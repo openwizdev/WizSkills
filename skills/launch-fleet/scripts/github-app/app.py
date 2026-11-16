@@ -1,6 +1,7 @@
 """Shared guards for the App tools. No credentials are logged."""
 import argparse
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,18 @@ PERMISSIONS = dict.fromkeys(
 # The service App's established profile (crates/adapters/github/src/app.rs):
 # what the App is registered and installed with (#1105).
 SERVICE = dict(PERMISSIONS, contents="write", issues="write", pull_requests="write")
+# J48 (#606): the explicit setting for the factory's public multi-account App.
+# Unset (or "user") is each user's own private App, bound to its owner's account.
+MODE = "OPENWIZ_GITHUB_APP_MODE"
+# contracts/github-identity.v1.md's pinned installations, carried with the tool
+# so the installed runtime needs no contracts/ folder (review R1): each account
+# and the repository names it selects. test.py holds this to the pin exactly.
+FACTORY = {"jparker2006": ("ClosedWiz",), "openwizdev": ("OpenWiz", "WizPlugins", "WizSkills")}
+
+
+def factory_installations():
+    """The only installations factory mode accepts: {account: {owner/name, ...}}, lower case."""
+    return {account: {f"{account}/{name}".lower() for name in names} for account, names in FACTORY.items()}
 
 
 def require(condition):
@@ -66,13 +79,49 @@ def repository(explicit):
     return explicit
 
 
-def manifest(repo=None):
-    """The checked template; with REPO, its homepage and disabled webhook name that repository."""
+def mode():
+    """The App setting from the environment: "user" (unset) or exactly "factory"."""
+    value = os.environ.get(MODE, "user")
+    require(value in ("user", "factory"))
+    return value
+
+
+def user_app_name(account):
+    """A user's own App's name: GitHub names are unique and at most 34 characters,
+    and the factory's "OpenWiz" is taken, so Create needs no edit."""
+    name = "OpenWiz " + account
+    if len(name) <= 34:
+        return name
+    return "OpenWiz " + account[:17] + " " + hashlib.sha256(account.lower().encode()).hexdigest()[:8]
+
+
+def bound(setting, app_owner, account, repositories):
+    """C-G1/J48: may this App mint for ACCOUNT's installation and these repositories?
+    A user App only on its owner's account, for repositories that account owns;
+    the factory App only on the identity contract's named installations."""
+    account = account.lower() if isinstance(account, str) else None
+    if account is None or not repositories:
+        return False
+    if setting == "factory":
+        named = factory_installations()
+        return all(r.lower() in named.get(account, ()) for r in repositories)
+    return (isinstance(app_owner, str) and app_owner.lower() == account
+            and all(r.lower().split("/")[0] == account for r in repositories))
+
+
+def manifest(repo=None, factory=False, account=None):
+    """The checked template, private by default (J48). With ACCOUNT, a user App's
+    own name; FACTORY is the explicit setting for the factory's public App. With
+    REPO, its homepage and disabled webhook name that repository."""
     value = parse_json(Path(__file__).with_name("manifest.json").read_bytes())
     service_permissions(value.get("default_permissions"))
     require(value.get("default_events") == [])
     require("url" not in value and value.get("hook_attributes") == {"active": False})
-    require(value.get("public") is True)
+    require(value.get("public") is False and value.get("name") == "OpenWiz")
+    if factory:
+        value = dict(value, public=True)
+    elif account is not None:
+        value = dict(value, name=user_app_name(account))
     if repo is not None:
         # GitHub's manifest schema requires url whenever hook_attributes is present.
         url = "https://github.com/" + repository(repo)

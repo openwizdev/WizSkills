@@ -151,6 +151,8 @@ Run nothing beside the full set in the same checkout when `docs/agents/fleet.md`
 
 - **Owned paths:** read the complete actual diff (`git diff --find-renames origin/<base>...<head>`) and its path list (`git diff --name-status --find-renames origin/<base>...<head>`). It changes only the ticket's owned paths, paths the orchestrator widened on the ticket, or supporting edits covered by its current explicitly approved envelope (or an explicitly adopted standing rule covering that ticket). Verify that approval and the builder's explanation of each supporting path: its acceptance criterion, the owned path it supports and why the actual edit is needed. This plain explanation in existing evidence or the pull request introduces no record format. A covered supporting edit needs no further path-permission question; a missing, unreadable or ambiguous approval does. Never retrofit an envelope into an old approval or infer one from a supporting filename or this skill. Keep currentness, approved revision/fingerprint and existing hold-first plan-change/reapproval rules intact.
 
+  **The project's standing supporting-edit rule,** when the fleet's settings hold one, is such a standing rule for every ticket. Check each use the pull request lists against it: one of its kinds, only this ticket's own rows and lines, and nothing on its ask-first list. Its changelog kind also satisfies the changelog line's path-authority check below: a covered `changes/<ticket>.md` needs no envelope and no path question. A use outside the rule, or a supporting edit in the diff that is neither listed nor otherwise covered, is a finding; such an edit keeps today's exact-path question.
+
   **Examples (synthetic):** an approved ticket owns `src/routes/export.rs` and requires refusal of an existing destination. Its explicitly approved supporting envelope can cover a regression case in `tests/export.rs`, synthetic input in `tests/fixtures/export.json`, the red-run evidence and `changes/4001.md`, each explained against that criterion and owned path. Read their actual contents: weakening the existing refusal assertion or adding an import route in the same diff is not justified by that explanation.
 
   Check deceptive names, executable fixtures and weakened assertions as carefully as production code; read every part of a mixed diff and both the old and new paths of a rename. A setup script among the test fixtures might change permissions or run live calls. Check existing owners and every shared-file section: the envelope transfers no other ticket's ownership. It grants no new behaviour or authority over protected rules, contracts/interfaces, dependencies, workflows, live actions or spending. Refuse self-authorization through policy or approval-rule edits. Anything outside the approved envelope retains the existing exact-path request procedure; independent review never supplies missing permission.
@@ -228,7 +230,7 @@ When a finding turns on a fact you can't settle by reading or running (what the 
 
 First the no-push check (Helpers, above): it comes before every write of yours.
 
-1. **File each new polish finding as a polish issue,** so its line can name it: a standalone issue labelled for the `needs-triage` role, never a sub-issue of the spec, whose body starts with the line `Follow-up of #<ticket> (spec #<spec>)`. A sub-issue would join the spec's plan graph, and `plan-graph`'s approval covers every sub-issue, so one polish issue would make the approval stale and stop every new start under the spec. That first line ties the polish issue to its ticket and spec for triage and the spec's closing summary. The label may have another name, such as `triage: new`, so read it from the table in `docs/agents/triage-labels.md`: the `label=` line prints the "Label here" cell of the `needs-triage` row. Write the body to a file with a quoted heredoc, so the shell runs nothing in the finding's backticks or `$`, and keep backticks, `$` and double quotes out of the short title.
+1. **File each new polish finding as a polish issue, and each blocker you log ("Re-checks", below) as a follow-up issue,** so its line can name it: the same form, a standalone issue labelled for the `needs-triage` role, never a sub-issue of the spec, whose body starts with the line `Follow-up of #<ticket> (spec #<spec>)`. A sub-issue would join the spec's plan graph, and `plan-graph`'s approval covers every sub-issue, so one polish issue would make the approval stale and stop every new start under the spec. That first line ties the polish issue to its ticket and spec for triage and the spec's closing summary. The label may have another name, such as `triage: new`, so read it from the table in `docs/agents/triage-labels.md`: the `label=` line prints the "Label here" cell of the `needs-triage` row. Write the body to a file with a quoted heredoc, so the shell runs nothing in the finding's backticks or `$`, and keep backticks, `$` and double quotes out of the short title.
 
    ```sh
    label=$(awk -F'|' '$2 ~ /^ *`needs-triage` *$/ { l = $3; gsub(/^[ `]+|[ `]+$/, "", l); print l }' docs/agents/triage-labels.md)
@@ -239,6 +241,8 @@ First the no-push check (Helpers, above): it comes before every write of yours.
    EOF
    gh issue create --label "$label" --title "<the claim, short> (polish for #<ticket>, R<k>)" --body-file follow-up.md
    ```
+
+   For a logged blocker, the body's second paragraph is the finding line and its `User path:` line, then `Still open after the <re-check | final check> of pull request #<N> at <head>; logged, so it did not block the merge.`, and the title ends `(follow-up for #<ticket>, R<k>)`.
 
    If the lookup prints no label, or more than one, stop before filing or posting anything, and say why in your reply: the project's settings need the `setup` skill. The user approves or drops all of a spec's polish issues together, when the spec closes; one joins a plan only then, as a ticket of a plan graph the user approves, or approved on its own.
 2. **Write the report** in the format below. If the project has the review-loops tool, check it first: its `check-report` command on your report file (in the project's war-room tool) must print `report ok`; fix the report until it does.
@@ -259,17 +263,23 @@ Each pull request gets **one review plus one re-check** (1 + 1, as the project's
 **A re-check never opens new narrow cases.** In the changed code, a new real-user path or a new security, privacy or data-loss risk still blocks, as a new finding with its line; anything else you see there is polish, filed in the same report. Code the builder didn't change since your last read is not reviewed again.
 
 1. **Read the builder's answers,** in its comments on the pull request since your last report, written by a record author (above). For each open id, the builder either fixed it or disputed it once, with evidence, instead of fixing it.
-2. **Give each earlier id its status** (the table under "The report"). An open blocking finding that meets step 3's rule on its own, and waits only on another owner's evidence, keeps its id and CHANGES, names that owner and the next event it needs, and needs no new head. For a dispute, you decide: `withdrawn` if the evidence holds; `disputed, kept` if it doesn't. A finding is disputed only once.
+2. **Give each earlier id its status** (the table under "The report"). An open blocking finding that meets step 3's rule on its own, and waits only on another owner's evidence, keeps its id, names that owner and the next event it needs, and takes the outcome below like any open blocker. For a dispute, you decide: `withdrawn` if the evidence holds; `disputed, kept` if it doesn't. A finding is disputed only once.
 3. **Run the three checks on the changed code,** under the rule above. A new finding there takes the next id.
-4. **Grade and post** as in steps 3 and 4, in the same format.
+4. **Mark every ruling again** at the new head ("The report"), keeping each earlier mark; a new ruling gets its mark, and a newly overturned one the next id.
+5. **Grade and post** as in steps 3 and 4, in the same format.
 
-**After the re-check, the orchestrator decides.** A blocker the re-check leaves open (still open, `disputed, kept`, or new) goes to the orchestrator, who posts one `**Orchestrator decision:**` comment on the pull request: `fix once more` or `log and merge`. On `log and merge`, the blocker becomes a polish issue and the pull request merges by the usual rules; you are not started again. On `fix once more`, you are started for one final check of the ids it names and the code changed since, by the same rules; a blocker still open after it goes back to the orchestrator, to log and merge or to ask the user for a security, privacy, live, spending or publishing call.
+**After the re-check, the loop closes itself** (the project's review-loops contract, v2). Each blocker the re-check leaves open (still open, `disputed, kept`, or new in the changed code):
+
+- **with a `Risk:` line** stays open: the verdict is `CHANGES`, and the `fresh` line sends it to one fresh, stronger builder for one round. You are then started for one **final check** of those ids and the code changed since, by the same rules.
+- **with a `User path:` line** is **logged:** file its follow-up issue (step 4), and end its status with `Logged as follow-up #<issue>.`, its `User path:` line still under it. A logged blocker is not open, so with no `Risk:` blocker open the report approves.
+
+At the final check, a `Risk:` blocker still open **parks** as a decision for Jake (the `park` line); anything else still open is logged, as at the re-check. A `Risk:` blocker is never logged. A pull request gets at most one fresh round, and it never resets the 1 + 1.
 
 **If `main` is merged in after your APPROVE** and it changes what you approved, you are started for a short re-check of that change: your APPROVE held only for the commit it named.
 
 ## The report
 
-Six parts, each its own paragraph, in this order:
+Seven parts, each its own paragraph, in this order:
 
 ```md
 VERDICT: CHANGES at 4b1f0c9e2d7a5b3c8f6e1d0a9b2c4e7f5a3d1c08
@@ -285,6 +295,9 @@ Intent: <the ticket's promise, in one line of your own words>
   Risk: privacy: <what is at risk, and for whom>.
 - **R3 [polish]** `<file>:<line>` (Standards) <what is wrong>. Fix: <the exact fix>. Polish issue: #4302.
 
+- **Ruling 1** upheld: <why it stands>.
+- **Ruling 2** overturned as R3: <why, from the ticket, spec or contract>.
+
 Checked: Standards (<the rule files read>), Spec (#<ticket>, spec #<spec>), full sweep. Helpers: <how many> at <short commit>; <kept> of <candidates> candidates kept; no-push check <its result>. Each helper: <role> on <its slice or finding>: <what it returned>, <what you made of it>; <the next helper>. Ran: `<command>` (<result>); ...
 
 Next: the builder fixes or disputes R1 and R2 once, then one re-check.
@@ -293,10 +306,12 @@ Next: the builder fixes or disputes R1 and R2 once, then one re-check.
 The head, the checks (`Standards`, `Spec` or `Sweep`), the risk class (`security`, `privacy` or `data loss`), the issue number and the `Next:` line are stand-ins, in the forms the report check reads: put in the real ones.
 
 - **The `VERDICT` line** names the commit you read, and holds only for it. `CHANGES` while any blocking finding is open, otherwise `APPROVE`: polish findings never hold it back.
-- **The second line,** on a re-check, reads `Re-check of <the open ids> and the code changed since <short commit>, by <harness, model, effort>. CI green on this commit: <the required checks>.`; on the final check after a `fix once more` decision, `Final check of ...`.
+- **The second line,** on a re-check, reads `Re-check of <the open ids> and the code changed since <short commit>, by <harness, model, effort>. CI green on this commit: <the required checks>.`; on the final check after the fresh round, `Final check of ...`.
 - **Ids are stable:** R1, R2, … in the order found, never renumbered or reused. A re-check lists every earlier id, in order, and a new finding takes the next number.
 - **A new finding** is one line: id, grade, file and line, the check that found it, what is wrong, and the exact fix. A blocking one has its `User path:` or `Risk:` line under it, then its `Shows the break:` line when a run shows it; a polish one ends with its `Polish issue: #<issue>`.
 - **No findings:** the line `No findings.` stands in place of the list.
+- **Every ruling gets exactly one mark,** after the findings: each numbered line of the description's `## Rulings` at this head is `upheld`, or `overturned as R<n>`, a new finding graded by step 3 and fixed or filed like any other; two rulings never share one. With no rulings, the line `Rulings: none.` A pull request opened without a `## Rulings` section is a polish finding, unless it was opened before the build skill asked for one.
+- **Check it,** when the project has the review-loops tool: `check-report <report> --description <the description at this head>` must print `report ok`.
 - **The report is as public as the pull request:** point at files and lines, and leave secrets and personal data out.
 
 On a re-check, each earlier id gets one status in place of its finding:
@@ -307,20 +322,32 @@ On a re-check, each earlier id gets one status in place of its finding:
 | `withdrawn: <why the builder's evidence holds>` | The builder's dispute convinced you |
 | `still open after the re-check: <why>` (or `after the final check`) | The fix didn't fix it |
 | `disputed, kept: <why the evidence doesn't hold>` | The dispute didn't convince you |
+| `still open after the re-check: <why>. Logged as follow-up #<issue>.` | A `User path:` blocker still open, logged ("Re-checks") |
 | `Polish issue: #<issue>.` | A polish finding, already filed |
 
-The report's last paragraph is exactly one of the contract's four `Next:` lines, naming every open blocker (`R1`, `R1 and R2`, or `R1, R2 and R3`):
+The report's last paragraph is exactly one of the v2 contract's four `Next:` lines, naming exactly the open blockers (`R1`, `R1 and R2`, or `R1, R2 and R3`); a logged blocker is not open:
 
 | When | Next |
 | --- | --- |
 | The full review leaves blockers open | `Next: the builder fixes or disputes R1 and R2 once, then one re-check.` |
-| The re-check leaves a blocker open | `Next: the orchestrator decides R1: fix once more, or log and merge.` |
-| The final check after `fix once more` leaves it open | `Next: the orchestrator logs R1 and merges, or asks Jake for a security, privacy, live, spending or publishing call.` |
+| The re-check leaves a `Risk:` blocker open | `Next: a fresh, stronger builder fixes R2 once, then one final check.` |
+| The final check leaves a `Risk:` blocker open | `Next: park R2 as a decision for Jake.` |
 | No blocker is open | `Next: none open. It merges by the project's merge rules.` |
 
 ## Worked example
 
-Synthetic. Pantry is a made-up recipe app. Its ticket #41, "Export a cookbook as one zip file", sits under spec #38, and its pull request is #57. First the full review:
+Synthetic. Pantry is a made-up recipe app. Its ticket #41, "Export a cookbook as one zip file", sits under spec #38, and its pull request is #57, whose description logs two rulings:
+
+```md
+Closes #41
+
+## Rulings
+
+1. A recipe with no photos exports an empty `photos/` folder. Why: the importer expects the folder in every export. Cost if wrong: low: the zip holds one empty folder.
+2. The zip is named after the cookbook's title. Why: the ticket names no file name. Cost if wrong: low: a cook looks for a file with an unexpected name.
+```
+
+First the full review:
 
 ```md
 VERDICT: CHANGES at 4b1f0c9e2d7a5b3c8f6e1d0a9b2c4e7f5a3d1c08
@@ -336,18 +363,23 @@ Intent: `pantry export` writes the whole cookbook to one zip file, and refuses t
 - **R3 [blocking]** `src/export.rs:71` (Sweep) A recipe titled `Soup/Stew` becomes the zip entry `Soup/Stew.md`, a folder the importer rejects. Fix: replace `/` in entry names.
   User path: a cook with a recipe called "Soup/Stew" exports, then imports the zip on a new phone, and the import fails.
 - **R4 [polish]** `src/cli.rs:30` (Sweep) The help says "zip archive file", where the glossary's word is "export". Fix: "Write the cookbook as one export (a zip file)." Polish issue: #59.
+- **R5 [blocking]** `src/export.rs:20` (Spec) Ruling 2: the zip is named after the cookbook's title, but spec #38 names it `cookbook.zip`, the only name the importer looks for. Fix: always write `cookbook.zip`.
+  User path: a cook exports "Gran's Recipes", copies the zip to a new phone, and the importer finds nothing to import.
 
-Checked: Standards (`AGENTS.md`, `docs/agents/`, ADR 0002), Spec (#41, spec #38), full sweep. Helpers: 7 at 4b1f0c9; 4 of 5 candidates kept; no-push check clean. Each helper: lens reviewer on error paths and callers: two candidates, R3 and an unflushed write at `src/zip.rs:9`, kept R3 and rejected the write; proof breaker on `tests/export.rs`: fails with the change undone, agreed; finding checker on R1: reproduced, kept; finding checker on R2: reproduced, kept as polish; finding checker on R3: reproduced through `entry_name()`, kept; finding checker on R4: reproduced, kept as polish; finding checker on the `src/zip.rs:9` write: not reproduced, as `close()` flushes it, rejected. Ran: `cargo test` (31 passed); R1's command; `tests/export.rs` with the change undone (fails, as it should).
+- **Ruling 1** upheld: the importer reads `photos/` in every export (`src/import.rs:14`).
+- **Ruling 2** overturned as R5: spec #38 names the file `cookbook.zip`.
 
-Next: the builder fixes or disputes R1 and R3 once, then one re-check.
+Checked: Standards (`AGENTS.md`, `docs/agents/`, ADR 0002), Spec (#41, spec #38), full sweep. Helpers: 8 at 4b1f0c9; 5 of 6 candidates kept; no-push check clean. Each helper: lens reviewer on error paths and callers: two candidates, R3 and an unflushed write at `src/zip.rs:9`, kept R3 and rejected the write; proof breaker on `tests/export.rs`: fails with the change undone, agreed; finding checker on R1: reproduced, kept; finding checker on R2: reproduced, kept as polish; finding checker on R3: reproduced through `entry_name()`, kept; finding checker on R4: reproduced, kept as polish; finding checker on R5: the importer opens only `cookbook.zip`, kept; finding checker on the `src/zip.rs:9` write: not reproduced, as `close()` flushes it, rejected. Ran: `cargo test` (31 passed); R1's command; `tests/export.rs` with the change undone (fails, as it should).
+
+Next: the builder fixes or disputes R1, R3 and R5 once, then one re-check.
 ```
 
-The builder fixed R1, and disputed R3 with evidence. The re-check:
+The builder fixed R1 and R5, and disputed R3 with evidence. The re-check finds R5 fixed for the command line only, and logs it:
 
 ```md
 VERDICT: APPROVE at 9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d
 
-Re-check of R1, R3 and the code changed since 4b1f0c9, by Codex, Sol 6.1, Medium. CI green on this commit: build, test.
+Re-check of R1, R3, R5 and the code changed since 4b1f0c9, by Codex, Sol 6.1, Medium. CI green on this commit: build, test.
 
 Intent: `pantry export` writes the whole cookbook to one zip file, and refuses to overwrite a file that is already there.
 
@@ -355,14 +387,19 @@ Intent: `pantry export` writes the whole cookbook to one zip file, and refuses t
 - **R2 [polish]** Polish issue: #58.
 - **R3 [blocking]** withdrawn: the builder showed that titles are made safe before export (`src/recipe.rs:20`, test `slug_strips_slash`), so no `/` reaches the zip.
 - **R4 [polish]** Polish issue: #59.
-- **R5 [polish]** `src/export.rs:52` (Sweep) The new error says "file exist". Fix: "file exists". Polish issue: #60.
+- **R5 [blocking]** still open after the re-check: the web page's export button still names the zip after the title (`src/web/export.rs:31`). Logged as follow-up #61.
+  User path: a cook exports "Gran's Recipes" from the web page, copies the zip to a new phone, and the importer finds nothing to import.
+- **R6 [polish]** `src/export.rs:52` (Sweep) The new error says "file exist". Fix: "file exists". Polish issue: #60.
 
-Checked: R1 and R3, and `git diff 4b1f0c9 9e8d7c6` with the three checks. Helpers: 4 at 9e8d7c6; 1 of 1 candidates kept; no-push check clean. Each helper: re-check differ on `git diff 4b1f0c9 9e8d7c6`: changes for R1 and a new error message, nothing else, agreed; finding checker on R1: prints `3` now, resolved; finding checker on R3: titles are made safe before export, so no `/` reaches the zip, withdrawn; finding checker on R5: the new error says "file exist", kept as polish R5. Ran: R1's command (prints `3`); `cargo test` (33 passed).
+- **Ruling 1** upheld: the importer reads `photos/` in every export (`src/import.rs:14`).
+- **Ruling 2** overturned as R5: spec #38 names the file `cookbook.zip`.
+
+Checked: R1, R3, R5, and `git diff 4b1f0c9 9e8d7c6` with the three checks. Helpers: 5 at 9e8d7c6; 2 of 2 candidates kept; no-push check clean. Each helper: re-check differ on `git diff 4b1f0c9 9e8d7c6`: changes for R1 and R5 and a new error message, nothing else, agreed; finding checker on R1: prints `3` now, resolved; finding checker on R3: titles are made safe before export, so no `/` reaches the zip, withdrawn; finding checker on R5: the command line writes `cookbook.zip`, the web page still the title, kept open and logged; finding checker on R6: the new error says "file exist", kept as polish R6. Ran: R1's command (prints `3`); `cargo test` (33 passed).
 
 Next: none open. It merges by the project's merge rules.
 ```
 
-Had R1 still been open at the re-check, its line would read `- **R1 [blocking]** still open after the re-check: <why>`, the verdict `CHANGES`, and the last line `Next: the orchestrator decides R1: fix once more, or log and merge.`
+Had R5 carried a `Risk:` line instead, it could not be logged: its status would read `still open after the re-check: <why>`, the verdict `CHANGES`, and the last line `Next: a fresh, stronger builder fixes R5 once, then one final check.` Still open at that final check, the last line would be `Next: park R5 as a decision for Jake.`
 
 ## Credit
 

@@ -170,6 +170,10 @@ Accepted/sent never means work completed; created never means started.
 | `fleet.tick`, `fleet.tick.preview` | `fleet-tick.v1.schema.json#/$defs/envelope` |
 | `fleet.due` | Currently human candidate lines only; no shipped JSON flag |
 | `loop off/on` | This schema's `loop_switch`: existing unwrapped event, **no schema field** |
+| `loop validate` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/not_built` until LC2 (#790) ships `validate_report` |
+| `loop export` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/not_built` until LC3 (#791) ships `export_report` |
+| `loop plan` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/not_built` until LC4 (#792) ships `plan_report` |
+| `loop apply` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/not_built` until LC5 (#793) ships `apply_report` |
 
 Tick exits 0 after reporting its plan/outcomes (individual failed or uncertain
 actions stay in that report), 1 for a required global read, setup, planning or

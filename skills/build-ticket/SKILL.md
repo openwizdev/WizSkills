@@ -59,11 +59,13 @@ Change only files under the ticket's owned paths and supporting edits covered by
 
 **Supporting edits need existing approval.** When the ticket's current approval explicitly covers a supporting envelope (or an explicitly adopted standing rule covers that ticket), select the tests, fixtures, evidence and changelog needed for its approved behaviour and owned paths without another path-permission question. In the existing evidence or pull request description, name each supporting path, the acceptance criterion it serves, the owned path it supports and why the actual edit is needed. This is a plain explanation, not a new record format. Independent review checks it against the complete actual diff at the exact head. Do not infer an envelope from this skill, a filename or an old graph's approval: older approved tickets gain nothing silently. Keep approval currentness and the approved revision and fingerprint intact; any required change to a ticket's body, title, blockers or approved outcome follows the existing hold-first plan-change and reapproval procedure.
 
+**The project's standing supporting-edit rule.** The fleet's settings may hold one standing rule for every ticket: its kinds of supporting edit, the own-lines limit and an ask-first list. An edit it covers needs no question. Keep to its kinds and this ticket's own rows and lines, and list each use in the pull request's Facts, beside the changed paths, with its kind. Its changelog kind also satisfies "Changelog line" below: a covered `changes/<ticket>.md` needs no envelope and no path question. Anything outside it, or on its ask-first list, is still asked first, as below.
+
 **Example (synthetic):** a ticket owns `src/routes/export.rs` and its acceptance criterion says export refuses an existing destination. Its explicitly approved supporting envelope covers the needed tests, fixtures, evidence and changelog. A case in `tests/export.rs`, synthetic input in `tests/fixtures/export.json`, its red-run log and `changes/4001.md` can support that criterion without a new path question. Record each path and that relationship. A new import route in the same test file is outside the approved behaviour.
 
 Read the whole proposed supporting change, not its name: a fixture can execute code, and a setup script among the test fixtures can change permissions or make live calls. Scrutinize executable fixtures, weakened assertions and mixed diffs; split out any unrelated work. Check both the old and new paths of a rename, shared-file sections and existing owners. The envelope does not transfer another ticket's ownership or authorize protected rules, contracts/interfaces, dependencies, workflows, live actions or spending. A supporting edit cannot authorize itself by changing the policy or approval rules that permit it. Existing safeguards and approval gates still apply.
 
-If the work needs a change beyond that approved envelope, or its coverage or ownership is unclear, **stop before you edit it**. Ask on the ticket, as in "When you're stuck" (next): which exact file, why, and the smallest change. Edit nothing there until the orchestrator widens the paths, recorded on the ticket. Other builders own other paths, and an edit there can collide with theirs.
+If the work needs a change beyond that approved envelope and the standing rule, or its coverage or ownership is unclear, **stop before you edit it**. Ask on the ticket, as in "When you're stuck" (next): which exact file, why, and the smallest change. Edit nothing there until the orchestrator widens the paths, recorded on the ticket. Other builders own other paths, and an edit there can collide with theirs.
 
 **Small shared files.** An owned path marked `(shared)` (or `(shared: …)`, `(shared with …)`) is a small file other tickets also change, each its own lines; the note beside the path names them. Change only this ticket's own lines there (its row, its section), and never rewrite another ticket's lines. A shared file needs no link between the tickets, so whichever merges second fixes the conflict: on a conflict with `main`, merge it as step 5 says.
 
@@ -130,16 +132,16 @@ reviewer, poll, watch or sleep. Green CI needs no builder action. Independent
 wake/access and live recovery remain unverified until OB8 evidence establishes
 them; an idle inbox alone proves neither.
 
-## When you're stuck
+## When you're stuck: rule, or ask
 
-When you need a decision, or a fact you can't find by reading, ask on your ticket, never the user. Never guess.
+**Rule** anything that stays inside your ticket's intent: decide it yourself and keep building. Read first; never guess at a fact you can read. Log each ruling as one line in the pull request's `## Rulings` section, numbered from 1, in the review-loops contract's (v2) ruling line: `<n>. <what you decided>. Why: <why>. Cost if wrong: <high or low>: <what breaks>.` Your reviewer upholds or overturns each one.
+
+**Ask**, and never rule, before you touch a contract, a workflow, a dependency, a protected guard, another ticket's logic, or anything live, paid or published; for a path outside the owned paths and the standing supporting-edit rule; for anything the project's rules say needs the user's approval; and for a fact no reading can settle that changes the ticket's outcome. Ask on your ticket, never the user:
 
 1. **Ask:** `gh issue comment <N> --body "..."`. Say what you found, the options and your recommendation, so it can be answered in a word.
 2. **Label it:** add `needs-info` beside the ticket's `ready-for-agent`, and keep both: `gh issue edit <N> --add-label needs-info`. With both labels, triage reads your words as a builder's question to answer; with `needs-info` alone, it reads them as a reply to sort. The label names are in `docs/agents/triage-labels.md`.
 3. **Wait.** Carry on with any work the question doesn't touch, or end your turn. The five-minute check (the fleet's loop, which `launch-fleet` runs) sees the label; the orchestrator answers on the ticket, or brings it to the user.
 4. **Resume:** when the answer is on the ticket, remove `needs-info` if it's still there (`ready-for-agent` stays), and carry on.
-
-Anything the project's rules say needs the user's approval (a new dependency, a live run) is a question here too.
 
 ## Helpers
 
@@ -287,6 +289,10 @@ Closes #<N>
 
 <optional: what a bad merge could break>
 
+## Rulings
+
+<one ruling line each, numbered from 1; or exactly `none`>
+
 ## Facts
 
 - **Branch:** `<branch>`. **Head:** `<full commit>`. **Tree:** `<tree>`
@@ -302,6 +308,7 @@ Closes #<N>
 
 - **Summary:** one small picture, whichever shows the change best: a diff sketch, a file tree, a call tree, pseudocode or a Mermaid diagram. Put it beside the sentence it explains, and leave out every part the reader doesn't need.
 - **Evidence:** the exact proof that failed before and passes now. A screenshot is best for a change you can see; a test run is next.
+- **Rulings:** every ruling at this head, in the contract's line, as "When you're stuck: rule, or ask" says; `none` when there are none.
 - **Merge danger:** a two-way door can be walked back (a revert is cheap); a one-way door can't (data deleted, a format published, a decision that's hard to reverse). The blast radius is what a bad merge could break.
 - **Facts:** update them for every new head, so they always name the current one.
 
@@ -324,24 +331,26 @@ You stay with your ticket through every review round: you already know the code.
 
 ### Answering a review
 
-**1 + 1:** each pull request gets one review plus one re-check (the project's review-loops contract, "1 + 1: the next states"). You answer each blocker once; after the re-check, the orchestrator decides.
+**1 + 1:** each pull request gets one review plus one re-check (the project's review-loops contract, v2). You answer each blocker once; after the re-check, the report itself sends what is still open on: a `Risk:` blocker to one fresh round, anything else logged as a follow-up issue.
 
-1. **Read the report:** the pull request's newest comment that starts `VERDICT:` and was written by a record author (above). It names the commit it read, and holds only for that commit.
+1. **Read the report:** the pull request's newest comment that starts `VERDICT:` and was written by a record author (above). It names the commit it read, and holds only for that commit. An overturned ruling is one of its findings, with its own id, like any other.
 2. **Fix every open blocking finding once,** red first: a proof that shows the break, then the fix. A blocking finding is `[blocking]`, with its `User path:` or `Risk:` line (an older report's `high` or `medium`). First name its cause and every reachable route or input form that shares it, and fix that whole class; for a route outside your owned paths, ask for its exact path (as in "Stay inside your owned paths") instead of editing it. Polish findings (`[polish]`, an older report's `low`) are already filed as polish issues by the reviewer: never fix them in this pull request unless an orchestrator decision says so.
 3. **Or dispute it,** if you think a finding is wrong: answer it with evidence instead of fixing it. The reviewer decides, and a finding is disputed only once. A finding waiting only on another owner's evidence needs no new head: say so in your answer, without a commit.
-4. **Run the scoped local checks** (step 3), rerunning only failed checks after a failure, then push a new green commit for CI's full suites.
+4. **Run the scoped local checks** (step 3), rerunning only failed checks after a failure, then push a new green commit for CI's full suites. Update the Rulings section for any new ruling.
 5. **Answer in one comment on the pull request** before you end your turn, one line per open id: `R1 fixed at <commit>: <its proof>`, or `R1 disputed: <your evidence>`. The reviewer reads it there, once CI is green on your new head, for the one re-check.
 
-The report's last paragraph, its `Next:` line, is one of the contract's four states. Do what its row says:
+The report's last paragraph, its `Next:` line, is one of the contract's four v2 states. Do what its row says:
 
 | `Next:` line | What you do |
 | --- | --- |
-| `Next: the builder fixes or disputes R1 once, then one re-check.` | Steps 2 to 5 for each named blocker, then hand back for the one re-check |
-| `Next: the orchestrator decides R1: fix once more, or log and merge.` | Nothing for those blockers: no fix, no new head for them. End your turn; the orchestrator decides |
-| `Next: the orchestrator logs R1 and merges, or asks Jake for a security, privacy, live, spending or publishing call.` | Nothing: the orchestrator logs it, or asks Jake |
+| `Next: the builder fixes or disputes R1 and R2 once, then one re-check.` | Steps 2 to 5 for each named blocker, then hand back for the one re-check |
+| `Next: a fresh, stronger builder fixes R2 once, then one final check.` | Nothing: the fleet archives you and starts the fresh builder. End your turn |
+| `Next: park R2 as a decision for Jake.` | Nothing: it waits for Jake's decision |
 | `Next: none open. It merges by the project's merge rules.` | Nothing. It merges by the project's rules |
 
-**The orchestrator's decision** is one comment on the pull request starting `**Orchestrator decision:**`, naming the findings and your head. `fix once more` means: fix those blockers once more, as in steps 2 to 5 (follow the diagnosis it carries, if any), and hand back for one more check; that check's `Next:` is the orchestrator's again, never another builder round. `log and merge` means: change nothing for them; each becomes a polish issue and the pull request merges by the usual merge rules. A failed CI run is never a review round. Jake is asked only for a security, privacy, live, spending or publishing call, never by you: such a call goes on the ticket, as in "When you're stuck".
+**The fresh round.** If your brief starts you for one fresh round on an existing pull request, read its newest `VERDICT:` report and fix only the `Risk:` blockers its `fresh` line names, once each, red first, as in steps 2, 4 and 5; fix nothing else and open no new pull request. Then push a green commit for the final check and end your turn. The round is that one fix, never a reset of the one review plus one re-check: the final check merges, logs or parks what is left.
+
+**The orchestrator's decision** only relays Jake's answer to a parked finding: one comment on the pull request starting `**Orchestrator decision:**`, naming the finding and the head it parked at. `fix once more` means: fix those blockers once more, as in steps 2 to 5 (follow the diagnosis it carries, if any), and hand back for one more check. `log and merge` means: change nothing for them; each becomes a polish issue and the pull request merges by the usual merge rules. A failed CI run is never a review round. Jake is asked only for a security, privacy, live, spending or publishing call, never by you: such a call goes on the ticket, as in "When you're stuck: rule, or ask".
 
 ## Licence
 

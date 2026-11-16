@@ -14,10 +14,9 @@ Read the project's `AGENTS.md` or `CLAUDE.md`, its `GLOSSARY.md` if present,
 and the ADRs for the area. Keep the caller's role, owned paths, approval gates
 and the 1 + 1 review limit: diagnosis grants no permission to edit elsewhere,
 run against a live system, merge or start agents. For a builder's question,
-use its ticket. The orchestrator's diagnosis is optional, inside its decision
-after a re-check leaves a blocker open (fix once more, or log and merge): it
-supplies a cause and direction for that decision and never resets the 1 + 1
-rule.
+use its ticket. The orchestrator's diagnosis is optional, inside a decision
+that relays Jake's answer to a parked finding: it supplies a cause and
+direction for that decision and never resets the 1 + 1 rule.
 
 ## Redact first
 

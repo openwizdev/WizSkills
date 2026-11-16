@@ -1,6 +1,6 @@
 {
   "name": "OpenWiz",
-  "public": true,
+  "public": false,
   "hook_attributes": {"active": false},
   "default_permissions": {
     "metadata": "read",

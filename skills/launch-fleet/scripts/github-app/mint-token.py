@@ -4,6 +4,10 @@
 --repository is required (C8, #2315): the token covers exactly those selected
 repositories of one owner. Stdout is two lines: the token, then its expiry in
 Unix seconds. Agent reads use this through tools/github-reads/read.py only.
+
+The installation is read back first (C-G1/J48, #606): a user's own App mints
+only on its owner's account; OPENWIZ_GITHUB_APP_MODE=factory is the explicit
+setting for the factory's App and its named installations only.
 """
 from datetime import datetime, timezone
 import os
@@ -29,12 +33,22 @@ def main():
             "repositories": [name.split("/")[1] for name in selected]}
     app.api_base(args.api_base)
     app.manifest()
+    setting = app.mode()
     installation = app.positive_id(args.installation_id)
     directory = app.app_directory(app.state_path(args.state_dir))
     try:
         config = app.parse_json(app.read_file(directory, "app.json", 1024))
         app.require(set(config) == {"app_id"})
         jwt = app.jwt(directory, config["app_id"])
+        # The App's owner and the installation's account, before any token exists.
+        status, found = app.get(args.api_base, "/app", jwt)
+        app.require(status == 200 and found.get("id") == config["app_id"])
+        status, held = app.get(args.api_base, f"/app/installations/{installation}", jwt)
+        app.require(status == 200 and held.get("id") == int(installation)
+                    and held.get("app_id") == config["app_id"]
+                    and held.get("repository_selection") == "selected")
+        app.require(app.bound(setting, (found.get("owner") or {}).get("login"),
+                              (held.get("account") or {}).get("login"), selected))
         result = app.post(args.api_base, f"/app/installations/{installation}/access_tokens",
                           body, jwt)
     finally:

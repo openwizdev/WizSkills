@@ -96,7 +96,8 @@ Done when both loops exist, the user has said yes or no to GitHub's messages, an
 **Overload admission (CS5):** before any automatic refresh or nonessential poll,
 run `fleet.sh overload automatic-refresh` or `fleet.sh overload nonessential-poll`
 in the project checkout. Supply `GH_REPO`, `LAUNCH_FLEET_OVERLOAD_INPUT` (one
-current complete snapshot from the existing queue/REST/GraphQL reads) and
+current complete snapshot from the existing queue/REST/GraphQL reads, or
+or `LAUNCH_FLEET_OVERLOAD_SUPPLY` to read the collector instead, as overload.md says) and
 `LAUNCH_FLEET_OVERLOAD_STATE` (the same durable private repository-scoped path
 across all fleets). Follow [overload.md](overload.md) for the input, its completeness, the unknown
 states and the durable pause. The source and pinned bundled `loop.sh` enforce this before checkout

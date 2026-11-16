@@ -3,12 +3,12 @@
 T1 of 0.0.12 (#1096), spec #1092, confirmed grill C1–C5 of
 2026-11-05, kept in the private record. This is the compatibility
 boundary for agents. [`cli.v1.schema.json`](cli.v1.schema.json) defines
-`catalogue`, `error`, `help`, `terminal_capability` and `loop_switch`.
+`catalogue`, `error`, `help` and `loop_switch`.
 Existing report schemas remain authoritative and unchanged.
 
 **Implementation boundary:** T1 implements `help --agent` and human `help`.
 T2 supplies the additive JSON help/errors and complete stream-selection runtime
-proof. T3 supplies interactive dispatch, `ui` and its capability result. A pinned
+proof. T3's `ui` and its capability result were removed in 0.0.16 (#776). A pinned
 future result does not make its command or JSON form available today. The
 catalogue describes shipped success forms; its `json` boolean and `flags` are
 availability, never permission to run a write. No fixture proves live behaviour.
@@ -22,9 +22,10 @@ store. Human `openwiz help`, `--help` and `-h` print bounded usage without reads
 or writes. Existing command-specific help aliases keep their parsing rules;
 notably `fleet --help` is not implemented, and exact `loop --help`/`loop -h`
 print loop-specific text. `help --agent` accepts no other operand or option.
-Main now ships `fleet tick`, its `--dry-run` form and `fleet due --github-only`;
-the catalogue includes these implemented forms. The original spec's caution
-against advertising a planned tick does not exclude its shipped implementation.
+Main ships the read-only `fleet tick --dry-run` and `fleet due --github-only`;
+the catalogue includes these implemented forms. The executing `fleet tick` and
+its `--expect-plan` were retired in 0.0.17 (#800, spec #786), and the `engine`
+commands with them; neither is in the catalogue or human help.
 
 For `ls` and `show`, any standalone `--help` or `-h` after the command selects
 help before parsing other tokens, including after an unknown option, in a
@@ -63,18 +64,14 @@ Positional requirements may be conditional (`project` versus `--project-id`);
 `arguments.description` and `rules` carry those conditions without inventing a
 default. Examples parse but are not promises that synthetic targets exist.
 `--help`'s `-h` alias applies only to forms listing it. Loop-only help entry
-forms are aliases of human help. `ui` may not be registered as shipped until
-implemented. T3 adds `ui` and its flags, schemas,
-examples and process proof in the same change that adds dispatch.
+forms are aliases of human help.
 
 Effects are `none`, `source_read`, `state_read`, `state_write`, `send`, `create`,
-`stage`, `delete`, `loop_switch`, `fleet_action`. `none` appears alone. `send`
-and `create` are the existing guarded CloudRoom writes. `fleet_action` marks
-the shipped tick's approved fleet execution through its existing adapters:
-builder/reviewer starts, findings/notifications, merge/close/hold/archive and
-records. Its dry-run form reads and plans only; due reads GitHub candidates
-only. Neither is new terminal authority. Stage/delete/switch are local mutations,
-not a third CloudRoom write. `new.preview --attach` stages locally;
+`stage`, `delete`, `loop_switch`. `none` appears alone. `send` and `create` are
+the existing guarded CloudRoom writes. The executing tick's `fleet_action`
+effect was retired with it (#800). The tick's dry-run form reads and plans
+only; due reads GitHub candidates only. Neither is new terminal authority.
+Stage/delete/switch are local mutations, not a third CloudRoom write. `new.preview --attach` stages locally;
 `attachment ls` sweeps an existing store and can delete expired/unfinished
 copies. `send.check` reads only its record; `new.status` may additionally read a
 created thread's start stage. Help has no effects even when state exists.
@@ -167,28 +164,20 @@ Accepted/sent never means work completed; created never means started.
 | `new`, `new.preview`, `new.status`, `models` | `new-thread.v1.schema.json#/$defs/report`, `preview`, `status_read`, `options` |
 | Attachment add/list/remove, failed `--attach` preparation | `attachment.v1.schema.json#/$defs/add_report`, `list_report`, `remove_report` |
 | `fleets`, `fleet` | `fleet.v1.schema.json#/$defs/envelope` |
-| `fleet.tick`, `fleet.tick.preview` | `fleet-tick.v1.schema.json#/$defs/envelope` |
+| `fleet.tick.preview` | `fleet-tick.v1.schema.json#/$defs/envelope` |
 | `fleet.due` | Currently human candidate lines only; no shipped JSON flag |
 | `loop off/on` | This schema's `loop_switch`: existing unwrapped event, **no schema field** |
-| `loop validate` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/not_built` until LC2 (#790) ships `validate_report` |
-| `loop export` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/not_built` until LC3 (#791) ships `export_report` |
-| `loop plan` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/not_built` until LC4 (#792) ships `plan_report` |
+| `loop validate` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/validate_report` |
+| `loop export` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/export_report` (LC3, #791) |
+| `loop plan` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/plan_report` (LC4, #792) |
 | `loop apply` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/not_built` until LC5 (#793) ships `apply_report` |
 
-Tick exits 0 after reporting its plan/outcomes (individual failed or uncertain
-actions stay in that report), 1 for a required global read, setup, planning or
-output failure, and 2 for invalid options. Due exits 0 for candidate lines or
-quiet empty output, 1 on a failed global read/output, and 2 for invalid options.
-Neither accepts repeated options, `=value`, operands or a `--` delimiter.
-Tick execution additionally accepts `--expect-plan PATH` once (EX1, #1892),
-using the existing dry-run envelope as described in
-[the fleet-tick contract](fleet-tick.v1.md#reviewed-plan-execution-revision-1892).
-It consumes one nonempty UTF-8 path token, even if that token looks like a flag;
-the path does not select JSON or preview mode. No inline `=value`, due or
-`--dry-run` combination is accepted. Before any effect, pending recovery or a
-changed complete ordered plan/rules/default branch refuses with exit 1; the
-preview timestamp is validated only. Invalid option syntax exits 2. Syntactic
-JSON refusal retains `openwiz.cli-error.v1`, with no execution report.
+Tick (`--dry-run`) exits 0 after reporting its plan, 1 for a required global
+read, setup, planning or output failure, and 2 for invalid options, including
+`fleet tick` without `--dry-run` and the retired `--expect-plan` (#800). Due
+exits 0 for candidate lines or quiet empty output, 1 on a failed global
+read/output, and 2 for invalid options. Neither accepts repeated options,
+`=value`, operands or a `--` delimiter.
 T2's additive JSON form for due uses `openwiz.fleet-due.v1` (`fleet_due` here):
 `candidates` is the same ordered list as the current text, each with positive
 `spec` and positive `ticket` or null for a spec-level candidate. Empty is `[]`;
@@ -256,7 +245,7 @@ openwiz init --yes --operation ID [--repository <owner/name>] [--state-dir DIR] 
 openwiz init --help [--json]
 ```
 
-- **Runtime.** Like `engine`, a thin wrapper over the matching package's
+- **Runtime.** A thin wrapper over the matching package's
   `runtime/setup/init.py` through absolute `/usr/bin/python3 -I`, with no
   source checkout, `PATH` fallback, fixture environment or production override.
   `--help` reads neither source nor state. Options occur once with separate
@@ -279,116 +268,9 @@ openwiz init --help [--json]
   call; 8 a stale or conflicting operation id; 10 unusable private state.
   Existing CLI error schemas and numeric meanings remain unchanged.
 
-## Terminal boundary
+## No terminal app (#776)
 
-[`terminal.v1.md`](terminal.v1.md) pins the future separate executable. JSON
-`ui` returns `openwiz.terminal-capability.v1`: availability, fixed executable,
-`loopback-http` transport, implemented action ids and an optional reason. It
-reads no API or state, opens no terminal screen and starts no server. Do not
-advertise unavailable actions. No-argument piped use produces bounded usage;
-only terminal input **and** output permit the implicit visual launch. Until T3
-ships, `ui` remains unimplemented and absent from the shipped catalogue.
-
-## Installed engine preparation (#1106)
-
-`engine preview [--location cloud|local] [--state-dir DIR] [--json]`,
-`engine activate --yes --operation ID [--root DIR] [--state-dir DIR] [--json]` and
-`engine status [--state-dir DIR] [--json]` use only the matching package's
-`runtime/engine/engine.py`, through absolute `/usr/bin/python3 -I`. No source
-checkout or PATH fallback. `engine --help [--json]` is source/state-free.
-Options occur once, with separate values; unknown/duplicate/non-UTF-8 arguments
-are refused. No stdin. JSON selection consumes value operands before flags.
-JSON output is one outcome (`openwiz.engine.v1`) or existing CLI error document.
-
-**PC first** (#1093 revision 17, with the EN2 build decisions of 2026-11-10;
-[private record](https://github.com/jparker2006/ClosedWiz/issues/1106#issuecomment-6779483749)).
-Two named assumptions hold here. The engine host is the PC: a `local` selection
-activates on it. Cloud activation is an unresolved gap pending its separate
-decision: `activate` on a `cloud` selection refuses the authorized operation at
-exit 5 with that reason, and writes nothing else. Login is `unknown` (LE1); it is
-reported, never inferred, and neither grants nor blocks anything here.
-
-`activate` on a `local` selection needs `--root DIR`, the
-installation root that `install.py --root` created. The installation's
-handover (`runtime/handover/handover.py`, #2379) must resolve that root's
-verified selected build, and this tool must be that build's own
-`runtime/engine/engine.py`. An older release without the handover, an
-unverified or foreign selection, or a missing `--root` refuses at exit 5 and
-writes nothing. Everything after that runs under one held setup lock, the same
-lock every setup and engine writer takes: the selection and exact `--operation`
-are rechecked against state read inside it (a changed selection or project
-refuses at exit 8, writing nothing), then the config is installed and both T9
-steps run, so a competing writer waits or is refused. Next it installs the
-previewed `service_config` as
-`<state>/service/config.json`: compact sorted-key JSON plus a newline, created
-once with mode 0600 inside owner-only 0700 directories, through an exclusive
-link. A byte-identical existing file is accepted; a different one refuses at
-exit 5 and is never replaced. Last, it runs T9's PC contract
-(`tools/install/pc_activation/contract.v1.md`) through the handover's
-`executor(...)`, never a second composition: one `preview()` and one
-`execute(...)` of that same saved operation. The engine supplies the
-handover's production provider and a supervisor runner that refuses every
-command. Until native PC observation and current owner authority exist, the
-journal records `held`: no supervisor start, no unit publication and no App
-record. That result exits 6. A clean wake or repeated `activate` reuses the
-same saved journal operation and never starts twice. Only the call whose
-journal reaches `applied`, which T9 grants after a fresh healthy observation and
-a confirmed App record read-back, exits 0; afterwards the applied-record rule
-below holds every command at exit 6 for reconciliation. There
-is no flag, environment override, Loop creation, new room-cli invocation or
-secret provisioning in these commands. The service's packaged startup gate is
-the handover's (#2379). Existing source installations retain their established
-startup and updater channel.
-
-`pc_activation` reports T9's journal at `<state>/setup/pc-activation.json`,
-read with T9's own strict reader: `absent`, `unreadable` (unsafe or invalid,
-never treated as activation), `proposed`, `held` or `applied`, with the
-journal's operation id. `location_status` is `held` for a held journal and
-`unknown` for an unreadable or applied journal or an uncertain operation. While
-a journal exists, checked under the setup lock, only the exact current
-selection's own proposal may be previewed again, unchanged. Any other preview,
-including one matching an older proposal, refuses at exit 8 without changing
-setup state, the journal or the config, because T9 binds that journal to one
-selection.
-
-Preview persists one `activate_engine` proposal in the existing owner-only setup
-store, under its existing lock. Fingerprint binds location, selection revision,
-complete project settings, App ids and the exact runtime pin. Retry/reload reuses
-a matching proposal. The optional `engine` state field has exactly `location`,
-`revision`, `runtime`, `operation_id`, `fingerprint`, `cost`, as `engine_selection`
-defines; old states omitting it remain valid. Reader and writer stay strict.
-The proposed service configuration uses the existing service contract and App
-record sink inputs, never another updater/sink. Only an authorized Local
-`activate` installs it, as above; no existing config or channel is changed.
-
-Status creates nothing. An uncertain activation anywhere in this setup store
-holds status/preview/activation at exit 6 and retains its original operation;
-it is never refused, erased or retried. This is preservation pending exact-resource
-reconciliation, not proof a remote resource exists. Authorization for another
-operation or a changed selection cannot activate. An applied record alone is
-not positive runtime evidence. Location and status remain distinct. `not_activated` describes this setup operation, not an inventory claim that every other service or Loop is stopped.
-
-`setup/engine-cost.json` is an optional owner-only, non-symlink, single-link
-regular file of at most 4096 bytes, supplied explicitly by the observation owner.
-It is not fetched by these commands. Its exact `engine_cost_evidence` shape names
-CloudRoom usage, measured/estimated provenance, credits, positive observation
-window and current free allowance, and both observation timestamps. No account
-identifiers or credentials. Both timestamps must be within the last hour,
-without future time; bad/unsafe/stale/missing evidence is unknown, never zero.
-The final live ticket supplies actual observed evidence; synthetic records do
-not establish live measurement. Provider charges are separate and unavailable.
-
-The labelled monthly projection is credits/window_s times 2,592,000 seconds
-(30 days), an estimate at the observed rate, never an actual monthly charge.
-For a free owner, measured projection above 10% of the verified current allowance
-defaults to Local; at or below defaults to Cloud. Unknown or estimated evidence
-requires explicit location and establishes no affordable Cloud default. Fleet
-agent location remains an independent choice. The setup read uses the same
-stored evidence and freshness/threshold rules, with no external call.
-
-Exits: 0 proposal/status printed, or a confirmed PC activation; 1 missing
-package/runtime or output failure; 2 usage; 5 nothing activated (Cloud gap, no
-verified installation, a different installed config) or explicit choice
-required; 6 held PC activation or retained uncertain outcome; 8 stale preview
-selection, or a changed selection while a PC journal exists; 10 unavailable
-private state. Existing CLI error schemas and numeric meanings remain unchanged.
+The visual terminal app and its `openwiz.terminal-capability.v1` result were
+removed in 0.0.16. `ui` is not a command: it is a usage error (exit 2) that
+opens and starts nothing. No-argument `openwiz` prints the human help when
+stdin and stdout are both terminals, and is a bounded usage error otherwise.

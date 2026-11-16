@@ -1,0 +1,14 @@
+{
+  "schema": "openwiz.wizskills.v1",
+  "required_files": ["skills/README.md", "check/run.py", ".github/workflows/ci.yml", ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", "README.md", "CHANGELOG.md", "LICENSE", "install.sh"],
+  "skill_files": ["SKILL.md", "agents/openai.yaml"],
+  "carried_contracts": ["contracts/decisions.v1.md", "contracts/decisions.v1.schema.json", "contracts/plan-links.v1.md", "contracts/plan-links.v1.schema.json", "contracts/open-development.v1.md", "contracts/ops-dispatch.v1.md", "contracts/ops-dispatch.v1.schema.json", "contracts/github-identity.v1.md", "contracts/cli.v1.md"],
+  "project_settings": ["docs/agents/*.md", "changes/README.md", "GLOSSARY.md", "AGENTS.md", "CLAUDE.md", "docs/adr/*.md", "GLOSSARY-MAP.md", ".out-of-scope/*.md", "docs/grills/*.md", ".github/workflows/*.yml", ".github/workflows/*.yaml", "pnpm-workspace.yaml", "package.json", "packages/*/src"],
+  "plugin_name": "openwiz",
+  "marketplace_name": "wizskills",
+  "version_pattern": "(?:0\\.[1-9][0-9]*|[1-9][0-9]*\\.(?:0|[1-9][0-9]*))\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?",
+  "oid_pattern": "[0-9a-f]{40}",
+  "lock_fields": ["version", "commit", "tree"],
+  "release_fields": ["schema", "version", "commit", "tree"],
+  "release_schema": "openwiz.wizskills.release.v1"
+}

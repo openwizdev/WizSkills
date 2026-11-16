@@ -1,0 +1,30 @@
+# Test-only dependency record (WZ15/J53):
+# playwright-core 1.64.1 (Apache-2.0); no transitive npm dependencies.
+# Chrome for Testing and Chrome Headless Shell 156.0.8078.4, revision 1248,
+# pinned by playwright-core 1.64.1's browsers.json (BSD-3-Clause and bundled
+# third-party notices). Installed only for CI's browser proofs. No skill gains
+# a runtime dependency. Node is supplied by the hosted runner.
+name: WizSkills check
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned test-only browser tools
+        run: |
+          npm install --no-save --ignore-scripts --package-lock=false playwright-core@1.64.1
+          node node_modules/playwright-core/cli.js install --with-deps chromium
+          node --input-type=module -e "import { chromium } from 'playwright-core'; console.log('OPENWIZ_CHROMIUM=' + chromium.executablePath())" >> "$GITHUB_ENV"
+      - name: Skill rules, standalone check and every skill's suites
+        env:
+          TEST_JOBS: 2
+        run: python3 check/run.py

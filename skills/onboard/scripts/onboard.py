@@ -17,8 +17,10 @@ and whether install already gave the explanation. It reads current setup
 evidence only and refuses, naming each one, when a prerequisite is missing,
 refused, unknown or out of date; it never fills one in. `create-repo` makes the
 one disposable demo repository, private, with the user's own gh identity, only
-on --yes: it saves the name first, reads it back, and reads before any retry
-of a create whose answer was lost.
+on --yes: it saves the name first, creates it with its disclosed initial README
+commit in that one create (#1074: init proposes the brain on its default
+branch), reads back the repository, default branch and commit, and reads before
+any retry of a create whose answer was lost. It never pushes into a repository.
 
 `launch` starts the first fleet the way launch-fleet starts every fleet: it
 reads launch-fleet's own frontier (../../launch-fleet/scripts/fleet.sh
@@ -53,6 +55,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 
 LAUNCH_FLEET = Path(__file__).resolve().parents[2] / 'launch-fleet'
 FLEET_SH = LAUNCH_FLEET / 'scripts/fleet.sh'
@@ -385,11 +388,18 @@ def carry_on(got):
 
 # --- The demo repository --------------------------------------------------
 
-def look(name):
-    """'private', 'public' or 'absent', from one read; None when the read itself failed."""
+def gh_env():
     env = dict(os.environ)
     env.pop('GH_REPO', None)
-    result = run(['gh', 'repo', 'view', name, '--json', 'nameWithOwner,isPrivate'], env)
+    return env
+
+
+def look(name):
+    """The repository as GitHub shows it now, from reads only: 'absent', 'public',
+    'empty' (private, but no default branch and commit read back) or
+    {'branch', 'commit'} (private, its default branch at that commit). None when
+    a read failed or answered something else: unknown, never success."""
+    result = run(['gh', 'repo', 'view', name, '--json', 'nameWithOwner,isPrivate,defaultBranchRef'], gh_env())
     if result is None:
         return None
     if result.returncode != 0:
@@ -397,15 +407,44 @@ def look(name):
     try:
         found = strict(result.stdout.decode('utf-8'))
         assert found['nameWithOwner'] == name and type(found['isPrivate']) is bool
+        branch = (found['defaultBranchRef'] or {}).get('name') or ''
+        assert isinstance(branch, str)
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError, AttributeError, AssertionError):
+        return None
+    if not found['isPrivate']:
+        return 'public'
+    if not branch:
+        return 'empty'
+    result = run(['gh', 'api', '--include', '-X', 'GET',
+                  'repos/%s/git/ref/heads/%s' % (name, urllib.parse.quote(branch, safe='/'))], gh_env())
+    if result is None:
+        return None
+    head, _, body = result.stdout.replace(b'\r\n', b'\n').partition(b'\n\n')
+    status = re.match(rb'HTTP/[0-9.]+ ([0-9]{3})', head)
+    if status is None:
+        return None
+    if status.group(1) in (b'404', b'409'):  # no such ref; 409 is GitHub's empty repository
+        return 'empty'
+    try:
+        assert status.group(1) == b'200'
+        commit = strict(body.decode('utf-8'))['object']['sha']
+        assert isinstance(commit, str) and re.fullmatch('[0-9a-f]{40}', commit)
     except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):
         return None
-    return 'private' if found['isPrivate'] else 'public'
+    return {'branch': branch, 'commit': commit}
+
+
+def created_line(name, seen):
+    return 'Created and read back: %s, private, default branch %s at commit %s.' % (
+        name, seen['branch'], seen['commit'])
 
 
 def create_repo(got):
     name = got['--repo']
-    print('Effect: create one new private GitHub repository, %s, with your gh identity. Nothing else is created; '
-          'its CloudRoom project stays yours to make or pick.' % name)
+    print('Effect: create one new private GitHub repository, %s, with your gh identity, in one GitHub create with '
+          'its initial commit: a README.md holding only the title "# %s" on its default branch, which OpenWiz '
+          'init needs to propose the brain. Nothing else is created or pushed; its CloudRoom project stays yours '
+          'to make or pick.' % (name, name.split('/')[1]))
     if not got.get('--yes'):
         print("Nothing created. On the user's yes to exactly this, run again with --yes.")
         return 12
@@ -420,13 +459,24 @@ def create_repo(got):
     if seen is None:
         raise Exit(1 if not record else 6, 'Could not read whether %s exists; nothing created.' % name)
     if record and record['repo'] == name and record['state'] in ('pending', 'uncertain', 'created'):
-        if seen == 'private':
-            state.value['created'] = {'repo': name, 'state': 'created'}
+        if isinstance(seen, dict):
+            state.value['created'] = {'repo': name, 'state': 'created', **seen}
             if not state.save():
                 raise Exit(6, 'Could not save the created repository; it exists, so never create it again.')
-            print('Created and read back: %s, private.' % name)
+            print(created_line(name, seen))
             return 0
-        if seen == 'public' or record['state'] == 'created':
+        if seen == 'public':
+            raise Exit(5, '%s is not the private repository this onboarding created; nothing created.' % name)
+        if seen == 'empty':
+            if record['state'] == 'created':
+                raise Exit(5, '%s has no default branch and initial commit, which init needs; OpenWiz never pushes '
+                              'one into an existing repository. Add a first commit yourself, or choose a new '
+                              'name; nothing created.' % name)
+            state.value['created'] = {'repo': name, 'state': 'uncertain'}
+            state.save()
+            raise Exit(6, '%s exists, but its default branch and initial commit did not read back; nothing more '
+                          'was created or pushed. Run this again to read it back.' % name)
+        if record['state'] == 'created':
             raise Exit(5, '%s is not the private repository this onboarding created; nothing created.' % name)
     elif seen != 'absent':
         raise Exit(5, '%s already exists; choose another name, or use it as an existing repository; '
@@ -434,17 +484,18 @@ def create_repo(got):
     state.value['created'] = {'repo': name, 'state': 'pending'}
     if not state.save():
         raise Exit(10, 'Could not save the repository name first; nothing created.')
-    run(['gh', 'repo', 'create', name, '--private'])
+    run(['gh', 'repo', 'create', name, '--private', '--add-readme'])
     seen = look(name)
-    ended = {'private': 'created', 'absent': 'absent'}.get(seen, 'uncertain')
-    state.value['created'] = {'repo': name, 'state': ended}
+    ended = 'created' if isinstance(seen, dict) else 'absent' if seen == 'absent' else 'uncertain'
+    state.value['created'] = {'repo': name, 'state': ended, **(seen if ended == 'created' else {})}
     saved = state.save()
     if ended == 'created' and saved:
-        print('Created and read back: %s, private.' % name)
+        print(created_line(name, seen))
         return 0
     if ended == 'absent' and saved:
         raise Exit(5, 'GitHub did not create %s; nothing created. Try again only after the user says yes again.' % name)
-    raise Exit(6, 'Whether %s was created is uncertain; read it back before any retry (run this again).' % name)
+    raise Exit(6, 'Whether %s was created with its default branch and initial commit is uncertain; read it back '
+                  'before any retry (run this again).' % name)
 
 
 # --- Choices ----------------------------------------------------------------

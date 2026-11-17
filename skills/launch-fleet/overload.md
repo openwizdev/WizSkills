@@ -12,6 +12,18 @@ sh skills/launch-fleet/scripts/fleet.sh overload automatic-refresh
 sh skills/launch-fleet/scripts/fleet.sh overload nonessential-poll
 ```
 
+In an OpenWiz checkout, set `LAUNCH_FLEET_OVERLOAD_SUPPLY` to the absolute
+path of that checkout's own overload supplier, the supply script in its CI
+overload tool (MT6, #825), to have `fleet.sh overload`
+read the war room collector's queue fact now, before `merge-batch`,
+`automatic-refresh` and `nonessential-poll`, into a private file of that call's
+own that only its guard reads (`LAUNCH_FLEET_OVERLOAD_INPUT` is then unused, so
+concurrent calls never swap observations). A supplier that fails or can't start
+leaves the guard no input, so it refuses new work as unknown. `completion` and
+`reconciliation` read nothing more. That supplier is the checkout's own, never
+part of this skill; its use and failure handling are in that checkout's CI
+overload guide.
+
 The actions are `merge-batch`, `automatic-refresh`, `nonessential-poll`,
 `completion` and `reconciliation`. The output is one JSON decision. Exit 0
 admits that action, 1 refuses it, and 2 means invalid invocation. Errors never

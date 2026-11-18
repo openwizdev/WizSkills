@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 - 2026-11-18
+
+- `install`: no longer chooses or activates an engine; after setup it checks CloudRoom, explains the product in a few lines and hands over to `onboard`, and every step reuses what an earlier one recorded.
+- `launch-fleet`: `fleet.sh overload` can read the war room collector's queue at the time of each new-work call through an OpenWiz checkout's own supplier (`LAUNCH_FLEET_OVERLOAD_SUPPLY`), and refuses new work as unknown when that supplier fails; the limit-recovery notes name the war room's renamed files.
+- `onboard`: starts from a fresh install with a new Connect step for the one chosen repository (GitHub sign-in, the user's own App or an explicit skip, the prepared project and its private brain), reuses the recorded harness, model and effort, and launches the first fleet as one launch-fleet fleet thread instead of the engine's tick.
+- `setup`: the person may explicitly skip the App, so their verified personal GitHub login acts on the selected repository and the App stays missing.
+- `contracts/cli.v1.md` (carried contract): records the removal of the terminal app and `ui`, the retirement of the executing `fleet tick`, `--expect-plan` and the `engine` commands, and the shipped `loop validate`, `loop export`, `loop plan` and `loop apply` reports.
+
 ## 0.1.1 - 2026-11-16
 
 - `build-ticket`: builders rule on choices inside the ticket and log each ruling in the pull request, follow a project's standing supporting-edit rule, and answer the review loop's v2 states, including one fresh round.

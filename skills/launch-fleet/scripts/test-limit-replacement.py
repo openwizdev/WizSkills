@@ -30,7 +30,7 @@ def load(path, name):
 lr = load(HERE / 'limit-replacement.py', 'limit_replacement')
 reference = load(HERE.parent / 'test/ops-protocol/protocol.py', 'ops_protocol_reference')
 EXAMPLES = json.loads((HERE.parent / 'test/ops-protocol/examples.json').read_text())
-# The literal defaults of tools/war-room/limits.conf (limits-contract.md).
+# The literal defaults of tools/collector/limits.conf (limits-contract.md).
 SETTINGS = {'schema': 'closedwiz.factory-limits.v1',
             'minutes': {'builder_start': 10, 'reviewer_start': 5, 'merge': 5,
                         'fix_after_changes': 30, 'builder_question_answer': 15}}

@@ -6,7 +6,7 @@ python3 -I skills/launch-fleet/scripts/limit-recovery.py pass < input.json   # {
 ```
 
 `misses.json` holds synthetic open misses in TL2's stage-bench row shape
-(`tools/war-room/journey-contract.md`, section 10) and the derived pull
+(`tools/collector/journey-contract.md`, section 10) and the derived pull
 request facts the ops agent supplies after complete GitHub reads. Every
 snapshot, owner, approval and outcome in the tests is a **synthetic
 assumption**; no GitHub, CloudRoom or merge endpoint is called.

@@ -40,6 +40,8 @@ Then ask where the work goes, recommending the first:
 
 1. **A new disposable demo repository** (the default): one private GitHub repository, created with the user's own `gh` identity, with one initial commit on its default branch: a `README.md` holding only its title (`# <name>`), which init needs to propose the brain. Show its exact owner, name, visibility and that initial README commit, and that it is new and safe to delete later; create it only after the user's yes to exactly that:
 
+   **Sign in before creating the demo.** First run the installed GitHub sign-in tool from step 3, without `--repository` because the demo does not exist yet: `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state>`. It reuses a verified account; if signed out, show its sign-in effects and, on the user's yes, run it with `--yes` for GitHub's browser sign-in. Only after the account reads back, show the demo creation preview and ask for its separate yes. Step 3 later verifies access to the created repository. `create-repo --yes` also refuses before creation if it cannot verify the GitHub login, pointing back to this sign-in step.
+
    ```sh
    python3 <this skill's folder>/scripts/onboard.py create-repo --state <private state file> --repo <owner>/<name>        # shows the effect
    python3 <this skill's folder>/scripts/onboard.py create-repo --state <private state file> --repo <owner>/<name> --yes  # on the yes

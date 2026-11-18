@@ -455,6 +455,11 @@ def create_repo(got):
     record = state.value.get('created')
     if record and record['repo'] != name and record['state'] != 'absent':
         raise Exit(5, 'This onboarding already made %s; it makes one demo repository.' % record['repo'])
+    login = run(['gh', 'api', 'user', '--jq', '.login'], gh_env())
+    if (login is None or login.returncode != 0
+            or not re.fullmatch(rb'[A-Za-z0-9](-?[A-Za-z0-9])*', login.stdout.strip())):
+        raise Exit(5, 'GitHub sign-in could not be verified. Complete the GitHub sign-in step first '
+                      '(github_login.py sign-in), then run create-repo again; nothing created.')
     seen = look(name)
     if seen is None:
         raise Exit(1 if not record else 6, 'Could not read whether %s exists; nothing created.' % name)
@@ -667,13 +672,46 @@ def brief(spec, repo):
 
 
 def fleet_recorded(spec, env):
-    """True when the spec carries launch-fleet's `fleet active` record; None when unread."""
+    """Only configured record authors settle a start; unread input stays unknown."""
+    settings = run(['gh', 'api', 'repos/%s/contents/docs/agents/fleet.md' % env['GH_REPO'],
+                    '-H', 'Accept: application/vnd.github.raw+json'], env)
+    if settings is None or settings.returncode != 0:
+        return None
+    try:
+        # The same Record authors policy as fleet.sh settings(): exactly one
+        # row in GitHub identity, only comma-separated backticked logins, no
+        # extra cells or malformed entries, compared case-insensitively.
+        rows, identity = [], False
+        for line in settings.stdout.decode('utf-8').splitlines():
+            if line.startswith('## '):
+                identity = line == '## GitHub identity'
+            if identity and re.match(r'^\| *Record authors *\|', line):
+                rows.append(line)
+        if len(rows) != 1:
+            return None
+        row = re.fullmatch(r'\| *Record authors *\|([^|]*)\|\s*', rows[0])
+        login = r'`[A-Za-z0-9](-?[A-Za-z0-9])*(\[bot\])?`'
+        if row is None or not re.fullmatch(r'\s*' + login + r'(\s*,\s*' + login + r')*\s*', row[1]):
+            return None
+        authors = {value.lower() for value in re.findall(r'`([^`]*)`', row[1])}
+    except UnicodeDecodeError:
+        return None
     result = run(['gh', 'api', '--paginate', 'repos/%s/issues/%d/comments?per_page=100' % (env['GH_REPO'], spec),
-                  '--jq', '.[].body | split("\\n")[0]'], env)
+                  '--jq', '.[] | {author: .user.login, body} | @json'], env)
     if result is None or result.returncode != 0:
         return None
-    lines = result.stdout.decode('utf-8', 'replace').splitlines()
-    return any(line.strip() == FLEET_RECORD + str(spec) for line in lines)
+    try:
+        lines = result.stdout.decode('utf-8').split('\n')
+        if lines[-1] == '':
+            lines.pop()
+        comments = [strict(line) for line in lines]
+        if any(not isinstance(c, dict) or set(c) != {'author', 'body'} or not isinstance(c['body'], str)
+               or c['author'] is not None and not isinstance(c['author'], str) for c in comments):
+            return None
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return any(c['author'] is not None and c['author'].lower() in authors
+               and c['body'].split('\n')[0].strip() == FLEET_RECORD + str(spec) for c in comments)
 
 
 def launch(got):

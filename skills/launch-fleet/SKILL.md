@@ -188,7 +188,7 @@ Do every line. Lines of the same kind run **in parallel** (every `start`, once i
 
 **After a merge,** run the full check once more (`sh "<this skill's folder>/scripts/fleet.sh"`; a fleet thread runs its own, `fleet.sh spec <S>`) and start whatever the merge unlocked, in this same tick: no message names the tickets a merge unblocks.
 
-**Finish:** `room-cli loop report --outcome acted` (or `needs-you`), with one `--action` per change. Then, once every record and message is written, archive your own thread (`room-cli thread archive --self`), even when something needs the user: the `Needs you` message, the spec comment and the records on GitHub are the handoff, and the next tick resumes from them. A tick never stays open to wait for an answer. A fleet thread never archives itself while its spec is open.
+**Finish:** `room-cli loop report --outcome acted` (or `needs-you`), with one `--action` per change. Then, once every record and message is written, archive your own thread (`room-cli thread archive --self`), even when something needs the user: the `Needs you` message, the spec comment and the records on GitHub are the handoff, and the next tick resumes from them. A tick never stays open to wait for an answer. A fresh spec wake ends as described in Fleet threads.
 
 Done when every line is done and recorded, and the check prints no line you could act on.
 
@@ -266,7 +266,7 @@ A pull request is the loop's when it closes an approved ticket (its description 
 
 **A quiet reviewer** (a `check review` line): no `VERDICT` names the head 30 minutes after its reviewer was started or asked to re-check it. The line names the reviewer's thread and the comment that records it. The reviewer gets one more try, then a fresh reviewer takes over:
 
-1. **No verdict 30 minutes after the record:** read the thread (`room-cli thread output <its thread> --all`). A tick can read and tell only the threads it started itself, so a reviewer started by an earlier tick or by the orchestrator is out of reach. When the thread is out of reach or gone, do step 2 now. Otherwise tell it again, once: `room-cli thread tell <its thread> "No report yet for pull request #<P> at <commit>. If you are still reviewing, finish and post it. If not, start now: <the brief>"`, with the brief it was given (the review brief above for `review started`, the re-check message for `re-check sent`). Then record `launch-fleet: review told again <commit>` as a new comment on the pull request.
+1. **No verdict 30 minutes after the record:** fresh spec wakes use the GitHub and delivery checks in Fleet threads. Otherwise read the thread (`room-cli thread output <its thread> --all`). A tick can read and tell only the threads it started itself, so a reviewer started by an earlier tick or by the orchestrator is out of reach. When the thread is out of reach or gone, do step 2 now. Otherwise tell it again, once: `room-cli thread tell <its thread> "No report yet for pull request #<P> at <commit>. If you are still reviewing, finish and post it. If not, start now: <the brief>"`, with the brief it was given (the review brief above for `review started`, the re-check message for `re-check sent`). Then record `launch-fleet: review told again <commit>` as a new comment on the pull request.
 2. **Still no verdict 30 minutes after it was told again,** or the thread is out of reach: archive the thread (`room-cli thread archive <its thread>`), so it can't post a late verdict. First retain that reviewer's immutable claim mapping for archive-only cleanup, including when this edit replaces its original start record. Then edit the comment the line names (`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -f body='...'`) to `launch-fleet: review given up <commit>: <why>`. If the archive failed, say so in `<why>`: the `archive` line lists the thread again when the ticket closes.
 3. **The next check prints** `review #<P> for #<N> at <commit>: a fresh reviewer`: start one as in "Starting a review", the other-family reviewer from `fleet.md`'s `## Reviewer for Claude-built` or `## Reviewer for GPT-built` table, verified from the branch-matching `start checked` record and that exact thread's provider; unknown/conflicting family waits, never another model. A reviewer span recorded as `review given up` is never told again or asked to re-check, at any commit in that span.
 
@@ -344,7 +344,7 @@ Then record `launch-fleet: findings sent <commit>: decision <its comment id>: <f
    | `open, the merge queue is on`, maybe with `; it left the queue at <time>: <reason>` | Not merged and not in the queue; its base is the default branch, which has a queue | Step 2. But if a `launch-fleet: merge queued <commit>` record names this commit, the queue let it go: record `launch-fleet: merge blocked <commit>: left the merge queue: <the reason>` instead |
    | `stop: <why>`, an error, or no line | Anything else | Record `launch-fleet: merge blocked <commit>: <why>` |
 
-2. **Check the verdict came from the reviewer.** Every agent posts from the same GitHub account, so the comment alone can't show who wrote it. Read the reviewer's own thread (`room-cli thread output <its thread> --all`, the thread named in the `review started` record): it must show the same `VERDICT: APPROVE at <commit>` line, which `review-ticket` has the reviewer read back after posting. If it doesn't, don't merge.
+2. **Check the verdict came from the reviewer.** Fresh spec wakes use the GitHub verdict check in Fleet threads. In other wakes, every agent posts from the same GitHub account, so the comment alone can't show who wrote it. Read the reviewer's own thread (`room-cli thread output <its thread> --all`, the thread named in the `review started` record): it must show the same `VERDICT: APPROVE at <commit>` line, which `review-ticket` has the reviewer read back after posting. If it doesn't, don't merge.
 3. **Check it may go in** (the merge rules in `fleet.md`). Before admitting a
    new merge batch, run `fleet.sh overload merge-batch` with the shared durable
    state and current complete observation described above. Continue only on exit
@@ -527,23 +527,25 @@ records, using the existing `look`, `needs approval` and other record lines.
 
 Set up the loop with the project's fleet agent settings and private repository
 access. Confirm that fresh runs have an authorized route to read the assigned
-reviewer's own output and deliver to and archive existing agents. Parent-only
-CloudRoom access does not carry over to a new wake. Use the project's approved
-routing mechanism and its read-back requirements. An inbox intent is not a
-delivery or an acknowledgement. If access is unavailable, record a thread-free
-`launch-fleet: look:` on the spec and leave its current routing in place.
+reviewer's verdict on GitHub, deliver to assigned agents with
+`room-cli thread tell`, and hand off unreachable archives privately to the
+planner or orchestrator. If required access is unavailable, record a
+thread-free `launch-fleet: look:` on the spec and keep its current routing.
 
 ```sh
 sh "<this skill's folder>/scripts/loop.sh" --bundle "<owner>/<repo>" "<S>" \
   > /tmp/launch-fleet-<S>.sh
 room-cli loop create --name "launch-fleet #<S> <owner>/<repo>" --cron '*/10 * * * *' --new-thread \
+  --parent "<open Cloud manager in this project>" \
   --script-file /tmp/launch-fleet-<S>.sh --priority 2 \
   --prompt "Fleet wake for <owner>/<repo> spec #<S>. Read the installed launch-fleet skill and follow Fleet threads, Each wake."
 ```
 
 Use the absolute folder of this loaded skill to bundle the check. Add the
 project's fleet agent settings and include the literal skill-file lookup from
-step 1 in the wake prompt. The scheduler's sandbox can keep its check cache.
+step 1 in the wake prompt. Set the parent to the open Cloud planner or fleet manager in the same
+project and read it back before activation. Keep any old manager that still
+parents active agents open. The scheduler's sandbox can keep its check cache.
 The brief names the repository, spec number and installed skill. The project's private configuration supplies routing.
 Use the 30-minute schedule only when GitHub's messages are verified on.
 
@@ -582,10 +584,20 @@ Legacy records keep their existing takeover semantics during rollout.
 3. Do each current due line under the claims, review and merge gates in
    **2. Each tick**.
    Before an effect, resolve its assigned agent through private routing and
-   verify that the authorized route can perform it. When a route is missing
-   or an outcome is uncertain, record the gap and preserve the assignment,
-   without repeating the effect or recording success. An inaccessible
-   reviewer keeps its assignment. For routing changes,
+   use `room-cli thread tell <id> --mode queue --message-file <file>` for
+   delivery. Record a successful send only when tell's own result confirms
+   acceptance. A refusal or unknown outcome leaves the assignment in place
+   and goes to reconciliation. A quiet reviewer is checked on GitHub before
+   any reminder. Read verdicts only from the exact PR on GitHub. Bind them to
+   its current head and selected review claim, check the record author and
+   applicable admission decision, and stop on missing or conflicting
+   evidence. This replaces the thread-output check in step 4 for fresh spec
+   wakes. All other admission and exact-head checks still apply.
+
+   For an unreachable archive, relay the identity and request privately to
+   the authorized planner or orchestrator. Keep the archive pending until
+   the archive is confirmed. A restart that requires retirement also stays
+   pending until retirement is confirmed. For routing changes,
    save the updated map to the private repository's configured branch and
    read it back before posting public success. Apply the wake's own changes
    to the latest map, preserving other entries. If the save races another
@@ -595,10 +607,12 @@ Legacy records keep their existing takeover semantics during rollout.
    guard (`fleet.sh every`).
    On `fleet done #<S>` or after closing the spec, resolve its current loop
    through the private loop map and remove it.
-5. Report the pass using `room-cli loop report`, then archive this wake with
-   `room-cli thread archive --self`, even while the spec is open. Later
-   wakes reconstruct work from the records. End on unresolved work, too,
-   without waiting or starting a poller.
+5. Report the pass using `room-cli loop report` and end the turn. Archive the
+   wake with `room-cli thread archive --self` when it has no active or
+   unreconciled children. Archiving a parent can stop those children. If it
+   still parents such agents, leave its own archive pending with the planner
+   or orchestrator and end the turn. Later wakes reconstruct work from the
+   records. End on unresolved work, too, without waiting or starting a poller.
 
 **What the check costs** (#2543). The spec check uses the scheduler's cached
 REST ETags when available. A cache miss triggers a full read. The cache is

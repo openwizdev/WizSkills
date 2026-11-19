@@ -44,6 +44,13 @@ class Brief(unittest.TestCase):
              'You are the fresh builder for #12: one fresh round on pull request #31, on its branch '
              'room/12-synthetic, after the report at %s.' % HEAD, 'build-ticket'),
             (('diagnose',), 'Use the diagnose skill.', 'diagnose'),
+            (('tick', 'synthetic-owner/synthetic-repo', 'thr_synorch1'),
+             'You are a launch-fleet tick for synthetic-owner/synthetic-repo. Use the launch-fleet skill.', 'launch-fleet'),
+            (('wakes', 'synthetic-owner/synthetic-repo', 'thr_synorch1'),
+             "You are a launch-fleet tick for synthetic-owner/synthetic-repo, woken by GitHub's messages.",
+             'launch-fleet'),
+            (('wake', 4001, 'synthetic-owner/synthetic-repo'),
+             'Fleet wake for synthetic-owner/synthetic-repo spec #4001. Use the launch-fleet skill.', 'launch-fleet'),
         ]
         for args, start, skill in cases:
             with self.subTest(kind=args[0]):
@@ -51,12 +58,15 @@ class Brief(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertTrue(text.startswith(start), text)
                 self.assertIn(lookup(skill), text)
+        code, text = brief('tick', 'synthetic-owner/synthetic-repo', 'thr_synorch1')
+        self.assertTrue(text.endswith("do its Each wake section for the due lines below. "
+                                      "The orchestrator's thread is thr_synorch1."), text)
         code, text = brief('re-check', 31, HEAD, OLD, 'R1,R2', 'none')
         self.assertIn('Open findings: R1,R2. Changed since %s: git diff %s %s' % (OLD, OLD, HEAD), text)
 
     def test_malformed_targets_print_no_brief(self):
         for args in (('builder', '12; rm -rf /'), ('reviewer', 31, 'abc123'), ('fresh', 12, 31, 'main branch', HEAD),
-                     ('re-check', 31, HEAD, OLD, 'R1', 'thr_synthetic'), ('fleet', 1, 'not a repo'), ('nope',)):
+                     ('re-check', 31, HEAD, OLD, 'R1', 'thr_synthetic'), ('fleet', 1, 'not a repo'), ('tick', 'synthetic-owner/synthetic-repo', 'me'), ('nope',)):
             with self.subTest(args=args):
                 self.assertEqual(brief(*args), (2, ''))
 

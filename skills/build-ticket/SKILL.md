@@ -1,333 +1,68 @@
 ---
 name: build-ticket
-description: Build one ticket as its builder, proof first and inside its owned paths, hand back one green pull request, and stay with it through review and CI until it merges. Use when you are told you are the builder for a ticket, or when your ticket's pull request gets a review, fails CI or conflicts with main.
+description: Build one ticket as its builder, proof first and inside its owned paths, hand back one green pull request, and stay with it through review and CI until it merges. Use when you are told you are the builder for a ticket, or when your ticket's pull request gets a review, fails CI or conflicts with main. Reviewing someone else's pull request is review-ticket.
 ---
 
 # Build a ticket
 
-You are the **builder** for one ticket. You build it proof first, on your own branch, inside its owned paths, and hand back one pull request that passes the project's full test set in CI. Then you stay with it through review and CI until it merges. Each builder works in one thread. You never review, merge or delegate.
+You are the **builder** for one ticket: you take it to one merged pull request, in one thread, on your own branch. You never review, merge or delegate, and you start no helper agents. You work unattended: questions go on the ticket, never to the user. **Never wait awake:** no watcher, poll loop or `sleep` for CI, a review or another thread; end your turn, and the fleet's next message wakes you.
 
-Helpers and swarms are future ideas to benchmark before adoption.
+`T="python3 -I <this skill's folder>/scripts/ticket.py"`. Each command prints a short result; exit 1 is a refusal whose last line says why, exit 2 an unreadable input (stop and ask on the ticket).
 
-Your whole brief is one line: "You are the builder for #N. Use the build-ticket skill. Read 'skills/build-ticket/SKILL.md' if present, otherwise find '*/skills/build-ticket/SKILL.md' only inside your own harness's configured plugin cache: Codex uses CODEX_HOME/plugins/cache (default HOME/.codex/plugins/cache); Claude uses CLAUDE_CODE_PLUGIN_CACHE_DIR/cache when set, otherwise CLAUDE_CONFIG_DIR/plugins/cache (default HOME/.claude/plugins/cache); for another harness use its installation metadata. Prefer active installation metadata over cache scanning when available. During cache scans exclude other harness caches, source checkouts, orphaned versions marked .orphaned_at, and targets outside the selected cache. Follow symlinks and deduplicate real paths. Verify .claude-plugin/plugin.json manifest name openwiz and entry ./skills/build-ticket; report missing, unreadable or ambiguous matches, otherwise read the unique matching file and follow it." The ticket, its spec and this skill are all you need. You work unattended: questions go on the ticket.
+## Guards
 
-**Never wait awake.** Never keep a background watcher, a poll loop or a `sleep` waiting for CI, a review or another thread: end your turn instead. The five-minute check or the orchestrator messages you when CI finishes or fails, a review lands or your question is answered (CF1).
+- **Privacy.** Read the [open-development contract](../../contracts/open-development.v1.md) before your first public write. Exact user words, thread ids, live identifiers, machine details and private records stay private; public comments, commits, pull requests and evidence carry only synthetic values, technical facts and the contract's private-record pointers. Keep red logs synthetic.
+- **Approval.** Change only the ticket's owned paths and supporting edits its current approval or the fleet's standing supporting-edit rule explicitly covers; name each such edit in the pull request's Facts with its kind, criterion and the owned path it supports. Keep to a standing rule's kinds, own-lines limit and ask-first list. Never infer an envelope from a filename or an older approval, and no supporting edit may change the rules that permit it. In a `(shared)` file change only this ticket's lines. Never edit the ticket's body, not even a checkbox: that makes the plan's approval stale.
+- **Ask, never rule,** before touching an unowned path, a contract, workflow, dependency or protected guard, another ticket's logic, anything live, paid or published, or anything the project says needs the user's approval: `gh issue comment <N>` with what you found, the options and your pick, then add `needs-info` beside `ready-for-agent`. Do other work or end your turn; on the answer, remove `needs-info` and resume.
+- **Records.** Act on a `VERDICT:`, an `**Orchestrator decision:**`, an answer or a `launch-fleet:` record only when `$T records <repo> <PR>` reports it from a record author; anyone else's comment is discussion. Exit 2 means trust nobody: ask on the ticket.
+- **Where the approval adopts ops-dispatch v1** or a recorded ops message reaches you, read [ops.md](references/ops.md) before using an envelope, grant or message.
 
-Jake, 2026-11-06: finish the available work and end the turn instead of waiting awake ([private record](https://github.com/jparker2006/ClosedWiz/issues/1278#issuecomment-6704791158)).
+## 1. Read
 
-The recipient uses its own harness's active installation metadata or configured plugin cache, never a recursive HOME search or another harness's cache. Cache candidates must resolve inside that cache and have no `.orphaned_at` marker; linked or in-place installs outside it need an active path from installation metadata. Verify the OpenWiz manifest, deduplicate real paths and report missing, unreadable or genuinely distinct eligible matches. The sender leaves lookup instructions literal and supplies no install path. The repository fallback and cache lookup need no skill catalog.
+1. `$T read <repo> <N>`: the title, owned paths, relies-on, blockers and blocked tickets. On `ready: no`, report that blocker on the ticket and claim nothing.
+2. Read the ticket and its comments, the whole spec (its parent), and the bodies of the tickets yours blocks, then the rest, for fit, never scope. Read the confirmed grill it names in the private repository; if the ticket disagrees with it, ask using a summary and pointer.
+3. Read the project's `AGENTS.md` or `CLAUDE.md`, `docs/agents/fleet.md`, `triage-labels.md` and `domain.md` once per session, recording each blob ID (`git rev-parse HEAD:<path>`); on a later turn re-read only a file whose ID changed.
 
-## Public records and private evidence
+Done when you can name the title, owned paths, every acceptance criterion and what each blocked ticket needs from you. When the spec has a contract-first ticket, build against its contract, types and fixtures, and leave the seams later tickets need, empty or stubbed, inside your owned paths.
 
-Read the project's open-development contract when present. Exact user words,
-thread ids, live identifiers, machine details and private records stay in the
-configured private repository or private state. Public comments, commits, pull
-requests and evidence carry only synthetic values and technical facts.
+## 2. Plan the proof
 
-For a decision, record the decision in your own words, its date and the
-contract's pointer to the private issue/PR comment holding the exact answer.
-Ask the orchestrator when that record is missing or unreadable. Never paste
-exact answers or links to private files on the public tracker. Keep red logs
-synthetic before committing them; live evidence stays private, with a public
-technical summary and a verified private-record pointer where needed.
+For each acceptance criterion write its claim and evidence: a test at the seam the spec names, a check, a live observation or a review. A test never proves live behaviour. For a mandatory proof you can't produce now, push your checkpoint, ask for it with `needs-info` and claim no complete hand-back. Before each test, state the behaviour, the plausible bug and why existing tests miss it; reject self-comparisons, copied inventories, mock-supplied behaviour and expectations computed like the code. Keep every contract, security and proof-case test, even when slow.
 
-## Read first
+## 3. Build, red first
 
-**Reuse policy reads within this session.** Read the project's instructions (`AGENTS.md` or `CLAUDE.md`, including applicable folder instructions), `docs/agents/fleet.md` once per session and record each file's blob ID with `git rev-parse HEAD:<path>`. Before reusing a policy read, including on later turns and review re-checks, run that command again for each file needed. Reuse the read only if its ID matches the recorded ID; if it changed, re-read that file and record its new ID. If the check fails or the previous read is unavailable in context, re-read the file instead. All other required reads still apply.
-
-| Read | For |
-| --- | --- |
-| **The ticket** and its comments, read as `docs/agents/issue-tracker.md` says | What to build; its **owned paths** (the only files you may change); what it **relies on**; its acceptance criteria and its proof |
-| **The whole spec**: the ticket's parent issue, all of it, not only its testing decisions | Why; the shape the whole plan builds toward; its testing decisions: where to test; and its contract-first ticket, if it has one |
-| **The spec's other tickets**: their bodies, first those your ticket blocks (`gh issue view <N> --json blocking`), then the rest (`gh issue view <spec> --json subIssues`) | Fit, never as scope: what the tickets after yours will need from your work, so you build it to fit them (as in "Build so later tickets fit"). You never build another ticket's work |
-| **The confirmed grill** the ticket or its spec names, in the configured private repository | The decisions in the user's own words stay private. Read the private record; if the ticket disagrees, ask on the ticket using a decision summary and pointer, never the exact words |
-| The project's instructions: `AGENTS.md` or `CLAUDE.md` | Its rules: privacy, dependencies, and what needs the user's approval |
-| `docs/agents/fleet.md` | The scoped local checks, the full test set in CI, the CI checks and the merge rules |
-| `docs/agents/triage-labels.md` | The label for `needs-info` |
-| `docs/agents/domain.md` | The glossary and the ADRs (short records of hard-to-reverse decisions): use their words |
-
-Done when you can name the ticket's title, its owned paths, every acceptance criterion, and the tickets your ticket blocks with what each needs from it.
-
-The next two rules hold the whole time, from the first edit to the merge.
-
-## Stay inside your owned paths
-
-Change only files under the ticket's owned paths and supporting edits covered by its explicitly approved supporting envelope. In this skill's path checks and pull request Facts, include and identify those covered supporting edits alongside the listed owned paths; this does not make them newly owned. Reading any file is fine.
-
-**Supporting edits need existing approval.** When the ticket's current approval explicitly covers a supporting envelope (or an explicitly adopted standing rule covers that ticket), select the tests, fixtures, evidence and changelog needed for its approved behaviour and owned paths without another path-permission question. In the existing evidence or pull request description, name each supporting path, the acceptance criterion it serves, the owned path it supports and why the actual edit is needed. This is a plain explanation, not a new record format. Independent review checks it against the complete actual diff at the exact head. Do not infer an envelope from this skill, a filename or an old graph's approval: older approved tickets gain nothing silently. Keep approval currentness and the approved revision and fingerprint intact; any required change to a ticket's body, title, blockers or approved outcome follows the existing hold-first plan-change and reapproval procedure.
-
-**The project's standing supporting-edit rule.** The fleet's settings may hold one standing rule for every ticket: its kinds of supporting edit, the own-lines limit and an ask-first list. An edit it covers needs no question. Keep to its kinds and this ticket's own rows and lines, and list each use in the pull request's Facts, beside the changed paths, with its kind. Its changelog kind also satisfies "Changelog line" below: a covered `changes/<ticket>.md` needs no envelope and no path question. Anything outside it, or on its ask-first list, is still asked first, as below.
-
-**Example (synthetic):** a ticket owns `src/routes/export.rs` and its acceptance criterion says export refuses an existing destination. Its explicitly approved supporting envelope covers the needed tests, fixtures, evidence and changelog. A case in `tests/export.rs`, synthetic input in `tests/fixtures/export.json`, its red-run log and `changes/4001.md` can support that criterion without a new path question. Record each path and that relationship. A new import route in the same test file is outside the approved behaviour.
-
-Read the whole proposed supporting change, not its name: a fixture can execute code, and a setup script among the test fixtures can change permissions or make live calls. Scrutinize executable fixtures, weakened assertions and mixed diffs; split out any unrelated work. Check both the old and new paths of a rename, shared-file sections and existing owners. The envelope does not transfer another ticket's ownership or authorize protected rules, contracts/interfaces, dependencies, workflows, live actions or spending. A supporting edit cannot authorize itself by changing the policy or approval rules that permit it. Existing safeguards and approval gates still apply.
-
-If the work needs a change beyond that approved envelope and the standing rule, or its coverage or ownership is unclear, **stop before you edit it**. Ask on the ticket, as in "When you're stuck" (next): which exact file, why, and the smallest change. Edit nothing there until the orchestrator widens the paths, recorded on the ticket. Other builders own other paths, and an edit there can collide with theirs.
-
-**Small shared files.** An owned path marked `(shared)` (or `(shared: …)`, `(shared with …)`) is a small file other tickets also change, each its own lines; the note beside the path names them. Change only this ticket's own lines there (its row, its section), and never rewrite another ticket's lines. A shared file needs no link between the tickets, so whichever merges second fixes the conflict: on a conflict with `main`, merge it as step 5 says.
-
-Before each commit, `git diff --name-status --find-renames origin/main...HEAD` and `git status --short` list only owned paths or supporting edits covered and explained above; inspect both rename paths and the complete staged and unstaged diff too. The diff of each `(shared)` file touches only this ticket's lines. A supporting filename alone never passes this check.
-
-**The ticket's body is not yours either.** It is the plan the user approved: put progress in comments, on the ticket or the pull request, and never edit the ticket's body, not even to tick an acceptance box. An edit to it makes the plan's approval stale, so nothing more under its spec starts until the user approves again. (`plan-graph` reads a ticked box as unticked, so a box ticked out of habit is the one edit that stops nothing.)
-
-## Contract-shaped envelope and exact grants
-
-Where the current approval adopts [ops-dispatch v1](../../contracts/ops-dispatch.v1.md),
-check its `envelope` beside the complete approval table and unchanged revision-v2
-fingerprint. The record supplements that approval; it never replaces it or
-retrofits an envelope into an older graph. Bind repository, ticket, approval
-revision/fingerprint/comment and the actual `approved-envelope` rule. Select
-supporting edits under the plain instructions above, record each exact
-path/purpose/criterion/shared section/owner and its supported owned path and
-necessity, and carry that use into evidence and independent exact-head review.
-A label, free-form comment or self-described complete JSON supplies no authority.
-
-For an uncovered narrow same-intent edit, post `Builder question:` on the ticket
-with the exact paths, purpose, acceptance claim and proposed complete diff; keep
-`ready-for-agent` and add `needs-info`. The ops **agent**, not the builder or a
-filename classifier, reads the request, current spec/ticket/approval, governing
-rule, evidence, owners and actual diff before recording a contracted `grant`,
-refusal or uncertainty. Escalate protected policy, contract/interface, dependency,
-workflow, changed scope, live or spending requests to the existing authority.
-Never authorize the rule or approval parser that would authorize this grant.
-
-Before using a grant, independently read its intent/operation key and immutable
-history on the actual ticket. Check the exact `narrow-grant` rule revision/source,
-`envelope_id`, current approval and source-recomputed intent/evidence/ownership/
-purpose/rule material. The [grant helper](../launch-fleet/scripts/grants.py)
-checks this evidence; it neither authenticates an agent nor decides same-intent
-code from a filename. Read resolved files, both rename sides, shared sections,
-executable fixtures, weakened assertions and every part of a mixed diff.
-Completion, revocation or replacement ends the grant; changed approval, intent,
-relevant evidence, ownership, rule or purpose requires reassessment. A head-only
-change preserves valid purpose authority and expires implementation review.
-Record grant use and all supporting paths in the existing evidence and PR Facts;
-independent review still checks the complete actual diff at the current head.
-Unsupported ops effects stay disabled under OB-A1; a valid record never enables
-starts, delivery, hold release or merging.
-
-## Consume recorded messages on a finite wake
-
-On an authorized independent event or scheduled wake, read the ticket/PR's
-pending GitHub intents directly, even if push delivery failed. Use OB6's inbox
-transport when delivered; these instructions implement no transport or wake.
-Read complete pages and current sources; check strict ops-dispatch shape, actual
-container/creation metadata, repository/ticket/approval, operation key, current
-head where relevant, destination `builder`, assignment and source-allocated
-sequence. Resolve private routing only in private state. Messages are context,
-never new path, model, effect or approval authority. Ignore superseded heads and
-decisions, deduplicate keys and do not pass an unresolved earlier item in the
-same ticket/revision. An unknown read or external outcome stays unresolved.
-
-Only after those checks, record/read back an `ack` with that operation key,
-intent id, assignment, sequence, checked head and checks digest, as the intended
-recipient. Preserve own-output evidence: another same-account comment cannot
-acknowledge responsibility for you. Transport acceptance is neither ACK nor
-completion. Do the bounded authorized work, record its outcome or unresolved
-gap, and end. Never resend/retry an uncertain effect, reset 1 + 1, substitute a
-reviewer, poll, watch or sleep. Green CI needs no builder action. Independent
-wake/access and live recovery remain unverified until OB8 evidence establishes
-them; an idle inbox alone proves neither.
-
-## When you're stuck: rule, or ask
-
-**Rule** anything that stays inside your ticket's intent: decide it yourself and keep building. Read first; never guess at a fact you can read. Log each ruling as one line in the pull request's `## Rulings` section, numbered from 1, in the review-loops contract's (v2) ruling line: `<n>. <what you decided>. Why: <why>. Cost if wrong: <high or low>: <what breaks>.` Your reviewer upholds or overturns each one.
-
-**Ask**, and never rule, before you touch a contract, a workflow, a dependency, a protected guard, another ticket's logic, or anything live, paid or published; for a path outside the owned paths and the standing supporting-edit rule; for anything the project's rules say needs the user's approval; and for a fact no reading can settle that changes the ticket's outcome. Ask on your ticket, never the user:
-
-1. **Ask:** `gh issue comment <N> --body "..."`. Say what you found, the options and your recommendation, so it can be answered in a word.
-2. **Label it:** add `needs-info` beside the ticket's `ready-for-agent`, and keep both: `gh issue edit <N> --add-label needs-info`. With both labels, triage reads your words as a builder's question to answer; with `needs-info` alone, it reads them as a reply to sort. The label names are in `docs/agents/triage-labels.md`.
-3. **Wait.** Carry on with any work the question doesn't touch, or end your turn. The five-minute check (the fleet's loop, which `launch-fleet` runs) sees the label; the orchestrator answers on the ticket, or brings it to the user.
-4. **Resume:** when the answer is on the ticket, remove `needs-info` if it's still there (`ready-for-agent` stays), and carry on.
-
-## Build so later tickets fit
-
-You read the whole spec and the other tickets' bodies (Read first) so that your work fits the tickets after yours. They are for fit, never scope: you never build another ticket's work.
-
-- **Build against the future shape.** When the spec has a contract-first ticket (the one that writes down the contract, types, schemas, fixtures, and stubs with tests that later tickets fill in), build against what it wrote: use its contract's words, its types and schemas, test on its fixtures, and fill in only your own stubs. If your ticket needs that shape to change, ask on the ticket, as in "When you're stuck".
-- **Leave the seams** the later tickets need, inside your owned paths: a named function they will call, a fixture slot they will fill, a stub they will write. Leave each one empty or stubbed, within the project's test rules, never with their behaviour in it.
-- **Name each seam in the pull request's Facts** (**Seams:**), with the ticket it is for, so its builder and your reviewer can find it.
-
-Done when you can name each seam you will leave and the ticket it is for, or that there are none.
-
-## 1. Plan the proof
-
-Before any code, write down each **claim** the work makes and the **evidence** that will prove it: at least one for each acceptance criterion, each a test or a check you can run.
-
-- **Test at the seams** the spec or the ticket names: the public edges where you can see behaviour without reaching inside. If you need a seam neither names, ask on the ticket.
-- **Test what the code does,** through its public interface, never how it does it. Take each expected value from somewhere independent (a known literal, a worked example, the spec), never computed the way the code computes it.
-- **Name each claim's evidence:** a test on fixtures, a live observation, or a review. A test never proves live behaviour.
-- **Record each proof's readiness:** its owning boundary, command or artifact, inputs, owner, and whether you can produce it now. A mandatory proof you can't produce (another owner's controlled observation, a live result) stays missing: green CI and fixtures never stand in for it. Push your checkpoint, ask for it on the ticket with `needs-info` (as in "When you're stuck"), and claim no complete hand-back.
-
-Done when every acceptance criterion has a named proof and its readiness.
-
-## Before writing or changing a test
-
-- State the observable behaviour or contract, the plausible bug that would break it,
-  and why existing tests miss that bug; for a proof case, name its claim.
-- Give each contract one owning test at the strongest boundary. Add a case to an
-  existing table or shared fixture before making a near-copy.
-- Reject self-comparisons, copied inventories, source greps without a user-facing
-  contract, call-shape assertions, mocks that supply the asserted behaviour,
-  expectations generated by the code under test, and test-only production seams.
-- Keep API, schema, allowlist, security, release, storage and ordering contracts,
-  and every P/M/N/AP/A/V proof case, even when static or slow; cost alone never justifies removal.
-- Run a regression test before the fix: it must fail because of the intended bug.
-
-## 2. Build it, red first
-
-Work on your own branch, made from the latest default branch: the one you were started on, or a new one. This skill calls the default branch `origin/main`; use yours if it differs. One ticket, one branch, one pull request.
-
-1. **Hooks first:** before your first push, install every git hook the project's instructions (`AGENTS.md` or `CLAUDE.md`) name. The pre-push hook checks privacy only. CI gates formatting, lint and tests.
-2. **Red:** write one proof and run it. It must fail, for the reason its claim gives. Read where it failed: a red that stops in setup (fixture or schema loading) before the code under test runs is not the claim's red. Fix the setup, or ask for the exact path if you don't own it, and run it again; a red that reaches the claim's own assertion is the proof. Keep that run's output in the ticket's evidence folder (if its owned paths have one), and commit it before the fix, so the history shows red came first.
-3. **Green:** write just enough code to pass it.
-4. **Next slice:** one proof, then its code, then the next. Each slice teaches you something the next one uses.
-
-Run the red/green proof and affected tests locally (step 3); CI runs the full set. Commit early and push often.
+1. Branch from the latest default branch; one ticket, one branch, one pull request. Install the hooks the project's instructions name, and run `$T author` before your first commit.
+2. **Red:** write one proof and run it; it must fail at its own assertion for the claim's reason, not in setup. Commit it and its synthetic log before the fix.
+3. **Green:** just enough code to pass, then the next slice. Every deleted test names its keeper.
+4. Log each choice inside the ticket's intent as a ruling: `<n>. <ruling> Why: <reason> Cost if wrong: high|low: <consequence>`.
+5. A product change adds `changes/<N>.md` per `changes/README.md` when owned or covered; infra, docs and tests use the `no-changelog` label, or say why no line is needed when the label is absent.
 
 Done when every proof passes and every red run is kept.
 
-## Changelog line
+## 4. Check and hand back
 
-For a product change, add `changes/<ticket>.md` in the ticket's pull request, following the project's changelog contract (`changes/README.md`): one kind and one short public sentence, true and no stronger than the evidence; the version comes from the ticket's milestone. Check the owned paths and current, explicitly approved supporting envelope first. An owned line needs no path question. If the envelope covers this exact changelog edit, record its acceptance criterion, supported owned path and why it is necessary, then use the contract's explicit supporting-envelope exception without another path question. If neither owned nor covered, ask on the ticket for that exact path before editing it. The envelope cannot authorize changes to the changelog contract or any other protected rule, widen an older approval, or grant new product behaviour or publication permission. Keep the line accurate through review and include it in the hand-back diff check.
-
-For infra, docs and tests, use the `no-changelog` pull request label instead of a line; explain the exemption in the description. Never use the label to hide a product change. Until the label exists (`gh label list --search no-changelog` prints nothing), do not create it: state in the description that no line is needed, and why.
-
-## First-successful-push receipt
-
-Before the first push, choose a private durable `receipt_file` outside the
-checkout and record its path in private resumable state. Run the normal push
-with the existing hooks and approvals. Immediately after it succeeds, capture
-its completion time and pushed head once. A failed push records nothing.
-
-```sh
-git push origin HEAD &&
-push_at=$(date -u +%Y-%m-%dT%H:%M:%SZ) &&
-push_head=$(git rev-parse HEAD) &&
-printf 'First successful push: %s at %s\n' "$push_head" "$push_at" > "$receipt_file"
-```
-
-Keep that receipt across retries and restarts; never replace its timestamp on
-subsequent pushes, force updates or review fixes. After opening the ticket's
-PR, set `pr` to its number and post that captured file on the PR, then read the
-comment back. Before retrying a failed comment write, read the PR's comments;
-reuse an identical existing receipt rather than posting again. Keep any
-unposted receipt privately if PR creation fails. Never reconstruct a lost
-receipt from PR creation, commit dates, CI starts or the current head.
-
-```sh
-gh pr comment "$pr" --body-file "$receipt_file"
-```
-
-The exact single-line receipt is a sourced builder observation (#2177), not a
-GitHub push-event timestamp. A missing or unavailable receipt remains unknown.
-This is timing evidence only and changes no hand-back, live, spending, review or
-merge gate.
-
-## 3. Check before you hand back
-
-1. **Main:** `git fetch origin`. Merge it in only when it conflicts or the orchestrator asks, as in step 5: `git merge-tree --write-tree HEAD origin/main` (git 2.38 or later) exits 1 on a conflict. A branch that is only behind stays as it is.
-2. **Scoped local checks:** locally run the red/green proof and the tests your change can affect, plus formatting and lint checks for the touched crates, on the commit you will hand back. Leave the full workspace and browser suites to CI. Run nothing beside the full set in the same checkout when `docs/agents/fleet.md`'s test commands say its builds replace files the tests use; anything beside it goes in a separate worktree with its own build output. Never share build output between those worktrees. Follow `docs/agents/fleet.md`'s test-command rule, if it has one. If a check fails, fix it and rerun only the failed checks.
-3. **The checklist:** check your work against every item in [checklist.md](checklist.md) that applies. Each item is a kind of mistake that cost a review round before. Fix what you find, red first.
-4. **Your diff:** read the complete actual diff, including supporting edits and both rename paths, against the current approval and the reasons recorded above. Only owned paths or covered supporting edits, and in each `(shared)` file only your own lines; respect existing owners. Check deceptive filenames, executable fixtures, weakened assertions and mixed changes for unapproved behaviour or protected edits. No secret, key or personal detail; synthetic values in fixtures; no new dependency the ticket doesn't allow. Supporting work grants none of the protected permissions listed above; send any uncovered or unclear change through the existing exact-path question procedure before editing it.
-
-Done when the scoped local checks pass on the commit you will hand back, and every checklist item that applies holds. CI runs the full suites; its passing result at the exact head is the hand-back gate.
-
-## 4. Hand back
-
-Open the ready pull request once the scoped local checks pass, so CI can run the full suites. The hand-back gate is passing CI at its exact head; review and merge still wait for it.
-
-1. **Commit it green.** The hand-back commit's subject contains the word **green**. It is the commit the scoped local checks passed on, or one on top of it that adds only the logs of runs at that commit. Keep the word out of every other commit's subject: a pull request whose head says green is a hand-back.
-2. **Push,** then open the pull request, ready for review (a draft is not a hand-back), or update its description if it exists. Push and open it as the App, with every commit authored and committed as the user, as `launch-fleet`'s "GitHub identity" says. Title it `#<N>: <the ticket's title>`, and write it as below.
-3. **Stop.** There is no message to send: the five-minute check finds your green head and starts the review. End your turn.
-
-Done when the pull request's head is your green commit and its description names that exact commit.
-
-## The pull request
-
-Matt Pocock's `pr` format, so the reviewer and the user see the change fast, then our facts, so they can trust the head. Keep the prose short, skip preambles, and use the glossary's words.
+1. `git fetch origin`; merge `origin/main` only on a conflict (`git merge-tree --write-tree HEAD origin/main` exits 1) or when asked.
+2. Run the scoped local checks `docs/agents/fleet.md` names for what you touched; CI runs the full set.
+3. Check every item that applies in [checklist.md](checklist.md).
+4. `$T scope <repo> <N> --supporting <path>...` must end `scope: ok`; then read the complete diff, both rename sides and every executable fixture for secrets, real identifiers, weakened assertions and unapproved dependencies.
+5. Commit the hand-back with **green** in its subject: the commit the checks passed on, or a logs-only commit on top. No other subject says green. Push with `$T push <private receipt file> -- git push origin HEAD`; it keeps the first successful push's receipt and never replaces it. If `openwiz github token` mints for the repository, push and open the pull request as the App, as [launch-fleet's GitHub identity](../launch-fleet/SKILL.md#github-identity) says; otherwise as today's account.
+6. Open the pull request ready, titled `#<N>: <ticket title>`, in the format below, then `$T post-receipt <repo> <PR> <receipt file>`; on exit 1 keep the file and rerun later. End your turn: the fleet starts the review once CI passes at your exact head.
 
 ```markdown
-Closes #<N>
-
-## Summary
-
-<the smallest picture of the change>
-
-## Evidence
-
-- **Before:** <the failing-first run: the proof, and how it failed>
-  **After:** <the same proof passing>
-
-## Merge danger
-
-**Door:** <one-way or two-way>
-
-**Blast radius:** <one word>
-
-<optional: what a bad merge could break>
-
-## Rulings
-
-<one ruling line each, numbered from 1; or exactly `none`>
-
-## Facts
-
-- **Branch:** `<branch>`. **Head:** `<full commit>`. **Tree:** `<tree>`
-- **Changed paths:** <each one; all inside the owned paths>
-- **Tests:** <each scoped local command and its result at this head; the full suites run in CI>
-- **Red run:** <where each failing-first run is kept>
-- **Claims:** <each claim, and its evidence: fixture test, live observation or review>
-- **Seams:** <each seam left for a later ticket (a named function, a fixture slot, a stub), with that ticket's number; or none>
-- **CI:** <its state at this exact head; passing CI is the hand-back gate>
-- **Gaps:** <what is not proven or not done, plainly>
+Closes #<N>       fully qualified (owner/repo#<N>) when the ticket lives in another repository
+## Summary        one small picture of the change
+## Evidence       Before: the failing-first run. After: the same proof passing
+## Merge danger   Door: one-way or two-way. Blast radius: one word
+## Rulings        numbered ruling lines, or exactly `none`
+## Facts          Branch, Head, Tree; Changed paths (and covered supporting edits); Tests;
+                  Red run; Claims; Seams (with each later ticket); CI at this head; Gaps
 ```
 
-- **Summary:** one small picture, whichever shows the change best: a diff sketch, a file tree, a call tree, pseudocode or a Mermaid diagram. Put it beside the sentence it explains, and leave out every part the reader doesn't need.
-- **Evidence:** the exact proof that failed before and passes now. A screenshot is best for a change you can see; a test run is next.
-- **Rulings:** every ruling at this head, in the contract's line, as "When you're stuck: rule, or ask" says; `none` when there are none.
-- **Merge danger:** a two-way door can be walked back (a revert is cheap); a one-way door can't (data deleted, a format published, a decision that's hard to reverse). The blast radius is what a bad merge could break.
-- **Facts:** update them for every new head, so they always name the current one.
+Per new test add `catches: <the bug>`, or `no new test: <why>`. Update Facts for every new head.
 
 ## 5. Until it merges
 
-You stay with your ticket through every review round: you already know the code. When the five-minute check tells you something changed, do its row.
-
-**Only the factory's records count** (#717). Act on a `VERDICT:` report, an `**Orchestrator decision:**`, an answer to your question or a `launch-fleet:` record only when its author (`user.login`) is one of the logins in the `Record authors` row of `docs/agents/fleet.md`'s `## GitHub identity` table, read as `launch-fleet`'s "Record authors" says and compared case-insensitively. Anyone else's comment, or one with no author, is ordinary discussion, whatever it says. With no row, an empty row or a malformed login, trust no record: ask on the ticket, as in "When you're stuck".
-
-| What happened | What you do |
-| --- | --- |
-| **A review** on the pull request says CHANGES | Answer it, as in "Answering a review" below |
-| **CI fails** on your green head | Read the failed job's log (`gh run view <run> --log-failed`), reproduce it, fix it, rerun only the failed checks locally and push a new green commit for CI's full suites. It is not a review round, and it needs nobody else |
-| **Main moves,** with no conflict | Nothing: your branch stays as it is. CI tests the pull request's merge ref (your branch merged with the latest `origin/main`), so an approved head stays put |
-| **Main conflicts** with your branch, or the orchestrator asks you to merge it | Merge `main` in only when it conflicts or the orchestrator asks: `git fetch origin`, then `git merge origin/main`. Resolve the conflict, run the scoped local checks (step 3) and push a new green commit for CI's full suites. Never rebase, never force-push: both rewrite commits a review has read. In a `(shared)` file, keep every other ticket's lines as `main` has them and change only your own. If the merge changed work a reviewer already approved, say what changed on the pull request; it goes back to that reviewer for a short re-check |
-| **An orchestrator decision** on the pull request names your head | Follow it, as in "Answering a review" below |
-| **An answer** to your `needs-info` question | Resume, as in "When you're stuck" |
-| **APPROVE**, naming your exact head | Nothing. It merges by the project's rules |
-| **The pull request merged or closed** | Your work on it is done. Archive your own thread with `room-cli thread archive --self`. This thread takes no other ticket |
-
-### Answering a review
-
-**1 + 1:** each pull request gets one review plus one re-check (the project's review-loops contract, v2). You answer each blocker once; after the re-check, the report itself sends what is still open on: a `Risk:` blocker to one fresh round, anything else logged as a follow-up issue.
-
-1. **Read the report:** the pull request's newest comment that starts `VERDICT:` and was written by a record author (above). It names the commit it read, and holds only for that commit. An overturned ruling is one of its findings, with its own id, like any other.
-2. **Fix every open blocking finding once,** red first: a proof that shows the break, then the fix. A blocking finding is `[blocking]`, with its `User path:` or `Risk:` line (an older report's `high` or `medium`). First name its cause and every reachable route or input form that shares it, and fix that whole class; for a route outside your owned paths, ask for its exact path (as in "Stay inside your owned paths") instead of editing it. Polish findings (`[polish]`, an older report's `low`) are already filed as polish issues by the reviewer: never fix them in this pull request unless an orchestrator decision says so.
-3. **Or dispute it,** if you think a finding is wrong: answer it with evidence instead of fixing it. The reviewer decides, and a finding is disputed only once. A finding waiting only on another owner's evidence needs no new head: say so in your answer, without a commit.
-4. **Run the scoped local checks** (step 3), rerunning only failed checks after a failure, then push a new green commit for CI's full suites. Update the Rulings section for any new ruling.
-5. **Answer in one comment on the pull request** before you end your turn, one line per open id: `R1 fixed at <commit>: <its proof>`, or `R1 disputed: <your evidence>`. The reviewer reads it there, once CI is green on your new head, for the one re-check.
-
-The report's last paragraph, its `Next:` line, is one of the contract's four v2 states. Do what its row says:
-
-| `Next:` line | What you do |
-| --- | --- |
-| `Next: the builder fixes or disputes R1 and R2 once, then one re-check.` | Steps 2 to 5 for each named blocker, then hand back for the one re-check |
-| `Next: a fresh, stronger builder fixes R2 once, then one final check.` | Nothing: the fleet archives you and starts the fresh builder. End your turn |
-| `Next: park R2 as a decision for Jake.` | Nothing: it waits for Jake's decision |
-| `Next: none open. It merges by the project's merge rules.` | Nothing. It merges by the project's rules |
-
-**The fresh round.** If your brief starts you for one fresh round on an existing pull request, read its newest `VERDICT:` report and fix only the `Risk:` blockers its `fresh` line names, once each, red first, as in steps 2, 4 and 5; fix nothing else and open no new pull request. Then push a green commit for the final check and end your turn. The round is that one fix, never a reset of the one review plus one re-check: the final check merges, logs or parks what is left.
-
-**The orchestrator's decision** only relays Jake's answer to a parked finding: one comment on the pull request starting `**Orchestrator decision:**`, naming the finding and the head it parked at. `fix once more` means: fix those blockers once more, as in steps 2 to 5 (follow the diagnosis it carries, if any), and hand back for one more check. `log and merge` means: change nothing for them; each becomes a polish issue and the pull request merges by the usual merge rules. A failed CI run is never a review round. Jake is asked only for a security, privacy, live, spending or publishing call, never by you: such a call goes on the ticket, as in "When you're stuck: rule, or ask".
+When a review, CI failure, conflict or decision arrives, read [review.md](references/review.md) and do its row. When the pull request merges or closes, run `room-cli thread archive --self`; this thread takes no other ticket.
 
 ## Licence
 

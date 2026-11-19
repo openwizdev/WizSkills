@@ -457,6 +457,8 @@ def create_repo(got):
     if state.value.get('setup') and state.value['setup']['repository'] != name:
         raise Exit(5, 'Setup already selected %s for this onboarding; it makes no second repository.'
                    % state.value['setup']['repository'])
+    if state.value.get('repo') not in (None, name):
+        raise Exit(5, 'This onboarding is for %s; it makes no second repository.' % state.value['repo'])
     record = state.value.get('created')
     if record and record['repo'] != name and record['state'] != 'absent':
         raise Exit(5, 'This onboarding already made %s; it makes one demo repository.' % record['repo'])
@@ -873,11 +875,12 @@ def resume(got):
         raise Exit(2, 'usage: --state takes an absolute path')
     value = state.read()
     created, launched = value.get('created') or {}, value.get('launch') or {}
-    repo, spec = value.get('repo') or created.get('repo'), value.get('spec')
+    demo = created.get('repo') if created.get('state') != 'absent' else None  # an absent create made nothing
+    repo, spec = value.get('repo') or demo, value.get('spec')
     if created.get('state') in ('pending', 'uncertain'):
         step = ('project', 'Creating %s is %s: run create-repo --repo %s --yes again; it reads before it creates.'
                 % (created['repo'], created['state'], created['repo']))
-    elif not repo or created.get('state') == 'absent' and not value.get('setup'):
+    elif not repo:
         step = ('project', 'Offer the ideas, then choose or create its one repository.')
     elif not value.get('setup'):
         step = ('connect', 'Connect %s with the installed tools, then run continue.' % repo)

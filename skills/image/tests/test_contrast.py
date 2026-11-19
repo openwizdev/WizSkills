@@ -37,6 +37,12 @@ class Contrast(unittest.TestCase):
         failing = run('#718399', '#1b222b', '--min', '4.5')
         self.assertEqual((failing.returncode, failing.stdout), (1, '4.13:1 fail (needs 4.5:1)\n'))
 
+    def test_threshold_compares_the_unrounded_ratio(self):
+        # catches: 4.499:1 passing 4.5 because the shown value rounds to 4.50.
+        # WCAG thresholds have no rounding.
+        result = run('#7171ad', '#ffffff', '--min', '4.5')
+        self.assertEqual((result.returncode, result.stdout), (1, '4.50:1 fail (needs 4.5:1)\n'))
+
     def test_bad_colours_are_refused(self):
         # catches: a token name or short form silently read as some colour.
         for args in [('gold', '#000000'), ('#fff', '#000000'), ('#gggggg', '#000000'),

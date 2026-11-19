@@ -11,22 +11,33 @@ attempt that stopped before reaching that branch's end.
 
 ## LV1 outcomes and trial accounting
 
-The [four read-back receipts](lv1.json) each record one attempt at the
-baseline pin. All four have zero retries. Host token fields and
-workflow-only wall time remain unknown for all four.
+The [read-back receipts](lv1.json) preserve the four original attempts and
+the one authorized plan-graph repeat at the baseline pin. Each receipt
+reports zero retries within its attempt. Host token fields remain unknown
+for all five attempts.
 
-| Workflow | Observed outcome | Spawn-to-receipt upper bound | Cloud Credits |
-| --- | --- | ---: | ---: |
-| `grill.new` | Pass | 329 s | 3 |
-| `plan-graph.approval` | Unknown. Fixture rejected the GraphQL read before graph display or approval. | 279 s | 4 |
-| `build-ticket.regression` | Pass | 253 s | 4 |
-| `review-ticket.exact-head` | Pass | 235 s | 3 |
+| Workflow and attempt | Observed outcome | Fixture workflow time | Spawn-to-receipt upper bound | Cloud Credits |
+| --- | --- | ---: | ---: | ---: |
+| `grill.new` | Pass | Unknown | 329 s | 3 |
+| `plan-graph.approval`, original | Unknown. The simulator rejected the GraphQL read before graph display or approval. | Unknown | 279 s | 4 |
+| `plan-graph.approval`, repeat | Pass | 8,849 ms | 299 s | 3 |
+| `build-ticket.regression` | Pass | Unknown | 253 s | 4 |
+| `review-ticket.exact-head` | Pass | Unknown | 235 s | 3 |
 
-The [supplemental read-back](https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999452169)
-reports 14 Cloud Credits in total. The bounds include startup, fixture work
-and publishing the receipt, rounded up for timestamp precision. Credits
-cover the logged thread activity in the source hour, including any archive
-turn. Both stay outside the workflow receipt's elapsed time and token fields.
+The [repeat receipt](https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999562018)
+records a pass after the simulator's GraphQL field parser was fixed. The first
+sandbox was unavailable, so the operator reconstructed the fixture from its
+sanitized receipt. The original revision bytes and fingerprint could not be
+compared. The repeat's instrumented workflow timer excludes setup and receipt
+publication. The baseline CSV uses the repeat's outcome and time for its
+single plan-graph summary row.
+
+The [combined read-back](https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999575215)
+reports 17 Cloud Credits across five attempts and retains the
+[original four-attempt accounting](https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999452169).
+Spawn-to-receipt bounds include startup, fixture preparation and publication,
+rounded up for timestamp precision. Cloud Credits cover the reported thread
+activity and stay outside the workflow receipt's elapsed time and token fields.
 
 Other representative cases and the additional pilot acceptance cases were
 unrun. The evidence establishes the observed before outcomes and static

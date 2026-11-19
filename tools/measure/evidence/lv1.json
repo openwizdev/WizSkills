@@ -1,6 +1,36 @@
 {
-  "cloud_credits_total": 14,
+  "cloud_credits_total": 17,
   "date_utc": "2026-11-19",
+  "repeat_attempt": {
+    "fixture_limitation": "The first sandbox was unavailable. The fixture was reconstructed from the sanitized original receipt, so the original revision bytes and fingerprint could not be compared.",
+    "receipt": {
+      "case": "plan-graph.approval",
+      "commit": "89fc285ce551f341b8d308732bcd8d4467ace353",
+      "effort": "medium",
+      "host": "codex",
+      "metrics": {
+        "discovery_tokens": null,
+        "entrypoint_tokens": null,
+        "input_tokens": null,
+        "output_tokens": null,
+        "reference_tokens": null,
+        "retries": 0,
+        "tool_output_tokens": null,
+        "wall_ms": 8849
+      },
+      "model": "gpt-6.2-sol",
+      "outcome": "pass",
+      "schema": "wizskills.measurement.v1"
+    },
+    "source": "https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999562018",
+    "trial_accounting": {
+      "cloud_credits": 3,
+      "receipt_posted_utc": "04:19:21",
+      "spawn_request_utc": "04:14:23",
+      "spawn_to_receipt_upper_bound_seconds": 299
+    },
+    "trial_accounting_source": "https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999575215"
+  },
   "trial_accounting_source": "https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999452169",
   "workflows": {
     "build-ticket.regression": {

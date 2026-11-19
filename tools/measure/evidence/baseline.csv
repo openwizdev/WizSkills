@@ -13,7 +13,7 @@ install.pinned,89fc285ce551f341b8d308732bcd8d4467ace353,99,1782,unknown,unknown,
 launch-fleet.wake,89fc285ce551f341b8d308732bcd8d4467ace353,720,18244,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
 onboard.resume,89fc285ce551f341b8d308732bcd8d4467ace353,141,2894,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
 overnight.gate,89fc285ce551f341b8d308732bcd8d4467ace353,81,1985,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
-plan-graph.approval,89fc285ce551f341b8d308732bcd8d4467ace353,580,9008,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,0
+plan-graph.approval,89fc285ce551f341b8d308732bcd8d4467ace353,580,9008,pass,8849,unknown,unknown,unknown,unknown,unknown,unknown,0
 research.synthesis,89fc285ce551f341b8d308732bcd8d4467ace353,168,2041,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
 review-ticket.exact-head,89fc285ce551f341b8d308732bcd8d4467ace353,476,7757,pass,unknown,unknown,unknown,unknown,unknown,unknown,unknown,0
 setup.repair,89fc285ce551f341b8d308732bcd8d4467ace353,93,1954,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown

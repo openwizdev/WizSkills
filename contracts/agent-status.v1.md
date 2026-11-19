@@ -43,12 +43,13 @@ Then one `key: value` line per field, in this order, each key once; optional fie
 | `state` | yes | `working`, `asking`, `done` or `stopped`; `stopped` may carry its reason, `stopped (<why>)` |
 | `harness` | yes | The agent's harness, as its fleet settings name it, for example `Claude Code` or `Codex` |
 | `model` | yes | The agent's model and effort, for example `Opus 5.5 Medium` |
+| `skills` | yes | Every skill the agent ran for this note, each `<skill>@<version>`, joined by `, `: the skill's folder name and the version of the skills package it ran from (its `.claude-plugin/plugin.json` `version`), for example `build-ticket@0.1.2, launch-fleet@0.1.2`. A writer reports the skills its agent actually ran; there is no default |
 | `step` | yes | One short public sentence: the agent's last step |
 | `time` | yes | When that step happened, UTC, `YYYY-MM-DDTHH:MM:SSZ` |
 | `pr` | no | The ticket's pull request: `https://github.com/<owner>/<repo>/pull/<n>` |
 | `preview` | no | An `https://` preview link of that pull request, which the app shows as-is |
 
-Every value is one line of 1 to 300 characters with no control character; `harness` and `model` hold at most 60, and a `stopped` reason at most 100 with no parentheses.
+Every value is one line of 1 to 300 characters with no control character; `harness` and `model` hold at most 60, and a `stopped` reason at most 100 with no parentheses. In `skills`, a skill's name is lowercase letters, digits and single hyphens, and its version is `<major>.<minor>.<patch>` in digits; nothing else (no path, no URL, no other word) is a skill.
 
 Example (synthetic):
 
@@ -58,6 +59,7 @@ agent: builder
 state: working
 harness: Claude Code
 model: Opus 5.5 Medium
+skills: build-ticket@0.1.2
 step: opened the pull request; CI is running
 time: 2030-01-02T03:04:05Z
 pr: https://github.com/example/site/pull/42
@@ -87,7 +89,8 @@ The writer refuses such text before any call to GitHub.
 
 ```sh
 status.py write --repo <owner>/<name> --ticket <n> --agent builder|reviewer|fleet \
-  --state working|asking|done|stopped [--why <text>] --harness <text> --model <text> --step <text> \
+  --state working|asking|done|stopped [--why <text>] --harness <text> --model <text> \
+  --skills '<skill>@<version>[, <skill>@<version>…]' --step <text> \
   [--pr <pull request url>] [--preview <https url>] [--time <YYYY-MM-DDTHH:MM:SSZ>] [--note <comment id>]
 status.py check --repo <owner>/<name>
 ```

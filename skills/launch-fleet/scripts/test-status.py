@@ -127,10 +127,10 @@ def ago(minutes):
 
 
 def note(agent='builder', state='working', step='started the build', time='2030-01-02T03:00:00Z',
-         pr=None, preview=None, harness='Claude Code', model='Opus 5.5 Medium'):
+         pr=None, preview=None, harness='Claude Code', model='Opus 5.5 Medium', skills='build-ticket@0.1.2'):
     """The text form the contract fixes, key by key."""
     lines = [MARKER, 'agent: ' + agent, 'state: ' + state, 'harness: ' + harness, 'model: ' + model,
-             'step: ' + step, 'time: ' + time]
+             'skills: ' + skills, 'step: ' + step, 'time: ' + time]
     lines += ['pr: ' + pr] if pr else []
     lines += ['preview: ' + preview] if preview else []
     return '\n'.join(lines)
@@ -192,7 +192,7 @@ class Tracker(unittest.TestCase):
     def write(self, state, step, time, *extra, agent='builder'):
         return self.run_status('write', '--repo', REPO, '--ticket', '12', '--agent', agent, '--state', state,
                                '--harness', 'Claude Code', '--model', 'Opus 5.5 Medium',
-                               '--step', step, '--time', time, *extra)
+                               '--skills', 'build-ticket@0.1.2', '--step', step, '--time', time, *extra)
 
     def ticket(self, world=None):
         return next(it for it in (world or self.load())['issues'] if it['number'] == 12)
@@ -200,8 +200,8 @@ class Tracker(unittest.TestCase):
 
 class Write(Tracker):
     def test_second_run_edits_the_one_note_and_asking_sets_then_clears_needs_info(self):
-        # catches: a second run posting another note, a stranger's planted marker taken as
-        # the agent's note, asking without needs-info, needs-info left after asking, or any
+        # catches: a second run posting another note, the skills the agent passed not written
+        # as given, a stranger's planted marker taken as the agent's note, asking without needs-info, needs-info left after asking, or any
         # building or in-review label written.
         self.save()
         first = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
@@ -217,7 +217,8 @@ class Write(Tracker):
 
         pr = 'https://github.com/example/skills/pull/31'
         back = self.write('working', 'handed back; CI is green', '2030-01-02T05:00:00Z', '--note', '9001',
-                          '--pr', pr, '--preview', 'https://31.example-site.pages.dev')
+                          '--pr', pr, '--preview', 'https://31.example-site.pages.dev',
+                          '--skills', 'build-ticket@0.1.2, diagnose@0.1.3')
         self.assertEqual((back.returncode, back.stdout), (0, '#12: builder working, status note 9001 edited\n'))
         world = self.load()
         self.assertEqual(self.ticket(world)['labels'], ['ready-for-agent'])
@@ -225,7 +226,7 @@ class Write(Tracker):
         self.assertEqual(self.ticket(world)['comments'][1]['body'], note())
         self.assertEqual(self.ticket(world)['comments'][3]['body'],
                          note(step='handed back; CI is green', time='2030-01-02T05:00:00Z', pr=pr,
-                              preview='https://31.example-site.pages.dev'))
+                              preview='https://31.example-site.pages.dev', skills='build-ticket@0.1.2, diagnose@0.1.3'))
         self.assertEqual(self.writes(), [
             ('POST', 'repos/example/tracker/issues/12/comments'),
             ('PATCH', 'repos/example/tracker/issues/comments/9001'),
@@ -285,7 +286,8 @@ class Write(Tracker):
 class Claims(Tracker):
     def test_the_oldest_live_note_of_a_kind_holds_the_claim(self):
         # catches: a second builder claiming a ticket another builder holds, a lapsed or
-        # stopped note still blocking, or another kind's note blocking a builder.
+        # stopped note still blocking, another kind's note blocking a builder, or a note
+        # without a well-formed skills line read as a claim.
         cases = [
             ('a live builder note blocks', [comment(104, BOT, note())], 3),
             ('an asking builder note blocks', [comment(104, 'Synthetic-Owner', note(state='asking'))], 3),
@@ -294,6 +296,8 @@ class Claims(Tracker):
             ('a done builder note does not', [comment(104, BOT, note(state='done'))], 0),
             ('a live fleet note does not', [comment(104, BOT, note(agent='fleet'))], 0),
             ('an unreadable note does not', [comment(104, BOT, MARKER + '\nagent: builder')], 0),
+            ('a note without skills does not', [comment(104, BOT, note().replace('skills: build-ticket@0.1.2\n', ''))], 0),
+            ('a note with a bad skills line does not', [comment(104, BOT, note(skills='build-ticket'))], 0),
         ]
         base = json.loads(json.dumps(self.world))
         for name, planted, code in cases:
@@ -368,6 +372,10 @@ PRIVATE = [
     ('--step', 'project prj_synfleet1'),
     ('--preview', 'https://example.invalid/thr_synpreview1'),
     ('--why', 'thread thr_synbuilder1 ended'),
+    ('--skills', 'build-ticket@0.1.2, /home/synthetic-dev/skills/grill'),
+    ('--skills', '~/skills/build-ticket@0.1.2'),
+    ('--skills', 'build-ticket@0.1.2, thr_synbuilder1'),
+    ('--skills', '"build-ticket@0.1.2"'),
     ('--step', 'Robin said "ship it"'),
     ('--step', 'Robin said \u201cship it\u201d'),
     ('--step', '> ship it'),
@@ -384,6 +392,16 @@ BAD_SHAPE = [
     ('--step', 'tab\there'),
     ('--step', 'x' * 301),
     ('--model', 'm' * 61),
+    ('--skills', 'build-ticket'),
+    ('--skills', 'build-ticket@0.1'),
+    ('--skills', 'build-ticket@v0.1.2'),
+    ('--skills', 'Build-Ticket@0.1.2'),
+    ('--skills', 'build_ticket@0.1.2'),
+    ('--skills', 'build-ticket@0.1.2,review-ticket@0.1.0'),
+    ('--skills', 'build-ticket@0.1.2, '),
+    ('--skills', 'skills/build-ticket@0.1.2'),
+    ('--skills', 'https://github.com/example/skills@0.1.2'),
+    ('--skills', ', '.join(['build-ticket@0.1.2'] * 16)),
     ('--time', '2030-01-02 03:00:00'),
     ('--pr', 'https://github.com/example/skills/issues/31'),
     ('--pr', '#31'),
@@ -397,11 +415,15 @@ GOOD_SHAPE = [
     ('--why', 'lease expired'),
     ('--step', 'x' * 300),
     ('--model', 'm' * 60),
+    ('--skills', 'build-ticket@0.1.1, review-ticket@0.1.0'),
+    ('--skills', 'launch-fleet@10.20.30'),
+    ('--skills', ', '.join(['build-ticket@0.1.2'] * 15)),
     ('--step', 'checked https://github.com/acme/home/pull/1 and a/home/b'),
     ('--pr', 'https://github.com/example/skills/pull/31'),
     ('--preview', 'https://31.example-site.pages.dev/app?x=1'),
 ]
 FIELD = {'--agent': 'agent', '--state': 'state', '--why': 'state', '--harness': 'harness', '--model': 'model',
+         '--skills': 'skills',
          '--step': 'step', '--time': 'time', '--pr': 'pr', '--preview': 'preview'}
 
 
@@ -430,10 +452,14 @@ def valid(schema, node, value):
 class Refuse(Tracker):
     def args(self, flag, value):
         values = {'--agent': 'builder', '--state': 'working', '--harness': 'Claude Code',
-                  '--model': 'Opus 5.5 Medium', '--step': 'started the build', '--time': '2030-01-02T03:00:00Z'}
+                  '--model': 'Opus 5.5 Medium', '--skills': 'build-ticket@0.1.2', '--step': 'started the build',
+                  '--time': '2030-01-02T03:00:00Z'}
         if flag == '--why':
             values['--state'] = 'stopped'
-        values[flag] = value
+        if value is None:
+            del values[flag]
+        else:
+            values[flag] = value
         args = ['write', '--repo', REPO, '--ticket', '12']
         for key, item in values.items():
             args += [key, item]
@@ -441,7 +467,8 @@ class Refuse(Tracker):
 
     def test_private_or_bad_text_is_refused_before_any_call(self):
         # catches: a thread id, machine path, CloudRoom id, quoted words or a bad shape
-        # reaching the public note, or a refusal that comes after a call.
+        # reaching the public note (in any field, skills included), a note written with no
+        # skills line, or a refusal that comes after a call.
         self.save()
         for flag, value in PRIVATE + BAD_SHAPE:
             with self.subTest(flag=flag, value=value):
@@ -452,6 +479,9 @@ class Refuse(Tracker):
                     self.assertNotIn(value, result.stderr)
                 self.assertEqual(self.calls(), [])
         self.assertEqual(self.load(), self.world)
+        missing = self.run_status(*self.args('--skills', None))
+        self.assertEqual((missing.returncode, missing.stdout, self.calls()), (2, '', []))
+        self.assertRegex(missing.stderr, r'^status\.py: refused: skills: missing')
         why = self.run_status(*self.args('--state', 'working') + ['--why', 'lease expired'])
         self.assertEqual((why.returncode, why.stdout, self.calls()), (2, '', []))
         self.assertRegex(why.stderr, r'^status\.py: refused: state: ')
@@ -460,7 +490,7 @@ class Refuse(Tracker):
         # catches: the schema the app validates with and the writer accepting different values.
         schema = json.loads(SCHEMA.read_text())
         base = {'agent': 'builder', 'state': 'working', 'harness': 'Claude Code', 'model': 'Opus 5.5 Medium',
-                'step': 'started the build', 'time': '2030-01-02T03:00:00Z'}
+                'skills': 'build-ticket@0.1.2', 'step': 'started the build', 'time': '2030-01-02T03:00:00Z'}
         self.assertTrue(valid(schema, schema, base))
         for flag, value, good in [(f, v, False) for f, v in BAD_SHAPE] + [(f, v, True) for f, v in GOOD_SHAPE]:
             with self.subTest(flag=flag, value=value):
@@ -469,6 +499,7 @@ class Refuse(Tracker):
                 self.assertEqual(result.returncode == 0, good, result.stderr)
                 field = dict(base, state='stopped (%s)' % value) if flag == '--why' else dict(base, **{FIELD[flag]: value})
                 self.assertEqual(valid(schema, schema, field), good)
+        self.assertFalse(valid(schema, schema, {k: v for k, v in base.items() if k != 'skills'}))
         self.assertEqual(schema['$defs']['label']['enum'], ['spec', 'ready-for-agent', 'ready-for-human', 'needs-info', 'held'])
         self.assertEqual(schema['$defs']['state']['enum'], ['working', 'asking', 'done', 'stopped'])
 

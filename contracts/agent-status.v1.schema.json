@@ -5,7 +5,7 @@
   "description": "The fields of one status note, as read from its key: value lines after the marker line '<!-- openwiz:status v1 -->'. See agent-status.v1.md for the note's text form, which notes count, the claim rules, the people-set labels and what a note never holds.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["agent", "state", "harness", "model", "step", "time"],
+  "required": ["agent", "state", "harness", "model", "skills", "step", "time"],
   "properties": {
     "agent": {
       "enum": ["builder", "reviewer", "fleet"]
@@ -19,6 +19,12 @@
     },
     "model": {
       "$ref": "#/$defs/short"
+    },
+    "skills": {
+      "description": "Every skill the agent ran, each <skill>@<version>, joined by ', '.",
+      "type": "string",
+      "maxLength": 300,
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*@[0-9]+\\.[0-9]+\\.[0-9]+(, [a-z0-9]+(-[a-z0-9]+)*@[0-9]+\\.[0-9]+\\.[0-9]+)*$"
     },
     "step": {
       "$ref": "#/$defs/text"

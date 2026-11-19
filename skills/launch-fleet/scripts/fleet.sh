@@ -8,7 +8,7 @@
 #   sh fleet.sh frontier              every ticket that may start now: "#N title"
 #                                     (a ticket of an approved plan graph, or an
 #                                     issue approved on its own, its blockers merged)
-#   sh fleet.sh holds                 every contract hold and builder note that is due
+#   sh fleet.sh holds                 every contract change note due for a builder
 #   sh fleet.sh claim N COMMENT_ID    after a tick posts a claim on ticket or pull request N:
 #                                     "go #N" if the claim is the oldest live one and N is
 #                                     still due, else "withdraw #N: <why>"
@@ -1440,7 +1440,7 @@ def hits_since($s; $tie): . as $t | cutoff($s) as $c | relies as $ps
            | select(. != null) | select(. as $f | any($ps[]; . as $p | $f | matches($p)))] | unique)}
        | select(.files | length > 0)] | sort_by(.pr) end;
 def hits($s): hits_since($s; false);
-def due_hits($s): records as $rs | [hits($s)[] | .pr as $p | select(any($rs[]; .r | test("^(held for|noted) #\($p)\\b")) | not)];
+def due_notes($s): records as $rs | [hits($s)[] | .pr as $p | select(any($rs[]; .r | test("^(held for|noted) #\($p)\\b")) | not)];
 def held($s): ([records[] | kind("held for") | select(.r | startswith("held for ordering:") | not) | .at] | max) as $h | approved_at($s) as $a
   | $h != null and ($a == null or $h > $a);
 # Every hold comment of any kind, as read: a `held ...` record (contract,
@@ -1487,7 +1487,7 @@ def ordering_open_claims: . as $t
      | (.h | tonumber) as $id | select($t | ordering_done({id: $id}) | not)
      | {id: $c.databaseId, hold: $id, at: $c.createdAt, edited: ($c.updatedAt // $c.createdAt), r: $r}];
 def ordering_inflight: (ordering_open_claims | length) > 0;
-# #2112 (OB7): an approval answers a contract hold only through a complete,
+# #2112 (OB7): an approval answers an existing contract hold only through a complete,
 # unchanged cutoff. No declared-contract change merged at or since that
 # approval (by either name of a rename, or a deletion; a `noted` record tells a
 # builder but approves nothing), no release claim is unresolved, and the plan
@@ -1504,22 +1504,20 @@ def start_clear($s):
   and all(.blockedBy.nodes[]; blocker_done)
   and start.state == "queued"
   and (open_prs | length) == 0
-  and (held($s) | not)
-  and (due_hits($s) | length) == 0;
+  and (held($s) | not);
 def ready_but_current($s): has_role("ready-for-agent") and start_clear($s)
   and (labelled_held | not) and (ordering_inflight | not);
 def ready($s): ready_but_current($s) and ($s == null or current($s));
 def may_start($s): ready($s) and (refused_lately(start.last; "start") | not);
 # A fleet thread'"'"'s takeover (ClosedWiz#192) starts a builder too, so it keeps
 # every gate of an ordinary start (Sol R1 on #1517): approved and current,
-# ready, no other triage label, its blockers merged, not held, no contract
-# change due. Only the gates a takeover is already past are left out: a
+# ready, no other triage label, its blockers merged and no hold.
+# Only the gates a takeover is already past are left out: a
 # recorded builder and its open pull request.
 def takeover_clear($s): has_role("ready-for-agent")
   and ([has_role("needs-info"), has_role("needs-triage"), has_role("ready-for-human"), has_role("wontfix")] | any | not)
   and all(.blockedBy.nodes[]; blocker_done)
-  and (held($s) | not) and (labelled_held | not) and (ordering_inflight | not)
-  and (due_hits($s) | length) == 0;
+  and (held($s) | not) and (labelled_held | not) and (ordering_inflight | not);
 def takeover_ready($s): takeover_clear($s) and current($s);
 # The orchestrator archived the old builder: "old builder archived, thread <id>".
 def old_archived: any(records[]; .r | test("^old builder archived, (thread |start [0-9]+$)"));
@@ -1673,17 +1671,16 @@ def ticket_lines_now($s): . as $t
     elif (looks | length) > 0 then records as $rs | looks[] | look($t.number; $rs; .)
     elif is_person($s) then
       (if release_due($s) then "release #\(.number): approved again since its hold; take the held label off" else empty end),
-      (due_hits($s)[] | "hold #\($t.number): \(.files | join(", ")) changed in #\(.pr)"),
-      (if has_role("ready-for-human") and (labelled_held | not) and (held($s) | not) and (due_hits($s) | length) == 0
+      (if has_role("ready-for-human") and (labelled_held | not) and (held($s) | not)
           and all(.blockedBy.nodes[]; blocker_done) and (.blockedBy.pageInfo.hasNextPage | not)
           and (any(records[]; .r | test("^told the user\\b")) | not)
        then "person #\(.number): \(.title) (spec #\($s.number)) is ready, and only the user can do it" else empty end)
     else
       ordering_lines($s),
       (if release_due($s) and (ordering_hold == null) then "release #\(.number): approved again since its hold; take the held label off" else empty end),
-      (building as $b | due_hits($s)[]
-        | if $b then "note #\($t.number): \(.files | join(", ")) changed in #\(.pr); tell its builder\($t | bthread)"
-          else "hold #\($t.number): \(.files | join(", ")) changed in #\(.pr)" end),
+      (if building then due_notes($s)[]
+        | "note #\($t.number): \(.files | join(", ")) changed in #\(.pr); tell its builder\($t | bthread)"
+        else empty end),
       (pending_wait as $w
        | if builder == null or $w == null then empty
          else $W.waited["\($w.number)"] as $b | resume_claim($w) as $claim
@@ -1827,11 +1824,6 @@ def take_over_again($s; $st): records as $rs
       + (if ($br | length) == 1 then "continue branch \($br[0])" else "build it, as it has no branch yet" end)
       + " (its record: comment \($st.last.id); retry after \"\($st.last.r)\")" end;
 def to_builder: test("^(note|resume|reconcile resume|check start|CI failed|findings|merge main in) ");
-# A contract change while the builder is out of the fleet thread'"'"'s reach
-# (Sol R4 on #1517): no builder can be told of it, so it is a hold, as for a
-# ticket with no builder yet, which the user re-approves before the takeover
-# goes on.
-def takeover_holds($s): . as $t | due_hits($s)[] | "hold #\($t.number): \(.files | join(", ")) changed in #\(.pr)";
 def ticket_lines($s):
   (if .state == "OPEN" and is_planned($s) and (looks | length) == 0 then
      .blockedBy.nodes[]? | completion_request
@@ -1839,9 +1831,9 @@ def ticket_lines($s):
   (fleet_of($s) as $f | start as $st
   | if $f != null and .state == "OPEN" and is_approved($s) and (looks | length) == 0
        and ($st.state == "started" or $st.state == "checked") and ($st.rec | inherited($f))
-    then takeover_holds($s), take_over($s; $f; $st.rec), (ticket_lines_now($s) | select(to_builder | not))
+    then take_over($s; $f; $st.rec), (ticket_lines_now($s) | select(to_builder | not))
     elif .state == "OPEN" and is_approved($s) and (looks | length) == 0 and taking_over($s)
-    then takeover_holds($s), take_over_again($s; $st), (ticket_lines_now($s) | select((to_builder or test("^(start|hold) #")) | not))
+    then take_over_again($s; $st), (ticket_lines_now($s) | select((to_builder or startswith("start #")) | not))
     else ticket_lines_now($s) end);
 
 # A spec'"'"'s approval: a look when it lists no tickets, a re-approve when the
@@ -1928,7 +1920,7 @@ def wake: [($W.specs | sort_by(.number)[]
 def frontier: [candidates | .s as $s | .t
   | select(.state == "OPEN" and is_approved($s) and (looks | length) == 0 and may_start($s))
   | {number, title}] | unique_by(.number) | .[] | "#\(.number) \(.title)";
-def holds: check | select(test("^(hold|note) "));
+def holds: check | select(startswith("note #"));
 # The claim rule: a tick that posted a claim goes only if no older claim is
 # still live (starting, started, start checked; or for a review, starting,
 # started or re-check sent on the same commit), no builder or pull request is

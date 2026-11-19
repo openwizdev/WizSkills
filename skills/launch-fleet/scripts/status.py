@@ -241,7 +241,7 @@ def viewer():
 
 
 EDITS = '''query($id: ID!, $n: Int!) {
-  node(id: $id) { ... on IssueComment { userContentEdits(first: $n) { nodes { diff } } } }
+  node(id: $id) { ... on IssueComment { userContentEdits(first: $n) { nodes { diff editedAt } } } }
 }'''
 HISTORY = 20
 
@@ -250,23 +250,35 @@ def replaced(made, fields):
     """The note under this writer's edits, from GitHub's edit history (newest first, each the
     full body), or None when there is none. It skips this edit's own earlier tries, which a retry
     after exit 2 leaves (the same write: the same fields but the time), so a release under the
-    first try is still found. Later edits by others may sit above this edit."""
+    first try is still found, but only a release that landed once the oldest try had started
+    (its editedAt at or after that try's time, which the writer stamps before it reads). A release
+    this agent read and then resumed stays under its resume (#57 R1). Later edits by others may
+    sit above this edit."""
     try:
         found = gh('POST', 'graphql', {'query': EDITS, 'variables': {'id': made['node_id'], 'n': HISTORY}})
-        texts = [x['diff'] for x in found['data']['node']['userContentEdits']['nodes']]
+        nodes = found['data']['node']['userContentEdits']['nodes']
+        texts = [x['diff'] for x in nodes]
+        stamps = [x['editedAt'] for x in nodes]
     except (KeyError, TypeError, ValueError) as error:
         raise Failed(f'note {made.get("id")} was edited but its edit history was not read: {error!r}')
-    if not all(isinstance(x, str) for x in texts):
+    if not all(isinstance(x, str) for x in texts + stamps):
         raise Failed(f'note {made.get("id")} was edited but its edit history was not read')
     versions = [parse(x) for x in texts]
     k = next((j for j, v in enumerate(versions) if v == fields), None)
     if k is None:
         raise Failed(f'note {made.get("id")} was edited but its edit history does not hold the edit')
     same = {key: value for key, value in fields.items() if key != 'time'}
-    k += 1
+    first = k = k + 1
     while k < len(versions) and versions[k] and dict(versions[k], time=None) == dict(same, time=None):
         k += 1
     if k < len(versions):
+        if k > first and versions[k] and versions[k]['state'] not in CLAIMING:
+            try:
+                unread = when(stamps[k].replace('.000', '')[:19] + 'Z') >= when(versions[k - 1]['time'])
+            except ValueError:
+                raise Failed(f'note {made.get("id")} was edited but its edit history has no readable time')
+            if not unread:
+                return texts[k - 1]
         return texts[k]
     if len(texts) >= HISTORY:
         raise Failed(f'note {made.get("id")} was edited but its edit history is too long to read past it')

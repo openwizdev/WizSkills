@@ -1,17 +1,17 @@
 ---
 name: launch-fleet
-description: Launch a project's fleets and keep them moving. When the user approves a plan graph, start that spec's fleet thread, which wakes on its own loop and starts, routes and archives its spec's builders and reviewers itself; the project's two loops (GitHub's messages, and a check every 30 minutes as the safety net) cover the rest. On each wake, start a builder on every ready ticket at once, send green pull requests to their reviewer and findings to their builder, merge approved work, hold tickets whose contracts changed, and archive finished agents. Use when a plan graph is approved, when a loop wakes you with due lines, when a fleet thread is replaced, or to see what a fleet has due.
+description: Launch a project's fleets and keep them moving. When the user approves a plan graph, start that spec's loop, which gives each fleet wake a fresh thread to start, route and archive its spec's builders and reviewers; the project's two loops (GitHub's messages, and a check every 30 minutes as the safety net) cover the rest. On each wake, start a builder on every ready ticket at once, send green pull requests to their reviewer and findings to their builder, merge approved work, hold tickets whose contracts changed, and archive finished agents. Use when a plan graph is approved, when a loop wakes you with due lines, when moving a spec to fresh wakes, or to see what a fleet has due.
 ---
 
 # Launch fleet
 
 A **fleet** is the agents working one approved plan graph. This skill starts every ticket that is ready, all at once, and then moves each one through build, review and merge until its spec is done. It works across every approved graph in the project at the same time, whatever their versions.
 
-**One fleet thread per spec** (ADR 0011, #192). Each approved spec gets one long-lived **fleet thread**, which starts every builder and reviewer of its spec itself, so it can always message, check and archive them: CloudRoom lets a thread read, tell and archive only the threads it started. A loop on that same thread wakes it. Its whole method is in "Fleet threads" below; the rest of this skill is what every wake does, a fleet thread's or a tick's.
+**One fleet loop per spec.** Each due run starts a fresh fleet thread for that spec. The wake reads GitHub and the private routing records, does its due work, records the outcomes and ends.
 
-**Everything it knows comes from GitHub.** The fleet threads, and the project's two loops (which cover the specs with no fleet thread yet, the issues approved on their own and the nightly CI run), run apart from the orchestrator and find all their work on GitHub: the plan graph approvals, the tickets, the pull requests, the review reports, and the fleet's own records. It never relies on a "finished" message from an agent, or on anyone's memory. The orchestrator only grills, plans and talks to the user. (In OpenWiz 0.0.6 the loop's mechanical work becomes OpenWiz code, and an agent is woken only for judgment calls.)
+**GitHub holds the fleet's records.** The spec wakes and the project's two loops (which cover the specs with no fleet loop yet, the issues approved on their own and the nightly CI run), run apart from the orchestrator and find all their work on GitHub: the plan graph approvals, the tickets, the pull requests, the review reports, and the fleet's own records. It never relies on a "finished" message from an agent, or on anyone's memory. The orchestrator only grills, plans and talks to the user. (In OpenWiz 0.0.6 the loop's mechanical work becomes OpenWiz code, and an agent is woken only for judgment calls.)
 
-**GitHub wakes the fleet** (#259). When a pull request, a review, a comment, a label or a CI result changes, GitHub sends a message to the wake loop, which wakes a tick as it arrives, and the tick reads only the issues and pull requests the messages name. Messages cost none of GitHub's hourly allowance. The safety net, a full check every 30 minutes, catches anything a message missed, and every line that comes due with time. A spec with a fleet thread is not theirs, as a tick the wake loop starts couldn't reach that spec's agents, so the message wakes its fleet thread instead (#2544): for any number in that spec, however many, `wake` prints one line, `wake fleet #<S>: room-cli loop run fleet-<S>`, with the spec's public loop handle from its latest `launch-fleet: fleet active, loop fleet-<S>` record. Resolve the handle to the real loop id through the private loop file (`LAUNCH_FLEET_LOOPS`, key `S`), then run `room-cli loop run <that id>` once and do nothing else for that spec; never post the real id. If the file or key is missing, record a thread-free `launch-fleet: look: fleet loop handle unresolved` on the spec and leave it to its own loop: the run is the fleet thread's own check (`fleet.sh spec <S>`, which costs no points when nothing changed, #2543), and it wakes the thread only when something is due. If CloudRoom refuses the run, record nothing: the fleet thread's loop still runs on its own, every 30 minutes while GitHub's messages are on (every 10 while they are off), as its safety net. A spec whose record names no loop, or names a loop another spec in the same wake names, gets no line and waits for its loop; a spec with no readable fleet record gets the tick's lines, as any other.
+**GitHub wakes the fleet** (#259). When a pull request, a review, a comment, a label or a CI result changes, GitHub sends a message to the wake loop, which wakes a tick as it arrives, and the tick reads only the issues and pull requests the messages name. Messages cost none of GitHub's hourly allowance. The safety net, a full check every 30 minutes, catches anything a message missed, and every line that comes due with time. For a spec with its own loop, the message triggers that loop (#2544): for any number in that spec, however many, `wake` prints one line, `wake fleet #<S>: room-cli loop run fleet-<S>`, with the spec's public loop handle from its latest `launch-fleet: fleet active, loop fleet-<S>` record. Read the current private loop file from the private repository, then resolve the handle to the real loop id through that file (`LAUNCH_FLEET_LOOPS`, key `S`), then run `room-cli loop run <that id>` once and do nothing else for that spec; never post the real id. If the file or key is missing, record a thread-free `launch-fleet: look: fleet loop handle unresolved` on the spec and leave it to its own loop: the run is the spec's own check (`fleet.sh spec <S>`, which costs no points when nothing changed, #2543), and it starts a fresh thread only when something is due. If CloudRoom refuses the run, record nothing: the spec's loop still runs on its own, every 30 minutes while GitHub's messages are on (every 10 while they are off), as its safety net. A spec whose record names no loop, or names a loop another spec in the same wake names, gets no line and waits for its loop; a spec with no readable fleet record gets the tick's lines, as any other.
 
 | Who | Does |
 | --- | --- |
@@ -19,8 +19,8 @@ A **fleet** is the agents working one approved plan graph. This skill starts eve
 | The wake loop | Wakes a tick with GitHub's messages, as they arrive. It has no check of its own: a webhook loop takes no script, so every batch of messages wakes a tick |
 | The safety net's check (`scripts/fleet.sh`) | Every 30 minutes (every 10 while GitHub's messages are off), reads all of GitHub and prints one line per thing that is due. When nothing is due it prints nothing, and no agent wakes |
 | A tick (a fresh agent either loop wakes) | Reads again only what its messages or lines name (`fleet.sh wake`), does each due line, records what it did, and archives itself (step 2) |
-| A spec's fleet thread (one per approved spec) | Started by the orchestrator when the user approves the spec's plan graph. Makes its own loop, records itself on the spec, and from then on does every line of that spec alone, with the agents it starts itself ("Fleet threads") |
-| The fleet thread's loop (`scripts/loop.sh --bundle <owner>/<repo> <S>`, which sets `FLEET_SPEC`) | Every 30 minutes while GitHub's messages are on (every 10 while they are off), and at once when a tick runs it for a message, runs that spec's check (`fleet.sh spec <S>`) in the fleet thread's sandbox, and wakes that same thread when it prints something |
+| A spec's fleet wake | A fresh thread reads the spec's records and private routing, handles its due work, reports and archives itself ("Fleet threads") |
+| The spec's fleet loop (`scripts/loop.sh --bundle <owner>/<repo> <S>`, which sets `FLEET_SPEC`) | Every 30 minutes while GitHub's messages are on (every 10 while they are off), and at once when a tick runs it for a message, runs that spec's check (`fleet.sh spec <S>`) in the loop's sandbox, and starts a fresh thread when it prints something |
 
 **Skill-file lookup belongs to the recipient.** Send lookup instructions literally, without sender-side variable expansion. Prefer the active OpenWiz install path in the recipient's own harness metadata. For cache fallback, use only that harness's configured plugin cache: Codex uses CODEX_HOME/plugins/cache (default HOME/.codex/plugins/cache); Claude uses CLAUDE_CODE_PLUGIN_CACHE_DIR/cache when set, otherwise CLAUDE_CONFIG_DIR/plugins/cache (default HOME/.claude/plugins/cache). Do not scan HOME, another harness's cache or a marketplace/source checkout. Use `find -L`, keep candidate real paths inside the selected cache, discard versions marked `.orphaned_at`, and verify the OpenWiz manifest name and skill entry. Deduplicate real paths and report missing, unreadable or genuinely distinct eligible matches. Linked or in-place installs outside the cache need an active path from installation metadata.
 
@@ -45,7 +45,7 @@ Follow `contracts/open-development.v1.md`, Fleet records. Every GitHub write, on
 
 Before posting a successful start or delivery, save its identity in private state, outside the public checkout (or `private/orchestration/` in the private repository). Set `LAUNCH_FLEET_STATE` to that absolute JSON file. Its shape is `{"repo":"owner/name","threads":{"builder:N":"<thread>","review:P:FULL_START_COMMIT":"<thread>","review:P:claim:CLAIM_COMMENT_ID":"<thread>","comment:CLAIM_COMMENT_ID":"<sender>","fleet:S":"<fleet>"}}`. It holds thread identities only. Loop ids go in a separate private file beside it, never in this map: set `LAUNCH_FLEET_LOOPS` to that absolute JSON file, shaped `{"repo":"owner/name","loops":{"S":"<loop id>"}}`; no check reads it, only the agent resolving a handle. Save each claim's sender before sending; a re-check adds its commit key to the same reviewer. Before editing a review-start claim to success, save its immutable `review:P:claim:CLAIM_COMMENT_ID` key as well. Give-up retires every routing key for that reviewer, but keeps that claim mapping for archive-only cleanup at ticket closure. Never overwrite or delete a retired claim mapping: a replacement, even at the same commit, gets a new claim key. Commit aliases may change; they cannot replace the retained claim identity. The reader never changes this map. Do not guess a sender for an unresolved resume, release or nightly claim: without private evidence proving delivery or non-delivery, leave it claimed and ask the orchestrator. A safety-net sandbox without CloudRoom can use this private map; without either source it reports out of reach, and the agent tick resolves the public facts in its own CloudRoom context.
 
-An old-builder archive records `launch-fleet: old builder archived, start <start comment id>` to bind it to that start. A fleet records `launch-fleet: fleet active, loop fleet-<S>`, a public handle: its thread identity stays under `fleet:S` in private state and its real loop id under `S` in the private loop file, never in a public record. These public records preserve the ownership timestamp and takeover gate.
+An old-builder archive records `launch-fleet: old builder archived, start <start comment id>` for legacy takeovers. The spec's loop is advertised as `launch-fleet: fleet active, loop fleet-<S>`. A separate line `Wake mode: fresh` in that same comment marks a loop that starts fresh threads. The real loop id stays under `S` in the private loop file. No wake writes its own identity as the fleet's identity.
 
 ## 1. Launch (the orchestrator, when the user approves a plan graph)
 
@@ -85,9 +85,9 @@ An old-builder archive records `launch-fleet: old builder archived, start <start
    ```
 
    It needs owner or admin access to the repository. GitHub sends a `ping` when a webhook is added (its documentation), which wakes one tick with nothing to read. Write the webhook's id in the handoff file. Then slow the safety net and every fleet thread's loop to every 30 minutes, as messages now wake them: `room-cli loop update <id> --cron '*/30 * * * *'`, for the safety net and for each open spec's fleet loop (the real loop id under its `S` key in the private loop file; the public record names only `fleet-<S>`), and read them back with `room-cli loop list`. If the user says no, the safety net and the fleet loops stay at every 10 minutes, and the wake loop, which nothing calls, can be deleted.
-4. **Start the spec's fleet thread** ("Fleet threads", "Starting one", below). Its first wake launches the fleet at once, and from its record on, the project's loops leave the spec to it. Only when it can't be started, start a tick instead, so the fleet still launches now: `room-cli loop run <the safety net's id>`, and record why on the spec (`launch-fleet: look: no fleet thread: <why>`).
+4. **Start the spec's fleet loop** ("Fleet threads", "Starting one", below). Run it once after publishing its record. If a fresh loop cannot be set up, record the reason on the spec and keep its existing routing. For a spec with no loop record, run the project's safety net once.
 
-Done when both loops exist, the user has said yes or no to GitHub's messages, and the spec's fleet thread has recorded itself on the spec (or a tick has run since the approval, with the look record saying why not).
+Done when both loops exist, the user has said yes or no to GitHub's messages, and the spec has a verified fleet loop record (or a look record explains why it could not be set up).
 
 **Turning GitHub's messages off** (the user asks, or they misbehave): delete the webhook (`gh api 'repos/{owner}/{repo}/hooks' --jq '.[] | {id, events, active}'` lists them without their addresses; `gh api --method DELETE 'repos/{owner}/{repo}/hooks/<id>'`), delete the wake loop (`room-cli loop delete <id>`), and set the safety net and every open spec's fleet loop back to every 10 minutes (`room-cli loop update <id> --cron '*/10 * * * *'` for each, the same loops as step 3; read them back with `room-cli loop list`). Nothing else changes, and nothing else needs undoing: with no messages, no tick runs a fleet loop early; the fleet's records are all on GitHub, so the check finds where everything stands. Record it in the handoff file.
 
@@ -127,7 +127,7 @@ every write and your Git push keep their current identity; the approval,
 hold, review, merge and C3 pause rules
 above and below are unchanged.
 
-You were woken by GitHub's messages (a `<webhook_events>` block at the end of your prompt), or by the safety net's due lines. A fleet thread is woken by its own loop's lines, and reads again with its own check: "Fleet threads", "Each wake", says how its wakes differ. The world may have moved since, so read again, in the repository, only what they name, and work from its output:
+You were woken by GitHub's messages (a `<webhook_events>` block at the end of your prompt), or by the safety net's due lines. For a spec's fleet loop, use "Fleet threads", "Each wake", to re-read and handle its due lines. The world may have moved since, so read again, in the repository, only what they name, and work from its output:
 
 ```sh
 sh "<this skill's folder>/scripts/fleet.sh" wake <the numbers> # Use the absolute folder of this loaded SKILL.md; keep the project's working directory.
@@ -168,8 +168,8 @@ Do every line. Lines of the same kind run **in parallel** (every `start`, once i
 | `reopen #P for #N at <commit>: ...` | Its unfinished re-test closed it and never reopened it: if `gh pr view <P> --json state,headRefOid` still says `CLOSED` at that commit, and no comment since the claim says it was closed on purpose, `gh pr reopen <P>`. The re-test then goes on from step 3. If it was closed on purpose, don't reopen: edit the claim to `launch-fleet: re-test failed <commit>: closed on purpose` (step 4, "Re-testing") |
 | `archive #N` | Archive the agents it names (`room-cli thread archive <id>` for each; one already archived, like a reviewer given up on, is done), then record `launch-fleet: archived` on the ticket, as its last comment. The check keeps finding a closed ticket until it is archived, and closes no spec before then |
 | `hold #N` / `note #N` | A contract it relies on changed (step 5) |
-| `take over #N: builder thread <X> is archived; ...` | A fleet thread starts its own builder in place of one from before it ("Fleet threads", "Taking over") |
-| `fleet done #S` | A fleet thread's spec is closed: delete its loop and archive it ("Fleet threads", "Each wake") |
+| `take over #N: builder thread <X> is archived; ...` | Legacy takeover line. A fresh fleet preserves the existing assignment |
+| `fleet done #S` | The spec has closed or is no longer open: resolve and delete its loop, then end the wake ("Fleet threads", "Each wake") |
 | `wake fleet #S: room-cli loop run fleet-<S>` | A message named something in a spec with a fleet thread: resolve the handle through the private loop file's `S` key, run `room-cli loop run <that id>` once, and nothing else for that spec ("GitHub wakes the fleet") |
 | `release #N: ordering hold C ...` | Claim and verify the conditional ordering release below; restore its ready label only after every release gate passes |
 | `reconcile release #N ...` | Reconcile that release claim below; uncertainty is never permission to relabel or start |
@@ -188,7 +188,7 @@ Do every line. Lines of the same kind run **in parallel** (every `start`, once i
 
 **After a merge,** run the full check once more (`sh "<this skill's folder>/scripts/fleet.sh"`; a fleet thread runs its own, `fleet.sh spec <S>`) and start whatever the merge unlocked, in this same tick: no message names the tickets a merge unblocks.
 
-**Finish:** `room-cli loop report --outcome acted` (or `needs-you`), with one `--action` per change. Then, once every record and message is written, archive your own thread (`room-cli thread archive --self`), even when something needs the user: the `Needs you` message, the spec comment and the records on GitHub are the handoff, and the next tick resumes from them. A tick never stays open to wait for an answer. A fleet thread never archives itself while its spec is open.
+**Finish:** `room-cli loop report --outcome acted` (or `needs-you`), with one `--action` per change. Then, once every record and message is written, archive your own thread (`room-cli thread archive --self`), even when something needs the user: the `Needs you` message, the spec comment and the records on GitHub are the handoff, and the next tick resumes from them. A tick never stays open to wait for an answer. A fresh spec wake ends as described in Fleet threads.
 
 Done when every line is done and recorded, and the check prints no line you could act on.
 
@@ -266,7 +266,7 @@ A pull request is the loop's when it closes an approved ticket (its description 
 
 **A quiet reviewer** (a `check review` line): no `VERDICT` names the head 30 minutes after its reviewer was started or asked to re-check it. The line names the reviewer's thread and the comment that records it. The reviewer gets one more try, then a fresh reviewer takes over:
 
-1. **No verdict 30 minutes after the record:** read the thread (`room-cli thread output <its thread> --all`). A tick can read and tell only the threads it started itself, so a reviewer started by an earlier tick or by the orchestrator is out of reach. When the thread is out of reach or gone, do step 2 now. Otherwise tell it again, once: `room-cli thread tell <its thread> "No report yet for pull request #<P> at <commit>. If you are still reviewing, finish and post it. If not, start now: <the brief>"`, with the brief it was given (the review brief above for `review started`, the re-check message for `re-check sent`). Then record `launch-fleet: review told again <commit>` as a new comment on the pull request.
+1. **No verdict 30 minutes after the record:** fresh spec wakes use the GitHub and delivery checks in Fleet threads. Otherwise read the thread (`room-cli thread output <its thread> --all`). A tick can read and tell only the threads it started itself, so a reviewer started by an earlier tick or by the orchestrator is out of reach. When the thread is out of reach or gone, do step 2 now. Otherwise tell it again, once: `room-cli thread tell <its thread> "No report yet for pull request #<P> at <commit>. If you are still reviewing, finish and post it. If not, start now: <the brief>"`, with the brief it was given (the review brief above for `review started`, the re-check message for `re-check sent`). Then record `launch-fleet: review told again <commit>` as a new comment on the pull request.
 2. **Still no verdict 30 minutes after it was told again,** or the thread is out of reach: archive the thread (`room-cli thread archive <its thread>`), so it can't post a late verdict. First retain that reviewer's immutable claim mapping for archive-only cleanup, including when this edit replaces its original start record. Then edit the comment the line names (`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -f body='...'`) to `launch-fleet: review given up <commit>: <why>`. If the archive failed, say so in `<why>`: the `archive` line lists the thread again when the ticket closes.
 3. **The next check prints** `review #<P> for #<N> at <commit>: a fresh reviewer`: start one as in "Starting a review", the other-family reviewer from `fleet.md`'s `## Reviewer for Claude-built` or `## Reviewer for GPT-built` table, verified from the branch-matching `start checked` record and that exact thread's provider; unknown/conflicting family waits, never another model. A reviewer span recorded as `review given up` is never told again or asked to re-check, at any commit in that span.
 
@@ -344,7 +344,7 @@ Then record `launch-fleet: findings sent <commit>: decision <its comment id>: <f
    | `open, the merge queue is on`, maybe with `; it left the queue at <time>: <reason>` | Not merged and not in the queue; its base is the default branch, which has a queue | Step 2. But if a `launch-fleet: merge queued <commit>` record names this commit, the queue let it go: record `launch-fleet: merge blocked <commit>: left the merge queue: <the reason>` instead |
    | `stop: <why>`, an error, or no line | Anything else | Record `launch-fleet: merge blocked <commit>: <why>` |
 
-2. **Check the verdict came from the reviewer.** Every agent posts from the same GitHub account, so the comment alone can't show who wrote it. Read the reviewer's own thread (`room-cli thread output <its thread> --all`, the thread named in the `review started` record): it must show the same `VERDICT: APPROVE at <commit>` line, which `review-ticket` has the reviewer read back after posting. If it doesn't, don't merge.
+2. **Check the verdict came from the reviewer.** Fresh spec wakes use the GitHub verdict check in Fleet threads. In other wakes, every agent posts from the same GitHub account, so the comment alone can't show who wrote it. Read the reviewer's own thread (`room-cli thread output <its thread> --all`, the thread named in the `review started` record): it must show the same `VERDICT: APPROVE at <commit>` line, which `review-ticket` has the reviewer read back after posting. If it doesn't, don't merge.
 3. **Check it may go in** (the merge rules in `fleet.md`). Before admitting a
    new merge batch, run `fleet.sh overload merge-batch` with the shared durable
    state and current complete observation described above. Continue only on exit
@@ -519,79 +519,104 @@ alert separately. Overlapping ticks use the oldest claim.
 
 ## Fleet threads
 
-**One long-lived fleet thread per spec** runs that spec's fleet (ADR 0011, #192). It starts every builder and reviewer of its spec itself, as its own children, because CloudRoom lets a thread read, tell and archive only the threads it started (the 0.0.5 acceptance, #106): so it can always route findings, re-checks and CI failures to them, check on them, and archive them when their ticket is done. A loop on that same thread wakes it. GitHub records public progress; CloudRoom and the private routing map retain identities for a takeover.
+The spec's latest fleet record routes its work to the per-spec loop. Each
+fresh wake handles one pass. It reaches the orchestrator through GitHub
+records, using the existing `look`, `needs approval` and other record lines.
 
-**GitHub records are its only channel to the orchestrator** (#169). A fleet thread never messages the orchestrator's thread, which it did not start: wherever this skill says to tell the orchestrator or the user, a fleet thread posts the record instead (`launch-fleet: look: <why>`, `asked the orchestrator`, `merge blocked`, `needs approval`, or the `**Needs you:**` comment on the spec), and the orchestrator's watch reads it there. The orchestrator reaches the fleet thread the same way: through the records, or by telling the thread, which it started.
+### Starting one (the orchestrator, after plan approval)
 
-**A spec with a fleet thread is that thread's alone.** Its record on the spec, `launch-fleet: fleet active, loop fleet-<S>` (the latest one counts), takes the spec out of the project's check and its wakes, which print nothing about it from then on but one `wake fleet` line that runs its loop (#2544). Only the fleet thread's own check prints that spec's lines, and only that spec's:
+Set up the loop with the project's fleet agent settings and private repository
+access. Confirm that fresh runs have an authorized route to read the assigned
+reviewer's verdict on GitHub, deliver to assigned agents with
+`room-cli thread tell`, and hand off unreachable archives privately to the
+planner or orchestrator. If required access is unavailable, record a
+thread-free `launch-fleet: look:` on the spec and keep its current routing.
 
 ```sh
-sh "<this skill's folder>/scripts/fleet.sh" spec <S> # Use the absolute folder of this loaded SKILL.md; keep the project's working directory.
+sh "<this skill's folder>/scripts/loop.sh" --bundle "<owner>/<repo>" "<S>" \
+  > /tmp/launch-fleet-<S>.sh
+room-cli loop create --name "launch-fleet #<S> <owner>/<repo>" --cron '*/10 * * * *' --new-thread \
+  --parent "<open Cloud manager in this project>" \
+  --script-file /tmp/launch-fleet-<S>.sh --priority 2 \
+  --prompt "Fleet wake for <owner>/<repo> spec #<S>. Read the installed launch-fleet skill and follow Fleet threads, Each wake."
 ```
 
-### Starting one (the orchestrator, when the user approves a plan graph)
+Use the absolute folder of this loaded skill to bundle the check. Add the
+project's fleet agent settings and include the literal skill-file lookup from
+step 1 in the wake prompt. Set the parent to the open Cloud planner or fleet manager in the same
+project and read it back before activation. Keep any old manager that still
+parents active agents open. The scheduler's sandbox can keep its check cache.
+The brief names the repository, spec number and installed skill. The project's private configuration supplies routing.
+Use the 30-minute schedule only when GitHub's messages are verified on.
 
-Start it as your own child, so you can tell and archive it, with the agent the project's safety net runs (`room-cli loop list` shows it; `fleet.md`'s Loop section), titled after the spec, and this brief (from a Local thread, add `--machine cloud`):
+Save the loop id in the configured private repository's loop map and read it
+back. Post this record on the spec as a single comment and read it back
+before running the loop once:
 
-```sh
-room-cli thread spawn --parent-self --project "$ROOM_PROJECT_ID" --provider <harness> --model <model> --reasoning-level <effort> \
-  --title "Fleet #<S>: <spec title>" \
-  --prompt "You are the fleet thread for spec #<S> of <owner>/<repo>. Use the launch-fleet skill. Read 'skills/launch-fleet/SKILL.md' if present, otherwise find '*/skills/launch-fleet/SKILL.md' only inside your own harness's configured plugin cache: Codex uses CODEX_HOME/plugins/cache (default HOME/.codex/plugins/cache); Claude uses CLAUDE_CODE_PLUGIN_CACHE_DIR/cache when set, otherwise CLAUDE_CONFIG_DIR/plugins/cache (default HOME/.claude/plugins/cache); for another harness use its installation metadata. Prefer active installation metadata over cache scanning when available. During cache scans exclude other harness caches, source checkouts, orphaned versions marked .orphaned_at, and targets outside the selected cache. Follow symlinks and deduplicate real paths. Verify .claude-plugin/plugin.json manifest name openwiz and entry ./skills/launch-fleet; report missing, unreadable or ambiguous matches, otherwise read the unique matching file and follow it; do its Fleet threads section, first wake."
+```text
+launch-fleet: fleet active, loop fleet-<S>
+
+Wake mode: fresh
 ```
 
-Nothing else: the fleet thread makes its own loop and record, its loop every 10 minutes. Once the record is on the spec, and only if GitHub's messages are on (the user's yes is in the handoff file and the webhook was added, step 1.3; never just because a wake loop exists), slow that loop to every 30 minutes: `room-cli loop update <its id from the private loop file> --cron '*/30 * * * *'`, and read it back with `room-cli loop list`. A refusal, or anything you can't confirm, leaves it at 10. If its record isn't on the spec within 10 minutes, read the thread (`room-cli thread output <id> --all`) and start it again, or record why it can't start (`launch-fleet: look: no fleet thread: <why>`) and run a tick, as step 1.4 says.
-
-### Its first wake
-
-1. **Make its loop,** on this same thread (`--same-thread`), so each run wakes you and not a fresh thread. The script is the bundled loop of step 1, with the spec's number after the repository, so it runs that spec's check alone; it runs in your own sandbox, which keeps the clone and the check's cache between runs:
-
-   ```sh
-   sh "<this skill's folder>/scripts/loop.sh" --bundle "<owner>/<repo>" "<S>" \
-     > /tmp/launch-fleet-<S>.sh # Use the absolute folder of this loaded SKILL.md.
-   room-cli loop create --name "launch-fleet #<S> <owner>/<repo>" --cron '*/10 * * * *' --same-thread \
-     --script-file /tmp/launch-fleet-<S>.sh --priority 2 \
-     --prompt "Fleet thread for spec #<S>: do the launch-fleet skill's step 2 for the due lines below, as its Fleet threads section says."
-   ```
-
-   It prints the loop's id. The name keeps the project's loop names' form, `launch-fleet ... <owner>/<repo>`. Always every 10 minutes: you can't tell whether GitHub's messages are on (a wake loop can exist with no webhook, when the user said no). Only the orchestrator slows it to every 30, once it knows they are on (step 1.3, and "Starting one" above).
-2. **Record yourself** on the spec, as a new comment: `launch-fleet: fleet active, loop fleet-<S>`. First save your thread id (`$ROOM_THREAD_ID`) under `fleet:S` in private state and the loop's real id under `S` in the private loop file, and read both back; the public record carries only the handle, never either id. From this record on, the spec is yours alone.
-3. **Run your check** (`fleet.sh spec <S>`) and do its lines, as on any wake.
+Move an existing fleet at a quiet moment, when none of its pull requests are
+being merged or re-tested. Confirm the new loop and durable
+routes for its existing agents, pause the old loop before publishing the new
+record, and retire the old loop after verifying the new record. Preserve the
+existing builders, selected reviewers and review rounds. A fresh record
+routes the spec without using its activation timestamp as a takeover cutoff.
+Legacy records keep their existing takeover semantics during rollout.
 
 ### Each wake
 
-Your loop runs your check every 30 minutes while GitHub's messages are on, and at once when a message names anything in your spec (a tick runs it, #2544); every 10 minutes while they are off. It wakes you with its lines when it prints any. Do step 2 for them, with these differences:
+1. Read the project's settings, the latest fleet record on the spec and the
+   configured private repository's latest default-branch revision. Verify
+   the repository is private before reading routing data. Read the thread and loop maps, plus the configured
+   routing instructions, from that repository. Give the check the fresh
+   map's absolute path as `LAUNCH_FLEET_STATE` and use `LAUNCH_FLEET_LOOPS`
+   for the loop map. Local files are only this wake's copies. Stop with a
+   thread-free look when the required state or ownership is unreadable or
+   the record was superseded. A scheduled run observing that its spec has
+   closed may still clean up its own recorded loop.
+2. Run `sh "<this skill's folder>/scripts/fleet.sh" spec <S>` from the project
+   checkout. Use the spec's current lines rather than the scheduler's output.
+   **Read through the project's review watchdog pass, where its settings name one** (RL3b, #2762; the project's fleet settings give its exact command), every time you read `fleet.sh spec <S>`, and do step 2 for its output in place of the check's own lines (the loop's lines too: read again through the pass before acting on any of them). It reads through REST only. It drops the check's quiet-reviewer lines (`check review ...: no verdict 30 minutes after ...` and `... still no verdict 30 minutes after it was told again ...`) for every pull request it governs: there the watchdog decides a stalled review, so a reviewer waiting on its question or stopped at an audit gate is never told again, archived or replaced. Act on its own lines: `start` claims and starts the review as in step 4. `restart` first retires the stalled reviewer as a quiet reviewer's step 2 does (archive its thread, keep its immutable claim mapping, and edit the record the line names to `launch-fleet: review given up <commit>: watchdog restart`), then reads again and claims and starts the fresh reviewer the check prints, as in step 4. `ask` and `clear` go to the orchestrator as a `launch-fleet: look:` record on the pull request, and no reviewer is started. `unknown` starts nothing. Post each `post #<P>:` line's text on that pull request (`--mirror` posts them itself, through REST). The pass never starts or archives a reviewer itself.
+3. Do each current due line under the claims, review and merge gates in
+   **2. Each tick**.
+   Before an effect, resolve its assigned agent through private routing and
+   use `room-cli thread tell <id> --mode queue --message-file <file>` for
+   delivery. Record a successful send only when tell's own result confirms
+   acceptance. A refusal or unknown outcome leaves the assignment in place
+   and goes to reconciliation. A quiet reviewer is checked on GitHub before
+   any reminder. Read verdicts only from the exact PR on GitHub. Bind them to
+   its current head and selected review claim, check the record author and
+   applicable admission decision, and stop on missing or conflicting
+   evidence. This replaces the thread-output check in step 4 for fresh spec
+   wakes. All other admission and exact-head checks still apply.
 
-- **Read again with `fleet.sh spec <S>`,** never `wake` or the full check, which leave your spec out: when you wake, and after a merge.
-- **Read through the project's review watchdog pass, where its settings name one** (RL3b, #2762; the project's fleet settings give its exact command), every time you read `fleet.sh spec <S>`, and do step 2 for its output in place of the check's own lines (the loop's lines too: read again through the pass before acting on any of them). It reads through REST only. It drops the check's quiet-reviewer lines (`check review ...: no verdict 30 minutes after ...` and `... still no verdict 30 minutes after it was told again ...`) for every pull request it governs: there the watchdog decides a stalled review, so a reviewer waiting on its question or stopped at an audit gate is never told again, archived or replaced. Act on its own lines: `start` claims and starts the review as in step 4. `restart` first retires the stalled reviewer as a quiet reviewer's step 2 does (archive its thread, keep its immutable claim mapping, and edit the record the line names to `launch-fleet: review given up <commit>: watchdog restart`), then reads again and claims and starts the fresh reviewer the check prints, as in step 4. `ask` and `clear` go to the orchestrator as a `launch-fleet: look:` record on the pull request, and no reviewer is started. `unknown` starts nothing. Post each `post #<P>:` line's text on that pull request (`--mirror` posts them itself, through REST). The pass never starts or archives a reviewer itself.
-- **Before a merge, read every spec:** in the merge step's step 3, the re-test guard's read is `fleet.sh every` (for a tick too), the check's lines on every spec, fleet threads' too, because an approved pull request of another spec can clash with yours, and of two that clash only the lower number merges first. If it doesn't print your same `merge` line, don't merge and record nothing: your next wake tries again, and once the other has merged, your check prints `re-test` instead. It costs a full check, so read it only for a `merge` line.
-- **Start every builder and reviewer as your own child:** `room-cli thread spawn --parent-self --project "$ROOM_PROJECT_ID"` (from a Local thread, add `--machine cloud`) with the same agent, title and brief as steps 3 and 4, never `--top-level`: a top-level thread is one you can't read, tell or archive. Claim first, as those steps say, except for a takeover's builder (below), whose claim is its own record.
-- **Tell your own agents yourself** (`room-cli thread tell <id>`): findings, CI failures, re-checks, notes and resumes.
-- **The orchestrator and the user only through records,** as above.
-- **Finish** with `room-cli loop report`, and a one-line verdict. Never archive yourself while your spec is open: you are its fleet for as long as it lasts.
-- **`fleet done #<S>`:** your spec is closed, or is no open spec. Delete your loop (`room-cli loop delete <id>`) and archive yourself (`room-cli thread archive --self`). Do the same once you have closed the spec yourself (`close spec #<S>`).
+   For an unreachable archive, relay the identity and request privately to
+   the authorized planner or orchestrator. Keep the archive pending until
+   the archive is confirmed. A restart that requires retirement also stays
+   pending until retirement is confirmed. For routing changes,
+   save the updated map to the private repository's configured branch and
+   read it back before posting public success. Apply the wake's own changes
+   to the latest map, preserving other entries. If the save races another
+   wake, re-read and reconcile before claiming a write succeeded.
+4. After a merge, read `fleet.sh spec <S>` once more for newly unblocked
+   work. Before any merge, require the same merge line from the cross-spec
+   guard (`fleet.sh every`).
+   On `fleet done #<S>` or after closing the spec, resolve its current loop
+   through the private loop map and remove it.
+5. Report the pass using `room-cli loop report` and end the turn. Archive the
+   wake with `room-cli thread archive --self` when it has no active or
+   unreconciled children. Archiving a parent can stop those children. If it
+   still parents such agents, leave its own archive pending with the planner
+   or orchestrator and end the turn. Later wakes reconstruct work from the
+   records. End on unresolved work, too, without waiting or starting a poller.
 
-**What your check costs** (#2543). GitHub's GraphQL points are shared by every agent on the account, and GraphQL can't ask "has this changed?". So `fleet.sh spec <S>` first asks REST with the ETags its last full read saved: the spec's sub-issues, each ticket's and closed blocker's timeline, each linked pull request and the checks on its head, the repository and the account. GitHub doesn't count a 304 against the allowance. When every answer is 304 and that full read is under 30 minutes old, the check reads no GraphQL. It still revalidates the spec's own issues, comments and branches, and works out the lines from the saved answers, the clock and CloudRoom as they are now, so lines that come due with time (a stalled review, a claim with no outcome) still come due. Anything changed, a lost or damaged cache, or a full read 30 minutes old gets a full read, as before. The cache stays in your sandbox between runs, and never holds a token. Its points line says how many reads came back unchanged: `used 0 GitHub points in 78 questions, 78 unchanged; no GraphQL read`.
-
-**Archiving** (an `archive #N` line): archive every thread it names. A thread you didn't start is out of your reach, and its archive fails: record `launch-fleet: look: agent for this ticket is out of reach of the current fleet` on the ticket for each one, then `launch-fleet: archived` as its last comment, as usual. The orchestrator archives those under its standing archive approval (#169; the private approval on spec #188).
-
-### Taking over (a new fleet thread for a spec)
-
-A fleet thread that is gone, archived or stuck is replaced (the service's `fleet_thread` check finds it gone, or the orchestrator sees it). The orchestrator:
-
-1. **Archives the old fleet thread** (its child) and deletes its loop (its real id is under `S` in the private loop file), so that two fleet threads never act on one spec.
-2. **Starts a new one** as in "Starting one", with the same brief.
-
-The new fleet thread's first wake is the same: its own loop, its record (now the latest, so the spec is its), its check. Everything else carries over, because GitHub has it all: the approvals, the claims and records, the reviews, the merges. Its check finds every builder and reviewer recorded before its record (the record last edited before it, or in the same second): started by the old fleet thread, or by a tick, and out of its reach. Nothing more goes to them, and each is moved over:
-
-| Line | Do |
-| --- | --- |
-| `look #N: archive thread <X>: its builder, started before fleet thread <F>` | Record a thread-free `look` naming this ticket and its start comment; keep the identities in private state. The orchestrator archives the builder and records `launch-fleet: old builder archived, start <start comment id>` on the ticket. Until then the ticket's findings, CI failures and notes wait: no line tells the old builder. A contract change it relies on comes as `hold #N` instead of a note, for the whole takeover (step 5) |
-| `take over #N: builder thread <X> is archived; start a builder to continue branch <B> (its record: comment <C>)` | Start your own builder for the ticket. The line comes only while the ticket could start as any ticket can: approved, with a current approval, ready and no other triage label, its blockers merged, not held, and no contract change due; until then it waits, as a start does. First edit comment C to `launch-fleet: starting`: that edit is the claim, so a cut-short takeover gets a `reconcile start` 10 minutes after the edit. Don't post another claim or run `fleet.sh claim`, which refuses a ticket with an open pull request; you are the spec's only fleet thread, and the project's loops leave it alone. Start it as in step 3, with the brief and one more sentence: `Continue the work on branch <B>: its pull request and the ticket's comments say where it stands.` Then edit C to `launch-fleet: started`; the next check asks for `check start`, as for any builder. If CloudRoom refuses, edit C to `launch-fleet: start refused: <its reason>`, and if it fails, `launch-fleet: start failed: <why>`: the line comes back, ending `; retry after "<that record>"`, 10 minutes after a refusal and at once after a failure, until your builder is started, whether or not the old builder opened a pull request; never an ordinary `start` line. `start a builder to build it, as it has no branch yet`: the brief alone |
-| `check review #P for #N at <commit>: its reviewer, thread <X>, was started before fleet thread <F>, so it is out of reach; record review given up (its record: comment <C>)` | Give it up at once, as a quiet reviewer out of reach (step 4): record `launch-fleet: look: reviewer is out of reach of the current fleet` on the pull request, then edit comment C to `launch-fleet: review given up <its commit>: reviewer is out of reach of the current fleet`. The next check starts a fresh reviewer |
-
-### Moving a running fleet
-
-Specs launched before fleet threads run on the project's loops, with agents the ticks started. Move each one at a quiet moment (Jake, 2026-10-31: transfer running fleets only at a quiet moment, [private record](https://github.com/jparker2006/ClosedWiz/issues/188#issuecomment-6550380796)): when none of its pull requests is being merged or re-tested. Start its fleet thread as in "Starting one". From its record on, the project's loops leave the spec to it, and its takeover lines move every builder and reviewer over, as above. The project's two loops stay, for the issues approved on their own, the nightly CI run and any spec without a fleet thread yet.
+**What the check costs** (#2543). The spec check uses the scheduler's cached
+REST ETags when available. A cache miss triggers a full read. The cache is
+an optimization and carries no routing, approval or outcome authority.
 
 ## Ops passes (#1456)
 
@@ -636,7 +661,7 @@ The loop's memory: comments on GitHub, each starting `launch-fleet:`. Edit a cla
 | | `launch-fleet: merge main asked <commit>` | Its builder was told to merge `main` in, as its re-test ran on an old `main` |
 | | `launch-fleet: merge blocked <commit>: <why>` | The merge waits for someone |
 | A spec | `launch-fleet: needs approval: <what changed>` / `spec summary` | The user was asked, or told it is done |
-| | `launch-fleet: fleet active, loop fleet-<S>` | The spec's fleet thread and its loop's public handle (the real loop id stays under `S` in the private loop file); the latest counts. From it on, only that thread's check prints the spec's lines, and every agent recorded before it is taken over |
+| | `launch-fleet: fleet active, loop fleet-<S>` | The spec's loop's public handle (the real loop id stays under `S` in the private loop file). The latest counts. A separate `Wake mode: fresh` line keeps existing assignments across wakes |
 | | `launch-fleet: look: live check not recorded as passed` / `live check passed` | Evidence is missing (one alert), or a newer explicit pass has been verified and the wait is released; the pass line may append `: <evidence source>` |
 | | `launch-fleet: look: live check evidence to verify in comment <id>` | The tick inspected that new evidence comment without establishing the required pass; do not repeat its verification task |
 | A run's commit | `launch-fleet: nightly telling <run> attempt <attempt>` / `nightly told <run> attempt <attempt>` / `nightly uncertain <run> attempt <attempt>` | Notification claimed, delivered, or settled after one uncertainty notice |
@@ -650,7 +675,7 @@ The loop's memory: comments on GitHub, each starting `launch-fleet:`. Edit a cla
 | --- | --- |
 | `sh "<this skill's folder>/scripts/fleet.sh"` | Every due line, or nothing when nothing is due (exit 0) |
 | `sh "<this skill's folder>/scripts/fleet.sh" wake <N>...` | The due lines about issues and pull requests `<N>...` alone, read alone: a pull request with every ticket it closes, a ticket with its spec's approval (its whole spec, when it could start), an issue approved on its own, a spec in full. A number that is no issue or pull request is nothing. Lines on anything else wait for the check, and so do a spec's own lines (`re-approve`, `spec done`, `close spec`) unless the wake names the spec; for a spec with a fleet thread, only its `wake fleet` line |
-| `sh "<this skill's folder>/scripts/fleet.sh" spec <S>` | A fleet thread's check: the due lines of spec `<S>` alone, read as the check reads them, with its takeover lines; `fleet done #<S>` when `<S>` is no open spec. The full check prints nothing about a spec with a fleet thread, and `wake` prints only its `wake fleet` line |
+| `sh "<this skill's folder>/scripts/fleet.sh" spec <S>` | The due lines of spec `<S>` alone; `fleet done #<S>` when `<S>` is no open spec. Legacy fleet records can still produce takeover lines. The full check prints nothing about a spec with a fleet thread, and `wake` prints only its `wake fleet` line |
 | `sh "<this skill's folder>/scripts/fleet.sh" every` | The check's lines on every spec, fleet threads' too, and on the issues approved on their own: a fleet thread's read before a merge |
 | `sh "<this skill's folder>/scripts/fleet.sh" frontier` | Every ticket that may start now |
 | `sh "<this skill's folder>/scripts/fleet.sh" holds` | Every contract hold and builder note due |

@@ -309,32 +309,92 @@ class Records(Case):
         self.assertIn(f'verdict: comment 1 by example[bot]: APPROVE at {OLD}, current head: no ({HEAD})',
                       out.splitlines())
 
+    def decision_line(self):
+        code, out, err = self.run_ticket('records', REPO, '7')
+        self.assertEqual(code, 0, err)
+        return next((l for l in out.splitlines() if l.startswith('decision:')), '')
+
     def test_records_binds_a_decision_to_its_parked_finding_and_head(self):
         park = f'VERDICT: CHANGES at {OLD}\n\nNext: park R2 as a decision for Jake.'
         cases = ((f'fix once more: R2 at {OLD}. Why: x', f'bound: no: {OLD} is not the current head'),
-                 (f'log and merge: R3 at {HEAD}. Why: x', f'bound: no: R3 was not parked at {HEAD}'),
+                 (f'log and merge: R3 at {HEAD}. Polish issues: #9. Why: x',
+                  f'bound: no: R3 was not parked at {HEAD}'),
                  ('fix once more R2', 'bound: no: not a decision line'),
                  (f'fix once more: R2 at {HEAD}. Why: x', 'bound: yes'))
         for decision, expected in cases:
             self.comments(7, ('example[bot]', park.replace(OLD, HEAD) if HEAD in decision else park),
                           ('owner-1', f'**Orchestrator decision:** {decision}'))
-            code, out, _ = self.run_ticket('records', REPO, '7')
-            self.assertEqual(code, 0)
-            line = next((l for l in out.splitlines() if l.startswith('decision:')), '')
+            line = self.decision_line()
             self.assertTrue(line.startswith('decision: comment 2 by owner-1: '), line)
             self.assertTrue(line.endswith(expected), (decision, line))
 
-    def test_records_reads_trusted_ticket_answers(self):
+    def test_records_binds_only_a_later_decision_naming_exactly_the_terminal_park(self):
+        # catches: a partial, early, incomplete or quoted-park decision resuming parked work
+        report = (f'VERDICT: CHANGES at {HEAD}\n\n- **R1 [blocking]** x\n  Risk: security: y\n'
+                  f'- **R2 [blocking]** x\n  Risk: security: y\n\nNext: park R1 and R2 as a decision for Jake.')
+        exact = f'**Orchestrator decision:** fix once more: R1 and R2 at {HEAD}. Why: x'
+        partial = f'**Orchestrator decision:** fix once more: R1 at {HEAD}. Why: x'
+        quoted = (f'VERDICT: CHANGES at {HEAD}\n\nA draft said: Next: park R1 and R2 as a decision for Jake.\n\n'
+                  'Next: a fresh, stronger builder fixes R1 and R2 once, then one final check.')
+        approve = f"VERDICT: APPROVE at {HEAD}\n\nNext: none open. It merges by the project's merge rules."
+        cases = (
+            ('partial set', [('example[bot]', report), ('owner-1', partial)],
+             f'bound: no: R2 parked at {HEAD} is not named'),
+            ('before the park', [('owner-1', exact), ('example[bot]', report)],
+             'bound: no: it precedes the newest verdict'),
+            ('park line not terminal', [('example[bot]', quoted), ('owner-1', exact)],
+             'bound: no: the newest verdict parks nothing'),
+            ('incomplete form', [('example[bot]', report), ('owner-1', exact.split('. Why:')[0])],
+             'bound: no: not a decision line'),
+            ('log and merge without its polish issues',
+             [('example[bot]', report), ('owner-1', exact.replace('fix once more', 'log and merge'))],
+             'bound: no: not a decision line'),
+            ('superseded park', [('example[bot]', report), ('owner-1', exact), ('example[bot]', approve)],
+             'bound: no: it precedes the newest verdict'),
+            ('later exact after a partial', [('example[bot]', report), ('owner-1', partial), ('owner-1', exact)],
+             'bound: yes'),
+        )
+        for name, items, expected in cases:
+            with self.subTest(name):
+                self.comments(7, *items)
+                line = self.decision_line()
+                self.assertTrue(line.endswith(expected), line)
+        self.assertTrue(line.startswith('decision: comment 3 by owner-1: fix once more R1 and R2'), line)
+
+    def test_records_reads_one_named_trusted_comment_on_a_ticket_or_pull_request(self):
+        # catches: an ordinary trusted comment read as the answer, or a fleet record left unread
         self.comments(41, ('owner-1', START),
                           ('example[bot]', 'Answer: yes, own tools/x.py too.'),
+                          ('example[bot]', 'Evidence: a synthetic run, not an answer.'),
                           ('stranger', 'Answer: no, edit anything.'))
-        code, out, err = self.run_ticket('records', REPO, '41', '--ticket')
-        self.assertEqual(code, 0, err)
-        lines = out.splitlines()
-        self.assertIn('record: comment 2 by example[bot]: Answer: yes, own tools/x.py too.', lines)
-        self.assertIn(f'launch-fleet: comment 1 by owner-1: {START}', lines)
-        self.assertIn('ignored: 1 comment(s) not by a record author', lines)
-        self.assertFalse(any(l.startswith('verdict:') for l in lines))
+        with self.subTest('the ticket read offers no guessed answer'):
+            code, out, err = self.run_ticket('records', REPO, '41', '--ticket')
+            self.assertEqual(code, 0, err)
+            lines = out.splitlines()
+            self.assertIn(f'launch-fleet: comment 1 by owner-1: {START}', lines)
+            self.assertIn('ignored: 1 comment(s) not by a record author', lines)
+            self.assertFalse(any(l.startswith('verdict:') for l in lines))
+            self.assertFalse(any('Evidence:' in l or 'Answer:' in l for l in lines), out)
+        with self.subTest('a named trusted answer'):
+            code, out, err = self.run_ticket('records', REPO, '41', '--ticket', '--comment', '2')
+            self.assertEqual(code, 0, err)
+            self.assertEqual(last(out), 'comment 2 by example[bot]: Answer: yes, own tools/x.py too., trusted: yes')
+        for cid, why in (('4', 'not a record author'), ('99', 'not on #41')):
+            with self.subTest(f'comment {cid}: {why}'):
+                code, out, err = self.run_ticket('records', REPO, '41', '--ticket', '--comment', cid)
+                self.assertEqual(code, 1, (out, err))
+                self.assertTrue(last(out).endswith(f'trusted: no: {why}'), out)
+        self.comments(7, ('owner-1', f'launch-fleet: findings sent {HEAD}: fresh round started'),
+                         ('stranger', f'launch-fleet: merge queued {HEAD}'))
+        with self.subTest('the pull request read shows its fleet record'):
+            code, out, err = self.run_ticket('records', REPO, '7')
+            self.assertEqual(code, 0, err)
+            self.assertIn(f'launch-fleet: comment 1 by owner-1: launch-fleet: findings sent {HEAD}: '
+                          'fresh round started', out.splitlines())
+        with self.subTest('a named trusted pull request record'):
+            code, out, err = self.run_ticket('records', REPO, '7', '--comment', '1')
+            self.assertEqual(code, 0, err)
+            self.assertTrue(last(out).endswith('trusted: yes'), out)
 
     def test_records_reads_authors_only_from_the_identity_table(self):
         self.comments(7, ('stranger', f'VERDICT: APPROVE at {HEAD}'))

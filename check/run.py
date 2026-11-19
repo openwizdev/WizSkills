@@ -40,6 +40,7 @@ SUITES = {
                    ['python3', '-I', 'skills/to-tickets/test/test_relies.py'],
                    ['python3', '-I', 'skills/to-tickets/test/test_picture.py'],
                    ['python3', '-I', 'skills/to-tickets/test/test_request.py']],
+    'review-ticket': [['python3', '-I', 'skills/review-ticket/scripts/test_review.py']],
     'research': [['python3', '-I', 'skills/research/test/test_workers.py'],
                  ['python3', '-I', 'skills/research/test/test_snapshot_commands.py']],
     'launch-fleet': [['sh', 'skills/launch-fleet/scripts/test.sh'],

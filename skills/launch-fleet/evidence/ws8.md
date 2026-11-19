@@ -8,22 +8,22 @@ the identity contract. After the rewrite that branch also reads the builders
 reference (the start's probe and outcome) and the identity reference. Scripts
 only run on that branch, so their source is never loaded.
 
-| Evidence | WS1 baseline `89fc285` | Main before WS8 `6a57abd` | After |
+| Evidence | WS1 baseline `89fc285` | Main before WS8 `34a27d3` | After |
 | --- | ---: | ---: | ---: |
-| Entrypoint lines | 720 | 722 | 128 |
-| Entrypoint words | 18,244 | 16,478 | 2,719 |
-| Entrypoint static tokens | 27,561 | 24,964 | 4,267 |
-| Static loaded-path tokens, `launch-fleet.wake` | 43,331 | 40,734 | 22,965 |
+| Entrypoint lines | 720 | 724 | 129 |
+| Entrypoint words | 18,244 | 16,544 | 2,785 |
+| Entrypoint static tokens | 27,561 | 25,089 | 4,390 |
+| Static loaded-path tokens, `launch-fleet.wake` | 43,331 | 40,859 | 23,088 |
 | Observed workflow outcome | Unknown | Unknown | Unknown |
 | Observed workflow token counts and wall time | Unknown | Unknown | Unknown |
 
-Result: pass for the static size (the WS1 path falls from 43,331 to 22,965
+Result: pass for the static size (the WS1 path falls from 43,331 to 23,088
 tokens, 47% less); unknown for an observed workflow.
 
 The main column counts the same WS1 path at the main this branch last merged
-(after WS13 and the notice move), with the same tokenizer.
+(after WS13, the notice move and AP2's status lines), with the same tokenizer.
 
-The entrypoint is 128 lines, past the guide's 50 to 100. The Records section
+The entrypoint is 129 lines, past the guide's 50 to 100. The Records section
 is 38 lines: every wake writes those records, and the kept public record case
 (`test-records.py`) reads the table from SKILL.md and checks it word for word against the open-development contract. The rest keep the
 approval, record, privacy, role, no-waiting and action-gate guards visible,
@@ -45,7 +45,7 @@ To regenerate it from the WizSkills root, run
 
 Each other line now loads the entrypoint plus only its own reference
 (for example `references/reviews.md` for a findings line), where before every
-line loaded the whole 24,964-token entrypoint.
+line loaded the whole 25,089-token entrypoint.
 
 ## SK-D: mechanics in scripts
 

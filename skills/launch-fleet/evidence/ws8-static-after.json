@@ -1,5 +1,5 @@
 {
-  "commit": "a11849b3aa9ceeb1d265c6db4d6ec5615119e399",
+  "commit": "8164439e4bf6a3096f9618000e4ea331a21700a7",
   "tokenizer": {
     "package": "js-tiktoken",
     "version": "1.0.21",
@@ -8,14 +8,14 @@
   "workflows": {
     "launch-fleet.wake": {
       "fragments": {
-        "skills/launch-fleet/SKILL.md": 4267,
+        "skills/launch-fleet/SKILL.md": 4390,
         "contracts/open-development.v1.md": 10781,
         "skills/launch-fleet/overload.md": 1481,
         "skills/launch-fleet/references/builders.md": 2140,
         "skills/launch-fleet/references/identity.md": 788,
         "contracts/github-identity.v1.md": 3508
       },
-      "loaded_path_tokens": 22965
+      "loaded_path_tokens": 23088
     }
   }
 }

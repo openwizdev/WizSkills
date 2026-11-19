@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from urllib.parse import quote
 
 PAGE = Path(__file__).resolve().parents[1] / 'page.md'
 REPOSITORY = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
@@ -30,6 +31,19 @@ SECRETS = [
 ]
 
 
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate key')
+        result[key] = value
+    return result
+
+
+def invalid_constant(_value):
+    raise ValueError('non-JSON constant')
+
+
 def gh_get(endpoint):
     try:
         result = subprocess.run(['gh', 'api', '--method', 'GET', endpoint], capture_output=True,
@@ -39,7 +53,7 @@ def gh_get(endpoint):
     if result.returncode:
         return None, f'gh exited {result.returncode}'
     try:
-        data = json.loads(result.stdout)
+        data = json.loads(result.stdout, object_pairs_hook=unique_object, parse_constant=invalid_constant)
     except ValueError:
         return None, 'invalid JSON'
     if not isinstance(data, dict):
@@ -63,7 +77,7 @@ def target(repo):
 
 
 def private(repo):
-    branch, stop = target(repo)
+    _, stop = target(repo)
     return stop or (0, f'private ok: {repo}')
 
 
@@ -114,7 +128,7 @@ def landed(repo, path, file):
     branch, stop = target(repo)
     if stop:
         return stop
-    data, reason = gh_get(f'repos/{repo}/contents/{path}?ref={branch}')
+    data, reason = gh_get(f'repos/{repo}/contents/{path}?ref={quote(branch, safe="")}')
     if reason is None:
         try:
             if data.get('encoding') != 'base64' or not isinstance(data.get('sha'), str):

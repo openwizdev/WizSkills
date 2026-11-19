@@ -1,0 +1,77 @@
+test_absent_and_partial_host_counters_remain_unknown (__main__.ReceiptTests.test_absent_and_partial_host_counters_remain_unknown) ... ok
+test_claude_counts_cache_writes_and_reads_in_input (__main__.ReceiptTests.test_claude_counts_cache_writes_and_reads_in_input) ... ok
+test_claude_jsonl_uses_result_usage_once_per_attempt (__main__.ReceiptTests.test_claude_jsonl_uses_result_usage_once_per_attempt) ... FAIL
+test_codex_incomplete_attempt_does_not_publish_partial_total (__main__.ReceiptTests.test_codex_incomplete_attempt_does_not_publish_partial_total) ... FAIL
+test_codex_jsonl_counts_completed_turns_and_only_outputs_receipt (__main__.ReceiptTests.test_codex_jsonl_counts_completed_turns_and_only_outputs_receipt) ... FAIL
+test_codex_sums_turns_without_adding_cached_input_twice (__main__.ReceiptTests.test_codex_sums_turns_without_adding_cached_input_twice) ... ok
+test_host_logs_refuse_ambiguous_or_conflicting_sources (__main__.ReceiptTests.test_host_logs_refuse_ambiguous_or_conflicting_sources) ...
+  test_host_logs_refuse_ambiguous_or_conflicting_sources (__main__.ReceiptTests.test_host_logs_refuse_ambiguous_or_conflicting_sources) (logs=([{'type': 'result', 'usage': {'output_tokens': 3}}, {'type': 'result', 'usage': {'output_tokens': 3}}],), extra={}) ... FAIL
+  test_host_logs_refuse_ambiguous_or_conflicting_sources (__main__.ReceiptTests.test_host_logs_refuse_ambiguous_or_conflicting_sources) (logs=([{'type': 'result', 'usage': {'output_tokens': 3}}],), extra={'usage': {'output_tokens': 3}}) ... FAIL
+test_incomplete_usage_stays_unknown_per_field (__main__.ReceiptTests.test_incomplete_usage_stays_unknown_per_field) ... ok
+test_invalid_or_duplicate_counters_refuse_without_a_receipt (__main__.ReceiptTests.test_invalid_or_duplicate_counters_refuse_without_a_receipt) ... ok
+
+======================================================================
+FAIL: test_claude_jsonl_uses_result_usage_once_per_attempt (__main__.ReceiptTests.test_claude_jsonl_uses_result_usage_once_per_attempt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "tools/measure/test_measure.py", line 103, in test_claude_jsonl_uses_result_usage_once_per_attempt
+    self.assertEqual((metrics["input_tokens"], metrics["output_tokens"]), (135, 11))
+AssertionError: Tuples differ: (None, None) != (135, 11)
+
+First differing element 0:
+None
+135
+
+- (None, None)
++ (135, 11)
+
+======================================================================
+FAIL: test_codex_incomplete_attempt_does_not_publish_partial_total (__main__.ReceiptTests.test_codex_incomplete_attempt_does_not_publish_partial_total)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "tools/measure/test_measure.py", line 76, in test_codex_incomplete_attempt_does_not_publish_partial_total
+    self.assertEqual((metrics["input_tokens"], metrics["output_tokens"]), (33, 4))
+AssertionError: Tuples differ: (None, None) != (33, 4)
+
+First differing element 0:
+None
+33
+
+- (None, None)
++ (33, 4)
+
+======================================================================
+FAIL: test_codex_jsonl_counts_completed_turns_and_only_outputs_receipt (__main__.ReceiptTests.test_codex_jsonl_counts_completed_turns_and_only_outputs_receipt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "tools/measure/test_measure.py", line 65, in test_codex_jsonl_counts_completed_turns_and_only_outputs_receipt
+    self.assertEqual((metrics["input_tokens"], metrics["output_tokens"]), (910, 40))
+AssertionError: Tuples differ: (None, None) != (910, 40)
+
+First differing element 0:
+None
+910
+
+- (None, None)
++ (910, 40)
+
+======================================================================
+FAIL: test_host_logs_refuse_ambiguous_or_conflicting_sources (__main__.ReceiptTests.test_host_logs_refuse_ambiguous_or_conflicting_sources) (logs=([{'type': 'result', 'usage': {'output_tokens': 3}}, {'type': 'result', 'usage': {'output_tokens': 3}}],), extra={})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "tools/measure/test_measure.py", line 113, in test_host_logs_refuse_ambiguous_or_conflicting_sources
+    self.assertEqual(result.returncode, 2)
+AssertionError: 0 != 2
+
+======================================================================
+FAIL: test_host_logs_refuse_ambiguous_or_conflicting_sources (__main__.ReceiptTests.test_host_logs_refuse_ambiguous_or_conflicting_sources) (logs=([{'type': 'result', 'usage': {'output_tokens': 3}}],), extra={'usage': {'output_tokens': 3}})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "tools/measure/test_measure.py", line 113, in test_host_logs_refuse_ambiguous_or_conflicting_sources
+    self.assertEqual(result.returncode, 2)
+AssertionError: 0 != 2
+
+----------------------------------------------------------------------
+Ran 9 tests
+
+FAILED (failures=5)

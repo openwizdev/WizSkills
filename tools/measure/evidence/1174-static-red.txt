@@ -1,0 +1,93 @@
+✖ counts each pinned fragment separately and refuses partial workflow totals (47.116664ms)
+✖ unavailable tokenizer leaves a readable workflow unknown (43.437788ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+
+✖ failing tests:
+
+test at tools/measure/test_static_count.cjs:39:1
+✖ counts each pinned fragment separately and refuses partial workflow totals (47.116664ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    {
+      'fixture.complete': {
+        fragments: {
+  +       'entry.md': 0,
+  +       'reference.md': 0
+  -       'entry.md': 2,
+  -       'reference.md': 2
+        },
+  +     loaded_path_tokens: 0
+  -     loaded_path_tokens: 4
+      },
+      'fixture.link': {
+        fragments: {
+  +       'entry.md': 0,
+  +       'link.md': 0
+  -       'entry.md': 2,
+  -       'link.md': null
+        },
+  +     loaded_path_tokens: 0
+  -     loaded_path_tokens: null
+      },
+      'fixture.missing': {
+        fragments: {
+  +       'entry.md': 0,
+  +       'missing.md': 0
+  -       'entry.md': 2,
+  -       'missing.md': null
+        },
+  +     loaded_path_tokens: 0
+  -     loaded_path_tokens: null
+      }
+    }
+
+      at TestContext.<anonymous> (tools/measure/test_static_count.cjs:41:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { 'fixture.complete': { fragments: [Object], loaded_path_tokens: 0 }, 'fixture.missing': { fragments: [Object], loaded_path_tokens: 0 }, 'fixture.link': { fragments: [Object], loaded_path_tokens: 0 } },
+    expected: { 'fixture.complete': { fragments: [Object], loaded_path_tokens: 4 }, 'fixture.missing': { fragments: [Object], loaded_path_tokens: null }, 'fixture.link': { fragments: [Object], loaded_path_tokens: null } },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tools/measure/test_static_count.cjs:49:1
+✖ unavailable tokenizer leaves a readable workflow unknown (43.437788ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    {
+      fragments: {
+  +     'entry.md': 0,
+  +     'reference.md': 0
+  -     'entry.md': null,
+  -     'reference.md': null
+      },
+  +   loaded_path_tokens: 0
+  -   loaded_path_tokens: null
+    }
+
+      at TestContext.<anonymous> (tools/measure/test_static_count.cjs:51:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { fragments: { 'entry.md': 0, 'reference.md': 0 }, loaded_path_tokens: 0 },
+    expected: { fragments: { 'entry.md': null, 'reference.md': null }, loaded_path_tokens: null },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

@@ -2,7 +2,7 @@
 """Write and check agent status notes: contracts/agent-status.v1.md (#1254, revision 4).
 
   status.py write --repo OWNER/NAME --ticket N --agent KIND --state STATE [--why TEXT]
-                  --harness TEXT --model TEXT --step TEXT [--pr URL] [--preview URL]
+                  --harness TEXT --model TEXT --skills 'SKILL@X.Y.Z[, ...]' --step TEXT [--pr URL] [--preview URL]
                   [--time TIME] [--note ID]
   status.py check --repo OWNER/NAME
 
@@ -30,10 +30,12 @@ CLAIMING = ('working', 'asking')
 ASKING_LABEL = 'needs-info'
 # Key, longest value, required. The order is the note's line order.
 KEYS = (('agent', 300, True), ('state', 300, True), ('harness', 60, True), ('model', 60, True),
-        ('step', 300, True), ('time', 300, True), ('pr', 300, False), ('preview', 300, False))
+        ('skills', 300, True), ('step', 300, True), ('time', 300, True), ('pr', 300, False), ('preview', 300, False))
 REPO = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
 TIME = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z')
 STATE = re.compile(r'(working|asking|done|stopped)( \(([^()]{1,100})\))?')
+SKILL = r'[a-z0-9]+(?:-[a-z0-9]+)*@[0-9]+\.[0-9]+\.[0-9]+'
+SKILLS = re.compile(rf'{SKILL}(?:, {SKILL})*')
 PR = re.compile(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*')
 PREVIEW = re.compile(r'https://[^\s"<>]+')
 CONTROL = re.compile(r'[\x00-\x1f\x7f]')
@@ -90,6 +92,8 @@ def shaped(fields):
     if not STATE.fullmatch(fields['state']) or (fields['state'].startswith(('working', 'asking', 'done'))
                                                  and fields['state'] not in STATES):
         refuse('state', 'not working, asking, done, stopped or stopped (<why>)')
+    if not SKILLS.fullmatch(fields['skills']):
+        refuse('skills', 'not <skill>@<major>.<minor>.<patch>, joined by a comma and a space')
     if not TIME.fullmatch(fields['time']):
         refuse('time', 'not YYYY-MM-DDTHH:MM:SSZ')
     if 'pr' in fields and not PR.fullmatch(fields['pr']):
@@ -196,7 +200,7 @@ def write(args, now):
         refuse('state', 'only stopped carries a reason')
     fields = {'agent': args.agent, 'state': state, 'harness': args.harness, 'model': args.model,
               'step': args.step, 'time': args.time or now.strftime('%Y-%m-%dT%H:%M:%SZ')}
-    for key in ('pr', 'preview'):
+    for key in ('skills', 'pr', 'preview'):
         if getattr(args, key) is not None:
             fields[key] = getattr(args, key)
     shaped(fields)
@@ -307,7 +311,8 @@ def main(argv):
     w = sub.add_parser('write')
     for flag in ('--repo', '--ticket', '--agent', '--state', '--harness', '--model', '--step'):
         w.add_argument(flag, required=True)
-    for flag in ('--why', '--pr', '--preview', '--time', '--note'):
+    # --skills has no default: a missing one is refused as the contract's missing field.
+    for flag in ('--skills', '--why', '--pr', '--preview', '--time', '--note'):
         w.add_argument(flag)
     c = sub.add_parser('check')
     c.add_argument('--repo', required=True)

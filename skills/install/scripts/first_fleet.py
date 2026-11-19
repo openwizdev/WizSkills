@@ -867,7 +867,11 @@ def progress(spec, program, env):
 
 def resume(got):
     """The first unfinished first-fleet step, from the saved state alone."""
-    value = State(got['--state']).value
+    state = State.__new__(State)  # read only: no lock, nothing opened for writing
+    state.path = Path(got['--state'])
+    if not state.path.is_absolute():
+        raise Exit(2, 'usage: --state takes an absolute path')
+    value = state.read()
     created, launched = value.get('created') or {}, value.get('launch') or {}
     repo, spec = value.get('repo') or created.get('repo'), value.get('spec')
     if created.get('state') in ('pending', 'uncertain'):

@@ -30,9 +30,37 @@ questions; neither replaces functional or accessibility proofs.
   these. Note platform-specific or uninspected states rather than claiming them.
 
 Write each defect with viewport, screenshot region, observation, impact and one
-proposed change, as in hill-climb's screenshot critique. Keep a pass/defect/gap
+proposed change, as in the screenshot critique below. Keep a pass/defect/gap
 record for each applicable check. Do not import style bans, image or motion
 quotas, scoring caps, new validators or a new approval stage from the sources.
+
+## Screenshot critique
+
+For each hill-climb round, or a reviewer's real-page pass, inspect both real-page
+images, then write these passes separately in the round's critique record. Cite
+the screenshot filename and region in each pass, including passes with no defect
+found; do not substitute a generic polish score.
+
+| Pass | What to inspect |
+| --- | --- |
+| First-visible answer | Can the person find the screen's answer and next action, or the page's promise and evidence? |
+| Visual masses and hierarchy | Which regions dominate before reading? Does that order serve the brief? |
+| Alignment and accidental voids | Shared edges, grouping and deliberate space; locate empty regions that disrupt the work. |
+| Type and contrast | Loaded fonts, readable roles and measured colour pairs, with the dark-interface checks above. |
+| Content fullness | Reconcile the packet and visible facts; distinguish purposeful space from missing content. |
+| Phone composition | Inspect the actual phone image for action order, wrapping, readable fields and overflow. |
+| Detailed defects | Locate clipped copy, weak control edges, icons and state cues needing correction. |
+
+Record each issue, most consequential first:
+
+| Viewport | Screenshot region | Observation | Impact | One proposed change |
+| --- | --- | --- | --- | --- |
+| 390 × 844 | `phone.png`, queue header, x:16–374 y:96–156 | Long label wraps over the count | The count cannot be read | Put the count on a separate aligned row |
+
+That row is a synthetic example. Give a real issue an exact region or annotated
+marker. Turn a chosen issue into one concrete change per candidate, keeping the
+other brief decisions fixed. Keep this diagnostic record separate from raw
+verdicts; it adds no score, scoring formula or stopping rule.
 
 ## Worked synthetic inspection
 
@@ -66,14 +94,12 @@ command above does not perform that extra preparation; do not claim it captured
 focus without inspecting it. Wait for the ready selector, fonts and two animation
 frames; retain both full-page captures and close both tabs.
 
-Recorded pairs below use **WCAG 2 relative sRGB luminance contrast**:
-`(lighter + 0.05) / (darker + 0.05)`. For each 8-bit channel divided by 255, use
-`c / 12.92` through `0.04045`, otherwise `((c + 0.055) / 1.055)^2.4`; weight linear
-R/G/B by `0.2126 / 0.7152 / 0.0722`. Python's standard library calculated the
-ratios from the browser-verified fixture colours; values are rounded to two
-places. The example checks 4.5:1 for ordinary text and 3:1 for the necessary
-control edge/focus indicator against the surrounding panel. These are example
-criteria, not a replacement for the project's accessibility contract.
+Recorded pairs below are **WCAG 2 contrast** ratios from
+`python3 skills/image/scripts/contrast.py FG BG --min <threshold>`, run on the
+browser-verified fixture colours. The example checks 4.5:1 for ordinary text and
+3:1 for the necessary control edge/focus indicator against the surrounding
+panel. These are example criteria, not a replacement for the project's
+accessibility contract.
 
 | Pair / annotation | Foreground | Background | Ratio | Example result |
 | --- | --- | --- | --- | --- |

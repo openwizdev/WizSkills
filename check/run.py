@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # Each carried skill's own suites, run from the tree's root. The inventory
 # guard below refuses any newly added suite until this list includes it.
 SUITES = {
+    'check': [['python3', '-I', 'check/test_notice.py']],
+    'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py']],
     'triage': [['python3', '-I', 'skills/triage/test/test_find_work.py'],
                ['python3', '-I', 'skills/triage/test/test_public_records.py']],
     'install': [['python3', '-I', 'skills/install/tests/test_first_fleet.py']],
@@ -31,6 +33,8 @@ SUITES = {
               ['python3', 'skills/grill/scripts/test_records.py']],
     'diagnose': [['node', '--test', 'skills/diagnose/tests/hitl-loop.test.mjs']],
     'where-are-we': [['python3', '-I', 'skills/where-are-we/test/test_read_github.py']],
+    'handoff': [['python3', '-I', 'skills/handoff/test/test_handoff.py']],
+    'ask-wiz': [['python3', '-I', 'skills/ask-wiz/test/test_routes.py']],
     'hill-climb': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/hill-climb/tests']],
     'image': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/image/tests'],
               ['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/image/references']],
@@ -49,6 +53,7 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-grants.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-inbox.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-records.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-status.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-ops-starts.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-on1.py'],
                      ['sh', 'skills/launch-fleet/scripts/test-loop.sh'],
@@ -174,8 +179,13 @@ def skill(root, name, out):
             out.add('notice', at, f'it carries its source line exactly, on a line of its own: `{source}`')
         if MATT_COPYRIGHT in collapsed:
             out.add('notice', at, "it is not adapted from Matt Pocock's skills, so it never carries his notice")
-    elif MATT_NOTICE not in collapsed:
-        out.add('notice', at, "it carries Matt Pocock's copyright and MIT notice word for word")
+    else:
+        notice_at = f'skills/{name}/NOTICE.md'
+        if MATT_NOTICE not in ' '.join((read(root / notice_at) or '').split()):
+            out.add('notice', notice_at, "it carries Matt Pocock's copyright and MIT notice word for word")
+        last = next((line for line in reversed(body.splitlines()) if line.strip()), '')
+        if MATT_COPYRIGHT in collapsed or '](NOTICE.md)' not in last:
+            out.add('notice', at, 'it ends with a credit line linking NOTICE.md and never carries the notice itself')
     yaml_at = f'skills/{name}/agents/openai.yaml'
     yaml = read(root / yaml_at)
     if yaml is None:

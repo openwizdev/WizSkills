@@ -90,26 +90,4 @@ Next: the builder fixes or disputes R1 once, then one re-check.
 
 `VERDICT` is `CHANGES` while a blocker is open, otherwise `APPROVE`. Ids run R1, R2, … in the order found, never renumbered or reused. Each numbered line of the description's `## Rulings` gets one mark, `upheld` or `overturned as R<n>` (a new finding, graded like any other); with none, write `Rulings: none.`, and a description with no `## Rulings` section is a polish finding. With no findings, write `No findings.` A full review ends with the builder line above or `Next: none open. It merges by the project's merge rules.`
 
-## Credit
-
-This skill adapts Matt Pocock's `code-review` (`github.com/mattpocock/skills` @ `a496f55`): Standards and Spec, run and reported apart. It also adapts Theo Browne's `sol-loop` (the verdict line, stable ids, severity by impact, re-checks of open ids and changed code, silence never approving) and Lauren Tan's `interrogate` (a finding proven by a rerun, the intent restated first); their notices are in [NOTICES.md](NOTICES.md). Matt Pocock's notice:
-
-Copyright (c) 2026 Matt Pocock
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Credit: adapted from Matt Pocock's, Theo Browne's and Lauren Tan's skills; the notices and sources are in [NOTICE.md](NOTICE.md) and [NOTICES.md](NOTICES.md).

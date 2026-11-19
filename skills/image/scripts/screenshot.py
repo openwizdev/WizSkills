@@ -2,12 +2,22 @@
 """Capture phone + desktop evidence through Cloudroom's browser-harness.
 
 Only Python's standard library and the existing browser-harness CLI are needed.
+For each width it opens and activates a fresh tab, sets a 1x CSS pixel scale and
+reduced motion, and loads the URL at 390 x 844 and 1440 x 900 (viewport sizes,
+not phone emulation). It waits for load, a success HTTP status, the visible
+ready selector, fonts, image decoding (lazy images too; empty placeholders are
+skipped) and two animation frames, then saves full-page phone.png and
+desktop.png and closes its tab, on success or failure. --timeout is per step,
+not a sleep. Any failure exits nonzero; partial files are not a completed pair.
 The manifest is written last: its presence marks a completed pair, not approval.
+It prints the manifest path, then `overflow: none` or each capture, first
+screens included, whose content is wider than its viewport.
 Use --fixed-at-bottom for a tall viewport plus a separate first-screen PNG.
 The taller viewport changes vh units and other viewport-relative layouts;
 compare the first-screen image before judging the full-page layout.
 """
 import argparse
+import json
 import math
 from pathlib import Path
 import subprocess
@@ -141,6 +151,17 @@ Path(config['out'], 'capture.json').write_text(json.dumps(manifest, indent=2) + 
 """
     subprocess.run(['browser-harness'], input=program, text=True, check=True)
     print(out / 'capture.json')
+    wide = []
+    for capture in json.loads((out / 'capture.json').read_text())['captures']:
+        # Every measured view, including the first screen kept by
+        # --fixed-at-bottom, whose layout can differ from the tall capture.
+        views = [(capture['name'], capture)]
+        if 'firstScreen' in capture:
+            views.append((capture['name'] + ' first screen', capture['firstScreen']))
+        wide += [f"{label} {view['page']['contentWidth']:g} > {view['viewport']['width']}"
+                 for label, view in views
+                 if view['page']['contentWidth'] > view['viewport']['width']]
+    print('overflow: ' + (', '.join(wide) or 'none'))
 
 
 if __name__ == '__main__':

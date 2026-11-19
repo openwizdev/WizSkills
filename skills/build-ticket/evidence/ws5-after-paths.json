@@ -1,0 +1,16 @@
+{
+  "commit": "c51ed4c481bd3190c6af650f67e2749306ae4652",
+  "workflows": {
+    "build-ticket.regression": [
+      "skills/build-ticket/SKILL.md",
+      "contracts/open-development.v1.md",
+      "skills/build-ticket/checklist.md"
+    ],
+    "build-ticket.regression-app": [
+      "skills/build-ticket/SKILL.md",
+      "contracts/open-development.v1.md",
+      "skills/build-ticket/checklist.md",
+      "skills/launch-fleet/SKILL.md"
+    ]
+  }
+}

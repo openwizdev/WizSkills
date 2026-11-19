@@ -1,0 +1,27 @@
+{
+  "commit": "c51ed4c481bd3190c6af650f67e2749306ae4652",
+  "tokenizer": {
+    "package": "js-tiktoken",
+    "version": "1.0.21",
+    "encoding": "o200k_base"
+  },
+  "workflows": {
+    "build-ticket.regression": {
+      "fragments": {
+        "skills/build-ticket/SKILL.md": 2095,
+        "contracts/open-development.v1.md": 10781,
+        "skills/build-ticket/checklist.md": 1922
+      },
+      "loaded_path_tokens": 14798
+    },
+    "build-ticket.regression-app": {
+      "fragments": {
+        "skills/build-ticket/SKILL.md": 2095,
+        "contracts/open-development.v1.md": 10781,
+        "skills/build-ticket/checklist.md": 1922,
+        "skills/launch-fleet/SKILL.md": 25234
+      },
+      "loaded_path_tokens": 40032
+    }
+  }
+}

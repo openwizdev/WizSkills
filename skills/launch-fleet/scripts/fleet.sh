@@ -1431,15 +1431,12 @@ def matches($p): . as $f
     elif ($p | contains("*")) then ($f | test("^" + ($p | gsub("(?<c>[.+?^${}()|\\[\\]\\\\])"; "\\\(.c)") | gsub("\\*"; "[^/]*")) + "$"))
     else $f == $p end;
 def cutoff($s): approved_at($s);
-# A merge tied with the approval is not a hit (`hits`), but it is no proof
-# the approval saw it either: the release reads `hits_since($s; true)` (#2112 R7).
-def hits_since($s; $tie): . as $t | cutoff($s) as $c | relies as $ps
+def hits($s): . as $t | cutoff($s) as $c | relies as $ps
   | if $c == null or ($ps | length) == 0 then [] else
-      [$W.merged[] | select(.closes as $cl | (.mergedAt > $c or ($tie and .mergedAt == $c)) and ($t.number | among($cl) | not))
+      [$W.merged[] | select(.closes as $cl | .mergedAt > $c and ($t.number | among($cl) | not))
        | {pr: .number, files: ([.files[] | select(.status != "added") | (.filename, .previous_filename)
            | select(. != null) | select(. as $f | any($ps[]; . as $p | $f | matches($p)))] | unique)}
        | select(.files | length > 0)] | sort_by(.pr) end;
-def hits($s): hits_since($s; false);
 def due_notes($s): records as $rs | [hits($s)[] | .pr as $p | select(any($rs[]; .r | test("^(held for|noted) #\($p)\\b")) | not)];
 def held($s): ([records[] | kind("held for") | select(.r | startswith("held for ordering:") | not) | .at] | max) as $h | approved_at($s) as $a
   | $h != null and ($a == null or $h > $a);
@@ -1487,14 +1484,9 @@ def ordering_open_claims: . as $t
      | (.h | tonumber) as $id | select($t | ordering_done({id: $id}) | not)
      | {id: $c.databaseId, hold: $id, at: $c.createdAt, edited: ($c.updatedAt // $c.createdAt), r: $r}];
 def ordering_inflight: (ordering_open_claims | length) > 0;
-# #2112 (OB7): an approval answers an existing contract hold only through a complete,
-# unchanged cutoff. No declared-contract change merged at or since that
-# approval (by either name of a rename, or a deletion; a `noted` record tells a
-# builder but approves nothing), no release claim is unresolved, and the plan
-# is still the one approved. Otherwise the hold stands.
-# Each candidate'"'"'s plan fingerprint is read, as for an ordering release.
-def release_candidate($s): labelled_held and released($s) and (hits_since($s; true) | length) == 0
-  and (ordering_inflight | not);
+# An existing contract hold needs a newer approval, exclusive hold ownership,
+# and no unresolved release claim. The plan fingerprint is checked for each candidate.
+def release_candidate($s): labelled_held and released($s) and (ordering_inflight | not);
 def release_due($s): release_candidate($s)
   and ($s == null or (current($s) and $W.fingerprint_agreement["\($s.number)"] == true));
 # Same ordinary start guards, before requiring a ready label or no held label.

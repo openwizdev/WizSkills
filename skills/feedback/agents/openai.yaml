@@ -1,3 +1,0 @@
-interface:
-  display_name: "Feedback"
-  short_description: "Send chosen public feedback after an exact preview and a yes"

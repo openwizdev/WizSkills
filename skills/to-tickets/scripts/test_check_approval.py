@@ -661,6 +661,11 @@ class MachineApproval(unittest.TestCase):
         issues += [{"number": t["number"], "title": t["title"], "body": t["body"], "state": t["state"],
                     "parent": SPEC, "milestone": "Synthetic", "blockedBy": [b["number"] for b in t["blocked_by"]],
                     "labels": [], "comments": []} for t in tickets]
+        planned = {t["number"] for t in tickets}
+        issues += [{"number": n, "title": f"Another spec's #{n}", "body": "", "state": state, "parent": None,
+                    "milestone": "Synthetic", "blockedBy": [], "labels": [], "comments": []}
+                   for n, state in sorted({(b["number"], b["state"]) for t in tickets for b in t["blocked_by"]
+                                           if b["number"] not in planned})]
         (state / "state.json").write_text(json.dumps({"next_issue": 9200, "issues": issues}))
         gh = state / "bin/gh"
         gh.write_text(f'#!/bin/sh\nexec python3 -I "{FAKE_REVISION_GH}" "$@"\n')
@@ -785,6 +790,95 @@ class MachineApproval(unittest.TestCase):
                 out = self.approve(plan(), stale)
                 self.assertEqual((out.returncode, out.stdout), (1, ""))
                 self.assertIn("approve: revision:", out.stderr)
+
+    def test_the_critical_chain_counts_open_outside_blockers_and_never_merged_work(self):
+        # catches: a chain length that leaves out an open blocker in another
+        # spec, or counts tickets already merged, so the record reports a
+        # critical chain shorter or longer than the work still ahead.
+        def chain(tickets):
+            out = self.approve(tickets)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            return next(l for l in out.stdout.split("\n") if l.startswith("Checks: ")).split("; ")[4]
+
+        self.assertEqual(chain(plan()), "width: chain 4, widest 3")
+        tickets = plan()
+        first = find(tickets, 9101)
+        first["blocked_by"].append({"number": 8001, "state": "OPEN"})
+        first["body"] = first["body"].replace(
+            "## Links\n\nnone\n", "## Links\n\n- #8001 real: another spec's record shape, which the contract extends\n")
+        self.assertEqual(chain(tickets), "width: chain 5, widest 2")
+        first["blocked_by"][0]["state"] = "CLOSED"
+        self.assertEqual(chain(tickets), "width: chain 4, widest 3")
+        first["state"] = "CLOSED"
+        self.assertEqual(chain(tickets), "width: chain 3, widest 4")
+
+
+PREFER = HERE / "prefer.py"
+
+
+def cut(tickets, links):
+    """One proposed cut in tickets.md's picture data: (id, state, role) and (blocker, ticket)."""
+    return {"tickets": [{"id": i, "title": f"Synthetic {i}", "size": "S", "state": state, "role": role}
+                        for i, state, role in tickets],
+            "links": [{"blocker": b, "ticket": t, "kind": "real", "reason": "Synthetic behaviour"} for b, t in links]}
+
+
+class PreferCut(unittest.TestCase):
+    """prefer.py: of two cuts of one spec, keep the shorter critical chain,
+    and the wider graph when the chains are equal."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+
+    def prefer(self, a, b):
+        for name, data in (("a.json", a), ("b.json", b)):
+            (self.tmp / name).write_text(json.dumps(data))
+        return subprocess.run(["python3", "-I", str(PREFER), str(self.tmp / "a.json"), str(self.tmp / "b.json")],
+                              capture_output=True, text=True, cwd=self.tmp)
+
+    def test_the_shorter_chain_wins_then_the_wider_graph(self):
+        # catches: a planner that keeps the first or the narrower cut when
+        # another cut finishes the spec sooner or starts more tickets at once.
+        w = "waiting", "builder"
+        line = cut([("A", *w), ("B", *w), ("C", *w), ("D", *w)], [("A", "B"), ("B", "C"), ("C", "D")])
+        fan = cut([("A", *w), ("B", *w), ("C", *w), ("D", *w)], [("A", "B"), ("A", "C"), ("A", "D")])
+        pair = cut([("A", *w), ("B", *w), ("C", *w), ("D", *w)], [("A", "B"), ("C", "D")])
+        out = self.prefer(line, fan)
+        self.assertEqual((out.returncode, out.stderr), (0, ""))
+        self.assertEqual(out.stdout, "cut a.json: chain 4, widest 1\ncut b.json: chain 2, widest 3\n"
+                                     "prefer b.json: the shorter critical chain\n")
+        out = self.prefer(pair, fan)
+        self.assertEqual(out.stdout, "cut a.json: chain 2, widest 2\ncut b.json: chain 2, widest 3\n"
+                                     "prefer b.json: the same chain, and the wider graph\n")
+        out = self.prefer(fan, pair)
+        self.assertEqual(out.stdout.splitlines()[-1], "prefer a.json: the same chain, and the wider graph")
+        out = self.prefer(pair, pair)
+        self.assertEqual(out.stdout.splitlines()[-1], "prefer a.json: the same chain and width; keep the first")
+
+    def test_the_chain_counts_open_outside_blockers_and_never_merged_work(self):
+        # catches: a comparison that ignores an outside blocker still open,
+        # or counts merged tickets, and so keeps the cut that finishes later.
+        w = "waiting", "builder"
+        outside = cut([("#10", "waiting", "external"), ("A", *w), ("B", *w), ("C", *w)],
+                      [("#10", "A"), ("A", "B"), ("C", "B")])
+        merged = cut([("#10", "merged", "external"), ("A", "merged", "builder"), ("B", *w), ("C", *w), ("D", *w)],
+                     [("#10", "A"), ("A", "B"), ("B", "C"), ("B", "D")])
+        out = self.prefer(outside, merged)
+        self.assertEqual(out.stdout, "cut a.json: chain 3, widest 1\ncut b.json: chain 2, widest 2\n"
+                                     "prefer b.json: the shorter critical chain\n")
+
+    def test_an_unusable_cut_is_refused(self):
+        # catches: a cycle or a link to an unknown ticket read as a short
+        # chain, so a cut that can never finish wins.
+        w = "waiting", "builder"
+        fine = cut([("A", *w)], [])
+        for bad in (cut([("A", *w), ("B", *w)], [("A", "B"), ("B", "A")]), cut([("A", *w)], [("Z", "A")]),
+                    {"tickets": "A"}):
+            with self.subTest(bad=bad):
+                out = self.prefer(fine, bad)
+                self.assertEqual((out.returncode, out.stdout), (2, ""))
+                self.assertIn("prefer: b.json:", out.stderr)
 
 
 if __name__ == "__main__":

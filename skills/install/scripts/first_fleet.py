@@ -8,6 +8,7 @@
   first_fleet.py spec --state FILE --spec N --repo OWNER/NAME
   first_fleet.py launch --state FILE --spec N [--yes --confirm DIGEST]
   first_fleet.py progress --state FILE --spec N --openwiz PROGRAM
+  first_fleet.py next --state FILE
 
 It adds no approval, planner or engine. `continue` carries what install and
 setup already recorded in the installed OpenWiz state (DIR is its `<state>`):
@@ -36,6 +37,9 @@ the engine's tick. The launch is saved before the start runs, and is never run
 twice: a repeat only reads the spec's fleet record and progress, and an
 uncertain start stays uncertain until that record reads back. Every command
 checks the checkout is the repository this onboarding recorded.
+
+`next` reads only the state file and prints the first unfinished step and
+what to run there, so a fresh session resumes without repeating an effect.
 
 The state file is private and owner-only; keep it outside the checkout. It
 holds the user's choices, the carried setup facts, this onboarding's spec and
@@ -67,6 +71,7 @@ OPTIONS = {
     'spec': ({'--state', '--spec', '--repo'}, set(), set()),
     'launch': ({'--state', '--spec'}, {'--yes'}, {'--confirm'}),
     'progress': ({'--state', '--spec', '--openwiz'}, set(), set()),
+    'next': ({'--state'}, set(), set()),
 }
 FAMILY = {'claude-code': 'claude', 'codex': 'gpt'}
 REVIEWER = {'claude': 'Reviewer for Claude-built', 'gpt': 'Reviewer for GPT-built'}
@@ -103,7 +108,7 @@ def strict(text):
 
 def parse(argv):
     if not argv or argv[0] not in OPTIONS:
-        raise Exit(2, 'usage: first_fleet.py continue|create-repo|choose|spec|launch|progress ... (see its header)')
+        raise Exit(2, 'usage: first_fleet.py continue|create-repo|choose|spec|launch|progress|next ... (see its header)')
     values, switches, optional = OPTIONS[argv[0]]
     got, rest = {}, argv[1:]
     while rest:
@@ -860,6 +865,36 @@ def progress(spec, program, env):
     return 0
 
 
+def resume(got):
+    """The first unfinished first-fleet step, from the saved state alone."""
+    value = State(got['--state']).value
+    created, launched = value.get('created') or {}, value.get('launch') or {}
+    repo, spec = value.get('repo') or created.get('repo'), value.get('spec')
+    if created.get('state') in ('pending', 'uncertain'):
+        step = ('project', 'Creating %s is %s: run create-repo --repo %s --yes again; it reads before it creates.'
+                % (created['repo'], created['state'], created['repo']))
+    elif not repo or created.get('state') == 'absent' and not value.get('setup'):
+        step = ('project', 'Offer the ideas, then choose or create its one repository.')
+    elif not value.get('setup'):
+        step = ('connect', 'Connect %s with the installed tools, then run continue.' % repo)
+    elif not value.get('choices'):
+        step = ('grill', 'Run the grill unless its summary is already confirmed; then choose the agents.')
+    elif not spec:
+        step = ('plan', 'Confirm the spec, approve the exact plan, then run spec --spec <N> --repo %s.' % repo)
+    elif launched.get('spec') == spec and launched.get('state') in ('pending', 'uncertain'):
+        step = ('launch', 'The start of spec #%d is uncertain: run launch --spec %d to read its fleet record; '
+                'never start it again.' % (spec, spec))
+    elif launched.get('spec') == spec and launched.get('state') == 'started':
+        step = ('watch', 'Run progress --spec %d.' % spec)
+    else:
+        step = ('launch', 'Preview with launch --spec %d and ask for a yes to exactly that.' % spec)
+    print('Next: %s.' % step[0])
+    if repo:
+        print('Repository: %s.' % repo)
+    print(step[1])
+    return 0
+
+
 def main(argv):
     try:
         command, got = parse(argv)
@@ -875,6 +910,8 @@ def main(argv):
             return record_spec(got)
         if command == 'launch':
             return launch(got)
+        if command == 'next':
+            return resume(got)
         return watch(got)
     except Exit as stop:
         print(stop.args[0])

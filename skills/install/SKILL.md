@@ -11,13 +11,13 @@ The user pasted one line into their agent:
 
 Take them from that line to setup, then to their first fleet, in this order: preflight, verified install, setup and connections, a brief explanation, first fleet. In this flow, every later step reuses what an earlier one recorded (the install, CloudRoom's sign-in, the repository, the identity, the brain, the agents), and resumes from the first unfinished step. Keep each step short: the goal is the user seeing their own agents working within minutes.
 
-This skill only connects existing tools: the verified installer (`tools/install/install` in the OpenWiz repository, over that repository's `contracts/install.v1.md`), setup (its `contracts/setup.v1.md` and the [`setup`](../setup/SKILL.md) skill), the agent CLI ([`contracts/cli.v1.md`](../../contracts/cli.v1.md)), and, for the first fleet, [`grill`](../grill/SKILL.md), [`plan-graph`](../plan-graph/SKILL.md) and [`launch-fleet`](../launch-fleet/SKILL.md). It adds no installer, engine, sign-in routine, approval or planner of its own, and never runs `openwiz engine` or `openwiz fleet tick`: the first fleet starts as launch-fleet starts every fleet, with a fleet thread and its loop. The public guide is `docs/install.md` in the OpenWiz repository.
+This skill only connects existing tools: the verified installer (`tools/install/install` in the OpenWiz repository, over that repository's `contracts/install.v1.md`), setup (its `contracts/setup.v1.md` and the [`setup`](../setup/SKILL.md) skill), the agent CLI ([`contracts/cli.v1.md`](../../contracts/cli.v1.md)), and, for the first fleet, [`grill`](../grill/SKILL.md), [`to-spec`](../to-spec/SKILL.md), [`to-tickets`](../to-tickets/SKILL.md) and [`launch-fleet`](../launch-fleet/SKILL.md). It adds no installer, engine, sign-in routine, approval or planner of its own, and never runs `openwiz engine` or `openwiz fleet tick`: the first fleet starts as launch-fleet starts every fleet, with a fleet thread and its loop. The public guide is `docs/install.md` in the OpenWiz repository.
 
 **Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills.
 
 ## Rules for the whole install
 
-- **Install permission is not work approval.** Asking for an install, finishing setup or saying yes to a step approves no spec, no plan and no start. The first fleet requires separate spec confirmation, exact-plan approval and explicit consent to start. Follow plan-graph and launch-fleet. Never write, fake or infer an approval, or ask for blanket consent to future work.
+- **Install permission is not work approval.** Asking for an install, finishing setup or saying yes to a step approves no spec, no plan and no start. The first fleet requires separate spec confirmation, exact-plan approval and explicit consent to start. Follow to-spec, to-tickets and launch-fleet. Never write, fake or infer an approval, or ask for blanket consent to future work.
 - **Every effect is shown first, then waits for a yes.** Before signing in, connecting or skipping the App, saving project settings, creating the brain or configuring phone access, show the tool's proposed effects and operation id and wait for the user's explicit yes to exactly that proposal. Then confirm that same operation id. No yes, no effect.
 - **Use the agent CLI's JSON, never its screen.** Every command here prints one JSON object or has a `--json` form; read it and its exit code. Never scrape a terminal screen, and run installed programs by absolute path.
 - **No build tools.** The packaged install needs Python 3.9 or later and nothing else: no Rust, Cargo, Node or npm, and no source build. If a step seems to need one, stop and say so.
@@ -162,7 +162,7 @@ Done when the choices are recorded and the builder settings match them.
 
 ### 5. Plan
 
-Run `plan-graph` from the confirmed grill, unchanged: write the spec, show it, and wait for the user's **spec confirmation**; propose 4 to 7 small tickets with disjoint owned paths and as few arrows as the work allows, so several can start at once; write them; then wait for the user's **exact-plan approval** of the graph as written, recorded with its revision and fingerprint. A reply that asks for a change is not an approval. Then record which spec this first-fleet journey planned:
+Run `to-spec` from the confirmed grill, show the spec and wait for **spec confirmation**. Then run `to-tickets`: propose 4 to 7 small tickets with disjoint owned paths and as few arrows as the work allows, so several can start at once; write them; then wait for the user's **exact-plan approval** of the graph as written, recorded with its revision and fingerprint. A reply that asks for a change is not an approval. Then record which spec this first-fleet journey planned:
 
 ```sh
 python3 <this skill's folder>/scripts/first_fleet.py spec --state <private state file> --spec <spec number> --repo <owner>/<name>
@@ -170,7 +170,7 @@ python3 <this skill's folder>/scripts/first_fleet.py spec --state <private state
 
 It checks the checkout is that repository and saves it; every later command refuses to run in another repository.
 
-Done when plan-graph's approval record is on the spec and current.
+Done when to-tickets’ approval record is on the spec and current.
 
 ### 6. Launch
 

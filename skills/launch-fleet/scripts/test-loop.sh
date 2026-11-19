@@ -7,9 +7,9 @@ FIX=$HERE/fixtures
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/plugin cache/skills/launch-fleet/scripts/carried" \
-  "$work/plugin cache/skills/plan-graph" "$work/remote" "$work/runtime"
+  "$work/plugin cache/skills/to-tickets" "$work/remote" "$work/runtime"
 cp "$HERE/loop.sh" "$HERE/fleet.sh" "$HERE/records.py" "$work/plugin cache/skills/launch-fleet/scripts/"
-cp "$HERE/../../plan-graph/revision.sh" "$work/plugin cache/skills/plan-graph/"
+cp "$HERE/../../to-tickets/revision.sh" "$work/plugin cache/skills/to-tickets/"
 cp "$HERE/carried/alarm.py" "$work/plugin cache/skills/launch-fleet/scripts/carried/"
 mkdir "$work/linked skills"
 ln -s "$work/plugin cache/skills/launch-fleet" "$work/linked skills/launch-fleet"
@@ -81,9 +81,9 @@ echo 'ok   bundled loop runs the packaged fleet and revision in a plain consumer
 
 # The consumer still refreshes. Its later skills must not replace the bundle.
 printf 'two\n' > "$work/remote/version"
-mkdir -p "$work/remote/skills/launch-fleet/scripts" "$work/remote/skills/plan-graph"
+mkdir -p "$work/remote/skills/launch-fleet/scripts" "$work/remote/skills/to-tickets"
 printf 'exit 99\n' > "$work/remote/skills/launch-fleet/scripts/fleet.sh"
-printf 'exit 99\n' > "$work/remote/skills/plan-graph/revision.sh"
+printf 'exit 99\n' > "$work/remote/skills/to-tickets/revision.sh"
 git -C "$work/remote" add -A
 git -C "$work/remote" -c user.name=synthetic -c user.email=synthetic@example.invalid commit -qm two
 rm -rf "$work/cache"
@@ -95,9 +95,9 @@ echo 'ok   later runs refresh the consumer while keeping the packaged helpers'
 
 # E6: the installed loop.sh run directly (no bundle) uses its own installed
 # fleet and revision helpers, never the consumer clone's hostile skills/.
-mkdir -p "$work/installed/skills/launch-fleet/scripts/carried" "$work/installed/skills/plan-graph"
+mkdir -p "$work/installed/skills/launch-fleet/scripts/carried" "$work/installed/skills/to-tickets"
 cp "$HERE/loop.sh" "$HERE/fleet.sh" "$HERE/records.py" "$work/installed/skills/launch-fleet/scripts/"
-cp "$HERE/../../plan-graph/revision.sh" "$work/installed/skills/plan-graph/"
+cp "$HERE/../../to-tickets/revision.sh" "$work/installed/skills/to-tickets/"
 cp "$HERE/carried/alarm.py" "$work/installed/skills/launch-fleet/scripts/carried/"
 rm -rf "$work/cache"
 status=0
@@ -159,7 +159,7 @@ grep -q "can't clone" "$work/err"
 echo 'ok   clone and refresh failures exit 2 without due lines or temporary files'
 
 # Generation must fail before emitting a partial upload when a helper is absent.
-mkdir -p "$work/incomplete/skills/launch-fleet/scripts" "$work/incomplete/skills/plan-graph"
+mkdir -p "$work/incomplete/skills/launch-fleet/scripts" "$work/incomplete/skills/to-tickets"
 cp "$HERE/loop.sh" "$work/incomplete/skills/launch-fleet/scripts/loop.sh"
 status=0
 sh "$work/incomplete/skills/launch-fleet/scripts/loop.sh" --bundle synthetic-owner/synthetic-repo \
@@ -168,7 +168,7 @@ sh "$work/incomplete/skills/launch-fleet/scripts/loop.sh" --bundle synthetic-own
 echo 'ok   an incomplete install cannot generate a partial loop'
 
 cp "$HERE/fleet.sh" "$work/incomplete/skills/launch-fleet/scripts/fleet.sh"
-cp "$FIX/revision.sh" "$work/incomplete/skills/plan-graph/revision.sh"
+cp "$FIX/revision.sh" "$work/incomplete/skills/to-tickets/revision.sh"
 printf '\nOPENWIZ_BUNDLED_HELPER_EOF\n' >> "$work/incomplete/skills/launch-fleet/scripts/fleet.sh"
 status=0
 sh "$work/incomplete/skills/launch-fleet/scripts/loop.sh" --bundle synthetic-owner/synthetic-repo \

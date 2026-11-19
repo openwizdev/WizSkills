@@ -68,7 +68,7 @@ If the work needs a change beyond that approved envelope and the standing rule, 
 
 Before each commit, `git diff --name-status --find-renames origin/main...HEAD` and `git status --short` list only owned paths or supporting edits covered and explained above; inspect both rename paths and the complete staged and unstaged diff too. The diff of each `(shared)` file touches only this ticket's lines. A supporting filename alone never passes this check.
 
-**The ticket's body is not yours either.** It is the plan the user approved: put progress in comments, on the ticket or the pull request, and never edit the ticket's body, not even to tick an acceptance box. An edit to it makes the plan's approval stale, so nothing more under its spec starts until the user approves again. (`plan-graph` reads a ticked box as unticked, so a box ticked out of habit is the one edit that stops nothing.)
+**The ticket's body is not yours either.** It is the plan the user approved: put progress in comments, on the ticket or the pull request, and never edit the ticket's body, not even to tick an acceptance box. An edit to it makes the plan's approval stale, so nothing more under its spec starts until the user approves again. (`to-tickets` reads a ticked box as unticked, so a box ticked out of habit is the one edit that stops nothing.)
 
 ## Contract-shaped envelope and exact grants
 

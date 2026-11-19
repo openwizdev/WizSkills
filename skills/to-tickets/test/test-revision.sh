@@ -17,7 +17,7 @@
 # 5. An approval recorded under v1 is stale under v2: v1's script
 #    (revision-v1.sh here: ClosedWiz's main at 9f5b557, byte for byte) gives a
 #    different fingerprint for the same plan.
-# Usage, from anywhere: sh skills/plan-graph/test/test-revision.sh
+# Usage, from anywhere: sh skills/to-tickets/test/test-revision.sh
 #   (REVISION_SH=<script> tests another script in its place)
 # Needs python3, jq and sha256sum (or shasum). Exits 0 only when every case
 # ran and matches; 1 on any mismatch, a missing case or a setup failure.

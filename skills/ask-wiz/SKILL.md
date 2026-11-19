@@ -31,13 +31,14 @@ an internal routing step for a builder, reviewer or orchestrator.
 
 ## Main flow
 
-**idea → `grill` → `plan-graph` → `launch-fleet` → `build-ticket` and
+**idea → `grill` → `to-spec` → `to-tickets` → `launch-fleet` → `build-ticket` and
 `review-ticket` → `where-are-we`**
 
 | Skill | Where it fits |
 | --- | --- |
 | `grill` | Settle a design with the user; finish with a confirmed summary |
-| `plan-graph` | Turn the confirmed grill into a spec, then tickets and blocking edges; the user approves the spec and plan graph |
+| `to-spec` | Turn the confirmed grill into a spec and narrated video for the user to confirm |
+| `to-tickets` | Turn the confirmed spec into tickets and blocking edges for the user to approve |
 | `launch-fleet` | Run the approved plan graph through its fleet and the project's merge rules |
 | `build-ticket` | One builder builds one ticket, proof first, inside its owned paths |
 | `review-ticket` | The independent reviewer checks the exact green pull request head |
@@ -53,7 +54,7 @@ them. Preserve the project's separate builder, reviewer and orchestrator roles.
 | Incoming bugs or ideas need sorting | `triage` sorts them; approved work enters the fleet |
 | A hard bug or stubborn failure needs a cause | `diagnose` starts from a tight failing loop and keeps the caller's scope |
 | Find small, unplanned work under standing approval | `huntr` proves findings and uses its configured approval gate before the fleet |
-| An effort is too big or unclear for one grill | `wayfind` maps decisions, then hands the settled map to `plan-graph` |
+| An effort is too big or unclear for one grill | `wayfind` maps decisions, then hands the settled design to `to-spec` |
 
 ## Tools
 

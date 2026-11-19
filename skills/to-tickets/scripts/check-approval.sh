@@ -6,7 +6,7 @@
 # Checks the public form and table, not authority, pointer provenance or
 # fingerprint currentness;
 # revision.sh and launch-fleet retain those checks unchanged.
-# Usage: sh skills/plan-graph/scripts/check-approval.sh <spec issue number>
+# Usage: sh skills/to-tickets/scripts/check-approval.sh <spec issue number>
 # Exit 0: valid table; 1: invalid table or unreadable graph; 2: bad arguments.
 set -u
 spec=${1:-}

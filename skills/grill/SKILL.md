@@ -78,8 +78,8 @@ the rounds.
 Confirm only when the user explicitly accepts the latest saved summary and
 nothing is open. Mark the file confirmed and dated, push, and resolve its
 request. Merge under the project's rules or ask the user to merge. The job
-ends at the merged private record for the planner. A spec confirmation and
-plan approval remain separate, and builders and reviewers stay independent.
+ends at the merged private record for [to-spec](../to-spec/SKILL.md).
+Spec confirmation and plan approval remain separate, and builders and reviewers stay independent.
 
 ## Licence
 

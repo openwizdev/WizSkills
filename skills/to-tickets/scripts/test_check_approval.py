@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic posted-approval fixtures; no network or live session data.
 
-Run: python3 skills/plan-graph/scripts/test_check_approval.py
+Run: python3 skills/to-tickets/scripts/test_check_approval.py
 CHECK_APPROVAL_SH can name another checker (including an always-pass mutant).
 The two six-ticket shapes reproduce #172/#330's bad and corrected records;
 people, titles, comment IDs and fingerprints below are synthetic.
@@ -125,7 +125,7 @@ class ApprovalTest(unittest.TestCase):
     def test_documented_handoff_from_plugin_consumer(self):
         with tempfile.TemporaryDirectory(prefix="approval-consumer-") as folder:
             tmp = Path(folder)
-            installed = tmp / "plugin cache" / "plan-graph"
+            installed = tmp / "plugin cache" / "to-tickets"
             (installed / "scripts").mkdir(parents=True)
             shutil.copy2(HERE.parent / "SKILL.md", installed / "SKILL.md")
             shutil.copy2(CHECKER, installed / "scripts" / "check-approval.sh")
@@ -304,11 +304,11 @@ class ApprovalTest(unittest.TestCase):
     def test_public_comment_templates(self):
         root = HERE.parents[2]
         found = []
-        for name in ("plan-graph", "grill", "handoff", "setup"):
+        for name in ("to-spec", "to-tickets", "grill", "handoff", "setup"):
             for path in (root / "skills" / name).rglob("*.md"):
                 text = path.read_text()
                 self.assertNotIn('"<their words, exactly>"', text, str(path))
-                if name == "plan-graph" and path.name == "SKILL.md":
+                if name == "to-tickets" and path.name == "changes.md":
                     c2 = text.split("**A wording-only change (C2).**", 1)[1].split(
                         "\nThe merges and their files,", 1)[0]
                     with self.subTest(path=str(path), rule="C2 source"):

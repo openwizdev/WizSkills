@@ -1059,5 +1059,27 @@ class Resume(unittest.TestCase):
         self.assertEqual(self.next(j).splitlines()[0], 'Next: connect.', 'a withdrawn setup is connected again')
 
 
+    def test_a_connected_repository_outlives_a_withdrawn_setup_after_an_absent_demo(self):
+        # catches: an absent demo create counted as "no repository" once setup is
+        # withdrawn, so resume asks for a repository again and create-repo makes a
+        # second one while the connected repository is still saved (review R1).
+        j = Journey(self)
+        other = 'synthetic-owner/synthetic-existing'
+        j.repos.write_text(github(create='fail'))
+        self.assertEqual(j.helper(['create-repo', '--repo', REPO, '--yes']).returncode, 5)
+        j.write_setup(setup_state(repository=other))
+        self.assertEqual(j.helper(['continue']).returncode, 0, j.calls[-1][1].stdout)
+        j.write_setup(setup_state(repository=other, overrides={'personal_github': 'identity_no_push'}))
+        self.assertEqual(j.helper(['continue']).returncode, 5)
+        said = self.next(j)
+        self.assertEqual(said.splitlines()[0], 'Next: connect.', said)
+        self.assertIn(other, said)
+        creates = [c[1] for c in j.gh_creates()].count('create')
+        second = j.helper(['create-repo', '--repo', 'synthetic-owner/second-demo', '--yes'])
+        self.assertEqual(second.returncode, 5, second.stdout)
+        self.assertIn(other, second.stdout)
+        self.assertEqual([c[1] for c in j.gh_creates()].count('create'), creates, 'no second repository')
+
+
 if __name__ == '__main__':
     unittest.main()

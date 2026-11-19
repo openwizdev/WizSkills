@@ -225,7 +225,8 @@ class Review(unittest.TestCase):
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 1)
         self.assertIn("check is not green", out.stdout)
-        self.assertNotIn(HEAD + ":docs", json.dumps(self.state()["calls"]))
+        reads = [c[-1] for c in self.state()["calls"] if "/contents/" in c[-1]]
+        self.assertEqual(reads, [f"repos/{SKILLS}/contents/docs/agents/fleet.md?ref=main"])
 
     def test_draft_closed_and_ticketless_pull_requests_stop(self):
         # catches: reviewing a draft, a merged or closed pull request, or one

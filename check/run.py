@@ -36,6 +36,7 @@ SUITES = {
     'plan-graph': [['python3', '-I', 'skills/plan-graph/scripts/test_check_approval.py'],
                    ['sh', 'skills/plan-graph/test/test-revision.sh'],
                    ['python3', '-I', 'skills/plan-graph/test/test_relies.py']],
+    'review-ticket': [['python3', '-I', 'skills/review-ticket/scripts/test_review.py']],
     'research': [['python3', '-I', 'skills/research/test/test_workers.py'],
                  ['python3', '-I', 'skills/research/test/test_snapshot_commands.py']],
     'launch-fleet': [['sh', 'skills/launch-fleet/scripts/test.sh'],

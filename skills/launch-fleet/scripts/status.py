@@ -6,8 +6,9 @@
                   [--time TIME] [--note ID]
   status.py check --repo OWNER/NAME
 
-write: exit 0 written, 2 refused or failed (a refusal comes before any call),
-3 stop: the claim is another note's or the fence stopped it (nothing more written).
+write: exit 0 written and read back, 2 refused or failed (a refusal comes before any
+call; a failure after a write is repaired by running the same write again), 3 stop:
+the claim is another note's or the fence stopped it (nothing more written).
 check: exit 0 no mismatch, 1 mismatches printed, 2 could not read. It never writes.
 Every GitHub call goes through `gh api`.
 """
@@ -37,7 +38,9 @@ STATE = re.compile(r'(working|asking|done|stopped)( \(([^()]{1,100})\))?')
 SKILL = r'[a-z0-9]+(?:-[a-z0-9]+)*@[0-9]+\.[0-9]+\.[0-9]+'
 SKILLS = re.compile(rf'{SKILL}(?:, {SKILL})*')
 PR = re.compile(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*')
-PREVIEW = re.compile(r'https://[^\s"<>]+')
+# A public https page: a domain-name host, no user, password, query or fragment (R3).
+PREVIEW = re.compile(r'https://(?![^/:]*\.(?:local|internal|lan|localhost)(?:[:/]|$))'
+                     r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?::[0-9]{1,5})?(?:/[^\s"<>?#@\\]*)?')
 CONTROL = re.compile(r'[\x00-\x1f\x7f]')
 QUOTE = re.compile('["“”]')
 # What a note never holds. A guard fails closed: every thr_ token, synthetic or not.
@@ -47,7 +50,18 @@ PRIVATE = (
     ('a machine path', re.compile(
         r'(?<![\w.:/~-])(?:~/|/(?:Users|home|root|tmp|var|private|mnt|Volumes|opt|srv|code)(?:/|\b))', re.I)),
     ('a machine path', re.compile(r'(?<![A-Za-z0-9])[A-Za-z]:\\')),
+    # R3: any absolute path of two or more parts; a URL's own path is preceded by its host.
+    ('a machine path', re.compile(r'(?<![\w.:/~@%$}\\-])/[\w.~+-]+/[\w.~+-]')),
+    ('a machine path', re.compile(r'\$\{?HOME\b|%(?:USERPROFILE|HOMEPATH|HOMEDRIVE|APPDATA|LOCALAPPDATA)%', re.I)),
+    ('a machine path', re.compile(r'\\\\[\w.$-]+\\')),
+    ('a machine path', re.compile(r'\bfile:', re.I)),
+    ('a credential', re.compile(
+        r'\b(?:[a-z_]*token|[a-z_]*key|secret|password|passwd|pwd|sig|signature|auth|credentials?)\s*=', re.I)),
+    ('a credential', re.compile(r'\b(?:password|passwd|secret|token)\s*:\s*\S|\bbearer\s+\S', re.I)),
+    ('a credential', re.compile(r'\bgh[pousr]_[A-Za-z0-9]{8,}|\bgithub_pat_|\bAKIA[0-9A-Z]{16}\b'
+                                r'|\bxox[abprs]-|\bsk-[A-Za-z0-9_-]{16,}')),
 )
+MANIFEST = Path(__file__).resolve().parents[3] / '.claude-plugin' / 'plugin.json'
 
 
 class Refused(Exception):
@@ -100,6 +114,27 @@ def shaped(fields):
         refuse('pr', 'not a GitHub pull request link')
     if 'preview' in fields and not PREVIEW.fullmatch(fields['preview']):
         refuse('preview', 'not an https link')
+
+
+def bound(skills):
+    """R5: every reported skill is one the installed package lists, at its version.
+
+    The package is the one supplying this script; its manifest is the evidence.
+    Which skills an agent actually ran is its caller's record (AP2).
+    """
+    try:
+        manifest = json.loads(MANIFEST.read_text())
+        version, listed = manifest['version'], manifest['skills']
+        if not (isinstance(version, str) and re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version)
+                and isinstance(listed, list) and all(isinstance(x, str) for x in listed)):
+            raise ValueError('malformed')
+    except (OSError, ValueError, KeyError, TypeError):
+        refuse('skills', 'the installed package has no readable manifest')
+    names = {x[len('./skills/'):] for x in listed if x.startswith('./skills/')}
+    for item in skills.split(', '):
+        name, _, at = item.partition('@')
+        if name not in names or at != version:
+            refuse('skills', f'a skill or version the installed package (openwiz {version}) does not have')
 
 
 def body(fields):
@@ -194,6 +229,23 @@ def holder(found, kind, now):
     return next((n for n in found if n[1]['agent'] == kind and live(n, now)), None)
 
 
+def viewer():
+    """The acting login, as GitHub's viewer names it, or None when the token can't name itself."""
+    try:
+        login = gh('POST', 'graphql', {'query': 'query { viewer { login } }'})['data']['viewer']['login']
+    except (Failed, KeyError, TypeError):
+        return None
+    return login if isinstance(login, str) and login else None
+
+
+def asked_last_by(repo, n, login):
+    """True when the issue's events show LOGIN added needs-info last (R1: the writer's own label)."""
+    added = [e for e in pages(f'repos/{repo}/issues/{n}/events')
+             if e.get('event') == 'labeled' and (e.get('label') or {}).get('name') == ASKING_LABEL]
+    actor = (added[-1].get('actor') or {}).get('login') if added else None
+    return isinstance(actor, str) and actor.lower() == login.lower()
+
+
 def write(args, now):
     state = args.state if args.why is None else f'{args.state} ({args.why})'
     if args.why is not None and args.state != 'stopped':
@@ -204,14 +256,17 @@ def write(args, now):
         if getattr(args, key) is not None:
             fields[key] = getattr(args, key)
     shaped(fields)
+    bound(fields['skills'])
     if args.note is not None and not re.fullmatch(r'[1-9][0-9]*', args.note):
         refuse('note', 'not a comment id')
     repo, n, kind = args.repo, args.ticket, args.agent
     authors = record_authors(repo)
+    # R4: a writer whose login isn't a record author writes nothing: its note would never count.
+    login = viewer()
+    if login is not None and login.lower() not in authors:
+        raise Failed(f'the acting login {login} is not a record author in docs/agents/fleet.md')
     comments = f'repos/{repo}/issues/{n}/comments'
-    labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
     found = notes(pages(comments), authors)
-    claiming = args.state in CLAIMING
     if args.note is not None:
         own = next((x for x in found if x[0] == int(args.note)), None)
         if own is None:
@@ -220,27 +275,42 @@ def write(args, now):
             raise Stop(f'note {args.note} is a {own[1]["agent"]} note')
         if own[1]['state'].startswith('stopped'):
             raise Stop(f'note {args.note} is stopped')
+        # R2: whoever holds the claim now, older or newer, fences out every other note of its kind.
         first = holder(found, kind, now)
-        if first and first[0] < own[0]:
+        if first and first[0] != own[0]:
             raise Stop(f'note {first[0]} holds the {kind} claim')
-        was = own[1]['state']
-        gh('PATCH', f'repos/{repo}/issues/comments/{own[0]}', {'body': body(fields)})
+        made = gh('PATCH', f'repos/{repo}/issues/comments/{own[0]}', {'body': body(fields)})
         note_id, verb = own[0], 'edited'
     else:
         first = holder(found, kind, now)
-        if claiming and first:
+        if args.state in CLAIMING and first:
             raise Stop(f'note {first[0]} holds the {kind} claim')
         made = gh('POST', comments, {'body': body(fields)})
-        note_id, verb, was = int(made['id']), 'posted', None
-        if claiming:
-            first = holder(notes(pages(comments), authors), kind, datetime.now(timezone.utc))
-            if first and first[0] < note_id:
-                gh('PATCH', f'repos/{repo}/issues/comments/{note_id}',
-                   {'body': body(dict(fields, state='stopped (lost claim)'))})
-                raise Stop(f'note {first[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
-    if args.state == 'asking' and ASKING_LABEL not in labels:
+        note_id, verb = int(made['id']), 'posted'
+    author = made['user']['login'] if isinstance(made.get('user'), dict) else None
+    if not (isinstance(author, str) and author.lower() in authors):
+        # R4: a token that can't name itself is judged by the note GitHub stored.
+        if verb == 'posted':
+            gh('DELETE', f'repos/{repo}/issues/comments/{note_id}')
+        raise Failed(f'note {note_id} was written by {author}, not a record author; it was deleted')
+    login = login or author
+    # R4: success, and any label, only once a trusted read-back shows the note as written.
+    found = notes(pages(comments), authors)
+    mine = next((x for x in found if x[0] == note_id), None)
+    if mine is None or mine[1] != fields:
+        raise Failed(f'note {note_id} was {verb} but not read back')
+    if verb == 'posted' and args.state in CLAIMING:
+        first = holder(found, kind, datetime.now(timezone.utc))
+        if first and first[0] < note_id:
+            gh('PATCH', f'repos/{repo}/issues/comments/{note_id}',
+               {'body': body(dict(fields, state='stopped (lost claim)'))})
+            raise Stop(f'note {first[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
+    # R1: settle needs-info from what GitHub shows now, so a retry repairs a failed label write.
+    labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+    asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)
+    if asking and ASKING_LABEL not in labels:
         gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
-    if was == 'asking' and args.state != 'asking' and ASKING_LABEL in labels:
+    elif not asking and ASKING_LABEL in labels and asked_last_by(repo, n, login):
         gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
     print(f'#{n}: {kind} {state}, status note {note_id} {verb}')
 

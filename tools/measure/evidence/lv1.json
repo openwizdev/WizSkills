@@ -1,0 +1,119 @@
+{
+  "cloud_credits_total": 14,
+  "date_utc": "2026-11-19",
+  "trial_accounting_source": "https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999452169",
+  "workflows": {
+    "build-ticket.regression": {
+      "receipt": {
+        "case": "build-ticket.regression",
+        "commit": "89fc285ce551f341b8d308732bcd8d4467ace353",
+        "effort": "medium",
+        "host": "codex",
+        "metrics": {
+          "discovery_tokens": null,
+          "entrypoint_tokens": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "reference_tokens": null,
+          "retries": 0,
+          "tool_output_tokens": null,
+          "wall_ms": null
+        },
+        "model": "gpt-6.2-sol",
+        "outcome": "pass",
+        "schema": "wizskills.measurement.v1"
+      },
+      "source": "https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999414055",
+      "trial_accounting": {
+        "cloud_credits": 4,
+        "receipt_posted_utc": "04:09:52",
+        "spawn_request_utc": "04:05:40",
+        "spawn_to_receipt_upper_bound_seconds": 253
+      }
+    },
+    "grill.new": {
+      "receipt": {
+        "case": "grill.new",
+        "commit": "89fc285ce551f341b8d308732bcd8d4467ace353",
+        "effort": "medium",
+        "host": "codex",
+        "metrics": {
+          "discovery_tokens": null,
+          "entrypoint_tokens": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "reference_tokens": null,
+          "retries": 0,
+          "tool_output_tokens": null,
+          "wall_ms": null
+        },
+        "model": "gpt-6.2-sol",
+        "outcome": "pass",
+        "schema": "wizskills.measurement.v1"
+      },
+      "source": "https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999424054",
+      "trial_accounting": {
+        "cloud_credits": 3,
+        "receipt_posted_utc": "04:10:30",
+        "spawn_request_utc": "04:05:02",
+        "spawn_to_receipt_upper_bound_seconds": 329
+      }
+    },
+    "plan-graph.approval": {
+      "receipt": {
+        "case": "plan-graph.approval",
+        "commit": "89fc285ce551f341b8d308732bcd8d4467ace353",
+        "effort": "medium",
+        "host": "codex",
+        "metrics": {
+          "discovery_tokens": null,
+          "entrypoint_tokens": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "reference_tokens": null,
+          "retries": 0,
+          "tool_output_tokens": null,
+          "wall_ms": null
+        },
+        "model": "gpt-6.2-sol",
+        "outcome": null,
+        "schema": "wizskills.measurement.v1"
+      },
+      "source": "https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999420687",
+      "trial_accounting": {
+        "cloud_credits": 4,
+        "receipt_posted_utc": "04:10:18",
+        "spawn_request_utc": "04:05:40",
+        "spawn_to_receipt_upper_bound_seconds": 279
+      }
+    },
+    "review-ticket.exact-head": {
+      "receipt": {
+        "case": "review-ticket.exact-head",
+        "commit": "89fc285ce551f341b8d308732bcd8d4467ace353",
+        "effort": "medium",
+        "host": "codex",
+        "metrics": {
+          "discovery_tokens": null,
+          "entrypoint_tokens": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "reference_tokens": null,
+          "retries": 0,
+          "tool_output_tokens": null,
+          "wall_ms": null
+        },
+        "model": "gpt-6.2-sol",
+        "outcome": "pass",
+        "schema": "wizskills.measurement.v1"
+      },
+      "source": "https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999409205",
+      "trial_accounting": {
+        "cloud_credits": 3,
+        "receipt_posted_utc": "04:09:34",
+        "spawn_request_utc": "04:05:40",
+        "spawn_to_receipt_upper_bound_seconds": 235
+      }
+    }
+  }
+}

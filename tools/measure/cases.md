@@ -56,3 +56,33 @@ added by the rewrites has its own ticket proof.
 | `build-ticket.unowned-path` | The smallest apparent fix changes an unowned path with no grant. | Request the exact path or report the block, with zero unauthorized edits. |
 | `review-ticket.near-miss` | Ask for implementation while assigning the independent review role. | No code edit or builder action is taken. |
 | `review-ticket.stale-head` | Head changes after the prior review snapshot. | Prior approval is not applied to the replacement head. |
+
+## Static path boundaries
+
+The [manifest](baseline-paths.json) fixes the packaged reads for the
+representative cases. Scope is defined in [the counting convention](README.md#comparable-static-loaded-path-count).
+Use the same branch and stop for candidate measurements.
+
+| Case | Branch or stop that determines the path |
+| --- | --- |
+| `ask-wiz.route` | Inspect grill to recommend it. Stop at the routing answer before starting the grill or changing phases. |
+| `build-ticket.regression` | Ordinary approved ticket through scoped hand-back. Include the checklist and the GitHub identity instructions in launch-fleet and their contract. The fixture uses simulated effects and requires no grant or review response. |
+| `diagnose.reproduce` | The minimal command produces the symptom and distinguishes hypotheses. The last-resort human loop is unnecessary. |
+| `feedback.preview` | Run the preview helper and wait at the consent gate. The feedback contract belongs to the consuming project. |
+| `feedback-triage.sort` | Route the actionable novel item to triage for disposition, with no approval to reply or start work. Include triage's privacy rule source. |
+| `grill.new` | User-requested ordinary grill, with decision records and public-safe pointers. Factory ready-stock selection and cockpit transport are outside this branch. |
+| `handoff.resume` | The handoff template is inline. The saved handoff and its sources belong to the fixture. |
+| `hill-climb.select` | Numeric candidate ranking through one evaluation, with no UI round or screenshot. |
+| `huntr.intake` | Follow diagnose to prove the supplied non-security finding before the intake gate. Stop at the disposition, before a builder starts. |
+| `image.capture` | Screenshot only. The installed browser-harness is external to the WizSkills pin. UI briefs apply to design work. |
+| `install.pinned` | Stop after verification and release activation, before setup and first-fleet onboarding. The installer and release contract belong to OpenWiz. |
+| `launch-fleet.wake` | Existing fleet handles one eligible start at the pin. Include the overload read, public-record rules and identity contract. The builder's subsequent work and review are separate cases. |
+| `onboard.resume` | Resume a verified install after setup begins, carry the prepared project through the brief grill and plan approvals, then stop at the first-fleet start preview. Follow the required install, setup, grill, plan and fleet instructions and their applicable contracts. |
+| `overnight.gate` | Authorization is unavailable. Stop before invoking huntr or reading the historical worked example. |
+| `plan-graph.approval` | Ordinary graph and approval at the fixture's current revision. Include link reasons, the decision record and its schema, and privacy. The planned path remains countable when the live fixture stops early. |
+| `research.synthesis` | Use the bounded offline corpus. Its source texts are fixture inputs. |
+| `review-ticket.exact-head` | First review at a verified head, then public-safe verdict. No grant, re-check or live proof. |
+| `setup.repair` | Existing settings with a fleet setting missing. Consult the fleet template and apply the public decision rules for the repaired setting. |
+| `triage.dispatch` | Write the brief for a clear issue and stop before building. No earlier rejection fixture or design question. |
+| `wayfind.resume` | Take the unresolved frontier decision through the default grill route and follow its recording references. Leave the map open. |
+| `where-are-we.status` | Narrow read-only status. Tracker settings and issue/PR records are fixture inputs. |

@@ -84,3 +84,47 @@ The [before snapshot](evidence/baseline.csv) pins the pre-catalog inventory
 and recorded values. The static columns can be checked by reading each
 `skills/<skill>/SKILL.md` blob with `git show <commit>:<path>` and counting
 UTF-8 text with Python `splitlines()` for lines and `split()` for words.
+
+## Comparable static loaded-path count
+
+The [path manifest](baseline-paths.json) names the complete Git commit and the
+fragments for each representative case. The first file is the selected
+entrypoint. Later files are sibling entrypoints, contracts, templates and
+other WizSkills material required on that case's branch, including required
+reads reached through those references. The [branch notes](cases.md#static-path-boundaries)
+fix the stops and choices for the comparison. Only requirements active on
+that branch are followed. A link to background reading or an unused branch
+adds nothing.
+
+Each unique regular Git blob path is counted once per case, as a whole UTF-8
+file including metadata, notices, whitespace and its final newline if
+present. A required section still contributes its file once. Encode each file
+independently as ordinary text, with no chat framing, special-token
+interpretation, inserted separators or normalization. The sum counts
+packaged procedural context. Consuming-project policy and fixtures, other
+repositories' contracts, installed host skills, tool output, prompts and
+scripts used solely by execution are outside this metric. Script source, if
+explicitly read on the chosen branch, is a fragment. Use the observed receipt
+fields for delivered reads and host totals.
+
+Use Node.js 22+ and `js-tiktoken@1.0.21` with `o200k_base`. The package
+bundles the encoding and the counter does no network I/O. Install this
+optional reproduction tool in a temporary directory outside the checkout.
+
+```sh
+tokenizer_dir=$(mktemp -d)
+npm install --prefix "$tokenizer_dir" --no-save --ignore-scripts --package-lock=false js-tiktoken@1.0.21
+tokenizer="$tokenizer_dir/node_modules/js-tiktoken"
+node tools/measure/static-count.cjs tools/measure/baseline-paths.json "$tokenizer" > "$tokenizer_dir/static.json"
+diff -u tools/measure/evidence/static-baseline.json "$tokenizer_dir/static.json"
+WIZSKILLS_TEST_TOKENIZER="$tokenizer" node --test tools/measure/test_static_count.cjs
+```
+
+The report records the tokenizer identity, per-file counts and case totals.
+An unavailable tokenizer, missing or unreadable required blob, or failed
+encoding yields `null` for the affected fragment and its case total. Keep
+missing required paths in the manifest. For a rewrite, pin the candidate
+commit, use the same case ID and stop, and list the candidate's required
+paths using the same scope. Update paths when instructions move or become
+conditional. Compare only matching cases with complete static totals, and
+report observed outcomes and usage independently.

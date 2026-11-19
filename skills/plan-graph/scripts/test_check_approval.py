@@ -7,6 +7,7 @@ The two six-ticket shapes reproduce #172/#330's bad and corrected records;
 people, titles, comment IDs and fingerprints below are synthetic.
 """
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -119,6 +120,100 @@ elif key == "comments":
 else:
     print(json.dumps(w[key]))
 '''
+
+
+def short_road(kind="one_card_plan"):
+    plan = {
+        "schema": "openwiz.decisions.v1", "kind": kind, "id": "synthetic-plan-1",
+        "status": "resolved", "risk": "ordinary", "ticket": 4201,
+        "title": "Fix the café help text",
+        "owned_paths": ["docs/help.md"],
+        "acceptance": ["The help text describes the existing option"],
+        "proof": "Read the corrected help text",
+        "approvals": ["https://github.com/synthetic-records/archive/issues/9001#issuecomment-9000000002"],
+    }
+    if kind == "batch_plan":
+        plan["edits"] = [
+            {"path": "docs/help.md", "change": "Correct the option spelling", "mechanical": True},
+            {"path": "docs/help.md", "change": "Fix the example punctuation", "mechanical": True},
+        ]
+    return plan
+
+
+class ShortRoadApprovalTest(unittest.TestCase):
+    def run_short_road(self, plan, reason=None, encode=json.dumps, fingerprint=None):
+        proposal = {key: value for key, value in plan.items() if key not in ("status", "approvals")}
+        canonical = json.dumps(proposal, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        plan["fingerprint"] = fingerprint or hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="short-road-approval-") as folder:
+            path = Path(folder) / "decision record.json"
+            path.write_text(encode(plan), encoding="utf-8")
+            result = subprocess.run(
+                ["sh", str(CHECKER), "--short-road", str(path)], cwd=folder,
+                text=True, capture_output=True, timeout=10,
+            )
+        if reason:
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertEqual(result.stdout, "")
+            self.assertIn(reason, result.stderr)
+        else:
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("short-road approval is valid", result.stdout)
+            self.assertEqual(result.stderr, "")
+
+    def test_one_card_and_batch(self):
+        for kind in ("one_card_plan", "batch_plan"):
+            with self.subTest(kind=kind):
+                self.run_short_road(short_road(kind))
+
+    def test_always_big_risk_refuses_both_short_roads(self):
+        for kind in ("one_card_plan", "batch_plan"):
+            for risk in ("live", "release", "publish", "security", "external_contract", "unknown"):
+                with self.subTest(kind=kind, risk=risk):
+                    self.run_short_road(dict(short_road(kind), risk=risk), "risk requires the big road")
+
+    def test_nonmechanical_batch_refuses_even_with_an_approval(self):
+        plan = short_road("batch_plan")
+        plan["edits"][1]["mechanical"] = False
+        self.run_short_road(plan, "every batch edit must be mechanical")
+
+    def test_only_one_recorded_yes_for_a_resolved_plan(self):
+        for kind in ("one_card_plan", "batch_plan"):
+            plan = short_road(kind)
+            for approvals in ([], plan["approvals"] * 2,
+                              plan["approvals"] + [plan["approvals"][0] + "1"]):
+                with self.subTest(kind=kind, approvals=approvals):
+                    self.run_short_road(dict(plan, approvals=approvals), "exactly one recorded yes")
+            for status in ("open", "superseded"):
+                with self.subTest(kind=kind, status=status):
+                    self.run_short_road(dict(plan, status=status, approvals=[]), "must be resolved")
+            self.run_short_road(dict(plan, approvals=["yes"]), "private-record comment pointer")
+
+    def test_fingerprint_binds_the_approved_content(self):
+        plan = short_road()
+        fingerprint = hashlib.sha256(json.dumps(
+            {key: value for key, value in plan.items() if key not in ("status", "approvals")},
+            sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        self.run_short_road(dict(plan, proof="Review some other proof"), "fingerprint does not match",
+                            fingerprint=fingerprint)
+
+    def test_duplicate_wire_key_refuses(self):
+        self.run_short_road(short_road(), "duplicate JSON key",
+                            encode=lambda plan: '{"risk":"live",' + json.dumps(plan)[1:])
+
+    def test_short_road_requires_complete_card(self):
+        for field in ("owned_paths", "acceptance", "proof"):
+            with self.subTest(field=field):
+                plan = short_road()
+                del plan[field]
+                self.run_short_road(plan, "short-road plan fields")
+
+    def test_batch_requires_explicit_edits_on_owned_paths(self):
+        plan = short_road("batch_plan")
+        self.run_short_road(dict(plan, edits=[]), "batch must list its edits")
+        plan["edits"][1]["path"] = "src/main.rs"
+        self.run_short_road(plan, "batch edit path must be owned")
 
 
 class ApprovalTest(unittest.TestCase):

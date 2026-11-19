@@ -10,22 +10,25 @@ only run on that branch, so their source is never loaded.
 
 | Evidence | WS1 baseline `89fc285` | Main before WS8 `2beb747` | After |
 | --- | ---: | ---: | ---: |
-| Entrypoint lines | 720 | 744 | 114 |
-| Entrypoint words | 18,244 | 16,677 | 2,136 |
-| Entrypoint static tokens | 27,561 | 25,231 | 3,363 |
-| Static loaded-path tokens, `launch-fleet.wake` | 43,331 | 41,001 | 22,061 |
+| Entrypoint lines | 720 | 744 | 150 |
+| Entrypoint words | 18,244 | 16,677 | 2,908 |
+| Entrypoint static tokens | 27,561 | 25,231 | 4,522 |
+| Static loaded-path tokens, `launch-fleet.wake` | 43,331 | 41,001 | 23,220 |
 | Observed workflow outcome | Unknown | Unknown | Unknown |
 | Observed workflow token counts and wall time | Unknown | Unknown | Unknown |
 
 The main column counts the same WS1 path at the commit this branch starts
 from, with the same tokenizer.
 
-The entrypoint is 114 lines, past the guide's 50 to 100. Matt Pocock's notice
+The entrypoint is 150 lines, past the guide's 50 to 100. Matt Pocock's notice
 is 20 of them, and the checker requires it word for word until WS15 moves it.
-The rest keep the approval, record, privacy, role, no-waiting and action-gate
-guards visible, the merge steps whose order is itself a guard, and the sections
-other skills cite by name ("Fleet threads", "Starting one", "Each wake",
-"GitHub identity", "Record authors").
+The Records table is 35: every wake writes those records, and the kept public
+record case (`test-records.py`) reads the table from SKILL.md and checks it
+word for word against the open-development contract. The rest keep the
+approval, record, privacy, role, no-waiting and action-gate guards visible,
+the merge steps whose order is itself a guard, and the sections other skills
+cite by name ("Fleet threads", "Starting one", "Each wake", "GitHub identity",
+"Record authors").
 
 Before sources are pinned at `89fc285ce551f341b8d308732bcd8d4467ace353`:
 the [WS1 baseline row](../../../tools/measure/evidence/baseline.csv) and
@@ -41,7 +44,7 @@ To regenerate it from the WizSkills root, run
 
 Each other line now loads the entrypoint plus only its own reference
 (for example `references/reviews.md` for a findings line), where before every
-line loaded the whole 27,561-token entrypoint.
+line loaded the whole 25,231-token entrypoint.
 
 ## SK-D: mechanics in scripts
 

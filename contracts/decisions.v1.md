@@ -130,6 +130,52 @@ changed summary/headline/risk also invalidates the displayed binding even when
 the plan revision hash happens to be unchanged. Schema fixtures' repeated hex
 strings are format examples, not calculated or verified revision fingerprints.
 
+## Machine plan approval
+
+Jake, 2026-11-19 (J202, J203; [private record](https://github.com/jparker2006/ClosedWiz/issues/3065#issuecomment-7005344027)):
+a confirmed grill is the owner's one active step. Its plan is approved by the
+agents' own checks, with no `plan_approval` request and no human reply. The
+record is one spec comment, posted by a record author, that to-tickets'
+`scripts/approve.py` prints only when every check passes:
+
+````md
+**Machine plan approval, <YYYY-MM-DD>, revision <N>:** links, relies, sizes, width and owned paths passed.
+Grill confirmed: <the grill confirmation's private-comment URL>
+
+Checks: <T> tickets; links <L>; relies <R>; sizes S <s>, M <m>, L <l>; width: chain <C>, widest <W>; owned paths <O>.
+
+Changed since revision <N-1>: <what changed>.
+
+| Ticket | Title | Blocked by | Label |
+| --- | --- | --- | --- |
+| #<n> | <title> | <#blockers, or none> | <ready-for-agent, ready-for-human, or none when closed> |
+
+Fingerprint: `<SHA-256 of the revision text>`
+
+<details><summary>Revision text</summary>
+
+```text
+<revision.sh's revision-v2 text, exactly>
+```
+
+</details>
+````
+
+The `Changed since` line and its blank line appear exactly when `N` is above 1.
+The fingerprint is the plan revision-v2 SHA-256 above, of the same graph read
+the checks ran on: the script refuses revision text that names other tickets,
+titles, blockers or bodies. The checks are links (`check-links.sh`), relies
+(`check-relies.sh`, a path a direct blocker owns counting as planned), sizes
+(exactly one `Size: S`, `M` or `L` per open ticket), width (no cycle, and no
+arrow another chain implies) and owned paths (exact repository paths, and no
+two tickets that can run at once owning the same path unless both bullets say
+`(shared`). A plan that fails any check gets no record. The header differs from
+`**Plan graph approved by`, so a reader of human approvals never takes a
+machine record for one; a reader of machine records re-runs the checks on the
+current revision and compares the fingerprint. The record grants what a plan
+approval grants and nothing more: every action gate (publish, spend, secrets,
+deleting user data, cut-overs) keeps its own approval.
+
 ## Lifecycle
 
 Only the orchestrator updates the added JSON block, preserving the surrounding

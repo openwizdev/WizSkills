@@ -1,6 +1,11 @@
 # to-spec: notice
 
-Adapted from Matt Pocock's `to-spec` skill (github.com/mattpocock/skills).
+Adapted from Matt Pocock's `to-spec` skill (github.com/mattpocock/skills). The
+steering video (`scripts/animatic.mjs`, `video.md`) is adapted from his `animatic`
+skill (github.com/mattpocock/skills, branch `animatic-skill` @ `7100905`,
+`skills/in-progress/animatic`): the storyboard, Playwright frames, voice and
+ffmpeg stitch, and its `--tts-command` form. Both are used under the MIT License:
+
 Copyright (c) 2026 Matt Pocock
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

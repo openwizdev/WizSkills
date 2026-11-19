@@ -11,7 +11,7 @@ time, and fix with a regression test. Skip a later phase only with a stated
 reason; the red loop cannot be skipped.
 
 Read the project's `AGENTS.md` or `CLAUDE.md`, its glossary and the ADRs for
-the area. Run the helper as `python3 -I <this skill>/scripts/loop.py`.
+the area. Run the helper as `python3 -I <this skill's folder>/scripts/loop.py`.
 
 ## Guards
 
@@ -38,7 +38,7 @@ path; a throwaway harness; a seeded fuzz loop; `git bisect run` in an
 isolated copy; or old against new on the same input. Assert the exact
 symptom, pin time and seeds, isolate files and network, and aim for seconds.
 
-**Last resort, a human loop:** `bash <this skill>/scripts/hitl-loop.template.sh
+**Last resort, a human loop:** `bash <this skill's folder>/scripts/hitl-loop.template.sh
 '<step>' '<symptom question>'`. Exit 1 means the symptom is present, 0 absent,
 2 inconclusive; map 2 to 125 under `git bisect run`. The human signs in
 themselves and answers only y or n. Without a terminal they can answer, ask;

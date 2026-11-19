@@ -10,8 +10,8 @@ skipped) and two animation frames, then saves full-page phone.png and
 desktop.png and closes its tab, on success or failure. --timeout is per step,
 not a sleep. Any failure exits nonzero; partial files are not a completed pair.
 The manifest is written last: its presence marks a completed pair, not approval.
-It prints the manifest path, then `overflow: none` or each width whose content
-is wider than its viewport.
+It prints the manifest path, then `overflow: none` or each capture, first
+screens included, whose content is wider than its viewport.
 Use --fixed-at-bottom for a tall viewport plus a separate first-screen PNG.
 The taller viewport changes vh units and other viewport-relative layouts;
 compare the first-screen image before judging the full-page layout.
@@ -151,9 +151,16 @@ Path(config['out'], 'capture.json').write_text(json.dumps(manifest, indent=2) + 
 """
     subprocess.run(['browser-harness'], input=program, text=True, check=True)
     print(out / 'capture.json')
-    captures = json.loads((out / 'capture.json').read_text())['captures']
-    wide = [f"{c['name']} {c['page']['contentWidth']:g} > {c['viewport']['width']}"
-            for c in captures if c['page']['contentWidth'] > c['viewport']['width']]
+    wide = []
+    for capture in json.loads((out / 'capture.json').read_text())['captures']:
+        # Every measured view, including the first screen kept by
+        # --fixed-at-bottom, whose layout can differ from the tall capture.
+        views = [(capture['name'], capture)]
+        if 'firstScreen' in capture:
+            views.append((capture['name'] + ' first screen', capture['firstScreen']))
+        wide += [f"{label} {view['page']['contentWidth']:g} > {view['viewport']['width']}"
+                 for label, view in views
+                 if view['page']['contentWidth'] > view['viewport']['width']]
     print('overflow: ' + (', '.join(wide) or 'none'))
 
 

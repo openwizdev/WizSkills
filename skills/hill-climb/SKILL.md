@@ -47,7 +47,7 @@ The council is the default for design work. Pairwise judging with Bradley-Terry 
 - **Design:** hierarchy, typography, color and contrast, consistency, clarity.
 - **Copy:** clarity, accuracy, tone, brevity.
 
-Named reference products are scored in the same round, with the same rubric and viewports, under blind labels. The aim is a candidate that beats every reference in every category, consistently. Judges never see the score being aimed for, an earlier score, another judge's score or which artifacts are references; vary the order between judges. Run the cheapest judge alone until it is satisfied, then seat the whole council for every later round. Record each judge's scores for every round, discarded candidates included. The run stops on the references when the same single candidate leads, and is also the round's `best`, for `--window` consecutive full-council rounds.
+Named reference products are scored in the same round, with the same rubric and viewports, under blind labels. The aim is a candidate that beats every reference in every category, consistently. Judges never see the score being aimed for. A judge's brief holds the frozen rubric, the 1–10 scale, the categories and the blind artifacts; never the stop condition, an earlier score, another judge's score or which artifacts are references. The controller keeps the stop and varies the order between judges. Run the cheapest judge alone until it is satisfied, then seat the whole council for every later round. Record each judge's scores for every round, discarded candidates included. The run stops on the references when the same single candidate leads, and is also the round's `best`, for `--window` consecutive full-council rounds.
 
 ```sh
 python3 skills/hill-climb/scripts/climb.py council council.json --window 2 > council-result.json
@@ -89,7 +89,7 @@ python3 skills/hill-climb/scripts/climb.py stall history.json --window 2
 
 Follow the image skill: generated targets set the look, the real HTML is judged. Every round folder, discarded candidates too, keeps the target and prompt, code commit, both real-page screenshots from its [screenshot script](../image/scripts/screenshot.py) at 390 × 844 and 1440 × 900, the capture manifest, comparisons, ranking and a written critique from the [screenshot critique](../image/references/ui-craft.md#screenshot-critique). Open both PNGs; test interactions and accessibility separately. Record missing artifacts for a crashed round; never invent them.
 
-Chart the climb from recorded numbers, never generated images, with the image skill's chart rules. Plot each round's selected candidate's chance of beating the fixed baseline from `climb.py odds results.json --baseline <id>`, or each category's council mean for a council run; mark ties, crashes, cheap-only rounds and picks, and never join different rubrics.
+Chart the climb from recorded numbers, never generated images, with the image skill's chart rules. Plot each round's selected candidate's chance of beating the fixed baseline from `climb.py odds results.json --baseline <id>`. For a council run, plot each category's council mean per round for the round's best candidate and for each reference, from `council`'s output, and keep the per-judge `table` output behind it. Mark ties, crashes, cheap-only rounds and picks, and never join different rubrics.
 
 ## Verify
 

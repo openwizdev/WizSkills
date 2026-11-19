@@ -37,6 +37,7 @@ SUITES = {
     'handoff': [['python3', '-I', 'skills/handoff/test/test_handoff.py']],
     'ask-wiz': [['python3', '-I', 'skills/ask-wiz/test/test_routes.py']],
     'hill-climb': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/hill-climb/tests']],
+    'setup': [['python3', '-I', 'skills/setup/scripts/test_settings.py']],
     'image': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/image/tests'],
               ['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/image/references']],
     'to-spec': [['python3', '-I', 'skills/to-spec/test/test_video.py']],

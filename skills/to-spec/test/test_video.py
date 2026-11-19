@@ -1,28 +1,58 @@
+"""to-spec's steering video (#1339, J204): an animatic built from a storyboard,
+showing what changes for a user and in the codebase, in build order, with no
+bench and no ticket graph. Synthetic only; no network.
+
+The render proof needs ffmpeg, ffprobe, a Chromium and playwright-core (from
+the working directory's node_modules or $ANIMATIC_HOME); without them it is
+skipped, and the pull request names that gap.
+"""
+import copy
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
-import wave
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/video.py'
+HERE = Path(__file__).resolve().parent
+SCRIPT = HERE.parent / 'scripts/animatic.mjs'
+STORYBOARD = HERE / 'synthetic/storyboard.json'
 
 
-def run(*args):
-    return subprocess.run([sys.executable, '-I', SCRIPT, *map(str, args)],
-                          capture_output=True, text=True)
+def run(*args, cwd=None):
+    return subprocess.run(['node', str(SCRIPT), *map(str, args)], capture_output=True, text=True, cwd=cwd)
+
+
+def can_render():
+    if not (shutil.which('ffmpeg') and shutil.which('ffprobe')):
+        return False
+    if not (os.environ.get('OPENWIZ_CHROMIUM') or shutil.which('chromium')):
+        return False
+    homes = [Path.cwd(), Path(os.environ.get('ANIMATIC_HOME', Path.home() / '.cache/animatic'))]
+    return any((home / 'node_modules/playwright-core/package.json').is_file() for home in homes)
 
 
 class SpecVideo(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.moments = json.loads(STORYBOARD.read_text())
+
+    def write(self, moments):
+        path = self.tmp / 'storyboard.json'
+        path.write_text(json.dumps(moments))
+        return path
+
     def test_link_is_ready_to_insert_in_spec(self):
+        # catches: a link line the spec issue can't use as written.
         result = run('link', 'https://example.com/videos/synthetic.mp4?lang=en')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout,
                          '[Watch the narrated spec](https://example.com/videos/synthetic.mp4?lang=en)\n')
 
     def test_link_refuses_unsafe_or_ambiguous_destinations(self):
+        # catches: a local file, a credential or injected Markdown reaching a public issue.
         for url in ['file:///tmp/video.mp4', 'https://user:secret@example.com/video.mp4',
                     'https://example.com/clip)\n[extra](https://example.org',
                     'https://example.com:bad/video.mp4', 'https:///video.mp4']:
@@ -31,39 +61,89 @@ class SpecVideo(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, '')
 
-    @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'),
-                         'local media integration requires ffmpeg and ffprobe')
-    def test_render_keeps_both_narrated_scenes_in_order(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for name, rgb, sample in [('one', b'\xff\x00\x00', b'\x00\x12'),
-                                      ('two', b'\x00\x00\xff', b'\x00\xe8')]:
-                (root / f'{name}.ppm').write_bytes(b'P6\n16 16\n255\n' + rgb * 256)
-                with wave.open(str(root / f'{name}.wav'), 'wb') as audio:
-                    audio.setparams((1, 2, 8000, 0, 'NONE', 'not compressed'))
-                    audio.writeframes(sample * 8000)
-            manifest = root / 'scenes.json'
-            manifest.write_text(json.dumps([
-                {'slide': f'{name}.ppm', 'narration': f'{name}.wav'}
-                for name in ('one', 'two')
-            ]))
-            video = root / 'spec.mp4'
-            result = run('render', manifest, video)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertTrue(video.is_file(), 'render did not produce a narrated preview')
-            metadata = json.loads(subprocess.check_output([
-                'ffprobe', '-v', 'error', '-show_entries',
-                'format=duration:stream=codec_type', '-of', 'json', video]))
-            self.assertEqual({stream['codec_type'] for stream in metadata['streams']},
-                             {'video', 'audio'})
-            self.assertAlmostEqual(float(metadata['format']['duration']), 2, delta=0.12)
-            for second, channel in [('0.5', 0), ('1.5', 2)]:
-                pixel = subprocess.check_output([
-                    'ffmpeg', '-v', 'error', '-ss', second, '-i', video, '-frames:v', '1',
-                    '-vf', 'crop=2:2:640:360,scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'])
-                self.assertGreater(pixel[channel], 200)
-                self.assertLess(pixel[2 - channel], 30)
+    def test_the_synthetic_grill_storyboard_passes_in_build_order(self):
+        # catches: a checker that refuses the storyboard to-spec is told to write.
+        result = run('check', STORYBOARD)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines()[0],
+                         'storyboard ok: 5 moments; steps 1-3; user 2, codebase 2')
+
+    def test_a_graph_a_bench_or_build_order_broken_is_refused_before_rendering(self):
+        # catches: a video that shows the ticket graph or a bench, or tells the
+        # changes out of build order, reaching the owner.
+        def change(fn):
+            moments = copy.deepcopy(self.moments)
+            fn(moments)
+            return moments
+
+        cases = {
+            'a graph frame': lambda m: m[1]['frame'].update(type='diagram'),
+            'an own image': lambda m: m[2].update(image='graph.png'),
+            'an own page': lambda m: m[2].update(html='graph.html'),
+            'graph in a line': lambda m: m[3].update(say='Here is the ticket graph.'),
+            'bench in a point': lambda m: m[2]['frame']['points'].append('Benchmarks go up'),
+            'out of build order': lambda m: m[4]['frame'].update(step=1),
+            'not starting at step 1': lambda m: [x['frame'].update(step=x['frame']['step'] + 1) for x in m[1:]],
+            'a skipped step': lambda m: m[4]['frame'].update(step=4),
+            'no codebase change': lambda m: [x['frame'].update(type='user', points=['A change'])
+                                             for x in m if x['frame']['type'] == 'codebase'],
+            'no user change': lambda m: [x['frame'].update(type='codebase', paths=['a/b.py'])
+                                         for x in m if x['frame']['type'] == 'user'],
+            'title not first': lambda m: m.insert(2, m.pop(0)),
+            'an extra key': lambda m: m[1]['frame'].update(ticket='#9101'),
+            'no line': lambda m: m[1].pop('say'),
+            'over the target': lambda m: m[1].update(say=' '.join(['word'] * 400)),
+        }
+        for name, fn in cases.items():
+            with self.subTest(name):
+                path = self.write(change(fn))
+                result = run('check', path)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, '')
+                self.assertTrue(result.stderr.startswith('animatic: '), result.stderr)
+                built = run('build', path, '-o', self.tmp / 'spec.mp4')
+                self.assertEqual(built.returncode, 1)
+                self.assertFalse((self.tmp / 'build').exists(), 'build rendered a refused storyboard')
+                self.assertFalse((self.tmp / 'spec.mp4').exists())
+
+    @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
+    def test_build_renders_each_frame_with_its_voice_in_order(self):
+        # catches: frames shown out of order or under the wrong line, a silent
+        # or missing track, or an MP4 that isn't what the storyboard says.
+        shutil.copy(STORYBOARD, self.tmp / 'storyboard.json')
+        # A voice of known length per line: 0.6 s plus 0.1 s per word.
+        tone = ('python3 -I -c "import sys, wave, math; n = len(sys.stdin.read().split()); '
+                'w = wave.open(sys.argv[1] + \'.wav\', \'wb\'); w.setparams((1, 2, 16000, 0, \'NONE\', \'\')); '
+                'w.writeframes(b\'\'.join(int(8000 * math.sin(i / 8)).to_bytes(2, \'little\', signed=True) '
+                'for i in range(int(16000 * (0.6 + 0.1 * n)))))" {out}')
+        out = self.tmp / 'spec.mp4'
+        result = run('build', self.tmp / 'storyboard.json', '-o', out, '--tts-command', tone, cwd=Path.cwd())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('no warnings', result.stdout)
+        words = [len(m['say'].split()) for m in self.moments]
+        lengths = [0.6 + 0.1 * n + 0.4 for n in words]  # each line, then its 0.4 s hold
+        meta = json.loads(subprocess.check_output([
+            'ffprobe', '-v', 'error', '-show_entries', 'format=duration:stream=codec_type,codec_name,r_frame_rate',
+            '-of', 'json', str(out)]))
+        self.assertEqual(sorted(s['codec_type'] for s in meta['streams']), ['audio', 'video'])
+        self.assertAlmostEqual(float(meta['format']['duration']), sum(lengths), delta=0.25)
+        frames = sorted((self.tmp / 'build').glob('frame-*.png'))
+        self.assertEqual(len(frames), len(self.moments))
+        self.assertTrue((self.tmp / 'build/sheet.png').is_file())
+
+        def tiny(args):
+            return subprocess.check_output(['ffmpeg', '-v', 'error', *args, '-frames:v', '1',
+                                            '-vf', 'scale=48:27', '-pix_fmt', 'gray', '-f', 'rawvideo', '-'])
+
+        pictures = [tiny(['-i', str(f)]) for f in frames]
+        start = 0.0
+        for i, length in enumerate(lengths):
+            shot = tiny(['-ss', f'{start + length / 2:.2f}', '-i', str(out)])
+            nearest = min(range(len(pictures)),
+                          key=lambda k: sum(abs(a - b) for a, b in zip(shot, pictures[k])))
+            self.assertEqual(nearest, i, f'moment {i + 1} shows frame {nearest + 1}')
+            start += length
 
 
 if __name__ == '__main__':
-    unittest.main()
+    unittest.main(verbosity=2)

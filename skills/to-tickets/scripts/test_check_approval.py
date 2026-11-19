@@ -740,7 +740,8 @@ class MachineApproval(unittest.TestCase):
             def change(tickets):
                 t = find(tickets, n)
                 t["blocked_by"].append({"number": blocker, "state": "OPEN"})
-                t["body"] = t["body"].replace("## Links\n\n", f"## Links\n\n- {line}\n").replace("- none\n", "")
+                t["body"] = (t["body"].replace("## Links\n\nnone\n", "## Links\n\n")
+                             .replace("## Links\n\n", f"## Links\n\n- {line}\n"))
             return change
 
         cases = {

@@ -1,6 +1,7 @@
 ---
 name: to-spec
 description: Turn a confirmed grill into a spec issue and a short narrated video for the owner's confirmation. Use when the design is settled and the user asks for a spec. A confirmed spec goes to to-tickets.
+version: 0.2.0
 ---
 
 # To spec

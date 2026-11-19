@@ -1,6 +1,7 @@
 ---
 name: hill-climb
 description: Improve one thing in autonomous rounds with fresh CloudRoom branches, a council of model families scoring each category against reference products (pairwise Bradley-Terry ranking as an option) and human checkpoints. Use for iterative improvement, exploring design directions, or a hill-climb run; design rounds use the image skill for targets and real-page screenshots.
+version: 0.2.0
 ---
 
 # Hill-climb one thing

@@ -1,6 +1,7 @@
 ---
 name: review-ticket
 description: Review a ticket's pull request as its independent other-family reviewer at its exact head once CI is green, on Standards, Spec and one full sweep, and post one verdict report on the pull request; only a real-user path or a security, privacy or data-loss risk blocks. Use when you are a pull request's reviewer, for its re-check, or to tell whether a pull request needs review. Fixing the code is build-ticket's job, never this one.
+version: 0.2.0
 ---
 
 # Review a ticket

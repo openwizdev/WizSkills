@@ -1,6 +1,7 @@
 ---
 name: where-are-we
 description: Answer where things stand across the factory or a requested version, spec, grill, builders, issues or CI. Use for status requests; read GitHub and CloudRoom without changing anything.
+version: 0.2.0
 ---
 
 # Where are we?

@@ -1,6 +1,7 @@
 ---
 name: launch-fleet
 description: Launch a project's fleets and keep them moving. When the user approves a plan graph, start that spec's loop, which gives each fleet wake a fresh thread to start, route and archive its spec's builders and reviewers; the project's two loops (GitHub's messages, and a check every 30 minutes as the safety net) cover the rest. On each wake, start a builder on every ready ticket at once, send green pull requests to their reviewer and findings to their builder, merge approved work, hold tickets whose contracts changed, and archive finished agents. Use when a plan graph is approved, when a loop wakes you with due lines, when moving a spec to fresh wakes, or to see what a fleet has due.
+version: 0.2.0
 ---
 
 # Launch fleet

@@ -55,6 +55,9 @@ SUITES = {
                      ['sh', 'skills/launch-fleet/scripts/test-loop.sh'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-limit-replacement.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-limit-recovery.py']],
+    # Not a skill: the check's own version rule and changesets (WS18).
+    'check': [['python3', '-I', 'check/test_versions.py'],
+              ['python3', '-I', 'check/test_changesets.py']],
 }
 
 # The skills not adapted from Matt Pocock's, each with the source line its
@@ -90,7 +93,7 @@ MATT_COPYRIGHT = 'Copyright (c) 2026 Matt Pocock'
 
 ASK_WIZ = 'ask-wiz'
 ASK_WIZ_POLICY = 'policy:\n  allow_implicit_invocation: false'
-FRONTMATTER_KEYS = ('name', 'description')
+FRONTMATTER_KEYS = ('name', 'description', 'version')
 DESCRIPTION_MAX = 1024
 OPENAI_KEYS = ('display_name', 'short_description')
 
@@ -105,6 +108,12 @@ VERSION = re.compile(
     r'(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
     r'(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?'
     r'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?')
+# A skill's own version (J205): plain semver 2.0.0, no leading `v`.
+SKILL_VERSION = re.compile(
+    r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)'
+    r'(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+    r'(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?'
+    r'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?', re.ASCII)
 SKILL_NAME = re.compile(r'[a-z0-9]+(?:-[a-z0-9]+)*')
 
 
@@ -214,13 +223,19 @@ def frontmatter(at, name, front, out):
                 out.add('frontmatter', at, 'ask-wiz has exactly one `disable-model-invocation: true`', n)
             continue
         if key not in FRONTMATTER_KEYS:
-            out.add('frontmatter', at, f'`{key}` is not allowed: only `name` and `description`', n)
+            out.add('frontmatter', at, f'`{key}` is not allowed: only `name`, `description` and `version`', n)
             continue
         value, why = scalar(rest)
-        if why:
+        if why and key == 'version' and key not in values:
+            values[key] = None
+            out.add('frontmatter', at, '`version` is not a semver version such as `0.2.0`', n)
+        elif why:
             out.add('frontmatter', at, f'`{key}` {why}', n)
         elif key in values:
             out.add('frontmatter', at, f'`{key}` appears twice', n)
+        elif key == 'version' and not SKILL_VERSION.fullmatch(value):
+            values[key] = None
+            out.add('frontmatter', at, '`version` is not a semver version such as `0.2.0`', n)
         else:
             values[key] = value
     if name == ASK_WIZ and flags == 0:
@@ -233,6 +248,8 @@ def frontmatter(at, name, front, out):
         out.add('frontmatter', at, 'the frontmatter has no valid `description`')
     elif len(values['description']) > DESCRIPTION_MAX:
         out.add('frontmatter', at, f'`description` is longer than {DESCRIPTION_MAX} characters')
+    if 'version' not in values:
+        out.add('frontmatter', at, 'the frontmatter has no valid `version` (semver, such as `0.2.0`)')
 
 
 INDICATORS = tuple('-?:,[]{}#&*!|>%@`')

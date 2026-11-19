@@ -1,6 +1,7 @@
 ---
 name: huntr
 description: Run one hunt across the project's hunting checklist under the user's approved risk tiers. One Codex Sol 6.1 XHigh controller sends Terra hunters per area and category, proves findings, files issues, and uses the approval gate; bigger work becomes a proposal. Read the project's huntr settings first.
+version: 0.2.0
 ---
 
 # huntr

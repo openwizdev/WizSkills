@@ -1,6 +1,7 @@
 ---
 name: image
 description: Generate or edit pictures, make target pictures before visible UI changes, and capture real pages at phone and desktop widths. Use for image generation, UI design and review, diagrams, charts, and every hill-climb round's picture and screenshot.
+version: 0.2.0
 ---
 
 # Pictures and UI

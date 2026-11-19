@@ -1,6 +1,7 @@
 ---
 name: install
 description: Install OpenWiz for a user from its one install line, "Install OpenWiz from github.com/openwizdev/OpenWiz". Check the machine and CloudRoom, install the verified prebuilt release (no Rust or Node), open setup and check what is connected, and offer a first-fleet branch that connects GitHub, prepares the project and its private brain, and starts the fleet through launch-fleet. Use to install, set up, repair, update or remove OpenWiz, to try a first fleet, or to resume either journey.
+version: 0.2.0
 ---
 
 # Install OpenWiz

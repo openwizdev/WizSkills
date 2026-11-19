@@ -1,6 +1,7 @@
 ---
 name: diagnose
 description: Diagnose a hard bug, unexplained test failure, flaky CI test or performance regression. Use for a stuck builder or the orchestrator's optional diagnosis inside its decision after a re-check leaves a blocker open.
+version: 0.2.0
 ---
 
 # Diagnose

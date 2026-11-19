@@ -1,6 +1,7 @@
 ---
 name: to-tickets
 description: Turn a confirmed spec into sized tickets and a plan graph for the owner's exact approval. Use to propose tickets, draw the graph or re-approve a changed plan. Send unconfirmed specs to to-spec.
+version: 0.2.0
 ---
 
 # To tickets

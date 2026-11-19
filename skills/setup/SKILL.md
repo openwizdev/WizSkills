@@ -1,6 +1,7 @@
 ---
 name: setup
 description: Set up a project for fleets, writing its issue tracker, triage labels, glossary layout and fleet defaults (builder, reviewer, test commands, CI checks, merge rules) to docs/agents/. Use before a project's first fleet, when a skill finds docs/agents/ missing, or after one of those settings changes.
+version: 0.2.0
 ---
 
 # Setup

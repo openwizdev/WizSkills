@@ -1,6 +1,7 @@
 ---
 name: research
 description: Investigate a question against primary sources. Use when asked for research, when a grill or plan needs facts first, or when a wayfind question needs research.
+version: 0.2.0
 ---
 
 Send a fresh agent to read primary sources; the asker writes one cited report and takes it through a docs-only pull request into `main`. Every claim cites the source that owns it.

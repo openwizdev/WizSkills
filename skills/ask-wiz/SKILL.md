@@ -2,6 +2,7 @@
 name: ask-wiz
 description: Recommend the skill or flow for the user's question, including OpenWiz, installed and discoverable skills. User-started only; agents may suggest ask-wiz when the user seems confused, but never run it in their own workflows.
 disable-model-invocation: true
+version: 0.2.0
 ---
 
 # Ask Wiz

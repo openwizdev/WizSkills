@@ -1,0 +1,22 @@
+## Mutation 1: machine_head loosened to a header prefix
+ok   machine: a valid machine plan approval starts its fleet
+ok   machine: a spec with no approval starts nothing
+FAIL machine: a header that is not the exact machine record approves nothing: unexpected output:
+FAIL machine: a record without its grill confirmation approves nothing: unexpected output:
+ok   machine: an outsider's machine record approves nothing
+ok   machine: a plan changed since its machine approval starts nothing
+ok   every gh call was one of fleet.sh's reads
+6 cases, 2 failed
+## Mutation 2: bold, quote, VERDICT and Orchestrator lines read as steers
+ok   steer: a stop on the video holds the fleet and asks to record it
+ok   steer: a recorded stop still holds the fleet
+ok   steer: a reset asks a re-cut and holds the fleet
+ok   steer: a recorded reset still holds until the new video
+ok   steer: a new video ends the hold
+ok   steer: anything else is a steer the fleet reads, and the fleet goes on
+ok   steer: a steer already read is not asked again
+ok   steer: a stop before the video steers nothing
+ok   steer: an outsider's stop holds nothing
+FAIL steer: the fleet's own bold records are no steer: unexpected output:
+ok   every gh call was one of fleet.sh's reads
+10 cases, 1 failed

@@ -1307,7 +1307,24 @@ def row($s): . as $t | [latest($s).rows[]? | select(.number == $t.number)] | fir
 # Current: the latest approval'"'"'s fingerprint is the one to-tickets'"'"'s
 # revision.sh gives the plan now ($W.fingerprints, read only for a spec with a
 # ticket that could start). Anything else is stale: nothing under it starts.
-def current($s): latest($s).fingerprint as $f | $f != null and $f == $W.fingerprints["\($s.number)"];
+def plan_current($s): latest($s).fingerprint as $f | $f != null and $f == $W.fingerprints["\($s.number)"];
+# #1340: to-spec'"'"'s steering video is the spec'"'"'s latest plain comment with the
+# line "Comment here to steer: stop, reset, or anything else." Each later plain
+# comment (record authors only, as everywhere here) steers: first word "stop"
+# holds the fleet, "reset" holds it and asks for a re-cut and a new video, and
+# anything else is a steer the fleet reads. A bold record line ("**...", such as
+# "**Needs you:**"), a quote, a VERDICT or an Orchestrator line is no steer. A
+# held spec starts, takes over and releases nothing until a newer video.
+def video_id: [.comments.nodes[] | select((.body | rec) == null
+  and (.body | lines | any(.[]; . == "Comment here to steer: stop, reset, or anything else."))) | .databaseId] | max;
+def steers: video_id as $v | if $v == null then [] else
+  [.comments.nodes[] | select(.databaseId > $v and (.body | rec) == null)
+   | (.body | first_line | sub("^\\s+"; "")) as $l
+   | select([$l | startswith("**", ">", "VERDICT:", "Orchestrator")] | any | not)
+   | {id: .databaseId, kind: (($l | ascii_downcase | capture("^(?<w>[a-z]+)") | .w) // "" | if . == "stop" or . == "reset" then . else "steer" end)}]
+  | sort_by(.id) end;
+def stopped: any(steers[]; .kind != "steer");
+def current($s): plan_current($s) and ($s | stopped | not);
 def spec_rec($s; $re): any($s | records[]; .r | test($re));
 # The latest fleet record routes the spec to its loop. Fresh wakes keep the
 # existing assignments, including agents whose records predate the loop.
@@ -1840,18 +1857,26 @@ def approval_lines: . as $s | records as $srs | latest($s) as $a
     elif ($a.rows | length) == 0 then look(.number; $srs; "its latest plan graph approval lists no tickets")
     else
       ($W.fingerprints["\($s.number)"] // null) as $now
-      | if $now == null or current($s) then empty
+      | if $now == null or plan_current($s) then empty
         else "changed since revision \($a.revision // "?") (fingerprint now \($now[:12]))" as $what
         | if any($s | records[]; .r == "needs approval: \($what)") then empty
           else "re-approve #\($s.number): \($what)" end end
     end;
+
+# The video'"'"'s steers, each asked once, until its record: "held by stop <id>",
+# "re-cut asked <id>" or "steer read <id>".
+def steer_lines: .number as $n | records as $srs | steers[] | .id as $id
+  | {stop: ["held by stop", "hold", "the owner said stop on the video in comment \($id); nothing under the spec starts until a new video"],
+     reset: ["re-cut asked", "re-cut", "the owner said reset on the video in comment \($id); re-cut the plan and make a new video"],
+     steer: ["steer read", "steer", "the owner steered on the video in comment \($id); read it and act on it"]}[.kind] as [$r, $line, $why]
+  | if any($srs[]; .r == "\($r) \($id)") then empty else "\($line) #\($n): \($why)" end;
 
 def spec_lines: . as $s | records as $srs
   | if .subIssues.pageInfo.hasNextPage then look(.number; $srs; "more than 100 tickets, so its graph can'"'"'t all be read")
     elif .comments.pageInfo.hasPreviousPage then look(.number; $srs; "comment history could not be read in full")
     else
       latest($s) as $a
-      | approval_lines,
+      | approval_lines, steer_lines,
         ($s.subIssues.nodes[] | ticket_lines($s)),
         (if $a == null or ($a.rows | length) == 0 then empty
          else [$s.subIssues.nodes[] | select(.state == "OPEN" and row($s) == null and (follow_up($s) | not)) | .number] as $pending
@@ -1883,7 +1908,7 @@ def is_named($s): ($s | has("named") | not) or (.number | among($s.named));
 def part_lines: . as $s | records as $srs
   | if .subIssues.pageInfo.hasNextPage or (.total // 0) > 100 then look(.number; $srs; "more than 100 tickets, so its graph can'"'"'t all be read")
     elif .comments.pageInfo.hasPreviousPage then look(.number; $srs; "comment history could not be read in full")
-    else approval_lines, (.subIssues.nodes[] | select(is_named($s)) | ticket_lines($s)) end;
+    else approval_lines, steer_lines, (.subIssues.nodes[] | select(is_named($s)) | ticket_lines($s)) end;
 
 def candidates: ($W.specs[] as $s | $s.subIssues.nodes[] | select(is_named($s)) | {t: ., s: $s}),
   ($W.singles[] | {t: ., s: null});

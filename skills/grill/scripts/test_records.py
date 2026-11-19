@@ -38,26 +38,28 @@ repo = "repos/example/private"
 if url == repo:
     response = {"full_name": "example/private", "private": s["private"]}
 elif url == repo + "/pulls/7":
-    response = {"number": 7, "state": "open", "head": {"sha": s["head"]}}
+    response = {"number": 7, "state": s["pr_state"], "head": {"sha": s["head"]}}
 elif url == repo + "/contents/" + s["file"] + "?ref=" + s["head"]:
     response = {"encoding": "base64", "content": s["source"], "path": s["file"]}
 elif url == repo + "/issues/7/comments":
     if args[1:3] == ["-X", "POST"]:
         s["writes"] += 1
-        response = {"id": 81, "issue_url": "https://api.github.com/" + repo + "/issues/7",
+        response = {"id": 81 + len(s["comments"]), "issue_url": "https://api.github.com/" + repo + "/issues/7",
                     **json.load(sys.stdin)}
-        s["comments"].append(response)
+        if not s["drop"]:
+            s["comments"].append(response)
         path.write_text(json.dumps(s))
         if s["lose"]:
             sys.exit(1)
     else:
         response = [s["comments"]]
-elif url == repo + "/issues/comments/81":
+elif url.startswith(repo + "/issues/comments/"):
+    index = int(url.rsplit("/", 1)[1]) - 81
     if args[1:3] == ["-X", "PATCH"]:
         s["writes"] += 1
-        s["comments"][0].update(json.load(sys.stdin))
+        s["comments"][index].update(json.load(sys.stdin))
         path.write_text(json.dumps(s))
-    response = s["comments"][0]
+    response = s["comments"][index]
 else:
     sys.exit(4)
 print(json.dumps(response))
@@ -76,7 +78,8 @@ class Records(unittest.TestCase):
         gh.write_text(FAKE_GH)
         gh.chmod(0o700)
         self.fixture = self.root / "fixture.json"
-        self.write_state(private=True, writes=0, comments=[], lose=False, file=FILE,
+        self.write_state(private=True, writes=0, comments=[], lose=False, drop=False,
+                         pr_state="open", file=FILE,
                          head=HEAD, source=self.encoded(ROUND))
 
     @staticmethod
@@ -210,6 +213,56 @@ class Records(unittest.TestCase):
         self.assertEqual(json.loads(updated.split("\n")[3]),
                          record | {"answered": ["N2"]})
         self.assertEqual(self.state()["writes"], 2)
+
+
+    def test_restart_reports_progress_without_resetting_answers(self):
+        self.publish()
+        saved = ROUND + "\n**Test User:**\n> N2 yes\n\nSettled: N2. Open: N1.\n"
+        self.write_state(source=self.encoded(saved))
+        self.assertEqual(self.call("advance", "81", "N2").returncode, 0)
+        result = self.call("publish", "round-one")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, b"verified request 81 (open)\n")
+        self.assertEqual(self.state()["writes"], 2)
+
+    def test_ambiguous_absent_response_never_issues_second_post(self):
+        self.write_state(lose=True, drop=True)
+        for _ in range(2):
+            result = self.call("publish", "round-one")
+            self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(self.state()["writes"], 1)
+        self.assertEqual(self.state()["comments"], [])
+
+    def test_park_keeps_pending_request_but_refuses_answers(self):
+        record = self.publish()
+        self.write_state(source=self.encoded(
+            ROUND.replace("**open**.", "**parked** by Test User, 2099-01-02.")))
+        output = self.root / "answer"
+        self.assertEqual(self.call("match", self.contextual(record, b"yes"),
+                                   str(output)).returncode, 2)
+        self.assertFalse(output.exists())
+        self.assertEqual(self.state()["writes"], 1)
+        self.write_state(pr_state="closed")
+        self.assertEqual(self.call("supersede", "81").returncode, 0)
+        updated = json.loads(self.state()["comments"][0]["body"].split("\n")[1])
+        self.assertEqual(updated, record | {"status": "superseded"})
+
+    def test_simplified_question_keeps_id_and_context_with_a_new_request(self):
+        old = self.publish()
+        replacement = ROUND[ROUND.index("## Round"):].replace("Round 1", "Round 2")
+        replacement = replacement[0:replacement.index("**N1")] + replacement[replacement.index("**N2"):]
+        replacement = replacement.replace("N2 - Which export?", "N2, re-asked - Save as text?")
+        self.write_state(source=self.encoded(ROUND + replacement))
+        self.assertEqual(self.call("supersede", "81").returncode, 0)
+        result = self.call("publish", "round-two")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        previous, current = [json.loads(c["body"].split("\n")[1])
+                             for c in self.state()["comments"]]
+        self.assertEqual(previous, old | {"status": "superseded"})
+        self.assertEqual(current["questions"],
+                         [old["questions"][1] | {"decides": "Save as text?"}])
+        self.assertNotEqual(current["fingerprint"], old["fingerprint"])
+        self.assertEqual(current["answered"], [])
 
 
 if __name__ == "__main__":

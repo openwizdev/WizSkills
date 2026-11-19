@@ -112,6 +112,14 @@ class Clean(unittest.TestCase):
             self.assertEqual(r.returncode, 1)
             self.assertEqual(r.stdout, 'left: 2 [DEBUG-a4f2] in src/app.py:2, src/probe.py:1\n')
 
+    def test_a_leftover_outside_the_current_directory_is_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            git_tree(tmp)
+            Path(tmp, 'tests').mkdir()
+            Path(tmp, 'tests/repro.py').write_text('# [DEBUG-a4f2]\n')
+            r = run('clean', '[DEBUG-a4f2]', cwd=Path(tmp, 'src'))
+            self.assertEqual((r.returncode, r.stdout), (1, 'left: 1 [DEBUG-a4f2] in tests/repro.py:1\n'))
+
     def test_a_prefix_that_would_match_ordinary_text_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             git_tree(tmp)

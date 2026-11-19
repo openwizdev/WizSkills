@@ -1,0 +1,20 @@
+{
+  "commit": "320dbb45fcd9432a9bf9e6611306f8a6c3f2094f",
+  "tokenizer": {
+    "package": "js-tiktoken",
+    "version": "1.0.21",
+    "encoding": "o200k_base"
+  },
+  "workflows": {
+    "wayfind.resume": {
+      "fragments": {
+        "skills/wayfind/SKILL.md": 1770,
+        "skills/grill/SKILL.md": 1227,
+        "skills/grill/assets/grill.md": 146,
+        "skills/grill/references/records.md": 909,
+        "contracts/open-development.v1.md": 10781
+      },
+      "loaded_path_tokens": 14833
+    }
+  }
+}

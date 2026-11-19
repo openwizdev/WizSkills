@@ -1,6 +1,6 @@
 ---
 name: research
-description: Investigate a question against primary sources and land one checked, cited report. Use when asked for research, when a grill or plan needs facts first, or when a wayfind question needs research. Not for deciding: research informs a grill or plan and approves nothing.
+description: Investigate a question against primary sources and land one checked, cited report. Use when asked for research, when a grill or plan needs facts first, or when a wayfind question needs research. Not for deciding; research informs a grill or plan and approves nothing.
 ---
 
 The **asker** sends fresh workers to read primary sources, writes one cited report and lands it through a docs-only pull request in the private repository. A **worker** given a fixed brief follows only "Worker: return cited notes" and never dispatches another agent.
@@ -46,7 +46,7 @@ After every worker is archived, check before publishing:
 sh "<research-skill-folder>/scripts/check-workers.sh" check '<snapshot-path>'
 ```
 
-Exit 0 is clean; exit 1 prints one `hit research:` line per changed branch, PR or comment; exit 2 could not compare everything and is never a pass. Keep every hit or error in the report's Gaps. Agents share credentials, so avoid GitHub writes during the swarm. For a write you made or verified, name the exact item and resulting value (`null` for a deletion; a branch's full commit; a PR's or comment's normalized value from a new snapshot) in a private JSON file and rerun `check '<snapshot-path>' --allow '<exact-changes.json>'`. Report that as "clean after allowances, see Gaps", never plain clean, and never exempt a prefix, author or unexamined change. Reviews, issues, labels and other repositories are not checked. Never remove another agent's branch or PR to pass.
+Exit 0 is clean; exit 1 prints one `hit research:` line per changed branch, PR or comment; exit 2 could not compare everything and is never a pass. Keep every hit or error in the report's Gaps. Agents share credentials, so avoid GitHub writes during the swarm. For a write you made or verified, name the exact item and resulting value (`null` for a deletion; a branch's full commit; a PR's or comment's normalized value from a new snapshot) in a private JSON file and rerun `check '<snapshot-path>' --allow '<exact-changes.json>'`. Report that as "clean after allowances, see Gaps", never plain clean, and never exempt a prefix, author or unexamined change. Reviews, issues, labels, tags, other repositories and writes undone between snapshots are not checked, so clean is not a complete audit. Never remove another agent's branch or PR to pass.
 
 Done when every worker has returned notes or a named gap and is archived, and the check result is recorded.
 

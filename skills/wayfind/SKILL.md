@@ -16,7 +16,7 @@ The map is one issue labelled `wayfind:map`: an index read once per session, hol
 
 - **Its kind is its one label;** the body never says it. `wayfind:` labels are the only labels a map and its questions carry, never a ready or triage label, so no fleet builds them.
 - **Blocking is GitHub's "blocked by" link.** A question is unblocked when every blocker is closed.
-- **A claim is a comment,** `wayfind: claimed`, posted before any work. Keep its numeric comment id (the `#issuecomment-` suffix of its URL, not the GraphQL `id`) in private resumable state, never a thread id. The earliest unreleased claim holds the question; `wayfind: released <claim comment id>` releases only that claim. If you lose your id, ask the orchestrator rather than release another holder's claim.
+- **A claim is a comment,** `wayfind: claimed`, posted before any work. Keep its numeric comment id (the `#issuecomment-` suffix of its URL, not the GraphQL `id`) in private resumable state, never a thread id. The earliest unreleased claim holds the question; `wayfind: released <claim comment id>` releases only that claim; release yours if you stop before settling. If you lose your id, ask the orchestrator rather than release another holder's claim.
 - **The frontier** is the open, unblocked, unclaimed questions. `frontier.py` (below) prints it.
 
 | Label | Settled by |
@@ -43,7 +43,7 @@ Done when the map, its labelled and linked questions, the roadmap line and every
 1. **Load the map's body** and run `frontier.py map <map>`. Take the question you were named, else the first `frontier` line.
 2. **Claim it,** then run `frontier.py holder <question> --mine <claim comment id>`. Work only on `yours`; on `held by` another id, release yours and take the next.
 3. **Settle it** as its label says, reading related questions and the skills in Notes as needed.
-4. **Record it:** the public-safe answer as a comment, close the question, add its linked line to Decisions so far.
+4. **Record it:** the public-safe answer as a comment, linking (never pasting) anything made to settle it; close the question, add its linked line to Decisions so far.
 5. **Redraw the map:** create and link new questions, graduate fog the answer made specific, rule out what lies beyond the destination, and change or close questions the decision makes wrong. Read the map's body again right before each edit.
 
 One question per session, except research, which runs in parallel. Done when the answer is on the closed question and the map shows its line and the redrawn fog.

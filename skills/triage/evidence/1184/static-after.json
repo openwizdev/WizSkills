@@ -1,0 +1,18 @@
+{
+  "commit": "320dbb45fcd9432a9bf9e6611306f8a6c3f2094f",
+  "tokenizer": {
+    "package": "js-tiktoken",
+    "version": "1.0.21",
+    "encoding": "o200k_base"
+  },
+  "workflows": {
+    "triage.dispatch": {
+      "fragments": {
+        "skills/triage/SKILL.md": 2251,
+        "contracts/open-development.v1.md": 10781,
+        "skills/triage/AGENT-BRIEF.md": 926
+      },
+      "loaded_path_tokens": 13958
+    }
+  }
+}

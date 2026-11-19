@@ -19,17 +19,17 @@ You are the independent **reviewer** of one ticket's pull request. You read, run
 
 Read the project's instructions (`AGENTS.md` or `CLAUDE.md`, with folder ones) and `fleet.md` once per session and record each blob ID (`git rev-parse HEAD:<path>`); reuse a read only while its ID still matches.
 
-The helper is [`scripts/review.py`](scripts/review.py): set `review` to its path in this skill's folder and run `python3 -I "$review" <command> --repo <owner/repo> --pr <N>` from the project checkout. It reads settings from the base branch and only record authors' comments. Exit 1 prints a stop, the report's broken lines or an unknown write; exit 2 is a refusal on settings: post nothing and ask on the ticket.
+The helper is [`scripts/review.py`](scripts/review.py): set `review` to its path in this skill's folder and run `python3 -I "$review" <command> --repo <owner/repo> --pr <N> --head <the assigned head>` from the project checkout. Each command reads one snapshot of the pull request and admits it first: open, ready, a ticket, still at the assigned head, every check `fleet.md` requires green there. It reads settings from the base branch and only record authors' comments. Exit 1 prints a stop, the report's broken lines or an unknown write; exit 2 is a refusal on settings: post nothing and ask on the ticket.
 
 ## 1. Pin the head
 
-`review.py pin` prints `review full #57 at <head>; ticket example/pantry#41; checks build, test`, or `stop: <why>`: a draft, closed or merged, no ticket, a required check not green at this head, already reported at this head, or parked for Jake. On a stop, post nothing and say why. A re-check line adds `last read <commit>; open <ids>; next id R<k>` (see Re-checks, below). Check out only that head (`git fetch origin <base> pull/<N>/head`, `git checkout --detach <head>`). Read the ticket and its parent spec (`gh issue view <n> --repo <ticket repo> --json title,body,comments,parent`) and any grill or contract it names.
+`review.py pin` prints `review full #57 at <head>; ticket example/pantry#41; checks build, test`, or `stop: <why>`: a draft, closed or merged, no ticket, a head other than the assigned one, a required check not green at this head, already reported at this head, or parked for Jake with no matching decision. On a stop, post nothing and say why. A re-check line adds `last read <commit>; open <ids>; next id R<k>` (see Re-checks, below). Check out only that head (`git fetch origin <base> pull/<N>/head`, `git checkout --detach <head>`). Read the ticket and its parent spec (`gh issue view <n> --repo <ticket repo> --json title,body,comments,parent`) and any grill or contract it names.
 
 Done when you hold one green head and have read its ticket and spec.
 
 ## Re-checks
 
-When `pin` prints `review re-check` or `review final`, read [re-checks](references/re-checks.md) and follow it through steps 2 to 4.
+When `pin` prints `review re-check`, `review final` or `review log-and-merge`, read [re-checks](references/re-checks.md) and follow it through steps 2 to 4.
 
 ## 2. Run three checks, apart
 
@@ -63,7 +63,7 @@ When a finding turns on a fact no reading or run can settle, comment on the tick
 
 1. **File each new polish finding:** `review.py follow-up --repo <ticket repo> --ticket <n> --spec <spec> --pr <owner/repo#N> --head <head> --id R<k> --title "<short claim>" --finding <file>` prints `filed #<issue>` or `already filed #<issue>`. It files a standalone `needs-triage` issue starting `Follow-up of #<ticket> (spec #<spec>)`, never a sub-issue, which would make the spec's approval stale.
 2. **Write the report** to a file, as below. `review.py check <file>` prints `report ok` or each broken line; fix until ok.
-3. **Post it:** `review.py post <file>` checks again, posts one pull-request comment as the App (`launch-fleet`'s GitHub identity), reads it back and prints `posted <id>` or `already posted <id>`. On `unknown: ...`, read the comments before anything else; never post blindly.
+3. **Post it:** `review.py post <file>` admits the head and checks the report again, posts one pull-request comment as the App (`launch-fleet`'s GitHub identity), reads it back and prints `posted <id>` or `already posted <id>`. On `unknown: ...`, read the comments before anything else; never post blindly.
 
 Done when the helper printed `posted` or `already posted` for the pinned head.
 

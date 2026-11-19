@@ -1,12 +1,14 @@
 """Review mechanics for review-ticket: pin the head, check and post the report, file a follow-up.
 
-  pin --repo O/R --pr N              which review is due at the exact head, or why none is
-  check REPORT --repo O/R --pr N     the report's contract lines against the PR and earlier reports
-  post REPORT --repo O/R --pr N      check, post once, read back
+  pin --repo O/R --pr N --head SHA           which review is due at the assigned head, or why none is
+  check REPORT --repo O/R --pr N --head SHA  admission, then the report's contract lines
+  post REPORT --repo O/R --pr N --head SHA   admission and check again, post once, read back
   follow-up --repo TICKET_REPO ...   file one polish issue or logged blocker for triage, once
 
-Settings are read from the base branch, never the pull request's head. Only
-comments by the `Record authors` row of docs/agents/fleet.md count. Exit 0
+Each command reads one pull-request snapshot and admits it (open, ready, a
+ticket, the assigned head, every required check green there) before anything
+else. Settings are read from the base branch, never the pull request's head.
+Only comments by the `Record authors` row of docs/agents/fleet.md count. Exit 0
 done, 1 a stop, report problems or an unknown write, 2 a refusal (unreadable
 or invalid settings, arguments). Python 3.11+ standard library and `gh`.
 """
@@ -24,6 +26,8 @@ VERDICT = re.compile(r"VERDICT: (APPROVE|CHANGES) at ([0-9a-f]{40})")
 FINDING = re.compile(r"- \*\*(R[1-9][0-9]*) \[([a-z]+)\]\*\* (.*)")
 NEW = re.compile(r"`[^`\s]+:[1-9][0-9]*` \((?:Standards|Spec|Sweep)\) \S")
 STATUSES = ("resolved at ", "withdrawn: ", "still open after the ", "disputed, kept: ", "Polish issue: #")
+BLOCKER_STATUSES = ("resolved at ", "withdrawn: ", "still open after the ", "disputed, kept: ")
+POLISH_STATUSES = ("Polish issue: #", "withdrawn: ")
 OPEN = ("still open after the ", "disputed, kept: ")
 USER = re.compile(r"User path: \S.*")
 RISK = re.compile(r"Risk: (?:security|privacy|data loss): \S.*")
@@ -37,9 +41,15 @@ NEXT = {"builder": rf"Next: the builder fixes or disputes ({IDS}) once, then one
         "merge": r"Next: none open\. It merges by the project's merge rules\."}
 ROUNDS = {"full": ("Full review by ", ("builder", "merge"), "the builder line or none open"),
           "re-check": ("Re-check of ", ("fresh", "merge"), "the fresh line or none open"),
-          "final": ("Final check of ", ("park", "merge"), "the park line or none open")}
+          "final": ("Final check of ", ("park", "merge"), "the park line or none open"),
+          "log-and-merge": ("Final check of ", ("merge",), "none open")}
+DECISION = re.compile(rf"\*\*Orchestrator decision:\*\* (fix once more|log and merge): ({IDS}) at ([0-9a-f]{{40}})\."
+                      r"(?: Polish issues: (#[1-9][0-9]*(?:, #[1-9][0-9]*)*)\.)? Why: \S.*", re.S)
+ADDITIONAL = re.compile(r"\*\*Additional\b[^*\n]*? check: `([^`]+)`")
 CLOSES = re.compile(r"(?im)^\s*(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+((?:[\w.-]+/[\w.-]+)?#[1-9][0-9]*)\b")
-LOGIN = re.compile(r"`([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?)`")
+LOGIN = r"`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`"
+# The whole cell, as launch-fleet's grants.py reads it: backticked logins separated by commas.
+AUTHORS_CELL = re.compile(rf"\s*{LOGIN}(?:\s*,\s*{LOGIN})*\s*")
 PRIVATE = re.compile(r"\b(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_-]{8,}|\bthr_[A-Za-z0-9]{4,}|(?i:\bbearer\s+[A-Za-z0-9._-]{8,})")
 
 
@@ -96,20 +106,26 @@ def cells(line):
 
 
 def record_authors(fleet):
-    for line in section(fleet, "## GitHub identity"):
-        row = cells(line)
-        if row[:1] == ["Record authors"] and len(row) == 2:
-            names = LOGIN.findall(row[1])
-            if names and LOGIN.sub("", row[1]).replace(",", "").strip() == "":
-                return {n.lower() for n in names}
-    raise Refusal("docs/agents/fleet.md has no valid record authors row; trust nobody and ask on the ticket")
+    """Lowercase logins from the one Record authors row, read whole as launch-fleet reads it, or a refusal."""
+    heading, rows = None, []
+    for line in fleet.splitlines():
+        if line.startswith("## "):
+            heading = line.strip()
+        elif heading == "## GitHub identity" and re.match(r"\| *Record authors *\|", line):
+            rows.append(line)
+    row = rows[0].split("|") if len(rows) == 1 else []
+    if not (len(row) == 4 and not row[3].strip() and AUTHORS_CELL.fullmatch(row[2])):
+        raise Refusal("docs/agents/fleet.md has no single valid record authors row; trust nobody and ask on the ticket")
+    return {x.lower() for x in re.findall(r"`([^`]*)`", row[2])}
 
 
 def required_checks(fleet):
-    names = [m[1] for line in section(fleet, "## CI checks")
-             if (row := cells(line)) and (m := re.fullmatch(r"`([^`]+)`", row[0]))]
+    """Every check the ## CI checks section requires: the table's names and any **Additional ... check: `x`**."""
+    lines = section(fleet, "## CI checks")
+    names = [m[1] for line in lines if (row := cells(line)) and (m := re.fullmatch(r"`([^`]+)`", row[0]))]
+    names += [n for n in ADDITIONAL.findall("\n".join(lines)) if n not in names]
     if not names:
-        raise Refusal("docs/agents/fleet.md's ## CI checks table names no required check")
+        raise Refusal("docs/agents/fleet.md's ## CI checks names no required check")
     return names
 
 
@@ -133,7 +149,7 @@ def parse(text):
                 break
             more.append(line.strip())
         rest = m[3]
-        findings.append({"id": m[1], "grade": m[2], "new": bool(NEW.match(rest)),
+        findings.append({"id": m[1], "grade": m[2], "new": bool(NEW.match(rest)), "text": rest,
                          "status": next((s for s in STATUSES if rest.startswith(s)), None),
                          "user": any(USER.fullmatch(x) for x in more), "risk": any(RISK.fullmatch(x) for x in more),
                          "polish": bool(POLISH.search(rest)), "logged": bool(LOGGED.fullmatch(rest))})
@@ -168,7 +184,7 @@ def description_rulings(text):
     return numbers
 
 
-def check(text, description, mode, head, earlier):
+def check(text, description, mode, head, earlier, decision=None):
     """Every contract line the report breaks; empty when it passes."""
     r, problems = parse(text), []
     if r["verdict"] is None:
@@ -188,9 +204,10 @@ def check(text, description, mode, head, earlier):
         problems.append("no findings and no No findings. line")
     if ids != [f"R{n}" for n in range(1, len(ids) + 1)]:
         problems.append("ids run R1, R2, ... with no gap or repeat")
-    before = {f["id"] for f in earlier["findings"]} if earlier else set()
+    before = {f["id"]: f for f in earlier["findings"]} if earlier else {}
+    logged_ids = set(decision["ids"]) if decision and decision["kind"] == "log and merge" else set()
     problems += [f"{i}: a re-check gives every earlier id its status"
-                 for i in sorted(before - set(ids), key=lambda x: int(x[1:]))]
+                 for i in sorted(set(before) - set(ids), key=lambda x: int(x[1:]))]
     for f in r["findings"]:
         i, blocking = f["id"], f["grade"] == "blocking"
         if f["grade"] not in ("blocking", "polish"):
@@ -205,6 +222,20 @@ def check(text, description, mode, head, earlier):
             problems.append(f"{i}: a new blocking finding needs its User path: or Risk: line")
         elif f["new"] and not blocking and not f["polish"]:
             problems.append(f"{i}: a new polish finding ends with Polish issue: #<n>")
+        old = before.get(i)
+        if i in logged_ids:
+            if not (f["grade"] == "polish" and f["status"] == "Polish issue: #"
+                    and re.search(r"#[1-9][0-9]*", f["text"])[0] in decision["polish"]):
+                problems.append(f"{i}: the decision grades it polish with Polish issue: {' or '.join(decision['polish'])}")
+            continue
+        if old and f["grade"] != old["grade"] and f["grade"] in ("blocking", "polish"):
+            problems.append(f"{i}: keeps its earlier grade, {old['grade']}")
+        elif old and blocking and f["status"] and f["status"] not in BLOCKER_STATUSES:
+            problems.append(f"{i}: a blocker's status is resolved, withdrawn, still open, disputed or logged")
+        elif old and not blocking and f["status"] and f["status"] not in POLISH_STATUSES:
+            problems.append(f"{i}: a polish finding's status is Polish issue: #<n> or withdrawn")
+        if old and old["risk"] and f["user"] and not f["risk"]:
+            problems.append(f"{i}: keeps its Risk: line")
         if f["logged"] and (f["risk"] or not blocking):
             problems.append(f"{i}: a Risk: blocker is never logged" if f["risk"] else f"{i}: only a blocker is logged")
         elif blocking and not f["new"] and (f["logged"] or (f["status"] or "").startswith(OPEN)) \
@@ -229,6 +260,10 @@ def check(text, description, mode, head, earlier):
     problems += [f"Ruling {n}: marked but not listed in the description" for n in sorted(set(marked) - set(listed))]
     problems += [f"Ruling {n}: marked twice" for n in sorted({n for n in marked if marked.count(n) > 1})]
     problems += [f"Ruling {n}: overturned as {i}, which is not a finding" for n, i in r["marks"] if i and i not in ids]
+    named = [i for _, i in r["marks"] if i]
+    problems += [f"{i}: named by two overturned rulings" for i in sorted({i for i in named if named.count(i) > 1})]
+    if r["no_rulings"] and marked:
+        problems.append("Rulings: none. stands beside a ruling mark")
     if not listed and not r["no_rulings"]:
         problems.append("with no rulings listed, the report says Rulings: none.")
     if PRIVATE.search(text):
@@ -236,31 +271,18 @@ def check(text, description, mode, head, earlier):
     return problems
 
 
-def review_state(repo, number, skip=None):
-    """The pull request, its settings and record-author reports (skipping an identical `skip` body)."""
-    pr = get(f"repos/{repo}/pulls/{number}")
-    fleet = setting(repo, pr["base"]["ref"], "docs/agents/fleet.md")
-    authors = record_authors(fleet)
-    reports = []
-    for c in pages(f"repos/{repo}/issues/{number}/comments?per_page=100"):
-        body = (c.get("body") or "").replace("\r\n", "\n")
-        login = ((c.get("user") or {}).get("login") or "").lower()
-        if login in authors and body.startswith("VERDICT: ") and body.strip() != (skip or "").strip():
-            reports.append(parse(body) | {"id": c.get("id")})
-    head, last = pr["head"]["sha"], reports[-1] if reports else None
-    if last is None:
-        mode = "full"
-    elif last["state"] == "park":
-        raise Stop(f"stop: {ids_text(last['named'])} is parked as a decision for Jake")
-    elif last["state"] is None:
-        raise Stop("stop: the last report has no Next: line; ask the orchestrator")
-    else:
-        mode = "final" if last["state"] == "fresh" else "re-check"
-    return {"pr": pr, "fleet": fleet, "authors": authors, "head": head, "last": last, "mode": mode}
+def authored(comment, authors):
+    return ((comment.get("user") or {}).get("login") or "").lower() in authors
 
 
-def pin(repo, number):
+def same(comment, text):
+    return (comment.get("body") or "").replace("\r\n", "\n").strip() == text.strip()
+
+
+def admit(repo, number, assigned, skip=None):
+    """One snapshot of the pull request, admitted at the assigned head, and the review it is due."""
     pr = get(f"repos/{repo}/pulls/{number}")
+    head = pr["head"]["sha"]
     if pr.get("state") != "open":
         raise Stop(f"stop: {'merged' if pr.get('merged') else 'closed'}; archive your own thread")
     if pr.get("draft"):
@@ -268,11 +290,12 @@ def pin(repo, number):
     ticket = CLOSES.search(pr.get("body") or "")
     if not ticket:
         raise Stop("stop: no Closes line names a ticket")
-    ref = ticket[1] if not ticket[1].startswith("#") else repo + ticket[1]
-    s = review_state(repo, number)
-    head = s["head"]
+    if head != assigned:
+        raise Stop(f"stop: the head is {head}, not the assigned {assigned}")
+    fleet = setting(repo, pr["base"]["ref"], "docs/agents/fleet.md")
+    authors, names = record_authors(fleet), required_checks(fleet)
     runs = get(f"repos/{repo}/commits/{head}/check-runs?per_page=100").get("check_runs", [])
-    names, bad = required_checks(s["fleet"]), []
+    bad = []
     for name in names:
         mine = [x for x in runs if x.get("name") == name]
         latest = max(mine, key=lambda x: (x.get("started_at") or "", x.get("id") or 0), default=None)
@@ -280,44 +303,72 @@ def pin(repo, number):
             bad.append(name)
     if bad:
         raise Stop(f"stop: {', '.join(bad)} is not green at {head}")
-    line = f"review {s['mode']} #{number} at {head}; ticket {ref}; checks {', '.join(names)}"
+    comments = pages(f"repos/{repo}/issues/{number}/comments?per_page=100")
+    records = [c for c in comments if authored(c, authors)]
+    reports = [(n, parse(c["body"].replace("\r\n", "\n"))) for n, c in enumerate(records)
+               if (c.get("body") or "").startswith("VERDICT: ") and not (skip and same(c, skip))]
+    at, last = reports[-1] if reports else (None, None)
+    decision, mode = None, "full"
+    if last is not None and last["state"] == "park":
+        for c in records[at + 1:]:
+            m = DECISION.fullmatch((c.get("body") or "").strip())
+            if m and m[3] == last["head"] and set(re.findall(r"R[1-9][0-9]*", m[2])) == set(last["named"]):
+                decision = {"kind": m[1], "ids": last["named"], "id": c.get("id"),
+                            "polish": re.findall(r"#[1-9][0-9]*", m[4] or "")}
+        if decision is None or (decision["kind"] == "log and merge" and not decision["polish"]):
+            raise Stop(f"stop: {ids_text(last['named'])} is parked as a decision for Jake")
+        if decision["kind"] == "log and merge":
+            if head != last["head"]:
+                raise Stop(f"stop: the log-and-merge decision is for {last['head']}, not {head}")
+            mode = "log-and-merge"
+        else:
+            mode = "final"
+    elif last is not None and last["state"] is None:
+        raise Stop("stop: the last report has no Next: line; ask the orchestrator")
+    elif last is not None:
+        mode = "final" if last["state"] == "fresh" else "re-check"
+    if last is not None and last["head"] == head and mode != "log-and-merge":
+        raise Stop(f"stop: already reported at {head}")
+    ref = ticket[1] if not ticket[1].startswith("#") else repo + ticket[1]
+    return {"pr": pr, "head": head, "ticket": ref, "checks": names, "authors": authors,
+            "comments": comments, "last": last, "mode": mode, "decision": decision}
+
+
+def pin(repo, number, assigned):
+    s = admit(repo, number, assigned)
+    line = f"review {s['mode']} #{number} at {s['head']}; ticket {s['ticket']}; checks {', '.join(s['checks'])}"
     if s["last"] is not None:
-        if s["last"]["head"] == head:
-            raise Stop(f"stop: already reported at {head}")
         ids = [int(f["id"][1:]) for f in s["last"]["findings"]]
         line += (f"; last read {s['last']['head']}; open {ids_text(open_blockers(s['last']))}; "
                  f"next id R{max(ids, default=0) + 1}")
     return line
 
 
-def report_problems(path, repo, number):
+def report_problems(path, repo, number, assigned):
     text = Path(path).read_text(encoding="utf-8").replace("\r\n", "\n")
-    s = review_state(repo, number, skip=text)
-    problems = check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"])
-    if s["last"] and s["last"]["head"] == s["head"]:
-        problems.append(f"already reported at {s['head']}")
-    return text, s, problems
+    s = admit(repo, number, assigned, skip=text)
+    return text, s, check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"], s["decision"])
 
 
-def find_comment(repo, number, text):
-    for c in pages(f"repos/{repo}/issues/{number}/comments?per_page=100"):
-        if (c.get("body") or "").replace("\r\n", "\n").strip() == text.strip():
-            return c
-    return None
-
-
-def post(path, repo, number):
-    text, s, problems = report_problems(path, repo, number)
-    found = find_comment(repo, number, text)
-    if found:
-        return f"already posted {found['id']}"
+def post(path, repo, number, assigned):
+    text, s, problems = report_problems(path, repo, number, assigned)
+    mine = [c for c in s["comments"] if authored(c, s["authors"]) and same(c, text)]
+    if mine:  # this exact report, naming this head, already stands as a record
+        return f"already posted {mine[0]['id']}"
     if problems:
         raise Stop("\n".join(problems))
-    gh("-X", "POST", f"repos/{repo}/issues/{number}/comments", "--input", "-", data=json.dumps({"body": text}))
-    found = find_comment(repo, number, text)
+    before = {c.get("id") for c in s["comments"]}
+    code, made = gh("-X", "POST", f"repos/{repo}/issues/{number}/comments", "--input", "-",
+                    data=json.dumps({"body": text}))
+    if code == 0 and isinstance(made, dict) and made.get("id") is not None:
+        back = gh(f"repos/{repo}/issues/comments/{made['id']}")[1]
+        found = back if isinstance(back, dict) and same(back, text) else None
+    else:  # the response was lost: only a new comment of this report counts
+        found = next((c for c in pages(f"repos/{repo}/issues/{number}/comments?per_page=100")
+                      if c.get("id") not in before and same(c, text)), None)
     if not found:
         raise Stop("unknown: not found on read-back; read the comments before posting again")
-    if ((found.get("user") or {}).get("login") or "").lower() not in s["authors"]:
+    if not authored(found, s["authors"]):
         raise Stop(f"posted {found['id']} by an account that is not a record author; it will not count")
     return f"posted {found['id']}"
 
@@ -367,7 +418,7 @@ def main(argv=None):
             c.add_argument("report")
         c.add_argument("--repo", required=True)
         c.add_argument("--pr", required=True, type=int)
-        c.add_argument("--head")
+        c.add_argument("--head", required=True, help="the assigned head, all 40 characters")
     f = sub.add_parser("follow-up")
     for name in ("repo", "ticket", "spec", "pr", "head", "id", "title", "finding"):
         f.add_argument("--" + name, required=True)
@@ -376,13 +427,13 @@ def main(argv=None):
     a = p.parse_args(argv)
     try:
         if a.command == "pin":
-            print(pin(a.repo, a.pr))
+            print(pin(a.repo, a.pr, a.head))
         elif a.command == "check":
-            problems = report_problems(a.report, a.repo, a.pr)[2]
+            problems = report_problems(a.report, a.repo, a.pr, a.head)[2]
             print("\n".join(problems) if problems else "report ok")
             return 1 if problems else 0
         elif a.command == "post":
-            print(post(a.report, a.repo, a.pr))
+            print(post(a.report, a.repo, a.pr, a.head))
         else:
             print(follow_up(a))
     except Stop as e:

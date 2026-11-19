@@ -1,6 +1,6 @@
 # Re-checks and the final check
 
-Read this when `review.py pin` prints `review re-check` or `review final`. Each pull request gets **one review plus one re-check** (1 + 1, the project's review-loops contract, v2), at most one fresh round and its final check. The fresh round never resets the 1 + 1.
+Read this when `review.py pin` prints `review re-check`, `review final` or `review log-and-merge`. Each pull request gets **one review plus one re-check** (1 + 1, the project's review-loops contract, v2), at most one fresh round and its final check. The fresh round never resets the 1 + 1.
 
 A re-check reads only:
 
@@ -29,6 +29,11 @@ A re-check never opens new narrow cases. In the changed code a new real-user pat
    - with a `Risk:` line stays open, is never logged, and goes to one fresh, stronger builder: `Next: a fresh, stronger builder fixes R2 once, then one final check.` At the final check it parks for Jake: `Next: park R2 as a decision for Jake.`
    - with nothing open: `Next: none open. It merges by the project's merge rules.`
 6. **Post** as in step 4 of the skill. The second paragraph starts `Re-check of <the open ids> and the code changed since <short commit>, by <harness, model, effort>. CI green on this commit: <checks>.`, or `Final check of ...` after the fresh round. `review.py check` refuses a builder line at a re-check, an unlogged `User path:` blocker, a logged `Risk:` blocker, and a dropped or renumbered id.
+
+**Jake's answer to a parked finding** is a record author's `**Orchestrator decision:**` after the park report, naming exactly the parked ids and the head they parked at. With none, `pin` keeps the park stop.
+
+- `fix once more: R2 at <parked head>. Why: ...`: the builder pushes a new green head, and `pin` prints `review final` there. Check it as a final check: the parked ids and the code changed since.
+- `log and merge: R2 at <parked head>. Polish issues: #<n>. Why: ...`: `pin` prints `review log-and-merge` at the parked head itself. Post one report at that head that grades each parked id `[polish]` with the status `Polish issue: #<n>.` from the decision, then `APPROVE` and `Next: none open. It merges by the project's merge rules.`
 
 If `main` is merged in after your `APPROVE` and changes what you approved, `pin` starts a short re-check of that change: your `APPROVE` held only for the commit it named.
 

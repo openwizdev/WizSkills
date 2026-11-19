@@ -530,7 +530,9 @@ class Review(unittest.TestCase):
             "- **R3 [blocking]** still open after the re-check: still logged.\n"
             "  Risk: privacy: a cook's sync token reaches a shared log.",
             "- **R3 [polish]** Polish issue: #64.").replace(
-            "Next: park R3 as a decision for Jake.", "Next: none open. It merges by the project's merge rules.")
+            "Next: park R3 as a decision for Jake.", "Next: none open. It merges by the project's merge rules.").replace(
+            "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60.",
+            "- **R4 [polish]** Polish issue: #60.")
         posted = self.run_helper("post", self.file("approve.md", approve), "--repo", SKILLS, "--pr", "7")
         self.assertEqual(posted.stdout.strip(), "posted 904", posted.stdout + posted.stderr)
         wrong = approve.replace("Polish issue: #64.", "Polish issue: #65.")

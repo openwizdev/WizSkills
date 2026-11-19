@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # Each carried skill's own suites, run from the tree's root. The inventory
 # guard below refuses any newly added suite until this list includes it.
 SUITES = {
+    'check': [['python3', '-I', 'check/test_notice.py']],
     'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py']],
     'triage': [['python3', '-I', 'skills/triage/test/test_find_work.py'],
                ['python3', '-I', 'skills/triage/test/test_public_records.py']],

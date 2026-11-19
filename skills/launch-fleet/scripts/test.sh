@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=817      # includes the two CW-G fresh wake cases
+CASES=816      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -3219,17 +3219,20 @@ EOF
 ### Token cuts (#694) in the skill: no superseded base-moved text, ticks end,
 ### re-checks carry their delta, one probe per batch, keyed scope blockers
 
-# skill_has NAME TEXT / skill_lacks NAME REGEX: one case on SKILL.md beside this folder.
-SKILL=$HERE/../SKILL.md
+# skill_has NAME TEXT / skill_lacks NAME REGEX: one case on the skill's text beside this folder,
+# SKILL.md and its references (WS8 moved branch detail there, #1181).
+SKILL="$HERE/../SKILL.md $HERE/../references/*.md"
 skill_has() {
   [ -z "${TEST_ONLY:-}" ] || [ "$1" = "$TEST_ONLY" ] || return 0
   cases=$((cases + 1))
-  if grep -qF -- "$2" "$SKILL"; then echo "ok   $1"; else bad "$1" "SKILL.md lacks: $2"; fi
+  # shellcheck disable=SC2086 # the list is the skill's own files
+  if cat $SKILL | grep -qF -- "$2"; then echo "ok   $1"; else bad "$1" "SKILL.md lacks: $2"; fi
 }
 skill_lacks() {
   [ -z "${TEST_ONLY:-}" ] || [ "$1" = "$TEST_ONLY" ] || return 0
   cases=$((cases + 1))
-  if grep -qiE -- "$2" "$SKILL"; then bad "$1" "SKILL.md still has: $(grep -iE -- "$2" "$SKILL" | head -n 1)"; else echo "ok   $1"; fi
+  # shellcheck disable=SC2086
+  if cat $SKILL | grep -qiE -- "$2"; then bad "$1" "SKILL.md still has: $(cat $SKILL | grep -iE -- "$2" | head -n 1)"; else echo "ok   $1"; fi
 }
 if take; then
   skill_lacks 'skill: no superseded base-moved merge text' 'base moved'
@@ -3237,7 +3240,7 @@ if take; then
   skill_has 'skill: the brief carries no merge rule' 'The brief is only the prompt above'
   skill_has 'skill: a tick archives itself once its records are written' 'once every record and message is written, archive your own thread'
   skill_lacks 'skill: a tick never stays open for the user' 'leave it open with a one-line verdict'
-  skill_has 'skill: a re-check names its finding ids, both heads and what changed' 'Open findings: <the ids>. Changed since <old head>: git diff <old head> <commit>; the builder'"'"'s answer: <its comment link>.'
+  # The re-check message's ids, both heads and delta: test-brief.py's re-check case (WS8).
   skill_has 'skill: one probe per batch, by assignment' 'start that group'"'"'s first claim alone, the probe'
   skill_has 'skill: the start not tried record' '`start not tried: <why>`'
   skill_has 'skill: a scope blocker is raised once per key' '`look #N: blocked on scope <key>: ...`'
@@ -3455,7 +3458,7 @@ fi
 if [ -z "${TEST_ONLY:-}" ] || [ "$TEST_ONLY" = private-map ]; then
   if take; then
     cases=$((cases + 1))
-    if python3 -I - "$HERE/../SKILL.md" "$tmp/private-map.json" > "$tmp/private-map.log" 2>&1 <<'PY' \
+    if python3 -I - "$HERE/../references/records.md" "$tmp/private-map.json" > "$tmp/private-map.log" 2>&1 <<'PY' \
       && printf '{"specs":[],"singles":[]}' | LAUNCH_FLEET_STATE="$tmp/private-map.json" \
         python3 -I "$HERE/records.py" synthetic-owner/synthetic-repo false >> "$tmp/private-map.log" 2>&1; then
 import json, re, sys
@@ -3469,7 +3472,7 @@ json.dump(state, open(sys.argv[2], 'w'))
 PY
       echo 'ok   private-map'
     else
-      bad private-map "records.py can't read the private map SKILL.md documents"
+      bad private-map "records.py can't read the private map references/records.md documents"
       cat "$tmp/private-map.log"
     fi
   fi

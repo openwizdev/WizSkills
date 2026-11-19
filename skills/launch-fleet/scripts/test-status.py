@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -757,26 +758,28 @@ def span(skill, pattern):
 
 
 def filled(skill, text, values):
-    """A skill's command with its placeholders filled, as an agent fills them."""
-    text = text.replace("<this skill's folder>", str(SKILLS_DIR / skill))
+    """A skill's command with its placeholders filled and quoted, as a shell then reads it."""
+    text = text.replace("<this skill's folder>", shlex.quote(str(SKILLS_DIR / skill)))
     for name, value in values.items():
-        text = text.replace(name, value)
-    return text
+        text = text.replace(name, shlex.quote(value))
+    argv = shlex.split(text)
+    assert argv[:2] == ['python3', '-I'] or argv[0] == 'gh', argv
+    return [sys.executable] + argv[1:] if argv[0] == 'python3' else argv
 
 
 class FleetRun(Tracker):
     """P4 (#1255): the status lines in build-ticket, review-ticket and launch-fleet, run as written."""
 
     def command(self, skill, kind):
-        base = span(skill, r'`S="([^"`]*status\.py write[^"`]*)"`')
+        """The skill's status write, filled for one step: (state, step, *extra) -> argv."""
+        base = span(skill, r'`(python3 -I [^`]*status\.py write [^`]*)`')
         self.assertIsNotNone(base, f'{skill} has no one status write line')
-        text = filled(skill, base, {'<repo>': REPO, '<N>': '12', '<harness>': 'Claude Code', '<model>': 'Opus 5.5 Medium',
-                                    '<skills>': f'{skill}@{VERSION}'})
-        self.assertNotRegex(text, '<[^>]*>', f'{skill}: a placeholder the agent cannot fill')
-        argv = text.split(' ')
-        self.assertEqual(argv[:2], ['python3', '-I'])
-        self.assertIn(f'--agent {kind}', text)
-        return [sys.executable] + argv[1:]
+        self.assertIn(f' --agent {kind} ', base)
+        values = {'<repo>': REPO, '<N>': '12', '<harness>': 'Claude Code', '<model>': 'Opus 5.5 Medium',
+                  '<skills>': f'{skill}@{VERSION}'}
+        self.assertEqual(set(re.findall('<[^<>]*>', base)) - {"<this skill's folder>"},
+                         set(values) | {'<state>', '<step>'}, f'{skill}: a placeholder the agent cannot fill')
+        return lambda state, step, *extra: filled(skill, base, dict(values, **{'<state>': state, '<step>': step})) + list(extra)
 
     def step(self, argv, *extra):
         env = dict(os.environ, PATH=str(self.dir / 'bin') + ':' + os.environ['PATH'],
@@ -811,8 +814,8 @@ class FleetRun(Tracker):
         review = self.command('review-ticket', 'reviewer')
         pr = 'https://github.com/example/tracker/pull/31'
 
-        def run(argv, state, step, *extra):
-            result = self.step(argv, '--state', state, '--step', step, *extra)
+        def run(command, state, step, *extra):
+            result = self.step(command(state, step, *extra))
             self.assertEqual(result.returncode, 0, result.stderr)
             return result.stdout
 
@@ -842,9 +845,7 @@ class FleetRun(Tracker):
         fix = span('launch-fleet', r'`(gh issue edit [^`]*--add-label needs-info[^`]*)`')
         self.assertIsNotNone(check, 'launch-fleet has no one status check call')
         self.assertIsNotNone(fix, 'launch-fleet has no one needs-info fix')
-        check = filled('launch-fleet', check, {'<owner>/<repo>': REPO}).split(' ')
-        self.assertEqual(check[:2], ['python3', '-I'])
-        check = [sys.executable] + check[1:]
+        check = filled('launch-fleet', check, {'<owner>/<repo>': REPO})
         seen = self.step(check)
         self.assertEqual(seen.returncode, 1, seen.stderr)
         lines = seen.stdout.splitlines()
@@ -855,7 +856,7 @@ class FleetRun(Tracker):
         for line in lines:
             if line.endswith(': no needs-info label'):
                 n = line.split(' ')[0][1:]
-                done = self.step(filled('launch-fleet', fix, {'<N>': n, '<owner>/<repo>': REPO}).split(' '))
+                done = self.step(filled('launch-fleet', fix, {'<N>': n, '<owner>/<repo>': REPO}))
                 self.assertEqual(done.returncode, 0, done.stderr)
         run(build, 'done', 'merged', *mine, '--pr', pr)
 

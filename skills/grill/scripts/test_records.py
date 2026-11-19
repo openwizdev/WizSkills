@@ -36,9 +36,10 @@ if args[:1] != ["api"]:
 url = args[-1]
 repo = "repos/example/private"
 if url == repo:
-    response = {"full_name": "example/private", "private": s["private"]}
+    response = {"full_name": "example/private", "private": s["private"],
+                "visibility": s["visibility"]}
 elif url == repo + "/pulls/7":
-    response = {"number": 7, "state": s["pr_state"], "head": {"sha": s["head"]}}
+    response = {"number": 7, "state": s["pr_state"], "head": {"sha": s["head"], "repo": {"full_name": s["head_repo"]}}}
 elif url == repo + "/contents/" + s["file"] + "?ref=" + s["head"]:
     response = {"encoding": "base64", "content": s["source"], "path": s["file"]}
 elif url == repo + "/issues/7/comments":
@@ -79,7 +80,7 @@ class Records(unittest.TestCase):
         gh.chmod(0o700)
         self.fixture = self.root / "fixture.json"
         self.write_state(private=True, writes=0, comments=[], lose=False, drop=False,
-                         pr_state="open", file=FILE,
+                         pr_state="open", visibility="private", head_repo=REPO, file=FILE,
                          head=HEAD, source=self.encoded(ROUND))
 
     @staticmethod
@@ -263,6 +264,38 @@ class Records(unittest.TestCase):
                          [old["questions"][1] | {"decides": "Save as text?"}])
         self.assertNotEqual(current["fingerprint"], old["fingerprint"])
         self.assertEqual(current["answered"], [])
+
+
+    def test_internal_visibility_cannot_receive_exact_records(self):
+        self.write_state(visibility="internal")
+        result = self.call("publish", "round-one")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(self.state()["writes"], 0)
+
+    def test_foreign_pr_head_cannot_supply_saved_wording(self):
+        self.write_state(head_repo="example/other")
+        result = self.call("publish", "round-one")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(self.state()["writes"], 0)
+
+    def test_context_follows_one_grill_even_if_answer_names_another(self):
+        record = self.publish()
+        payload = b"N2 yes\nP2 yes"
+        other = str(self.root / "other-answer")
+        message = self.contextual(record, payload)
+        result = subprocess.run(
+            [sys.executable, "-I", str(HELPER), REPO, "7",
+             "docs/grills/2099-01-01-other.md", "match", message, other],
+            cwd=self.root, capture_output=True,
+            env=os.environ | {"FIXTURE": str(self.fixture),
+                              "PATH": str(self.root) + os.pathsep + os.environ["PATH"]},
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse(Path(other).exists())
+        output = self.root / "own-answer"
+        result = self.call("match", message, str(output))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output.read_bytes(), payload)
 
 
 if __name__ == "__main__":

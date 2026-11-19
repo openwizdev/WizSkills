@@ -1,38 +1,46 @@
 #!/usr/bin/env python3
 """build-ticket's lookups and records. Python 3.11+ standard library, `gh`, `git`.
 
-  ticket.py read REPO N                     the ticket's owned paths, links and readiness
-  ticket.py scope REPO N [--base REF] [--supporting PATH]...
+  ticket.py read REPO N                     owned paths, links, blockers, fleet start, readiness
+  ticket.py scope REPO N [--base REF] [--supporting PATH]... [--owned PATH]...
                                             every changed path: owned, supporting or OUT
-  ticket.py records REPO PR [--fleet-ref REF]
-                                            the newest record-author verdict and decision
+  ticket.py records REPO N [--ticket] [--fleet-ref REF]
+                                            trusted verdict and bound decision on pull request N,
+                                            or with --ticket the newest trusted records on ticket N
   ticket.py author                          set git's author to the GitHub user's noreply
   ticket.py push RECEIPT -- PUSH-COMMAND... run the push; keep the first success's receipt
-  ticket.py post-receipt REPO PR RECEIPT    post the receipt once, read back
+  ticket.py post-receipt REPO PR RECEIPT    post the receipt once as a record author, read back
 
 Exit 0 done, 1 refused (the last line says why), 2 an input it cannot read.
 It prints a short result, never a log, and writes only what its command names.
+Record authors come only from the `## GitHub identity` table of docs/agents/fleet.md
+at the fleet ref (default origin/main); without one valid row it trusts nobody.
 """
 from datetime import datetime, timezone
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 
 LOGIN = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?')
-SHA = re.compile(r'\b[0-9a-f]{40}\b')
-REPO_QUALIFIER = re.compile(r'\s+in\s+`[\w.-]+/[\w.-]+`\s*$')
+REPO_NAME = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
+VERDICT = re.compile(r'VERDICT: (APPROVE|CHANGES) at ([0-9a-f]{40})')
+FINDINGS = r'R\d+(?:(?:,? and |, )R\d+)*'
+DECISION = re.compile(r'\*\*Orchestrator decision:\*\* (fix once more|log and merge): '
+                      rf'({FINDINGS}) at ([0-9a-f]{{40}})\b')
+PARK = re.compile(rf'Next: park ({FINDINGS}) as a decision for Jake\.')
+START = re.compile(r'launch-fleet: (?:started|start checked)\b')
+POST_TIMEOUT = 30
 
 
 class Unreadable(Exception):
     pass
 
 
-def run(argv, what):
+def run(argv, what, timeout=120):
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         raise Unreadable(f'cannot read {what}')
     if r.returncode:
@@ -47,9 +55,9 @@ def gh_json(argv, what):
         raise Unreadable(f'cannot read {what}: not JSON')
 
 
-def section(body, heading):
+def section(text, heading):
     lines, inside = [], False
-    for line in body.splitlines():
+    for line in text.splitlines():
         if line.startswith('## '):
             inside = line[3:].strip().lower() == heading
             continue
@@ -58,19 +66,35 @@ def section(body, heading):
     return lines
 
 
-def owned_paths(body):
-    """[(path or None, text)] for each bullet under `## Owned paths`."""
+def owned_bullets(body, ticket_repo):
+    """[{'text', 'paths': [(path, repo)], 'annotated', 'note'}] for each `## Owned paths` bullet.
+
+    A path is bound to the bullet's `in `owner/repo`` qualifier, else to the ticket's
+    repository. A bullet with words besides its paths, qualifiers and one note is
+    annotated: its paths are listed, and their conditions stay with the builder.
+    """
     out = []
     for line in section(body, 'owned paths'):
         if not line.startswith('- '):
             continue
         text = line[2:].strip()
-        bare = REPO_QUALIFIER.sub('', text)
-        m = re.match(r'`([^`\s]+)`(.*)$', bare)
-        if m and m.group(1).strip() and '..' not in m.group(1).split('/'):
-            out.append((m.group(1), (m.group(1) + m.group(2)).strip()))
-        else:
-            out.append((None, text))
+        tokens = list(re.finditer(r'`([^`]*)`', text))
+        repos = {m.group(1).lower() for m in tokens
+                 if REPO_NAME.fullmatch(m.group(1)) and text[:m.start()].endswith('in ')}
+        paths = [m.group(1) for m in tokens
+                 if m.group(1).lower() not in repos and m.group(1).strip() == m.group(1)
+                 and m.group(1) and ' ' not in m.group(1) and not m.group(1).startswith('/')
+                 and '..' not in m.group(1).split('/') and '<' not in m.group(1)]
+        if len(repos) > 1:
+            paths = []
+        repo = next(iter(repos)) if repos else ticket_repo.lower()
+        rest = re.sub(r'`[^`]*`', '', text)
+        notes = re.findall(r'\([^()]*\)', rest)
+        rest = re.sub(r'\([^()]*\)', '', rest)
+        plain = not re.sub(r'\b(in|and)\b|[,\s]', '', rest)
+        out.append({'text': text, 'paths': [(p, repo) for p in paths],
+                    'annotated': bool(paths) and not plain,
+                    'note': notes[0] if plain and len(paths) == 1 and len(notes) == 1 else ''})
     return out
 
 
@@ -82,99 +106,29 @@ def ticket(repo, n):
     return data
 
 
-def nodes(data, key):
-    value = data.get(key) or {}
-    return [x for x in value.get('nodes', []) if isinstance(x, dict)]
+def links(data, key):
+    value = data.get(key)
+    nodes = value.get('nodes') if isinstance(value, dict) else None
+    if (not isinstance(nodes, list) or not all(isinstance(x, dict) for x in nodes)
+            or value.get('totalCount') != len(nodes)):
+        raise Unreadable(f'cannot read ticket links: incomplete blocker data in {key}')
+    return nodes
 
 
-def cmd_read(repo, n):
-    t = ticket(repo, n)
-    labels = sorted(l.get('name', '') for l in t.get('labels', []))
-    print(f'ticket #{t["number"]}: {t["title"]}')
-    print(f'state: {t["state"]}; labels: {", ".join(labels) or "none"}')
-    parent = t.get('parent') or {}
-    print(f'spec: #{parent["number"]}' if parent.get('number') else 'spec: none')
-    owned = owned_paths(t['body'])
-    for path, text in owned:
-        print(f'owned: {text}' if path else f'owned, not a path: {text}')
-    relies = [l for l in t['body'].splitlines() if l.startswith('**Relies on:**')]
-    for line in relies:
-        print('relies on: ' + line[len('**Relies on:**'):].strip())
-    blockers = nodes(t, 'blockedBy')
-    for b in blockers:
-        print(f'blocked by: #{b.get("number")} {b.get("state")}')
-    for b in nodes(t, 'blocking'):
-        print(f'blocks: #{b.get("number")} {b.get("state")}')
-    open_blockers = [b for b in blockers if b.get('state') != 'CLOSED']
-    if t['state'] != 'OPEN':
-        why = f'the ticket is {t["state"]}'
-    elif 'ready-for-agent' not in labels:
-        why = 'no ready-for-agent label'
-    elif 'needs-info' in labels:
-        why = 'needs-info is open'
-    elif open_blockers:
-        why = ', '.join(f'#{b.get("number")}' for b in open_blockers) + ' is open'
-    elif not any(path for path, _ in owned):
-        why = 'no owned paths'
-    else:
-        print('ready: yes')
-        return 0
-    print(f'ready: no: {why}')
-    return 1
-
-
-def covers(rule, path):
-    return path.startswith(rule) if rule.endswith('/') else path == rule
-
-
-def changed(base):
-    run(['git', 'rev-parse', '--verify', '--quiet', base + '^{commit}'], f'base {base}')
-    paths = set()
-    diff = run(['git', 'diff', '--name-status', '-z', '--find-renames', f'{base}...HEAD'], 'the diff')
-    fields = diff.split('\0')
-    i = 0
-    while i < len(fields) and fields[i]:
-        status = fields[i]
-        count = 2 if status[:1] in ('R', 'C') else 1
-        paths.update(fields[i + 1:i + 1 + count])
-        i += 1 + count
-    status = run(['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], 'git status')
-    fields = status.split('\0')
-    i = 0
-    while i < len(fields) and fields[i]:
-        entry = fields[i]
-        paths.add(entry[3:])
-        if entry[:1] in ('R', 'C') or entry[1:2] in ('R', 'C'):
-            i += 1
-            paths.add(fields[i])
-        i += 1
-    return sorted(p for p in paths if p)
-
-
-def cmd_scope(repo, n, base, supporting):
-    owned = [path for path, _ in owned_paths(ticket(repo, n)['body']) if path]
-    paths = changed(base)
-    outside = 0
-    for path in paths:
-        if any(covers(rule, path) for rule in owned):
-            print(f'owned: {path}')
-        elif any(covers(rule, path) for rule in supporting):
-            print(f'supporting: {path}')
-        else:
-            print(f'OUT: {path}')
-            outside += 1
-    if outside:
-        print(f'scope: {outside} path(s) outside the owned paths: ask first')
-        return 1
-    print('scope: ok')
-    return 0
+def blocker_reason(node):
+    m = re.match(r'https://github\.com/([^/]+/[^/]+)/issues/\d+$', str(node.get('url', '')))
+    if not m:
+        raise Unreadable(f'cannot read blocker #{node.get("number")}: no repository')
+    data = gh_json(['issue', 'view', str(node['number']), '--repo', m.group(1), '--json',
+                    'state,stateReason'], f'blocker #{node["number"]}')
+    return data.get('state'), data.get('stateReason')
 
 
 def record_authors(ref):
     text = run(['git', 'show', f'{ref}:docs/agents/fleet.md'], f'docs/agents/fleet.md at {ref}')
-    rows = [l for l in text.splitlines() if re.match(r'\|\s*Record authors\s*\|', l)]
+    rows = [l for l in section(text, 'github identity') if re.match(r'\|\s*Record authors\s*\|', l)]
     if len(rows) != 1:
-        raise Unreadable('no single Record authors row: trust nobody')
+        raise Unreadable('no single Record authors row in the GitHub identity table: trust nobody')
     cell = rows[0].split('|')[2].strip()
     logins = [x.strip() for x in cell.split(',')] if cell else []
     names = [x[1:-1] if len(x) > 1 and x[0] == x[-1] == '`' else '' for x in logins]
@@ -197,31 +151,178 @@ def author_of(comment):
     return login.lower() if isinstance(login, str) else None
 
 
-def cmd_records(repo, pr, ref):
+def first_line(comment):
+    return next((l.strip() for l in str(comment.get('body', '')).splitlines() if l.strip()), '')
+
+
+def cmd_read(repo, n, ref):
+    t = ticket(repo, n)
+    blockers, blocking = links(t, 'blockedBy'), links(t, 'blocking')
+    labels = sorted(l.get('name', '') for l in t.get('labels', []))
+    print(f'ticket #{t["number"]}: {t["title"]}')
+    print(f'state: {t["state"]}; labels: {", ".join(labels) or "none"}')
+    parent = t.get('parent') or {}
+    print(f'spec: #{parent["number"]}' if parent.get('number') else 'spec: none')
+    bullets = owned_bullets(t['body'], repo)
+    for b in bullets:
+        if not b['paths']:
+            print(f'owned, not a path: {b["text"]}')
+        for path, prepo in b['paths']:
+            if b['annotated']:
+                print(f'owned, check the bullet: {path} in {prepo}')
+            else:
+                print(f'owned: {path} in {prepo}' + (f' {b["note"]}' if b['note'] else ''))
+        if b['annotated']:
+            print(f'bullet: {b["text"]}')
+    for line in t['body'].splitlines():
+        if line.startswith('**Relies on:**'):
+            print('relies on: ' + line[len('**Relies on:**'):].strip())
+    reasons = {}
+    for b in blockers:
+        reasons[b.get('number')] = blocker_reason(b) if b.get('state') == 'CLOSED' else (b.get('state'), None)
+        print(f'blocked by: #{b.get("number")} {" ".join(x for x in reasons[b.get("number")] if x)}')
+    for b in blocking:
+        print(f'blocks: #{b.get("number")} {b.get("state")}')
     authors = record_authors(ref)
-    items = comments(repo, pr)
-    head = gh_json(['api', f'repos/{repo}/pulls/{pr}'], f'pull request #{pr}')
-    head = (head.get('head') or {}).get('sha') if isinstance(head, dict) else None
+    starts = [c for c in comments(repo, n) if author_of(c) in authors and START.match(first_line(c))]
+    if starts:
+        print(f'start: comment {starts[-1].get("id")} by {author_of(starts[-1])}: {first_line(starts[-1])}')
+    open_blockers = [b for b in blockers if reasons[b.get('number')][0] != 'CLOSED']
+    unfinished = [b for b in blockers if reasons[b.get('number')][0] == 'CLOSED'
+                  and reasons[b.get('number')][1] != 'COMPLETED']
+    if t['state'] != 'OPEN':
+        why = f'the ticket is {t["state"]}'
+    elif 'ready-for-agent' not in labels:
+        why = 'no ready-for-agent label'
+    elif 'needs-info' in labels:
+        why = 'needs-info is open'
+    elif open_blockers:
+        why = ', '.join(f'#{b.get("number")}' for b in open_blockers) + ' is open'
+    elif unfinished:
+        b = unfinished[0]
+        why = f'#{b.get("number")} was closed as {reasons[b.get("number")][1] or "unknown"}'
+    elif not any(b['paths'] for b in bullets):
+        why = 'no owned paths'
+    elif not starts:
+        why = 'no launch-fleet start record from a record author'
+    else:
+        print('ready: yes')
+        return 0
+    print(f'ready: no: {why}')
+    return 1
+
+
+def covers(rule, path):
+    return path.startswith(rule) if rule.endswith('/') else path == rule
+
+
+def changed(base):
+    run(['git', 'rev-parse', '--verify', '--quiet', base + '^{commit}'], f'base {base}')
+    paths = set()
+    fields = run(['git', 'diff', '--name-status', '-z', '--find-renames', f'{base}...HEAD'],
+                 'the diff').split('\0')
+    i = 0
+    while i < len(fields) and fields[i]:
+        count = 2 if fields[i][:1] in ('R', 'C') else 1
+        paths.update(fields[i + 1:i + 1 + count])
+        i += 1 + count
+    fields = run(['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+                 'git status').split('\0')
+    i = 0
+    while i < len(fields) and fields[i]:
+        entry = fields[i]
+        paths.add(entry[3:])
+        if entry[:1] in ('R', 'C') or entry[1:2] in ('R', 'C'):
+            i += 1
+            paths.add(fields[i])
+        i += 1
+    return sorted(p for p in paths if p)
+
+
+def cmd_scope(repo, n, base, supporting, by_hand):
+    here = gh_json(['repo', 'view', '--json', 'nameWithOwner'], 'the checkout repository')
+    here = here.get('nameWithOwner', '') if isinstance(here, dict) else ''
+    if not REPO_NAME.fullmatch(here):
+        raise Unreadable('cannot read the checkout repository')
+    here = here.lower()
+    bullets = owned_bullets(ticket(repo, n)['body'], repo)
+    plain = [p for b in bullets if not b['annotated'] for p, r in b['paths'] if r == here]
+    annotated = [p for b in bullets if b['annotated'] for p, r in b['paths'] if r == here]
+    if by_hand and not any(b['annotated'] and any(r == here for _, r in b['paths']) for b in bullets):
+        raise Unreadable('--owned: no annotated owned bullet for this repository: ask first')
+    outside = 0
+    for path in changed(base):
+        if any(covers(rule, path) for rule in plain):
+            print(f'owned: {path}')
+        elif any(covers(rule, path) for rule in annotated):
+            print(f'owned, check the bullet: {path}')
+        elif any(covers(rule, path) for rule in by_hand):
+            print(f'owned, resolved by hand: {path}')
+        elif any(covers(rule, path) for rule in supporting):
+            print(f'supporting: {path}')
+        else:
+            print(f'OUT: {path}')
+            outside += 1
+    if outside:
+        print(f'scope: {outside} path(s) outside the owned paths: ask first')
+        return 1
+    print('scope: ok')
+    return 0
+
+
+def ids(text):
+    return set(re.findall(r'R\d+', text))
+
+
+def cmd_records(repo, n, ref, on_ticket):
+    authors = record_authors(ref)
+    items = comments(repo, n)
     trusted = [c for c in items if author_of(c) in authors]
     print('authors: ' + ', '.join(authors))
-    verdicts = [c for c in trusted if str(c.get('body', '')).lstrip().startswith('VERDICT:')]
+    if on_ticket:
+        fleet = [c for c in trusted if first_line(c).startswith('launch-fleet:')]
+        other = [c for c in trusted if c not in fleet]
+        for label, found in (('record', other), ('launch-fleet', fleet)):
+            c = found[-1] if found else None
+            print(f'{label}: comment {c.get("id")} by {author_of(c)}: {first_line(c)}' if c
+                  else f'{label}: none')
+        print(f'ignored: {len(items) - len(trusted)} comment(s) not by a record author')
+        return 0
+    pr = gh_json(['api', f'repos/{repo}/pulls/{n}'], f'pull request #{n}')
+    head = (pr.get('head') or {}).get('sha') if isinstance(pr, dict) else None
+    if not isinstance(head, str) or not re.fullmatch(r'[0-9a-f]{40}', head):
+        raise Unreadable(f'cannot read the head of pull request #{n}')
+    verdicts = [(c, VERDICT.fullmatch(first_line(c))) for c in trusted]
+    verdicts = [(c, m) for c, m in verdicts if m]
     if verdicts:
-        v = verdicts[-1]
-        body = str(v.get('body', ''))
-        named = SHA.search(body)
-        named = named.group(0) if named else 'no head'
-        current = 'yes' if head and named == head else f'no ({head or "unknown"})'
-        print(f'verdict: comment {v.get("id")} by {author_of(v)} at {named}, current head: {current}')
-        nxt = [l.strip() for l in body.splitlines() if l.strip().startswith('Next:')]
+        c, m = verdicts[-1]
+        current = 'yes' if m.group(2) == head else f'no ({head})'
+        print(f'verdict: comment {c.get("id")} by {author_of(c)}: {m.group(1)} at {m.group(2)}, '
+              f'current head: {current}')
+        nxt = [l.strip() for l in str(c.get('body', '')).splitlines() if l.strip().startswith('Next:')]
         print('next: ' + (nxt[-1] if nxt else 'none'))
     else:
         print('verdict: none')
-    decisions = [c for c in trusted
-                 if str(c.get('body', '')).lstrip().startswith('**Orchestrator decision:**')]
+    decisions = [c for c in trusted if first_line(c).startswith('**Orchestrator decision:**')]
     if decisions:
-        d = decisions[-1]
-        first = str(d.get('body', '')).strip().splitlines()[0]
-        print(f'decision: comment {d.get("id")} by {author_of(d)}: {first}')
+        c = decisions[-1]
+        m = DECISION.match(first_line(c))
+        if not m:
+            bound = 'no: not a decision line'
+        elif m.group(3) != head:
+            bound = f'no: {m.group(3)} is not the current head'
+        else:
+            parked = set()
+            for v, vm in verdicts:
+                if vm.group(2) == m.group(3):
+                    nxt = PARK.search(str(v.get('body', '')))
+                    parked = ids(nxt.group(1)) if nxt else set()
+            missing = sorted(ids(m.group(2)) - parked)
+            bound = f'no: {", ".join(missing)} was not parked at {head}' if missing else 'yes'
+        summary = f'{m.group(1)} {m.group(2)} at {m.group(3)}' if m else first_line(c)
+        print(f'decision: comment {c.get("id")} by {author_of(c)}: {summary}, bound: {bound}')
+    else:
+        print('decision: none')
     print(f'ignored: {len(items) - len(trusted)} comment(s) not by a record author')
     return 0
 
@@ -249,15 +350,38 @@ def outside_checkout(path):
     return target
 
 
+def earlier_push(branch):
+    """True when origin's branch already holds work not on origin/main, None if unknown."""
+    try:
+        out = run(['git', 'ls-remote', 'origin', f'refs/heads/{branch}'], 'the remote branch')
+    except Unreadable:
+        return None
+    sha = out.split()[0] if out.split() else None
+    if sha is None:
+        return False
+    known = subprocess.run(['git', 'cat-file', '-e', f'{sha}^{{commit}}'], capture_output=True)
+    if known.returncode:
+        return True
+    base = subprocess.run(['git', 'merge-base', '--is-ancestor', sha, 'origin/main'], capture_output=True)
+    return base.returncode == 1 if base.returncode in (0, 1) else None
+
+
 def cmd_push(receipt, command):
     target = outside_checkout(receipt)
     if not command:
         raise Unreadable('no push command after --')
+    branch = run(['git', 'symbolic-ref', '--short', 'HEAD'], 'the current branch').strip()
+    earlier = None if target.exists() else earlier_push(branch)
     if subprocess.run(command).returncode:
         print('push failed: no receipt')
         return 1
     if target.exists():
         print(f'receipt kept: {target.read_text(encoding="utf-8").strip()}')
+        return 0
+    if earlier is not False:
+        why = f'an earlier push to {branch} has no receipt' if earlier else \
+            f'cannot tell whether {branch} was pushed before'
+        print(f'receipt unknown: {why}; record none')
         return 0
     at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     head = run(['git', 'rev-parse', 'HEAD'], 'HEAD').strip()
@@ -269,59 +393,75 @@ def cmd_push(receipt, command):
     return 0
 
 
-def cmd_post_receipt(repo, pr, receipt):
+def cmd_post_receipt(repo, pr, receipt, ref):
     try:
         body = Path(receipt).read_text(encoding='utf-8')
     except (OSError, UnicodeDecodeError):
         raise Unreadable('cannot read the receipt file')
     if not re.fullmatch(r'First successful push: [0-9a-f]{40} at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n', body):
         raise Unreadable('the receipt file is not one receipt line')
+    authors = record_authors(ref)
 
     def existing():
-        return next((c for c in comments(repo, pr) if c.get('body') == body), None)
+        return next((c for c in comments(repo, pr)
+                     if c.get('body') == body and author_of(c) in authors), None)
 
     found = existing()
     if found:
         print(f'receipt reused: comment {found.get("id")}')
         return 0
-    subprocess.run(['gh', 'api', '--method', 'POST', f'repos/{repo}/issues/{pr}/comments',
-                    '-f', 'body=' + body], capture_output=True, timeout=120)
-    found = existing()
+    try:
+        subprocess.run(['gh', 'api', '--method', 'POST', f'repos/{repo}/issues/{pr}/comments',
+                        '-f', 'body=' + body], capture_output=True, timeout=POST_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        found = existing()
+    except Unreadable:
+        print('receipt unknown: read the pull request before posting again')
+        return 1
     if found:
         print(f'receipt posted: comment {found.get("id")}')
         return 0
-    print('receipt not posted: keep the file and run post-receipt again')
+    print('receipt not posted: no copy by a record author; keep the file and run post-receipt again')
     return 1
 
 
 def main(argv):
     try:
-        if argv[:1] == ['read'] and len(argv) == 3:
-            return cmd_read(argv[1], int(argv[2]))
-        if argv[:1] == ['scope'] and len(argv) >= 3:
-            base, supporting, rest = 'origin/main', [], argv[3:]
-            while rest:
-                if rest[0] == '--base' and len(rest) > 1:
-                    base = rest[1]
-                elif rest[0] == '--supporting' and len(rest) > 1:
-                    supporting.append(rest[1])
-                else:
-                    raise ValueError
-                rest = rest[2:]
-            return cmd_scope(argv[1], int(argv[2]), base, supporting)
-        if argv[:1] == ['records'] and len(argv) in (3, 5):
-            ref = 'origin/main'
-            if len(argv) == 5:
-                if argv[3] != '--fleet-ref':
-                    raise ValueError
-                ref = argv[4]
-            return cmd_records(argv[1], int(argv[2]), ref)
-        if argv == ['author']:
+        args, flags = [], {'--base': [], '--supporting': [], '--owned': [], '--fleet-ref': []}
+        ticket_mode, rest = False, list(argv)
+        if '--' in rest:
+            rest, command = rest[:rest.index('--')], rest[rest.index('--') + 1:]
+        else:
+            command = None
+        while rest:
+            item = rest.pop(0)
+            if item == '--ticket':
+                ticket_mode = True
+            elif item in flags and rest:
+                flags[item].append(rest.pop(0))
+            elif item.startswith('--'):
+                raise ValueError
+            else:
+                args.append(item)
+        ref = flags['--fleet-ref'][-1] if flags['--fleet-ref'] else 'origin/main'
+        name = args[:1]
+        if command is not None and name != ['push']:
+            raise ValueError
+        if name == ['read'] and len(args) == 3 and not ticket_mode:
+            return cmd_read(args[1], int(args[2]), ref)
+        if name == ['scope'] and len(args) == 3 and not ticket_mode and len(flags['--base']) <= 1:
+            base = flags['--base'][0] if flags['--base'] else 'origin/main'
+            return cmd_scope(args[1], int(args[2]), base, flags['--supporting'], flags['--owned'])
+        if name == ['records'] and len(args) == 3:
+            return cmd_records(args[1], int(args[2]), ref, ticket_mode)
+        if name == ['author'] and len(args) == 1:
             return cmd_author()
-        if argv[:1] == ['push'] and len(argv) >= 4 and argv[2] == '--':
-            return cmd_push(argv[1], argv[3:])
-        if argv[:1] == ['post-receipt'] and len(argv) == 4:
-            return cmd_post_receipt(argv[1], int(argv[2]), argv[3])
+        if name == ['push'] and len(args) == 2 and command:
+            return cmd_push(args[1], command)
+        if name == ['post-receipt'] and len(args) == 4:
+            return cmd_post_receipt(args[1], int(args[2]), args[3], ref)
         raise ValueError
     except ValueError:
         print(__doc__.split('\n\n')[1], file=sys.stderr)

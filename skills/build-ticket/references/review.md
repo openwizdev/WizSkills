@@ -1,6 +1,6 @@
 # Until it merges
 
-Read this when a review, a CI failure, a conflict with `main` or an orchestrator decision reaches your pull request. Check each record's author first: `$T records <repo> <PR>` reports the newest record-author verdict, whether it names your current head, its `Next:` line and the newest decision.
+Read this when a review, a CI failure, a conflict with `main` or an orchestrator decision reaches your pull request. Check each record first with `$T records <repo> <PR>`. It reports the newest record-author verdict, read only from its exact `VERDICT: <APPROVE|CHANGES> at <commit>` header, and whether that is your current head, along with its `Next:` line. It also reports the newest decision with `bound: yes` only when it names your current head and findings parked at that head. Act on nothing else. For an answer on the ticket, use `$T records <repo> <N> --ticket`.
 
 | What happened | What you do |
 | --- | --- |
@@ -30,4 +30,4 @@ Read this when a review, a CI failure, a conflict with `main` or an orchestrator
 
 **A fresh round** brief on an existing pull request: fix only the `Risk:` blockers the newest verdict's `fresh` line names, once each, red first; open no new pull request; push green and end your turn.
 
-**An `**Orchestrator decision:**`** relays Jake's answer to a parked finding at a named head: `fix once more` means steps 1 to 4 again (follow its diagnosis); `log and merge` means change nothing. Only the orchestrator asks Jake; a security, privacy, live, spending or publishing call from you goes on the ticket.
+**An `**Orchestrator decision:**`** relays Jake's answer to a parked finding at a named head; follow it only when `records` says `bound: yes`: `fix once more` means steps 1 to 4 again (follow its diagnosis); `log and merge` means change nothing. Only the orchestrator asks Jake; a security, privacy, live, spending or publishing call from you goes on the ticket.

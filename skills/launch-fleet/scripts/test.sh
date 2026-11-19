@@ -2983,6 +2983,25 @@ EOF
 
 # A builder's own fleet thread reaches it; one from before the fleet thread is taken over.
 FINDINGS31='pr31 | pr_say(31; 3101; "11:10"; "launch-fleet: review started \(sha(31)), thread thr_synrev31") | pr_say(31; 3102; "11:20"; "VERDICT: CHANGES at \(sha(31))")'
+# CW-G: independent processes with cold caches share only the durable routing
+# and GitHub fixtures. The first wake must keep the recorded builder, then the
+# next must honour the delivery record without taking over or sending again.
+if selected 'CW-G: route findings to the existing builder' || selected 'CW-G: resume from the recorded delivery'; then
+  printf '%s\n' '{"repo":"synthetic-owner/synthetic-repo","threads":{"builder:12":"thr_syn12","review:31:claim:3101":"thr_synrev31"}}' > "$tmp/fresh-routes.json" || exit 1
+fi
+FRESH_FINDINGS="pr31 | .private = false
+  | edit(12; 1201; \"09:40\"; \"launch-fleet: start checked, branch room/12-w2-widget-store-bbbb\")
+  | pr_say(31; 3101; \"09:41\"; \"launch-fleet: review started \(sha(31))\")
+  | say(10; 1090; \"10:00\"; \"launch-fleet: fleet active, loop fleet-10\\n\\nWake mode: fresh\")
+  | pr_say(31; 3102; \"11:20\"; \"VERDICT: CHANGES at \(sha(31))\")"
+expect 'CW-G: route findings to the existing builder' 0 check.json "$FRESH_FINDINGS" \
+  LAUNCH_FLEET_STATE="$tmp/fresh-routes.json" -- spec 10 <<EOF
+findings #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect 'CW-G: resume from the recorded delivery' 0 check.json \
+  "$FRESH_FINDINGS | pr_say(31; 3103; \"11:21\"; \"launch-fleet: findings sent \(sha(31))\")" \
+  LAUNCH_FLEET_STATE="$tmp/fresh-routes.json" -- spec 10 < /dev/null
+
 expect 'fleet: without a fleet thread, findings go to the recorded builder' 0 check.json "$FINDINGS31" -- spec 10 <<EOF
 findings #31 for #12 at $S31: tell its builder, thread thr_syn12
 EOF
@@ -3718,6 +3737,7 @@ case ${TEST_ONLY:-} in
   'GI1:*') expected=16 ;;
   'WZ-PROBE:*') expected=3 ;;
   'GI2:*') expected=13 ;;
+  'CW-G:*') expected=2 ;;
 esac
 [ "$cases" = "$expected" ] || bad 'the selected cases ran' "$cases cases ran, not $expected: is \"$TEST_ONLY\" a case's name?"
 

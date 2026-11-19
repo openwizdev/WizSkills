@@ -167,6 +167,35 @@ class CLI(unittest.TestCase):
             self.assertAlmostEqual(left["log_strength"] - right["log_strength"],
                                    1.6094379124341003, places=7)
 
+    def test_odds_against_the_baseline_come_from_the_fit(self):
+        # catches: chart odds computed by dividing display strengths, or
+        # against the wrong baseline. A won 3.5:1.5 with the prior (.7:.3).
+        rows = series() + series(first="left", second="left")
+        odds = self.good("odds", results(rows), "--baseline", "B")
+        self.assertEqual(odds["baseline"], "B")
+        self.assertEqual([row["id"] for row in odds["odds"]], ["A", "B"])
+        self.assertAlmostEqual(odds["odds"][0]["beats_baseline"], 0.7, places=7)
+        self.assertEqual(odds["odds"][1]["beats_baseline"], 0.5)
+
+    def test_odds_stay_finite_when_display_strengths_underflow(self):
+        # catches: 0/0 or NaN when both strengths underflow to zero. Each
+        # chain step is exactly 5:1, so C0001 beats C0000 with 5/6.
+        names = [f"C{i:04d}" for i in range(501)]
+        data = {**manifest(),
+                "candidates": [{"id": name, "family": "openai"} for name in names],
+                "comparisons": [row for a, b in zip(names, names[1:])
+                                for row in series(a, b, "right", "left")]}
+        odds = {row["id"]: row["beats_baseline"]
+                for row in self.good("odds", data, "--baseline", "C0000")["odds"]}
+        self.assertAlmostEqual(odds["C0001"], 5 / 6, places=7)
+        self.assertEqual(odds["C0500"], 1.0)
+        self.assertTrue(all(0 <= value <= 1 for value in odds.values()))
+
+    def test_odds_refuse_an_unknown_or_missing_baseline(self):
+        # catches: a chart against a baseline that is not in the stretch.
+        self.bad("odds", results(), "--baseline", "Z")
+        self.bad("odds", results())
+
     def test_rank_refuses_missing_reverse_and_unbalanced_repeats(self):
         for rows in ([], series()[:1], series() + series()[:1]):
             self.bad("rank", results(rows))

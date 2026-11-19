@@ -290,6 +290,9 @@ class CouncilInstructions(unittest.TestCase):
 
     def test_judges_never_see_the_target(self):
         self.rule("Judges never see the score being aimed for")
+        # R3: a brief that names the stop tells judges what their scores trigger.
+        self.rule("A judge's brief holds the frozen rubric, the 1–10 scale, the categories "
+                  "and the blind artifacts; never the stop condition")
 
     def test_cheapest_judge_first_with_each_judges_scores_recorded(self):
         self.rule("Run the cheapest judge alone until it is satisfied, then seat the whole council")
@@ -298,6 +301,13 @@ class CouncilInstructions(unittest.TestCase):
     def test_checkpoint_shows_annotated_before_and_after_and_the_score_table(self):
         self.assertIn("before and after images with arrows and short notes on what changed, "
                       "plus the per-round score table", self.text)
+
+    def test_council_chart_keeps_reference_series_and_per_judge_table(self):
+        # R2: a chart of candidate scores alone hides the comparison with the
+        # named benchmarks round by round.
+        self.assertIn("each category's council mean per round for the round's best candidate "
+                      "and for each reference", self.text)
+        self.assertIn("keep the per-judge `table` output behind it", self.text)
 
 
 if __name__ == "__main__":

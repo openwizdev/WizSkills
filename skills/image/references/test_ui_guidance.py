@@ -63,7 +63,7 @@ class UIGuidance(unittest.TestCase):
         self.contains(image, "one synthetic content packet", "same packet")
 
     def test_05_critique_passes_and_locatable_defects(self):
-        critique = self.section("hill-climb/SKILL.md", "Screenshot critique", "###")
+        critique = self.section("image/references/ui-craft.md", "Screenshot critique")
         self.contains(critique, "First-visible answer", "Visual masses and hierarchy",
                       "Alignment and accidental voids", "Type and contrast",
                       "Content fullness", "Phone composition", "Detailed defects",

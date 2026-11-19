@@ -10,11 +10,13 @@
   loop.py tag
       Print a fresh debug prefix such as `[DEBUG-a4f2]`.
   loop.py clean PREFIX
-      In the current Git work tree, search tracked and untracked, not ignored,
-      files for PREFIX. Exit 0 `clean: ...` when none is left, 1 `left: ...`
-      naming each file:line, 2 outside a Git tree or for a PREFIX that is not
-      `[DEBUG-xxxx]`-shaped.
+      From the root of the Git work tree around the current directory, from
+      any subdirectory, search tracked and untracked, not ignored, files for
+      PREFIX. Exit 0 `clean: ...` when none is left, 1 `left: ...` naming each
+      root-relative file:line, 2 outside a Git tree or for a PREFIX that is
+      not `[DEBUG-xxxx]`-shaped.
 """
+import os
 import re
 import secrets
 import subprocess
@@ -69,14 +71,18 @@ def clean(args):
     if len(args) != 1 or not TAG.fullmatch(args[0]):
         refuse('usage: loop.py clean [DEBUG-xxxx]')
     prefix = args[0]
-    listed = subprocess.run(['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
-                            capture_output=True)
-    if listed.returncode != 0:
+    top = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True)
+    if top.returncode != 0:
         refuse('not inside a Git work tree')
+    root = os.fsdecode(top.stdout.rstrip(b'\n'))
+    listed = subprocess.run(['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+                            cwd=root, capture_output=True)
+    if listed.returncode != 0:
+        refuse('cannot list the Git work tree')
     left = []
     for path in sorted(set(filter(None, listed.stdout.decode('utf-8', 'surrogateescape').split('\0')))):
         try:
-            with open(path, encoding='utf-8', errors='replace') as file:
+            with open(os.path.join(root, path), encoding='utf-8', errors='replace') as file:
                 left += [f'{path}:{n}' for n, line in enumerate(file, 1) if prefix in line]
         except (FileNotFoundError, IsADirectoryError):
             continue  # deleted from the work tree, or a submodule

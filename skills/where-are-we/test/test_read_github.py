@@ -293,5 +293,32 @@ class ReadRuns(unittest.TestCase):
                 self.assertEqual(data.get('in_progress'), {'state': 'read', 'items': [compact_run(4, 'in_progress')]})
 
 
+class NoInstallationRoute(unittest.TestCase):
+    """The installation read route is removed (#1238); gh is the only route (#1186)."""
+
+    def test_a_configured_installation_still_reads_through_gh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'gh').write_text(FAKE)
+            (root / 'gh').chmod(0o755)
+            answers = {endpoint: [[copy.deepcopy(item)] for item in SOURCES[name]]
+                       for name, endpoint in ENDPOINTS.items()}
+            (root / 'answers.json').write_text(json.dumps(answers))
+            marker = root / 'state' / 'service' / 'github-reads' / 'installation.json'
+            marker.parent.mkdir(parents=True)
+            marker.write_text('{}')
+            env = dict(os.environ, PATH=tmp + os.pathsep + os.environ['PATH'],
+                       ANSWERS=str(root / 'answers.json'), CALLS=str(root / 'calls'),
+                       OPENWIZ_STATE_DIR=str(root / 'state'), GH_REPO='example-org/example-repo')
+            result = subprocess.run([sys.executable, '-B', str(SCRIPT)], cwd=root,
+                                    env=env, capture_output=True, text=True)
+            calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()] if (root / 'calls').exists() else []
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(calls, [['api', '--method', 'GET', '--paginate', '--slurp', endpoint]
+                                 for endpoint in ENDPOINTS.values()])
+        self.assertEqual(json.loads(result.stdout), {
+            name: {'state': 'read', 'items': EXPECTED[name]} for name in ENDPOINTS})
+
+
 if __name__ == '__main__':
     unittest.main()

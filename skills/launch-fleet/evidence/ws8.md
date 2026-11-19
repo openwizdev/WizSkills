@@ -63,14 +63,17 @@ replaces them yet.
 ## #1238: the dormant reader and pass runner
 
 The owner's decision of 2026-11-19 (recorded on #1181) let WS8 delete them or
-test them. They are deleted, so the behaviour is gone:
+test them. WS8 deletes them, so the behaviour is gone:
 
-- C8's carried installation reader, `read.py`, formerly beside `alarm.py` in `carried/`;
 - `fleet.sh`'s installation read route (the `installation.json` switch,
   `routed`, `installation_get`, the paged-response shim and the installation
   privacy read). Every read is the `gh` read it was with the route off;
 - `loop.sh --pass` and `--ack`, the supervised finite-pass runner.
 
-No WizSkills test covered any of them, so none is deleted. The installation
-read route cannot be enabled from launch-fleet any more. `records.py ops-pass`
-and the GitHub App write identity are unchanged.
+C8's carried installation reader, `read.py` beside `alarm.py` in `carried/`,
+is no longer called by launch-fleet. Its one remaining caller is where-are-we's
+dormant installation branch, which WS13 (#1186) removes in its own file
+(decision recorded on #1181). The reader stays until WS13's verified merge;
+WS8 then merges main and deletes it. No WizSkills test covered any of these,
+so no test is deleted. The installation read route stays disabled throughout.
+`records.py ops-pass` and the GitHub App write identity are unchanged.

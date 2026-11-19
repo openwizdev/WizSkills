@@ -3,13 +3,13 @@
 | Evidence | Before | After |
 | --- | ---: | ---: |
 | Entrypoint lines | 185 | 124 |
-| Entrypoint words | 2,812 | 1,517 |
-| Entrypoint static tokens | 3,936 | 2,251 |
-| `triage.dispatch` static loaded-path tokens | 15,643 | 13,958 |
+| Entrypoint words | 2,812 | 1,534 |
+| Entrypoint static tokens | 3,936 | 2,271 |
+| `triage.dispatch` static loaded-path tokens | 15,643 | 13,978 |
 | Observed workflow outcome | Unknown | Unknown |
 | Observed workflow token counts | Unknown | Unknown |
 
-Before is the WS1 pin `89fc285ce551f341b8d308732bcd8d4467ace353`. After is `320dbb45fcd9432a9bf9e6611306f8a6c3f2094f`
+Before is the WS1 pin `89fc285ce551f341b8d308732bcd8d4467ace353`. After is `cbfe4bcf3d5a1aafecf081f6a192db752d314a71`
 ([path manifest](after-paths.json), [static count](static-after.json)), same
 tokenizer and encoding as WS1. The open-development contract dominates the
 path and is unchanged. No workflow trial ran for this ticket: the

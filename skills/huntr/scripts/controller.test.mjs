@@ -410,3 +410,111 @@ scenario('L11 legacy thread-bearing lease remains held by its run until release 
   assert.equal(w.run(lease, ['release', 'legacy-run', index]).status, 0);
   assert.equal(w.run(lease, ['claim', 'new-run']).status, 0);
 });
+
+// WS12: whether to hunt (switch, kind approvals and pace) and the durable record's posting.
+scenario('S1 switch: the newest huntr: first line decides, unknown commands are off, kind approvals are listed', w => {
+  const filler = Array.from({length: 120}, (_, i) => ({created_at: at(-200 + i), body: `note ${i}`}));
+  w.state.comments = [{created_at: at(-300), body: 'huntr: off'}, ...filler,
+    {created_at: at(-50), body: 'huntr kind approved: docs typo sweeps, tier 1\nPrivate record: synthetic'},
+    {created_at: at(-40), body: 'huntr: on — resumed'}, {created_at: at(-30), body: claimLine('night-r1')},
+    {created_at: at(-20), body: 'a note\nhuntr: off'}].map((c, i) => ({id: 100 + i, ...c}));
+  const read = () => { const r = w.run(lease, ['switch']); assert.equal(r.status, 0, r.stderr); return JSON.parse(r.stdout); };
+  assert.deepEqual(read(), {switch: 'on', line: 'huntr: on — resumed',
+    kinds: [{comment: 221, line: 'huntr kind approved: docs typo sweeps, tier 1'}]});
+  w.state.comments.push({id: 300, created_at: at(-10), body: 'huntr: on hold until Monday'});
+  assert.equal(read().switch, 'off');
+  w.state.comments = [{id: 100, created_at: at(-10), body: 'ordinary note'}];
+  assert.deepEqual(read(), {switch: 'off', line: null, kinds: []});
+  assert.deepEqual(w.posts(), [], 'switch writes nothing');
+});
+scenario('S2 switch: an unreadable switch issue is a refusal, never on', w => {
+  w.state.comments = [{id: 100, ...on}];
+  w.state.readFailure = true;
+  const r = w.run(lease, ['switch']);
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout, '');
+  assert.match(r.stderr, /switch issue read failed/);
+});
+
+// A fixed-offset zone whose local hour now satisfies `want`: Etc/GMT-14 to Etc/GMT+12 cover every hour.
+function zone(want) {
+  const now = Date.now();
+  for (let offset = -12; offset <= 14; offset++) {
+    const local = new Date(now + offset * 3600000);
+    if (want(local.getUTCHours() + local.getUTCMinutes() / 60))
+      return {tz: offset === 0 ? 'Etc/GMT' : `Etc/GMT${offset > 0 ? '-' : '+'}${Math.abs(offset)}`, local};
+  }
+  throw new Error('no zone');
+}
+const nextDay = local => new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() + 1)).toISOString().slice(0, 10);
+scenario('PC1 pace: two empty hunts pause until the next calendar day in the project timezone', w => {
+  const pace = (...args) => w.run(lease, ['pace', ...args]);
+  const midday = zone(h => h >= 6 && h < 18), earlyMorning = zone(h => h >= 0.25 && h < 2.5);
+  const hourAgo = new Date(Date.now() - 3600000).toISOString(), threeHoursAgo = new Date(Date.now() - 3 * 3600000).toISOString();
+  assert.deepEqual(JSON.parse(pace(midday.tz, '1', hourAgo).stdout), {hunt: true});
+  assert.deepEqual(JSON.parse(pace(midday.tz, '2', hourAgo).stdout), {hunt: false, until: nextDay(midday.local)});
+  assert.deepEqual(JSON.parse(pace(midday.tz, '3', hourAgo).stdout), {hunt: false, until: nextDay(midday.local)});
+  // The same instant was yesterday in another zone, so its pause is over.
+  assert.deepEqual(JSON.parse(pace(earlyMorning.tz, '2', threeHoursAgo).stdout), {hunt: true});
+  assert.deepEqual(w.calls(), [], 'pace reads no GitHub');
+});
+scenario('PC2 pace: an unknown timezone, streak or time asks instead of hunting', w => {
+  const now = new Date().toISOString();
+  for (const args of [['Mars/Olympus', '2', now], ['', '2', now], ['Etc/GMT', 'two', now], ['Etc/GMT', '-1', now],
+    ['Etc/GMT', '2', 'yesterday']]) {
+    const r = w.run(lease, ['pace', ...args]);
+    assert.equal(r.status, 2, JSON.stringify(args));
+    assert.equal(r.stdout, '');
+    assert.match(r.stderr, /unknown (timezone|empty-hunt streak|last empty hunt time): ask on the tracking issue/);
+  }
+});
+
+const manifest = join(here, 'manifest.mjs');
+function publish(w, record, run = record.run) {
+  const index = join(w.dir, 'index.md');
+  rmSync(index, {force: true});
+  const r = w.run(lease, ['publish', run, w.file('record.json', JSON.stringify(record)), index]);
+  return {r, index: existsSync(index) ? readFileSync(index, 'utf8') : null};
+}
+const unpackPosted = (w, bodies, sha) => {
+  const r = spawnSync(process.execPath, [manifest, 'unpack', w.file('readback.json', JSON.stringify(bodies)), sha], {encoding: 'utf8'});
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+};
+const bigRecord = {run: 'night-big', slices: [], gaps: [], note: 'quoted "text"\nλ😺'.repeat(10000)};
+scenario('PB1 publish posts every numbered part, reads them back and writes the index that links them', w => {
+  w.state.comments = [{id: 100, ...on}];
+  const {r, index} = publish(w, bigRecord);
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  const parts = w.state.comments.slice(1);
+  assert.equal(parts.length, 6);
+  assert.deepEqual(out, {sha256: out.sha256, parts: 6, index: join(w.dir, 'index.md')});
+  assert.deepEqual(unpackPosted(w, parts.map(c => c.body), out.sha256), bigRecord);
+  assert.equal(index.split('\n')[0], `Hunt record index for night-big: 6 parts, sha256 ${out.sha256}`);
+  for (const [i, c] of parts.entries())
+    assert.ok(index.includes(`- part ${i + 1}/6: https://github.com/synthetic/project/issues/394#issuecomment-${c.id}`), `part ${i + 1}`);
+  // The index posts as a plain record: its first line never reads as a switch or lease line.
+  assert.equal(w.run(lease, ['record', 'night-big', join(w.dir, 'index.md')]).status, 0);
+});
+scenario('PB2 publish after a lost response reuses the part already posted, never a duplicate', w => {
+  w.state.comments = [{id: 100, ...on}];
+  const packed = JSON.parse(spawnSync(process.execPath, [manifest, 'pack', w.file('r.json', JSON.stringify(bigRecord))], {encoding: 'utf8'}).stdout);
+  w.state.comments.push({id: 101, created_at: at(-5), body: packed.comments[0]}, {id: 102, created_at: at(-4), body: packed.comments[1]});
+  const {r} = publish(w, bigRecord);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(w.posts().length, 4);
+  assert.equal(w.state.comments.length, 7);
+});
+scenario('PB3 publish refuses another run\'s record and an unconfirmed post leaves no index', w => {
+  w.state.comments = [{id: 100, ...on}];
+  const wrong = publish(w, {run: 'night-other', slices: []}, 'night-mine');
+  assert.equal(wrong.r.status, 2);
+  assert.match(wrong.r.stderr, /run/);
+  assert.deepEqual(w.posts(), []);
+  w.state.postFailure = true;
+  const lost = publish(w, {run: 'night-mine', slices: []});
+  assert.equal(lost.r.status, 2);
+  assert.match(lost.r.stderr, /rerun publish/);
+  assert.equal(lost.index, null);
+});

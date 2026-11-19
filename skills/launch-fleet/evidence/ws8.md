@@ -68,12 +68,13 @@ test them. WS8 deletes them, so the behaviour is gone:
 - `fleet.sh`'s installation read route (the `installation.json` switch,
   `routed`, `installation_get`, the paged-response shim and the installation
   privacy read). Every read is the `gh` read it was with the route off;
-- `loop.sh --pass` and `--ack`, the supervised finite-pass runner.
+- `loop.sh --pass` and `--ack`, the supervised finite-pass runner;
+- C8's carried installation reader, `read.py` beside `alarm.py` in `carried/`.
+  Its last caller, where-are-we's dormant installation branch, was removed by
+  WS13 (#1186, merged into main at `6a57abd`); WS8 merged main and deleted it,
+  as the decision recorded on #1181 asked.
 
-C8's carried installation reader, `read.py` beside `alarm.py` in `carried/`,
-is no longer called by launch-fleet. Its one remaining caller is where-are-we's
-dormant installation branch, which WS13 (#1186) removes in its own file
-(decision recorded on #1181). The reader stays until WS13's verified merge;
-WS8 then merges main and deletes it. No WizSkills test covered any of these,
-so no test is deleted. The installation read route stays disabled throughout.
-`records.py ops-pass` and the GitHub App write identity are unchanged.
+No WizSkills test covered any of these, so no test is deleted. The
+installation read route stays disabled: no WizSkills script reads through an
+installation any more. `records.py ops-pass` and the GitHub App write
+identity are unchanged.

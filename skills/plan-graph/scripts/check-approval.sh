@@ -7,8 +7,17 @@
 # fingerprint currentness;
 # revision.sh and launch-fleet retain those checks unchanged.
 # Usage: sh skills/plan-graph/scripts/check-approval.sh <spec issue number>
+#        sh skills/plan-graph/scripts/check-approval.sh --short-road <decision.json>
 # Exit 0: valid table; 1: invalid table or unreadable graph; 2: bad arguments.
 set -u
+if [ "${1:-}" = --short-road ]; then
+  if [ "$#" -ne 2 ]; then
+    echo 'usage: sh check-approval.sh --short-road <decision.json>' >&2
+    exit 2
+  fi
+  script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
+  exec python3 -I "$script_dir/check-short-road.py" "$2"
+fi
 spec=${1:-}
 case $spec in
   '' | 0* | *[!0-9]*) echo 'usage: sh check-approval.sh <spec issue number>' >&2; exit 2 ;;

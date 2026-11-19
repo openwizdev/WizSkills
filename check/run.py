@@ -173,8 +173,12 @@ def skill(root, name, out):
             out.add('notice', at, f'it carries its source line exactly, on a line of its own: `{source}`')
         if MATT_COPYRIGHT in collapsed:
             out.add('notice', at, "it is not adapted from Matt Pocock's skills, so it never carries his notice")
-    elif MATT_NOTICE not in collapsed:
-        out.add('notice', at, "it carries Matt Pocock's copyright and MIT notice word for word")
+    else:
+        notice_at = f'skills/{name}/NOTICE.md'
+        if MATT_NOTICE not in ' '.join((read(root / notice_at) or '').split()):
+            out.add('notice', notice_at, "it carries Matt Pocock's copyright and MIT notice word for word")
+        if MATT_COPYRIGHT in collapsed or '](NOTICE.md)' not in body:
+            out.add('notice', at, 'it ends with a credit line linking NOTICE.md and never carries the notice itself')
     yaml_at = f'skills/{name}/agents/openai.yaml'
     yaml = read(root / yaml_at)
     if yaml is None:

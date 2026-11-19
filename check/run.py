@@ -31,6 +31,8 @@ SUITES = {
               ['python3', 'skills/grill/scripts/test_records.py']],
     'diagnose': [['node', '--test', 'skills/diagnose/tests/hitl-loop.test.mjs']],
     'where-are-we': [['python3', '-I', 'skills/where-are-we/test/test_read_github.py']],
+    'handoff': [['python3', '-I', 'skills/handoff/test/test_handoff.py']],
+    'ask-wiz': [['python3', '-I', 'skills/ask-wiz/test/test_routes.py']],
     'hill-climb': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/hill-climb/tests']],
     'image': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/image/tests'],
               ['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/image/references']],

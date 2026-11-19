@@ -97,7 +97,8 @@ class Handoff(unittest.TestCase):
         self.assertEqual(result.stdout, f'refused: {REPO} is not private\n')
 
     def test_unknown_visibility_is_never_private(self):
-        for answer in ['FAIL', 'not JSON', {'full_name': REPO}, {'private': 'true'}, []]:
+        for answer in ['FAIL', 'not JSON', {'full_name': REPO, 'default_branch': 'main'},
+                       {'private': 'false', 'default_branch': 'main'}, {'private': True}, []]:
             with self.subTest(answer=answer):
                 result, _ = self.run_helper('private', REPO, answers={f'repos/{REPO}': answer})
                 self.assertEqual(result.returncode, 2)

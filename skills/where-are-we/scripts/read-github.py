@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Collect compact GitHub status sources through explicit GETs; never infer activity."""
+"""Collect compact GitHub status sources through explicit GETs; never infer activity.
+
+  read-github.py        milestones, open issues and open pull requests
+  read-github.py runs   queued and in-progress CI runs
+"""
 import json
 import os
 from pathlib import Path
@@ -11,6 +15,10 @@ ENDPOINTS = {
     'milestones': 'repos/{owner}/{repo}/milestones?state=all&per_page=100',
     'issues': 'repos/{owner}/{repo}/issues?state=open&per_page=100',
     'pulls': 'repos/{owner}/{repo}/pulls?state=open&per_page=100',
+}
+RUNS = {
+    'queued': 'repos/{owner}/{repo}/actions/runs?status=queued&per_page=100',
+    'in_progress': 'repos/{owner}/{repo}/actions/runs?status=in_progress&per_page=100',
 }
 
 
@@ -55,6 +63,9 @@ def field(item, key, expected):
 
 
 def project(source, item):
+    if source in RUNS:
+        return {key: field(item, key, expected) for key, expected in
+                [('id', int), ('name', str), ('status', str), ('head_sha', str)]}
     if source == 'issues' and 'pull_request' in item:
         return None
     compact = {'number': field(item, 'number', int), 'title': field(item, 'title', str)}
@@ -121,6 +132,10 @@ def read(source, endpoint):
         pages, reason = (installation_pages if installation_reads() else gh_pages)(endpoint)
         if reason:
             return {'state': 'unconfirmed', 'reason': reason}
+        if source in RUNS:  # run pages are objects, each holding one list of runs
+            if not isinstance(pages, list) or any(not isinstance(page, dict) for page in pages):
+                raise ValueError('expected run pages')
+            pages = [page.get('workflow_runs') for page in pages]
         if (not isinstance(pages, list) or not pages
                 or any(not isinstance(page, list) for page in pages)
                 or any(not isinstance(item, dict) for page in pages for item in page)):
@@ -139,11 +154,15 @@ def read(source, endpoint):
     return {'state': 'read', 'items': items}
 
 
-def main():
-    sources = {name: read(name, endpoint) for name, endpoint in ENDPOINTS.items()}
+def main(argv):
+    if argv not in ([], ['runs']):
+        print('usage: read-github.py [runs]', file=sys.stderr)
+        return 2
+    endpoints = RUNS if argv else ENDPOINTS
+    sources = {name: read(name, endpoint) for name, endpoint in endpoints.items()}
     print(json.dumps(sources, separators=(',', ':')))
     return 2 if any(source['state'] == 'unconfirmed' for source in sources.values()) else 0
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

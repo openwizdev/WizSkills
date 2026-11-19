@@ -1,6 +1,7 @@
 ---
 name: grill
 description: Settle a design through a recorded interview. Use when asked to grill, before planning an unsettled design, or to resume an open grill.
+version: 0.2.0
 ---
 
 # Grill

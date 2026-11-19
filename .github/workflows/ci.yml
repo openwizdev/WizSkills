@@ -4,6 +4,9 @@
 # pinned by playwright-core 1.64.1's browsers.json (BSD-3-Clause and bundled
 # third-party notices). Installed only for CI's browser proofs. No skill gains
 # a runtime dependency. Node is supplied by the hosted runner.
+# Release-tool dependency record (WS18/J187): @changesets/cli 3.0.3 (MIT),
+# pinned with package-lock.json (40 packages, MIT or ISC), installed by
+# `npm ci --ignore-scripts`. Used only by check/changesets.py; never shipped.
 name: WizSkills check
 on:
   push:
@@ -19,9 +22,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The pull request's merge commit and its first parent, main's tip.
+          fetch-depth: 2
+      - name: Install the pinned Changesets
+        run: npm ci --ignore-scripts
+      - name: Changeset gate (a pull request that changes a skill names it in a new changeset)
+        if: github.event_name == 'pull_request'
+        run: python3 -I check/changesets.py check --base HEAD^1
       - name: Install pinned test-only browser tools
         run: |
-          npm install --no-save --ignore-scripts --package-lock=false playwright-core@1.64.1
+          npm install --no-save --ignore-scripts playwright-core@1.64.1
           node node_modules/playwright-core/cli.js install --with-deps chromium
           node --input-type=module -e "import { chromium } from 'playwright-core'; console.log('OPENWIZ_CHROMIUM=' + chromium.executablePath())" >> "$GITHUB_ENV"
       - name: Skill rules, standalone check and every skill's suites

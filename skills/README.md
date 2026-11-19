@@ -26,7 +26,7 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 ## Rules
 
 - **Layout:** `skills/` holds only this file and skill folders, each named in lowercase and hyphens and holding its `SKILL.md`.
-- **Frontmatter:** `name` (the folder's name) and `description`, one line each, and no other key; only `ask-wiz` also requires `disable-model-invocation: true`.
+- **Frontmatter:** `name` (the folder's name), `description` and `version` (semver), one line each, and no other key; only `ask-wiz` also requires `disable-model-invocation: true`.
 - **Codex:** `agents/openai.yaml` holds only `interface.display_name` and `interface.short_description`; only `ask-wiz` also has `policy.allow_implicit_invocation: false`.
 - **Notice:** a skill listed in `SOURCE_LINES` in `check/run.py` carries its source line exactly, on a line of its own, and never Matt Pocock's notice; every other skill keeps his copyright and MIT notice word for word in its sibling `NOTICE.md`, and its `SKILL.md` ends with a credit line linking that file.
 - **Links:** every relative Markdown link resolves inside the package, and there are no symlinks inside `skills/`: plugin installs may drop them.

@@ -1,6 +1,7 @@
 ---
 name: review-ticket
 description: Review a ticket's pull request as its independent other-family reviewer at its exact head once CI is green, on Standards, Spec and one full sweep, and post one verdict report on the pull request; only a real-user path or a security, privacy or data-loss risk blocks. Use when you are a pull request's reviewer, for its re-check, or to tell whether a pull request needs review. Fixing the code is build-ticket's job, never this one.
+version: 0.2.0
 ---
 
 # Review a ticket
@@ -19,7 +20,7 @@ You are the independent **reviewer** of one ticket's pull request. You read, run
 
 Read the project's instructions (`AGENTS.md` or `CLAUDE.md`, with folder ones) and `fleet.md` once per session and record each blob ID (`git rev-parse HEAD:<path>`); reuse a read only while its ID still matches.
 
-The helper is [`scripts/review.py`](scripts/review.py): set `review` to its path in this skill's folder and run `python3 -I "$review" <command> --repo <owner/repo> --pr <N> --head <the assigned head>` from the project checkout. Each command reads one snapshot of the pull request and admits it first: open, ready, a ticket, still at the assigned head, every check `fleet.md` requires green there. It reads settings from the base branch and only record authors' comments. Exit 1 prints a stop, the report's broken lines or an unknown write; exit 2 is a refusal on settings: post nothing and ask on the ticket.
+The helper is [`scripts/review.py`](scripts/review.py): set `review` to its path in this skill's folder and run `python3 -I "$review" <command> --repo <owner/repo> --pr <N> --head <the assigned head>` from the project checkout. Each reviewer command reads one snapshot of the pull request and admits it first: open, ready, a ticket, still at the assigned head, every check `fleet.md` requires green there. It reads settings from the base branch and only record authors' comments. Exit 1 prints a stop, the report's broken lines or an unknown write; exit 2 is a refusal on settings: post nothing and ask on the ticket.
 
 **Status note** ([agent status contract](../../contracts/agent-status.v1.md)), on the ticket in its repository `<repo>`: at each step run `python3 -I <this skill's folder>/../launch-fleet/scripts/status.py write --repo <repo> --ticket <N> --agent reviewer --harness <harness> --model <model> --skills <skills> --state <state> --step <step>`, each value quoted; `<skills>` lists each skill you ran as `<skill>@<version>`, at the package's `.claude-plugin/plugin.json` version. `<state>` is `working` once `pin` holds a head (keep the note id and add `--note <id>` to every later write, re-checks too), `asking` with a reviewer question, `done --pr <url>` once the report is posted. Exit 3: another reviewer holds the ticket; post nothing.
 
@@ -49,7 +50,9 @@ Read `git diff --find-renames origin/<base>...<head>` and the code around it. Ke
 
 **Changelog:** `changes/<ticket>.md` agrees with `changes/README.md`, the diff and its evidence: true, user-facing, nothing private, no stronger than the evidence, and its path covered as above. Infra, docs and tests use the `no-changelog` label with a reason (the reason stands in while the label doesn't exist); a product change can't.
 
-**Full sweep:** read the whole diff once more for bugs, broken callers, error paths, security and privacy. Report everything now: a held-back finding costs a round.
+**Full sweep:** read the whole diff once more for bugs, broken callers, error paths, security and privacy.
+
+**One pass:** this step is the checklist the builder also runs on its own diff (build-ticket step 4, with `review.py self-check`). Report every finding, blocking and polish, in your first verdict: a held-back finding costs a round. A re-check reads only the listed findings and the code changed since, and `review.py check` refuses a new finding on unchanged code unless it is a stated `Risk:` (security, privacy or data loss).
 
 Done when the three checks covered the whole diff and every finding has its file and line, its check and the exact fix, rechecked at the pinned head.
 

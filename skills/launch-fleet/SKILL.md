@@ -167,13 +167,13 @@ Do every line. Lines of the same kind run **in parallel** (every `start`, once i
 | `merge main in #P for #N at <commit>: ...` | Its re-test ran on an old `main`: tell its builder to merge `main` in (step 4, "Re-testing") |
 | `reopen #P for #N at <commit>: ...` | Its unfinished re-test closed it and never reopened it: if `gh pr view <P> --json state,headRefOid` still says `CLOSED` at that commit, and no comment since the claim says it was closed on purpose, `gh pr reopen <P>`. The re-test then goes on from step 3. If it was closed on purpose, don't reopen: edit the claim to `launch-fleet: re-test failed <commit>: closed on purpose` (step 4, "Re-testing") |
 | `archive #N` | Archive the agents it names (`room-cli thread archive <id>` for each; one already archived, like a reviewer given up on, is done), then record `launch-fleet: archived` on the ticket, as its last comment. The check keeps finding a closed ticket until it is archived, and closes no spec before then |
-| `hold #N` / `note #N` | A contract it relies on changed (step 5) |
+| `note #N` | Tell the running builder about a contract change (step 5) |
 | `take over #N: builder thread <X> is archived; ...` | Legacy takeover line. A fresh fleet preserves the existing assignment |
 | `fleet done #S` | The spec has closed or is no longer open: resolve and delete its loop, then end the wake ("Fleet threads", "Each wake") |
 | `wake fleet #S: room-cli loop run fleet-<S>` | A message named something in a spec with a fleet thread: resolve the handle through the private loop file's `S` key, run `room-cli loop run <that id>` once, and nothing else for that spec ("GitHub wakes the fleet") |
 | `release #N: ordering hold C ...` | Claim and verify the conditional ordering release below; restore its ready label only after every release gate passes |
 | `reconcile release #N ...` | Reconcile that release claim below; uncertainty is never permission to relabel or start |
-| `release #N` | The user approved it again since launch-fleet's own hold: take its `held` label off (`gh issue edit <N> --remove-label held`). It starts on a later line. Only launch-fleet's holds are released here, each once: a `held` label put on after launch-fleet's hold (by `plan-graph`, which takes its own off) is never launch-fleet's |
+| `release #N` | The user approved it again since launch-fleet's old contract hold: take its `held` label off (`gh issue edit <N> --remove-label held`). It starts on a later line. Only launch-fleet's holds are released here, each once: a `held` label put on after launch-fleet's hold (by `plan-graph`, which takes its own off) is never launch-fleet's |
 | `resume #N: #B merged ... (wait comment C)` | Claim and deliver the resume in step 3 below |
 | `reconcile resume #N ...` | Reconcile the delivery claim in step 3; never blindly send the same resume again |
 | `needs-info #N` | Its builder asked a question. A narrow same-intent path request goes first to the ops agent's grant evaluation ("Ops passes" below); otherwise, and for every real exception, tell the orchestrator, with a link to the question, and record `launch-fleet: asked the orchestrator` |
@@ -389,10 +389,9 @@ If any of this fails, record `launch-fleet: merge blocked <commit>: <why>` on th
 
 ## 5. Contracts
 
-A ticket lists the contract files it relies on in its "Relies on" line. On every merge into the default branch, the check looks at the files the merge changed. A file that a merge **creates** is the planned delivery of a contract, not a change. A file it edits, renames or deletes is a change.
+A ticket's **Relies on** line names contract files for its builder. Review handles changes to those contracts. An edit, rename or deletion on the default branch can produce an informational `note #N` for a running builder. Tell that builder which files changed in which pull request and record `launch-fleet: noted #<P>`. A newly created file produces no note. A relied-on file change never puts a ticket on hold.
 
-- **`hold #N`** (no builder yet, a person's ticket, or a builder out of a fleet thread's reach during its takeover): put the `held` label on it and take its ready label off, `ready-for-agent`, or `ready-for-human` for a person's ticket (`gh issue edit <N> --add-label held --remove-label ready-for-agent`; if the project has no `held` label yet, create it once first: `gh label create held --description "Held: waits for the user's approval"`). Then, after the labels, comment `launch-fleet: held for #<P>: contract changed, re-approve. <the files> changed in #<P>.`: that order is what marks the `held` label as launch-fleet's. Tell the user (step 6). The user re-approves just that ticket, through `plan-graph`'s next revision. Only once that approval lands does the check print `release #N`, and the `held` label comes off. The tick holds every contract change the same way, mechanically: it never classifies a diff. A wording-only change is the orchestrator's to release under Jake's standing approval, as `plan-graph`'s "A wording-only change (C2)" says; its new approval record is what the check reads.
-- **`note #N`** (being built): tell its builder which files changed in which pull request, and to check its work against them. Record `launch-fleet: noted #<P>`.
+Existing contract holds keep their recorded release conditions. See `plan-graph`'s legacy contract hold procedure.
 
 ### Conditional ordering holds
 
@@ -432,7 +431,7 @@ reassesses it. A dependency-only wake does not discover reverse relationships.
 An Issue must be closed by a verified default-branch merge; a PR must itself be
 merged into that branch. The check also requires the current plan fingerprint
 (and agreement with the plan snapshot it read), every remaining native blocker,
-no pending contract change, no manual/live gate, no existing builder/open PR and
+no manual/live gate, no existing builder/open PR and
 ordinary role/claim safeguards. Standalone tickets still need their own approval.
 The release action names the ordering hold comment id C; release never spawns.
 
@@ -460,7 +459,7 @@ The release action names the ordering hold comment id C; release never spawns.
 
 ## 6. Telling the user
 
-The fleet talks to the user only when it needs them: a red nightly CI run, a contract hold, a plan that changed since its approval, a finding parked as a decision for Jake or an overturned ruling whose stated cost is high (step 4), a security, privacy, live, spending or publishing call an orchestrator decision needs, a live step (a `person` line), and once when a spec closes. Everything else stays quiet; the user can always ask the orchestrator where things stand. Each ticket or spec item goes to two places: a message in the orchestrator's thread (`room-cli thread tell <the orchestrator's thread> "Needs you: ..."`), and a comment on the spec issue starting `**Needs you:**` (on the issue itself, for one approved on its own). A fleet thread posts only the comment: GitHub records are its only channel to the orchestrator ("Fleet threads"). The user reads and answers it in the orchestrator's thread, on the web page; in 0.0.6 it moves to the web page's "Needs you" list.
+The fleet talks to the user only when it needs them: a red nightly CI run, a plan that changed since its approval, a finding parked as a decision for Jake or an overturned ruling whose stated cost is high (step 4), a security, privacy, live, spending or publishing call an orchestrator decision needs, a live step (a `person` line), and once when a spec closes. Everything else stays quiet; the user can always ask the orchestrator where things stand. Each ticket or spec item goes to two places: a message in the orchestrator's thread (`room-cli thread tell <the orchestrator's thread> "Needs you: ..."`), and a comment on the spec issue starting `**Needs you:**` (on the issue itself, for one approved on its own). A fleet thread posts only the comment: GitHub records are its only channel to the orchestrator ("Fleet threads"). The user reads and answers it in the orchestrator's thread, on the web page; in 0.0.6 it moves to the web page's "Needs you" list.
 
 **A red nightly run** belongs to the repository, not a ticket. The check reads
 the latest **completed**, scheduled `ci.yml` run on the default branch. Only
@@ -645,7 +644,7 @@ The loop's memory: comments on GitHub, each starting `launch-fleet:`. Edit a cla
 | | `launch-fleet: held for ordering: issue #B merges to main` / `held for ordering: PR #P merges to main` | An owned ordering-only hold, after its label change |
 | | `launch-fleet: held manual: <why>` / `held live: <why>` | A manual/live gate, even while already labelled held; its owner supplies separate release evidence |
 | | `launch-fleet: release starting <hold comment id>` / `released ordering C` / `release failed C: <why>` / `release withdrawn C` | A release intent and its verified outcome; unresolved intents block starts |
-| | `launch-fleet: held for #<P>` / `noted #<P>` | A contract hold, or a builder told of a change |
+| | `launch-fleet: held for #<P>` / `noted #<P>` | An existing contract hold, or a builder told of a change |
 | | `launch-fleet: asked the orchestrator` | Its `needs-info` question was passed on |
 | | `launch-fleet: told the user` | A person's ticket is ready, and the user knows |
 | | `launch-fleet: complete: <evidence>` | The orchestrator or owning fleet thread records a person's completed work and names its evidence; with the ticket closed, its dependents may start |
@@ -669,7 +668,7 @@ The loop's memory: comments on GitHub, each starting `launch-fleet:`. Edit a cla
 
 ## The check
 
-`scripts/fleet.sh`, beside this file, is the loop's check, the tick's read of what it was woken for, and the frontier and contract-hold helpers. It only reads, through `gh` and `jq`. For a spec with a ticket that could start, it runs `plan-graph`'s `revision.sh` (in `skills/plan-graph/`) to check the approval is current. `scripts/loop.sh` is the safety net's script, which runs it, and with `FLEET_SPEC` set, a fleet thread's loop's script, which runs `spec <S>`.
+`scripts/fleet.sh`, beside this file, is the loop's check, the tick's read of what it was woken for, and the frontier and contract-note helpers. It only reads, through `gh` and `jq`. For a spec with a ticket that could start, it runs `plan-graph`'s `revision.sh` (in `skills/plan-graph/`) to check the approval is current. `scripts/loop.sh` is the safety net's script, which runs it, and with `FLEET_SPEC` set, a fleet thread's loop's script, which runs `spec <S>`.
 
 | Command | Prints |
 | --- | --- |
@@ -678,7 +677,7 @@ The loop's memory: comments on GitHub, each starting `launch-fleet:`. Edit a cla
 | `sh "<this skill's folder>/scripts/fleet.sh" spec <S>` | The due lines of spec `<S>` alone; `fleet done #<S>` when `<S>` is no open spec. Legacy fleet records can still produce takeover lines. The full check prints nothing about a spec with a fleet thread, and `wake` prints only its `wake fleet` line |
 | `sh "<this skill's folder>/scripts/fleet.sh" every` | The check's lines on every spec, fleet threads' too, and on the issues approved on their own: a fleet thread's read before a merge |
 | `sh "<this skill's folder>/scripts/fleet.sh" frontier` | Every ticket that may start now |
-| `sh "<this skill's folder>/scripts/fleet.sh" holds` | Every contract hold and builder note due |
+| `sh "<this skill's folder>/scripts/fleet.sh" holds` | Every contract change note due for a builder (legacy command name) |
 | `sh "<this skill's folder>/scripts/fleet.sh" claim <N> <comment id>` | After a claim on ticket or pull request `<N>`: `go #<N>`, or `withdraw #<N>: <why>`. It reads only `<N>`, as `wake` does |
 
 It exits 2, with the reason, when it can't read what it needs. Its tests run on synthetic GitHub answers: `sh "<this skill's folder>/scripts/test.sh"`.

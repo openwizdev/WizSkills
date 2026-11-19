@@ -1181,59 +1181,53 @@ expect 'needs-info: a new question after the last one was asked' 0 check.json 'i
 needs-info #12: a question for the orchestrator
 EOF
 
-### The contract hold (holds, and the same lines in the check)
+### Contract changes and existing holds
 
 # #565: historical plan-graph headings, on synthetic ticket bodies only.
-expect 'legacy Relies on: holds unstarted tickets and notes builders' 0 check.json 'issue(12; .body = "## Relies on\n\n`contracts/widget.v1.md`\n\n## Proof\nSynthetic proof.") | issue(13; .body = "## Relies on\n\n`contracts/widget.v1.md`\n\n## Acceptance criteria\nSynthetic criterion.") | contract23' -- holds <<EOF
+expect 'legacy Relies on: notes builders without holding unstarted tickets' 0 check.json 'issue(12; .body = "## Relies on\n\n`contracts/widget.v1.md`\n\n## Proof\nSynthetic proof.") | issue(13; .body = "## Relies on\n\n`contracts/widget.v1.md`\n\n## Acceptance criteria\nSynthetic criterion.") | contract23' -- holds <<EOF
 note #12: contracts/widget.v1.md changed in #23; tell its builder, thread thr_syn12
-hold #13: contracts/widget.v1.md changed in #23
 EOF
-expect 'legacy Relies on: check holds a ready ticket instead of starting it' 0 check.json 'merge12 | issue(13; .body = "## Relies on\n\n`contracts/widget.v1.md`\n") | contract23' -- check <<EOF
-hold #13: contracts/widget.v1.md changed in #23
+expect 'legacy Relies on: check starts the ready ticket after a contract change' 0 check.json 'merge12 | issue(13; .body = "## Relies on\n\n`contracts/widget.v1.md`\n") | contract23' -- check <<EOF
+start #13: W3: widget page (spec #10)
 EOF
-expect 'legacy Relies on: a targeted wake sees the contract hold' 0 check.json 'merge12 | issue(13; .body = "## Relies on\n\n`contracts/widget.v1.md`\n") | contract23' -- wake 13 <<EOF
-hold #13: contracts/widget.v1.md changed in #23
+expect 'legacy Relies on: a targeted wake starts the ready ticket' 0 check.json 'merge12 | issue(13; .body = "## Relies on\n\n`contracts/widget.v1.md`\n") | contract23' -- wake 13 <<EOF
+start #13: W3: widget page (spec #10)
 EOF
-expect 'legacy Relies on: every file across lines and CRLF is read' 0 check.json 'issue(13; .body = "## Relies on\r\n\r\n- `contracts/widget.v1.md`\r\n- `contracts/other.v1.md`, `contracts/widget.v1.md`\r\n\r\n## Proof\r\n`contracts/unrelated.v1.md`") | m23([changed("contracts/widget.v1.md"; "modified"), changed("contracts/other.v1.md"; "modified"), changed("contracts/unrelated.v1.md"; "modified")])' -- holds <<EOF
+expect 'legacy Relies on: every file across lines and CRLF is read' 0 check.json 'issue(13; .body = "## Relies on\r\n\r\n- `contracts/widget.v1.md`\r\n- `contracts/other.v1.md`, `contracts/widget.v1.md`\r\n\r\n## Proof\r\n`contracts/unrelated.v1.md`") | m23([changed("contracts/widget.v1.md"; "modified"), changed("contracts/other.v1.md"; "modified"), changed("contracts/unrelated.v1.md"; "modified")]) | say(13; 1301; "10:50"; "launch-fleet: start checked, thread thr_syn13, branch room/13-widget-cccc")' -- holds <<EOF
 note #12: contracts/widget.v1.md changed in #23; tell its builder, thread thr_syn12
-hold #13: contracts/other.v1.md, contracts/widget.v1.md changed in #23
+note #13: contracts/other.v1.md, contracts/widget.v1.md changed in #23; tell its builder, thread thr_syn13
 EOF
 expect 'legacy Relies on: unrelated sections and similar headings add no contracts' 0 check.json 'issue(12; .body = "## Owned paths\n`contracts/widget.v1.md`\n\n## Relies on elsewhere\n`contracts/widget.v1.md`\n\n## Relies on\n\nnothing\n\n## Proof\n`contracts/widget.v1.md`") | issue(13; .body = "## Relies on\n\nnothing\n\n### Proof\n`contracts/widget.v1.md`") | contract23' -- holds < /dev/null
-expect 'legacy Relies on: inline and heading declarations both protect contracts' 0 check.json 'issue(13; .body = "**Relies on:** `contracts/other.v1.md`\n\n## Relies on\n\n`contracts/widget.v1.md`\n") | m23([changed("contracts/widget.v1.md"; "modified"), changed("contracts/other.v1.md"; "modified")])' -- holds <<EOF
+expect 'legacy Relies on: inline and heading declarations both inform builders' 0 check.json 'issue(13; .body = "**Relies on:** `contracts/other.v1.md`\n\n## Relies on\n\n`contracts/widget.v1.md`\n") | m23([changed("contracts/widget.v1.md"; "modified"), changed("contracts/other.v1.md"; "modified")]) | say(13; 1301; "10:50"; "launch-fleet: start checked, thread thr_syn13, branch room/13-widget-cccc")' -- holds <<EOF
 note #12: contracts/widget.v1.md changed in #23; tell its builder, thread thr_syn12
-hold #13: contracts/other.v1.md, contracts/widget.v1.md changed in #23
+note #13: contracts/other.v1.md, contracts/widget.v1.md changed in #23; tell its builder, thread thr_syn13
 EOF
 
-expect 'a changed contract holds the unstarted ticket and notes the building one' 0 check.json 'contract23' -- holds <<EOF
+expect 'a changed contract only notes the building ticket' 0 check.json 'contract23' -- holds <<EOF
 note #12: contracts/widget.v1.md changed in #23; tell its builder, thread thr_syn12
-hold #13: contracts/widget.v1.md changed in #23
 EOF
-expect 'the check prints the same hold and note' 0 check.json 'contract23' -- check <<EOF
+expect 'the check prints the same note without a hold' 0 check.json 'contract23' -- check <<EOF
 note #12: contracts/widget.v1.md changed in #23; tell its builder, thread thr_syn12
-hold #13: contracts/widget.v1.md changed in #23
 EOF
 expect 'creating a contract is not changing it' 0 check.json 'm23([changed("contracts/widget.v1.md"; "added")])' -- holds < /dev/null
 expect 'a merge before the approval does not count' 0 check.json 'merged_pr(23; 99; "07:00"; [changed("contracts/widget.v1.md"; "modified")])' -- holds < /dev/null
-expect 'a merge before a ticket'"'"'s own approval does not count, though it is after another'"'"'s' 0 check.json 'issue(70; .body = "**Relies on:** `contracts/widget.v1.md`") | own_approval(70; 7002; "11:00") | contract23' -- holds <<EOF
+expect 'a merge before a ticket'"'"'s own approval does not count, though it is after another'"'"'s' 0 check.json 'issue(70; .body = "**Relies on:** `contracts/widget.v1.md`") | own_approval(70; 7002; "11:00") | say(70; 7003; "11:15"; "launch-fleet: start checked, thread thr_syn70, branch room/70-fix-eeee") | contract23' -- holds <<EOF
 note #12: contracts/widget.v1.md changed in #23; tell its builder, thread thr_syn12
-hold #13: contracts/widget.v1.md changed in #23
 EOF
 expect 'a merge into another branch does not count' 0 check.json 'contract23 | pull(23; .base = "release-1")' -- holds < /dev/null
 expect 'a merge before the latest approval does not count' 0 check.json 'contract23 | approve(10; 1002; "11:00"; 2; [11, 12, 13, 14])' -- holds < /dev/null
-expect 'a hold or note already recorded is not repeated' 0 check.json 'contract23 | say(13; 1301; "10:30"; "launch-fleet: held for #23") | say(12; 1202; "10:30"; "launch-fleet: noted #23")' -- holds < /dev/null
-expect 'a folder and a pattern under Relies on' 0 check.json 'm23([changed("docs/widgets/guide.md"; "modified"), changed("skills/grill/SKILL.md"; "modified"), changed("skills/grill/agents/openai.yaml"; "modified"), changed("docs/other.md"; "modified")])' -- holds <<EOF
-hold #13: docs/widgets/guide.md, skills/grill/SKILL.md changed in #23
+expect 'a past hold or note prevents a duplicate builder note' 0 check.json 'contract23 | say(13; 1302; "10:30"; "launch-fleet: held for #23") | say(12; 1202; "10:30"; "launch-fleet: noted #23") | say(13; 1301; "10:00"; "launch-fleet: start checked, thread thr_syn13, branch room/13-widget-cccc")' -- holds < /dev/null
+expect 'a folder and a pattern under Relies on' 0 check.json 'm23([changed("docs/widgets/guide.md"; "modified"), changed("skills/grill/SKILL.md"; "modified"), changed("skills/grill/agents/openai.yaml"; "modified"), changed("docs/other.md"; "modified")]) | say(13; 1301; "10:50"; "launch-fleet: start checked, thread thr_syn13, branch room/13-widget-cccc")' -- holds <<EOF
+note #13: docs/widgets/guide.md, skills/grill/SKILL.md changed in #23; tell its builder, thread thr_syn13
 EOF
 expect 'a contract renamed away is a change' 0 check.json 'm23([{filename: "contracts/widget.v2.md", status: "renamed", previous_filename: "contracts/widget.v1.md"}])' -- holds <<EOF
 note #12: contracts/widget.v1.md changed in #23; tell its builder, thread thr_syn12
-hold #13: contracts/widget.v1.md changed in #23
 EOF
 expect 'a contract removed is a change' 0 check.json 'm23([changed("contracts/widget.v1.md"; "removed")])' -- holds <<EOF
 note #12: contracts/widget.v1.md changed in #23; tell its builder, thread thr_syn12
-hold #13: contracts/widget.v1.md changed in #23
 EOF
-expect 'a ready ticket with a hold due is held, not started' 0 check.json 'merge12 | contract23' -- check <<EOF
-hold #13: contracts/widget.v1.md changed in #23
+expect 'a ready ticket starts after a relied-on contract change' 0 check.json 'merge12 | contract23' -- check <<EOF
+start #13: W3: widget page (spec #10)
 EOF
 expect 'a held ticket does not start, even with its label still on' 0 check.json 'merge12 | contract23 | say(13; 1301; "11:10"; "launch-fleet: held for #23")' -- check < /dev/null
 expect 'a held label stops a start; with no hold of launch-fleet'"'"'s behind it, it is left on' 0 check.json 'merge12 | issue(13; .labels += ["held"])' -- check < /dev/null
@@ -1252,10 +1246,10 @@ EOF
 expect 'a held ticket starts once a new revision approves it' 0 check.json 'merge12 | contract23 | say(13; 1301; "11:10"; "launch-fleet: held for #23") | approve(10; 1002; "11:20"; 2; [11, 12, 13, 14])' -- check <<EOF
 start #13: W3: widget page (spec #10)
 EOF
-expect 'merged pull requests read across pages, files cached' 0 check.json 'contract23 | merged_pr(24; 98; "10:30"; [changed("README.md"; "modified")]) | merged_pr(25; 97; "10:40"; [changed("docs/widgets/a.md"; "modified"), changed("docs/widgets/b.md"; "modified"), changed("docs/widgets/c.md"; "added")])' FAKE_GH_PAGE=1 -- holds <<EOF
+expect 'merged pull requests read across pages, files cached' 0 check.json 'contract23 | merged_pr(24; 98; "10:30"; [changed("README.md"; "modified")]) | merged_pr(25; 97; "10:40"; [changed("docs/widgets/a.md"; "modified"), changed("docs/widgets/b.md"; "modified"), changed("docs/widgets/c.md"; "added")]) | say(13; 1301; "10:50"; "launch-fleet: start checked, thread thr_syn13, branch room/13-widget-cccc")' FAKE_GH_PAGE=1 -- holds <<EOF
 note #12: contracts/widget.v1.md changed in #23; tell its builder, thread thr_syn12
-hold #13: contracts/widget.v1.md changed in #23
-hold #13: docs/widgets/a.md, docs/widgets/b.md changed in #25
+note #13: contracts/widget.v1.md changed in #23; tell its builder, thread thr_syn13
+note #13: docs/widgets/a.md, docs/widgets/b.md changed in #25; tell its builder, thread thr_syn13
 EOF
 log_has 'merged pull requests read across pages' 4 '^graphql Merged'
 log_has 'merged pull requests read across pages' 3 '^files 25$'
@@ -1403,8 +1397,8 @@ EOF
 
 ### A person's ticket under a changed contract
 
-expect 'a person'"'"'s ticket whose contract changed is held, not announced (Sol R3)' 0 check.json 'merge12 | issue(13; .labels = ["ready-for-human"]) | approve(10; 1002; "09:50"; 2; [11, 12, [13, "ready-for-human"], 14]) | contract23' -- check <<EOF
-hold #13: contracts/widget.v1.md changed in #23
+expect 'a person'"'"'s ticket is announced after a contract change' 0 check.json 'merge12 | issue(13; .labels = ["ready-for-human"]) | approve(10; 1002; "09:50"; 2; [11, 12, [13, "ready-for-human"], 14]) | contract23' -- check <<EOF
+person #13: W3: widget page (spec #10) is ready, and only the user can do it
 EOF
 expect 'a held person'"'"'s ticket stays quiet until approved again' 0 check.json 'merge12 | issue(13; .labels = ["held"]) | approve(10; 1002; "09:50"; 2; [11, 12, [13, "ready-for-human"], 14]) | contract23 | say(13; 1301; "10:30"; "launch-fleet: held for #23: contract changed, re-approve.")' -- check < /dev/null
 expect 'a person'"'"'s ticket approved again since its hold is released before it is announced' 0 check.json 'merge12 | issue(13; .labels = ["held", "ready-for-human"]) | approve(10; 1002; "09:50"; 2; [11, 12, [13, "ready-for-human"], 14]) | contract23 | held_at(13; "10:29") | say(13; 1301; "10:30"; "launch-fleet: held for #23: contract changed, re-approve.") | approve(10; 1003; "11:20"; 3; [11, 12, [13, "ready-for-human"], 14])' -- check <<EOF
@@ -1492,7 +1486,6 @@ review #32 for #70 at $(sha 32): first review
 EOF
 expect 'a held issue approved on its own starts once approved again' 0 check.json 'issue(70; .body = "**Relies on:** `contracts/widget.v1.md`") | own_approval(70; 7002; "09:00") | contract23 | say(70; 7003; "10:30"; "launch-fleet: held for #23") | own_approval(70; 7004; "11:00")' -- check <<EOF
 note #12: contracts/widget.v1.md changed in #23; tell its builder, thread thr_syn12
-hold #13: contracts/widget.v1.md changed in #23
 start #70: Fix the broken link in the widget docs (approved on its own)
 EOF
 expect 'a closed issue approved on its own gets its builder archived' 0 check.json 'say(70; 7002; "09:00"; "**Approved on its own by Robin, 2026-11-01:** \"approve #70\"") | say(70; 7003; "09:10"; "launch-fleet: start checked, thread thr_syn70, branch room/70-fix-eeee") | issue(70; .state = "CLOSED")' -- check <<EOF
@@ -2056,7 +2049,8 @@ expect 'a low finding added after the approval starts once a new revision covers
 #55 G11: gadget filter
 #57 G13: a low finding, filed after the approval
 EOF
-expect 'a contract hold due stops a start' 0 frontier.json 'issue(41; .body = "**Relies on:** `contracts/gadget.v1.md`") | merged_pr(75; 98; "10:00"; [changed("contracts/gadget.v1.md"; "modified")])' -- frontier <<EOF
+expect 'a relied-on contract change leaves a ticket on the frontier' 0 frontier.json 'issue(41; .body = "**Relies on:** `contracts/gadget.v1.md`") | merged_pr(75; 98; "10:00"; [changed("contracts/gadget.v1.md"; "modified")])' -- frontier <<EOF
+#41 G1: gadget reader
 #45 G5: gadget import
 #55 G11: gadget filter
 EOF
@@ -2436,8 +2430,8 @@ expect 'stall: an unknown reopen reason is not an automatic retry' 0 check.json 
 expect 'wake: an approved head merges' 0 check.json 'reviewing31 | pr_say(31; 3102; "11:40"; "VERDICT: APPROVE at \(sha(31))")' -- wake 31 <<EOF
 merge #31 for #12 at $S31: APPROVE and CI green
 EOF
-expect 'wake: a changed contract holds the ticket it names, which never starts' 0 check.json 'merge12 | contract23' -- wake 13 <<EOF
-hold #13: contracts/widget.v1.md changed in #23
+expect 'wake: a relied-on contract change leaves the ticket ready to start' 0 check.json 'merge12 | contract23' -- wake 13 <<EOF
+start #13: W3: widget page (spec #10)
 EOF
 
 # A refusal's record is itself a message: a refused start or review is tried
@@ -3110,17 +3104,14 @@ expect 'takeover R3: a takeover claim with no outcome 10 minutes after its edit 
 reconcile start #12: claimed at 2026-11-01T11:45:00Z, no outcome after 10 minutes
 EOF
 
-# Sol's re-check of #1517 at 6277bb77 (R4): a contract change on a ticket whose
-# builder is out of the fleet thread's reach is a hold, not a lost note.
-expect "takeover R4: a contract change before the old builder's archive is a hold" 0 check.json "$FINDINGS31 | $FLEET10 | issue(13; .body = \"\") | contract23" -- spec 10 <<EOF
-hold #12: contracts/widget.v1.md changed in #23
+expect "takeover: a contract change before archive leaves the archive request due" 0 check.json "$FINDINGS31 | $FLEET10 | issue(13; .body = \"\") | contract23" -- spec 10 <<EOF
 look #12: archive thread [private thread]: its builder, started before fleet thread [private thread]
 EOF
-expect "takeover R4: a contract change after the old builder's archive is a hold, and starts nothing" 0 check.json "$ARCH12 | issue(13; .body = \"\") | contract23" -- spec 10 <<EOF
-hold #12: contracts/widget.v1.md changed in #23
+expect "takeover: a contract change after archive allows a replacement builder" 0 check.json "$ARCH12 | issue(13; .body = \"\") | contract23" -- spec 10 <<EOF
+take over #12: builder thread thr_syn12 is archived; start a builder to continue branch room/12-w2-widget-store-bbbb (its record: comment 1201)
 EOF
-expect 'takeover R4: a contract change on a takeover retry with its pull request open is a hold' 0 check.json "$ARCH12 | issue(13; .body = \"\") | contract23 | edit(12; 1201; \"11:45\"; \"launch-fleet: start refused: synthetic reason\")" -- spec 10 <<EOF
-hold #12: contracts/widget.v1.md changed in #23
+expect 'takeover: a contract change does not block a retry with the pull request open' 0 check.json "$ARCH12 | issue(13; .body = \"\") | contract23 | edit(12; 1201; \"11:45\"; \"launch-fleet: start refused: synthetic reason\")" -- spec 10 <<EOF
+take over #12: builder thread thr_syn12 is archived; start a builder to continue branch room/12-w2-widget-store-bbbb (its record: comment 1201; retry after "start refused: synthetic reason")
 EOF
 expect 'takeover R4: once held, a takeover waits for the new approval' 0 check.json "$ARCH12 | issue(13; .body = \"\") | contract23 | issue(12; .labels = [\"held\"]) | say(12; 1295; \"11:50\"; \"launch-fleet: held for #23: contract changed, re-approve. contracts/widget.v1.md changed in #23.\")" -- spec 10 < /dev/null
 
@@ -3287,8 +3278,8 @@ re-approve #10: changed since revision 1 (fingerprint now $ORDER_STALE_FP)
 EOF_ORDER
 expect 'ordering: manual hold cannot be inferred from a closed blocker' 0 check.json 'merge12 | issue(13; .labels = ["held"]) | held_at(13; "11:09") | say(13; 1301; "11:10"; "Orchestrator: manual hold until I approve.")' -- check < /dev/null
 expect 'ordering: contract hold still needs reapproval' 0 check.json "$ORDER13 | $ORDER71 | say(13; 1302; \"11:20\"; \"launch-fleet: held for #72: contract changed, re-approve.\")" -- check < /dev/null
-expect 'ordering: due contract change prevents release' 0 check.json "$ORDER13 | $ORDER71 | contract23" -- check <<EOF_ORDER
-hold #13: contracts/widget.v1.md changed in #23
+expect 'ordering: a contract change does not prevent an ordering release' 0 check.json "$ORDER13 | $ORDER71 | contract23" -- check <<EOF_ORDER
+release #13: ordering hold 1301; issue #71 merged to main; restore ready-for-agent and remove held
 EOF_ORDER
 expect 'ordering: production live hold is not an ordering record' 0 check.json "$ORDER13 | $ORDER71 | edit(13; 1301; \"11:10\"; \"launch-fleet: held for production/live: wait for #71\")" -- check < /dev/null
 expect 'ordering: new manual label ownership defeats older ordering evidence' 0 check.json "$ORDER13 | $ORDER71 | held_at(13; \"11:40\")" -- check < /dev/null
@@ -3401,20 +3392,20 @@ OB7CLAIM='say(13; 1303; "11:55"; "launch-fleet: release starting 1301")'
 expect 'OB7: an answered contract hold with nothing newer is released' 0 check.json "$OB7" -- check <<EOF
 release #13: approved again since its hold; take the held label off
 EOF
-expect 'OB7: a contract merge after the approval holds instead of releasing' 0 check.json "$OB7 | $OB7LATE" -- check <<EOF
-hold #13: contracts/widget.v1.md changed in #26
+expect 'OB7: a later contract merge does not block release' 0 check.json "$OB7 | $OB7LATE" -- check <<EOF
+release #13: approved again since its hold; take the held label off
 EOF
-expect 'OB7: a wake holds instead of releasing past a later contract merge' 0 check.json "$OB7 | $OB7LATE" -- wake 13 <<EOF
-hold #13: contracts/widget.v1.md changed in #26
+expect 'OB7: a wake releases the existing hold after a later merge' 0 check.json "$OB7 | $OB7LATE" -- wake 13 <<EOF
+release #13: approved again since its hold; take the held label off
 EOF
-expect 'OB7: a renamed contract after the approval holds instead of releasing' 0 check.json "$OB7 | merged_pr(26; 99; \"11:45\"; [{filename: \"contracts/widget.v2.md\", status: \"renamed\", previous_filename: \"contracts/widget.v1.md\"}])" -- check <<EOF
-hold #13: contracts/widget.v1.md changed in #26
+expect 'OB7: a renamed contract does not block release' 0 check.json "$OB7 | merged_pr(26; 99; \"11:45\"; [{filename: \"contracts/widget.v2.md\", status: \"renamed\", previous_filename: \"contracts/widget.v1.md\"}])" -- check <<EOF
+release #13: approved again since its hold; take the held label off
 EOF
-expect 'OB7: a deleted contract after the approval holds instead of releasing' 0 check.json "$OB7 | merged_pr(26; 99; \"11:45\"; [changed(\"contracts/widget.v1.md\"; \"removed\")])" -- check <<EOF
-hold #13: contracts/widget.v1.md changed in #26
+expect 'OB7: a deleted contract does not block release' 0 check.json "$OB7 | merged_pr(26; 99; \"11:45\"; [changed(\"contracts/widget.v1.md\"; \"removed\")])" -- check <<EOF
+release #13: approved again since its hold; take the held label off
 EOF
-expect 'OB7: a person'"'"'s ticket holds instead of releasing past a later contract merge' 0 check.json "$OB7 | approve(10; 1003; \"11:35\"; 3; [11, 12, [13, \"ready-for-human\"], 14]) | $OB7LATE" -- check <<EOF
-hold #13: contracts/widget.v1.md changed in #26
+expect 'OB7: a person'"'"'s ticket releases after a later contract merge' 0 check.json "$OB7 | approve(10; 1003; \"11:35\"; 3; [11, 12, [13, \"ready-for-human\"], 14]) | $OB7LATE" -- check <<EOF
+release #13: approved again since its hold; take the held label off
 EOF
 expect 'OB7: a plan changed since its approval releases nothing' 0 check.json "$OB7 @@then@@ issue(14; .blockedBy = [12])" -- check <<EOF
 re-approve #10: changed since revision 2 (fingerprint now e9f6f2a713ac)
@@ -3425,8 +3416,12 @@ withdraw #13: that ordering release is not due or an older claim holds it
 EOF
 expect 'OB7: a partial relabel under an unresolved claim starts nothing' 0 check.json "$OB7 | issue(13; .labels = [\"ready-for-agent\"]) | $OB7CLAIM" -- check < /dev/null
 expect 'OB7: a newer manual hold keeps the contract hold held' 0 check.json "$OB7 | say(13; 1302; \"11:40\"; \"launch-fleet: held manual: owner decision required\")" -- check < /dev/null
-expect 'OB7: a noted contract merge after the approval still blocks the release' 0 check.json "$OB7 | $OB7LATE | say(13; 1304; \"11:46\"; \"launch-fleet: noted #26\")" -- check < /dev/null
-expect 'OB7: a contract merge at the approval time blocks the release' 0 check.json "$OB7 | merged_pr(26; 99; \"11:30\"; [changed(\"contracts/widget.v1.md\"; \"modified\")])" -- check < /dev/null
+expect 'OB7: a noted contract merge after approval does not block release' 0 check.json "$OB7 | $OB7LATE | say(13; 1304; \"11:46\"; \"launch-fleet: noted #26\")" -- check <<EOF
+release #13: approved again since its hold; take the held label off
+EOF
+expect 'OB7: a contract merge at the approval time does not block release' 0 check.json "$OB7 | merged_pr(26; 99; \"11:30\"; [changed(\"contracts/widget.v1.md\"; \"modified\")])" -- check <<EOF
+release #13: approved again since its hold; take the held label off
+EOF
 
 # #2112 (OB7): ON1 evidence checks; the release effect stays disabled.
 if [ -z "${TEST_ONLY:-}" ] || [ "$TEST_ONLY" = on1 ]; then

@@ -34,7 +34,7 @@ The orchestrator launches a fleet when the user approves a plan graph: check the
    `fleet.sh` only reads; it exits 2 with the reason when it can't. Nothing due: `room-cli loop report --outcome done --confidence high --reason "nothing due"`, archive yourself, end.
 4. **Do every line**, lines of one kind in parallel, with the table below. Claim before acting: post the claim, then `fleet.sh claim <N> <claim id>`; act only on `go #<N>`, and on `withdraw` edit the claim to its `withdrawn` form and stop. Resolve each assigned agent from private routing and deliver with `room-cli thread tell <id> --mode queue --message-file <file>`; record a delivery only when tell's own result confirms it. A refusal or unknown outcome stays claimed for reconciliation. Save a start or delivery identity in private state, and read it back, before recording its public success.
 5. **After a merge**, run `fleet.sh spec <S>` again (a tick: `fleet.sh`) and do what it unlocked in this wake.
-6. **Finish.** `room-cli loop report --outcome acted` (or `needs-you`) with one `--action` per change. Archive yourself (`room-cli thread archive --self`) once every record is written and you parent no active or unreconciled agent; otherwise leave that archive with the planner or orchestrator. End on unresolved work too.
+6. **Finish.** `room-cli loop report --outcome acted` (or `needs-you`) with one `--action` per change. Then, once every record and message is written, archive your own thread (`room-cli thread archive --self`) if you parent no active or unreconciled agent; otherwise leave that archive with the planner or orchestrator. End on unresolved work too.
 
 Done when every line is done and recorded and the check prints no line you could act on.
 
@@ -103,7 +103,7 @@ A `merge` line means CI is green and the selected reviewer's `VERDICT: APPROVE a
 4. **Merge:** `python3 -I scripts/merge.py merge <owner>/<repo> <P> <commit> <checks> "<the APPROVE and the plan approval it relies on>" --ticket <N>`, adding `--base-rule-checked` after step 3's base rule. It merges only that commit, never with `--admin`, reads it back and records `merge queued` or `merge blocked` itself. `merged <commit>; cost ...` is a **verified merge**, and it has posted the ticket's FM4 cost line (`launch-fleet: cost: ...`, or `cost unknown` with the reason; never zero). `pending:` means read again next wake. Pass the project's private flow files after `--` when it has them.
 5. **Close the ticket** if its `Closes #<N>` line didn't. A refused or blocked merge whose branch conflicts goes to the builder (merge `main` in, never rebase); anything else goes to the orchestrator. Never retry a refused merge as another account.
 
-A move of `main` alone never closes or reopens a pull request: only the re-test guard does ([references/reviews.md](references/reviews.md)).
+A move of `main` alone is never a reason to close and reopen a pull request: only the re-test guard reopens one ([references/reviews.md](references/reviews.md)).
 
 ## Fleet threads
 

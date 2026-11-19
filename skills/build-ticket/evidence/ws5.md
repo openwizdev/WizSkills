@@ -11,16 +11,16 @@ both branches are counted.
 
 | Evidence | Before | After |
 | --- | ---: | ---: |
-| Entrypoint lines (WS1 pin / pre-rewrite `main`) | 377 / 354 | 89 |
-| Entrypoint words (WS1 pin / pre-rewrite `main`) | 6,777 / 5,848 | 1,415 |
-| Entrypoint static tokens (WS1 pin) | 9,389 | 2,095 |
-| Static loaded-path tokens, no App token | 53,161 | 14,798 |
-| Static loaded-path tokens, App token mints | 53,161 | 40,032 |
+| Entrypoint lines (WS1 pin / pre-rewrite `main`) | 377 / 354 | 91 |
+| Entrypoint words (WS1 pin / pre-rewrite `main`) | 6,777 / 5,848 | 1,590 |
+| Entrypoint static tokens (WS1 pin) | 9,389 | 2,358 |
+| Static loaded-path tokens, no App token | 53,161 | 15,061 |
+| Static loaded-path tokens, App token mints | 53,161 | 43,800 |
 | Observed workflow outcome | Pass | Unmeasured |
 | Observed workflow token counts and wall time | Unknown | Unknown |
 
-Conditional references carry static token counts of 718 for
-`references/review.md` and 566 for `references/ops.md`. These references are
+Conditional references carry static token counts of 804 for
+`references/review.md` and 644 for `references/ops.md`. These references are
 outside the regression branch. The entrypoint includes the full license notice
 that the WizSkills checker requires.
 
@@ -28,8 +28,11 @@ The before values come from the
 [WS1 static baseline](../../../tools/measure/evidence/static-baseline.json)
 and [LV1 receipts](../../../tools/measure/evidence/lv1.json) at
 `89fc285ce551f341b8d308732bcd8d4467ace353`. The
-[after path manifest](ws5-after-paths.json) pins the candidate text, and the
-[static count](ws5-static-after.json) uses the same tokenizer and encoding.
+[after path manifest](ws5-after-paths.json) pins the repaired text after
+the first review. The App branch also counts the GitHub identity contract,
+matching WS1's path scope (the first count omitted it). The [static count](ws5-static-after.json) uses the same tokenizer and
+encoding. The unmeasured trial below ran at the earlier candidate `b38d2e6`;
+the static count is a separate size estimate of the repaired text.
 To regenerate it, run
 `node tools/measure/static-count.cjs skills/build-ticket/evidence/ws5-after-paths.json <tokenizer>`
 from the WizSkills root, using `js-tiktoken@1.0.21`.
@@ -59,16 +62,20 @@ size estimate of the required paths, not an observation.
 
 `scripts/ticket.py` now does the mechanics that the text used to spell out:
 
-- reading the ticket's owned paths and readiness
-- checking every changed path, including both sides of a rename and untracked files
-- reading the record-author row and the newest trusted verdict against the current head
+- reading the ticket's repository-bound owned paths, complete blocker data, blockers closed as completed and the record-author fleet start
+- checking every changed path, including both sides of a rename and untracked files, against the paths owned in this checkout's repository
+- reading record authors only from the GitHub identity table, the newest exact verdict header against the current head, a decision bound to its parked findings at the current head, and trusted ticket answers
 - setting the noreply author
-- keeping and posting the first-successful-push receipt with read-back
+- keeping the first-successful-push receipt, leaving it unknown after an unrecorded earlier push, and posting it once as a record author with read-back after a lost or timed-out response
 
 Run `python3 -I skills/build-ticket/scripts/test_ticket.py -v`, which
 `check/run.py` also runs. All 17 tests first failed against a stub that
 exits 2 for every command. Each failure reached its own assertion, as shown in
-[ws5-red.txt](ws5-red.txt).
+[ws5-red.txt](ws5-red.txt). After the first review (R1 to R5), the 16 new
+or changed cases failed at their own assertions against `e88fcf3`, while
+the 13 kept cases passed. That run is
+[ws5-review-red.txt](ws5-review-red.txt). All 29 cases pass after the fix.
+R6 restores ops-wake text, which has no script.
 
 Each guard below was broken in a temporary copy of the implementation. The
 named test then failed, and restoring the copy made it pass.
@@ -90,6 +97,18 @@ named test then failed, and restoring the copy made it pass.
 | Post without reading back first | `test_post_receipt_survives_a_lost_response_and_never_posts_twice` |
 | Lost POST response treated as not posted | `test_post_receipt_survives_a_lost_response_and_never_posts_twice` |
 | Author email not the noreply form | `test_author_sets_the_users_noreply_identity` |
+| R1: verdict SHA read anywhere in the body | `test_records_reads_only_a_full_verdict_header` |
+| R1: decision head not checked | `test_records_binds_a_decision_to_its_parked_finding_and_head` |
+| R1: decision's parked finding not checked | `test_records_binds_a_decision_to_its_parked_finding_and_head` |
+| R1: authors row read outside the identity table | `test_records_reads_authors_only_from_the_identity_table` |
+| R2: repository qualifier ignored | `test_scope_applies_owned_paths_only_in_their_repository` |
+| R2: `--owned` accepted without an annotated bullet | `test_scope_accepts_annotated_and_hand_resolved_paths` |
+| R3: blocker closed as not completed accepted | `test_read_requires_completed_blockers_and_the_fleet_start` |
+| R3: fleet start record not required | `test_read_requires_completed_blockers_and_the_fleet_start` |
+| R3: incomplete blocker data accepted | `test_read_refuses_incomplete_blocker_data` |
+| R4: earlier unrecorded push ignored | `test_push_after_an_unrecorded_earlier_push_stays_unknown` |
+| R5: a copy by any author accepted | `test_post_receipt_ignores_a_copy_by_anyone_else` |
+| R5: read-back failure not reported as unknown | `test_post_receipt_without_a_read_back_is_unknown` |
 
 ## SK-E: guards
 
@@ -98,13 +117,20 @@ named test then failed, and restoring the copy made it pass.
   checkout.
 - **Approval.** The skill states the rules for owned paths, supporting
   edits, standing rules, shared files, ticket bodies and asking first. The
-  `scope` command enforces them, and ops-dispatch envelopes and grants are in
-  `references/ops.md`.
-- **Records.** The skill states the record-author rule, and the `records`
-  command enforces it. Without a valid authors row, it trusts nobody.
+  `scope` command enforces them before each commit and at hand-back. Paths
+  are bound to their repositories. `read` requires blockers closed as completed
+  and the fleet's start record. Ops-dispatch envelopes, grants and the
+  authorized-wake, OB-A1 and OB8 limits are in `references/ops.md`.
+- **Records.** The skill states the record-author rule, the current-head
+  binding of verdicts and decisions, and the parked-finding binding inline.
+  The `records` command enforces them on pull requests and tickets. Without a
+  valid authors row in the identity table, it trusts nobody. A first-push
+  receipt is reused or confirmed only from a record author.
 - **Builder and reviewer.** The builder never reviews, merges or delegates,
   uses no helper agents, never waits awake, follows the 1 + 1 loop with its
   `Next:` states and archives itself after a merge or close (CW16).
 
-No build-ticket suite existed before this change, and no test was deleted.
+No build-ticket suite existed before this change. The review repair changed
+expected output lines only in this change's own new tests, and no test was
+deleted.
 The skill rules, the standalone check and every other suite run unchanged.

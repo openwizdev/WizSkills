@@ -97,6 +97,7 @@ seg = [unquote(s) for s in parts.path.split('/')]
 def edit(c, text):
     # GitHub keeps a comment's edit history: its first edit records the original too.
     c.setdefault('edits', [c['body']]).append(text)
+    c.setdefault('edited_at', [c['updated']]).append(now)
     c['body'] = text; c['updated'] = now
 if path == 'graphql' and 'userContentEdits' in body['query']:
     assert method == 'POST' and 'mutation' not in body['query'], body
@@ -104,9 +105,10 @@ if path == 'graphql' and 'userContentEdits' in body['query']:
         for c in it['comments']:
             if 'IC_%d' % c['id'] == body['variables']['id'] and not world.get('history_fails'):
                 # Newest first, each node the full body of that version, as GitHub answers.
-                shown = list(reversed(c.get('edits', [])))[1 if world.get('history_stale') else 0:]
+                shown = list(reversed(list(zip(c.get('edits', []), c.get('edited_at', [])))))
+                shown = shown[1 if world.get('history_stale') else 0:]
                 out({'data': {'node': {'userContentEdits': {'nodes': [
-                    {'diff': text} for text in shown][:body['variables'].get('n', 2)]}}}})
+                    {'diff': text, 'editedAt': at} for text, at in shown][:body['variables'].get('n', 2)]}}}})
     out({'data': {'node': None}})
 if path == 'graphql' and 'viewer' in body['query']:
     assert method == 'POST' and 'mutation' not in body['query'], body
@@ -580,15 +582,38 @@ class EditRace(Tracker):
         self.world['race_edit'] = [{'edit': 104, 'body': released}]
         self.world['history_fails'] = True
         self.save()
-        first = self.write('working', 'CI finished', '2030-01-02T03:00:00Z', '--note', '104')
+        # The writer stamps time when it starts, before its read: here a minute before the release.
+        first = self.write('working', 'CI finished', ago(1), '--note', '104')
         self.assertEqual((first.returncode, first.stdout), (2, ''))
         world = self.load()
         world['history_fails'] = False
         (self.dir / 'world.json').write_text(json.dumps(world))
-        again = self.write('working', 'CI finished', '2030-01-02T03:01:00Z', '--note', '104')
+        again = self.write('working', 'CI finished', ago(0), '--note', '104')
         self.assertEqual((again.returncode, again.stdout), (3, ''))
         self.assertIn('note 104 was done before this edit landed', again.stderr)
         self.assertEqual(self.ticket()['comments'][-1]['body'], released)
+
+    def test_a_resumed_done_note_written_again_holds(self):
+        # catches: the retry skip walking past this agent's own resume of a done note it read,
+        # so writing the same step again (or re-running after exit 2) puts the done back and
+        # exits 3, which stops build-ticket's fix round (#57 R1).
+        base = json.loads(json.dumps(self.world))
+        handed = note(state='done', step='handed back', pr='https://github.com/example/tracker/pull/31')
+        for name in ('the same step again', 'a retry after exit 2'):
+            with self.subTest(name):
+                self.world = json.loads(json.dumps(base))
+                self.ticket(self.world)['comments'].append(comment(104, BOT, handed))
+                self.world['history_fails'] = name == 'a retry after exit 2'
+                self.save()
+                first = self.write('working', 'fixing review findings', ago(0), '--note', '104')
+                self.assertEqual(first.returncode, 2 if self.world['history_fails'] else 0, first.stderr)
+                world = self.load()
+                world['history_fails'] = False
+                (self.dir / 'world.json').write_text(json.dumps(world))
+                again = self.write('working', 'fixing review findings', ago(0), '--note', '104')
+                self.assertEqual((again.returncode, again.stdout),
+                                 (0, '#12: builder working, status note 104 edited\n'), again.stderr)
+                self.assertIn('state: working', self.ticket()['comments'][-1]['body'])
 
     def test_an_edit_steps_down_for_an_older_note_that_came_back_live(self):
         # catches: an edit read-back that steps down only for a newer note, leaving two live

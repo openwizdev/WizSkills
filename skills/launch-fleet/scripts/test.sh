@@ -3373,11 +3373,21 @@ OB7CLAIM='say(13; 1303; "11:55"; "launch-fleet: release starting 1301")'
 expect 'OB7: an answered contract hold with nothing newer is released' 0 check.json "$OB7" -- check <<EOF
 release #13: approved again since its hold; take the held label off
 EOF
-expect 'OB7: a later contract merge leaves the existing hold without printing a new hold' 0 check.json "$OB7 | $OB7LATE" -- check < /dev/null
-expect 'OB7: a wake leaves the existing hold in place after a later merge' 0 check.json "$OB7 | $OB7LATE" -- wake 13 < /dev/null
-expect 'OB7: a renamed contract blocks release of the existing hold' 0 check.json "$OB7 | merged_pr(26; 99; \"11:45\"; [{filename: \"contracts/widget.v2.md\", status: \"renamed\", previous_filename: \"contracts/widget.v1.md\"}])" -- check < /dev/null
-expect 'OB7: a deleted contract blocks release of the existing hold' 0 check.json "$OB7 | merged_pr(26; 99; \"11:45\"; [changed(\"contracts/widget.v1.md\"; \"removed\")])" -- check < /dev/null
-expect 'OB7: a person'"'"'s ticket keeps its existing hold after a later contract merge' 0 check.json "$OB7 | approve(10; 1003; \"11:35\"; 3; [11, 12, [13, \"ready-for-human\"], 14]) | $OB7LATE" -- check < /dev/null
+expect 'OB7: a later contract merge does not block release' 0 check.json "$OB7 | $OB7LATE" -- check <<EOF
+release #13: approved again since its hold; take the held label off
+EOF
+expect 'OB7: a wake releases the existing hold after a later merge' 0 check.json "$OB7 | $OB7LATE" -- wake 13 <<EOF
+release #13: approved again since its hold; take the held label off
+EOF
+expect 'OB7: a renamed contract does not block release' 0 check.json "$OB7 | merged_pr(26; 99; \"11:45\"; [{filename: \"contracts/widget.v2.md\", status: \"renamed\", previous_filename: \"contracts/widget.v1.md\"}])" -- check <<EOF
+release #13: approved again since its hold; take the held label off
+EOF
+expect 'OB7: a deleted contract does not block release' 0 check.json "$OB7 | merged_pr(26; 99; \"11:45\"; [changed(\"contracts/widget.v1.md\"; \"removed\")])" -- check <<EOF
+release #13: approved again since its hold; take the held label off
+EOF
+expect 'OB7: a person'"'"'s ticket releases after a later contract merge' 0 check.json "$OB7 | approve(10; 1003; \"11:35\"; 3; [11, 12, [13, \"ready-for-human\"], 14]) | $OB7LATE" -- check <<EOF
+release #13: approved again since its hold; take the held label off
+EOF
 expect 'OB7: a plan changed since its approval releases nothing' 0 check.json "$OB7 @@then@@ issue(14; .blockedBy = [12])" -- check <<EOF
 re-approve #10: changed since revision 2 (fingerprint now e9f6f2a713ac)
 EOF
@@ -3387,8 +3397,12 @@ withdraw #13: that ordering release is not due or an older claim holds it
 EOF
 expect 'OB7: a partial relabel under an unresolved claim starts nothing' 0 check.json "$OB7 | issue(13; .labels = [\"ready-for-agent\"]) | $OB7CLAIM" -- check < /dev/null
 expect 'OB7: a newer manual hold keeps the contract hold held' 0 check.json "$OB7 | say(13; 1302; \"11:40\"; \"launch-fleet: held manual: owner decision required\")" -- check < /dev/null
-expect 'OB7: a noted contract merge after the approval still blocks the release' 0 check.json "$OB7 | $OB7LATE | say(13; 1304; \"11:46\"; \"launch-fleet: noted #26\")" -- check < /dev/null
-expect 'OB7: a contract merge at the approval time blocks the release' 0 check.json "$OB7 | merged_pr(26; 99; \"11:30\"; [changed(\"contracts/widget.v1.md\"; \"modified\")])" -- check < /dev/null
+expect 'OB7: a noted contract merge after approval does not block release' 0 check.json "$OB7 | $OB7LATE | say(13; 1304; \"11:46\"; \"launch-fleet: noted #26\")" -- check <<EOF
+release #13: approved again since its hold; take the held label off
+EOF
+expect 'OB7: a contract merge at the approval time does not block release' 0 check.json "$OB7 | merged_pr(26; 99; \"11:30\"; [changed(\"contracts/widget.v1.md\"; \"modified\")])" -- check <<EOF
+release #13: approved again since its hold; take the held label off
+EOF
 
 # #2112 (OB7): ON1 evidence checks; the release effect stays disabled.
 if [ -z "${TEST_ONLY:-}" ] || [ "$TEST_ONLY" = on1 ]; then

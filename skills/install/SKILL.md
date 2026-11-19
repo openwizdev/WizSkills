@@ -1,6 +1,7 @@
 ---
 name: install
 description: Install OpenWiz from its one line, "Install OpenWiz from github.com/openwizdev/OpenWiz", then optionally run a resumable first fleet. Checks the machine, installs the verified prebuilt release (no Rust or Node), checks setup's connections, and on the first-fleet branch connects one repository and starts its fleet through launch-fleet. Use to install, repair, update or remove OpenWiz, or to start or resume a first fleet. For a project's docs/agents/ settings alone, use setup.
+version: 0.2.0
 ---
 
 # Install OpenWiz

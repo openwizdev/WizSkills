@@ -1,6 +1,7 @@
 ---
 name: huntr
 description: Run one hunt for small, unplanned, proven fixes under the project's approved risk tiers. One controller holds the lease, sends a hunter per area and category, proves each finding, files it and asks the approval gate. Use when a huntr loop or the orchestrator starts a hunt; not for planned tickets (triage, build-ticket) or one known bug (diagnose).
+version: 0.2.0
 ---
 
 # huntr

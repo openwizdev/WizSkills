@@ -1,0 +1,1 @@
+# Failing-first CLI scaffold.

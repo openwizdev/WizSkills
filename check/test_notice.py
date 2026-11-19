@@ -48,6 +48,10 @@ class NoticeRule(unittest.TestCase):
         self.assertEqual([f for f, _ in found], ['skills/demo/SKILL.md'])
         self.assertIn('NOTICE.md', found[0][1])
 
+    def test_credit_link_only_mid_body_is_refused(self):
+        found = notice_findings(FRONT + '\n' + CREDIT + '\n## Later\n\nMore steps.\n', NOTICE)
+        self.assertEqual([f for f, _ in found], ['skills/demo/SKILL.md'])
+
 
 if __name__ == '__main__':
     unittest.main()

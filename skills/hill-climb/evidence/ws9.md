@@ -71,3 +71,17 @@ unchanged.
 
 All 9 earlier screenshot proofs are unchanged. The fixture server gained one
 `/wide` route for the overflow proof.
+
+## Review round (R1–R3)
+
+These findings come from the review at `e3076f7`, and each was proved red first.
+
+- **R1:** with `--fixed-at-bottom`, the overflow summary ignored the first-screen measurement. A height-sensitive phone fixture (`/short-wide`) is 600 px wide on the 844 px first screen and 390 px at page height. It printed `overflow: none` ([red](../../image/evidence/ws9-r1-red.txt), commit `cd94432`). The summary now prints `overflow: phone first screen 600 > 390`.
+- **R2:** the council chart once again plots each category's mean per round for the best candidate and for each reference, with the per-judge `table` behind it.
+- **R3:** the judge brief again lists what judges receive and withholds the stop condition. The controller keeps the stop.
+- R2 and R3 failed as text cases before the fix ([red](ws9-r2-r3-red.txt), commit `aa4556a`).
+
+Static recount at fix commit `4d11f0aeac7dd2f05dc175982d5c404064297eee`
+([paths](ws9-recheck-paths.json), [count](ws9-recheck-static.json)): hill-climb is
+106 lines, 1,880 words and 2,970 tokens (before: 6,432; −53.8%). image's
+entrypoint is unchanged at 1,770 tokens. No observed trial ran.

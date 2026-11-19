@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""settings.py check: the read-back setup's last step relies on (#1183).
+
+Each case writes a synthetic docs/agents/ folder, runs the public command and
+reads only its exit code and short result.
+"""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+SCRIPT = Path(__file__).resolve().parent / 'settings.py'
+
+
+def table(title, provider, model):
+    return ('## %s\n\nOne line.\n\n| Setting | Value | `room-cli thread spawn` flag |\n| --- | --- | --- |\n'
+            '| Harness | Synthetic | `--provider %s` |\n| Model | Synthetic | `--model %s` |\n'
+            '| Effort | High | `--reasoning-level high` |\n\nSource: synthetic decision.\n\n' % (title, provider, model))
+
+
+FLEET = ('# Fleet settings\n\nIntro.\n\n'
+         + table('Builder', 'claude-code', 'syn-claude-1')
+         + table('Builder for small tickets', 'codex', 'syn-codex-1')
+         + table('Reviewer for Claude-built', 'codex', 'syn-codex-1')
+         + table('Reviewer for GPT-built', 'claude-code', 'syn-claude-1')
+         + '## Test commands\n\n| # | Folder | Command | CI check |\n| --- | --- | --- | --- |\n'
+           '| 1 | root | `make test` | `build` |\n\nSource: synthetic workflow.\n\n'
+           '## CI checks\n\n| Check | Runs | Required on |\n| --- | --- | --- |\n| `build` | 1 | `main` |\n\n'
+           'Source: synthetic workflow.\n\n'
+           '## Standing merge rules\n\nNone yet: every merge waits for the user.\n\nSource: synthetic.\n\n'
+           '## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n'
+           '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |\n\nSource: synthetic.\n')
+ROLES = ('needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix')
+LABELS = ('# Triage labels\n\n## Labels\n\n| Role | Label here | Meaning |\n| --- | --- | --- |\n'
+          + ''.join('| `%s` | `%s` | Synthetic |\n' % (r, r) for r in ROLES))
+FILES = {'fleet.md': FLEET, 'triage-labels.md': LABELS,
+         'issue-tracker.md': '# Issue tracker: GitHub\n\nSynthetic.\n', 'domain.md': '# Domain docs\n\nSynthetic.\n'}
+
+
+class Check(unittest.TestCase):
+
+    def project(self, **changes):
+        root = Path(tempfile.mkdtemp(prefix='setup-check-'))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / 'docs/agents').mkdir(parents=True)
+        for name, text in dict(FILES, **changes).items():
+            if text is not None:
+                (root / 'docs/agents' / name).write_text(text)
+        return root
+
+    def check(self, root, *args):
+        result = subprocess.run([sys.executable, '-I', str(SCRIPT), 'check', '--root', str(root), *args],
+                                capture_output=True, text=True, timeout=60)
+        return result.returncode, result.stdout
+
+    def test_complete_settings_read_back_verified(self):
+        # catches: a correct project refused, so no fleet can start after setup.
+        code, out = self.check(self.project())
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.splitlines()[-1], 'Settings: verified (4 files).')
+
+    def test_a_missing_setting_is_named_and_repair_reads_back(self):
+        # catches: setup reporting done while a setting every fleet reads is gone
+        # (the setup.repair case), or a repaired file still refused.
+        broken = FLEET.replace('| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |\n', '')
+        root = self.project(**{'fleet.md': broken})
+        code, out = self.check(root)
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: GitHub identity: no Record authors row', out)
+        (root / 'docs/agents/fleet.md').write_text(FLEET)
+        self.assertEqual(self.check(root)[0], 0)
+
+    def test_every_required_file_and_section_is_named_when_missing(self):
+        # catches: a missing settings file or section passed over silently.
+        code, out = self.check(self.project(**{'domain.md': None, 'fleet.md': FLEET.replace('## CI checks', '## Checks')}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('domain.md: missing', out)
+        self.assertIn('fleet.md: no ## CI checks section', out)
+
+    def test_a_linked_settings_file_is_refused(self):
+        # catches: a settings file read through a link to somewhere outside the project.
+        root = self.project()
+        outside = Path(tempfile.mkdtemp(prefix='setup-outside-'))
+        self.addCleanup(shutil.rmtree, outside, True)
+        (outside / 'fleet.md').write_text(FLEET)
+        (root / 'docs/agents/fleet.md').unlink()
+        os.symlink(outside / 'fleet.md', root / 'docs/agents/fleet.md')
+        code, out = self.check(root)
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: not a regular file', out)
+
+    def test_a_reviewer_from_the_builders_family_is_refused(self):
+        # catches: a same-family reviewer table, which breaks the builder-reviewer split.
+        same = FLEET.replace(table('Reviewer for Claude-built', 'codex', 'syn-codex-1'),
+                             table('Reviewer for Claude-built', 'claude-code', 'syn-claude-1'))
+        code, out = self.check(self.project(**{'fleet.md': same}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Reviewer for Claude-built: claude-code is not from another model family', out)
+
+    def test_an_unfilled_template_value_or_unsourced_table_is_refused(self):
+        # catches: a template placeholder or a value with no source shipped as a setting.
+        placeholder = FLEET.replace('`--model syn-codex-1`', '`--model <id>`', 1)
+        code, out = self.check(self.project(**{'fleet.md': placeholder}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Builder for small tickets: unfilled <id>', out)
+        unsourced = FLEET.replace('Source: synthetic decision.\n\n## Reviewer for GPT-built',
+                                  '## Reviewer for GPT-built', 1)
+        code, out = self.check(self.project(**{'fleet.md': unsourced}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Reviewer for Claude-built: no Source line', out)
+
+    def test_each_triage_role_has_one_label_that_exists_once(self):
+        # catches: a role with no label or two, and a label missing from (or
+        # repeated in) the tracker, which leaves triage unable to sort.
+        twice = LABELS + '| `needs-info` | `waiting` | Synthetic |\n'
+        code, out = self.check(self.project(**{'triage-labels.md': twice}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('triage-labels.md: needs-info: mapped 2 times', out)
+        root = self.project()
+        saved = root / 'labels.json'
+        saved.write_text(json.dumps([{'name': n} for n in ROLES if n != 'wontfix'] + [{'name': 'needs-info'}]))
+        code, out = self.check(root, '--labels', str(saved))
+        self.assertEqual(code, 5, out)
+        self.assertIn('triage-labels.md: wontfix: label wontfix is not in the tracker', out)
+        self.assertIn('triage-labels.md: needs-info: label needs-info is in the tracker 2 times', out)
+
+    def test_usage_errors_exit_2(self):
+        # catches: a mistyped command read as a verified project.
+        result = subprocess.run([sys.executable, '-I', str(SCRIPT), 'verify'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertTrue(result.stdout.startswith('usage: settings.py check'), result.stdout)
+
+
+if __name__ == '__main__':
+    unittest.main()

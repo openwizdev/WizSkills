@@ -32,6 +32,7 @@ SUITES = {
     'diagnose': [['node', '--test', 'skills/diagnose/tests/hitl-loop.test.mjs']],
     'where-are-we': [['python3', '-I', 'skills/where-are-we/test/test_read_github.py']],
     'hill-climb': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/hill-climb/tests']],
+    'setup': [['python3', '-I', 'skills/setup/scripts/test_settings.py']],
     'image': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/image/tests'],
               ['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/image/references']],
     'to-spec': [['python3', '-I', 'skills/to-spec/test/test_video.py']],

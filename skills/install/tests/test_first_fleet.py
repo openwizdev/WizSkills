@@ -996,5 +996,65 @@ class DemoRepository(unittest.TestCase):
         self.assertEqual(self.world(j)['repos'], world['repos'], 'a repeat only reads')
         self.assertEqual(self.writes(j), [['POST', 'user/repos']])
 
+
+class Resume(unittest.TestCase):
+    """#1183: a fresh session resumes the first fleet from the private state alone.
+    `next` reads only that state and names the first unfinished step."""
+
+    def next(self, j):
+        before = j.state.read_bytes() if j.state.exists() else None
+        calls = (j.gh_creates(), j.logged(), j.spawns())
+        result = j.helper(['next'])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(j.state.read_bytes() if j.state.exists() else None, before, 'next never writes the state')
+        self.assertEqual((j.gh_creates(), j.logged(), j.spawns()), calls, 'next runs no gh, openwiz or room-cli')
+        return result.stdout
+
+    def test_a_fresh_session_resumes_at_the_first_unfinished_step(self):
+        # catches: a resumed journey that restarts from the top, or jumps past an
+        # unfinished step (a grill before Connect is carried, a launch before the spec is recorded).
+        j = Journey(self)
+        seen = []
+        for turn in JOURNEY['turns']:
+            if not seen or seen[-1] != turn['step']:
+                seen.append(turn['step'])
+                expected = {'explain': 'project', 'agents': 'grill'}.get(turn['step'], turn['step'])
+                self.assertEqual(self.next(j).splitlines()[0], 'Next: %s.' % expected, turn['step'])
+            if 'plan' in turn:
+                j.plan(turn['plan'])
+            elif turn.get('approve'):
+                j.approve()
+            elif 'setup' in turn:
+                j.write_setup(setup_state(turn['setup'], repository=REPO,
+                                          settings=tuple(j.settings[k] for k in ('harness', 'model', 'effort'))))
+            elif 'tool' in turn:
+                j.tool(turn)
+        self.assertIn('progress --spec 900', self.next(j))
+
+    def test_an_interrupted_or_withdrawn_step_is_resumed_not_skipped(self):
+        # catches: an uncertain create or start reported as done (inviting a second
+        # effect), and a withdrawn setup skipped because later choices are saved.
+        j = Journey(self)
+        j.repos.write_text(github(create='lost', fail_after_create=2))
+        self.assertEqual(j.helper(['create-repo', '--repo', REPO, '--yes']).returncode, 6)
+        said = self.next(j)
+        self.assertEqual(said.splitlines()[0], 'Next: project.')
+        self.assertIn('create-repo --repo %s' % REPO, said)
+        self.assertIn('reads before it creates', said)
+
+        j = Journey(self)
+        j.replay(until='launch')
+        self.assertEqual(j.tool(PREVIEW).returncode, 12)
+        self.assertEqual(j.tool(dict(YES, spawn=1)).returncode, 6)
+        said = self.next(j)
+        self.assertEqual(said.splitlines()[0], 'Next: launch.')
+        self.assertIn('uncertain', said)
+        self.assertIn('never start it again', said)
+
+        j.write_setup(setup_state(overrides={'personal_github': 'identity_no_push'}))
+        self.assertEqual(j.helper(['continue']).returncode, 5)
+        self.assertEqual(self.next(j).splitlines()[0], 'Next: connect.', 'a withdrawn setup is connected again')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -104,8 +104,9 @@ if path == 'graphql' and 'userContentEdits' in body['query']:
         for c in it['comments']:
             if 'IC_%d' % c['id'] == body['variables']['id'] and not world.get('history_fails'):
                 # Newest first, each node the full body of that version, as GitHub answers.
+                shown = list(reversed(c.get('edits', [])))[1 if world.get('history_stale') else 0:]
                 out({'data': {'node': {'userContentEdits': {'nodes': [
-                    {'diff': text} for text in reversed(c.get('edits', []))][:body['variables'].get('n', 2)]}}}})
+                    {'diff': text} for text in shown][:body['variables'].get('n', 2)]}}}})
     out({'data': {'node': None}})
 if path == 'graphql' and 'viewer' in body['query']:
     assert method == 'POST' and 'mutation' not in body['query'], body
@@ -570,6 +571,47 @@ class EditRace(Tracker):
         self.assertIn('note 104 was done before this edit landed', result.stderr)
         self.assertEqual(self.ticket()['comments'][-1]['body'], released)
         self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
+
+    def test_a_retry_after_an_unread_history_still_puts_the_release_back(self):
+        # catches: a re-run of the same write (as exit 2 asks) whose edit sits on its own first
+        # try, so the sibling's release under that try is skipped and lost (#57 review).
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+        released = note(state='done', step='the sibling wake handed back')
+        self.world['race_edit'] = [{'edit': 104, 'body': released}]
+        self.world['history_fails'] = True
+        self.save()
+        first = self.write('working', 'CI finished', '2030-01-02T03:00:00Z', '--note', '104')
+        self.assertEqual((first.returncode, first.stdout), (2, ''))
+        world = self.load()
+        world['history_fails'] = False
+        (self.dir / 'world.json').write_text(json.dumps(world))
+        again = self.write('working', 'CI finished', '2030-01-02T03:01:00Z', '--note', '104')
+        self.assertEqual((again.returncode, again.stdout), (3, ''))
+        self.assertIn('note 104 was done before this edit landed', again.stderr)
+        self.assertEqual(self.ticket()['comments'][-1]['body'], released)
+
+    def test_an_edit_steps_down_for_an_older_note_that_came_back_live(self):
+        # catches: an edit read-back that steps down only for a newer note, leaving two live
+        # notes when an older lapsed one was revived between this writer's read and its edit.
+        self.ticket(self.world)['comments'] += [comment(104, BOT, note(step='a rival started'), minutes=90),
+                                                comment(105, BOT, note())]
+        self.world['race_edit'] = [{'edit': 104, 'body': note(step='the rival came back')}]
+        self.save()
+        result = self.write('working', 'CI finished', '2030-01-02T03:00:00Z', '--note', '105')
+        self.assertEqual((result.returncode, result.stdout), (3, ''))
+        self.assertIn('note 104 holds the builder claim; note 105 is stopped (lost claim)', result.stderr)
+        self.assertEqual(self.ticket()['comments'][-1]['body'], note(state='stopped (lost claim)', step='CI finished'))
+
+    def test_an_edit_missing_from_its_history_fails(self):
+        # catches: a read-back that trusts an edit history not yet holding this edit, and so
+        # judges the wrong version as the one it replaced.
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+        self.world['history_stale'] = True
+        self.save()
+        result = self.write('working', 'CI finished', '2030-01-02T03:00:00Z', '--note', '104')
+        self.assertEqual((result.returncode, result.stdout), (2, ''))
+        self.assertIn('note 104 was edited but its edit history does not hold the edit', result.stderr)
+        self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')])
 
     def test_an_edit_whose_history_cannot_be_read_fails_closed(self):
         # catches: a claim edit reported written when the writer never saw what it replaced,

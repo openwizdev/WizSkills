@@ -98,7 +98,8 @@ class Handoff(unittest.TestCase):
 
     def test_unknown_visibility_is_never_private(self):
         for answer in ['FAIL', 'not JSON', {'full_name': REPO, 'default_branch': 'main'},
-                       {'private': 'false', 'default_branch': 'main'}, {'private': True}, []]:
+                       {'private': 'false', 'default_branch': 'main'}, {'private': True}, [],
+                       '{"private": false, "private": true, "default_branch": "main"}']:
             with self.subTest(answer=answer):
                 result, _ = self.run_helper('private', REPO, answers={f'repos/{REPO}': answer})
                 self.assertEqual(result.returncode, 2)
@@ -178,7 +179,8 @@ class Handoff(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
     def test_an_unreadable_read_back_is_unknown(self):
-        for answer in ['FAIL', {'sha': 'a' * 40}, {'content': '%%%', 'encoding': 'base64', 'sha': 'a' * 40}]:
+        duplicate = json.dumps(contents(GOOD.replace('#10', '#11')))[:-1] + ', "content": ' + json.dumps(contents(GOOD)['content']) + '}'
+        for answer in ['FAIL', {'sha': 'a' * 40}, {'content': '%%%', 'encoding': 'base64', 'sha': 'a' * 40}, duplicate]:
             with self.subTest(answer=str(answer)[:10]):
                 answers = self.answers()
                 answers[f'repos/{REPO}/contents/{PAGE_PATH}?ref=main'] = answer

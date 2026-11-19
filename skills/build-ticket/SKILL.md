@@ -45,7 +45,7 @@ Done when every proof passes and every red run is kept.
 2. Run the scoped local checks `docs/agents/fleet.md` names for what you touched; CI runs the full set.
 3. Check every item that applies in [checklist.md](checklist.md).
 4. `$T scope <repo> <N> --supporting <path>...` must end `scope: ok`; then read the complete diff, both rename sides and every executable fixture for secrets, real identifiers, weakened assertions and unapproved dependencies.
-5. Commit the hand-back with **green** in its subject: the commit the checks passed on, or a logs-only commit on top. No other subject says green. Push with `$T push <private receipt file> -- git push origin HEAD`; it keeps the first successful push's receipt and never replaces it. If `openwiz github token` mints for the repository, push and open the pull request as the App, as [launch-fleet's GitHub identity](../launch-fleet/SKILL.md#github-identity) says; otherwise as today's account.
+5. Commit the hand-back with **green** in its subject: the commit the checks passed on, or a logs-only commit on top. No other subject says green. Push with `$T push <private receipt file> -- git push origin HEAD`; it keeps the first successful push's receipt and never replaces it. If `openwiz github token` mints for the repository, push and open the pull request as the App, as [launch-fleet's GitHub identity](../launch-fleet/SKILL.md#github-identity) says, passing its push written out as one command after `--`; otherwise act as today's account.
 6. Open the pull request ready, titled `#<N>: <ticket title>`, in the format below, then `$T post-receipt <repo> <PR> <receipt file>`; on exit 1 keep the file and rerun later. End your turn: the fleet starts the review once CI passes at your exact head.
 
 ```markdown

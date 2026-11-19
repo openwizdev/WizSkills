@@ -26,8 +26,8 @@
 # in $LAUNCH_FLEET_CACHE (default ~/.cache/launch-fleet): they never change.
 # The same sandbox cache holds ETagged REST answers, revalidated on every read.
 # Before a ticket of a spec may start, the spec's latest plan graph approval
-# must be current: plan-graph's revision.sh ($LAUNCH_FLEET_REVISION, default
-# ../../plan-graph/revision.sh from this file) prints the plan as it is now,
+# must be current: to-tickets’ revision.sh ($LAUNCH_FLEET_REVISION, default
+# ../../to-tickets/revision.sh from this file) prints the plan as it is now,
 # and its SHA-256 must be the approval's fingerprint.
 # $LAUNCH_FLEET_NOW (seconds since 1970) stands in for the clock in tests.
 #
@@ -128,7 +128,7 @@ command -v jq > /dev/null 2>&1 || die "jq is not installed"
 if command -v sha256sum > /dev/null 2>&1; then SHA=sha256sum
 elif command -v shasum > /dev/null 2>&1; then SHA='shasum -a 256'
 else die "neither sha256sum nor shasum is installed"; fi
-REVISION=${LAUNCH_FLEET_REVISION:-$(cd "$(dirname "$0")" && pwd)/../../plan-graph/revision.sh}
+REVISION=${LAUNCH_FLEET_REVISION:-$(cd "$(dirname "$0")" && pwd)/../../to-tickets/revision.sh}
 
 NOW=${LAUNCH_FLEET_NOW:-$(date -u +%s)}
 is_number "$NOW" || die "LAUNCH_FLEET_NOW must be a number of seconds"
@@ -1286,7 +1286,7 @@ def refused_lately($last; $k): $last != null and ($last.r | test("^" + $k + " (r
 def look($n; $rs; $why): ($why | gsub("\\bthr_[A-Za-z0-9][A-Za-z0-9_-]*"; "[private thread]")) as $why | if any($rs[]; (.r | gsub("\\bthr_[A-Za-z0-9][A-Za-z0-9_-]*"; "[private thread]")) == "look: \($why)") then empty else "look #\($n): \($why)" end;
 
 # A spec'"'"'s approved plan graph: its latest comment that starts
-# "**Plan graph approved by" (the plan-graph skill'"'"'s record): the revision
+# "**Plan graph approved by" (the to-tickets skill'"'"'s record): the revision
 # number, a table with one row per ticket (| #<n> | <title> | <blocked by> |
 # <label> |), and "Fingerprint: <the SHA-256 of the revision text>".
 def approval: (.body | lines) as $ls | ($ls | map(select(test("\\S"))) | first // "" | sub("^\\s+"; "")) as $head
@@ -1299,7 +1299,7 @@ def approval: (.body | lines) as $ls | ($ls | map(select(test("\\S"))) | first /
 def latest($s): [$s.comments.nodes[] | approval] | max_by(.id);
 def subs($s): [$s.subIssues.nodes[].number];
 def row($s): . as $t | [latest($s).rows[]? | select(.number == $t.number)] | first;
-# Current: the latest approval'"'"'s fingerprint is the one plan-graph'"'"'s
+# Current: the latest approval'"'"'s fingerprint is the one to-tickets'"'"'s
 # revision.sh gives the plan now ($W.fingerprints, read only for a spec with a
 # ticket that could start). Anything else is stale: nothing under it starts.
 def current($s): latest($s).fingerprint as $f | $f != null and $f == $W.fingerprints["\($s.number)"];
@@ -1452,7 +1452,7 @@ def hold_comments: [.comments.nodes[]
 # A hold of launch-fleet'"'"'s own that a newer approval has released. The held
 # label on the ticket is launch-fleet'"'"'s only when launch-fleet'"'"'s "held for"
 # record is no older than the label'"'"'s latest going on (its timeline): a held
-# label put on later, by plan-graph or anyone, is theirs to take off.
+# label put on later, by to-tickets or anyone, is theirs to take off.
 def held_since: [.timelineItems.nodes[]? | select(.label.name == "held") | .createdAt] | max;
 # The newest unresolved hold of any kind decides, failing closed (#2218): every
 # hold comment since the label last went on must be a contract `held for #<P>`
@@ -1989,7 +1989,7 @@ world() {
       fingerprints: {}, branches: {}, merged: [], prfiles: {}}' > "$TMP/world.json" || die "can't build the world"
 }
 
-# unticked_hash FILE: FILE's SHA-256 as plan-graph's revision.sh hashes a body:
+# unticked_hash FILE: FILE's SHA-256 as to-tickets’ revision.sh hashes a body:
 # each ticked task box read as unticked, bytes not characters.
 TAB=$(printf '\t') CR=$(printf '\r')
 unticked_hash() {
@@ -1997,7 +1997,7 @@ unticked_hash() {
     -e "s/^([ $TAB]*[-*+][ $TAB]+)\[[xX]\]([ $TAB$CR])/\1[ ]\2/" "$1" | hash
 }
 
-# revision_text SPEC: the revision text plan-graph's revision.sh prints for
+# revision_text SPEC: the revision text to-tickets’ revision.sh prints for
 # SPEC, made from what this check read, the same read as its fingerprint key.
 # A fingerprint is kept only when revision.sh printed exactly this, so a plan
 # edited between the two reads is never cached under the wrong key (Sol R2 on
@@ -2035,7 +2035,7 @@ fingerprint_key() {
 }
 
 # Each spec with a ticket that could start: its plan as it is now, from
-# plan-graph's revision.sh, and that text's SHA-256; or the fingerprint
+# to-tickets’ revision.sh, and that text's SHA-256; or the fingerprint
 # cached for the same key, when nothing revision.sh reads has changed. Only a
 # fingerprint whose revision text is the plan this check read is cached. A
 # read that fails stops the check: nothing starts on a guess.
@@ -2044,8 +2044,8 @@ fingerprints() {
   printf '{' > "$TMP/fingerprints.json" || die "can't write"
   sep=''
   for s in $(sort -n -u "$TMP/to-check.txt"); do
-    [ -f "$REVISION" ] || die "can't find plan-graph's revision.sh at $REVISION, so no approval can be checked"
-    REVISION_SELF=$(hash < "$REVISION") && [ ${#REVISION_SELF} = 64 ] || die "can't hash plan-graph's revision.sh"
+    [ -f "$REVISION" ] || die "can't find to-tickets’ revision.sh at $REVISION, so no approval can be checked"
+    REVISION_SELF=$(hash < "$REVISION") && [ ${#REVISION_SELF} = 64 ] || die "can't hash to-tickets’ revision.sh"
     k='' f='' agreed=false
     [ -z "$CACHE" ] || k=$(fingerprint_key "$s") || k=''
     if [ ${#k} = 64 ]; then
@@ -2057,7 +2057,7 @@ fingerprints() {
     if [ ${#f} != 64 ]; then
       [ -z "$REPLAY" ] || die "the saved full read has no fingerprint for #$s"
       LAUNCH_FLEET_ASKED=$TMP/asked-revision sh "$REVISION" "$s" > "$TMP/revision-$s.txt" \
-        || die "plan-graph's revision.sh failed on #$s, so its approval can't be checked"
+        || die "to-tickets’ revision.sh failed on #$s, so its approval can't be checked"
       f=$(hash < "$TMP/revision-$s.txt") || die "can't hash the revision of #$s"
       case $f in *[!0-9a-f]* | '') die "can't hash the revision of #$s" ;; esac
       [ ${#f} = 64 ] || die "can't hash the revision of #$s"

@@ -24,7 +24,7 @@ FIXTURES = Path(__file__).resolve().parent / 'fixtures'
 SKILL = SKILL_DIR / 'SKILL.md'
 HELPER = SKILL_DIR / 'scripts/first_fleet.py'
 FAKE_GH = FIXTURES / 'fake_gh.py'
-REVISION = SKILL_DIR.parent / 'plan-graph/revision.sh'
+REVISION = SKILL_DIR.parent / 'to-tickets/revision.sh'
 JOURNEY = json.loads((FIXTURES / 'first-fleet.json').read_text())
 NOW = 1793534400  # 2026-11-01T12:00:00Z, the synthetic clock fleet.sh reads
 REPO = JOURNEY['repo']
@@ -205,7 +205,7 @@ class Journey:
         self.save_world()
 
     def approve(self, spec=None, tickets=None, comment=90001):
-        """plan-graph's approval record, with the fingerprint revision.sh gives the plan now."""
+        """to-tickets's approval record, with the fingerprint revision.sh gives the plan now."""
         spec, tickets = spec or self.spec, tickets or self.tickets
         out = subprocess.run(['sh', str(REVISION), str(spec)], env=self.env(), capture_output=True, check=True)
         fingerprint = hashlib.sha256(out.stdout).hexdigest()

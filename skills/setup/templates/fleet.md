@@ -56,11 +56,11 @@ The triage labels and their names here are in `triage-labels.md`. A fleet adds o
 
 | Label | Means | Put on by | Taken off by |
 | --- | --- | --- | --- |
-| `held` | The ticket is held: it waits for the user's approval of a changed plan or contract, and never starts while it has this label. It has no ready label while held | `plan-graph`, before it changes an approved plan; `launch-fleet`, when a merge changes a contract the ticket relies on | `plan-graph`, as it puts the ready label back once the new approval is recorded; `launch-fleet`'s `release` line, if it is still on after that |
+| `held` | The ticket is held: it waits for the user's approval of a changed plan or contract, and never starts while it has this label. It has no ready label while held | `to-tickets`, before it changes an approved plan; `launch-fleet`, when a merge changes a contract the ticket relies on | `to-tickets`, as it puts the ready label back once the new approval is recorded; `launch-fleet`'s `release` line, if it is still on after that |
 
 The skill that holds a ticket first creates the label, once, with the description "Held: waits for the user's approval".
 
-Source: the fleet skills, `plan-graph` and `launch-fleet`, which put it on and take it off. It is the same in every project.
+Source: the fleet skills, `to-tickets` and `launch-fleet`, which put it on and take it off. It is the same in every project.
 
 ## Test commands
 

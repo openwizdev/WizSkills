@@ -18,7 +18,7 @@ Sort the issues that reach the tracker outside a plan graph, so each one ends wi
 | A reply to triage | Labelled `needs-triage` or `needs-info`, and someone wrote on it after triage did | Sort an issue, again |
 | A builder's question | A ticket labelled `ready-for-agent` and `needs-info`, and its builder wrote on it after triage did | Answer a builder |
 
-Specs and their tickets belong to `plan-graph`, and a ticket being built belongs to its builder. So an issue with no state label that sits in a milestone, has a parent issue or has sub-issues is left alone: it is a spec, or a ticket waiting for its plan graph's approval.
+Specs and their tickets belong to `to-tickets`, and a ticket being built belongs to its builder. So an issue with no state label that sits in a milestone, has a parent issue or has sub-issues is left alone: it is a spec, or a ticket waiting for its plan graph's approval.
 
 ## The labels
 
@@ -119,7 +119,7 @@ Done when the ticket's newest comment is yours, with the answer or saying it is 
 ## Nothing starts without approval
 
 - **A label starts nothing.** `ready-for-agent` means sorted and briefed, not approved. Work starts only when the user approves it, in one of two ways:
-  1. **It joins a plan graph:** it becomes part of a spec's plan (`plan-graph`), and the user's approval of that plan graph covers it.
+  1. **It joins a plan graph:** it becomes part of a spec's plan (`to-tickets`), and the user's approval of that plan graph covers it.
   2. **The user approves it on its own,** explicitly naming the issue. Before you ask, propose its owned paths and what it relies on, read fresh from the code (the brief names no files), so it can be built like any ticket. Save the exact answer in a private record and read it back. Then record the public approval using the template below, with the decision in your own words and no double quote marks, the pointer on the immediately following line, a link to the brief they approved, its owned paths and what it relies on. The pointer must be the contract's private issue/PR comment URL holding the answer, never a file link or an issue without a comment.
 - **"Move #42 to `ready-for-agent`" changes a label; it approves nothing.** Apply it (write the brief if there is none), and ask whether they also approve the work.
 - **Low findings wait for their spec's closing summary.** There the user approves them together, or drops them. Have each one sorted, with proposed owned paths and what it relies on (as for standalone approval above), before asking. Record the decision on the spec and each approved follow-up as below.

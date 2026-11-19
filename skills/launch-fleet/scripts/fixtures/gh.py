@@ -3,7 +3,7 @@
 
 It answers only the reads fleet.sh makes, from a synthetic GitHub in
 $FAKE_GH_WORLD (JSON, see check.json), and logs each call to $FAKE_GH_LOG.
-It also answers plan-graph's revision.sh (`issue view <n> --json ... --jq`)
+It also answers to-tickets's revision.sh (`issue view <n> --json ... --jq`)
 and `repo clone` (from the git repository $FAKE_GH_REMOTE).
 Any other call, including every write, fails, so the tests catch it.
 

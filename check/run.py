@@ -30,8 +30,6 @@ SUITES = {
     'huntr': [['sh', 'skills/huntr/scripts/test.sh']],
     'grill': [['sh', 'skills/grill/scripts/test.sh']],
     'diagnose': [['node', '--test', 'skills/diagnose/tests/hitl-loop.test.mjs']],
-    'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test/test_check_helpers.py'],
-                     ['python3', '-I', 'skills/build-ticket/scripts/test/test_durable_helpers.py']],
     'where-are-we': [['python3', '-I', 'skills/where-are-we/test/test_read_github.py']],
     'hill-climb': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/hill-climb/tests']],
     'image': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/image/tests'],

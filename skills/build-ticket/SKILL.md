@@ -5,11 +5,13 @@ description: Build one ticket as its builder, proof first and inside its owned p
 
 # Build a ticket
 
-You are the **builder** for one ticket. You build it proof first, on your own branch, inside its owned paths, and hand back one pull request that passes the project's full test set in CI. Then you stay with it through review and CI until it merges. You never review or merge, and you start no agents but your own helpers.
+You are the **builder** for one ticket. You build it proof first, on your own branch, inside its owned paths, and hand back one pull request that passes the project's full test set in CI. Then you stay with it through review and CI until it merges. Each builder works in one thread. You never review, merge or delegate.
+
+Helpers and swarms are future ideas to benchmark before adoption.
 
 Your whole brief is one line: "You are the builder for #N. Use the build-ticket skill. Read 'skills/build-ticket/SKILL.md' if present, otherwise find '*/skills/build-ticket/SKILL.md' only inside your own harness's configured plugin cache: Codex uses CODEX_HOME/plugins/cache (default HOME/.codex/plugins/cache); Claude uses CLAUDE_CODE_PLUGIN_CACHE_DIR/cache when set, otherwise CLAUDE_CONFIG_DIR/plugins/cache (default HOME/.claude/plugins/cache); for another harness use its installation metadata. Prefer active installation metadata over cache scanning when available. During cache scans exclude other harness caches, source checkouts, orphaned versions marked .orphaned_at, and targets outside the selected cache. Follow symlinks and deduplicate real paths. Verify .claude-plugin/plugin.json manifest name openwiz and entry ./skills/build-ticket; report missing, unreadable or ambiguous matches, otherwise read the unique matching file and follow it." The ticket, its spec and this skill are all you need. You work unattended: questions go on the ticket.
 
-**Never wait awake.** Never keep a background watcher, a poll loop or a `sleep` waiting for CI, a review or another thread, a helper included: end your turn instead. The five-minute check or the orchestrator messages you when CI finishes or fails, a review lands or your question is answered, and CloudRoom messages you when a helper finishes (CF1).
+**Never wait awake.** Never keep a background watcher, a poll loop or a `sleep` waiting for CI, a review or another thread: end your turn instead. The five-minute check or the orchestrator messages you when CI finishes or fails, a review lands or your question is answered (CF1).
 
 Jake, 2026-11-06: finish the available work and end the turn instead of waiting awake ([private record](https://github.com/jparker2006/ClosedWiz/issues/1278#issuecomment-6704791158)).
 
@@ -18,13 +20,9 @@ The recipient uses its own harness's active installation metadata or configured 
 ## Public records and private evidence
 
 Read the project's open-development contract when present. Exact user words,
-thread ids, live identifiers, machine details, helper snapshots and private
-records stay in the configured private repository or private state. Public
-comments, commits, pull requests, helper logs and evidence carry only synthetic
-values and technical facts. Name helpers by role, never by thread; keep returned
-thread ids and saved snapshot/window paths in private resumable state, outside
-public Git. A public helper entry records the role, slice, commit, result and
-no-push outcome without embedding the private JSON or its local path.
+thread ids, live identifiers, machine details and private records stay in the
+configured private repository or private state. Public comments, commits, pull
+requests and evidence carry only synthetic values and technical facts.
 
 For a decision, record the decision in your own words, its date and the
 contract's pointer to the private issue/PR comment holding the exact answer.
@@ -35,7 +33,7 @@ technical summary and a verified private-record pointer where needed.
 
 ## Read first
 
-**Reuse policy reads within this session.** Read the project's instructions (`AGENTS.md` or `CLAUDE.md`, including applicable folder instructions), `docs/agents/fleet.md` and `docs/agents/helpers.md` once per session and record each file's blob ID with `git rev-parse HEAD:<path>`. Before reusing a policy read, including on later turns and review re-checks, run that command again for each file needed. Reuse the read only if its ID matches the recorded ID; if it changed, re-read that file and record its new ID. If the check fails or the previous read is unavailable in context, re-read the file instead. All other required reads still apply.
+**Reuse policy reads within this session.** Read the project's instructions (`AGENTS.md` or `CLAUDE.md`, including applicable folder instructions), `docs/agents/fleet.md` once per session and record each file's blob ID with `git rev-parse HEAD:<path>`. Before reusing a policy read, including on later turns and review re-checks, run that command again for each file needed. Reuse the read only if its ID matches the recorded ID; if it changed, re-read that file and record its new ID. If the check fails or the previous read is unavailable in context, re-read the file instead. All other required reads still apply.
 
 | Read | For |
 | --- | --- |
@@ -44,8 +42,7 @@ technical summary and a verified private-record pointer where needed.
 | **The spec's other tickets**: their bodies, first those your ticket blocks (`gh issue view <N> --json blocking`), then the rest (`gh issue view <spec> --json subIssues`) | Fit, never as scope: what the tickets after yours will need from your work, so you build it to fit them (as in "Build so later tickets fit"). You never build another ticket's work |
 | **The confirmed grill** the ticket or its spec names, in the configured private repository | The decisions in the user's own words stay private. Read the private record; if the ticket disagrees, ask on the ticket using a decision summary and pointer, never the exact words |
 | The project's instructions: `AGENTS.md` or `CLAUDE.md` | Its rules: privacy, dependencies, and what needs the user's approval |
-| `docs/agents/fleet.md` | The scoped local checks, the full test set in CI, the CI checks, the merge rules, and your helpers' model and size guide |
-| `docs/agents/helpers.md` | Your helpers: what they are, how to start, brief and read one, the roles, archiving and the no-push check |
+| `docs/agents/fleet.md` | The scoped local checks, the full test set in CI, the CI checks and the merge rules |
 | `docs/agents/triage-labels.md` | The label for `needs-info` |
 | `docs/agents/domain.md` | The glossary and the ADRs (short records of hard-to-reverse decisions): use their words |
 
@@ -143,25 +140,6 @@ them; an idle inbox alone proves neither.
 3. **Wait.** Carry on with any work the question doesn't touch, or end your turn. The five-minute check (the fleet's loop, which `launch-fleet` runs) sees the label; the orchestrator answers on the ticket, or brings it to the user.
 4. **Resume:** when the answer is on the ticket, remove `needs-info` if it's still there (`ready-for-agent` stays), and carry on.
 
-## Helpers
-
-Helpers are small, cheap agents you start to find things and do chores for you, so your attention goes to the hard part. Your helpers for one task are a **swarm**. How to start, brief, read, check and archive them, and the roles for a builder, are in `docs/agents/helpers.md`; their model and the size guide are in `docs/agents/fleet.md`. Read both before your first helper. This section says when to use them, and what stays yours.
-
-- **When they help:** finding things and doing chores: searching the code, tracing the spec and the grill, finding how the repository already does something, checking `--help` and documentation, running and reading tests, drafting tests, and reproducing a failure (a test with the change undone, a failed CI job). The guide's roles for a builder say at which step each one fits.
-- **When they don't:** decisions and the code itself. What to build, which proof proves it, what a result means and when to ask on the ticket are yours, and so is the change.
-- **You keep every judgment and write every line.** A report holds pointers and evidence, and a drafted test comes back as text in it. Check each item yourself before you use it, then write every line that lands on your branch yourself: code, tests and evidence, red first as in step 2.
-- **How many:** about one helper for each independent piece of the ticket (an area of its owned paths, a group of its acceptance criteria, a slow command, a failure to reproduce), starting from the size guide (`docs/agents/fleet.md`, "Swarm size"). It is a starting point, never a cap: more independent pieces, more helpers.
-- **Light helpers share your sandbox:** a helper that only reads, searches or runs small checks starts with `--shared-sandbox`; only one that builds or runs heavy tests (any Cargo or npm command, even `cargo --help`; the full set; a red-run check) gets its own sandbox, as the guide's "Starting one" says (CF2).
-- **The brief and the report:** write each helper's brief, and read its short report, exactly as the guide's "The brief" and "The report" say.
-- **Log each helper's work in the evidence:** one line for each helper, with its role, its slice, the commit it worked on, its result, and how many of its items you used, ignored or found wrong. Keep the lines in the ticket's evidence folder, or in the pull request's description if its owned paths have none, and sum them up in the pull request's **Helpers** fact.
-- **Before each swarm, save the snapshot durably:** run `sh "<this skill's folder>/scripts/check-helpers.sh" snapshot <ticket> [<pull request>]` right before its first helper starts, using the absolute folder of this loaded SKILL.md and keeping the project's working directory. The command saves a private copy under `$HOME/.openwiz/helper-checks/<owner>/<repo>/<ticket>/snapshot.*/state.json` before success and prints that path on stderr. Record it in private resumable state or private evidence before starting helpers; never commit the JSON or its local path to public evidence. `/tmp` must never be the only copy. This replaces the guide's old `/tmp` storage advice.
-- **Immediately after each swarm, the no-push check:** archive every helper, then run `sh "<this skill's folder>/scripts/check-helpers.sh" check <saved-snapshot>` immediately, before more work or hand-back. Name only known writes with `--own <branch> <commit>`, `--own-comment <id>` or `--loop-comment <id>` as the guide says. Inside the window a fleet prefix alone grants no exemption: helpers share the account and can copy any prefix.
-- **Keep the original window:** the check saves both compared states under the same durable root in `window.*/state.json` and prints that path on stderr, for a clean result or a hit. Keep the path privately with the result; public evidence records only the check outcome. If a retry or restart needs that original comparison, use `check <saved-snapshot> --ended <saved-window>` with the same explicit write IDs. This reads the saved end state, not today's GitHub state; later fleet writes are outside the window. `--ended` takes a file, not a timestamp: current branches and deleted or edited comments cannot reconstruct their earlier state. A failed read before capture has no completed window; fix it and check again immediately, naming any known intervening writes explicitly.
-- **Exit 0 is clean.** A hit, or a read that still fails, stops the ticket: change nothing more, hand nothing back, and ask on the ticket with its lines, as in "When you're stuck".
-- **Archive your helpers:** each one as soon as you have read its report, all of a swarm's before its check, and one you abandon at once. Nobody else can. A helper still running when you end your turn to wait for it: keep it, its id and the swarm's saved snapshot in private resumable state, and let its finishing message wake you; then read its report, archive it, and run the no-push check before any final report or GitHub write.
-
-Done when every helper is archived and its work logged, and each swarm's no-push check is clean.
-
 ## Build so later tickets fit
 
 You read the whole spec and the other tickets' bodies (Read first) so that your work fits the tickets after yours. They are for fit, never scope: you never build another ticket's work.
@@ -200,7 +178,7 @@ Done when every acceptance criterion has a named proof and its readiness.
 
 Work on your own branch, made from the latest default branch: the one you were started on, or a new one. This skill calls the default branch `origin/main`; use yours if it differs. One ticket, one branch, one pull request.
 
-1. **Hooks first:** before your first push, install every git hook the project's instructions (`AGENTS.md` or `CLAUDE.md`) name, so a format or check mistake stops your push instead of failing in CI.
+1. **Hooks first:** before your first push, install every git hook the project's instructions (`AGENTS.md` or `CLAUDE.md`) name. The pre-push hook checks privacy only. CI gates formatting, lint and tests.
 2. **Red:** write one proof and run it. It must fail, for the reason its claim gives. Read where it failed: a red that stops in setup (fixture or schema loading) before the code under test runs is not the claim's red. Fix the setup, or ask for the exact path if you don't own it, and run it again; a red that reaches the claim's own assertion is the proof. Keep that run's output in the ticket's evidence folder (if its owned paths have one), and commit it before the fix, so the history shows red came first.
 3. **Green:** write just enough code to pass it.
 4. **Next slice:** one proof, then its code, then the next. Each slice teaches you something the next one uses.
@@ -301,7 +279,6 @@ Closes #<N>
 - **Red run:** <where each failing-first run is kept>
 - **Claims:** <each claim, and its evidence: fixture test, live observation or review>
 - **Seams:** <each seam left for a later ticket (a named function, a fixture slot, a stub), with that ticket's number; or none>
-- **Helpers:** <how many, by role; what you used, ignored or found wrong; each no-push check's line>
 - **CI:** <its state at this exact head; passing CI is the hand-back gate>
 - **Gaps:** <what is not proven or not done, plainly>
 ```
@@ -327,7 +304,7 @@ You stay with your ticket through every review round: you already know the code.
 | **An orchestrator decision** on the pull request names your head | Follow it, as in "Answering a review" below |
 | **An answer** to your `needs-info` question | Resume, as in "When you're stuck" |
 | **APPROVE**, naming your exact head | Nothing. It merges by the project's rules |
-| **The pull request merged** | Your work is done, and the five-minute check archives your thread. You are never reused: this thread takes no other ticket |
+| **The pull request merged or closed** | Your work on it is done. Archive your own thread with `room-cli thread archive --self`. This thread takes no other ticket |
 
 ### Answering a review
 

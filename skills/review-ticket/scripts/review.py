@@ -4,10 +4,12 @@
   check REPORT --repo O/R --pr N --head SHA  admission, then the report's contract lines
   post REPORT --repo O/R --pr N --head SHA   admission and check again, post once, read back
   follow-up --repo TICKET_REPO ...   file one polish issue or logged blocker for triage, once
+  self-check DESCRIPTION [--base REF]       the builder's own pass on its checkout, before any review
 
 Each command reads one pull-request snapshot and admits it (open, ready, a
 ticket, the assigned head, every required check green there) before anything
-else. Settings are read from the base branch, never the pull request's head.
+else (self-check reads only the local checkout and description, before a pull
+request exists). Settings are read from the base branch, never the pull request's head.
 Only comments by the `Record authors` row of docs/agents/fleet.md count. Exit 0
 done, 1 a stop, report problems or an unknown write, 2 a refusal (unreadable
 or invalid settings, arguments). Python 3.11+ standard library and `gh`.
@@ -50,6 +52,7 @@ CLOSES = re.compile(r"(?im)^\s*(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+((?:[
 LOGIN = r"`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`"
 # The whole cell, as launch-fleet's grants.py reads it: backticked logins separated by commas.
 AUTHORS_CELL = re.compile(rf"\s*{LOGIN}(?:\s*,\s*{LOGIN})*\s*")
+TEST_RULE = re.compile(r"\b(?:catches|no new test): \S")
 PRIVATE = re.compile(r"\b(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_-]{8,}|\bthr_[A-Za-z0-9]{4,}|(?i:\bbearer\s+[A-Za-z0-9._-]{8,})")
 
 
@@ -168,23 +171,29 @@ def open_blockers(report):
             and (f["new"] or (f["status"] or "").startswith(OPEN))]
 
 
-def description_rulings(text):
+def rulings_lines(text):
+    """The stripped lines of the description's first unfenced ## Rulings section, or None without one."""
     lines, fenced, fence = text.splitlines(), [], False
     for line in lines:
         if line.lstrip().startswith(("```", "~~~")):
             fence = not fence
         fenced.append(fence)
     heads = [i for i, x in enumerate(lines) if x.strip() == "## Rulings" and not fenced[i]]
-    numbers = []
-    for line, quoted in zip(lines[heads[0] + 1:] if heads else [], fenced[heads[0] + 1:] if heads else []):
+    if not heads:
+        return None
+    out = []
+    for line, quoted in zip(lines[heads[0] + 1:], fenced[heads[0] + 1:]):
         if re.match(r"#{1,2} ", line) and not quoted:
             break
-        if m := re.match(r"([1-9][0-9]*)\. ", line.strip()):
-            numbers.append(int(m[1]))
-    return numbers
+        out.append(line.strip())
+    return out
 
 
-def check(text, description, mode, head, earlier, decision=None):
+def description_rulings(text):
+    return [int(m[1]) for line in rulings_lines(text) or [] if (m := re.match(r"([1-9][0-9]*)\. ", line))]
+
+
+def check(text, description, mode, head, earlier, decision=None, changed=None):
     """Every contract line the report breaks; empty when it passes."""
     r, problems = parse(text), []
     if r["verdict"] is None:
@@ -222,6 +231,10 @@ def check(text, description, mode, head, earlier, decision=None):
             problems.append(f"{i}: a new blocking finding needs its User path: or Risk: line")
         elif f["new"] and not blocking and not f["polish"]:
             problems.append(f"{i}: a new polish finding ends with Polish issue: #<n>")
+        where = re.match(r"`([^`\s]+):[1-9][0-9]*`", f["text"]) if f["new"] and i not in before else None
+        if where and changed is not None and where[1] not in changed and not f["risk"]:
+            problems.append(f"{i}: `{where[1]}` is unchanged since {earlier['head'][:7]}; a re-check raises a new "
+                            "finding there only as a Risk: security, privacy or data-loss blocker")
         old = before.get(i)
         if i in logged_ids:
             if not (f["grade"] == "polish" and f["status"] == "Polish issue: #"
@@ -344,10 +357,62 @@ def pin(repo, number, assigned):
     return line
 
 
+def changed_since(repo, last, head):
+    """Every file the compare from the last read head to this one changes; unreadable or truncated refuses."""
+    files = get(f"repos/{repo}/compare/{last}...{head}").get("files")
+    if not isinstance(files, list) or len(files) >= 300:  # GitHub lists at most 300 files
+        raise Refusal(f"cannot read every file changed since {last[:7]}")
+    return {x["filename"] for x in files}
+
+
 def report_problems(path, repo, number, assigned):
     text = Path(path).read_text(encoding="utf-8").replace("\r\n", "\n")
     s = admit(repo, number, assigned, skip=text)
-    return text, s, check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"], s["decision"])
+    changed = changed_since(repo, s["last"]["head"], s["head"]) if s["mode"] in ("re-check", "final") else None
+    return text, s, check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"], s["decision"], changed)
+
+
+def git(*args):
+    try:
+        out = subprocess.run(["git", *args], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        out = None
+    if out is None or out.returncode:
+        raise Refusal(f"cannot read {args[-1]} with git")
+    return out.stdout
+
+
+def self_check(path, base):
+    """The reviewer's mechanical checks on the builder's own hand-back: each miss, then the tally."""
+    try:
+        description = Path(path).read_text(encoding="utf-8").replace("\r\n", "\n")
+    except (OSError, UnicodeDecodeError):
+        raise Refusal(f"cannot read {path}")
+    head = git("rev-parse", "--verify", "HEAD^{commit}").strip()
+    diff = git("-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", "--no-ext-diff", f"{base}...HEAD")
+    misses, rulings = [], rulings_lines(description)
+    if not CLOSES.search(description):
+        misses.append("no Closes line names the ticket; the review cannot start")
+    if rulings is None or not (description_rulings(description) or {"none", "`none`"} & set(rulings)):
+        misses.append("no ## Rulings section with numbered rulings or exactly none")
+    if head not in description:
+        misses.append(f"the description does not name the head {head}")
+    if not TEST_RULE.search(description):
+        misses.append("no `catches: <the bug>` or `no new test: <why>` line")
+    leaks = ["the description"] if PRIVATE.search(description) else []
+    name, header = None, False
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            header = True
+        elif header and line.startswith("+++ "):
+            name = line[6:] if line.startswith("+++ b/") else line[4:]
+        elif line.startswith("@@"):
+            header = False
+        elif not header and line.startswith("+") and PRIVATE.search(line) and name not in leaks:
+            leaks.append(name)
+    misses += [f"private material (a token or thread id) in {x}" for x in leaks]
+    lines = [f"miss: {m}" for m in misses]
+    return lines + [f"self-check: {len(misses)} miss{'es' if len(misses) != 1 else ''}" if misses else "self-check: ok"]
 
 
 def post(path, repo, number, assigned):
@@ -424,8 +489,15 @@ def main(argv=None):
         f.add_argument("--" + name, required=True)
     f.add_argument("--logged", choices=("re-check", "final check"))
     f.add_argument("--user-path")
+    c = sub.add_parser("self-check")
+    c.add_argument("description", help="the pull request description you will hand back, as a file")
+    c.add_argument("--base", default="origin/main")
     a = p.parse_args(argv)
     try:
+        if a.command == "self-check":
+            lines = self_check(a.description, a.base)
+            print("\n".join(lines))
+            return 0 if lines == ["self-check: ok"] else 1
         if a.command == "pin":
             print(pin(a.repo, a.pr, a.head))
         elif a.command == "check":

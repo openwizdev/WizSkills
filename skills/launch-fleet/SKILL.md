@@ -189,6 +189,8 @@ Do every line. Lines of the same kind run **in parallel** (every `start`, once i
 
 **After a merge,** run the full check once more (`sh "<this skill's folder>/scripts/fleet.sh"`; a fleet thread runs its own, `fleet.sh spec <S>`) and start whatever the merge unlocked, in this same tick: no message names the tickets a merge unblocks.
 
+**Status notes** ([agent status contract](../../contracts/agent-status.v1.md)): run `python3 -I <this skill's folder>/scripts/status.py check --repo <owner>/<repo>`. Fix each `asking: no needs-info label` line with `gh issue edit <N> --repo <owner>/<repo> --add-label needs-info`; report every other line (a live note on a merged ticket, a lapsed claim, a second claim) as an `--action` in the loop report. Never edit an agent's note.
+
 **Finish:** `room-cli loop report --outcome acted` (or `needs-you`), with one `--action` per change. Then, once every record and message is written, archive your own thread (`room-cli thread archive --self`), even when something needs the user: the `Needs you` message, the spec comment and the records on GitHub are the handoff, and the next tick resumes from them. A tick never stays open to wait for an answer. A fresh spec wake ends as described in Fleet threads.
 
 Done when every line is done and recorded, and the check prints no line you could act on.
@@ -607,7 +609,7 @@ Legacy records keep their existing takeover semantics during rollout.
    guard (`fleet.sh every`).
    On `fleet done #<S>` or after closing the spec, resolve its current loop
    through the private loop map and remove it.
-5. Report the pass using `room-cli loop report` and end the turn. Archive the
+5. Run the status check (**2. Each tick**), report the pass using `room-cli loop report` and end the turn. Archive the
    wake with `room-cli thread archive --self` when it has no active or
    unreconciled children. Archiving a parent can stop those children. If it
    still parents such agents, leave its own archive pending with the planner

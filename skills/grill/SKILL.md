@@ -34,13 +34,17 @@ large gap. Builder limits and approval gates still apply.
 
 ## Work the frontier
 
-The frontier is the open decisions whose prerequisites are settled. Before
+Keep a design tree: each decision branches into the decisions that hang off
+it. The frontier is the open decisions whose prerequisites are settled. Before
 each round, read the saved answers, related grills and ADRs. Record anything
 you skipped as already settled, with its source.
 
 1. Ask at most three frontier questions per grill. Choose the ones that unblock
    the most. Give each a stable ID, plain context, options and consequences,
-   and one recommendation on its own ➡️ line so “yes” accepts it.
+   and one recommendation on its own ➡️ line so “yes” accepts it. A question
+   that depends on one still open this round waits for a later round. Finding
+   facts never blocks a round: only the questions that depend on a pending
+   lookup wait.
 2. Classify and save the round's risk. Push, publish and verify the request,
    then show the round exactly as saved. Wait for the user's reply.
 3. For a cockpit reply, match its context to the current, unanswered private
@@ -81,27 +85,4 @@ request. Merge under the project's rules or ask the user to merge. The job
 ends at the merged private record for [to-spec](../to-spec/SKILL.md).
 Spec confirmation and plan approval remain separate, and builders and reviewers stay independent.
 
-## Licence
-
-
-Adapted from Matt Pocock's `grilling` and `domain-modeling` skills (`github.com/mattpocock/skills` @ `a496f55`), which carry this notice:
-
-Copyright (c) 2026 Matt Pocock
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Credit: adapted from Matt Pocock's skills under the MIT License; the notice and sources are in [NOTICE.md](NOTICE.md).

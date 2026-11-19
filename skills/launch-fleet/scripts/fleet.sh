@@ -1286,11 +1286,16 @@ def refused_lately($last; $k): $last != null and ($last.r | test("^" + $k + " (r
 def look($n; $rs; $why): ($why | gsub("\\bthr_[A-Za-z0-9][A-Za-z0-9_-]*"; "[private thread]")) as $why | if any($rs[]; (.r | gsub("\\bthr_[A-Za-z0-9][A-Za-z0-9_-]*"; "[private thread]")) == "look: \($why)") then empty else "look #\($n): \($why)" end;
 
 # A spec'"'"'s approved plan graph: its latest comment that starts
-# "**Plan graph approved by" (the to-tickets skill'"'"'s record): the revision
-# number, a table with one row per ticket (| #<n> | <title> | <blocked by> |
-# <label> |), and "Fingerprint: <the SHA-256 of the revision text>".
+# "**Plan graph approved by" (the to-tickets skill'"'"'s record), or to-tickets'"'"'
+# machine plan approval (#1340, decisions.v1): exactly its header line, then its
+# "Grill confirmed:" line. Either has the revision number, a table with one row
+# per ticket (| #<n> | <title> | <blocked by> | <label> |), and "Fingerprint:
+# <the SHA-256 of the revision text>".
+def machine_head($ls): ($ls | map(select(test("\\S")))) as $ne
+  | ($ne[0] // "" | test("^\\*\\*Machine plan approval, [0-9]{4}-[0-9]{2}-[0-9]{2}, revision [1-9][0-9]*:\\*\\* links, relies, sizes, width and owned paths passed\\.$"))
+    and ($ne[1] // "" | test("^Grill confirmed: https://github\\.com/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/(issues|pull)/[1-9][0-9]*#issuecomment-[1-9][0-9]*$"));
 def approval: (.body | lines) as $ls | ($ls | map(select(test("\\S"))) | first // "" | sub("^\\s+"; "")) as $head
-  | if ($head | startswith("**Plan graph approved by")) | not then empty else
+  | if (($head | startswith("**Plan graph approved by")) or machine_head($ls)) | not then empty else
       {id: .databaseId, at: .createdAt,
        revision: ([$head | capture(", revision (?<n>[0-9]+):\\*\\*") | .n | tonumber] | first),
        fingerprint: ([$ls[] | capture("^\\s*Fingerprint:\\s*`?(?<f>[0-9a-f]{64})`?\\s*$") | .f] | first),

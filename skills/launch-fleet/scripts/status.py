@@ -240,21 +240,37 @@ def viewer():
     return login if isinstance(login, str) and login else None
 
 
-EDITS = '''query($id: ID!) {
-  node(id: $id) { ... on IssueComment { userContentEdits(first: 2) { nodes { diff } } } }
+EDITS = '''query($id: ID!, $n: Int!) {
+  node(id: $id) { ... on IssueComment { userContentEdits(first: $n) { nodes { diff } } } }
 }'''
+HISTORY = 20
 
 
 def replaced(made, fields):
-    """The note an edit replaced, from GitHub's edit history: newest first, each the full body."""
+    """The note under this writer's edits, from GitHub's edit history (newest first, each the
+    full body), or None when there is none. It skips this edit's own earlier tries, which a retry
+    after exit 2 leaves (the same write: the same fields but the time), so a release under the
+    first try is still found. Later edits by others may sit above this edit."""
     try:
-        found = gh('POST', 'graphql', {'query': EDITS, 'variables': {'id': made['node_id']}})
-        mine, before = (x['diff'] for x in found['data']['node']['userContentEdits']['nodes'][:2])
+        found = gh('POST', 'graphql', {'query': EDITS, 'variables': {'id': made['node_id'], 'n': HISTORY}})
+        texts = [x['diff'] for x in found['data']['node']['userContentEdits']['nodes']]
     except (KeyError, TypeError, ValueError) as error:
         raise Failed(f'note {made.get("id")} was edited but its edit history was not read: {error!r}')
-    if parse(mine) != fields:
-        raise Failed(f'note {made.get("id")} was edited but its edit history does not end with it')
-    return before
+    if not all(isinstance(x, str) for x in texts):
+        raise Failed(f'note {made.get("id")} was edited but its edit history was not read')
+    versions = [parse(x) for x in texts]
+    k = next((j for j, v in enumerate(versions) if v == fields), None)
+    if k is None:
+        raise Failed(f'note {made.get("id")} was edited but its edit history does not hold the edit')
+    same = {key: value for key, value in fields.items() if key != 'time'}
+    k += 1
+    while k < len(versions) and versions[k] and dict(versions[k], time=None) == dict(same, time=None):
+        k += 1
+    if k < len(versions):
+        return texts[k]
+    if len(texts) >= HISTORY:
+        raise Failed(f'note {made.get("id")} was edited but its edit history is too long to read past it')
+    return None
 
 
 def asked_last_by(repo, n, login):
@@ -316,6 +332,19 @@ def write(args, now):
     # R4: success, and any label, only once a trusted read-back shows the note as written.
     found = notes(pages(comments), authors)
     mine = next((x for x in found if x[0] == note_id), None)
+    if verb == 'edited' and args.state in CLAIMING:
+        # #1441: the edit landed after its read, so read back as a post does. A release this
+        # writer never read, landed under its edit (a sibling wake's), is put back: a release is
+        # never lost (P3), even when a later edit has changed the note since (#1463 R1). A
+        # release it read, it may resume, as a builder answering a review does.
+        prior = parse(replaced(made, fields))
+        if prior and prior['state'] not in CLAIMING and prior != own[1]:
+            if mine is None:
+                raise Failed(f'note {note_id} was edited over a release but not read back')
+            if mine[1]['state'] in CLAIMING:
+                gh('PATCH', f'repos/{repo}/issues/comments/{note_id}', {'body': body(prior)})
+            raise Stop(f'note {note_id} was {prior["state"].split(" ")[0]} before this edit landed; '
+                       'the release is put back')
     if mine is None or mine[1] != fields:
         raise Failed(f'note {note_id} was {verb} but not read back')
     if verb == 'posted' and args.state in CLAIMING:
@@ -325,16 +354,7 @@ def write(args, now):
                {'body': body(dict(fields, state='stopped (lost claim)'))})
             raise Stop(f'note {first[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
     if verb == 'edited' and args.state in CLAIMING:
-        # #1441: the edit landed after its read, so read back as a post does. A release this
-        # wake never read (a sibling wake's, landed in between) is put back: a release is never
-        # lost (P3). A release it read, it may resume, as a builder answering a review does.
-        before = replaced(made, fields)
-        prior = parse(before)
-        if prior and prior != own[1] and prior['state'] not in CLAIMING:
-            gh('PATCH', f'repos/{repo}/issues/comments/{note_id}', {'body': before})
-            raise Stop(f'note {note_id} was {prior["state"].split(" ")[0]} before this edit landed; '
-                       'the release is put back')
-        # A newer note that claimed while this one had lapsed keeps the claim (P1, P2, P4).
+        # #1441: a newer note that claimed while this one had lapsed keeps the claim (P1, P2, P4).
         other = next((x for x in found if x[0] != note_id and x[1]['agent'] == kind
                       and live(x, datetime.now(timezone.utc))), None)
         if other:

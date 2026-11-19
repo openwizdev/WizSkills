@@ -8,6 +8,8 @@
 #
 #   sh check-links.sh [--json] <spec>      reads spec <spec>'s tickets through gh
 #   sh check-links.sh [--json] --graph -   reads one graph read on standard input
+#   sh check-links.sh --read <spec>        prints the spec's graph read, unchecked,
+#                                          for approve.py (#1339)
 #
 # Exit 0: pass, the report on stdout. 1: refused, the report on stdout and one
 # line per refusal on stderr. 2: bad arguments, or a failed, partial or
@@ -22,14 +24,16 @@ export LC_ALL
 nl='
 '
 die() { printf 'check-links: %s\n' "$*" >&2; exit 2; }
-usage() { die 'usage: sh check-links.sh [--json] <spec> | sh check-links.sh [--json] --graph -'; }
+usage() { die 'usage: sh check-links.sh [--json | --read] <spec> | sh check-links.sh [--json] --graph -'; }
 
 json=false
 graph=false
+read_only=false
 spec=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --json) [ "$json" = false ] || usage; json=true; shift ;;
+    --read) [ "$read_only" = false ] || usage; read_only=true; shift ;;
     --graph)
       [ "$#" -ge 2 ] && [ "$2" = - ] && [ "$graph" = false ] && [ -z "$spec" ] || usage
       graph=true
@@ -43,6 +47,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ "$graph" = true ] || [ -n "$spec" ] || usage
+[ "$read_only" = false ] || { [ "$graph" = false ] && [ "$json" = false ]; } || usage
 command -v jq > /dev/null 2>&1 || die 'jq is required'
 
 # The checker: one graph read, as a stream of jq events (so a repeated key,
@@ -315,4 +320,5 @@ read=$(printf '%s\n' "$pages" | jq -cs --arg read_at "$read_at" --argjson spec "
   ) catch error("bad")
 ' 2> /dev/null) || die "spec #$spec's read is partial or invalid"
 
+if [ "$read_only" = true ]; then printf '%s\n' "$read"; exit 0; fi
 printf '%s\n' "$read" | run_check

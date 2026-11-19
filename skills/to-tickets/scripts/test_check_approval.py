@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Synthetic posted-approval fixtures; no network or live session data.
+"""Synthetic posted-approval and machine-approval fixtures; no network or live
+session data.
 
 Run: python3 skills/to-tickets/scripts/test_check_approval.py
 CHECK_APPROVAL_SH can name another checker (including an always-pass mutant).
@@ -573,6 +574,217 @@ class ApprovalTest(unittest.TestCase):
     def test_bad_arguments_never_read(self):
         for argument in ("0", "-1", "172x", "01", ""):
             self.assertEqual(self.run_check(fixture(172), status=2, reason="usage:", argument=argument), [])
+
+
+# The machine plan approval (#1339, J202): a plan cut from a synthetic grill
+# by to-spec and to-tickets, approved by approve.py's own checks with no human
+# step. Its revision text comes from the real revision.sh over the folder's
+# fake gh, so the fingerprint is never computed the way approve.py computes it.
+APPROVE = HERE / "approve.py"
+REVISION = HERE.parent / "revision.sh"
+FAKE_REVISION_GH = HERE.parent / "test" / "fake_gh.py"
+GRILL = "https://github.com/synthetic-owner/synthetic-private/issues/77#issuecomment-7700000001"
+SPEC = 9100
+SPEC_BODY = ("## Problem Statement\n\nFrom the synthetic grill `docs/grills/2026-11-19-export.md`: "
+             "a user can't take their widgets out.\n\n## Solution\n\nAn export button and an export command.\n")
+
+
+def body(n, size, owned, relies="nothing", links=(), done_by=None):
+    """One ticket body as tickets.md asks for it."""
+    parts = [f"## Parent\n\nTicket of spec #{SPEC}. Size: {size}.\n",
+             f"## What to build\n\nSynthetic work for #{n}.\n"]
+    if done_by:
+        parts.append(f"## Done by\n\n{done_by}\n")
+    else:
+        parts.append("## Owned paths\n\n" + "".join(f"- {line}\n" for line in owned)
+                     + f"\n**Relies on:** {relies}\n")
+    parts.append("## Links\n\n" + ("".join(f"- {line}\n" for line in links) if links else "none\n"))
+    parts.append("## Acceptance criteria\n\n- [ ] Synthetic criterion.\n")
+    return "\n".join(parts)
+
+
+def plan():
+    """The synthetic plan: a contract first, two builders on it, a chained
+    builder inside a blocker's folder, two parallel tickets on separate lines
+    of one shared file, and a person's live check last."""
+    tickets = [
+        (9101, "Write the export contract", [], body(9101, "S", ["`contracts/export.v1.md`"])),
+        (9102, "Show the export button", [9101],
+         body(9102, "M", ["`app/export/` in `synthetic-owner/synthetic-repo`"], "`contracts/export.v1.md`",
+              ["#9101 real: the export record shape, which the button writes"])),
+        (9103, "Add the export command", [9101],
+         body(9103, "M", ["`cli/export.py`"], "`docs/existing.md`",
+              ["#9101 real: the export record shape, which the command prints"])),
+        (9104, "List export in the fleet settings", [],
+         body(9104, "S", ["`docs/agents/fleet.md` (shared: the export row only)"])),
+        (9105, "List import in the fleet settings", [],
+         body(9105, "S", ["`docs/agents/fleet.md` (shared: the import row only)"])),
+        (9106, "Add the export page", [9102],
+         body(9106, "L", ["`app/export/page.ts`"], links=["#9102 real: the button's route, which the page opens"])),
+        (9107, "Try the export live", [9103, 9106],
+         body(9107, "S", [], done_by="Synthetic owner, on their own account.",
+              links=["#9103 real: the command the owner runs", "#9106 real: the page the owner opens"])),
+    ]
+    return [{"number": n, "title": title, "state": "OPEN", "labels": [], "milestone": "Synthetic",
+             "parent": SPEC, "blocked_by": [{"number": b, "state": "OPEN"} for b in blockers],
+             "body": text, "start_recorded": False, "pull_requests": []}
+            for n, title, blockers, text in tickets]
+
+
+def graph_read(tickets):
+    return {"schema": "openwiz.plan-links.v1", "kind": "graph", "repo": "synthetic-owner/synthetic-repo",
+            "read_at": "2026-11-19T12:00:00Z", "source": {"kind": "spec", "spec": SPEC}, "tickets": tickets}
+
+
+def find(tickets, n):
+    return next(t for t in tickets if t["number"] == n)
+
+
+class MachineApproval(unittest.TestCase):
+    """approve.py: a plan that passes every check gets one machine approval
+    record bound to its revision fingerprint; a plan that fails any check gets
+    none."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.root = self.tmp / "root"
+        (self.root / "docs").mkdir(parents=True)
+        (self.root / "docs/existing.md").write_text("Synthetic interface.\n")
+
+    def revision(self, tickets):
+        """The revision text revision.sh prints for this plan on a fake GitHub."""
+        state = self.tmp / "gh"
+        (state / "bin").mkdir(parents=True, exist_ok=True)
+        issues = [{"number": SPEC, "title": "Synthetic spec", "body": SPEC_BODY, "state": "OPEN",
+                   "parent": None, "milestone": "Synthetic", "blockedBy": [], "labels": [], "comments": []}]
+        issues += [{"number": t["number"], "title": t["title"], "body": t["body"], "state": t["state"],
+                    "parent": SPEC, "milestone": "Synthetic", "blockedBy": [b["number"] for b in t["blocked_by"]],
+                    "labels": [], "comments": []} for t in tickets]
+        (state / "state.json").write_text(json.dumps({"next_issue": 9200, "issues": issues}))
+        gh = state / "bin/gh"
+        gh.write_text(f'#!/bin/sh\nexec python3 -I "{FAKE_REVISION_GH}" "$@"\n')
+        gh.chmod(0o755)
+        env = dict(os.environ, FAKE_GH_STATE=str(state), PATH=f"{state / 'bin'}:{os.environ['PATH']}")
+        out = subprocess.run(["sh", str(REVISION), str(SPEC)], capture_output=True, text=True, env=env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout
+
+    def approve(self, tickets, revision=None, *extra):
+        (self.tmp / "graph.json").write_text(json.dumps(graph_read(tickets)))
+        (self.tmp / "revision.txt").write_text(self.revision(tickets) if revision is None else revision)
+        return subprocess.run(
+            ["python3", "-I", str(APPROVE), "--graph", str(self.tmp / "graph.json"),
+             "--revision", str(self.tmp / "revision.txt"), "--grill", GRILL, "--number", "1",
+             "--date", "2026-11-19", "--root", str(self.root), *extra],
+            capture_output=True, text=True)
+
+    def test_a_plan_that_passes_every_check_gets_a_record_bound_to_its_fingerprint(self):
+        # catches: an approval that isn't bound to the exact revision checked,
+        # or one that needs a human reply first.
+        tickets = plan()
+        revision = self.revision(tickets)
+        out = self.approve(tickets, revision)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        fingerprint = __import__("hashlib").sha256(revision.encode()).hexdigest()
+        lines = out.stdout.split("\n")
+        self.assertEqual(lines[0], "**Machine plan approval, 2026-11-19, revision 1:** "
+                                   "links, relies, sizes, width and owned paths passed.")
+        self.assertEqual(lines[1], "Grill confirmed: " + GRILL)
+        self.assertIn("Checks: 7 tickets; links 5; relies 6; sizes S 4, M 2, L 1; "
+                      "width: chain 4, widest 3; owned paths 6.", lines)
+        table = [line for line in lines if line.startswith("| ")]
+        self.assertEqual(table, [
+            "| Ticket | Title | Blocked by | Label |",
+            "| --- | --- | --- | --- |",
+            "| #9101 | Write the export contract | none | ready-for-agent |",
+            "| #9102 | Show the export button | #9101 | ready-for-agent |",
+            "| #9103 | Add the export command | #9101 | ready-for-agent |",
+            "| #9104 | List export in the fleet settings | none | ready-for-agent |",
+            "| #9105 | List import in the fleet settings | none | ready-for-agent |",
+            "| #9106 | Add the export page | #9102 | ready-for-agent |",
+            "| #9107 | Try the export live | #9103 #9106 | ready-for-human |",
+        ])
+        self.assertIn(f"Fingerprint: `{fingerprint}`", lines)
+        self.assertIn("```text\n" + revision + "```\n", out.stdout)
+        # Not a human record: launch-fleet's and check-approval.sh's readers
+        # never take it for one.
+        self.assertFalse(out.stdout.startswith("**Plan graph approved by"))
+        self.assertNotIn("Private record:", out.stdout)
+
+    def test_revision_two_needs_what_changed(self):
+        # catches: a re-cut recorded without saying what changed since the last one.
+        tickets = plan()
+        (self.tmp / "graph.json").write_text(json.dumps(graph_read(tickets)))
+        (self.tmp / "revision.txt").write_text(self.revision(tickets))
+        base = ["python3", "-I", str(APPROVE), "--graph", str(self.tmp / "graph.json"),
+                "--revision", str(self.tmp / "revision.txt"), "--grill", GRILL,
+                "--date", "2026-11-19", "--root", str(self.root), "--number", "2"]
+        missing = subprocess.run(base, capture_output=True, text=True)
+        self.assertEqual((missing.returncode, missing.stdout), (2, ""))
+        given = subprocess.run(base + ["--changed", "the export page split off"], capture_output=True, text=True)
+        self.assertEqual(given.returncode, 0, given.stderr)
+        self.assertIn("\nChanged since revision 1: the export page split off.\n", given.stdout)
+
+    def test_a_plan_that_fails_any_check_gets_no_record(self):
+        # catches: a check that lets a bad plan through, so the fleet would
+        # start on it with nobody watching.
+        def edit(n, old, new):
+            def change(tickets):
+                t = find(tickets, n)
+                self.assertIn(old, t["body"])
+                t["body"] = t["body"].replace(old, new)
+            return change
+
+        def block(n, blocker, line):
+            def change(tickets):
+                t = find(tickets, n)
+                t["blocked_by"].append({"number": blocker, "state": "OPEN"})
+                t["body"] = (t["body"].replace("## Links\n\nnone\n", "## Links\n\n")
+                             .replace("## Links\n\n", f"## Links\n\n- {line}\n"))
+            return change
+
+        cases = {
+            "links": [edit(9102, "- #9101 real: the export record shape, which the button writes\n", "")],
+            "relies": [edit(9103, "`docs/existing.md`", "`docs/missing.md`"),
+                       edit(9104, "**Relies on:** nothing", "**Relies on:** `cli/export.py`")],
+            "sizes": [edit(9101, "Size: S.", "Size: XL."), edit(9101, "Size: S.", "Sized small."),
+                      edit(9101, "Size: S.", "Size: S. Size: M.")],
+            "width": [block(9107, 9102, "#9102 real: the button the owner presses"),
+                      block(9101, 9106, "#9106 real: the page the contract describes")],
+            "owned paths": [edit(9103, "`cli/export.py`", "`app/export/cli.py`"),
+                            edit(9104, " (shared: the export row only)", ""),
+                            edit(9103, "`cli/export.py`", "`app/*/page.ts`"),
+                            edit(9103, "- `cli/export.py`\n", "- the command's files\n"),
+                            edit(9103, "- `cli/export.py`\n", ""),
+                            edit(9103, "`cli/export.py`", "`../export.py`")],
+        }
+        for check, changes in cases.items():
+            for i, change in enumerate(changes):
+                with self.subTest(check=check, case=i):
+                    tickets = plan()
+                    change(tickets)
+                    out = self.approve(tickets)
+                    self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                    self.assertEqual(out.stdout, "")
+                    self.assertIn(f"approve: {check}:", out.stderr)
+
+    def test_a_fingerprint_of_another_plan_gets_no_record(self):
+        # catches: an approval whose fingerprint names a revision other than
+        # the graph that was checked (a ticket edited between the two reads).
+        tickets = plan()
+        revision = self.revision(tickets)
+        find(tickets, 9103)["body"] += "\nA late edit.\n"
+        out = self.approve(tickets, revision)
+        self.assertEqual((out.returncode, out.stdout), (1, ""))
+        self.assertIn("approve: revision:", out.stderr)
+        for stale in (revision.replace("#9101", "#9109", 1), revision.replace("title Add the", "title Add a"),
+                      revision.replace("ticket #9105 blocked-by none", "ticket #9105 blocked-by #9104"),
+                      "\n".join(l for l in revision.split("\n") if "#9104 " not in l.split("blocked-by")[0])):
+            with self.subTest(stale=stale[-80:]):
+                out = self.approve(plan(), stale)
+                self.assertEqual((out.returncode, out.stdout), (1, ""))
+                self.assertIn("approve: revision:", out.stderr)
 
 
 if __name__ == "__main__":

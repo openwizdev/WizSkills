@@ -1,5 +1,10 @@
 # Write and read back spec and graph decisions
 
+A new plan is approved by its checks: the machine plan approval of
+[to-tickets step 4](SKILL.md#4-approve-by-the-checks). This page covers the
+records before it (J202): human-approved plans still in flight, their
+requests, and approvals on their own.
+
 Use [the publishing contract](../../contracts/open-development.v1.md) and
 [decisions.v1](../../contracts/decisions.v1.md) with
 [its schema](../../contracts/decisions.v1.schema.json). Only the orchestrator

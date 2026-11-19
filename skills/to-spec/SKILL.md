@@ -1,66 +1,75 @@
 ---
 name: to-spec
-description: Turn a confirmed grill into a spec issue and a short narrated video for the owner's confirmation. Use when the design is settled and the user asks for a spec. A confirmed spec goes to to-tickets.
+description: Turn a confirmed grill into a spec issue, run to-tickets on it, and make the spec's narrated steering video. Use when a grill is confirmed or the owner steers a spec through its video. No human step between grill and fleet.
 version: 0.2.0
 ---
 
 # To spec
 
-The orchestrator takes a confirmed design to a confirmed spec. In OpenWiz,
+The owner's one active step is answering and confirming the grill (J202). From
+there the orchestrator writes the spec, has [to-tickets](../to-tickets/SKILL.md)
+cut and approve the plan by its own checks, and makes one video the owner
+watches to steer. Nothing is asked between them. In OpenWiz,
 [the roads page](https://github.com/openwizdev/OpenWiz/blob/main/docs/agents/roads.md)
 describes when this road applies.
 
-## 1. Read the settled design
+## 1. Read the confirmed grill
 
 Read the consumer project's tracker, domain and fleet settings in `docs/agents/`.
-Read the confirmed grill privately, the glossary, relevant ADRs and the code.
-If a decision is still open, return to [grill](../grill/SKILL.md) before writing.
-Use the earliest user-facing seams that can prove the design.
+Read the grill privately, with its confirmation comment, the glossary, relevant
+ADRs and the code. An unconfirmed grill, or a decision still open, goes back to
+[grill](../grill/SKILL.md). Keep the confirmation's private-comment URL: it is
+the plan approval's authority.
 
 Keep exact replies, grill sources, thread IDs and private media in private
 storage. Verify the private records repository and development tracker before
 writing. Save public-safe summaries, issue text and visuals in public. An
 unclear read or publication approval stops the related write.
 
-## 2. Write and show the spec
+## 2. Write the spec
 
-Use the [spec template](spec.md). Name the outcome, proof and seams the owner
-will confirm. Set the headline to `none` for infra. Use the grill's version
-milestone, creating it if applicable and missing. Give the spec no ticket label.
+Use the [spec template](spec.md). Name the outcome, proof and seams. Take the
+headline from the grill's words, or `none` for infra. Use the grill's version
+milestone, creating it if missing. Give the spec no ticket label. Create it,
+read it back, and on a resume confirm any uncertain write before retrying. For
+an already approved plan, use [the hold-first procedure](../to-tickets/changes.md)
+before changing the spec.
 
-Build a short animatic with a simple slide and brief narration per beat.
-Cover the problem, the proposed experience and how the proof will work. Use
-existing local audio or authorized narration, and keep exact private replies
-out of both slides and speech. See [the scene input](video.md).
+## 3. Cut the plan
 
-- `python3 -I "<this skill's folder>/scripts/video.py" render scenes.json spec.mp4` assembles
-  local slides and narration. Check the picture and sound before sharing.
-- Put the MP4 in an approved location the owner can play with the issue's
-  visibility. Public sharing needs publication authority. Confirm playback
-  there. `python3 -I "<this skill's folder>/scripts/video.py" link "$url"` gives one Markdown
-  line for the issue. Fix a refusal before filing it.
+Run [to-tickets](../to-tickets/SKILL.md) on the spec now, with the grill
+confirmation's URL. It ends with a machine plan approval on the spec, or a
+refusal it fixes and re-checks. It never comes back to the owner.
 
-Create the spec issue with the video link in its body and read it back. On a
-resume, confirm any uncertain issue or media write before retrying. For an
-already approved graph, use [the hold-first procedure](../to-tickets/changes.md)
-before updating the spec.
+## 4. Make the steering video
 
-## 3. Record the owner's confirmation
+One animatic: what changes for a user and in the codebase, in the grill's
+words, in build order (step 1 is what starts first in the approved plan). No
+bench and no ticket graph: the graph stays on the spec as the agents' document.
+Write `storyboard.json` in a work folder outside any repo, as
+[video.md](video.md) says, then:
 
-Show the issue and up to ten summary lines including the exact headline. Ask
-the owner to confirm. Use [the decision procedure](../to-tickets/records.md)
-to post a `spec_confirmation` request. A correction supersedes that request
-before you show a replacement.
+- `node "<this skill's folder>/scripts/animatic.mjs" build storyboard.json -o spec.mp4`
+  checks the storyboard first and renders nothing on a refusal: fix the lines
+  it names. Read `build/sheet.png`; done when it reads right and the report ends
+  `no warnings`.
+- Put the MP4 where the owner can play it with the issue's visibility. Public
+  sharing needs publication authority. Confirm playback there, then
+  `node "<this skill's folder>/scripts/animatic.mjs" link "$url"` gives the line.
+- Post it as a spec comment, never in the body (that would change the plan's
+  fingerprint): the link, then `Comment here to steer: stop, reset, or anything else.`
 
-Wait for a clear confirmation. Save and read back the exact answer in the
-verified private comment. Publish the paraphrased `Spec confirmed by` comment
-with its date and pointer, read it back, then resolve the request. Leave the
-request open when a reply or write is uncertain.
+## 5. Steer
 
-Done when the current issue links the playable video and has verified owner
-confirmation. Hand that issue to [to-tickets](../to-tickets/SKILL.md).
-Planning grants only the authority recorded at each gate. Keep builders and
-other-family reviewers independent and leave starting, reviewing and merging
-to their assigned roles.
+The owner's comments on the video steer the fleet (launch-fleet reads them):
+stop holds it, reset re-cuts the plan through
+[the hold-first procedure](../to-tickets/changes.md) and makes a new video, and
+anything else is a steer to act on. A changed spec or plan always gets a new
+machine approval and a new video.
 
-Credit: adapted from Matt Pocock's skills under the MIT License; the notice and sources are in [NOTICE.md](NOTICE.md).
+Planning grants only what the machine approval records: every action gate
+(publish, spend, secrets, deleting user data, cut-overs) still asks the owner.
+Builders and other-family reviewers stay independent; starting, reviewing and
+merging stay with their roles.
+
+Credit: adapted from Matt Pocock's skills, the video from his `animatic` skill, under the MIT License; the notice and sources are in [NOTICE.md](NOTICE.md).

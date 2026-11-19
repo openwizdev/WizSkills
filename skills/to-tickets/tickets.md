@@ -6,7 +6,9 @@ Separate enabling cleanup when it truly blocks work. Read exact links across
 versions when needed. Releases and live checks stay in version order.
 
 Write the issue body with Parent, What to build, Owned paths, Links, Acceptance
-criteria and Proof. In Owned paths describe each exact file or folder.
+criteria and Proof. Parent ends with the size, exactly once: `Size: S.`, `Size: M.`
+or `Size: L.`. In Owned paths give each exact file or folder in backticks, with
+`in \`owner/repo\`` when it is another repository's.
 Mark a small shared file `(shared)` and name the separate lines each ticket
 owns. `**Relies on:**` lists exact backticked interface-file paths on one line,
 or `nothing`. Use `## Done by` for a person's ticket. Proof names the spec

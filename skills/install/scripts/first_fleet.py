@@ -24,7 +24,7 @@ any retry of a create whose answer was lost. It never pushes into a repository.
 
 `launch` starts the first fleet the way launch-fleet starts every fleet: it
 reads launch-fleet's own frontier (../../launch-fleet/scripts/fleet.sh
-frontier, which checks that plan-graph's approval is current), keeps this
+frontier, which checks that to-tickets's approval is current), keeps this
 spec's tickets, reads the fleet settings setup wrote (every builder table the
 user's choice, each reviewer from the other model family), and starts one
 fleet thread for the spec, with launch-fleet's own brief. That thread makes

@@ -45,9 +45,9 @@ with tempfile.TemporaryDirectory(prefix='1273-o10-') as directory:
         target = triage / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(o10_source(relative))
-    revision = root / 'skills/plan-graph/revision.sh'
+    revision = root / 'skills/to-tickets/revision.sh'
     revision.parent.mkdir(parents=True)
-    revision.write_bytes((HERE.parent.parent / 'plan-graph/revision.sh').read_bytes())
+    revision.write_bytes((HERE.parent.parent / 'to-tickets/revision.sh').read_bytes())
 
     source = (scripts / 'test.sh').read_text()
     prefix = source[:source.index('# A full run: the workers')]

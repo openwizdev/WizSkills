@@ -14,10 +14,11 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 | [`image`](image/SKILL.md) |
 | [`install`](install/SKILL.md) |
 | [`launch-fleet`](launch-fleet/SKILL.md) |
-| [`plan-graph`](plan-graph/SKILL.md) |
 | [`research`](research/SKILL.md) |
 | [`review-ticket`](review-ticket/SKILL.md) |
 | [`setup`](setup/SKILL.md) |
+| [`to-spec`](to-spec/SKILL.md) |
+| [`to-tickets`](to-tickets/SKILL.md) |
 | [`triage`](triage/SKILL.md) |
 | [`wayfind`](wayfind/SKILL.md) |
 | [`where-are-we`](where-are-we/SKILL.md) |

@@ -304,7 +304,7 @@ You stay with your ticket through every review round: you already know the code.
 | **An orchestrator decision** on the pull request names your head | Follow it, as in "Answering a review" below |
 | **An answer** to your `needs-info` question | Resume, as in "When you're stuck" |
 | **APPROVE**, naming your exact head | Nothing. It merges by the project's rules |
-| **The pull request merged** | Your work is done, and the five-minute check archives your thread. You are never reused: this thread takes no other ticket |
+| **The pull request merged or closed** | Your work on it is done. Archive your own thread with `room-cli thread archive --self`. This thread takes no other ticket |
 
 ### Answering a review
 

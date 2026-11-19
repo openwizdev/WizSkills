@@ -25,7 +25,7 @@ orchestrator; never fill it with a quotation or an invented pointer.
 
 ## Who reviews, and when
 
-The reviewer is the one `docs/agents/fleet.md` names, from a different model family than the builder. There is one reviewer per pull request: the same one does every re-check, since it already knows the code, and it is archived when the pull request merges. Each reviewer works in one thread and posts the report without delegating.
+The reviewer is the one `docs/agents/fleet.md` names, from a different model family than the builder. There is one reviewer per pull request: the same one does every re-check, since it already knows the code. Each reviewer works in one thread and posts the report without delegating. When the pull request merges or closes, archive your own thread with `room-cli thread archive --self`.
 
 Helpers and swarms are future ideas to benchmark before adoption.
 

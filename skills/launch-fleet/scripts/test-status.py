@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""P4 (#1254): status.py on a synthetic tracker with a fake `gh`.
+"""P4 (#1254, revision 4): status.py on a synthetic tracker with a fake `gh`.
 
 Run: python3 -I skills/launch-fleet/scripts/test-status.py
 Every value here is synthetic. The fake gh keeps the tracker in a JSON file,
-logs every call, and refuses what GitHub refuses (editing another author's
-comment). The expected bodies, labels and lines come from the contract,
-contracts/agent-status.v1.md, never from status.py.
+logs every call, stamps GitHub's updated_at on each comment it writes, and
+refuses what GitHub refuses (editing another author's comment). Expected notes,
+labels and lines come from the contract, contracts/agent-status.v1.md, never
+from status.py. Ages are 5 minutes (live) or 31 to 90 minutes (lapsed) against
+the real clock, far from the 30-minute edge.
 """
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -26,10 +29,11 @@ SCHEMA = ROOT / 'contracts/agent-status.v1.schema.json'
 REPO = 'example/tracker'
 BOT = 'openwiz[bot]'
 FLEET_MD = '# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n| Record authors | `openwiz[bot]`, `synthetic-owner` |\n'
-MARKER = '<!-- openwiz.agent-status.v1 -->'
+MARKER = '<!-- openwiz:status v1 -->'
 
 FAKE_GH = r'''
 import json, os, sys
+from datetime import datetime, timezone
 from urllib.parse import urlsplit, parse_qs, unquote
 args = sys.argv[1:]
 world_path = os.environ['FAKE_GH_WORLD']
@@ -47,6 +51,7 @@ while i < len(args):
 with open(os.environ['FAKE_GH_LOG'], 'a') as log:
     log.write(json.dumps({'method': method, 'path': path, 'body': body}) + '\n')
 size = int(os.environ.get('FAKE_GH_PAGE', '100'))
+now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 def out(value):
     sys.stdout.write(json.dumps(value)); sys.exit(0)
 def fail(code, text):
@@ -57,6 +62,9 @@ def issue(n):
     for it in world['issues']:
         if it['number'] == int(n): return it
     fail(404, 'Not Found')
+def rest(c):
+    return {'id': c['id'], 'user': {'login': c['author']} if c['author'] else None,
+            'body': c['body'], 'updated_at': c['updated']}
 def page(items, query):
     k = int(query.get('page', ['1'])[0]); n = min(int(query.get('per_page', ['30'])[0]), size)
     return items[(k - 1) * n:k * n]
@@ -71,6 +79,9 @@ if path == 'graphql':
     out({'data': {'repository': {'issues': {
         'pageInfo': {'hasNextPage': start + size < len(open_issues), 'endCursor': str(start + size)},
         'nodes': [{'number': it['number'], 'labels': {'nodes': [{'name': l} for l in it['labels']]},
+                   'comments': {'pageInfo': {'hasNextPage': len(it['comments']) > size},
+                                'nodes': [{'databaseId': c['id'], 'author': {'login': c['author']} if c['author'] else None,
+                                           'body': c['body'], 'updatedAt': c['updated']} for c in it['comments'][:size]]},
                    'closedByPullRequestsReferences': {'nodes': it.get('prs', [])}} for it in chunk]}}}})
 assert '/'.join(seg[:3]) == 'repos/' + world['repo'], path
 seg = seg[3:]
@@ -78,17 +89,11 @@ if method == 'GET' and seg == ['contents', 'docs', 'agents', 'fleet.md']:
     assert accept == 'Accept: application/vnd.github.raw'
     if world.get('fleet_md') is None: fail(404, 'Not Found')
     sys.stdout.write(world['fleet_md']); sys.exit(0)
-if method == 'GET' and seg == ['labels']:
-    out(page([{'name': l['name']} for l in world['labels']], query))
-if method == 'POST' and seg == ['labels']:
-    if any(l['name'].lower() == body['name'].lower() for l in world['labels']): fail(422, 'Validation Failed')
-    world['labels'].append(body); save(); out(body)
 if seg[0] == 'issues' and len(seg) == 2 and method == 'GET':
     it = issue(seg[1]); out({'number': it['number'], 'state': it['state'], 'labels': [{'name': l} for l in it['labels']]})
 if seg[0] == 'issues' and seg[2:] == ['labels'] and method == 'POST':
     it = issue(seg[1])
     for l in body['labels']:
-        if not any(x['name'] == l for x in world['labels']): world['labels'].append({'name': l})
         if l not in it['labels']: it['labels'].append(l)
     save(); out([{'name': l} for l in it['labels']])
 if seg[0] == 'issues' and len(seg) == 4 and seg[2] == 'labels' and method == 'DELETE':
@@ -96,32 +101,43 @@ if seg[0] == 'issues' and len(seg) == 4 and seg[2] == 'labels' and method == 'DE
     if seg[3] not in it['labels']: fail(404, 'Label does not exist')
     it['labels'].remove(seg[3]); save(); out([{'name': l} for l in it['labels']])
 if seg[0] == 'issues' and seg[2:] == ['comments'] and method == 'GET':
-    it = issue(seg[1]); out(page([{'id': c['id'], 'user': {'login': c['author']} if c['author'] else None, 'body': c['body']} for c in it['comments']], query))
+    it = issue(seg[1]); out(page([rest(c) for c in it['comments']], query))
 if seg[0] == 'issues' and seg[2:] == ['comments'] and method == 'POST':
-    it = issue(seg[1]); world['next_id'] += 1
-    c = {'id': world['next_id'], 'author': world['login'], 'body': body['body']}
-    it['comments'].append(c); save(); out({'id': c['id'], 'body': c['body']})
+    it = issue(seg[1])
+    # A rival agent's note that reached GitHub a moment before this one.
+    for rival in world.pop('race', []):
+        world['next_id'] += 1
+        it['comments'].append(dict(rival, id=world['next_id'], updated=now))
+    world['next_id'] += 1
+    c = {'id': world['next_id'], 'author': world['login'], 'body': body['body'], 'updated': now}
+    it['comments'].append(c); save(); out(rest(c))
 if seg[:2] == ['issues', 'comments'] and len(seg) == 3 and method == 'PATCH':
     for it in world['issues']:
         for c in it['comments']:
             if c['id'] == int(seg[2]):
                 if c['author'] != world['login']: fail(403, 'Must have admin rights to Repository.')
-                c['body'] = body['body']; save(); out({'id': c['id'], 'body': c['body']})
+                c['body'] = body['body']; c['updated'] = now; save(); out(rest(c))
     fail(404, 'Not Found')
 fail(404, 'Not Found: ' + method + ' ' + path)
 '''
 
 
-def comment(cid, author, body):
-    return {'id': cid, 'author': author, 'body': body}
+def ago(minutes):
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
-def status_body(kind, harness, model, step, time, pr='none', preview='none'):
-    """The text form the contract fixes, field by field."""
-    return '\n'.join([MARKER, '**Agent status**', '',
-                      '- **Kind:** ' + kind, '- **Harness:** ' + harness, '- **Model:** ' + model,
-                      '- **Last step:** ' + step, '- **Time:** ' + time,
-                      '- **Pull request:** ' + pr, '- **Preview:** ' + preview])
+def note(agent='builder', state='working', step='started the build', time='2030-01-02T03:00:00Z',
+         pr=None, preview=None, harness='Claude Code', model='Opus 5.5 Medium'):
+    """The text form the contract fixes, key by key."""
+    lines = [MARKER, 'agent: ' + agent, 'state: ' + state, 'harness: ' + harness, 'model: ' + model,
+             'step: ' + step, 'time: ' + time]
+    lines += ['pr: ' + pr] if pr else []
+    lines += ['preview: ' + preview] if preview else []
+    return '\n'.join(lines)
+
+
+def comment(cid, author, body, minutes=5):
+    return {'id': cid, 'author': author, 'body': body, 'updated': ago(minutes)}
 
 
 def contract_example():
@@ -142,12 +158,11 @@ class Tracker(unittest.TestCase):
         gh.chmod(0o755)
         self.world = {
             'repo': REPO, 'login': BOT, 'fleet_md': FLEET_MD, 'next_id': 9000,
-            'labels': [{'name': 'ready-for-agent'}, {'name': 'held', 'color': 'ededed', 'description': 'synthetic own'}],
             'issues': [{'number': 12, 'state': 'open', 'labels': ['ready-for-agent'], 'comments': [
                 comment(101, 'synthetic-owner', 'launch-fleet: started'),
-                # Anyone may comment on a public ticket: a planted marker is not a status.
-                comment(102, 'synthetic-outsider', MARKER + '\nplanted'),
-                comment(103, None, MARKER + '\nfrom a deleted account'),
+                # Anyone may comment on a public ticket: a planted marker is not a note.
+                comment(102, 'synthetic-outsider', note()),
+                comment(103, None, note()),
             ]}],
         }
         self.page = '100'
@@ -162,6 +177,9 @@ class Tracker(unittest.TestCase):
         log = self.dir / 'gh.log'
         return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
+    def writes(self):
+        return [(c['method'], c['path']) for c in self.calls() if c['method'] != 'GET' and c['path'] != 'graphql']
+
     def run_status(self, *args):
         env = dict(os.environ, PATH=str(self.dir / 'bin') + ':' + os.environ['PATH'],
                    FAKE_GH_WORLD=str(self.dir / 'world.json'), FAKE_GH_LOG=str(self.dir / 'gh.log'),
@@ -171,8 +189,8 @@ class Tracker(unittest.TestCase):
         return subprocess.run([sys.executable, '-I', str(SCRIPT), *args], env=env,
                               capture_output=True, text=True, timeout=60)
 
-    def write(self, state, step, time, *extra, kind='builder'):
-        return self.run_status('write', '--repo', REPO, '--ticket', '12', '--state', state, '--kind', kind,
+    def write(self, state, step, time, *extra, agent='builder'):
+        return self.run_status('write', '--repo', REPO, '--ticket', '12', '--agent', agent, '--state', state,
                                '--harness', 'Claude Code', '--model', 'Opus 5.5 Medium',
                                '--step', step, '--time', time, *extra)
 
@@ -181,78 +199,70 @@ class Tracker(unittest.TestCase):
 
 
 class Write(Tracker):
-    def test_second_run_edits_the_one_status_comment_and_swaps_the_label(self):
-        # catches: a second run posting another status comment, an old state label left on,
-        # a missing label created again, or a stranger's planted marker taken as the status.
+    def test_second_run_edits_the_one_note_and_asking_sets_then_clears_needs_info(self):
+        # catches: a second run posting another note, a stranger's planted marker taken as
+        # the agent's note, asking without needs-info, needs-info left after asking, or any
+        # building or in-review label written.
         self.save()
-        first = self.write('building', 'started the build', '2030-01-02T03:00:00Z')
+        first = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
         self.assertEqual((first.returncode, first.stdout, first.stderr),
-                         (0, '#12: building, status comment 9001 posted\n', ''))
-        world = self.load()
-        self.assertEqual(self.ticket(world)['labels'], ['ready-for-agent', 'building'])
-        self.assertIn({'name': 'building', 'color': 'fbca04',
-                       'description': 'An agent is building this ticket (openwiz.agent-status.v1)'}, world['labels'])
-        self.assertEqual([c['id'] for c in self.ticket(world)['comments']], [101, 102, 103, 9001])
-        self.assertEqual(self.ticket(world)['comments'][3]['body'],
-                         status_body('builder', 'Claude Code', 'Opus 5.5 Medium', 'started the build', '2030-01-02T03:00:00Z'))
+                         (0, '#12: builder working, status note 9001 posted\n', ''))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+        self.assertEqual(self.ticket()['comments'][3]['body'], note())
+
+        asking = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '9001')
+        self.assertEqual((asking.returncode, asking.stdout, asking.stderr),
+                         (0, '#12: builder asking, status note 9001 edited\n', ''))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
         pr = 'https://github.com/example/skills/pull/31'
-        second = self.write('in-review', 'handed back; CI is green', '2030-01-02T04:00:00Z', '--pr', pr)
-        self.assertEqual((second.returncode, second.stdout, second.stderr),
-                         (0, '#12: in-review, status comment 9001 edited\n', ''))
-        third = self.write('in-review', 'answered the review', '2030-01-02T05:00:00Z', '--pr', pr,
-                           '--preview', 'https://31.example-site.pages.dev', kind='builder')
-        self.assertEqual((third.returncode, third.stdout), (0, '#12: in-review, status comment 9001 edited\n'))
+        back = self.write('working', 'handed back; CI is green', '2030-01-02T05:00:00Z', '--note', '9001',
+                          '--pr', pr, '--preview', 'https://31.example-site.pages.dev')
+        self.assertEqual((back.returncode, back.stdout), (0, '#12: builder working, status note 9001 edited\n'))
         world = self.load()
-        self.assertEqual(self.ticket(world)['labels'], ['ready-for-agent', 'in-review'])
+        self.assertEqual(self.ticket(world)['labels'], ['ready-for-agent'])
         self.assertEqual([c['id'] for c in self.ticket(world)['comments']], [101, 102, 103, 9001])
-        self.assertEqual(self.ticket(world)['comments'][1]['body'], MARKER + '\nplanted')
+        self.assertEqual(self.ticket(world)['comments'][1]['body'], note())
         self.assertEqual(self.ticket(world)['comments'][3]['body'],
-                         status_body('builder', 'Claude Code', 'Opus 5.5 Medium', 'answered the review',
-                                     '2030-01-02T05:00:00Z', pr, 'https://31.example-site.pages.dev'))
-        writes = [(c['method'], c['path']) for c in self.calls() if c['method'] != 'GET']
-        self.assertEqual(writes, [
-            ('POST', 'repos/example/tracker/labels'),
-            ('POST', 'repos/example/tracker/issues/12/labels'),
+                         note(step='handed back; CI is green', time='2030-01-02T05:00:00Z', pr=pr,
+                              preview='https://31.example-site.pages.dev'))
+        self.assertEqual(self.writes(), [
             ('POST', 'repos/example/tracker/issues/12/comments'),
-            ('POST', 'repos/example/tracker/labels'),
-            ('DELETE', 'repos/example/tracker/issues/12/labels/building'),
+            ('PATCH', 'repos/example/tracker/issues/comments/9001'),
             ('POST', 'repos/example/tracker/issues/12/labels'),
             ('PATCH', 'repos/example/tracker/issues/comments/9001'),
-            ('PATCH', 'repos/example/tracker/issues/comments/9001'),
+            ('DELETE', 'repos/example/tracker/issues/12/labels/needs-info'),
         ])
+        self.assertEqual([c['body'] for c in self.calls() if c['path'].endswith('/12/labels')], [{'labels': ['needs-info']}])
 
-    def test_held_keeps_the_existing_label_and_none_clears_every_state(self):
-        # catches: an existing label recreated or recoloured, or `none` leaving a state label on.
-        self.ticket(self.world)['labels'] = ['ready-for-agent', 'building', 'in-review']
+    def test_leaving_asking_keeps_a_needs_info_it_did_not_set(self):
+        # catches: a note that was never asking clearing a needs-info a person set.
+        self.ticket(self.world)['labels'] = ['ready-for-agent', 'needs-info', 'held']
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
         self.save()
-        held = self.write('held', 'held by the fleet', '2030-01-02T03:00:00Z', kind='fleet')
-        self.assertEqual(held.returncode, 0, held.stderr)
-        world = self.load()
-        self.assertEqual(self.ticket(world)['labels'], ['ready-for-agent', 'held'])
-        self.assertIn({'name': 'held', 'color': 'ededed', 'description': 'synthetic own'}, world['labels'])
-        self.assertEqual([c for c in self.calls() if c['path'] == 'repos/example/tracker/labels' and c['method'] == 'POST'], [])
-        clear = self.write('none', 'released the ticket', '2030-01-02T04:00:00Z', kind='fleet')
-        self.assertEqual((clear.returncode, clear.stdout), (0, '#12: none, status comment 9001 edited\n'))
-        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+        done = self.write('done', 'merged', '2030-01-02T06:00:00Z', '--note', '104')
+        self.assertEqual((done.returncode, done.stdout), (0, '#12: builder done, status note 104 edited\n'))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info', 'held'])
+        self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')])
 
-    def test_a_status_comment_past_the_first_page_is_edited_not_posted_again(self):
-        # catches: reading only the first page of comments and posting a second status comment.
+    def test_a_note_past_the_first_page_is_found(self):
+        # catches: reading only the first page of comments, so a claim or the agent's own note is missed.
         self.ticket(self.world)['comments'] += [comment(104, 'synthetic-owner', 'note'),
-                                                comment(105, 'openwiz[bot]', MARKER + '\nold'),
-                                                comment(106, 'Synthetic-Owner', MARKER + '\nlater')]
+                                                comment(105, BOT, note(state='working')),
+                                                comment(106, BOT, note(agent='fleet'))]
         self.save()
         self.page = '2'
-        result = self.write('building', 'started the build', '2030-01-02T03:00:00Z')
-        self.assertEqual((result.returncode, result.stdout), (0, '#12: building, status comment 105 edited\n'))
-        comments = self.ticket()['comments']
-        self.assertEqual([c['id'] for c in comments], [101, 102, 103, 104, 105, 106])
-        self.assertEqual(comments[5]['body'], MARKER + '\nlater')
+        edit = self.write('asking', 'asked a question', '2030-01-02T03:00:00Z', '--note', '105')
+        self.assertEqual((edit.returncode, edit.stdout), (0, '#12: builder asking, status note 105 edited\n'))
+        claim = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
+        self.assertEqual((claim.returncode, claim.stdout), (3, ''))
+        self.assertIn('note 105 holds the builder claim', claim.stderr)
+        self.assertEqual([c['id'] for c in self.ticket()['comments']], [101, 102, 103, 104, 105, 106])
 
     def test_the_contract_example_is_what_the_writer_writes(self):
         # catches: the writer's text drifting from the contract the app parses.
         self.save()
-        result = self.write('in-review', 'opened the pull request; CI is running', '2030-01-02T03:04:05Z',
+        result = self.write('working', 'opened the pull request; CI is running', '2030-01-02T03:04:05Z',
                             '--pr', 'https://github.com/example/site/pull/42',
                             '--preview', 'https://42.example-site.pages.dev')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -265,11 +275,84 @@ class Write(Tracker):
                 self.world['fleet_md'] = fleet_md
                 self.save()
                 (self.dir / 'gh.log').unlink(missing_ok=True)
-                result = self.write('building', 'started the build', '2030-01-02T03:00:00Z')
+                result = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
                 self.assertEqual((result.returncode, result.stdout), (2, ''))
                 self.assertIn('record authors', result.stderr)
                 self.assertEqual([c['method'] for c in self.calls()], ['GET'])
                 self.assertEqual(self.load(), self.world)
+
+
+class Claims(Tracker):
+    def test_the_oldest_live_note_of_a_kind_holds_the_claim(self):
+        # catches: a second builder claiming a ticket another builder holds, a lapsed or
+        # stopped note still blocking, or another kind's note blocking a builder.
+        cases = [
+            ('a live builder note blocks', [comment(104, BOT, note())], 3),
+            ('an asking builder note blocks', [comment(104, 'Synthetic-Owner', note(state='asking'))], 3),
+            ('a lapsed builder note does not', [comment(104, BOT, note(), minutes=31)], 0),
+            ('a stopped builder note does not', [comment(104, BOT, note(state='stopped (lease expired)'))], 0),
+            ('a done builder note does not', [comment(104, BOT, note(state='done'))], 0),
+            ('a live fleet note does not', [comment(104, BOT, note(agent='fleet'))], 0),
+            ('an unreadable note does not', [comment(104, BOT, MARKER + '\nagent: builder')], 0),
+        ]
+        base = json.loads(json.dumps(self.world))
+        for name, planted, code in cases:
+            with self.subTest(name):
+                self.world = json.loads(json.dumps(base))
+                self.ticket(self.world)['comments'] += planted
+                self.save()
+                (self.dir / 'gh.log').unlink(missing_ok=True)
+                result = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
+                self.assertEqual(result.returncode, code, result.stderr)
+                if code:
+                    self.assertEqual((result.stdout, self.writes()), ('', []))
+                    self.assertEqual(self.load(), self.world)
+                else:
+                    self.assertEqual(self.writes(), [('POST', 'repos/example/tracker/issues/12/comments')])
+
+    def test_the_fence_stops_a_writer_whose_note_is_no_longer_live(self):
+        # catches: an agent writing on after its claim was stopped, lost or taken by another kind.
+        cases = [
+            ('stopped by the fleet', [comment(104, BOT, note(state='stopped (lease expired)'))], '104'),
+            ('an older live claim', [comment(104, BOT, note()), comment(105, BOT, note())], '105'),
+            ('gone', [], '104'),
+            ('not a record author', [comment(104, 'synthetic-outsider', note())], '104'),
+            ('another kind', [comment(104, BOT, note(agent='reviewer'))], '104'),
+            ('not a note', [comment(104, BOT, 'launch-fleet: started')], '104'),
+        ]
+        base = json.loads(json.dumps(self.world))
+        for name, planted, own in cases:
+            with self.subTest(name):
+                self.world = json.loads(json.dumps(base))
+                self.ticket(self.world)['comments'] += planted
+                self.save()
+                (self.dir / 'gh.log').unlink(missing_ok=True)
+                result = self.write('asking', 'asked a question', '2030-01-02T03:00:00Z', '--note', own)
+                self.assertEqual((result.returncode, result.stdout), (3, ''))
+                self.assertRegex(result.stderr, r'^status\.py: stop: ')
+                self.assertEqual(self.writes(), [])
+                self.assertEqual(self.load(), self.world)
+        # A lapsed note that nobody took over is still its agent's: an edit revives it.
+        self.world = json.loads(json.dumps(base))
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note(), minutes=90))
+        self.save()
+        revived = self.write('working', 'CI finished', '2030-01-02T03:00:00Z', '--note', '104')
+        self.assertEqual((revived.returncode, revived.stdout), (0, '#12: builder working, status note 104 edited\n'))
+
+    def test_a_writer_that_loses_the_race_stops_its_own_note(self):
+        # catches: two builders both keeping a claim when their notes reach GitHub together.
+        self.ticket(self.world)['labels'] = ['ready-for-agent']
+        self.world['race'] = [{'author': BOT, 'body': note(step='a rival started')}]
+        self.save()
+        result = self.write('asking', 'asked a question', '2030-01-02T03:00:00Z')
+        self.assertEqual((result.returncode, result.stdout), (3, ''))
+        self.assertIn('note 9001 holds the builder claim', result.stderr)
+        comments = self.ticket()['comments']
+        self.assertEqual([c['id'] for c in comments], [101, 102, 103, 9001, 9002])
+        self.assertEqual(comments[4]['body'], note(state='stopped (lost claim)', step='asked a question'))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+        self.assertEqual(self.writes(), [('POST', 'repos/example/tracker/issues/12/comments'),
+                                         ('PATCH', 'repos/example/tracker/issues/comments/9002')])
 
 
 # Each value is refused before any call (exit 2, no gh call). A field's flag and a value.
@@ -284,13 +367,18 @@ PRIVATE = [
     ('--harness', 'Codex on mch_synbox1'),
     ('--step', 'project prj_synfleet1'),
     ('--preview', 'https://example.invalid/thr_synpreview1'),
+    ('--why', 'thread thr_synbuilder1 ended'),
     ('--step', 'Robin said "ship it"'),
     ('--step', 'Robin said \u201cship it\u201d'),
     ('--step', '> ship it'),
 ]
 # Shape refusals: the schema refuses them too.
 BAD_SHAPE = [
-    ('--kind', 'helper'),
+    ('--agent', 'helper'),
+    ('--state', 'building'),
+    ('--state', 'in-review'),
+    ('--why', 'two (parts)'),
+    ('--why', 'w' * 101),
     ('--step', ''),
     ('--step', 'two\nlines'),
     ('--step', 'tab\there'),
@@ -304,15 +392,17 @@ BAD_SHAPE = [
     ('--preview', 'https://example.invalid/<script>'),
 ]
 GOOD_SHAPE = [
-    ('--kind', 'reviewer'),
+    ('--agent', 'reviewer'),
+    ('--state', 'done'),
+    ('--why', 'lease expired'),
     ('--step', 'x' * 300),
     ('--model', 'm' * 60),
     ('--step', 'checked https://github.com/acme/home/pull/1 and a/home/b'),
     ('--pr', 'https://github.com/example/skills/pull/31'),
     ('--preview', 'https://31.example-site.pages.dev/app?x=1'),
 ]
-FIELD = {'--kind': 'kind', '--harness': 'harness', '--model': 'model', '--step': 'step',
-         '--time': 'time', '--pr': 'pr', '--preview': 'preview'}
+FIELD = {'--agent': 'agent', '--state': 'state', '--why': 'state', '--harness': 'harness', '--model': 'model',
+         '--step': 'step', '--time': 'time', '--pr': 'pr', '--preview': 'preview'}
 
 
 def valid(schema, node, value):
@@ -328,8 +418,6 @@ def valid(schema, node, value):
         return all(valid(schema, node['properties'][k], v) for k, v in value.items())
     if node.get('type') == 'string' and not isinstance(value, str):
         return False
-    if 'const' in node and value != node['const']:
-        return False
     if 'enum' in node and value not in node['enum']:
         return False
     if 'minLength' in node and len(value) < node['minLength']:
@@ -341,61 +429,70 @@ def valid(schema, node, value):
 
 class Refuse(Tracker):
     def args(self, flag, value):
-        values = {'--kind': 'builder', '--harness': 'Claude Code', '--model': 'Opus 5.5 Medium',
-                  '--step': 'started the build', '--time': '2030-01-02T03:00:00Z'}
+        values = {'--agent': 'builder', '--state': 'working', '--harness': 'Claude Code',
+                  '--model': 'Opus 5.5 Medium', '--step': 'started the build', '--time': '2030-01-02T03:00:00Z'}
+        if flag == '--why':
+            values['--state'] = 'stopped'
         values[flag] = value
-        args = ['write', '--repo', REPO, '--ticket', '12', '--state', 'building']
+        args = ['write', '--repo', REPO, '--ticket', '12']
         for key, item in values.items():
             args += [key, item]
-        return args, values
+        return args
 
     def test_private_or_bad_text_is_refused_before_any_call(self):
         # catches: a thread id, machine path, CloudRoom id, quoted words or a bad shape
-        # reaching the public status comment, or a refusal that comes after a write.
+        # reaching the public note, or a refusal that comes after a call.
         self.save()
         for flag, value in PRIVATE + BAD_SHAPE:
             with self.subTest(flag=flag, value=value):
-                result = self.run_status(*self.args(flag, value)[0])
+                result = self.run_status(*self.args(flag, value))
                 self.assertEqual((result.returncode, result.stdout), (2, ''))
                 self.assertRegex(result.stderr, r'^status\.py: refused: ' + FIELD[flag] + r': ')
-                self.assertNotIn(value, result.stderr) if value else None
+                if value:
+                    self.assertNotIn(value, result.stderr)
                 self.assertEqual(self.calls(), [])
         self.assertEqual(self.load(), self.world)
+        why = self.run_status(*self.args('--state', 'working') + ['--why', 'lease expired'])
+        self.assertEqual((why.returncode, why.stdout, self.calls()), (2, '', []))
+        self.assertRegex(why.stderr, r'^status\.py: refused: state: ')
 
     def test_the_schema_and_the_writer_agree_on_each_shape(self):
         # catches: the schema the app validates with and the writer accepting different values.
         schema = json.loads(SCHEMA.read_text())
-        base = {'schema': 'openwiz.agent-status.v1', 'kind': 'builder', 'harness': 'Claude Code',
-                'model': 'Opus 5.5 Medium', 'step': 'started the build', 'time': '2030-01-02T03:00:00Z',
-                'pr': 'none', 'preview': 'none'}
+        base = {'agent': 'builder', 'state': 'working', 'harness': 'Claude Code', 'model': 'Opus 5.5 Medium',
+                'step': 'started the build', 'time': '2030-01-02T03:00:00Z'}
         self.assertTrue(valid(schema, schema, base))
         for flag, value, good in [(f, v, False) for f, v in BAD_SHAPE] + [(f, v, True) for f, v in GOOD_SHAPE]:
             with self.subTest(flag=flag, value=value):
                 self.save()
-                result = self.run_status(*self.args(flag, value)[0])
+                result = self.run_status(*self.args(flag, value))
                 self.assertEqual(result.returncode == 0, good, result.stderr)
-                self.assertEqual(valid(schema, schema, dict(base, **{FIELD[flag]: value})), good)
-        self.assertEqual(schema['$defs']['label']['enum'], ['building', 'in-review', 'needs-you', 'held'])
+                field = dict(base, state='stopped (%s)' % value) if flag == '--why' else dict(base, **{FIELD[flag]: value})
+                self.assertEqual(valid(schema, schema, field), good)
+        self.assertEqual(schema['$defs']['label']['enum'], ['spec', 'ready-for-agent', 'ready-for-human', 'needs-info', 'held'])
+        self.assertEqual(schema['$defs']['state']['enum'], ['working', 'asking', 'done', 'stopped'])
 
 
 class Check(Tracker):
     def test_check_lists_each_planted_mismatch_and_changes_nothing(self):
-        # catches: a stale state label the wake misses, a closed ticket or an unlabelled one
-        # reported, a page of issues skipped, or a check that writes.
+        # catches: a note GitHub contradicts or a lapsed claim the wake misses, a closed
+        # ticket, a stranger's note or a finished note reported, a page skipped, or a write.
         def pr(n, state):
             return {'number': n, 'state': state, 'url': 'https://github.com/example/skills/pull/%d' % n}
-        def it(n, labels, prs=(), state='open'):
-            return {'number': n, 'state': state, 'labels': labels, 'comments': [], 'prs': list(prs)}
+        def it(n, comments, labels=('ready-for-agent',), prs=(), state='open'):
+            return {'number': n, 'state': state, 'labels': list(labels), 'comments': comments, 'prs': list(prs)}
         self.world['issues'] = [
-            it(20, ['ready-for-agent', 'building'], [pr(30, 'CLOSED'), pr(31, 'MERGED')]),
-            it(21, ['ready-for-agent', 'in-review'], [pr(32, 'CLOSED')]),
-            it(22, ['ready-for-agent', 'in-review'], [pr(33, 'OPEN')]),
-            it(23, ['building', 'held']),
-            it(24, ['building'], [pr(34, 'CLOSED')]),
-            it(25, ['needs-you'], [pr(35, 'MERGED')]),
-            it(26, ['ready-for-agent'], [pr(36, 'MERGED')]),
-            it(27, ['in-review'], [pr(37, 'MERGED')], state='closed'),
-            it(28, ['held'], [pr(38, 'MERGED')]),
+            it(20, [comment(201, BOT, note())], prs=[pr(30, 'CLOSED'), pr(31, 'MERGED')]),
+            it(21, [comment(211, BOT, note(state='asking'), minutes=45)], labels=['ready-for-agent', 'needs-info']),
+            it(22, [comment(221, BOT, note(state='asking'))]),
+            it(23, [comment(231, BOT, note()), comment(232, BOT, note(agent='fleet')), comment(233, BOT, note())]),
+            it(24, [comment(241, BOT, note(state='done'))], prs=[pr(34, 'MERGED')]),
+            it(25, [comment(251, 'synthetic-outsider', note())], prs=[pr(35, 'MERGED')]),
+            it(26, [comment(261, BOT, note(state='stopped (lease expired)'), minutes=90),
+                    comment(262, BOT, note(state='asking'))], labels=['needs-info', 'held'], prs=[pr(36, 'OPEN')]),
+            it(27, [comment(271, BOT, note())], prs=[pr(37, 'MERGED')], state='closed'),
+            it(28, [comment(281, 'synthetic-owner', 'plain'), comment(282, BOT, 'plain'),
+                    comment(283, BOT, note(agent='reviewer'), minutes=60)]),
         ]
         self.save()
         self.page = '2'
@@ -403,14 +500,19 @@ class Check(Tracker):
         result = self.run_status('check', '--repo', REPO)
         self.assertEqual((result.returncode, result.stderr), (1, ''))
         self.assertEqual(result.stdout,
-                         '#20 building: pull request https://github.com/example/skills/pull/31 merged\n'
-                         '#21 in-review: no open pull request closes it\n'
-                         '#23 building, held: more than one state label\n'
-                         '#25 needs-you: pull request https://github.com/example/skills/pull/35 merged\n')
+                         '#20 note 201 builder working: pull request https://github.com/example/skills/pull/31 merged\n'
+                         '#21 note 211 builder asking: lapsed, no edit for 30 minutes\n'
+                         '#22 note 221 builder asking: no needs-info label\n'
+                         '#23 note 233 builder working: note 231 holds the builder claim\n'
+                         '#28 note 283 reviewer working: lapsed, no edit for 30 minutes\n')
         self.assertEqual((self.dir / 'world.json').read_bytes(), before)
-        self.assertEqual([c['path'] for c in self.calls()], ['graphql'] * 4)
+        self.assertEqual({c['method'] for c in self.calls()}, {'GET', 'POST'})
+        self.assertEqual({c['path'] for c in self.calls() if c['method'] == 'POST'}, {'graphql'})
+        self.assertIn(('GET', 'repos/example/tracker/issues/28/comments?per_page=100&page=1'),
+                      [(c['method'], c['path']) for c in self.calls()])
 
-        self.world['issues'] = [it(22, ['in-review'], [pr(33, 'OPEN')]), it(26, [], [pr(36, 'MERGED')])]
+        self.world['issues'] = [it(24, [comment(241, BOT, note(state='done'))], prs=[pr(34, 'MERGED')]),
+                                it(29, [], labels=['needs-info'])]
         self.save()
         clean = self.run_status('check', '--repo', REPO)
         self.assertEqual((clean.returncode, clean.stdout, clean.stderr), (0, '', ''))

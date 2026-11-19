@@ -1,17 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:openwiz:schema:agent-status:v1",
-  "title": "openwiz.agent-status.v1",
-  "description": "The fields of a ticket's status comment, as read from its seven field lines after the marker line '<!-- openwiz.agent-status.v1 -->'. See agent-status.v1.md for the comment's text form, which comment counts, the state labels and what it never holds.",
+  "title": "openwiz:status v1",
+  "description": "The fields of one status note, as read from its key: value lines after the marker line '<!-- openwiz:status v1 -->'. See agent-status.v1.md for the note's text form, which notes count, the claim rules, the people-set labels and what a note never holds.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "kind", "harness", "model", "step", "time", "pr", "preview"],
+  "required": ["agent", "state", "harness", "model", "step", "time"],
   "properties": {
-    "schema": {
-      "const": "openwiz.agent-status.v1"
-    },
-    "kind": {
+    "agent": {
       "enum": ["builder", "reviewer", "fleet"]
+    },
+    "state": {
+      "type": "string",
+      "pattern": "^(working|asking|done|stopped|stopped \\([^()\\u0000-\\u001f\\u007f\"\\u201c\\u201d]{1,100}\\))$"
     },
     "harness": {
       "$ref": "#/$defs/short"
@@ -28,11 +29,11 @@
     },
     "pr": {
       "type": "string",
-      "pattern": "^(none|https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*)$"
+      "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*$"
     },
     "preview": {
       "type": "string",
-      "pattern": "^(none|https://[^\\s\"<>]+)$",
+      "pattern": "^https://[^\\s\"<>]+$",
       "maxLength": 300
     }
   },
@@ -48,8 +49,12 @@
       "maxLength": 60
     },
     "label": {
-      "description": "The four state labels; a ticket carries at most one.",
-      "enum": ["building", "in-review", "needs-you", "held"]
+      "description": "The five labels people set. Agents add or clear needs-info only for their own asking note.",
+      "enum": ["spec", "ready-for-agent", "ready-for-human", "needs-info", "held"]
+    },
+    "state": {
+      "description": "The four states. A note is live while working or asking and edited within the last 30 minutes.",
+      "enum": ["working", "asking", "done", "stopped"]
     }
   }
 }

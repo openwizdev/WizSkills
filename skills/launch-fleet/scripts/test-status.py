@@ -45,6 +45,18 @@ from urllib.parse import urlsplit, parse_qs, unquote
 args = sys.argv[1:]
 world_path = os.environ['FAKE_GH_WORLD']
 world = json.load(open(world_path))
+if args[:2] == ['issue', 'edit']:
+    # launch-fleet's fix for an asking note without needs-info: gh issue edit N --repo R --add-label L.
+    n, opts = int(args[2]), dict(zip(args[3::2], args[4::2]))
+    assert opts['--repo'] == world['repo'] and set(opts) == {'--repo', '--add-label'}, args
+    with open(os.environ['FAKE_GH_LOG'], 'a') as log:
+        log.write(json.dumps({'method': 'EDIT', 'path': 'issue %d' % n, 'body': opts['--add-label']}) + '\n')
+    it = next(i for i in world['issues'] if i['number'] == n)
+    if opts['--add-label'] not in it['labels']:
+        it['labels'].append(opts['--add-label'])
+        it.setdefault('events', []).append({'event': 'labeled', 'label': {'name': opts['--add-label']}, 'actor': {'login': world['login']}})
+    json.dump(world, open(world_path, 'w'), indent=1, sort_keys=True)
+    sys.exit(0)
 assert args[0] == 'api', args
 args = args[1:]
 method, path, accept, body = 'GET', None, None, None
@@ -731,6 +743,138 @@ class Check(Tracker):
         result = self.run_status('check', '--repo', REPO)
         self.assertEqual((result.returncode, result.stdout), (2, ''))
         self.assertIn('could not read', result.stderr)
+
+
+
+SKILLS_DIR = ROOT / 'skills'
+LABELS = {'ready-for-agent', 'needs-info'}
+
+
+def span(skill, pattern):
+    """The one code span in SKILL.md matching PATTERN, or None."""
+    found = re.findall(pattern, (SKILLS_DIR / skill / 'SKILL.md').read_text())
+    return found[0] if len(found) == 1 else None
+
+
+def filled(skill, text, values):
+    """A skill's command with its placeholders filled, as an agent fills them."""
+    text = text.replace("<this skill's folder>", str(SKILLS_DIR / skill))
+    for name, value in values.items():
+        text = text.replace(name, value)
+    return text
+
+
+class FleetRun(Tracker):
+    """P4 (#1255): the status lines in build-ticket, review-ticket and launch-fleet, run as written."""
+
+    def command(self, skill, kind):
+        base = span(skill, r'`S="([^"`]*status\.py write[^"`]*)"`')
+        self.assertIsNotNone(base, f'{skill} has no one status write line')
+        text = filled(skill, base, {'<repo>': REPO, '<N>': '12', '<harness>': 'Claude Code', '<model>': 'Opus 5.5 Medium',
+                                    '<skills>': f'{skill}@{VERSION}'})
+        self.assertNotRegex(text, '<[^>]*>', f'{skill}: a placeholder the agent cannot fill')
+        argv = text.split(' ')
+        self.assertEqual(argv[:2], ['python3', '-I'])
+        self.assertIn(f'--agent {kind}', text)
+        return [sys.executable] + argv[1:]
+
+    def step(self, argv, *extra):
+        env = dict(os.environ, PATH=str(self.dir / 'bin') + ':' + os.environ['PATH'],
+                   FAKE_GH_WORLD=str(self.dir / 'world.json'), FAKE_GH_LOG=str(self.dir / 'gh.log'),
+                   FAKE_GH_PAGE=self.page)
+        for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_REPO'):
+            env.pop(key, None)
+        return subprocess.run(argv + list(extra), env=env, capture_output=True, text=True, timeout=60)
+
+    def states(self):
+        """Each status note on #12 as (comment id, agent, state), read as the app reads the contract."""
+        out = []
+        for c in self.ticket()['comments']:
+            lines = c['body'].split('\n')
+            if lines[0] == MARKER and c['author'] == BOT:
+                fields = dict(line.split(': ', 1) for line in lines[1:])
+                out.append((c['id'], fields['agent'], fields['state']))
+        return out
+
+    def test_a_synthetic_fleet_run_moves_each_note_in_place_and_the_wake_fixes_or_reports(self):
+        # catches: a skill with no status line, a line pointing at a status.py that isn't there
+        # from its own folder, the wrong agent kind, a placeholder the agent can't fill, a later
+        # step posting a second note instead of editing its own, any state label written, or a
+        # wake that neither fixes an asking note's missing needs-info nor reports a lapsed claim.
+        self.world['issues'] += [
+            {'number': 13, 'state': 'open', 'labels': ['ready-for-agent'],
+             'comments': [comment(201, BOT, note(state='asking'))]},
+            {'number': 14, 'state': 'open', 'labels': ['ready-for-agent'],
+             'comments': [comment(301, BOT, note(), minutes=45)]}]
+        self.save()
+        build = self.command('build-ticket', 'builder')
+        review = self.command('review-ticket', 'reviewer')
+        pr = 'https://github.com/example/tracker/pull/31'
+
+        def run(argv, state, step, *extra):
+            result = self.step(argv, '--state', state, '--step', step, *extra)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+
+        posted = run(build, 'working', 'claimed the ticket')
+        builder = int(re.fullmatch(r'#12: builder working, status note ([0-9]+) posted\n', posted)[1])
+        mine = ['--note', str(builder)]
+        run(build, 'asking', 'asked which file to change', *mine)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        run(build, 'working', 'got the answer', *mine)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+        self.world = self.load()
+        self.ticket(self.world)['prs'] = [{'number': 31, 'state': 'OPEN', 'url': pr}]
+        self.save()
+        run(build, 'done', 'handed back; CI is green', *mine, '--pr', pr)
+
+        posted = run(review, 'working', 'reviewing the head')
+        reviewer = int(re.fullmatch(r'#12: reviewer working, status note ([0-9]+) posted\n', posted)[1])
+        run(review, 'done', 'posted its verdict', '--note', str(reviewer))
+        self.assertEqual(self.states(), [(builder, 'builder', 'done'), (reviewer, 'reviewer', 'done')])
+
+        # The pull request merges while the builder is back at work: merged is GitHub's word.
+        run(build, 'working', 'answering the review', *mine, '--pr', pr)
+        self.world = self.load()
+        self.ticket(self.world)['prs'][0]['state'] = 'MERGED'
+        self.save()
+        check = span('launch-fleet', r'`([^`]*status\.py check[^`]*)`')
+        fix = span('launch-fleet', r'`(gh issue edit [^`]*--add-label needs-info[^`]*)`')
+        self.assertIsNotNone(check, 'launch-fleet has no one status check call')
+        self.assertIsNotNone(fix, 'launch-fleet has no one needs-info fix')
+        check = filled('launch-fleet', check, {'<owner>/<repo>': REPO}).split(' ')
+        self.assertEqual(check[:2], ['python3', '-I'])
+        check = [sys.executable] + check[1:]
+        seen = self.step(check)
+        self.assertEqual(seen.returncode, 1, seen.stderr)
+        lines = seen.stdout.splitlines()
+        self.assertEqual(sorted(lines), sorted([
+            f'#12 note {builder} builder working: pull request {pr} merged',
+            '#13 note 201 builder asking: no needs-info label',
+            '#14 note 301 builder working: lapsed, no edit for 30 minutes']))
+        for line in lines:
+            if line.endswith(': no needs-info label'):
+                n = line.split(' ')[0][1:]
+                done = self.step(filled('launch-fleet', fix, {'<N>': n, '<owner>/<repo>': REPO}).split(' '))
+                self.assertEqual(done.returncode, 0, done.stderr)
+        run(build, 'done', 'merged', *mine, '--pr', pr)
+
+        again = self.step(check)
+        self.assertEqual((again.returncode, again.stdout),
+                         (1, '#14 note 301 builder working: lapsed, no edit for 30 minutes\n'))
+        world = self.load()
+        self.assertEqual([it['labels'] for it in world['issues']],
+                         [['ready-for-agent'], ['ready-for-agent', 'needs-info'], ['ready-for-agent']])
+        self.assertEqual([c['id'] for c in self.ticket(world)['comments']], [101, 102, 103, builder, reviewer])
+        self.assertEqual(self.states(), [(builder, 'builder', 'done'), (reviewer, 'reviewer', 'done')])
+        # Each agent edits only its own note, and no label but needs-info is ever written.
+        edits = [c['path'] for c in self.calls() if c['method'] == 'PATCH']
+        self.assertEqual(sorted(set(edits)), sorted({f'repos/{REPO}/issues/comments/{builder}',
+                                                     f'repos/{REPO}/issues/comments/{reviewer}'}))
+        added = [c['body'] for c in self.calls() if c['method'] == 'POST' and c['path'].endswith('/labels')]
+        added += [{'labels': [c['body']]} for c in self.calls() if c['method'] == 'EDIT']
+        self.assertTrue(added)
+        self.assertTrue(all(set(b['labels']) <= LABELS for b in added), added)
 
 
 if __name__ == '__main__':

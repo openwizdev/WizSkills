@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 
@@ -27,6 +28,90 @@ class ReceiptTests(unittest.TestCase):
             [sys.executable, "-I", str(CLI)], input=payload,
             text=True, capture_output=True, check=False,
         )
+
+    def run_log(self, host, *logs, **observed):
+        with tempfile.TemporaryDirectory() as folder:
+            args = []
+            for index, events in enumerate(logs):
+                log = Path(folder) / f"attempt-{index}.jsonl"
+                log.write_text("".join(json.dumps(event) + "\n" for event in events))
+                args.extend(("--host-log", str(log)))
+            return subprocess.run(
+                [sys.executable, "-I", str(CLI), *args], text=True, capture_output=True,
+                input=json.dumps({
+                    "case": "synthetic.case", "commit": "a" * 40,
+                    "host": host, "model": "example-model", "effort": "medium",
+                    **observed,
+                }),
+                check=False,
+            )
+
+    def test_codex_jsonl_counts_completed_turns_and_only_outputs_receipt(self):
+        result = self.run_log("codex", [
+            {"type": "thread.started", "thread_id": "synthetic-hidden-id"},
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": {"text": "synthetic-hidden-content"}},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 401, "cached_input_tokens": 100, "output_tokens": 17,
+            }},
+        ], [
+            {"type": "turn.started"},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 509, "cached_input_tokens": 100, "output_tokens": 23,
+            }},
+        ], metrics={"wall_ms": 847, "retries": 1}, outcome="pass")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        metrics = self.read_receipt(result)
+        self.assertEqual((metrics["input_tokens"], metrics["output_tokens"]), (910, 40))
+        self.assertEqual((metrics["wall_ms"], metrics["retries"]), (847, 1))
+        self.assertNotIn("synthetic-hidden", result.stdout)
+
+    def test_codex_incomplete_attempt_does_not_publish_partial_total(self):
+        complete = [
+            {"type": "turn.started"},
+            {"type": "turn.completed", "usage": {"input_tokens": 33, "output_tokens": 4}},
+        ]
+        control = self.run_log("codex", complete)
+        metrics = self.read_receipt(control)
+        self.assertEqual((metrics["input_tokens"], metrics["output_tokens"]), (33, 4))
+        for end in [[], [{"type": "turn.failed"}]]:
+            with self.subTest(end=end):
+                result = self.run_log("codex", [
+                    *complete, {"type": "turn.started"}, *end,
+                ], outcome="fail")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                metrics = self.read_receipt(result)
+                self.assertIsNone(metrics["input_tokens"])
+                self.assertIsNone(metrics["output_tokens"])
+                self.assertEqual(json.loads(result.stdout)["outcome"], "fail")
+
+    def test_claude_jsonl_uses_result_usage_once_per_attempt(self):
+        first = [
+            {"type": "assistant", "message": {"usage": {"input_tokens": 8}}},
+            {"type": "result", "is_error": True, "usage": {
+                "input_tokens": 9, "cache_creation_input_tokens": 20,
+                "cache_read_input_tokens": 30, "output_tokens": 7, "server_tool_use": {},
+            }},
+        ]
+        second = [{"type": "result", "usage": {
+            "input_tokens": 6, "cache_creation_input_tokens": 10,
+            "cache_read_input_tokens": 60, "output_tokens": 4,
+        }}]
+        result = self.run_log("claude-code", first, second, outcome="pass")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        metrics = self.read_receipt(result)
+        self.assertEqual((metrics["input_tokens"], metrics["output_tokens"]), (135, 11))
+
+    def test_host_logs_refuse_ambiguous_or_conflicting_sources(self):
+        completed = {"type": "result", "usage": {"output_tokens": 3}}
+        for logs, extra in [
+            (([completed, completed],), {}),
+            (([completed],), {"usage": {"output_tokens": 3}}),
+        ]:
+            with self.subTest(logs=logs, extra=extra):
+                result = self.run_log("claude-code", *logs, **extra)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
 
     def read_receipt(self, result):
         self.assertEqual(result.returncode, 0, result.stderr)

@@ -80,7 +80,7 @@ def png_column(path):
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200 if self.path in ('/', '/fragment', '/empty', '/broken', '/fixed', '/wide') else 404)
+        self.send_response(200 if self.path in ('/', '/fragment', '/empty', '/broken', '/fixed', '/wide', '/short-wide') else 404)
         self.send_header('Content-Type', 'text/html')
         self.end_headers()
         if self.path == '/fixed':
@@ -91,6 +91,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             <script>document.querySelector('main').style.height = innerWidth < 500 ? '1200px' : '1500px';</script>''')
         elif self.path == '/wide':
             self.wfile.write(PAGE + b'<style>@media(max-width:500px){body{width:600px}}</style>')
+        elif self.path == '/short-wide':
+            # Wider than the phone only while the viewport is short, so the
+            # first screen overflows and the page-height capture does not.
+            self.wfile.write(PAGE + b'<style>@media(max-width:500px) and (max-height:900px)'
+                             b'{body{width:600px}}</style>')
         elif self.path == '/empty':
             self.wfile.write(PAGE + b'<img alt="Optional empty placeholder">')
         elif self.path == '/broken':
@@ -158,6 +163,19 @@ class Screenshots(unittest.TestCase):
             plain = self.run_capture(Path(temp) / 'plain')
             self.assertEqual(plain.returncode, 0, plain.stderr + plain.stdout)
             self.assertEqual(plain.stdout.splitlines()[1:], ['overflow: none'])
+
+    def test_overflow_summary_includes_the_first_screen(self):
+        # catches (R1): --fixed-at-bottom reporting `overflow: none` because
+        # only the tall capture fits, while the first-screen PNG overflows.
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / 'short-wide'
+            result = self.run_capture(out, '--fixed-at-bottom', url=self.url + 'short-wide')
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            manifest = json.loads((out / 'capture.json').read_text())
+            self.assertEqual(manifest['captures'][0]['firstScreen']['page']['contentWidth'], 600)
+            self.assertEqual(manifest['captures'][0]['page']['contentWidth'], 390)
+            self.assertEqual(result.stdout.splitlines()[1:],
+                             ['overflow: phone first screen 600 > 390'])
 
     def test_fragment_url_loads_a_fresh_page_at_each_width(self):
         with tempfile.TemporaryDirectory() as temp:

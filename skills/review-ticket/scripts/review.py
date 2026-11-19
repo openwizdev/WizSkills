@@ -367,6 +367,7 @@ def main(argv=None):
             c.add_argument("report")
         c.add_argument("--repo", required=True)
         c.add_argument("--pr", required=True, type=int)
+        c.add_argument("--head")
     f = sub.add_parser("follow-up")
     for name in ("repo", "ticket", "spec", "pr", "head", "id", "title", "finding"):
         f.add_argument("--" + name, required=True)

@@ -120,8 +120,13 @@ if post:
 if len(parts) == 3:
     done({"full_name": repo, "default_branch": "main"})
 if parts[3] == "pulls":
+    if w.get("pull_sequence"):
+        done(w["pull_sequence"].pop(0))
     pr = w["pulls"].get(parts[4])
     done(pr, 0) if pr else done(None, 1)
+if parts[3:5] == ["issues", "comments"]:
+    found = [c for cs in w["comments"].values() for c in cs if str(c["id"]) == parts[5]]
+    done(found[0]) if found else done(None, 1)
 if parts[3] == "contents":
     ref = url.split("?ref=")[1]
     text = w["files"].get(repo + "@" + ref + ":" + "/".join(parts[4:]))
@@ -164,6 +169,8 @@ class Review(unittest.TestCase):
         self.dir.cleanup()
 
     def world(self, changes, *, pr=None, comments=None):
+        for n, c in enumerate(comments or []):
+            c["id"] = 800 + n
         w = {
             "calls": [], "writes": 0, "issues": {},
             "pulls": {"7": {"number": 7, "state": "open", "draft": False, "merged": False,
@@ -181,6 +188,9 @@ class Review(unittest.TestCase):
         return json.loads(self.fixture.read_text())
 
     def run_helper(self, *args, stdin=None):
+        if args[0] in ("pin", "check", "post") and "--head" not in args:
+            # The assigned head is the pull request's current head unless a test says otherwise.
+            args = (*args, "--head", self.state()["pulls"]["7"]["head"]["sha"])
         return subprocess.run([sys.executable, "-I", str(HELPER), *args], input=stdin, text=True,
                               capture_output=True, env=self.env, timeout=30)
 
@@ -477,6 +487,166 @@ class Review(unittest.TestCase):
                 out = self.follow_up()
                 self.assertEqual(out.returncode, 2)
                 self.assertIn("needs-triage label", out.stderr)
+                self.assertEqual(self.state()["writes"], 0)
+
+
+    # --- re-check round fixes (WizSkills #19 review) -----------------------
+
+    def parked_world(self, decision=None, head=NEWER, author="owner", extra=None):
+        fresh = RECHECK.replace("VERDICT: APPROVE", "VERDICT: CHANGES").replace(
+            "- **R3 [blocking]** resolved at bbbbbbb: the log line is redacted.",
+            "- **R3 [blocking]** still open after the re-check: still logged.\n"
+            "  Risk: privacy: a cook's sync token reaches a shared log.").replace(
+            "Next: none open. It merges by the project's merge rules.",
+            "Next: a fresh, stronger builder fixes R3 once, then one final check.")
+        parked = fresh.replace(HEAD, NEWER).replace("Re-check of R1, R3", "Final check of R3").replace(
+            "Next: a fresh, stronger builder fixes R3 once, then one final check.",
+            "Next: park R3 as a decision for Jake.")
+        comments = [report(FULL), report(fresh), report(parked)]
+        if decision:
+            comments.append({"body": decision, "user": {"login": author}})
+        comments += extra or []
+        self.world({"checks": {**green(NEWER), **green("d" * 40)}}, pr={"head": {"sha": head}}, comments=comments)
+        return parked
+
+    def test_fix_once_more_decision_admits_a_check_of_the_new_head(self):
+        # catches (R1): the park stop ignoring Jake's relayed fix-once-more
+        # answer, so the reviewer can never check the requested fix.
+        self.parked_world(f"**Orchestrator decision:** fix once more: R3 at {NEWER}. Why: one line.", head="d" * 40)
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertTrue(out.stdout.startswith(f"review final #7 at {'d' * 40}"), out.stdout)
+        self.assertIn(f"last read {NEWER}; open R3", out.stdout)
+
+    def test_log_and_merge_decision_admits_one_same_head_polish_report(self):
+        # catches (R1): the park stop refusing the authorized same-head report
+        # that grades the parked finding as polish with the decision's issue.
+        parked = self.parked_world(f"**Orchestrator decision:** log and merge: R3 at {NEWER}. Polish issues: #64. "
+                                   "Why: the log stays local.")
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertTrue(out.stdout.startswith(f"review log-and-merge #7 at {NEWER}"), out.stdout)
+        approve = parked.replace("VERDICT: CHANGES", "VERDICT: APPROVE").replace(
+            "- **R3 [blocking]** still open after the re-check: still logged.\n"
+            "  Risk: privacy: a cook's sync token reaches a shared log.",
+            "- **R3 [polish]** Polish issue: #64.").replace(
+            "Next: park R3 as a decision for Jake.", "Next: none open. It merges by the project's merge rules.")
+        posted = self.run_helper("post", self.file("approve.md", approve), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual(posted.stdout.strip(), "posted 904", posted.stdout + posted.stderr)
+        wrong = approve.replace("Polish issue: #64.", "Polish issue: #65.")
+        self.world({**self.state(), "comments": {f"{SKILLS}#7": self.state()["comments"][f"{SKILLS}#7"][:4]}})
+        out = self.run_helper("check", self.file("wrong.md", wrong), "--repo", SKILLS, "--pr", "7")
+        self.assertIn("R3: the decision grades it polish with Polish issue: #64", out.stdout.splitlines())
+
+    def test_unmatched_or_unauthorized_decisions_keep_the_park(self):
+        # catches (R1): a decision from a non-record author, for other ids or
+        # for another head releasing a parked finding.
+        for name, (decision, author) in {
+            "stranger": (f"**Orchestrator decision:** fix once more: R3 at {NEWER}. Why: x.", "stranger"),
+            "other ids": (f"**Orchestrator decision:** fix once more: R1 at {NEWER}. Why: x.", "owner"),
+            "other head": (f"**Orchestrator decision:** fix once more: R3 at {HEAD}. Why: x.", "owner"),
+        }.items():
+            with self.subTest(name):
+                self.parked_world(decision, head="d" * 40, author=author)
+                out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
+                self.assertEqual((out.returncode, out.stdout.strip()), (1, "stop: R3 is parked as a decision for Jake"))
+
+    def test_an_earlier_blocker_cannot_be_closed_as_polish(self):
+        # catches (R2): a re-check approving an unresolved Risk: blocker by
+        # giving it a polish status or a polish grade.
+        cases = {
+            "polish status": RECHECK.replace("- **R3 [blocking]** resolved at bbbbbbb: the log line is redacted.",
+                                             "- **R3 [blocking]** Polish issue: #62."),
+            "polish grade": RECHECK.replace("- **R3 [blocking]** resolved at bbbbbbb: the log line is redacted.",
+                                            "- **R3 [polish]** Polish issue: #62."),
+        }
+        problems = {"polish status": "R3: a blocker's status is resolved, withdrawn, still open, disputed or logged",
+                    "polish grade": "R3: keeps its earlier grade, blocking"}
+        for name, text in cases.items():
+            with self.subTest(name):
+                self.world({}, comments=[report(FULL)])
+                out = self.run_helper("post", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, 1, out.stdout)
+                self.assertIn(problems[name], out.stdout.splitlines())
+                self.assertEqual(self.state()["writes"], 0)
+
+    def test_v2_ruling_mark_refusals(self):
+        # catches (R2): two rulings overturned as one finding, or Rulings:
+        # none. beside a mark, both refused by the v2 check.
+        self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}, "body": DESCRIPTION.replace(
+            "1. Name the zip", "2. Keep one zip. Why: one file. Cost if wrong: low: two files.\n1. Name the zip")})
+        two = FULL.replace("- **Ruling 1** upheld: the importer reads cookbook.zip.",
+                           "- **Ruling 1** overturned as R1: wrong.\n- **Ruling 2** overturned as R1: wrong.")
+        out = self.run_helper("check", self.file("r.md", two), "--repo", SKILLS, "--pr", "7")
+        self.assertIn("R1: named by two overturned rulings", out.stdout.splitlines())
+        none = FULL.replace("- **Ruling 1** upheld: the importer reads cookbook.zip.",
+                            "- **Ruling 1** upheld: ok.\n- **Ruling 2** upheld: ok.\n\nRulings: none.")
+        out = self.run_helper("check", self.file("r.md", none), "--repo", SKILLS, "--pr", "7")
+        self.assertIn("Rulings: none. stands beside a ruling mark", out.stdout.splitlines())
+
+    def test_record_author_row_is_parsed_whole(self):
+        # catches (R3): a malformed row with a missing comma, a second row or
+        # an extra cell still supplying trusted authors.
+        row = "| Record authors | `example[bot]`, `owner` |\n"
+        for name, bad in {"missing comma": "| Record authors | `example[bot]` `owner` |\n",
+                          "two rows": row + "| Record authors | `owner` |\n",
+                          "extra cell": "| Record authors | `example[bot]`, `owner` | extra |\n"}.items():
+            with self.subTest(name):
+                self.world({"files": {f"{SKILLS}@main:docs/agents/fleet.md": FLEET.replace(row, bad)}},
+                           comments=[report(FULL.replace(OLD, HEAD))])
+                out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
+                self.assertEqual((out.returncode, out.stdout), (2, ""), out.stdout)
+                self.assertIn("record authors", out.stderr)
+
+    def test_additional_required_check_outside_the_table(self):
+        # catches (R4): an OpenWiz-shaped fleet.md whose privacy gate is named
+        # outside the table being reviewed with privacy failed.
+        fleet = FLEET.replace("| `check` | Every suite | Pull requests to `main` |\n",
+                              "| `ci` | Every lane | `main`, `release-*` |\n\n"
+                              "**Additional public check: `privacy` (O3).** It checks the public tree.\n")
+        checks = {HEAD: [{"name": "ci", "status": "completed", "conclusion": "success"},
+                         {"name": "privacy", "status": "completed", "conclusion": "failure"}]}
+        self.world({"files": {f"{SKILLS}@main:docs/agents/fleet.md": fleet}, "checks": checks})
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (1, f"stop: privacy is not green at {HEAD}"))
+
+    def test_identical_text_from_anyone_else_is_not_a_post(self):
+        # catches (R5): an ordinary comment with the report's text ending the
+        # post as already posted, leaving the fleet no recognized verdict.
+        self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}},
+                   comments=[{"body": FULL, "user": {"login": "stranger"}}])
+        out = self.run_helper("post", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "posted 901"), out.stdout + out.stderr)
+        self.assertEqual(self.state()["writes"], 1)
+
+    def test_commands_are_bound_to_the_assigned_head(self):
+        # catches (R6): reviewing or posting for a head other than the one the
+        # fleet assigned.
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--head", NEWER)
+        self.assertEqual((out.returncode, out.stdout.strip()),
+                         (1, f"stop: the head is {HEAD}, not the assigned {NEWER}"))
+
+    def test_pin_reads_one_snapshot(self):
+        # catches (R6): readiness and ticket from one pull-request read joined
+        # with the head of a later read.
+        later = {**self.state()["pulls"]["7"], "draft": True, "head": {"sha": NEWER}, "body": "Closes #99\n"}
+        self.world({"pull_sequence": [self.state()["pulls"]["7"], later] * 3, "checks": {**green(HEAD), **green(NEWER)}})
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--head", HEAD)
+        self.assertEqual(out.stdout.strip(), f"review full #7 at {HEAD}; ticket {PRODUCT}#41; checks check")
+
+    def test_post_repeats_admission_before_writing(self):
+        # catches (R6): handing back a verdict after the head became draft or
+        # its required check failed.
+        for name, (pr, checks) in {
+            "draft": ({"draft": True, "head": {"sha": OLD}}, green(OLD)),
+            "failed check": ({"head": {"sha": OLD}},
+                             {OLD: [{"name": "check", "status": "completed", "conclusion": "failure"}]}),
+        }.items():
+            with self.subTest(name):
+                self.world({"checks": checks}, pr=pr)
+                out = self.run_helper("post", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, 1, out.stdout)
+                self.assertTrue(out.stdout.startswith("stop: "), out.stdout)
                 self.assertEqual(self.state()["writes"], 0)
 
 

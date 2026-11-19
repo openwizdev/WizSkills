@@ -1003,8 +1003,11 @@ class Resume(unittest.TestCase):
 
     def next(self, j):
         before = j.state.read_bytes() if j.state.exists() else None
+        lock = Path(str(j.state) + '.lock')
+        locked = lock.exists()
         calls = (j.gh_creates(), j.logged(), j.spawns())
         result = j.helper(['next'])
+        self.assertEqual(lock.exists(), locked, 'next opens nothing for writing, not even a lock')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(j.state.read_bytes() if j.state.exists() else None, before, 'next never writes the state')
         self.assertEqual((j.gh_creates(), j.logged(), j.spawns()), calls, 'next runs no gh, openwiz or room-cli')

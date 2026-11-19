@@ -8,7 +8,9 @@
 
 write: exit 0 written and read back, 2 refused or failed (a refusal comes before any
 call; a failure after a write is repaired by running the same write again), 3 stop:
-the claim is another note's or the fence stopped it (nothing more written).
+the claim is another note's or the fence stopped it (nothing more written). An edit
+reads back too (#1441): it steps down when another live note of its kind appeared, and
+puts back a release a sibling wake wrote between its read and its edit.
 check: exit 0 no mismatch, 1 mismatches printed, 2 could not read. It never writes.
 Every GitHub call goes through `gh api`.
 """
@@ -238,6 +240,23 @@ def viewer():
     return login if isinstance(login, str) and login else None
 
 
+EDITS = '''query($id: ID!) {
+  node(id: $id) { ... on IssueComment { userContentEdits(first: 2) { nodes { diff } } } }
+}'''
+
+
+def replaced(made, fields):
+    """The note an edit replaced, from GitHub's edit history: newest first, each the full body."""
+    try:
+        found = gh('POST', 'graphql', {'query': EDITS, 'variables': {'id': made['node_id']}})
+        mine, before = (x['diff'] for x in found['data']['node']['userContentEdits']['nodes'][:2])
+    except (KeyError, TypeError, ValueError) as error:
+        raise Failed(f'note {made.get("id")} was edited but its edit history was not read: {error!r}')
+    if parse(mine) != fields:
+        raise Failed(f'note {made.get("id")} was edited but its edit history does not end with it')
+    return before
+
+
 def asked_last_by(repo, n, login):
     """True when the issue's events show LOGIN added needs-info last (R1: the writer's own label)."""
     added = [e for e in pages(f'repos/{repo}/issues/{n}/events')
@@ -305,6 +324,23 @@ def write(args, now):
             gh('PATCH', f'repos/{repo}/issues/comments/{note_id}',
                {'body': body(dict(fields, state='stopped (lost claim)'))})
             raise Stop(f'note {first[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
+    if verb == 'edited' and args.state in CLAIMING:
+        # #1441: the edit landed after its read, so read back as a post does. A release this
+        # wake never read (a sibling wake's, landed in between) is put back: a release is never
+        # lost (P3). A release it read, it may resume, as a builder answering a review does.
+        before = replaced(made, fields)
+        prior = parse(before)
+        if prior and prior != own[1] and prior['state'] not in CLAIMING:
+            gh('PATCH', f'repos/{repo}/issues/comments/{note_id}', {'body': before})
+            raise Stop(f'note {note_id} was {prior["state"].split(" ")[0]} before this edit landed; '
+                       'the release is put back')
+        # A newer note that claimed while this one had lapsed keeps the claim (P1, P2, P4).
+        other = next((x for x in found if x[0] != note_id and x[1]['agent'] == kind
+                      and live(x, datetime.now(timezone.utc))), None)
+        if other:
+            gh('PATCH', f'repos/{repo}/issues/comments/{note_id}',
+               {'body': body(dict(fields, state='stopped (lost claim)'))})
+            raise Stop(f'note {other[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
     # R1: settle needs-info from what GitHub shows now, so a retry repairs a failed label write.
     labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
     asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)

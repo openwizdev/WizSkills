@@ -102,7 +102,7 @@ if path == 'graphql' and 'userContentEdits' in body['query']:
     assert method == 'POST' and 'mutation' not in body['query'], body
     for it in world['issues']:
         for c in it['comments']:
-            if 'IC_%d' % c['id'] == body['variables']['id']:
+            if 'IC_%d' % c['id'] == body['variables']['id'] and not world.get('history_fails'):
                 # Newest first, each node the full body of that version, as GitHub answers.
                 out({'data': {'node': {'userContentEdits': {'nodes': [
                     {'diff': text} for text in reversed(c.get('edits', []))][:2]}}}})
@@ -534,25 +534,10 @@ class EditRace(Tracker):
         self.assertEqual(comments[9001], note(step='a newer builder claimed'))
         self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
 
-    def test_an_edit_never_reopens_a_done_note(self):
-        # catches: a wake that read its own note as done editing it back to working or asking.
-        self.ticket(self.world)['comments'].append(
-            comment(104, BOT, note(state='done', pr='https://github.com/example/tracker/pull/31')))
-        self.save()
-        for state in ('working', 'asking'):
-            with self.subTest(state):
-                result = self.write(state, 'resumed', '2030-01-02T03:00:00Z', '--note', '104')
-                self.assertEqual((result.returncode, result.stdout), (3, ''))
-                self.assertIn('note 104 is done', result.stderr)
-                self.assertEqual(self.writes(), [])
-                self.assertEqual(self.load(), self.world)
-        # A done note may still be written done again, as each hand-back does.
-        again = self.write('done', 'handed back again', '2030-01-02T03:10:00Z', '--note', '104')
-        self.assertEqual((again.returncode, again.stdout), (0, '#12: builder done, status note 104 edited\n'))
-
     def test_an_edit_that_lands_over_a_sibling_release_puts_the_release_back(self):
         # catches: two overlapping wakes of one agent, where the one that read working edits
-        # after its sibling released the note, and the release is lost (P3).
+        # after its sibling released the note, and the release is lost (P3). A wake that read
+        # its note done may still resume it (FleetRun's builder answering a review).
         base = json.loads(json.dumps(self.world))
         for final in ('done', 'stopped (lease expired)'):
             with self.subTest(final):
@@ -567,6 +552,17 @@ class EditRace(Tracker):
                 self.assertIn('note 104 was ' + final.split(' ')[0] + ' before this edit landed', result.stderr)
                 self.assertEqual(self.ticket()['comments'][-1]['body'], released)
                 self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
+
+    def test_an_edit_whose_history_cannot_be_read_fails_closed(self):
+        # catches: a claim edit reported written when the writer never saw what it replaced,
+        # so a sibling's release could be lost without a word.
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+        self.world['history_fails'] = True
+        self.save()
+        result = self.write('working', 'CI finished', '2030-01-02T03:00:00Z', '--note', '104')
+        self.assertEqual((result.returncode, result.stdout), (2, ''))
+        self.assertIn('note 104 was edited but its edit history was not read', result.stderr)
+        self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')])
 
 
 # Each value is refused before any call (exit 2, no gh call). A field's flag and a value.

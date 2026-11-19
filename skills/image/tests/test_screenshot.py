@@ -80,7 +80,7 @@ def png_column(path):
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200 if self.path in ('/', '/fragment', '/empty', '/broken', '/fixed') else 404)
+        self.send_response(200 if self.path in ('/', '/fragment', '/empty', '/broken', '/fixed', '/wide') else 404)
         self.send_header('Content-Type', 'text/html')
         self.end_headers()
         if self.path == '/fixed':
@@ -89,6 +89,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b'''<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
             <style>html,body{margin:0}</style><body><main id="ready"></main>
             <script>document.querySelector('main').style.height = innerWidth < 500 ? '1200px' : '1500px';</script>''')
+        elif self.path == '/wide':
+            self.wfile.write(PAGE + b'<style>@media(max-width:500px){body{width:600px}}</style>')
         elif self.path == '/empty':
             self.wfile.write(PAGE + b'<img alt="Optional empty placeholder">')
         elif self.path == '/broken':
@@ -145,6 +147,17 @@ class Screenshots(unittest.TestCase):
             second = self.run_capture(out)
             self.assertNotEqual(second.returncode, 0, 'existing evidence must survive')
             self.assertEqual(json.loads((out / 'capture.json').read_text()), manifest)
+
+    def test_short_result_names_horizontal_overflow(self):
+        # catches: a phone shot wider than its viewport handed back without
+        # anyone reading contentWidth in the manifest.
+        with tempfile.TemporaryDirectory() as temp:
+            wide = self.run_capture(Path(temp) / 'wide', url=self.url + 'wide')
+            self.assertEqual(wide.returncode, 0, wide.stderr + wide.stdout)
+            self.assertEqual(wide.stdout.splitlines()[1:], ['overflow: phone 600 > 390'])
+            plain = self.run_capture(Path(temp) / 'plain')
+            self.assertEqual(plain.returncode, 0, plain.stderr + plain.stdout)
+            self.assertEqual(plain.stdout.splitlines()[1:], ['overflow: none'])
 
     def test_fragment_url_loads_a_fresh_page_at_each_width(self):
         with tempfile.TemporaryDirectory() as temp:

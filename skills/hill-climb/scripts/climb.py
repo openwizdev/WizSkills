@@ -396,6 +396,10 @@ def stall(data, window):
     return {"stop": reason != "continue", "reason": reason, "unchanged_rounds": unchanged}
 
 
+def odds(data, baseline):
+    return {"baseline": None, "odds": []}
+
+
 def positive(value):
     require(re.fullmatch(r"[1-9][0-9]*", value), "window must be a positive integer")
     return int(value)
@@ -406,11 +410,13 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     windows = {"stall": "unchanged completed rounds after the winner was selected",
                "council": "consecutive full-council rounds the same leader must lead"}
-    for name in ("pairs", "rank", "stall", "council", "table"):
+    for name in ("pairs", "rank", "stall", "council", "table", "odds"):
         child = commands.add_parser(name)
         child.add_argument("input", help="UTF-8 JSON file (read only)")
         if name in windows:
             child.add_argument("--window", required=True, type=positive, help=windows[name])
+        if name == "odds":
+            child.add_argument("--baseline", required=True)
     try:
         args = parser.parse_args()
         data = load(args.input)
@@ -418,7 +424,10 @@ def main():
             output = table(data)
         else:
             command = globals()[args.command]
-            result = command(data, args.window) if args.command in windows else command(data)
+            if args.command == "odds":
+                result = odds(data, args.baseline)
+            else:
+                result = command(data, args.window) if args.command in windows else command(data)
             output = json.dumps(result, allow_nan=False, sort_keys=True)
     except (OSError, ValueError, UnicodeError, OverflowError) as error:
         parser.error(str(error))

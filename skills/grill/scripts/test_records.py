@@ -1,0 +1,216 @@
+import base64
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+HELPER = Path(__file__).with_name("records.py")
+REPO = "example/private"
+FILE = "docs/grills/2099-01-01-notebook.md"
+HEAD = "a" * 40
+ROUND = """# Grill: Notebook (2099-01-01)
+
+**Private.** Status: **open**. Feeds: the notebook spec.
+
+## Round 1
+Risk: ordinary
+
+**N1 - Which order?** Synthetic café, /notes.
+➡️ Use date order.
+
+**N2 - Which export?** The notebook has two formats.
+➡️ Use text.
+"""
+FAKE_GH = '''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+path = Path(os.environ["FIXTURE"])
+s = json.loads(path.read_text())
+args = sys.argv[1:]
+if args[:1] != ["api"]:
+    sys.exit(3)
+url = args[-1]
+repo = "repos/example/private"
+if url == repo:
+    response = {"full_name": "example/private", "private": s["private"]}
+elif url == repo + "/pulls/7":
+    response = {"number": 7, "state": "open", "head": {"sha": s["head"]}}
+elif url == repo + "/contents/" + s["file"] + "?ref=" + s["head"]:
+    response = {"encoding": "base64", "content": s["source"], "path": s["file"]}
+elif url == repo + "/issues/7/comments":
+    if args[1:3] == ["-X", "POST"]:
+        s["writes"] += 1
+        response = {"id": 81, "issue_url": "https://api.github.com/" + repo + "/issues/7",
+                    **json.load(sys.stdin)}
+        s["comments"].append(response)
+        path.write_text(json.dumps(s))
+        if s["lose"]:
+            sys.exit(1)
+    else:
+        response = [s["comments"]]
+elif url == repo + "/issues/comments/81":
+    if args[1:3] == ["-X", "PATCH"]:
+        s["writes"] += 1
+        s["comments"][0].update(json.load(sys.stdin))
+        path.write_text(json.dumps(s))
+    response = s["comments"][0]
+else:
+    sys.exit(4)
+print(json.dumps(response))
+'''
+
+
+class Records(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        subprocess.run(["git", "-C", str(self.root), "remote", "add", "origin",
+                        "https://github.com/" + REPO + ".git"], check=True)
+        gh = self.root / "gh"
+        gh.write_text(FAKE_GH)
+        gh.chmod(0o700)
+        self.fixture = self.root / "fixture.json"
+        self.write_state(private=True, writes=0, comments=[], lose=False, file=FILE,
+                         head=HEAD, source=self.encoded(ROUND))
+
+    @staticmethod
+    def encoded(source):
+        return base64.b64encode(source.encode()).decode()
+
+    def state(self):
+        return json.loads(self.fixture.read_text())
+
+    def write_state(self, **changes):
+        before = self.state() if self.fixture.exists() else {}
+        self.fixture.write_text(json.dumps(before | changes))
+
+    def call(self, action, *args):
+        return subprocess.run(
+            [sys.executable, "-I", str(HELPER), REPO, "7", FILE, action, *args],
+            cwd=self.root, capture_output=True,
+            env=os.environ | {"FIXTURE": str(self.fixture),
+                              "PATH": str(self.root) + os.pathsep + os.environ["PATH"]},
+        )
+
+    def publish(self, request="round-one"):
+        result = self.call("publish", request)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(self.state()["comments"][0]["body"].split("\n")[1])
+
+    def contextual(self, record, payload, **changes):
+        context = {
+            "subject": {"repository": REPO, "kind": "pull_request", "number": 7},
+            "comment_id": 81, "request_id": record["id"], "request_kind": record["kind"],
+            "fingerprint": record["fingerprint"], "grill_file": FILE,
+        }
+        if record["kind"] == "grill_round":
+            context.update(round=record["round"], question_id="N2")
+        message = self.root / "message"
+        message.write_bytes(b"openwiz decision answer v1\n" +
+                            json.dumps(context | changes, separators=(",", ":")).encode() +
+                            b"\n\n" + payload)
+        return str(message)
+
+    def test_new_round_binds_saved_wording_and_risk(self):
+        record = self.publish()
+        self.assertEqual(record["questions"], [
+            {"id": "N1", "decides": "Which order?", "context": "Synthetic café, /notes.",
+             "recommendation": "Use date order."},
+            {"id": "N2", "decides": "Which export?", "context": "The notebook has two formats.",
+             "recommendation": "Use text."},
+        ])
+        canonical = (
+            '{"grill_file":"docs/grills/2099-01-01-notebook.md","id":"round-one",'
+            '"kind":"grill_round","questions":[{"context":"Synthetic café, /notes.",'
+            '"decides":"Which order?","id":"N1","recommendation":"Use date order."},'
+            '{"context":"The notebook has two formats.","decides":"Which export?",'
+            '"id":"N2","recommendation":"Use text."}],"risk":"ordinary","round":1,'
+            '"schema":"openwiz.decisions.v1"}'
+        )
+        self.assertEqual(record["fingerprint"], hashlib.sha256(canonical.encode()).hexdigest())
+        self.assertEqual(record["answered"], [])
+        self.assertEqual(self.state()["writes"], 1)
+
+    def test_cold_restart_reuses_post_after_lost_response(self):
+        self.write_state(lose=True)
+        self.publish()
+        self.publish()
+        self.assertEqual(self.state()["writes"], 1)
+
+    def test_unknown_privacy_writes_nothing(self):
+        self.write_state(private=None)
+        result = self.call("publish", "round-one")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"privacy", result.stderr)
+        self.assertEqual(self.state()["writes"], 0)
+
+    def test_context_extracts_only_exact_payload_and_one_question(self):
+        record = self.publish()
+        payload = b"  N2 yes\r\n\nopenwiz decision answer v1\nN1 no\n\n"
+        output = self.root / "answer"
+        result = self.call("match", self.contextual(record, payload), str(output))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, b"matched N2\n")
+        self.assertEqual(output.read_bytes(), payload)
+        self.assertEqual(self.state()["writes"], 1)
+
+    def test_stale_round_and_cross_subject_answer_are_refused(self):
+        record = self.publish()
+        path = str(self.root / "answer")
+        wrong = {"repository": REPO, "kind": "pull_request", "number": 8}
+        later = ROUND[ROUND.index("## Round"):].replace("Round 1", "Round 2")
+        for source, context in [(ROUND, {"subject": wrong}), (ROUND + later, {})]:
+            with self.subTest(context=context):
+                self.write_state(source=self.encoded(source))
+                result = self.call("match", self.contextual(record, b"yes", **context), path)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(Path(path).exists())
+
+    def test_corrected_summary_cannot_accept_previous_fingerprint(self):
+        summary = "\n## Summary (shown to Test User for confirmation)\nRisk: ordinary\n\n1. Use text.\n"
+        self.write_state(source=self.encoded(ROUND + summary))
+        previous = self.publish("summary-one")
+        corrected = summary.replace("Summary ", "Summary, corrected ").replace("text", "CSV")
+        self.write_state(source=self.encoded(ROUND + summary + corrected))
+        output = self.root / "answer"
+        self.assertEqual(self.call("match", self.contextual(previous, b"confirm"),
+                                   str(output)).returncode, 2)
+        self.assertFalse(output.exists())
+
+    def test_unknown_saved_risk_never_accepts_an_answer(self):
+        self.write_state(source=self.encoded(ROUND.replace("Risk: ordinary\n", "")))
+        record = self.publish()
+        self.assertEqual(record["risk"], "unknown")
+        output = self.root / "answer"
+        self.assertEqual(self.call("match", self.contextual(record, b"yes"),
+                                   str(output)).returncode, 2)
+        self.assertFalse(output.exists())
+
+    def test_partial_progress_requires_saved_settled_ids_and_preserves_comment(self):
+        record = self.publish()
+        body = self.state()["comments"][0]["body"]
+        comments = self.state()["comments"]
+        comments[0]["body"] = "Synthetic note.\n\n" + body
+        self.write_state(comments=comments)
+        premature = self.call("advance", "81", "N2")
+        self.assertEqual(premature.returncode, 2)
+        self.assertEqual(self.state()["writes"], 1)
+        saved = ROUND + "\n**Test User:**\n> N2 yes\n\nSettled: N2. Open: N1.\n"
+        self.write_state(source=self.encoded(saved))
+        result = self.call("advance", "81", "N2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        updated = self.state()["comments"][0]["body"]
+        self.assertTrue(updated.startswith("Synthetic note.\n\n"))
+        self.assertEqual(json.loads(updated.split("\n")[3]),
+                         record | {"answered": ["N2"]})
+        self.assertEqual(self.state()["writes"], 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

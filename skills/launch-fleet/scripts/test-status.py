@@ -105,7 +105,7 @@ if path == 'graphql' and 'userContentEdits' in body['query']:
             if 'IC_%d' % c['id'] == body['variables']['id'] and not world.get('history_fails'):
                 # Newest first, each node the full body of that version, as GitHub answers.
                 out({'data': {'node': {'userContentEdits': {'nodes': [
-                    {'diff': text} for text in reversed(c.get('edits', []))][:2]}}}})
+                    {'diff': text} for text in reversed(c.get('edits', []))][:body['variables'].get('n', 2)]}}}})
     out({'data': {'node': None}})
 if path == 'graphql' and 'viewer' in body['query']:
     assert method == 'POST' and 'mutation' not in body['query'], body
@@ -181,7 +181,11 @@ if seg[:2] == ['issues', 'comments'] and len(seg) == 3 and method == 'PATCH':
                     else:
                         world['next_id'] += 1
                         it['comments'].append(dict(rival, id=world['next_id'], updated=now))
-                edit(c, body['body']); save(); out(rest(c))
+                edit(c, body['body']); answer = rest(c)
+                # What lands after this edit and before the writer reads back: a sibling's edit.
+                for rival in world.pop('race_after_edit', []):
+                    edit(next(x for x in it['comments'] if x['id'] == rival['edit']), rival['body'])
+                save(); out(answer)
     fail(404, 'Not Found')
 fail(404, 'Not Found: ' + method + ' ' + path)
 '''
@@ -552,6 +556,20 @@ class EditRace(Tracker):
                 self.assertIn('note 104 was ' + final.split(' ')[0] + ' before this edit landed', result.stderr)
                 self.assertEqual(self.ticket()['comments'][-1]['body'], released)
                 self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
+
+    def test_a_lost_release_is_put_back_even_when_a_later_edit_changed_the_note(self):
+        # catches: a release lost for good when the read-back fails because a sibling wake,
+        # reading the stale working note, edited it again before this wake read back (#1463 R1).
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+        released = note(state='done', step='the sibling wake handed back')
+        self.world['race_edit'] = [{'edit': 104, 'body': released}]
+        self.world['race_after_edit'] = [{'edit': 104, 'body': note(state='asking', step='the sibling asked')}]
+        self.save()
+        result = self.write('working', 'CI finished', '2030-01-02T03:00:00Z', '--note', '104')
+        self.assertEqual((result.returncode, result.stdout), (3, ''))
+        self.assertIn('note 104 was done before this edit landed', result.stderr)
+        self.assertEqual(self.ticket()['comments'][-1]['body'], released)
+        self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
 
     def test_an_edit_whose_history_cannot_be_read_fails_closed(self):
         # catches: a claim edit reported written when the writer never saw what it replaced,

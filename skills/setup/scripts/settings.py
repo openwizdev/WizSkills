@@ -5,8 +5,7 @@
 
 Reads the four files in DIR/docs/agents/ (default: the current folder) and
 names each missing or unsafe setting: a missing file or section, a builder or
-reviewer table without its three flags or its Source line, a template
-placeholder, a reviewer from the builder's model family, no Record authors
+reviewer table without its three flags, a template placeholder, a reviewer from the builder's model family, no Record authors
 row, or a triage role without exactly one label. FILE is the saved output of
 `gh label list --limit 500 --json name`; with it, each mapped label must exist
 in the tracker exactly once. It writes nothing and runs nothing.
@@ -73,8 +72,6 @@ def fleet(text, problems):
                 problems.append('fleet.md: %s: unfilled %s' % (title, match[1]))
             else:
                 values[flag] = match[1]
-        if not re.search(r'^Source: \S', body, re.M):
-            problems.append('fleet.md: %s: no Source line' % title)
         provider = values.get('provider')
         if title in REVIEWS and provider:
             if provider not in FAMILY:

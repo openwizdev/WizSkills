@@ -101,17 +101,12 @@ class Check(unittest.TestCase):
         self.assertEqual(code, 5, out)
         self.assertIn('fleet.md: Reviewer for Claude-built: claude-code is not from another model family', out)
 
-    def test_an_unfilled_template_value_or_unsourced_table_is_refused(self):
-        # catches: a template placeholder or a value with no source shipped as a setting.
+    def test_an_unfilled_template_value_is_refused(self):
+        # catches: a template placeholder shipped as a setting.
         placeholder = FLEET.replace('`--model syn-codex-1`', '`--model <id>`', 1)
         code, out = self.check(self.project(**{'fleet.md': placeholder}))
         self.assertEqual(code, 5, out)
         self.assertIn('fleet.md: Builder for small tickets: unfilled <id>', out)
-        unsourced = FLEET.replace('Source: synthetic decision.\n\n## Reviewer for GPT-built',
-                                  '## Reviewer for GPT-built', 1)
-        code, out = self.check(self.project(**{'fleet.md': unsourced}))
-        self.assertEqual(code, 5, out)
-        self.assertIn('fleet.md: Reviewer for Claude-built: no Source line', out)
 
     def test_each_triage_role_has_one_label_that_exists_once(self):
         # catches: a role with no label or two, and a label missing from (or

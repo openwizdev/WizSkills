@@ -87,13 +87,26 @@ def issue(n):
         if it['number'] == int(n): return it
     fail(404, 'Not Found')
 def rest(c):
-    return {'id': c['id'], 'user': {'login': c['author']} if c['author'] else None,
+    return {'id': c['id'], 'node_id': 'IC_%d' % c['id'], 'user': {'login': c['author']} if c['author'] else None,
             'body': c['body'], 'updated_at': c['updated']}
 def page(items, query):
     k = int(query.get('page', ['1'])[0]); n = min(int(query.get('per_page', ['30'])[0]), size)
     return items[(k - 1) * n:k * n]
 parts = urlsplit(path); query = parse_qs(parts.query)
 seg = [unquote(s) for s in parts.path.split('/')]
+def edit(c, text):
+    # GitHub keeps a comment's edit history: its first edit records the original too.
+    c.setdefault('edits', [c['body']]).append(text)
+    c['body'] = text; c['updated'] = now
+if path == 'graphql' and 'userContentEdits' in body['query']:
+    assert method == 'POST' and 'mutation' not in body['query'], body
+    for it in world['issues']:
+        for c in it['comments']:
+            if 'IC_%d' % c['id'] == body['variables']['id']:
+                # Newest first, each node the full body of that version, as GitHub answers.
+                out({'data': {'node': {'userContentEdits': {'nodes': [
+                    {'diff': text} for text in reversed(c.get('edits', []))][:2]}}}})
+    out({'data': {'node': None}})
 if path == 'graphql' and 'viewer' in body['query']:
     assert method == 'POST' and 'mutation' not in body['query'], body
     if world.get('viewer_fails'): fail(403, 'Resource not accessible by integration')
@@ -160,7 +173,15 @@ if seg[:2] == ['issues', 'comments'] and len(seg) == 3 and method == 'PATCH':
         for c in it['comments']:
             if c['id'] == int(seg[2]):
                 if c['author'] != world['login']: fail(403, 'Must have admin rights to Repository.')
-                c['body'] = body['body']; c['updated'] = now; save(); out(rest(c))
+                # What reached GitHub between the writer's read and this edit: a newer note,
+                # or a sibling wake's edit of this same note.
+                for rival in world.pop('race_edit', []):
+                    if 'edit' in rival:
+                        edit(next(x for x in it['comments'] if x['id'] == rival['edit']), rival['body'])
+                    else:
+                        world['next_id'] += 1
+                        it['comments'].append(dict(rival, id=world['next_id'], updated=now))
+                edit(c, body['body']); save(); out(rest(c))
     fail(404, 'Not Found')
 fail(404, 'Not Found: ' + method + ' ' + path)
 '''
@@ -492,6 +513,60 @@ class Claims(Tracker):
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
         self.assertEqual(self.writes(), [('POST', 'repos/example/tracker/issues/12/comments'),
                                          ('PATCH', 'repos/example/tracker/issues/comments/9002')])
+
+
+
+class EditRace(Tracker):
+    """#1441: KN10's finding on the edit path, which re-read before but never after its write."""
+
+    def test_a_lapsed_note_whose_edit_lands_after_a_newer_claim_steps_down(self):
+        # catches: a lapsed builder's edit landing after a newer builder claimed and read back,
+        # so the lapsed note holds again as the oldest (P2), two notes stay live (P4) and the
+        # newer builder's succeeded claim no longer holds (P1).
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note(), minutes=90))
+        self.world['race_edit'] = [{'author': BOT, 'body': note(step='a newer builder claimed')}]
+        self.save()
+        result = self.write('working', 'CI finished', '2030-01-02T03:00:00Z', '--note', '104')
+        self.assertEqual((result.returncode, result.stdout), (3, ''))
+        self.assertIn('note 9001 holds the builder claim; note 104 is stopped (lost claim)', result.stderr)
+        comments = {c['id']: c['body'] for c in self.ticket()['comments']}
+        self.assertEqual(comments[104], note(state='stopped (lost claim)', step='CI finished'))
+        self.assertEqual(comments[9001], note(step='a newer builder claimed'))
+        self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
+
+    def test_an_edit_never_reopens_a_done_note(self):
+        # catches: a wake that read its own note as done editing it back to working or asking.
+        self.ticket(self.world)['comments'].append(
+            comment(104, BOT, note(state='done', pr='https://github.com/example/tracker/pull/31')))
+        self.save()
+        for state in ('working', 'asking'):
+            with self.subTest(state):
+                result = self.write(state, 'resumed', '2030-01-02T03:00:00Z', '--note', '104')
+                self.assertEqual((result.returncode, result.stdout), (3, ''))
+                self.assertIn('note 104 is done', result.stderr)
+                self.assertEqual(self.writes(), [])
+                self.assertEqual(self.load(), self.world)
+        # A done note may still be written done again, as each hand-back does.
+        again = self.write('done', 'handed back again', '2030-01-02T03:10:00Z', '--note', '104')
+        self.assertEqual((again.returncode, again.stdout), (0, '#12: builder done, status note 104 edited\n'))
+
+    def test_an_edit_that_lands_over_a_sibling_release_puts_the_release_back(self):
+        # catches: two overlapping wakes of one agent, where the one that read working edits
+        # after its sibling released the note, and the release is lost (P3).
+        base = json.loads(json.dumps(self.world))
+        for final in ('done', 'stopped (lease expired)'):
+            with self.subTest(final):
+                self.world = json.loads(json.dumps(base))
+                self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+                released = note(state=final, step='the sibling wake released it')
+                self.world['race_edit'] = [{'edit': 104, 'body': released}]
+                self.save()
+                (self.dir / 'gh.log').unlink(missing_ok=True)
+                result = self.write('working', 'CI finished', '2030-01-02T03:00:00Z', '--note', '104')
+                self.assertEqual((result.returncode, result.stdout), (3, ''))
+                self.assertIn('note 104 was ' + final.split(' ')[0] + ' before this edit landed', result.stderr)
+                self.assertEqual(self.ticket()['comments'][-1]['body'], released)
+                self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
 
 
 # Each value is refused before any call (exit 2, no gh call). A field's flag and a value.

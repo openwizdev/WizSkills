@@ -21,6 +21,8 @@ Read the project's instructions (`AGENTS.md` or `CLAUDE.md`, with folder ones) a
 
 The helper is [`scripts/review.py`](scripts/review.py): set `review` to its path in this skill's folder and run `python3 -I "$review" <command> --repo <owner/repo> --pr <N> --head <the assigned head>` from the project checkout. Each command reads one snapshot of the pull request and admits it first: open, ready, a ticket, still at the assigned head, every check `fleet.md` requires green there. It reads settings from the base branch and only record authors' comments. Exit 1 prints a stop, the report's broken lines or an unknown write; exit 2 is a refusal on settings: post nothing and ask on the ticket.
 
+**Status note** ([agent status contract](../../contracts/agent-status.v1.md)), on the ticket in its repository `<repo>`: at each step run `python3 -I <this skill's folder>/../launch-fleet/scripts/status.py write --repo <repo> --ticket <N> --agent reviewer --harness <harness> --model <model> --skills <skills> --state <state> --step <step>`, each value quoted; `<skills>` lists each skill you ran as `<skill>@<version>`, at the package's `.claude-plugin/plugin.json` version. `<state>` is `working` once `pin` holds a head (keep the note id and add `--note <id>` to every later write, re-checks too), `asking` with a reviewer question, `done --pr <url>` once the report is posted. Exit 3: another reviewer holds the ticket; post nothing.
+
 ## 1. Pin the head
 
 `review.py pin` prints `review full #57 at <head>; ticket example/pantry#41; checks build, test`, or `stop: <why>`: a draft, closed or merged, no ticket, a head other than the assigned one, a required check not green at this head, already reported at this head, or parked for Jake with no matching decision. On a stop, post nothing and say why. A re-check line adds `last read <commit>; open <ids>; next id R<k>` (see Re-checks, below). Check out only that head (`git fetch origin <base> pull/<N>/head`, `git checkout --detach <head>`). Read the ticket and its parent spec (`gh issue view <n> --repo <ticket repo> --json title,body,comments,parent`) and any grill or contract it names.
@@ -57,7 +59,7 @@ A finding **blocks** only with a line under it: `User path: <who does what ordin
 
 ## Ask, never guess
 
-When a finding turns on a fact no reading or run can settle, comment on the ticket `Reviewer question: #<PR> at <the full head>`, then the question on the next line, answerable in a word. Add `needs-info` beside `ready-for-agent` (names in `docs/agents/triage-labels.md`), post no report for that head and end your turn. Resume on a record author's `Orchestrator answer: #<PR> at <the same head>`, and remove `needs-info`.
+When a finding turns on a fact no reading or run can settle, comment on the ticket `Reviewer question: #<PR> at <the full head>`, then the question on the next line, answerable in a word. Write your status `asking` (it adds `needs-info`), post no report for that head and end your turn. Resume on a record author's `Orchestrator answer: #<PR> at <the same head>`, and write `working` (it clears `needs-info`).
 
 ## 4. Report
 

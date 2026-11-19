@@ -14,14 +14,18 @@ stock and elevated-risk cockpit guidance are conditional on those branches.
 | Entrypoint words | 3,960 | 872 |
 | Entrypoint static tokens | 5,842 | 1,220 |
 | Static loaded-path tokens | 26,553 | 13,056 |
-| Observed workflow outcome | Pass | Unknown |
-| Observed workflow token counts and wall time | Unknown | Unknown |
+| Observed workflow outcome | Pass | Pass, zero retries |
+| Instrumented workflow time | Unknown | 23,545 ms |
+| Bounded spawn-to-receipt time | 329 s | 264 s |
+| Observed Cloud Credits | 3 | 3 |
+| Observed workflow token counts | Unknown | Unknown |
 
 The after entrypoint includes the full license notice required by the
 WizSkills checker and keeps the privacy and approval boundaries visible.
 The before source is pinned at `89fc285ce551f341b8d308732bcd8d4467ace353`.
 The before observation comes from the
-[WS1 receipt](https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999424054)
+[WS1 receipt](https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999424054),
+the [WS1 before accounting](https://github.com/openwizdev/OpenWiz/issues/1174#issuecomment-6999452169),
 and the [WS1 static baseline](../../../tools/measure/evidence/static-baseline.json).
 The [after path manifest](ws3-after-paths.json) pins the implementation.
 The [static count](ws3-static-after.json) uses the same tokenizer and encoding.
@@ -29,12 +33,30 @@ Regenerate it from the WizSkills root with
 `node tools/measure/static-count.cjs skills/grill/evidence/ws3-after-paths.json <tokenizer>`
 using `js-tiktoken@1.0.21` and `o200k_base`.
 
-The [after receipt](ws3-after-receipt.json) records the pending matched
-observation. The notebook fixture replay passed at the helper boundary.
-Its user choices and the order of its saved rounds are fixture inputs.
-The replay checks saved proposal bytes, progress, and confirmation through
-the CLI and a stateful synthetic tracker. An authorized fresh trial still
-owns interview behavior and observed usage.
+The single authorized after-run passed on Codex Sol 6.2 Medium at
+`9e7efe35dcc8e6ac1c895ec27aae15877535283a`. The 23,545 ms instrumented
+timer covers delivery of the synthetic request through the final local
+read-back, including operator time between steps. The 264 s bound covers
+spawn through receipt publication, and 3 Cloud Credits cover the thread.
+Workflow token counters remain null because the host could not isolate them.
+[Saved receipt](ws3-after-receipt.json) ·
+[Trial receipt](https://github.com/openwizdev/OpenWiz/issues/1176#issuecomment-7000772836) ·
+[Thread accounting](https://github.com/openwizdev/OpenWiz/issues/1176#issuecomment-7000783715)
+
+The before receipt describes the notebook choices and checks without the
+original fixture bytes. The after fixture reconstructed that workflow with
+fresh synthetic prompts, replies, dates and IDs. It delivered the two
+independent replies separately and used a multiline dependent reply with
+trailing spaces. The candidate index and record helper read actual local Git
+commits. A local adapter supplied the expected origin identity and private
+tracker responses. Push, PR, comment, message and merge effects stayed local.
+
+The operator verified that the first two answers were saved before the
+dependent header choice was asked, that all four exact replies matched the
+Git record and simulated private comments, and that the confirmed summary
+and round order survived local Git read-back. Only the representative
+`grill.new` workflow ran. The other nine research cases remain unobserved
+in an agent workflow. Their scoped proof is listed below.
 
 ## SK-D and SK-E
 

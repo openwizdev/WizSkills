@@ -20,7 +20,7 @@ Say all three before the first choice:
 
 ## Where agents run
 
-> Your agents need a place to run: this machine, with `<harness>` you're already signed into, builds one ticket at a time, and Cloudroom or another cloud host runs many at once. Which would you like?
+> Your agents need a place to run: this machine, with `<harness>` you're already signed into, or Cloudroom or another cloud host to run many at once. Which would you like?
 
 When something is missing, such as a GitHub account or a sign-in:
 

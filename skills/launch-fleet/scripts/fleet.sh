@@ -1304,14 +1304,14 @@ def row($s): . as $t | [latest($s).rows[]? | select(.number == $t.number)] | fir
 # ticket that could start). Anything else is stale: nothing under it starts.
 def current($s): latest($s).fingerprint as $f | $f != null and $f == $W.fingerprints["\($s.number)"];
 def spec_rec($s; $re): any($s | records[]; .r | test($re));
-# The spec'"'"'s fleet thread (ClosedWiz#192, ADR 0011): its latest record
-# "fleet thread <id>, loop <id>", which the fleet thread posts on its spec as it
-# starts, and a new fleet thread posts again as it takes over. Null if none.
-def fleet($s): [($s.comments.nodes // [])[] | {id: .databaseId, at: .createdAt, r: (.body | rec), error: .recordError} | select(.error == null) | . as $c
-  | (.r // "" | capture("^(?:fleet active, loop (?<loop>[A-Za-z0-9_-]+)|fleet thread (?<t>[A-Za-z0-9_][A-Za-z0-9_-]{0,127})(, loop (?<l>[A-Za-z0-9_][A-Za-z0-9_-]{0,127}))?)$"))
-  | {id: $c.id, at: $c.at, thread: (.t // "private fleet"), loop: (.loop // .l)}] | max_by(.id);
-# In a fleet thread'"'"'s check (`spec S`), the fleet thread of spec $s; else null.
-def fleet_of($s): if $s != null and $W.spec == $s.number then fleet($s) else null end;
+# The latest fleet record routes the spec to its loop. Fresh wakes keep the
+# existing assignments, including agents whose records predate the loop.
+def fleet($s): [($s.comments.nodes // [])[] | {id: .databaseId, at: .createdAt, body, error: .recordError} | select(.error == null) | . as $c
+  | ((.body | rec) // "" | capture("^(?:fleet active, loop (?<loop>[A-Za-z0-9_-]+)|fleet thread (?<t>[A-Za-z0-9_][A-Za-z0-9_-]{0,127})(, loop (?<l>[A-Za-z0-9_][A-Za-z0-9_-]{0,127}))?)$"))
+  | {id: $c.id, at: $c.at, thread: (.t // "private fleet"), loop: (.loop // .l),
+     fresh: (.loop != null and ($c.body | split("\n") | index("Wake mode: fresh") != null))}] | max_by(.id);
+# Only a legacy retained fleet thread uses the takeover cutoff.
+def fleet_of($s): if $s != null and $W.spec == $s.number then (fleet($s) | if .fresh then null else . end) else null end;
 # A record last edited before the fleet thread'"'"'s record, or in the same
 # second: the agent it names was started by an earlier fleet thread or tick,
 # so this one can'"'"'t reach it. A tie counts as before: a fleet thread records

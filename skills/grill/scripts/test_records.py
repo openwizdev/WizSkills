@@ -298,5 +298,38 @@ class Records(unittest.TestCase):
         self.assertEqual(output.read_bytes(), payload)
 
 
+    def test_notebook_fixture_records_dependent_round_and_confirmed_summary(self):
+        self.publish()
+        source = ROUND + "\n**Test User:**\n> N1 yes\n> N2 yes\n\nSettled: N1, N2. Open: none.\n"
+        self.write_state(source=self.encoded(source))
+        self.assertEqual(self.call("advance", "81", "N1", "N2").returncode, 0)
+        source += (
+            "\n## Round 2\nRisk: ordinary\n\n"
+            "**N3 - Which header?** Text export was settled in round one.\n"
+            "➡️ Include the notebook title.\n"
+        )
+        self.write_state(source=self.encoded(source))
+        self.assertEqual(self.call("publish", "round-two").returncode, 0)
+        source += "\n**Test User:**\n> N3 no: keep it blank.  \n\nSettled: N3. Open: none.\n"
+        self.write_state(source=self.encoded(source))
+        self.assertEqual(self.call("advance", "82", "N3").returncode, 0)
+        source += ("\n## Summary (shown to Test User for confirmation)\nRisk: ordinary\n\n"
+                   "1. Sort by date.\n2. Export text.\n3. Leave the header blank.\n")
+        self.write_state(source=self.encoded(source))
+        self.assertEqual(self.call("publish", "summary-one").returncode, 0)
+        self.assertEqual(self.call("advance", "83", "confirmed").returncode, 2)
+        source = source.replace("**open**.", "**confirmed** by Test User, 2099-01-02.")
+        source += "\n**Test User:**\n> Confirm.\n"
+        self.write_state(source=self.encoded(source))
+        self.assertEqual(self.call("advance", "83", "confirmed").returncode, 0)
+        records = [json.loads(c["body"].split("\n")[1]) for c in self.state()["comments"]]
+        self.assertEqual([(r["round"], r["answered"], r["status"]) for r in records[:2]],
+                         [(1, ["N1", "N2"], "resolved"), (2, ["N3"], "resolved")])
+        self.assertEqual(records[2]["summary"],
+                         ["Sort by date.", "Export text.", "Leave the header blank."])
+        self.assertEqual(records[2]["status"], "resolved")
+        self.assertEqual(self.state()["writes"], 6)
+
+
 if __name__ == "__main__":
     unittest.main()

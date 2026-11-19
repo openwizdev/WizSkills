@@ -14,9 +14,9 @@ both branches are counted.
 | Entrypoint lines (WS1 pin / pre-rewrite `main`) | 377 / 354 | 89 |
 | Entrypoint words (WS1 pin / pre-rewrite `main`) | 6,777 / 5,848 | 1,415 |
 | Entrypoint static tokens (WS1 pin) | 9,389 | 2,095 |
-| Static loaded-path tokens, no App token | 53,161 | 14,798 (−72.2%) |
-| Static loaded-path tokens, App token mints | 53,161 | 40,032 (−24.7%) |
-| Observed workflow outcome | Pass | Unknown |
+| Static loaded-path tokens, no App token | 53,161 | 14,798 |
+| Static loaded-path tokens, App token mints | 53,161 | 40,032 |
+| Observed workflow outcome | Pass | Unmeasured |
 | Observed workflow token counts and wall time | Unknown | Unknown |
 
 Conditional references carry static token counts of 718 for
@@ -34,11 +34,26 @@ To regenerate it, run
 `node tools/measure/static-count.cjs skills/build-ticket/evidence/ws5-after-paths.json <tokenizer>`
 from the WizSkills root, using `js-tiktoken@1.0.21`.
 
-The [after receipt](ws5-after-receipt.json) is `measure.py`'s output for the
-matched observation. It uses the baseline profile and the pinned candidate.
-Its outcome and all counters are `null` until the fleet runs the independent
-after trial. The `build-ticket.near-miss` and `build-ticket.unowned-path`
-trials are also unrun. They have the fixture-level proofs listed below.
+### Observed after trial: unmeasured
+
+The [after record](ws5-after-receipt.json) preserves both receipts for the
+candidate `b38d2e6ff78e177725555df3f4217cb2c7506b8c`, which used WS1's case
+and baseline profile. Both attempts stopped in setup, before synthetic
+assignment, so neither reached the workflow. Under the standing rule, the one
+allowed replacement is spent and the case is handed back **unmeasured**.
+
+| Attempt | Where it stopped | Outcome and workflow counters | Spawn-to-receipt upper bound | Cloud Credits |
+| --- | --- | --- | ---: | ---: |
+| [Original](https://github.com/openwizdev/OpenWiz/issues/1178#issuecomment-7001331616) | Git seed setup | All `null` | 176 s | 4 |
+| [Replacement](https://github.com/openwizdev/OpenWiz/issues/1178#issuecomment-7001776864) | Isolated preflight | All `null` | 297 s | 3 |
+
+The two attempts used 7 Cloud Credits in total
+([accounting](https://github.com/openwizdev/OpenWiz/issues/1178#issuecomment-7001788768)).
+Credits and spawn intervals cover whole threads, including setup and
+publication, and are not workflow time. The `build-ticket.near-miss` and
+`build-ticket.unowned-path` cases were not observed. No observed outcome or
+token saving is claimed. The static counts above are a separate reproducible
+size estimate of the required paths, not an observation.
 
 ## SK-D: mechanics in tested scripts
 

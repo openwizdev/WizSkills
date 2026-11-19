@@ -1,5 +1,22 @@
 #!/usr/bin/env python3
-"""Offline pair plans, Bradley-Terry fits, council scores and stall decisions. No model calls."""
+"""Offline pair plans, Bradley-Terry fits, chart odds, council scores and stall decisions.
+
+No model calls. Reads one UTF-8 JSON file, prints one result, writes nothing.
+Exit 2 is a refusal with nothing on stdout. Exact keys only: duplicate keys,
+wrong types, unknown enums and non-JSON constants are refused.
+
+rank: smoothed Bradley-Terry over every comparison, with half a prior win per
+side of each observed pair, so unanimous records stay finite. Damped Newton
+steps in log space solve the pinned graph Laplacian until the largest gradient
+entry is below 1e-9; a singular, nonfinite or stalled solve is refused. Strengths
+are relative and sum to one; order and ties use log strengths, and a gap within
+1e-8 is a tie. The pair graph must be connected and every pair needs equally
+many orders. position_splits is the minimum count of verdicts that disagree
+across the two orders.
+
+odds: each candidate's probability of beating --baseline, from the same fit's
+log-strength gap, for the climb chart.
+"""
 import argparse
 from collections import Counter, defaultdict
 import json
@@ -397,7 +414,17 @@ def stall(data, window):
 
 
 def odds(data, baseline):
-    return {"baseline": None, "odds": []}
+    ranked = rank(data)
+    logs = {row["id"]: row["log_strength"] for row in ranked["ranking"]}
+    require(baseline in logs, "baseline must be a known candidate")
+
+    def beats(gap):
+        # Logistic of the log-strength gap, stable at either extreme, so
+        # strengths that underflow to zero never divide 0 by 0.
+        return 1 / (1 + math.exp(-gap)) if gap >= 0 else math.exp(gap) / (1 + math.exp(gap))
+    return {"baseline": baseline,
+            "odds": [{"id": row["id"], "beats_baseline": beats(logs[row["id"]] - logs[baseline])}
+                     for row in ranked["ranking"]]}
 
 
 def positive(value):
@@ -416,7 +443,7 @@ def main():
         if name in windows:
             child.add_argument("--window", required=True, type=positive, help=windows[name])
         if name == "odds":
-            child.add_argument("--baseline", required=True)
+            child.add_argument("--baseline", required=True, help="the stretch's fixed baseline id")
     try:
         args = parser.parse_args()
         data = load(args.input)

@@ -1,13 +1,13 @@
 ---
 name: wayfind
-description: Chart an effort too big for one grill (many specs, even many versions, far out) as a map of the decisions it needs, and settle them one at a time until plan-graph can plan it. Use when a grill shows the effort is bigger than one grill, when asked to wayfind, or to work through an open map.
+description: Chart an effort too big for one grill (many specs, even many versions, far out) as a map of the decisions it needs, and settle them one at a time until its designs are ready for to-spec and to-tickets. Use when a grill shows the effort is bigger than one grill, when asked to wayfind, or to work through an open map.
 ---
 
 # Wayfind
 
-Some efforts are too big for one grill: many specs, even many versions, far out. They arrive wrapped in fog: the way from here to the **destination** isn't visible yet. Wayfind charts that way as a **map** on GitHub, then settles its **questions** one at a time, until nothing is left to decide and `plan-graph` can turn it into versions, specs and tickets. The orchestrator runs it, when a grill shows the effort is bigger than one grill, and grills the small parts as it goes.
+Some efforts are too big for one grill: many specs, even many versions, far out. They arrive wrapped in fog: the way from here to the **destination** isn't visible yet. Wayfind charts that way as a **map** on GitHub, then settles its **questions** one at a time, until nothing is left to decide and `to-spec` and `to-tickets` can turn it into versions, specs and tickets. The orchestrator runs it, when a grill shows the effort is bigger than one grill, and grills the small parts as it goes.
 
-- **Plan, don't do.** Each question settles a decision, and the map is done when the way is clear, with nothing left to decide. The pull to just do the work means you have reached the edge of the map: hand over to `plan-graph` (see "When the way is clear"). Work starts only from a plan graph the user approves, never from the map.
+- **Plan, don't do.** Each question settles a decision, and the map is done when the way is clear, with nothing left to decide. The pull to just do the work means you have reached the edge of the map: hand over to `to-spec` (see "When the way is clear"). Work starts only from a plan graph the user approves, never from the map.
 - **Every decision is the user's, in a grill.** Research and prototypes only feed the grills. Never answer the user's side of a question yourself. Follow the project's open-development contract: save exact answers in the configured private repository; public answers and map entries give the decision in your own words, the date and a pointer to its private record comment. Publish no exact user words, thread ids, private files or links into them. If the private record cannot be saved or verified, ask the orchestrator before recording the decision.
 - **Refer by name.** Every map and question is an issue, so it has a title. In everything the user reads, call it by its title, with its link inside the name (`[<title>](<url>)`), never by a bare number like `#42`.
 
@@ -102,7 +102,7 @@ Done when the answer is on the question, the question is closed, and the map sho
 
 ## When the way is clear
 
-When no question is open and nothing is left under Not yet specified, the map is clear. Hand it to `plan-graph`, never straight to building: its Decisions so far link every grill it rests on. `plan-graph` turns them into one or more specs, across as many versions as they need, and their tickets join the one plan graph like any spec's, with real arrows to the exact tickets they need, in any version.
+When no question is open and nothing is left under Not yet specified, the map is clear. Hand it to `to-spec`, never straight to building: its Decisions so far link every grill it rests on. `to-spec` writes the specs across as many versions as needed. Once confirmed, `to-tickets` puts their tickets in the plan graph with real arrows to the exact tickets they need, in any version.
 
 ## Commands
 

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Prints the revision text of a spec's plan graph, version 2, as the
-# plan-graph skill defines it ("Is an approval current?" in SKILL.md): the
+# to-tickets defines it (records.md): the
 # spec's body, and each of its tickets' number, blockers, body and title. A
 # body is hashed with its ticked task boxes read as unticked, so ticking one
 # is never a change to the plan. Its SHA-256 is the fingerprint an approval

@@ -295,7 +295,7 @@ if [ "${1:-}" = --bundle ]; then
   repository "$2" || die 'GH_REPO must be owner/name'
   [ $# = 2 ] || spec_number "$3" || die "FLEET_SPEC must be a spec's number"
   source=$(cd -P "$(dirname "$0")/../.." && pwd) || die "can't find the installed skills"
-  files='launch-fleet/scripts/loop.sh launch-fleet/scripts/fleet.sh launch-fleet/scripts/records.py plan-graph/revision.sh launch-fleet/scripts/carried/alarm.py'
+  files='launch-fleet/scripts/loop.sh launch-fleet/scripts/fleet.sh launch-fleet/scripts/records.py to-tickets/revision.sh launch-fleet/scripts/carried/alarm.py'
   for file in $files; do
     [ -r "$source/$file" ] || die "can't read installed $file"
     # The quoted heredoc must preserve every byte, without interpreting shell
@@ -312,7 +312,7 @@ if [ "${1:-}" = --bundle ]; then
 runtime=$(mktemp -d) || { echo "loop.sh: can't unpack the bundled loop" >&2; exit 2; }
 trap 'rm -rf "$runtime"' EXIT
 trap 'exit 2' HUP INT TERM
-mkdir -p "$runtime/skills/launch-fleet/scripts/carried" "$runtime/skills/plan-graph" || exit 2
+mkdir -p "$runtime/skills/launch-fleet/scripts/carried" "$runtime/skills/to-tickets" || exit 2
 OPENWIZ_BUNDLE_BOOTSTRAP
     for file in $files; do
       printf 'cat > "$runtime/skills/%s" <<%s || exit 2\n' "$file" "'OPENWIZ_BUNDLED_HELPER_EOF'"
@@ -382,7 +382,7 @@ fi
 # Always the invoking installation's (or the bundle's pinned) helpers: the
 # consumer clone's skills/ is data to read, never code to run.
 scripts=$guard_scripts
-LAUNCH_FLEET_REVISION=$scripts/plan-graph/revision.sh
+LAUNCH_FLEET_REVISION=$scripts/to-tickets/revision.sh
 export LAUNCH_FLEET_REVISION
 # Refresh may have overlapped another observation. Recheck before the poll.
 overload nonessential-poll

@@ -130,7 +130,7 @@ def merged_pr($n; $t; $h; $files): .pulls += [{number: $n, state: "MERGED", draf
 def changed($f; $s): {filename: $f, status: $s};
 def ticket($n; $title; $labels; $blockers): .issues += [{number: $n, title: $title, state: "OPEN",
   parent: 10, labels: $labels, blockedBy: $blockers, body: "", comments: []}];
-# A plan-graph approval comment on SPEC, as plan-graph writes it: the graph
+# A to-tickets approval comment on SPEC, as to-tickets writes it: the graph
 # read back now, one row per ticket; a row is a number (ready-for-agent) or
 # [number, label].
 def row_of($n; $lbl): .issues[] | select(.number == $n)
@@ -184,8 +184,8 @@ bad() { echo "FAIL $1: $2"; fails=$((fails + 1)); }
 # world FIXTURE FILTER DIR: the fixture changed by FILTER, on stdout. FILTER
 # is "BEFORE @@then@@ AFTER", or just BEFORE. BEFORE makes the world as the
 # user approved it: then each spec's "@@FP@@" becomes its fingerprint, from
-# plan-graph's revision.sh (the copy in fixtures/) run on that world, as
-# plan-graph records it. AFTER changes it since. The frontier fixture takes its
+# to-tickets’ revision.sh (the copy in fixtures/) run on that world, as
+# to-tickets records it. AFTER changes it since. The frontier fixture takes its
 # settings files from check.json. DIR holds the steps.
 world() {
   before=${2%%@@then@@*}
@@ -1267,7 +1267,7 @@ fi
 ### The loop's script: a clone of the project in the loop's sandbox
 
 # A synthetic project on disk, as `gh repo clone` and `git fetch` find it: this
-# fleet.sh, and plan-graph's revision.sh where the plan-graph skill keeps it.
+# fleet.sh, and to-tickets’ revision.sh where the to-tickets skill keeps it.
 loop_case() { # NAME, then the checks; $1 is the case's name
   cases=$((cases + 1))
   echo "ok   $1"
@@ -1275,9 +1275,9 @@ loop_case() { # NAME, then the checks; $1 is the case's name
 L=$tmp/loop
 if { [ -n "${TEST_ONLY:-}" ] && [ "$TEST_ONLY" != loop ]; } || ! take; then
   : # the loop's script runs only in a full run, in one worker
-elif mkdir -p "$L/remote/skills/launch-fleet/scripts" "$L/remote/skills/plan-graph" "$L/home" \
+elif mkdir -p "$L/remote/skills/launch-fleet/scripts" "$L/remote/skills/to-tickets" "$L/home" \
   && cp "$FLEET" "$L/remote/skills/launch-fleet/scripts/fleet.sh" \
-    && cp "$HERE/records.py" "$L/remote/skills/launch-fleet/scripts/records.py" && cp "$FIX/revision.sh" "$L/remote/skills/plan-graph/revision.sh" \
+    && cp "$HERE/records.py" "$L/remote/skills/launch-fleet/scripts/records.py" && cp "$FIX/revision.sh" "$L/remote/skills/to-tickets/revision.sh" \
   && git -C "$L/remote" init -q && git -C "$L/remote" add -A \
   && git -C "$L/remote" -c user.name=synthetic -c user.email=synthetic@example.invalid commit -q -m one \
   && mkdir "$L/w" && world check.json 'merge12' "$L/w" > "$L/world.json"; then
@@ -1294,7 +1294,7 @@ elif mkdir -p "$L/remote/skills/launch-fleet/scripts" "$L/remote/skills/plan-gra
   printf 'start #13: W3: widget page (spec #10)\n' > "$L/want"
   if loop_run log1 out1 && cmp -s "$L/want" "$L/out1" && loop_points "$L/out1.err" && grep -qx 'repo clone' "$L/log1" \
     && grep -q '^issue view 10 subIssues$' "$L/log1"; then
-    loop_case "the loop's script clones the project and runs its check, with plan-graph's revision.sh beside it"
+    loop_case "the loop's script clones the project and runs its check, with to-tickets’ revision.sh beside it"
   else
     bad "the loop's script clones the project and runs its check" "$(cat "$L/out1" "$L/out1.err" | head -c 400)"; cases=$((cases + 1))
   fi
@@ -1770,10 +1770,10 @@ expect 'a failed read of the branches' 2 check.json 'merge12 | say(13; 1301; "11
 can't read the branches of #13
 EOF
 expect 'revision.sh fails: nothing starts, and the check fails' 2 check.json 'merge12' FAKE_GH_FAIL=issue_view_13_body -- check <<EOF
-plan-graph's revision.sh failed on #10
+to-tickets’ revision.sh failed on #10
 EOF
 expect 'revision.sh missing when a ticket could start: the check fails' 2 check.json 'merge12' LAUNCH_FLEET_REVISION=/nonexistent/revision.sh -- frontier <<EOF
-can't find plan-graph's revision.sh
+can't find to-tickets’ revision.sh
 EOF
 expect 'no jq' 2 check.json . PATH="$tmp/nojq" -- check <<EOF
 jq is not installed
@@ -3121,9 +3121,9 @@ if { [ -n "${TEST_ONLY:-}" ] && [ "$TEST_ONLY" != fleet-loop ]; } || ! take; the
   : # the fleet thread's loop runs only in a full run, in one worker
 else
   FL=$tmp/case-fleetloop
-  if mkdir -p "$FL/remote/skills/launch-fleet/scripts" "$FL/remote/skills/plan-graph" "$FL/home" "$FL/w" \
+  if mkdir -p "$FL/remote/skills/launch-fleet/scripts" "$FL/remote/skills/to-tickets" "$FL/home" "$FL/w" \
     && cp "$FLEET" "$FL/remote/skills/launch-fleet/scripts/fleet.sh" \
-    && cp "$HERE/records.py" "$FL/remote/skills/launch-fleet/scripts/records.py" && cp "$FIX/revision.sh" "$FL/remote/skills/plan-graph/revision.sh" \
+    && cp "$HERE/records.py" "$FL/remote/skills/launch-fleet/scripts/records.py" && cp "$FIX/revision.sh" "$FL/remote/skills/to-tickets/revision.sh" \
     && git -C "$FL/remote" init -q && git -C "$FL/remote" add -A \
     && git -C "$FL/remote" -c user.name=synthetic -c user.email=synthetic@example.invalid commit -q -m one \
     && world check.json "merge12 | $SPEC40" "$FL/w" > "$FL/world.json"; then
@@ -3481,7 +3481,7 @@ if [ -z "${TEST_ONLY:-}" ] || [ "$TEST_ONLY" = o10-release ]; then
   if take; then
     cases=$((cases + 1))
     rel=$tmp/o10-release
-    if mkdir -p "$rel/skills" && cp -R "$HERE/../../launch-fleet" "$HERE/../../triage" "$HERE/../../plan-graph" "$rel/skills/" \
+    if mkdir -p "$rel/skills" && cp -R "$HERE/../../launch-fleet" "$HERE/../../triage" "$HERE/../../to-tickets" "$rel/skills/" \
       && (cd "$rel" && GIT_CEILING_DIRECTORIES=$tmp python3 -I skills/launch-fleet/scripts/fixtures/test-o10-triage.py) > "$tmp/o10-release.log" 2>&1; then
       echo 'ok   o10-release'
     else
@@ -3491,14 +3491,14 @@ if [ -z "${TEST_ONLY:-}" ] || [ "$TEST_ONLY" = o10-release ]; then
   fi
 fi
 
-### The pinned revision.sh is plan-graph's
+### The pinned revision.sh is to-tickets’
 
 if [ -z "${TEST_ONLY:-}" ] && take; then
   cases=$((cases + 1))
-  if cmp -s "$FIX/revision.sh" "$HERE/../../plan-graph/revision.sh"; then
-    echo "ok   the pinned revision.sh is plan-graph's, byte for byte"
+  if cmp -s "$FIX/revision.sh" "$HERE/../../to-tickets/revision.sh"; then
+    echo "ok   the pinned revision.sh is to-tickets’, byte for byte"
   else
-    bad "the pinned revision.sh is plan-graph's, byte for byte" "fixtures/revision.sh differs from skills/plan-graph/revision.sh: copy it again"
+    bad "the pinned revision.sh is to-tickets’, byte for byte" "fixtures/revision.sh differs from skills/to-tickets/revision.sh: copy it again"
   fi
 fi
 

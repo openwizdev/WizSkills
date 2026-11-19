@@ -5,7 +5,7 @@ description: Grill the user on a design in rounds of three plain questions, each
 
 # Grill
 
-Interview the user until a design is settled, at most three questions at a time, and write down every word as you go, so a fresh session (or `plan-graph`, which plans from it) can carry on without the chat. You find the facts; the user makes every decision. The grill is done only when the user confirms its summary.
+Interview the user until a design is settled, at most three questions at a time, and write down every word as you go, so a fresh session (or `to-spec`, which plans from it) can carry on without the chat. You find the facts; the user makes every decision. The grill is done only when the user confirms its summary.
 
 ## Where things go
 
@@ -19,7 +19,7 @@ Read the development and private repositories from `docs/agents/issue-tracker.md
 | Hard-to-reverse decisions | ADRs (one short file per decision) in `docs/adr/`, unless `docs/agents/domain.md` names another place |
 | The version, for a grill for a version | Its milestone, named after it, made when the grill starts (see "Start") |
 
-Create each file the first time you have something to write in it. `plan-graph` reads all three: the grill, the glossary and the ADRs.
+Create each file the first time you have something to write in it. `to-spec` reads all three: the grill, the glossary and the ADRs.
 
 **Grills are private.** A grill keeps the user's exact words, which can include personal context.
 
@@ -85,7 +85,7 @@ Several grills can run side by side, even sent to the user in one message. Each 
 3. **Save their reply exactly.** If it corrects a line, fix it, save the new summary below their reply, and show it again. If it opens a decision (something new, or something unclear), go back to rounds: ask it in the next round, with ids still counting, and when the frontier is empty again, write a new summary and show it.
 4. **Done only when the user confirms the summary** (the latest one) and nothing is open. Set the file's status to **confirmed**, with the date, push, resolve its decision record, and merge the pull request as the project's merge rules allow (or ask the user to merge it).
 
-Done when the confirmed grill is merged. From there, `plan-graph` can plan from it.
+Done when the confirmed grill is merged. From there, `to-spec` can plan from it.
 
 ## Decision records
 

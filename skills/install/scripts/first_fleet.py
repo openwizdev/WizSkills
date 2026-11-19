@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""The onboarding skill's mechanical checks (#1108, joined to install in #636). Standard library only.
+"""The install skill's first-fleet checks (#1108, joined to install in #636). Standard library only.
 
-  onboard.py continue --state FILE --setup-state DIR [--explained]
-  onboard.py decisions --state FILE --setup-state DIR [--yes]
-  onboard.py create-repo --state FILE --repo OWNER/NAME [--yes]
-  onboard.py choose --state FILE --options FILE (--harness P --model M --effort E | --from-setup) --agents cloud|local
-  onboard.py spec --state FILE --spec N --repo OWNER/NAME
-  onboard.py launch --state FILE --spec N [--yes --confirm DIGEST]
-  onboard.py progress --state FILE --spec N --openwiz PROGRAM
+  first_fleet.py continue --state FILE --setup-state DIR [--explained]
+  first_fleet.py decisions --state FILE --setup-state DIR [--yes]
+  first_fleet.py create-repo --state FILE --repo OWNER/NAME [--yes]
+  first_fleet.py choose --state FILE --options FILE (--harness P --model M --effort E | --from-setup) --agents cloud|local
+  first_fleet.py spec --state FILE --spec N --repo OWNER/NAME
+  first_fleet.py launch --state FILE --spec N [--yes --confirm DIGEST]
+  first_fleet.py progress --state FILE --spec N --openwiz PROGRAM
 
 It adds no approval, planner or engine. `continue` carries what install and
 setup already recorded in the installed OpenWiz state (DIR is its `<state>`):
@@ -103,7 +103,7 @@ def strict(text):
 
 def parse(argv):
     if not argv or argv[0] not in OPTIONS:
-        raise Exit(2, 'usage: onboard.py continue|create-repo|choose|spec|launch|progress ... (see its header)')
+        raise Exit(2, 'usage: first_fleet.py continue|create-repo|choose|spec|launch|progress ... (see its header)')
     values, switches, optional = OPTIONS[argv[0]]
     got, rest = {}, argv[1:]
     while rest:

@@ -1,3 +1,0 @@
-interface:
-  display_name: "Overnight"
-  short_description: "Run huntr at night and deliver the morning report"

@@ -1,3 +1,0 @@
-interface:
-  display_name: "Feedback Triage"
-  short_description: "Queue feedback issues and post a reply only after Jake's yes"

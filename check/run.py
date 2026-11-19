@@ -25,8 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SUITES = {
     'triage': [['python3', '-I', 'skills/triage/test/test_find_work.py'],
                ['python3', '-I', 'skills/triage/test/test_public_records.py']],
-    'feedback': [['python3', '-I', 'skills/feedback/test/test_feedback.py']],
-    'feedback-triage': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/feedback-triage/tests']],
+    'install': [['python3', '-I', 'skills/install/tests/test_first_fleet.py']],
     'huntr': [['sh', 'skills/huntr/scripts/test.sh']],
     'grill': [['sh', 'skills/grill/scripts/test.sh']],
     'diagnose': [['node', '--test', 'skills/diagnose/tests/hitl-loop.test.mjs']],
@@ -56,14 +55,10 @@ SUITES = {
 # SKILL.md carries exactly, on a line of its own, instead of his notice.
 ORIGINAL = "**Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills."
 SOURCE_LINES = {
-    'feedback': ORIGINAL,
-    'feedback-triage': ORIGINAL,
     'hill-climb': ORIGINAL,
     'huntr': ORIGINAL,
     'image': ORIGINAL,
     'install': ORIGINAL,
-    'onboard': ORIGINAL,
-    'overnight': ORIGINAL,
     'where-are-we': "**Source:** dot-context's written plan. Not adapted from Matt Pocock's skills.",
 }
 

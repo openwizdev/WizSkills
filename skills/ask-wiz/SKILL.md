@@ -69,7 +69,7 @@ them. Preserve the project's separate builder, reviewer and orchestrator roles.
 | --- | --- |
 | A fresh orchestrator needs the project's durable state | `handoff` |
 | Configure a project's issue tracker, labels and fleet settings | `setup` |
-| Continue approved work while the user sleeps, through huntr's night setting | `overnight` |
+| Keep an approved fleet progressing between sessions | `launch-fleet` |
 | Unsure which flow or skill to choose | `ask-wiz`, started by the user |
 
 At a phase boundary, read [the CloudRoom thread guide](PHASE-BOUNDARIES.md) to

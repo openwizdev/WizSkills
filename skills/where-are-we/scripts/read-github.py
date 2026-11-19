@@ -5,9 +5,6 @@
   read-github.py runs   queued and in-progress CI runs
 """
 import json
-import os
-from pathlib import Path
-import re
 import subprocess
 import sys
 
@@ -20,26 +17,6 @@ RUNS = {
     'queued': 'repos/{owner}/{repo}/actions/runs?status=queued&per_page=100',
     'in_progress': 'repos/{owner}/{repo}/actions/runs?status=in_progress&per_page=100',
 }
-
-
-# C10 (#2317), Assumption A1: the one switch. The shared installation route is
-# used only once its credentials are configured: C9's protected provisioning
-# writes <state>/service/github-reads/installation.json (C8's README). Without
-# it, the reads below stay exactly the `gh` reads they were. With it, a missing
-# helper or a missing, expired or revoked installation refuses the read; it
-# never falls back to `gh` and the personal quota.
-def installation_reads():
-    state = os.environ.get('OPENWIZ_STATE_DIR')
-    if not state:
-        xdg = Path(os.environ.get('XDG_STATE_HOME', ''))
-        state = (xdg if xdg.is_absolute() else Path.home() / '.local/state') / 'openwiz'
-    return os.path.lexists(Path(state) / 'service/github-reads/installation.json')
-
-
-# C8's reader, as launch-fleet carries its exact copy (WZ4, #2634).
-READER = Path(__file__).resolve().parents[2] / 'launch-fleet/scripts/carried/read.py'
-REPOSITORY = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
-OUTCOME = re.compile(r'(refused|deferred): [a-z-]+( until=[0-9]+)?')
 
 
 def unique_object(pairs):
@@ -99,37 +76,9 @@ def gh_pages(endpoint):
     return json.loads(result.stdout, object_pairs_hook=unique_object, parse_constant=invalid_constant), None
 
 
-def installation_pages(endpoint):
-    """The complete pages through C8's read.py: the explicit repository, every page."""
-    repository = os.environ.get('GH_REPO', '')
-    if not REPOSITORY.fullmatch(repository):
-        return None, 'installation read needs GH_REPO=owner/name'
-    if not READER.is_file():
-        return None, 'installation read refused: the read helper is missing'
-    owner, repo = repository.split('/')
-    try:
-        result = subprocess.run(
-            [sys.executable, '-I', str(READER), 'rest', repository, endpoint.format(owner=owner, repo=repo),
-             '--purpose', 'display', '--max-age', '60'],
-            capture_output=True, timeout=300, check=False, stdin=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None, 'installation read unavailable or timed out'
-    if result.returncode:
-        # read.py's one stderr line holds only its fixed outcome words.
-        line = result.stderr.decode('ascii', 'replace').strip()
-        return None, f'installation read {line}' if OUTCOME.fullmatch(line) else 'installation read failed'
-    text, decoder, pages, at = result.stdout.decode(), json.JSONDecoder(
-        object_pairs_hook=unique_object, parse_constant=invalid_constant), [], 0
-    while text[at:].strip():
-        page, at = decoder.raw_decode(text, len(text) - len(text[at:].lstrip()))
-        pages.append(page)
-    return pages, None
-
-
 def read(source, endpoint):
     try:
-        pages, reason = (installation_pages if installation_reads() else gh_pages)(endpoint)
+        pages, reason = gh_pages(endpoint)
         if reason:
             return {'state': 'unconfirmed', 'reason': reason}
         if source in RUNS:  # run pages are objects, each holding one list of runs

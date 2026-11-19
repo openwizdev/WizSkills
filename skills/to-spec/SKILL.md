@@ -22,7 +22,8 @@ the plan approval's authority.
 
 Keep exact replies, grill sources, thread IDs and private media in private
 storage. Verify the private records repository and development tracker before
-writing. Save public-safe summaries, issue text and visuals in public.
+writing. Save public-safe summaries, issue text and visuals in public. An
+unclear read or publication approval stops the related write.
 
 ## 2. Write the spec
 

@@ -2,6 +2,8 @@
 import base64
 import json
 import os
+import re
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -135,6 +137,9 @@ if parts[3] == "contents":
     done({"encoding": "base64", "content": base64.b64encode(text.encode()).decode()})
 if parts[3] == "commits":
     done({"check_runs": w["checks"].get(parts[4], [])})
+if parts[3] == "compare":
+    found = w["compare"].get(parts[4])
+    done({"files": [{"filename": f} for f in found]}) if found is not None else done(None, 1)
 if parts[3] == "issues" and len(parts) == 6:
     done([w["comments"].get(repo + "#" + parts[4], [])])
 if parts[3] == "issues" and len(parts) == 4:
@@ -180,6 +185,7 @@ class Review(unittest.TestCase):
                       f"{PRODUCT}@main:docs/agents/triage-labels.md": LABELS},
             "checks": green(HEAD),
             "comments": {f"{SKILLS}#7": comments or []},
+            "compare": {f"{OLD}...{HEAD}": ["src/export.rs"]},
         }
         w.update(changes)
         self.fixture.write_text(json.dumps(w))
@@ -187,12 +193,12 @@ class Review(unittest.TestCase):
     def state(self):
         return json.loads(self.fixture.read_text())
 
-    def run_helper(self, *args, stdin=None):
+    def run_helper(self, *args, stdin=None, cwd=None):
         if args[0] in ("pin", "check", "post") and "--head" not in args:
             # The assigned head is the pull request's current head unless a test says otherwise.
             args = (*args, "--head", self.state()["pulls"]["7"]["head"]["sha"])
         return subprocess.run([sys.executable, "-I", str(HELPER), *args], input=stdin, text=True,
-                              capture_output=True, env=self.env, timeout=30)
+                              capture_output=True, env=self.env, timeout=30, cwd=cwd)
 
     def file(self, name, text):
         path = self.root / name
@@ -407,6 +413,121 @@ class Review(unittest.TestCase):
                 text = FULL.replace("Ran: `cargo test`", f"Ran: `cargo test` {leak}")
                 out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
                 self.assertIn("private material: a token or thread id", out.stdout.splitlines())
+
+    def test_a_recheck_raises_new_findings_only_in_changed_code_or_as_a_stated_risk(self):
+        # catches: a re-check that drips a new finding on code unchanged since
+        # its last read (a second surprise round), or one that drops the stated
+        # exception for a security, privacy or data-loss risk there.
+        self.world({}, comments=[report(FULL)])
+        unchanged = "- **R4 [polish]** `src/cli.rs:12` (Sweep) Typo. Fix: file exists. Polish issue: #60."
+        risk = ("- **R4 [blocking]** `src/cli.rs:12` (Sweep) The sync token is printed. Fix: redact it.\n"
+                "  Risk: privacy: a cook's sync token reaches the terminal log.")
+        fresh = ("VERDICT: CHANGES", "Next: a fresh, stronger builder fixes R4 once, then one final check.")
+        old_r4 = "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60."
+        merge = ("VERDICT: APPROVE", "Next: none open. It merges by the project's merge rules.")
+        refused = ("R4: `src/cli.rs` is unchanged since aaaaaaa; a re-check raises a new finding there "
+                   "only as a Risk: security, privacy or data-loss blocker")
+        cases = {
+            "polish on unchanged code": (unchanged, merge, 1, refused),
+            "user path on unchanged code": (risk.replace("Risk: privacy: a cook's sync token reaches the terminal log.",
+                                                         "User path: a cook sees the token in the terminal."),
+                                            fresh, 1, refused),
+            "stated risk on unchanged code": (risk, fresh, 0, "report ok"),
+            "polish on changed code": (old_r4, merge, 0, "report ok"),
+        }
+        for name, (line, (verdict, nxt), code, expected) in cases.items():
+            with self.subTest(name):
+                text = (RECHECK.replace(old_r4, line).replace("VERDICT: APPROVE", verdict)
+                        .replace("Next: none open. It merges by the project's merge rules.", nxt))
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, code, out.stdout + out.stderr)
+                self.assertIn(expected, out.stdout.splitlines())
+        self.assertIn(["api", f"repos/{SKILLS}/compare/{OLD}...{HEAD}"], self.state()["calls"])
+        self.world({"compare": {}}, comments=[report(FULL)])
+        out = self.run_helper("check", self.file("r.md", RECHECK), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual(out.returncode, 2, out.stdout)
+        self.assertIn("cannot read", out.stderr)
+
+    # --- self-check: the builder's own pass --------------------------------
+
+    def hand_back(self, code_line):
+        """A synthetic builder checkout: origin/main, then one green commit adding `code_line`."""
+        upstream, work = self.root / "upstream", self.root / "work"
+
+        def git(where, *args):
+            return subprocess.run(["git", "-C", str(where), "-c", "user.name=Builder", "-c",
+                                   "user.email=builder@example.com", *args],
+                                  check=True, capture_output=True, text=True).stdout.strip()
+        for d in (upstream, work):
+            if d.exists():
+                subprocess.run(["rm", "-rf", str(d)], check=True)
+        upstream.mkdir()
+        git(upstream, "init", "-q", "-b", "main")
+        (upstream / "export.py").write_text("def export():\n    pass\n")
+        git(upstream, "add", "-A")
+        git(upstream, "commit", "-qm", "base")
+        git(self.root, "clone", "-q", str(upstream), str(work))
+        git(work, "checkout", "-qb", "room/41-export")
+        (work / "export.py").write_text(f"def export():\n    {code_line}\n")
+        git(work, "commit", "-qam", "#41 green: export refuses an existing zip")
+        return work, git(work, "rev-parse", "HEAD")
+
+    def builder_pass(self, work, description):
+        """Run build-ticket's own self-check line, as a builder fills it in."""
+        skill = HELPER.parent.parent.parent / "build-ticket"
+        text = (skill / "SKILL.md").read_text()
+        line = re.search(r"`(python3 -I <this skill's folder>/\.\./review-ticket/scripts/review\.py "
+                         r"self-check <description file>)`", text)
+        self.assertIsNotNone(line, "build-ticket's SKILL.md names no self-check line")
+        argv = shlex.split(line[1].replace("<this skill's folder>", str(skill))
+                           .replace("<description file>", self.file("description.md", description)))
+        return subprocess.run(argv, text=True, capture_output=True, env=self.env, timeout=30, cwd=work)
+
+    def test_the_builders_own_pass_catches_a_planted_checklist_miss(self):
+        # catches: a hand-back that the reviewer's checklist would send back
+        # (no ticket to admit, no Rulings to mark, stale Facts, no test-rule
+        # line, a token or thread id in public text) reaching review because
+        # the builder's pass missed it, or build-ticket pointing at a
+        # self-check that is not there.
+        clean = "raise FileExistsError('cookbook.zip')"
+        work, head = self.hand_back(clean)
+
+        def description(head):
+            return (f"Closes example/product#41\n\n## Summary\n\nExport refuses an existing zip.\n\n"
+                    f"## Rulings\n\n1. Name the zip cookbook.zip. Why: the importer reads that name. "
+                    f"Cost if wrong: low: one rename.\n\n## Facts\n\n- **Head:** `{head}`\n"
+                    f"- **Tests:** `test_export_refuses`. catches: a second export overwriting the first.\n")
+        good = description(head)
+        out = self.builder_pass(work, good)
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "self-check: ok"), out.stdout + out.stderr)
+        rulings = ("## Rulings\n\n1. Name the zip cookbook.zip. Why: the importer reads that name. "
+                   "Cost if wrong: low: one rename.\n\n")
+        planted = {  # each: the description for this head, the code line, the one miss expected
+            "no Closes line": (lambda h: description(h).replace("Closes example/product#41\n", ""), clean,
+                               "no Closes line names the ticket; the review cannot start"),
+            "no Rulings section": (lambda h: description(h).replace(rulings, ""), clean,
+                                   "no ## Rulings section with numbered rulings or exactly none"),
+            "stale head": (lambda h: description(OLD), clean, "the description does not name the head {head}"),
+            "no test-rule line": (lambda h: description(h).replace(" catches: a second export overwriting the first.",
+                                                                   ""), clean,
+                                  "no `catches: <the bug>` or `no new test: <why>` line"),
+            "token in the diff": (description, "token = '" + "ghp_" + "A1b2C3d4E5f6G7h8'",
+                                  "private material (a token or thread id) in export.py"),
+            "thread id in the description": (lambda h: description(h).replace("## Summary", "## Summary " + "thr_" + "a1b2c3d4"),
+                                             clean, "private material (a token or thread id) in the description"),
+        }
+        for name, (text, code_line, expected) in planted.items():
+            with self.subTest(name):
+                work, head = self.hand_back(code_line)
+                out = self.builder_pass(work, text(head))
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertEqual(out.stdout.splitlines(), ["miss: " + expected.format(head=head), "self-check: 1 miss"])
+        work, head = self.hand_back(clean)
+        out = self.builder_pass(work, description(head).replace(rulings, "## Rulings\n\nnone\n\n"))
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "self-check: ok"), out.stdout)
+        out = self.run_helper("self-check", self.file("d.md", description(head)), "--base", "origin/gone", cwd=work)
+        self.assertEqual((out.returncode, out.stdout), (2, ""), out.stdout)
+        self.assertIn("cannot read origin/gone...HEAD with git", out.stderr)
 
     # --- post --------------------------------------------------------------
 

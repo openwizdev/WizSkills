@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Produce a workflow receipt from host counters and observed measurements."""
 
+import argparse
 import json
+from pathlib import Path
 import re
 import sys
 
@@ -70,7 +72,58 @@ def totals(host, usage):
             complete_sum(t["output_tokens"] for t in turns))
 
 
-def receipt(record):
+def decode(text):
+    return json.loads(text, object_pairs_hook=unique_object, parse_constant=refuse_constant)
+
+
+def events(path):
+    with path.open(encoding="utf-8") as stream:
+        for line in stream:
+            event = decode(line)
+            if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+                raise ValueError("invalid host event")
+            yield event
+
+
+def event_usage(event, keys):
+    usage = event.get("usage")
+    if usage is None:
+        return None
+    if not isinstance(usage, dict):
+        raise ValueError("invalid host usage")
+    return {key: usage[key] for key in keys if key in usage}
+
+
+def codex_attempt(path):
+    # A started turn without a usable completion contributes unknown usage.
+    turns = []
+    pending = False
+    for event in events(path):
+        kind = event["type"]
+        if kind == "turn.started":
+            if pending:
+                raise ValueError("overlapping turns")
+            pending = True
+        elif kind in ("turn.completed", "turn.failed"):
+            if not pending:
+                raise ValueError("terminal event without a turn")
+            counts = event_usage(event, CODEX_USAGE) if kind == "turn.completed" else None
+            turns.append(counts)
+            pending = False
+    if pending:
+        turns.append(None)
+    return totals("codex", turns)
+
+
+def claude_attempt(path):
+    results = [event_usage(event, CLAUDE_USAGE) for event in events(path)
+               if event["type"] == "result"]
+    if len(results) > 1:
+        raise ValueError("multiple Claude results for one attempt")
+    return totals("claude-code", results[0] if results else None)
+
+
+def receipt(record, logs):
     fields(record, (*IDENTITY, "metrics", "usage", "outcome"))
     for key in IDENTITY:
         if key not in record or not isinstance(record[key], str):
@@ -85,7 +138,15 @@ def receipt(record):
     if outcome not in (None, "pass", "fail"):
         raise ValueError("invalid outcome")
     metrics = counters(record.get("metrics"), OBSERVED)
-    metrics["input_tokens"], metrics["output_tokens"] = totals(host, record.get("usage"))
+    if logs:
+        if "usage" in record or len({path.resolve() for path in logs}) != len(logs):
+            raise ValueError("ambiguous usage sources")
+        attempt = codex_attempt if host == "codex" else claude_attempt
+        inputs, outputs = zip(*(attempt(path) for path in logs))
+        token_totals = complete_sum(inputs), complete_sum(outputs)
+    else:
+        token_totals = totals(host, record.get("usage"))
+    metrics["input_tokens"], metrics["output_tokens"] = token_totals
     return {
         "schema": SCHEMA,
         **{key: record[key] for key in IDENTITY},
@@ -95,11 +156,13 @@ def receipt(record):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host-log", type=Path, action="append", default=[],
+                        help="private JSONL log for one attempt, repeat for retries")
+    args = parser.parse_args()
     try:
-        record = json.load(sys.stdin, object_pairs_hook=unique_object,
-                           parse_constant=refuse_constant)
-        result = receipt(record)
-    except (ValueError, UnicodeError, RecursionError):
+        result = receipt(decode(sys.stdin.read()), args.host_log)
+    except (OSError, ValueError, RecursionError):
         # Parser errors can contain excerpts of private input.
         print("measure: invalid workflow input", file=sys.stderr)
         return 2

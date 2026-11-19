@@ -110,3 +110,28 @@ at the head, any comment author trusted, the CI gate skipped, no post
 deduplication, no read-back, a `Risk:` blocker loggable, and the privacy check
 off. The [failing-first run](ws6-red.txt) is the committed skeleton, before the
 implementation.
+
+## Review round: R1 to R6
+
+The measured candidate above, `c41ef0f`, and its scoped receipt are unchanged.
+No new independent trial was run or authorized, so the fixes have no observed
+workflow measurement. The [re-check failing-first run](ws6-recheck-red.txt)
+reproduces each finding on the reviewed helper before the fix.
+
+| Finding | Workflow path it changes | New test |
+| --- | --- | --- |
+| R1 | Park and decision only. `pin` consumes a record author's decision naming the parked ids and head. Fix once more admits a final check at the new head. Log and merge admits one same-head report grading those ids polish with the decision's issues. | `test_fix_once_more_decision_admits_a_check_of_the_new_head`, `test_log_and_merge_decision_admits_one_same_head_polish_report`, `test_unmatched_or_unauthorized_decisions_keep_the_park` |
+| R2 | Re-check and final-check reports. An earlier finding keeps its grade, a blocker takes only a blocker status, a prior `Risk:` line is carried forward, and the v2 ruling-mark refusals apply. | `test_an_earlier_blocker_cannot_be_closed_as_polish`, `test_v2_ruling_mark_refusals` |
+| R3 | Every command. The record-author row is read whole and only once, as launch-fleet's `grants.py` reads it. | `test_record_author_row_is_parsed_whole` |
+| R4 | Every command. Required checks include a `**Additional ... check: `name`**` declaration in `## CI checks`, OpenWiz's form for `privacy`. | `test_additional_required_check_outside_the_table` |
+| R5 | `post`. Success is bound to the write's returned id and its read-back. A lost response counts only a new comment. An identical comment from anyone else is not a post. | `test_identical_text_from_anyone_else_is_not_a_post` |
+| R6 | Every command. `--head` is required. Each command reads one pull-request snapshot and admits it before reading or writing, and `post` repeats admission right before the write. | `test_commands_are_bound_to_the_assigned_head`, `test_pin_reads_one_snapshot`, `test_post_repeats_admission_before_writing` |
+
+On the measured `review-ticket.exact-head` path, the only command change is the
+added `--head` argument. The admission gates add stops; they add no reads to
+the entrypoint. Recounted at the fix commit, the same path is 13,948 static
+tokens: 3,167 for the entrypoint, which is 115 lines and 2,041 words, and
+10,781 for the contract ([paths](ws6-recheck-paths.json),
+[count](ws6-recheck-static.json)). The earlier count was 13,879. The kept 21
+tests changed only to pass the assigned head. One new log-and-merge fixture
+gives R4 its status, as a re-check must. No test was deleted.

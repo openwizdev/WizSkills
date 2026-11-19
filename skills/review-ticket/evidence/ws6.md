@@ -14,7 +14,7 @@ is never loaded. The re-check and grant references load only on those branches.
 | Entrypoint words | 7,757 | 1,990 |
 | Entrypoint static tokens | 11,519 | 3,098 |
 | Static loaded-path tokens, `review-ticket.exact-head` | 22,300 | 13,879 |
-| Observed workflow outcome | Pass | Unknown |
+| Observed workflow outcome | Pass | Pass |
 | Observed workflow token counts and wall time | Unknown | Unknown |
 
 The entrypoint is 115 lines, past the guide's 50 to 100. Matt Pocock's notice
@@ -39,10 +39,39 @@ The [static count](ws6-static-after.json) uses `js-tiktoken@1.0.21` and
 `node tools/measure/static-count.cjs skills/review-ticket/evidence/ws6-after-paths.json <tokenizer>`.
 The same tokenizer reproduces the WS1 static baseline exactly.
 
-The [after receipt](ws6-after-receipt.json) records that the matched
-observation is still pending. Under the LV1 extension, the fleet runs one
-synthetic after trial at the exact candidate with WS1's workflow and baseline
-profile. Counters the host doesn't report stay `null`.
+The [after receipt](ws6-after-receipt.json) is the fleet's one matched
+synthetic trial under the LV1 extension, at candidate
+`c41ef0fc2184b942b18a478aeaaacab9dcc95ff1` with WS1's baseline profile
+(Codex, Sol 6.2, Medium). The candidate's skill, references, helper and
+contracts are byte-identical to the implementation commit pinned for the static
+count. Source: [receipt](https://github.com/openwizdev/OpenWiz/issues/1179#issuecomment-7001179969)
+and [accounting](https://github.com/openwizdev/OpenWiz/issues/1179#issuecomment-7001196636).
+
+| Workflow and attempt | Observed outcome | Workflow time | Spawn-to-receipt upper bound | Cloud Credits |
+| --- | --- | ---: | ---: | ---: |
+| `review-ticket.exact-head`, before | Pass | Unknown | 235 s | 3 |
+| `review-ticket.exact-head`, after | Pass | Unknown | 316 s | 4 |
+
+The after trial had zero retries. Its workflow-only time and every host token
+counter are `null`: no complete matched workflow timer or attributed host
+counters were available. The spawn-to-receipt bound covers startup, fixture
+preparation and publication as well, rounded up to the second, so it is not a
+workflow-time comparison. Cloud Credits are thread-level.
+
+In the trial, `pin` selected a full review using base-branch settings, `check`
+accepted the report, and `post` wrote one simulated comment and read it back.
+The verdict was `CHANGES`, with one blocking finding for the confirmation guard
+the synthetic shortcut route had dropped. A scratch run of the base showed the
+red, and a rerun at the clean pinned head reproduced the break. The reviewed
+checkout stayed unchanged.
+
+The fixture was reconstructed from the sanitized WS1 before receipt at the
+action-dispatch layer. The original fixture bytes were unavailable, so they
+could not be compared. It used new synthetic IDs, commits, policy and tracker
+records, and it kept the original case's controls and every-route confirmation
+requirement. Setup and preflight on disposable state ran outside the measured
+segment, as did publication. The trial exercised no grant, re-check, merge or
+live proof. No further independent trial is authorized.
 
 ## SK-D: mechanics in `scripts/review.py`
 

@@ -8,7 +8,6 @@ as one Claude Code plugin, `openwiz`, so each is named `openwiz:<name>`.
 
 This README describes release 0.1.2. Every install below names that one
 release; none follows a branch.
-
 To report a problem with OpenWiz, ask your agent to file a GitHub issue.
 
 ## Versions

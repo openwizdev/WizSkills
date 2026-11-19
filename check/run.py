@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SUITES = {
     'triage': [['python3', '-I', 'skills/triage/test/test_find_work.py'],
                ['python3', '-I', 'skills/triage/test/test_public_records.py']],
+    'install': [['python3', '-I', 'skills/install/tests/test_first_fleet.py']],
     'huntr': [['sh', 'skills/huntr/scripts/test.sh']],
     'grill': [['sh', 'skills/grill/scripts/test.sh']],
     'diagnose': [['node', '--test', 'skills/diagnose/tests/hitl-loop.test.mjs']],

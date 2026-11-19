@@ -500,26 +500,34 @@ class Review(unittest.TestCase):
         good = description(head)
         out = self.builder_pass(work, good)
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "self-check: ok"), out.stdout + out.stderr)
-        planted = {
-            "no Closes line": (good.replace("Closes example/product#41\n", ""), clean,
-                               "miss: no Closes line names the ticket; the review cannot start"),
-            "no Rulings section": (good.replace("## Rulings\n\n1. Name the zip cookbook.zip. Why: the importer "
-                                                "reads that name. Cost if wrong: low: one rename.\n\n", ""), clean,
-                                   "miss: no ## Rulings section with numbered rulings or exactly none"),
-            "stale head": (description(OLD), clean, f"miss: the description does not name the head {head}"),
-            "no test-rule line": (good.replace(" catches: a second export overwriting the first.", ""), clean,
-                                  "miss: no `catches: <the bug>` or `no new test: <why>` line"),
-            "token in the diff": (None, "token = '" + "ghp_" + "A1b2C3d4E5f6G7h8'",
-                                  "miss: private material (a token or thread id) in export.py"),
-            "thread id in the description": (good.replace("## Summary", "## Summary " + "thr_" + "a1b2c3d4"), clean,
-                                             "miss: private material (a token or thread id) in the description"),
+        rulings = ("## Rulings\n\n1. Name the zip cookbook.zip. Why: the importer reads that name. "
+                   "Cost if wrong: low: one rename.\n\n")
+        planted = {  # each: the description for this head, the code line, the one miss expected
+            "no Closes line": (lambda h: description(h).replace("Closes example/product#41\n", ""), clean,
+                               "no Closes line names the ticket; the review cannot start"),
+            "no Rulings section": (lambda h: description(h).replace(rulings, ""), clean,
+                                   "no ## Rulings section with numbered rulings or exactly none"),
+            "stale head": (lambda h: description(OLD), clean, "the description does not name the head {head}"),
+            "no test-rule line": (lambda h: description(h).replace(" catches: a second export overwriting the first.",
+                                                                   ""), clean,
+                                  "no `catches: <the bug>` or `no new test: <why>` line"),
+            "token in the diff": (description, "token = '" + "ghp_" + "A1b2C3d4E5f6G7h8'",
+                                  "private material (a token or thread id) in export.py"),
+            "thread id in the description": (lambda h: description(h).replace("## Summary", "## Summary " + "thr_" + "a1b2c3d4"),
+                                             clean, "private material (a token or thread id) in the description"),
         }
         for name, (text, code_line, expected) in planted.items():
             with self.subTest(name):
                 work, head = self.hand_back(code_line)
-                out = self.builder_pass(work, text if text is not None else description(head))
+                out = self.builder_pass(work, text(head))
                 self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
-                self.assertEqual(out.stdout.splitlines(), [expected, "self-check: 1 miss"])
+                self.assertEqual(out.stdout.splitlines(), ["miss: " + expected.format(head=head), "self-check: 1 miss"])
+        work, head = self.hand_back(clean)
+        out = self.builder_pass(work, description(head).replace(rulings, "## Rulings\n\nnone\n\n"))
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "self-check: ok"), out.stdout)
+        out = self.run_helper("self-check", self.file("d.md", description(head)), "--base", "origin/gone", cwd=work)
+        self.assertEqual((out.returncode, out.stdout), (2, ""), out.stdout)
+        self.assertIn("cannot read origin/gone...HEAD with git", out.stderr)
 
     # --- post --------------------------------------------------------------
 

@@ -1,6 +1,6 @@
 # Until it merges
 
-Read this when a review, a CI failure, a conflict with `main` or an orchestrator decision reaches your pull request. Check each record first with `$T records <repo> <PR>`. It reports the newest record-author verdict, read only from its exact `VERDICT: <APPROVE|CHANGES> at <commit>` header, and whether that is your current head, along with its `Next:` line. It also reports the newest decision with `bound: yes` only when it names your current head and findings parked at that head. Act on nothing else. For an answer on the ticket, use `$T records <repo> <N> --ticket`.
+Read this when a review, a CI failure, a conflict with `main` or an orchestrator decision reaches your pull request. Check each record first with `$T records <repo> <PR>`. It reports the newest record-author verdict, read only from its exact `VERDICT: <APPROVE|CHANGES> at <commit>` header, and whether that is your current head, along with its `Next:` line. It also reports a decision with `bound: yes` only when its complete line comes after the newest verdict, that verdict's last line parks findings at your current head, and the decision names exactly those findings and that head. Act on nothing else. For an answer on the ticket, or any record your wake names, check that comment with `$T records <repo> <N> --comment <id>` and use it only on `trusted: yes`.
 
 | What happened | What you do |
 | --- | --- |

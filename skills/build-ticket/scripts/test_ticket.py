@@ -349,6 +349,8 @@ class Records(Case):
             ('log and merge without its polish issues',
              [('example[bot]', report), ('owner-1', exact.replace('fix once more', 'log and merge'))],
              'bound: no: not a decision line'),
+            ('park at an older head', [('example[bot]', report.replace(HEAD, OLD)), ('owner-1', exact)],
+             f'bound: no: the park report is at {OLD}, not the current head'),
             ('superseded park', [('example[bot]', report), ('owner-1', exact), ('example[bot]', approve)],
              'bound: no: it precedes the newest verdict'),
             ('later exact after a partial', [('example[bot]', report), ('owner-1', partial), ('owner-1', exact)],

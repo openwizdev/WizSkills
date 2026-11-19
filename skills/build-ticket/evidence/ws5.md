@@ -64,7 +64,7 @@ size estimate of the required paths, not an observation.
 
 - reading the ticket's repository-bound owned paths, complete blocker data, blockers closed as completed and the record-author fleet start
 - checking every changed path, including both sides of a rename and untracked files, against the paths owned in this checkout's repository
-- reading record authors only from the GitHub identity table, the newest exact verdict header against the current head, a decision bound to its parked findings at the current head, and trusted ticket answers
+- reading record authors only from the GitHub identity table, the newest exact verdict header against the current head, a complete decision line bound only when it follows the newest verdict, whose last line parks exactly its findings at the current head, the newest `launch-fleet:` record on a ticket or pull request, and one named comment checked for a record author
 - setting the noreply author
 - keeping the first-successful-push receipt, leaving it unknown after an unrecorded earlier push, and posting it once as a record author with read-back after a lost or timed-out response
 
@@ -76,6 +76,21 @@ or changed cases failed at their own assertions against `e88fcf3`, while
 the 13 kept cases passed. That run is
 [ws5-review-red.txt](ws5-review-red.txt). All 29 cases pass after the fix.
 R6 restores ops-wake text, which has no script.
+
+In the fresh round for the re-check's R1, the new cases failed at their own
+assertions against `fd3bd0f`, as shown in [ws5-r1-red.txt](ws5-r1-red.txt).
+Eleven subtests failed and no setup errors occurred. Each failing subtest
+represents a decision that is bound or a comment that is read when it should
+not be. They cover a partial parked set, a decision before the park report, a
+park line that is quoted rather than terminal, an incomplete decision line,
+`log and merge` without its polish issues, the ticket read offering the
+newest trusted comment as the answer, the missing named-comment check and
+the pull request read omitting its `launch-fleet:` record. The
+superseded-park case was already refused, but it failed on its reason.
+Afterwards, a park report at an older head was added. `fd3bd0f` refused that
+case for a different reason. All 30 tests pass after the fix. The fix adds
+39 words to the entrypoint's Records guard and 33 to `references/review.md`.
+The static counts above remain pinned at `ca6cefd` and were not rerun.
 
 Each guard below was broken in a temporary copy of the implementation. The
 named test then failed, and restoring the copy made it pass.
@@ -101,6 +116,13 @@ named test then failed, and restoring the copy made it pass.
 | R1: decision head not checked | `test_records_binds_a_decision_to_its_parked_finding_and_head` |
 | R1: decision's parked finding not checked | `test_records_binds_a_decision_to_its_parked_finding_and_head` |
 | R1: authors row read outside the identity table | `test_records_reads_authors_only_from_the_identity_table` |
+| Fresh R1: decision before the park report accepted | `test_records_binds_only_a_later_decision_naming_exactly_the_terminal_park` |
+| Fresh R1: park line read anywhere in the report | `test_records_binds_only_a_later_decision_naming_exactly_the_terminal_park` |
+| Fresh R1: partial parked set accepted | `test_records_binds_only_a_later_decision_naming_exactly_the_terminal_park` |
+| Fresh R1: park report's head not checked | `test_records_binds_only_a_later_decision_naming_exactly_the_terminal_park` |
+| Fresh R1: `log and merge` accepted without its polish issues | `test_records_binds_only_a_later_decision_naming_exactly_the_terminal_park` |
+| Fresh R1: named comment trusted from any author | `test_records_reads_one_named_trusted_comment_on_a_ticket_or_pull_request` |
+| Fresh R1: ticket read offers the newest trusted comment as the answer | `test_records_reads_one_named_trusted_comment_on_a_ticket_or_pull_request` |
 | R2: repository qualifier ignored | `test_scope_applies_owned_paths_only_in_their_repository` |
 | R2: `--owned` accepted without an annotated bullet | `test_scope_accepts_annotated_and_hand_resolved_paths` |
 | R3: blocker closed as not completed accepted | `test_read_requires_completed_blockers_and_the_fleet_start` |

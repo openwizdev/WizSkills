@@ -4,9 +4,10 @@
   ticket.py read REPO N                     owned paths, links, blockers, fleet start, readiness
   ticket.py scope REPO N [--base REF] [--supporting PATH]... [--owned PATH]...
                                             every changed path: owned, supporting or OUT
-  ticket.py records REPO N [--ticket] [--fleet-ref REF]
-                                            trusted verdict and bound decision on pull request N,
-                                            or with --ticket the newest trusted records on ticket N
+  ticket.py records REPO N [--ticket] [--comment ID] [--fleet-ref REF]
+                                            trusted verdict, bound decision and fleet record on pull
+                                            request N, or with --ticket the fleet record on ticket N;
+                                            --comment checks that one named comment on N is trusted
   ticket.py author                          set git's author to the GitHub user's noreply
   ticket.py push RECEIPT -- PUSH-COMMAND... run the push; keep the first success's receipt
   ticket.py post-receipt REPO PR RECEIPT    post the receipt once as a record author, read back
@@ -26,9 +27,10 @@ import sys
 LOGIN = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?')
 REPO_NAME = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
 VERDICT = re.compile(r'VERDICT: (APPROVE|CHANGES) at ([0-9a-f]{40})')
-FINDINGS = r'R\d+(?:(?:,? and |, )R\d+)*'
-DECISION = re.compile(r'\*\*Orchestrator decision:\*\* (fix once more|log and merge): '
-                      rf'({FINDINGS}) at ([0-9a-f]{{40}})\b')
+FINDINGS = r'R\d+(?:(?:, R\d+)* and R\d+)?'
+DECISION = re.compile(r'\*\*Orchestrator decision:\*\* (?:(fix once more)|(log and merge)): '
+                      rf'({FINDINGS}) at ([0-9a-f]{{40}})\. '
+                      r'(?(2)Polish issues: #\d+(?:, #\d+)*\. )Why: \S.*')
 PARK = re.compile(rf'Next: park ({FINDINGS}) as a decision for Jake\.')
 START = re.compile(r'launch-fleet: (?:started|start checked)\b')
 POST_TIMEOUT = 30
@@ -271,56 +273,86 @@ def cmd_scope(repo, n, base, supporting, by_hand):
 
 
 def ids(text):
-    return set(re.findall(r'R\d+', text))
+    found = re.findall(r'R\d+', text)
+    return set(found) if len(found) == len(set(found)) else None
 
 
-def cmd_records(repo, n, ref, on_ticket):
+def last_line(comment):
+    return next((l.strip() for l in reversed(str(comment.get('body', '')).splitlines()) if l.strip()), '')
+
+
+def binding(c, at, verdict, head):
+    """Why decision `c` (index `at` among trusted comments) does not bind, or None if it does.
+
+    It binds only after the newest trusted verdict, when that verdict's terminal line parks
+    findings at the current head and the decision's complete line names exactly them there.
+    """
+    m = DECISION.fullmatch(first_line(c))
+    if not m or ids(m.group(3)) is None:
+        return 'not a decision line'
+    if verdict is None or at < verdict[0]:
+        return 'it precedes the newest verdict'
+    park = PARK.fullmatch(last_line(verdict[1]))
+    if not park or ids(park.group(1)) is None:
+        return 'the newest verdict parks nothing'
+    if m.group(4) != head:
+        return f'{m.group(4)} is not the current head'
+    if verdict[2] != head:
+        return f'the park report is at {verdict[2]}, not the current head'
+    parked, named = ids(park.group(1)), ids(m.group(3))
+    if named - parked:
+        return f'{", ".join(sorted(named - parked))} was not parked at {head}'
+    if parked - named:
+        return f'{", ".join(sorted(parked - named))} parked at {head} is not named'
+    return None
+
+
+def cmd_records(repo, n, ref, on_ticket, named):
     authors = record_authors(ref)
     items = comments(repo, n)
     trusted = [c for c in items if author_of(c) in authors]
     print('authors: ' + ', '.join(authors))
+    if named is not None:
+        c = next((c for c in items if str(c.get('id')) == named), None)
+        if c is None:
+            print(f'comment {named}, trusted: no: not on #{n}')
+            return 1
+        line = f'comment {named} by {author_of(c)}: {first_line(c)}, trusted: '
+        print(line + ('yes' if c in trusted else 'no: not a record author'))
+        return 0 if c in trusted else 1
+    fleet = [c for c in trusted if first_line(c).startswith('launch-fleet:')]
+    c = fleet[-1] if fleet else None
+    print(f'launch-fleet: comment {c.get("id")} by {author_of(c)}: {first_line(c)}' if c
+          else 'launch-fleet: none')
     if on_ticket:
-        fleet = [c for c in trusted if first_line(c).startswith('launch-fleet:')]
-        other = [c for c in trusted if c not in fleet]
-        for label, found in (('record', other), ('launch-fleet', fleet)):
-            c = found[-1] if found else None
-            print(f'{label}: comment {c.get("id")} by {author_of(c)}: {first_line(c)}' if c
-                  else f'{label}: none')
         print(f'ignored: {len(items) - len(trusted)} comment(s) not by a record author')
         return 0
     pr = gh_json(['api', f'repos/{repo}/pulls/{n}'], f'pull request #{n}')
     head = (pr.get('head') or {}).get('sha') if isinstance(pr, dict) else None
     if not isinstance(head, str) or not re.fullmatch(r'[0-9a-f]{40}', head):
         raise Unreadable(f'cannot read the head of pull request #{n}')
-    verdicts = [(c, VERDICT.fullmatch(first_line(c))) for c in trusted]
-    verdicts = [(c, m) for c, m in verdicts if m]
+    verdicts = [(i, c, VERDICT.fullmatch(first_line(c))) for i, c in enumerate(trusted)]
+    verdicts = [(i, c, m) for i, c, m in verdicts if m]
+    verdict = None
     if verdicts:
-        c, m = verdicts[-1]
+        i, c, m = verdicts[-1]
+        verdict = (i, c, m.group(2))
         current = 'yes' if m.group(2) == head else f'no ({head})'
         print(f'verdict: comment {c.get("id")} by {author_of(c)}: {m.group(1)} at {m.group(2)}, '
               f'current head: {current}')
-        nxt = [l.strip() for l in str(c.get('body', '')).splitlines() if l.strip().startswith('Next:')]
-        print('next: ' + (nxt[-1] if nxt else 'none'))
+        nxt = last_line(c)
+        print('next: ' + (nxt if nxt.startswith('Next:') else 'none'))
     else:
         print('verdict: none')
-    decisions = [c for c in trusted if first_line(c).startswith('**Orchestrator decision:**')]
+    decisions = [(i, c) for i, c in enumerate(trusted)
+                 if first_line(c).startswith('**Orchestrator decision:**')]
     if decisions:
-        c = decisions[-1]
-        m = DECISION.match(first_line(c))
-        if not m:
-            bound = 'no: not a decision line'
-        elif m.group(3) != head:
-            bound = f'no: {m.group(3)} is not the current head'
-        else:
-            parked = set()
-            for v, vm in verdicts:
-                if vm.group(2) == m.group(3):
-                    nxt = PARK.search(str(v.get('body', '')))
-                    parked = ids(nxt.group(1)) if nxt else set()
-            missing = sorted(ids(m.group(2)) - parked)
-            bound = f'no: {", ".join(missing)} was not parked at {head}' if missing else 'yes'
-        summary = f'{m.group(1)} {m.group(2)} at {m.group(3)}' if m else first_line(c)
-        print(f'decision: comment {c.get("id")} by {author_of(c)}: {summary}, bound: {bound}')
+        reasons = [(c, binding(c, i, verdict, head)) for i, c in decisions]
+        c, why = next(((c, why) for c, why in reversed(reasons) if why is None), reasons[-1])
+        m = DECISION.fullmatch(first_line(c))
+        summary = f'{m.group(1) or m.group(2)} {m.group(3)} at {m.group(4)}' if m else first_line(c)
+        print(f'decision: comment {c.get("id")} by {author_of(c)}: {summary}, '
+              f'bound: {"yes" if why is None else "no: " + why}')
     else:
         print('decision: none')
     print(f'ignored: {len(items) - len(trusted)} comment(s) not by a record author')
@@ -429,7 +461,8 @@ def cmd_post_receipt(repo, pr, receipt, ref):
 
 def main(argv):
     try:
-        args, flags = [], {'--base': [], '--supporting': [], '--owned': [], '--fleet-ref': []}
+        args, flags = [], {'--base': [], '--supporting': [], '--owned': [], '--fleet-ref': [],
+                           '--comment': []}
         ticket_mode, rest = False, list(argv)
         if '--' in rest:
             rest, command = rest[:rest.index('--')], rest[rest.index('--') + 1:]
@@ -454,8 +487,11 @@ def main(argv):
         if name == ['scope'] and len(args) == 3 and not ticket_mode and len(flags['--base']) <= 1:
             base = flags['--base'][0] if flags['--base'] else 'origin/main'
             return cmd_scope(args[1], int(args[2]), base, flags['--supporting'], flags['--owned'])
-        if name == ['records'] and len(args) == 3:
-            return cmd_records(args[1], int(args[2]), ref, ticket_mode)
+        if name == ['records'] and len(args) == 3 and len(flags['--comment']) <= 1:
+            named = flags['--comment'][0] if flags['--comment'] else None
+            if named is not None and not named.isdigit():
+                raise ValueError
+            return cmd_records(args[1], int(args[2]), ref, ticket_mode, named)
         if name == ['author'] and len(args) == 1:
             return cmd_author()
         if name == ['push'] and len(args) == 2 and command:

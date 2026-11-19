@@ -53,7 +53,10 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-on1.py'],
                      ['sh', 'skills/launch-fleet/scripts/test-loop.sh'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-limit-replacement.py'],
-                     ['python3', '-I', 'skills/launch-fleet/scripts/test-limit-recovery.py']],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-limit-recovery.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-post.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-merge.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-brief.py']],
 }
 
 # The skills not adapted from Matt Pocock's, each with the source line its

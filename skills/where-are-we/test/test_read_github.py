@@ -224,5 +224,101 @@ class ReadGithub(unittest.TestCase):
             for name in ENDPOINTS})
 
 
+RUNS = {
+    'queued': 'repos/{owner}/{repo}/actions/runs?status=queued&per_page=100',
+    'in_progress': 'repos/{owner}/{repo}/actions/runs?status=in_progress&per_page=100',
+}
+
+
+def run_record(n, status):
+    # Synthetic REST-shaped run with invented values and fields the view drops.
+    return {'id': n, 'name': f'check {n}', 'status': status, 'head_sha': f'synthetic-head-{n}',
+            'head_branch': f'branch-{n}', 'html_url': 'NESTED_SENTINEL', 'head_commit': {'message': 'PRIVATE_BODY_SENTINEL'}}
+
+
+def run_pages(status, numbers, size=2):
+    runs = [run_record(n, status) for n in numbers]
+    return [{'total_count': len(runs), 'workflow_runs': runs[i:i + size]}
+            for i in range(0, max(len(runs), 1), size)]
+
+
+def compact_run(n, status):
+    return {'id': n, 'name': f'check {n}', 'status': status, 'head_sha': f'synthetic-head-{n}'}
+
+
+class ReadRuns(unittest.TestCase):
+    """`read-github.py runs`: queued and in-progress CI runs, every page (#1186)."""
+
+    def run_runs(self, answers, fail=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'gh').write_text(FAKE)
+            (root / 'gh').chmod(0o755)
+            (root / 'answers.json').write_text(json.dumps(answers))
+            env = dict(os.environ, PATH=tmp + os.pathsep + os.environ['PATH'],
+                       ANSWERS=str(root / 'answers.json'), CALLS=str(root / 'calls'),
+                       OPENWIZ_STATE_DIR=str(root / 'no-installation'))
+            if fail:
+                env['FAIL_ENDPOINT'] = fail
+            result = subprocess.run([sys.executable, '-B', str(SCRIPT), 'runs'], cwd=root,
+                                    env=env, capture_output=True, text=True)
+            calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()] if (root / 'calls').exists() else []
+            return result, calls
+
+    def test_runs_reads_every_page_of_both_states(self):
+        result, calls = self.run_runs({RUNS['queued']: run_pages('queued', [1, 2, 3]),
+                                       RUNS['in_progress']: run_pages('in_progress', [])})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [['api', '--method', 'GET', '--paginate', '--slurp', endpoint]
+                                 for endpoint in RUNS.values()])
+        self.assertNotIn('SENTINEL', result.stdout)
+        self.assertEqual(json.loads(result.stdout), {
+            'queued': {'state': 'read', 'items': [compact_run(n, 'queued') for n in (1, 2, 3)]},
+            'in_progress': {'state': 'read', 'items': []},
+        })
+
+    def test_an_unread_run_state_is_unconfirmed_not_empty(self):
+        good = run_pages('in_progress', [4])
+        for name, answer, fail, reason in [
+            ('failed read', run_pages('queued', [1]), RUNS['queued'], 'gh exited 7'),
+            ('list pages', [[run_record(1, 'queued')]], None, 'invalid paginated JSON'),
+            ('no runs key', [{'total_count': 0}], None, 'invalid paginated JSON'),
+            ('bad record', [{'total_count': 1, 'workflow_runs': [{'id': '1'}]}], None, 'invalid source record'),
+        ]:
+            with self.subTest(name):
+                result, _ = self.run_runs({RUNS['queued']: answer, RUNS['in_progress']: good}, fail=fail)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                data = json.loads(result.stdout)
+                self.assertEqual(data.get('queued'), {'state': 'unconfirmed', 'reason': reason})
+                self.assertEqual(data.get('in_progress'), {'state': 'read', 'items': [compact_run(4, 'in_progress')]})
+
+
+class NoInstallationRoute(unittest.TestCase):
+    """The installation read route is removed (#1238); gh is the only route (#1186)."""
+
+    def test_a_configured_installation_still_reads_through_gh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'gh').write_text(FAKE)
+            (root / 'gh').chmod(0o755)
+            answers = {endpoint: [[copy.deepcopy(item)] for item in SOURCES[name]]
+                       for name, endpoint in ENDPOINTS.items()}
+            (root / 'answers.json').write_text(json.dumps(answers))
+            marker = root / 'state' / 'service' / 'github-reads' / 'installation.json'
+            marker.parent.mkdir(parents=True)
+            marker.write_text('{}')
+            env = dict(os.environ, PATH=tmp + os.pathsep + os.environ['PATH'],
+                       ANSWERS=str(root / 'answers.json'), CALLS=str(root / 'calls'),
+                       OPENWIZ_STATE_DIR=str(root / 'state'), GH_REPO='example-org/example-repo')
+            result = subprocess.run([sys.executable, '-B', str(SCRIPT)], cwd=root,
+                                    env=env, capture_output=True, text=True)
+            calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()] if (root / 'calls').exists() else []
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(calls, [['api', '--method', 'GET', '--paginate', '--slurp', endpoint]
+                                 for endpoint in ENDPOINTS.values()])
+        self.assertEqual(json.loads(result.stdout), {
+            name: {'state': 'read', 'items': EXPECTED[name]} for name in ENDPOINTS})
+
+
 if __name__ == '__main__':
     unittest.main()

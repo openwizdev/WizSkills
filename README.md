@@ -138,4 +138,4 @@ test -f "$HOME/wizskills/skills/build-ticket/SKILL.md" && echo ok
 ## Licence
 
 [LICENSE](LICENSE) collects the upstream licence notices the skills carry.
-Each adapted skill also keeps its notice in its own `SKILL.md`.
+Each adapted skill also keeps its notice in a `NOTICE.md` beside its `SKILL.md`.

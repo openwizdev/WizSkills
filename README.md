@@ -116,5 +116,6 @@ test -f "$HOME/wizskills/skills/build-ticket/SKILL.md" && echo ok
 
 ## Licence
 
-[LICENSE](LICENSE) collects the upstream licence notices the skills carry.
+WizSkills is licensed under Apache-2.0: see [LICENSE](LICENSE).
+[NOTICE](NOTICE) collects the upstream licence notices the skills carry.
 Each adapted skill also keeps its notice in a `NOTICE.md` beside its `SKILL.md`.

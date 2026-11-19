@@ -121,6 +121,18 @@ Run `first_fleet.py progress --spec <N> --openwiz <absolute path to openwiz>` wh
 
 Done when the user has seen their agents' progress.
 
+## Doctor
+
+When setup or a fleet seems stuck, or the user asks whether setup is right, run the doctor from the project's clone:
+
+```sh
+python3 -I <this skill's folder>/scripts/doctor.py --repo <owner>/<name> --state-dir <state> --build <build> --openwiz "$openwiz" [--driver <the driver this machine runs>]
+```
+
+In order, it checks the labels, the App, that the acting login is a record author, the harness, the driver's `version` and the skills, through the checks that already exist. It only reads. Show each problem line as it is; its `Fix:` is the command that fixes it. A sign-in fix is the user's to run: show it, never run it. Exit 0 prints one all-clear line; 5 prints the problems.
+
+Done when it prints all clear, or the user has each fix.
+
 ## Recovery and removal
 
 If setup does not open, run `install status --root <root>` and `open` again; a failed bind never proves another page is OpenWiz's. To remove OpenWiz, stop only its own setup server and delete `<root>`; keep `<state>` unless the user asks. Removal revokes nothing: show the user how to uninstall the App or remove repositories from it, delete any phone-access tunnel or rule, and delete the fleet loops in CloudRoom. Never remove or revoke anything without their yes.

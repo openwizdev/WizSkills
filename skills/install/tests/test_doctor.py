@@ -163,12 +163,14 @@ class Doctor(unittest.TestCase):
     # catches: a clean setup that still prints noise, or no single all-clear line.
     def test_clean_setup_prints_one_all_clear_line(self):
         self.assertEqual(self.lines(self.s.run(), 0),
-                         ['Doctor: all clear: labels, App, record author, harness, driver and skills.'])
+                         ['Doctor: all clear: labels, App, record author, harness listed (its sign-in is not provable yet), '
+                          'driver and skills.'])
 
     # catches: a clean setup that reads as clear without saying the driver went unchecked.
     def test_no_driver_is_said_on_the_all_clear_line(self):
         self.assertEqual(self.lines(self.s.run(driver=False), 0),
-                         ['Doctor: all clear: labels, App, record author, harness and skills; no driver given.'])
+                         ['Doctor: all clear: labels, App, record author, harness listed (its sign-in is not provable yet) '
+                          'and skills; no driver given.'])
 
     # catches: a missing tracker label passing, or a fix that isn't the exact gh command.
     def test_missing_label(self):
@@ -176,6 +178,18 @@ class Doctor(unittest.TestCase):
         self.assertEqual(self.only(self.s.run()),
                          '1. Labels: needs-info is not in the tracker. Fix: gh label create needs-info --repo %s'
                          % REPO)
+
+    # catches: a printed fix a shell splits or expands: run it through sh and read the argv gh gets.
+    def test_printed_label_fix_runs_as_printed(self):
+        odd = "needs info $HOME 'x'"
+        write(self.s.checkout / 'docs/agents/triage-labels.md', TRIAGE.replace('| `needs-info` | `needs-info` |',
+                                                                              '| `needs-info` | `%s` |' % odd))
+        line = self.only(self.s.run())
+        self.assertTrue(line.startswith('1. Labels: '), line)
+        fix = line.split('. Fix: ', 1)[1]
+        env = {'PATH': '%s:/usr/bin:/bin' % (self.s.fake / 'bin'), 'FAKE_DIR': str(self.s.fake), 'HOME': 'expanded'}
+        subprocess.run(['sh', '-c', fix], env=env, capture_output=True)
+        self.assertEqual(self.s.gh_calls()[-1], ['label', 'create', odd, '--repo', REPO])
 
     # catches: an unmapped triage role (settings.py's own check) going unreported.
     def test_unmapped_label_role(self):
@@ -259,8 +273,9 @@ class Doctor(unittest.TestCase):
     def test_skills_not_installed(self):
         (self.s.build / 'runtime/skills/grill/SKILL.md').unlink()
         self.assertEqual(self.only(self.s.run()),
-                         '6. Skills: the build at %s is missing its skills. Fix: python3 -I <openwiz>/tools/install/'
-                         'install install --assets <download folder> --target <target> --root <root>' % self.s.build)
+                         '6. Skills: the build at %s is missing its skills. Fix: python3 -I %s/tools/install/'
+                         'install install --assets <download folder> --target <target> --root <root>'
+                         % (self.s.build, self.s.openwiz))
 
     # catches: problems printed out of order, or the first one hiding the rest.
     def test_every_problem_in_order(self):

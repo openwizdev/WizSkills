@@ -128,6 +128,16 @@ def latest(source):
     return {"kind": kind, "risk": risk} | fields, wording
 
 
+
+def saved_answers(wording, questions):
+    settled = set()
+    for line in wording:
+        if line.startswith("Settled: "):
+            labels = line.split(". Open:", 1)[0].removeprefix("Settled: ")
+            settled.update(re.findall(r"\b(" + QUESTION + r")\b", labels.split(" (", 1)[0]))
+    return [item["id"] for item in questions if item["id"] in settled]
+
+
 def parse_comment(body):
     found = []
     for match in FENCE.finditer(body):
@@ -205,12 +215,14 @@ class Grill:
             repo = self.api(self.base)
         except (subprocess.SubprocessError, ValueError, Refusal, OSError):
             raise Refusal("repository privacy could not be verified") from None
-        require(repo.get("private") is True and repo.get("full_name", "").lower() == self.repo.lower(),
+        require(repo.get("private") is True and repo.get("visibility") == "private"
+                and repo.get("full_name", "").lower() == self.repo.lower(),
                 "repository privacy could not be verified")
 
     def read_head(self):
         pr = self.api(f"{self.base}/pulls/{self.pr}")
         require(type(pr.get("number")) is int and pr["number"] == self.pr
+                and pr["head"]["repo"]["full_name"].lower() == self.repo.lower()
                 and re.fullmatch(r"[a-f0-9]{40}", pr["head"]["sha"]), "unreadable private PR head")
         self.is_open = pr.get("state") == "open"
         return pr["head"]["sha"]
@@ -253,12 +265,19 @@ class Grill:
         validate(record, self.file)
         return record, wording
 
+    def status(self):
+        line = self.source.split("\n")[2]
+        matches = re.findall(r"Status: \*\*(open|parked|confirmed)\*\*", line)
+        require(line.count("Status:") == 1 and len(matches) == 1, "unreadable grill status")
+        return matches[0]
+
     def publish(self, request_id):
         require(re.fullmatch(IDENTIFIER, request_id), "invalid request id")
         record, _ = self.proposal(request_id)
         self.check_head()
         comment_id = self.list_request(request_id)
         if comment_id is None:
+            require(self.status() == "open", "grill is not open")
             self.privacy()
             self.check_head()
             self.remember_attempt(request_id)
@@ -269,9 +288,10 @@ class Grill:
             comment_id = self.list_request(request_id)
         require(comment_id is not None, "write unresolved; reconcile the same request id")
         _, _, _, saved = self.comment(comment_id)
-        require(saved == record, "existing request differs; inspect before continuing")
+        require(saved["fingerprint"] == record["fingerprint"] and saved["status"] != "superseded",
+                "existing request differs; inspect before continuing")
         self.check_head()
-        print(f"verified request {comment_id}")
+        print(f"verified request {comment_id} ({saved['status']})")
 
     def remember_attempt(self, request_id):
         # Common Git dir covers linked worktrees. Record the intent before POST.
@@ -290,10 +310,10 @@ class Grill:
         except FileExistsError:
             raise Refusal("prior write unresolved; reconcile the same request id") from None
 
-    def verify_current(self, record):
+    def verify_current(self, record, comment_id):
         current, wording = self.proposal(record["id"])
         require(record["fingerprint"] == current["fingerprint"], "request is stale")
-        require(self.list_request(record["id"]) is not None, "request identity is unresolved")
+        require(self.list_request(record["id"]) == comment_id, "request identity is unresolved")
         return wording
 
     def match_answer(self, message, output):
@@ -318,9 +338,12 @@ class Grill:
             expected.update(round=record["round"], question_id=locator)
         require(compact(raw).encode() == context and compact(raw) == compact(expected),
                 "context does not match the saved private request")
-        require(record["status"] == "open" and record["risk"] != "unknown",
+        require(self.status() == "open" and record["status"] == "open" and record["risk"] != "unknown",
                 "request is closed or saved risk is unknown")
-        self.verify_current(record)
+        wording = self.verify_current(record, comment_id)
+        if record["kind"] == ROUND:
+            require(locator not in saved_answers(wording, record["questions"]),
+                    "question already has a saved answer")
         self.check_head()
         payload.decode()
         fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -332,23 +355,17 @@ class Grill:
         target = self.comment(comment_id)
         record = target[3]
         require(record["status"] in ("open", "resolved"), "request is superseded")
-        wording = self.verify_current(record)
+        wording = self.verify_current(record, comment_id)
         require(any(line.startswith(">") for line in wording), "exact reply is not saved")
         if record["kind"] == ROUND:
             ids = [item["id"] for item in record["questions"]]
-            settled = set()
-            for line in wording:
-                if line.startswith("Settled: "):
-                    labels = line.split(". Open:", 1)[0].removeprefix("Settled: ")
-                    settled.update(re.findall(r"\b(" + QUESTION + r")\b", labels.split(" (", 1)[0]))
-            answered = [key for key in ids if key in settled]
+            answered = saved_answers(wording, record["questions"])
             require(requested == answered and set(record["answered"]) <= set(answered),
                     "answer ids do not match saved progress")
             updated = record | {"answered": answered,
                                 "status": "resolved" if answered == ids else "open"}
         else:
-            status = self.source.split("\n")[2]
-            require(requested == ["confirmed"] and "Status: **confirmed** by " in status,
+            require(requested == ["confirmed"] and self.status() == "confirmed",
                     "latest summary confirmation is not saved")
             updated = record | {"status": "resolved"}
         self.patch(comment_id, target, updated, open_pr=True)

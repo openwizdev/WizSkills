@@ -40,8 +40,11 @@ if url == repo:
                 "visibility": s["visibility"]}
 elif url == repo + "/pulls/7":
     response = {"number": 7, "state": s["pr_state"], "head": {"sha": s["head"], "repo": {"full_name": s["head_repo"]}}}
-elif url == repo + "/contents/" + s["file"] + "?ref=" + s["head"]:
-    response = {"encoding": "base64", "content": s["source"], "path": s["file"]}
+elif url.startswith(repo + "/contents/") and url.endswith("?ref=" + s["head"]):
+    file = url.removeprefix(repo + "/contents/").split("?ref=")[0]
+    if file not in (s["file"], s.get("other_file")):
+        sys.exit(4)
+    response = {"encoding": "base64", "content": s["source"], "path": file}
 elif url == repo + "/issues/7/comments":
     if args[1:3] == ["-X", "POST"]:
         s["writes"] += 1
@@ -94,9 +97,9 @@ class Records(unittest.TestCase):
         before = self.state() if self.fixture.exists() else {}
         self.fixture.write_text(json.dumps(before | changes))
 
-    def call(self, action, *args):
+    def call(self, action, *args, file=FILE):
         return subprocess.run(
-            [sys.executable, "-I", str(HELPER), REPO, "7", FILE, action, *args],
+            [sys.executable, "-I", str(HELPER), REPO, "7", file, action, *args],
             cwd=self.root, capture_output=True,
             env=os.environ | {"FIXTURE": str(self.fixture),
                               "PATH": str(self.root) + os.pathsep + os.environ["PATH"]},
@@ -283,14 +286,11 @@ class Records(unittest.TestCase):
         payload = b"N2 yes\nP2 yes"
         other = str(self.root / "other-answer")
         message = self.contextual(record, payload)
-        result = subprocess.run(
-            [sys.executable, "-I", str(HELPER), REPO, "7",
-             "docs/grills/2099-01-01-other.md", "match", message, other],
-            cwd=self.root, capture_output=True,
-            env=os.environ | {"FIXTURE": str(self.fixture),
-                              "PATH": str(self.root) + os.pathsep + os.environ["PATH"]},
-        )
+        other_file = "docs/grills/2099-01-01-other.md"
+        self.write_state(other_file=other_file)
+        result = self.call("match", message, other, file=other_file)
         self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn(b"decision identity", result.stderr)
         self.assertFalse(Path(other).exists())
         output = self.root / "own-answer"
         result = self.call("match", message, str(output))

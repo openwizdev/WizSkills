@@ -8,7 +8,7 @@ Read this when a review, a CI failure, a conflict with `main` or an orchestrator
 | CI fails on your green head | `gh run view <run> --log-failed`, reproduce, fix, rerun only the failed checks, push a new green commit. Not a review round |
 | `main` moves with no conflict | Nothing: CI tests the merge ref, so an approved head stays put |
 | `main` conflicts, or the orchestrator asks | `git fetch origin && git merge origin/main`; never rebase or force-push. In a `(shared)` file keep other tickets' lines as `main` has them. Rerun the scoped checks, push a new green commit, and say on the pull request what changed in approved work |
-| An answer to your `needs-info` | Remove `needs-info` and resume |
+| An answer to your `needs-info` | Write your status `working` (it clears `needs-info`) and resume |
 | APPROVE naming your exact head | Nothing. It merges by the project's rules |
 | The pull request merged or closed | `room-cli thread archive --self`. This thread takes no other ticket |
 

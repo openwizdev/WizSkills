@@ -10,6 +10,10 @@
 //   lease.mjs due <run> scheduled|hunter  (read-only: must this wake post a checkpoint?)
 //   lease.mjs record <run> <index-file>            (a record without a lease of its own: an off switch,
 //                                                   a lost lease; posted as it is, lease unchanged)
+//   lease.mjs switch                      (read-only: on or off, and every `huntr kind approved:` line)
+//   lease.mjs pace <timezone> <streak> <last-empty-at>   (no GitHub: may a hunt start today?)
+//   lease.mjs publish <run> <record.json> <index-file>   (post the record's numbered parts, read them
+//                                                   back, verify them and write the index that links them)
 // Exit 0 prints {"holder": ...} as JSON; exit 2 is a refusal, a lost lease or an unconfirmed
 // write, with its reason on stderr. Claims and refusals before a post write nothing.
 import { randomBytes } from 'node:crypto';
@@ -17,6 +21,7 @@ import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const MINUTES = 45;
 const RUN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
@@ -100,12 +105,73 @@ function post(repo, issue, body, before) {
   if (!mine) fail('lease write unconfirmed on read-back; run status before retrying');
   return {after, mine};
 }
+// The switch: the newest comment whose first line starts `huntr:` decides; only `huntr: on`, optionally
+// followed by a spaced dash and reason, is on. Kind approvals are listed by their first line.
+function switchState(list) {
+  const firsts = list.map(c => ({comment: c.id, line: c.body.split(/\r?\n/, 1)[0]}));
+  const line = firsts.filter(f => f.line.startsWith('huntr:')).at(-1)?.line ?? null;
+  return {switch: line?.match(/^huntr: (on|off)(?:\s+[—–-]\s.*)?$/)?.[1] === 'on' ? 'on' : 'off', line,
+    kinds: firsts.filter(f => f.line.startsWith('huntr kind approved:'))};
+}
+// Two consecutive empty hunts pause hunting until the next calendar day in the project's timezone.
+function pace(timezone, streak, lastEmpty) {
+  const ask = what => fail(`unknown ${what}: ask on the tracking issue`);
+  let day;
+  try { day = new Intl.DateTimeFormat('en-CA', {timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit'}); }
+  catch { ask('timezone'); }
+  if (!timezone) ask('timezone');
+  if (!/^(0|[1-9][0-9]*)$/.test(streak)) ask('empty-hunt streak');
+  const last = Date.parse(lastEmpty);
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(lastEmpty) || Number.isNaN(last)) ask('last empty hunt time');
+  if (Number(streak) < 2) return {hunt: true};
+  const lastDay = day.format(last);
+  if (day.format(Date.now()) > lastDay) return {hunt: true};
+  const [y, m, d] = lastDay.split('-').map(Number);
+  return {hunt: false, until: new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10)};
+}
+// Post the durable record as numbered parts (manifest.mjs pack), each read back by id. An exact part
+// already on the issue is reused, so a rerun after a lost response never duplicates one. The parts
+// read back must unpack to the same record before the index linking them is written.
+function publish(repo, issue, run, recordFile, indexFile) {
+  const manifest = fileURLToPath(new URL('./manifest.mjs', import.meta.url));
+  const node = (args, what) => {
+    try { return JSON.parse(execFileSync(process.execPath, [manifest, ...args], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024})); }
+    catch { fail(what); }
+  };
+  let record;
+  try { record = JSON.parse(readFileSync(recordFile, 'utf8')); } catch { fail('unreadable record file'); }
+  if (record?.run !== run) fail(`the record is not run ${run}'s`);
+  const packed = node(['pack', recordFile], 'the record cannot be packed');
+  let list = comments(repo, issue);
+  const ids = [];
+  for (const [i, body] of packed.comments.entries()) {
+    const found = list.find(c => c.body.trimEnd() === body.trimEnd());
+    if (found) { ids.push(found.id); continue; }
+    try { ({after: list} = post(repo, issue, body, list.at(-1)?.id ?? 0)); }
+    catch { fail(`part ${i + 1}/${packed.comments.length} unconfirmed; rerun publish to reconcile`); }
+    ids.push(list.find(c => c.body.trimEnd() === body.trimEnd()).id);
+  }
+  const back = comments(repo, issue);
+  const bodies = ids.map(id => back.find(c => c.id === id)?.body ?? fail('a posted part is missing on read-back'));
+  const dir = mkdtempSync(join(tmpdir(), 'huntr-publish-'));
+  try {
+    writeFileSync(join(dir, 'readback.json'), JSON.stringify(bodies));
+    const verified = node(['unpack', join(dir, 'readback.json'), packed.sha256], 'the read-back parts do not verify');
+    if (JSON.stringify(verified) !== JSON.stringify(record)) fail('the read-back record differs');
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+  const total = ids.length;
+  writeFileSync(indexFile, [`Hunt record index for ${run}: ${total} parts, sha256 ${packed.sha256}`, '',
+    ...ids.map((id, i) => `- part ${i + 1}/${total}: https://github.com/${repo}/issues/${issue}#issuecomment-${id}`), ''].join('\n'));
+  return {sha256: packed.sha256, parts: total, index: indexFile};
+}
 function main() {
   const [command, ...args] = process.argv.slice(2);
-  const shapes = {id: 0, status: 0, claim: 1, renew: 2, release: 2, due: 2, record: 2};
-  if (!Object.hasOwn(shapes, command) || args.length !== shapes[command]) fail('usage: lease.mjs id | status | claim <run> | renew <run> <result-file> | release <run> <result-file> | due <run> scheduled|hunter | record <run> <index-file>');
+  const shapes = {id: 0, status: 0, claim: 1, renew: 2, release: 2, due: 2, record: 2, switch: 0, pace: 3, publish: 3};
+  if (!Object.hasOwn(shapes, command) || args.length !== shapes[command]) fail('usage: lease.mjs id | status | claim <run> | renew <run> <result-file> | release <run> <result-file> | due <run> scheduled|hunter | record <run> <index-file> | switch | pace <timezone> <streak> <last-empty-at> | publish <run> <record.json> <index-file>');
   // No GitHub or Cloudroom identity is needed, even when the switch is off.
   if (command === 'id') return `huntr-${new Date().toISOString().slice(0, 19).replace(/[-:]/g, '')}Z-${randomBytes(12).toString('hex')}`;
+  if (command === 'pace') return pace(...args);
+  if (command === 'switch') return switchState(comments(repository(), switchIssue()));
   const [run] = args;
   if (command !== 'status' && (!RUN.test(run) || run.startsWith('thr_'))) fail('unreadable run id');
   if (command === 'due' && !['scheduled', 'hunter'].includes(args[1])) fail('unreadable wake kind: scheduled or hunter');
@@ -118,6 +184,7 @@ function main() {
   // A plain record must never read as a switch, lease or kind-approval line.
   if (command === 'record' && /^huntr[ :]/.test(text.split(/\r?\n/, 1)[0])) fail('a record\'s first line may not start with huntr');
   const issue = switchIssue(), repo = repository();
+  if (command === 'publish') return publish(repo, issue, run, args[1], args[2]);
   const before = comments(repo, issue);
   const now = current(holderOf(before), Date.now());
   if (command === 'status') return {holder: now};

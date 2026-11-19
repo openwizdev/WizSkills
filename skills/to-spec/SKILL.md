@@ -1,6 +1,7 @@
 ---
 name: to-spec
 description: Turn a confirmed grill into a spec issue, run to-tickets on it, and make the spec's narrated steering video. Use when a grill is confirmed or the owner steers a spec through its video. No human step between grill and fleet.
+version: 0.2.0
 ---
 
 # To spec

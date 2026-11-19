@@ -1,0 +1,14 @@
+$ python3 -I check/test_versions.py
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.000s
+
+OK
+$ python3 -I check/test_changesets.py
+...............
+----------------------------------------------------------------------
+Ran 15 tests in 2.502s
+
+OK
+$ python3 -I check/changesets.py check --base origin/main   # WS18 itself: version lines only
+changeset check: pass (no skill changed)

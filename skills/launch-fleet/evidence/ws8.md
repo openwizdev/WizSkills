@@ -8,23 +8,24 @@ the identity contract. After the rewrite that branch also reads the builders
 reference (the start's probe and outcome) and the identity reference. Scripts
 only run on that branch, so their source is never loaded.
 
-| Evidence | WS1 baseline `89fc285` | Main before WS8 `2beb747` | After |
+| Evidence | WS1 baseline `89fc285` | Main before WS8 `6a57abd` | After |
 | --- | ---: | ---: | ---: |
-| Entrypoint lines | 720 | 744 | 150 |
-| Entrypoint words | 18,244 | 16,677 | 2,908 |
-| Entrypoint static tokens | 27,561 | 25,231 | 4,522 |
-| Static loaded-path tokens, `launch-fleet.wake` | 43,331 | 41,001 | 23,220 |
+| Entrypoint lines | 720 | 722 | 128 |
+| Entrypoint words | 18,244 | 16,478 | 2,719 |
+| Entrypoint static tokens | 27,561 | 24,964 | 4,267 |
+| Static loaded-path tokens, `launch-fleet.wake` | 43,331 | 40,734 | 22,965 |
 | Observed workflow outcome | Unknown | Unknown | Unknown |
 | Observed workflow token counts and wall time | Unknown | Unknown | Unknown |
 
-The main column counts the same WS1 path at the commit this branch starts
-from, with the same tokenizer.
+Result: pass for the static size (the WS1 path falls from 43,331 to 22,965
+tokens, 47% less); unknown for an observed workflow.
 
-The entrypoint is 150 lines, past the guide's 50 to 100. Matt Pocock's notice
-is 20 of them, and the checker requires it word for word until WS15 moves it.
-The Records table is 35: every wake writes those records, and the kept public
-record case (`test-records.py`) reads the table from SKILL.md and checks it
-word for word against the open-development contract. The rest keep the
+The main column counts the same WS1 path at the main this branch last merged
+(after WS13 and the notice move), with the same tokenizer.
+
+The entrypoint is 128 lines, past the guide's 50 to 100. The Records section
+is 38 lines: every wake writes those records, and the kept public record case
+(`test-records.py`) reads the table from SKILL.md and checks it word for word against the open-development contract. The rest keep the
 approval, record, privacy, role, no-waiting and action-gate guards visible,
 the merge steps whose order is itself a guard, and the sections other skills
 cite by name ("Fleet threads", "Starting one", "Each wake", "GitHub identity",
@@ -44,7 +45,7 @@ To regenerate it from the WizSkills root, run
 
 Each other line now loads the entrypoint plus only its own reference
 (for example `references/reviews.md` for a findings line), where before every
-line loaded the whole 25,231-token entrypoint.
+line loaded the whole 24,964-token entrypoint.
 
 ## SK-D: mechanics in scripts
 

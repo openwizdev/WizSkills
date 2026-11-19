@@ -1,5 +1,5 @@
 {
-  "commit": "59a3e479a57ca43bbec8cba42198918f3c431c57",
+  "commit": "a11849b3aa9ceeb1d265c6db4d6ec5615119e399",
   "workflows": {
     "launch-fleet.wake": [
       "skills/launch-fleet/SKILL.md",

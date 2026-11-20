@@ -1,7 +1,7 @@
 # OpenWiz decisions contract, version 1 (`openwiz.decisions.v1`)
 
 Structured decision requests posted by the orchestrator, plus the read-only
-`GET /api/v1/decisions` response (0.0.11, #648, U1 #651). The schema is
+decisions response (0.0.11, #648, U1 #651). The schema is
 [decisions.v1.schema.json](decisions.v1.schema.json). **Contract only:** U4 builds
 posting, U5 reading and U6 cards/sends. Inline synthetic tests in
 `tests/checks/plan_decisions_schema_conformance.rs` prove parsed shapes only.
@@ -311,7 +311,7 @@ invalidates it. Risky records confirm twice. Repeats, held keys, reload and retr
 reuse the existing operation id and one-send guarantees. These are U6's runtime
 proofs. A sent/uncertain answer remains unresolved until the orchestrator saves it.
 
-## Coverage, freshness, route and proof limits
+## Coverage, freshness and proof limits
 
 Coverage/gap/freshness forms and the 70,000 ms oldest-required-source threshold
 are as in [plan.v1](plan.v1.md#coverage-and-freshness) and `cockpit.v1`. Source
@@ -322,14 +322,7 @@ coverage/freshness; target availability has its separate part. Only complete fre
 empty record coverage permits “no decisions waiting”; no target does not hide the
 records or itself turn their discovery into a confident empty list.
 
-Exact `GET /api/v1/decisions`, no query (even `?`) or body. Existing API Host,
-framing, method, security headers, `no-store`, route-only sanitized logs,
-transport errors, shared two read slots, five-second slot wait and forty-second
-request deadline apply as for the plan route. Other methods: `405`, `Allow: GET`;
-HEAD has no body/Content-Length. Valid complete/partial/stale/empty envelopes are
-`200`; slot exhaustion `503` with Retry-After; deadline `504`, unfinished read
-retaining its slot. In-flight identical reads share only that run; later reads
-read anew. The route never sends, saves an answer, edits a comment or starts work.
+Reading decisions never sends, saves an answer, edits a comment or starts work.
 
 Schema conformance does not prove fencing, authorization/provenance, canonical
 hashing, question-id grammar/uniqueness, lifecycle consistency, table/graph equality,
@@ -382,10 +375,10 @@ One row per declared property; inline fact fields retain the enclosing field’s
 | `item.request.status` | Open-read filter; only status open is returned |
 | `item.subject` | GitHub issue/PR containing the comment |
 | `item.updated_at` | GitHub comment updatedAt, converted to nonnegative milliseconds |
-| `orchestrator.coverage` | Completeness of this server configuration/target verification read |
+| `orchestrator.coverage` | Completeness of this configuration/target verification read |
 | `orchestrator.freshness` | Oldest required configuration/target verification snapshot |
-| `orchestrator.target` | Existing #129 server-configured target verified to exist; null only after successful absence |
-| `orchestrator.target.known` | Positive known result of: Existing #129 server-configured target verified to exist; null only after successful absence |
+| `orchestrator.target` | Existing #129 configured target verified to exist; null only after successful absence |
+| `orchestrator.target.known` | Positive known result of: Existing #129 configured target verified to exist; null only after successful absence |
 | `plan_approval.fingerprint` | Existing plan revision-v2 SHA-256 for plan_approval; specified canonical exact-proposal SHA-256 for other variants |
 | `plan_approval.graph` | Exact blocker-to-ticket edges of that table; empty before planning |
 | `plan_approval.headline` | Exact spec changelog headline, including none for infra when applicable |
@@ -407,7 +400,7 @@ One row per declared property; inline fact fields retain the enclosing field’s
 | `response.kind` | Contract response discriminator, never a request kind |
 | `response.orchestrator` | Existing configured target and bounded verification read, with separate coverage/freshness |
 | `response.schema` | Contract constant openwiz.decisions.v1 |
-| `response.snapshot_at` | Server clock at assembly after reads |
+| `response.snapshot_at` | Clock at assembly after reads |
 | `spec_confirmation.fingerprint` | Existing plan revision-v2 SHA-256 for plan_approval; specified canonical exact-proposal SHA-256 for other variants |
 | `spec_confirmation.graph` | Exact blocker-to-ticket edges of that table; empty before planning |
 | `spec_confirmation.headline` | Exact spec changelog headline, including none for infra when applicable |
@@ -429,8 +422,8 @@ One row per declared property; inline fact fields retain the enclosing field’s
 
 The optional `decision_repositories` setting in private service settings names
 `public` and `private`, each an exact `{owner, name}` object. The roles must be
-valid and distinct under case folding. Both the standalone server and embedded
-service read `service/config.json` in the existing private state directory.
+valid and distinct under case folding. The reader reads `service/config.json`
+in the existing private state directory.
 An absent setting/file preserves today's single cwd repository. A malformed or
 unreadable setting never falls back. In pair mode, GitHub metadata must confirm
 the configured canonical identities and their public/private visibility before
@@ -439,9 +432,10 @@ read. Public spec/plan requests and private grill requests stay on their own
 role. Each subject, current-source lookup, duplicate check and answer binding
 includes its canonical repository; equal local IDs across repositories are
 separate identities. Coverage is complete only if every configured feed and its
-required source reads are complete. Private request text remains loopback only.
+required source reads are complete. Private request text is never posted on
+the public repository.
 
-Repository role names must be ordinary path components; `.` and `..` are refused. Settings are read at server startup; restart the server after an approved setting change.
+Repository role names must be ordinary path components; `.` and `..` are refused. Settings are read once, when the reader is set up.
 
 On upgrade, an earlier web answer may be stored under a slot key without a
 repository. A matching legacy receipt or composer record blocks answers to

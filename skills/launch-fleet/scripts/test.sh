@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=835      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py
+CASES=860      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -115,6 +115,10 @@ def pr_say($n; $id; $h; $body): pull($n; .comments += [{id: $id, at: at($h), bod
 def by($n; $id; $h; $who; $body): issue($n; .comments += [{id: $id, at: at($h), author: $who, body: $body}]);
 def pr_by($n; $id; $h; $who; $body): pull($n; .comments += [{id: $id, at: at($h), author: $who, body: $body}]);
 def outsider: "synthetic-outsider";
+# KN13 (#1448): the ready-for-agent label of #$n put on at $h by $who (a login, or null
+# for GitHub'"'"'s deleted user), and its body last edited at $h by $who.
+def labelled($n; $h; $who): issue($n; .labelEvents += [{name: "ready-for-agent", at: at($h), by: $who}]);
+def body_edited($n; $h; $who): issue($n; .editedAt = at($h) | .editor = $who);
 # Each check carries the time its workflow run was created ($run): when GitHub
 # fixed the merge commit it tests (K9, #337; a re-run keeps it).
 def green: [{name: "build", status: "COMPLETED", conclusion: "SUCCESS", run: at("11:00")},
@@ -380,7 +384,7 @@ take() {
 
 # only_reads LOG...: every gh call in these logs was one of fleet.sh's reads.
 only_reads() {
-  grep -h -v -E '^(repo view|nightly runs branch=[^ ]+|commit comments [0-9a-f]{40}|contents docs/agents/(fleet|triage-labels)\.md|graphql (Specs|Merged) cursor=[0-9a-z]+|graphql Spec number=[0-9]+( size=[0-9]+)?|graphql Singles cursor=[0-9a-z]+|files [0-9]+|refs heads/room/[0-9]+-|graphql (Nodes|Blockers) count=[0-9]+|graphql Checks oid=[0-9a-f]{40} cursor=[0-9]+|graphql Item number=[0-9]+ size=(2|5)( cursor=[0-9]+)?|issue view [0-9]+ (subIssues|body|number,title,blockedBy)|issues page=[0-9]+|search issues page=[0-9]+|issue comments [0-9]+ page=[0-9]+|detail [0-9]+|dependencies [0-9]+ page=[0-9]+|repo clone|repository|user|installation repositories|sub issues [0-9]+ page=[0-9]+|timeline [0-9]+ page=[0-9]+|(check runs|status) [0-9a-f]{40}|ref heads/[A-Za-z0-9._/-]+)$' "$@" 2> /dev/null \
+  grep -h -v -E '^(repo view|nightly runs branch=[^ ]+|commit comments [0-9a-f]{40}|contents docs/agents/(fleet|triage-labels)\.md|graphql (Specs|Merged) cursor=[0-9a-z]+|graphql Spec number=[0-9]+( size=[0-9]+)?|graphql Singles cursor=[0-9a-z]+|files [0-9]+|refs heads/room/[0-9]+-|graphql (Nodes|Blockers) count=[0-9]+|graphql Writer login=[a-z0-9-]+|graphql Checks oid=[0-9a-f]{40} cursor=[0-9]+|graphql Item number=[0-9]+ size=(2|5)( cursor=[0-9]+)?|issue view [0-9]+ (subIssues|body|number,title,blockedBy)|issues page=[0-9]+|search issues page=[0-9]+|issue comments [0-9]+ page=[0-9]+|detail [0-9]+|dependencies [0-9]+ page=[0-9]+|repo clone|repository|user|installation repositories|sub issues [0-9]+ page=[0-9]+|timeline [0-9]+ page=[0-9]+|(check runs|status) [0-9a-f]{40}|ref heads/[A-Za-z0-9._/-]+)$' "$@" 2> /dev/null \
     | sed 's/^/    /' > "$tmp/odd-calls"
   if [ -s "$tmp/odd-calls" ]; then bad 'only reads' "unexpected gh calls:"; cat "$tmp/odd-calls"; else echo "ok   every gh call was one of fleet.sh's reads"; fi
 }
@@ -587,6 +591,83 @@ log_has 'GH_REPO unset: the repository comes from the clone' 1 '^repo view$'
 expect 'a merge unlocks the ticket waiting on it' 0 check.json 'merge12' -- check <<EOF
 start #13: W3: widget page (spec #10)
 EOF
+### KN13 (#1448): a start needs ready-for-agent from a maintainer and no edit since
+
+expect 'KN13: labelled by a record author, unedited: starts as before' 0 check.json 'merge12 | labelled(13; "09:00"; "Synthetic-Owner")' -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+log_has 'KN13: labelled by a record author, unedited: starts as before' 0 '^graphql Writer'
+expect 'KN13: labelled by the App, which GraphQL names without [bot]: starts' 0 check.json 'merge12 | labelled(13; "09:00"; "synthetic-factory[bot]")' -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'KN13: edited before a maintainer labelled it: starts' 0 check.json 'merge12 | body_edited(13; "08:30"; outsider) | labelled(13; "09:00"; "Synthetic-Owner")' -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'KN13: labelled by a non-maintainer: refused, once, naming who must re-approve' 0 check.json 'merge12 | labelled(13; "09:00"; outsider)' -- check <<EOF
+look #13: start refused: ready-for-agent was last added at 2026-11-01T09:00:00Z by someone who is not a maintainer; a maintainer must add it again
+EOF
+again 'KN13: the refusal recorded, nothing more' 'say(13; 1301; "11:58"; "launch-fleet: look: start refused: ready-for-agent was last added at 2026-11-01T09:00:00Z by someone who is not a maintainer; a maintainer must add it again")' -- check < /dev/null
+again 'KN13: a maintainer adds it again: starts' 'labelled(13; "11:59"; "Synthetic-Owner")' -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'KN13: labelled by a deleted user: refused' 0 check.json 'merge12 | labelled(13; "09:00"; null)' -- check <<EOF
+look #13: start refused: ready-for-agent was last added at 2026-11-01T09:00:00Z by someone who is not a maintainer; a maintainer must add it again
+EOF
+expect 'KN13: labelled by an App that is not a record author: refused' 0 check.json 'merge12 | labelled(13; "09:00"; "other-app[bot]")' -- check <<EOF
+look #13: start refused: ready-for-agent was last added at 2026-11-01T09:00:00Z by someone who is not a maintainer; a maintainer must add it again
+EOF
+log_has 'KN13: labelled by an App that is not a record author: refused' 0 '^graphql Writer'
+expect 'KN13: the newest labelling counts: a maintainer, then a non-maintainer' 0 check.json 'merge12 | labelled(13; "09:00"; "Synthetic-Owner") | labelled(13; "10:00"; outsider)' -- check <<EOF
+look #13: start refused: ready-for-agent was last added at 2026-11-01T10:00:00Z by someone who is not a maintainer; a maintainer must add it again
+EOF
+expect 'KN13: labelled by a collaborator with write access: starts' 0 check.json 'merge12 | labelled(13; "09:00"; "synthetic-writer") | .collaborators = {"synthetic-writer": "WRITE"}' -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+log_has 'KN13: labelled by a collaborator with write access: starts' 1 '^graphql Writer login=synthetic-writer$'
+expect 'KN13: labelled by a collaborator with triage access only: refused' 0 check.json 'merge12 | labelled(13; "09:00"; "synthetic-writer") | .collaborators = {"synthetic-writer": "TRIAGE"}' -- check <<EOF
+look #13: start refused: ready-for-agent was last added at 2026-11-01T09:00:00Z by someone who is not a maintainer; a maintainer must add it again
+EOF
+expect 'KN13: write access only for a longer login it matches: refused' 0 check.json 'merge12 | labelled(13; "09:00"; "synthetic-writer") | .collaborators = {"synthetic-writer-2": "ADMIN"}' -- check <<EOF
+look #13: start refused: ready-for-agent was last added at 2026-11-01T09:00:00Z by someone who is not a maintainer; a maintainer must add it again
+EOF
+expect 'KN13: an unreadable collaborator answer fails closed' 0 check.json 'merge12 | labelled(13; "09:00"; "synthetic-writer") | .collaborators = {"synthetic-writer": "WRITE"}' FAKE_GH_ERRORS=Writer -- check <<EOF
+look #13: start refused: ready-for-agent was last added at 2026-11-01T09:00:00Z by someone who is not a maintainer; a maintainer must add it again
+EOF
+expect 'KN13: a blocked ticket labelled by an outsider asks nothing' 0 check.json 'labelled(13; "09:00"; "synthetic-writer")' -- check < /dev/null
+log_has 'KN13: a blocked ticket labelled by an outsider asks nothing' 0 '^graphql Writer'
+expect 'KN13: edited by someone else after labelling: refused' 0 check.json 'merge12 | labelled(13; "09:00"; "Synthetic-Owner") | body_edited(13; "10:00"; outsider)' -- check <<EOF
+look #13: start refused: the ticket was edited at 2026-11-01T10:00:00Z, after ready-for-agent was added at 2026-11-01T09:00:00Z; a maintainer must add it again
+EOF
+again 'KN13: a maintainer adds it again after the edit: starts' 'labelled(13; "11:00"; "Synthetic-Owner")' -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'KN13: any edit after labelling refuses, a maintainer'"'"'s too' 0 check.json 'merge12 | labelled(13; "09:00"; "Synthetic-Owner") | body_edited(13; "10:00"; "Synthetic-Owner")' -- check <<EOF
+look #13: start refused: the ticket was edited at 2026-11-01T10:00:00Z, after ready-for-agent was added at 2026-11-01T09:00:00Z; a maintainer must add it again
+EOF
+expect 'KN13: the ready label pushed out of the last 20 label events: refused' 0 check.json 'merge12 | labelled(13; "09:00"; "Synthetic-Owner") | issue(13; .labelEvents += [range(10; 30) | {name: "bug", at: "2026-11-01T10:\(.):00Z"}])' -- check <<EOF
+look #13: start refused: who added ready-for-agent can't be read; a maintainer must add it again
+EOF
+expect 'KN13: the frontier leaves a refused ticket out' 0 check.json 'merge12 | labelled(13; "09:00"; outsider)' -- frontier < /dev/null
+expect 'KN13: a wake on a refused ticket refuses it too' 0 check.json 'merge12 | labelled(13; "09:00"; "Synthetic-Owner") | body_edited(13; "10:00"; outsider)' -- wake 13 <<EOF
+look #13: start refused: the ticket was edited at 2026-11-01T10:00:00Z, after ready-for-agent was added at 2026-11-01T09:00:00Z; a maintainer must add it again
+EOF
+expect 'KN13: a claim on a ticket edited since labelling withdraws' 0 check.json 'merge12 | labelled(13; "09:00"; "Synthetic-Owner") | body_edited(13; "10:00"; outsider) | say(13; 1301; "11:55"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
+withdraw #13: start refused: the ticket was edited at 2026-11-01T10:00:00Z, after ready-for-agent was added at 2026-11-01T09:00:00Z; a maintainer must add it again
+EOF
+expect 'KN13: a claim on a ticket labelled by a non-maintainer withdraws' 0 check.json 'merge12 | labelled(13; "09:00"; outsider) | say(13; 1301; "11:55"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
+withdraw #13: start refused: ready-for-agent was last added at 2026-11-01T09:00:00Z by someone who is not a maintainer; a maintainer must add it again
+EOF
+expect 'KN13: an issue approved on its own needs a maintainer'"'"'s label too' 0 check.json 'own_approval(70; 7001; "10:00") | labelled(70; "09:00"; outsider)' -- check <<EOF
+look #70: start refused: ready-for-agent was last added at 2026-11-01T09:00:00Z by someone who is not a maintainer; a maintainer must add it again
+EOF
+
+expect 'KN13 R1: edited the same second as the label on an issue approved on its own: refused' 0 check.json 'own_approval(70; 7001; "10:00") | labelled(70; "09:00"; "Synthetic-Owner") | body_edited(70; "09:00"; outsider)' -- check <<EOF
+look #70: start refused: the ticket was edited at 2026-11-01T09:00:00Z, the same second ready-for-agent was added, so which came first can't be read; a maintainer must add it again
+EOF
+expect 'KN13 R1: a claim on an issue edited the same second as its label withdraws' 0 check.json 'own_approval(70; 7001; "10:00") | labelled(70; "09:00"; "Synthetic-Owner") | body_edited(70; "09:00"; outsider) | say(70; 7002; "11:55"; "launch-fleet: starting")' -- claim 70 7002 <<EOF
+withdraw #70: start refused: the ticket was edited at 2026-11-01T09:00:00Z, the same second ready-for-agent was added, so which came first can't be read; a maintainer must add it again
+EOF
+
 expect 'a claimed start is left alone for 10 minutes' 0 check.json 'merge12 | say(13; 1301; "11:55"; "launch-fleet: starting")' -- check < /dev/null
 expect 'a claim with no outcome after 10 minutes is reconciled' 0 check.json 'merge12 | say(13; 1301; "11:45"; "launch-fleet: starting")' -- check <<EOF
 reconcile start #13: claimed at 2026-11-01T11:45:00Z, no outcome after 10 minutes

@@ -291,6 +291,10 @@ class Tracker(unittest.TestCase):
             ]}],
         }
         self.page = '100'
+        # #1737: the writer's private record of its own label applications stays in this test.
+        state = mock.patch.dict(os.environ, {'XDG_STATE_HOME': str(self.dir / 'state')})
+        state.start()
+        self.addCleanup(state.stop)
 
     def save(self):
         (self.dir / 'world.json').write_text(json.dumps(self.world))
@@ -314,10 +318,13 @@ class Tracker(unittest.TestCase):
         return subprocess.run([sys.executable, '-I', str(script), *args], env=env,
                               capture_output=True, text=True, timeout=60)
 
+    def write_argv(self, state, step, time, *extra, agent='builder'):
+        return [sys.executable, '-I', str(SCRIPT), 'write', '--repo', REPO, '--ticket', '12', '--agent', agent,
+                '--state', state, '--harness', 'Claude Code', '--model', 'Opus 5.5 Medium',
+                '--skills', SKILLS, '--step', step, '--time', time, *extra]
+
     def write(self, state, step, time, *extra, agent='builder'):
-        return self.run_status('write', '--repo', REPO, '--ticket', '12', '--agent', agent, '--state', state,
-                               '--harness', 'Claude Code', '--model', 'Opus 5.5 Medium',
-                               '--skills', SKILLS, '--step', step, '--time', time, *extra)
+        return self.run_status(*self.write_argv(state, step, time, *extra, agent=agent)[3:])
 
     def ticket(self, world=None):
         return next(it for it in (world or self.load())['issues'] if it['number'] == 12)
@@ -373,19 +380,130 @@ class Write(Tracker):
         self.ticket(self.world)['comments'].append(comment(104, BOT, note(state='asking')))
         self.save()
         done = self.write('done', 'merged', '2030-01-02T06:00:00Z', '--note', '104')
-        self.assertEqual((done.returncode, done.stdout), (0, '#12: builder done, status note 104 edited\n'))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info', 'held'])
+        # #1737: a label it leaves on, it says so.
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertRegex(done.stdout, r'^#12: builder done, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
         self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')])
+
+    def test_leaving_asking_keeps_a_same_login_hold_it_cannot_show_it_added(self):
+        # catches (#1737): a write leaving asking deleting the needs-info triage set under the
+        # writer's own login before the agent asked, because its last application carries that
+        # login; or leaving it on without saying so.
+        ticket = self.ticket(self.world)
+        ticket['labels'] = ['ready-for-agent', 'needs-info']
+        ticket['events'] = [{'event': 'labeled', 'label': {'name': 'needs-info'}, 'actor': {'login': BOT}}]
+        ticket['comments'].append(comment(104, BOT, note()))
+        self.save()
+        asking = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual((asking.returncode, asking.stdout), (0, '#12: builder asking, status note 104 edited\n'))
+        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertRegex(back.stdout, r'^#12: builder working, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
+        self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
+
+    def test_with_a_shared_login_a_hold_added_just_before_the_write_post_stays(self):
+        # catches (#1737): while the agents post as a person's own account, that person's
+        # needs-info landing just before the asking write's POST (a no-op POST) taken as the
+        # write's own and deleted when the agent resumes.
+        self.world['login'] = 'synthetic-owner'
+        self.ticket(self.world)['comments'].append(comment(104, 'synthetic-owner', note()))
+        self.world['race_label'] = [{'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
+        self.save()
+        asking = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual(asking.returncode, 0, asking.stderr)
+        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertRegex(back.stdout, r'(?m)^#12: needs-info left on: ')
+
+    def test_a_hold_reapplied_as_the_write_clears_its_label_survives_a_failed_read(self):
+        # catches (#1737): a resume write whose DELETE takes a person's reapplied needs-info and,
+        # after a temporary event-read error, never puts it back on the retry.
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+        self.save()
+        asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual(asked.returncode, 0, asked.stderr)
+        self.world = self.load()
+        self.world['race_delete'] = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                                     {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'},
+                                     {'fail_once': f'GET repos/{REPO}/issues/12/events?per_page=100&page=1'}]
+        self.save()
+        failed = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(failed.returncode, 2, failed.stdout)
+        retry = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertRegex(retry.stdout, r'(?m)^#12: needs-info put back: synthetic-owner ')
+
+    def test_only_an_exact_record_of_this_login_s_application_takes_the_label_off(self):
+        # catches (#1737): a damaged or foreign record (a boolean or negative event, a repeated or
+        # extra key, another login) read as proof, so a write deletes a label it can't show it added.
+        good = '{"login": "openwiz[bot]", "event": 0}'
+        cases = {good: ['ready-for-agent'],
+                 '{"login": "openwiz[bot]", "event": true}': None,
+                 '{"login": "openwiz[bot]", "event": -1}': None,
+                 '{"login": "openwiz[bot]", "event": "0"}': None,
+                 '{"login": "openwiz[bot]", "event": 5, "event": 0}': None,
+                 '{"login": "openwiz[bot]", "event": 0, "ticket": 12}': None,
+                 '{"login": "synthetic-owner", "event": 0}': None,
+                 '[0]': None}
+        for record, labels in cases.items():
+            with self.subTest(record):
+                self.setUp()
+                self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+                self.save()
+                asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+                self.assertEqual(asked.returncode, 0, asked.stderr)
+                [kept] = (self.dir / 'state').rglob('*.json')
+                self.assertEqual(json.loads(kept.read_text()), json.loads(good))
+                kept.write_text(record)
+                back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+                self.assertEqual(back.returncode, 0, back.stderr)
+                self.assertEqual(self.ticket()['labels'], labels or ['ready-for-agent', 'needs-info'])
+
+    def test_an_older_resume_never_drops_the_proof_of_a_write_that_asked_meanwhile(self):
+        # catches (#119 R1): a builder's resume whose DELETE lands, then a reviewer on the same
+        # machine asks (its POST applies needs-info and saves its proof), then the builder's
+        # settle forgets that proof, so the reviewer's own resume leaves its label on.
+        self.ticket(self.world)['comments'] += [comment(104, BOT, note()), comment(105, BOT, note(agent='reviewer'))]
+        self.save()
+        asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual(asked.returncode, 0, asked.stderr)
+        reviewer = self.write_argv('asking', 'asked about the fixture', '2030-01-02T04:30:00Z', '--note', '105',
+                                   agent='reviewer')
+        done = self.dir / 'reviewer.exit'
+        # The reviewer's write starts once the builder's DELETE has landed, while the builder's
+        # call is still out. The builder may hold it off: after a while the call returns anyway.
+        (self.dir / 'bin' / 'gh').write_text(
+            '#!/bin/sh\n' + sys.executable + ' -I -S ' + str(self.dir / 'gh.py') + ' "$@"; code=$?\n'
+            'case " $* " in *" DELETE "*) if [ ! -e ' + str(self.dir / 'started') + ' ]; then\n'
+            '  : > ' + str(self.dir / 'started') + '\n'
+            '  (' + shlex.join(reviewer) + ' >/dev/null 2>&1; echo $? > ' + str(done) + '.tmp; mv ' + str(done)
+            + '.tmp ' + str(done) + ') </dev/null >/dev/null 2>&1 &\n'
+            '  n=0; while [ ! -e ' + str(done) + ' ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done\n'
+            'fi;; esac\nexit $code\n')
+        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        end = time.monotonic() + 60
+        while not done.exists() and time.monotonic() < end:
+            time.sleep(0.1)
+        self.assertEqual(done.read_text(), '0\n')
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        resumed = self.write('working', 'got the fixture', '2030-01-02T06:00:00Z', '--note', '105', agent='reviewer')
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+        self.assertEqual((resumed.returncode, resumed.stdout), (0, '#12: reviewer working, status note 105 edited\n'))
 
     def test_needs_info_stays_while_any_agent_asks_and_a_failed_clear_recovers(self):
         # catches (R1): one agent leaving asking clearing the label another live agent's
         # question needs, or a failed label write that a retry or check never repairs.
-        ticket = self.ticket(self.world)
-        ticket['labels'] = ['ready-for-agent', 'needs-info']
-        ticket['events'] = [{'event': 'labeled', 'label': {'name': 'needs-info'}, 'actor': {'login': BOT}}]
-        ticket['comments'] += [comment(104, BOT, note(state='asking')),
-                               comment(105, BOT, note(agent='reviewer', state='asking'))]
+        # #1737: the label is the builder's own write's application, so a write may take it off.
+        self.ticket(self.world)['comments'] += [comment(104, BOT, note()),
+                                                comment(105, BOT, note(agent='reviewer', state='asking'))]
         self.save()
+        asked = self.write('asking', 'asked which file to change', '2030-01-02T03:30:00Z', '--note', '104')
+        self.assertEqual(asked.returncode, 0, asked.stderr)
         builder = self.write('working', 'got the answer', '2030-01-02T04:00:00Z', '--note', '104')
         self.assertEqual((builder.returncode, builder.stdout), (0, '#12: builder working, status note 104 edited\n'))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
@@ -1687,6 +1805,22 @@ class WakeRepair(Tracker):
         self.assertEqual(beat.returncode, 0, beat.stderr)
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
         self.assertEqual(self.timeline(), before)
+
+    def test_a_resume_write_after_the_repair_put_back_a_hold_keeps_it(self):
+        # catches (#1737): the agent's own write leaving asking taking off a person's needs-info
+        # that the repair put back under the same App login (#1712's case, on the plain write).
+        resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                 {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
+        self.asking_on_12(race_label=[resume], race_delete=again)
+        self.wake()
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        before = self.timeline()
+        back = self.write('working', 'pushed the fix', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual(self.timeline(), before)
+        self.assertRegex(back.stdout, r'(?m)^#12: needs-info left on: ')
 
     def test_a_person_who_reapplies_needs_info_after_the_repair_added_it_keeps_it(self):
         # catches: the repair taking off a needs-info whose last application is a person's,

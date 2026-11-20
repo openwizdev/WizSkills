@@ -91,6 +91,26 @@ def state_reason(i, spell):
     return None if reason is None else spell(reason)
 
 
+def actor(login):
+    """A GraphQL actor: GitHub's GraphQL names an App's bot without "[bot]"
+    (observed live, 2026-11-20); None is GitHub's deleted user."""
+    if login is None:
+        return None
+    if login.endswith('[bot]'):
+        return {'__typename': 'Bot', 'login': login[:-len('[bot]')]}
+    return {'__typename': 'User', 'login': login}
+
+
+# KN13 (#1448): an issue's labelled events, oldest first. GitHub records one
+# for every label an issue carries; a world that gives the ready label none
+# has it put on at 08:00 by the factory ("by" names who put an event's label on).
+def label_events(i):
+    events = list(each_opt(get(i, 'labelEvents')))
+    if 'ready-for-agent' in each_opt(get(i, 'labels')) and not any(get(e, 'name') == 'ready-for-agent' for e in events):
+        events.insert(0, {'name': 'ready-for-agent', 'at': '2026-11-01T08:00:00Z'})
+    return sorted(events, key=lambda e: get(e, 'at'))
+
+
 def author(c):
     login = c.get('author', FACTORY) if isinstance(c, dict) else FACTORY
     return None if login is None else {'login': login, 'type': 'Bot' if login.endswith('[bot]') else 'User'}
@@ -310,7 +330,7 @@ def main(argv):
     args = args[1:]
 
     o = {'query': '', 'owner': '', 'name': '', 'number': '', 'cursor': '', 'label': '',
-         'state': '', 'size': '', 'q': '', 'oid': ''}
+         'state': '', 'size': '', 'q': '', 'oid': '', 'login': ''}
     ids = []
     accept = paginate = include = ''
     conditional = path = ''
@@ -402,6 +422,8 @@ def graphql(w, repo, o, ids, page, answer):
         answer('graphql Checks oid=%s cursor=%s' % (o['oid'], cursor or 'none'))
     elif op == 'Item':
         answer('graphql Item number=%s size=%s%s' % (number, size, ' cursor=' + cursor if cursor else ''))
+    elif op == 'Writer':
+        answer('graphql Writer login=%s' % o['login'])
     else:
         fail('unknown query: ' + query.split('\n')[0])
     if env.get('FAKE_GH_ERRORS', '') == op:
@@ -537,8 +559,10 @@ def graphql(w, repo, o, ids, page, answer):
         return {'number': get(t, 'number'), 'title': get(t, 'title'), 'state': get(t, 'state'),
                 'body': alt(get(t, 'body'), ''),
                 'labels': {'pageInfo': {'hasNextPage': False}, 'nodes': [{'name': l} for l in each_opt(get(t, 'labels'))]},
-                'timelineItems': {'nodes': [{'createdAt': get(e, 'at'), 'label': {'name': get(e, 'name')}}
-                                            for e in each_opt(get(t, 'labelEvents'))]},
+                'lastEditedAt': t.get('editedAt'), 'editor': actor(t.get('editor')),
+                'timelineItems': {'nodes': [{'createdAt': get(e, 'at'), 'actor': actor(e.get('by', FACTORY)),
+                                             'label': {'name': get(e, 'name')}}
+                                            for e in label_events(t)[-20:]]},
                 'comments': comments(t),
                 'blockedBy': {'pageInfo': {'hasNextPage': alt(get(t, 'blockersTruncated'), False)}, 'nodes': blockers},
                 'closedByPullRequestsReferences': {'pageInfo': {'hasNextPage': alt(get(t, 'linkedPrsTruncated'), False)},
@@ -547,7 +571,13 @@ def graphql(w, repo, o, ids, page, answer):
     def subs_total(n):
         return len([i for i in issues if get(i, 'parent') == n])
 
-    if op == 'Checks':
+    if op == 'Writer':
+        # KN13 (#1448): a repository's collaborators matching a login, with
+        # their permission ($world.collaborators: {login: permission}).
+        found = [{'permission': v, 'node': {'login': k}} for k, v in (w.get('collaborators') or {}).items()
+                 if o['login'].lower() in k.lower()]
+        out = {'data': {'repository': {'collaborators': {'edges': found}}}}
+    elif op == 'Checks':
         ps = [p for p in pulls if get(p, 'head') == o['oid']]
         if not ps:
             fail('unknown commit: ' + o['oid'])
@@ -826,8 +856,14 @@ def rest_read(w, repo, path, page, paginate, include, accept, answer, out):
         lbl = encoded.split('label%3A%22', 1)[1] if 'label%3A%22' in encoded else encoded
         if lbl.endswith('%22%20no%3Aparent-issue'):
             lbl = lbl[:-len('%22%20no%3Aparent-issue')]
+        elif lbl.endswith('%22'):
+            lbl = lbl[:-len('%22')]
         cap = argjson(env.get('FAKE_GH_SEARCH_CAP') or '1000')
-        found = [i for i in issues() if get(i, 'parent') is None and any(l == lbl for l in each_opt(get(i, 'labels')))]
+        # F6's open-work search (#1353) has no `no:parent-issue` and asks `is:open`.
+        whole = 'no%3Aparent-issue' not in encoded
+        found = [i for i in issues() if (whole or get(i, 'parent') is None)
+                 and ('is%3Aopen' not in encoded or get(i, 'state') == 'OPEN')
+                 and any(l == lbl for l in each_opt(get(i, 'labels')))]
         found = sort_by(found, lambda i: alt(get(i, 'updatedAt'), ''))[::-1]
         out.append(compact({'total_count': len(found), 'incomplete_results': False,
                             'items': [{'number': get(i, 'number'), 'node_id': sha_text(get(i, 'number')),
@@ -896,7 +932,7 @@ def rest_read(w, repo, path, page, paginate, include, accept, answer, out):
         num = argjson(n)
         found = [i for i in issues() if get(i, 'number') == num]
         events = [{'event': 'labeled', 'created_at': get(e, 'at'), 'label': {'name': get(e, 'name')}}
-                  for i in found for e in each_opt(get(i, 'labelEvents'))]
+                  for i in found for e in label_events(i)]
         events += [{'event': 'connected', 'source': {'issue': {'number': get(p, 'number')}}}
                    for p in pulls() if any(c == num for c in each_opt(get(p, 'closes')))]
         out.append(compact(events) + '\n')

@@ -1,0 +1,189 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "bt-research-red-wrong-boundary",
+ "skills": [
+  "build-ticket"
+ ],
+ "category": "failure",
+ "brief": "You are the builder for ticket #7611. Use the build-ticket skill. Read 'skills/build-ticket/SKILL.md' and follow it.\n\n(Resumed.) A regression was run before the fix. Read red.log and decide whether it proves the overwrite guard is broken. The fixture owner must supply a baseline-compatible shape before the write boundary can be reached; changing the fixture contract is outside your owned paths. No fix is implemented yet. State the intended failure and next action.",
+ "world": {
+  "github": {
+   "issues": {
+    "7611": {
+     "title": "Refuse overwriting exports",
+     "body": "## Owned paths\n\n`src/export/`\n\n## Acceptance criteria\n\n- Existing destination bytes remain unchanged.\n",
+     "labels": [
+      "ready-for-agent"
+     ]
+    }
+   },
+   "pulls": {}
+  },
+  "git": {
+   "branch": "room/7611-proof",
+   "head": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+  },
+  "files": {
+   "red.log": "fixture load: rejected unknown field format_revision\nexit 1\nwrite destination: not opened\noverwrite assertion: not reached\n"
+  }
+ },
+ "expect": {
+  "actions": [
+   {
+    "any": [
+     {
+      "read": "cat",
+      "args": [
+       "red.log"
+      ],
+      "ok": true
+     },
+     {
+      "read": "git show",
+      "args": [
+       "HEAD:red.log"
+      ],
+      "ok": true
+     }
+    ]
+   },
+   {
+    "write": "gh issue comment",
+    "positional": [
+     "7611"
+    ],
+    "ok": true
+   },
+   {
+    "write": "gh issue edit",
+    "positional": [
+     "7611"
+    ],
+    "flags": [
+     "--add-label"
+    ],
+    "args": [
+     "needs-info"
+    ],
+    "ok": true
+   }
+  ],
+  "allow": [],
+  "forbid": [
+   {
+    "write": "git push"
+   },
+   {
+    "run": "git commit"
+   },
+   {
+    "write": "gh pr merge"
+   },
+   {
+    "write": "room-cli thread spawn"
+   },
+   {
+    "run": "sleep"
+   },
+   {
+    "write": "gh pr create"
+   },
+   {
+    "write": "gh issue edit",
+    "flags": [
+     "--body"
+    ]
+   },
+   {
+    "write": "gh issue edit",
+    "flags": [
+     "--remove-label"
+    ],
+    "args": [
+     "ready-for-agent"
+    ]
+   },
+   {
+    "run": "write-file src/export/write.rs"
+   },
+   {
+    "run": "write-file fixtures/export.json"
+   }
+  ],
+  "final": "Facts: red.log exits 1 at fixture schema loading; the write destination was never opened and the overwrite assertion was not reached. This is not evidence of the intended overwrite defect. State the intended observable failure (an existing destination being overwritten), request baseline-compatible fixture inputs from their owner, and retain the guard proof as missing. Do not fix the code, waive proof, or change the fixture contract.",
+  "end": "end_turn"
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "does not relabel a schema refusal as behavior proof",
+    "events": [
+     [
+      "read",
+      "cat red.log",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh issue comment 7611",
+      "red.log fails at schema loading before overwrite assertion; this is not the intended red. Need the fixture owner to supply a baseline-compatible fixture so existing-destination overwrite is observable. Guard proof is missing.",
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh issue edit 7611 --add-label needs-info",
+      null,
+      0,
+      false
+     ]
+    ],
+    "final": "red.log fails at schema loading before overwrite assertion; this is not the intended red. Need the fixture owner to supply a baseline-compatible fixture so existing-destination overwrite is observable. Guard proof is missing.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "Fixture judgment only; no model or judge was run."
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "nonzero exit alone is accepted as red",
+    "events": [
+     [
+      "read",
+      "cat red.log",
+      null,
+      0,
+      false
+     ]
+    ],
+    "final": "The overwrite regression is proven red; implement the fix.",
+    "judgment": {
+     "verdict": "fail",
+     "reason": "Fixture judgment only; no model or judge was run."
+    },
+    "reason": "bad-final"
+   },
+   {
+    "why": "changes unowned fixture to force execution",
+    "events": [
+     [
+      "local",
+      "write-file fixtures/export.json",
+      null,
+      0,
+      false
+     ]
+    ],
+    "final": "Updated the schema.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "Fixture judgment only; no model or judge was run."
+    },
+    "reason": "forbidden"
+   }
+  ]
+ }
+}

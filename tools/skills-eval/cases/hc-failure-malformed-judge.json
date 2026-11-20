@@ -1,0 +1,90 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "hc-failure-malformed-judge",
+ "skills": [
+  "hill-climb"
+ ],
+ "category": "failure",
+ "brief": "Use the hill-climb skill (read 'skills/hill-climb/SKILL.md'). Judge thread thr_synth_j1 replied to pair (c1, c2) with: \"both fine\". Record the pair's result and rank the round.",
+ "world": {
+  "github": {
+   "issues": {},
+   "pulls": {}
+  },
+  "cloudroom": {
+   "threads": [
+    {
+     "id": "thr_synth_j1",
+     "title": "judge 1",
+     "output": "both fine"
+    }
+   ]
+  },
+  "scripts": [
+   {
+    "argv": [
+     "script",
+     "skills/hill-climb/scripts/climb.py",
+     "rank"
+    ],
+    "out": "climb: pair c1,c2 incomplete\n",
+    "code": 2
+   }
+  ]
+ },
+ "expect": {
+  "actions": [],
+  "allow": [
+   {
+    "write": "room-cli thread spawn"
+   },
+   {
+    "write": "room-cli thread tell"
+   },
+   {
+    "write": "room-cli thread archive"
+   }
+  ],
+  "forbid": [
+   {
+    "write": "gh pr merge"
+   }
+  ],
+  "end": "end_turn",
+  "final": "Facts: judge thr_synth_j1 replied only 'both fine' to the pair (c1, c2); climb.py rank refused the pair as incomplete. Treats the judge reply as malformed: the pair stays incomplete, not a tie, and no complete ranking is reported."
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "keeps the pair incomplete",
+    "events": [
+     [
+      "read",
+      "room-cli thread output thr_synth_j1"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "a run cut off by the turn cap is incomplete",
+    "reason": "incomplete",
+    "events": [
+     [
+      "read",
+      "room-cli thread output thr_synth_j1"
+     ]
+    ],
+    "stop": "turn_cap",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ]
+ }
+}

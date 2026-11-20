@@ -26,10 +26,9 @@ The private service setting `decision_repositories` explicitly names both roles:
 `public` and `private`, each an exact `{owner, name}` repository object. It is
 optional in `service/config.json` under the existing private state directory;
 without the setting/file, decision discovery retains today's single cwd
-repository. The standalone and embedded server read the same setting. A
-malformed, duplicate, unreadable or same-repository pair is refused, never
-replaced by cwd. Repository names have the existing service repository syntax.
-The setting changes no tracker, publication or cut-over gate.
+repository. A malformed, duplicate, unreadable or same-repository pair is
+refused, never replaced by cwd. Repository names have the existing service repository syntax.
+The setting changes no tracker or publication gate.
 
 In pair mode, each role is verified with canonical GitHub identity and visibility:
 public must be public, private must be private, and each returned name must match
@@ -38,8 +37,8 @@ a coverage gap and no legacy-private exception. Both feeds are read; failure of
 one never makes the other a complete empty discovery. Subjects, request/comment
 identity, current-source reads and answer bindings include the canonical
 repository. Public spec/plan requests and private grill requests stay on their
-configured roles. Private requests are returned only through the owner-loopback
-API. No new route is added. See `decisions.v1.md` and its schema.
+configured roles. Private request text is never posted on the public
+repository. See `decisions.v1.md` and its schema.
 
 Neither a directory basename nor the cwd's project title discovers a private
 repository. A caller selects a private input explicitly and verifies its role;
@@ -239,7 +238,7 @@ The fleet's public records (comments starting `launch-fleet:`) carry **no thread
   - **The proofs** (O4, O5, at their fixture seams) include a reviewer started at `<A>`, re-checked and given up at `<B>`, followed by records that must not reach it, with and without private state.
 - **Exactly one match** is the thread. **None,** or a source that can't be read, is today's "gone or out of reach" case for that record. **Two or more, or private state and CloudRoom disagreeing:** a `launch-fleet: look: <reason>` record, never a guess. The reason names the ticket or pull request, never a thread.
 
-Today's forms stay readable on the private repository, so tickets already running there keep working through the cut-over. No writer writes them on the public repository, and the ticket mover copies no comments, so none arrives there.
+Today's forms stay readable on the private repository, so tickets that started there keep working. No writer writes them on the public repository, and the ticket mover copies no comments, so none arrives there.
 
 The same rule holds for every public record, not just the fleet's: no issue, pull request, comment, commit message or file on the public repository carries a thread id. A builder's helper log names each helper by role, not by thread. The other public records that name a thread today:
 
@@ -325,7 +324,7 @@ was [ClosedWiz #9010](https://github.com/jparker2006/ClosedWiz/issues/9011)
 
 ## The mapping file
 
-One private file maps every moved number, old to new. The ticket mover (O15) writes it; the rehearsal (O16) checks it complete on the dry run and the cut-over on the real move.
+One private file maps every moved number, old to new. The ticket mover (O15) writes it; the rehearsal (O16) checks it complete on the dry run and on the real move.
 
 - **Place:** `private/evidence/open-development/tickets/map.tsv` for the real move, and `private/evidence/open-development/tickets/map.dry-run.tsv` for a dry run.
 - **Format:** UTF-8, LF line endings, tab-separated, ending with a newline, no blank or comment lines. The first line is exactly `kind`, `closedwiz`, `openwiz`. Then one row per moved number:
@@ -503,7 +502,7 @@ The importer (O14) builds the public tree from one ClosedWiz commit and makes **
 
 **May carry:** the content of files in O1's public classes, at that commit, after their edits have merged, and the public repository's own files that O14's reviewed list keeps (O14's ticket names its README, changelog, licence, contributing and releasing guides and plugin manifests; O1's classes don't cover them, as they are not ClosedWiz files). The new commit's only parent is the public repository's `main`; its author and committer pass C3.
 
-**May not carry:** any file in a private class or a retiring one; any path not on the reviewed list; any ClosedWiz commit, branch, tag, note or other ref, or any ClosedWiz object fetched into the public clone; anything the privacy check refuses (it runs on the staged tree and the new commit before anything is staged as final). Work in flight moves as a patch, never as commits. It never pushes: at the cut-over the orchestrator pushes that one commit to a new branch of the public repository and opens one pull request, which merges when CI, the privacy check included, is green.
+**May not carry:** any file in a private class or a retiring one; any path not on the reviewed list; any ClosedWiz commit, branch, tag, note or other ref, or any ClosedWiz object fetched into the public clone; anything the privacy check refuses (it runs on the staged tree and the new commit before anything is staged as final). Work in flight moves as a patch, never as commits. It never pushes: the orchestrator pushes that one commit to a new branch of the public repository and opens one pull request, which merges when CI, the privacy check included, is green.
 
 A staged tree's paths, from a ClosedWiz commit:
 
@@ -570,7 +569,7 @@ Investigate prj_planted42 start failures
 | launch-fleet's check (`skills/launch-fleet/scripts/fleet.sh`) | Nothing in how it finds approvals: it matches only the opening, the revision, the table and the fingerprint. Its fleet records change as in "Fleet records" (O5). |
 | huntr's gate (`skills/huntr/scripts/approve.mjs`) | Nothing in how it finds its own approvals: it matches only the `**Approved on its own by` opening. Its approval comment gains the pointer line (O5). |
 | The readers of today's thread-carrying records: the review relay (`tools/review-relay/relay.py`, which finds the builder only from `started, thread` or `start checked, thread`), launch-fleet's check, and the Rust tick's records and graph | They read the public forms too, and find the thread as in "Fleet records"; a public record with no thread is not "no builder" (O4, O5). |
-| `contracts/decisions.v1.md` and its reader (`crates/adapters/github/src/decisions.rs`) and consumers | **Changes at the cut-over.** After the move, `spec_confirmation` and `plan_approval` requests are posted on spec issues in the public repository, so their summary lines obey the text rules (the decision in plain words, never exact words). `grill_round` and `grill_confirmation` requests stay on the grill's pull request in the private repository, because grills are private. Today the reader scans only the repository it runs in, and an item's identity is its subject's kind and number in that repository. So: (1) discovery reads both repositories' issue-comment feeds, and coverage is complete only when both reads are; either one unread or partial is incomplete coverage with a gap, never a confident empty list; (2) an item's `subject` gains the repository it is on (public or private), and identity, `current` checks (each against its own repository's sources) and every answer's binding include it; (3) the response stays the owner's loopback API, so private request content is shown only there, never posted on the public repository. The response's `orchestrator.target` is part of that loopback response, not a GitHub record, so it is unchanged. Until the cut-over both kinds are on the private repository and nothing changes. **Owner:** #2141, including the explicit private repository-pair setting above, repository-qualified subjects and answer bindings, and fixture coverage of both feeds. No fixture proves cut-over or live discovery. |
+| `contracts/decisions.v1.md` and its reader (`crates/adapters/github/src/decisions.rs`) and consumers | `spec_confirmation` and `plan_approval` requests are posted on spec issues in the public repository, so their summary lines obey the text rules (the decision in plain words, never exact words). `grill_round` and `grill_confirmation` requests stay on the grill's pull request in the private repository, because grills are private. Without the pair setting the reader scans only the repository it runs in. With it: (1) discovery reads both repositories' issue-comment feeds, and coverage is complete only when both reads are; either one unread or partial is incomplete coverage with a gap, never a confident empty list; (2) an item's `subject` carries the repository it is on (public or private), and identity, `current` checks (each against its own repository's sources) and every answer's binding include it; (3) private request content is never posted on the public repository. The response's `orchestrator.target` is not a GitHub record, so it is unchanged. **Owner:** #2141, including the explicit private repository-pair setting above, repository-qualified subjects and answer bindings, and fixture coverage of both feeds. No fixture proves live discovery. |
 
 **Which form a reader accepts.** Writers write only the public forms, on both repositories. Readers on a private repository also accept today's forms (they are private records there). Readers on the public repository accept only the public forms. A reader that can't tell which repository it is on treats it as public.
 
@@ -578,6 +577,6 @@ Investigate prj_planted42 start failures
 
 - T2 finds the exact words in the forms the project writes them. Words quoted without a decider's name before them, or unquoted ones, are found only by review and by the writers' own tests.
 - The named literals are not checked in CI on the public repository.
-- **Decisions across two repositories** are owned by #2141 and verified on configured fixture feeds. Single-repository mode remains the default until a pair is explicitly configured. The rehearsal and cut-over must still verify the real settings and both feed reads; fixture results do not establish live discovery.
+- **Decisions across two repositories** are owned by #2141 and verified on configured fixture feeds. Single-repository mode remains the default until a pair is explicitly configured. Fixture results do not establish live discovery of the real settings or either feed.
 - Text inside images is not read by the check.
-- Today's `rust` job in `.github/workflows/ci.yml` falls back to a runner label not on F2's list, so the check refuses it until the CI specs change it. Today's builder commits use an address C3 refuses, so builders need GitHub's private address before the cut-over. The rehearsal (O16) finds both on its dry run.
+- Today's `rust` job in `.github/workflows/ci.yml` falls back to a runner label not on F2's list, so the check refuses it until the CI specs change it. Today's builder commits use an address C3 refuses, so builders need GitHub's private address.

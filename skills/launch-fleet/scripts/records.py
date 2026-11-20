@@ -6,6 +6,7 @@ Optional private state: {"repo": "owner/name", "threads": {"builder:N": "...",
 "comment:COMMENT_ID": "..."}}.
 Readers never update it. Starters save it privately before recording success.
 """
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -78,14 +79,46 @@ def choose(key, matches, state, threads):
     return (found, None) if found else (None, 'no thread matches ' + key)
 
 
-def builder_thread(n, branch, threads, state):
+UNREADABLE, UNSET, MISSING = object(), object(), object()
+
+
+def driver_runs(repo):
+    """host.py's runs ({N: run}) from LAUNCH_FLEET_RUNS (#1371), stopped ones too.
+
+    UNSET when the wake restored no run map, MISSING when its file isn't there, UNREADABLE when it doesn't read."""
+    path = os.environ.get('LAUNCH_FLEET_RUNS')
+    if not path:
+        return UNSET
+    if not os.path.exists(path):
+        return MISSING
+    sys.dont_write_bytecode = True  # never leave caches in an installed skill
+    spec = importlib.util.spec_from_file_location('launch_fleet_host', Path(__file__).resolve().parent / 'host.py')
+    host = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(host)
+    try:
+        return host.load(repo)['runs']
+    except host.Unreadable:
+        return UNREADABLE
+
+
+def builder_thread(n, branch, threads, state, runs=None):
+    if runs is UNREADABLE:
+        return None, 'the private runs file is unreadable'
+    if runs is MISSING:
+        return None, 'the private run map LAUNCH_FLEET_RUNS was not restored from the private state'
+    if isinstance(runs, dict) and str(n) in runs:
+        # Started through a host driver: host.py wakes and stops it (a stop answers again); no CloudRoom thread exists.
+        return f'run:{n}', None
     saved = state.get(f'builder:{n}')
     if branch and any(t['id'] == saved and t.get('branch') is not None and t['branch'] != branch for t in threads or []):
         return None, 'private state disagrees with the checked builder branch'
     matches = [t for t in threads or [] if isinstance(t.get('title'), str)
                and t['title'].startswith(f'#{n}: ')
                and (branch is None or t.get('branch') == branch)]
-    return choose(f'builder:{n}', matches, state, threads)
+    found, error = choose(f'builder:{n}', matches, state, threads)
+    if runs is UNSET and error == f'no thread matches builder:{n}':
+        error += ', and no private run map LAUNCH_FLEET_RUNS was restored'
+    return found, error
 
 
 def reviewer_thread(n, commit, threads, state, claim=None, retired=()):
@@ -101,6 +134,8 @@ def reviewer_thread(n, commit, threads, state, claim=None, retired=()):
 
 def annotate(world, repo, private, threads, state):
     """Attach private routing metadata; preserve every original body and comment position."""
+    runs = driver_runs(repo)
+
     def item(obj):
         span = []
         retired = set()
@@ -127,7 +162,7 @@ def annotate(world, repo, private, threads, state):
                     line = line.replace('review failed ', 'review given up ', 1)
             branch = re.fullmatch(r'start checked, branch ([A-Za-z0-9._/-]+)', line)
             if not legacy and (line == 'started' or branch):
-                c['resolvedThread'], c['recordError'] = builder_thread(obj['number'], branch[1] if branch else None, threads, state)
+                c['resolvedThread'], c['recordError'] = builder_thread(obj['number'], branch[1] if branch else None, threads, state, runs)
             review = re.fullmatch(rf'(review started|re-check sent|review told again|review given up) ({SHA})(?:: .+)?', line)
             if review:
                 kind, commit = review.groups()

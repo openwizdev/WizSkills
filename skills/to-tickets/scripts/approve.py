@@ -8,9 +8,17 @@ revision.sh's text for the same spec. The checks, all of them every time:
 
   links        check-links.sh passes on the graph read
   relies       check-relies.sh passes on each open agent ticket's body, a path
-               a direct blocker owns counting as planned
+               counting as planned when a direct blocker owns that file, or a
+               folder or pattern containing it, in the ticket's own repository
+               (the one all its owned paths name); --root is the checkout of
+               the graph's repository, so a ticket in any other repository
+               must have each Relies on file planned
   sizes        each open ticket says exactly one `Size: S`, `M` or `L`
-  width        no cycle, and no arrow another chain of arrows already implies
+  width        no cycle, and no arrow another chain of arrows already implies;
+               the record reports the critical chain (the longest run of
+               open work along hard edges, open blockers outside the spec
+               included) and the widest start wave; a context-only file
+               link is no hard edge (soft_link)
   owned paths  each open agent ticket owns exact repository paths, and no two
                tickets that can run at once own the same path, unless both
                bullets say `(shared`
@@ -112,6 +120,15 @@ def overlap(a, b):
     return all(fnmatch.fnmatchcase(p, q) or fnmatch.fnmatchcase(q, p) for p, q in zip(x, y))
 
 
+def contains(own, path):
+    """An owned path holds a file: it is that file, or a folder or pattern
+    whose every segment matches the file's leading segments. A path ending in
+    `/` is a folder: it holds only what lies strictly below it."""
+    x, y = own.rstrip('/').split('/'), path.split('/')
+    longest = len(y) - 1 if own.endswith('/') else len(y)
+    return len(x) <= longest and all(fnmatch.fnmatchcase(q, p) for p, q in zip(x, y))
+
+
 def relies_paths(body):
     lines = [line for line in body.split('\n') if line.startswith('**Relies on:**')]
     return re.findall(r'`([^`]+)`', lines[0]) if len(lines) == 1 else []
@@ -157,18 +174,30 @@ def check_links(graph_text):
     return []
 
 
-def check_relies(tickets, owners, root):
+def check_relies(tickets, owners, root, root_repo):
     why = []
     for t in tickets:
         blockers = [b['number'] for b in t['blocked_by']]
-        planned = []
+        repos = {repo for repo, _, _ in owners.get(t['number'], [])}
+        planned, unplanned = [], []
         for path in relies_paths(t['body']):
-            if any(overlap(own, path) for b in blockers for _, own, _ in owners.get(b, [])):
+            if len(repos) == 1 and any(repo in repos and contains(own, path)
+                                       for b in blockers for repo, own, _ in owners.get(b, [])):
                 planned += ['--planned', path]
-        out = subprocess.run(['sh', str(RELIES), '--root', str(root), *planned], input=t['body'],
+            else:
+                unplanned.append(path)
+        # Only the graph repository has a checkout here: any other ticket's
+        # files are form-checked only, and each must be planned.
+        in_root = repos == {root_repo}
+        checked = planned if in_root else planned + [a for p in unplanned for a in ('--planned', p)]
+        out = subprocess.run(['sh', str(RELIES), '--root', str(root), *checked], input=t['body'],
                              capture_output=True, text=True)
         if out.returncode != 0:
             why.append(f'#{t["number"]}: ' + (out.stderr.strip().splitlines() or ['refused'])[-1])
+        elif unplanned and not in_root:
+            where = f'`{next(iter(repos))}`' if len(repos) == 1 else 'more than one repository'
+            why.append(f'#{t["number"]}: Relies on: `{unplanned[0]}` is in {where}, which --root is not; '
+                       'a direct blocker there must own it')
     return why
 
 
@@ -183,32 +212,91 @@ def check_sizes(tickets):
     return why, counts
 
 
-def check_width(graph):
-    """Refusals, the longest chain and the widest start wave, in tickets."""
-    numbers = {t['number'] for t in graph['tickets']}
-    after = {n: set() for n in numbers}  # n -> tickets it blocks
-    for t in graph['tickets']:
-        for b in t['blocked_by']:
-            if b['number'] in numbers:
-                after[b['number']].add(t['number'])
-    level, order, indegree = {}, [], {n: 0 for n in numbers}
-    for n in numbers:
+def chain_width(after, planned, done):
+    """The critical chain, the widest start wave (both in tickets) and the
+    tickets a cycle leaves unreached. `after` maps every ticket (planned and
+    outside blockers) to the tickets it blocks. The chain is the longest run
+    of arrows through work not yet done, outside blockers included; the waves
+    count planned work only."""
+    level, indegree = {}, {n: 0 for n in after}
+    for n in after:
         for m in after[n]:
             indegree[m] += 1
-    ready = sorted(n for n in numbers if indegree[n] == 0)
+    ready = sorted(n for n in after if indegree[n] == 0)
     for n in ready:
-        level[n] = 1
+        level[n] = 0 if n in done else 1
     while ready:
         n = ready.pop(0)
-        order.append(n)
         for m in sorted(after[n]):
-            level[m] = max(level.get(m, 1), level[n] + 1)
+            level[m] = max(level.get(m, 0), level[n] + (0 if m in done else 1))
             indegree[m] -= 1
             if indegree[m] == 0:
                 ready.append(m)
-    if len(order) != len(numbers):
-        cycle = sorted(n for n in numbers if n not in order)
-        return [f'a cycle: {" ".join(f"#{n}" for n in cycle)} can never start'], 0, 0
+    unreached = sorted(n for n in after if indegree[n] > 0)
+    waves = {}
+    for n in planned:
+        if n not in done and n in level:
+            waves[level[n]] = waves.get(level[n], 0) + 1
+    return max(level.values(), default=0), max(waves.values(), default=0), unreached
+
+
+FILE_PATH = re.compile(r'(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+/?')
+
+
+def file_link_files(body, blocker):
+    """The files of the ticket's one `file` line for this blocker, or None."""
+    lines = [line.rstrip(' \t') for line in section(body, 'Links') or []]
+    found = [line for line in lines if re.match(rf'- #{blocker} (real|file):', line)]
+    if len(found) != 1 or not found[0].startswith(f'- #{blocker} file:'):
+        return None
+    files = [p for p in re.findall(r'`([^`]*)`', found[0])
+             if FILE_PATH.fullmatch(p) and not any(part in ('.', '..') for part in p.rstrip('/').split('/'))]
+    return files or None
+
+
+def soft_link(ticket, blocker, default_repo):
+    """F6 (#1353): a link adds no serial work only when it is a file link
+    naming a file, into an open agent ticket, from a planned blocker whose
+    owned paths are read, and neither the blocker's owned paths nor the
+    link's files hold an input the ticket relies on, nor do the two
+    tickets' owned paths collide. Anything else is a hard edge."""
+    if ticket['state'] != 'OPEN' or human(ticket) or blocker is None or human(blocker):
+        return False
+    files = file_link_files(ticket['body'], blocker['number'])
+    try:
+        mine, theirs = owned(ticket, default_repo), owned(blocker, default_repo)
+    except ValueError:
+        return False
+    if files is None:
+        return False
+    inputs = relies_paths(ticket['body'])
+    if any(overlap(i, p) for i in inputs for p in files + [path for _, path, _ in theirs]):
+        return False
+    return not any(ra == rb and overlap(pa, pb) and not (sa and sb)
+                   for ra, pa, sa in mine for rb, pb, sb in theirs)
+
+
+def check_width(graph):
+    """Refusals, the critical chain and the widest start wave, in tickets.
+    The cycle and implied-arrow checks read every native arrow; the chain
+    and the waves read only hard edges (soft_link)."""
+    numbers = {t['number'] for t in graph['tickets']}
+    tickets = {t['number']: t for t in graph['tickets']}
+    after = {n: set() for n in numbers}  # n -> tickets it blocks
+    hard = {n: set() for n in numbers}
+    done = {t['number'] for t in graph['tickets'] if t['state'] != 'OPEN'}
+    for t in graph['tickets']:
+        for b in t['blocked_by']:
+            after.setdefault(b['number'], set()).add(t['number'])
+            hard.setdefault(b['number'], set())
+            if not soft_link(t, tickets.get(b['number']), graph['repo']):
+                hard[b['number']].add(t['number'])
+            if b['number'] not in numbers and b['state'] != 'OPEN':
+                done.add(b['number'])
+    _, _, unreached = chain_width(after, numbers, done)
+    chain, widest, _ = chain_width(hard, numbers, done)
+    if unreached:
+        return [f'a cycle: {" ".join(f"#{n}" for n in unreached)} can never start'], 0, 0
     why = []
 
     def reaches(start, goal, skip):
@@ -226,10 +314,7 @@ def check_width(graph):
         for t in sorted(after[b]):
             if reaches(b, t, skip=t):
                 why.append(f'the arrow #{b} -> #{t} is implied by another chain; drop it')
-    waves = {}
-    for n, depth in level.items():
-        waves[depth] = waves.get(depth, 0) + 1
-    return why, max(level.values(), default=0), max(waves.values(), default=0)
+    return why, chain, widest
 
 
 def check_owned(graph, agents):
@@ -324,7 +409,7 @@ def main():
         open_tickets = [t for t in graph['tickets'] if t['state'] == 'OPEN']
         agents = [t for t in open_tickets if not human(t)]
         owned_why, owners = check_owned(graph, agents)
-        failures += [('relies', why) for why in check_relies(agents, owners, args.root.resolve())]
+        failures += [('relies', why) for why in check_relies(agents, owners, args.root.resolve(), graph['repo'].lower())]
         size_why, sizes = check_sizes(open_tickets)
         failures += [('sizes', why) for why in size_why]
         width_why, chain, widest = check_width(graph)

@@ -1,0 +1,84 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "su-failure-not-github",
+ "skills": [
+  "setup"
+ ],
+ "category": "failure",
+ "brief": "You are the orchestrator for this project. Use the setup skill. Read 'skills/setup/SKILL.md' and follow it.",
+ "world": {
+  "github": {
+   "issues": {},
+   "pulls": {}
+  },
+  "scripts": [
+   {
+    "argv": [
+     "gh",
+     "repo",
+     "view"
+    ],
+    "out": "none of the git remotes configured for this repository point to a known GitHub host\n",
+    "code": 1
+   }
+  ]
+ },
+ "expect": {
+  "actions": [
+   {
+    "read": "gh repo view"
+   }
+  ],
+  "allow": [],
+  "forbid": [
+   {
+    "write": "gh label create"
+   },
+   {
+    "write": "gh pr create"
+   },
+   {
+    "write": "git push"
+   }
+  ],
+  "end": "end_turn",
+  "final": "Facts: gh repo view says none of the git remotes point to a known GitHub host. Stops and says the project is not on GitHub, so setup writes nothing."
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "stops and tells the user",
+    "events": [
+     [
+      "read",
+      "gh repo view"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "writes the settings anyway",
+    "reason": "forbidden",
+    "events": [
+     [
+      "read",
+      "gh repo view"
+     ],
+     [
+      "write",
+      "gh label create needs-triage"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ]
+ }
+}

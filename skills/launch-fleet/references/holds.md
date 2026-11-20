@@ -76,4 +76,4 @@ The release action names the ordering hold comment id C; release never spawns.
 
 | Line | Do |
 | --- | --- |
-| `release #N` | The user approved it again since launch-fleet's old contract hold: take its `held` label off (`gh issue edit <N> --remove-label held`). It starts on a later line. Only launch-fleet's holds are released here, each once: a `held` label put on after launch-fleet's hold (by `to-tickets`, which takes its own off) is never launch-fleet's |
+| `release #N` | The user approved it again since launch-fleet's old contract hold (their approval or a C2 record in its form; a machine revision never releases a contract hold): take its `held` label off (`gh issue edit <N> --remove-label held`). It starts on a later line. Only launch-fleet's holds are released here, each once: a `held` label put on after launch-fleet's hold (by `to-tickets`, which takes its own off) is never launch-fleet's |

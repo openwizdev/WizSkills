@@ -1,8 +1,10 @@
 # Changesets
 
 A pull request that changes a skill adds one changeset here: a Markdown file
-with any name (such as `build-ticket-fix-typo.md`) that names each skill it
-changes, with that skill's bump, then one summary line for the release notes.
+(such as `build-ticket-fix-typo.md`) that names each skill it changes, with
+that skill's bump, then one summary line for the release notes. Changesets
+ignores a name starting with `.`, `README.md` in any case, `AGENTS.md`,
+`CLAUDE.md` and `GEMINI.md`, so the gate refuses those as changesets.
 
 ```markdown
 ---
@@ -24,4 +26,4 @@ Builders read the decision record before the verdict.
   release does.
 
 `python3 -I check/changesets.py check --base origin/main` runs the same gate as
-CI. [README.md](../README.md#versions) says how a release bundles the notes.
+CI. [docs/versions.md](../docs/versions.md) says how a release bundles the notes.

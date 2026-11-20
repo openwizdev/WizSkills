@@ -15,7 +15,8 @@ own line with the command that fixes it:
   3. Record author: the acting gh login is one (status.py's author check).
   4. Harness: the last setup check listed it (as for the App).
   5. Driver: PROGRAM answers `version` (the OpenWiz checkout's driver kit,
-     kernel/driver-kit/kit.py); skipped without --driver.
+     kernel/driver-kit/kit.py); skipped without --driver. An answer the kit
+     flags as possibly holding a credential is withheld, never printed.
   6. Skills: the installed build carries its skills (the build's
      setup.py runtime_pin).
 
@@ -33,6 +34,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -53,6 +55,15 @@ def load(name, path):
 first_fleet = load('openwiz_first_fleet', SKILLS / 'install/scripts/first_fleet.py')
 settings = load('openwiz_settings', SKILLS / 'setup/scripts/settings.py')
 status = load('openwiz_status', SKILLS / 'launch-fleet/scripts/status.py')
+# A saved value that might be a credential is never printed (#65 R3): status.py's credential shapes, and,
+# failing closed for the one free-text value (the operator), any long unbroken run no name has.
+CREDENTIAL = [pattern for what, pattern in status.PRIVATE if what == 'a credential']
+TOKEN_LIKE = re.compile(r'[A-Za-z0-9_+/=-]{20,}')
+
+
+def unsafe(text, free=False):
+    return any(p.search(text) for p in CREDENTIAL) or bool(free and TOKEN_LIKE.search(text))
+
 MISSING_LABEL = re.compile(r'triage-labels\.md: [^:]+: label (.+) is not in the tracker')
 
 
@@ -100,16 +111,32 @@ def recorded(args, value, why, component):
     """(problem, fix) for one component's recorded setup check, or None when it holds."""
     check = 'python3 -I -B %s --state-dir %s' % (
         shlex.quote(str(Path(args.build) / 'runtime/setup/setup.py')) + ' check', shlex.quote(args.state_dir))
+    # Setup holds none of prepare's values, or none it may show: the Prepare step asks the person for them
+    # (#1578 item 4, #65 R1 and R3).
+    guided = ("prepare setup for %s with the install skill's Prepare step (2. Connect; it asks for the CloudRoom "
+              'project, operator, service issue, answer thread, harness, model and effort), then %s'
+              % (args.repo, check))
     if value is None:
-        return why, check
+        return why, guided if why == 'setup has not run yet' else check
     project = value.get('project')
-    prepare = ('python3 -I -B %s prepare --state-dir %s --repository %s ...'
-               % (shlex.quote(str(Path(args.build) / 'runtime/setup/setup.py')), shlex.quote(args.state_dir),
-                  shlex.quote(args.repo)))
+    step = "the install skill's Prepare step, 2. Connect"
     if not isinstance(project, dict) or not isinstance(project.get('repository'), str):
-        return 'setup has no prepared project', prepare
+        return 'setup has no prepared project', guided
     if project['repository'].lower() != args.repo.lower():
-        return 'setup is prepared for %s' % project['repository'], prepare
+        # Every flag setup.py prepare requires, from the saved project, as a preview that saves nothing. Each
+        # value is bound to its flag in one word, so a dash-leading value stays a value (#65 R2).
+        flags = [('--state-dir', args.state_dir), ('--repository', args.repo)] + [
+            (flag, str(project.get(key))) for flag, key in (
+                ('--project', 'project'), ('--operator', 'operator'), ('--service-issue', 'service_issue'),
+                ('--answer-thread', 'answer_thread'), ('--harness', 'harness'), ('--model', 'model'),
+                ('--effort', 'effort'))]
+        if any(unsafe(text, flag == '--operator') for flag, text in flags[2:]):
+            return 'setup is prepared for %s' % project['repository'], guided
+        prepare = 'python3 -I -B %s prepare %s' % (shlex.quote(str(Path(args.build) / 'runtime/setup/setup.py')),
+                                                   ' '.join(shlex.quote('%s=%s' % pair) for pair in flags))
+        return 'setup is prepared for %s' % project['repository'], (
+            '%s (a preview: change what differs for %s, confirm it with --yes --operation, then %s)'
+            % (prepare, args.repo, check))
     identity = value.get('identity')
     if (component == 'github_app' and isinstance(identity, dict) and identity.get('repository') == project['repository']
             and identity.get('selected') == 'personal_login' and identity.get('app_choice') == 'skip'
@@ -127,9 +154,20 @@ def recorded(args, value, why, component):
         return None
     if code.endswith('_unreadable'):
         return 'could not be read (%s)' % code, check
+    if code == 'app_all_repositories':
+        return ('not verified (%s)' % code,
+                "switch OpenWiz's GitHub App installation on %s to Only select repositories, including %s "
+                "(Settings > Applications > Installed GitHub Apps > Configure, or the organization's Settings > "
+                'GitHub Apps), then %s' % (args.repo.split('/')[0], args.repo, check))
     if component == 'github_app':
         return ('not verified (%s)' % code,
                 "install OpenWiz's GitHub App on %s from the setup page, then %s" % (args.repo, check))
+    if code == 'harness_unavailable':
+        # setup.py records this only when it read the offered catalogue and the selection isn't in it.
+        chosen = '%s, %s, %s effort' % (project.get('harness'), project.get('model'), project.get('effort'))
+        return ('%s is not offered (%s)' % ('the saved harness, model or effort' if unsafe(chosen) else chosen, code),
+                'choose a harness, model and effort that openwiz models --json offers and prepare setup again '
+                'with them (%s), then %s' % (step, check))
     return 'not verified (%s)' % code, 'sign in to %s in CloudRoom, then %s' % (project.get('harness'), check)
 
 
@@ -149,13 +187,34 @@ def author(args):
 
 def driver(args):
     """Check 5: the driver kit's own version check."""
-    update = 'git -C %s pull --ff-only, then the doctor again' % shlex.quote(args.openwiz)
+    pull = 'git -C %s pull --ff-only, then the doctor again' % shlex.quote(args.openwiz)
     try:
         kit = load('openwiz_driver_kit', Path(args.openwiz) / 'kernel/driver-kit/kit.py')
-        verdict, what = kit.Kit(types.SimpleNamespace(driver=args.driver), None).version()
+        checker = kit.Kit(types.SimpleNamespace(driver=args.driver), None)
+        # The driver gets no token or other value of the doctor's environment, only what a program needs to
+        # start, and the kit's own run mark (#65 R4). A kit with no Kit.env could pass on everything: refuse it.
+        if not isinstance(getattr(checker, 'env', None), dict):
+            raise TypeError('Kit.env')
+        checker.env = dict({k: os.environ[k] for k in ('PATH', 'HOME', 'LANG') if k in os.environ},
+                           **{k: v for k, v in checker.env.items() if k == 'OPENWIZ_KIT_RUN'})
+        verdict, what = checker.version()
     except Exception as error:  # a kit that can't run is a problem to report, never a crash
-        return [('the driver kit could not run (%s)' % type(error).__name__, update)]
-    return [] if verdict == 'pass' else [('%s does not answer version: %s' % (args.driver, what), update)]
+        return [('the driver kit could not run (%s)' % type(error).__name__, pull)]
+    leaks = getattr(checker, 'leaks', None)
+    if verdict == 'pass' and leaks == []:
+        return []
+    # A driver outside the checkout is its own program: pulling OpenWiz leaves it as it is (#1578 item 5).
+    found = shutil.which(args.driver) or args.driver
+    inside = Path(args.openwiz).resolve() in Path(found).resolve().parents
+    update = pull if inside else ('update or replace the driver at %s so it answers version for this OpenWiz, '
+                                  'then the doctor again' % shlex.quote(args.driver))
+    if leaks != []:
+        # The kit flags the driver's answer as possibly holding a credential, or can't say (a kit without
+        # the flag): never repeat it, even when version otherwise passed (#1578 item 1).
+        return [("%s's version answer may hold a credential (%s), so the doctor withholds it"
+                 % (args.driver, 'the driver kit flags it' if leaks else 'this driver kit cannot check it'), 'run %s version in your own terminal, not through an agent, to read it; then %s'
+                 % (shlex.quote(args.driver), update))]
+    return [('%s does not answer version: %s' % (args.driver, what), update)]
 
 
 def skills(args):

@@ -5,6 +5,7 @@ The world is the JSON file named by FAKE_WORLD. Each write is appended to its
 `writes`. `faults` makes the next matching call fail: `post`, `patch` or
 `merge` set to `fail` (no effect, exit 1) or `lost` (the effect happens, the
 response is lost: exit 1). `merge` may also be `queue` (the queue takes it).
+`readback` set to `fail` fails the first comment-list read after a write.
 """
 import json
 import os
@@ -128,6 +129,9 @@ if args[:2] != ['api', 'graphql'] and args[0] == 'api':
                 fail('connection reset')
         out(c)
     if method == 'GET' and parts[0] == 'issues' and parts[2:] == ['comments']:
+        if world['writes'] and world.get('faults', {}).get('readback') == 'fail':
+            fault('readback')
+            fail('HTTP 502')
         page = comments(parts[1])
         out([page] if '--slurp' in args else page)
     fail('unexpected api call: %s' % ' '.join(args))

@@ -814,6 +814,26 @@ class MachineApproval(unittest.TestCase):
         (self.root / "contracts/export.v1.md").write_text("The merged synthetic contract.\n")
         self.assertEqual(chain(tickets), "width: chain 3, widest 4")
 
+    def test_a_context_file_link_adds_no_serial_work_but_a_needed_input_does(self):
+        # catches (review R5 of #1353): a file link that F6 starts past
+        # counted in the critical chain, or one whose blocker owns an input
+        # the ticket relies on left out of it.
+        def chain(tickets):
+            out = self.approve(tickets)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            return next(l for l in out.stdout.split("\n") if l.startswith("Checks: ")).split("; ")[4]
+
+        def file_blocked(relies):
+            tickets = plan()
+            first = find(tickets, 9101)
+            first["blocked_by"].append({"number": 9105, "state": "OPEN"})
+            first["body"] = first["body"].replace("**Relies on:** nothing", f"**Relies on:** {relies}").replace(
+                "## Links\n\nnone\n", "## Links\n\n- #9105 file: `docs/agents/fleet.md`\n")
+            return tickets
+
+        self.assertEqual(chain(file_blocked("nothing")), "width: chain 4, widest 3")
+        self.assertEqual(chain(file_blocked("`docs/agents/fleet.md`")), "width: chain 5, widest 2")
+
 
 PREFER = HERE / "prefer.py"
 
@@ -869,6 +889,22 @@ class PreferCut(unittest.TestCase):
         out = self.prefer(outside, merged)
         self.assertEqual(out.stdout, "cut a.json: chain 3, widest 1\ncut b.json: chain 2, widest 2\n"
                                      "prefer b.json: the shorter critical chain\n")
+
+    def test_a_file_link_is_context_except_into_a_persons_ticket(self):
+        # catches (review R5 of #1353): a cut whose tickets only share files
+        # rated as a serial chain, so the slower cut with a real dependency wins.
+        w = "waiting", "builder"
+        shared = {"tickets": cut([("A", *w), ("B", *w), ("C", *w)], [])["tickets"],
+                  "links": [{"blocker": "A", "ticket": "B", "kind": "file", "reason": "shared.md"},
+                            {"blocker": "B", "ticket": "C", "kind": "file", "reason": "shared.md"}]}
+        serial = cut([("A", *w), ("B", *w), ("C", *w)], [("A", "B")])
+        out = self.prefer(serial, shared)
+        self.assertEqual(out.stdout, "cut a.json: chain 2, widest 2\ncut b.json: chain 1, widest 3\n"
+                                     "prefer b.json: the shorter critical chain\n")
+        person = {"tickets": cut([("A", *w), ("J", "waiting", "jake")], [])["tickets"],
+                  "links": [{"blocker": "A", "ticket": "J", "kind": "file", "reason": "notes.md"}]}
+        out = self.prefer(person, person)
+        self.assertEqual(out.stdout.splitlines()[0], "cut a.json: chain 2, widest 1")
 
     def test_an_unusable_cut_is_refused(self):
         # catches: a cycle or a link to an unknown ticket read as a short

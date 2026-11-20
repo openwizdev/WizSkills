@@ -3,7 +3,6 @@
 Write a short procedure an agent can repeat. State when to start, what to do,
 and how to verify the result. Judge a revision by the context loaded for the
 whole successful workflow, including dependencies, tool results and retries.
-Use the [measurement harness](../tools/measure/README.md) for comparisons.
 Keep the reproducible static count of required paths separate from tokens
 observed by the host.
 

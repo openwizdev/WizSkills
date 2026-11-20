@@ -195,6 +195,20 @@ class Copy(Base):
         version = subprocess.run([str(dest / 'driver'), 'version'], capture_output=True, text=True)
         self.assertEqual(json.loads(version.stdout)['driver'], 'examplehost')
 
+    def test_copy_opens_its_readme_with_the_login_line_for_the_host(self):
+        # catches: a copied driver whose README keeps the template's login line, so a cloud driver says its login
+        # stays on the user's machine (driver v1, "The login line")
+        for login, line in (('machine', 'Login: stays on your machine'), ('host', 'Login: held by examplehost')):
+            with self.subTest(login):
+                self.begin()
+                repo = self.tmp / ('repo-' + login)
+                self.wd('copy', '--state', self.state, '--openwiz', OPENWIZ, '--into', repo, '--login', login,
+                        check=0)
+                lines = (repo / 'adapters' / 'examplehost' / 'README.md').read_text().split('\n')
+                self.assertTrue(lines[0].startswith('# '), lines[0])
+                self.assertEqual(lines[1:3], ['', line])
+                self.assertEqual([x for x in lines if x.startswith('Login:')], [line])
+
     def test_copy_never_overwrites(self):
         # catches: a rerun replacing the user's fixed driver with the template again
         self.begin()

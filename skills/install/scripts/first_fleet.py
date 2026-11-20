@@ -54,7 +54,7 @@ on the user's yes right before it (a preview names the host and that it can
 cost money, with a digest of its exact effects; `--yes --confirm DIGEST`
 starts only if a fresh read still has exactly those effects), and only from the spec's latest approval when it is the machine plan
 approval of this onboarding's confirmed grill, on the host the user chose (a
-local host only once its setting is on the default branch). It
+driver host only once its setting is on the default branch). It
 reads launch-fleet's own frontier (../../launch-fleet/scripts/fleet.sh
 frontier, which checks that to-tickets's approval is current), keeps this
 spec's tickets, reads the fleet settings setup wrote (every builder table the
@@ -141,11 +141,19 @@ PROGRAMS = {'claude-code': 'claude', 'codex': 'codex'}
 HOST_FILE = 'docs/agents/host.md'
 DRIVER_NAME = r'[a-z0-9]+(?:-[a-z0-9]+)*'
 VERSION_WAIT = 60
+PROBE_ENV = ('PATH', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR')
+RECORDS = r'openwiz:records v[1-9][0-9]{0,2}'
+CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox')
+LOGIN_LINE = 'https://github.com/openwizdev/OpenWiz/blob/main/adapters/%s/README.md'
 HOSTS = {
     'local': {'label': 'this machine', 'where': 'on this machine'},
     'boat': {'label': 'boat.dev, each agent in its own cloud sandbox', 'where': 'on boat.dev',
              'program': 'boat', 'link': 'https://boat.dev',
              'then': 'Then sign in to boat yourself, and connect GitHub and your harness in its dashboard.',
+             'login': 'Login: held by boat.dev. Sign in to boat yourself, then connect GitHub and the key or '
+                      "subscription for your harness in boat.dev's dashboard (Agents & Proxying); OpenWiz never "
+                      'touches that login.',
+             'ask': 'Have you signed in to boat.dev and connected GitHub and your harness in its dashboard?',
              'run': 'Agents run on boat.dev, many at once, each in its own sandbox, through the boat CLI you are '
                     'signed into.',
              'cost': 'boat.dev bills per second while each sandbox runs, against your boat plan, and model-provider '
@@ -275,9 +283,9 @@ class State:
             return False
 
 
-def run(argv, env=None, timeout=600):
+def run(argv, env=None, timeout=600, stdin=None):
     try:
-        return subprocess.run(argv, capture_output=True, timeout=timeout, env=env)
+        return subprocess.run(argv, capture_output=True, timeout=timeout, env=env, stdin=stdin)
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -319,7 +327,8 @@ def driver_answer(env, adapters, name):
     path = Path(adapters, name, 'driver')
     if not os.path.isabs(adapters) or not path.is_file() or not os.access(path, os.X_OK):
         return None, 'there is no runnable driver'
-    result = run([str(path), 'version'], env, timeout=VERSION_WAIT)
+    probe = {k: env[k] for k in PROBE_ENV if k in env}
+    result = run([str(path), 'version'], probe, timeout=VERSION_WAIT, stdin=subprocess.DEVNULL)
     if result is None:
         return None, 'its `version` did not answer'
     if result.returncode != 0:
@@ -327,8 +336,14 @@ def driver_answer(env, adapters, name):
     try:
         version = strict(result.stdout.decode('utf-8'))
         assert isinstance(version, dict) and set(version) == {'driver', 'records', 'can'}
-        assert isinstance(version['records'], list) and 'openwiz:records v1' in version['records']
-        assert isinstance(version['can'], list) and {'start', 'wake', 'stop'} <= set(version['can'])
+        assert isinstance(version['driver'], str) and re.fullmatch(DRIVER_NAME, version['driver'])
+        assert len(version['driver']) <= 40
+        records, can = version['records'], version['can']
+        assert isinstance(records, list) and records and len(set(map(str, records))) == len(records)
+        assert all(isinstance(r, str) and re.fullmatch(RECORDS, r) for r in records)
+        assert 'openwiz:records v1' in records
+        assert isinstance(can, list) and len(set(map(str, can))) == len(can)
+        assert all(isinstance(c, str) and c in CAN for c in can) and {'start', 'wake', 'stop'} <= set(can)
     except (AssertionError, UnicodeDecodeError, ValueError, TypeError):
         return None, "its `version` answer is not driver v1's"
     if version['driver'] != name:
@@ -651,11 +666,16 @@ def where(got):
         print('Agents run in Cloudroom, many at once. They use your Cloud Credits: unknown until measured. '
               'Model-provider charges are separate.')
     else:
-        print('%s %s.' % (HOSTS.get(agents, {}).get('run', "Agents run through OpenWiz's %s driver, signed in as "
-                                                             'that host asks.' % agents), host_cost(agents).capitalize()))
+        known = HOSTS.get(agents, {})
+        print(known.get('run', "Agents run through OpenWiz's %s driver." % agents))
+        print('Cost: %s.' % host_cost(agents))
+        print(known.get('login', "Login: where %s's driver says, in the Login line of %s. Sign in there yourself; "
+                                 'OpenWiz never touches that login.' % (agents, LOGIN_LINE % agents)))
+        print(known.get('ask', 'Have you signed in to %s as that Login line says?' % agents))
     print('OpenWiz is free now.')
     if not got.get('--yes'):
-        print("Nothing recorded. Ask where agents run; on the user's answer, run again with that --agents and --yes.")
+        print("Nothing recorded. Ask where agents run%s; on the user's yes, run again with that --agents and --yes."
+              % ('' if agents in ('local', 'cloud') else ', and the sign-in question above'))
         return 12
     if state.value.get('launch'):
         raise Exit(5, 'This onboarding already launched its fleet; ask to change the host setting instead.')
@@ -1761,8 +1781,10 @@ def resume(got):
     candidate = prepared(folder) if folder else None
     choices = value.get('choices') or {}
     if not host:
-        step = ('where', "Say the teacher's opening lines, run where to list the hosts this OpenWiz offers, ask "
-                'where agents run and run where --agents <the pick> --yes on the answer.')
+        step = ('where', "Say the teacher's opening lines, then run where --build <build> to list the hosts this "
+                'OpenWiz offers, and ask where agents run. On the answer, run where --agents <the pick> --build '
+                "<build> and say what it prints: the cost and, for a driver host, where its login lives. Only on the "
+                "user's yes to that, run it again with --yes.")
     elif created.get('state') in ('pending', 'uncertain'):
         step = ('project', 'Creating %s is %s: run create-repo --repo %s --yes again; it reads before it creates.'
                 % (created['repo'], created['state'], created['repo']))

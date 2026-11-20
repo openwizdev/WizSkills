@@ -1239,6 +1239,22 @@ class WakeRepair(Tracker):
         self.assertEqual(self.wake(), (0, []))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
+    def test_a_needs_info_whose_application_is_not_listed_yet_stays_and_is_reported(self):
+        # catches: a needs-info left on silently by a wake that settles an earlier wake's repair
+        # while GitHub's event list doesn't show who applied the label yet (#1702).
+        self.asking_on_12(fail_once=[f'POST repos/{REPO}/issues/12/labels'])
+        self.assertEqual(self.wake()[0], 2)
+        self.world = self.load()
+        it = self.ticket(self.world)
+        it['labels'].append('needs-info')
+        resumed = next(c for c in it['comments'] if c['id'] == 104)
+        resumed.update(body=note(state='working', step='got the answer'), updated=ago(1))
+        self.save()
+        code, report = self.wake()
+        self.assertEqual((code, len(report)), (1, 1), report)
+        self.assertRegex(report[0], r'^#12: needs-info left on: ')
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
     def test_a_repair_that_fails_part_way_still_reports_what_it_changed(self):
         # catches: a label written on one ticket and then left out of the report because a
         # later ticket's repair failed, so the wake never records that it changed anything.

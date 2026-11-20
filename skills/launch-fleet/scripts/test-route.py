@@ -43,6 +43,20 @@ sys.exit(1 if errors else 0)
 '''
 
 
+# A fake `fleet.sh`, run by `sh`: it logs its arguments and prints the world's lines.
+FAKE_FLEET = r'''python3 -I -c '
+import json, os, sys
+w = json.load(open(os.environ["FAKE_WORLD"]))
+open(os.environ["FAKE_LOG"], "a").write(json.dumps(["fleet.sh"] + sys.argv[1:]) + "\n")
+for line in w.get("fleet_lines", []):
+    print(line)
+if w.get("fleet_code"):
+    print("fleet.sh: synthetic refusal", file=sys.stderr)
+sys.exit(w.get("fleet_code", 0))
+' "$@"
+'''
+
+
 def pr(*closes, more=False):
     """A pull request closing each `owner/name#N` in `closes`."""
     return {'__typename': 'PullRequest', 'closingIssuesReferences': {
@@ -66,11 +80,19 @@ class World:
         self.world = {'repo': repo, 'items': items or {}, 'fail': fail, 'error': error, 'asked': []}
         self.log = self.dir / 'calls.log'
         self.log.write_text('')
+        fleet = self.dir / 'bin/fleet.sh'
+        fleet.write_text(FAKE_FLEET)
         self.env = dict(os.environ, PATH='%s:%s' % (self.dir / 'bin', os.environ['PATH']),
-                        FAKE_WORLD=str(self.dir / 'world.json'), FAKE_LOG=str(self.log), GH_REPO=HOME)
+                        FAKE_WORLD=str(self.dir / 'world.json'), FAKE_LOG=str(self.log), GH_REPO=HOME,
+                        ROUTE_FLEET_SH=str(fleet))
+
+    def fleet(self, lines=(), code=0):
+        """What the fake `fleet.sh wake` prints, and its exit status."""
+        self.world.update(fleet_lines=list(lines), fleet_code=code)
 
     def run(self, *args, env=None):
-        asked = [int(a) for a in args[2:] if a.isdigit()] if args[:1] == ('refs',) else []
+        first = {'refs': 2, 'tick': 3}.get(args[0] if args else None)
+        asked = [int(a) for a in args[first:] if a.isdigit()] if first else []
         (self.dir / 'world.json').write_text(json.dumps(dict(self.world, asked=asked)))
         r = subprocess.run([sys.executable, '-I', str(HERE / 'route.py'), *args], capture_output=True, text=True,
                            env=dict(self.env, **(env or {})), cwd=self.dir, timeout=60)
@@ -164,6 +186,93 @@ class Loop(unittest.TestCase):
         path = w.loops({'repo': HOME, 'loops': {'10': self.ID}})
         for s in ('', '-10', '10 40', 'S'):
             self.assertEqual(w.run('loop', path, s)[:2], (2, ''), s)
+
+
+class Tick(unittest.TestCase):
+    """One webhook tick's group of messages, from the numbers to the effect lines it acts on."""
+    ID = '0f1e2d3c-synthetic-loop'
+
+    def world(self, **kw):
+        w = World(self, **kw)
+        return w, w.loops({'repo': HOME, 'loops': {'10': self.ID}})
+
+    def test_a_satellite_message_runs_its_spec_s_loop(self):
+        # catches: the tick's three steps (refs, wake, loop id) not joining up for another repository's message.
+        w, path = self.world(items={'29': pr(HOME + '#13')})
+        w.fleet(['wake fleet #10: room-cli loop run fleet-10'])
+        self.assertEqual(w.run('tick', SAT, path, '29'), (0, 'wake fleet #10: room-cli loop run %s\n' % self.ID, ''))
+        self.assertEqual([c for c in w.calls() if c[0] == 'fleet.sh'], [['fleet.sh', 'wake', '13']])
+
+    def test_a_missing_handle_is_reported_privately_and_writes_nothing(self):
+        # catches (R1): a missing loop id posting a GitHub record, whose own issue_comment message comes back
+        # through the same webhook and wakes the same missing handle again, over and over.
+        w, _ = self.world(items={'29': pr(HOME + '#13')})
+        w.fleet(['wake fleet #10: room-cli loop run fleet-10'])
+        for path in (str(w.dir / 'absent.json'), w.loops({'repo': HOME, 'loops': {}})):
+            self.assertEqual(w.run('tick', SAT, path, '29'), (0, 'wake fleet #10: unresolved\n', ''))
+        gh = [c for c in w.calls() if c[0] != 'fleet.sh']
+        self.assertTrue(gh and all(c[:2] == ['api', 'graphql'] and 'mutation' not in ' '.join(c) for c in gh), gh)
+
+    def test_a_group_with_no_project_ticket_ends_quietly(self):
+        # catches (R3): a satellite issue, or a pull request closing nothing, calling `fleet.sh wake` with no
+        # numbers, which prints its usage and exits 2.
+        w, path = self.world(items={'5': ISSUE, '6': pr(SAT + '#2')})
+        self.assertEqual(w.run('tick', SAT, path, '5', '6'), (0, '', ''))
+        self.assertEqual([c for c in w.calls() if c[0] == 'fleet.sh'], [])
+
+    def test_the_project_s_own_numbers_go_straight_to_wake(self):
+        # catches: the project's own messages paying the satellite read, or losing a line wake prints.
+        w, path = self.world(repo=HOME)
+        w.fleet(['start #41: G1: gadget model (spec #40)', 'wake fleet #10: room-cli loop run fleet-10'])
+        self.assertEqual(w.run('tick', HOME, path, '41', '13'),
+                         (0, 'start #41: G1: gadget model (spec #40)\nwake fleet #10: room-cli loop run %s\n' % self.ID,
+                          ''))
+        self.assertEqual(w.calls(), [['fleet.sh', 'wake', '13', '41']])
+
+    def test_a_failed_lookup_or_wake_is_a_failure(self):
+        # catches: a refused read or a refused `fleet.sh wake` passing as a quiet nothing due.
+        w, path = self.world(fail=True)
+        code, out, err = w.run('tick', SAT, path, '29')
+        self.assertEqual((code, out), (2, ''))
+        self.assertEqual([c for c in w.calls() if c[0] == 'fleet.sh'], [])
+        w, path = self.world(repo=HOME)
+        w.fleet(code=2)
+        code, out, err = w.run('tick', HOME, path, '13')
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('synthetic refusal', err)
+
+
+class Setup(unittest.TestCase):
+    def test_the_webhook_address_never_touches_a_file_or_an_argument(self):
+        # catches (R2): a setup step that saves the wake loop's address to a file, prints it, or passes it on a
+        # command line, where it outlives the step or shows in a process list.
+        skill = HERE.parent
+        text = '\n'.join(p.read_text() for p in sorted(skill.rglob('*.md')))
+        self.assertFalse('launch-fleet-wakes.json' in text, 'a setup step saves the address to a file')
+        commands, block, cur = [], False, ''
+        for line in text.splitlines():
+            if line.strip().startswith('```'):
+                block = not block
+                continue
+            if block:
+                cur += line.strip()
+                if not cur.endswith('\\'):
+                    commands.append(cur)
+                    cur = ''
+                else:
+                    cur = cur[:-1] + ' '
+        risky = [c for c in commands if ('loop create' in c and '--webhook' in c) or 'loop hook' in c]
+        self.assertGreaterEqual(len(risky), 2, 'the wake loop is created and its address issued in the setup')
+        for c in risky:
+            head, tail = c.split('room-cli loop', 1)
+            self.assertNotRegex(head, r"(\$\(|`|=)\s*$", c)
+            self.assertRegex(tail, r"\|\s*jq ", c)
+            self.assertNotRegex(tail, r"(^|[^|&])>|\btee\b|--slurpfile|--rawfile", c)
+        for c in commands:
+            if 'loop hook' in c:
+                self.assertRegex(c, r"\|\s*gh api --method POST '?repos/[^ ]+/hooks'? --input -", c)
+            if 'loop create' in c and '--webhook' in c:
+                self.assertIn('| jq -r .id', c)
 
 
 if __name__ == '__main__':

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // A synthetic GitHub for the controller lease and hunter provisioning (#1685): no network.
 // State: comments [{id, created_at, body}], clock (ISO time of the next post, else now),
-// race (a rival body posted just before ours), readFailure, postFailure, auth ('fail').
+// race (a rival body posted just before ours), readFailure, readFailures (fail only the next N
+// reads), postFailure, auth ('fail').
 import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 const file = process.env.HUNTR_FAKE_STATE;
@@ -16,7 +17,9 @@ const add = body => {
 };
 const repo = process.env.GH_REPO;
 if (a.join(' ') === `api --paginate --slurp repos/${repo}/issues/394/comments?per_page=100`) {
-  if (w.readFailure) { process.stderr.write('synthetic read failure\n'); process.exit(1); }
+  const failing = w.readFailure || w.readFailures > 0;
+  if (w.readFailures > 0) { w.readFailures--; writeFileSync(file, JSON.stringify(w)); }
+  if (failing) { process.stderr.write('synthetic read failure\n'); process.exit(1); }
   const pages = [];
   for (let i = 0; i < w.comments.length || !pages.length; i += 100) pages.push(w.comments.slice(i, i + 100));
   process.stdout.write(JSON.stringify(pages));

@@ -29,6 +29,11 @@ JOURNEY = json.loads((FIXTURES / 'first-fleet.json').read_text())
 NOW = 1793534400  # 2026-11-01T12:00:00Z, the synthetic clock fleet.sh reads
 REPO = JOURNEY['repo']
 CODEX = ('codex', 'syn-codex-model-01', 'high')
+GRILL = 'https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-71'
+# Stub until #1340 (WizSkills #60) merges: launch-fleet's frontier on main does
+# not read to-tickets' machine plan approval yet, so no fleet can start from one.
+WS17 = 'Machine plan approval' in (SKILL_DIR.parent / 'launch-fleet/scripts/fleet.sh').read_text()
+WS17_WHY = 'stub: launch-fleet on main does not read machine plan approvals until #1340 (WizSkills #60) merges'
 CLAUDE = ('claude-code', 'syn-claude-model-01', 'high')
 
 
@@ -60,8 +65,8 @@ FILES = {
 
 def skill_steps():
     """The journey's step names, in order, from the packaged skill's numbered sections."""
-    explain, _, branch = SKILL.read_text().partition('## 5. First fleet\n')
-    names = re.findall(r'^## 4\. (Explain)$', explain, re.M)
+    explain, _, branch = SKILL.read_text().partition('## 5. The onboarding road\n')
+    names = re.findall(r'^## 4\. (Teach)$', explain, re.M)
     names.extend(re.findall(r'^### [0-9]+\. (.+)$', branch.partition('\n## ')[0], re.M))
     return [name.split()[-1].lower() for name in names]
 
@@ -204,16 +209,20 @@ class Journey:
                 'body': '## What to build\n\n%s.\n' % t['title'], 'comments': []})
         self.save_world()
 
-    def approve(self, spec=None, tickets=None, comment=90001):
-        """to-tickets's approval record, with the fingerprint revision.sh gives the plan now."""
+    def approve(self, spec=None, tickets=None, comment=90001, grill=GRILL, human=False):
+        """to-tickets's machine plan approval (decisions.v1) of this grill, or an older human approval record,
+        with the fingerprint revision.sh gives the plan now."""
         spec, tickets = spec or self.spec, tickets or self.tickets
         out = subprocess.run(['sh', str(REVISION), str(spec)], env=self.env(), capture_output=True, check=True)
         fingerprint = hashlib.sha256(out.stdout).hexdigest()
         rows = '\n'.join('| #%d | %s | %s | ready-for-agent |' % (
-            t['number'], t['title'], ', '.join('#%d' % b for b in t['blockers']) or 'none') for t in tickets)
-        body = ('**Plan graph approved by Robin, 2026-11-01, revision 1:** approved the synthetic plan.\n'
-                'Private record: https://github.com/jparker2006/ClosedWiz/issues/1#issuecomment-1\n\n'
-                '| Ticket | Title | Blocked by | Label |\n| --- | --- | --- | --- |\n%s\n\nFingerprint: `%s`' % (rows, fingerprint))
+            t['number'], t['title'], ' '.join('#%d' % b for b in t['blockers']) or 'none') for t in tickets)
+        head = ('**Plan graph approved by Robin, 2026-11-01, revision 1:** approved the synthetic plan.\n'
+                'Private record: https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-1\n'
+                if human else '**Machine plan approval, 2026-11-01, revision 1:** links, relies, sizes, width and '
+                'owned paths passed.\nGrill confirmed: %s\n\nChecks: synthetic.\n' % grill)
+        body = head + ('\n| Ticket | Title | Blocked by | Label |\n| --- | --- | --- | --- |\n%s\n\n'
+                       'Fingerprint: `%s`\n' % (rows, fingerprint))
         issue = next(i for i in self.world['issues'] if i['number'] == spec)
         issue['comments'].append({'id': comment, 'at': '2026-11-01T10:00:00Z', 'body': body})
         if spec == self.spec:
@@ -282,17 +291,9 @@ class Journey:
             return []
         return [json.loads(line) for line in self.room_log.read_text().splitlines()]
 
-    def confirmation(self):
-        """The confirmation the latest preview printed: what the user said yes to."""
-        for args, result in reversed(self.calls):
-            found = re.findall(r'^Confirmation: ([0-9a-f]{64})$', result.stdout, re.M)
-            if found:
-                return found[-1]
-        return '0' * 64
-
     def tool(self, turn):
         """Run one recorded tool step, answering the fakes as the turn records."""
-        args = [self.confirmation() if a == '@preview' else a for a in turn['tool']]
+        args = turn['tool']
         self.queue({'fleet': [{'exit': 0, 'stdout': self.fleet_view(turn['progress'])}]} if 'progress' in turn else {})
         self.room_script.write_text(json.dumps(
             {'spawn': [{'exit': turn['spawn'], 'stdout': ''}]} if 'spawn' in turn else {}))
@@ -316,14 +317,14 @@ class Journey:
         return results
 
 
-YES = {'tool': ['launch', '--spec', '900', '--yes', '--confirm', '@preview'], 'spawn': 0}
-PREVIEW = {'tool': ['launch', '--spec', '900']}
+LAUNCH = {'tool': ['launch', '--spec', '900'], 'spawn': 0}
 
 
 class RecordedJourney(unittest.TestCase):
     def test_the_conversation_follows_the_packaged_skill(self):
         steps = skill_steps()
-        self.assertEqual(steps, ['explain', 'project', 'connect', 'grill', 'agents', 'plan', 'launch', 'watch'])
+        self.assertEqual(steps, ['teach', 'run', 'start', 'connect', 'setting', 'grill', 'agents', 'plan', 'launch',
+                                 'watch'])
         seen = [turn['step'] for turn in JOURNEY['turns']]
         self.assertEqual(sorted(set(seen), key=steps.index), steps, 'every step, and only the skill\'s')
         self.assertEqual(seen, sorted(seen, key=steps.index), 'in the skill\'s order')
@@ -338,10 +339,14 @@ class RecordedJourney(unittest.TestCase):
             asked += list(turn.get('answers', {}))
             if turn.get('tool', [None])[0] == 'create-repo' and '--yes' in turn['tool']:
                 self.assertIn('create_repository', permitted, 'repository created only after a yes')
-            if turn.get('tool', [None])[:2] == ['launch', '--spec'] and '--yes' in turn['tool']:
-                self.assertIn('start_cloud_agents', permitted, 'agents start only after a yes')
+            if turn.get('tool', [None])[0] == 'where' and '--yes' in turn['tool']:
+                self.assertIn('spend_cloud_credits', permitted, 'what Cloudroom spends is answered before it is recorded')
+                self.assertEqual(turn['tool'][2], answers(turns[:i])['agents'])
+            if turn.get('tool', [None])[0] == 'launch':
+                self.assertEqual(turn['tool'], ['launch', '--spec', '900'], 'the launch asks nothing (J203)')
+                self.assertIn('spend_cloud_credits', permitted)
             if turn.get('tool', [None])[0] == 'choose':
-                self.assertEqual(turn['tool'], ['choose', '--from-setup', '--agents', answers(turns[:i])['agents']])
+                self.assertEqual(turn['tool'], ['choose', '--from-setup'])
         self.assertEqual(len(asked), len(set(asked)), 'no choice is asked twice')
         self.assertEqual(answers(turns)['agents'], 'cloud')
         self.assertNotIn('engine', json.dumps(turns).lower(), 'no engine question or effect')
@@ -436,7 +441,8 @@ class Continuation(unittest.TestCase):
     def test_a_failed_refresh_withdraws_the_carried_setup_but_keeps_the_choices(self):
         # Review R4: catches an old carried setup staying eligible after setup refuses.
         j, result = self.carried(setup_state())
-        self.assertEqual(j.helper(['choose', '--from-setup', '--agents', 'cloud']).returncode, 0)
+        self.assertEqual(j.helper(['where', '--agents', 'cloud', '--yes']).returncode, 0)
+        self.assertEqual(j.helper(['choose', '--from-setup']).returncode, 0)
         j.write_setup(setup_state(overrides={'personal_github': 'identity_no_push'}))
         refused = j.helper(['continue'])
         self.assertEqual(refused.returncode, 5, refused.stdout)
@@ -535,6 +541,7 @@ class Continuation(unittest.TestCase):
 
     def test_the_prepared_agents_are_reused_only_when_offered(self):
         j = Journey(self)
+        self.assertEqual(j.helper(['where', '--agents', 'cloud', '--yes']).returncode, 0)
         self.assertEqual(j.helper(['choose', '--from-setup', '--agents', 'cloud']).returncode, 5, 'nothing carried yet')
         j.write_setup(setup_state(settings=('codex', 'syn-codex-model-01', 'xhigh')))
         self.assertEqual(j.helper(['continue']).returncode, 0)
@@ -547,6 +554,7 @@ class Continuation(unittest.TestCase):
 
 
 class Launch(unittest.TestCase):
+    @unittest.skipUnless(WS17, WS17_WHY)
     def test_the_whole_journey_starts_one_fleet_thread_through_launch_fleet(self):
         # #636 (J87 Q1): the first fleet starts as launch-fleet starts every
         # fleet; catches any engine or tick call, a second start, or a start
@@ -569,53 +577,56 @@ class Launch(unittest.TestCase):
         for words in ('You are the fleet thread for spec #900 of %s.' % REPO, 'Use the launch-fleet skill.',
                       'do its Fleet threads section, first wake.'):
             self.assertIn(words, flags['--prompt'])
-        preview = next(r for turn, r in results if turn['tool'] == ['launch', '--spec', '900']).stdout
-        for line in ('1 fleet thread, codex syn-codex-model-01 high', 'checks spec #900 every 10 minutes',
-                     'Then 3 builders', '#901 S1: the field and its sheep', 'reviewed by claude-code syn-claude-model-01 high',
-                     'CloudRoom project prj_synthetic', 'Cloud Credits: unknown'):
-            self.assertIn(line, preview)
+        started = next(r for turn, r in results if turn['tool'] == ['launch', '--spec', '900']).stdout
+        for line in ("Started spec #900's fleet thread in Cloudroom (codex syn-codex-model-01 high)",
+                     'checks the spec every 10 minutes', '#901 S1: the field and its sheep',
+                     'reviewed by claude-code syn-claude-model-01 high', 'Cloud Credits: unknown',
+                     'The plan passed its checks, so the fleet started: 3 builders'):
+            self.assertIn(line, started)
+        self.assertNotIn('#904', started)
         watch = results[-1][1].stdout
         for line in ('Spec #900 has no fleet record yet', '#901 building', '#904 blocked',
                      '5 tickets: 3 building, 2 blocked', 'Counts are progress, not a first merge'):
             self.assertIn(line, watch)
         self.assertEqual(stat.S_IMODE(j.state.stat().st_mode), 0o600, 'owner-only state')
 
+    @unittest.skipUnless(WS17, WS17_WHY)
     def test_repeat_and_reload_never_start_again(self):
         j = Journey(self)
         j.replay()
-        again = j.tool(YES)
+        again = j.tool(LAUNCH)
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertIn('already started', again.stdout)
         self.assertEqual(len(j.spawns()), 1)
 
+    @unittest.skipUnless(WS17, WS17_WHY)
     def test_an_uncertain_start_is_never_retried_and_settles_only_on_its_record(self):
         j = Journey(self)
         j.replay(until='launch')
-        self.assertEqual(j.tool(PREVIEW).returncode, 12)
-        first = j.tool(dict(YES, spawn=1))
+        first = j.tool(dict(LAUNCH, spawn=1))
         self.assertEqual(first.returncode, 6, first.stdout)
         self.assertIn('uncertain', first.stdout)
-        second = j.tool(YES)
+        second = j.tool(LAUNCH)
         self.assertEqual(second.returncode, 6, second.stdout)
         self.assertIn('no fleet record yet', second.stdout)
         j.extra_env = {'FAKE_GH_COMMENTS_FAIL': '1'}
-        unread = j.tool(YES)
+        unread = j.tool(LAUNCH)
         self.assertEqual(unread.returncode, 6, 'an unread record settles nothing')
         j.extra_env = {}
         j.fleet_record()
-        third = j.tool(YES)
+        third = j.tool(LAUNCH)
         self.assertEqual(third.returncode, 0, third.stdout)
         self.assertIn('has its fleet record', third.stdout)
         self.assertEqual(len(j.spawns()), 1, 'never a second start')
 
+    @unittest.skipUnless(WS17, WS17_WHY)
     def test_uncertain_launch_accepts_only_configured_record_authors(self):
         # Catches #1096 F1: outsider text settling an uncertain launch, or an
         # unread author policy/comment read being treated as a started fleet.
         # Earlier recovery tests supplied only the factory's own comment.
         j = Journey(self)
         j.replay(until='launch')
-        self.assertEqual(j.tool(PREVIEW).returncode, 12)
-        self.assertEqual(j.tool(dict(YES, spawn=1)).returncode, 6)
+        self.assertEqual(j.tool(dict(LAUNCH, spawn=1)).returncode, 6)
         j.fleet_record()
         record = j.world['issues'][0]['comments'][-1]
         unresolved = j.state.read_text()
@@ -625,7 +636,7 @@ class Launch(unittest.TestCase):
                 j.state.write_text(unresolved)
                 record['author'] = author
                 j.save_world()
-                result = j.tool(YES)
+                result = j.tool(LAUNCH)
                 self.assertEqual(result.returncode, 6, result.stdout)
                 self.assertIn('no fleet record yet', result.stdout)
                 self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'uncertain')
@@ -644,7 +655,7 @@ class Launch(unittest.TestCase):
                 else:
                     j.world['files']['docs/agents/fleet.md'] = policy
                 j.save_world()
-                result = j.tool(YES)
+                result = j.tool(LAUNCH)
                 self.assertEqual(result.returncode, 6, result.stdout)
                 self.assertIn('could not be read', result.stdout)
                 self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'uncertain')
@@ -652,7 +663,7 @@ class Launch(unittest.TestCase):
         j.save_world()
         j.state.write_text(unresolved)
         j.extra_env['FAKE_GH_COMMENTS_FAIL'] = '1'
-        unread = j.tool(YES)
+        unread = j.tool(LAUNCH)
         self.assertEqual(unread.returncode, 6, unread.stdout)
         self.assertIn('could not be read', unread.stdout)
         self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'uncertain')
@@ -669,62 +680,57 @@ class Launch(unittest.TestCase):
                 j.world['files']['docs/agents/fleet.md'] = settings.replace(
                     row, '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |')
                 j.save_world()
-                settled = j.tool(YES)
+                settled = j.tool(LAUNCH)
                 self.assertEqual(settled.returncode, 0, settled.stdout)
                 self.assertIn('has its fleet record', settled.stdout)
                 self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'started')
         self.assertEqual(len(j.spawns()), 1, 'reconciliation never dispatches another fleet')
 
+    @unittest.skipUnless(WS17, WS17_WHY)
     def test_a_start_cut_short_before_its_outcome_settles_on_its_record(self):
         # Review R1: catches a start interrupted after the spawn and before its
         # outcome was saved staying pending for ever, even once its fleet record exists.
         j = Journey(self)
         j.replay(until='launch')
-        self.assertEqual(j.tool(PREVIEW).returncode, 12)
         j.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': '', 'kill_caller': True}]}))
-        cut = j.helper([*YES['tool'][:4], '--confirm', j.confirmation()])
+        cut = j.helper(LAUNCH['tool'])
         self.assertNotEqual(cut.returncode, 0)
         self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'pending')
-        waiting = j.tool(YES)
+        waiting = j.tool(LAUNCH)
         self.assertEqual(waiting.returncode, 6, waiting.stdout)
         j.fleet_record()
-        settled = j.tool(YES)
+        settled = j.tool(LAUNCH)
         self.assertEqual(settled.returncode, 0, settled.stdout)
         self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'started')
         self.assertEqual(len(j.spawns()), 1, 'never a second start')
 
-    def test_a_start_that_could_not_run_is_refused_and_previewed_again(self):
+    @unittest.skipUnless(WS17, WS17_WHY)
+    def test_a_start_that_could_not_run_is_refused_and_can_run_again(self):
         # Review R2: catches a known no-dispatch (room-cli not found) recorded as
         # uncertain, which would block every later start.
         j = Journey(self)
         j.replay(until='launch')
-        self.assertEqual(j.tool(PREVIEW).returncode, 12)
         room = j.dir / 'bin/room-cli'
         moved = j.dir / 'room-cli.away'
         room.rename(moved)
-        missing = j.tool(YES)
+        missing = j.tool(LAUNCH)
         self.assertEqual(missing.returncode, 5, missing.stdout)
         self.assertIn('nothing started', missing.stdout)
         self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'refused')
         moved.rename(room)
-        stale = j.tool(YES)
-        self.assertEqual(stale.returncode, 5, 'the old yes needs a fresh preview')
-        self.assertEqual(j.tool(PREVIEW).returncode, 12)
-        self.assertEqual(j.tool(YES).returncode, 0)
+        self.assertEqual(j.tool(LAUNCH).returncode, 0)
         self.assertEqual(len(j.spawns()), 1)
 
-    def test_a_preview_is_void_once_setup_no_longer_verifies(self):
-        # Review R4: catches an old preview starting a fleet after setup refuses a
-        # prerequisite or its checks expire.
+    def test_no_start_once_setup_no_longer_verifies(self):
+        # Review R4: catches a fleet started after setup refuses a prerequisite or its checks expire.
         stale = int(time.time() * 1000) - 2 * 60 * 60 * 1000
         for name, state in (('login lost push access', setup_state(overrides={'personal_github': 'identity_no_push'})),
                             ('checks expired', setup_state(at=stale))):
             with self.subTest(name):
                 j = Journey(self)
                 j.replay(until='launch')
-                self.assertEqual(j.tool(PREVIEW).returncode, 12)
                 j.write_setup(state)
-                result = j.tool(YES)
+                result = j.tool(LAUNCH)
                 self.assertEqual(result.returncode, 5, result.stdout)
                 self.assertIn('nothing started', result.stdout)
                 self.assertEqual(j.spawns(), [])
@@ -740,11 +746,12 @@ class Launch(unittest.TestCase):
                 else:
                     j.world['issues'][3]['body'] += 'A changed body.\n'
                 j.save_world()
-                result = j.tool(PREVIEW)
+                result = j.tool(LAUNCH)
                 self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
                 self.assertIn('nothing started', result.stdout)
                 self.assertEqual(j.spawns(), [])
 
+    @unittest.skipUnless(WS17, WS17_WHY)
     def test_another_specs_frontier_is_not_this_fleets(self):
         # Catches a first fleet that would also start an approved ticket of
         # another spec in the same repository.
@@ -757,33 +764,10 @@ class Launch(unittest.TestCase):
                                'labels': ['ready-for-agent'], 'blockedBy': [], 'body': 'Synthetic.\n', 'comments': []}]
         j.save_world()
         j.approve(spec=950, tickets=[other], comment=90009)
-        shown = j.tool(PREVIEW)
-        self.assertEqual(shown.returncode, 12, shown.stdout)
-        self.assertIn('Then 3 builders', shown.stdout)
+        shown = j.tool(LAUNCH)
+        self.assertEqual(shown.returncode, 0, shown.stdout)
+        self.assertIn('3 builders', shown.stdout)
         self.assertNotIn('#951', shown.stdout)
-
-    def test_the_yes_binds_the_preview_the_user_saw(self):
-        # The user said yes to two starts; a third ticket becoming ready before
-        # the yes runs must not start without a new preview and yes.
-        j = Journey(self)
-        j.replay(until='launch')
-        j.world['issues'][1]['labels'] = ['ready-for-agent', 'held']
-        j.save_world()
-        shown = j.tool(PREVIEW)
-        self.assertEqual(shown.returncode, 12, shown.stdout)
-        self.assertIn('Then 2 builders', shown.stdout)
-        j.world['issues'][1]['labels'] = ['ready-for-agent']
-        j.save_world()
-        shutil.rmtree(j.dir / 'cache', ignore_errors=True)
-        result = j.tool(YES)
-        self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
-        self.assertIn('preview again', result.stdout)
-        self.assertEqual(j.spawns(), [], 'no start of effects the user never saw')
-        bare = j.tool(dict(YES, tool=['launch', '--spec', '900', '--yes']))
-        self.assertEqual(bare.returncode, 2, 'a yes names the preview it answers')
-        self.assertEqual(j.tool(PREVIEW).returncode, 12)
-        self.assertEqual(j.tool(YES).returncode, 0)
-        self.assertEqual(len(j.spawns()), 1)
 
     def test_every_builder_profile_the_fleet_can_use_is_the_users_choice(self):
         # Blocked tickets may later use the small-ticket builder; the reviewer
@@ -796,24 +780,27 @@ class Launch(unittest.TestCase):
                 j.replay(until='launch')
                 j.world['files']['docs/agents/fleet.md'] = text
                 j.save_world()
-                result = j.tool(PREVIEW)
+                result = j.tool(LAUNCH)
                 self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
-                self.assertNotIn('Confirmation:', result.stdout)
+                self.assertIn('nothing started', result.stdout)
+                self.assertEqual(j.spawns(), [])
 
     def test_without_carried_setup_local_agents_or_another_spec_nothing_starts(self):
         j = Journey(self)
         j.replay(until='launch')
         state = json.loads(j.state.read_text())
         j.state.write_text(json.dumps({k: v for k, v in state.items() if k != 'setup'}))
-        uncarried = j.tool(PREVIEW)
+        uncarried = j.tool(LAUNCH)
         self.assertEqual(uncarried.returncode, 5, uncarried.stdout)
         self.assertIn('run continue first', uncarried.stdout)
         k = Journey(self)
         k.replay(until='launch')
-        self.assertEqual(k.helper(['choose', '--from-setup', '--agents', 'local']).returncode, 0)
-        local = k.tool(YES)
+        saved = json.loads(k.state.read_text())
+        saved['choices']['agents'] = 'local'  # agents chosen for a place the user never answered
+        k.state.write_text(json.dumps(saved))
+        local = k.tool(LAUNCH)
         self.assertEqual(local.returncode, 5, local.stdout)
-        self.assertIn('Local', local.stdout)
+        self.assertIn('not chosen for where agents run', local.stdout)
         other = k.tool({'tool': ['launch', '--spec', '950']})
         self.assertEqual(other.returncode, 5, other.stdout)
         self.assertEqual(j.spawns() + k.spawns() + j.logged() + k.logged(), [], 'not even a read of the engine')
@@ -824,7 +811,7 @@ class Launch(unittest.TestCase):
         j.replay(until='launch')
         j.world['repo'] = 'synthetic-owner/synthetic-other'
         j.save_world()
-        for turn in (PREVIEW, YES, {'tool': ['progress', '--spec', '900'], 'progress': ['building'] * 5}):
+        for turn in (LAUNCH, {'tool': ['progress', '--spec', '900'], 'progress': ['building'] * 5}):
             result = j.tool(turn)
             self.assertEqual(result.returncode, 5, (turn['tool'], result.stdout + result.stderr))
             self.assertIn(REPO, result.stdout)
@@ -880,7 +867,7 @@ class Launch(unittest.TestCase):
         j.replay(until='launch')
         with open(str(j.state) + '.lock', 'a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            busy = j.tool(YES)
+            busy = j.tool(LAUNCH)
         self.assertEqual(busy.returncode, 7, busy.stdout + busy.stderr)
         self.assertEqual(j.spawns() + j.logged(), [])
 
@@ -1021,7 +1008,9 @@ class Resume(unittest.TestCase):
         for turn in JOURNEY['turns']:
             if not seen or seen[-1] != turn['step']:
                 seen.append(turn['step'])
-                expected = {'explain': 'project', 'agents': 'grill'}.get(turn['step'], turn['step'])
+                expected = {'teach': 'where', 'run': 'where', 'start': 'project'}.get(turn['step'], turn['step'])
+                if turn['step'] == 'watch' and not WS17:
+                    expected = 'launch'  # the stubbed frontier starts nothing yet (WS17_WHY)
                 self.assertEqual(self.next(j).splitlines()[0], 'Next: %s.' % expected, turn['step'])
             if 'plan' in turn:
                 j.plan(turn['plan'])
@@ -1032,12 +1021,14 @@ class Resume(unittest.TestCase):
                                           settings=tuple(j.settings[k] for k in ('harness', 'model', 'effort'))))
             elif 'tool' in turn:
                 j.tool(turn)
-        self.assertIn('progress --spec 900', self.next(j))
+        if WS17:
+            self.assertIn('progress --spec 900', self.next(j))
 
     def test_an_interrupted_or_withdrawn_step_is_resumed_not_skipped(self):
         # catches: an uncertain create or start reported as done (inviting a second
         # effect), and a withdrawn setup skipped because later choices are saved.
         j = Journey(self)
+        self.assertEqual(j.helper(['where', '--agents', 'cloud', '--yes']).returncode, 0)
         j.repos.write_text(github(create='lost', fail_after_create=2))
         self.assertEqual(j.helper(['create-repo', '--repo', REPO, '--yes']).returncode, 6)
         said = self.next(j)
@@ -1047,12 +1038,12 @@ class Resume(unittest.TestCase):
 
         j = Journey(self)
         j.replay(until='launch')
-        self.assertEqual(j.tool(PREVIEW).returncode, 12)
-        self.assertEqual(j.tool(dict(YES, spawn=1)).returncode, 6)
-        said = self.next(j)
-        self.assertEqual(said.splitlines()[0], 'Next: launch.')
-        self.assertIn('uncertain', said)
-        self.assertIn('never start it again', said)
+        if WS17:
+            self.assertEqual(j.tool(dict(LAUNCH, spawn=1)).returncode, 6)
+            said = self.next(j)
+            self.assertEqual(said.splitlines()[0], 'Next: launch.')
+            self.assertIn('uncertain', said)
+            self.assertIn('never start it again', said)
 
         j.write_setup(setup_state(overrides={'personal_github': 'identity_no_push'}))
         self.assertEqual(j.helper(['continue']).returncode, 5)
@@ -1064,6 +1055,7 @@ class Resume(unittest.TestCase):
         # withdrawn, so resume asks for a repository again and create-repo makes a
         # second one while the connected repository is still saved (review R1).
         j = Journey(self)
+        self.assertEqual(j.helper(['where', '--agents', 'cloud', '--yes']).returncode, 0)
         other = 'synthetic-owner/synthetic-existing'
         j.repos.write_text(github(create='fail'))
         self.assertEqual(j.helper(['create-repo', '--repo', REPO, '--yes']).returncode, 5)

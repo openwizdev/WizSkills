@@ -7,28 +7,21 @@ the road's own steps one at a time: where agents run, the host setting, the
 grill confirmed in chat, the launch from the plan's machine approval, and the
 closing offer after a merge read back from GitHub. All values are synthetic.
 """
-import hashlib
 import json
 from pathlib import Path
 import re
-import subprocess
 import sys
 import unittest
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_first_fleet import (CLAUDE, FIXTURES, Journey, REVISION, SKILL_DIR, demo_repository,  # noqa: E402
-                              fleet_md, github, setup_state)
+from test_first_fleet import (CLAUDE, FIXTURES, GRILL, WS17, WS17_WHY, Journey, SKILL_DIR,  # noqa: E402
+                              demo_repository, fleet_md, github, setup_state, skill_steps)
 
 ROAD = json.loads((FIXTURES / 'onboarding.json').read_text())
 TEACH = (SKILL_DIR / 'teach.md').read_text()
 IDEAS = (SKILL_DIR / 'ideas.md').read_text()
-GRILL = 'https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-71'
 OTHER_GRILL = 'https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-72'
-# Stub until #1340 (WizSkills #60) merges: launch-fleet's frontier on main does
-# not read to-tickets' machine plan approval yet, so no fleet can start from one.
-WS17 = 'Machine plan approval' in (SKILL_DIR.parent / 'launch-fleet/scripts/fleet.sh').read_text()
-WS17_WHY = 'stub: launch-fleet on main does not read machine plan approvals until #1340 (WizSkills #60) merges'
 MOMENTS = {'up-front': ('Up front', None), 'install-done': ('Install done', 0), 'where': ('Where agents run', 0),
            'missing': ('Where agents run', 1), 'grill-start': ('The grill', 0), 'grill-summary': ('The grill', 1),
            'spec': ('The spec and its video', 0), 'fleet-start': ('The fleet starting', 0),
@@ -97,17 +90,10 @@ class Road(Journey):
                               FAKE_DRIVER_LOG=str(self.dir / 'driver.log'), FAKE_GH_ARGV_LOG=str(self.dir / 'gh-argv.log'))
 
     def machine_approve(self, grill=GRILL, comment=90001):
-        """to-tickets' machine plan approval (decisions.v1), for the plan as it stands now."""
-        out = subprocess.run(['sh', str(REVISION), str(self.spec)], env=self.env(), capture_output=True, check=True)
-        rows = '\n'.join('| #%d | %s | %s | ready-for-agent |' % (
-            t['number'], t['title'], ' '.join('#%d' % b for b in t['blockers']) or 'none') for t in self.tickets)
-        body = ('**Machine plan approval, 2026-11-01, revision 1:** links, relies, sizes, width and owned paths '
-                'passed.\nGrill confirmed: %s\n\nChecks: synthetic.\n\n| Ticket | Title | Blocked by | Label |\n'
-                '| --- | --- | --- | --- |\n%s\n\nFingerprint: `%s`\n' % (grill, rows, hashlib.sha256(out.stdout).hexdigest()))
-        self.world['issues'][0]['comments'].append({'id': comment, 'at': '2026-11-01T10:00:00Z', 'body': body})
-        self.save_world()
+        self.approve(comment=comment, grill=grill)
 
     def change(self, turn):
+        self.world = json.loads(self.world_path.read_text())  # the fake gh writes it too
         what = turn['world']
         if what in ('signed_out', 'signed_in'):
             repos = json.loads(self.repos.read_text())
@@ -178,6 +164,15 @@ class Conversation(unittest.TestCase):
         for words in ('ideas.md', 'teach.md', 'grill --confirmed', 'first-merge'):
             self.assertIn(words, text)
         self.assertNotRegex(text, r'(?i)exact-plan approval|approve the plan|demo repository \(recommended\)')
+
+    def test_each_road_follows_the_skills_steps_in_order(self):
+        # catches: a road whose recorded steps skip, repeat or reorder the packaged skill's steps
+        steps = skill_steps()
+        for journey in ROAD['journeys']:
+            with self.subTest(journey['name']):
+                seen = [turn['step'] for turn in journey['turns']]
+                self.assertEqual(sorted(set(seen), key=steps.index), steps)
+                self.assertEqual(seen, sorted(seen, key=steps.index))
 
     def test_every_moment_says_its_teach_line_in_order(self):
         # catches: a road that skips a moment's line, rewords it, leaves a <placeholder> unfilled or says it out of order
@@ -260,7 +255,8 @@ class Replay(unittest.TestCase):
                     self.assertIn(said, merged)
                 self.assertEqual(road.saved()['grill'], GRILL)
                 self.assertFalse((road.dir / 'harness.log').exists())
-                self.assertEqual({tuple(c) for c in road.driver_calls()}, {('version',)} if journey['host'] == 'local' else set())
+                self.assertTrue(road.driver_calls())
+                self.assertEqual({tuple(c) for c in road.driver_calls()}, {('version',)})
 
 
 class Where(unittest.TestCase):
@@ -358,7 +354,7 @@ class Launch(unittest.TestCase):
         result = road.helper(['launch', '--spec', '900'])
         self.assertEqual(result.returncode, 5, result.stdout)
         self.assertIn('grill', result.stdout)
-        road.approve(comment=90003)  # a human plan graph approval, newest
+        road.approve(comment=90003, human=True)  # a human plan graph approval, newest
         result = road.helper(['launch', '--spec', '900'])
         self.assertEqual(result.returncode, 5, result.stdout)
         self.assertEqual(road.spawns(), [])

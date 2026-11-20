@@ -10,27 +10,27 @@
    "existing": true,
    "turns": [
     {
-     "step": "explain",
+     "step": "teach",
      "say": "up-front",
      "agent": "OpenWiz is a factory of coding agents: they turn one thing you want into small tickets, build each one, review each other's work and merge it."
     },
     {
-     "step": "explain",
+     "step": "teach",
      "say": "up-front",
      "agent": "First I ask you a few short questions, you say yes here when the summary matches, and the agents build it, aiming for your first merged pull request within the hour."
     },
     {
-     "step": "explain",
+     "step": "teach",
      "say": "up-front",
      "agent": "Watch everything at openwiz.dev/app; nothing is created, written, spent or published without your yes here in this chat."
     },
     {
-     "step": "explain",
+     "step": "teach",
      "say": "install-done",
      "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is on this machine. Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
     },
     {
-     "step": "where",
+     "step": "run",
      "tool": [
       "where",
       "--agents",
@@ -40,20 +40,20 @@
      "world": "signed_out"
     },
     {
-     "step": "where",
+     "step": "run",
      "say": "missing",
      "agent": "You need a GitHub sign-in first: open https://github.com/login and sign in yourself, because I never touch your login. Say done here when you're in."
     },
     {
-     "step": "where",
+     "step": "run",
      "user": "Done."
     },
     {
-     "step": "where",
+     "step": "run",
      "world": "signed_in"
     },
     {
-     "step": "where",
+     "step": "run",
      "tool": [
       "where",
       "--agents",
@@ -62,19 +62,19 @@
      "exit": 12
     },
     {
-     "step": "where",
+     "step": "run",
      "say": "where",
      "agent": "Your agents need a place to run: this machine, with Claude Code you're already signed into, or Cloudroom or another cloud host to run many at once. Which would you like?"
     },
     {
-     "step": "where",
+     "step": "run",
      "user": "This machine.",
      "answers": {
       "agents": "local"
      }
     },
     {
-     "step": "where",
+     "step": "run",
      "tool": [
       "where",
       "--agents",
@@ -84,18 +84,18 @@
      "exit": 0
     },
     {
-     "step": "choose",
+     "step": "start",
      "agent": "Three ways to start: a small change in a repository you have, a fresh project from your idea, or something you have always wanted to build. Which one, and do you want a few ideas?"
     },
     {
-     "step": "choose",
+     "step": "start",
      "user": "A small change in a repository I have. Ideas, please.",
      "answers": {
       "choice": "A small change in a repository I have."
      }
     },
     {
-     "step": "choose",
+     "step": "start",
      "agent": "A few ideas: A clearer README; One missing test; A friendlier error message. Pick one, change one or bring your own.",
      "ideas": [
       "A clearer README",
@@ -104,16 +104,16 @@
      ]
     },
     {
-     "step": "choose",
+     "step": "start",
      "user": "A friendlier error message."
     },
     {
-     "step": "choose",
+     "step": "start",
      "agent": "It goes in synthetic-owner/synthetic-notes, and the fleet opens branches and pull requests there. Use it?",
      "gate": "write"
     },
     {
-     "step": "choose",
+     "step": "start",
      "user": "Yes.",
      "permits": [
       "write"
@@ -395,27 +395,27 @@
    "existing": false,
    "turns": [
     {
-     "step": "explain",
+     "step": "teach",
      "say": "up-front",
      "agent": "OpenWiz is a factory of coding agents: they turn one thing you want into small tickets, build each one, review each other's work and merge it."
     },
     {
-     "step": "explain",
+     "step": "teach",
      "say": "up-front",
      "agent": "First I ask you a few short questions, you say yes here when the summary matches, and the agents build it, aiming for your first merged pull request within the hour."
     },
     {
-     "step": "explain",
+     "step": "teach",
      "say": "up-front",
      "agent": "Watch everything at openwiz.dev/app; nothing is created, written, spent or published without your yes here in this chat."
     },
     {
-     "step": "explain",
+     "step": "teach",
      "say": "install-done",
      "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is on this machine. Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
     },
     {
-     "step": "where",
+     "step": "run",
      "tool": [
       "where",
       "--agents",
@@ -424,19 +424,19 @@
      "exit": 12
     },
     {
-     "step": "where",
+     "step": "run",
      "say": "where",
      "agent": "Your agents need a place to run: this machine, with Claude Code you're already signed into, or Cloudroom or another cloud host to run many at once. Which would you like?"
     },
     {
-     "step": "where",
+     "step": "run",
      "user": "Cloudroom, please.",
      "answers": {
       "agents": "cloud"
      }
     },
     {
-     "step": "where",
+     "step": "run",
      "tool": [
       "where",
       "--agents",
@@ -446,18 +446,18 @@
      "exit": 0
     },
     {
-     "step": "choose",
+     "step": "start",
      "agent": "Three ways to start: a small change in a repository you have, a fresh project from your idea, or something you have always wanted to build. Which one, and do you want a few ideas?"
     },
     {
-     "step": "choose",
+     "step": "start",
      "user": "A fresh project from my idea. Ideas, please.",
      "answers": {
       "choice": "A fresh project from my idea."
      }
     },
     {
-     "step": "choose",
+     "step": "start",
      "agent": "A few ideas: A to-do app; A personal site; A unit or tip converter. Pick one, change one or bring your own.",
      "ideas": [
       "A to-do app",
@@ -466,11 +466,11 @@
      ]
     },
     {
-     "step": "choose",
+     "step": "start",
      "user": "A to-do app."
     },
     {
-     "step": "choose",
+     "step": "start",
      "tool": [
       "create-repo",
       "--repo",
@@ -479,19 +479,19 @@
      "exit": 12
     },
     {
-     "step": "choose",
+     "step": "start",
      "agent": "This creates one private GitHub repository, synthetic-owner/synthetic-todo, with your gh identity and one README commit. Create it?",
      "gate": "create_repository"
     },
     {
-     "step": "choose",
+     "step": "start",
      "user": "Yes.",
      "permits": [
       "create_repository"
      ]
     },
     {
-     "step": "choose",
+     "step": "start",
      "tool": [
       "create-repo",
       "--repo",
@@ -751,27 +751,27 @@
    "existing": false,
    "turns": [
     {
-     "step": "explain",
+     "step": "teach",
      "say": "up-front",
      "agent": "OpenWiz is a factory of coding agents: they turn one thing you want into small tickets, build each one, review each other's work and merge it."
     },
     {
-     "step": "explain",
+     "step": "teach",
      "say": "up-front",
      "agent": "First I ask you a few short questions, you say yes here when the summary matches, and the agents build it, aiming for your first merged pull request within the hour."
     },
     {
-     "step": "explain",
+     "step": "teach",
      "say": "up-front",
      "agent": "Watch everything at openwiz.dev/app; nothing is created, written, spent or published without your yes here in this chat."
     },
     {
-     "step": "explain",
+     "step": "teach",
      "say": "install-done",
      "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is on this machine. Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
     },
     {
-     "step": "where",
+     "step": "run",
      "tool": [
       "where",
       "--agents",
@@ -780,19 +780,19 @@
      "exit": 12
     },
     {
-     "step": "where",
+     "step": "run",
      "say": "where",
      "agent": "Your agents need a place to run: this machine, with Claude Code you're already signed into, or Cloudroom or another cloud host to run many at once. Which would you like?"
     },
     {
-     "step": "where",
+     "step": "run",
      "user": "This machine.",
      "answers": {
       "agents": "local"
      }
     },
     {
-     "step": "where",
+     "step": "run",
      "tool": [
       "where",
       "--agents",
@@ -802,18 +802,18 @@
      "exit": 0
     },
     {
-     "step": "choose",
+     "step": "start",
      "agent": "Three ways to start: a small change in a repository you have, a fresh project from your idea, or something you have always wanted to build. Which one, and do you want a few ideas?"
     },
     {
-     "step": "choose",
+     "step": "start",
      "user": "Something I've always wanted to build. Ideas, please.",
      "answers": {
       "choice": "Something I've always wanted to build."
      }
     },
     {
-     "step": "choose",
+     "step": "start",
      "agent": "A few ideas: A simple browser game; A countdown page; A quiz on something they love. Pick one, change one or bring your own.",
      "ideas": [
       "A simple browser game",
@@ -822,11 +822,11 @@
      ]
     },
     {
-     "step": "choose",
+     "step": "start",
      "user": "A quiz on something I love."
     },
     {
-     "step": "choose",
+     "step": "start",
      "tool": [
       "create-repo",
       "--repo",
@@ -835,19 +835,19 @@
      "exit": 12
     },
     {
-     "step": "choose",
+     "step": "start",
      "agent": "This creates one private GitHub repository, synthetic-owner/synthetic-quiz, with your gh identity and one README commit. Create it?",
      "gate": "create_repository"
     },
     {
-     "step": "choose",
+     "step": "start",
      "user": "Yes.",
      "permits": [
       "create_repository"
      ]
     },
     {
-     "step": "choose",
+     "step": "start",
      "tool": [
       "create-repo",
       "--repo",

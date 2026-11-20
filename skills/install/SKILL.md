@@ -56,7 +56,7 @@ python3 -I "$openwiz"/tools/install/install open --root <root> --browser
 python3 -I -B "$build"/runtime/setup/setup.py check --state-dir <state>
 ```
 
-`open` serves only this build's setup page on `http://127.0.0.1:7370/setup` (add `--state-root <state>` for a custom state). Read each component's state (`verified`, `missing`, `refused`, `unknown`) and `next` step; only the check marks a component ready. Reuse the user's current CloudRoom sign-in and harnesses. GitHub, the App, the project and its brain wait for the repository the user picks under First fleet. Phone access is optional: `python3 -I -B "$build"/runtime/access/access.py`, as its README says. Run `check` after each change.
+`open` serves only this build's setup page on `http://127.0.0.1:7370/setup` (add `--state-root <state>` for a custom state). Read each component's state (`verified`, `missing`, `refused`, `unknown`) and `next` step; only the check marks a component ready. Reuse the user's current CloudRoom sign-in and harnesses. GitHub, the App, the project and its brain wait for the repository the user picks on the onboarding road. Phone access is optional: `python3 -I -B "$build"/runtime/access/access.py`, as its README says. Run `check` after each change.
 
 Done when CloudRoom reads `verified`, or the user chose to stop with the remaining `next` steps.
 
@@ -76,7 +76,7 @@ Run `first_fleet.py where --agents local`. It checks this machine: a GitHub sign
 
 Done when `where` recorded the answer.
 
-### 2. Three choices
+### 2. Choose a start
 
 Offer three ways to start: a small change in a repository they have, a fresh project from their idea, or something they've always wanted to build. Anyone without an idea gets two or three ideas from that choice's group in [ideas.md](ideas.md); their own idea always wins. Then its one repository:
 
@@ -97,37 +97,37 @@ For that repository, each tool previews and applies only on the yes (`--yes`, or
 
 Done when `continue` prints the carried setup and the acting identity.
 
-### 4. The host setting
+### 4. Host setting
 
 Run `first_fleet.py setting`. For this machine it previews one pull request that adds `docs/agents/host.md` with `Host: local`, the setting launch-fleet reads; on the yes, run it with `--yes` and ask the user to merge it. For Cloudroom no file is needed: it says so and exits 0. It never overwrites a host the project already names.
 
 Done when the setting matches the answer, or its pull request is open.
 
-### 5. The grill
+### 5. Grill
 
 Say **The grill**'s first line, then run `grill` briefly: one or two rounds of at most three questions, each with a recommendation, steered to 4 to 7 small, mostly independent tickets, even for a small change. When its summary is ready, show it and say **The grill**'s second line. Only the user's yes here confirms it; anything else is a change to make. Save the yes as `grill` says, then run `first_fleet.py grill --confirmed <its private comment URL>`.
 
 Done when `grill` recorded the confirmation.
 
-### 6. The agents
+### 6. Agents
 
 Harness, model and effort were answered at Connect. Save `openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup` (without a carried setup, ask the three and pass `--harness --model --effort`). Then run `setup` so both builder tables name exactly these settings, sourced to the user's decision; setup keeps reviewers in the other family.
 
 Done when the choice is recorded and the builder tables match it.
 
-### 7. The plan checks itself
+### 7. Plan
 
-Run `to-spec` with the confirmed grill. It writes the spec, runs `to-tickets`, whose checks record the machine plan approval, and makes the spec's video. Say **The spec and its video** with its video link. Ask nothing here: no spec or plan approval. When a check refuses, re-cut the plan; never ask the user to approve it instead. Then run `first_fleet.py spec --spec <N> --repo <owner>/<name>`.
+The plan checks itself. Run `to-spec` with the confirmed grill. It writes the spec, runs `to-tickets`, whose checks record the machine plan approval, and makes the spec's video. Say **The spec and its video** with its video link. Ask nothing here: no spec or plan approval. When a check refuses, re-cut the plan; never ask the user to approve it instead. Then run `first_fleet.py spec --spec <N> --repo <owner>/<name>`.
 
 Done when the machine plan approval is on the spec and `spec` saved it.
 
-### 8. The fleet starts
+### 8. Launch
 
 Run `first_fleet.py launch --spec <N>`. It asks nothing. It starts the fleet only from the spec's machine plan approval for this grill, on the host the user chose (this machine only once its host setting is merged), through launch-fleet's own frontier and brief. Say **The fleet starting** as it prints it. A refusal names what to fix; exit 6 is uncertain: run it again to read the fleet record, never start by hand.
 
 Done when the start is recorded, or recorded uncertain and reported so.
 
-### 9. To the first merge
+### 9. Watch
 
 Run `first_fleet.py progress --spec <N> --openwiz <absolute path to openwiz>` when the user asks or a moment may have happened, and say each moment's line once: **A pull request opened**, then **Reviewed**. A count is never a merge. When a pull request merges, run `first_fleet.py first-merge --pr <number>`: it reads the merge back from GitHub and prints **Merged** and **The closing offer**; say both. On the answer: stay as the project's orchestrator (launch-fleet), start a new project (this road again, with a new state file), or keep building (the grill again, for the next idea).
 

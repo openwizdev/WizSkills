@@ -415,6 +415,25 @@ class Write(Tracker):
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
         self.assertRegex(back.stdout, r'(?m)^#12: needs-info left on: ')
 
+    def test_a_hold_reapplied_as_the_write_clears_its_label_survives_a_failed_read(self):
+        # catches (#1737): a resume write whose DELETE takes a person's reapplied needs-info and,
+        # after a temporary event-read error, never puts it back on the retry.
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+        self.save()
+        asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual(asked.returncode, 0, asked.stderr)
+        self.world = self.load()
+        self.world['race_delete'] = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                                     {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'},
+                                     {'fail_once': f'GET repos/{REPO}/issues/12/events?per_page=100&page=1'}]
+        self.save()
+        failed = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(failed.returncode, 2, failed.stdout)
+        retry = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertRegex(retry.stdout, r'(?m)^#12: needs-info put back: synthetic-owner ')
+
     def test_needs_info_stays_while_any_agent_asks_and_a_failed_clear_recovers(self):
         # catches (R1): one agent leaving asking clearing the label another live agent's
         # question needs, or a failed label write that a retry or check never repairs.

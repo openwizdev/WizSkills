@@ -166,12 +166,34 @@ class PlannedReliesTest(unittest.TestCase):
             'a dependent in two repositories': [
                 (9102, '`app/export/` in `synthetic-owner/synthetic-repo`\n',
                  '`app/export/` in `synthetic-owner/synthetic-repo`\n- `web/export/` in `synthetic-owner/second-repo`\n')],
+            # Review R1: a folder at the file's own path holds only files below it.
+            'a folder at the file\'s path': [(9101, contract, '- `contracts/export.v1.md/`\n')],
+            'a folder pattern at the file\'s path': [(9101, contract, '- `contracts/*/`\n')],
         }
         for name, edits in cases.items():
             with self.subTest(case=name):
                 out = self.approve(self.plan(*edits))
                 self.assertEqual((out.returncode, out.stdout), (1, ''), out.stderr)
                 self.assertIn('approve: relies: #9102:', out.stderr)
+
+    def test_a_file_in_the_root_checkout_never_stands_in_for_another_repository(self):
+        # catches: review R2, a dependent in a second repository cleared by a
+        # copy of its Relies on file in --root, the graph repository's checkout.
+        (self.root / 'contracts').mkdir()
+        (self.root / 'contracts/export.v1.md').write_text('Synthetic contract.\n')
+        in_second = (9102, '`app/export/` in `synthetic-owner/synthetic-repo`',
+                     '`app/export/` in `synthetic-owner/second-repo`')
+        in_both = (9102, '`app/export/` in `synthetic-owner/synthetic-repo`\n',
+                   '`app/export/` in `synthetic-owner/synthetic-repo`\n- `web/export/` in `synthetic-owner/second-repo`\n')
+        for name, edits, code in [('the graph repository, so the copy counts', [], 0),
+                                  ('a second repository', [in_second], 1),
+                                  ('two repositories', [in_both], 1)]:
+            with self.subTest(dependent=name):
+                out = self.approve(self.plan(*edits))
+                self.assertEqual(out.returncode, code, out.stderr)
+                if code:
+                    self.assertEqual(out.stdout, '')
+                    self.assertIn('approve: relies: #9102:', out.stderr)
 
     def test_the_exact_file_or_a_containing_folder_in_the_same_repository_is_planned(self):
         # catches: a fix so strict it refuses the plans #1339 accepts, so every
@@ -180,6 +202,7 @@ class PlannedReliesTest(unittest.TestCase):
         cases = {
             'the exact file': [],
             'a containing folder': [(9101, contract, '- `contracts/`\n')],
+            'a containing folder pattern': [(9101, contract, '- `contra*/`\n')],
             'a folder without its slash': [(9101, contract, '- `contracts`\n')],
             'a containing pattern': [(9101, contract, '- `contracts/*.md`\n')],
             'the repository named in another case': [

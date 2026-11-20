@@ -141,5 +141,55 @@ class Post(unittest.TestCase):
         self.assertEqual(w.writes(), [])
 
 
+
+class SelfGrant(unittest.TestCase):
+    """self-grant.py (#1353, F4): a wake grants and records the four bounded
+    kinds itself, each with its reason; a model or effort change is refused."""
+
+    def test_each_kind_is_recorded_with_its_reason(self):
+        # catches: a grant made without a record, or recorded without its
+        # reason, so nobody can audit what the fleet allowed itself.
+        w = World(self)
+        cases = [('supporting-edit', 'two lines in check/run.py, which runs the new test',
+                  'launch-fleet: granted supporting edit: two lines in check/run.py, which runs the new test'),
+                 ('dependency-wiring', 'the spec-approved pinned parser in the build file',
+                  'launch-fleet: granted dependency wiring: the spec-approved pinned parser in the build file'),
+                 ('read-route', 'the issue timeline, under the API rules',
+                  'launch-fleet: granted read route: the issue timeline, under the API rules')]
+        for kind, reason, body in cases:
+            with self.subTest(kind=kind):
+                self.assertEqual(w.run('self-grant.py', REPO, 12, kind, reason)[0], 0)
+                self.assertEqual(w.bodies(12)[-1:], [body])
+        code, out = w.run('self-grant.py', REPO, 12, 'spec-change', 'the proof table names the after bench', '--spec', 3)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(w.bodies(3), ['launch-fleet: spec changed for #12: the proof table names the after bench'])
+        self.assertEqual(w.bodies(12)[-1], 'launch-fleet: granted spec change on #3: the proof table names the after bench')
+        self.assertEqual(len(w.writes()), 5)
+
+    def test_a_model_or_effort_change_or_any_other_ask_is_refused(self):
+        # catches: a fleet that grants itself a stronger model or effort, or
+        # anything outside the four kinds, instead of asking.
+        w = World(self)
+        for kind, why in (('model', 'refused: a model or effort change is never a self-grant; ask Jake'),
+                          ('effort', 'refused: a model or effort change is never a self-grant; ask Jake'),
+                          ('contract', 'refused: not a self-grant kind; ask the orchestrator'),
+                          ('spend', 'refused: not a self-grant kind; ask the orchestrator')):
+            with self.subTest(kind=kind):
+                self.assertEqual(w.run('self-grant.py', REPO, 12, kind, 'a stronger fixer round'), (1, why))
+        for args in ((REPO, 12, 'spec-change', 'no spec named'), (REPO, 12, 'read-route', ''),
+                     (REPO, 12, 'read-route', 'two\nlines'), (REPO, 12, 'read-route', 'x', '--spec', 12)):
+            with self.subTest(args=args):
+                self.assertEqual(w.run('self-grant.py', *args)[0], 2)
+        self.assertEqual(w.writes(), [])
+
+    def test_a_spec_change_not_read_back_records_no_grant(self):
+        # catches: a ticket told its spec changed when the spec record may
+        # never have been written.
+        w = World(self, faults={'post': 'fail'})
+        code, out = w.run('self-grant.py', REPO, 12, 'spec-change', 'the proof names the after bench', '--spec', 3)
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith('unknown: '), out)
+        self.assertEqual(w.bodies(12), [])
+
 if __name__ == '__main__':
     unittest.main()

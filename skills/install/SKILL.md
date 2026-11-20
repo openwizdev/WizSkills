@@ -97,25 +97,25 @@ For that repository, each tool previews and applies only on the yes (`--yes`, or
 
 Done when `continue` prints the carried setup and the acting identity.
 
-### 4. Host setting
-
-On this machine, first ask the owner to pick the harness permission mode, once. Run `first_fleet.py mode`: it lists that harness's modes, each with what it lets an agent do. Explain each one plainly, as printed, and recommend none: never pick, default or widen a mode for the owner, and touch no login. On their answer, run `first_fleet.py mode --mode <their pick>`. The local driver passes it to the harness unchanged and starts nothing without it.
-
-Then run `first_fleet.py setting`. For this machine it previews one pull request that adds `docs/agents/host.md` with `Host: local` and the owner's `Permission mode:`, the settings launch-fleet and the local driver read; on the yes, run it with `--yes` and ask the user to merge it. For Cloudroom no file is needed: it says so and exits 0. It never overwrites a host the project already names.
-
-Done when the setting matches the answer, or its pull request is open.
-
-### 5. Grill
+### 4. Grill
 
 Say **The grill**'s first line, then run `grill` briefly: one or two rounds of at most three questions, each with a recommendation, steered to 4 to 7 small, mostly independent tickets, even for a small change. When its summary is ready, show it and say **The grill**'s second line. Only the user's yes here confirms it; anything else is a change to make. Save the yes as `grill` says, then run `first_fleet.py grill --confirmed <its private comment URL>`.
 
 Done when `grill` recorded the confirmation.
 
-### 6. Agents
+### 5. Agents
 
 Harness, model and effort were answered at Connect. Save `openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup` (without a carried setup, ask the three and pass `--harness --model --effort`). Then run `setup` so both builder tables name exactly these settings, sourced to the user's decision; setup keeps reviewers in the other family. Then run the same `choose` again: it reads the tables back.
 
 Done when the choice is recorded and the builder tables match it.
+
+### 6. Host setting
+
+On this machine, first ask the owner to pick the harness permission mode, once. Run `first_fleet.py mode`: it lists that harness's modes, each with what it lets an agent do. Explain each one plainly, as printed, and recommend none: never pick, default or widen a mode for the owner, and touch no login. On their answer, run `first_fleet.py mode --mode <their pick>`. The local driver passes it to the harness unchanged and starts nothing without it.
+
+Then run `first_fleet.py setting`. For this machine it previews one pull request that adds `docs/agents/host.md` with `Host: local` (the host launch-fleet reads) and one row, `| Harness permission mode | `<their pick>` |`, to the `docs/agents/fleet.md` setup wrote (the mode the local driver reads), changing no other line. On the yes, run it with `--yes` and ask the user to merge it. It never adds a second row or replaces a mode the owner already saved: it names that row and asks. For Cloudroom no file is needed: it says so and exits 0. It never overwrites a host the project already names.
+
+Done when both settings match the answers, or their pull request is open.
 
 ### 7. Plan
 

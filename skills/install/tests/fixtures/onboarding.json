@@ -150,6 +150,49 @@
      "exit": 0
     },
     {
+     "step": "grill",
+     "say": "grill-start",
+     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+    },
+    {
+     "step": "grill",
+     "agent": "Q1: Which message: the failed-save one (recommended)? Q2: Should it name the file (recommended)?"
+    },
+    {
+     "step": "grill",
+     "user": "Your recommendations."
+    },
+    {
+     "step": "grill",
+     "agent": "Summary: the failed-save message names the file, says what went wrong and what to do next, with a test."
+    },
+    {
+     "step": "grill",
+     "say": "grill-summary",
+     "agent": "That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off."
+    },
+    {
+     "step": "grill",
+     "user": "Yes."
+    },
+    {
+     "step": "grill",
+     "tool": [
+      "grill",
+      "--confirmed",
+      "https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-71"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "agents",
+     "tool": [
+      "choose",
+      "--from-setup"
+     ],
+     "exit": 0
+    },
+    {
      "step": "setting",
      "tool": [
       "mode"
@@ -158,7 +201,8 @@
     },
     {
      "step": "setting",
-     "agent": "Your agents on this machine need a permission mode for Claude Code, picked by you once: default (it stops and waits for you before each edit or command, so an unattended builder stalls), acceptEdits (it edits files on its own and still asks before running a command) or bypassPermissions (it edits files and runs any command without asking). I pick none for you. Which one?"
+     "agent": "Your agents on this machine need a permission mode for Claude Code, picked by you once: default (it stops and waits for you before each edit or command, so an unattended builder stalls), acceptEdits (it edits files on its own and still asks before running a command) or bypassPermissions (it edits files and runs any command without asking). I pick none for you. Which one?",
+     "asks": "permission_mode"
     },
     {
      "step": "setting",
@@ -214,49 +258,6 @@
     {
      "step": "setting",
      "user": "Merged."
-    },
-    {
-     "step": "grill",
-     "say": "grill-start",
-     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
-    },
-    {
-     "step": "grill",
-     "agent": "Q1: Which message: the failed-save one (recommended)? Q2: Should it name the file (recommended)?"
-    },
-    {
-     "step": "grill",
-     "user": "Your recommendations."
-    },
-    {
-     "step": "grill",
-     "agent": "Summary: the failed-save message names the file, says what went wrong and what to do next, with a test."
-    },
-    {
-     "step": "grill",
-     "say": "grill-summary",
-     "agent": "That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off."
-    },
-    {
-     "step": "grill",
-     "user": "Yes."
-    },
-    {
-     "step": "grill",
-     "tool": [
-      "grill",
-      "--confirmed",
-      "https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-71"
-     ],
-     "exit": 0
-    },
-    {
-     "step": "agents",
-     "tool": [
-      "choose",
-      "--from-setup"
-     ],
-     "exit": 0
     },
     {
      "step": "plan",
@@ -582,13 +583,6 @@
      "exit": 0
     },
     {
-     "step": "setting",
-     "tool": [
-      "setting"
-     ],
-     "exit": 0
-    },
-    {
      "step": "grill",
      "say": "grill-start",
      "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
@@ -628,6 +622,13 @@
      "tool": [
       "choose",
       "--from-setup"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "setting",
+     "tool": [
+      "setting"
      ],
      "exit": 0
     },
@@ -962,6 +963,49 @@
      "exit": 0
     },
     {
+     "step": "grill",
+     "say": "grill-start",
+     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+    },
+    {
+     "step": "grill",
+     "agent": "Q1: Ten multiple-choice questions (recommended)? Q2: Score shown at the end (recommended)?"
+    },
+    {
+     "step": "grill",
+     "user": "Your recommendations."
+    },
+    {
+     "step": "grill",
+     "agent": "Summary: a ten-question multiple-choice quiz about sheep, with a start screen and a score at the end."
+    },
+    {
+     "step": "grill",
+     "say": "grill-summary",
+     "agent": "That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off."
+    },
+    {
+     "step": "grill",
+     "user": "Yes."
+    },
+    {
+     "step": "grill",
+     "tool": [
+      "grill",
+      "--confirmed",
+      "https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-71"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "agents",
+     "tool": [
+      "choose",
+      "--from-setup"
+     ],
+     "exit": 0
+    },
+    {
      "step": "setting",
      "tool": [
       "mode"
@@ -970,7 +1014,8 @@
     },
     {
      "step": "setting",
-     "agent": "Your agents on this machine need a permission mode for Claude Code, picked by you once: default (it stops and waits for you before each edit or command, so an unattended builder stalls), acceptEdits (it edits files on its own and still asks before running a command) or bypassPermissions (it edits files and runs any command without asking). I pick none for you. Which one?"
+     "agent": "Your agents on this machine need a permission mode for Claude Code, picked by you once: default (it stops and waits for you before each edit or command, so an unattended builder stalls), acceptEdits (it edits files on its own and still asks before running a command) or bypassPermissions (it edits files and runs any command without asking). I pick none for you. Which one?",
+     "asks": "permission_mode"
     },
     {
      "step": "setting",
@@ -1026,49 +1071,6 @@
     {
      "step": "setting",
      "user": "Merged."
-    },
-    {
-     "step": "grill",
-     "say": "grill-start",
-     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
-    },
-    {
-     "step": "grill",
-     "agent": "Q1: Ten multiple-choice questions (recommended)? Q2: Score shown at the end (recommended)?"
-    },
-    {
-     "step": "grill",
-     "user": "Your recommendations."
-    },
-    {
-     "step": "grill",
-     "agent": "Summary: a ten-question multiple-choice quiz about sheep, with a start screen and a score at the end."
-    },
-    {
-     "step": "grill",
-     "say": "grill-summary",
-     "agent": "That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off."
-    },
-    {
-     "step": "grill",
-     "user": "Yes."
-    },
-    {
-     "step": "grill",
-     "tool": [
-      "grill",
-      "--confirmed",
-      "https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-71"
-     ],
-     "exit": 0
-    },
-    {
-     "step": "agents",
-     "tool": [
-      "choose",
-      "--from-setup"
-     ],
-     "exit": 0
     },
     {
      "step": "plan",

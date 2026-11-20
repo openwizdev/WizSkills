@@ -146,13 +146,6 @@
       "agent": "Setup is verified. Acting identity: synthetic-owner, your personal GitHub login (the App is skipped). The private brain is in synthetic-owner/synthetic-sheep."
     },
     {
-      "step": "setting",
-      "tool": [
-        "setting"
-      ],
-      "exit": 0
-    },
-    {
       "step": "grill",
       "agent": "Q1: Smallest fun version: one field, three sheep, arrow keys move the dog (recommended), or levels too? Q2: Scoring by time to pen all sheep (recommended) or by moves? Q3: A title screen with the best time (recommended), or none?"
     },
@@ -182,6 +175,13 @@
       "tool": [
         "choose",
         "--from-setup"
+      ],
+      "exit": 0
+    },
+    {
+      "step": "setting",
+      "tool": [
+        "setting"
       ],
       "exit": 0
     },

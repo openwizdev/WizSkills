@@ -363,7 +363,7 @@ YES = {'tool': ['launch', '--spec', '900', '--yes', '--confirm', '@preview'], 's
 class RecordedJourney(unittest.TestCase):
     def test_the_conversation_follows_the_packaged_skill(self):
         steps = skill_steps()
-        self.assertEqual(steps, ['teach', 'run', 'start', 'connect', 'setting', 'grill', 'agents', 'plan', 'launch',
+        self.assertEqual(steps, ['teach', 'run', 'start', 'connect', 'grill', 'agents', 'setting', 'plan', 'launch',
                                  'watch'])
         seen = [turn['step'] for turn in JOURNEY['turns']]
         self.assertEqual(sorted(set(seen), key=steps.index), steps, 'every step, and only the skill\'s')
@@ -1185,7 +1185,7 @@ class Resume(unittest.TestCase):
         j.world['files']['docs/agents/fleet.md'] = fleet_md()
         j.save_world()
         self.assertEqual(j.helper(['choose', '--from-setup']).returncode, 0)
-        self.assertEqual(self.next(j).splitlines()[0], 'Next: plan.')
+        self.assertEqual(self.next(j).splitlines()[0], 'Next: setting.', 'the host setting follows the agents (#1358)')
 
     def test_a_cloud_choice_resumes_at_choose_the_agents_until_its_builder_tables_read_back(self):
         # catches: #1571, a saved Cloud choice counted as a finished Choose the agents
@@ -1207,7 +1207,7 @@ class Resume(unittest.TestCase):
         self.assertEqual(self.next(j).splitlines()[0], 'Next: agents.', 'only a read-back settles the tables')
         again = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
         self.assertEqual(again.returncode, 0, again.stdout)
-        self.assertEqual(self.next(j).splitlines()[0], 'Next: plan.')
+        self.assertEqual(self.next(j).splitlines()[0], 'Next: setting.', 'the host setting follows the agents (#1358)')
         self.assertEqual({k: v for k, v in json.loads(j.state.read_text())['choices'].items() if k in j.settings},
                          j.settings, 'the read-back keeps the recorded choice')
 

@@ -75,6 +75,7 @@ class Road(Journey):
         self.world['repo'] = self.repo
         self.world['files'] = {**self.world['files'], 'docs/agents/fleet.md': fleet_md(builder=CLAUDE, small=CLAUDE)}
         self.save_world()
+        self.origin_write({'docs/agents/fleet.md': self.world['files']['docs/agents/fleet.md']})  # setup's, merged
         self.settings = {'harness': 'claude-code', 'model': 'syn-claude-model-01', 'effort': 'high'}
         repos = [demo_repository(self.repo)] if journey['existing'] else []
         self.repos.write_text(github(repos))
@@ -99,9 +100,11 @@ class Road(Journey):
             repos = json.loads(self.repos.read_text())
             repos['signed_out'] = what == 'signed_out'
             self.repos.write_text(json.dumps(repos))
-        elif what == 'merge_setting':
-            self.origin_write({'docs/agents/host.md': self.world['branches']['openwiz/host-setting'][
-                'docs/agents/host.md']})
+        elif what == 'merge_setting':  # the owner merges the host setting pull request
+            merged = {path: self.world['branches']['openwiz/host-setting'][path]
+                      for path in ('docs/agents/host.md', 'docs/agents/fleet.md')}
+            self.origin_write(merged)
+            self.world['files'].update(merged)
             self.world['host_pulls'][0]['state'] = 'MERGED'
             self.save_world()
         elif what == 'fleet_record':
@@ -188,9 +191,9 @@ class Conversation(unittest.TestCase):
                 self.assertEqual([t['agent'] for t in said[:3]], lines['Up front'])
         self.assertTrue(any(t.get('say') == 'missing' for j in ROAD['journeys'] for t in j['turns']))
 
-    def test_after_the_grills_yes_only_the_start_gate_asks_until_the_closing_offer(self):
-        # catches: a plan or spec approval coming back after the grill's yes, or the fleet's start asked for
-        # without naming its host and that it can cost money (ruling 7029073685)
+    def test_after_the_grills_yes_only_the_gates_and_the_mode_ask_until_the_closing_offer(self):
+        # catches: a plan or spec approval coming back after the grill's yes, the fleet's start asked for
+        # without naming its host and that it can cost money (ruling 7029073685), or Cloudroom asked a local mode
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):
                 turns = journey['turns']
@@ -198,9 +201,11 @@ class Conversation(unittest.TestCase):
                 self.assertEqual(turns[yes].get('user'), 'Yes.')
                 offer = next(i for i, t in enumerate(turns) if t.get('say') == 'offer')
                 asked = [t for t in turns[yes + 1:offer] if '?' in t.get('agent', '')]
-                self.assertEqual([t.get('gate') for t in asked], ['start_fleet'])
-                where = 'on this machine' if journey['host'] == 'local' else 'in Cloudroom'
-                self.assertTrue(asked[0]['agent'].startswith('Start the fleet %s now? It can cost money: ' % where))
+                local = journey['host'] == 'local'
+                self.assertEqual([t.get('gate') or t.get('asks') for t in asked],
+                                 ['permission_mode', 'write', 'start_fleet'] if local else ['start_fleet'])
+                where = 'on this machine' if local else 'in Cloudroom'
+                self.assertTrue(asked[-1]['agent'].startswith('Start the fleet %s now? It can cost money: ' % where))
                 self.assertFalse([t for t in turns if re.search(r'(?i)\bapprove\b', t.get('agent', ''))])
                 launch = [t['tool'] for t in turns if t.get('tool', [''])[0] == 'launch']
                 self.assertEqual(launch, [['launch', '--spec', '900'], ['launch', '--spec', '900', '--yes', '--confirm',
@@ -468,7 +473,7 @@ class PermissionMode(unittest.TestCase):
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
         # The mode anywhere but KN3's one fleet.md row is no saved mode: the driver reads only that row.
         road.origin_write({'docs/agents/host.md': '# Where agents run\n\nHost: local\n\nPermission mode: acceptEdits\n',
-                           'docs/agents/fleet.md': road.world['files']['docs/agents/fleet.md']})
+                           'docs/agents/fleet.md': fleet_md(builder=CLAUDE, small=CLAUDE)})
         road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
         result = road.helper(['launch', '--spec', '900'])
         self.assertEqual(result.returncode, 5, result.stdout)

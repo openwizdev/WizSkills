@@ -318,11 +318,13 @@ def host_setting(env):
     return None if named[1] == 'none' else named[1]
 
 
-# Stub until KN3 (#1368, OpenWiz #1455) pushes its field: the harness permission mode the owner picks
-# once, saved in docs/agents/, which the local driver passes to the harness unchanged (J254 A). The file,
-# the field's name and each harness's modes are KN3's; swap these three when it pushes them.
-MODE_FILE = 'docs/agents/host.md'
-MODE_FIELD = 'Permission mode'
+# Stub until KN3 (#1368, OpenWiz #1455) merges: the harness permission mode the owner picks once (J254 A),
+# saved where KN3's driver at a00ada1 reads it, the repository's docs/agents/fleet.md, as exactly one row
+# `| Harness permission mode | `<mode>` |` whose value is one plain word; the driver passes it to the
+# harness unchanged (`claude --permission-mode`, `codex --sandbox`) and starts nothing without it.
+MODE_FILE = 'docs/agents/fleet.md'
+MODE_ROW = '| Harness permission mode |'
+MODE_VALUE = r'[A-Za-z][A-Za-z0-9_-]{0,39}'
 MODES = {
     'claude-code': [
         ('default', 'it stops and waits for a person before each edit or command, so an unattended builder stalls'),
@@ -335,21 +337,36 @@ MODES = {
 }
 
 
+def mode_rows(text):
+    """KN3's permission-mode rows in a fleet.md text, each as its value, or None for one it can't read."""
+    rows = [line for line in (text or '').splitlines() if line.startswith(MODE_ROW)]
+    values = [re.findall(r'`([^`]*)`', row) for row in rows]
+    return [v[0] if len(v) == 1 and re.fullmatch(MODE_VALUE, v[0]) else None for v in values]
+
+
 def saved_mode(env):
-    """The permission mode the default branch's MODE_FILE saves, or None; read as launch-fleet's host.py reads
-    the host setting, from this checkout's origin."""
+    """The permission mode the default branch's docs/agents/fleet.md saves, or None for no row; read as
+    launch-fleet's host.py reads the host setting, from this checkout's origin, and as KN3's driver reads it."""
     sys.dont_write_bytecode = True  # never write bytecode into launch-fleet's folder
     spec = importlib.util.spec_from_file_location('launch_fleet_host', HOST_PY)
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
+        module.SETTING = Path(MODE_FILE)  # the same default-branch read, for KN3's file
         text = module.setting_text()
     except Exception as error:  # host.py's Unreadable, or a missing git
         raise Exit(1, 'Could not read %s from the default branch: %s; %s' % (MODE_FILE, error, NOTHING))
-    lines = re.findall(r'(?m)^%s:[ \t]*(.*?)[ \t]*$' % re.escape(MODE_FIELD), text or '')
-    if len(lines) > 1:
-        raise Exit(5, '%s names more than one `%s:` line; ask to fix it; %s' % (MODE_FILE, MODE_FIELD, NOTHING))
-    return lines[0] if lines else None
+    values = mode_rows(text)
+    if len(values) > 1 or None in values:
+        raise Exit(5, '%s needs exactly one `%s `<mode>` |` row; ask the owner to fix it; %s' % (
+            MODE_FILE, MODE_ROW, NOTHING))
+    return values[0] if values else None
+
+
+def mode_section(picked):
+    return ('\n## Harness permission mode\n\nThe mode the owner picked for builders on this machine; the local '
+            'driver passes it to the harness unchanged. To change it, ask your agent to edit this one row.\n\n'
+            '| Setting | Value |\n| --- | --- |\n%s `%s` |\n' % (MODE_ROW, picked))
 
 
 # --- Where agents run (#1358) ---------------------------------------------------
@@ -706,12 +723,24 @@ def create_repo(got):
 
 # --- The host setting (records v1, section 6) --------------------------------
 
-def host_text(picked):
+def host_text():
     return ('# Where agents run\n\nOpenWiz starts, wakes and stops this project\'s agents through the host named '
             'below: a driver in OpenWiz\'s adapters/ folder. `local` is the machine the agents run on. To change '
-            'it, ask your agent to edit this one line.\n\nHost: local\n\nThe harness runs with the permission mode '
-            'the owner picked; the driver passes it unchanged. To change it, ask your agent to edit this one line.'
-            '\n\n%s: %s\n' % (MODE_FIELD, picked))
+            'it, ask your agent to edit this one line.\n\nHost: local\n')
+
+
+def raw(repo, path, env, ref=None):
+    """A file's text on the default branch (or ref), None when it isn't there; Exit when unreadable."""
+    target = 'repos/%s/contents/%s%s' % (repo, path, '?ref=' + ref if ref else '')
+    result = run(['gh', 'api', '--include', target, '-H', 'Accept: application/vnd.github.raw+json'], env)
+    text = result.stdout.decode('utf-8', 'replace').replace('\r\n', '\n') if result is not None else ''
+    head, _, body = text.partition('\n\n')
+    status = re.match(r'HTTP/[0-9.]+ ([0-9]{3})', head)
+    if status and status[1] == '404':
+        return None
+    if result is None or result.returncode != 0 or not status or status[1] != '200':
+        raise Exit(1, 'Could not read %s; nothing written.' % path)
+    return body
 
 
 def host_pull(repo, env):
@@ -766,31 +795,42 @@ def mode(got):
 
 
 def setting(got):
-    """Write where agents run to docs/agents/host.md, as one pull request the user merges, only on --yes."""
+    """Write where agents run (docs/agents/host.md) and, on this machine, the owner's permission mode (KN3's one
+    docs/agents/fleet.md row) as one pull request the user merges, only on --yes."""
     state = State(got['--state'])
     host = state.value.get('host')
     repo = (state.value.get('setup') or {}).get('repository')
     if not host or not repo:
         raise Exit(5, 'Ask where agents run (where) and connect the repository (continue) first; nothing written.')
     picked = (state.value.get('mode') or {}).get('mode')
-    if host['agents'] == 'local' and not picked:
+    local = host['agents'] == 'local'
+    if local and not picked:
         raise Exit(5, 'Ask the owner to pick the harness permission mode first (mode); nothing written.')
     env = repository(repo)
-    want = 'local' if host['agents'] == 'local' else None
     now = host_setting(env)
-    if now == want and want and saved_mode(env) != picked:
-        raise Exit(5, '%s says Host: local but not `%s: %s`, the mode the owner picked; ask the owner to change '
-                      'that line; nothing written.' % (HOST_FILE, MODE_FIELD, picked))
-    if now == want:
-        state.value['setting'] = {'host': want, 'state': 'merged', 'mode': picked}
+    if now is not None and now != ('local' if local else None):
+        raise Exit(5, '%s already says Host: %s on the default branch; OpenWiz never overwrites it. Ask the user '
+                      'whether to change that line, or answer where agents run again; nothing written.' % (HOST_FILE, now))
+    writes = []
+    if local:
+        fleet = raw(repo, MODE_FILE, env)
+        if fleet is None:
+            raise Exit(5, '%s is not on the default branch yet: run setup and merge its settings (Agents) first; '
+                          'nothing written.' % MODE_FILE)
+        values = mode_rows(fleet)
+        if values and values != [picked]:
+            raise Exit(5, '%s already saves %s; OpenWiz never adds a second row or replaces the owner\'s. Ask the '
+                          'owner whether to change that row; nothing written.' % (
+                              MODE_FILE, ', '.join('`%s`' % v if v else 'an unreadable row' for v in values)))
+        writes = ([HOST_FILE] if now is None else []) + ([MODE_FILE] if not values else [])
+    if not writes:
+        state.value['setting'] = {'host': 'local' if local else None, 'state': 'merged', 'mode': picked}
         if not state.save():
             raise Exit(10, 'Could not save the host setting; nothing written.')
         print('The host setting already matches: %s.' % (
-            'Host: local, on the default branch' if want else 'no host file, so Cloudroom, the default'))
+            'Host: local and the %s permission mode, on the default branch' % picked if local
+            else 'no host file, so Cloudroom, the default'))
         return 0
-    if now is not None:
-        raise Exit(5, '%s already says Host: %s on the default branch; OpenWiz never overwrites it. Ask the user '
-                      'whether to change that line, or answer where agents run again; nothing written.' % (HOST_FILE, now))
     recorded = state.value.get('setting') or {}
     if recorded.get('state') in ('pending', 'opened'):
         found = host_pull(repo, env)
@@ -802,9 +842,10 @@ def setting(got):
             state.save()
             print('The host setting pull request is open: %s. The user merges it; launch waits for it.' % found[0])
             return 0
-    print('Effect: write one file, %s, holding `Host: local`, `%s: %s` and how to change each, on a new branch %s '
-          'of %s, and open one pull request for you to merge. Nothing else is written.' % (
-              HOST_FILE, MODE_FIELD, picked, HOST_BRANCH, repo))
+    said = {HOST_FILE: 'add %s holding `Host: local`' % HOST_FILE,
+            MODE_FILE: 'add one row, %s `%s` |, to %s, changing no other line' % (MODE_ROW, picked, MODE_FILE)}
+    print('Effect: on a new branch %s of %s, %s, and open one pull request for you to merge. Nothing else is '
+          'written.' % (HOST_BRANCH, repo, ' and '.join(said[w] for w in writes)))
     if not got.get('--yes'):
         print("Nothing written. On the user's yes to exactly this, run again with --yes.")
         return 12
@@ -821,17 +862,31 @@ def setting(got):
         raise Exit(1, "Could not read the default branch's tip; nothing written.")
     run(['gh', 'api', '-X', 'POST', 'repos/%s/git/refs' % repo, '-f', 'ref=refs/heads/' + HOST_BRANCH,
          '-f', 'sha=' + sha], env)
-    content = base64.b64encode(host_text(picked).encode()).decode()
-    have = run(['gh', 'api', '--include', 'repos/%s/contents/%s?ref=%s' % (repo, HOST_FILE, HOST_BRANCH),
-                '-H', 'Accept: application/vnd.github.raw+json'], env)
-    if have is None or not have.stdout.decode('utf-8', 'replace').replace('\r\n', '\n').endswith(host_text(picked)):
-        run(['gh', 'api', '-X', 'PUT', 'repos/%s/contents/%s' % (repo, HOST_FILE), '-f',
-             'message=Where agents run: Host: local, %s' % picked, '-f', 'content=' + content, '-f', 'branch=' + HOST_BRANCH], env)
+    for path in writes:
+        have = raw(repo, path, env, HOST_BRANCH)
+        if path == HOST_FILE:
+            if have == host_text():
+                continue
+            text, blob = host_text(), None
+        else:
+            if have is None or mode_rows(have) == [picked]:
+                continue  # the branch lost fleet.md (read again on the retry), or the row is already there
+            text = have.rstrip('\n') + '\n' + mode_section(picked)
+            found = run(['gh', 'api', 'repos/%s/contents/%s?ref=%s' % (repo, path, HOST_BRANCH), '--jq', '.sha'], env)
+            blob = found.stdout.decode('utf-8', 'replace').strip() if found is not None and found.returncode == 0 else ''
+            if not re.fullmatch(r'[0-9a-f]{40}', blob):
+                raise Exit(6, 'Could not read %s on %s; run this again to read it before anything else.' % (
+                    path, HOST_BRANCH))
+        put = ['gh', 'api', '-X', 'PUT', 'repos/%s/contents/%s' % (repo, path), '-f',
+               'message=Where agents run: Host: local, %s' % picked, '-f',
+               'content=' + base64.b64encode(text.encode()).decode(), '-f', 'branch=' + HOST_BRANCH]
+        run(put + (['-f', 'sha=' + blob] if blob else []), env)
     if host_pull(repo, env) is None:
         run(['gh', 'pr', 'create', '--repo', repo, '--head', HOST_BRANCH, '--base', branch, '--title',
-             'Where agents run: this machine', '--body', 'Adds %s with `Host: local`: OpenWiz starts this '
-             "project's agents through its local driver, on the machine they run on (records v1, section 6). "
-             'Merge it to start the first fleet there.' % HOST_FILE], env)
+             'Where agents run: this machine', '--body', 'Adds `Host: local` to %s and the owner\'s harness '
+             'permission mode as one row of %s: OpenWiz starts this project\'s agents through its local driver, '
+             'which passes that mode to the harness unchanged (records v1, section 6). Merge it to start the first '
+             'fleet there.' % (HOST_FILE, MODE_FILE)], env)
     found = host_pull(repo, env)
     if found is None:
         raise Exit(6, 'Whether the host setting pull request was opened is uncertain; run this again to read it '
@@ -1196,9 +1251,9 @@ def launch(got):
             'answer where agents run again, or ask to change that line', NOTHING))
     picked = (state.value.get('mode') or {}).get('mode')
     if local and (not picked or saved_mode(env) != picked):
-        raise Exit(5, 'No harness permission mode the owner picked is saved in %s on the default branch, and the '
-                      "local driver starts no agent without one: run mode, then setting, and merge it; %s" % (
-                          MODE_FILE, NOTHING))
+        raise Exit(5, 'No `%s `%s` |` row, the Harness permission mode the owner picked, is in %s on the default '
+                      "branch, and the local driver starts no agent without it: run mode, then setting, and merge "
+                      'it; %s' % (MODE_ROW, picked or '<mode>', MODE_FILE, NOTHING))
     if local and local_driver(env) is None:
         raise Exit(5, "This OpenWiz's local driver no longer answers, so no agent can run on this machine; " + NOTHING)
     plan_approved(spec, env, confirmed)
@@ -1403,11 +1458,6 @@ def resume(got):
     elif spec and launched.get('spec') == spec and launched.get('state') == 'started':
         step = ('watch', "Run progress --spec %d, say the teacher's line for each moment, and run first-merge "
                 '--pr <N> when a pull request merges.' % spec)
-    elif host['agents'] == 'local' and not value.get('mode'):
-        step = ('mode', 'Run mode, explain each permission mode as it prints, pick none for the owner, then run '
-                'mode --mode <their pick>.')
-    elif setting_.get('state') not in ('opened', 'merged'):
-        step = ('setting', 'Run setting%s.' % (' again: its pull request is uncertain' if setting_ else ''))
     elif not value.get('grill'):
         step = ('grill', "Run the short grill; on the user's yes in chat, run grill --confirmed <its comment URL>.")
     elif not choices:
@@ -1415,6 +1465,11 @@ def resume(got):
     elif choices.get('builder_tables') != 'read':
         step = ('agents', '%s %s' % (chosen_line(choices),
                                      tables_line(choices, 'have not read back this choice yet')))
+    elif host['agents'] == 'local' and not value.get('mode'):
+        step = ('mode', 'Run mode, explain each permission mode as it prints, pick none for the owner, then run '
+                'mode --mode <their pick>.')
+    elif setting_.get('state') not in ('opened', 'merged'):
+        step = ('setting', 'Run setting%s.' % (' again: its pull request is uncertain' if setting_ else ''))
     elif not spec:
         step = ('plan', 'Run to-spec, which runs to-tickets; no plan approval is asked. Then run spec --spec <N> '
                 '--repo %s.' % repo)

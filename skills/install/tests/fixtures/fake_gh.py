@@ -140,15 +140,25 @@ def road(argv):
         if name in branches:
             sys.stderr.write('gh: Reference already exists (HTTP 422)\n')
             return 1
-        branches[name] = {}
+        branches[name] = dict(world['files'])  # a new branch holds its base's files
         save()
         return 0
-    if argv[:4] == ['api', '-X', 'PUT', r + '/contents/docs/agents/host.md'] and len(argv) == 10:
+    match = re.fullmatch(re.escape(r + '/contents/') + r'(docs/agents/[^?]+)', argv[3]) if len(argv) > 3 else None
+    if argv[:3] == ['api', '-X', 'PUT'] and match and len(argv) in (10, 12):
         fields = dict(value.split('=', 1) for value in argv[5::2])
-        if fields['branch'] not in branches:
+        files = branches.get(fields['branch'])
+        if files is None or (match[1] in files) != ('sha' in fields):  # GitHub needs the sha to replace a file
+            sys.stderr.write('gh: sha mismatch (HTTP 409)\n')
             return 1
-        branches[fields['branch']]['docs/agents/host.md'] = base64.b64decode(fields['content']).decode()
+        files[match[1]] = base64.b64decode(fields['content']).decode()
         save()
+        return 0
+    match = re.fullmatch(re.escape(r + '/contents/') + r'([^?]+)\?ref=(.+)', argv[1]) if len(argv) == 4 else None
+    if match and argv[0] == 'api' and argv[2:] == ['--jq', '.sha']:
+        if match[1] not in branches.get(match[2], {}):
+            sys.stderr.write('gh: Not Found (HTTP 404)\n')
+            return 1
+        print('c' * 40)
         return 0
     if argv[:2] == ['pr', 'list'] and argv[2:4] == ['--repo', world['repo']]:
         head = argv[argv.index('--head') + 1]

@@ -9,7 +9,7 @@
   first_fleet.py grill --state FILE --confirmed URL
   first_fleet.py choose --state FILE --options FILE (--harness P --model M --effort E | --from-setup) [--agents cloud|local]
   first_fleet.py spec --state FILE --spec N --repo OWNER/NAME
-  first_fleet.py launch --state FILE --spec N
+  first_fleet.py launch --state FILE --spec N [--yes --confirm DIGEST]
   first_fleet.py progress --state FILE --spec N --openwiz PROGRAM
   first_fleet.py first-merge --state FILE --pr N
   first_fleet.py next --state FILE
@@ -38,8 +38,10 @@ commit in that one create (#1074: init proposes the brain on its default
 branch), reads back the repository, default branch and commit, and reads before
 any retry of a create whose answer was lost. It never pushes into a repository.
 
-`launch` starts the first fleet the way launch-fleet starts every fleet, with
-no question: only from the spec's latest approval when it is the machine plan
+`launch` starts the first fleet the way launch-fleet starts every fleet, only
+on the user's yes right before it (a preview names the host and that it can
+cost money, with a digest of its exact effects; `--yes --confirm DIGEST`
+starts only if a fresh read still has exactly those effects), and only from the spec's latest approval when it is the machine plan
 approval of this onboarding's confirmed grill, on the host the user chose (a
 local host only once its setting is on the default branch). It
 reads launch-fleet's own frontier (../../launch-fleet/scripts/fleet.sh
@@ -92,7 +94,7 @@ OPTIONS = {
     'create-repo': ({'--state', '--repo'}, {'--yes'}, set()),
     'choose': ({'--state', '--options'}, {'--from-setup'}, {'--harness', '--model', '--effort', '--agents'}),
     'spec': ({'--state', '--spec', '--repo'}, set(), set()),
-    'launch': ({'--state', '--spec'}, set(), set()),
+    'launch': ({'--state', '--spec'}, {'--yes'}, {'--confirm'}),
     'progress': ({'--state', '--spec', '--openwiz'}, set(), set()),
     'next': ({'--state'}, set(), set()),
 }
@@ -161,6 +163,8 @@ def parse(argv):
                           'setup already recorded')
     if '--spec' in got and not re.fullmatch(r'[1-9][0-9]{0,9}', got['--spec']):
         raise Exit(2, 'usage: --spec takes an issue number')
+    if argv[0] == 'launch' and ('--confirm' in got) != bool(got.get('--yes')) or not re.fullmatch(r'[0-9a-f]{64}', got.get('--confirm', '0' * 64)):
+        raise Exit(2, 'usage: --yes takes --confirm with the digest of the preview the user said yes to')
     if '--pr' in got and not re.fullmatch(r'[1-9][0-9]{0,9}', got['--pr']):
         raise Exit(2, 'usage: --pr takes a pull request number')
     if '--confirmed' in got and not re.fullmatch(GRILL, got['--confirmed']):
@@ -1057,10 +1061,37 @@ def launch(got):
         raise Exit(5, 'No approved ticket of spec #%d is ready to start: the plan changed since its checks passed, '
                       'or is still blocked; %s' % (spec, NOTHING))
     builder, reviewer = review(choices, fleet_rules(env, state.value['repo']))
-    state.value['launch'] = {'spec': spec, 'state': 'pending', 'tickets': starts}
+    where = 'on this machine' if local else 'in Cloudroom'
+    effects = {'repo': state.value['repo'], 'spec': spec, 'project': carried['project'], 'title': title,
+               'host': host['agents'], 'builder': builder, 'reviewer': reviewer, 'grill': confirmed,
+               'tickets': [[n, ready[n]] for n in starts]}
+    digest = hashlib.sha256(json.dumps(effects, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    if got.get('--yes'):
+        shown = state.value.get('preview') or {}
+        if got['--confirm'] != digest or shown.get('effects') != digest or shown.get('spec') != spec:
+            raise Exit(5, 'The effects changed since the preview the user said yes to (or it was never shown); '
+                          'preview again and ask again; ' + NOTHING)
+    agents = '%s %s %s' % (builder['harness'], builder['model'], builder['effort'])
+    if not got.get('--yes'):
+        print('Ready to start the fleet for spec #%d %s, through launch-fleet: 1 fleet thread (%s), whose loop checks '
+              'the spec every 10 minutes and starts a builder (%s) for each of:' % (spec, where, agents, agents))
+        for ticket in starts:
+            print('#%d %s' % (ticket, ready[ticket]))
+        print('Each pull request is reviewed by %s %s %s, from the other model family.' % (
+            reviewer['harness'], reviewer['model'], reviewer['effort']))
+        cost = ('it uses your Cloud Credits, unknown until measured, and model-provider charges are separate'
+                if not local else 'every agent uses %s on this machine, whose model use is billed to you as it is '
+                'today' % builder['harness'])
+        print('Start the fleet %s now? It can cost money: %s.' % (where, cost))
+        state.value['preview'] = {'spec': spec, 'effects': digest}
+        if not state.save():
+            raise Exit(10, 'Could not save the preview; ' + NOTHING)
+        print('Confirmation: %s' % digest)
+        print("Nothing started. Ask exactly that; on the user's yes, run again with --yes --confirm %s." % digest)
+        return 12
+    state.value['launch'] = {'spec': spec, 'state': 'pending', 'effects': digest, 'tickets': starts}
     if not state.save():
         raise Exit(10, 'Could not save the launch record; ' + NOTHING)
-    agents = '%s %s %s' % (builder['harness'], builder['model'], builder['effort'])
     argv = ['room-cli', 'thread', 'spawn', '--parent-self', '--project', carried['project'],
             '--machine', 'local' if local else 'cloud', '--provider', builder['harness'], '--model', builder['model'],
             '--reasoning-level', builder['effort'], '--title', 'Fleet #%d: %s' % (spec, title),
@@ -1070,9 +1101,10 @@ def launch(got):
     except (FileNotFoundError, PermissionError):
         # Review R2: room-cli never ran, so nothing was dispatched.
         state.value['launch']['state'] = 'refused'
+        state.value.pop('preview', None)
         saved = state.save()
         raise Exit(5 if saved else 6, 'room-cli could not be run, so no fleet thread was dispatched; nothing started. '
-                   'Fix the Cloudroom installation, then run launch again.' if saved else
+                   'Fix the Cloudroom installation, then preview again and ask again.' if saved else
                    'room-cli could not be run, but that could not be saved; the start stays pending until read.')
     except (OSError, subprocess.TimeoutExpired):
         result = None
@@ -1085,15 +1117,8 @@ def launch(got):
         print('Whether the fleet thread started is uncertain. Never start it again by hand: run this command again '
               "to read the spec's fleet record, or look for the thread in Cloudroom.")
         return 6
-    print("Started spec #%d's fleet thread %s (%s), through launch-fleet. Its loop checks the spec every 10 minutes, "
-          'records itself on the spec and starts a builder (%s) for each of:' % (
-              spec, 'on this machine' if local else 'in Cloudroom', agents, agents))
-    for ticket in starts:
-        print('#%d %s' % (ticket, ready[ticket]))
-    print('Each pull request is reviewed by %s %s %s, from the other model family.' % (
-        reviewer['harness'], reviewer['model'], reviewer['effort']))
-    if not local:
-        print('Cloud Credits: unknown until measured. Model-provider charges are separate.')
+    print("Started spec #%d's fleet thread %s (%s), through launch-fleet; its first wake makes its loop, records "
+          'itself and starts the builders.' % (spec, where, agents))
     print(teach('The fleet starting', (str(len(starts)),)))
     return 0
 
@@ -1212,7 +1237,7 @@ def resume(got):
         step = ('watch', "Run progress --spec %d, say the teacher's line for each moment, and run first-merge "
                 '--pr <N> when a pull request merges.' % spec)
     else:
-        step = ('launch', 'Run launch --spec %d; it asks nothing.' % spec)
+        step = ('launch', 'Preview with launch --spec %d and ask for a yes to exactly that.' % spec)
     print('Next: %s.' % step[0])
     if repo:
         print('Repository: %s.' % repo)

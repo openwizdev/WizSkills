@@ -288,6 +288,30 @@
       "--spec",
       "900"
      ],
+     "exit": 12
+    },
+    {
+     "step": "launch",
+     "agent": "Start the fleet on this machine now? It can cost money: every agent uses claude-code on this machine, whose model use is billed to you as it is today.",
+     "gate": "start_fleet"
+    },
+    {
+     "step": "launch",
+     "user": "Yes.",
+     "permits": [
+      "start_fleet"
+     ]
+    },
+    {
+     "step": "launch",
+     "tool": [
+      "launch",
+      "--spec",
+      "900",
+      "--yes",
+      "--confirm",
+      "@preview"
+     ],
      "exit": 0,
      "spawn": 0
     },
@@ -640,6 +664,30 @@
       "launch",
       "--spec",
       "900"
+     ],
+     "exit": 12
+    },
+    {
+     "step": "launch",
+     "agent": "Start the fleet in Cloudroom now? It can cost money: it uses your Cloud Credits, unknown until measured, and model-provider charges are separate.",
+     "gate": "start_fleet"
+    },
+    {
+     "step": "launch",
+     "user": "Yes.",
+     "permits": [
+      "start_fleet"
+     ]
+    },
+    {
+     "step": "launch",
+     "tool": [
+      "launch",
+      "--spec",
+      "900",
+      "--yes",
+      "--confirm",
+      "@preview"
      ],
      "exit": 0,
      "spawn": 0
@@ -1021,6 +1069,30 @@
       "launch",
       "--spec",
       "900"
+     ],
+     "exit": 12
+    },
+    {
+     "step": "launch",
+     "agent": "Start the fleet on this machine now? It can cost money: every agent uses claude-code on this machine, whose model use is billed to you as it is today.",
+     "gate": "start_fleet"
+    },
+    {
+     "step": "launch",
+     "user": "Yes.",
+     "permits": [
+      "start_fleet"
+     ]
+    },
+    {
+     "step": "launch",
+     "tool": [
+      "launch",
+      "--spec",
+      "900",
+      "--yes",
+      "--confirm",
+      "@preview"
      ],
      "exit": 0,
      "spawn": 0

@@ -322,9 +322,17 @@ class Journey:
             return []
         return [json.loads(line) for line in self.room_log.read_text().splitlines()]
 
+    def confirmation(self):
+        """The confirmation the latest preview printed: what the user said yes to."""
+        for args, result in reversed(self.calls):
+            found = re.findall(r'^Confirmation: ([0-9a-f]{64})$', result.stdout, re.M)
+            if found:
+                return found[-1]
+        return '0' * 64
+
     def tool(self, turn):
         """Run one recorded tool step, answering the fakes as the turn records."""
-        args = turn['tool']
+        args = [self.confirmation() if a == '@preview' else a for a in turn['tool']]
         self.queue({'fleet': [{'exit': 0, 'stdout': self.fleet_view(turn['progress'])}]} if 'progress' in turn else {})
         self.room_script.write_text(json.dumps(
             {'spawn': [{'exit': turn['spawn'], 'stdout': ''}]} if 'spawn' in turn else {}))
@@ -348,7 +356,8 @@ class Journey:
         return results
 
 
-LAUNCH = {'tool': ['launch', '--spec', '900'], 'spawn': 0}
+PREVIEW = {'tool': ['launch', '--spec', '900']}
+YES = {'tool': ['launch', '--spec', '900', '--yes', '--confirm', '@preview'], 'spawn': 0}
 
 
 class RecordedJourney(unittest.TestCase):
@@ -373,9 +382,9 @@ class RecordedJourney(unittest.TestCase):
             if turn.get('tool', [None])[0] == 'where' and '--yes' in turn['tool']:
                 self.assertIn('spend_cloud_credits', permitted, 'what Cloudroom spends is answered before it is recorded')
                 self.assertEqual(turn['tool'][2], answers(turns[:i])['agents'])
-            if turn.get('tool', [None])[0] == 'launch':
-                self.assertEqual(turn['tool'], ['launch', '--spec', '900'], 'the launch asks nothing (J203)')
-                self.assertIn('spend_cloud_credits', permitted)
+            if turn.get('tool', [None])[:2] == ['launch', '--spec'] and '--yes' in turn['tool']:
+                self.assertIn('start_fleet', permitted, 'the fleet starts only after its own yes (ruling 7029073685)')
+                self.assertEqual(turns[i - 1].get('permits'), ['start_fleet'], 'the yes comes right before the start')
             if turn.get('tool', [None])[0] == 'choose':
                 self.assertEqual(turn['tool'], ['choose', '--from-setup'])
         self.assertEqual(len(asked), len(set(asked)), 'no choice is asked twice')
@@ -608,13 +617,17 @@ class Launch(unittest.TestCase):
         for words in ('You are the fleet thread for spec #900 of %s.' % REPO, 'Use the launch-fleet skill.',
                       'do its Fleet threads section, first wake.'):
             self.assertIn(words, flags['--prompt'])
-        started = next(r for turn, r in results if turn['tool'] == ['launch', '--spec', '900']).stdout
+        preview = next(r for turn, r in results if turn['tool'] == ['launch', '--spec', '900']).stdout
+        for line in ('Ready to start the fleet for spec #900 in Cloudroom, through launch-fleet: 1 fleet thread '
+                     '(codex syn-codex-model-01 high)', 'checks the spec every 10 minutes', '#901 S1: the field and its sheep',
+                     'reviewed by claude-code syn-claude-model-01 high',
+                     'Start the fleet in Cloudroom now? It can cost money: it uses your Cloud Credits'):
+            self.assertIn(line, preview)
+        self.assertNotIn('#904', preview)
+        started = results[-2][1].stdout
         for line in ("Started spec #900's fleet thread in Cloudroom (codex syn-codex-model-01 high)",
-                     'checks the spec every 10 minutes', '#901 S1: the field and its sheep',
-                     'reviewed by claude-code syn-claude-model-01 high', 'Cloud Credits: unknown',
                      'The plan passed its checks, so the fleet started: 3 builders'):
             self.assertIn(line, started)
-        self.assertNotIn('#904', started)
         watch = results[-1][1].stdout
         for line in ('Spec #900 has no fleet record yet', '#901 building', '#904 blocked',
                      '5 tickets: 3 building, 2 blocked', 'Counts are progress, not a first merge'):
@@ -625,7 +638,7 @@ class Launch(unittest.TestCase):
     def test_repeat_and_reload_never_start_again(self):
         j = Journey(self)
         j.replay()
-        again = j.tool(LAUNCH)
+        again = j.tool(YES)
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertIn('already started', again.stdout)
         self.assertEqual(len(j.spawns()), 1)
@@ -634,18 +647,19 @@ class Launch(unittest.TestCase):
     def test_an_uncertain_start_is_never_retried_and_settles_only_on_its_record(self):
         j = Journey(self)
         j.replay(until='launch')
-        first = j.tool(dict(LAUNCH, spawn=1))
+        self.assertEqual(j.tool(PREVIEW).returncode, 12)
+        first = j.tool(dict(YES, spawn=1))
         self.assertEqual(first.returncode, 6, first.stdout)
         self.assertIn('uncertain', first.stdout)
-        second = j.tool(LAUNCH)
+        second = j.tool(YES)
         self.assertEqual(second.returncode, 6, second.stdout)
         self.assertIn('no fleet record yet', second.stdout)
         j.extra_env = {'FAKE_GH_COMMENTS_FAIL': '1'}
-        unread = j.tool(LAUNCH)
+        unread = j.tool(YES)
         self.assertEqual(unread.returncode, 6, 'an unread record settles nothing')
         j.extra_env = {}
         j.fleet_record()
-        third = j.tool(LAUNCH)
+        third = j.tool(YES)
         self.assertEqual(third.returncode, 0, third.stdout)
         self.assertIn('has its fleet record', third.stdout)
         self.assertEqual(len(j.spawns()), 1, 'never a second start')
@@ -657,7 +671,8 @@ class Launch(unittest.TestCase):
         # Earlier recovery tests supplied only the factory's own comment.
         j = Journey(self)
         j.replay(until='launch')
-        self.assertEqual(j.tool(dict(LAUNCH, spawn=1)).returncode, 6)
+        self.assertEqual(j.tool(PREVIEW).returncode, 12)
+        self.assertEqual(j.tool(dict(YES, spawn=1)).returncode, 6)
         j.fleet_record()
         record = j.world['issues'][0]['comments'][-1]
         unresolved = j.state.read_text()
@@ -667,7 +682,7 @@ class Launch(unittest.TestCase):
                 j.state.write_text(unresolved)
                 record['author'] = author
                 j.save_world()
-                result = j.tool(LAUNCH)
+                result = j.tool(YES)
                 self.assertEqual(result.returncode, 6, result.stdout)
                 self.assertIn('no fleet record yet', result.stdout)
                 self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'uncertain')
@@ -686,7 +701,7 @@ class Launch(unittest.TestCase):
                 else:
                     j.world['files']['docs/agents/fleet.md'] = policy
                 j.save_world()
-                result = j.tool(LAUNCH)
+                result = j.tool(YES)
                 self.assertEqual(result.returncode, 6, result.stdout)
                 self.assertIn('could not be read', result.stdout)
                 self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'uncertain')
@@ -694,7 +709,7 @@ class Launch(unittest.TestCase):
         j.save_world()
         j.state.write_text(unresolved)
         j.extra_env['FAKE_GH_COMMENTS_FAIL'] = '1'
-        unread = j.tool(LAUNCH)
+        unread = j.tool(YES)
         self.assertEqual(unread.returncode, 6, unread.stdout)
         self.assertIn('could not be read', unread.stdout)
         self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'uncertain')
@@ -711,7 +726,7 @@ class Launch(unittest.TestCase):
                 j.world['files']['docs/agents/fleet.md'] = settings.replace(
                     row, '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |')
                 j.save_world()
-                settled = j.tool(LAUNCH)
+                settled = j.tool(YES)
                 self.assertEqual(settled.returncode, 0, settled.stdout)
                 self.assertIn('has its fleet record', settled.stdout)
                 self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'started')
@@ -723,33 +738,38 @@ class Launch(unittest.TestCase):
         # outcome was saved staying pending for ever, even once its fleet record exists.
         j = Journey(self)
         j.replay(until='launch')
+        self.assertEqual(j.tool(PREVIEW).returncode, 12)
         j.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': '', 'kill_caller': True}]}))
-        cut = j.helper(LAUNCH['tool'])
+        cut = j.helper([*YES['tool'][:4], '--confirm', j.confirmation()])
         self.assertNotEqual(cut.returncode, 0)
         self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'pending')
-        waiting = j.tool(LAUNCH)
+        waiting = j.tool(YES)
         self.assertEqual(waiting.returncode, 6, waiting.stdout)
         j.fleet_record()
-        settled = j.tool(LAUNCH)
+        settled = j.tool(YES)
         self.assertEqual(settled.returncode, 0, settled.stdout)
         self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'started')
         self.assertEqual(len(j.spawns()), 1, 'never a second start')
 
     @unittest.skipUnless(WS17, WS17_WHY)
-    def test_a_start_that_could_not_run_is_refused_and_can_run_again(self):
+    def test_a_start_that_could_not_run_is_refused_and_previewed_again(self):
         # Review R2: catches a known no-dispatch (room-cli not found) recorded as
         # uncertain, which would block every later start.
         j = Journey(self)
         j.replay(until='launch')
+        self.assertEqual(j.tool(PREVIEW).returncode, 12)
         room = j.dir / 'bin/room-cli'
         moved = j.dir / 'room-cli.away'
         room.rename(moved)
-        missing = j.tool(LAUNCH)
+        missing = j.tool(YES)
         self.assertEqual(missing.returncode, 5, missing.stdout)
         self.assertIn('nothing started', missing.stdout)
         self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'refused')
         moved.rename(room)
-        self.assertEqual(j.tool(LAUNCH).returncode, 0)
+        stale = j.tool(YES)
+        self.assertEqual(stale.returncode, 5, 'the old yes needs a fresh preview')
+        self.assertEqual(j.tool(PREVIEW).returncode, 12)
+        self.assertEqual(j.tool(YES).returncode, 0)
         self.assertEqual(len(j.spawns()), 1)
 
     def test_no_start_once_setup_no_longer_verifies(self):
@@ -761,7 +781,7 @@ class Launch(unittest.TestCase):
                 j = Journey(self)
                 j.replay(until='launch')
                 j.write_setup(state)
-                result = j.tool(LAUNCH)
+                result = j.tool(PREVIEW)
                 self.assertEqual(result.returncode, 5, result.stdout)
                 self.assertIn('nothing started', result.stdout)
                 self.assertEqual(j.spawns(), [])
@@ -777,7 +797,7 @@ class Launch(unittest.TestCase):
                 else:
                     j.world['issues'][3]['body'] += 'A changed body.\n'
                 j.save_world()
-                result = j.tool(LAUNCH)
+                result = j.tool(PREVIEW)
                 self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
                 self.assertIn('nothing started', result.stdout)
                 self.assertEqual(j.spawns(), [])
@@ -795,10 +815,35 @@ class Launch(unittest.TestCase):
                                'labels': ['ready-for-agent'], 'blockedBy': [], 'body': 'Synthetic.\n', 'comments': []}]
         j.save_world()
         j.approve(spec=950, tickets=[other], comment=90009)
-        shown = j.tool(LAUNCH)
-        self.assertEqual(shown.returncode, 0, shown.stdout)
-        self.assertIn('3 builders', shown.stdout)
+        shown = j.tool(PREVIEW)
+        self.assertEqual(shown.returncode, 12, shown.stdout)
+        self.assertIn('#903 S3: sheep flee the dog', shown.stdout)
         self.assertNotIn('#951', shown.stdout)
+
+    @unittest.skipUnless(WS17, WS17_WHY)
+    def test_the_yes_binds_the_preview_the_user_saw(self):
+        # The user said yes to two starts; a third ticket becoming ready before
+        # the yes runs must not start without a new preview and yes.
+        j = Journey(self)
+        j.replay(until='launch')
+        j.world['issues'][1]['labels'] = ['ready-for-agent', 'held']
+        j.save_world()
+        shown = j.tool(PREVIEW)
+        self.assertEqual(shown.returncode, 12, shown.stdout)
+        self.assertNotIn('#901 ', shown.stdout)
+        self.assertIn('#902 ', shown.stdout)
+        j.world['issues'][1]['labels'] = ['ready-for-agent']
+        j.save_world()
+        shutil.rmtree(j.dir / 'cache', ignore_errors=True)
+        result = j.tool(YES)
+        self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
+        self.assertIn('preview again', result.stdout)
+        self.assertEqual(j.spawns(), [], 'no start of effects the user never saw')
+        bare = j.tool(dict(YES, tool=['launch', '--spec', '900', '--yes']))
+        self.assertEqual(bare.returncode, 2, 'a yes names the preview it answers')
+        self.assertEqual(j.tool(PREVIEW).returncode, 12)
+        self.assertEqual(j.tool(YES).returncode, 0)
+        self.assertEqual(len(j.spawns()), 1)
 
     def test_every_builder_profile_the_fleet_can_use_is_the_users_choice(self):
         # Blocked tickets may later use the small-ticket builder; the reviewer
@@ -811,7 +856,7 @@ class Launch(unittest.TestCase):
                 j.replay(until='launch')
                 j.world['files']['docs/agents/fleet.md'] = text
                 j.save_world()
-                result = j.tool(LAUNCH)
+                result = j.tool(PREVIEW)
                 self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
                 self.assertIn('nothing started', result.stdout)
                 self.assertEqual(j.spawns(), [])
@@ -821,7 +866,7 @@ class Launch(unittest.TestCase):
         j.replay(until='launch')
         state = json.loads(j.state.read_text())
         j.state.write_text(json.dumps({k: v for k, v in state.items() if k != 'setup'}))
-        uncarried = j.tool(LAUNCH)
+        uncarried = j.tool(PREVIEW)
         self.assertEqual(uncarried.returncode, 5, uncarried.stdout)
         self.assertIn('run continue first', uncarried.stdout)
         k = Journey(self)
@@ -829,7 +874,7 @@ class Launch(unittest.TestCase):
         saved = json.loads(k.state.read_text())
         saved['choices']['agents'] = 'local'  # agents chosen for a place the user never answered
         k.state.write_text(json.dumps(saved))
-        local = k.tool(LAUNCH)
+        local = k.tool(PREVIEW)
         self.assertEqual(local.returncode, 5, local.stdout)
         self.assertIn('not chosen for where agents run', local.stdout)
         other = k.tool({'tool': ['launch', '--spec', '950']})
@@ -842,7 +887,7 @@ class Launch(unittest.TestCase):
         j.replay(until='launch')
         j.world['repo'] = 'synthetic-owner/synthetic-other'
         j.save_world()
-        for turn in (LAUNCH, {'tool': ['progress', '--spec', '900'], 'progress': ['building'] * 5}):
+        for turn in (PREVIEW, YES, {'tool': ['progress', '--spec', '900'], 'progress': ['building'] * 5}):
             result = j.tool(turn)
             self.assertEqual(result.returncode, 5, (turn['tool'], result.stdout + result.stderr))
             self.assertIn(REPO, result.stdout)
@@ -898,7 +943,7 @@ class Launch(unittest.TestCase):
         j.replay(until='launch')
         with open(str(j.state) + '.lock', 'a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            busy = j.tool(LAUNCH)
+            busy = j.tool(YES)
         self.assertEqual(busy.returncode, 7, busy.stdout + busy.stderr)
         self.assertEqual(j.spawns() + j.logged(), [])
 
@@ -1070,7 +1115,8 @@ class Resume(unittest.TestCase):
         j = Journey(self)
         j.replay(until='launch')
         if WS17:
-            self.assertEqual(j.tool(dict(LAUNCH, spawn=1)).returncode, 6)
+            self.assertEqual(j.tool(PREVIEW).returncode, 12)
+            self.assertEqual(j.tool(dict(YES, spawn=1)).returncode, 6)
             said = self.next(j)
             self.assertEqual(said.splitlines()[0], 'Next: launch.')
             self.assertIn('uncertain', said)

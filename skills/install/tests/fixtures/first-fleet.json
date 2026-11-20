@@ -249,6 +249,29 @@
         "--spec",
         "900"
       ],
+      "exit": 12
+    },
+    {
+      "step": "launch",
+      "agent": "Ready: one fleet thread (codex, syn-codex-model-01, high) whose loop checks spec #900 every 10 minutes and starts 3 builders for S1, S2 and S3, each reviewed by claude-code from the other family. Start the fleet in Cloudroom now? It can cost money: it uses your Cloud Credits, unknown until measured, and model-provider charges are separate."
+    },
+    {
+      "step": "launch",
+      "user": "Yes.",
+      "permits": [
+        "start_fleet"
+      ]
+    },
+    {
+      "step": "launch",
+      "tool": [
+        "launch",
+        "--spec",
+        "900",
+        "--yes",
+        "--confirm",
+        "@preview"
+      ],
       "exit": 0,
       "spawn": 0
     },

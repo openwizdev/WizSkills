@@ -16,8 +16,8 @@ Take them from that line to setup, then down the onboarding road to their first 
 
 ## Guards
 
-- **Install permission is not work approval.** Installing or finishing setup approves nothing. The first fleet needs the user's answer to where agents run, which says what they spend, and their yes in this chat to the grill's summary. Then the plan approves itself by to-tickets' checks (J203): no spec or plan approval is asked, and the fleet starts from those checks. Never write, fake or infer a yes, or ask for blanket consent.
-- **Show every effect, then wait for a yes to exactly it.** Where agents run, sign-in, the App or its skip, project settings, the host setting, the brain, phone access and a new repository each preview first; confirm with that preview's own `--yes` or `--yes --operation <id>`. Creating a repository, any write, spend, secrets and publishing always ask; a teacher's line never stands in for that ask.
+- **Install permission is not work approval.** Installing or finishing setup approves nothing. The first fleet needs the user's answer to where agents run, their yes in this chat to the grill's summary, and, right before it starts, their yes to starting it on that host, which can cost money. The plan approves itself by to-tickets' checks (J203): no spec or plan approval is asked. Never write, fake or infer a yes, or ask for blanket consent.
+- **Show every effect, then wait for a yes to exactly it.** Where agents run, the fleet's start, sign-in, the App or its skip, project settings, the host setting, the brain, phone access and a new repository each preview first; confirm with that preview's own `--yes` or `--yes --operation <id>`. Creating a repository, any write, spend, secrets and publishing always ask; a teacher's line never stands in for that ask.
 - **Never touch a login.** A missing sign-in gets its walk-through and a link; the user signs in themselves. Never run a sign-in for them, and never read, pass or store a credential.
 - **Credentials stay out of the conversation.** Never ask for a key or token in chat or put one in a prompt, argument, URL, log, issue or file. Keys go only through the tools' protected setup, into owner-only state on this computer or CloudRoom's secret store. Save the user's exact words only under [open-development](../../contracts/open-development.v1.md).
 - **Uncertain is never retried blindly.** Run the same command again: it reads its record first and never repeats an effect.
@@ -123,7 +123,7 @@ Done when the machine plan approval is on the spec and `spec` saved it.
 
 ### 8. Launch
 
-Run `first_fleet.py launch --spec <N>`. It asks nothing. It starts the fleet only from the spec's machine plan approval for this grill, on the host the user chose (this machine only once its host setting is merged), through launch-fleet's own frontier and brief. Say **The fleet starting** as it prints it. A refusal names what to fix; exit 6 is uncertain: run it again to read the fleet record, never start by hand.
+Preview with `first_fleet.py launch --spec <N>`. It reads the spec's machine plan approval for this grill, the host the user chose (this machine only once its host setting is merged) and launch-fleet's own frontier, then prints the start's effects and one question that names the host and says it can cost money. Show the effects and ask that question as printed. This is the one yes before the fleet starts; never skip it, even though the cost was shown at **Where agents run**. On the yes, run it with `--yes --confirm <the digest it printed>`. It refuses if anything changed since the preview: preview again and ask again. Say **The fleet starting** as it prints it. Exit 6 is uncertain: run it again to read the fleet record, never start by hand.
 
 Done when the start is recorded, or recorded uncertain and reported so.
 

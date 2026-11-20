@@ -188,19 +188,23 @@ class Conversation(unittest.TestCase):
                 self.assertEqual([t['agent'] for t in said[:3]], lines['Up front'])
         self.assertTrue(any(t.get('say') == 'missing' for j in ROAD['journeys'] for t in j['turns']))
 
-    def test_after_the_grills_yes_nothing_is_asked_until_the_closing_offer(self):
-        # catches: a plan or spec approval, or a "start them?" launch question, coming back after the grill's yes
+    def test_after_the_grills_yes_only_the_start_gate_asks_until_the_closing_offer(self):
+        # catches: a plan or spec approval coming back after the grill's yes, or the fleet's start asked for
+        # without naming its host and that it can cost money (ruling 7029073685)
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):
                 turns = journey['turns']
                 yes = next(i for i, t in enumerate(turns) if t.get('say') == 'grill-summary') + 1
                 self.assertEqual(turns[yes].get('user'), 'Yes.')
                 offer = next(i for i, t in enumerate(turns) if t.get('say') == 'offer')
-                asked = [t['agent'] for t in turns[yes + 1:offer] if '?' in t.get('agent', '')]
-                self.assertEqual(asked, [])
+                asked = [t for t in turns[yes + 1:offer] if '?' in t.get('agent', '')]
+                self.assertEqual([t.get('gate') for t in asked], ['start_fleet'])
+                where = 'on this machine' if journey['host'] == 'local' else 'in Cloudroom'
+                self.assertTrue(asked[0]['agent'].startswith('Start the fleet %s now? It can cost money: ' % where))
                 self.assertFalse([t for t in turns if re.search(r'(?i)\bapprove\b', t.get('agent', ''))])
                 launch = [t['tool'] for t in turns if t.get('tool', [''])[0] == 'launch']
-                self.assertEqual(launch, [['launch', '--spec', '900']])
+                self.assertEqual(launch, [['launch', '--spec', '900'], ['launch', '--spec', '900', '--yes', '--confirm',
+                                                                       '@preview']])
 
     def test_every_gate_is_asked_before_its_effect(self):
         # catches: a repository created, a file written or setup run without its own yes first
@@ -214,10 +218,12 @@ class Conversation(unittest.TestCase):
                         self.assertIn('create_repository', granted)
                     if args[:1] == ['setting'] and '--yes' in args:
                         self.assertIn('write', granted)
+                    if args[:1] == ['launch'] and '--yes' in args:
+                        self.assertEqual(turns[i - 1].get('permits'), ['start_fleet'])
                     if args[:1] == ['continue']:
                         self.assertIn('setup', granted)
                     if 'gate' in turn:
-                        self.assertTrue(turn['agent'].endswith('?'))
+                        self.assertIn('?', turn['agent'])
                         self.assertEqual(turns[i + 1].get('permits'), [turn['gate']])
 
     def test_ideas_come_from_the_chosen_group_and_the_user_picks(self):
@@ -246,7 +252,9 @@ class Replay(unittest.TestCase):
                 machine = spawns[0][spawns[0].index('--machine') + 1]
                 self.assertEqual(machine, journey['host'])
                 outputs = {tuple(args): result.stdout for args, result in road.calls}
-                launch = outputs[('launch', '--spec', '900')]
+                ask = next(t['agent'] for t in journey['turns'] if t.get('gate') == 'start_fleet')
+                self.assertIn(ask, outputs[('launch', '--spec', '900')].splitlines())
+                launch = next(result.stdout for args, result in road.calls if args[:4] == ['launch', '--spec', '900', '--yes'])
                 fleet = next(t['agent'] for t in journey['turns'] if t.get('say') == 'fleet-start')
                 self.assertIn(fleet, launch.splitlines())
                 merged = outputs[('first-merge', '--pr', '911')].splitlines()
@@ -403,7 +411,7 @@ class LaunchYes(unittest.TestCase):
                 preview = road.helper(['launch', '--spec', '900'])
                 self.assertEqual(preview.returncode, 12, preview.stdout)
                 self.assertEqual(road.spawns(), [])
-                ask = [line for line in preview.stdout.splitlines() if line.endswith('?')]
+                ask = [line for line in preview.stdout.splitlines() if '?' in line]
                 self.assertEqual(len(ask), 1, preview.stdout)
                 self.assertIn(where, ask[0])
                 self.assertIn('can cost money', ask[0])

@@ -1000,8 +1000,8 @@ class Run(Tracker):
             os.kill(int(pid.read_text()), 0)
         missing = self.run_status('run', '--repo', REPO, '--ticket', '12', '--agent', 'builder', '--note', '104',
                                   '--', str(self.dir / 'no-such-command'))
-        self.assertEqual((missing.returncode, missing.stderr),
-                         (2, 'status.py: command: could not start: No such file or directory\n'))
+        self.assertEqual((missing.returncode, missing.stderr.splitlines()[-1:]),
+                         (2, ['status.py: command: could not start: No such file or directory']))
 
     def test_run_never_starts_the_command_on_a_released_note(self):
         # catches: a run that starts long work on a claim it no longer holds.

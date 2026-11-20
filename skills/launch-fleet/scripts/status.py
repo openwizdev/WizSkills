@@ -350,7 +350,13 @@ def run(args):
     except Stop as error:
         raise Stop(f'{error}; the command was not started')
     # Its own process group, so a stop reaches everything COMMAND started.
-    proc = subprocess.Popen(command, start_new_session=True)
+    try:
+        proc = subprocess.Popen(command, start_new_session=True)
+    except OSError as error:
+        raise Failed(f'command: could not start: {error.strerror}')
+    # A run that is itself stopped stops COMMAND too, through the cleanup below.
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda number, _: sys.exit(128 + number))
     try:
         while True:
             try:

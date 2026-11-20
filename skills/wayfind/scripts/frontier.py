@@ -37,12 +37,14 @@ CLAIM = 'wayfind: claimed'
 RELEASE = re.compile(r'wayfind: released ([1-9][0-9]*)')
 COMMENT_ID = re.compile(r'#issuecomment-([1-9][0-9]*)')
 LOGIN = re.compile(r'[a-z0-9][a-z0-9-]{0,38}(?:\[bot\])?')
-PAGE = '%s(first: 100, after: $after) { totalCount pageInfo { hasNextPage endCursor } nodes { %s } }'
+# Only the connection being advanced binds the cursor; every other one, nested
+# ones included, starts at its first page (GitHub refuses a shared cursor).
+PAGE = '%s(first: 100%s) { totalCount pageInfo { hasNextPage endCursor } nodes { %s } }'
 FIELDS = {'labels': 'name', 'blockedBy': 'number state',
           'comments': 'url body author { __typename login }'}
-QUESTION = 'number title state ' + ' '.join(PAGE % item for item in FIELDS.items())
+QUESTION = 'number title state ' + ' '.join(PAGE % (f, '', n) for f, n in FIELDS.items())
 FIELDS['subIssues'] = QUESTION
-QUERY = '''query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+QUERY = '''query($owner: String!, $repo: String!, $number: Int!%s) {
   repository(owner: $owner, name: $repo) { issue(number: $number) { %s } }
 }'''
 FLEET = '''query($owner: String!, $repo: String!) {
@@ -78,7 +80,8 @@ def graphql(what, query, values):
 
 def read(number, fields, after=None):
     values = ['-F', f'number={number}'] + ([] if after is None else ['-f', f'after={after}'])
-    issue = graphql(f'#{number}', QUERY % fields, values).get('issue')
+    query = QUERY % ('' if after is None else ', $after: String', fields)
+    issue = graphql(f'#{number}', query, values).get('issue')
     if not isinstance(issue, dict):
         raise Refuse(f'#{number} is not a readable issue')
     return issue
@@ -126,7 +129,7 @@ def nodes(issue, field):
         if not isinstance(cursor, str) or not cursor or cursor in cursors:
             raise Refuse(f'#{issue.get("number")} has a broken page chain in its {field}')
         cursors.add(cursor)
-        connection = read(issue['number'], PAGE % (field, FIELDS[field]), cursor).get(field)
+        connection = read(issue['number'], PAGE % (field, ', after: $after', FIELDS[field]), cursor).get(field)
     if total != len(found):
         raise Refuse(f'#{issue.get("number")} has more {field} than its pages return')
     issue[('all', field)] = found
@@ -181,7 +184,7 @@ def line(question, authors):
 def main(argv):
     if len(argv) == 2 and argv[0] == 'map' and argv[1].isdigit():
         authors = record_authors()
-        issue = read(int(argv[1]), 'number ' + PAGE % ('subIssues', QUESTION))
+        issue = read(int(argv[1]), 'number ' + PAGE % ('subIssues', '', QUESTION))
         lines = [line(q, authors) for q in nodes(issue, 'subIssues') if q.get('state') == 'OPEN']
         return '\n'.join(lines) if lines else 'no open question'
     if len(argv) in (2, 4) and argv[0] == 'holder' and argv[1].isdigit() and \

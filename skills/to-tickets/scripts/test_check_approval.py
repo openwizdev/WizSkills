@@ -700,16 +700,10 @@ SPEC_BODY = ("## Problem Statement\n\nFrom the synthetic grill `docs/grills/2026
              "a user can't take their widgets out.\n\n## Solution\n\nAn export button and an export command.\n")
 
 
-SPEC_GH = """#!/usr/bin/env python3
-import json, os, sys
-with open(os.environ["SPEC_LOG"], "a") as log:
-    log.write(json.dumps(sys.argv[1:]) + "\\n")
-if sys.argv[1:] != ["issue", "view", "9100", "--repo", "synthetic-owner/synthetic-repo", "--json", "body,createdAt"]:
-    sys.exit("unexpected gh call")
-spec = json.load(open(os.environ["SPEC_FILE"]))
-if spec is None:
-    sys.exit("planted read failure")
-print(json.dumps(spec))
+# approve.py takes the spec as a file and calls no network: any gh call fails.
+SPEC_GH = """#!/bin/sh
+echo "$*" >> "$SPEC_LOG"
+exit 1
 """
 
 
@@ -775,14 +769,14 @@ class MachineApproval(unittest.TestCase):
         self.root = self.tmp / "root"
         (self.root / "docs").mkdir(parents=True)
         (self.root / "docs/existing.md").write_text("Synthetic interface.\n")
-        # RC2 (#1830): approve.py reads the spec's body and creation time.
+        # RC2 (#1830): step 4 passes the spec's body and creation time to approve.py.
         self.spec = {"body": SPEC_BODY, "createdAt": "2026-11-01T00:00:00Z"}
         spec_bin = self.tmp / "spec-bin"
         spec_bin.mkdir()
         (spec_bin / "gh").write_text(SPEC_GH)
         (spec_bin / "gh").chmod(0o755)
-        self.env = dict(os.environ, PATH=f"{spec_bin}:{os.environ['PATH']}",
-                        SPEC_FILE=str(self.tmp / "spec.json"), SPEC_LOG=str(self.tmp / "spec-calls"))
+        self.env = dict(os.environ, PATH=f"{spec_bin}:{os.environ['PATH']}", SPEC_LOG=str(self.tmp / "gh-calls"))
+        self.addCleanup(lambda: self.assertFalse((self.tmp / "gh-calls").exists(), "approve.py called gh"))
 
     def revision(self, tickets):
         """The revision text revision.sh prints for this plan on a fake GitHub."""
@@ -808,13 +802,15 @@ class MachineApproval(unittest.TestCase):
         return out.stdout
 
     def approve(self, tickets, revision=None, *extra):
-        (self.tmp / "spec.json").write_text(json.dumps(self.spec))
+        (self.tmp / "spec.json").unlink(missing_ok=True)
+        if self.spec is not None:
+            (self.tmp / "spec.json").write_text(json.dumps(self.spec))
         (self.tmp / "graph.json").write_text(json.dumps(graph_read(tickets)))
         (self.tmp / "revision.txt").write_text(self.revision(tickets) if revision is None else revision)
         return subprocess.run(
             ["python3", "-I", str(APPROVE), "--graph", str(self.tmp / "graph.json"),
-             "--revision", str(self.tmp / "revision.txt"), "--grill", GRILL, "--number", "1",
-             "--date", "2026-11-19", "--root", str(self.root), *extra],
+             "--revision", str(self.tmp / "revision.txt"), "--spec", str(self.tmp / "spec.json"),
+             "--grill", GRILL, "--number", "1", "--date", "2026-11-19", "--root", str(self.root), *extra],
             capture_output=True, text=True, env=self.env)
 
     def test_a_plan_that_passes_every_check_gets_a_record_bound_to_its_fingerprint(self):
@@ -873,9 +869,6 @@ class MachineApproval(unittest.TestCase):
                 else:
                     self.assertEqual(out.returncode, 0, out.stderr)
                     self.assertTrue(out.stdout.startswith("**Machine plan approval, 2026-11-19, revision 1:**"))
-                calls = [json.loads(line) for line in (self.tmp / "spec-calls").read_text().splitlines()]
-                self.assertEqual(calls[-1], ["issue", "view", "9100", "--repo", "synthetic-owner/synthetic-repo",
-                                             "--json", "body,createdAt"])
 
     def test_machine_approval_checks_the_spec_its_revision_names(self):
         # catches: answers checked on a spec body other than the one the
@@ -888,12 +881,21 @@ class MachineApproval(unittest.TestCase):
         out = self.approve(tickets, revision)
         self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
         self.assertIn("approve: checkpoints: spec #9100's body differs from the revision's", out.stderr)
-        for spec in (None, {"body": SPEC_BODY}, {"body": SPEC_BODY, "createdAt": "2026-11-01"}, []):
+        for spec in (None, {"body": SPEC_BODY}, {"body": SPEC_BODY, "createdAt": "2026-11-01"}, [], "text"):
             with self.subTest(spec=spec):
                 self.spec = spec
                 out = self.approve(tickets, revision)
                 self.assertEqual((out.returncode, out.stdout), (2, ""), out.stderr)
                 self.assertIn("approve: unreadable input:", out.stderr)
+
+    def test_step_four_passes_the_spec_to_machine_approval(self):
+        # catches: the documented step 4 leaving out the spec read or its
+        # --spec, so a planner following it can't run the checkpoint check.
+        text = (HERE.parent / "SKILL.md").read_text()
+        step = text.split("## 4. Approve by the checks", 1)[1].split("\n## 5.", 1)[0]
+        block = step.split("```sh\n", 1)[1].split("```", 1)[0]
+        self.assertIn('gh issue view <spec> --json body,createdAt > spec.json\n', block)
+        self.assertIn(" --spec spec.json ", " ".join(block.split()) + " ")
 
     def test_revision_two_needs_what_changed(self):
         # catches: a re-cut recorded without saying what changed since the last one.
@@ -902,7 +904,7 @@ class MachineApproval(unittest.TestCase):
         (self.tmp / "revision.txt").write_text(self.revision(tickets))
         (self.tmp / "spec.json").write_text(json.dumps(self.spec))
         base = ["python3", "-I", str(APPROVE), "--graph", str(self.tmp / "graph.json"),
-                "--revision", str(self.tmp / "revision.txt"), "--grill", GRILL,
+                "--revision", str(self.tmp / "revision.txt"), "--spec", str(self.tmp / "spec.json"), "--grill", GRILL,
                 "--date", "2026-11-19", "--root", str(self.root), "--number", "2"]
         missing = subprocess.run(base, capture_output=True, text=True, env=self.env)
         self.assertEqual((missing.returncode, missing.stdout), (2, ""))

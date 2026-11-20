@@ -1,15 +1,15 @@
-# #1358 green, at branch head 0012dce (main merged in at ab8a7f0: WS17 #1340 is in, as WizSkills #60's ab8a7f0); KN3's row and approvals.json (OpenWiz #1455 at 857d107) behind the KN3 stub
+# #1358 green, at branch head 6591f5e (main merged in at 5a48410); every blocker merged: KN6 #1371, WS17 #1340 (WizSkills ab8a7f0), KN3 #1368 (OpenWiz 583f2ae); no stub, no skip
 
-## On the branch: nothing skipped
+## On the branch
 $ python3 -I skills/install/tests/test_onboarding.py
-Ran 26 tests in 115.127s
+Ran 26 tests in 121.513s
 
 OK
 $ python3 -I skills/install/tests/test_first_fleet.py
-Ran 41 tests in 221.475s
+Ran 41 tests in 235.663s
 
 OK
 $ python3 -I skills/install/tests/test_doctor.py
-Ran 31 tests in 4.399s
+Ran 31 tests in 4.386s
 
 OK

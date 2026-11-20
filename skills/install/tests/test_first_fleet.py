@@ -239,13 +239,21 @@ class Journey:
         out = subprocess.run(['sh', str(REVISION), str(spec)], env=self.env(), capture_output=True, check=True)
         fingerprint = hashlib.sha256(out.stdout).hexdigest()
         rows = '\n'.join('| #%d | %s | %s | ready-for-agent |' % (
-            t['number'], t['title'], ' '.join('#%d' % b for b in t['blockers']) or 'none') for t in tickets)
-        head = ('**Plan graph approved by Robin, 2026-11-01, revision 1:** approved the synthetic plan.\n'
-                'Private record: https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-1\n'
-                if human else '**Machine plan approval, 2026-11-01, revision 1:** links, relies, sizes, width and '
-                'owned paths passed.\nGrill confirmed: %s\n\nChecks: synthetic.\n' % grill)
-        body = head + ('\n| Ticket | Title | Blocked by | Label |\n| --- | --- | --- | --- |\n%s\n\n'
-                       'Fingerprint: `%s`\n' % (rows, fingerprint))
+            t['number'], t['title'], ' '.join('#%d' % b for b in sorted(t['blockers'])) or 'none')
+            for t in sorted(tickets, key=lambda t: t['number']))
+        if human:
+            body = ('**Plan graph approved by Robin, 2026-11-01, revision 1:** approved the synthetic plan.\n'
+                    'Private record: https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-1\n\n'
+                    '| Ticket | Title | Blocked by | Label |\n| --- | --- | --- | --- |\n%s\n\n'
+                    'Fingerprint: `%s`\n' % (rows, fingerprint))
+        else:  # to-tickets' approve.py layout, read whole by launch-fleet (#1340)
+            n = len(tickets)
+            body = ('**Machine plan approval, 2026-11-01, revision 1:** links, relies, sizes, width and owned paths '
+                    'passed.\nGrill confirmed: %s\n\nChecks: %d tickets; links 0; relies 0; sizes S %d, M 0, L 0; '
+                    'width: chain 1, widest %d; owned paths %d.\n\n| Ticket | Title | Blocked by | Label |\n'
+                    '| --- | --- | --- | --- |\n%s\n\nFingerprint: `%s`\n\n<details><summary>Revision text</summary>'
+                    '\n\n```text\n%s```\n\n</details>\n' % (grill, n, n, n, n, rows, fingerprint,
+                                                         out.stdout.decode()))
         issue = next(i for i in self.world['issues'] if i['number'] == spec)
         issue['comments'].append({'id': comment, 'at': '2026-11-01T10:00:00Z', 'body': body})
         if spec == self.spec:

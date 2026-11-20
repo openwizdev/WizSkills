@@ -46,6 +46,10 @@ from urllib.parse import urlsplit, parse_qs, unquote
 args = sys.argv[1:]
 world_path = os.environ['FAKE_GH_WORLD']
 world = json.load(open(world_path))
+def logged(it, kind, name, login):
+    # A label event as GitHub's issue events list it: who, what and when, oldest first.
+    it.setdefault('events', []).append({'event': kind, 'label': {'name': name}, 'actor': {'login': login},
+                                        'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')})
 def races(key):
     # #1592: what lands at that moment, as the world names it: an agent's edit of its note,
     # or a person adding a label (an event under that person's login).
@@ -63,10 +67,10 @@ def races(key):
         elif 'unlabel' in rival:
             if rival['unlabel'] in it['labels']:
                 it['labels'].remove(rival['unlabel'])
-                it.setdefault('events', []).append({'event': 'unlabeled', 'label': {'name': rival['unlabel']}, 'actor': {'login': rival['by']}})
+                logged(it, 'unlabeled', rival['unlabel'], rival['by'])
         elif rival['label'] not in it['labels']:
             it['labels'].append(rival['label'])
-            it.setdefault('events', []).append({'event': 'labeled', 'label': {'name': rival['label']}, 'actor': {'login': rival['by']}})
+            logged(it, 'labeled', rival['label'], rival['by'])
 if args[:2] == ['issue', 'edit']:
     # launch-fleet's fix for an asking note without needs-info: gh issue edit N --repo R --add-label L.
     n, opts = int(args[2]), dict(zip(args[3::2], args[4::2]))
@@ -77,7 +81,7 @@ if args[:2] == ['issue', 'edit']:
     it = next(i for i in world['issues'] if i['number'] == n)
     if opts['--add-label'] not in it['labels']:
         it['labels'].append(opts['--add-label'])
-        it.setdefault('events', []).append({'event': 'labeled', 'label': {'name': opts['--add-label']}, 'actor': {'login': world['login']}})
+        logged(it, 'labeled', opts['--add-label'], world['login'])
     json.dump(world, open(world_path, 'w'), indent=1, sort_keys=True)
     sys.exit(0)
 assert args[0] == 'api', args
@@ -167,14 +171,15 @@ if seg[0] == 'issues' and seg[2:] == ['labels'] and method == 'POST':
     for l in body['labels']:
         if l not in it['labels']:
             it['labels'].append(l)
-            it.setdefault('events', []).append({'event': 'labeled', 'label': {'name': l}, 'actor': {'login': world['login']}})
+            logged(it, 'labeled', l, world['login'])
+    races('race_after_label')
     save(); out([{'name': l} for l in it['labels']])
 if seg[0] == 'issues' and len(seg) == 4 and seg[2] == 'labels' and method == 'DELETE':
     races('race_delete')
     it = issue(seg[1])
     if seg[3] not in it['labels']: fail(404, 'Label does not exist')
     it['labels'].remove(seg[3])
-    it.setdefault('events', []).append({'event': 'unlabeled', 'label': {'name': seg[3]}, 'actor': {'login': world['login']}})
+    logged(it, 'unlabeled', seg[3], world['login'])
     save(); out([{'name': l} for l in it['labels']])
 if seg[0] == 'issues' and seg[2:] == ['events'] and method == 'GET':
     it = issue(seg[1]); out(page(it.get('events', []), query))
@@ -932,6 +937,8 @@ class Check(Tracker):
 
 
 SKILLS_DIR = ROOT / 'skills'
+# launch-fleet's status step, filled as the fleet fills it (#1592).
+FLEET = {'<owner>/<repo>': REPO, '<harness>': 'Codex', '<model>': 'Sol 6.1 High', '<skills>': 'launch-fleet@' + VERSION}
 LABELS = {'ready-for-agent', 'needs-info'}
 
 
@@ -1028,7 +1035,7 @@ class FleetRun(Tracker):
         # #1592: the wake's one status call checks and fixes; its lines are the report.
         check = span('launch-fleet', r'`([^`]*status\.py repair[^`]*)`')
         self.assertIsNotNone(check, 'launch-fleet has no one status repair call')
-        check = filled('launch-fleet', check, {'<owner>/<repo>': REPO})
+        check = filled('launch-fleet', check, FLEET)
         seen = self.step(check)
         self.assertEqual(seen.returncode, 1, seen.stderr)
         self.assertEqual(sorted(seen.stdout.splitlines()), sorted([
@@ -1046,9 +1053,13 @@ class FleetRun(Tracker):
         self.assertEqual([c['id'] for c in self.ticket(world)['comments']], [101, 102, 103, builder, reviewer])
         self.assertEqual(self.states(), [(builder, 'builder', 'done'), (reviewer, 'reviewer', 'done')])
         # Each agent edits only its own note, and no label but needs-info is ever written.
+        # #1592: the fleet's own note on #13 records its repair, and ends done.
+        fleet = [c for c in world['issues'][1]['comments'] if c['body'].startswith(MARKER + '\nagent: fleet\n')]
+        self.assertEqual([c['body'].split('\n')[2] for c in fleet], ['state: done'])
         edits = [c['path'] for c in self.calls() if c['method'] == 'PATCH']
         self.assertEqual(sorted(set(edits)), sorted({f'repos/{REPO}/issues/comments/{builder}',
-                                                     f'repos/{REPO}/issues/comments/{reviewer}'}))
+                                                     f'repos/{REPO}/issues/comments/{reviewer}',
+                                                     f'repos/{REPO}/issues/comments/{fleet[0]["id"]}'}))
         added = [c['body'] for c in self.calls() if c['method'] == 'POST' and c['path'].endswith('/labels')]
         self.assertTrue(added)
         self.assertTrue(all(set(b['labels']) <= LABELS for b in added), added)
@@ -1067,7 +1078,7 @@ class WakeRepair(Tracker):
         what the call prints, which the wake passes on as its actions."""
         call = span('launch-fleet', r'`(python3 -I [^`]*status\.py (?:check|repair) [^`]*)`')
         self.assertIsNotNone(call, 'launch-fleet has no one status call')
-        seen = self.step(filled('launch-fleet', call, {'<owner>/<repo>': REPO}))
+        seen = self.step(filled('launch-fleet', call, FLEET))
         report = seen.stdout.splitlines()
         fix = span('launch-fleet', r'`(gh issue edit [^`]*--add-label needs-info[^`]*)`')
         for line in report if fix else ():
@@ -1150,6 +1161,36 @@ class WakeRepair(Tracker):
         # The next wake leaves the person's hold alone.
         self.assertEqual(self.wake(), (0, []))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
+    def test_a_person_who_reapplies_needs_info_after_the_repair_added_it_keeps_it(self):
+        # catches: the repair taking off a needs-info whose last application is a person's,
+        # because it applied the label itself earlier in the same wake.
+        resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                 {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
+        self.asking_on_12(race_after_label=[resume] + again)
+        self.assertEqual(self.wake(), (0, []))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual(self.timeline(), [('labeled', BOT), ('unlabeled', 'synthetic-owner'),
+                                           ('labeled', 'synthetic-owner')])
+
+    def test_a_repair_left_part_way_settles_only_its_own_application(self):
+        # catches: the next wake treating an older cleanup in the timeline as this repair's,
+        # and putting back a label nobody asked for now.
+        old = [{'event': kind, 'label': {'name': 'needs-info'}, 'actor': {'login': who}, 'created_at': ago(60)}
+               for kind, who in (('labeled', BOT), ('unlabeled', 'synthetic-owner'),
+                                 ('labeled', 'synthetic-owner'), ('unlabeled', BOT))]
+        self.ticket(self.world)['events'] = old
+        self.asking_on_12(fail_once=[f'POST repos/{REPO}/issues/12/labels'])
+        code, report = self.wake()
+        self.assertEqual(code, 2, report)
+        self.world = self.load()
+        resumed = next(c for c in self.ticket(self.world)['comments'] if c['id'] == 104)
+        resumed.update(body=note(state='working', step='got the answer'), updated=ago(1))
+        self.save()
+        self.assertEqual(self.wake(), (0, []))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+        self.assertEqual(len(self.timeline()), 4)
 
     def test_a_repair_that_fails_part_way_still_reports_what_it_changed(self):
         # catches: a label written on one ticket and then left out of the report because a

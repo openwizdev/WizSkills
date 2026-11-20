@@ -5,7 +5,7 @@
                   --harness TEXT --model TEXT --skills 'SKILL@X.Y.Z[, ...]' --step TEXT [--pr URL] [--preview URL]
                   [--time TIME] [--note ID]
   status.py check --repo OWNER/NAME
-  status.py repair --repo OWNER/NAME
+  status.py repair --repo OWNER/NAME --harness TEXT --model TEXT --skills 'launch-fleet@X.Y.Z'
 
 write: exit 0 written and read back, 2 refused or failed (a refusal comes before any
 call; a failure after a write is repaired by running the same write again), 3 stop:
@@ -14,10 +14,12 @@ reads back too (#1441): it steps down when another live note of its kind appeare
 puts back a release a sibling wake wrote between its read and its edit.
 check: exit 0 no mismatch, 1 mismatches printed, 2 could not read. It never writes.
 repair (#1592): the wake's check and fix. For each asking note with no needs-info it reads
-the ticket's notes again, adds the label only while a live note is still asking, then reads
-again and takes off a label it added last once no live note is asking; a needs-info anyone
-else added last stays. It prints each change and every other mismatch, one report line each:
-exit 0 nothing to report, 1 lines printed, 2 `status check failed: <why>` printed.
+the ticket's notes again and, while a live note still asks, records the repair in its own
+fleet note (working), adds the label and reads again. Once no live note asks, it takes off
+only the application it made since that record, puts back a person's application its DELETE
+took, and edits its note to done. A wake that stops part way leaves the note working; the
+next wake settles that ticket from it. It prints each change and every other mismatch, one
+report line each: exit 0 nothing to report, 1 lines printed, 2 `status check failed: <why>`.
 Every GitHub call goes through `gh api`.
 """
 import argparse
@@ -218,13 +220,13 @@ def when(stamp):
 
 
 def notes(comments, authors):
-    """The record authors' readable notes, oldest first: (id, fields, updated)."""
+    """The record authors' readable notes, oldest first: (id, fields, updated, author)."""
     found = []
     for item in comments:
         login = item['user']['login'] if isinstance(item.get('user'), dict) else None
         fields = parse(item.get('body'))
         if isinstance(login, str) and login.lower() in authors and fields:
-            found.append((int(item['id']), fields, when(item['updated_at'])))
+            found.append((int(item['id']), fields, when(item['updated_at']), login.lower()))
     return sorted(found, key=lambda n: n[0])
 
 
@@ -408,7 +410,7 @@ def mismatches(number, labels, found, prs, now):
     lines = []
     merged = [pr['url'] for pr in prs if pr['state'] == 'MERGED']
     for note in found:
-        nid, fields, updated = note
+        nid, fields, updated = note[:3]
         state, kind = fields['state'], fields['agent']
         if state not in CLAIMING:
             continue
@@ -426,7 +428,7 @@ def mismatches(number, labels, found, prs, now):
 
 
 def scan(repo, authors, now):
-    """Every mismatch on the open issues: (issue number, line)."""
+    """Every open issue: (number, its readable notes, its mismatch lines)."""
     owner, name = repo.split('/')
     cursor, found = None, []
     while True:
@@ -439,9 +441,10 @@ def scan(repo, authors, now):
             else:
                 comments = [{'id': c['databaseId'], 'user': c['author'], 'body': c['body'],
                              'updated_at': c['updatedAt']} for c in issue['comments']['nodes']]
-            found += [(issue['number'], line) for line in mismatches(
+            own = notes(comments, authors)
+            found.append((issue['number'], own, mismatches(
                 issue['number'], [label['name'] for label in issue['labels']['nodes']],
-                notes(comments, authors), issue['closedByPullRequestsReferences']['nodes'], now)]
+                own, issue['closedByPullRequestsReferences']['nodes'], now)))
         if not issues['pageInfo']['hasNextPage']:
             break
         cursor = issues['pageInfo']['endCursor']
@@ -449,16 +452,77 @@ def scan(repo, authors, now):
 
 
 def check(args, now):
-    found = scan(args.repo, record_authors(args.repo), now)
-    for _, line in found:
+    found = [line for _, _, lines in scan(args.repo, record_authors(args.repo), now) for line in lines]
+    for line in found:
         print(line)
     return 1 if found else 0
 
 
-def settle(repo, n, authors, login):
+# #1592 (#68 R1): the repair's record is its own fleet note on the ticket, working from just
+# before its label write until the label is settled, then done. A wake that stops in between
+# leaves it working, and the next wake settles the ticket from it.
+REPAIRING = 'adding needs-info for an asking note'
+REPAIRED = 'settled needs-info'
+
+
+def stamp():
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def record(repo, n, base, state, step, note_id=None):
+    """Post or edit the repair's fleet note: (its id, GitHub's time for this write)."""
+    fields = dict(base, state=state, step=step, time=stamp())
+    if note_id is None:
+        made = gh('POST', f'repos/{repo}/issues/{n}/comments', {'body': body(fields)})
+    else:
+        made = gh('PATCH', f'repos/{repo}/issues/comments/{note_id}', {'body': body(fields)})
+    if not (isinstance(made.get('updated_at'), str) and TIME.fullmatch(made['updated_at'])):
+        raise Failed(f'the repair note on #{n} was written but GitHub gave no time for it')
+    return int(made['id']), made['updated_at']
+
+
+def label_events(repo, n):
+    return [e for e in pages(f'repos/{repo}/issues/{n}/events')
+            if e.get('event') in ('labeled', 'unlabeled') and (e.get('label') or {}).get('name') == ASKING_LABEL]
+
+
+def by(event, login):
+    actor = (event.get('actor') or {}).get('login')
+    return isinstance(actor, str) and actor.lower() == login.lower()
+
+
+def cleanup(repo, n, login, since, labelled):
+    """Take off the needs-info this repair applied (#68 R2): only when its application, made since
+    its record, is the last one. GitHub's DELETE takes whatever label is there when it lands, so
+    the timeline is read again after it: a person's application that landed between the read and
+    the DELETE is put back, and reported. The report lines."""
+    events = label_events(repo, n)
+    mine = [k for k, e in enumerate(events) if e['event'] == 'labeled' and by(e, login)
+            and isinstance(e.get('created_at'), str) and e['created_at'] >= since]
+    if not mine:
+        return []
+    if labelled():
+        last = max(k for k, e in enumerate(events) if e['event'] == 'labeled')
+        if last != mine[-1]:
+            return []
+        gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
+        events = label_events(repo, n)
+    after = events[mine[-1] + 1:]
+    off = [k for k, e in enumerate(after) if e['event'] == 'unlabeled' and by(e, login)]
+    if not off:
+        return []
+    people = [e for e in after[:off[-1]] if e['event'] == 'labeled' and not by(e, login)]
+    if not people or labelled():
+        return []
+    gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+    who = people[-1]['actor']['login']
+    return [f'#{n}: {ASKING_LABEL} put back: {who} applied it as the repair took it off; check whose it is']
+
+
+def settle(repo, n, authors, login, base, pending):
     """#1592: needs-info on one ticket from its notes as they are now, read again after the
-    label write, so an agent that resumed meanwhile is never marked as asking. The report
-    line, or None when nothing is left to report."""
+    label write, so an agent that resumed meanwhile is never marked as asking. PENDING is the
+    repair's own working fleet note from a wake that stopped part way, or None. The report lines."""
     comments = f'repos/{repo}/issues/{n}/comments'
 
     def asking():
@@ -468,16 +532,24 @@ def settle(repo, n, authors, login):
     def labelled():
         return ASKING_LABEL in [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
 
-    if asking() is None or labelled():
-        return None
-    gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
     still = asking()
+    if pending is None:
+        if still is None or labelled():
+            return []
+        mine = [x for x in notes(pages(comments), authors) if x[1]['agent'] == 'fleet' and x[3] == login.lower()]
+        note_id, since = record(repo, n, base, 'working', REPAIRING, mine[-1][0] if mine else None)
+    else:
+        note_id, since = pending[0], pending[2].strftime('%Y-%m-%dT%H:%M:%SZ')
+    report = []
+    if still is not None and not labelled():
+        gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+        still = asking()
+        if still is not None:
+            report.append(f'#{n} note {still[0]} {still[1]["agent"]} asking: {ASKING_LABEL} added')
     if still is None:
-        # Only a label this login added last comes off: a person's needs-info is theirs.
-        if labelled() and asked_last_by(repo, n, login):
-            gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
-        return None
-    return f'#{n} note {still[0]} {still[1]["agent"]} asking: {ASKING_LABEL} added'
+        report += cleanup(repo, n, login, since, labelled)
+    record(repo, n, base, 'done', REPAIRED, note_id)
+    return report
 
 
 def guarded(what, act):
@@ -491,6 +563,13 @@ def guarded(what, act):
 
 
 def repair(args, now):
+    base = {'agent': 'fleet', 'harness': args.harness, 'model': args.model, 'skills': args.skills}
+    try:
+        shaped(dict(base, state='working', step=REPAIRING, time=stamp()))
+        bound(args.skills)
+    except Refused as error:
+        raise Failed(f'refused: {error}')
+
     def read():
         authors = record_authors(args.repo)
         return authors, scan(args.repo, authors, now)
@@ -498,11 +577,17 @@ def repair(args, now):
     authors, found = guarded('could not read', read)
     login = viewer()
     reported = 0
-    for n, line in found:
+    for n, own, lines in found:
         # Without its own login the repair can't tell its label from a person's: it reports.
-        if line.endswith(f': no {ASKING_LABEL} label') and login is not None:
-            line = guarded(f'could not repair #{n}', lambda: settle(args.repo, n, authors, login))
-        if line is not None:
+        pending = None if login is None else next(
+            (x for x in reversed(own) if x[1]['agent'] == 'fleet' and x[3] == login.lower()
+             and x[1]['state'] == 'working' and x[1]['step'] == REPAIRING), None)
+        asks = any(line.endswith(f': no {ASKING_LABEL} label') for line in lines)
+        if login is not None and (asks or pending):
+            settled = guarded(f'could not repair #{n}', lambda: settle(args.repo, n, authors, login, base, pending))
+            lines = [line for line in lines if not line.endswith(f': no {ASKING_LABEL} label')
+                     and not (pending and line.startswith(f'#{n} note {pending[0]} '))] + settled
+        for line in lines:
             # Each line as it is settled: a later failure never hides an earlier change.
             print(line, flush=True)
             reported += 1
@@ -518,8 +603,11 @@ def main(argv):
     # --skills has no default: a missing one is refused as the contract's missing field.
     for flag in ('--skills', '--why', '--pr', '--preview', '--time', '--note'):
         w.add_argument(flag)
-    for command in ('check', 'repair'):
-        sub.add_parser(command).add_argument('--repo', required=True)
+    c = sub.add_parser('check')
+    c.add_argument('--repo', required=True)
+    r = sub.add_parser('repair')
+    for flag in ('--repo', '--harness', '--model', '--skills'):
+        r.add_argument(flag, required=True)
     args = parser.parse_args(argv)
     now = datetime.now(timezone.utc)
     try:

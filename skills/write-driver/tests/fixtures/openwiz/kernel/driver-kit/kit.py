@@ -7,7 +7,8 @@ the real kit's start check does, and never stops what it started (the real kit s
 start fails). The real kit is OpenWiz's; write-driver's eval (WD3) runs it.
 
 Its credential and schema checks, from SHAPES to holds_credential, are the real kit's, copied byte for byte
-from OpenWiz's kernel/driver-kit/kit.py, with its schema.json beside them: write-driver's proxy imports them.
+from OpenWiz's kernel/driver-kit/kit.py (all but records_version, which reads a kernel file and which the proxy
+never calls), with its schema.json beside them: write-driver's proxy imports them.
 """
 import json, os, re, subprocess, sys
 
@@ -110,15 +111,6 @@ def invalid(value, s, at='the answer'):
         if why:
             return why
     return None
-
-
-def records_version():
-    """The records version this kernel implements, from records.v1.md's title."""
-    with open(os.path.join(HERE, '..', 'records.v1.md')) as f:
-        m = re.search(r'\(`(openwiz:records v[0-9]+)`\)', f.readline())
-    if not m:
-        raise Unusable('records.v1.md names no records version')
-    return m.group(1)
 
 
 def texts(value):

@@ -25,10 +25,13 @@ Every exact text comes from the contract's one `write-driver-v1` block. The run'
 JSON file, <dir>/run.json. Exit 0: done; 1: refused (the last line says why), or a kit check failed;
 2: the kit could not run; 3: skipped on the user's no. It never reads, asks for, prints or stores a login, token or key: GitHub is
 reached only through the user's own signed-in `gh`. The kit reaches the driver through `proxy`, which
-records each run it starts for stop-all. Python 3.9+, standard library, Linux (/proc).
+records each run its `start` answers, once the kit's own checks accept that answer, for stop-all. The
+expired-login probe runs the driver under Landlock and seccomp, or not at all. Python 3.9+, standard library,
+Linux (/proc).
 """
 import argparse
 import ctypes
+import importlib.util
 import json
 import math
 import os
@@ -36,6 +39,7 @@ import re
 import shlex
 import signal
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -482,9 +486,9 @@ def cmd_kit(a):
     # The kit calls the driver through this proxy, so every run its `start` answers is recorded for stop-all,
     # even when the kit's start check then fails and it never stops that run itself.
     proxy = Path(a.state) / 'kit-driver'
-    proxy.write_text('#!/bin/sh\nexec %s -I %s proxy --state %s --driver %s "$@"\n' % tuple(
+    proxy.write_text('#!/bin/sh\nexec %s -I %s proxy --state %s --openwiz %s --driver %s "$@"\n' % tuple(
         shlex.quote(x) for x in (sys.executable, os.path.abspath(__file__), os.path.abspath(a.state),
-                                 os.path.abspath(a.driver))))
+                                 os.path.abspath(a.openwiz), os.path.abspath(a.driver))))
     proxy.chmod(0o700)
     argv = [sys.executable, '-I', str(Path(a.openwiz) / 'kernel' / 'driver-kit' / 'kit.py'), '--driver',
             str(proxy), '--repo', a.repo, '--ticket', str(a.ticket), '--harness', a.harness, '--model', a.model,
@@ -512,22 +516,52 @@ def cmd_kit(a):
     return 0 if p.returncode == 0 else 1
 
 
+def kit_checks(openwiz):
+    """The kit's own credential and schema checks, imported from the kit it runs: nothing is copied to drift."""
+    path = Path(openwiz) / 'kernel' / 'driver-kit' / 'kit.py'
+    spec = importlib.util.spec_from_file_location('openwiz_driver_kit', str(path))
+    kit = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(kit)
+    return kit
+
+
+def kit_run(openwiz, out, err):
+    """The run a `start` answer names, only when the kit itself would read that answer: no credential in what
+    the driver printed, in any decoded string or key, and the schema's start answer. Else None."""
+    try:
+        kit = kit_checks(openwiz)
+        out, err = out.decode('utf-8'), err.decode('utf-8')
+        if kit.holds_credential(out + err):
+            return None
+        value = kit.parse(out)
+        if any(kit.holds_credential(text) for text in kit.texts(value)):
+            return None
+        if kit.invalid(value, kit.load_schema()['commands']['start']['output']) is not None:
+            return None
+        return value['run']
+    except Exception:  # a kit or answer it can't read keeps nothing of the answer
+        return None
+
+
 def cmd_proxy(a):
-    """The kit's view of the driver: the driver itself, byte for byte, recording each run `start` answers."""
+    """The kit's view of the driver: the driver itself, byte for byte, recording each run `start` answers.
+    Nothing of an answer enters state until the kit's own checks accept it; a run whose answer they refuse is
+    kept without its id, as one the user must stop on the host."""
     request = sys.stdin.buffer.read()
     p = subprocess.run([a.driver, *a.args], input=request, capture_output=True)
     if a.args == ['start'] and p.returncode == 0:
-        try:
-            run = json.loads(p.stdout)['run']
-        except (ValueError, KeyError, TypeError):
-            run = None
-        if isinstance(run, str) and re.fullmatch(r'[A-Za-z0-9._:-]{1,100}', run):
-            state = load(a.state)
-            state['started'].append({'what': 'driver run %s (started by the kit)' % run, 'argv': [a.driver, 'stop'],
-                                     'stdin': json.dumps({'run': run}), 'stopped': False})
-            state['stop_all'] = False
-            changed(state)
-            save(a.state, state)
+        run = kit_run(a.openwiz, p.stdout, p.stderr)
+        if run is None:
+            item = {'what': 'a driver run the kit started, whose start answer the kit refuses, so its id is not '
+                            'kept', 'argv': [], 'stdin': '', 'stopped': False}
+        else:
+            item = {'what': 'driver run %s (started by the kit)' % run, 'argv': [a.driver, 'stop'],
+                    'stdin': json.dumps({'run': run}), 'stopped': False}
+        state = load(a.state)
+        state['started'].append(item)
+        state['stop_all'] = False
+        changed(state)
+        save(a.state, state)
     sys.stdout.buffer.write(p.stdout)
     sys.stderr.buffer.write(p.stderr)
     return p.returncode
@@ -584,6 +618,76 @@ def descendants():
     return found
 
 
+# --- the expired-login probe's isolation ----------------------------------------------------------------
+# The driver under test runs under Landlock (it reads and runs only the system's programs and its own folder,
+# writes only its box, and traces no process outside it) and a seccomp filter (no socket of any kind, no
+# io_uring): no network, no host socket, no user file, no other process's environment. Where the kernel can't
+# apply both, the probe refuses and runs nothing.
+# Per architecture: its seccomp audit value and the numbers of socket, socketpair and io_uring_setup.
+SYSCALLS = {'x86_64': (0xC000003E, (41, 53, 425)), 'aarch64': (0xC00000B7, (198, 199, 425))}
+LANDLOCK_CREATE, LANDLOCK_ADD, LANDLOCK_RESTRICT = 444, 445, 446
+READ = 1 | 4 | 8  # execute, read a file, read a folder
+SYSTEM = ('/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/etc')
+
+
+def syscall(*args):
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.syscall.restype = ctypes.c_long
+    r = libc.syscall(*(a if isinstance(a, ctypes.c_char_p) else ctypes.c_long(a) for a in args))
+    if r < 0:
+        e = ctypes.get_errno()
+        raise OSError(e, os.strerror(e))
+    return r
+
+
+def landlock_abi():
+    """The kernel's Landlock version, or 0 when it has none."""
+    try:
+        return syscall(LANDLOCK_CREATE, 0, 0, 1)
+    except OSError:
+        return 0
+
+
+def isolation(box, driver):
+    """What runs in the probe's child before it becomes the driver, or Refused when this system can't isolate it."""
+    abi, arch = landlock_abi(), SYSCALLS.get(os.uname().machine)
+    if abi < 1 or arch is None:
+        raise Refused('this system cannot isolate the expired-login probe (it needs Linux Landlock on x86_64 or '
+                      'aarch64), so it runs nothing: check that lesson on a machine that can')
+    # Each right this kernel's Landlock knows: refer (2), truncate (3), device ioctl (5); TCP (4) and the
+    # abstract-socket and signal scopes (6) on top of the seccomp filter's ban on every socket.
+    fs = (1 << 13) - 1 | (1 << 13 if abi >= 2 else 0) | (1 << 14 if abi >= 3 else 0) | (1 << 15 if abi >= 5 else 0)
+    attr = struct.pack('=QQQ', fs, 3 if abi >= 4 else 0, 3 if abi >= 6 else 0)
+    attr = attr[:8 if abi < 4 else 16 if abi < 6 else 24]
+    reads = sorted({str(Path(x).resolve()) for x in SYSTEM + (sys.base_prefix, os.path.dirname(driver), '/proc',
+                                                              '/dev') if os.path.isdir(x)})
+    rules = [(x, READ if x != '/dev' else 4 | 8) for x in reads]
+    rules += [('/dev/null', (2 | 4 | 1 << 14) & fs), (str(box), fs)]
+    audit, (socket, pair, uring) = arch
+    ld, jeq, jge, ret = 0x20, 0x15, 0x35, 0x06
+    allow, refuse, kill = 0x7fff0000, 0x00050000 | 1, 0x80000000  # 1: EPERM
+    program = [(ld, 0, 0, 4), (jeq, 0, 7, audit), (ld, 0, 0, 0), (jge, 5, 0, 0x40000000), (jeq, 3, 0, socket),
+               (jeq, 2, 0, pair), (jeq, 1, 0, uring), (ret, 0, 0, allow), (ret, 0, 0, refuse), (ret, 0, 0, kill)]
+    filters = ctypes.create_string_buffer(b''.join(struct.pack('=HBBI', *i) for i in program))
+    fprog = ctypes.create_string_buffer(struct.pack('=HxxxxxxQ', len(program), ctypes.addressof(filters)))
+    keep = (filters, fprog)  # fprog points into filters: both live as long as enter
+
+    def enter():
+        libc = ctypes.CDLL(None, use_errno=True)
+        ruleset = syscall(LANDLOCK_CREATE, ctypes.c_char_p(attr), len(attr), 0)
+        for path, access in rules:
+            fd = os.open(path, os.O_PATH | os.O_CLOEXEC)
+            syscall(LANDLOCK_ADD, ruleset, 1, ctypes.c_char_p(struct.pack('=Qi', access, fd)), 0)
+            os.close(fd)
+        if libc.prctl(38, 1, 0, 0, 0) != 0:  # PR_SET_NO_NEW_PRIVS
+            raise OSError(ctypes.get_errno(), 'no_new_privs')
+        syscall(LANDLOCK_RESTRICT, ruleset, 0)
+        # PR_SET_SECCOMP, SECCOMP_MODE_FILTER
+        if libc.prctl(22, 2, ctypes.c_void_p(ctypes.addressof(keep[1])), 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), 'seccomp')
+    return enter
+
+
 STAND_IN = """#!/bin/sh
 # write-driver's stand-in harness: its first turn ends at once on an expired sign-in. It is not the user's harness.
 : > %s
@@ -604,7 +708,8 @@ def cmd_lesson(a):
                                               'second_note': a.second_note == 'yes'})
     # expired-login: the driver's own `start`, against its own test fixtures, with a stand-in harness that ends
     # its first turn on a sign-in line. Nothing of the caller's reaches it: an empty home, a PATH of the stand-in,
-    # the driver's fixtures and the system's programs, its own state folder, and no other variable.
+    # the driver's fixtures and the system's programs, its own state folder, and no other variable; and the
+    # kernel lets it reach nothing outside its box (isolation, above).
     if not field('harness', a.harness):
         raise Refused('%s is not a harness name: 1 to 40 lower-case letters, digits or -, starting with a letter'
                       % a.harness)
@@ -628,11 +733,17 @@ def cmd_lesson(a):
                                         '/usr/local/bin', '/usr/bin', '/bin']),
                'HOME': str(box / 'home'), 'LANG': 'C.UTF-8',
                'OPENWIZ_%s_STATE' % state['host'].upper().replace('-', '_'): str(box / 'state')}
+        enter = isolation(box, driver)
         ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER: keep what it starts
         request = {'repository': 'example-user/%s-driver-kit' % state['host'], 'ticket': 1,
                    'skill': 'build-ticket', 'harness': a.harness, 'model': 'stand-in'}
-        p = subprocess.run([driver, 'start'], input=json.dumps(request), env=env, capture_output=True, text=True,
-                           timeout=300, cwd=str(box / 'home'))
+        try:
+            p = subprocess.run([driver, 'start'], input=json.dumps(request), env=env, capture_output=True,
+                               text=True, timeout=300, cwd=str(box / 'home'), preexec_fn=enter)
+        except subprocess.SubprocessError as e:
+            if isinstance(e, subprocess.TimeoutExpired):
+                raise
+            raise Refused('the expired-login probe could not isolate the driver, so it ran nothing')
         try:
             answer = json.loads(p.stdout)
         except ValueError:
@@ -642,7 +753,7 @@ def cmd_lesson(a):
         if p.returncode == 0 and isinstance(answer.get('run'), str):
             # It answered a run its first turn never keeps: stop it, as everything this skill started.
             subprocess.run([driver, 'stop'], input=json.dumps({'run': answer['run']}), env=env,
-                           capture_output=True, text=True, timeout=300, cwd=str(box / 'home'))
+                           capture_output=True, text=True, timeout=300, cwd=str(box / 'home'), preexec_fn=enter)
         deadline = time.monotonic() + 5
         while descendants() and time.monotonic() < deadline:
             time.sleep(0.1)
@@ -688,9 +799,10 @@ def cmd_stop_all(a):
     for item in reversed(state['started']):
         if item['stopped']:
             continue
-        try:
-            p = subprocess.run(item['argv'], input=item['stdin'], capture_output=True, text=True, timeout=300)
-            item['stopped'] = p.returncode == 0
+        try:  # an item with no stop command is the user's to stop on the host
+            p = item['argv'] and subprocess.run(item['argv'], input=item['stdin'], capture_output=True, text=True,
+                                                timeout=300)
+            item['stopped'] = bool(p) and p.returncode == 0
         except (OSError, subprocess.TimeoutExpired):
             item['stopped'] = False
         print('%s %s' % ('stopped' if item['stopped'] else 'still runs:', item['what']))
@@ -706,7 +818,8 @@ def stopped_line(state):
     left = [i for i in state['started'] if not i['stopped']]
     if not left:
         return render('stopped', count=str(len(state['started'])))
-    what = '; '.join('%s (stop it with: %s)' % (i['what'], ' '.join(i['argv'])) for i in left)
+    what = '; '.join('%s (stop it with: %s)' % (i['what'], ' '.join(i['argv'])) if i['argv'] else
+                     '%s (stop it on the host yourself)' % i['what'] for i in left)
     return render('not_stopped', what=what[:300])
 
 
@@ -896,6 +1009,7 @@ def parser():
         q.add_argument('--state', required=True)
     cmd('stop-all')
     p = cmd('proxy')
+    p.add_argument('--openwiz', required=True)
     p.add_argument('--driver', required=True)
     p.add_argument('args', nargs=argparse.REMAINDER)
     p = cmd('report')

@@ -31,9 +31,8 @@ class Project:
         for host in hosts:
             folder = self.dir / 'adapters' / host
             folder.mkdir(parents=True)
-            # The shim runs the fixture with the shim's own folder as its host.
-            (folder / 'driver').write_text('#!%s -I\nimport runpy, sys\nsys.argv[0] = __file__\n'
-                                           'runpy.run_path(%r, run_name="__main__")\n' % (sys.executable, str(HERE / 'fixtures/driver.py')))
+            (folder / 'driver').write_text('#!/bin/sh\nFAKE_DRIVER_HOST=%s exec "%s" -I "%s" "$@"\n'
+                                           % (host, sys.executable, HERE / 'fixtures/driver.py'))
             (folder / 'driver').chmod(0o755)
         self.log = self.dir / 'driver.log'
         self.runs = self.dir / 'private/runs.json'
@@ -69,6 +68,9 @@ class Host(unittest.TestCase):
         self.assertEqual(p.host('stop', REPO, 7), (0, 'stopped #7 on local', ''))
         self.assertEqual([(c['host'], c['command'], c['input']) for c in p.calls()[1:]],
                          [('local', 'wake', {'run': 'local-run-7'}), ('local', 'stop', {'run': 'local-run-7'})])
+        self.assertEqual(p.saved()['runs'], {'7': {'host': 'local', 'run': 'local-run-7', 'stopped': True}})
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5'), (0, 'started #7 on local', ''))
+        self.assertEqual(p.saved()['runs'], {'7': {'host': 'local', 'run': 'local-run-7'}})
 
     def test_changing_the_setting_switches_the_driver_and_each_run_keeps_its_own(self):
         p = Project(self)

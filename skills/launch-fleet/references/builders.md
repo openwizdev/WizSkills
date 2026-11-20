@@ -17,7 +17,17 @@ Read this for a `start`, `reconcile start`, `check start`, `resume` or `reconcil
 
    Everything about the work is in the ticket and its spec, so the brief never drifts from them. A top-level thread starts from the default branch on GitHub, and outlives this tick. A fleet thread starts it as its own child instead (`--parent-self --project "$ROOM_PROJECT_ID"` in place of `--top-level`), so it can reach it (SKILL.md, "Fleet threads").
 
+   With a host chosen (`host.py which` prints `host: <name>`), start it through that host's driver instead ("Hosts", below); `host: none` keeps the `room-cli` start above.
+
 3. **Record the outcome** by editing your claim (`post.py edit`): `launch-fleet: started` when CloudRoom started it, or `launch-fleet: start refused: <its reason>` when it said no. A refused start stays on the frontier, and is tried again 10 minutes after the refusal (the edit that made your claim one), not sooner: the refusal's record is itself one of GitHub's messages, which would otherwise wake a retry at once, again and again. If the start timed out or you can't tell, leave the claim as it is: the check asks for a reconcile after 10 minutes.
+
+**Hosts** (#1371). A project chooses where its builders run in `docs/agents/host.md`: one `Host: <name>` line naming a driver in OpenWiz's `adapters/` (records v1, section 6). Onboarding writes it, and the user changes it by asking their agent to edit that line; nothing else changes. `scripts/host.py`, run from the project checkout, calls the driver (`$OPENWIZ_ADAPTERS/<name>/driver`, driver v1) and keeps each run privately in `LAUNCH_FLEET_RUNS`, an absolute JSON file beside `LAUNCH_FLEET_STATE`, never in the checkout or a public record:
+
+- **Start:** `python3 -I "<this skill's folder>/scripts/host.py" start <owner>/<repo> <N> <harness> <model>`, the harness `claude` for Claude Code or `codex` for Codex and the model the table's `--model` value. `started #<N> on <host>` means the run is saved: edit the claim to `launch-fleet: started`. `refused: <error>; next: <next>` is a refusal: edit the claim to `launch-fleet: start refused: <error>`. `unknown: ...` leaves the claim as it is: the reconcile looks for the builder's status note and branch on GitHub before any retry, as a run may exist. A ticket never gets a second live run.
+- **Wake:** every message to a builder with a run (a CI failure, findings, a resume) is `host.py wake <owner>/<repo> <N>`, after its record or reason is on GitHub: the builder reads its ticket and pull request again. `woke` is the delivery's confirmation. `no run: ...` means the builder was started with `room-cli`: tell it as before.
+- **Stop:** `host.py stop <owner>/<repo> <N>` when its ticket closes, in place of archiving its thread.
+
+Wake and stop reach the host that started the run, even after the setting changes; the next start uses the new host. A driver gets the caller's environment unchanged, and no login ever passes through `host.py` or a driver. Reviewers still start with `room-cli`.
 
 **Never wait awake.** No brief or message from a tick asks an agent to stay awake while it waits: a builder or reviewer never keeps a background watcher, a poll loop or a `sleep` waiting for CI, a review or another thread, and ends its turn instead, as `build-ticket` and `review-ticket` say. The tick's next message (CI failed, findings, a re-check, a resume) is what wakes it. A message that tells one to wait for something (#B to merge, say) says to end its turn until the resume (Jake, the cheaper-factory grill, CF1).
 

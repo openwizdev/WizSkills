@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A synthetic driver v1 for test-host.py (#1371): it starts nothing.
 
-Installed as `<adapters>/<host>/driver`, it appends each call (its host, command
+Run by a `<adapters>/<host>/driver` shim that sets $FAKE_DRIVER_HOST, it appends each call (its host, command
 and stdin) to $FAKE_DRIVER_LOG as one JSON line and answers as a driver would:
 `start` a run id naming its host, `wake` and `stop` that run. With
 $FAKE_DRIVER_MODE `refuse` it fails as v1 says (exit 1, `error` and `next`);
@@ -11,7 +11,7 @@ import json
 import os
 import sys
 
-host = os.path.basename(os.path.dirname(os.path.abspath(sys.argv[0])))
+host = os.environ['FAKE_DRIVER_HOST']
 command = sys.argv[1] if len(sys.argv) > 1 else ''
 given = sys.stdin.read() if command in ('start', 'wake', 'stop') else ''
 with open(os.environ['FAKE_DRIVER_LOG'], 'a') as log:

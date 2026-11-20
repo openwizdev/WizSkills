@@ -35,7 +35,7 @@ The map is one issue labelled `wayfind:map`: an index read once per session, hol
 2. **Map the frontier** in a breadth-first grill. If there is no fog and one grill fits, stop and ask the user how to go on.
 3. **Create the map,** then each question you can state now as a sub-issue with its label; add "blocked by" links and real cross-references in a second pass.
 4. **Add one Later line** to the project's roadmap linking the map.
-5. **Claim each research question and start its agent,** all in parallel. Then stop.
+5. **Claim each research question,** then run `frontier.py holder <question> --mine <claim comment id>`. Start its agent only on `yours`; on anything else (`held by`, `blocked by`, `no kind label` or `closed`), release yours and leave that question. Start the agents in parallel. Then stop.
 
 Done when the map, its labelled and linked questions, the roadmap line and every research agent exist.
 

@@ -5,11 +5,13 @@ Run by a `<adapters>/<host>/driver` shim that sets $FAKE_DRIVER_HOST, it appends
 and stdin) to $FAKE_DRIVER_LOG as one JSON line and answers as a driver would:
 `start` a run id naming its host, `wake` and `stop` that run. With
 $FAKE_DRIVER_MODE `refuse` it fails as v1 says (exit 1, `error` and `next`);
-with `garbage` it answers something that is no run.
+with `garbage` it answers something that is no run; with `extra`, a run with a
+repeated or unknown key. While $FAKE_DRIVER_HOLD names a file, it waits.
 """
 import json
 import os
 import sys
+import time
 
 host = os.environ['FAKE_DRIVER_HOST']
 command = sys.argv[1] if len(sys.argv) > 1 else ''
@@ -17,6 +19,12 @@ given = sys.stdin.read() if command in ('start', 'wake', 'stop') else ''
 with open(os.environ['FAKE_DRIVER_LOG'], 'a') as log:
     log.write(json.dumps({'host': host, 'command': command, 'input': json.loads(given) if given else None}) + '\n')
 mode = os.environ.get('FAKE_DRIVER_MODE', '')
+while os.environ.get('FAKE_DRIVER_HOLD') and os.path.exists(os.environ['FAKE_DRIVER_HOLD']):
+    time.sleep(0.02)  # held by the test until it removes the file
+if mode == 'extra':
+    print('{"run": "%s-run-1", "run": "%s-run-2"}' % (host, host) if command == 'start'
+          else json.dumps({'run': json.loads(given)['run'], 'woke': True, 'token': 'synthetic'}))
+    sys.exit(0)
 if mode == 'refuse':
     print(json.dumps({'error': 'the synthetic harness is not signed in', 'next': 'sign in to the harness, then start again'}))
     sys.exit(1)

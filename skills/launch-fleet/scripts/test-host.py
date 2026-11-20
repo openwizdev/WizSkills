@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -104,6 +105,32 @@ class Host(unittest.TestCase):
         self.assertEqual((code, out), (1, 'unknown: the local driver answered no run; a run may exist, '
                                           'so reconcile before any retry'))
         self.assertIsNone(p.saved())
+        code, out, _ = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', FAKE_DRIVER_MODE='extra')
+        self.assertEqual((code, out), (1, 'unknown: the local driver answered no run; a run may exist, '
+                                          'so reconcile before any retry'))
+        self.assertIsNone(p.saved())
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5')[0], 0)
+        self.assertEqual(p.host('wake', REPO, 7, FAKE_DRIVER_MODE='extra')[:2],
+                         (1, 'unknown: the local driver answered no run; a run may exist, so reconcile before any retry'))
+
+    def test_starts_at_once_keep_every_run(self):
+        p = Project(self)
+        hold = p.dir / 'hold'
+        hold.touch()
+        slow = subprocess.Popen([sys.executable, '-I', str(HERE / 'host.py'), 'start', REPO, '7', 'claude', 'm'],
+                                cwd=p.dir / 'repo', env=dict(p.env, FAKE_DRIVER_HOLD=str(hold)),
+                                stdout=subprocess.PIPE, text=True)
+        self.addCleanup(slow.kill)
+        for _ in range(500):  # until #7's driver has its call (it logs before it waits)
+            if p.calls():
+                break
+            time.sleep(0.02)
+        self.assertEqual(len(p.calls()), 1)
+        self.assertEqual(p.host('start', REPO, 8, 'claude', 'm'), (0, 'started #8 on local', ''))
+        hold.unlink()
+        self.assertEqual((slow.communicate(timeout=60)[0].strip(), slow.returncode), ('started #7 on local', 0))
+        self.assertEqual(p.saved()['runs'], {'7': {'host': 'local', 'run': 'local-run-7'},
+                                             '8': {'host': 'local', 'run': 'local-run-8'}})
 
     def test_no_run_or_no_setting_leaves_the_room_cli_route(self):
         p = Project(self, setting=None)

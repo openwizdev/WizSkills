@@ -165,6 +165,9 @@ service() { # the synthetic service on the local route, and the old key secret t
 [ "$(jq -c .argv "$work/service.log")" = '["mint"]' ]
 ! grep -q "$ga4" "$work/out" "$work/err" "$work/gh.log"
 echo 'ok   with a token service the wake reads GitHub with the helper'"'"'s read-only token and prints none (#1846)'
+(service; export LAUNCH_FLEET_TOKEN_STEP=1; identity "$ga4 installation" '')
+[ "$(wc -l < "$work/service.log" | tr -d ' ')" = 1 ]
+echo 'ok   an inherited step marker never skips the helper (#1846)'
 (service; export FAKE_SERVICE_REFUSE=1; identity 'none account' \
   "openwiz: no openwiz[bot] token (unavailable); using the owner's GitHub account")
 [ "$(wc -l < "$work/service.log" | tr -d ' ')" = 1 ]

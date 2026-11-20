@@ -74,6 +74,18 @@ class Fleet(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout
 
+    def test_builder_with_a_driver_run_is_told_through_its_driver(self):
+        # #1371: a builder host.py started has no CloudRoom thread; its saved run is its identity.
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        self.threads = self.threads[1:]
+        runs = self.dir / 'runs.json'
+        self.env['LAUNCH_FLEET_RUNS'] = str(runs)
+        runs.write_text(json.dumps({'repo': 'example/public', 'runs': {'12': {'host': 'local', 'run': 'run-0a1b'}}}))
+        self.assertEqual(self.run_fleet('wake', '12'), f'CI failed #31 for #12 at {SHA}: tell its builder, thread run:12\n')
+        runs.write_text(json.dumps({'repo': 'example/public', 'runs': {'12': {'host': 'local', 'run': 'run-0a1b',
+                                                                              'stopped': True}}}))
+        self.assertNotIn('run:12', self.run_fleet('wake', '12'))
+
     def test_builder_found_by_title_and_checked_branch(self):
         self.pr['checks'][0]['conclusion'] = 'FAILURE'
         self.assertEqual(self.run_fleet('wake', '12'), f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')

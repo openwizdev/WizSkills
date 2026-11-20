@@ -12,7 +12,9 @@ Run from the project checkout. The setting is the one `Host: <name>` line of
 $LAUNCH_FLEET_RUNS, {"repo": "owner/name", "runs": {"N": {"host", "run"}}},
 before success is printed, so a wake or stop always reaches the driver that
 started the run, even after the setting changes. A ticket has one live run: a
-new start replaces only a run its driver stopped (`"stopped": true`).
+new start replaces only a run its driver stopped (`"stopped": true`). Each
+save re-reads the file under the lock file beside it, so starts at once keep
+every run. A driver answer is taken only in exactly its v1 shape.
 
 Exit 0: `host: <name>`, `host: none`, `started #N on <host>`, `woke ...` or
 `stopped ...`. Exit 1, one line: `refused: <driver's error>; next: <its next>`
@@ -21,6 +23,7 @@ room-cli route); `unknown: ...` (a run may exist: reconcile before any retry).
 Exit 2, `host.py: <why>` on stderr: an unreadable setting, driver or runs file.
 The driver gets the caller's environment unchanged; this script reads no login.
 """
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -70,36 +73,55 @@ def driver(host):
     return path
 
 
+ANSWERS = {'start': {'run'}, 'wake': {'run', 'woke'}, 'stop': {'run', 'stopped'}}
+
+
+def strict(text):
+    """JSON with each key once; None for anything else."""
+    def once(pairs):
+        if len({k for k, _ in pairs}) != len(pairs):
+            raise ValueError('repeated key')
+        return dict(pairs)
+    try:
+        return json.loads(text, object_pairs_hook=once)
+    except ValueError:
+        return None
+
+
 def call(host, command, given):
-    """The driver's answer object, or Outcome on a refusal or an unreadable answer."""
+    """The driver's run id, or Outcome on a refusal or any answer that isn't exactly v1's."""
     try:
         r = subprocess.run([str(driver(host)), command], input=json.dumps(given), capture_output=True, text=True,
                            timeout=TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise Outcome('unknown: the %s driver did not answer %s (%s); a run may exist, so reconcile before any '
                       'retry' % (host, command, type(e).__name__))
-    try:
-        answer = json.loads(r.stdout)
-    except ValueError:
-        answer = None
+    answer = strict(r.stdout)
     if r.returncode == 1 and isinstance(answer, dict) and set(answer) == {'error', 'next'} \
-            and all(isinstance(v, str) and '\n' not in v for v in answer.values()):
+            and all(isinstance(v, str) and 0 < len(v) <= 300 and '\n' not in v for v in answer.values()):
         raise Outcome('refused: %s; next: %s' % (answer['error'], answer['next']))
-    if r.returncode != 0 or not isinstance(answer, dict) or not isinstance(answer.get('run'), str) \
-            or not RUN.fullmatch(answer['run']):
+    if r.returncode != 0 or not isinstance(answer, dict) or set(answer) != ANSWERS[command] \
+            or not isinstance(answer['run'], str) or not RUN.fullmatch(answer['run']) \
+            or any(answer[k] is not True for k in ANSWERS[command] - {'run'}) \
+            or (command != 'start' and answer['run'] != given['run']):
         raise Outcome('unknown: the %s driver answered no run; a run may exist, so reconcile before any retry' % host)
-    return answer
+    return answer['run']
 
 
-def load(repo):
+def runs_path():
     path = os.environ.get('LAUNCH_FLEET_RUNS', '')
     if not path or not os.path.isabs(path):
         raise Unreadable('set LAUNCH_FLEET_RUNS to an absolute private JSON file, outside the checkout')
+    return Path(path)
+
+
+def load(repo):
+    path = runs_path()
     try:
-        value = json.loads(Path(path).read_text())
+        value = strict(path.read_text())
     except FileNotFoundError:
-        return Path(path), {'repo': repo, 'runs': {}}
-    except (OSError, ValueError) as e:
+        return {'repo': repo, 'runs': {}}
+    except (OSError, UnicodeDecodeError) as e:
         raise Unreadable('%s is unreadable: %s' % (path, e))
     if not (isinstance(value, dict) and set(value) == {'repo', 'runs'} and value['repo'] == repo
             and isinstance(value['runs'], dict)
@@ -108,17 +130,27 @@ def load(repo):
                     and isinstance(v['host'], str) and NAME.fullmatch(v['host'])
                     and isinstance(v['run'], str) and RUN.fullmatch(v['run']) for k, v in value['runs'].items())):
         raise Unreadable('%s is not a runs file for %s' % (path, repo))
-    return Path(path), value
+    return value
 
 
-def save(path, value):
-    """Write the runs file owner-only, atomically, and read it back."""
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.runs-')
-    with os.fdopen(fd, 'w') as f:
-        json.dump(value, f, sort_keys=True)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
-    return json.loads(path.read_text()) == value
+def record(repo, change):
+    """Under the runs file's lock, re-read it, apply change(runs) and save it owner-only, read back.
+
+    False when the save or its read-back failed. Starts at once each keep their run."""
+    path = runs_path()
+    with open(str(path) + '.lock', 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        value = load(repo)
+        change(value['runs'])
+        try:
+            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.runs-')
+            with os.fdopen(fd, 'w') as f:
+                json.dump(value, f, sort_keys=True)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+            return load(repo) == value
+        except (OSError, Unreadable):
+            return False
 
 
 def main(argv):
@@ -130,39 +162,35 @@ def main(argv):
     if shapes.get(kind) != len(argv) or not REPO.fullmatch(argv[1]) or not TICKET.fullmatch(argv[2]):
         raise Unreadable('usage: which | start OWNER/NAME N HARNESS MODEL | wake OWNER/NAME N | stop OWNER/NAME N')
     repo, n = argv[1], argv[2]
-    path, value = load(repo)
-    run = value['runs'].get(n)
+    run = load(repo)['runs'].get(n)
+    live = 'refused: #%s already has a run on %s; wake or stop it instead'
     if kind == 'start':
         host = chosen()
         if host is None:
             raise Outcome('refused: no host is chosen in %s' % SETTING)
         driver(host)
         if run and not run.get('stopped'):
-            raise Outcome('refused: #%s already has a run on %s; wake or stop it instead' % (n, run['host']))
-        answer = call(host, 'start', {'repository': repo, 'ticket': int(n), 'skill': 'build-ticket',
-                                      'harness': argv[3], 'model': argv[4]})
-        value['runs'][n] = {'host': host, 'run': answer['run']}
-        try:
-            saved = save(path, value)
-        except (OSError, ValueError):
-            saved = False
-        if not saved:
+            raise Outcome(live % (n, run['host']))
+        new = call(host, 'start', {'repository': repo, 'ticket': int(n), 'skill': 'build-ticket',
+                                   'harness': argv[3], 'model': argv[4]})
+
+        def add(runs):
+            if runs.get(n) != run:  # another start saved a run for #N meanwhile
+                raise Outcome('unknown: #%s got a second run, %s on %s; stop one of them' % (n, new, host))
+            runs[n] = {'host': host, 'run': new}
+        if not record(repo, add):
             raise Outcome('unknown: #%s started on %s but its run was not saved; save run %s for #%s privately '
-                          'before anything else' % (n, host, answer['run'], n))
+                          'before anything else' % (n, host, new, n))
         print('started #%s on %s' % (n, host))
         return 0
     if not run:
         raise Outcome('no run: #%s was not started through a driver' % n)
-    answer = call(run['host'], kind, {'run': run['run']})
-    if answer.get('run') != run['run']:
-        raise Outcome('unknown: the %s driver answered another run' % run['host'])
+    call(run['host'], kind, {'run': run['run']})
     if kind == 'stop' and not run.get('stopped'):
-        run['stopped'] = True
-        try:
-            saved = save(path, value)
-        except (OSError, ValueError):
-            saved = False
-        if not saved:
+        def stopped(runs):
+            if runs.get(n, {}).get('run') == run['run']:
+                runs[n]['stopped'] = True
+        if not record(repo, stopped):
             raise Outcome('unknown: #%s stopped on %s but that was not saved' % (n, run['host']))
     print('%s #%s on %s' % ({'wake': 'woke', 'stop': 'stopped'}[kind], n, run['host']))
     return 0

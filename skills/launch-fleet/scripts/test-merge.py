@@ -595,7 +595,9 @@ class Landed(unittest.TestCase):
     def test_only_a_record_authors_landed_comment_counts(self):
         # catches: anyone pasting the landed line on a report silencing the real one.
         forged = comment(4000, LANDED, login='synthetic-user')
-        w = self.world(self.issues, comments={'9101': [forged]})
+        # Not the contract's form: the fix it names is outside openwizdev (amended FL1 2f54a80).
+        elsewhere = comment(4001, LANDED.replace(DEST, 'synthetic-owner/OpenWiz'))
+        w = self.world(self.issues, comments={'9101': [forged, elsewhere]})
         project(w, None)
         self.assertEqual(self.merge(w)[0], 0)
         self.assertEqual(self.posts(w), [(9101, LANDED)])

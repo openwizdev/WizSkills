@@ -1,0 +1,29 @@
+# Synthetic fixture output; the synthetic thread id in the takeover line is redacted as <synthetic thread>.
+$ TEST_ONLY='F6: a native blocker in another repository with a local twin number is hard' sh skills/launch-fleet/scripts/test.sh   # at f1b3428 plus the new case
+FAIL F6: a native blocker in another repository with a local twin number is hard: unexpected output:
+    --- /tmp/tmp.X/case-1/want.txt	<time>
+    +++ /tmp/tmp.X/case-1/out	<time>
+    @@ -1,3 +1,4 @@
+     #41 G1: gadget reader
+    +#42 G2: gadget writer
+     #45 G5: gadget import
+     #55 G11: gadget filter
+ok   every gh call was one of fleet.sh's reads
+1 cases, 1 failed
+$ TEST_ONLY='F6 claim: a running ticket of another spec on hold still withdraws' sh skills/launch-fleet/scripts/test.sh
+FAIL F6 claim: a running ticket of another spec on hold still withdraws: unexpected output:
+    --- /tmp/tmp.X/case-1/want.txt	<time>
+    +++ /tmp/tmp.X/case-1/out	<time>
+    @@ -1 +1 @@
+    -withdraw #13: its owned paths collide with #81, which is running or claimed first
+    +go #13
+ok   every gh call was one of fleet.sh's reads
+1 cases, 1 failed
+$ TEST_ONLY='takeover: a running ticket of another spec on hold holds a takeover start' sh skills/launch-fleet/scripts/test.sh
+FAIL takeover: a running ticket of another spec on hold holds a takeover start: unexpected output:
+    --- /tmp/tmp.X/case-1/want.txt	<time>
+    +++ /tmp/tmp.X/case-1/out	<time>
+    @@ -0,0 +1 @@
+    +take over #12: builder thread <synthetic thread> is archived; start a builder to continue branch room/12-w2-widget-store-bbbb (its record: comment 1201)
+ok   every gh call was one of fleet.sh's reads
+1 cases, 1 failed

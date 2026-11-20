@@ -4,6 +4,7 @@
 Each case writes a synthetic docs/agents/ folder, runs the public command and
 reads only its exit code and short result.
 """
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,16 @@ import tempfile
 import unittest
 
 SCRIPT = Path(__file__).resolve().parent / 'settings.py'
+SKILLS = Path(__file__).resolve().parents[2]
+
+
+def reader(path):
+    """A consumer of the settings, loaded from its own skill so this test reads its real rules."""
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def table(title, provider, model):
@@ -166,6 +177,38 @@ class Check(unittest.TestCase):
         code, out = self.check(self.project(**{'fleet.md': FLEET.replace('## Test commands', extra + '## Test commands')}))
         self.assertEqual(code, 5, out)
         self.assertIn('fleet.md: Builder: --provider appears 2 times', out)
+
+    def test_setup_and_the_readers_refuse_the_same_settings(self):
+        # catches: setup and the review or launch reader disagreeing on one
+        # file, so setup verifies settings the fleet then refuses (#1500, #1520).
+        review = reader(SKILLS / 'review-ticket/scripts/review.py')
+        launch = reader(SKILLS / 'install/scripts/first_fleet.py')
+        row = '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |'
+        builder = table('Builder', 'claude-code', 'syn-claude-1')
+        cases = [FLEET]
+        cases += [FLEET.replace(row, bad) for bad in (
+            row + '\n| Record authors | `synthetic-old` |', row.replace('`, `', '` and `'), row + ' x |',
+            row.replace('synthetic-owner', 'synthetic--owner'), '| Record authors | |')]
+        cases += [FLEET.replace(builder, bad) for bad in (
+            builder + 'Was `--model syn-old`.\n', builder.replace('`--provider claude-code`', '`--provider claude code`'),
+            builder.replace('`--model syn-claude-1`', '`--model  syn-claude-1`'))]
+        for text in cases:
+            try:
+                review.record_authors(text)
+                authors = True
+            except review.Refusal:
+                authors = False
+            sections = {}
+            for line in text.split('\n'):
+                if line.startswith('## '):
+                    name = line[3:].strip()
+                    sections.setdefault(name, [])
+                elif sections:
+                    sections[name].append(line)
+            tables = all(launch.agent(sections[t]) for t in ('Builder', 'Builder for small tickets',
+                                                             'Reviewer for Claude-built', 'Reviewer for GPT-built'))
+            code, out = self.check(self.project(**{'fleet.md': text}))
+            self.assertEqual(code == 0, authors and tables, text + '\n' + out)
 
     def test_usage_errors_exit_2(self):
         # catches: a mistyped command read as a verified project.

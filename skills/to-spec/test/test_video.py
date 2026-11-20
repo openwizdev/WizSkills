@@ -253,5 +253,26 @@ class SpecVideo(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in out_dir.iterdir()), sorted([planted[0].name, 'spec.mp4']))
 
 
+# Video comment steering is off in every mode until OpenWiz #1402's identity
+# separation is verified (WizSkills #60); the owner steers through the
+# orchestrator. Turn this on, and the video post's wording with it, together.
+COMMENT_STEERING_ON = False
+
+
+class SteeringWording(unittest.TestCase):
+    """#1736: the line posted with the video matches whether comment steering is on."""
+
+    def test_the_video_post_invites_comment_steering_only_while_it_is_on(self):
+        text = (HERE.parent / 'SKILL.md').read_text()
+        post = text.split('Post it as a spec comment', 1)[1].split('\n## ', 1)[0]
+        steer = text.split('## 5. Steer', 1)[1].split('\n\nPlanning grants', 1)[0]
+        invites = 'comment here to steer' in post.lower() or "owner's comments on the video steer" in steer
+        if COMMENT_STEERING_ON:
+            self.assertTrue(invites, 'comment steering is on but the video post does not invite it')
+        else:
+            self.assertFalse(invites, 'the video post invites comment steering while it is off')
+            self.assertIn('orchestrator', post.lower(), 'the video post must send the owner to their orchestrator')
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

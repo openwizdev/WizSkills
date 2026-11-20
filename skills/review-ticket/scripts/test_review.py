@@ -869,6 +869,18 @@ class CommentPass(unittest.TestCase):
         code, findings, out = self.comment_pass(diff)
         self.assertEqual([f.split(": ", 2)[:2] for f in findings], [["src/app.py:41", "comment"]], out)
 
+    def test_docstrings_and_shebang_scripts_are_read_from_the_diff(self):
+        diff = new_file("src/app.py", [
+            '"""Module notes."""', "def f():", '    """Set the state, as the old runner did."""',
+            '    x = """not a docstring"""', "    return x"]) + new_file(
+            "bin/tool", ["#!/usr/bin/env bash", "set -e", "# workaround for the old runner", "echo hi"])
+        code, findings, out = self.comment_pass(diff)
+        self.assertEqual([f.split(": ", 2)[:2] for f in findings],
+                         [["src/app.py:1", "comment"], ["src/app.py:3", "comment"], ["bin/tool:3", "workaround"]], out)
+        self.assertEqual(self.comment_pass(diff, "--docs", "src/")[1], ["bin/tool:3: workaround: workaround for the "
+                         "old runner Fix: " + "fix the cause, or turn the rule it guards into a test or a check (red "
+                         "first), then delete the comment."])
+
     def test_a_block_comment_is_judged_once_at_its_first_added_line(self):
         diff = new_file("web/app.js", [
             "const a = 1;", "/*", " * Needed because Safari caches the old bundle,",

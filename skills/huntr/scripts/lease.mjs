@@ -9,9 +9,11 @@
 //   lease.mjs release <run> <result-file>          (the final result, posted under the release line)
 //   lease.mjs due <run> scheduled|hunter  (read-only: must this wake post a checkpoint?)
 //   lease.mjs record <run> <index-file>            (a record without a lease of its own: an off switch,
-//                                                   a lost lease; posted as it is, lease unchanged)
+//                                                   a lost lease; posted as it is, lease unchanged; refused
+//                                                   while <run> holds the live lease, which must release)
 //   lease.mjs switch                      (read-only: on or off, and every `huntr kind approved:` line)
-//   lease.mjs pace <timezone> <streak> <last-empty-at>   (no GitHub: may a hunt start today?)
+//   lease.mjs pace <timezone> <streak> <last-empty-at>   (no GitHub: may a hunt start today? <last-empty-at>
+//                                                   is an ISO instant with Z or an offset, such as 2026-11-19T23:55:00Z)
 //   lease.mjs publish <run> <record.json> <index-file>   (post the record's numbered parts, read them
 //                                                   back, verify them and write the index that links them)
 // Exit 0 prints {"holder": ...} as JSON; exit 2 is a refusal, a lost lease or an unconfirmed
@@ -121,8 +123,11 @@ function pace(timezone, streak, lastEmpty) {
   catch { ask('timezone'); }
   if (!timezone) ask('timezone');
   if (!/^(0|[1-9][0-9]*)$/.test(streak)) ask('empty-hunt streak');
+  // An offset-free time would be read in the host's timezone, so the host could decide the pause.
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?$/.test(lastEmpty))
+    fail('last empty hunt time needs Z or an offset (such as 2026-11-19T23:55:00Z): ask on the tracking issue');
   const last = Date.parse(lastEmpty);
-  if (!/^\d{4}-\d{2}-\d{2}T/.test(lastEmpty) || Number.isNaN(last)) ask('last empty hunt time');
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})$/.test(lastEmpty) || Number.isNaN(last)) ask('last empty hunt time');
   if (Number(streak) < 2) return {hunt: true};
   const lastDay = day.format(last);
   if (day.format(Date.now()) > lastDay) return {hunt: true};
@@ -189,6 +194,8 @@ function main() {
   const now = current(holderOf(before), Date.now());
   if (command === 'status') return {holder: now};
   if (command === 'record') {
+    // A run that still holds its lease finishes with release, or the next controller waits out 45 minutes.
+    if (now && now.run === run) fail(`${run} holds the live lease: post its final index with release`);
     const {after, mine} = post(repo, issue, text, before.at(-1)?.id ?? 0);
     return {holder: current(holderOf(after), Date.parse(mine.created_at)), comment: mine.id};
   }

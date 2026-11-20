@@ -568,7 +568,7 @@ scenario('D5 a controller paused after claiming cannot record past its live leas
 // and a pause after claiming end through step 5's publish and release; record is for no lease.
 test('W1 the last wake and a pause after claiming finish with release; record only without a live lease', () => {
   const skill = readFileSync(join(here, '../SKILL.md'), 'utf8');
-  const section = heading => skill.split(`\n${heading}\n`)[1].split('\n## ')[0];
+  const section = heading => skill.split(`\n${heading}\n`)[1].split('\n## ')[0].replace(/\s+/g, ' ');
   assert.match(section('## On every wake'), /every slice is reported or blocked[^.]*\bfinish the hunt \(step 5\) with `release`/i);
   assert.match(section('## 1. Check whether to hunt'), /`hunt: false` ends the hunt as paused[^.]*step 5[^.]*`release`/);
   assert.match(section('## 5. Record the result and finish this hunt'), /`record` only when this run holds no live lease/);

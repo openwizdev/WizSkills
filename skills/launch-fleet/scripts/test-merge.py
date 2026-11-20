@@ -6,6 +6,9 @@ python3 -I skills/launch-fleet/scripts/test-merge.py
 import importlib.util
 import json
 from pathlib import Path
+import re
+import shlex
+import subprocess
 import sys
 import unittest
 
@@ -275,6 +278,85 @@ class Cost(unittest.TestCase):
         self.assertEqual(w.bodies(12)[-1], 'launch-fleet: cost: ' + LINE)
 
 
+class Documented(unittest.TestCase):
+    """#1622: SKILL.md's two merge commands, run as written from a consuming project's checkout
+    (the installed skill lives outside it), so the project's FM4 command resolves there."""
+
+    def commands(self):
+        text = (HERE.parent / 'SKILL.md').read_text()
+        found = re.findall(r'`(python3 -I [^`]*merge\.py"? (?:admit|merge) [^`]*)`', text)
+        self.assertEqual(len(found), 2, found)
+        values = {"<this skill's folder>": str(HERE.parent), '<owner>/<repo>': REPO, '<P>': '7',
+                  '<commit>': HEAD, '<checks>': 'check',
+                  '<the APPROVE and the plan approval it relies on>': 'APPROVE 1 and plan approval 2', '<N>': '12'}
+        argvs = []
+        for command in found:
+            for name, value in values.items():
+                command = command.replace(name, value)
+            argv = shlex.split(command)
+            self.assertNotRegex(' '.join(argv), r'<[^>]+>', 'a placeholder left unfilled')
+            argvs.append([sys.executable] + argv[1:])
+        return argvs
+
+    def test_the_documented_commands_run_from_the_project_checkout(self):
+        # catches: the merge commands naming scripts/merge.py relative to the consuming project,
+        # which has no such file, so an approved green PR is never admitted or merged (#1622).
+        w = World(self, pr=pr())
+        root = project(w, PRINTS)
+        admit, merge = self.commands()
+        for argv, want in [(admit, 'base rule: no merge queue; mergeable: MERGEABLE'),
+                           (merge + ['--base-rule-checked'], 'merged %s; cost posted 5001' % ('f' * 40))]:
+            r = subprocess.run(argv, capture_output=True, text=True, env=w.env, cwd=root, timeout=60)
+            self.assertEqual((r.returncode, r.stdout.strip()), (0, want), r.stderr)
+        self.assertEqual(w.bodies(12), ['launch-fleet: cost: ' + LINE])
+
+
+    def archive_rule(self):
+        """The archive row's settle command, filled, and the results it may archive after."""
+        row = next(x for x in (HERE.parent / 'SKILL.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
+        found = re.findall(r'`(python3 -I [^`]*merge\.py"? settle [^`]*)`', row)
+        self.assertEqual(len(found), 1, row)
+        command = found[0]
+        for name, value in {"<this skill's folder>": str(HERE.parent), '<owner>/<repo>': REPO, '<P>': '7', '<N>': '12'}.items():
+            command = command.replace(name, value)
+        argv = shlex.split(command)
+        self.assertNotRegex(' '.join(argv), r'<[^>]+>', 'a placeholder left unfilled')
+        after = re.search(r'archives? only after ([^;.]*)', row)
+        self.assertIsNotNone(after, 'the archive row names no settled results that let it archive')
+        settled = [x.split(' <')[0] for x in re.findall(r'`([^`]+)`', after.group(1))]
+        return [sys.executable] + argv[1:], settled
+
+    def test_the_archive_row_archives_only_after_a_settled_cost(self):
+        # catches: the archive row archiving on a settle result that confirms no cost record (an
+        # `unknown:` read or write, a `refused:`), after which fleet.sh prints no archive line and
+        # the queued merge's cost is never posted (#115 R2).
+        argv, settled = self.archive_rule()
+        receipt = comment(4000, 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD)
+        merged = dict(state='MERGED', mergeCommit={'oid': 'c' * 40})
+        # name: (pull request, its comments, the fault, archives now, archives on the next wake)
+        cases = {
+            'settled': (pr(**merged), [receipt], {}, True, True),
+            'never queued': (pr(**merged), [], {}, True, True),
+            'receipt read fails': (pr(**merged), [receipt], {'read': 'fail'}, False, True),
+            'cost write fails': (pr(**merged), [receipt], {'post': 'fail'}, False, True),
+            'cost write lost': (pr(**merged), [receipt], {'post': 'lost'}, False, True),
+            'still queued': (pr(isMergeQueueEnabled=True, isInMergeQueue=True,
+                                mergeQueueEntry={'headCommit': {'oid': HEAD}}), [receipt], {}, False, False),
+        }
+        for name, (value, comments, faults, now, later) in cases.items():
+            with self.subTest(name):
+                w = World(self, pr=value, comments={'7': comments}, faults=faults)
+                root = project(w, PRINTS)
+                for want in (now, later):  # this wake, then the next one, the fault gone
+                    r = subprocess.run(argv, capture_output=True, text=True, env=w.env, cwd=root, timeout=60)
+                    out = r.stdout.strip()
+                    archives = any(out.startswith(x) for x in settled)
+                    self.assertEqual(archives, want, (out, r.stderr))
+                    # Never archived while a queued merge's cost is missing from the ticket.
+                    costs = [b for b in w.bodies(12) if b.startswith('launch-fleet: cost')]
+                    self.assertTrue(not archives or costs or not comments, (out, costs))
+
+
 class CrossRepository(unittest.TestCase):
     """#1502: the pull request lives in one repository and closes a ticket in another."""
 
@@ -433,6 +515,7 @@ class Queue(unittest.TestCase):
         self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
         self.assertEqual(w.bodies(7), [self.receipt()])
         self.assertEqual(sum('merge' in x for x in w.writes()), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

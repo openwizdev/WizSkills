@@ -22,14 +22,18 @@ revision.sh's text for the same spec. The checks, all of them every time:
   owned paths  each open agent ticket owns exact repository paths, and no two
                tickets that can run at once own the same path, unless both
                bullets say `(shared`
+  checkpoints  the spec's two checkpoint answers (contracts/checkpoints.v1.md),
+               read by check-approval.sh --checkpoints from the spec body the
+               revision's fingerprint binds (RC2, #1830)
 
 Before any check, the revision text must name exactly the graph's tickets,
 titles, blockers and bodies, so the fingerprint binds the plan checked.
 
 Exit 0: every check passed; the record (decisions.v1, "Machine plan approval")
 on stdout. 1: refused; nothing on stdout, one `approve: <check>: <why>` line per
-failure on stderr. 2: bad arguments or an unreadable input. Writes nothing and
-calls no network; it runs the two sibling checkers.
+failure on stderr. 2: bad arguments or an unreadable input. Writes nothing; its
+one network call reads the spec's body and creation time, and it runs the three
+sibling checkers.
 """
 import argparse
 import datetime
@@ -44,6 +48,7 @@ import sys
 HERE = Path(__file__).resolve().parent
 LINKS = HERE.parent / 'check-links.sh'
 RELIES = HERE.parent / 'check-relies.sh'
+CHECK_APPROVAL = HERE / 'check-approval.sh'
 GRILL = re.compile(r'https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/(issues|pull)/[1-9][0-9]*'
                    r'#issuecomment-[1-9][0-9]*')
 REPO = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
@@ -172,6 +177,28 @@ def check_links(graph_text):
     if out.returncode != 0:
         return [line.strip() for line in out.stderr.splitlines() if line.strip()] or ['check-links.sh refused']
     return []
+
+
+def check_checkpoints(graph, revision):
+    spec = graph['source']['spec']
+    read = subprocess.run(['gh', 'issue', 'view', str(spec), '--repo', graph['repo'], '--json', 'body,createdAt'],
+                          capture_output=True, text=True)
+    if read.returncode != 0:
+        raise Unreadable(f'cannot read spec #{spec}: ' + read.stderr.strip()[:200])
+    try:
+        body = json.loads(read.stdout)
+    except json.JSONDecodeError:
+        raise Unreadable(f'spec #{spec} is not JSON')
+    if not isinstance(body, dict) or not isinstance(body.get('body'), str):
+        raise Unreadable(f'spec #{spec} has no body')
+    if revision.split('\n')[1] != f'spec #{spec} body sha256 {unticked_sha256(body["body"])}':
+        return [f"spec #{spec}'s body differs from the revision's"]
+    out = subprocess.run(['sh', str(CHECK_APPROVAL), '--checkpoints', str(spec)], input=json.dumps(body),
+                         capture_output=True, text=True)
+    why = [line.strip().removeprefix('check-approval.sh: ') for line in out.stderr.splitlines() if line.strip()]
+    if out.returncode == 2:
+        raise Unreadable('; '.join(why)[:200] or 'check-approval.sh could not read the spec')
+    return (why or ['check-approval.sh refused']) if out.returncode != 0 else []
 
 
 def check_relies(tickets, owners, root, root_repo):
@@ -415,6 +442,7 @@ def main():
         width_why, chain, widest = check_width(graph)
         failures += [('width', why) for why in width_why]
         failures += [('owned paths', why) for why in owned_why]
+        failures += [('checkpoints', why) for why in check_checkpoints(graph, revision)]
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, Unreadable) as e:
         print(f'approve: unreadable input: {e}', file=sys.stderr)
         return 2

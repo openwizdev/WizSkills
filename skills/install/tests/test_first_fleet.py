@@ -1060,7 +1060,8 @@ class ModelsTable(unittest.TestCase):
         self.assertEqual(written[:start] + written[end:], fleet_md(), 'nothing outside the inserted table changes')
         self.assertIn('| Builder | Codex | syn-codex-model-01 | High |', written, 'the names set writes')
         self.assertIn('docs/agents/fleet.md', result.stdout)
-        self.assertEqual(json.loads(j.state.read_text())['choices'], dict(j.settings, agents='cloud'))
+        self.assertEqual(json.loads(j.state.read_text())['choices'],
+                         dict(j.settings, agents='cloud', builder_tables='read'), 'the merged older tables read back')
         again = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
         self.assertEqual((again.returncode, j.checkout.read_text()), (0, written), 'a repeat writes nothing new')
 
@@ -1273,7 +1274,7 @@ class Resume(unittest.TestCase):
         self.assertEqual(chosen.returncode, 0, chosen.stdout)
         said = self.next(j)
         self.assertEqual(said.splitlines()[0], 'Next: agents.', said)
-        self.assertIn('builder tables', said)
+        self.assertIn("fleet's settings on the default branch", said)
         self.assertEqual(json.loads(j.state.read_text())['choices'], dict(j.settings, agents='cloud'),
                          'the recorded choice survives the restart')
         j.world['files']['docs/agents/fleet.md'] = fleet_md()  # setup made both builder tables the choice

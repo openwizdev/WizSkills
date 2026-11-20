@@ -338,6 +338,22 @@ class Check(unittest.TestCase):
         code, out = self.check(self.project(**{'fleet.md': broken}))
         self.assertEqual(code, 5, 'never falls back to the older tables past a broken Models table\n' + out)
 
+    def test_the_launch_reads_every_models_table_setup_verifies(self):
+        # catches: setup verifying a Models table the first-fleet launch then
+        # refuses, or one whose reviews it reads as waiting (#1807).
+        launch = reader(SKILLS / 'install/scripts/first_fleet.py')
+        builder = choice('Builder', 'claude-code', 'syn-claude-1')
+        reviewer = choice('Reviewer', 'codex', 'syn-codex-1')
+        cases = [NEW, NEW.replace('| Fixer | follows Builder | | | |\n', ''),
+                 NEW.replace(reviewer, choice('Reviewer', 'claude-code', 'syn-claude-2')),
+                 NEW.replace(builder, builder.replace('syn-claude-1', 'vendor/syn')),
+                 NEW.replace(builder, builder.replace('syn-claude-1', 'vendor//syn'))]
+        for text in cases:
+            code, out = self.check(self.project(**{'fleet.md': text}))
+            if code == 0:
+                rules = launch.settings_rules(text)
+                self.assertTrue(rules['reviewer_claude'] and rules['orchestrator'], text)
+
     def test_usage_errors_exit_2(self):
         # catches: a mistyped command read as a verified project.
         result = subprocess.run([sys.executable, '-I', str(SCRIPT), 'verify'], capture_output=True, text=True)

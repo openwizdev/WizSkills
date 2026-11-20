@@ -4,7 +4,7 @@ Every fleet in this project starts from these settings. The fleet skills read th
 
 ## Models
 
-One table for every agent the fleet starts, in the models contract's form (`openwiz.models.v1`). The Orchestrator starts each spec's fleet thread. The Builder builds each ticket on its own branch, and never reviews or merges. The Reviewer reviews each pull request's exact head, and never edits. The Small builder (tickets with an exact `polish`, `huntr` or `proposal` label) and the Fixer follow the Builder unless their row names a choice of its own. A pull request is reviewed by the other model family than its builder: the Reviewer, or the Builder when the Reviewer is the builder's family; otherwise the review waits, and is never swapped for another model. Change a row with `openwiz models set`, or edit it by hand.
+One table for every agent the fleet starts, in the models contract's form (`openwiz.models.v1`). The Orchestrator starts each spec's fleet thread. The Builder builds each ticket on its own branch, and never reviews or merges. The Reviewer reviews each pull request's exact head, and never edits. The Small builder (tickets with an exact `polish`, `huntr` or `proposal` label) and the Fixer follow the Builder unless their row names a choice of its own. A pull request is reviewed by the other model family than its builder: the Reviewer, or the Builder when the Reviewer is the builder's family; otherwise the review waits, and is never swapped for another model. To change a row, edit it by hand or run `setup` again.
 
 | Role | Harness | Model | Effort | `room-cli thread spawn` flags |
 | --- | --- | --- | --- | --- |

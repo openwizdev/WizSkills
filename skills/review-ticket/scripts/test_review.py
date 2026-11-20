@@ -883,6 +883,11 @@ class CommentPass(unittest.TestCase):
                          "old runner Fix: " + "fix the cause, or turn the rule it guards into a test or a check (red "
                          "first), then delete the comment."])
 
+    def test_an_added_line_that_looks_like_a_header_stays_in_its_hunk(self):
+        diff = new_file("web/count.js", ["let n = 0;", "++ n;", "-- n;", "// workaround for the old counter"])
+        code, findings, out = self.comment_pass(diff)
+        self.assertEqual([f.split(": ", 2)[:2] for f in findings], [["web/count.js:4", "workaround"]], out)
+
     def test_a_block_comment_is_judged_once_at_its_first_added_line(self):
         diff = new_file("web/app.js", [
             "const a = 1;", "/*", " * Needed because Safari caches the old bundle,",

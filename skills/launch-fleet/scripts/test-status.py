@@ -992,6 +992,12 @@ class Refuse(Tracker):
             ('--step', 'updated oauth2_token: synthetic-value', 'a credential'),
             ('--step', 'updated oauth2_token=synthetic-value', 'a credential'),
             ('--step', 'set aws2_key: synthetic-value', 'a credential'),
+            # Review R4: a credential in a web link's query or fragment, outside its path.
+            ('--step', 'checked https://example.com/render?debug=api_key:synthetic-value', 'a credential'),
+            ('--step', 'checked https://example.com/x?api_key:synthetic-value', 'a credential'),
+            ('--step', 'checked https://example.com/docs/auth:overview#access_token:synthetic-value',
+             'a credential'),
+            ('--step', 'synced https://example.com/a?from=synthetic-host:/srv/data/x', 'a machine path'),
         ]
         for flag, value, what in cases:
             with self.subTest(flag=flag, value=value):
@@ -1009,7 +1015,8 @@ class Refuse(Tracker):
                 ('--step', 'opened https://example.com/docs/auth:overview and https://example.com/a:/b'),
                 ('--preview', 'https://example.com/releases:/web/current'),
                 ('--preview', 'https://example.com/docs/auth:overview'),
-                ('--preview', 'https://example.com/x/c:/api_key:v2')]
+                ('--preview', 'https://example.com/x/c:/api_key:v2'),
+                ('--step', 'opened https://example.com/docs/auth:overview?page=2#setup')]
         for flag, value in good:
             with self.subTest(flag=flag, value=value):
                 self.save()

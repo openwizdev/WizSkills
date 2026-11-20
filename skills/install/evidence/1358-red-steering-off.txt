@@ -1,0 +1,14 @@
+$ python3 -I skills/install/tests/test_onboarding.py Conversation   # red: branch 44edfab plus this test (SKILL.md doesn't yet say the owner steers through the orchestrator)
+.....F.
+======================================================================
+FAIL: test_the_owner_steers_through_the_orchestrator_never_by_video_comment (__main__.Conversation.test_the_owner_steers_through_the_orchestrator_never_by_video_comment)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 188, in test_the_owner_steers_through_the_orchestrator_never_by_video_comment
+    self.assertIn('steers through the orchestrator', plan)
+AssertionError: 'steers through the orchestrator' not found in "\nThe plan checks itself. Run `to-spec` with the confirmed grill. It writes the spec, runs `to-tickets`, whose checks record the machine plan approval, and makes the spec's video. Say **The spec and its video** with its video link. Ask nothing here: no spec or plan approval. When a check refuses, re-cut the plan; never ask the user to approve it instead. Then run `first_fleet.py spec --spec <N> --repo <owner>/<name>`.\n\nDone when the machine plan approval is on the spec and `spec` saved it.\n"
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.006s
+
+FAILED (failures=1)

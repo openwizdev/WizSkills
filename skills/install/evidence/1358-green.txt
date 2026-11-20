@@ -1,0 +1,15 @@
+# #1358 green, at branch head 0380422 (main at 5921369 merges cleanly): review 7038665551 R1 to R7 fixed; no stub, no skip
+
+## On the branch
+$ python3 -I skills/install/tests/test_onboarding.py
+Ran 33 tests in 129.693s
+
+OK
+$ python3 -I skills/install/tests/test_first_fleet.py
+Ran 39 tests in 168.625s
+
+OK
+$ python3 -I skills/install/tests/test_doctor.py
+Ran 31 tests in 3.818s
+
+OK

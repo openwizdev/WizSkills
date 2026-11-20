@@ -899,8 +899,8 @@ BAD_SHAPE = [
     ('--preview', 'http://31.example-site.pages.dev'),
     ('--preview', 'https://example.invalid/<script>'),
     # R3: a preview link is a public https page with no credentials, query or fragment.
-    ('--preview', 'https://synthetic:secret@31.example-site.pages.dev/app'),
-    ('--preview', 'https://synthetic-token@31.example-site.pages.dev/app'),
+    ('--preview', 'https://synthetic:secret@31.preview.example/app'),
+    ('--preview', 'https://synthetic-token@31.preview.example/app'),
     ('--preview', 'https://31.example-site.pages.dev/app?token=synthetic'),
     ('--preview', 'https://31.example-site.pages.dev/app?x=1'),
     ('--preview', 'https://31.example-site.pages.dev/app#access_token=synthetic'),
@@ -917,7 +917,7 @@ GOOD_SHAPE = [
     ('--model', 'm' * 60),
     ('--skills', f"{SKILLS}, {at('review-ticket')}"),
     ('--skills', ', '.join([SKILLS] * FITS)),
-    ('--step', 'checked https://github.com/acme/home/pull/1 and a/home/b'),
+    ('--step', 'checked https://github.com/home/example-site/pull/1 and a/home/example-b'),
     ('--step', 'changed skills/launch-fleet/scripts/status.py and/or its test'),
     ('--pr', 'https://github.com/example/skills/pull/31'),
     ('--preview', 'https://31.example-site.pages.dev/app/agents'),
@@ -1128,7 +1128,7 @@ class Refuse(Tracker):
                 self.assertEqual(self.load(), self.world)
         # Ordinary notes near those shapes still write, and (review R2) a note holding a public
         # link with a colon in its path writes and can be edited again in place.
-        good = [('--step', 'checked https://github.com/acme/home/pull/1 at 10:30'),
+        good = [('--step', 'checked https://github.com/home/example-site/pull/1 at 10:30'),
                 ('--step', 'ratio 2:1 on the key path'),
                 ('--step', 'opened https://example.com/docs/auth:overview and https://example.com/a:/b'),
                 ('--preview', 'https://example.com/releases:/web/current'),

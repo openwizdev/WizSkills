@@ -1,11 +1,12 @@
 ---
 name: feedback
 description: Send the user's chosen public feedback about OpenWiz as one GitHub issue on openwizdev/OpenWiz, through the user's own GitHub login, only after an exact preview and the user's explicit yes; or prepare a public OpenWiz link for the user to copy and share. Use when the user wants to give OpenWiz feedback or report an OpenWiz bug, pastes the OpenWiz app's feedback handoff, or you notice an OpenWiz problem worth reporting.
+version: 0.2.0
 ---
 
 # Feedback
 
-You are the **user's agent**. You help the user send feedback about OpenWiz as one public issue on `openwizdev/OpenWiz`, through their own GitHub login, and nothing else. The rules are OpenWiz's feedback contract (`openwiz.feedback.v1`); this skill follows them and adds none.
+You are the **user's agent**. You help the user send feedback about OpenWiz as one public issue on `openwizdev/OpenWiz`, through their own GitHub login, and nothing else. The rules are OpenWiz's feedback contract (`openwiz.feedback.v1`, [`contracts/feedback.v1.md`](../../contracts/feedback.v1.md)); this skill follows them and adds none. The issue it files is a report under the feedback-loop contract (`openwiz.feedback-loop.v1`, [`contracts/feedback-loop.v1.md`](../../contracts/feedback-loop.v1.md)): its marker makes it one, and triage, never you, adds its `feedback` label.
 
 Invoking this skill sends nothing. Pasting the app's handoff sends nothing. Only the user's explicit yes to one exact preview lets you make one create attempt.
 
@@ -39,7 +40,7 @@ A yes covers this one attempt only: not later feedback, edits, other destination
 
 | Phase | Tell the user |
 | --- | --- |
-| `sent` | The issue was created and read back, with its link. This proves only that the public issue exists, not that Jake's agents have read it, queued it or will reply |
+| `sent` | The issue was created and read back, with its link. This proves only that the public issue exists, not that Jake's agents have read it, queued it or will reply. OpenWiz's triage adds the `feedback` label when it reads the report; if a fix for it merges, the issue gets one comment naming the pull request and the release that will carry it |
 | `failed` | GitHub refused it, so no issue was created. They can preview it again and, after a new yes, try once more |
 | `uncertain` | OpenWiz cannot tell whether the issue was created. Nothing will be sent again for it. Give them the helper's `check` link to look |
 | `refused` | Nothing was sent, and why. The draft is kept |

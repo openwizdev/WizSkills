@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """One consented feedback operation, under contracts/feedback.v1.md (#2292).
 
+The issue it files is a report under contracts/feedback-loop.v1.md (#1840):
+the marker makes it one, and triage, never this helper, adds its label.
+
 python3 -I feedback.py draft --title-file F --body-file F
 python3 -I feedback.py edit OP --title-file F --body-file F
 python3 -I feedback.py preview OP
@@ -433,7 +436,9 @@ SAY = {
     'previewed': 'Shown exactly; waiting for an explicit yes to this preview.',
     'refused': 'Not sent. The draft is kept, so it can be edited and previewed again.',
     'sending': 'The create request is being made now.',
-    'sent': 'The public issue was created and read back. This proves only that the issue exists, not that Jake\'s agents have read it.',
+    'sent': ('The public issue was created and read back. This proves only that the issue exists, not that Jake\'s agents '
+             'have read it. OpenWiz\'s triage adds the `feedback` label when it reads the report; if a fix for it merges, '
+             'the issue gets one comment naming the pull request and the release that will carry it.'),
     'failed': 'GitHub refused the request, so no issue was created. You can preview it again and, after a new yes, try once more.',
     'uncertain': 'OpenWiz cannot tell whether the issue was created. Nothing will be sent again for it. Check the issue list, then reconcile.',
 }

@@ -298,6 +298,23 @@ class FeedbackPath(unittest.TestCase):
         self.assertIn("\n**Relies on:** `contracts/feedback-loop.v1.md`\n", out["brief"]["body"])
         self.assertTrue(out["brief"]["approval"].endswith("\nRelies on: `contracts/feedback-loop.v1.md`"))
 
+    def test_a_brief_written_on_another_day_carries_that_day(self):
+        # catches: every brief's approval carrying one fixed date (the planner's
+        # #1845 answer: the date is the day triage writes each brief), in the
+        # helper's output or in the skill's instructions for filling it.
+        for day in ("2031-02-14", "2032-12-31"):
+            with self.subTest(day=day):
+                data = case()
+                data["approval"]["date"] = day
+                rc, out, text = plan(data)
+                self.assertEqual(rc, 0, text)
+                self.assertTrue(out["brief"]["approval"].startswith(f"**Approved on its own by Robin, {day}:** "))
+        section = (ROOT / "skills/triage/SKILL.md").read_text().split("## Feedback reports\n", 1)[1].split("\n## ", 1)[0]
+        step = section.split("\n1. ", 1)[1].split("\n2. ", 1)[0]
+        self.assertNotRegex(step, r"date `[0-9]{4}-[0-9]{2}-[0-9]{2}`", "a fixed approval date")
+        self.assertIn("date `<the day you write the brief>`", step)
+        self.assertIn("`date -u +%F`", step)
+
     def test_the_produced_brief_starts_under_the_real_fleet_admission(self):
         # catches: a brief and approval that look right here but that
         # launch-fleet's own check never starts (R1), shown on its fake GitHub.

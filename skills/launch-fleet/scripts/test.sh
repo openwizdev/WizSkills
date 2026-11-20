@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=885      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 22; #1759 added 3
+CASES=887      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 22; #1759 added 5
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1299,6 +1299,11 @@ EOF
 HELD81='issue(81; .labels = ["held"]) | say(81; 8102; "11:10"; "launch-fleet: held manual: owner decision required")'
 expect 'F6 claim: a running ticket of another spec on hold still withdraws' 0 check.json "$OWN13"' claim13 | other_spec | '"$HELD81" -- claim 13 1301 <<EOF
 withdraw #13: its owned paths collide with #81, which is running or claimed first
+EOF
+# R1 (review of #1759): a colliding issue whose comments can't be read may
+# have a builder, so the claim withdraws.
+expect 'F6 claim: a colliding held ticket whose history can'"'"'t be read withdraws' 0 check.json "$OWN13"' claim13 | other_spec | '"$HELD81" FAKE_GH_FAIL=issue_comments_81_page=1 -- claim 13 1301 <<EOF
+withdraw #13: its owned paths collide with #81, whose start history can't be read
 EOF
 expect 'F6 claim: an older colliding claim wins' 0 check.json "$OWN13"' claim13 | own(70; "src/page/a.md") | say(70; 1300; "11:50"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
 withdraw #13: its owned paths collide with #70, which is running or claimed first
@@ -3334,6 +3339,7 @@ ARCH12="$TOOK12 | say(12; 1291; \"10:20\"; \"launch-fleet: old builder archived,
 # #1750: a takeover starts a builder too, so a held running ticket of another
 # spec on the same paths holds it, as it withdraws a start claim.
 expect 'takeover: a running ticket of another spec on hold holds a takeover start' 0 check.json "$OWN13"' other_spec | '"$HELD81"' | own(12; "src/store/") | issue(81; .body = "## Owned paths\n\n- `src/store/index.md`\n")'" | $ARCH12" -- spec 10 < /dev/null
+expect 'takeover: a colliding held ticket whose history can'"'"'t be read holds a takeover start' 0 check.json "$OWN13"' other_spec | '"$HELD81"' | own(12; "src/store/") | issue(81; .body = "## Owned paths\n\n- `src/store/index.md`\n")'" | $ARCH12" FAKE_GH_FAIL=issue_comments_81_page=1 -- spec 10 < /dev/null
 expect 'takeover: a refused takeover start waits 10 minutes, and nothing goes to a builder' 0 check.json "$ARCH12 | edit(12; 1201; \"11:55\"; \"launch-fleet: start refused: synthetic reason\")" -- spec 10 < /dev/null
 expect 'takeover: a refused takeover start is tried again 10 minutes on' 0 check.json "$ARCH12 | edit(12; 1201; \"11:45\"; \"launch-fleet: start refused: synthetic reason\")" -- spec 10 <<EOF
 take over #12: builder thread thr_syn12 is archived; start a builder to continue branch room/12-w2-widget-store-bbbb (its record: comment 1201; retry after "start refused: synthetic reason")

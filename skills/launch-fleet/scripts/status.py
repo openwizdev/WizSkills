@@ -420,8 +420,9 @@ def stop_group(proc):
 def proof(repo, n):
     """#1737: this machine's private record of the needs-info application a write's own POST made
     on one ticket, outside the checkout and never posted."""
-    home = os.environ.get('XDG_STATE_HOME') or os.path.join(os.path.expanduser('~'), '.local', 'state')
-    return Path(home, 'openwiz', 'needs-info', f'{quote(repo.lower(), safe="")}-{n}.json')
+    home = Path(os.environ.get('XDG_STATE_HOME') or '.')
+    home = home if home.is_absolute() else Path.home() / '.local' / 'state'
+    return home / 'openwiz' / 'needs-info' / f'{quote(repo.lower(), safe="")}-{n}.json'
 
 
 def forget(repo, n):
@@ -458,22 +459,32 @@ def add_own(repo, n, login):
             pass
 
 
-def take_own(repo, n, login):
-    """#1737: no live note asks and needs-info is on. Take off only the application this machine's
-    record shows a write's own POST made, while it is still the last one (the repair's cleanup,
-    which puts back a person's application that lands as it deletes). Any other needs-info, such
-    as triage's hold or a put-back under the same login, stays and is reported. The report lines."""
+def take_own(repo, n, login, labels):
+    """#1737: no live note asks. Take off only the needs-info application this machine's record
+    shows a write's own POST made, while it is still the last one (the repair's cleanup, which puts
+    back a person's application that lands as it deletes; the record stays until that is settled,
+    so a retry still puts it back). Any other needs-info, such as triage's hold or a put-back under
+    the same login, stays and is reported. LABELS: the issue's labels as just read. The report lines."""
     def labelled():
         return ASKING_LABEL in [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+    def once(pairs):
+        if len({k for k, _ in pairs}) != len(pairs):
+            raise ValueError('a repeated key')
+        return dict(pairs)
     try:
-        own = json.loads(proof(repo, n).read_text())
+        own = json.loads(proof(repo, n).read_text(), object_pairs_hook=once)
     except (OSError, ValueError):
         own = None
-    mine = own.get('event') if isinstance(own, dict) and own.get('login') == login.lower() else None
-    report = cleanup(repo, n, login, mine, labelled, 'this write') if isinstance(mine, int) else []
-    if not report and labelled():
-        report = [f'#{n}: {ASKING_LABEL} left on: no note asks, and this writer can\'t show its own write '
-                  'added it; a person takes it off']
+    # Only the exact shape add_own writes, for this login; anything else proves nothing.
+    exact = isinstance(own, dict) and set(own) == {'login', 'event'} and own['login'] == login.lower()
+    mine = own['event'] if exact and type(own['event']) is int and own['event'] >= 0 else None
+    left = [f'#{n}: {ASKING_LABEL} left on: no note asks, and this writer can\'t show its own write '
+            'added it; a person takes it off']
+    if mine is None:
+        forget(repo, n)
+        return left if ASKING_LABEL in labels else []
+    report = cleanup(repo, n, login, mine, labelled, 'this write')
+    report = report or (left if labelled() else [])
     forget(repo, n)
     return report
 
@@ -582,12 +593,10 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
     report = []
     if asking and ASKING_LABEL not in labels:
         add_own(repo, n, login)
-    elif not beat and not asking and ASKING_LABEL in labels:
+    elif not beat and not asking:
         # #1720: a heartbeat never takes needs-info off. The agent's own write leaving asking
         # takes off only the application its record proves its own (#1737).
-        report = take_own(repo, n, login)
-    elif not beat and not asking:
-        forget(repo, n)
+        report = take_own(repo, n, login, labels)
     print(f'#{n}: {kind} {state}, status note {note_id} {verb}', file=out)
     for line in report:
         print(line, file=out)

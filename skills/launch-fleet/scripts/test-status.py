@@ -1132,7 +1132,8 @@ class WakeRepair(Tracker):
 
     def test_a_repair_whose_read_after_its_label_write_fails_is_settled_by_the_next_wake(self):
         # catches: a label the repair wrote as the builder resumed, left on the ticket because the
-        # read after the write failed, and never looked at again (#68 R1).
+        # read after the write failed, and never looked at again (#68 R1). Under one shared login
+        # the next wake can't tell it from a person's, so it reports it and leaves it (#1702).
         resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
         failing = {'fail_once': f'GET repos/{REPO}/issues/12/comments?per_page=100&page=1'}
         self.asking_on_12(race_label=[resume, failing])
@@ -1140,9 +1141,11 @@ class WakeRepair(Tracker):
         self.assertEqual(code, 2)
         self.assertEqual(len(report), 1, report)
         self.assertRegex(report[0], r'^status check failed: could not repair #12: ')
-        self.wake()
-        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
-        self.assertEqual(self.timeline(), [('labeled', BOT), ('unlabeled', BOT)])
+        code, report = self.wake()
+        self.assertEqual((code, len(report)), (1, 1), report)
+        self.assertRegex(report[0], r'^#12: needs-info left on: ')
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual(self.timeline(), [('labeled', BOT)])
         self.assertEqual(self.wake(), (0, []))
 
     def test_a_person_who_reapplies_needs_info_as_the_repair_takes_it_off_keeps_it(self):

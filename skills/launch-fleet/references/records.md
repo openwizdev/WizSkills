@@ -27,3 +27,5 @@ An old-builder archive records `launch-fleet: old builder archived, start <start
 | `sh "<this skill's folder>/scripts/fleet.sh" claim <N> <comment id>` | After a claim on ticket or pull request `<N>`: `go #<N>`, or `withdraw #<N>: <why>`. It reads only `<N>`, as `wake` does |
 
 It exits 2, with the reason, when it can't read what it needs. Its tests run on synthetic GitHub answers: `sh "<this skill's folder>/scripts/test.sh"`.
+
+`scripts/route.py` is the wake route's two lookups (FF2, #1332), with `GH_REPO` the project: `route.py refs <owner>/<repo> <N>...` prints the project's tickets that messages from that repository name (its own numbers unchanged; another repository's pull requests give the project issues they close, in one GraphQL read), and `route.py loop <loop map> <S>` prints the loop id under `S`, or nothing, exit 0, when the map, key or id is missing or unusable. It exits 2 on bad arguments or a failed or partial read. Tests: `python3 -I "<this skill's folder>/scripts/test-route.py"`.

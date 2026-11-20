@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""The wake route's two lookups (FF2, #1332). GH_REPO is the project's repository, where its specs live.
+
+  route.py refs FROM N...    The project's tickets that messages from repository FROM name.
+                             FROM is the project: N... unchanged. Any other repository: the
+                             project's issues each named pull request closes (one GraphQL read).
+                             Prints the numbers once each, ascending, on one line, for
+                             `fleet.sh wake`; nothing when none.
+  route.py loop FILE S       The loop id under key S of the private loop map FILE
+                             ({"repo": GH_REPO, "loops": {"S": "<loop id>"}}), for `room-cli loop run`.
+                             No file, no key, another repository or an unusable id: prints
+                             nothing and exits 0, which leaves the spec to its own loop.
+
+Exit 2 with the reason on stderr for bad arguments or a read that fails or is
+partial. It only reads; it never prints a webhook address or a thread id.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+
+REPO = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}')
+NUMBER = re.compile(r'[1-9][0-9]{0,8}')
+LOOP_ID = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_-]{0,127}')
+QUERY = ('query($o: String!, $n: String!) { repository(owner: $o, name: $n) { %s } }')
+ITEM = ('i%d: issueOrPullRequest(number: %d) { __typename ... on PullRequest { closingIssuesReferences(first: 50) '
+        '{ pageInfo { hasNextPage } nodes { number repository { nameWithOwner } } } } }')
+
+
+class Refused(Exception):
+    pass
+
+
+def refs(home, source, numbers):
+    if source.lower() == home.lower():
+        return sorted(set(numbers))
+    owner, name = source.split('/')
+    query = QUERY % ' '.join(ITEM % (n, n) for n in sorted(set(numbers)))
+    r = subprocess.run(['gh', 'api', 'graphql', '-f', 'query=' + query, '-f', 'o=' + owner, '-f', 'n=' + name],
+                       capture_output=True, text=True, timeout=60)
+    try:
+        answer = json.loads(r.stdout)
+        items = answer['data']['repository']
+        errors = answer.get('errors') or []
+    except (ValueError, KeyError, TypeError):
+        raise Refused("can't read %s: %s" % (source, (r.stderr or r.stdout).strip()[:200] or 'no answer'))
+    other = [e for e in errors if not isinstance(e, dict) or e.get('type') != 'NOT_FOUND']
+    if not isinstance(items, dict) or other or (r.returncode != 0 and not errors):
+        why = '; '.join('%s: %s' % (e.get('type'), e.get('message')) if isinstance(e, dict) else str(e)
+                        for e in other) or r.stderr.strip() or 'unexpected answer'
+        raise Refused("can't read %s: %s" % (source, why[:200]))
+    found = set()
+    for n in numbers:
+        item = items.get('i%d' % n)
+        if not item or item.get('__typename') != 'PullRequest':
+            continue
+        closing = item['closingIssuesReferences']
+        if closing['pageInfo']['hasNextPage']:
+            raise Refused('%s#%d closes more than one page of issues' % (source, n))
+        found.update(c['number'] for c in closing['nodes']
+                     if c['repository']['nameWithOwner'].lower() == home.lower())
+    return sorted(found)
+
+
+def loop(home, path, spec):
+    try:
+        with open(path) as f:
+            value = json.load(f)
+        loop_id = value['loops'][spec]
+        if value['repo'].lower() != home.lower() or not LOOP_ID.fullmatch(loop_id):
+            return None
+        return loop_id
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def main(argv):
+    home = os.environ.get('GH_REPO', '')
+    if not REPO.fullmatch(home):
+        raise Refused('GH_REPO must be the project repository, owner/name')
+    if len(argv) >= 3 and argv[0] == 'refs' and REPO.fullmatch(argv[1]) and all(NUMBER.fullmatch(a) for a in argv[2:]):
+        found = refs(home, argv[1], [int(a) for a in argv[2:]])
+        if found:
+            print(' '.join(map(str, found)))
+        return 0
+    if len(argv) == 3 and argv[0] == 'loop' and NUMBER.fullmatch(argv[2]):
+        loop_id = loop(home, argv[1], argv[2])
+        if loop_id:
+            print(loop_id)
+        return 0
+    raise Refused('usage: route.py refs OWNER/NAME N... | route.py loop FILE S')
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Refused as e:
+        print('route.py: %s' % e, file=sys.stderr)
+        sys.exit(2)

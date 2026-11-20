@@ -36,6 +36,8 @@ for number in world['asked']:
     items['i%d' % number] = item
     if item is None:
         errors.append({'type': 'NOT_FOUND', 'path': ['repository', 'i%d' % number]})
+if world.get('error'):
+    errors.append({'type': world['error'], 'message': 'synthetic %s' % world['error']})
 print(json.dumps({'data': {'repository': items}, **({'errors': errors} if errors else {})}))
 sys.exit(1 if errors else 0)
 '''
@@ -53,7 +55,7 @@ ISSUE = {'__typename': 'Issue'}
 
 
 class World:
-    def __init__(self, test, repo=SAT, items=None, fail=False):
+    def __init__(self, test, repo=SAT, items=None, fail=False, error=None):
         self.dir = Path(tempfile.mkdtemp())
         test.addCleanup(subprocess.run, ['rm', '-rf', str(self.dir)])
         (self.dir / 'bin').mkdir()
@@ -61,7 +63,7 @@ class World:
         gh.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, self.dir / 'fake_gh.py'))
         gh.chmod(0o755)
         (self.dir / 'fake_gh.py').write_text(FAKE_GH)
-        self.world = {'repo': repo, 'items': items or {}, 'fail': fail, 'asked': []}
+        self.world = {'repo': repo, 'items': items or {}, 'fail': fail, 'error': error, 'asked': []}
         self.log = self.dir / 'calls.log'
         self.log.write_text('')
         self.env = dict(os.environ, PATH='%s:%s' % (self.dir / 'bin', os.environ['PATH']),
@@ -78,7 +80,7 @@ class World:
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
     def loops(self, value):
-        path = self.dir / 'loops.json'
+        path = self.dir / ('loops-%d.json' % len(list(self.dir.glob('loops-*.json'))))
         path.write_text(value if isinstance(value, str) else json.dumps(value))
         return str(path)
 
@@ -113,7 +115,8 @@ class Refs(unittest.TestCase):
         # catches: a pull request with more closing references than one page, or a failed read, waking no fleet
         # while looking like "nothing due".
         for world, reason in ((World(self, items={'9': pr(HOME + '#1', more=True)}), 'more than one page'),
-                              (World(self, fail=True), 'synthetic failure')):
+                              (World(self, fail=True), 'synthetic failure'),
+                              (World(self, items={'9': pr(HOME + '#1')}, error='FORBIDDEN'), 'FORBIDDEN')):
             code, out, err = world.run('refs', SAT, '9')
             self.assertEqual((code, out), (2, ''))
             self.assertIn(reason, err)

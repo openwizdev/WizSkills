@@ -336,6 +336,57 @@ class Kit(Base):
         self.assertFalse(alive(pid))
 
 
+    def answering_driver(self, answer):
+        """A synthetic driver whose `start` prints answer (a Python expression) and whose `stop` leaves a marker."""
+        driver = self.tmp / 'answering-driver'
+        driver.write_text('#!%s\nimport json, os, sys\nif sys.argv[1] == "start":\n    print(json.dumps(%s))\n'
+                          'else:\n    open(%r, "a").write(sys.stdin.read() + "\\n")\n'
+                          % (sys.executable, answer, str(self.tmp / 'stopped')))
+        driver.chmod(0o700)
+        return driver
+
+    def kit_starts_once(self, driver):
+        self.env['FAKE_KIT_STARTS'] = '1'
+        out = ('pass version: synthetic\nfail start: its start answer held a credential, which the kit does not '
+               'show\nfail wake: not run: start failed\nfail stop: not run: start failed\npass token: synthetic\n')
+        (self.tmp / 'kit.out').write_text(out)
+        self.env.update(FAKE_KIT_OUT=str(self.tmp / 'kit.out'), FAKE_KIT_ARGV=str(self.tmp / 'kit.argv'),
+                        FAKE_KIT_EXIT='1')
+        self.wd('kit', '--state', self.state, '--openwiz', OPENWIZ, '--driver', driver, '--repo',
+                'example-user/examplehost-driver-kit', '--ticket', 7, '--harness', 'fake-harness', '--model',
+                'example-model', check=1)
+
+    def test_a_start_answer_the_kit_refuses_never_enters_state_or_cleanup_output(self):
+        # catches (R8): the proxy storing a credential-shaped or off-schema run id in run.json, and stop-all
+        # printing it, before the kit has screened the answer
+        for name, answer, value in (
+                ('a secret of the environment', '{"run": os.environ["EXAMPLEHOST_API_TOKEN"]}', SECRET),
+                ('a key shape', '{"run": "AKIA" + "SYNTHETIC0000000"}', 'AKIASYNTHETIC0000000'),
+                ('a key shape in a field the schema refuses', '{"run": "run-1", "note": "sk-" + "s" * 24}', 'sk-sss'),
+                ('a run id the schema refuses', '{"run": "-synthetic-run"}', '-synthetic-run')):
+            with self.subTest(name):
+                self.tearDown_state()
+                self.begin()
+                self.kit_starts_once(self.answering_driver(answer))
+                self.assertNotIn(value, (self.state / 'run.json').read_text())
+                p = self.wd('stop-all', '--state', self.state, check=1)
+                self.assertNotIn(value, p.stdout)
+                last = p.stdout.strip().split('\n')[-1]
+                self.assertTrue(last.startswith('Not stopped: a driver run the kit started'), last)
+                self.assertFalse((self.tmp / 'stopped').exists())
+
+    def test_a_start_answer_the_kit_accepts_is_recorded_and_stopped(self):
+        # catches (R8): the kit's checks refusing a good answer, so a run it started is never stopped
+        self.begin()
+        self.kit_starts_once(self.answering_driver('{"run": "run-synthetic-1"}'))
+        p = self.wd('stop-all', '--state', self.state, check=0)
+        self.assertEqual(p.stdout.strip().split('\n')[-1], 'Stopped: everything it started (1)')
+        self.assertEqual((self.tmp / 'stopped').read_text(), '{"run": "run-synthetic-1"}\n')
+
+    def tearDown_state(self):
+        shutil.rmtree(self.state, True)
+        (self.tmp / 'stopped').unlink(missing_ok=True)
+
 class Asks(Base):
     def test_an_ask_naming_a_credential_is_refused_before_it_is_shown(self):
         # catches: the skill asking the user to hand over or set a login or key
@@ -509,6 +560,12 @@ class ExpiredLogin(Base):
                             'exampleagent', check=0)
                 self.assertIn('expired-login fail: no-sign-in-next', p.stdout)
 
+    def probing_driver(self, name, probe):
+        """The fixed driver, refusing with a wrong next step when probe (Python, at its start) succeeds."""
+        return self.fixed_driver(name, change=lambda t: t.replace(
+            "    if cmd == 'start':\n", "    if cmd == 'start':\n        try:\n            %s\n        except Exception:\n"
+            "            pass\n        else:\n            refuse('the probe reached the host', 'nothing')\n" % probe))
+
     def test_the_probe_runs_only_the_stand_in_in_a_credential_free_environment(self):
         # catches (R2, R5): the probe handing the caller's environment (and any credential in it) to the driver,
         # or falling through to the user's real harness
@@ -516,19 +573,69 @@ class ExpiredLogin(Base):
         real = self.bin / 'exampleagent'
         real.write_text('#!/bin/sh\ntouch "%s"\n' % (self.tmp / 'real-harness-ran'))
         real.chmod(0o755)
-        seen = self.tmp / 'driver-env.json'
-        driver = self.fixed_driver('env', change=lambda t: t.replace(
-            "def main():\n", "def main():\n    open(%r, 'w').write(json.dumps(dict(os.environ)))\n" % str(seen)))
-        self.wd('lesson', 'expired-login', '--state', self.state, '--driver', driver, '--harness', 'exampleagent',
-                check=0)
-        env = json.loads(seen.read_text())
-        self.assertNotIn(SECRET, json.dumps(env))
-        self.assertEqual(sorted(k for k in env if k not in ('PWD', 'SHLVL', '_', 'LC_CTYPE')),
-                         ['HOME', 'LANG', 'OPENWIZ_EXAMPLEHOST_STATE', 'PATH'])
-        self.assertNotEqual(env['HOME'], self.env['HOME'])
-        self.assertNotIn(str(self.bin), env['PATH'])
+        leaked = ('assert %r not in json.dumps(dict(os.environ)) and %r not in os.environ["PATH"] '
+                  'and os.environ["HOME"] != %r and sorted(k for k in os.environ if k not in '
+                  '("PWD", "SHLVL", "_", "LC_CTYPE")) == ["HOME", "LANG", "OPENWIZ_EXAMPLEHOST_STATE", "PATH"]; '
+                  'raise RuntimeError' % (SECRET, str(self.bin), self.env['HOME']))
+        p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', self.probing_driver('env', leaked),
+                    '--harness', 'exampleagent', check=0)
+        self.assertIn('expired-login pass', p.stdout)
         self.assertFalse((self.tmp / 'real-harness-ran').exists())
         self.assertEqual(self.gh_calls(), [])
+
+    def test_the_probe_reaches_no_network_host_socket_or_host_file(self):
+        # catches (R9): a driver under test reading the user's files or another process's environment, writing
+        # outside its box, or reaching the network, a host socket or a real client outside its fixtures
+        import socket
+        self.begin()
+        host_file = self.tmp / 'host-file'
+        host_file.write_text('synthetic host file\n')
+        tcp = socket.socket()
+        tcp.bind(('127.0.0.1', 0))
+        tcp.listen(5)
+        tcp.setblocking(False)
+        self.addCleanup(tcp.close)
+        unix = socket.socket(socket.AF_UNIX)
+        unix.bind(str(self.tmp / 'host.sock'))
+        unix.listen(5)
+        unix.setblocking(False)
+        self.addCleanup(unix.close)
+        client = self.tmp / 'real-client'
+        client.write_text('#!/bin/sh\necho reached > "%s"\n' % (self.tmp / 'client-ran'))
+        client.chmod(0o755)
+        probes = {
+            'a host file': 'open(%r).read()' % str(host_file),
+            'a write outside its box': 'open(%r, "w").write("x")' % str(self.tmp / 'written'),
+            'the parent process environment': 'open("/proc/%d/environ" % os.getppid(), "rb").read()',
+            'the network': '__import__("socket").create_connection(("127.0.0.1", %d), 2)' % tcp.getsockname()[1],
+            'a host socket': 's = __import__("socket").socket(1); s.connect(%r)' % str(self.tmp / 'host.sock'),
+            'a client outside its fixtures': 'subprocess.run([%r], check=True)' % str(client)}
+        for n, (name, probe) in enumerate(probes.items()):
+            with self.subTest(name):
+                p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver',
+                            self.probing_driver('probe-%d' % n, probe), '--harness', 'exampleagent', check=0)
+                self.assertIn('expired-login pass', p.stdout)
+        for sock in (tcp, unix):
+            with self.assertRaises(BlockingIOError):
+                sock.accept()
+        self.assertFalse((self.tmp / 'written').exists())
+        self.assertFalse((self.tmp / 'client-ran').exists())
+
+    def test_without_isolation_the_probe_never_runs_the_driver(self):
+        # catches (R9): a system that can't isolate the probe running the driver unisolated anyway
+        import contextlib
+        import io
+        from unittest import mock
+        self.begin()
+        driver = self.probing_driver('unisolated', 'open(%r, "w").write("x")' % str(self.tmp / 'driver-ran'))
+        out = io.StringIO()
+        with mock.patch.object(wd, 'landlock_abi', return_value=0, create=True), contextlib.redirect_stdout(out):
+            code = wd.main(['lesson', 'expired-login', '--state', str(self.state), '--driver', str(driver),
+                            '--harness', 'exampleagent'])
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertIn('cannot isolate', out.getvalue())
+        self.assertFalse((self.tmp / 'driver-ran').exists())
+        self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_a_driver_that_never_runs_the_stand_in_proves_nothing(self):
         # catches (R5): a lesson read as passing although the driver never ran the stand-in harness

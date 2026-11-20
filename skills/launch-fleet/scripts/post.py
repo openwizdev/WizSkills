@@ -8,8 +8,11 @@ Prints one line and exits 0 on `posted <id>` or `edited <id>`. Exits 1 with
 `refused: <why>` and no write when the body is not a fleet record (its first
 line starts `launch-fleet: ` or `**Needs you:**`), carries a private identity
 (a thread or loop id, a token), or the project's Record authors row is
-missing; with `unknown: <why>` when read-back cannot confirm the write. An
-unknown write may have happened: read the thread again before any retry.
+missing; with `unknown: <why>` when the write returned no receipt or
+read-back cannot confirm it. A record counts as posted only by its returned
+id, never by an identical new comment, which another wake may have written
+(#1555). An unknown write may have happened: reconcile the thread before any
+retry.
 """
 import importlib.util
 import json
@@ -85,10 +88,14 @@ def comment(repo, number, body):
         raise Stop(f'unknown: #{number} could not be read before writing; nothing was written')
     seen = {c.get('id') for c in before}
     made = read_json('api', '--method', 'POST', f'repos/{repo}/issues/{number}/comments', '-f', f'body={body}')
+    if not isinstance(made, dict) or type(made.get('id')) is not int:
+        # Without a receipt nothing ties a new identical record to this write:
+        # another wake may have posted it under the same login (#1555).
+        raise Stop(f'unknown: the write on #{number} returned no receipt, so no record is adopted; '
+                   f'reconcile #{number} before any retry')
     after = thread(repo, number) or []
-    found = [c for c in after if c.get('id') not in seen and c.get('body') == body and ours(c, auth)]
-    if isinstance(made, dict):
-        found = [c for c in found if c.get('id') == made.get('id')]
+    found = [c for c in after if c.get('id') == made['id'] and c.get('id') not in seen
+             and c.get('body') == body and ours(c, auth)]
     if len(found) != 1:
         raise Stop(f'unknown: the record on #{number} could not be read back; read #{number} before any retry')
     return f"posted {found[0]['id']}"

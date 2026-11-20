@@ -92,11 +92,28 @@ class Post(unittest.TestCase):
         self.assertEqual(w.writes(), [])
         self.assertEqual(w.run('post.py', 'comment', REPO, 3, '**Needs you:** spec #3 changed since revision 2')[0], 0)
 
-    def test_a_lost_response_is_recovered_by_read_back(self):
+    def test_a_lost_response_is_unknown_and_left_for_reconciliation(self):
+        # catches: (#1555) a write whose response is lost adopting the one new
+        # identical record, which a second wake can equally have written.
         w = World(self, comments={'12': [comment(4000, 'launch-fleet: starting')]}, faults={'post': 'lost'})
         code, out = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')
-        self.assertEqual((code, out), (0, 'posted 5001'))
+        self.assertEqual((code, out.split(' ')[0]), (1, 'unknown:'), out)
         self.assertEqual(len(w.writes()), 1)
+
+    def test_another_wakes_identical_record_is_never_adopted(self):
+        # catches: (#1555) a failed write returning another wake's identical
+        # claim id as its own, so both wakes proceed as owners of one claim.
+        w = World(self, faults={'post': 'fail'})
+        # The other wake's identical claim lands while this wake's write is in flight.
+        inject = w.dir / 'other_wake.py'
+        inject.write_text('import json, os\nw = json.load(open(os.environ["FAKE_WORLD"]))\n'
+                          'w["comments"].setdefault("12", []).append(%r)\n'
+                          'json.dump(w, open(os.environ["FAKE_WORLD"], "w"))\n' % comment(8001, 'launch-fleet: starting'))
+        gh = w.dir / 'bin' / 'gh'
+        head, rest = gh.read_text().split('\n', 1)
+        gh.write_text('%s\ncase " $* " in *" POST "*) "%s" -I "%s";; esac\n%s' % (head, sys.executable, inject, rest))
+        code, out = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')
+        self.assertEqual((code, out.split(' ')[0]), (1, 'unknown:'), out)
 
     def test_a_failed_write_is_unknown_never_posted(self):
         w = World(self, faults={'post': 'fail'})

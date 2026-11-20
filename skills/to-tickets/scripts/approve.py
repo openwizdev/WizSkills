@@ -10,7 +10,10 @@ revision.sh's text for the same spec. The checks, all of them every time:
   relies       check-relies.sh passes on each open agent ticket's body, a path
                a direct blocker owns counting as planned
   sizes        each open ticket says exactly one `Size: S`, `M` or `L`
-  width        no cycle, and no arrow another chain of arrows already implies
+  width        no cycle, and no arrow another chain of arrows already implies;
+               the record reports the critical chain (the longest run of
+               open work, open blockers outside the spec included) and the
+               widest start wave
   owned paths  each open agent ticket owns exact repository paths, and no two
                tickets that can run at once own the same path, unless both
                bullets say `(shared`
@@ -183,32 +186,47 @@ def check_sizes(tickets):
     return why, counts
 
 
-def check_width(graph):
-    """Refusals, the longest chain and the widest start wave, in tickets."""
-    numbers = {t['number'] for t in graph['tickets']}
-    after = {n: set() for n in numbers}  # n -> tickets it blocks
-    for t in graph['tickets']:
-        for b in t['blocked_by']:
-            if b['number'] in numbers:
-                after[b['number']].add(t['number'])
-    level, order, indegree = {}, [], {n: 0 for n in numbers}
-    for n in numbers:
+def chain_width(after, planned, done):
+    """The critical chain, the widest start wave (both in tickets) and the
+    tickets a cycle leaves unreached. `after` maps every ticket (planned and outside blockers) to the
+    tickets it blocks. The chain is the longest run of arrows through work
+    not yet done, outside blockers included; the waves count planned work only.
+    """
+    level, indegree = {}, {n: 0 for n in after}
+    for n in after:
         for m in after[n]:
             indegree[m] += 1
-    ready = sorted(n for n in numbers if indegree[n] == 0)
+    ready = sorted(n for n in after if indegree[n] == 0)
     for n in ready:
-        level[n] = 1
+        level[n] = 0 if n in done else 1
     while ready:
         n = ready.pop(0)
-        order.append(n)
         for m in sorted(after[n]):
-            level[m] = max(level.get(m, 1), level[n] + 1)
+            level[m] = max(level.get(m, 0), level[n] + (0 if m in done else 1))
             indegree[m] -= 1
             if indegree[m] == 0:
                 ready.append(m)
-    if len(order) != len(numbers):
-        cycle = sorted(n for n in numbers if n not in order)
-        return [f'a cycle: {" ".join(f"#{n}" for n in cycle)} can never start'], 0, 0
+    unreached = sorted(n for n in after if indegree[n] > 0)
+    waves = {}
+    for n in planned:
+        if n not in done and n in level:
+            waves[level[n]] = waves.get(level[n], 0) + 1
+    return max(level.values(), default=0), max(waves.values(), default=0), unreached
+
+
+def check_width(graph):
+    """Refusals, the critical chain and the widest start wave, in tickets."""
+    numbers = {t['number'] for t in graph['tickets']}
+    after = {n: set() for n in numbers}  # n -> tickets it blocks
+    done = {t['number'] for t in graph['tickets'] if t['state'] != 'OPEN'}
+    for t in graph['tickets']:
+        for b in t['blocked_by']:
+            after.setdefault(b['number'], set()).add(t['number'])
+            if b['number'] not in numbers and b['state'] != 'OPEN':
+                done.add(b['number'])
+    chain, widest, unreached = chain_width(after, numbers, done)
+    if unreached:
+        return [f'a cycle: {" ".join(f"#{n}" for n in unreached)} can never start'], 0, 0
     why = []
 
     def reaches(start, goal, skip):
@@ -226,10 +244,7 @@ def check_width(graph):
         for t in sorted(after[b]):
             if reaches(b, t, skip=t):
                 why.append(f'the arrow #{b} -> #{t} is implied by another chain; drop it')
-    waves = {}
-    for n, depth in level.items():
-        waves[depth] = waves.get(depth, 0) + 1
-    return why, max(level.values(), default=0), max(waves.values(), default=0)
+    return why, chain, widest
 
 
 def check_owned(graph, agents):

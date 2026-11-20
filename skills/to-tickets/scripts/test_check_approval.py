@@ -810,6 +810,8 @@ class MachineApproval(unittest.TestCase):
         first["blocked_by"][0]["state"] = "CLOSED"
         self.assertEqual(chain(tickets), "width: chain 4, widest 3")
         first["state"] = "CLOSED"
+        (self.root / "contracts").mkdir()
+        (self.root / "contracts/export.v1.md").write_text("The merged synthetic contract.\n")
         self.assertEqual(chain(tickets), "width: chain 3, widest 4")
 
 

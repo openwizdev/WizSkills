@@ -318,10 +318,13 @@ class Tracker(unittest.TestCase):
         return subprocess.run([sys.executable, '-I', str(script), *args], env=env,
                               capture_output=True, text=True, timeout=60)
 
+    def write_argv(self, state, step, time, *extra, agent='builder'):
+        return [sys.executable, '-I', str(SCRIPT), 'write', '--repo', REPO, '--ticket', '12', '--agent', agent,
+                '--state', state, '--harness', 'Claude Code', '--model', 'Opus 5.5 Medium',
+                '--skills', SKILLS, '--step', step, '--time', time, *extra]
+
     def write(self, state, step, time, *extra, agent='builder'):
-        return self.run_status('write', '--repo', REPO, '--ticket', '12', '--agent', agent, '--state', state,
-                               '--harness', 'Claude Code', '--model', 'Opus 5.5 Medium',
-                               '--skills', SKILLS, '--step', step, '--time', time, *extra)
+        return self.run_status(*self.write_argv(state, step, time, *extra, agent=agent)[3:])
 
     def ticket(self, world=None):
         return next(it for it in (world or self.load())['issues'] if it['number'] == 12)
@@ -459,6 +462,38 @@ class Write(Tracker):
                 back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
                 self.assertEqual(back.returncode, 0, back.stderr)
                 self.assertEqual(self.ticket()['labels'], labels or ['ready-for-agent', 'needs-info'])
+
+    def test_an_older_resume_never_drops_the_proof_of_a_write_that_asked_meanwhile(self):
+        # catches (#119 R1): a builder's resume whose DELETE lands, then a reviewer on the same
+        # machine asks (its POST applies needs-info and saves its proof), then the builder's
+        # settle forgets that proof, so the reviewer's own resume leaves its label on.
+        self.ticket(self.world)['comments'] += [comment(104, BOT, note()), comment(105, BOT, note(agent='reviewer'))]
+        self.save()
+        asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual(asked.returncode, 0, asked.stderr)
+        reviewer = self.write_argv('asking', 'asked about the fixture', '2030-01-02T04:30:00Z', '--note', '105',
+                                   agent='reviewer')
+        done = self.dir / 'reviewer.exit'
+        # The reviewer's write starts once the builder's DELETE has landed, while the builder's
+        # call is still out. The builder may hold it off: after a while the call returns anyway.
+        (self.dir / 'bin' / 'gh').write_text(
+            '#!/bin/sh\n' + sys.executable + ' -I -S ' + str(self.dir / 'gh.py') + ' "$@"; code=$?\n'
+            'case " $* " in *" DELETE "*) if [ ! -e ' + str(self.dir / 'started') + ' ]; then\n'
+            '  : > ' + str(self.dir / 'started') + '\n'
+            '  (' + shlex.join(reviewer) + ' >/dev/null 2>&1; echo $? > ' + str(done) + '.tmp; mv ' + str(done)
+            + '.tmp ' + str(done) + ') &\n'
+            '  n=0; while [ ! -e ' + str(done) + ' ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done\n'
+            'fi;; esac\nexit $code\n')
+        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        end = time.monotonic() + 60
+        while not done.exists() and time.monotonic() < end:
+            time.sleep(0.1)
+        self.assertEqual(done.read_text(), '0\n')
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        resumed = self.write('working', 'got the fixture', '2030-01-02T06:00:00Z', '--note', '105', agent='reviewer')
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+        self.assertEqual((resumed.returncode, resumed.stdout), (0, '#12: reviewer working, status note 105 edited\n'))
 
     def test_needs_info_stays_while_any_agent_asks_and_a_failed_clear_recovers(self):
         # catches (R1): one agent leaving asking clearing the label another live agent's

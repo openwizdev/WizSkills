@@ -925,6 +925,19 @@ class CommentPass(unittest.TestCase):
         out = self.comment_pass(diff)[2]
         self.assertIn("check config.yml:10: context: ", out)
 
+    def test_here_documents_and_hunks_inside_strings_are_not_comments(self):
+        diff = new_file("run.sh", ["cat > fake <<'EOF'", "# shown as text", "EOF", "# workaround for the old runner",
+                                   'grep x <<< "$a"  # workaround for the old reader']) + (
+            "diff --git a/model.py b/model.py\n--- a/model.py\n+++ b/model.py\n@@ -18,2 +18,4 @@\n"
+            " P5 a heartbeat\n+    never reopens a final note (#1447)\n \"\"\"\n+x = 1  # workaround for the old reader\n"
+            "diff --git a/fake.sh b/fake.sh\n--- a/fake.sh\n+++ b/fake.sh\n@@ -40,1 +40,3 @@\n"
+            "+# shown as text\n EOF\n+# workaround for the old runner\n")
+        kinds, out = self.kinds(diff)
+        self.assertEqual(kinds, [["run.sh:4", "workaround"], ["run.sh:5", "workaround"],
+                                 ["model.py:21", "workaround"], ["fake.sh:42", "workaround"]], out)
+        self.assertIn("check model.py:18: context: ", out)
+        self.assertIn("check fake.sh:40: context: ", out)
+
     def test_two_block_comments_on_one_line_are_two_blocks(self):
         line = "let a = /* first workaround */ 1, b = /* second workaround */ 2;"
         self.assertEqual(self.kinds(new_file("app.js", [line]))[0],

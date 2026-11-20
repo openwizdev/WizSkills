@@ -612,6 +612,7 @@ class Landed(unittest.TestCase):
             'a pull request': ({'9106': brief(9106), '9101': dict(REPORT, pull_request={'url': 'x'})}, (9106,), 9106),
             'no milestone': ({'9106': brief(9106), '9101': dict(REPORT, milestone=None)}, (9106,), 9106),
             'not a version': ({'9106': brief(9106), '9101': dict(REPORT, milestone={'title': 'Later'})}, (9106,), 9106),
+            'a bare milestone': ({'9106': brief(9106), '9101': dict(REPORT, milestone='9.4.2')}, (9106,), 9106),
         }
         for name, (issues, close, ticket) in cases.items():
             with self.subTest(name):

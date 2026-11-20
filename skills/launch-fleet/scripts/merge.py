@@ -217,7 +217,8 @@ def land(repo, number, report, auth):
         return f'landed unknown: #{report} could not be read'
     if not is_report(value):
         return f'landed none: #{report} is not a report'
-    version = (value.get('milestone') or {}).get('title')
+    milestone = value.get('milestone')
+    version = milestone.get('title') if isinstance(milestone, dict) else None
     if not (isinstance(version, str) and VERSION.fullmatch(version)):
         return f'landed none: #{report} has no version milestone'
     before = post.thread(repo, report)
@@ -225,7 +226,7 @@ def land(repo, number, report, auth):
         return f'landed unknown: #{report} could not be read, so nothing was posted'
     for c in before:
         if post.ours(c, auth) and LANDED_ANY.fullmatch(c.get('body') or ''):
-            return f"landed already posted {c['id']}"
+            return f"landed already posted {c.get('id')}"
     body = LANDED.format(pr=number, version=version)
     made = post.read_json('api', '--method', 'POST', f'repos/{repo}/issues/{report}/comments', '-f', f'body={body}')
     if not isinstance(made, dict) or type(made.get('id')) is not int:

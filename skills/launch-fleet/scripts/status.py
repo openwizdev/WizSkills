@@ -19,8 +19,9 @@ fleet note (working), adds the label and reads again. Once no live note asks, it
 only the application its own POST made in this wake, puts back a person's application its
 DELETE took, and edits its note to done. A wake that stops part way leaves the note working;
 the next wake settles that ticket from it but never deletes (#1702): while agents post as a
-person's own account, a needs-info it can't prove it applied in this wake stays and is reported. It prints each change and every other mismatch, one
-report line each: exit 0 nothing to report, 1 lines printed, 2 `status check failed: <why>`.
+person's own account, a needs-info it can't prove it applied in this wake stays and is
+reported. It prints each change and every other mismatch, one report line each: exit 0
+nothing to report, 1 lines printed, 2 `status check failed: <why>`.
 Every GitHub call goes through `gh api`.
 """
 import argparse
@@ -522,8 +523,9 @@ def left(repo, n, login, labelled):
     of one, so it is reported, never taken off. The report lines."""
     if not labelled():
         return []
+    # Silent only when the last listed application is provably someone else's.
     applied = [e for e in label_events(repo, n) if e['event'] == 'labeled']
-    if not applied or not by(applied[-1], login):
+    if applied and not by(applied[-1], login):
         return []
     return [f'#{n}: {ASKING_LABEL} left on: no note asks, and the repair can\'t tell whether it or a person '
             'added it; check whose it is']

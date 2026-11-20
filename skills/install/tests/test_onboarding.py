@@ -8,6 +8,7 @@ grill confirmed in chat, the launch from the plan's machine approval, and the
 closing offer after a merge read back from GitHub. All values are synthetic.
 """
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -584,6 +585,44 @@ class HostApproval(unittest.TestCase):
         self.assertEqual(wider.returncode, 5, wider.stdout)
         self.assertEqual(road.approvals(), {road.repo: {'claude': 'acceptEdits'}}, 'never widened')
         self.assertFalse([c for c in road.gh_calls() if c[:1] == ['auth']])
+
+    def test_the_approval_adds_only_this_entry_keeps_every_other_byte_and_is_owner_only_600(self):
+        # catches: other repositories' or harnesses' approvals rewritten or reformatted (KN3 at 857d107: keep them
+        # byte for byte), a file left with another owner or a mode other than exactly 600, or an existing file's
+        # mode loosened
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
+        others = ('{\n  "synthetic-owner/other": {\n    "codex": "read-only"\n  },\n  "%s": {\n    "codex": '
+                  '"workspace-write"\n  }\n}\n' % road.repo)
+        path = road.host_state / 'approvals.json'
+        path.write_text(others)
+        path.chmod(0o600)
+        picked = road.helper(['mode', '--mode', 'acceptEdits'])
+        self.assertEqual(picked.returncode, 0, picked.stdout)
+        text = path.read_text()
+        for kept in ('"synthetic-owner/other": {\n    "codex": "read-only"\n  }', '"codex": "workspace-write"\n  }'):
+            self.assertIn(kept, text, 'every other entry byte for byte')
+        self.assertEqual(json.loads(text), {'synthetic-owner/other': {'codex': 'read-only'},
+                                            road.repo: {'codex': 'workspace-write', 'claude': 'acceptEdits'}})
+        info = path.stat()
+        self.assertEqual(info.st_uid, os.getuid())
+        self.assertEqual(stat.S_IMODE(info.st_mode), 0o600)
+        self.assertEqual([p.name for p in road.host_state.iterdir()], ['approvals.json'], 'no temporary file left')
+
+    def test_an_approvals_file_others_can_change_is_refused_never_fixed(self):
+        # catches: a group- or world-writable approvals file used or silently chmod-ed and written (KN3's start
+        # refuses it), or a refusal that doesn't say what to do
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
+        path = road.host_state / 'approvals.json'
+        path.write_text('{"synthetic-owner/other": {"codex": "read-only"}}\n')
+        path.chmod(0o622)
+        refused = road.helper(['mode', '--mode', 'acceptEdits'])
+        self.assertEqual(refused.returncode, 5, refused.stdout)
+        self.assertIn('chmod 600', refused.stdout)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o622, 'never fixed silently')
+        self.assertEqual(path.read_text(), '{"synthetic-owner/other": {"codex": "read-only"}}\n')
+        self.assertNotIn('mode', road.saved())
 
     def test_neither_a_row_nor_an_approval_alone_launches_on_this_machine(self):
         # catches: a fleet started on this machine when the fleet.md row has no matching host-side approval, or the

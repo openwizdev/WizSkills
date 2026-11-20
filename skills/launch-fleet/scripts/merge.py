@@ -93,8 +93,9 @@ OWNER = DESTINATION.split('/')[0]
 MARKER = re.compile(r'OpenWiz feedback operation [0-9a-f]{32}')
 LINK = re.compile(r'Report: #([1-9][0-9]*)')
 VERSION = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+')
+PULL_REQUEST = re.compile(r'openwizdev/[A-Za-z0-9._-]+#[1-9][0-9]*')
 LANDED = 'Landed: the fix for this report merged in {pr} and will ship in OpenWiz {version}.'
-LANDED_ANY = re.compile(r'Landed: the fix for this report merged in [A-Za-z0-9-]+/[A-Za-z0-9_.-]+#[1-9][0-9]* '
+LANDED_ANY = re.compile(r'Landed: the fix for this report merged in openwizdev/[A-Za-z0-9._-]+#[1-9][0-9]* '
                         r'and will ship in OpenWiz [0-9]+\.[0-9]+\.[0-9]+\.')
 
 
@@ -248,6 +249,8 @@ def landed(repo, number, p):
     name = ((p or {}).get('repository') or {}).get('nameWithOwner')
     if not (isinstance(name, str) and post.REPO.fullmatch(name) and name.casefold() == repo.casefold()):
         return f'; landed unknown: the repository of PR #{number} could not be read'
+    if not PULL_REQUEST.fullmatch(f'{name}#{number}'):
+        return ''
     refs = (p or {}).get('closingIssuesReferences') or {}
     if (refs.get('pageInfo') or {}).get('hasNextPage') is not False:
         return f'; landed unknown: the issues PR #{number} closes could not be read whole'

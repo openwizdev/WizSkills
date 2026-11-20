@@ -518,3 +518,59 @@ scenario('PB3 publish refuses another run\'s record and an unconfirmed post leav
   assert.match(lost.r.stderr, /rerun publish/);
   assert.equal(lost.index, null);
 });
+
+// WS23 (#1608): the recorded last-empty time is an instant with Z or an offset, so the host's
+// timezone can never decide whether a hunt starts. Each case runs under two host zones.
+scenario('PC3 pace: an offset-free time is refused and an offset-bearing instant decides the same in every host zone', w => {
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.parse(today) - 86400000).toISOString().slice(0, 10);
+  const pace = (host, when) => {
+    const saved = w.env.TZ;
+    w.env.TZ = host;
+    try { return w.run(lease, ['pace', 'UTC', '2', when]); }
+    finally { if (saved === undefined) delete w.env.TZ; else w.env.TZ = saved; }
+  };
+  for (const host of ['UTC', 'America/Los_Angeles']) {
+    for (const when of [`${yesterday}T23:00:00`, `${yesterday}T23:00`, `${yesterday}T23:00:00.000`]) {
+      const r = pace(host, when);
+      assert.equal(r.status, 2, `${host} ${when}: ${r.stdout}`);
+      assert.equal(r.stdout, '');
+      assert.match(r.stderr, /last empty hunt time needs Z or an offset .*: ask on the tracking issue/);
+    }
+    // One instant written three ways: yesterday in the project's zone, so the pause is over.
+    for (const when of [`${yesterday}T23:00:00Z`, `${yesterday}T15:00:00-08:00`, `${today}T07:00:00.000+08:00`])
+      assert.deepEqual(JSON.parse(pace(host, when).stdout), {hunt: true}, `${host} ${when}`);
+    const tomorrow = new Date(Date.parse(today) + 86400000).toISOString().slice(0, 10);
+    assert.deepEqual(JSON.parse(pace(host, `${today}T00:00:00Z`).stdout), {hunt: false, until: tomorrow}, host);
+  }
+  assert.deepEqual(w.calls(), [], 'pace reads no GitHub');
+});
+
+// WS23 (#1569): a run that still holds its lease finishes with release, never the lease-less record,
+// so the next scheduled controller is never refused by a finished hunt's live lease.
+scenario('D5 a controller paused after claiming cannot record past its live lease; release frees it for the next controller', w => {
+  w.state.comments = [{id: 100, ...on}];
+  assert.equal(w.run(lease, ['claim', 'synthetic-final']).status, 0);
+  const {r: published} = publish(w, {run: 'synthetic-final', slices: [], gaps: [], next: 'paused until tomorrow'});
+  assert.equal(published.status, 0, published.stderr);
+  const index = join(w.dir, 'index.md'), posts = w.posts().length;
+  const record = w.run(lease, ['record', 'synthetic-final', index]);
+  assert.equal(record.status, 2, record.stdout);
+  assert.match(record.stderr, /synthetic-final holds the live lease: post its final index with release/);
+  assert.equal(w.posts().length, posts, 'a refused record posts nothing');
+  const release = w.run(lease, ['release', 'synthetic-final', index]);
+  assert.equal(release.status, 0, release.stderr);
+  const next = w.run(lease, ['claim', 'synthetic-next']);
+  assert.equal(next.status, 0, next.stderr);
+});
+
+// WS23 (#1569): the controller's own steps. The last hunter wake (all slices reported or blocked)
+// and a pause after claiming end through step 5's publish and release; record is for no lease.
+test('W1 the last wake and a pause after claiming finish with release; record only without a live lease', () => {
+  const skill = readFileSync(join(here, '../SKILL.md'), 'utf8');
+  const section = heading => skill.split(`\n${heading}\n`)[1].split('\n## ')[0];
+  assert.match(section('## On every wake'), /every slice is reported or blocked[^.]*\bfinish the hunt \(step 5\) with `release`/i);
+  assert.match(section('## 1. Check whether to hunt'), /`hunt: false` ends the hunt as paused[^.]*step 5[^.]*`release`/);
+  assert.match(section('## 5. Record the result and finish this hunt'), /`record` only when this run holds no live lease/);
+  assert.doesNotMatch(section('## 5. Record the result and finish this hunt'), /`record` \(off, paused, blocked/);
+});

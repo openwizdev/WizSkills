@@ -226,7 +226,7 @@ class Documented(unittest.TestCase):
 
     def commands(self):
         text = (HERE.parent / 'SKILL.md').read_text()
-        found = re.findall(r'`(python3 -I [^`]*merge\.py (?:admit|merge) [^`]*)`', text)
+        found = re.findall(r'`(python3 -I [^`]*merge\.py"? (?:admit|merge) [^`]*)`', text)
         self.assertEqual(len(found), 2, found)
         values = {"<this skill's folder>": str(HERE.parent), '<owner>/<repo>': REPO, '<P>': '7',
                   '<commit>': HEAD, '<checks>': 'check',

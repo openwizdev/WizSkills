@@ -1,0 +1,181 @@
+{
+  "commit": "dd6279a31eb45f17f6fd6be26a073356efea02f0",
+  "tokenizer": {
+    "package": "js-tiktoken",
+    "version": "1.0.21",
+    "encoding": "o200k_base"
+  },
+  "workflows": {
+    "ask-wiz.route": {
+      "fragments": {
+        "skills/ask-wiz/SKILL.md": 1041,
+        "skills/grill/SKILL.md": 1056
+      },
+      "loaded_path_tokens": 2097
+    },
+    "build-ticket.regression": {
+      "fragments": {
+        "skills/build-ticket/SKILL.md": 2435,
+        "contracts/open-development.v1.md": 10660,
+        "skills/build-ticket/checklist.md": 1935,
+        "skills/review-ticket/SKILL.md": 3151,
+        "skills/launch-fleet/SKILL.md": 5383,
+        "skills/launch-fleet/references/identity.md": 788,
+        "contracts/github-identity.v1.md": 3508
+      },
+      "loaded_path_tokens": 27860
+    },
+    "diagnose.reproduce": {
+      "fragments": {
+        "skills/diagnose/SKILL.md": 1277
+      },
+      "loaded_path_tokens": 1277
+    },
+    "grill.new": {
+      "fragments": {
+        "skills/grill/SKILL.md": 1056,
+        "skills/grill/references/records.md": 909,
+        "contracts/open-development.v1.md": 10660,
+        "contracts/decisions.v1.md": 6520,
+        "contracts/decisions.v1.schema.json": 3817,
+        "skills/grill/assets/grill.md": 146
+      },
+      "loaded_path_tokens": 23108
+    },
+    "handoff.resume": {
+      "fragments": {
+        "skills/handoff/SKILL.md": 1022
+      },
+      "loaded_path_tokens": 1022
+    },
+    "hill-climb.select": {
+      "fragments": {
+        "skills/hill-climb/SKILL.md": 2979
+      },
+      "loaded_path_tokens": 2979
+    },
+    "huntr.intake": {
+      "fragments": {
+        "skills/huntr/SKILL.md": 2265,
+        "skills/diagnose/SKILL.md": 1277
+      },
+      "loaded_path_tokens": 3542
+    },
+    "image.capture": {
+      "fragments": {
+        "skills/image/SKILL.md": 1779
+      },
+      "loaded_path_tokens": 1779
+    },
+    "install.pinned": {
+      "fragments": {
+        "skills/install/SKILL.md": 2933
+      },
+      "loaded_path_tokens": 2933
+    },
+    "launch-fleet.wake": {
+      "fragments": {
+        "skills/launch-fleet/SKILL.md": 5383,
+        "skills/launch-fleet/overload.md": 1481,
+        "skills/launch-fleet/references/builders.md": 3346,
+        "skills/launch-fleet/references/records.md": 1715,
+        "contracts/open-development.v1.md": 10660,
+        "skills/launch-fleet/references/identity.md": 788,
+        "contracts/github-identity.v1.md": 3508
+      },
+      "loaded_path_tokens": 26881
+    },
+    "onboard.resume": {
+      "fragments": {
+        "skills/install/SKILL.md": 2933,
+        "contracts/cli.v1.md": 4248,
+        "skills/setup/SKILL.md": 1645,
+        "skills/setup/templates/fleet.md": 1242,
+        "contracts/open-development.v1.md": 10660,
+        "contracts/github-identity.v1.md": 3508,
+        "skills/grill/SKILL.md": 1056,
+        "skills/grill/references/records.md": 909,
+        "skills/grill/assets/grill.md": 146,
+        "contracts/decisions.v1.md": 6520,
+        "contracts/decisions.v1.schema.json": 3817,
+        "skills/to-spec/SKILL.md": 961,
+        "skills/to-spec/spec.md": 242,
+        "skills/to-spec/video.md": 640,
+        "skills/to-tickets/SKILL.md": 1108,
+        "skills/to-tickets/tickets.md": 788,
+        "contracts/plan-links.v1.md": 4245
+      },
+      "loaded_path_tokens": 44668
+    },
+    "plan-graph.approval": {
+      "fragments": {
+        "skills/to-tickets/SKILL.md": 1108,
+        "skills/to-tickets/tickets.md": 788,
+        "contracts/plan-links.v1.md": 4245,
+        "contracts/decisions.v1.md": 6520,
+        "contracts/decisions.v1.schema.json": 3817
+      },
+      "loaded_path_tokens": 16478
+    },
+    "research.synthesis": {
+      "fragments": {
+        "skills/research/SKILL.md": 1469
+      },
+      "loaded_path_tokens": 1469
+    },
+    "review-ticket.exact-head": {
+      "fragments": {
+        "skills/review-ticket/SKILL.md": 3151,
+        "contracts/open-development.v1.md": 10660
+      },
+      "loaded_path_tokens": 13811
+    },
+    "setup.repair": {
+      "fragments": {
+        "skills/setup/SKILL.md": 1645,
+        "skills/setup/templates/fleet.md": 1242,
+        "contracts/open-development.v1.md": 10660
+      },
+      "loaded_path_tokens": 13547
+    },
+    "to-spec.chain": {
+      "fragments": {
+        "skills/to-spec/SKILL.md": 961,
+        "skills/to-spec/spec.md": 242,
+        "skills/to-spec/video.md": 640,
+        "skills/to-tickets/SKILL.md": 1108,
+        "skills/to-tickets/tickets.md": 788,
+        "contracts/plan-links.v1.md": 4245,
+        "contracts/decisions.v1.md": 6520,
+        "contracts/decisions.v1.schema.json": 3817
+      },
+      "loaded_path_tokens": 18321
+    },
+    "triage.dispatch": {
+      "fragments": {
+        "skills/triage/SKILL.md": 2029,
+        "contracts/open-development.v1.md": 10660,
+        "skills/triage/AGENT-BRIEF.md": 926
+      },
+      "loaded_path_tokens": 13615
+    },
+    "wayfind.resume": {
+      "fragments": {
+        "skills/wayfind/SKILL.md": 1710,
+        "skills/grill/SKILL.md": 1056,
+        "skills/grill/references/records.md": 909,
+        "contracts/open-development.v1.md": 10660,
+        "contracts/decisions.v1.md": 6520,
+        "contracts/decisions.v1.schema.json": 3817,
+        "skills/grill/assets/grill.md": 146
+      },
+      "loaded_path_tokens": 24818
+    },
+    "where-are-we.status": {
+      "fragments": {
+        "skills/where-are-we/SKILL.md": 1112
+      },
+      "loaded_path_tokens": 1112
+    }
+  }
+}

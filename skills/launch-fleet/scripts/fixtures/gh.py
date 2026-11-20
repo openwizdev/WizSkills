@@ -826,8 +826,14 @@ def rest_read(w, repo, path, page, paginate, include, accept, answer, out):
         lbl = encoded.split('label%3A%22', 1)[1] if 'label%3A%22' in encoded else encoded
         if lbl.endswith('%22%20no%3Aparent-issue'):
             lbl = lbl[:-len('%22%20no%3Aparent-issue')]
+        elif lbl.endswith('%22'):
+            lbl = lbl[:-len('%22')]
         cap = argjson(env.get('FAKE_GH_SEARCH_CAP') or '1000')
-        found = [i for i in issues() if get(i, 'parent') is None and any(l == lbl for l in each_opt(get(i, 'labels')))]
+        # F6's open-work search (#1353) has no `no:parent-issue` and asks `is:open`.
+        whole = 'no%3Aparent-issue' not in encoded
+        found = [i for i in issues() if (whole or get(i, 'parent') is None)
+                 and ('is%3Aopen' not in encoded or get(i, 'state') == 'OPEN')
+                 and any(l == lbl for l in each_opt(get(i, 'labels')))]
         found = sort_by(found, lambda i: alt(get(i, 'updatedAt'), ''))[::-1]
         out.append(compact({'total_count': len(found), 'incomplete_results': False,
                             'items': [{'number': get(i, 'number'), 'node_id': sha_text(get(i, 'number')),

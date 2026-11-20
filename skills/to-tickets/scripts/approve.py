@@ -12,8 +12,9 @@ revision.sh's text for the same spec. The checks, all of them every time:
   sizes        each open ticket says exactly one `Size: S`, `M` or `L`
   width        no cycle, and no arrow another chain of arrows already implies;
                the record reports the critical chain (the longest run of
-               open work, open blockers outside the spec included) and the
-               widest start wave
+               open work along hard edges, open blockers outside the spec
+               included) and the widest start wave; a context-only file
+               link is no hard edge (soft_link)
   owned paths  each open agent ticket owns exact repository paths, and no two
                tickets that can run at once own the same path, unless both
                bullets say `(shared`
@@ -214,17 +215,61 @@ def chain_width(after, planned, done):
     return max(level.values(), default=0), max(waves.values(), default=0), unreached
 
 
+FILE_PATH = re.compile(r'(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+/?')
+
+
+def file_link_files(body, blocker):
+    """The files of the ticket's one `file` line for this blocker, or None."""
+    lines = [line.rstrip(' \t') for line in section(body, 'Links') or []]
+    found = [line for line in lines if re.match(rf'- #{blocker} (real|file):', line)]
+    if len(found) != 1 or not found[0].startswith(f'- #{blocker} file:'):
+        return None
+    files = [p for p in re.findall(r'`([^`]*)`', found[0])
+             if FILE_PATH.fullmatch(p) and not any(part in ('.', '..') for part in p.rstrip('/').split('/'))]
+    return files or None
+
+
+def soft_link(ticket, blocker, default_repo):
+    """F6 (#1353): a link adds no serial work only when it is a file link
+    naming a file, into an open agent ticket, from a planned blocker whose
+    owned paths are read, and neither the blocker's owned paths nor the
+    link's files hold an input the ticket relies on, nor do the two
+    tickets' owned paths collide. Anything else is a hard edge."""
+    if ticket['state'] != 'OPEN' or human(ticket) or blocker is None or human(blocker):
+        return False
+    files = file_link_files(ticket['body'], blocker['number'])
+    try:
+        mine, theirs = owned(ticket, default_repo), owned(blocker, default_repo)
+    except ValueError:
+        return False
+    if files is None:
+        return False
+    inputs = relies_paths(ticket['body'])
+    if any(overlap(i, p) for i in inputs for p in files + [path for _, path, _ in theirs]):
+        return False
+    return not any(ra == rb and overlap(pa, pb) and not (sa and sb)
+                   for ra, pa, sa in mine for rb, pb, sb in theirs)
+
+
 def check_width(graph):
-    """Refusals, the critical chain and the widest start wave, in tickets."""
+    """Refusals, the critical chain and the widest start wave, in tickets.
+    The cycle and implied-arrow checks read every native arrow; the chain
+    and the waves read only hard edges (soft_link)."""
     numbers = {t['number'] for t in graph['tickets']}
+    tickets = {t['number']: t for t in graph['tickets']}
     after = {n: set() for n in numbers}  # n -> tickets it blocks
+    hard = {n: set() for n in numbers}
     done = {t['number'] for t in graph['tickets'] if t['state'] != 'OPEN'}
     for t in graph['tickets']:
         for b in t['blocked_by']:
             after.setdefault(b['number'], set()).add(t['number'])
+            hard.setdefault(b['number'], set())
+            if not soft_link(t, tickets.get(b['number']), graph['repo']):
+                hard[b['number']].add(t['number'])
             if b['number'] not in numbers and b['state'] != 'OPEN':
                 done.add(b['number'])
-    chain, widest, unreached = chain_width(after, numbers, done)
+    _, _, unreached = chain_width(after, numbers, done)
+    chain, widest, _ = chain_width(hard, numbers, done)
     if unreached:
         return [f'a cycle: {" ".join(f"#{n}" for n in unreached)} can never start'], 0, 0
     why = []

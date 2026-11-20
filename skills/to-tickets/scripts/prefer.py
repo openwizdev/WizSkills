@@ -5,9 +5,10 @@ chain, and the wider graph when the chains are equal.
 
 Each cut is tickets.md's picture data (`tickets` with `id`, `state` and
 `role`; `links` with `blocker` and `ticket`). The chain and the width are
-approve.py's: the chain is the longest run of work not yet merged, outside
-(`external`) blockers included, and the width is the largest start wave of the
-spec's own work. Prints one `cut <file>: chain C, widest W` line per cut, then
+approve.py's: the chain is the longest run of work not yet merged along hard
+edges, outside (`external`) blockers included, and the width is the largest
+start wave of the spec's own work. A `file` link into a builder's ticket only
+shares context (F6) and is no hard edge; every link into a person's is. Prints one `cut <file>: chain C, widest W` line per cut, then
 `prefer <file>: <why>`; on a tie it keeps the first. Exit 0, or 2 with one
 `prefer: <file>: <why>` line when a cut can't be read or has a cycle.
 """
@@ -28,11 +29,12 @@ def measure(path):
     tickets, links = data['tickets'], data['links']
     if not isinstance(tickets, list) or not isinstance(links, list) or not tickets:
         raise ValueError('needs `tickets` and `links` lists')
-    after, planned, done = {}, set(), set()
+    after, planned, done, roles = {}, set(), set(), {}
     for t in tickets:
         if not isinstance(t['id'], str) or t['id'] in after:
             raise ValueError(f'unreadable or repeated ticket id {t["id"]!r}')
         after[t['id']] = set()
+        roles[t['id']] = t['role']
         if t['role'] != 'external':
             planned.add(t['id'])
         if t['state'] == 'merged':
@@ -40,7 +42,10 @@ def measure(path):
     for link in links:
         if link['blocker'] not in after or link['ticket'] not in after:
             raise ValueError(f'a link names an unknown ticket: {link["blocker"]} -> {link["ticket"]}')
-        after[link['blocker']].add(link['ticket'])
+        # F6: a file link into a builder's ticket only shares context; into
+        # a person's (or any other) ticket every link holds it.
+        if link['kind'] != 'file' or roles[link['ticket']] != 'builder':
+            after[link['blocker']].add(link['ticket'])
     chain, widest, unreached = approve.chain_width(after, planned, done)
     if unreached:
         raise ValueError(f'a cycle: {" ".join(unreached)} can never start')

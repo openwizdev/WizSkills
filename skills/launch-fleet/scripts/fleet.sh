@@ -129,6 +129,8 @@ if command -v sha256sum > /dev/null 2>&1; then SHA=sha256sum
 elif command -v shasum > /dev/null 2>&1; then SHA='shasum -a 256'
 else die "neither sha256sum nor shasum is installed"; fi
 REVISION=${LAUNCH_FLEET_REVISION:-$(cd "$(dirname "$0")" && pwd)/../../to-tickets/revision.sh}
+# F6 (#1353): the plan-links parser, to-tickets'"'"' check-links.sh, labels each link.
+LINKS=${LAUNCH_FLEET_LINKS:-$(cd "$(dirname "$0")" && pwd)/../../to-tickets/check-links.sh}
 
 NOW=${LAUNCH_FLEET_NOW:-$(date -u +%s)}
 is_number "$NOW" || die "LAUNCH_FLEET_NOW must be a number of seconds"
@@ -1124,6 +1126,63 @@ $n
     || die "can't read the issues"
 }
 
+# active: F6'"'"'s collision scope for a start claim (#1353): every open issue of
+# the repository labelled ready-for-agent, in a spec or not, read in full into
+# active.json, so the claim sees running and claimed work of every fleet. A
+# search that lists fewer than it counts stops the claim.
+active() {
+  label=$(jq -er '."ready-for-agent"' "$TMP/labels.json") || die "can't read the labels"
+  q="repo:$REPO is:issue is:open label:\"$label\""
+  encoded=$(jq -rn --arg q "$q" '$q | @uri') || die "can't encode the open work search"
+  endpoint="search/issues?q=$encoded&per_page=100" pages=0 listed=0 total=0
+  : > "$TMP/active-ids.txt" && : > "$TMP/singles.txt" || die "can't write"
+  while [ -n "$endpoint" ]; do
+    pages=$((pages + 1))
+    [ $pages -le 11 ] || die "the search for open work did not end"
+    rest "$endpoint" "$TMP/search.json" || die "can't read the open work"
+    jq -e 'type == "object" and .incomplete_results == false and (.total_count | type == "number")
+      and (.items | type) == "array" and all(.items[]; (.node_id | type) == "string" and (.number | type) == "number")' \
+      "$TMP/search.json" > /dev/null || die "can't read the open work"
+    total=$(jq .total_count "$TMP/search.json") && n=$(jq '.items | length' "$TMP/search.json") || die "can't read the open work"
+    listed=$((listed + n))
+    jq -r '.items[].node_id' "$TMP/search.json" >> "$TMP/active-ids.txt" || die "can't read the open work"
+    endpoint=$(next_page "$TMP/search.json.http") || die "can't read the open work search pagination"
+  done
+  [ "$listed" = "$total" ] || die "the search listed $listed of $total open tickets, so a colliding start could be missed"
+  set --
+  while read -r id; do
+    set -- "$@" -f "ids[]=$id"
+    [ $# -lt 100 ] || { single_nodes "$@"; set --; }
+  done < "$TMP/active-ids.txt"
+  [ $# -eq 0 ] || single_nodes "$@"
+  jq -s . "$TMP/singles.txt" > "$TMP/active.json" && hydrate "$TMP/active.json" || die "can't read the open work"
+}
+
+# links_read: F6 (#1353): every link of every ticket read, labelled by
+# to-tickets'"'"' check-links.sh, into the world as links {"T:B": {kind, files}}.
+# A read the parser refuses stops the check.
+links_read() {
+  jq --arg repo "$REPO" '{schema: "openwiz.plan-links.v1", kind: "graph", repo: $repo, read_at: (.now | todate),
+      source: {kind: "board"},
+      tickets: ([.specs[].subIssues.nodes[], .singles[], .active[]] | map(select(.blockedBy != null)) | unique_by(.number)
+        | map({number, title: (if (.title // "") == "" then "#\(.number)" else .title end), state,
+               labels: ([.labels.nodes[]?.name] | unique), milestone: null, parent: null,
+               blocked_by: ([.blockedBy.nodes[] | {number, state}] | unique_by(.number)),
+               body: (.body // "" | gsub("\r"; "")), start_recorded: false, pull_requests: []}))}' \
+    "$TMP/world.json" > "$TMP/graph.json" || die "can't build the links read"
+  sh "$LINKS" --json --graph - < "$TMP/graph.json" > "$TMP/links.json" 2> /dev/null
+  [ $? -le 1 ] || die "the plan-links parser could not read the tickets"
+  jq --slurpfile r "$TMP/links.json" '.links = ($r[0].links | map({key: "\(.ticket):\(.blocker)", value: {kind, files}}) | from_entries)' \
+    "$TMP/world.json" > "$TMP/w2.json" && mv "$TMP/w2.json" "$TMP/world.json" || die "can't read the links"
+}
+
+# selection: F6'"'"'s start set, admitted in number order, into the world.
+selection() {
+  jqw -j 'start_selection | tojson' > "$TMP/selected.json" \
+    && jq --slurpfile s "$TMP/selected.json" '.selected = $s[0]' "$TMP/world.json" > "$TMP/w2.json" \
+    && mv "$TMP/w2.json" "$TMP/world.json" || die "can't work out the start set"
+}
+
 # single_nodes -f ids[]=ID...: issues read in full, by id, into singles.txt.
 single_nodes() {
   gql Nodes "$TMP/nodes.json" "$@"
@@ -1394,29 +1453,66 @@ def ordering_inflight: (ordering_open_claims | length) > 0;
 def release_candidate($s): labelled_held and released($s) and (ordering_inflight | not);
 def release_due($s): release_candidate($s)
   and ($s == null or (current($s) and $W.fingerprint_agreement["\($s.number)"] == true));
-# F6 (#1353): only a hard blocker holds a start. A native blocker whose one
-# `## Links` line is `file` (the two tickets only share files) is context and
-# holds nothing; a real, unlabelled or missing line is hard. Shared files stay
-# safe through owned paths instead: see collision below.
-def section_lines($h): reduce ((.body // "") | lines[]) as $line ({on: false, out: []};
-    if ($line | test("^## " + $h + "\\s*$")) then .on = true
-    elif ($line | test("^#{1,6}\\s")) then .on = false
-    elif .on then .out += [$line] else . end) | .out;
-def context_blocker($n): [section_lines("Links")[] | capture("^- #(?<n>[1-9][0-9]{0,8}) (?<k>real|file):") | select(.n == "\($n)")]
-  | length == 1 and .[0].k == "file";
-def hard_blockers_done: . as $t | all(.blockedBy.nodes[]; blocker_done or (.number as $n | $t | context_blocker($n)));
-# Owned paths, as to-tickets'"'"' approve.py reads them: each bullet'"'"'s backticked
-# paths, in its one `in \`owner/repo\`` repository or this one, shared when the
-# bullet says `(shared`. Two paths overlap when one holds the other or a
-# pattern segment matches; two shared paths never collide.
-def owned_paths: [section_lines("Owned paths")[] | select(startswith("- ")) | . as $b
-  | [scan("\\bin `([^`]+)`") | .[0]] as $repos
-  | scan("`([^`]+)`") | .[0] | select(. as $p | any($repos[]; . == $p) | not)
-  | {repo: (if ($repos | length) == 1 then $repos[0] | ascii_downcase else $W.repo end), path: ., shared: ($b | contains("(shared"))}];
-def segment($p): . as $f | if ($p | contains("*")) then ($f | test("^" + ($p | gsub("(?<c>[.+?^${}()|\\[\\]\\\\])"; "\\\(.c)") | gsub("\\*"; "[^/]*")) + "$")) else $f == $p end;
+# F6 (#1353): only a hard blocker holds a start. A native blocker is context,
+# and holds nothing, only when to-tickets'"'"' check-links.sh (the plan-links
+# parser, $W.links) reads its one line as a `file` line naming a file, its
+# blocker is read here with owned paths, neither the blocker'"'"'s owned paths
+# nor the line'"'"'s files hold an input the ticket relies on, and the two
+# tickets'"'"' owned paths don'"'"'t clash. Anything else is hard.
+def scope_tickets: [$W.specs[].subIssues.nodes[], $W.singles[], ($W.active // [])[]];
+# Owned paths exactly as to-tickets'"'"' approve.py reads them: the lines under
+# `## Owned paths` to the next `## `, each `- ` bullet'"'"'s backticked paths, in
+# its one `in \`owner/repo\`` repository or this one, shared when the bullet
+# says `(shared`. [] when the ticket has no such section (a legacy ticket
+# claims no path); null when the section can'"'"'t be read as approval reads it.
+def owned_paths: ((.body // "") | split("\n")) as $l
+  | ([range(0; $l | length) | select($l[.] | rtrimstr("\r") | test("^## Owned paths\\s*$"))] | first) as $h
+  | if $h == null then [] else
+      ([$l[$h + 1:][] | rtrimstr("\r")] | (([to_entries[] | select(.value | startswith("## ")) | .key] | first) // length) as $e | .[:$e]
+       | map(select(startswith("- ")) | .[2:])) as $bullets
+      | if ($bullets | length) == 0 then null else
+          [$bullets[] | . as $b | [scan("\\bin `([^`]+)`") | .[0]] as $repos
+           | if ($repos | length) > 1 or any($repos[]; test("^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$") | not) then {bad: true}
+             else ([scan("`([^`]+)`") | .[0] | select(. as $p | any($repos[]; . == $p) | not)]) as $ps
+               | if ($ps | length) == 0 then {bad: true}
+                 else $ps[] | (rtrimstr("/") | split("/")) as $parts
+                   | if startswith("/") or any($parts[]; . == "" or . == "." or . == "..") or contains(" ") then {bad: true}
+                     else {repo: (if ($repos | length) == 1 then $repos[0] | ascii_downcase else $W.repo end),
+                           path: ., shared: ($b | contains("(shared"))} end end end]
+          | if any(.[]; .bad) then null else . end end end;
+# fnmatch.fnmatchcase, as approve.py matches a path segment: * ? [seq] [!seq].
+def glob_re: explode as $c | ($c | length) as $n
+  | {i: 0, out: "^"} | until(.i >= $n;
+      $c[.i] as $ch
+      | if $ch == 42 then .out += ".*" | .i += 1
+        elif $ch == 63 then .out += "." | .i += 1
+        elif $ch == 91 then
+          (.i + 1) as $j0 | (if $j0 < $n and $c[$j0] == 33 then $j0 + 1 else $j0 end) as $j1
+          | (if $j1 < $n and $c[$j1] == 93 then $j1 + 1 else $j1 end) as $j2
+          | ([range($j2; $n) | select($c[.] == 93)] | first) as $close
+          | if $close == null then .out += "\\[" | .i += 1
+            else ($c[.i + 1:$close] | implode | gsub("\\\\"; "\\\\") | gsub("(?<x>[&~|])"; "\\\(.x)")) as $body
+              | .out += "[" + (if ($body | startswith("!")) then "^" + $body[1:]
+                               elif ($body | test("^[\\^\\[]")) then "\\" + $body else $body end) + "]"
+              | .i = $close + 1 end
+        else ([$ch] | implode) as $x
+          | .out += (if ($x | test("[.+?^${}()|\\[\\]\\\\]")) then "\\" + $x else $x end) | .i += 1 end)
+  | .out + "$";
+def segment($p): . as $f | $f | test($p | glob_re);
 def overlaps($a; $b): ($a | rtrimstr("/") | split("/")) as $x | ($b | rtrimstr("/") | split("/")) as $y
   | all(range([($x | length), ($y | length)] | min); $x[.] as $p | $y[.] as $q | ($p | segment($q)) or ($q | segment($p)));
-def collides($mine): . as $theirs | any($mine[]; . as $a | any($theirs[]; .repo == $a.repo and overlaps(.path; $a.path) and ((.shared and $a.shared) | not)));
+# Two tickets'"'"' owned paths clash: one claims no path ([]) never clashes; an
+# unreadable side (null) always does; otherwise an overlap in one repository
+# where not both bullets say `(shared`.
+def paths_clash($a; $b): if $a == [] or $b == [] then false elif $a == null or $b == null then true
+  else any($a[]; . as $x | any($b[]; .repo == $x.repo and overlaps(.path; $x.path) and ((.shared and $x.shared) | not))) end;
+def context_blocker($n): . as $t | $W.links["\($t.number):\($n)"] as $link
+  | ([scope_tickets[] | select(.number == $n)] | first) as $b
+  | $link != null and $link.kind == "file" and ($link.files | length) > 0 and $b != null
+    and (($b | owned_paths) as $bp | $bp != null and ($bp | length) > 0
+      and ([$t | relies[]] as $in | any($in[]; . as $i | any(($bp | map(.path))[], $link.files[]; overlaps($i; .))) | not)
+      and (paths_clash($t | owned_paths; $bp) | not));
+def hard_blockers_done: . as $t | all(.blockedBy.nodes[]; blocker_done or (.number as $n | $t | context_blocker($n)));
 # Same ordinary start guards, before requiring a ready label or no held label.
 # The release path must be able to check these while ready is still removed.
 def start_clear($s):
@@ -1429,15 +1525,14 @@ def ready_but_current($s): has_role("ready-for-agent") and start_clear($s)
   and (labelled_held | not) and (ordering_inflight | not);
 def ready($s): ready_but_current($s) and ($s == null or current($s));
 def unrefused_ready($s): ready($s) and (refused_lately(start.last; "start") | not);
-# F6: a ticket waits while its owned paths collide with a running ticket'"'"'s
-# (an open one with a builder or a pull request), or with a lower-numbered
-# ticket that may start in this same read. A ticket naming no owned path
-# collides with nothing (to-tickets'"'"' approval refuses an agent ticket without).
-def collision: . as $t | owned_paths as $mine
-  | ($mine | length) > 0 and any($W.specs[] as $s2 | $s2.subIssues.nodes[]
-      | select(.number != $t.number and .state == "OPEN" and (owned_paths | collides($mine)))
-      | building or (.number < $t.number and is_approved($s2) and (looks | length) == 0 and unrefused_ready($s2)); .);
-def may_start($s): unrefused_ready($s) and (collision | not);
+# F6 (#1353): a running ticket is an open one with a builder (or a claim) or
+# a pull request. The start set is admitted in number order: each ready ticket
+# whose owned paths clash with no running ticket'"'"'s and no ticket admitted
+# before it ($W.selected, worked out once a read, after the fingerprints).
+# An unreadable Owned paths section is never admitted.
+def running_clash: . as $t | owned_paths as $mine
+  | any(scope_tickets[] | select(.number != $t.number and .state == "OPEN" and building); paths_clash($mine; owned_paths));
+def may_start($s): unrefused_ready($s) and (.number as $n | any(($W.selected // [])[]; . == $n));
 # A fleet thread'"'"'s takeover (ClosedWiz#192) starts a builder too, so it keeps
 # every gate of an ordinary start (Sol R1 on #1517): approved and current,
 # ready, no other triage label, its blockers merged and no hold.
@@ -1445,7 +1540,7 @@ def may_start($s): unrefused_ready($s) and (collision | not);
 # recorded builder and its open pull request.
 def takeover_clear($s): has_role("ready-for-agent")
   and ([has_role("needs-info"), has_role("needs-triage"), has_role("ready-for-human"), has_role("wontfix")] | any | not)
-  and hard_blockers_done
+  and hard_blockers_done and (running_clash | not)
   and (held($s) | not) and (labelled_held | not) and (ordering_inflight | not);
 def takeover_ready($s): takeover_clear($s) and current($s);
 # The orchestrator archived the old builder: "old builder archived, thread <id>".
@@ -1819,6 +1914,11 @@ def part_lines: . as $s | records as $srs
 
 def candidates: ($W.specs[] as $s | $s.subIssues.nodes[] | select(is_named($s)) | {t: ., s: $s}),
   ($W.singles[] | {t: ., s: null});
+def start_selection: [candidates | .s as $s | .t
+    | select(.state == "OPEN" and is_approved($s) and (looks | length) == 0 and unrefused_ready($s))
+    | {number, paths: owned_paths} as $c | select($c.paths != null and (running_clash | not)) | $c]
+  | unique_by(.number) | reduce .[] as $c ([]; if any(.[]; paths_clash(.paths; $c.paths)) then . else . + [$c] end)
+  | map(.number);
 # Only existing, readable builders can be resumed; this never starts one.
 def waiters: candidates | .s as $s | .t
   | select(.state == "OPEN" and is_approved($s) and (looks | length) == 0 and builder != null)
@@ -1884,7 +1984,17 @@ def claim: $W.claim.n as $n | $W.claim.id as $id
             elif (open_prs | length) > 0 then "withdraw #\($n): pull request #\(open_prs[0].number) is open"
             elif (looks | length) > 0 then "withdraw #\($n): \(looks[0])"
             elif refused_lately($st.last; "start") then "withdraw #\($n): its start was refused less than 10 minutes ago"
-            elif ready($s) then "go #\($n)"
+            elif ready($s) then
+              # F6 (#1353): the gate every builder start passes. $W.active is
+              # every open ready ticket of the repository; a clash with one
+              # running, or claimed by an older claim, withdraws this one.
+              owned_paths as $mine
+              | ([scope_tickets[] | select(.number != $n and .state == "OPEN" and paths_clash($mine; owned_paths))
+                  | select((open_prs | length) > 0 or (start | .state != "queued" and (.state != "claimed" or .rec.id < $id)))
+                  | .number] | unique | first) as $m
+              | if $mine == null then "withdraw #\($n): its owned paths can'"'"'t be read as the plan approval reads them"
+                elif $m != null then "withdraw #\($n): its owned paths collide with #\($m), which is running or claimed first"
+                else "go #\($n)" end
             else "withdraw #\($n): it is not on the frontier now" end end
     else
       ([candidates | .s as $s | .t | select(.state == "OPEN" and is_approved($s)) | . as $t
@@ -1923,7 +2033,7 @@ world() {
     '{now: $now, default: $default, repo: ($repo | ascii_downcase), specs: $specs[0], singles: $singles[0], checks: $checks[0], labels: $labels[0],
       followups: $followups[0], spec: (if $spec == "" then null else ($spec | tonumber) end),
       claim: (if $claim == "" then null else ($claim | split(" ") | {n: (.[0] | tonumber), id: (.[1] | tonumber)}) end),
-      fingerprints: {}, branches: {}, merged: [], prfiles: {}}' > "$TMP/world.json" || die "can't build the world"
+      fingerprints: {}, branches: {}, merged: [], prfiles: {}, active: [], links: {}, selected: null}' > "$TMP/world.json" || die "can't build the world"
 }
 
 # unticked_hash FILE: FILE's SHA-256 as to-tickets’ revision.sh hashes a body:
@@ -2405,6 +2515,10 @@ if [ "$cmd" = wake ] || [ "$cmd" = claim ]; then
   items
   settings
   wake_world
+  # A start claim on a ticket reads every fleet'"'"'s open work (F6, #1353).
+  if [ "$cmd" = claim ] && jq -se --argjson n "$CLAIM_N" 'any(.[]; .number == $n and .subIssuesSummary != null)' "$TMP/items.txt" > /dev/null; then
+    active
+  fi
 elif [ "$cmd" = spec ]; then
   # A fleet thread's check: the check's reads, of its own spec alone; none
   # at all past the probe when nothing it read has changed (GI1).
@@ -2427,6 +2541,10 @@ else
   singles
 fi
 world "$TMP/checks.json" "$TMP/labels.json" "$TMP/singles.json"
+if [ -f "$TMP/active.json" ]; then
+  jq --slurpfile a "$TMP/active.json" '.active = $a[0]' "$TMP/world.json" > "$TMP/w2.json" \
+    && mv "$TMP/w2.json" "$TMP/world.json" || die "can't read the open work"
+fi
 # A gh failure means public. No API body is echoed.
 if [ -n "$REPLAY" ]; then
   private=$(cat "$REPLAY/snap/private")
@@ -2439,6 +2557,8 @@ python3 "$(dirname "$0")/records.py" "$REPO" "$private" < "$TMP/world.json" > "$
 case $cmd in check | wake | spec | every) branches; waits ;; claim) waits ;; esac
 merges
 [ "$cmd" = holds ] || fingerprints
+links_read
+selection
 jqw "$cmd" > "$TMP/out.txt" || die "can't work out what is due"
 case $(head -n 1 "$TMP/out.txt") in error\ *) die "$(head -n 1 "$TMP/out.txt" | cut -c7-)" ;; esac
 if grep -q '^guard #' "$TMP/out.txt"; then

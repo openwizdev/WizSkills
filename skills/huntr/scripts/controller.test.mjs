@@ -607,7 +607,7 @@ test('W2 an unreadable wake retries instead of recording, and a dispatch with no
   const section = heading => skill.split(`\n${heading}\n`)[1].split('\n## ')[0].replace(/\s+/g, ' ');
   const wake = section('## On every wake');
   assert.match(wake, /Exit 2 \(the lease is lost or taken\): file nothing more, put unfiled candidates in the record and finish the hunt \(step 5\)\./);
-  assert.match(wake, /Exit 3 \(unreadable\): file nothing this wake; go on with steps 3 and 4, and end the turn only while hunters are still running or queued\./);
+  assert.match(wake, /Exit 3 \(unreadable\): file nothing and dispatch no queued slice this wake; collect reports \(step 3\), then end the turn while hunters are still running, or else finish the hunt \(step 5\) with any queued slice recorded as a gap\./);
   assert.match(section('## 2. Plan and dispatch hunters'),
     /If no slice is running or queued \(every slice blocked\), finish the hunt now \(step 5\)\. Otherwise end the turn\./);
   const finish = section('## 5. Record the result and finish this hunt');
@@ -684,4 +684,24 @@ scenario('F4 finish with GitHub down keeps finalization pending, and a rerun reu
   assert.deepEqual(JSON.parse(again.stdout), {finished: 'already', verified: true, comment: JSON.parse(up.stdout).comment, holder: null});
   assert.equal(w.posts().length, posts + 2, 'one failed post, one release, no duplicate');
   assert.equal(w.run(lease, ['claim', 'synthetic-next']).status, 0);
+});
+
+// WS23 review R4 (#1656, planner's call): an old controller whose wake cannot read the lease may
+// collect and finish, but never dispatch: a new controller may already hold the hunt.
+scenario('W3 two controllers: after a new claim, the old controller\'s unreadable wake dispatches no queued slice', w => {
+  w.state.comments = [{id: 100, ...on}];
+  assert.equal(w.run(lease, ['claim', 'synthetic-old']).status, 0);
+  w.advance(46);
+  assert.equal(w.run(lease, ['claim', 'synthetic-new']).status, 0);
+  w.state.readFailure = true;
+  const late = w.run(lease, ['due', 'synthetic-old', 'hunter']);
+  assert.equal(late.status, 3, late.stderr);
+  w.state.readFailure = false;
+  assert.equal(JSON.parse(w.run(lease, ['status']).stdout).holder.run, 'synthetic-new');
+  // So the exit-3 route the old controller follows must start no hunter.
+  const skill = readFileSync(join(here, '../SKILL.md'), 'utf8');
+  const wake = skill.split('\n## On every wake\n')[1].split('\n## ')[0].replace(/\s+/g, ' ');
+  assert.match(wake, /Exit 3 \(unreadable\): file nothing and dispatch no queued slice this wake;/);
+  assert.match(wake, /dispatch queued slices only after `due` exited 0\./);
+  assert.doesNotMatch(wake, /Archive those hunters; dispatch queued slices\./);
 });

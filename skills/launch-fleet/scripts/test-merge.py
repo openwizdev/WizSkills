@@ -740,14 +740,19 @@ class LateLook(unittest.TestCase):
         w.update(faults={'read': 'fail'})
         self.assertEqual(self.merge(w), (1, 'unknown: the comments on %s#40 could not be read; nothing was merged'
                                          % REPO))
-        w = self.world(VISIBLE)
-        with mock.patch.object(M, 'CONTRACT', w.dir / 'missing.md', create=True):
-            out = io.StringIO()
-            with mock.patch.dict(os.environ, w.env), contextlib.redirect_stdout(out):
-                code = M.main(['merge', REPO, '7', HEAD, 'check', 'APPROVE 1', '--ticket', '12', '--base-rule-checked'])
-        self.assertEqual((code, out.getvalue().strip()),
-                         (1, 'unknown: the checkpoints contract could not be read; nothing was merged'))
-        self.assertEqual(self.merges(w), [])
+        partial = w.dir / 'partial.md'
+        partial.write_text(CONTRACT.read_text().replace('  "record_pointer"', '  "record_pointer_gone"'))
+        for contract in (w.dir / 'missing.md', partial):
+            with self.subTest(contract.name):
+                w = self.world(VISIBLE)
+                with mock.patch.object(M, 'CONTRACT', contract, create=True):
+                    out = io.StringIO()
+                    with mock.patch.dict(os.environ, w.env), contextlib.redirect_stdout(out):
+                        code = M.main(['merge', REPO, '7', HEAD, 'check', 'APPROVE 1', '--ticket', '12',
+                                       '--base-rule-checked'])
+                self.assertEqual((code, out.getvalue().strip()),
+                                 (1, 'unknown: the checkpoints contract could not be read; nothing was merged'))
+                self.assertEqual(self.merges(w), [])
 
     def test_the_documented_late_look_commands_run_as_written(self):
         # catches: reviews.md's `look` or `ask` command naming a verb, argument order or path

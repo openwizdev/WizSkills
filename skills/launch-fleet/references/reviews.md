@@ -60,6 +60,14 @@ Then record `launch-fleet: findings sent <commit>: decision <its comment id>: <f
 
    A red new run is a `CI failed` line, for the builder, as any red CI is. A claim with no new run 30 minutes on comes back as the `re-test` line, ending `(again: no new run 30 minutes after it was claimed)`.
 
+**The late look** (`contracts/checkpoints.v1.md`, RC3 #1831): `merge.py merge` holds the final merge of a user-visible spec (its last open planned ticket, where the spec answers `User-visible: yes` or `yes, a release`, or its answers are invalid) until the owner's look at that head's evidence is recorded. `python3 -I "<this skill's folder>/scripts/merge.py" look <owner>/<repo> <P> <commit> --ticket <N>` prints the same reading and only reads. Do the row its `held:` line names; each new head starts over.
+
+| `held:` | What the fleet does |
+| --- | --- |
+| `ask-due` | Take the evidence from the pull request: a preview link, screenshots or a short video of the change working, never code (no pull request, commit, file, diff or source archive). Write one or more `Evidence: <preview\|screenshots\|video> <link>` lines and one `Look for: <what the owner should see working>` line to a file, then run `python3 -I "<this skill's folder>/scripts/merge.py" ask <owner>/<repo> <P> <commit> --ticket <N> <file>`: it posts `launch-fleet: late look asked #<P> at <commit>` on the spec once per head, and refuses a code link. With no evidence to show, or on `refused:`, tell the builder to add the evidence to the pull request's description. On `ask posted <id>` or `ask already posted <id>`, tell the orchestrator the ask's link: who records the owner's look is its routing |
+| `look-due` | Nothing: the owner's late-look record (`**Late look by <decider>, <date>, #<P> at <commit>:** ...`, from a record author) releases it, and the next `merge` line merges |
+| `changes-asked` | Tell the builder `The owner's late look at pull request #<P> at <commit> asked for changes: read the late-look record on the spec. Make them and hand back a new green head.`, then record `launch-fleet: findings sent <commit>: late look` on the pull request; send nothing again while that record is there. The new head goes through its review and gets a new ask |
+
 A move of `main` alone is never a reason to close and reopen a pull request: M1 (the base rule in `fleet.md`) and the checks above decide, and only "Re-testing" reopens one, for its re-test.
 
 If any of this fails, record `launch-fleet: merge blocked <commit>: <why>` on the pull request. When `main` moved and the branch conflicts, or its merge group failed the checks (it and the latest `main` break each other), tell the builder to merge `main` in and fix it (never rebase or force-push); its new head goes back for a re-check. Otherwise tell the orchestrator.

@@ -574,8 +574,8 @@ class Landed(unittest.TestCase):
         code, out = self.merge(w)
         self.assertEqual((code, out.split('; ')[0]), (0, 'merged ' + 'c' * 40), out)
         self.assertEqual(self.posts(w), [(9101, LANDED)])
-        self.assertTrue(out.endswith('; landed posted 5002 on #9101'), out)
-        self.assertEqual(self.merge(w), (0, 'merged %s; cost already posted 5001; landed already posted 5002'
+        self.assertTrue(out.endswith('; cost posted 5002; landed posted 5001 on #9101'), out)
+        self.assertEqual(self.merge(w), (0, 'merged %s; cost already posted 5002; landed already posted 5001'
                                          % ('c' * 40)))
         self.assertEqual(w.run('merge.py', 'settle', DEST, 9201, 9106, cwd=w.dir / 'project'), (0, 'no queued merge'))
         self.assertEqual(self.posts(w), [(9101, LANDED)])
@@ -658,7 +658,7 @@ class Landed(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertTrue(out.split('; ')[-1].startswith('landed unknown: '), out)
         gh.write_text('%s\n%s' % (head, rest))
-        self.assertEqual(self.merge(w)[1].split('; ')[-1], 'landed already posted 5002')
+        self.assertEqual(self.merge(w)[1].split('; ')[-1], 'landed already posted 5001')
         self.assertEqual(self.posts(w), [(9101, LANDED)])
 
     def test_an_unreadable_report_posts_nothing_and_says_unknown(self):

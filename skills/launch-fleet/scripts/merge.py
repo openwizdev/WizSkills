@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Merge one approved pull request at its exact head, then post the ticket's cost (WS8, #1181; WS26, #1670).
+"""Merge one approved pull request at its exact head, then post the ticket's cost and the landed comment
+(WS8, #1181; WS26, #1670; FL4, #1848).
 
   merge.py read   OWNER/NAME PR HEAD
   merge.py admit  OWNER/NAME PR HEAD CHECKS
@@ -44,6 +45,15 @@ author's record, matching the pull request's repository in any letter case;
 when the ticket's records can't be read it prints `unknown: ...` and posts
 nothing. It refuses before a verified merge at HEAD.
 
+After a verified merge `cost` also tells a feedback report it landed (FL4, #1848; the feedback-loop
+contract v1 in OpenWiz): for a pull request on openwizdev/OpenWiz, each issue it closes that carries a
+report link (a record author's issue whose body ends with a blank line and `Report: #<report>`) leads to
+its report, which gets `Landed: the fix for this report merged in #<PR> and will ship in OpenWiz
+<milestone>.` once, ever, read back on the report. It adds `; landed posted <id> on #<report>`,
+`; landed already posted <id>` (a record author's landed comment is there), `; landed none: <why>` (no
+report, or no `X.Y.Z` milestone) or `; landed unknown: <why>` (reconcile on the next run, never retried
+blind); a merge that closes no linked issue adds nothing.
+
 `settle` is the cost a queued merge still owes: it reads the newest record
 author's queue receipt on the pull request and runs `cost` at that commit
 (`refused: ...` while it isn't merged there), or prints `no queued merge`.
@@ -66,7 +76,7 @@ QUERY = '''query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { defaultBranchRef { name } pullRequest(number: $number) {
     state baseRefName headRefOid isMergeQueueEnabled isInMergeQueue mergeable mergeCommit { oid }
     mergeQueueEntry { headCommit { oid } }
-    closingIssuesReferences(first: 50) { pageInfo { hasNextPage } nodes { number repository { nameWithOwner } } }
+    closingIssuesReferences(first: 50) { pageInfo { hasNextPage } nodes { number body repository { nameWithOwner } } }
     timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 1) {
       nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } } }
     commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 50) { pageInfo { hasNextPage }
@@ -75,6 +85,14 @@ COST = 'tools/collector/cost_line.py'
 SHA = re.compile(r'[0-9a-f]{40}')
 TICKET = re.compile(r'(?:([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#)?([1-9][0-9]{0,11})')
 QUEUED = re.compile(r'launch-fleet: merge queued ([0-9a-f]{40})\b')
+# The feedback-loop contract v1 (#1840): its destination, marker, report link, version and landed comment.
+DESTINATION = 'openwizdev/OpenWiz'
+MARKER = re.compile(r'OpenWiz feedback operation [0-9a-f]{32}')
+LINK = re.compile(r'Report: #([1-9][0-9]*)')
+VERSION = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+')
+LANDED = 'Landed: the fix for this report merged in #{pr} and will ship in OpenWiz {version}.'
+LANDED_ANY = re.compile(r'Landed: the fix for this report merged in #[1-9][0-9]* and will ship in OpenWiz '
+                        r'[0-9]+\.[0-9]+\.[0-9]+\.')
 
 
 def snapshot(repo, number):
@@ -167,12 +185,98 @@ def record(repo, number, body):
         return f'not recorded ({outcome})'
 
 
+def lines(body):
+    return (body or '').replace('\r\n', '\n').split('\n') if isinstance(body, str) else []
+
+
+def report_link(body):
+    """The report number a body's last line links, after a blank line, as its only link line; else None."""
+    found = lines(body)
+    links = [x for x in found if LINK.fullmatch(x)]
+    return int(LINK.fullmatch(found[-1]).group(1)) if len(found) > 2 and found[-2] == '' and links == found[-1:] \
+        else None
+
+
+def issue(repo, number):
+    value = post.read_json('api', f'repos/{repo}/issues/{number}')
+    return value if isinstance(value, dict) and value.get('number') == number else None
+
+
+def is_report(value):
+    """An issue (never a pull request) labelled `feedback`, or whose body ends with the marker after a blank line."""
+    labels = {x.get('name') for x in value.get('labels') or [] if isinstance(x, dict)}
+    found = lines(value.get('body'))
+    return 'pull_request' not in value and ('feedback' in labels or (
+        len(found) > 1 and found[-2] == '' and MARKER.fullmatch(found[-1]) is not None))
+
+
+def land(repo, number, report, auth):
+    """Post the landed comment on one report once, read back; one `landed ...` outcome."""
+    value = issue(repo, report)
+    if value is None:
+        return f'landed unknown: #{report} could not be read'
+    if not is_report(value):
+        return f'landed none: #{report} is not a report'
+    version = (value.get('milestone') or {}).get('title')
+    if not (isinstance(version, str) and VERSION.fullmatch(version)):
+        return f'landed none: #{report} has no version milestone'
+    before = post.thread(repo, report)
+    if before is None:
+        return f'landed unknown: #{report} could not be read, so nothing was posted'
+    for c in before:
+        if post.ours(c, auth) and LANDED_ANY.fullmatch(c.get('body') or ''):
+            return f"landed already posted {c['id']}"
+    body = LANDED.format(pr=number, version=version)
+    made = post.read_json('api', '--method', 'POST', f'repos/{repo}/issues/{report}/comments', '-f', f'body={body}')
+    if not isinstance(made, dict) or type(made.get('id')) is not int:
+        return f'landed unknown: the write on #{report} returned no receipt, so reconcile #{report} and never retry blind'
+    after = post.thread(repo, report) or []
+    if not any(c.get('id') == made['id'] and c.get('body') == body and post.ours(c, auth) for c in after):
+        return f'landed unknown: the comment on #{report} could not be read back, so reconcile #{report}'
+    return f"landed posted {made['id']} on #{report}"
+
+
+def landed(repo, number, p):
+    """`; landed ...` per report the merged pull request's closed issues link to, or '' (FL4, #1848)."""
+    if repo.casefold() != DESTINATION.casefold():
+        return ''
+    refs = (p or {}).get('closingIssuesReferences') or {}
+    if (refs.get('pageInfo') or {}).get('hasNextPage') is not False:
+        return f'; landed unknown: the issues PR #{number} closes could not be read whole'
+    linked = sorted({i['number'] for i in refs.get('nodes') or [] if isinstance(i, dict)
+                     and type(i.get('number')) is int and report_link(i.get('body'))
+                     and str((i.get('repository') or {}).get('nameWithOwner')).casefold() == repo.casefold()})
+    if not linked:
+        return ''
+    try:
+        auth = post.authors(repo)
+    except Stop as outcome:
+        return f'; landed unknown: {outcome}'
+    reports, told = set(), []
+    for n in linked:  # the link counts only as read whole, on a record author's issue
+        value = issue(repo, n)
+        if value is None:
+            told.append(f'landed unknown: #{n} could not be read')
+        elif post.ours(value, auth) and report_link(value.get('body')):
+            reports.add(report_link(value.get('body')))
+    told += [land(repo, number, r, auth) for r in sorted(reports)]
+    return ''.join('; ' + x for x in told)
+
+
 def cost(repo, number, head, ticket, extra=()):
     main, p = snapshot(repo, number)
     state = where(main, p, head)
     if not state.startswith('merged '):
         raise Stop(f'refused: no verified merge at {head} ({state})')
     home, ticket = ticket_of(repo, number, p, ticket)
+    told = landed(repo, number, p)
+    try:
+        return _cost(repo, number, home, ticket, extra) + told
+    except Stop as outcome:
+        raise Stop(f'{outcome}{told}')
+
+
+def _cost(repo, number, home, ticket, extra):
     same = home.casefold() == repo.casefold()
     ref = f'(PR #{number})' if same else f'(PR {repo}#{number})'
     auth = post.authors(home)

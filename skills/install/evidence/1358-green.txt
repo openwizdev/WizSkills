@@ -1,25 +1,25 @@
-# #1358 green, at branch head 727889c (main merged in at 6457891); KN3's row (OpenWiz #1455) and its host-side approval setup step (security R6 A) behind the KN3 stub
+# #1358 green, at branch head 7e24f03 (main merged in at 6457891); KN3's row and host-side approval behind the KN3 stub; steering by video comment off (WS17 R2)
 
 ## On the branch (launch-fleet from main: WS17 not merged, its starts stubbed)
 $ python3 -I skills/install/tests/test_onboarding.py
-Ran 22 tests in 29.030s
+Ran 24 tests in 31.651s
 
-OK (skipped=2)
+OK (skipped=3)
 $ python3 -I skills/install/tests/test_first_fleet.py
-Ran 41 tests in 56.067s
+Ran 41 tests in 58.357s
 
 OK (skipped=9)
 $ python3 -I skills/install/tests/test_doctor.py
-Ran 31 tests in 3.964s
+Ran 31 tests in 4.197s
 
 OK
 
-## On a scratch merge of 727889c with WizSkills #60 (room/1340-fleet-auto-start at 7374b28), never pushed: nothing skipped
+## On a scratch merge of 7e24f03 with WizSkills #60 (room/1340-fleet-auto-start at c3d0cbf, steering off), never pushed: nothing skipped
 $ python3 -I skills/install/tests/test_onboarding.py
-Ran 22 tests in 84.316s
+Ran 24 tests in 113.726s
 
 OK
 $ python3 -I skills/install/tests/test_first_fleet.py
-Ran 41 tests in 190.366s
+Ran 41 tests in 188.523s
 
 OK

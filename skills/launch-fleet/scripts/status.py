@@ -4,11 +4,19 @@
   status.py write --repo OWNER/NAME --ticket N --agent KIND --state STATE [--why TEXT]
                   --harness TEXT --model TEXT --skills 'SKILL@X.Y.Z[, ...]' --step TEXT [--pr URL] [--preview URL]
                   [--time TIME] [--note ID]
+  status.py run --repo OWNER/NAME --ticket N --agent KIND --note ID [--every SECONDS] -- COMMAND...
   status.py check --repo OWNER/NAME
 
 write: exit 0 written and read back, 2 refused or failed (a refusal comes before any
 call; a failure after a write is repaired by running the same write again), 3 stop:
 the claim is another note's or the fence stopped it (nothing more written).
+run (#1447): a heartbeat before COMMAND starts and every --every seconds (default 600)
+while it runs: an edit of note ID as it reads now, only its time set to now, so GitHub's
+updated_at, which alone counts toward the 30-minute lease, is new. A beat whose read shows
+the note done or stopped writes nothing. On the fence exit it stops COMMAND (its process
+group: SIGTERM, then SIGKILL after 10 seconds) and exits 3. Otherwise it exits as COMMAND
+does; a failed beat is reported and tried again at the next beat. A refusal or failure
+before COMMAND starts exits 2.
 check: exit 0 no mismatch, 1 mismatches printed, 2 could not read. It never writes.
 Every GitHub call goes through `gh api`.
 """
@@ -17,7 +25,9 @@ from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 from pathlib import Path
+import os
 import re
+import signal
 import subprocess
 import sys
 
@@ -25,6 +35,8 @@ sys.dont_write_bytecode = True
 
 MARKER = '<!-- openwiz:status v1 -->'
 LEASE = timedelta(minutes=30)
+EVERY = 600         # run's default seconds between beats: three beats in each lease
+EVERY_MOST = 900    # at most half the lease, so one failed beat never lets the note lapse
 KINDS = ('builder', 'reviewer', 'fleet')
 STATES = ('working', 'asking', 'done', 'stopped')
 CLAIMING = ('working', 'asking')
@@ -246,17 +258,20 @@ def asked_last_by(repo, n, login):
     return isinstance(actor, str) and actor.lower() == login.lower()
 
 
-def write(args, now):
-    state = args.state if args.why is None else f'{args.state} ({args.why})'
-    if args.why is not None and args.state != 'stopped':
-        refuse('state', 'only stopped carries a reason')
-    fields = {'agent': args.agent, 'state': state, 'harness': args.harness, 'model': args.model,
-              'step': args.step, 'time': args.time or now.strftime('%Y-%m-%dT%H:%M:%SZ')}
-    for key in ('skills', 'pr', 'preview'):
-        if getattr(args, key) is not None:
-            fields[key] = getattr(args, key)
-    shaped(fields)
-    bound(fields['skills'])
+def write(args, now, beat=False, out=sys.stdout):
+    """One write. A BEAT (#1447) takes the note's own fields as its re-read shows them, with
+    only time set to now, and stops on a note that is done or stopped: it never reopens one."""
+    if not beat:
+        state = args.state if args.why is None else f'{args.state} ({args.why})'
+        if args.why is not None and args.state != 'stopped':
+            refuse('state', 'only stopped carries a reason')
+        fields = {'agent': args.agent, 'state': state, 'harness': args.harness, 'model': args.model,
+                  'step': args.step, 'time': args.time or now.strftime('%Y-%m-%dT%H:%M:%SZ')}
+        for key in ('skills', 'pr', 'preview'):
+            if getattr(args, key) is not None:
+                fields[key] = getattr(args, key)
+        shaped(fields)
+        bound(fields['skills'])
     if args.note is not None and not re.fullmatch(r'[1-9][0-9]*', args.note):
         refuse('note', 'not a comment id')
     repo, n, kind = args.repo, args.ticket, args.agent
@@ -274,7 +289,12 @@ def write(args, now):
         if own[1]['agent'] != kind:
             raise Stop(f'note {args.note} is a {own[1]["agent"]} note')
         if own[1]['state'].startswith('stopped'):
-            raise Stop(f'note {args.note} is stopped')
+            raise Stop(f'note {args.note} is {"stopped: a heartbeat never reopens it" if beat else "stopped"}')
+        if beat:
+            if own[1]['state'] not in CLAIMING:
+                raise Stop(f'note {args.note} is {own[1]["state"]}: a heartbeat never reopens it')
+            fields = dict(own[1], time=now.strftime('%Y-%m-%dT%H:%M:%SZ'))
+            state = args.state = fields['state']
         # R2: whoever holds the claim now, older or newer, fences out every other note of its kind.
         first = holder(found, kind, now)
         if first and first[0] != own[0]:
@@ -312,7 +332,51 @@ def write(args, now):
         gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
     elif not asking and ASKING_LABEL in labels and asked_last_by(repo, n, login):
         gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
-    print(f'#{n}: {kind} {state}, status note {note_id} {verb}')
+    print(f'#{n}: {kind} {state}, status note {note_id} {verb}', file=out)
+
+
+def run(args):
+    """#1447: keep the claim live while COMMAND runs; stop COMMAND when the claim is lost."""
+    command = args.cmd[1:] if args.cmd[:1] == ['--'] else args.cmd
+    if not command:
+        refuse('command', 'missing: run --note ID -- COMMAND...')
+    if not re.fullmatch(r'[1-9][0-9]*', args.every) or int(args.every) > EVERY_MOST:
+        refuse('every', f'not a whole number of seconds from 1 to {EVERY_MOST}')
+    if args.note is None or not re.fullmatch(r'[1-9][0-9]*', args.note):
+        refuse('note', 'not a comment id')
+    every = int(args.every)
+    try:
+        write(args, datetime.now(timezone.utc), beat=True, out=sys.stderr)
+    except Stop as error:
+        raise Stop(f'{error}; the command was not started')
+    # Its own process group, so a stop reaches everything COMMAND started.
+    proc = subprocess.Popen(command, start_new_session=True)
+    try:
+        while True:
+            try:
+                code = proc.wait(timeout=every)
+                return code if code >= 0 else 128 - code
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                write(args, datetime.now(timezone.utc), beat=True, out=sys.stderr)
+            except Stop as error:
+                raise Stop(f'{error}; the command is stopped')
+            except (Failed, KeyError, TypeError, IndexError, ValueError) as error:
+                # The note stays live for the lease; the next beat tries again, and its fence
+                # still stops the command if another note claimed the ticket meanwhile.
+                print(f'status.py: heartbeat failed, next in {every}s: {error}', file=sys.stderr)
+    finally:
+        if proc.poll() is None:
+            for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, None)):
+                try:
+                    os.killpg(proc.pid, sig)
+                    proc.wait(timeout=wait)
+                    break
+                except ProcessLookupError:
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
 
 
 QUERY = '''query($owner: String!, $name: String!, $cursor: String) {
@@ -384,6 +448,11 @@ def main(argv):
     # --skills has no default: a missing one is refused as the contract's missing field.
     for flag in ('--skills', '--why', '--pr', '--preview', '--time', '--note'):
         w.add_argument(flag)
+    r = sub.add_parser('run')
+    for flag in ('--repo', '--ticket', '--agent', '--note'):
+        r.add_argument(flag, required=True)
+    r.add_argument('--every', default=str(EVERY))
+    r.add_argument('cmd', nargs=argparse.REMAINDER, metavar='COMMAND')
     c = sub.add_parser('check')
     c.add_argument('--repo', required=True)
     args = parser.parse_args(argv)
@@ -400,6 +469,13 @@ def main(argv):
                 raise Failed(f'could not read: unexpected GitHub answer: {error!r}')
         if not re.fullmatch(r'[1-9][0-9]*', args.ticket):
             raise Refused('ticket: not an issue number')
+        if args.command == 'run':
+            if args.agent not in KINDS:
+                raise Refused('agent: not builder, reviewer or fleet')
+            try:
+                return run(args)
+            except (KeyError, TypeError, IndexError, ValueError) as error:
+                raise Failed(f'unexpected GitHub answer: {error!r}')
         try:
             write(args, now)
         except (KeyError, TypeError, IndexError, ValueError) as error:

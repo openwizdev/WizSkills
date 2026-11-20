@@ -21,6 +21,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 sys.dont_write_bytecode = True
@@ -880,20 +881,23 @@ class FleetRun(Tracker):
         self.assertTrue(all(set(b['labels']) <= LABELS for b in added), added)
 
 
-# #1447: the command under status.py run. It records its pid; `long` sleeps and exits 7, and
-# the others wait for the first heartbeat, then change note 104 as another writer would, and
-# keep running until stopped. Every value is synthetic.
+# #1447: the command under status.py run. It records its pid; `long` waits for the first beat
+# and two more (or 30 seconds) and exits 7, and the others wait for the first beat, then change
+# note 104 as another writer would, and keep running until stopped. Every value is synthetic.
 ACTOR = r'''
 import fcntl, json, os, sys, time
 from datetime import datetime, timedelta, timezone
 mode, out = sys.argv[1], sys.argv[2]
 world, log = os.environ['FAKE_GH_WORLD'], os.environ['FAKE_GH_LOG']
 open(out + '.pid', 'w').write(str(os.getpid()))
+def calls(what='\n'):
+    return open(log).read().count(what) if os.path.exists(log) else 0
 if mode == 'long':
-    time.sleep(3.5); open(out + '.done', 'w').close(); sys.exit(7)
-def calls():
-    return open(log).read().count('\n') if os.path.exists(log) else 0
-while '"PATCH"' not in (open(log).read() if os.path.exists(log) else ''):
+    end = time.monotonic() + 30
+    while calls('"PATCH"') < 3 and time.monotonic() < end:
+        time.sleep(0.05)
+    open(out + '.done', 'w').close(); sys.exit(7)
+while calls('"PATCH"') < 1:
     time.sleep(0.05)
 with open(world + '.lock', 'w') as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
@@ -936,17 +940,20 @@ class Run(Tracker):
 
     def test_run_keeps_the_note_live_across_a_long_command(self):
         # catches: a run whose note lapses during long work (no edit, or an edit GitHub would not
-        # record), a beat that changes anything but time, or a lost exit status of the command.
+        # record), a beat that changes anything but time (asking rewritten as working), or a
+        # lost exit status of the command.
+        self.ticket(self.world)['comments'][3]['body'] = note(state='asking')
         result, _ = self.run_command('long')
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertTrue(Path(self.out + '.done').exists())
         beats = [c for c in self.calls() if c['method'] == 'PATCH']
-        self.assertGreaterEqual(len(beats), 3, beats)
+        # The beat before the command, then one each second until the command sees the third.
+        self.assertEqual(len(beats), 3, beats)
         self.assertTrue(all(c['path'] == f'repos/{REPO}/issues/comments/104' for c in beats), beats)
         mine = self.ticket()['comments'][3]
-        time = mine['body'].rsplit('time: ', 1)[1]
-        self.assertEqual(mine['body'], note(time=time))
-        for stamp in (time, mine['updated']):  # the beat's time, and GitHub's updated_at
+        beat = mine['body'].rsplit('time: ', 1)[1]
+        self.assertEqual(mine['body'], note(state='asking', time=beat))
+        for stamp in (beat, mine['updated']):  # the beat's time, and GitHub's updated_at
             self.assertLess(abs((datetime.now(timezone.utc) - datetime.strptime(
                 stamp, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)).total_seconds()), 60)
 
@@ -971,6 +978,30 @@ class Run(Tracker):
                 self.assertLess(took, 30)
                 self.assertEqual(self.ticket()['comments'][3]['body'].split('\n')[2], 'state: ' + state)
                 self.assert_stopped()
+
+    def test_a_stopped_run_stops_its_command_and_a_missing_command_is_a_failure(self):
+        # catches: a run killed by its host (SIGTERM) that leaves its command running unwatched,
+        # or a command that can't start ending in a traceback instead of exit 2.
+        self.save()
+        env = dict(os.environ, PATH=str(self.dir / 'bin') + ':' + os.environ['PATH'],
+                   FAKE_GH_WORLD=str(self.dir / 'world.json'), FAKE_GH_LOG=str(self.dir / 'gh.log'))
+        proc = subprocess.Popen([sys.executable, '-I', str(SCRIPT), 'run', '--repo', REPO, '--ticket', '12',
+                                 '--agent', 'builder', '--note', '104', '--every', '1', '--', sys.executable,
+                                 '-I', str(self.dir / 'actor.py'), 'long', self.out],
+                                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        pid = Path(self.out + '.pid')
+        for _ in range(600):
+            if pid.exists() and pid.read_text():
+                break
+            time.sleep(0.05)
+        proc.terminate()
+        self.assertEqual(proc.wait(timeout=30), 143)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int(pid.read_text()), 0)
+        missing = self.run_status('run', '--repo', REPO, '--ticket', '12', '--agent', 'builder', '--note', '104',
+                                  '--', str(self.dir / 'no-such-command'))
+        self.assertEqual((missing.returncode, missing.stderr),
+                         (2, 'status.py: command: could not start: No such file or directory\n'))
 
     def test_run_never_starts_the_command_on_a_released_note(self):
         # catches: a run that starts long work on a claim it no longer holds.

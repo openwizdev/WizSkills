@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=867      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 26
+CASES=869      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 26
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1620,6 +1620,17 @@ start #13: W3: widget page (spec #10)
 EOF
 expect 'steer: a help comment repeating the cue is no new video and keeps the stop (R3)' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "stop") | say(10; 1004; "10:05"; "launch-fleet: held by stop 1003") | say(10; 1005; "10:10"; "To steer, reply on the video.\n\nComment here to steer: stop, reset, or anything else.")' -- check < /dev/null
 expect 'steer: the fleet'"'"'s own bold records are no steer' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "**Needs you:** stop and look at #13")' -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+# R2 (decision 7030919773): video comment steering is off in every mode until
+# #1402's identity separation is verified, whoever posted the video.
+OFF_ALL='comments on the video steer nothing until the identity separation of OpenWiz #1402 is verified; the owner steers through the orchestrator'
+expect 'steer: an App-posted video and a later shared-login agent note steer nothing (R2 decision)' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "Reset the cache before the next run.")' -- check <<EOF
+look #10: $OFF_ALL
+start #13: W3: widget page (spec #10)
+EOF
+expect 'steer: the owner'"'"'s stop on an App-posted video steers nothing either (R2 decision)' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "Stop.")' -- check <<EOF
+look #10: $OFF_ALL
 start #13: W3: widget page (spec #10)
 EOF
 # R2 (planner ruling, J87): with the video posted from the owner's login, agents

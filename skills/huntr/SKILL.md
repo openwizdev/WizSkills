@@ -16,7 +16,8 @@ labels, then its huntr settings, `docs/agents/huntr.md`: tiers and their
 proofs, never-list, pace, open cap, model rows, switch issue, lease,
 checklist, slice manifests, issue form and gate. Run every script from the
 consuming repository root as `node <installed-huntr>/scripts/<script>`.
-Each exits 2 with its reason on stderr; a refused write posted nothing.
+Each refusal exits 2 (an unreadable `due` exits 3) with its reason on
+stderr; a refused write posted nothing.
 
 ## Guards
 
@@ -80,12 +81,15 @@ Each exits 2 with its reason on stderr; a refused write posted nothing.
    Cloudroom in separate sandboxes, with the settings' hunter model row. A
    missing model is a blocked slice, never a substitute. Queue slices beyond
    real capacity.
-5. End the turn. Never poll or sleep.
+5. If no slice is running or queued (every slice blocked), finish the hunt
+   now (step 5) with `release`. Otherwise end the turn. Never poll or sleep.
 
 ## On every wake
 
-1. `lease.mjs due <run> scheduled|hunter`. Exit 2: file nothing more, post
-   unfiled candidates as a step 5 record, and archive.
+1. `lease.mjs due <run> scheduled|hunter`. Exit 2 (the lease is lost or
+   taken): file nothing more, post unfiled candidates as a step 5 `record`,
+   and archive. Exit 3 (unreadable): change nothing and end the turn; the
+   next wake retries.
 2. File every proven finding first (step 3).
 3. `hunters.mjs collect <pin> <slice>=<report>...`; only a report at the pin
    is coverage. Archive those hunters; dispatch queued slices.

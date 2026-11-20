@@ -7,7 +7,8 @@
 //   lease.mjs claim <run>
 //   lease.mjs renew <run> <result-file>   (a checkpoint result, posted under the lease line)
 //   lease.mjs release <run> <result-file>          (the final result, posted under the release line)
-//   lease.mjs due <run> scheduled|hunter  (read-only: must this wake post a checkpoint?)
+//   lease.mjs due <run> scheduled|hunter  (read-only: must this wake post a checkpoint? exit 3 when the
+//                                                   switch issue is unreadable, so the lease is unknown)
 //   lease.mjs record <run> <index-file>            (a record without a lease of its own: an off switch,
 //                                                   a lost lease; posted as it is, lease unchanged; refused
 //                                                   while <run> holds the live lease, which must release)
@@ -188,9 +189,16 @@ function main() {
   }
   // A plain record must never read as a switch, lease or kind-approval line.
   if (command === 'record' && /^huntr[ :]/.test(text.split(/\r?\n/, 1)[0])) fail('a record\'s first line may not start with huntr');
-  const issue = switchIssue(), repo = repository();
-  if (command === 'publish') return publish(repo, issue, run, args[1], args[2]);
-  const before = comments(repo, issue);
+  let issue, repo, before;
+  try {
+    issue = switchIssue(); repo = repository();
+    if (command === 'publish') return publish(repo, issue, run, args[1], args[2]);
+    before = comments(repo, issue);
+  } catch (e) {
+    // A wake that cannot read the lease must not take the lost-lease route (exit 2): it retries.
+    if (command === 'due') Object.assign(e, {exit: 3, message: `${e.message}: the lease is unknown, so end the turn and retry on the next wake`});
+    throw e;
+  }
   const now = current(holderOf(before), Date.now());
   if (command === 'status') return {holder: now};
   if (command === 'record') {
@@ -222,4 +230,4 @@ function main() {
   return {holder};
 }
 try { const result = main(); process.stdout.write((typeof result === 'string' ? result : JSON.stringify(result)) + '\n'); }
-catch (e) { process.stderr.write(`huntr lease: ${e.message}\n`); process.exit(2); }
+catch (e) { process.stderr.write(`huntr lease: ${e.message}\n`); process.exit(e.exit ?? 2); }

@@ -484,5 +484,184 @@ class Starts(unittest.TestCase):
             self.assertEqual((run.returncode, run.stdout), (2, ''))
 
 
+MODELS = FIX / 'models'  # byte-identical copies of the models contract's fixtures (MD1, #1803)
+STARTS = ('fleet_thread', 'builder', 'small_builder', 'review_of_claude_built', 'review_of_gpt_built',
+          'fix_round_for_claude_builder', 'fix_round_for_gpt_builder')
+
+
+def spawn(choice):
+    return None if choice is None else (f'--provider {choice["provider"]} --model {choice["model"]} '
+                                        f'--reasoning-level {choice["effort"]}')
+
+
+def contract_starts(show):
+    """What the contract's show fixture says each start spawns, read from the fixture alone."""
+    return dict(fleet_thread=spawn(show['roles']['orchestrator']['choice']),
+                builder=spawn(show['roles']['builder']['choice']),
+                small_builder=spawn(show['roles']['small_builder']['choice']),
+                review_of_claude_built=spawn(show['reviews']['claude']['choice']),
+                review_of_gpt_built=spawn(show['reviews']['gpt']['choice']),
+                fix_round_for_claude_builder=spawn(show['fixers']['claude']['choice']),
+                fix_round_for_gpt_builder=spawn(show['fixers']['gpt']['choice']))
+
+
+class ModelsTable(unittest.TestCase):
+    """MD4 (#1806): every start reads the one Models table, with the older tables as the fallback."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.api = load(HERE / 'ops-starts.py', 'ops_starts_models')
+        cls.base = json.loads((FIX / 'world.json').read_text())
+        cls.one = (MODELS / 'one-table/fleet.md').read_text()
+
+    def flags(self, fleet, *start):
+        """`ops-starts.py flags [START]` in a project whose docs/agents/fleet.md is `fleet`."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / 'docs/agents').mkdir(parents=True)
+            (Path(tmp) / 'docs/agents/fleet.md').write_text(fleet)
+            return subprocess.run([sys.executable, '-I', str(HERE / 'ops-starts.py'), 'flags', *start],
+                                  cwd=tmp, capture_output=True, text=True, timeout=60)
+
+    def starts(self, fleet):
+        run = self.flags(fleet)
+        return (run.returncode, json.loads(run.stdout) if run.returncode == 0 else run.stderr.strip())
+
+    def pass_settings(self, fleet, small=False, built_by='claude-code'):
+        """The settings one finite pass selects for the builder and the initial review, or its refusal."""
+        world = copy.deepcopy(self.base)
+        if small:
+            world['builders'][0]['labels'].append('polish')
+        world['reviews'][0]['builder']['providers'] = [built_by]
+        try:
+            entries = self.api.plan(world, fleet, lambda *_: self.fail('a start was attempted'))
+        except ValueError as error:
+            return 'refused: ' + str(error)
+        return {e['action']: e['settings'] if e['decision'] == 'dispatch' else 'refused: ' + e['reason']
+                for e in entries}
+
+    # P1. catches: a Models table reader whose follow, fixer or cross-family rule
+    # (or the older-tables fallback) starts any role, or any family's review or
+    # fix round, on other flags than the contract's own fixtures say.
+    def test_every_start_spawns_what_the_contract_fixtures_say(self):
+        for case in sorted(p.name for p in MODELS.iterdir()):
+            with self.subTest(case):
+                fleet = MODELS / case / ('fleet.md' if (MODELS / case / 'fleet.md').exists() else 'after.md')
+                show = json.loads((MODELS / case / 'show.json').read_text())
+                self.assertEqual(self.starts(fleet.read_text()), (0, contract_starts(show)))
+
+    # P1. catches: a start pass that picks other builder or reviewer settings
+    # from the one table than from today's five tables, for any builder family.
+    def test_one_table_and_five_tables_start_alike(self):
+        five = (MODELS / 'five-tables/fleet.md').read_text()
+        self.assertEqual(self.starts(self.one), self.starts(five))
+        opus = dict(provider='claude-code', model='claude-opus-5-5', effort='medium')
+        sol = dict(provider='codex', model='gpt-6.2-sol', effort='medium')
+        for small in (False, True):
+            for built_by, reviewer in (('claude-code', sol), ('codex', opus)):
+                with self.subTest(small=small, built_by=built_by):
+                    want = {'builder_start': opus, 'review_start': reviewer}
+                    self.assertEqual(self.pass_settings(self.one, small, built_by), want)
+                    self.assertEqual(self.pass_settings(five, small, built_by), want)
+
+    # P3. catches: a cached or stale read, so a merged table change never reaches
+    # the next start; or a change that restarts an agent already running.
+    def test_a_changed_table_reaches_the_next_start_only(self):
+        changed = self.one.replace(
+            '| Builder | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 '
+            '--reasoning-level medium` |',
+            '| Builder | Claude Code | Sonnet 5.5 | Low | `--provider claude-code --model claude-sonnet-5-5 '
+            '--reasoning-level low` |', 1)
+        self.assertNotEqual(changed, self.one)
+        before, after = self.flags(self.one, 'builder'), self.flags(changed, 'builder')
+        self.assertEqual((before.returncode, before.stdout),
+                         (0, '--provider claude-code --model claude-opus-5-5 --reasoning-level medium\n'))
+        self.assertEqual((after.returncode, after.stdout),
+                         (0, '--provider claude-code --model claude-sonnet-5-5 --reasoning-level low\n'))
+        sonnet = dict(provider='claude-code', model='claude-sonnet-5-5', effort='low')
+        self.assertEqual(self.pass_settings(changed)['builder_start'], sonnet)
+        # The small builder and the fixer follow the Builder, so they change with it.
+        self.assertEqual(self.pass_settings(changed, small=True)['builder_start'], sonnet)
+        # A builder already running keeps its model: the pass starts nothing for its ticket.
+        world = copy.deepcopy(self.base)
+        world['builders'][0]['live_builders'] = 1
+        entry = self.api.plan(world, changed, lambda *_: self.fail('a start was attempted'))[0]
+        self.assertEqual((entry['decision'], entry['settings']), ('refused', None))
+
+    # P4. catches: a spec's fleet thread started on the Builder's (or no) choice
+    # when the Orchestrator row names its own.
+    def test_a_fleet_thread_starts_on_the_orchestrator_row(self):
+        orchestrator = self.one.replace(
+            '| Orchestrator | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 '
+            '--reasoning-level medium` |',
+            '| Orchestrator | Codex | Sol 6.2 | High | `--provider codex --model gpt-6.2-sol '
+            '--reasoning-level high` |', 1)
+        self.assertNotEqual(orchestrator, self.one)
+        for fleet, want in ((orchestrator, '--provider codex --model gpt-6.2-sol --reasoning-level high\n'),
+                            (self.one, '--provider claude-code --model claude-opus-5-5 --reasoning-level medium\n')):
+            run = self.flags(fleet, 'fleet_thread')
+            self.assertEqual((run.returncode, run.stdout), (0, want))
+        self.assertEqual(self.flags(orchestrator, 'builder').stdout,
+                         '--provider claude-code --model claude-opus-5-5 --reasoning-level medium\n')
+
+    # catches: a same-family reviewer started on its own family's work (ADR 0008),
+    # a review swapped to another model instead of waiting, or a missed fallback to the Builder.
+    def test_a_same_family_reviewer_falls_back_to_the_builder_then_waits(self):
+        sol = dict(provider='codex', model='gpt-6.2-sol', effort='medium')
+        opus_high = dict(provider='claude-code', model='claude-opus-5-5', effort='high')
+        # Builder Codex, Reviewer Claude: Claude-built work (a small builder's) goes to the Builder role.
+        fallback = (self.one.replace('| Builder | Claude Code | Opus 5.5 | Medium | `--provider claude-code '
+                                     '--model claude-opus-5-5 --reasoning-level medium` |',
+                                     '| Builder | Codex | Sol 6.2 | Medium | `--provider codex --model gpt-6.2-sol '
+                                     '--reasoning-level medium` |', 1)
+                    .replace('| Reviewer | Codex | Sol 6.2 | Medium | `--provider codex --model gpt-6.2-sol '
+                             '--reasoning-level medium` |',
+                             '| Reviewer | Claude Code | Opus 5.5 | High | `--provider claude-code '
+                             '--model claude-opus-5-5 --reasoning-level high` |', 1))
+        self.assertEqual(self.pass_settings(fallback, built_by='claude-code'),
+                         {'builder_start': sol, 'review_start': sol})
+        self.assertEqual(self.pass_settings(fallback, built_by='codex'),
+                         {'builder_start': sol, 'review_start': opus_high})
+        # Reviewer and Builder both Claude: Claude-built work waits; GPT-built work goes to the Reviewer.
+        same = (MODELS / 'same-family/fleet.md').read_text()
+        self.assertEqual(self.pass_settings(same, built_by='claude-code'), {
+            'builder_start': dict(provider='claude-code', model='claude-opus-5-5', effort='medium'),
+            'review_start': 'refused: no other-family reviewer: the review waits, never swapped'})
+        self.assertEqual(self.pass_settings(same, built_by='codex')['review_start'], opus_high)
+        run = self.flags(same, 'review_of_claude_built')
+        self.assertEqual((run.returncode, run.stdout, run.stderr),
+                         (1, '', 'ops-starts: review_of_claude_built waits: no other-family choice\n'))
+
+    # catches: a reader that guesses past a broken Models table (falling back to
+    # the older tables beside it, or taking a misplaced row), so two readers start
+    # different models from one file.
+    def test_a_broken_models_table_is_refused_never_guessed(self):
+        both = (MODELS / 'both/fleet.md').read_text()
+        breaks = (('| Reviewer | Codex', '| Reviewers | Codex'),
+                  ('| Builder | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 '
+                   '--reasoning-level medium` |', '| Builder | follows Builder | | | |'),
+                  ('--reasoning-level medium` |\n| Reviewer', '--effort medium` |\n| Reviewer'),
+                  ('| Small builder | follows Builder | | | |\n| Fixer',
+                   '| Fixer | follows Builder | | | |\n| Small builder'),
+                  ('`room-cli thread spawn` flags |', 'flags |'),
+                  ('--model claude-opus-5-5 --reasoning-level medium` |\n| Reviewer',
+                   '--model vendor//demo --reasoning-level medium` |\n| Reviewer'),
+                  ('## Loop', '## Models\n\n## Loop'))
+        for old, new in breaks:
+            with self.subTest(new):
+                broken = both.replace(old, new, 1)
+                self.assertNotEqual(broken, both)
+                run = self.flags(broken)
+                self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+                refused = self.pass_settings(broken)
+                self.assertIsInstance(refused, str)
+                self.assertTrue(refused.startswith('refused: '), refused)
+        for name in ('Builder', 'Fixer'):
+            with self.subTest(older_without=name):
+                five = (MODELS / 'five-tables/fleet.md').read_text().replace(f'## {name}\n', f'## Not {name}\n', 1)
+                run = self.flags(five)
+                self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+
+
 if __name__ == '__main__':
     unittest.main()

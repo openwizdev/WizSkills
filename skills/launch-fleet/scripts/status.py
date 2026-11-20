@@ -171,14 +171,23 @@ def bound(skills):
 
 
 def installed(name):
-    """The `version:` of NAME's SKILL.md front matter in the installed package, or None."""
+    """NAME's installed version, or None: the one `version:` declaration of the first front-matter
+    block of its SKILL.md (the `---` lines opening the file and the next `---` line), plain or
+    YAML-quoted, as `<major>.<minor>.<patch>` in digits. None when it is missing or declared twice."""
     try:
-        text = (MANIFEST.parents[1] / 'skills' / name / 'SKILL.md').read_text()
+        lines = (MANIFEST.parents[1] / 'skills' / name / 'SKILL.md').read_text().split('\n')
     except (OSError, UnicodeDecodeError):
         return None
-    head = re.match(r'---\n(.*?)\n---\n', text, re.S)
-    found = head and re.search(r'(?m)^version: ([0-9]+\.[0-9]+\.[0-9]+)$', head.group(1))
-    return found.group(1) if found else None
+    if lines[0] != '---' or '---' not in lines[1:]:
+        return None
+    front = lines[1:lines.index('---', 1)]
+    found = [line[len('version:'):].strip() for line in front if line.startswith('version:')]
+    if len(found) != 1:
+        return None
+    value = found[0]
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
+        value = value[1:-1]
+    return value if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', value) else None
 
 
 def body(fields):

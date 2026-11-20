@@ -530,13 +530,12 @@ class Queue(unittest.TestCase):
         self.assertEqual(sum('merge' in x for x in w.writes()), 1)
 
 
-# RC3 (#1831): the late look. merge.py reads its forms from the checkpoints contract; until
-# WizSkills carries contracts/checkpoints.v1.md (RC2, #1830) the tests read fixtures/checkpoints.v1.md,
-# OpenWiz main's contract byte for byte, and the contract's synthetic decider `Robin` joins the list.
+# RC3 (#1831): the late look, read with the checkpoints contract's own forms
+# (contracts/checkpoints.v1.md); the contract's synthetic decider `Robin` joins the decider list.
 _merge = importlib.util.spec_from_file_location('launch_fleet_merge', HERE / 'merge.py')
 M = importlib.util.module_from_spec(_merge)
 _merge.loader.exec_module(M)
-CONTRACT = HERE / 'fixtures/checkpoints.v1.md'
+CONTRACT = M.CONTRACT
 SPEC = '## Problem Statement\n\nA synthetic settings page.\n\n## Checkpoints\n\n- One-way door: %s\n- User-visible: %s\n'
 VISIBLE, RELEASE, NEITHER = SPEC % ('no', 'yes'), SPEC % ('no', 'yes, a release'), SPEC % ('no', 'no')
 ASKED = ('launch-fleet: late look asked #7 at %s\n\nEvidence: preview https://preview.example.test/settings\n'
@@ -568,8 +567,7 @@ class LateLook(unittest.TestCase):
         cwd = os.getcwd()
         os.chdir(w.dir / 'project')
         try:
-            with mock.patch.dict(os.environ, w.env), mock.patch.object(M, 'CONTRACT', CONTRACT, create=True), \
-                    mock.patch.object(M, 'DECIDERS', getattr(M, 'DECIDERS', ()) + ('Robin',), create=True), \
+            with mock.patch.dict(os.environ, w.env), mock.patch.object(M, 'DECIDERS', M.DECIDERS + ('Robin',)), \
                     contextlib.redirect_stdout(out):
                 code = M.main([str(a) for a in argv])
         finally:
@@ -745,7 +743,7 @@ class LateLook(unittest.TestCase):
         for contract in (w.dir / 'missing.md', partial):
             with self.subTest(contract.name):
                 w = self.world(VISIBLE)
-                with mock.patch.object(M, 'CONTRACT', contract, create=True):
+                with mock.patch.object(M, 'CONTRACT', contract):
                     out = io.StringIO()
                     with mock.patch.dict(os.environ, w.env), contextlib.redirect_stdout(out):
                         code = M.main(['merge', REPO, '7', HEAD, 'check', 'APPROVE 1', '--ticket', '12',
@@ -775,14 +773,6 @@ class LateLook(unittest.TestCase):
             self.assertEqual(argv[:2], ['python3', '-I'])
             self.assertNotRegex(' '.join(argv), r'<[^>]+>', 'a placeholder left unfilled')
             self.assertEqual(self.run_merge(w, *argv[3:]), (0, want))
-
-    def test_the_fixture_is_the_contract(self):
-        # catches: the tests' copy of the checkpoints contract drifting from the one merge.py reads
-        # once WizSkills carries it (RC2), so the tests prove other forms than the fleet uses.
-        self.assertTrue(hasattr(M, 'CONTRACT'), 'merge.py names no checkpoints contract')
-        if M.CONTRACT.is_file():
-            self.assertEqual(M.CONTRACT.read_bytes(), CONTRACT.read_bytes())
-        self.assertIn(b'```checkpoints-v1\n', CONTRACT.read_bytes())
 
 
 if __name__ == '__main__':

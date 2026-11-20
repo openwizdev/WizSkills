@@ -112,14 +112,16 @@ def nodes(issue, field):
     connection, found, cursors, total = issue.get(field), [], set(), None
     while True:
         if not isinstance(connection, dict) or not isinstance(connection.get('nodes'), list) \
-                or not isinstance(connection.get('pageInfo'), dict):
-            raise Refuse(f'#{issue.get("number")} has no {field}')
+                or not all(isinstance(node, dict) for node in connection['nodes']) \
+                or not isinstance(connection.get('pageInfo'), dict) \
+                or not isinstance(connection['pageInfo'].get('hasNextPage'), bool):
+            raise Refuse(f'#{issue.get("number")} has no readable {field}')
         if found and connection.get('totalCount') != total:
             raise Refuse(f'#{issue.get("number")} changed its {field} while being read')
         total = connection.get('totalCount')
         found += connection['nodes']
         cursor = connection['pageInfo'].get('endCursor')
-        if connection['pageInfo'].get('hasNextPage') is not True:
+        if not connection['pageInfo']['hasNextPage']:
             break
         if not isinstance(cursor, str) or not cursor or cursor in cursors:
             raise Refuse(f'#{issue.get("number")} has a broken page chain in its {field}')
@@ -159,7 +161,7 @@ def holder(issue, authors):
 
 def standing(question):
     """Why nobody may work on this question now, or its kind label when they may."""
-    kinds = [l['name'] for l in nodes(question, 'labels') if l.get('name', '').startswith('wayfind:')]
+    kinds = [l['name'] for l in nodes(question, 'labels') if str(l.get('name')).startswith('wayfind:')]
     blockers = [b['number'] for b in nodes(question, 'blockedBy') if b.get('state') != 'CLOSED']
     if len(kinds) != 1 or kinds[0] not in KINDS:
         return False, 'no kind label'

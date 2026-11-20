@@ -74,6 +74,24 @@ class Fleet(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout
 
+    def test_builder_with_a_driver_run_is_told_through_its_driver(self):
+        # #1371: a builder host.py started has no CloudRoom thread; its saved run is its identity.
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        self.threads = self.threads[1:]
+        runs = self.dir / 'runs.json'
+        self.env['LAUNCH_FLEET_RUNS'] = str(runs)
+        runs.write_text(json.dumps({'repo': 'example/public', 'runs': {'12': {'host': 'local', 'run': 'run-0a1b'}}}))
+        self.assertEqual(self.run_fleet('wake', '12'), f'CI failed #31 for #12 at {SHA}: tell its builder, thread run:12\n')
+        runs.write_text(json.dumps({'repo': 'example/other', 'runs': {}}))  # not this repository's: trust no run
+        self.assertEqual(self.run_fleet('wake', '12'), 'look #12: the private runs file is unreadable\n')
+        # R2: a wake that did not restore the private run map says so, rather than a bare thread miss.
+        runs.unlink()
+        self.assertEqual(self.run_fleet('wake', '12'), 'look #12: the private run map LAUNCH_FLEET_RUNS was not '
+                                                       'restored from the private state\n')
+        del self.env['LAUNCH_FLEET_RUNS']
+        self.assertEqual(self.run_fleet('wake', '12'), 'look #12: no thread matches builder:12, and no private run '
+                                                       'map LAUNCH_FLEET_RUNS was restored\n')
+
     def test_builder_found_by_title_and_checked_branch(self):
         self.pr['checks'][0]['conclusion'] = 'FAILURE'
         self.assertEqual(self.run_fleet('wake', '12'), f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')

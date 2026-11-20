@@ -1,27 +1,6 @@
-## Proof cases at the hand-back (after merging main dc48e73, WS8 #1181)
-ok   machine: a valid machine plan approval starts its fleet
-ok   machine: a spec with no approval starts nothing
-ok   machine: a header that is not the exact machine record approves nothing
-ok   machine: a record without its grill confirmation approves nothing
-ok   machine: an outsider's machine record approves nothing
-ok   machine: a plan changed since its machine approval starts nothing
-ok   every gh call was one of fleet.sh's reads
-6 cases, 0 failed
-ok   steer: a stop on the video holds the fleet and asks to record it
-ok   steer: a recorded stop still holds the fleet
-ok   steer: a reset asks a re-cut and holds the fleet
-ok   steer: a recorded reset still holds until the new video
-ok   steer: a new video ends the hold
-ok   steer: anything else is a steer the fleet reads, and the fleet goes on
-ok   steer: a steer already read is not asked again
-ok   steer: a stop before the video steers nothing
-ok   steer: an outsider's stop holds nothing
-ok   steer: the fleet's own bold records are no steer
-ok   every gh call was one of fleet.sh's reads
-10 cases, 0 failed
-## Full run (TEST_JOBS=4)
-832 cases, 0 failed
-test-loop.sh: exit 0
+## Review round, at the hand-back (main a1d6f8f merged in)
+test.sh (TEST_JOBS=4): 839 cases, 0 failed
+test-loop.sh: test-loop exit 0
 test-brief.py exit 0
 test-effects.py exit 0
 test-grants.py exit 0
@@ -32,5 +11,4 @@ test-merge.py exit 0
 test-on1.py exit 0
 test-ops-starts.py exit 0
 test-post.py exit 0
-test-records.py exit 0
-test-status.py exit 0
+The rest of the Python suites and the full check/run.py: CI.

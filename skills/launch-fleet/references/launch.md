@@ -20,24 +20,23 @@ Read this when a plan graph is approved, when a spec moves to fresh wakes, or wh
    The wake loop, which GitHub's messages wake:
 
    ```sh
-   (umask 077; room-cli loop create --name "launch-fleet wakes <owner>/<repo>" --webhook --new-thread --priority 2 \
+   room-cli loop create --name "launch-fleet wakes <owner>/<repo>" --webhook --new-thread --priority 2 \
      --prompt "$(python3 -I "<this skill's folder>/scripts/brief.py" wakes "<owner>/<repo>" "<your thread id>")" \
-     > /tmp/launch-fleet-wakes.json)
-   jq -r .id /tmp/launch-fleet-wakes.json
+     | jq -r .id
    ```
 
    **The brief is only the prompt above.** Never add merge, base or workaround rules to a loop's prompt: they live in this skill, its references and `fleet.md` (M1, the base rule, and its checks), and a copy goes stale. A loop whose prompt still carries an old rule, such as closing and reopening a pull request because `main` moved, gets the prompt above again: `room-cli loop update <id> --prompt "..."`.
 
-   It prints its id and its secret address (`url`), the address only once, into that file, which only you can read. Anyone with the address can wake the fleet, so it never goes into a comment, a file in the repository, the handoff file or a message: only into the repository's webhook (step 3). `room-cli loop hook <id>` gives it a new address, if it ever leaks; then update the webhook to it. Each run gets the messages that arrived since the last as data, and starts a fresh thread. Write both loops' ids in the handoff file (the `handoff` skill). When a new orchestrator takes over, it updates the thread id in both prompts: `room-cli loop update <id> --prompt "..."`.
-3. **GitHub's messages are the user's setup.** The repository's webhook is a repository setting the user owns: ask the user ([user.md](user.md)) before it exists, and add it only on their yes, in their words in the handoff file. Either the user adds it in the repository's settings (Webhooks, Add webhook: the payload address from the file, content type `application/json`, no secret (the address is the secret), and "Let me select individual events": issues, issue comments, pull requests, pull request reviews, check suites, workflow runs), or, if they ask you to, you add it:
+   It prints its id and its secret address (`url`); `jq` keeps only the id, and that first address is dropped unseen. Anyone with the address can wake the fleet, so it never goes into a file, a variable, a command's arguments, a terminal, a comment, the handoff file or a message: `room-cli loop hook <id>` issues a fresh one straight into the repository's webhook through a pipe (step 3), which also retires every earlier address. If one ever leaks, run step 3's pipe again, with `--method PATCH` and `repos/{owner}/{repo}/hooks/<webhook id>` for the existing webhook. Each run gets the messages that arrived since the last as data, and starts a fresh thread. Write both loops' ids in the handoff file (the `handoff` skill). When a new orchestrator takes over, it updates the thread id in both prompts: `room-cli loop update <id> --prompt "..."`.
+3. **GitHub's messages are the user's setup.** The repository's webhook is a repository setting the user owns: ask the user ([user.md](user.md)) before it exists, and add it only on their yes, in their words in the handoff file. On that yes, the address goes from Cloudroom to GitHub in one pipe, held in memory only (the user can run it themselves, or let you run it):
 
    ```sh
-   jq -n --slurpfile w /tmp/launch-fleet-wakes.json '{name: "web", active: true,
-       events: ["issues", "issue_comment", "pull_request", "pull_request_review", "check_suite", "workflow_run"],
-       config: {url: $w[0].url, content_type: "json", insecure_ssl: "0"}}' \
+   room-cli loop hook <wake loop id> \
+     | jq '{name: "web", active: true, events: ["issues", "issue_comment", "pull_request", "pull_request_review", "check_suite", "workflow_run"], config: {url: .url, content_type: "json", insecure_ssl: "0"}}' \
      | gh api --method POST 'repos/{owner}/{repo}/hooks' --input - --jq '{id, events, active}'
-   rm -f /tmp/launch-fleet-wakes.json
    ```
+
+   That is the repository's webhook with content type `application/json`, no secret (the address is the secret), and the individual events issues, issue comments, pull requests, pull request reviews, check suites and workflow runs. The user may instead add it in the repository's settings (Webhooks, Add webhook, the same choices), taking a fresh address straight to their clipboard (`room-cli loop hook <wake loop id> | jq -j .url | pbcopy`) and pasting it into the form, never into a file or a message.
 
    It needs owner or admin access to the repository. GitHub sends a `ping` when a webhook is added (its documentation), which wakes one tick with nothing to read. Write the webhook's id in the handoff file. Then slow the safety net and every fleet thread's loop to every 30 minutes, as messages now wake them: `room-cli loop update <id> --cron '*/30 * * * *'`, for the safety net and for each open spec's fleet loop (the real loop id under its `S` key in the private loop file; the public record names only `fleet-<S>`), and read them back with `room-cli loop list`. If the user says no, the safety net and the fleet loops stay at every 10 minutes, and the wake loop, which nothing calls, can be deleted.
 4. **Start the spec's fleet loop** ("Starting one", below). Run it once after publishing its record. If a fresh loop cannot be set up, record the reason on the spec and keep its existing routing. For a spec with no loop record, run the project's safety net once.
@@ -89,4 +88,4 @@ existing builders, selected reviewers and review rounds. A fresh record
 routes the spec without using its activation timestamp as a takeover cutoff.
 Legacy records keep their existing takeover semantics during rollout.
 
-**A message for a spec with its own loop** prints `wake fleet #<S>: room-cli loop run fleet-<S>`. Resolve the handle through the private loop file (`LAUNCH_FLEET_LOOPS`, key `S`) with `scripts/route.py loop`, run `room-cli loop run <that id>` once and do nothing else for that spec; never post the real id. If the file or key is missing, record a thread-free `launch-fleet: look: fleet loop handle unresolved` on the spec and leave it to its own loop. If CloudRoom refuses the run, record nothing: the spec's loop still runs on its own. A spec whose record names no loop, or a loop another spec in the same wake names, gets no line and waits for its loop.
+**A message for a spec with its own loop** prints `wake fleet #<S>: room-cli loop run fleet-<S>`. Resolve the handle through the private loop file (`LAUNCH_FLEET_LOOPS`, key `S`) with `scripts/route.py loop`, run `room-cli loop run <that id>` once and do nothing else for that spec; never post the real id. If the file or key is missing (`route.py tick` prints `wake fleet #<S>: unresolved`), write nothing on GitHub, as any record there comes back through the same webhook and wakes the same missing handle again: name it in the loop report (`--action "fleet #<S> loop handle unresolved"`) and leave the spec to its own loop. If CloudRoom refuses the run, record nothing: the spec's loop still runs on its own. A spec whose record names no loop, or a loop another spec in the same wake names, gets no line and waits for its loop.

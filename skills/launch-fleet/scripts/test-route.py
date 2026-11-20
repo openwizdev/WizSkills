@@ -8,6 +8,7 @@ GraphQL answer from a JSON world and logs every call, so a test can count reads.
 """
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -264,7 +265,7 @@ class Setup(unittest.TestCase):
         risky = [c for c in commands if ('loop create' in c and '--webhook' in c) or 'loop hook' in c]
         self.assertGreaterEqual(len(risky), 2, 'the wake loop is created and its address issued in the setup')
         for c in risky:
-            head, tail = c.split('room-cli loop', 1)
+            head, tail = re.sub(r'<[^<>]*>', 'X', c).split('room-cli loop', 1)  # placeholders aren't redirects
             self.assertNotRegex(head, r"(\$\(|`|=)\s*$", c)
             self.assertRegex(tail, r"\|\s*jq ", c)
             self.assertNotRegex(tail, r"(^|[^|&])>|\btee\b|--slurpfile|--rawfile", c)

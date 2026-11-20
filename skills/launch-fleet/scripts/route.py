@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The wake route's two lookups (FF2, #1332). GH_REPO is the project's repository, where its specs live.
+"""The wake route (FF2, #1332): one webhook tick's lookups. GH_REPO is the project's repository, where its specs live.
 
   route.py refs FROM N...    The project's tickets that messages from repository FROM name.
                              FROM is the project: N... unchanged. Any other repository: the
@@ -10,6 +10,14 @@
                              ({"repo": GH_REPO, "loops": {"S": "<loop id>"}}), for `room-cli loop run`.
                              No file, no key, another repository or an unusable id: prints
                              nothing and exits 0, which leaves the spec to its own loop.
+  route.py tick FROM FILE N...
+                             One webhook tick's group of messages from repository FROM: refs,
+                             then `fleet.sh wake` (only when refs names a ticket), then each
+                             `wake fleet #S: room-cli loop run fleet-<S>` line with its handle
+                             resolved through FILE: `wake fleet #S: room-cli loop run <loop id>`,
+                             or `wake fleet #S: unresolved`. Every other line of the wake is
+                             printed unchanged. No ticket: prints nothing, exit 0. A refused
+                             lookup or wake: its exit status and reason.
 
 Exit 2 with the reason on stderr for bad arguments or a read that fails or is
 partial. It only reads; it never prints a webhook address or a thread id.
@@ -23,6 +31,7 @@ import sys
 REPO = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}')
 NUMBER = re.compile(r'[1-9][0-9]{0,8}')
 LOOP_ID = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_-]{0,127}')
+WAKE_FLEET = re.compile(r'wake fleet #([1-9][0-9]{0,8}): room-cli loop run fleet-\1')
 QUERY = ('query($o: String!, $n: String!) { repository(owner: $o, name: $n) { %s } }')
 ITEM = ('i%d: issueOrPullRequest(number: %d) { __typename ... on PullRequest { closingIssuesReferences(first: 50) '
         '{ pageInfo { hasNextPage } nodes { number repository { nameWithOwner } } } } }')
@@ -75,6 +84,24 @@ def loop(home, path, spec):
         return None
 
 
+def tick(home, source, path, numbers):
+    found = refs(home, source, numbers)
+    if not found:
+        return 0
+    fleet = os.environ.get('ROUTE_FLEET_SH') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fleet.sh')
+    r = subprocess.run(['sh', fleet, 'wake', *map(str, found)], capture_output=True, text=True, timeout=600)
+    sys.stderr.write(r.stderr)
+    if r.returncode != 0:
+        return r.returncode
+    for line in r.stdout.splitlines():
+        m = WAKE_FLEET.fullmatch(line)
+        if m:
+            loop_id = loop(home, path, m.group(1))
+            line = 'wake fleet #%s: %s' % (m.group(1), 'room-cli loop run ' + loop_id if loop_id else 'unresolved')
+        print(line)
+    return 0
+
+
 def main(argv):
     home = os.environ.get('GH_REPO', '')
     if not REPO.fullmatch(home):
@@ -89,7 +116,9 @@ def main(argv):
         if loop_id:
             print(loop_id)
         return 0
-    raise Refused('usage: route.py refs OWNER/NAME N... | route.py loop FILE S')
+    if len(argv) >= 4 and argv[0] == 'tick' and REPO.fullmatch(argv[1]) and all(NUMBER.fullmatch(a) for a in argv[3:]):
+        return tick(home, argv[1], argv[2], [int(a) for a in argv[3:]])
+    raise Refused('usage: route.py refs OWNER/NAME N... | route.py loop FILE S | route.py tick OWNER/NAME FILE N...')
 
 
 if __name__ == '__main__':

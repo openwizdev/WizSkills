@@ -23,9 +23,12 @@ TICKETS = 'synthetic-owner/synthetic-tickets'
 # The shared fake serves one repository. This router gives each repository its
 # own world (FAKE_WORLDS) and answers the pull request's closing issues from
 # its world's `closes`, so a write to the wrong repository lands where a test sees it.
-# A world's `faults: {"read": "fail"}` fails its next comment-list read, and its
-# `issues` answers one issue's read (the landed comment's brief and report).
-ROUTER = r'''import json, os, subprocess, sys
+# A world's `faults: {"read": "fail"}` fails its next comment-list read, `{"read_of": "N"}`
+# its next read of issue N's comments; its `issues` answers one issue's read (the landed
+# comment's brief and report), and a DELETE removes one comment. Calls take a lock on the
+# world, so runs side by side never lose a write; FAKE_RACE=N holds each run's first read of
+# issue N's comments until two runs have made it (#1848 R2).
+ROUTER = r'''import fcntl, json, os, subprocess, sys, time
 args = sys.argv[1:]
 named = dict(a.split('=', 1) for a in args if a.split('=', 1)[0] in ('owner', 'name'))
 repo = named['owner'] + '/' + named['name'] if len(named) == 2 else None
@@ -35,7 +38,39 @@ for i, a in enumerate(args):
     elif a.startswith('repos/'):
         repo = '/'.join(a.split('/')[1:3])
 path = json.loads(os.environ.get('FAKE_WORLDS') or '{}').get(repo, os.environ['FAKE_WORLD'])
-issue = [a.split('/') for a in args if a.startswith('repos/')]
+issue = [a.split('?')[0].split('/') for a in args if a.startswith('repos/')]
+race = os.environ.get('FAKE_RACE')
+if race and '--method' not in args and issue and issue[0][3:] == ['issues', race, 'comments']:
+    mine = path + '.raced-' + str(os.getppid())
+    if not os.path.exists(mine):
+        open(mine, 'w').close()
+        with open(path + '.arrived', 'a') as f:
+            f.write('x')
+        stop = time.time() + 20
+        while open(path + '.arrived').read().count('x') < 2 and time.time() < stop:
+            time.sleep(0.02)
+lock = open(path + '.lock', 'a')
+fcntl.flock(lock, fcntl.LOCK_EX)
+if '--method' in args and args[args.index('--method') + 1] == 'DELETE':
+    with open(path) as f:
+        world = json.load(f)
+    gone = int(issue[0][-1])
+    for items in world.get('comments', {}).values():
+        if any(c['id'] == gone for c in items):
+            items[:] = [c for c in items if c['id'] != gone]
+            world['writes'].append({'delete': gone})
+            with open(path, 'w') as f:
+                json.dump(world, f)
+            sys.exit(0)
+    sys.exit('HTTP 404')
+if '--method' not in args and issue and issue[0][3] == 'issues' and issue[0][5:] == ['comments']:
+    with open(path) as f:
+        world = json.load(f)
+    if world.get('faults', {}).get('read_of') == issue[0][4]:
+        del world['faults']['read_of']
+        with open(path, 'w') as f:
+            json.dump(world, f)
+        sys.exit('HTTP 502')
 if args[0] == 'api' and '--method' not in args and issue and len(issue[0]) == 5 and issue[0][3] == 'issues':
     with open(path) as f:
         found = json.load(f).get('issues', {}).get(issue[0][4])  # one issue, read whole (#1848)
@@ -706,6 +741,64 @@ class Landed(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertTrue(out.split('; ')[-1].startswith('landed unknown: '), out)
         self.assertEqual(self.posts(w), [])
+
+    def archive(self, w):
+        """One wake's archive row, filled for this fix: (archives, its output) (#1848 R1)."""
+        row = next(x for x in (HERE.parent / 'SKILL.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
+        command = re.findall(r'`(python3 -I [^`]*merge\.py"? settle [^`]*)`', row)[0]
+        for name, value in {"<this skill's folder>": str(HERE.parent), '<owner>/<repo>': DEST, '<P>': '9201',
+                            '<N>': '9106'}.items():
+            command = command.replace(name, value)
+        settled = [x.split(' <')[0] for x in re.findall(r'`([^`]+)`', re.search(r'archives? only after ([^;.]*)',
+                                                                               row).group(1))]
+        r = subprocess.run([sys.executable] + shlex.split(command)[1:], capture_output=True, text=True, env=w.env,
+                           cwd=w.dir / 'project', timeout=60)
+        out = r.stdout.strip()
+        return any(out.startswith(x) for x in settled), out
+
+    def test_a_transient_report_read_keeps_the_work_open_until_a_later_wake_lands_it(self):
+        # catches: (#127 R1) a `landed unknown:` after a direct or a queued merge archived as
+        # settled, so the reporter is never told; the archive row ran settle only after the queue.
+        receipt = comment(4000, 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD)
+        for name, comments in {'direct': {}, 'queued': {'9201': [receipt]}}.items():
+            with self.subTest(name):
+                w = self.world(self.issues, comments=comments, faults={'read_of': '9101'})
+                project(w, None)
+                if name == 'direct':
+                    code, out = self.merge(w)
+                    self.assertEqual(code, 0, out)
+                    self.assertIn('; landed unknown: ', out)
+                    w.update(faults={'read_of': '9101'})
+                archives, out = self.archive(w)  # this wake: the report's comments can't be read
+                self.assertFalse(archives, out)
+                self.assertEqual(w.bodies(9101), [])
+                archives, out = self.archive(w)  # the next wake re-checks the report and posts
+                self.assertTrue(archives, out)
+                self.assertEqual(w.bodies(9101), [LANDED])
+                self.assertEqual(self.archive(w)[0], True)
+                self.assertEqual(w.bodies(9101), [LANDED])
+        # The row settles every merged pull request, so a direct merge's landed comment is retried too.
+        row = next(x for x in (HERE.parent / 'SKILL.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
+        self.assertNotIn('through the merge queue', row)
+
+    def test_two_runs_racing_on_one_report_leave_the_earliest_comment_only(self):
+        # catches: (#127 R2) two runs both reading no landed comment, then both posting and each
+        # reading back its own, so the reporter is told twice.
+        w = self.world(self.issues)
+        project(w, None)
+        w.env['FAKE_RACE'] = '9101'
+        runs = [subprocess.Popen([sys.executable, '-I', str(HERE / 'merge.py'), 'cost', DEST, '9201', HEAD, '9106'],
+                                 stdout=subprocess.PIPE, text=True, env=w.env, cwd=w.dir / 'project')
+                for _ in range(2)]
+        outs = sorted(r.communicate(timeout=60)[0].strip().split('; ')[-1] for r in runs)
+        kept = [c for c in w.load()['comments']['9101']]
+        self.assertEqual([c['body'] for c in kept], [LANDED], outs)
+        self.assertEqual(outs, ['landed already posted %d' % kept[0]['id'],
+                                'landed posted %d on openwizdev/OpenWiz#9101' % kept[0]['id']])
+        posted = [x['body'] for x in w.writes() if x.get('post') == 9101]
+        deleted = [x['delete'] for x in w.writes() if 'delete' in x]
+        self.assertEqual((len(posted), len(deleted)), (2, 1))
+        self.assertGreater(deleted[0], kept[0]['id'])
 
 
 if __name__ == '__main__':

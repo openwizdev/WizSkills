@@ -1,0 +1,40 @@
+FAIL: test_a_release_spec_is_held_the_same_way (__main__.LateLook.test_a_release_spec_is_held_the_same_way)
+AssertionError: 0 != 1
+FAIL: test_a_user_visible_specs_final_merge_waits_for_one_ask_and_the_late_look (__main__.LateLook.test_a_user_visible_specs_final_merge_waits_for_one_ask_and_the_late_look)
+AssertionError: Tuples differ: (0, 'merged ffffffffffffffffffffffffffffff[25 chars]001') != (1, 'held: ask-due: post the evidence ask [51 chars]ask')
+FAIL: test_an_ask_that_shows_code_or_breaks_the_form_is_refused_before_any_write (__main__.LateLook.test_an_ask_that_shows_code_or_breaks_the_form_is_refused_before_any_write) [evidence-code]
+AssertionError: Tuples differ: (2, '') != (1, 'refused: the evidence ask is invalid: evidence-code')
+FAIL: test_an_ask_that_shows_code_or_breaks_the_form_is_refused_before_any_write (__main__.LateLook.test_an_ask_that_shows_code_or_breaks_the_form_is_refused_before_any_write) [evidence-missing]
+AssertionError: Tuples differ: (2, '') != (1, 'refused: the evidence ask is invalid: evidence-missing')
+FAIL: test_an_ask_that_shows_code_or_breaks_the_form_is_refused_before_any_write (__main__.LateLook.test_an_ask_that_shows_code_or_breaks_the_form_is_refused_before_any_write) [ask-line]
+AssertionError: Tuples differ: (2, '') != (1, 'refused: the evidence ask is invalid: ask-line')
+FAIL: test_an_unreadable_answer_holds_like_a_yes (__main__.LateLook.test_an_unreadable_answer_holds_like_a_yes) [near-miss heading]
+AssertionError: 'merged ffffffffffffffffffffffffffffffffff[20 chars]5001' != 'held: ask-due: post the evidence ask on s[46 chars] ask'
+FAIL: test_an_unreadable_answer_holds_like_a_yes (__main__.LateLook.test_an_unreadable_answer_holds_like_a_yes) [bad answer]
+AssertionError: 'merged ffffffffffffffffffffffffffffffffff[20 chars]5001' != 'held: ask-due: post the evidence ask on s[46 chars] ask'
+FAIL: test_an_unreadable_answer_holds_like_a_yes (__main__.LateLook.test_an_unreadable_answer_holds_like_a_yes) [inline code span]
+AssertionError: 'merged ffffffffffffffffffffffffffffffffff[20 chars]5001' != 'held: ask-due: post the evidence ask on s[46 chars] ask'
+FAIL: test_an_unreadable_spec_or_contract_merges_nothing (__main__.LateLook.test_an_unreadable_spec_or_contract_merges_nothing)
+AssertionError: Tuples differ: (0, 'merged ffffffffffffffffffffffffffffff[25 chars]001') != (1, "unknown: spec synthetic-owner/synthet[69 chars]ged")
+FAIL: test_no_ask_while_nothing_is_held (__main__.LateLook.test_no_ask_while_nothing_is_held)
+AssertionError: Tuples differ: (2, '') != (1, 'refused: no late look is due: the merge flows')
+FAIL: test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it (__main__.LateLook.test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it) [another head]
+AssertionError: Tuples differ: (0, ['merged ffffffffffffffffffffffffffffffffffffffff; cost posted 5001']) != (1, ['held', ' ask-due'])
+FAIL: test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it (__main__.LateLook.test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it) [ask by a stranger]
+AssertionError: Tuples differ: (0, ['merged ffffffffffffffffffffffffffffffffffffffff; cost posted 5001']) != (1, ['held', ' ask-due'])
+FAIL: test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it (__main__.LateLook.test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it) [record before the ask]
+AssertionError: Tuples differ: (0, ['merged ffffffffffffffffffffffffffffffffffffffff; cost posted 5001']) != (1, ['held', ' look-due'])
+FAIL: test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it (__main__.LateLook.test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it) [record by a stranger]
+AssertionError: Tuples differ: (0, ['merged ffffffffffffffffffffffffffffffffffffffff; cost posted 5001']) != (1, ['held', ' look-due'])
+FAIL: test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it (__main__.LateLook.test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it) [another decider]
+AssertionError: Tuples differ: (0, ['merged ffffffffffffffffffffffffffffffffffffffff; cost posted 5001']) != (1, ['held', ' look-due'])
+FAIL: test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it (__main__.LateLook.test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it) [quoted words]
+AssertionError: Tuples differ: (0, ['merged ffffffffffffffffffffffffffffffffffffffff; cost posted 5001']) != (1, ['held', ' look-due'])
+FAIL: test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it (__main__.LateLook.test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it) [changes after approved]
+AssertionError: Tuples differ: (0, ['merged ffffffffffffffffffffffffffffffffffffffff; cost posted 5001']) != (1, ['held', ' changes-asked'])
+FAIL: test_the_ask_goes_to_the_specs_own_repository (__main__.LateLook.test_the_ask_goes_to_the_specs_own_repository)
+AssertionError: Tuples differ: (2, '') != (0, 'ask posted 5001')
+FAIL: test_the_fixture_is_the_contract (__main__.LateLook.test_the_fixture_is_the_contract)
+AssertionError: False is not true : merge.py names no checkpoints contract
+Ran 10 tests in 8.084s
+FAILED (failures=19)

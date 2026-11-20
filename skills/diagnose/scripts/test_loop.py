@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -53,6 +54,22 @@ class Rate(unittest.TestCase):
                 sys.executable, '-I', '-c', 'import time; time.sleep(5)')
         self.assertEqual(r.returncode, 1)
         self.assertEqual(r.stdout, 'rate: 2/2 failed; exits none; timeouts 2\n')
+
+    def test_a_timed_out_attempts_workers_are_stopped_before_the_next_attempt(self):
+        # catches: a timeout that kills only the direct command, so its worker
+        # writes into the fixture during the next attempt or after rate exits.
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp) / 'fixture'
+            worker = ('import pathlib, sys, time; time.sleep(0.6); '
+                      'open(sys.argv[1], "a").write("late\\n")')
+            parent = ('import pathlib, subprocess, sys, time; '
+                      f'subprocess.Popen([sys.executable, "-I", "-c", {worker!r}, sys.argv[1]]); '
+                      'open(sys.argv[1], "a").write("start\\n"); time.sleep(5)')
+            r = run('rate', '--runs', '2', '--timeout', '0.3', '--',
+                    sys.executable, '-I', '-c', parent, str(fixture))
+            self.assertEqual((r.returncode, r.stdout), (1, 'rate: 2/2 failed; exits none; timeouts 2\n'))
+            time.sleep(1)
+            self.assertEqual(fixture.read_text(), 'start\nstart\n')
 
     def test_command_output_is_never_echoed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -111,6 +128,39 @@ class Clean(unittest.TestCase):
             r = run('clean', '[DEBUG-a4f2]', cwd=tmp)
             self.assertEqual(r.returncode, 1)
             self.assertEqual(r.stdout, 'left: 2 [DEBUG-a4f2] in src/app.py:2, src/probe.py:1\n')
+
+    def test_a_tag_left_only_in_the_staged_copy_is_named(self):
+        # catches: clean reading only the working copy, so a staged probe the
+        # agent then removed from the file passes clean and is committed.
+        with tempfile.TemporaryDirectory() as tmp:
+            git_tree(tmp)
+            Path(tmp, 'src/app.py').write_text('print("ready")\n# [DEBUG-a4f2]\n')
+            subprocess.run(['git', 'add', 'src/app.py'], cwd=tmp, check=True)
+            Path(tmp, 'src/app.py').write_text('print("ready")\n')
+            r = run('clean', '[DEBUG-a4f2]', cwd=tmp)
+            self.assertEqual((r.returncode, r.stdout), (1, 'left: 1 [DEBUG-a4f2] in src/app.py:2 (staged)\n'))
+
+    def test_a_staged_file_deleted_from_the_work_tree_is_still_read(self):
+        # catches: skipping a path missing from the work tree while its staged
+        # blob, which Git will commit, still holds the tag.
+        with tempfile.TemporaryDirectory() as tmp:
+            git_tree(tmp)
+            Path(tmp, 'src/probe.py').write_text('# [DEBUG-a4f2]\n')
+            subprocess.run(['git', 'add', 'src/probe.py'], cwd=tmp, check=True)
+            Path(tmp, 'src/probe.py').unlink()
+            r = run('clean', '[DEBUG-a4f2]', cwd=tmp)
+            self.assertEqual((r.returncode, r.stdout), (1, 'left: 1 [DEBUG-a4f2] in src/probe.py:1 (staged)\n'))
+
+    def test_a_tag_removed_from_the_index_but_left_in_the_file_is_named_once(self):
+        # catches: the staged scan replacing the working-copy scan, or naming a
+        # line twice when the index and the file both hold it.
+        with tempfile.TemporaryDirectory() as tmp:
+            git_tree(tmp)
+            Path(tmp, 'src/app.py').write_text('print("ready")\n# [DEBUG-a4f2]\n')
+            Path(tmp, 'src/both.py').write_text('# [DEBUG-a4f2]\n')
+            subprocess.run(['git', 'add', 'src/both.py'], cwd=tmp, check=True)
+            r = run('clean', '[DEBUG-a4f2]', cwd=tmp)
+            self.assertEqual((r.returncode, r.stdout), (1, 'left: 2 [DEBUG-a4f2] in src/app.py:2, src/both.py:1\n'))
 
     def test_a_leftover_outside_the_current_directory_is_named(self):
         with tempfile.TemporaryDirectory() as tmp:

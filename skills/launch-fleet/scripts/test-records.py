@@ -82,9 +82,8 @@ class Fleet(unittest.TestCase):
         self.env['LAUNCH_FLEET_RUNS'] = str(runs)
         runs.write_text(json.dumps({'repo': 'example/public', 'runs': {'12': {'host': 'local', 'run': 'run-0a1b'}}}))
         self.assertEqual(self.run_fleet('wake', '12'), f'CI failed #31 for #12 at {SHA}: tell its builder, thread run:12\n')
-        runs.write_text(json.dumps({'repo': 'example/public', 'runs': {'12': {'host': 'local', 'run': 'run-0a1b',
-                                                                              'stopped': True}}}))
-        self.assertNotIn('run:12', self.run_fleet('wake', '12'))
+        runs.write_text(json.dumps({'repo': 'example/other', 'runs': {}}))  # not this repository's: trust no run
+        self.assertEqual(self.run_fleet('wake', '12'), 'look #12: the private runs file is unreadable\n')
 
     def test_builder_found_by_title_and_checked_branch(self):
         self.pr['checks'][0]['conclusion'] = 'FAILURE'

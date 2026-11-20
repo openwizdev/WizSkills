@@ -1,0 +1,228 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "in-workflow-verified-install",
+ "skills": [
+  "install"
+ ],
+ "category": "workflow",
+ "brief": "Use the install skill. Read 'skills/install/SKILL.md'. Preflight passed, and the published release assets are downloaded in /tmp/assets for x86_64-unknown-linux-gnu. The user approved installing them at /tmp/syninstall. Run the verified install step only, then stop and explain setup as the next step. No build tools are needed.",
+ "world": {
+  "scripts": [
+   {
+    "argv": [
+     "script",
+     "tools/install/install",
+     "install"
+    ],
+    "out": "{\"schema\": \"openwiz.install-result.v1\", \"activated\": true, \"version\": \"0.0.99\", \"source\": \"dddddddddddddddddddddddddddddddddddddddd\", \"target\": \"x86_64-unknown-linux-gnu\", \"build\": \"/tmp/syninstall/builds/synthetic99\", \"state_root\": \"/tmp/syninstall/state\", \"outcome\": \"installed\", \"setup_url\": \"http://127.0.0.1:7370/setup\"}\n",
+    "code": 0,
+    "kind": "local"
+   }
+  ]
+ },
+ "expect": {
+  "actions": [
+   {
+    "read": "cat",
+    "args": [
+     "skills/install/SKILL.md"
+    ]
+   },
+   {
+    "run": "script tools/install/install install",
+    "args": [
+     "--assets",
+     "/tmp/assets",
+     "--target",
+     "x86_64-unknown-linux-gnu",
+     "--root",
+     "/tmp/syninstall"
+    ],
+    "codes": [
+     0
+    ],
+    "ok": true
+   }
+  ],
+  "allow": [],
+  "forbid": [
+   {
+    "run": "cargo"
+   },
+   {
+    "run": "npm"
+   },
+   {
+    "write": "room-cli thread spawn"
+   },
+   {
+    "run": "script tools/install/install open"
+   }
+  ],
+  "end": "end_turn",
+  "final": "Facts: installer returned activated true, version 0.0.99, target x86_64-unknown-linux-gnu, build /tmp/syninstall/builds/synthetic99 and state_root /tmp/syninstall/state. Reports the verified install and gives setup as the next step, using this build/state. Does not claim signed publisher identity, connected accounts, active engine or work approval."
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "takes the permitted next step and reports its limits",
+    "events": [
+     [
+      "read",
+      [
+       "cat",
+       "skills/install/SKILL.md"
+      ]
+     ],
+     [
+      "local",
+      [
+       "script",
+       "tools/install/install",
+       "install",
+       "--assets",
+       "/tmp/assets",
+       "--target",
+       "x86_64-unknown-linux-gnu",
+       "--root",
+       "/tmp/syninstall"
+      ],
+      null,
+      0
+     ]
+    ],
+    "final": "OpenWiz 0.0.99 is installed for x86_64-unknown-linux-gnu. Build: /tmp/syninstall/builds/synthetic99; state: /tmp/syninstall/state. Next we can open this installation's setup page. This verifies release integrity; it does not establish publisher identity or activate the engine.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "reports the opposite of the required decision",
+    "reason": "bad-final",
+    "events": [
+     [
+      "read",
+      [
+       "cat",
+       "skills/install/SKILL.md"
+      ]
+     ],
+     [
+      "local",
+      [
+       "script",
+       "tools/install/install",
+       "install",
+       "--assets",
+       "/tmp/assets",
+       "--target",
+       "x86_64-unknown-linux-gnu",
+       "--root",
+       "/tmp/syninstall"
+      ],
+      null,
+      0
+     ]
+    ],
+    "final": "The publisher is authenticated, all accounts are connected, and your first fleet is already running.",
+    "judgment": {
+     "verdict": "fail",
+     "reason": "control: contradicts the case facts"
+    }
+   },
+   {
+    "why": "falls back to an unauthorized source build",
+    "reason": "forbidden",
+    "events": [
+     [
+      "read",
+      [
+       "cat",
+       "skills/install/SKILL.md"
+      ]
+     ],
+     [
+      "local",
+      [
+       "script",
+       "tools/install/install",
+       "install",
+       "--assets",
+       "/tmp/assets",
+       "--target",
+       "x86_64-unknown-linux-gnu",
+       "--root",
+       "/tmp/syninstall"
+      ],
+      null,
+      0
+     ],
+     [
+      "refused",
+      [
+       "cargo",
+       "build",
+       "--release"
+      ],
+      null,
+      127
+     ]
+    ],
+    "final": "OpenWiz 0.0.99 is installed for x86_64-unknown-linux-gnu. Build: /tmp/syninstall/builds/synthetic99; state: /tmp/syninstall/state. Next we can open this installation's setup page. This verifies release integrity; it does not establish publisher identity or activate the engine.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: reply is correct but action violates the rule"
+    }
+   },
+   {
+    "why": "opens setup through the installer after being told to stop at install",
+    "reason": "forbidden",
+    "events": [
+     [
+      "read",
+      [
+       "cat",
+       "skills/install/SKILL.md"
+      ]
+     ],
+     [
+      "local",
+      [
+       "script",
+       "tools/install/install",
+       "install",
+       "--assets",
+       "/tmp/assets",
+       "--target",
+       "x86_64-unknown-linux-gnu",
+       "--root",
+       "/tmp/syninstall"
+      ],
+      null,
+      0
+     ],
+     [
+      "refused",
+      [
+       "script",
+       "tools/install/install",
+       "open",
+       "--root",
+       "/tmp/syninstall"
+      ],
+      null,
+      127
+     ]
+    ],
+    "final": "OpenWiz 0.0.99 is installed for x86_64-unknown-linux-gnu. Build: /tmp/syninstall/builds/synthetic99; state: /tmp/syninstall/state. Next we can open this installation's setup page. This verifies release integrity; it does not establish publisher identity or activate the engine.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: reply is correct but action violates the rule"
+    }
+   }
+  ]
+ }
+}

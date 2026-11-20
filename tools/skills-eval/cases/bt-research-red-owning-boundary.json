@@ -1,0 +1,102 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "bt-research-red-owning-boundary",
+ "skills": [
+  "build-ticket"
+ ],
+ "category": "workflow",
+ "brief": "You are the builder for #7661. Use the build-ticket skill. Read 'skills/build-ticket/SKILL.md' and follow it.\n\n(Resumed at the proof decision, before implementation.) Read red.log and decide whether the already executed proof reaches the intended overwrite boundary. State whether this is valid red evidence and what authorized implementation step follows. This turn is the evidence decision only; do not edit or launch anything.",
+ "world": {
+  "github": {
+   "issues": {
+    "7661": {
+     "title": "Refuse overwriting exports",
+     "body": "## Owned paths\n\n`src/export/`\n\n## Acceptance criteria\n\n- Existing destination bytes remain unchanged.\n",
+     "labels": [
+      "ready-for-agent"
+     ]
+    }
+   },
+   "pulls": {}
+  },
+  "files": {
+   "red.log": "fixture load: accepted baseline-compatible input\nwrite destination: existing file opened\nbefore bytes: original\nafter bytes: replaced\nassert destination bytes unchanged: FAILED\nexit 1\n"
+  }
+ },
+ "expect": {
+  "actions": [
+   {
+    "read": "cat",
+    "args": [
+     "red.log"
+    ],
+    "ok": true
+   }
+  ],
+  "allow": [],
+  "forbid": [
+   {
+    "write": "gh issue comment"
+   },
+   {
+    "write": "gh pr create"
+   },
+   {
+    "run": "git commit"
+   },
+   {
+    "write": "git push"
+   },
+   {
+    "write": "room-cli thread spawn"
+   }
+  ],
+  "end": "end_turn",
+  "final": "Facts: the supplied already executed red.log accepted baseline-compatible input, opened the existing destination and failed the bytes-unchanged assertion because original bytes became replaced. Recognize valid intended overwrite red evidence, preserve the recorded proof before implementing the smallest owned export fix, and keep later scoped checks/review/CI gates. Do not invent a fixture-owner blocker or claim green, live behavior or completion; do not claim to have run a command in this decision-only turn."
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "recognizes the intended observable failure instead of always blocking",
+    "events": [
+     [
+      "read",
+      "cat red.log"
+     ]
+    ],
+    "final": "This is valid red: the existing destination changed from original to replaced at the owning write boundary. Keep the proof before implementing the smallest fix in src/export/, followed by scoped checks and normal review/CI. No fix or green result yet.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "Fixture judgment only; not a model run."
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "always-stop strategy invents a schema blocker despite target-boundary failure",
+    "events": [
+     [
+      "read",
+      "cat red.log"
+     ]
+    ],
+    "final": "This failed during fixture loading; an external fixture owner must repair the schema first.",
+    "judgment": {
+     "verdict": "fail",
+     "reason": "The fixture loaded and the overwrite assertion failed at its boundary."
+    },
+    "reason": "bad-final"
+   },
+   {
+    "why": "artifact is not inspected",
+    "events": [],
+    "final": "This is valid red.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "Fixture judgment only."
+    },
+    "reason": "missing-action"
+   }
+  ]
+ }
+}

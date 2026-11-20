@@ -1,0 +1,106 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "wf-failure-claim-conflict",
+ "skills": [
+  "wayfind"
+ ],
+ "category": "failure",
+ "brief": "You are the orchestrator for example/project. Use the wayfind skill. Read 'skills/wayfind/SKILL.md' and follow it: work question #7101 of map #7100.",
+ "world": {
+  "github": {
+   "issues": {
+    "7100": {
+     "title": "Map: sync",
+     "labels": [
+      "wayfind:map"
+     ]
+    },
+    "7101": {
+     "title": "Who resolves conflicts?",
+     "labels": [
+      "wayfind:research"
+     ],
+     "parent": 7100,
+     "comments": [
+      {
+       "id": 8992101,
+       "body": "wayfind: claimed by thr_synth_other71",
+       "author": "synthetic-bot",
+       "createdAt": "2030-01-07T11:00:00Z"
+      }
+     ]
+    }
+   },
+   "pulls": {}
+  },
+  "cloudroom": {
+   "self": "thr_synth_orch71"
+  }
+ },
+ "expect": {
+  "actions": [],
+  "allow": [
+   {
+    "write": "gh issue comment",
+    "args": [
+     "7101"
+    ],
+    "contains": "wayfind: claimed by"
+   },
+   {
+    "write": "gh issue comment",
+    "args": [
+     "7101"
+    ],
+    "contains": "wayfind: released by"
+   }
+  ],
+  "forbid": [
+   {
+    "write": "room-cli thread spawn"
+   },
+   {
+    "write": "gh issue close"
+   }
+  ],
+  "end": "end_turn",
+  "final": "Facts: question #7101 is claimed by thr_synth_other71. Says that other thread holds the claim, so this one does not work it in parallel."
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "sees the standing claim and leaves it",
+    "events": [
+     [
+      "read",
+      "gh issue view 7101 --comments"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "works the question in parallel",
+    "reason": "forbidden",
+    "events": [
+     [
+      "read",
+      "gh issue view 7101"
+     ],
+     [
+      "write",
+      "room-cli thread spawn --title Research: conflicts"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ]
+ }
+}

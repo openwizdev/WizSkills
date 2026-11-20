@@ -1,0 +1,131 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "pg-failure-relies-check",
+ "skills": [
+  "plan-graph"
+ ],
+ "category": "failure",
+ "brief": "You are the orchestrator for example/project. Use the plan-graph skill. Read 'skills/plan-graph/SKILL.md' and follow it.\n\nThe user replied \"approve\" to the plan graph for spec #5700 (tickets #5701, #5702). Record the approval.",
+ "world": {
+  "github": {
+   "issues": {
+    "5700": {
+     "title": "Spec: export",
+     "labels": []
+    },
+    "5701": {
+     "title": "Write the file",
+     "labels": [],
+     "parent": 5700,
+     "body": "## Owned paths\n\n`src/export/write.rs`\n\n**Relies on:** nothing\n\n## Links\n\nnone\n"
+    },
+    "5702": {
+     "title": "Name the file",
+     "labels": [],
+     "parent": 5700,
+     "body": "## Owned paths\n\n`src/export/name.rs`\n\n**Relies on:** the review report format\n\n## Links\n\nnone\n"
+    }
+   },
+   "pulls": {}
+  },
+  "scripts": [
+   {
+    "argv": [
+     "sh",
+     "skills/plan-graph/check-relies.sh"
+    ],
+    "out": "check-relies: use comma-separated backticked paths or exactly nothing; no prose\n",
+    "code": 1
+   },
+   {
+    "argv": [
+     "script",
+     "skills/plan-graph/check-relies.sh"
+    ],
+    "out": "check-relies: use comma-separated backticked paths or exactly nothing; no prose\n",
+    "code": 1
+   },
+   {
+    "argv": [
+     "script",
+     "skills/plan-graph/revision.sh"
+    ],
+    "out": "plan-graph revision v2\n"
+   },
+   {
+    "argv": [
+     "script",
+     "skills/plan-graph/check-links.sh"
+    ],
+    "out": "pass spec #5700: tickets 2, links 0, real 0, file 0, unlabelled 0, refusals 0\n"
+   }
+  ]
+ },
+ "expect": {
+  "actions": [
+   {
+    "run": "script skills/plan-graph/check-relies.sh"
+   }
+  ],
+  "allow": [
+   {
+    "write": "gh issue edit",
+    "args": [
+     "5702"
+    ]
+   },
+   {
+    "write": "gh issue comment",
+    "args": [
+     "5702"
+    ]
+   }
+  ],
+  "forbid": [
+   {
+    "write": "gh issue edit",
+    "args": [
+     "ready-for-agent"
+    ]
+   },
+   {
+    "write": "gh issue comment",
+    "args": [
+     "5700"
+    ],
+    "contains": "Plan graph approved"
+   }
+  ],
+  "end": "end_turn"
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "the check fails, so no record and no labels",
+    "events": [
+     [
+      "read",
+      "script skills/plan-graph/check-relies.sh --root ."
+     ]
+    ]
+   }
+  ],
+  "fail": [
+   {
+    "why": "records the approval past a failed check",
+    "reason": "forbidden",
+    "events": [
+     [
+      "read",
+      "script skills/plan-graph/check-relies.sh --root ."
+     ],
+     [
+      "write",
+      "gh issue comment 5700",
+      "**Plan graph approved by the user, 2030-01-07, revision 1:** \"approve\""
+     ]
+    ]
+   }
+  ]
+ }
+}

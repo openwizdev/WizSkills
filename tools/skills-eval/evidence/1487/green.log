@@ -1,0 +1,7 @@
+test_checkout_without_the_file_names_the_missing_path (__main__.OpenWizPath.test_checkout_without_the_file_names_the_missing_path) ... ok
+test_no_path_is_refused_by_name (__main__.OpenWizPath.test_no_path_is_refused_by_name) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.261s
+
+OK

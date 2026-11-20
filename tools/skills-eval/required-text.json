@@ -1,0 +1,360 @@
+{
+  "schema": "openwiz.skills-eval.required-text.v2",
+  "note": "Files one load of each skill requires reading, resolved in this repository. `required` is read on every load; `conditional` only on some paths, each with its reason; `not_loaded` names files a skill mentions but never reads (scripts it runs, examples), each with its reason. A path ending `/` is every file under that folder at the measured revision. tokens.mentions() lists what each SKILL.md names, and every mention must be classified here.",
+  "skills": {
+    "ask-wiz": {
+      "required": [
+        "skills/ask-wiz/SKILL.md"
+      ],
+      "conditional": {
+        "skills/ask-wiz/PHASE-BOUNDARIES.md": "only at a phase boundary (SKILL.md: 'At a phase boundary, read')"
+      },
+      "not_loaded": {
+        "AGENTS.md": "named only to say fetched text cannot override project instructions"
+      }
+    },
+    "build-ticket": {
+      "required": [
+        "skills/build-ticket/SKILL.md",
+        "AGENTS.md",
+        "docs/agents/fleet.md",
+        "docs/agents/helpers.md",
+        "docs/agents/issue-tracker.md",
+        "docs/agents/triage-labels.md",
+        "docs/agents/domain.md",
+        "skills/build-ticket/checklist.md",
+        "tools/collector/factory-numbers.md",
+        "changes/README.md",
+        "GLOSSARY.md"
+      ],
+      "conditional": {
+        "docs/adr/": "the ADRs for the task's area; the report counts every ADR, an upper bound (named through docs/agents/domain.md: use their words)",
+        "docs/grills/": "only the one grill the ticket or its spec names; the report counts every grill, an upper bound",
+        "contracts/ops-dispatch.v1.md": "only when the current approval adopts ops-dispatch v1 and its envelope or an exact grant is checked",
+        "contracts/review-loops.v1.md": "only when answering a review: the 1 + 1 rule and its Next: states (SKILL.md: Answering a review)"
+      },
+      "not_loaded": {
+        "skills/launch-fleet/scripts/grants.py": "the grant helper, a script it runs, not text it reads"
+      }
+    },
+    "diagnose": {
+      "required": [
+        "skills/diagnose/SKILL.md",
+        "AGENTS.md",
+        "GLOSSARY.md"
+      ],
+      "conditional": {
+        "docs/adr/": "the ADRs for the task's area; the report counts every ADR, an upper bound",
+        "skills/diagnose/scripts/hitl-loop.template.sh": "the last-resort human-assisted loop only"
+      },
+      "not_loaded": {}
+    },
+    "feedback": {
+      "required": [
+        "skills/feedback/SKILL.md"
+      ],
+      "conditional": {},
+      "not_loaded": {
+        "contracts/feedback.v1.md": "names the rules the helper implements; SKILL.md carries every step and adds none",
+        "skills/feedback/scripts/feedback.py": "the helper executed for every feedback step, not source text it reads (SKILL.md: The helper does every step)"
+      }
+    },
+    "feedback-triage": {
+      "required": [
+        "skills/feedback-triage/SKILL.md"
+      ],
+      "conditional": {
+        "contracts/open-development.v1.md": "only when saving Jake's exact words before a reply is sent (SKILL.md: 3. Record the yes, then send)",
+        "docs/agents/issue-tracker.md": "only when saving Jake's exact words before a reply is sent (SKILL.md: 3. Record the yes, then send)",
+        "skills/triage/SKILL.md": "only for feedback reviewed as actionable (SKILL.md: 5. Hand actionable feedback to triage)"
+      },
+      "not_loaded": {
+        "contracts/feedback.v1.md": "names the receiver side of the contract the helper implements; SKILL.md carries every step",
+        "skills/feedback-triage/scripts/triage.py": "a script it runs, not text it reads"
+      }
+    },
+    "grill": {
+      "required": [
+        "skills/grill/SKILL.md",
+        "docs/agents/domain.md",
+        "docs/agents/issue-tracker.md",
+        "GLOSSARY.md",
+        "docs/grills/README.md",
+        "docs/adr/"
+      ],
+      "conditional": {
+        "contracts/decisions.v1.md": "only when posting a round or summary record",
+        "contracts/decisions.v1.schema.json": "only when posting a round or summary record, with decisions.v1.md",
+        "contracts/plan-links.v1.md": "only when counting ready stock and builders running",
+        "contracts/open-development.v1.md": "only when writing public decisions, glossary terms or ADRs, whose private-record pointers must follow this contract"
+      },
+      "not_loaded": {
+        "docs/grills/2026-10-30-fleets-0.0.5.md": "an example file name",
+        "skills/grill/scripts/index.sh": "a script it runs, not text it reads"
+      }
+    },
+    "handoff": {
+      "required": [
+        "skills/handoff/SKILL.md",
+        "AGENTS.md",
+        "docs/agents/fleet.md",
+        "docs/agents/issue-tracker.md",
+        "docs/agents/domain.md"
+      ],
+      "conditional": {
+        "private/orchestration/HANDOFF.md": "the page it rewrites; read when it exists"
+      },
+      "not_loaded": {
+        "private/orchestration/": "names the private state storage folder, not a folder-wide read; the handoff page it reads is classified separately"
+      }
+    },
+    "hill-climb": {
+      "required": [
+        "skills/hill-climb/SKILL.md",
+        "AGENTS.md"
+      ],
+      "conditional": {
+        "skills/image/SKILL.md": "design rounds only",
+        "skills/image/references/ui-brief.md": "design rounds only",
+        "skills/image/references/ui-craft.md": "design rounds only"
+      },
+      "not_loaded": {
+        "docs/grills/2026-11-01-skill-hill-climb.md": "its source line, not a read",
+        "skills/hill-climb/scripts/climb.py": "a script it runs, not text it reads",
+        "skills/image/scripts/screenshot.py": "a script it runs, not text it reads"
+      }
+    },
+    "huntr": {
+      "required": [
+        "skills/huntr/SKILL.md",
+        "docs/agents/huntr.md",
+        "AGENTS.md",
+        "GLOSSARY.md",
+        "docs/adr/",
+        "docs/agents/issue-tracker.md",
+        "docs/agents/fleet.md",
+        "docs/agents/helpers.md",
+        "docs/agents/triage-labels.md"
+      ],
+      "conditional": {
+        "skills/overnight/SKILL.md": "only under the night setting"
+      },
+      "not_loaded": {}
+    },
+    "image": {
+      "required": [
+        "skills/image/SKILL.md"
+      ],
+      "conditional": {
+        "skills/image/references/ui-brief.md": "UI design work only",
+        "skills/image/references/ui-craft.md": "UI design work only"
+      },
+      "not_loaded": {
+        "skills/image/scripts/screenshot.py": "a script it runs, not text it reads"
+      }
+    },
+    "install": {
+      "required": [
+        "skills/install/SKILL.md"
+      ],
+      "conditional": {
+        "skills/setup/SKILL.md": "only when setup shows a component missing (SKILL.md: 3. Setup and connections)",
+        "skills/onboard/SKILL.md": "only at the hand-over to a first fleet (SKILL.md: 6. First fleet)",
+        "contracts/cli.v1.md": "only to read an openwiz engine command's JSON or exit code as the contract defines them (SKILL.md: 4. Engine)",
+        "tools/install/access/README.md": "only when the user chooses optional phone access, to follow the installed access helper instructions (SKILL.md: 3. Setup and connections)"
+      },
+      "not_loaded": {
+        "tools/install/install": "the verified installer, a script it runs, not text it reads",
+        "contracts/install.v1.md": "names the contract the installer implements; SKILL.md carries the steps",
+        "contracts/setup.v1.md": "names the contract the setup helper implements; SKILL.md carries the steps",
+        "docs/install.md": "the public guide for people; the skill carries its own steps"
+      }
+    },
+    "launch-fleet": {
+      "required": [
+        "skills/launch-fleet/SKILL.md",
+        "docs/agents/fleet.md",
+        "docs/agents/triage-labels.md",
+        "contracts/open-development.v1.md",
+        "tools/ci-overload/README.md"
+      ],
+      "conditional": {
+        "contracts/review-loops.v1.md": "only on a findings line, to read the report's Next: state (SKILL.md: Findings)"
+      },
+      "not_loaded": {
+        "skills/launch-fleet/scripts/fleet.sh": "a script it runs, not text it reads",
+        "skills/launch-fleet/scripts/loop.sh": "a script the loop runs, not text it reads",
+        "docs/agents/": "names the settings folder; the files it reads there (fleet.md, triage-labels.md) are required one by one",
+        "skills/plan-graph/": "names where plan-graph's revision.sh lives, a script it runs",
+        "docs/": "named only as a file pattern for the re-test guard's clash rule (docs-only changes); nothing there is read",
+        "tests/": "named only as a file pattern for the re-test guard's clash rule (test files); nothing there is read",
+        "skills/": "Names the consumer skills folder only to say the bundled loop does not need it at runtime; no folder-wide text load.",
+        "private/orchestration/": "names an alternative private routing-state storage folder; the configured JSON state file is used, not every file in this folder",
+        "skills/launch-fleet/scripts/carried/read.py": "the installation read helper fleet.sh runs, not text it reads",
+        "contracts/github-identity.v1.md": "names the GitHub identity contract as the source of the inlined identity instructions; does not instruct reading it",
+        ".github/workflows/": "names the push diff path whose changes use the existing account; no workflow text is read"
+      }
+    },
+    "onboard": {
+      "required": [
+        "skills/onboard/SKILL.md",
+        "skills/grill/SKILL.md",
+        "skills/setup/SKILL.md",
+        "skills/plan-graph/SKILL.md"
+      ],
+      "conditional": {
+        "contracts/cli.v1.md": "only to read an openwiz command's JSON or exit code as the contract defines them",
+        "contracts/open-development.v1.md": "only when saving the user's exact words under the private-record rules",
+        "docs/agents/fleet.md": "only after step 4's setup re-run, to check both builder tables match the recorded choices"
+      },
+      "not_loaded": {
+        "skills/launch-fleet/SKILL.md": "named as a reused skill; onboard.py runs its fleet.sh frontier, the skill is not followed",
+        "skills/onboard/scripts/onboard.py": "a script it runs, not text it reads",
+        "skills/launch-fleet/scripts/fleet.sh": "the frontier helper onboard.py executes during launch preview, not source text it reads (SKILL.md: 6. Launch)"
+      }
+    },
+    "overnight": {
+      "required": [
+        "skills/overnight/SKILL.md",
+        "AGENTS.md",
+        "GLOSSARY.md",
+        "docs/agents/issue-tracker.md",
+        "docs/agents/fleet.md",
+        "docs/agents/helpers.md",
+        "docs/agents/triage-labels.md",
+        "docs/agents/huntr.md",
+        "skills/huntr/SKILL.md",
+        "docs/adr/"
+      ],
+      "conditional": {
+        "skills/overnight/references/first-run.md": "historical context only"
+      },
+      "not_loaded": {
+        "skills/": "named only to say a plugin may not install a local skills/ folder"
+      }
+    },
+    "plan-graph": {
+      "required": [
+        "skills/plan-graph/SKILL.md",
+        "docs/agents/issue-tracker.md",
+        "docs/agents/fleet.md",
+        "docs/agents/triage-labels.md",
+        "docs/agents/domain.md",
+        "GLOSSARY.md",
+        "docs/adr/",
+        "contracts/open-development.v1.md"
+      ],
+      "conditional": {
+        "contracts/decisions.v1.md": "only when posting a confirmation or approval record",
+        "contracts/decisions.v1.schema.json": "only when posting a confirmation or approval record, with decisions.v1.md",
+        "contracts/plan-links.v1.md": "only when writing tickets' `## Links` lines or checking link reasons (writing the graph, approvals)",
+        "contracts/ops-dispatch.v1.md": "only when the approval explicitly adopts ops-dispatch v1 and its envelope is recorded or checked"
+      },
+      "not_loaded": {
+        "skills/plan-graph/check-relies.sh": "a script it runs, not text it reads",
+        "skills/plan-graph/revision.sh": "a script it runs, not text it reads",
+        "skills/review-ticket/SKILL.md": "named only inside an example ticket body",
+        "skills/plan-graph/check-links.sh": "a script it runs, not text it reads",
+        "STATUS.md": "named only as an example of a small shared file",
+        "docs/agents/": "names the settings folder; the files it reads there are required one by one",
+        "private/orchestration/grant-audit.md": "names the private daily grant-audit procedure for its operator; plan-graph does not run that audit"
+      }
+    },
+    "research": {
+      "required": [
+        "skills/research/SKILL.md",
+        "AGENTS.md",
+        "docs/agents/issue-tracker.md",
+        "docs/agents/domain.md",
+        "docs/agents/fleet.md"
+      ],
+      "conditional": {},
+      "not_loaded": {}
+    },
+    "review-ticket": {
+      "required": [
+        "skills/review-ticket/SKILL.md",
+        "AGENTS.md",
+        "changes/README.md",
+        "docs/agents/"
+      ],
+      "conditional": {
+        "docs/adr/": "the ADRs for the task's area; the report counts every ADR, an upper bound",
+        "contracts/ops-dispatch.v1.md": "only for approvals that explicitly adopt ops-dispatch v1, to compare the envelope and grants",
+        "contracts/review-loops.v1.md": "only for a reviewer question's first lines or a re-check's 1 + 1 rule; the report format is in SKILL.md"
+      },
+      "not_loaded": {
+        "GLOSSARY.md": "named only in the review table and an example finding",
+        "skills/launch-fleet/scripts/grants.py": "the grant helper, a script it runs, not text it reads"
+      }
+    },
+    "setup": {
+      "required": [
+        "skills/setup/SKILL.md",
+        "AGENTS.md",
+        "skills/setup/templates/issue-tracker.md",
+        "skills/setup/templates/triage-labels.md",
+        "skills/setup/templates/domain.md",
+        "skills/setup/templates/fleet.md",
+        "docs/adr/",
+        ".github/workflows/"
+      ],
+      "conditional": {
+        "docs/agents/": "its own earlier output, read only on a re-run",
+        "docs/grills/": "a re-run reads the grills the settings cite as sources; the folder is an upper bound",
+        "contracts/open-development.v1.md": "only when writing settings sources or saving decision records under step 3; an unchanged re-run writes nothing",
+        "contracts/github-identity.v1.md": "only when preparing the OpenWiz App (SKILL.md: The App)"
+      },
+      "not_loaded": {
+        "GLOSSARY.md": "it checks the glossary exists; it does not read it",
+        "private/orchestration/": "names the private handoff/state storage location to record in domain settings; it does not instruct a folder-wide read"
+      },
+      "linked": {
+        "docs/agents/": "a re-run reads each earlier setting's source again (SKILL.md, Running it again): every file the settings link to"
+      }
+    },
+    "triage": {
+      "required": [
+        "skills/triage/SKILL.md",
+        "docs/agents/issue-tracker.md",
+        "docs/agents/triage-labels.md",
+        "docs/agents/domain.md",
+        "skills/triage/OUT-OF-SCOPE.md",
+        "GLOSSARY.md",
+        "docs/adr/",
+        "contracts/open-development.v1.md"
+      ],
+      "conditional": {
+        "skills/triage/AGENT-BRIEF.md": "only when writing an agent brief",
+        "docs/agents/": "all of docs/agents/, only when answering a builder question (SKILL.md: Read ... `docs/agents/`)"
+      },
+      "not_loaded": {
+        "skills/triage/find-work.sh": "a script it runs, not text it reads"
+      }
+    },
+    "wayfind": {
+      "required": [
+        "skills/wayfind/SKILL.md",
+        "docs/agents/issue-tracker.md"
+      ],
+      "conditional": {
+        "skills/research/SKILL.md": "only for a research question"
+      },
+      "not_loaded": {
+        "docs/grills/": "where the grill skill saves; wayfind reads no grill itself"
+      }
+    },
+    "where-are-we": {
+      "required": [
+        "skills/where-are-we/SKILL.md",
+        "docs/agents/issue-tracker.md",
+        "docs/agents/fleet.md",
+        "docs/agents/domain.md"
+      ],
+      "conditional": {},
+      "not_loaded": {
+        "skills/where-are-we/scripts/read-github.py": "a script it runs, not text it reads"
+      }
+    }
+  }
+}

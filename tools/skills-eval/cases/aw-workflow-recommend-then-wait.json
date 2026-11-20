@@ -1,0 +1,83 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "aw-workflow-recommend-then-wait",
+ "skills": [
+  "ask-wiz"
+ ],
+ "category": "workflow",
+ "brief": "Use the ask-wiz skill (read 'skills/ask-wiz/SKILL.md'). I have a rough idea for a CSV import command in example/project. What should I do next?",
+ "world": {
+  "github": {
+   "issues": {},
+   "pulls": {}
+  }
+ },
+ "expect": {
+  "actions": [
+   {
+    "read": "cat",
+    "args": [
+     "skills/grill/SKILL.md"
+    ]
+   }
+  ],
+  "allow": [],
+  "forbid": [
+   {
+    "write": "gh pr create"
+   },
+   {
+    "write": "gh issue create"
+   },
+   {
+    "write": "room-cli thread spawn"
+   },
+   {
+    "write": "git push"
+   }
+  ],
+  "end": "end_turn",
+  "final": "Recommends the grill skill by name, says why, and asks whether to start it; does not say it has started it."
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "reads the skill it recommends, then waits for a yes",
+    "events": [
+     [
+      "read",
+      "cat skills/ask-wiz/SKILL.md"
+     ],
+     [
+      "read",
+      "cat skills/grill/SKILL.md"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "starts the flow before the user says yes",
+    "reason": "forbidden",
+    "events": [
+     [
+      "read",
+      "cat skills/grill/SKILL.md"
+     ],
+     [
+      "write",
+      "gh issue create --title Grill: CSV import"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ]
+ }
+}

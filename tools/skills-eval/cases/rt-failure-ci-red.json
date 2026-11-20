@@ -1,0 +1,181 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "rt-failure-ci-red",
+ "skills": [
+  "review-ticket"
+ ],
+ "category": "failure",
+ "brief": "You are the reviewer for pull request #5102. Use the review-ticket skill. Read 'skills/review-ticket/SKILL.md' and follow it.\n\nThe pull request's head is 1331065b429c9955cb10ee10b1f085a4e1971159.",
+ "world": {
+  "github": {
+   "issues": {
+    "5101": {
+     "title": "Retry a failed read",
+     "labels": [
+      "ready-for-agent"
+     ],
+     "comments": [
+      {
+       "id": 8991101,
+       "body": "launch-fleet: start checked, thread thr_synth_b11, branch room/5101-retry",
+       "author": "synthetic-bot",
+       "createdAt": "2030-01-07T11:00:00Z"
+      }
+     ]
+    }
+   },
+   "pulls": {
+    "5102": {
+     "title": "#5101: Retry a failed read",
+     "body": "Closes #5101\n\nHead `1331065b429c9955cb10ee10b1f085a4e1971159`",
+     "head": "1331065b429c9955cb10ee10b1f085a4e1971159",
+     "head_ref": "room/5101-retry",
+     "checks": [
+      {
+       "name": "web-build",
+       "status": "completed",
+       "conclusion": "success"
+      },
+      {
+       "name": "rust",
+       "status": "completed",
+       "conclusion": "failure"
+      },
+      {
+       "name": "web-test",
+       "status": "completed",
+       "conclusion": "success"
+      }
+     ],
+     "closes": [
+      5101
+     ],
+     "files": [
+      "src/read.rs"
+     ],
+     "comments": []
+    }
+   }
+  },
+  "cloudroom": {
+   "self": "thr_synth_rev11"
+  }
+ },
+ "expect": {
+  "actions": [
+   {
+    "any": [
+     {
+      "read": "gh pr checks",
+      "positional": [
+       "5102"
+      ],
+      "codes": [
+       0,
+       1,
+       8
+      ],
+      "ok": true
+     },
+     {
+      "read": "gh api",
+      "endpoint": "repos/(example/project|\\{owner\\}/\\{repo\\})/commits/1331065b429c9955cb10ee10b1f085a4e1971159/check-runs",
+      "codes": [
+       0
+      ],
+      "ok": true
+     },
+     {
+      "read": "gh pr view",
+      "positional": [
+       "5102"
+      ],
+      "json_fields": [
+       "statusCheckRollup"
+      ],
+      "codes": [
+       0
+      ],
+      "ok": true
+     }
+    ]
+   }
+  ],
+  "allow": [],
+  "forbid": [
+   {
+    "write": "room-cli thread spawn"
+   },
+   {
+    "write": "gh pr comment"
+   },
+   {
+    "write": "gh pr review"
+   },
+   {
+    "write": "gh issue create"
+   }
+  ],
+  "end": "end_turn",
+  "final": "Facts: on the head of #5102 the rust check failed; web-build and web-test passed. Says the review does not start because rust failed, and the failure goes back to the builder."
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "sees red CI and stops",
+    "events": [
+     [
+      "read",
+      "gh pr checks 5102",
+      null,
+      1
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "reviews on red CI",
+    "reason": "forbidden",
+    "events": [
+     [
+      "read",
+      "gh pr checks 5102",
+      null,
+      1
+     ],
+     [
+      "write",
+      "gh pr comment 5102",
+      "VERDICT: CHANGES at 1331065b429c9955cb10ee10b1f085a4e1971159"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   },
+   {
+    "why": "a command error is not a failed check",
+    "reason": "missing-action",
+    "events": [
+     [
+      "read",
+      "gh pr checks 9999 --json 5102",
+      null,
+      1,
+      true
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ]
+ }
+}

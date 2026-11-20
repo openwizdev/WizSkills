@@ -277,11 +277,11 @@ def teach(heading, fill=(), which=0):
 
 
 # --- Other tickets' interfaces (#1358) ------------------------------------------
-# local_driver() is a thin stub against the interface KN3's open pull request
-# defines; swap it when KN3 merges. host_setting() calls KN6's merged reader.
+# KN3's local driver (#1368, OpenWiz #1455, merged as 583f2ae) and KN6's host
+# setting reader (#1371, WizSkills #64), both merged; nothing here is a stub.
 
 def local_driver(env):
-    """Stub until KN3 (#1368, OpenWiz #1455) merges: the local driver's `version` answer, or None.
+    """KN3's local driver (#1368, OpenWiz 583f2ae): its `version` answer, or None.
 
     The driver is `$OPENWIZ_ADAPTERS/local/driver` (driver v1), as launch-fleet's
     host.py (#1371, WizSkills #64) finds it. Only `version` is called here: it starts nothing."""
@@ -318,8 +318,8 @@ def host_setting(env):
     return None if named[1] == 'none' else named[1]
 
 
-# Stub until KN3 (#1368, OpenWiz #1455) merges: the harness permission mode the owner picks once (J254 A),
-# saved where KN3's driver at a00ada1 reads it, the repository's docs/agents/fleet.md, as exactly one row
+# The harness permission mode the owner picks once (J254 A), saved where KN3's merged driver (OpenWiz
+# 583f2ae, adapters/local) reads it, the repository's docs/agents/fleet.md, as exactly one row
 # `| Harness permission mode | `<mode>` |` whose value is one plain word; the driver passes it to the
 # harness unchanged (`claude --permission-mode`, `codex --sandbox`) and starts nothing without it.
 MODE_FILE = 'docs/agents/fleet.md'
@@ -363,9 +363,9 @@ def saved_mode(env):
     return values[0] if values else None
 
 
-# KN3's host-side approval (security R6, option A), behind the KN3 stub until OpenWiz #1455 merges: the same
-# pick saved on the owner's machine, per repository and harness, outside the repository, in KN3's own form at
-# 857d107: $OPENWIZ_LOCAL_STATE/approvals.json (default ~/.local/state/openwiz-local), one JSON object
+# KN3's host-side approval (security R6, option A): the same pick saved on the owner's machine, per
+# repository and harness, outside the repository, in the merged driver's form (OpenWiz 583f2ae):
+# $OPENWIZ_LOCAL_STATE/approvals.json (default ~/.local/state/openwiz-local), one JSON object
 # {"owner/name": {"claude"|"codex": "<mode>"}}, the user's own, mode 600. KN3's start refuses unless the
 # fleet.md row matches it, or if others can change the file.
 def approval_file(env):

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""A recording fake of OpenWiz's local driver (driver v1, adapters/local/driver, #1368).
+"""A recording fake of OpenWiz's local driver (driver v1, adapters/local/driver, #1368, merged
+as OpenWiz 583f2ae; its `version` answer here is that driver's VERSION, byte for byte).
 
 It answers only `version`, as the local driver does: its name, the records it
 speaks and what it can do. Every call is logged to $FAKE_DRIVER_LOG as one

@@ -99,7 +99,7 @@ class Road(Journey):
                               FAKE_DRIVER_LOG=str(self.dir / 'driver.log'), FAKE_GH_ARGV_LOG=str(self.dir / 'gh-argv.log'))
 
     def approvals(self):
-        """This machine's host-side permission approvals, as KN3's setup step (stubbed) saves them."""
+        """This machine's host-side permission approvals, in the merged local driver's form (OpenWiz 583f2ae)."""
         path = self.host_state / 'approvals.json'
         return json.loads(path.read_text()) if path.exists() else None
 
@@ -584,7 +584,7 @@ class HostApproval(unittest.TestCase):
         self.assertFalse([c for c in road.gh_calls() if c[:1] == ['auth']])
 
     def test_the_approval_adds_only_this_entry_keeps_every_other_byte_and_is_owner_only_600(self):
-        # catches: other repositories' or harnesses' approvals rewritten or reformatted (KN3 at 857d107: keep them
+        # catches: other repositories' or harnesses' approvals rewritten or reformatted (KN3, OpenWiz 583f2ae: keep them
         # byte for byte), a file left with another owner or a mode other than exactly 600, or an existing file's
         # mode loosened
         road = self.road()

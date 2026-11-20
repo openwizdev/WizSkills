@@ -1,8 +1,8 @@
 case,commit,entrypoint_lines,entrypoint_words,outcome,wall_ms,discovery_tokens,entrypoint_tokens,reference_tokens,tool_output_tokens,input_tokens,output_tokens,retries
 ask-wiz.route,dc48e732b7c6f4405ffe66f1f171843595d2e194,58,767,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
-build-ticket.regression,dc48e732b7c6f4405ffe66f1f171843595d2e194,72,1596,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
+build-ticket.regression,dc48e732b7c6f4405ffe66f1f171843595d2e194,72,1596,pass,unknown,unknown,unknown,unknown,unknown,unknown,unknown,0
 diagnose.reproduce,dc48e732b7c6f4405ffe66f1f171843595d2e194,103,885,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
-grill.new,dc48e732b7c6f4405ffe66f1f171843595d2e194,89,750,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
+grill.new,dc48e732b7c6f4405ffe66f1f171843595d2e194,89,750,pass,18962,unknown,unknown,unknown,unknown,unknown,unknown,0
 handoff.resume,dc48e732b7c6f4405ffe66f1f171843595d2e194,59,707,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
 hill-climb.select,dc48e732b7c6f4405ffe66f1f171843595d2e194,107,1882,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
 huntr.intake,dc48e732b7c6f4405ffe66f1f171843595d2e194,131,1228,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
@@ -10,9 +10,9 @@ image.capture,dc48e732b7c6f4405ffe66f1f171843595d2e194,77,1176,unknown,unknown,u
 install.pinned,dc48e732b7c6f4405ffe66f1f171843595d2e194,139,1814,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
 launch-fleet.wake,dc48e732b7c6f4405ffe66f1f171843595d2e194,130,2787,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
 onboard.resume,dc48e732b7c6f4405ffe66f1f171843595d2e194,139,1814,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
-plan-graph.approval,dc48e732b7c6f4405ffe66f1f171843595d2e194,76,573,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
+plan-graph.approval,dc48e732b7c6f4405ffe66f1f171843595d2e194,76,573,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,0
 research.synthesis,dc48e732b7c6f4405ffe66f1f171843595d2e194,76,1030,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
-review-ticket.exact-head,dc48e732b7c6f4405ffe66f1f171843595d2e194,98,1995,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
+review-ticket.exact-head,dc48e732b7c6f4405ffe66f1f171843595d2e194,98,1995,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,0
 setup.repair,dc48e732b7c6f4405ffe66f1f171843595d2e194,74,1053,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
 to-spec.chain,dc48e732b7c6f4405ffe66f1f171843595d2e194,75,586,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown
 triage.dispatch,dc48e732b7c6f4405ffe66f1f171843595d2e194,103,1366,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown

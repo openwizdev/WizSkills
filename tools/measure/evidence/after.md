@@ -106,14 +106,35 @@ Removed: feedback (65 lines), feedback-triage (83), onboard (141), overnight
 
 ## Workflow trials (SK-C)
 
-WS1 observed four workflow outcomes at the baseline: `grill.new`,
-`plan-graph.approval`, `build-ticket.regression` and
-`review-ticket.exact-head`, all passing. Their after-trials at the candidate
-pin have not run. Their outcomes and every host token field stay `unknown`
-in [after.csv](after.csv) until sanitized receipts are recorded. The
-other cases were never observed before and are not observed after either.
-The static counts above are a separate measure of packaged context, not of
-tokens a host delivered.
+The fleet ran WS1's four observed cases once each at the candidate pin, on
+the same host, model and effort as the baseline (Codex, Sol 6.2, Medium). The
+[receipts](after-trials.json) are copied from the
+[trial record](https://github.com/openwizdev/OpenWiz/issues/1187#issuecomment-7026277760).
+Each attempt made zero retries.
+
+| Case | Before | After | Result |
+| --- | --- | --- | --- |
+| `grill.new` | Pass | Pass, 18,962 ms | pass |
+| `build-ticket.regression` | Pass | Pass | pass |
+| `plan-graph.approval` (to-spec and to-tickets) | Unknown at first, pass on the authorized repeat | Unknown | unknown |
+| `review-ticket.exact-head` | Pass | Unknown | unknown |
+
+Both unknowns stopped in the trial tooling, not in the skill:
+
+- `plan-graph.approval`: the fixture's own validator read a Markdown table
+  divider in the spec template as a required heading. The run stopped at the
+  hand-off to to-spec, before any graph or approval.
+- `review-ticket.exact-head`: the reviewer validated the expected `CHANGES`
+  report at the full pinned head, naming the guard failure under Standards
+  and Spec. The local GitHub shim then rejected the comment write, so the
+  posted report was never read back.
+
+No repeat was run. Unknown stays unknown, so SK-C's observed outcomes are 2
+passes and 2 unknowns, with no observed failure. Host token fields stay
+unknown for all four, as at the baseline: Codex usage covered the enclosing
+turn. The other cases were never observed before and are not observed after
+either. The static counts above are a separate measure of packaged context,
+not of tokens a host delivered.
 
 ## Path rulings
 

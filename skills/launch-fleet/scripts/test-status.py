@@ -377,8 +377,10 @@ class Write(Tracker):
         self.ticket(self.world)['comments'].append(comment(104, BOT, note(state='asking')))
         self.save()
         done = self.write('done', 'merged', '2030-01-02T06:00:00Z', '--note', '104')
-        self.assertEqual((done.returncode, done.stdout), (0, '#12: builder done, status note 104 edited\n'))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info', 'held'])
+        # #1737: a label it leaves on, it says so.
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertRegex(done.stdout, r'^#12: builder done, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
         self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')])
 
     def test_leaving_asking_keeps_a_same_login_hold_it_cannot_show_it_added(self):
@@ -398,15 +400,30 @@ class Write(Tracker):
         self.assertRegex(back.stdout, r'^#12: builder working, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
         self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
 
+    def test_with_a_shared_login_a_hold_added_just_before_the_write_post_stays(self):
+        # catches (#1737): while the agents post as a person's own account, that person's
+        # needs-info landing just before the asking write's POST (a no-op POST) taken as the
+        # write's own and deleted when the agent resumes.
+        self.world['login'] = 'synthetic-owner'
+        self.ticket(self.world)['comments'].append(comment(104, 'synthetic-owner', note()))
+        self.world['race_label'] = [{'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
+        self.save()
+        asking = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual(asking.returncode, 0, asking.stderr)
+        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertRegex(back.stdout, r'(?m)^#12: needs-info left on: ')
+
     def test_needs_info_stays_while_any_agent_asks_and_a_failed_clear_recovers(self):
         # catches (R1): one agent leaving asking clearing the label another live agent's
         # question needs, or a failed label write that a retry or check never repairs.
-        ticket = self.ticket(self.world)
-        ticket['labels'] = ['ready-for-agent', 'needs-info']
-        ticket['events'] = [{'event': 'labeled', 'label': {'name': 'needs-info'}, 'actor': {'login': BOT}}]
-        ticket['comments'] += [comment(104, BOT, note(state='asking')),
-                               comment(105, BOT, note(agent='reviewer', state='asking'))]
+        # #1737: the label is the builder's own write's application, so a write may take it off.
+        self.ticket(self.world)['comments'] += [comment(104, BOT, note()),
+                                                comment(105, BOT, note(agent='reviewer', state='asking'))]
         self.save()
+        asked = self.write('asking', 'asked which file to change', '2030-01-02T03:30:00Z', '--note', '104')
+        self.assertEqual(asked.returncode, 0, asked.stderr)
         builder = self.write('working', 'got the answer', '2030-01-02T04:00:00Z', '--note', '104')
         self.assertEqual((builder.returncode, builder.stdout), (0, '#12: builder working, status note 104 edited\n'))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])

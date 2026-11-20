@@ -88,12 +88,14 @@ with its reason on stderr; a refused write posted nothing.
 
 1. `lease.mjs due <run> scheduled|hunter`. Exit 2 (the lease is lost or
    taken): file nothing more, put unfiled candidates in the record and finish
-   the hunt (step 5). Exit 3 (unreadable): file nothing this wake; go on with
-   steps 3 and 4, and end the turn only while hunters are still running or
-   queued.
+   the hunt (step 5). Exit 3 (unreadable): file nothing and dispatch no queued
+   slice this wake; collect reports (step 3), then end the turn while hunters
+   are still running, or else finish the hunt (step 5) with any queued slice
+   recorded as a gap.
 2. File every proven finding first (step 3).
 3. `hunters.mjs collect <pin> <slice>=<report>...`; only a report at the pin
-   is coverage. Archive those hunters; dispatch queued slices.
+   is coverage. Archive those hunters; dispatch queued slices only after
+   `due` exited 0.
 4. When every slice is reported or blocked and none is queued, finish the
    hunt (step 5); this wake ends there.
 5. Otherwise, on `"checkpoint": true`, publish the partial record (step 5)

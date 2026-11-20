@@ -6,13 +6,17 @@ python3 -I skills/launch-fleet/scripts/test-route.py
 Synthetic repositories, numbers and loop ids only. The fake `gh` serves one
 GraphQL answer from a JSON world and logs every call, so a test can count reads.
 """
+import http.server
 import json
 import os
 import re
 from pathlib import Path
+import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -271,10 +275,98 @@ class Setup(unittest.TestCase):
             self.assertNotRegex(tail, r"(^|[^|&])>|\btee\b|--slurpfile|--rawfile", c)
         for c in commands:
             if 'loop hook' in c:
-                self.assertRegex(c, r"\|\s*gh api --method POST '?repos/[^ ]+/hooks'? --input -", c)
+                self.assertRegex(c, r"\|\s*(env (-u \w+ )+)?gh api --method POST '?repos/[^ ]+/hooks'? --input -", c)
             if 'loop create' in c and '--webhook' in c:
                 self.assertIn('| jq -r .id', c)
 
+
+
+ADDRESS = 'https://synthetic.invalid/wake/SYNTHETIC-ADDRESS-0000'
+
+
+def documented_hook_calls():
+    """Every documented command whose `gh api` call sends or reads a webhook, with its placeholders filled in."""
+    text = (HERE.parent / 'references/launch.md').read_text()
+    fenced = [b.replace('\\\n', ' ') for b in re.findall(r'```sh\n(.*?)```', text, re.S)]
+    spans = re.findall(r'`([^`\n]*gh api[^`\n]*)`', re.sub(r'```.*?```', '', text, flags=re.S))
+    calls = [' '.join(c.split()) for c in fenced + spans if 'gh api' in c and '/hooks' in c]
+    fill = {'<wake loop id>': 'loop_synthetic', '<id>': '7', '<webhook id>': '7'}
+    return [re.sub(r'<[^<>]*>', lambda m: fill[m.group(0)], c) for c in calls]
+
+
+class FakeGitHub(http.server.BaseHTTPRequestHandler):
+    """A local HTTPS GitHub that answers like the real one: a webhook's address comes back in `config.url`."""
+    def answer(self):
+        body = self.rfile.read(int(self.headers.get('Content-Length') or 0))
+        hook = {'id': 7, 'events': ['issues'], 'active': True,
+                'config': {'url': json.loads(body)['config']['url'] if body else ADDRESS, 'content_type': 'json'}}
+        out = b'' if self.command == 'DELETE' else json.dumps([hook] if self.command == 'GET' else hook).encode()
+        self.send_response(204 if self.command == 'DELETE' else 201 if self.command == 'POST' else 200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+    do_GET = do_POST = do_PATCH = do_DELETE = answer
+
+    def log_message(self, *args):
+        pass
+
+
+class SetupUnderTracing(unittest.TestCase):
+    """The documented webhook setup run for real, with the real GitHub CLI and HTTP tracing on in the caller's shell."""
+
+    def setUp(self):
+        for tool in ('gh', 'jq', 'openssl'):
+            self.assertTrue(shutil.which(tool), 'this proof needs %s on PATH' % tool)
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        bin_ = self.dir / 'bin'
+        bin_.mkdir()
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost',
+                        '-addext', 'subjectAltName=DNS:localhost', '-keyout', str(self.dir / 'key.pem'),
+                        '-out', str(self.dir / 'cert.pem')], check=True, capture_output=True)
+        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.load_cert_chain(self.dir / 'cert.pem', self.dir / 'key.pem')
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), FakeGitHub)
+        server.socket = tls.wrap_socket(server.socket, server_side=True)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        # Cloudroom's side: `loop hook` prints a fresh synthetic address on stdout, as the real one does.
+        (bin_ / 'room-cli').write_text('#!/bin/sh\nprintf \'{"id":"loop_synthetic","url":"%s"}\\n\'\n' % ADDRESS)
+        # A shim in front of the real gh records only whether the address is in its arguments or environment.
+        (bin_ / 'gh').write_text('#!/bin/sh\ncase "$* $(env)" in *SYNTHETIC-ADDRESS*) echo leaked >> "%s";; esac\n'
+                                 'exec "%s" "$@"\n' % (self.dir / 'shim.log', shutil.which('gh')))
+        for tool in ('room-cli', 'gh'):
+            (bin_ / tool).chmod(0o755)
+        host = 'localhost:%d' % server.server_address[1]
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith(('GH_', 'GITHUB_'))}
+        self.env.update(PATH='%s:%s' % (bin_, os.environ['PATH']), SSL_CERT_FILE=str(self.dir / 'cert.pem'),
+                        GH_HOST=host, GH_REPO='%s/synthetic-org/project' % host, GH_ENTERPRISE_TOKEN='synthetic',
+                        GH_CONFIG_DIR=str(self.dir / 'config'), GH_NO_UPDATE_NOTIFIER='1', GH_PROMPT_DISABLED='1',
+                        HOME=str(self.dir), GH_DEBUG='api', DEBUG='api')
+
+    def test_tracing_never_shows_the_address(self):
+        # catches (R2): a URL-bearing gh call that inherits GH_DEBUG=api (or the legacy DEBUG=api), so the GitHub
+        # CLI writes the request and response bodies, address and all, to stderr before --jq filters stdout.
+        calls = documented_hook_calls()
+        self.assertGreaterEqual(len(calls), 3, 'the setup, the list and the delete are all documented')
+        for call in calls:
+            with self.subTest(call=call):
+                r = subprocess.run(['sh', '-c', call], capture_output=True, text=True, env=self.env,
+                                   cwd=self.dir, timeout=60)
+                self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+                self.assertNotIn('SYNTHETIC-ADDRESS', r.stdout, 'the address reaches the terminal')
+                self.assertNotIn('SYNTHETIC-ADDRESS', r.stderr, 'HTTP tracing writes the address to stderr')
+                self.assertFalse((self.dir / 'shim.log').exists(), 'the address reaches gh as an argument or variable')
+                for f in self.dir.rglob('*'):
+                    if f.is_file() and f.parent.name != 'bin':  # bin holds the synthetic room-cli itself
+                        self.assertNotIn(b'SYNTHETIC-ADDRESS', f.read_bytes(), 'the address reaches %s' % f)
+        self.assertTrue(any(c.startswith('room-cli loop hook') for c in calls), calls)
+        # Not vacuous: in this same environment, a plain gh call does trace its request and response bodies.
+        r = subprocess.run(['sh', '-c', "gh api 'repos/{owner}/{repo}/hooks'"], capture_output=True, text=True,
+                           env=self.env, cwd=self.dir, timeout=60)
+        self.assertIn('SYNTHETIC-ADDRESS', r.stderr, 'tracing is on in the caller')
 
 if __name__ == '__main__':
     unittest.main()

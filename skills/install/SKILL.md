@@ -76,7 +76,7 @@ Continue only if the user wants a first fleet; otherwise finish with the install
 Offer three or four fun, one-line ideas made up for this user, plus "your own idea". Then ask where it goes:
 
 1. **A new private demo repository** (recommended). Sign in first: `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state>` (it reuses a verified login; signed out, preview, then `--yes` for GitHub's browser page). Then `first_fleet.py create-repo --repo <owner>/<name>` previews the repository and its one README commit; on the yes, add `--yes`. Exit 6: run it again. The user makes or picks its CloudRoom project.
-2. **An existing repository:** confirm it, and that the fleet opens branches and pull requests there.
+2. **An existing repository:** confirm it, and that the fleet opens branches and pull requests there, then run `first_fleet.py select --repo <owner>/<name>`.
 
 Done when the idea and one repository are chosen and read back. There is no second repository.
 

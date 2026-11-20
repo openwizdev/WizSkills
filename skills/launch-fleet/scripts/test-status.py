@@ -41,10 +41,17 @@ REPO = 'example/tracker'
 BOT = 'openwiz[bot]'
 FLEET_MD = '# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n| Record authors | `openwiz[bot]`, `synthetic-owner` |\n'
 MARKER = '<!-- openwiz:status v1 -->'
-# The installed package supplying status.py (this checkout). Inputs name its real
-# version, so a release bump never turns a good value into an invented one.
+# The installed package supplying status.py (this checkout). Inputs name each skill's real
+# installed version (its SKILL.md front matter, #1663), so a release bump never turns a good
+# value into an invented one.
 VERSION = json.loads((ROOT / '.claude-plugin/plugin.json').read_text())['version']
-SKILLS = 'build-ticket@' + VERSION
+
+
+def at(name):
+    return name + '@' + re.search(r'(?m)^version: (.+)$', (ROOT / 'skills' / name / 'SKILL.md').read_text()).group(1)
+
+
+SKILLS = at('build-ticket')
 
 FAKE_GH = r'''
 import fcntl, json, os, sys
@@ -336,7 +343,7 @@ class Write(Tracker):
         pr = 'https://github.com/example/skills/pull/31'
         back = self.write('working', 'handed back; CI is green', '2030-01-02T05:00:00Z', '--note', '9001',
                           '--pr', pr, '--preview', 'https://31.example-site.pages.dev',
-                          '--skills', f'build-ticket@{VERSION}, diagnose@{VERSION}')
+                          '--skills', f"{SKILLS}, {at('diagnose')}")
         self.assertEqual((back.returncode, back.stdout), (0, '#12: builder working, status note 9001 edited\n'))
         world = self.load()
         self.assertEqual(self.ticket(world)['labels'], ['ready-for-agent'])
@@ -344,7 +351,7 @@ class Write(Tracker):
         self.assertEqual(self.ticket(world)['comments'][1]['body'], note())
         self.assertEqual(self.ticket(world)['comments'][3]['body'],
                          note(step='handed back; CI is green', time='2030-01-02T05:00:00Z', pr=pr,
-                              preview='https://31.example-site.pages.dev', skills=f'build-ticket@{VERSION}, diagnose@{VERSION}'))
+                              preview='https://31.example-site.pages.dev', skills=f"{SKILLS}, {at('diagnose')}"))
         self.assertEqual(self.writes(), [
             ('POST', 'repos/example/tracker/issues/12/comments'),
             ('PATCH', 'repos/example/tracker/issues/comments/9001'),
@@ -790,7 +797,7 @@ GOOD_SHAPE = [
     ('--why', 'lease expired'),
     ('--step', 'x' * 300),
     ('--model', 'm' * 60),
-    ('--skills', f'build-ticket@{VERSION}, review-ticket@{VERSION}'),
+    ('--skills', f"{SKILLS}, {at('review-ticket')}"),
     ('--skills', ', '.join([SKILLS] * FITS)),
     ('--step', 'checked https://github.com/acme/home/pull/1 and a/home/b'),
     ('--step', 'changed skills/launch-fleet/scripts/status.py and/or its test'),
@@ -800,10 +807,10 @@ GOOD_SHAPE = [
 ]
 # R5: well-formed (the schema takes them) but not what the installed package holds.
 UNBOUND = [
-    'made-up-skill@' + VERSION,
+    'made-up-skill@' + SKILLS.split('@')[1],
     'build-ticket@9.9.9',
-    f'build-ticket@{VERSION}, launch-fleet@10.20.30',
-    'build-ticket@' + VERSION + '0',
+    f'{SKILLS}, launch-fleet@10.20.30',
+    SKILLS + '0',
 ]
 FIELD = {'--agent': 'agent', '--state': 'state', '--why': 'state', '--harness': 'harness', '--model': 'model',
          '--skills': 'skills',
@@ -862,7 +869,7 @@ class Refuse(Tracker):
                 self.assertEqual((result.returncode, result.stdout, self.calls()), (2, '', []))
                 self.assertIn('installed package', result.stderr)
         listed = sorted(path.rsplit('/', 1)[1] for path in manifest['skills'])
-        result = self.run_status(*self.args('--skills', ', '.join(f'{name}@{VERSION}' for name in listed[:5])))
+        result = self.run_status(*self.args('--skills', ', '.join(at(name) for name in listed[:5])))
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_each_skill_is_bound_to_its_own_installed_version(self):
@@ -1001,7 +1008,7 @@ class Check(Tracker):
 
 SKILLS_DIR = ROOT / 'skills'
 # launch-fleet's status step, filled as the fleet fills it (#1592).
-FLEET = {'<owner>/<repo>': REPO, '<harness>': 'Codex', '<model>': 'Sol 6.1 High', '<skills>': 'launch-fleet@' + VERSION}
+FLEET = {'<owner>/<repo>': REPO, '<harness>': 'Codex', '<model>': 'Sol 6.1 High', '<skills>': at('launch-fleet')}
 LABELS = {'ready-for-agent', 'needs-info'}
 
 
@@ -1030,7 +1037,7 @@ class FleetRun(Tracker):
         self.assertIsNotNone(base, f'{skill} has no one status write line')
         self.assertIn(f' --agent {kind} ', base)
         values = {'<repo>': REPO, '<N>': '12', '<harness>': 'Claude Code', '<model>': 'Opus 5.5 Medium',
-                  '<skills>': f'{skill}@{VERSION}'}
+                  '<skills>': at(skill)}
         self.assertEqual(set(re.findall('<[^<>]*>', base)) - {"<this skill's folder>"},
                          set(values) | {'<state>', '<step>'}, f'{skill}: a placeholder the agent cannot fill')
         return lambda state, step, *extra: filled(skill, base, dict(values, **{'<state>': state, '<step>': step})) + list(extra)

@@ -149,24 +149,36 @@ def shaped(fields):
 
 
 def bound(skills):
-    """R5: every reported skill is one the installed package lists, at its version.
+    """R5 (#1663): every reported skill is one the installed package lists, at that skill's
+    own installed version: the `version:` line of its SKILL.md front matter (J205).
 
-    The package is the one supplying this script; its manifest is the evidence.
-    Which skills an agent actually ran is its caller's record (AP2).
+    The package is the one supplying this script; its manifest and the listed skills'
+    SKILL.md files are the evidence. Only a write binds: a note already posted reads by its
+    shape alone, whichever version it names. Which skills an agent actually ran is its
+    caller's record (AP2).
     """
     try:
-        manifest = json.loads(MANIFEST.read_text())
-        version, listed = manifest['version'], manifest['skills']
-        if not (isinstance(version, str) and re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version)
-                and isinstance(listed, list) and all(isinstance(x, str) for x in listed)):
+        listed = json.loads(MANIFEST.read_text())['skills']
+        if not (isinstance(listed, list) and all(isinstance(x, str) for x in listed)):
             raise ValueError('malformed')
     except (OSError, ValueError, KeyError, TypeError):
         refuse('skills', 'the installed package has no readable manifest')
     names = {x[len('./skills/'):] for x in listed if x.startswith('./skills/')}
     for item in skills.split(', '):
         name, _, at = item.partition('@')
-        if name not in names or at != version:
-            refuse('skills', f'a skill or version the installed package (openwiz {version}) does not have')
+        if name not in names or at != installed(name):
+            refuse('skills', 'a skill or version the installed package does not have')
+
+
+def installed(name):
+    """The `version:` of NAME's SKILL.md front matter in the installed package, or None."""
+    try:
+        text = (MANIFEST.parents[1] / 'skills' / name / 'SKILL.md').read_text()
+    except (OSError, UnicodeDecodeError):
+        return None
+    head = re.match(r'---\n(.*?)\n---\n', text, re.S)
+    found = head and re.search(r'(?m)^version: ([0-9]+\.[0-9]+\.[0-9]+)$', head.group(1))
+    return found.group(1) if found else None
 
 
 def body(fields):

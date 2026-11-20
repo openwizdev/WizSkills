@@ -178,7 +178,7 @@ class Copy(Base):
         # drivers' runs collide; a changed schema.json the kit then fails; the template's evidence shipped as the host's
         self.begin()
         repo = self.tmp / 'repo'
-        self.wd('copy', '--state', self.state, '--openwiz', OPENWIZ, '--into', repo, check=0)
+        self.wd('copy', '--state', self.state, '--openwiz', OPENWIZ, '--into', repo, '--login', 'machine', check=0)
         dest = repo / 'adapters' / 'examplehost'
         driver = (dest / 'driver').read_text()
         self.assertIn("'driver': 'examplehost'", driver)
@@ -215,7 +215,7 @@ class Copy(Base):
         repo = self.tmp / 'repo'
         (repo / 'adapters' / 'examplehost').mkdir(parents=True)
         (repo / 'adapters' / 'examplehost' / 'driver').write_text('# the user\'s own fix\n')
-        p = self.wd('copy', '--state', self.state, '--openwiz', OPENWIZ, '--into', repo, check=1)
+        p = self.wd('copy', '--state', self.state, '--openwiz', OPENWIZ, '--into', repo, '--login', 'machine', check=1)
         self.assertIn('already exists', p.stdout)
         self.assertEqual((repo / 'adapters/examplehost/driver').read_text(), '# the user\'s own fix\n')
 
@@ -226,7 +226,8 @@ class Copy(Base):
         shutil.copytree(OPENWIZ, changed)
         d = changed / 'adapters/template/driver'
         d.write_text(d.read_text().replace("'driver': 'template'", "'driver': 'base'"))
-        p = self.wd('copy', '--state', self.state, '--openwiz', changed, '--into', self.tmp / 'repo', check=1)
+        p = self.wd('copy', '--state', self.state, '--openwiz', changed, '--into', self.tmp / 'repo', '--login',
+                    'machine', check=1)
         self.assertIn("'driver': 'template'", p.stdout)
         self.assertFalse((self.tmp / 'repo' / 'adapters' / 'examplehost').exists())
 
@@ -505,7 +506,7 @@ class Stop(Base):
         # catches: a driver run or host machine left running after the skill ends
         self.begin()
         repo = self.tmp / 'repo'
-        self.wd('copy', '--state', self.state, '--openwiz', OPENWIZ, '--into', repo, check=0)
+        self.wd('copy', '--state', self.state, '--openwiz', OPENWIZ, '--into', repo, '--login', 'machine', check=0)
         driver = repo / 'adapters/examplehost/driver'
         run, pid = self.start_run(driver)
         self.assertTrue(alive(pid))

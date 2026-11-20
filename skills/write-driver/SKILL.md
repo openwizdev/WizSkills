@@ -33,7 +33,7 @@ Take them from it to a driver that passes, end to end. Every exact text you say 
 ## 2. Write
 
 1. Clone OpenWiz into a private temporary folder: `git clone --depth 1 https://github.com/openwizdev/OpenWiz <openwiz>`.
-2. `$W copy --state <state> --openwiz <openwiz> --into <the user's repository>`: `adapters/<host>/`, renamed for the host. It never overwrites.
+2. `$W copy --state <state> --openwiz <openwiz> --into <the user's repository> --login <machine|host>`: `adapters/<host>/`, renamed for the host. It never overwrites. Its `README.md` opens, right under its title, with driver v1's login line: `--login machine` writes `Login: stays on your machine` (the host's signed-in tools run on the user's machine), `--login host` writes `Login: held by <host>` (a cloud host holds the login). For a cloud host that takes an API key, add the name of the variable the user sets under that line: its name only, never a value.
 3. Adapt `command`, `launch`, `running` and `end`, as `<openwiz>/adapters/template/README.md` says, keeping its four rules. Keep the four words and `schema` exactly as driver v1 defines them; `schema.json` stays byte for byte.
 4. **live-shape**, before the driver reads any reply from the host's own tool: run that command live (ask first if it costs), save the reply with its values replaced by synthetic ones of the same type, and run `$W lesson live-shape --state <state> --live <reply file> --fixture <the reply the driver's tests feed it>`. On `fail`, fix the driver or its tests and check again.
 5. Run the driver's own tests until they pass.

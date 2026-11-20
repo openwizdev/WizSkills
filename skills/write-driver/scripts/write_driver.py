@@ -3,7 +3,7 @@
 
     write_driver.py begin --state <dir>
     write_driver.py host --state <dir> --host <host> --costly yes|no
-    write_driver.py copy --state <dir> --openwiz <checkout> --into <repository folder>
+    write_driver.py copy --state <dir> --openwiz <checkout> --into <repository folder> --login machine|host
     write_driver.py ticket --host <host> --account <login> --out <folder>
     write_driver.py ask --state <dir> --operation kit|expired-login|host [--step <host step>] --effect <effect>
     write_driver.py reply --state <dir> --file <the user's next message>
@@ -373,6 +373,21 @@ def cmd_host(a):
     return 0
 
 
+# Driver v1's login line: where the user's login lives, right under the README's title.
+LOGIN = {'machine': 'Login: stays on your machine', 'host': 'Login: held by {host}'}
+
+
+def login_line(readme, line):
+    """Open the README, right under its title, with exactly this login line, and no other."""
+    lines = readme.read_text(encoding='utf-8').split('\n') if readme.exists() else []
+    if not lines or not lines[0].startswith('# '):
+        raise Refused('the template README.md has no title to put the login line under: write it by hand')
+    rest = [x for x in lines[1:] if not x.startswith('Login:')]
+    while rest and not rest[0].strip():
+        rest.pop(0)
+    readme.write_text('\n'.join([lines[0], '', line, ''] + rest), encoding='utf-8')
+
+
 def cmd_copy(a):
     state = load(a.state)
     host = state['host']
@@ -401,6 +416,7 @@ def cmd_copy(a):
                 new = new.replace(old, to.format(**values))
             if new != text:
                 path.write_text(new, encoding='utf-8')
+        login_line(tmp / host / 'README.md', LOGIN[a.login].format(host=host))
         os.replace(tmp / host, dest)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -959,6 +975,7 @@ def parser():
     p.add_argument('--host', required=True)
     p.add_argument('--costly', choices=('yes', 'no'), required=True)
     p = cmd('copy')
+    p.add_argument('--login', choices=tuple(LOGIN), required=True)
     p.add_argument('--openwiz', required=True)
     p.add_argument('--into', required=True)
     p = cmd('ticket')

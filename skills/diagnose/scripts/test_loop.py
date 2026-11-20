@@ -29,6 +29,12 @@ def counter(tmp, fail_on):
     return [sys.executable, '-I', str(script), str(Path(tmp) / 'count')]
 
 
+# Python 3.10's subprocess.Popen keyword parameters (its documented signature).
+POPEN_3_10 = {'bufsize', 'executable', 'stdin', 'stdout', 'stderr', 'preexec_fn', 'close_fds',
+              'shell', 'cwd', 'env', 'universal_newlines', 'startupinfo', 'creationflags',
+              'restore_signals', 'start_new_session', 'pass_fds', 'user', 'group',
+              'extra_groups', 'encoding', 'errors', 'text', 'umask', 'pipesize'}
+
 ALIVE = ('def alive(pid):\n'
          '    try:\n'
          '        state = open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()[0]\n'
@@ -100,6 +106,30 @@ class Rate(unittest.TestCase):
             while any(map(alive, workers)) and time.monotonic() < deadline:
                 time.sleep(0.05)
             self.assertEqual([p for p in workers if alive(p)], [])
+
+    def test_rate_runs_on_python_3_10s_subprocess(self):
+        # catches: a Popen keyword newer than Python 3.10 (such as
+        # process_group, 3.11), which crashes rate before its first run on a
+        # host whose python3 is 3.10. Popen is narrowed to 3.10's parameters.
+        launcher = (
+            'import runpy, subprocess, sys\n'
+            f'ALLOWED = {sorted(POPEN_3_10)!r}\n'
+            'class Popen(subprocess.Popen):\n'
+            '    def __init__(self, *args, **kwargs):\n'
+            '        extra = sorted(set(kwargs) - set(ALLOWED))\n'
+            '        if extra:\n'
+            '            raise TypeError(f"Python 3.10 Popen has no {extra}")\n'
+            '        super().__init__(*args, **kwargs)\n'
+            'subprocess.Popen = Popen\n'
+            'sys.argv = sys.argv[1:]\n'
+            'runpy.run_path(sys.argv[0], run_name="__main__")\n')
+        for timeout in ([], ['--timeout', '0.5']):
+            r = subprocess.run([sys.executable, '-I', '-c', launcher, str(LOOP), 'rate', '--runs', '1',
+                                *timeout, '--', sys.executable, '-I', '-c', 'import time; time.sleep(2)'],
+                               capture_output=True, text=True, timeout=60)
+            expected = 'rate: 1/1 failed; exits none; timeouts 1\n' if timeout else \
+                'rate: 0/1 failed; exits 0x1; timeouts 0\n'
+            self.assertEqual((r.stdout, r.stderr), (expected, ''), timeout)
 
     def test_command_output_is_never_echoed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -206,6 +236,29 @@ class Clean(unittest.TestCase):
             r = run('clean', '[DEBUG-a4f2]', cwd=tmp)
             self.assertEqual((r.returncode, r.stdout), (2, ''))
             self.assertIn('cannot read', r.stderr)
+
+    def test_a_staged_tag_behind_index_flags_is_named(self):
+        # catches: trusting `git diff-files` to list every staged copy that
+        # differs from its file: it skips skip-worktree (sparse checkout) and
+        # assume-unchanged entries, so their staged tags were called clean.
+        for flag in ('sparse-checkout', 'assume-unchanged'):
+            with self.subTest(flag), tempfile.TemporaryDirectory() as tmp:
+                git_tree(tmp)
+                Path(tmp, 'docs').mkdir()
+                Path(tmp, 'docs/readme.md').write_text('notes\n')
+                Path(tmp, 'src/app.py').write_text('print("ready")\n# [DEBUG-a4f2]\n')
+                subprocess.run(['git', 'add', '.'], cwd=tmp, check=True)
+                if flag == 'sparse-checkout':
+                    subprocess.run(['git', 'sparse-checkout', 'set', 'docs'], cwd=tmp, check=True,
+                                   capture_output=True)
+                    self.assertFalse(Path(tmp, 'src/app.py').exists())
+                else:
+                    subprocess.run(['git', 'update-index', '--assume-unchanged', 'src/app.py'],
+                                   cwd=tmp, check=True)
+                    Path(tmp, 'src/app.py').write_text('print("ready")\n')
+                r = run('clean', '[DEBUG-a4f2]', cwd=tmp)
+                self.assertEqual((r.returncode, r.stdout),
+                                 (1, 'left: 1 [DEBUG-a4f2] in src/app.py:2 (staged)\n'))
 
     def test_a_leftover_outside_the_current_directory_is_named(self):
         with tempfile.TemporaryDirectory() as tmp:

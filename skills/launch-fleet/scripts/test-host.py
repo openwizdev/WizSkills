@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""host.py (#1371): builders start, wake and stop through the chosen host's driver.
+"""host.py (#1371): builders start, wake and stop through the chosen host's driver; a refused start or
+wake is tried twice more, then reported on the ticket once, and a later success clears it (#1446).
 
 python3 -I skills/launch-fleet/scripts/test-host.py
 
 Each case is a synthetic project checkout with `docs/agents/host.md`, an
 adapters folder of synthetic drivers (fixtures/driver.py, one per host) that
-log every call, and a private runs file. Nothing reaches GitHub or a host.
+log every call, a private runs file and a synthetic GitHub (fixtures/fake_github.py on PATH as `gh`).
+Nothing reaches GitHub or a host.
 """
 import json
 import os
@@ -18,6 +20,11 @@ import unittest
 
 HERE = Path(__file__).resolve().parent
 REPO = 'synthetic-owner/synthetic-repo'
+VERSION = json.loads((HERE.parents[2] / '.claude-plugin/plugin.json').read_text())['version']
+FLEET_MD = ('# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n'
+            '| Record authors | `openwiz[bot]`, `synthetic-owner` |\n')
+MARK = 'launch-fleet: driver start failed'
+NEXT = 'sign in to the harness, then start again'
 
 
 class Project:
@@ -50,8 +57,17 @@ class Project:
         self.log = self.dir / 'driver.log'
         self.runs = self.dir / 'private/runs.json'
         self.runs.parent.mkdir()
+        bin_dir = self.dir / 'bin'
+        bin_dir.mkdir()
+        (bin_dir / 'gh').write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, HERE / 'fixtures/fake_github.py'))
+        (bin_dir / 'gh').chmod(0o755)
+        self.world = self.dir / 'world.json'
+        self.world.write_text(json.dumps({'repo': REPO, 'me': 'openwiz[bot]', 'fleet_md': FLEET_MD, 'next_id': 5000,
+                                          'comments': {}, 'writes': [], 'faults': {}}))
         self.env = dict(self.git_env, OPENWIZ_ADAPTERS=str(self.dir / 'adapters'), LAUNCH_FLEET_RUNS=str(self.runs),
-                        FAKE_DRIVER_LOG=str(self.log))
+                        FAKE_DRIVER_LOG=str(self.log), PATH='%s:%s' % (bin_dir, os.environ['PATH']),
+                        FAKE_WORLD=str(self.world), LAUNCH_FLEET_HARNESS='Claude Code',
+                        LAUNCH_FLEET_MODEL='Opus 5.5 Medium', LAUNCH_FLEET_SKILLS='launch-fleet@' + VERSION)
 
     def git(self, *args):
         subprocess.run(['git', *args], check=True, env=self.git_env, capture_output=True, timeout=60)
@@ -73,6 +89,28 @@ class Project:
 
     def saved(self):
         return json.loads(self.runs.read_text()) if self.runs.exists() else None
+
+    def github(self):
+        return json.loads(self.world.read_text())
+
+    def fault(self, **faults):
+        world = self.github()
+        world['faults'] = faults
+        self.world.write_text(json.dumps(world))
+
+    def ticket(self, n=7):
+        """#N's comments as GitHub holds them: (first line, the rest) of each, oldest first."""
+        return [tuple(c['body'].split('\n', 1)) if '\n' in c['body'] else (c['body'], '')
+                for c in self.github()['comments'].get(str(n), [])]
+
+    def fleet_notes(self, n=7):
+        """The `state:` of each fleet status note on #N, oldest first."""
+        return [next(line[len('state: '):] for line in body.split('\n') if line.startswith('state: '))
+                for first, body in self.ticket(n) if first == '<!-- openwiz:status v1 -->' and 'agent: fleet' in body]
+
+    def failures(self, n=7):
+        """The failure comments on #N: each one's first line and text."""
+        return [(first, rest.strip()) for first, rest in self.ticket(n) if first.startswith(MARK)]
 
 
 class Host(unittest.TestCase):
@@ -116,20 +154,20 @@ class Host(unittest.TestCase):
         self.assertEqual((code, out), (1, 'refused: #7 already has a run on local; wake or stop it instead'))
         self.assertEqual(len(p.calls()), 1)
 
-    def test_a_driver_refusal_or_an_unreadable_answer_saves_no_run(self):
+    def test_an_unreadable_answer_saves_no_run_and_is_never_retried(self):
+        # A refusal is tested in Failures below. An unknown answer may mean a run exists: one call, no retry (#1446).
         p = Project(self)
-        code, out, _ = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', FAKE_DRIVER_MODE='refuse')
-        self.assertEqual((code, out), (1, 'refused: the synthetic harness is not signed in; '
-                                          'next: sign in to the harness, then start again'))
-        self.assertIsNone(p.saved())
         code, out, _ = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', FAKE_DRIVER_MODE='garbage')
         self.assertEqual((code, out), (1, 'unknown: the local driver answered no run; a run may exist, '
                                           'so reconcile before any retry'))
         self.assertIsNone(p.saved())
+        self.assertEqual(len(p.calls()), 1)
         code, out, _ = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', FAKE_DRIVER_MODE='extra')
         self.assertEqual((code, out), (1, 'unknown: the local driver answered no run; a run may exist, '
                                           'so reconcile before any retry'))
         self.assertIsNone(p.saved())
+        self.assertEqual(len(p.calls()), 2)
+        self.assertEqual(p.github()['writes'], [])
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5')[0], 0)
         self.assertEqual(p.host('wake', REPO, 7, FAKE_DRIVER_MODE='extra')[:2],
                          (1, 'unknown: the local driver answered no run; a run may exist, so reconcile before any retry'))
@@ -188,6 +226,111 @@ class Host(unittest.TestCase):
         code, _, err = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', OPENWIZ_ADAPTERS='')
         self.assertEqual(code, 2)
         self.assertIn('OPENWIZ_ADAPTERS', err)
+        self.assertEqual(p.calls(), [])
+
+
+STOPPED = 'stopped (driver start failed)'
+
+
+class Failures(unittest.TestCase):
+    """#1446: a refused start or wake is tried three times in all, then reported on the ticket once."""
+
+    def test_a_refused_start_is_tried_three_times_with_backoff_then_reported_once(self):
+        p = Project(self)
+        began = time.monotonic()
+        code, out, _ = p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')
+        self.assertGreaterEqual(time.monotonic() - began, 3, 'two waits, of 1 and 2 seconds')
+        self.assertEqual((code, out), (1, '%s: the local driver refused #7\'s start 3 times; next: %s' % (STOPPED, NEXT)))
+        self.assertEqual([c['command'] for c in p.calls()], ['start'] * 3)
+        self.assertIsNone(p.saved())
+        self.assertEqual(p.fleet_notes(), [STOPPED])
+        self.assertEqual(p.failures(), [(MARK, "The local driver could not start this ticket's builder after 3 "
+                                               "tries. What it says to do next: " + NEXT)])
+        # The fleet tries again later and the driver still refuses: no second note or comment.
+        writes = len(p.github()['writes'])
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')[:2], (code, out))
+        self.assertEqual(len(p.calls()), 6)
+        self.assertEqual(len(p.github()['writes']), writes)
+        self.assertEqual((p.fleet_notes(), len(p.failures())), ([STOPPED], 1))
+
+    def test_a_start_that_succeeds_on_a_retry_reports_nothing(self):
+        p = Project(self)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_REFUSALS='2'), (0, 'started #7 on local', ''))
+        self.assertEqual([c['command'] for c in p.calls()], ['start'] * 3)
+        self.assertEqual(p.saved()['runs'], {'7': {'host': 'local', 'run': 'local-run-7'}})
+        self.assertEqual(p.github()['writes'], [])
+
+    def test_a_later_success_clears_the_stopped_state_once(self):
+        p = Project(self)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')[0], 1)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm'), (0, 'started #7 on local', ''))
+        self.assertEqual(p.fleet_notes(), [STOPPED, 'done'])
+        self.assertEqual(p.failures(), [(MARK + ', cleared', "The local driver could not start this ticket's builder "
+                                         "after 3 tries. What it says to do next: %s\n\nCleared: the local driver "
+                                         "started it later." % NEXT)])
+        writes = len(p.github()['writes'])
+        self.assertEqual(p.host('wake', REPO, 7), (0, 'woke #7 on local', ''))
+        self.assertEqual(len(p.github()['writes']), writes)
+
+    def test_a_refused_wake_is_retried_reported_and_cleared(self):
+        p = Project(self)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm')[0], 0)
+        code, out, _ = p.host('wake', REPO, 7, FAKE_DRIVER_MODE='refuse')
+        self.assertEqual((code, out), (1, '%s: the local driver refused #7\'s wake 3 times; next: %s' % (STOPPED, NEXT)))
+        self.assertEqual([c['command'] for c in p.calls()], ['start', 'wake', 'wake', 'wake'])
+        self.assertEqual(p.fleet_notes(), [STOPPED])
+        self.assertEqual(p.failures(), [(MARK, "The local driver could not wake this ticket's builder after 3 tries. "
+                                               "What it says to do next: " + NEXT)])
+        self.assertEqual(p.host('wake', REPO, 7, FAKE_DRIVER_MODE='refuse')[0], 1)
+        self.assertEqual((p.fleet_notes(), len(p.failures())), ([STOPPED], 1))
+        self.assertEqual(p.host('wake', REPO, 7), (0, 'woke #7 on local', ''))
+        self.assertEqual(p.fleet_notes(), [STOPPED, 'done'])
+        self.assertEqual([first for first, _ in p.failures()], [MARK + ', cleared'])
+
+    def test_a_stop_is_never_retried(self):
+        p = Project(self)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm')[0], 0)
+        code, out, _ = p.host('stop', REPO, 7, FAKE_DRIVER_MODE='refuse')
+        self.assertEqual((code, out), (1, 'refused: the synthetic harness is not signed in; next: ' + NEXT))
+        self.assertEqual([c['command'] for c in p.calls()], ['start', 'stop'])
+        self.assertEqual(p.github()['writes'], [])
+
+    def test_a_credential_or_private_id_in_the_drivers_text_never_reaches_the_ticket(self):
+        secret = 'synthetic-secret-value-0123'
+        leaks = {'a token': 'export token=ghp_synthetic0123456789abcdef and retry',
+                 'a thread id': 'resume thr_synthetic1 by hand', 'a machine path': 'edit /srv/synthetic/driver.conf',
+                 'a secret value': 'use %s to sign in' % secret}
+        for name, text in leaks.items():
+            with self.subTest(name):
+                p = Project(self)
+                code, out, _ = p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse', FAKE_DRIVER_NEXT=text,
+                                      SYNTHETIC_API_TOKEN=secret)
+                withheld = 'withheld, as it held a credential, a private id or a machine path; run the driver by hand'
+                self.assertEqual((code, out), (1, '%s: the local driver refused #7\'s start 3 times; next: %s'
+                                               % (STOPPED, withheld)))
+                self.assertEqual(p.failures(), [(MARK, "The local driver could not start this ticket's builder after "
+                                                       "3 tries. What it says to do next: " + withheld)])
+                world = json.dumps(p.github())
+                for part in ('ghp_', 'thr_', '/srv/', secret):
+                    self.assertNotIn(part, world)
+
+    def test_a_report_github_lost_is_written_by_the_next_failure(self):
+        p = Project(self)
+        p.fault(post='fail')
+        code, out, _ = p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith('%s: the local driver refused #7\'s start 3 times; next: %s; unknown: the ticket '
+                                       'was not told (' % (STOPPED, NEXT)), out)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')[0], 1)
+        self.assertEqual((p.fleet_notes(), len(p.failures())), ([STOPPED], 1))
+
+    def test_no_fleet_identity_starts_or_wakes_nothing(self):
+        p = Project(self)
+        for args in (('start', REPO, 7, 'claude', 'm'), ('wake', REPO, 7)):
+            with self.subTest(args[0]):
+                code, out, err = p.host(*args, LAUNCH_FLEET_SKILLS='')
+                self.assertEqual((code, out), (2, ''))
+                self.assertIn('LAUNCH_FLEET_SKILLS', err)
         self.assertEqual(p.calls(), [])
 
 

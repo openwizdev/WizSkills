@@ -637,7 +637,7 @@ issue_facts() (
       and (.body == null or (.body | type) == "string") and (.state | IN("open", "closed")))
     |         select((.labels | type) == "array" and all(.labels[]; (.name | type) == "string")
           and (.updated_at | type) == "string")
-        | {number, title, state: (.state | ascii_upcase), body: (.body // ""), updatedAt: .updated_at,
+        | {number, id: (.node_id | if type == "string" then . else null end), title, state: (.state | ascii_upcase), body: (.body // ""), updatedAt: .updated_at,
            stateReason: (.state_reason | if type == "string" then ascii_upcase else null end),
            labels: {pageInfo: {hasNextPage: ((.labels | length) > 20)}, nodes: (.labels[:20] | map({name}))}}
       | . + {comments: $c[0], blockedBy: $b[0]}' "$facts.detail" > "$facts" || { rm -f "$facts"; exit 1; }
@@ -775,7 +775,7 @@ hydrate() (
   else printf '{}' > "$source.closures" || exit 1; fi
   jq --slurpfile c "$source.closures" 'with_entries(.value |=
     (if has("blockedBy") then .blockedBy.nodes |= map(. +
-      ($c[0][.node_id] // {closedByPullRequestsReferences: {nodes: []}}) | del(.node_id)) else . end))' \
+      ($c[0][.node_id] // {closedByPullRequestsReferences: {nodes: []}})) else . end))' \
     "$source.facts" > "$source.next" && mv "$source.next" "$source.facts" || exit 1
   jq --slurpfile facts "$source.facts" 'walk(if type == "object" and has("number")
     and (.closedByPullRequestsReferences.pageInfo != null or has("subIssues")
@@ -1133,16 +1133,9 @@ $n
     || die "can't read the issues"
 }
 
-# active: F6'"'"'s collision scope for a start claim (#1353): every open issue of
-# the repository labelled ready-for-agent, in a spec or not, read in full into
-# active.json, so the claim sees running and claimed work of every fleet. A
-# search that lists fewer than it counts stops the claim.
-active() {
-  label=$(jq -er '."ready-for-agent"' "$TMP/labels.json") || die "can't read the labels"
-  q="repo:$REPO is:issue is:open label:\"$label\""
-  encoded=$(jq -rn --arg q "$q" '$q | @uri') || die "can't encode the open work search"
+active_search() {
+  encoded=$(jq -rn --arg q "$1" '$q | @uri') || die "can't encode the open work search"
   endpoint="search/issues?q=$encoded&per_page=100" pages=0 listed=0 total=0
-  : > "$TMP/active-ids.txt" && : > "$TMP/singles.txt" || die "can't write"
   while [ -n "$endpoint" ]; do
     pages=$((pages + 1))
     [ $pages -le 11 ] || die "the search for open work did not end"
@@ -1156,6 +1149,22 @@ active() {
     endpoint=$(next_page "$TMP/search.json.http") || die "can't read the open work search pagination"
   done
   [ "$listed" = "$total" ] || die "the search listed $listed of $total open tickets, so a colliding start could be missed"
+}
+# active: F6'"'"'s collision scope for a builder start (#1353): every open issue
+# of the repository with live work, in a spec or not, read in full into
+# active.json, so a start sees running and claimed work of every fleet. Live
+# work is found whatever its labels (#1750): a ticket held by hand keeps its
+# builder records and its pull requests, so the ready label, any launch-fleet
+# record and a linked pull request are each searched. A search that lists
+# fewer than it counts stops the start.
+active() {
+  label=$(jq -er '."ready-for-agent"' "$TMP/labels.json") || die "can't read the labels"
+  : > "$TMP/active-ids.txt" && : > "$TMP/singles.txt" || die "can't write"
+  for q in "label:\"$label\"" '"launch-fleet" in:comments' 'linked:pr'; do
+    active_search "repo:$REPO is:issue is:open $q"
+  done
+  sort -u "$TMP/active-ids.txt" > "$TMP/active-ids.sorted" && mv "$TMP/active-ids.sorted" "$TMP/active-ids.txt" \
+    || die "can't write"
   set --
   while read -r id; do
     set -- "$@" -f "ids[]=$id"
@@ -1514,13 +1523,15 @@ def overlaps($a; $b): ($a | rtrimstr("/") | split("/")) as $x | ($b | rtrimstr("
 # where not both bullets say `(shared`.
 def paths_clash($a; $b): if $a == [] or $b == [] then false elif $a == null or $b == null then true
   else any($a[]; . as $x | any($b[]; .repo == $x.repo and overlaps(.path; $x.path) and ((.shared and $x.shared) | not))) end;
-def context_blocker($n): . as $t | $W.links["\($t.number):\($n)"] as $link
-  | ([scope_tickets[] | select(.number == $n)] | first) as $b
+# #1753: the blocker is the local ticket with the exact node id of the dependency;
+# a same-number issue of another repository, or an id not read, stays hard.
+def context_blocker($d): . as $t | $d.number as $n | $W.links["\($t.number):\($n)"] as $link
+  | ([scope_tickets[] | select(.number == $n and (.id | type) == "string" and .id == $d.node_id)] | first) as $b
   | $link != null and $link.kind == "file" and ($link.files | length) > 0 and $b != null
     and (($b | owned_paths) as $bp | $bp != null and ($bp | length) > 0
       and ([$t | relies[]] as $in | any($in[]; . as $i | any(($bp | map(.path))[], $link.files[]; overlaps($i; .))) | not)
       and (paths_clash($t | owned_paths; $bp) | not));
-def hard_blockers_done: . as $t | all(.blockedBy.nodes[]; blocker_done or (.number as $n | $t | context_blocker($n)));
+def hard_blockers_done: . as $t | all(.blockedBy.nodes[]; blocker_done or (. as $d | $t | context_blocker($d)));
 # Same ordinary start guards, before requiring a ready label or no held label.
 # The release path must be able to check these while ready is still removed.
 def start_clear($s):
@@ -2589,6 +2600,9 @@ elif [ "$cmd" = spec ]; then
     && mv "$TMP/spec-list.one" "$TMP/spec-list.sorted" || die "can't read the open issues"
   if [ -s "$TMP/spec-list.sorted" ]; then
     specs
+    # A takeover starts a builder too (#1750): once an old builder is
+    # archived, read every fleet's open work, as a start claim does.
+    if grep -q 'old builder archived' "$TMP/specs.json"; then active; fi
   else
     done_spec="fleet done #$SPEC: it is not an open spec; delete this fleet thread's loop and archive the thread"
     printf '[]' > "$TMP/specs.json" || die "can't write"

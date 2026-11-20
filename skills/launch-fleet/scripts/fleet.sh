@@ -597,7 +597,7 @@ comment_facts() (
           and (.body | type) == "string" and (.created_at | type) == "string"
           and (.updated_at | type) == "string"))
       | {pageInfo: {hasPreviousPage: false},
-         nodes: (authored($a[0]) | map({databaseId: .id, createdAt: .created_at, updatedAt: .updated_at, body}))}' \
+         nodes: (authored($a[0]) | map({databaseId: .id, createdAt: .created_at, updatedAt: .updated_at, body, author: (.user.login | ascii_downcase)}))}' \
       "$TMP/comments-$n.raw" > "$TMP/comments-$n.json" 2> /dev/null; then
     exit 0
   fi
@@ -1258,23 +1258,68 @@ def refused_lately($last; $k): $last != null and ($last.r | test("^" + $k + " (r
 def look($n; $rs; $why): ($why | gsub("\\bthr_[A-Za-z0-9][A-Za-z0-9_-]*"; "[private thread]")) as $why | if any($rs[]; (.r | gsub("\\bthr_[A-Za-z0-9][A-Za-z0-9_-]*"; "[private thread]")) == "look: \($why)") then empty else "look #\($n): \($why)" end;
 
 # A spec'"'"'s approved plan graph: its latest comment that starts
-# "**Plan graph approved by" (the to-tickets skill'"'"'s record): the revision
+# "**Plan graph approved by" (the to-tickets skill'"'"'s record), or to-tickets'"'"'
+# machine plan approval (#1340, decisions.v1), read whole: its header, grill
+# line, checks summary, optional changed line, table, fingerprint and revision
+# text, in that layout, the table naming exactly the revision text'"'"'s tickets,
+# titles and blockers. Anything less is no approval. Either has the revision
 # number, a table with one row per ticket (| #<n> | <title> | <blocked by> |
-# <label> |), and "Fingerprint: <the SHA-256 of the revision text>".
+# <label> |), and "Fingerprint: <the SHA-256 of the revision text>"; a machine
+# record also its revision text, which the check hashes ($W.machine_text).
+def at_($l; $i): $l[$i] // "";
+def machine_record($ls): ($ls | until(length == 0 or .[-1] != ""; .[:-1])) as $l
+  | (at_($l; 0) | capture("^\\*\\*Machine plan approval, [0-9]{4}-[0-9]{2}-[0-9]{2}, revision (?<n>[1-9][0-9]*):\\*\\* links, relies, sizes, width and owned paths passed\\.$") | .n | tonumber) as $n
+  | select(at_($l; 1) | test("^Grill confirmed: https://github\\.com/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/(issues|pull)/[1-9][0-9]*#issuecomment-[1-9][0-9]*$"))
+  | select(at_($l; 2) == "" and at_($l; 4) == "")
+  | (at_($l; 3) | capture("^Checks: (?<t>[1-9][0-9]*) tickets; links [0-9]+; relies [0-9]+; sizes S [0-9]+, M [0-9]+, L [0-9]+; width: chain [0-9]+, widest [0-9]+; owned paths [0-9]+\\.$") | .t | tonumber) as $t
+  | (if $n > 1 then (select((at_($l; 5) | test("^Changed since revision \($n - 1): .+\\.$")) and at_($l; 6) == "") | 7) else 5 end) as $k
+  | select(at_($l; $k) == "| Ticket | Title | Blocked by | Label |" and at_($l; $k + 1) == "| --- | --- | --- | --- |")
+  | ($k + 2 + $t) as $j
+  | [$l[$k + 2:$j][] | capture("^\\| #(?<n>[1-9][0-9]*) \\| (?<title>.+) \\| (?<b>none|#[1-9][0-9]*(?: #[1-9][0-9]*)*) \\| (?<label>ready-for-agent|ready-for-human|none) \\|$")
+     | {number: (.n | tonumber), title: (.title | gsub("\\\\\\|"; "|")), blockers: .b, label: .label}] as $rows
+  | select(($rows | length) == $t and at_($l; $j) == "")
+  | (at_($l; $j + 1) | capture("^Fingerprint: `(?<f>[0-9a-f]{64})`$") | .f) as $f
+  | select(at_($l; $j + 2) == "" and at_($l; $j + 3) == "<details><summary>Revision text</summary>"
+      and at_($l; $j + 4) == "" and at_($l; $j + 5) == "```text"
+      and ($l | length) >= $j + 9 and $l[-3] == "```" and $l[-2] == "" and $l[-1] == "</details>")
+  | $l[$j + 6:-3] as $rev
+  | select(at_($rev; 0) == "plan-graph revision v2" and (at_($rev; 1) | test("^spec #[1-9][0-9]* body sha256 [0-9a-f]{64}$")))
+  | [$rev[2:][] | capture("^ticket #(?<n>[1-9][0-9]*) blocked-by (?<b>none|#[1-9][0-9]*(?: #[1-9][0-9]*)*) body sha256 [0-9a-f]{64} title (?<title>.+)$")
+     | {number: (.n | tonumber), title, blockers: .b}] as $named
+  | select(($named | length) == ($rev | length) - 2
+      and ($named | sort_by(.number)) == ($rows | map({number, title, blockers}) | sort_by(.number)))
+  | {revision: $n, fingerprint: $f, text: (($rev | join("\n")) + "\n"), rows: ($rows | map({number, label: .label}))};
 def approval: (.body | lines) as $ls | ($ls | map(select(test("\\S"))) | first // "" | sub("^\\s+"; "")) as $head
-  | if ($head | startswith("**Plan graph approved by")) | not then empty else
-      {id: .databaseId, at: .createdAt,
+  | if ($head | startswith("**Plan graph approved by")) then
+      {id: .databaseId, at: .createdAt, machine: false,
        revision: ([$head | capture(", revision (?<n>[0-9]+):\\*\\*") | .n | tonumber] | first),
        fingerprint: ([$ls[] | capture("^\\s*Fingerprint:\\s*`?(?<f>[0-9a-f]{64})`?\\s*$") | .f] | first),
        rows: [$ls[] | select(test("^\\|\\s*#[0-9]+\\s*\\|")) | split("|") | map(sub("^\\s+"; "") | sub("\\s+$"; "")) | .[1:-1]
-              | select(length >= 4) | {number: (.[0] | ltrimstr("#") | tonumber), label: .[-1]}]} end;
+              | select(length >= 4) | {number: (.[0] | ltrimstr("#") | tonumber), label: .[-1]}]}
+    else (.databaseId as $id | .createdAt as $at | [machine_record($ls)] | first // empty | {id: $id, at: $at, machine: true} + .) end;
 def latest($s): [$s.comments.nodes[] | approval] | max_by(.id);
 def subs($s): [$s.subIssues.nodes[].number];
 def row($s): . as $t | [latest($s).rows[]? | select(.number == $t.number)] | first;
 # Current: the latest approval'"'"'s fingerprint is the one to-tickets'"'"'s
 # revision.sh gives the plan now ($W.fingerprints, read only for a spec with a
 # ticket that could start). Anything else is stale: nothing under it starts.
-def current($s): latest($s).fingerprint as $f | $f != null and $f == $W.fingerprints["\($s.number)"];
+def plan_current($s): latest($s) as $a | $a.fingerprint as $f | $f != null and $f == $W.fingerprints["\($s.number)"]
+  and (($a.machine | not) or $f == ($W.machine_text // {})["\($s.number)"]);
+# R1: a contract hold is released by the owner'"'"'s approval (or a C2 record in
+# its form), never by a machine revision.
+def owner_at($s): [$s.comments.nodes[] | approval | select(.machine | not)] | max_by(.id) | .at;
+# #1340: to-spec'"'"'s steering video is the spec'"'"'s latest comment that is exactly
+# its link line, a blank line and "Comment here to steer: stop, reset, or
+# anything else." (R3), or since WS33 (#1736) "Steering by comment is off for
+# now: tell your orchestrator what to change (stop, reset, or anything else)."
+# R2 (decision 7030919773): no comment on it steers, in
+# any mode and whoever posted the video, until #1402'"'"'s identity separation is
+# verified: no author can yet prove a comment is the owner'"'"'s. A spec with a
+# video gets one look saying so (steer_lines); the owner steers through the
+# orchestrator.
+def video: [.comments.nodes[] | select(.body | gsub("\r"; "") | sub("\\s+$"; "")
+  | test("^\\[Watch the narrated spec\\]\\(https://[^\\s<>()\\\\`]+\\)\n\n(Comment here to steer: stop, reset, or anything else|Steering by comment is off for now: tell your orchestrator what to change \\(stop, reset, or anything else\\))\\.$"))] | max_by(.databaseId);
+def current($s): plan_current($s);
 def spec_rec($s; $re): any($s | records[]; .r | test($re));
 # The latest fleet record routes the spec to its loop. Fresh wakes keep the
 # existing assignments, including agents whose records predate the loop.
@@ -1410,7 +1455,7 @@ def hits($s): . as $t | cutoff($s) as $c | relies as $ps
            | select(. != null) | select(. as $f | any($ps[]; . as $p | $f | matches($p)))] | unique)}
        | select(.files | length > 0)] | sort_by(.pr) end;
 def due_notes($s): records as $rs | [hits($s)[] | .pr as $p | select(any($rs[]; .r | test("^(held for|noted) #\($p)\\b")) | not)];
-def held($s): ([records[] | kind("held for") | select(.r | startswith("held for ordering:") | not) | .at] | max) as $h | approved_at($s) as $a
+def held($s): ([records[] | kind("held for") | select(.r | startswith("held for ordering:") | not) | .at] | max) as $h | (if $s == null then own else owner_at($s) end) as $a
   | $h != null and ($a == null or $h > $a);
 # Every hold comment of any kind, as read: a `held ...` record (contract,
 # ordering, manual, live), an `Orchestrator: **held` instruction, or a plain
@@ -1430,7 +1475,7 @@ def held_since: [.timelineItems.nodes[]? | select(.label.name == "held") | .crea
 # hold comment since the label last went on must be a contract `held for #<P>`
 # record. A manual, live, ordering or plain hold there, newer or older than the
 # approval, keeps it held: each keeps its own release evidence.
-def released($s): held_since as $since | approved_at($s) as $a
+def released($s): held_since as $since | (if $s == null then own else owner_at($s) end) as $a
   | ([records[] | kind("held for") | select(.r | startswith("held for ordering:") | not) | .at | select($since != null and . >= $since)] | max) as $h
   | $h != null and $a != null and $a > $h
     and all(hold_comments[] | select(.at >= $since); .r | test("^held for #[1-9][0-9]{0,8}(\\b|$)"));
@@ -1900,18 +1945,24 @@ def approval_lines: . as $s | records as $srs | latest($s) as $a
     elif ($a.rows | length) == 0 then look(.number; $srs; "its latest plan graph approval lists no tickets")
     else
       ($W.fingerprints["\($s.number)"] // null) as $now
-      | if $now == null or current($s) then empty
+      | if $now == null or plan_current($s) then empty
+        elif $a.machine and $a.fingerprint == $now then look($s.number; $srs; "its latest machine plan approval'"'"'s revision text is not the plan its fingerprint names")
         else "changed since revision \($a.revision // "?") (fingerprint now \($now[:12]))" as $what
         | if any($s | records[]; .r == "needs approval: \($what)") then empty
           else "re-approve #\($s.number): \($what)" end end
     end;
+
+# R2 (decision 7030919773): with a video, one look, once: its "look: <reason>"
+# record settles it. Comments on the video steer nothing.
+def steer_lines: .number as $n | records as $srs
+  | if video != null then look($n; $srs; "comments on the video steer nothing until the identity separation of OpenWiz #1402 is verified; the owner steers through the orchestrator") else empty end;
 
 def spec_lines: . as $s | records as $srs
   | if .subIssues.pageInfo.hasNextPage then look(.number; $srs; "more than 100 tickets, so its graph can'"'"'t all be read")
     elif .comments.pageInfo.hasPreviousPage then look(.number; $srs; "comment history could not be read in full")
     else
       latest($s) as $a
-      | approval_lines,
+      | approval_lines, steer_lines,
         ($s.subIssues.nodes[] | ticket_lines($s)),
         (if $a == null or ($a.rows | length) == 0 then empty
          else [$s.subIssues.nodes[] | select(.state == "OPEN" and row($s) == null and (follow_up($s) | not)) | .number] as $pending
@@ -1943,7 +1994,7 @@ def is_named($s): ($s | has("named") | not) or (.number | among($s.named));
 def part_lines: . as $s | records as $srs
   | if .subIssues.pageInfo.hasNextPage or (.total // 0) > 100 then look(.number; $srs; "more than 100 tickets, so its graph can'"'"'t all be read")
     elif .comments.pageInfo.hasPreviousPage then look(.number; $srs; "comment history could not be read in full")
-    else approval_lines, (.subIssues.nodes[] | select(is_named($s)) | ticket_lines($s)) end;
+    else approval_lines, steer_lines, (.subIssues.nodes[] | select(is_named($s)) | ticket_lines($s)) end;
 
 def candidates: ($W.specs[] as $s | $s.subIssues.nodes[] | select(is_named($s)) | {t: ., s: $s}),
   ($W.singles[] | {t: ., s: null});
@@ -2173,12 +2224,20 @@ fingerprints() {
         [ ${#k} != 64 ] || keep "spec-$s.fingerprint" "$k $f"
       fi
     fi
-    printf '%s"%s":{"hash":"%s","agreed":%s}' "$sep" "$s" "$f" "$agreed" >> "$TMP/fingerprints.json" || die "can't write"
+    # #1340 R4: a machine approval'"'"'s own revision text, hashed, so its table
+    # and text are bound to the plan its fingerprint names.
+    t=''
+    if jqw -j "[\$W.specs[] | select(.number == $s)] | first | latest(.) | select(.machine) | .text" > "$TMP/machine-$s.txt"; then
+      [ ! -s "$TMP/machine-$s.txt" ] || t=$(hash < "$TMP/machine-$s.txt") || die "can't hash the machine approval of #$s"
+    else die "can't read the machine approval of #$s"; fi
+    case $t in *[!0-9a-f]*) t='' ;; esac
+    printf '%s"%s":{"hash":"%s","agreed":%s,"text":"%s"}' "$sep" "$s" "$f" "$agreed" "$t" >> "$TMP/fingerprints.json" || die "can't write"
     sep=','
   done
   printf '}' >> "$TMP/fingerprints.json" || die "can't write"
   jq --slurpfile f "$TMP/fingerprints.json" '.fingerprints = ($f[0] | with_entries(.value = .value.hash))
-    | .fingerprint_agreement = ($f[0] | with_entries(.value = .value.agreed))' "$TMP/world.json" > "$TMP/w2.json" \
+    | .fingerprint_agreement = ($f[0] | with_entries(.value = .value.agreed))
+    | .machine_text = ($f[0] | with_entries(.value = .value.text))' "$TMP/world.json" > "$TMP/w2.json" \
     && mv "$TMP/w2.json" "$TMP/world.json" || die "can't record the fingerprints"
 }
 

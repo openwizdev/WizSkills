@@ -2,9 +2,9 @@
 
 Read this when a plan graph is approved, when a spec moves to fresh wakes, or when GitHub's messages are turned on or off. Get every brief and loop prompt from `scripts/brief.py`; never write one by hand.
 
-## Launch (the orchestrator, when the user approves a plan graph)
+## Launch (the orchestrator, when a plan graph is approved: by its machine approval, or by the user)
 
-1. **Check the approval is recorded** on the spec issue, as `to-tickets` writes it. No record, no fleet.
+1. **Check the approval is recorded** on the spec issue, as `to-tickets` writes it. No record, no fleet. A machine approval needs no human reply (J203): re-run to-tickets' checks on the plan as it stands (its step 4, with the record's grill link, revision number, date and changed line) and launch only when `approve.py` prints exactly the record.
 2. **Make sure the project has its two loops.** They drive every fleet in the project. `room-cli loop list` shows them if they exist. If not, create them. The safety net, a check every 10 minutes until GitHub's messages are on (step 3), then every 30:
 
    ```sh

@@ -288,7 +288,12 @@ class Report(Helper):
         self.assertEqual((before, blank), (BODY, ''))
         self.assertRegex(marker, loop['marker'])
         self.assertIn(f"`{loop['label']}` label", sent['say'])
+        # FL1's landed comment comes only through a brief triage sends to a fleet;
+        # a report held for the owner can close with no comment (#126 R1).
+        self.assertIn('only if triage sends it to a fleet and that fix merges', sent['say'])
         self.assertIn('pull request and the release', sent['say'])
+        self.assertIn('a report held for the owner can close without that comment', sent['say'])
+        self.assertNotIn('if a fix for it merges', sent['say'])
 
 
 class Outcomes(Helper):

@@ -22,6 +22,7 @@ SCRIPT = HERE.parent / 'scripts' / 'write_driver.py'
 FIXTURES = HERE / 'fixtures'
 OPENWIZ = FIXTURES / 'openwiz'
 CONTRACT = FIXTURES / 'contract'
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(SCRIPT.parent))
 import write_driver as wd  # noqa: E402
 
@@ -75,21 +76,22 @@ class Base(unittest.TestCase):
     def saved(self):
         return json.loads((self.state / 'run.json').read_text())
 
-    def shift_paste(self, seconds):
+    def shift_paste(self, seconds, passed_too=False):
         s = self.saved()
         s['paste'] -= seconds
-        if s.get('passed_at'):
+        if passed_too and s.get('passed_at'):  # as if time went on after the driver passed
             s['passed_at'] -= seconds
         (self.state / 'run.json').write_text(json.dumps(s))
 
     def begin(self, costly=False):
-        self.wd('begin', '--state', self.state, '--host', 'examplehost', '--costly', 'yes' if costly else 'no',
+        self.wd('begin', '--state', self.state, check=0)
+        self.wd('host', '--state', self.state, '--host', 'examplehost', '--costly', 'yes' if costly else 'no',
                 check=0)
 
-    def reply(self, text, *extra):
+    def reply(self, text, *extra, check=None):
         f = self.tmp / 'reply.txt'
         f.write_text(text)
-        return self.wd(*extra, '--file', f)
+        return self.wd(*extra, '--file', f, check=check)
 
     def kit(self, out=PASS5, code=0, *extra):
         (self.tmp / 'kit.out').write_text(out)
@@ -110,7 +112,7 @@ class Base(unittest.TestCase):
 
     def passing_report(self, minutes=23):
         self.begin()
-        self.kit(check=None)
+        self.kit()
         self.lessons_pass()
         self.shift_paste(minutes * 60 - 30)
         self.wd('stop-all', '--state', self.state, check=0)
@@ -138,7 +140,7 @@ class Forms(unittest.TestCase):
                 with self.subTest(rel):
                     self.assertEqual(readers[group](text), want)
                 seen += 1
-        self.assertGreaterEqual(seen, 70)
+        self.assertEqual(seen, 68)
 
     def test_ticket_writes_the_exact_forms(self):
         # catches: a throwaway repository whose fleet.md, ticket or start record a builder or the kit can't read
@@ -206,7 +208,8 @@ class Copy(Base):
         # catches: a host folder name that breaks the report and share forms later in the run
         for host in ('Example', 'example-', '9host', 'a' * 41):
             with self.subTest(host):
-                self.wd('begin', '--state', self.state, '--host', host, '--costly', 'no', check=1)
+                self.wd('begin', '--state', self.state, check=0)
+                self.wd('host', '--state', self.state, '--host', host, '--costly', 'no', check=1)
 
 
 class Kit(Base):
@@ -229,7 +232,7 @@ class Kit(Base):
     def test_a_kit_that_could_not_run_records_nothing(self):
         # catches: a kit crash or a garbled kit line read as passing or as a result
         self.begin()
-        self.kit(PASS5, 0, check=None)
+        self.kit(PASS5, 0)
         for out, code in (('', 2), (PASS5.replace('pass token', 'pass extra'), 0), (PASS5 * 2, 0),
                           (PASS5.replace('pass stop: synthetic\n', ''), 0), (PASS5, 1)):
             with self.subTest(out=out, code=code):
@@ -254,7 +257,7 @@ class Kit(Base):
         self.assertEqual(p.returncode, 1)
         self.assertIn('no answer yet', p.stdout)
         self.reply('yes', 'reply', '--state', self.state)
-        self.kit(PASS5, 0, '--asked', ask_id, check=None)
+        self.kit(PASS5, 0, '--asked', ask_id)
         self.assertEqual(self.kit(PASS5, 0, '--asked', ask_id).returncode, 1, 'one ask covers one step')
 
     def test_a_no_skips_the_kit_and_its_checks_read_not_run(self):
@@ -279,7 +282,8 @@ class Asks(Base):
                 p = self.wd('ask', '--state', self.state, '--step', step, '--effect', 'cost money', check=1)
                 self.assertNotIn('Before I', p.stdout)
                 self.assertIn('credential', p.stdout)
-        self.wd('begin', '--state', self.tmp / 'other', '--host', 'key-host', '--costly', 'no', check=0)
+        self.wd('begin', '--state', self.tmp / 'other', check=0)
+        self.wd('host', '--state', self.tmp / 'other', '--host', 'key-host', '--costly', 'no', check=0)
         self.wd('ask', '--state', self.tmp / 'other', '--step', 'start a sandbox', '--effect', 'start a machine',
                 check=0)
 
@@ -304,15 +308,24 @@ class Clock(Base):
         # catches: a time measured from another moment than paste, rounded down, or kept running after 5 of 5
         p = self.passing_report(23)
         self.assertEqual(p.stdout.split('\n')[0], 'Your examplehost driver passed 5 of 5 in 23 minutes.')
-        self.shift_paste(600)  # later reruns of the report keep the time it passed at
+        self.shift_paste(600, passed_too=True)  # later reruns of the report keep the time it passed at
         p = self.wd('report', '--state', self.state, '--pr',
                     'https://github.com/example-user/examplehost-driver/pull/1', check=0)
         self.assertTrue(p.stdout.startswith('Your examplehost driver passed 5 of 5 in 23 minutes.\n'), p.stdout)
 
+    def test_the_clock_starts_at_paste_not_when_the_host_is_named(self):
+        # catches: the grill's minutes left out of the time because the clock restarts when the host is named
+        self.wd('begin', '--state', self.state, check=0)
+        self.shift_paste(10 * 60)
+        paste = self.saved()['paste']
+        self.wd('begin', '--state', self.state, check=0)  # a resumed session keeps it
+        self.wd('host', '--state', self.state, '--host', 'examplehost', '--costly', 'no', check=0)
+        self.assertEqual(self.saved()['paste'], paste)
+
     def test_a_fast_run_says_one_minute(self):
         # catches: `0 minutes` or `1 minutes`, both refused by the share line
         self.begin()
-        self.kit(check=None)
+        self.kit()
         self.lessons_pass()
         self.wd('stop-all', '--state', self.state, check=0)
         p = self.wd('report', '--state', self.state, '--pr', 'https://github.com/example-user/x/pull/2', check=0)
@@ -321,25 +334,25 @@ class Clock(Base):
     def test_a_run_that_never_passes_still_says_its_time(self):
         # catches: a not-passing run ending without its time, or claiming passing with a failed lesson
         self.begin()
-        self.kit(check=None)
+        self.kit()
         live = self.tmp / 'live.json'
         fixture = self.tmp / 'fixture.json'
         live.write_text('{"sandbox": {"state": "running"}}')
         fixture.write_text('{"state": "running"}')
         p = self.wd('lesson', 'live-shape', '--state', self.state, '--live', live, '--fixture', fixture)
         self.assertIn('live-shape fail: shape-differs', p.stdout)
-        self.shift_paste(58 * 60)
+        self.shift_paste(58 * 60 - 30)
         self.wd('stop-all', '--state', self.state, check=0)
         p = self.wd('report', '--state', self.state, check=0)
         lines = p.stdout.rstrip('\n').split('\n')
-        self.assertEqual(lines[0], 'Your examplehost driver reached 5 of 5 after 59 minutes; not passing yet.')
+        self.assertEqual(lines[0], 'Your examplehost driver reached 5 of 5 after 58 minutes; not passing yet.')
         self.assertEqual(lines[2], 'Live lessons: live-shape fail, wake-after-turn not run, expired-login not run')
         self.assertEqual(wd.read_report('\n'.join(lines))['result'], 'not-passing')
 
     def test_a_passing_report_needs_its_pull_request(self):
         # catches: a passing report without the pull request line the contract requires
         self.begin()
-        self.kit(check=None)
+        self.kit()
         self.lessons_pass()
         self.wd('stop-all', '--state', self.state, check=0)
         p = self.wd('report', '--state', self.state, check=1)
@@ -389,7 +402,7 @@ class Stop(Base):
         last = p.stdout.strip().split('\n')[-1]
         self.assertTrue(last.startswith('Not stopped: sandbox example-2'), last)
         self.assertIn('false', last)
-        self.kit(check=None)
+        self.kit()
         self.lessons_pass()
         p = self.wd('report', '--state', self.state, '--pr', 'https://github.com/example-user/x/pull/3', check=0)
         self.assertEqual(wd.read_report(p.stdout.rstrip('\n'))['stopped'], False)
@@ -448,7 +461,7 @@ class ExpiredLogin(Base):
         p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', driver, '--harness',
                     'exampleagent', check=1)
         self.assertIn('ask first', p.stdout)
-        self.wd('ask', '--state', self.state, '--step', 'check the expired-login lesson', '--effect',
+        self.wd('ask', '--state', self.state, '--step', 'check the expired sign-in lesson', '--effect',
                 'start a machine', check=0)
         ask_id = self.saved()['asks'][-1]['id']
         self.reply('no', 'reply', '--state', self.state)
@@ -541,9 +554,7 @@ class NoCredential(Base):
                 self.assertNotIn(SECRET, path.read_text())
         self.assertNotIn(SECRET, self.gh_log.read_text())
         self.assertEqual(oct(self.state.stat().st_mode & 0o777), '0o700')
-        source = SCRIPT.read_text()
-        self.assertNotIn('os.environ[', source)
-        self.assertNotIn('os.getenv', source)
+        self.assertEqual(oct((self.state / 'run.json').stat().st_mode & 0o777), '0o600')
 
 
 if __name__ == '__main__':

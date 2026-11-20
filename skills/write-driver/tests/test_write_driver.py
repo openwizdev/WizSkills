@@ -107,8 +107,20 @@ class Base(unittest.TestCase):
         self.wd('lesson', 'live-shape', '--state', self.state, '--live', live, '--fixture', live, check=0)
         self.wd('lesson', 'wake-after-turn', '--state', self.state, '--turn-ended', 'yes', '--wake', 'answered',
                 '--note-edited', 'yes', '--second-note', 'no', check=0)
-        rec = CONTRACT / 'lessons' / 'expired-login-pass.json'
-        self.wd('lesson', 'record', '--state', self.state, '--file', rec, check=0)
+        self.wd('lesson', 'expired-login', '--state', self.state, '--driver', self.fixed_driver(), '--harness',
+                'exampleagent', check=0)
+
+    def fixed_driver(self, name='fixed', host='examplehost', change=None):
+        """A copy of the synthetic template that fails `start` on an expired sign-in, with its own fixtures."""
+        folder = self.tmp / name
+        if not folder.exists():
+            shutil.copytree(OPENWIZ / 'adapters' / 'template', folder)
+            text = (folder / 'driver').read_text()
+            text = text.replace("HOST = 'template'", "HOST = %r" % host)
+            text = text.replace('OPENWIZ_TEMPLATE_STATE', 'OPENWIZ_EXAMPLEHOST_STATE')
+            text = text.replace('FIRST_TURN_CHECK = False', 'FIRST_TURN_CHECK = True')
+            (folder / 'driver').write_text(change(text) if change else text)
+        return folder / 'driver'
 
     def passing_report(self, minutes=23):
         self.begin()
@@ -221,7 +233,10 @@ class Kit(Base):
         p = self.kit(out, 1)
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         argv = (self.tmp / 'kit.argv').read_text().split('\n')
-        for pair in (['--driver', str(self.tmp / 'driver')], ['--repo', 'example-user/examplehost-driver-kit'],
+        proxy = argv[argv.index('--driver') + 1]
+        self.assertTrue(proxy.startswith(str(self.state) + '/'), proxy)
+        self.assertIn(str(self.tmp / 'driver'), Path(proxy).read_text())
+        for pair in (['--repo', 'example-user/examplehost-driver-kit'],
                      ['--ticket', '7'], ['--harness', 'exampleagent'], ['--model', 'example-model']):
             i = argv.index(pair[0])
             self.assertEqual(argv[i:i + 2], pair)
@@ -230,7 +245,8 @@ class Kit(Base):
         self.assertIn('Kit: version pass, start pass, wake fail, stop pass, token pass', p.stdout)
 
     def test_a_kit_that_could_not_run_records_nothing(self):
-        # catches: a kit crash or a garbled kit line read as passing or as a result
+        # catches: a kit crash or a garbled kit line read as passing or as a result, or an earlier pass kept
+        # after a rerun that proved nothing (R7)
         self.begin()
         self.kit(PASS5, 0)
         for out, code in (('', 2), (PASS5.replace('pass token', 'pass extra'), 0), (PASS5 * 2, 0),
@@ -239,7 +255,7 @@ class Kit(Base):
                 p = self.kit(out, code)
                 self.assertEqual(p.returncode, 2, p.stdout)
                 self.assertIn('could not run', p.stdout)
-                self.assertEqual(set(self.saved()['kit'].values()), {'pass'})
+                self.assertEqual(self.saved()['kit'], {}, 'a rerun without usable results keeps no old pass')
 
     def test_a_costly_kit_run_needs_a_yes_first(self):
         # catches: a kit run against a host that costs money or starts a machine without the user's yes
@@ -248,8 +264,7 @@ class Kit(Base):
         self.assertEqual(p.returncode, 1)
         self.assertIn('ask first', p.stdout)
         self.assertFalse((self.tmp / 'kit.argv').exists())
-        ask = self.wd('ask', '--state', self.state, '--step', 'run the driver kit', '--effect', 'start a machine',
-                      check=0)
+        ask = self.wd('ask', '--state', self.state, '--operation', 'kit', '--effect', 'start a machine', check=0)
         self.assertEqual(ask.stdout.strip(), 'Before I run the driver kit on examplehost: this may start a machine. '
                                              'Say yes to go ahead, or no to skip it.')
         ask_id = self.saved()['asks'][-1]['id']
@@ -263,13 +278,62 @@ class Kit(Base):
     def test_a_no_skips_the_kit_and_its_checks_read_not_run(self):
         # catches: a declined step run anyway, or its checks left at an earlier pass
         self.begin(costly=True)
-        self.wd('ask', '--state', self.state, '--step', 'run the driver kit', '--effect', 'cost money', check=0)
+        self.wd('ask', '--state', self.state, '--operation', 'kit', '--effect', 'cost money', check=0)
         ask_id = self.saved()['asks'][-1]['id']
         self.reply('yes, but use the small machine', 'reply', '--state', self.state)
         p = self.kit(PASS5, 0, '--asked', ask_id)
         self.assertEqual(p.returncode, 3, p.stdout)
         self.assertFalse((self.tmp / 'kit.argv').exists())
         self.assertEqual(set(self.saved()['kit'].values()), {'not run'})
+
+
+    def test_a_yes_to_another_step_never_runs_the_kit(self):
+        # catches (R3): a yes to one host step passed as the consent for a costly kit run the user was never asked
+        self.begin(costly=True)
+        self.wd('ask', '--state', self.state, '--operation', 'host', '--step', 'read the host help', '--effect',
+                'cost money', check=0)
+        ask_id = self.saved()['asks'][-1]['id']
+        self.reply('yes', 'reply', '--state', self.state, check=0)
+        p = self.kit(PASS5, 0, '--asked', ask_id)
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn('not an ask for this step', p.stdout)
+        self.assertFalse((self.tmp / 'kit.argv').exists())
+        self.wd('ask', '--state', self.state, '--operation', 'kit', '--effect', 'cost money', check=0)
+        kit_ask = self.saved()['asks'][-1]['id']
+        self.reply('yes', 'reply', '--state', self.state, check=0)
+        p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', self.fixed_driver(), '--harness',
+                    'exampleagent', '--asked', kit_ask)
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn('not an ask for this step', p.stdout)
+        self.assertNotIn('expired-login', self.saved()['lessons'])
+
+    def test_runs_the_kit_started_are_stopped_even_when_its_start_check_fails(self):
+        # catches (R4): a run the kit started, whose start check then failed, left running while stop-all says
+        # everything stopped
+        self.begin()
+        driver = self.fixed_driver('plain')
+        self.env['PATH'] = '%s:%s' % (driver.parent / 'fixtures', self.env['PATH'])
+        self.env['FAKE_KIT_STARTS'] = '1'
+        out = ('pass version: synthetic\nfail start: no builder status note appeared\nfail wake: not run: start '
+               'failed\nfail stop: not run: start failed\npass token: synthetic\n')
+        (self.tmp / 'kit.out').write_text(out)
+        self.env.update(FAKE_KIT_OUT=str(self.tmp / 'kit.out'), FAKE_KIT_ARGV=str(self.tmp / 'kit.argv'),
+                        FAKE_KIT_EXIT='1')
+        self.wd('kit', '--state', self.state, '--openwiz', OPENWIZ, '--driver', driver, '--repo',
+                'example-user/examplehost-driver-kit', '--ticket', 7, '--harness', 'fake-harness', '--model',
+                'example-model', check=1)
+        runs = list((self.tmp / 'driver-state').iterdir())
+        self.assertEqual(len(runs), 1)
+        pid = int(runs[0].read_text())
+        self.addCleanup(lambda: alive(pid) and os.killpg(pid, signal.SIGKILL))
+        self.assertTrue(alive(pid))
+        p = self.wd('stop-all', '--state', self.state, check=0)
+        self.assertEqual(p.stdout.strip().split('\n')[-1], 'Stopped: everything it started (1)')
+        for _ in range(50):
+            if not alive(pid):
+                break
+            time.sleep(0.05)
+        self.assertFalse(alive(pid))
 
 
 class Asks(Base):
@@ -279,13 +343,14 @@ class Asks(Base):
         for step in ('set EXAMPLEHOST_API_TOKEN for the driver', 'paste your PAT', 'read your login',
                      'copy the apikey', 'use the oauth app'):
             with self.subTest(step):
-                p = self.wd('ask', '--state', self.state, '--step', step, '--effect', 'cost money', check=1)
+                p = self.wd('ask', '--state', self.state, '--operation', 'host', '--step', step, '--effect',
+                            'cost money', check=1)
                 self.assertNotIn('Before I', p.stdout)
                 self.assertIn('credential', p.stdout)
         self.wd('begin', '--state', self.tmp / 'other', check=0)
         self.wd('host', '--state', self.tmp / 'other', '--host', 'key-host', '--costly', 'no', check=0)
-        self.wd('ask', '--state', self.tmp / 'other', '--step', 'start a sandbox', '--effect', 'start a machine',
-                check=0)
+        self.wd('ask', '--state', self.tmp / 'other', '--operation', 'host', '--step', 'start a sandbox', '--effect',
+                'start a machine', check=0)
 
     def test_only_an_explicit_yes_goes_ahead(self):
         # catches: "maybe", "looks good, but change X" or an empty reply read as consent
@@ -416,53 +481,88 @@ class Stop(Base):
 
 
 class ExpiredLogin(Base):
-    def copy(self, fixed):
-        repo = self.tmp / 'repo'
-        self.wd('copy', '--state', self.state, '--openwiz', OPENWIZ, '--into', repo, check=0)
-        driver = repo / 'adapters/examplehost/driver'
-        text = driver.read_text().replace("HOST = 'template'", "HOST = 'examplehost'")
-        if fixed:
-            text = text.replace('FIRST_TURN_CHECK = False', 'FIRST_TURN_CHECK = True')
-        driver.write_text(text)
-        return driver
-
     def test_the_templates_silent_start_fails_the_lesson(self):
         # catches: a driver that answers a run whose first turn ended on an expired sign-in passing the lesson
         self.begin()
-        p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', self.copy(False), '--harness',
-                    'exampleagent')
+        driver = self.fixed_driver('silent', change=lambda t: t.replace('FIRST_TURN_CHECK = True',
+                                                                        'FIRST_TURN_CHECK = False'))
+        p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', driver, '--harness',
+                    'exampleagent', check=0)
         self.assertIn('expired-login fail: silent-start', p.stdout)
         self.assertEqual(self.saved()['lessons']['expired-login'], 'fail')
-        self.assertEqual(list((self.tmp / 'driver-state').iterdir()) and
-                         [alive(int(f.read_text())) for f in (self.tmp / 'driver-state').iterdir()], [False])
 
     def test_a_driver_that_fails_start_with_the_sign_in_next_passes(self):
         # catches: the lesson never reaching pass for a driver that does it right
         self.begin()
-        p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', self.copy(True), '--harness',
+        p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', self.fixed_driver(), '--harness',
                     'exampleagent', check=0)
         self.assertIn('expired-login pass', p.stdout)
 
-    def test_the_stand_in_never_touches_the_users_sign_in(self):
-        # catches: the lesson signing the user out, or running their real harness, to get an expired login
+    def test_a_sign_in_next_for_another_harness_or_host_fails(self):
+        # catches (R5): a driver whose expired-login error sends the user to the wrong harness or host passing
+        self.begin()
+        for name, change in (('other-host', lambda t: t.replace("HOST = 'examplehost'", "HOST = 'otherhost'")),
+                             ('other-harness', lambda t: t.replace("(req['harness'], HOST)", "('otheragent', HOST)"))):
+            with self.subTest(name):
+                driver = self.fixed_driver(name, change=change)
+                p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', driver, '--harness',
+                            'exampleagent', check=0)
+                self.assertIn('expired-login fail: no-sign-in-next', p.stdout)
+
+    def test_the_probe_runs_only_the_stand_in_in_a_credential_free_environment(self):
+        # catches (R2, R5): the probe handing the caller's environment (and any credential in it) to the driver,
+        # or falling through to the user's real harness
         self.begin()
         real = self.bin / 'exampleagent'
         real.write_text('#!/bin/sh\ntouch "%s"\n' % (self.tmp / 'real-harness-ran'))
         real.chmod(0o755)
-        self.wd('lesson', 'expired-login', '--state', self.state, '--driver', self.copy(True), '--harness',
-                'exampleagent', check=0)
+        seen = self.tmp / 'driver-env.json'
+        driver = self.fixed_driver('env', change=lambda t: t.replace(
+            "def main():\n", "def main():\n    open(%r, 'w').write(json.dumps(dict(os.environ)))\n" % str(seen)))
+        self.wd('lesson', 'expired-login', '--state', self.state, '--driver', driver, '--harness', 'exampleagent',
+                check=0)
+        env = json.loads(seen.read_text())
+        self.assertNotIn(SECRET, json.dumps(env))
+        self.assertEqual(sorted(k for k in env if k not in ('PWD', 'SHLVL', '_', 'LC_CTYPE')),
+                         ['HOME', 'LANG', 'OPENWIZ_EXAMPLEHOST_STATE', 'PATH'])
+        self.assertNotEqual(env['HOME'], self.env['HOME'])
+        self.assertNotIn(str(self.bin), env['PATH'])
         self.assertFalse((self.tmp / 'real-harness-ran').exists())
         self.assertEqual(self.gh_calls(), [])
+
+    def test_a_driver_that_never_runs_the_stand_in_proves_nothing(self):
+        # catches (R5): a lesson read as passing although the driver never ran the stand-in harness
+        self.begin()
+        driver = self.fixed_driver('no-harness', change=lambda t: t.replace(
+            "    if cmd == 'start':\n", "    if cmd == 'start':\n        refuse('run run-x: the first turn ended at "
+            "once: the harness is not signed in (exit 1)', 'sign in to exampleagent on examplehost yourself, then "
+            "start again')\n"))
+        p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', driver, '--harness', 'exampleagent',
+                    check=1)
+        self.assertIn('never ran the stand-in', p.stdout)
+        self.assertNotIn('expired-login', self.saved()['lessons'])
+
+    def test_a_harness_that_is_not_a_harness_name_is_refused_before_any_file_is_written(self):
+        # catches (R6): a harness given as a path overwriting that file with the stand-in
+        self.begin()
+        victim = self.tmp / 'victim'
+        victim.write_text('keep me\n')
+        for harness in (str(victim), '../victim', 'Example', 'a/b'):
+            with self.subTest(harness):
+                p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', self.fixed_driver(),
+                            '--harness', harness, check=1)
+                self.assertIn('not a harness name', p.stdout)
+        self.assertEqual(victim.read_text(), 'keep me\n')
 
     def test_a_costly_lesson_needs_a_yes_and_a_no_reads_not_run(self):
         # catches: a lesson that starts a machine on a costly host run without asking
         self.begin(costly=True)
-        driver = self.copy(True)
+        driver = self.fixed_driver()
         p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', driver, '--harness',
                     'exampleagent', check=1)
         self.assertIn('ask first', p.stdout)
-        self.wd('ask', '--state', self.state, '--step', 'check the expired sign-in lesson', '--effect',
-                'start a machine', check=0)
+        self.wd('ask', '--state', self.state, '--operation', 'expired-login', '--effect', 'start a machine',
+                check=0)
         ask_id = self.saved()['asks'][-1]['id']
         self.reply('no', 'reply', '--state', self.state)
         self.wd('lesson', 'expired-login', '--state', self.state, '--driver', driver, '--harness', 'exampleagent',
@@ -530,6 +630,54 @@ class Share(Base):
                 self.assertEqual(p.returncode, 1)
                 self.assertIn("can't find where driver times go", p.stdout)
                 self.assertNotIn('Share your time?', p.stdout)
+
+    def test_a_changed_account_or_issue_needs_a_fresh_preview(self):
+        # catches (R1): a yes to one account's preview posting as another account, or to an issue no longer the
+        # pinned Driver times issue
+        for change in ('account', 'issue'):
+            with self.subTest(change):
+                self.setUp()
+                self.offer()
+                world = json.loads(self.world.read_text())
+                if change == 'account':
+                    world['login'] = 'other-user'
+                else:
+                    world['issues'][0]['pinned'] = False
+                self.world.write_text(json.dumps(world))
+                p = self.reply('yes', 'share', 'reply', '--state', self.state, check=1)
+                self.assertIn('fresh preview', p.stdout)
+                self.assertFalse([c for c in self.gh_calls() if c['argv'][:2] == ['issue', 'comment']])
+        p = self.wd('share', 'offer', '--state', self.state, check=1)  # the issue is still unpinned: no offer
+        self.assertIn("can't find where driver times go", p.stdout)
+
+    def test_a_fresh_preview_after_an_account_change_names_the_new_account(self):
+        # catches (R1): the stale preview's account reused after the binding changed
+        self.offer()
+        world = json.loads(self.world.read_text())
+        world['login'] = 'other-user'
+        self.world.write_text(json.dumps(world))
+        self.reply('yes', 'share', 'reply', '--state', self.state, check=1)
+        p = self.wd('share', 'offer', '--state', self.state, check=0)
+        self.assertEqual(wd.read_preview(p.stdout.rstrip('\n'))['account'], 'other-user')
+        self.reply('yes', 'share', 'reply', '--state', self.state, check=0)
+        self.assertEqual(len([c for c in self.gh_calls() if c['argv'][:2] == ['issue', 'comment']]), 1)
+
+    def test_changed_evidence_or_resources_void_the_report_and_the_pending_share(self):
+        # catches (R7): a share offered or posted from a report that no longer holds: a new thing started, or a
+        # kit rerun that proved nothing
+        self.passing_report(23)
+        self.wd('started', 'add', '--state', self.state, '--what', 'sandbox example-4', '--', 'true', check=0)
+        p = self.wd('share', 'offer', '--state', self.state, check=1)
+        self.assertNotIn('Share your time?', p.stdout)
+        self.setUp()
+        self.offer()
+        self.kit('', 2)
+        p = self.reply('yes', 'share', 'reply', '--state', self.state, check=1)
+        self.assertFalse([c for c in self.gh_calls() if c['argv'][:2] == ['issue', 'comment']])
+        self.wd('stop-all', '--state', self.state, check=0)
+        p = self.wd('report', '--state', self.state, check=0)
+        self.assertTrue(p.stdout.startswith('Your examplehost driver reached 0 of 5 after'), p.stdout)
+        self.wd('share', 'offer', '--state', self.state, check=1)
 
     def test_no_offer_unless_passing_and_stopped(self):
         # catches: a share offered for a run that did not pass, or that left something running

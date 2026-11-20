@@ -531,5 +531,23 @@ class Dispatcher(unittest.TestCase):
         self.assertRegex(step, r'`archive`', 'an archive line keeps its own guard')
 
 
+    def test_the_archive_settles_with_the_flow_inputs_and_never_archives_on_a_refused_settlement(self):
+        # catches: the archive row's `merge.py settle` dropping the project's private FM4 flow inputs
+        # that `merge` passes after `--`, so a queued merge's cost is posted with unknown role totals a
+        # later settle cannot correct (#115 R1); and archiving on a `refused:` settle, after which
+        # fleet.sh prints no archive line and the owed cost has no retry (#115 R2).
+        lines = (HERE.parent / 'SKILL.md').read_text().splitlines()
+        row = next(x for x in lines if x.startswith('| `archive #N` |'))
+        merge = next(x for x in lines if x.startswith('4. **Merge:**'))
+        self.assertIn("private flow files after `--`", merge)
+        settle = row.split('merge.py" settle', 1)[1]
+        self.assertRegex(settle.split('Archive the agents')[0], r"private flow files after `--`",
+                         'settle gets the same flow inputs as merge')
+        refused = settle.split('`refused:`', 1)[1].split('Archive the agents')[0]
+        self.assertNotIn('archive goes ahead', refused)
+        self.assertRegex(refused, r'leaves? the `archive` line for a later wake',
+                         'a refused settlement keeps its retry: the archive waits')
+
+
 if __name__ == '__main__':
     unittest.main()

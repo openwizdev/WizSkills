@@ -1111,10 +1111,18 @@ with open(world + '.lock', 'w') as lock:
         # The note lapsed (a long stall) and a newer builder claimed the ticket.
         mine['updated'] = stamp(40)
         it['comments'].append({'id': 105, 'author': 'openwiz[bot]', 'body': sys.argv[3], 'updated': stamp(0)})
+    elif mode == 'resumed':
+        # The agent got its answer and wrote working over its asking note.
+        mine['body'] = mine['body'].replace('state: asking', 'state: working'); mine['updated'] = stamp(0)
     else:
         mine['body'] = mine['body'].replace('state: working', 'state: ' + mode); mine['updated'] = stamp(0)
     json.dump(w, open(world, 'w'))
     open(out + '.mark', 'w').write(str(calls()))
+if mode == 'resumed':
+    end, beats = time.monotonic() + 30, calls('"PATCH"')
+    while calls('"PATCH"') < beats + 1 and time.monotonic() < end:
+        time.sleep(0.05)
+    sys.exit(0)
 time.sleep(60)
 '''
 
@@ -1173,6 +1181,22 @@ class Run(Tracker):
         for stamp in (beat, mine['updated']):  # the beat's time, and GitHub's updated_at
             self.assertLess(abs((datetime.now(timezone.utc) - datetime.strptime(
                 stamp, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)).total_seconds()), 60)
+
+    def test_a_run_takes_off_only_the_needs_info_its_own_beat_added(self):
+        # catches: a heartbeat that never takes off the needs-info its own beat added once its
+        # agent resumes (the label stuck after the answer), or that takes it off under a person's
+        # own login, where its application can't be told from that person's hold (#1702 R1).
+        cases = ((BOT, ['ready-for-agent'], [('labeled', BOT), ('unlabeled', BOT)]),
+                 ('synthetic-owner', ['ready-for-agent', 'needs-info'], [('labeled', 'synthetic-owner')]))
+        for login, labels, timeline in cases:
+            with self.subTest(login=login):
+                self.setUp()
+                self.world['login'] = login
+                self.ticket(self.world)['comments'][3] = comment(104, login, note(state='asking'), minutes=25)
+                result, _ = self.run_command('resumed')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.ticket()['labels'], labels)
+                self.assertEqual([(e['event'], e['actor']['login']) for e in self.ticket()['events']], timeline)
 
     def test_run_stops_the_command_when_a_newer_builder_holds_the_claim(self):
         # catches: a heartbeat that keeps the work running, or takes the ticket back, after its

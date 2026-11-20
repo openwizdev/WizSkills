@@ -17,6 +17,9 @@ run (#1447): a heartbeat before COMMAND starts and every --every seconds (defaul
 while it runs: an edit of note ID as it reads now, only its time set to now, so GitHub's
 updated_at, which alone counts toward the 30-minute lease, is new (a note written this same
 second waits for the next). A beat whose read shows the note done or stopped writes nothing.
+A beat adds needs-info for an asking note as a write does, but takes it off only when this same
+run's beat applied it, under a GitHub App's own login (#1720): a hold a person set, or one the
+repair put back, stays.
 A failed beat is reported and tried again after 60 seconds (or --every, if shorter). When no
 beat can start 120 seconds before the lease of the last good one ends, or on the fence exit,
 it stops COMMAND's whole process group (SIGTERM, then SIGKILL to any of it left after 10
@@ -477,7 +480,24 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
     # R1: settle needs-info from what GitHub shows now, so a retry repairs a failed label write.
     labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
     asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)
-    if asking and ASKING_LABEL not in labels:
+    if beat:
+        # #1720: a heartbeat takes off only the application its own run's POST made, as the
+        # repair does (#1702): a hold a person set, or one the repair put back, stays.
+        if ASKING_LABEL not in labels:
+            args.mine = None
+        if asking and ASKING_LABEL not in labels:
+            before = len(label_events(repo, n))
+            gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+            new = label_events(repo, n)[before:]
+            if app(login) and len(new) == 1 and new[0]['event'] == 'labeled' and by(new[0], login):
+                args.mine = before
+        elif not asking and ASKING_LABEL in labels and args.mine is not None:
+            def labelled():
+                return ASKING_LABEL in [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+            mine, args.mine = args.mine, None
+            for line in cleanup(repo, n, login, mine, labelled):
+                print(line, file=out)
+    elif asking and ASKING_LABEL not in labels:
         gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
     elif not asking and ASKING_LABEL in labels and asked_last_by(repo, n, login):
         gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
@@ -495,7 +515,7 @@ def run(args):
     if args.note is None or not re.fullmatch(r'[1-9][0-9]*', args.note):
         refuse('note', 'not a comment id')
     every = int(args.every)
-    args.floor = None
+    args.floor = args.mine = None
     ok_at = time.monotonic()
     try:
         args.floor = write(args, datetime.now(timezone.utc), beat=True, out=sys.stderr)['time']

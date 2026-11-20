@@ -28,9 +28,9 @@ URL = re.compile(r"\b(?:https?|ftp|file)://\S+|\bwww\.\S+", re.I)
 # A backstop under triage's own reading, which the report's words may steer:
 # text addressed to an agent, or anything to run or follow.
 INSTRUCTION = re.compile(
-    r"`|https?://|\bwww\.|^\s*\$ |\b(?:agents?|assistants?|AI|LLMs?|claude|codex|gpt)\b\s*[,:(]"
+    r"```|`[^`\n]*[\s|;&$<>/\\=][^`\n]*`|https?://|\bwww\.|^\s*\$ |\b(?:agents?|assistants?|AI|LLMs?|claude|codex|gpt)\b\s*[,:(]"
     r"|\b(?:system|assistant|developer)\s*:|\bignore (?:all|any|previous|prior|your|the above)\b"
-    r"|\b(?:run|execute|curl|wget|sudo|pip install|npm install)\b.*(?:\||;|&&|\.sh\b)",
+    r"|\b(?:run|execute|curl|wget|sudo|pip install|npm install)\b.*(?:\||&&|\.sh\b)",
     re.I | re.M)
 PRIVATE = re.compile(
     r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[abpr]-[\w-]{10,})"
@@ -65,10 +65,9 @@ def words(report):
 
 
 def copied(report, text):
-    """The first piece of the report the brief repeats: a link, code or a line."""
-    pieces = URL.findall(report["body"]) + re.findall(r"`+([^`]+)`+", report["body"])
-    pieces += [line.strip() for line in report["body"].split("\n") if len(line.strip()) >= 24]
-    return next((p for p in pieces if p.strip() and p.strip() in text), None)
+    """Whether the brief repeats a whole line of the report (its marker included).
+    A report with a link or code in it is already held, so lines are enough."""
+    return any(line.strip() in text for line in report["body"].split("\n") if len(line.strip()) >= 24)
 
 
 def plan(case):

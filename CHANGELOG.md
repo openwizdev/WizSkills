@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 - 2026-11-20
+
+- `handoff` 0.2.1: Handoff's and launch-fleet's shipped tests and evidence now use only the synthetic thread ids, email domains and paths OpenWiz's release privacy scan allows, so the packaged skills pass that scan; every test checks what it did before.
+- `launch-fleet` 0.2.1: Handoff's and launch-fleet's shipped tests and evidence now use only the synthetic thread ids, email domains and paths OpenWiz's release privacy scan allows, so the packaged skills pass that scan; every test checks what it did before.
+
 ## 0.2.0 - 2026-11-20
 
 - WizSkills 0.2.0: 18 skills, each one short job in plain steps, with its mechanics in tested scripts, so your agents load a fraction of the text.

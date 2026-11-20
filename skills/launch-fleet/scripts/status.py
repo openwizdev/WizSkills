@@ -5,6 +5,7 @@
                   --harness TEXT --model TEXT --skills 'SKILL@X.Y.Z[, ...]' --step TEXT [--pr URL] [--preview URL]
                   [--time TIME] [--note ID]
   status.py check --repo OWNER/NAME
+  status.py repair --repo OWNER/NAME
 
 write: exit 0 written and read back, 2 refused or failed (a refusal comes before any
 call; a failure after a write is repaired by running the same write again), 3 stop:
@@ -12,6 +13,11 @@ the claim is another note's or the fence stopped it (nothing more written). An e
 reads back too (#1441): it steps down when another live note of its kind appeared, and
 puts back a release a sibling wake wrote between its read and its edit.
 check: exit 0 no mismatch, 1 mismatches printed, 2 could not read. It never writes.
+repair (#1592): the wake's check and fix. For each asking note with no needs-info it reads
+the ticket's notes again, adds the label only while a live note is still asking, then reads
+again and takes off a label it added last once no live note is asking; a needs-info anyone
+else added last stays. It prints each change and every other mismatch, one report line each:
+exit 0 nothing to report, 1 lines printed, 2 `status check failed: <why>` printed.
 Every GitHub call goes through `gh api`.
 """
 import argparse
@@ -419,9 +425,9 @@ def mismatches(number, labels, found, prs, now):
     return lines
 
 
-def check(args, now):
-    owner, name = args.repo.split('/')
-    authors = record_authors(args.repo)
+def scan(repo, authors, now):
+    """Every mismatch on the open issues: (issue number, line)."""
+    owner, name = repo.split('/')
     cursor, found = None, []
     while True:
         page = gh('POST', 'graphql', {'query': QUERY,
@@ -429,18 +435,78 @@ def check(args, now):
         issues = page['data']['repository']['issues']
         for issue in issues['nodes']:
             if issue['comments']['pageInfo']['hasNextPage']:
-                comments = pages(f'repos/{args.repo}/issues/{issue["number"]}/comments')
+                comments = pages(f'repos/{repo}/issues/{issue["number"]}/comments')
             else:
                 comments = [{'id': c['databaseId'], 'user': c['author'], 'body': c['body'],
                              'updated_at': c['updatedAt']} for c in issue['comments']['nodes']]
-            found += mismatches(issue['number'], [label['name'] for label in issue['labels']['nodes']],
-                                notes(comments, authors), issue['closedByPullRequestsReferences']['nodes'], now)
+            found += [(issue['number'], line) for line in mismatches(
+                issue['number'], [label['name'] for label in issue['labels']['nodes']],
+                notes(comments, authors), issue['closedByPullRequestsReferences']['nodes'], now)]
         if not issues['pageInfo']['hasNextPage']:
             break
         cursor = issues['pageInfo']['endCursor']
-    for line in found:
+    return found
+
+
+def check(args, now):
+    found = scan(args.repo, record_authors(args.repo), now)
+    for _, line in found:
         print(line)
     return 1 if found else 0
+
+
+def settle(repo, n, authors, login):
+    """#1592: needs-info on one ticket from its notes as they are now, read again after the
+    label write, so an agent that resumed meanwhile is never marked as asking. The report
+    line, or None when nothing is left to report."""
+    comments = f'repos/{repo}/issues/{n}/comments'
+
+    def asking():
+        now = datetime.now(timezone.utc)
+        return next((x for x in notes(pages(comments), authors) if x[1]['state'] == 'asking' and live(x, now)), None)
+
+    def labelled():
+        return ASKING_LABEL in [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+
+    if asking() is None or labelled():
+        return None
+    gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+    still = asking()
+    if still is None:
+        # Only a label this login added last comes off: a person's needs-info is theirs.
+        if labelled() and asked_last_by(repo, n, login):
+            gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
+        return None
+    return f'#{n} note {still[0]} {still[1]["agent"]} asking: {ASKING_LABEL} added'
+
+
+def guarded(what, act):
+    """ACT's result, or Failed naming WHAT: a GitHub answer of the wrong shape fails too."""
+    try:
+        return act()
+    except Failed as error:
+        raise Failed(f'{what}: {error}')
+    except (KeyError, TypeError, IndexError, ValueError) as error:
+        raise Failed(f'{what}: unexpected GitHub answer: {error!r}')
+
+
+def repair(args, now):
+    def read():
+        authors = record_authors(args.repo)
+        return authors, scan(args.repo, authors, now)
+
+    authors, found = guarded('could not read', read)
+    login = viewer()
+    report = []
+    for n, line in found:
+        # Without its own login the repair can't tell its label from a person's: it reports.
+        if line.endswith(f': no {ASKING_LABEL} label') and login is not None:
+            line = guarded(f'could not repair #{n}', lambda: settle(args.repo, n, authors, login))
+        if line is not None:
+            report.append(line)
+    for line in report:
+        print(line)
+    return 1 if report else 0
 
 
 def main(argv):
@@ -452,8 +518,8 @@ def main(argv):
     # --skills has no default: a missing one is refused as the contract's missing field.
     for flag in ('--skills', '--why', '--pr', '--preview', '--time', '--note'):
         w.add_argument(flag)
-    c = sub.add_parser('check')
-    c.add_argument('--repo', required=True)
+    for command in ('check', 'repair'):
+        sub.add_parser(command).add_argument('--repo', required=True)
     args = parser.parse_args(argv)
     now = datetime.now(timezone.utc)
     try:
@@ -466,6 +532,13 @@ def main(argv):
                 raise Failed(f'could not read: {error}')
             except (KeyError, TypeError, IndexError, ValueError) as error:
                 raise Failed(f'could not read: unexpected GitHub answer: {error!r}')
+        if args.command == 'repair':
+            # R2: a failed check is a report line of its own, never a clean pass.
+            try:
+                return repair(args, now)
+            except Failed as error:
+                print(f'status check failed: {error}')
+                return 2
         if not re.fullmatch(r'[1-9][0-9]*', args.ticket):
             raise Refused('ticket: not an issue number')
         try:

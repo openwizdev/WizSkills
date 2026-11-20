@@ -1017,23 +1017,16 @@ class FleetRun(Tracker):
         self.world = self.load()
         self.ticket(self.world)['prs'][0]['state'] = 'MERGED'
         self.save()
-        check = span('launch-fleet', r'`([^`]*status\.py check[^`]*)`')
-        fix = span('launch-fleet', r'`(gh issue edit [^`]*--add-label needs-info[^`]*)`')
-        self.assertIsNotNone(check, 'launch-fleet has no one status check call')
-        self.assertIsNotNone(fix, 'launch-fleet has no one needs-info fix')
+        # #1592: the wake's one status call checks and fixes; its lines are the report.
+        check = span('launch-fleet', r'`([^`]*status\.py repair[^`]*)`')
+        self.assertIsNotNone(check, 'launch-fleet has no one status repair call')
         check = filled('launch-fleet', check, {'<owner>/<repo>': REPO})
         seen = self.step(check)
         self.assertEqual(seen.returncode, 1, seen.stderr)
-        lines = seen.stdout.splitlines()
-        self.assertEqual(sorted(lines), sorted([
+        self.assertEqual(sorted(seen.stdout.splitlines()), sorted([
             f'#12 note {builder} builder working: pull request {pr} merged',
-            '#13 note 201 builder asking: no needs-info label',
+            '#13 note 201 builder asking: needs-info added',
             '#14 note 301 builder working: lapsed, no edit for 30 minutes']))
-        for line in lines:
-            if line.endswith(': no needs-info label'):
-                n = line.split(' ')[0][1:]
-                done = self.step(filled('launch-fleet', fix, {'<N>': n, '<owner>/<repo>': REPO}))
-                self.assertEqual(done.returncode, 0, done.stderr)
         run(build, 'done', 'merged', *mine, '--pr', pr)
 
         again = self.step(check)
@@ -1049,7 +1042,6 @@ class FleetRun(Tracker):
         self.assertEqual(sorted(set(edits)), sorted({f'repos/{REPO}/issues/comments/{builder}',
                                                      f'repos/{REPO}/issues/comments/{reviewer}'}))
         added = [c['body'] for c in self.calls() if c['method'] == 'POST' and c['path'].endswith('/labels')]
-        added += [{'labels': [c['body']]} for c in self.calls() if c['method'] == 'EDIT']
         self.assertTrue(added)
         self.assertTrue(all(set(b['labels']) <= LABELS for b in added), added)
 
@@ -1084,15 +1076,17 @@ class WakeRepair(Tracker):
         resumed = note(state='working', step='got the answer')
         resume = {'issue': 12, 'edit': 104, 'body': resumed}
         person = {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}
+        add, remove = ('POST', f'repos/{REPO}/issues/12/labels'), ('DELETE', f'repos/{REPO}/issues/12/labels/needs-info')
         cases = {
             # The reviewer's reproduction: the builder resumes after the check reads the tracker.
-            'resumed after the read': ({'race_after_scan': [resume]}, ['ready-for-agent']),
+            # Not even a moment's needs-info: the app would show a false wait.
+            'resumed after the read': ({'race_after_scan': [resume]}, ['ready-for-agent'], []),
             # The builder resumes as the label is written.
-            'resumed at the label write': ({'race_label': [resume]}, ['ready-for-agent']),
+            'resumed at the label write': ({'race_label': [resume]}, ['ready-for-agent'], [add, remove]),
             # A person marks the ticket as the builder resumes: theirs stays.
-            'a person added it': ({'race_label': [resume, person]}, ['ready-for-agent', 'needs-info']),
+            'a person added it': ({'race_label': [resume, person]}, ['ready-for-agent', 'needs-info'], [add]),
         }
-        for name, (race, labels) in cases.items():
+        for name, (race, labels, writes) in cases.items():
             with self.subTest(name):
                 self.setUp()
                 self.ticket(self.world)['comments'].append(comment(104, BOT, asking))
@@ -1100,6 +1094,7 @@ class WakeRepair(Tracker):
                 self.save()
                 self.wake()
                 self.assertEqual(self.ticket()['labels'], labels)
+                self.assertEqual(self.writes(), writes)
                 # The next wake sees nothing to fix or report on #12.
                 code, report = self.wake()
                 self.assertEqual((code, report), (0, []))

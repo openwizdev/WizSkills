@@ -26,9 +26,8 @@ The private service setting `decision_repositories` explicitly names both roles:
 `public` and `private`, each an exact `{owner, name}` repository object. It is
 optional in `service/config.json` under the existing private state directory;
 without the setting/file, decision discovery retains today's single cwd
-repository. A
-malformed, duplicate, unreadable or same-repository pair is refused, never
-replaced by cwd. Repository names have the existing service repository syntax.
+repository. A malformed, duplicate, unreadable or same-repository pair is
+refused, never replaced by cwd. Repository names have the existing service repository syntax.
 The setting changes no tracker or publication gate.
 
 In pair mode, each role is verified with canonical GitHub identity and visibility:

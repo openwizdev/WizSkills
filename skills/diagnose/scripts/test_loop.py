@@ -60,15 +60,15 @@ class Rate(unittest.TestCase):
         # writes into the fixture during the next attempt or after rate exits.
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp) / 'fixture'
-            worker = ('import pathlib, sys, time; time.sleep(0.6); '
+            worker = ('import pathlib, sys, time; time.sleep(1.5); '
                       'open(sys.argv[1], "a").write("late\\n")')
             parent = ('import pathlib, subprocess, sys, time; '
                       f'subprocess.Popen([sys.executable, "-I", "-c", {worker!r}, sys.argv[1]]); '
                       'open(sys.argv[1], "a").write("start\\n"); time.sleep(5)')
-            r = run('rate', '--runs', '2', '--timeout', '0.3', '--',
+            r = run('rate', '--runs', '2', '--timeout', '1', '--',
                     sys.executable, '-I', '-c', parent, str(fixture))
             self.assertEqual((r.returncode, r.stdout), (1, 'rate: 2/2 failed; exits none; timeouts 2\n'))
-            time.sleep(1)
+            time.sleep(1.5)
             self.assertEqual(fixture.read_text(), 'start\nstart\n')
 
     def test_command_output_is_never_echoed(self):
@@ -161,6 +161,21 @@ class Clean(unittest.TestCase):
             subprocess.run(['git', 'add', 'src/both.py'], cwd=tmp, check=True)
             r = run('clean', '[DEBUG-a4f2]', cwd=tmp)
             self.assertEqual((r.returncode, r.stdout), (1, 'left: 2 [DEBUG-a4f2] in src/app.py:2, src/both.py:1\n'))
+
+    def test_an_unreadable_staged_copy_is_never_called_clean(self):
+        # catches: a staged blob Git cannot read being skipped, so clean
+        # passes without having seen what Git would commit.
+        with tempfile.TemporaryDirectory() as tmp:
+            git_tree(tmp)
+            Path(tmp, 'src/probe.py').write_text('# [DEBUG-a4f2]\n')
+            subprocess.run(['git', 'add', 'src/probe.py'], cwd=tmp, check=True)
+            blob = subprocess.run(['git', 'rev-parse', ':src/probe.py'], cwd=tmp, check=True,
+                                  capture_output=True, text=True).stdout.strip()
+            Path(tmp, '.git/objects', blob[:2], blob[2:]).unlink()
+            Path(tmp, 'src/probe.py').write_text('print("ready")\n')
+            r = run('clean', '[DEBUG-a4f2]', cwd=tmp)
+            self.assertEqual((r.returncode, r.stdout), (2, ''))
+            self.assertIn('cannot read', r.stderr)
 
     def test_a_leftover_outside_the_current_directory_is_named(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -9,7 +9,9 @@
 
 write: exit 0 written and read back, 2 refused or failed (a refusal comes before any
 call; a failure after a write is repaired by running the same write again), 3 stop:
-the claim is another note's or the fence stopped it (nothing more written).
+the claim is another note's or the fence stopped it (nothing more written). An edit
+reads back too (#1441): it steps down when another live note of its kind appeared, and
+puts back a release a sibling wake wrote between its read and its edit.
 run (#1447): a heartbeat before COMMAND starts and every --every seconds (default 600)
 while it runs: an edit of note ID as it reads now, only its time set to now, so GitHub's
 updated_at, which alone counts toward the 30-minute lease, is new. A beat whose read shows
@@ -250,6 +252,51 @@ def viewer():
     return login if isinstance(login, str) and login else None
 
 
+EDITS = '''query($id: ID!, $n: Int!) {
+  node(id: $id) { ... on IssueComment { userContentEdits(first: $n) { nodes { diff editedAt } } } }
+}'''
+HISTORY = 20
+
+
+def replaced(made, fields):
+    """The note under this writer's edits, from GitHub's edit history (newest first, each the
+    full body), or None when there is none. It skips this edit's own earlier tries, which a retry
+    after exit 2 leaves (the same write: the same fields but the time), so a release under the
+    first try is still found, but only a release that landed once the oldest try had started
+    (its editedAt at or after that try's time, which the writer stamps before it reads). A release
+    this agent read and then resumed stays under its resume (#57 R1). Later edits by others may
+    sit above this edit."""
+    try:
+        found = gh('POST', 'graphql', {'query': EDITS, 'variables': {'id': made['node_id'], 'n': HISTORY}})
+        nodes = found['data']['node']['userContentEdits']['nodes']
+        texts = [x['diff'] for x in nodes]
+        stamps = [x['editedAt'] for x in nodes]
+    except (KeyError, TypeError, ValueError) as error:
+        raise Failed(f'note {made.get("id")} was edited but its edit history was not read: {error!r}')
+    if not all(isinstance(x, str) for x in texts + stamps):
+        raise Failed(f'note {made.get("id")} was edited but its edit history was not read')
+    versions = [parse(x) for x in texts]
+    k = next((j for j, v in enumerate(versions) if v == fields), None)
+    if k is None:
+        raise Failed(f'note {made.get("id")} was edited but its edit history does not hold the edit')
+    same = {key: value for key, value in fields.items() if key != 'time'}
+    first = k = k + 1
+    while k < len(versions) and versions[k] and dict(versions[k], time=None) == dict(same, time=None):
+        k += 1
+    if k < len(versions):
+        if k > first and versions[k] and versions[k]['state'] not in CLAIMING:
+            try:
+                unread = when(stamps[k].replace('.000', '')[:19] + 'Z') >= when(versions[k - 1]['time'])
+            except ValueError:
+                raise Failed(f'note {made.get("id")} was edited but its edit history has no readable time')
+            if not unread:
+                return texts[k - 1]
+        return texts[k]
+    if len(texts) >= HISTORY:
+        raise Failed(f'note {made.get("id")} was edited but its edit history is too long to read past it')
+    return None
+
+
 def asked_last_by(repo, n, login):
     """True when the issue's events show LOGIN added needs-info last (R1: the writer's own label)."""
     added = [e for e in pages(f'repos/{repo}/issues/{n}/events')
@@ -317,6 +364,19 @@ def write(args, now, beat=False, out=sys.stdout):
     # R4: success, and any label, only once a trusted read-back shows the note as written.
     found = notes(pages(comments), authors)
     mine = next((x for x in found if x[0] == note_id), None)
+    if verb == 'edited' and args.state in CLAIMING:
+        # #1441: the edit landed after its read, so read back as a post does. A release this
+        # writer never read, landed under its edit (a sibling wake's), is put back: a release is
+        # never lost (P3), even when a later edit has changed the note since (#1463 R1). A
+        # release it read, it may resume, as a builder answering a review does.
+        prior = parse(replaced(made, fields))
+        if prior and prior['state'] not in CLAIMING and prior != own[1]:
+            if mine is None:
+                raise Failed(f'note {note_id} was edited over a release but not read back')
+            if mine[1]['state'] in CLAIMING:
+                gh('PATCH', f'repos/{repo}/issues/comments/{note_id}', {'body': body(prior)})
+            raise Stop(f'note {note_id} was {prior["state"].split(" ")[0]} before this edit landed; '
+                       'the release is put back')
     if mine is None or mine[1] != fields:
         raise Failed(f'note {note_id} was {verb} but not read back')
     if verb == 'posted' and args.state in CLAIMING:
@@ -325,6 +385,14 @@ def write(args, now, beat=False, out=sys.stdout):
             gh('PATCH', f'repos/{repo}/issues/comments/{note_id}',
                {'body': body(dict(fields, state='stopped (lost claim)'))})
             raise Stop(f'note {first[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
+    if verb == 'edited' and args.state in CLAIMING:
+        # #1441: a newer note that claimed while this one had lapsed keeps the claim (P1, P2, P4).
+        other = next((x for x in found if x[0] != note_id and x[1]['agent'] == kind
+                      and live(x, datetime.now(timezone.utc))), None)
+        if other:
+            gh('PATCH', f'repos/{repo}/issues/comments/{note_id}',
+               {'body': body(dict(fields, state='stopped (lost claim)'))})
+            raise Stop(f'note {other[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
     # R1: settle needs-info from what GitHub shows now, so a retry repairs a failed label write.
     labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
     asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)

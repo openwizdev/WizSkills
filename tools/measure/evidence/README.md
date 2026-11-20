@@ -48,3 +48,8 @@ baseline. After trials and any measured token delta under SK-C remain open.
 - [Receipt accounting](1174-red.txt)
 - [Host-log accounting](1174-host-log-red.txt)
 - [Static path accounting](1174-static-red.txt)
+
+## After (WS14)
+
+The [after measurements](after.md) compare the 0.2.0 candidate with this
+baseline, per skill and in total, using the same harness and stops.

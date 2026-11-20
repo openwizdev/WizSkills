@@ -1,0 +1,119 @@
+{
+  "commit": "dc48e732b7c6f4405ffe66f1f171843595d2e194",
+  "workflows": {
+    "ask-wiz.route": [
+      "skills/ask-wiz/SKILL.md",
+      "skills/grill/SKILL.md"
+    ],
+    "build-ticket.regression": [
+      "skills/build-ticket/SKILL.md",
+      "contracts/open-development.v1.md",
+      "skills/build-ticket/checklist.md",
+      "skills/review-ticket/SKILL.md",
+      "skills/launch-fleet/SKILL.md",
+      "skills/launch-fleet/references/identity.md",
+      "contracts/github-identity.v1.md"
+    ],
+    "diagnose.reproduce": [
+      "skills/diagnose/SKILL.md"
+    ],
+    "grill.new": [
+      "skills/grill/SKILL.md",
+      "skills/grill/references/records.md",
+      "contracts/open-development.v1.md",
+      "contracts/decisions.v1.md",
+      "contracts/decisions.v1.schema.json",
+      "skills/grill/assets/grill.md"
+    ],
+    "handoff.resume": [
+      "skills/handoff/SKILL.md"
+    ],
+    "hill-climb.select": [
+      "skills/hill-climb/SKILL.md"
+    ],
+    "huntr.intake": [
+      "skills/huntr/SKILL.md",
+      "skills/diagnose/SKILL.md"
+    ],
+    "image.capture": [
+      "skills/image/SKILL.md"
+    ],
+    "install.pinned": [
+      "skills/install/SKILL.md"
+    ],
+    "launch-fleet.wake": [
+      "skills/launch-fleet/SKILL.md",
+      "skills/launch-fleet/overload.md",
+      "skills/launch-fleet/references/builders.md",
+      "skills/launch-fleet/references/records.md",
+      "contracts/open-development.v1.md",
+      "skills/launch-fleet/references/identity.md",
+      "contracts/github-identity.v1.md"
+    ],
+    "onboard.resume": [
+      "skills/install/SKILL.md",
+      "contracts/cli.v1.md",
+      "skills/setup/SKILL.md",
+      "skills/setup/templates/fleet.md",
+      "contracts/open-development.v1.md",
+      "contracts/github-identity.v1.md",
+      "skills/grill/SKILL.md",
+      "skills/grill/references/records.md",
+      "skills/grill/assets/grill.md",
+      "contracts/decisions.v1.md",
+      "contracts/decisions.v1.schema.json",
+      "skills/to-spec/SKILL.md",
+      "skills/to-spec/spec.md",
+      "skills/to-spec/video.md",
+      "skills/to-tickets/SKILL.md",
+      "skills/to-tickets/tickets.md",
+      "contracts/plan-links.v1.md"
+    ],
+    "plan-graph.approval": [
+      "skills/to-tickets/SKILL.md",
+      "skills/to-tickets/tickets.md",
+      "contracts/plan-links.v1.md",
+      "contracts/decisions.v1.md",
+      "contracts/decisions.v1.schema.json"
+    ],
+    "research.synthesis": [
+      "skills/research/SKILL.md"
+    ],
+    "review-ticket.exact-head": [
+      "skills/review-ticket/SKILL.md",
+      "contracts/open-development.v1.md"
+    ],
+    "setup.repair": [
+      "skills/setup/SKILL.md",
+      "skills/setup/templates/fleet.md",
+      "contracts/open-development.v1.md"
+    ],
+    "to-spec.chain": [
+      "skills/to-spec/SKILL.md",
+      "skills/to-spec/spec.md",
+      "skills/to-spec/video.md",
+      "skills/to-tickets/SKILL.md",
+      "skills/to-tickets/tickets.md",
+      "contracts/plan-links.v1.md",
+      "contracts/decisions.v1.md",
+      "contracts/decisions.v1.schema.json"
+    ],
+    "triage.dispatch": [
+      "skills/triage/SKILL.md",
+      "contracts/open-development.v1.md",
+      "skills/triage/AGENT-BRIEF.md"
+    ],
+    "wayfind.resume": [
+      "skills/wayfind/SKILL.md",
+      "skills/grill/SKILL.md",
+      "skills/grill/references/records.md",
+      "contracts/open-development.v1.md",
+      "contracts/decisions.v1.md",
+      "contracts/decisions.v1.schema.json",
+      "skills/grill/assets/grill.md"
+    ],
+    "where-are-we.status": [
+      "skills/where-are-we/SKILL.md"
+    ]
+  }
+}

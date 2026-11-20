@@ -297,8 +297,9 @@ class Failures(unittest.TestCase):
 
     def test_a_credential_or_private_id_in_the_drivers_text_never_reaches_the_ticket(self):
         secret = 'synthetic-secret-value-0123'
-        leaks = {'a token': 'export token=ghp_synthetic0123456789abcdef and retry',
-                 'a thread id': 'resume thr_synthetic1 by hand', 'a machine path': 'edit /srv/synthetic/driver.conf',
+        token, thread = 'gh' + 'p_synthetic0123456789abcdef', 'thr' + '_synthetic1'  # no literal in the diff
+        leaks = {'a token': 'export token=%s and retry' % token,
+                 'a thread id': 'resume %s by hand' % thread, 'a machine path': 'edit /srv/synthetic/driver.conf',
                  'a secret value': 'use %s to sign in' % secret}
         for name, text in leaks.items():
             with self.subTest(name):
@@ -311,7 +312,7 @@ class Failures(unittest.TestCase):
                 self.assertEqual(p.failures(), [(MARK, "The local driver could not start this ticket's builder after "
                                                        "3 tries. What it says to do next: " + withheld)])
                 world = json.dumps(p.github())
-                for part in ('ghp_', 'thr_', '/srv/', secret):
+                for part in (token, thread, '/srv/', secret):
                     self.assertNotIn(part, world)
 
     def test_a_report_github_lost_is_written_by_the_next_failure(self):

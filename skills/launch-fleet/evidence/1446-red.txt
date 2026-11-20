@@ -1,4 +1,5 @@
 $ python3 -I skills/launch-fleet/scripts/test-host.py   # #1446 retry, report and clear tests, before the fix
+# The two synthetic private values the test plants are shown as <synthetic token> and <synthetic thread id>.
 FFFFFFFFF.FFF........
 ======================================================================
 FAIL: test_a_credential_or_private_id_in_the_drivers_text_never_reaches_the_ticket (__main__.Failures.test_a_credential_or_private_id_in_the_drivers_text_never_reaches_the_ticket) [a token]
@@ -14,7 +15,7 @@ First differing element 1:
 
   (1,
 -  'refused: the synthetic harness is not signed in; next: export '
--  'token=ghp_synthetic0123456789abcdef and retry')
+-  'token=<synthetic token> and retry')
 +  "stopped (driver start failed): the local driver refused #7's start 3 times; "
 +  'next: withheld, as it held a credential, a private id or a machine path; run '
 +  'the driver by hand')
@@ -32,7 +33,7 @@ First differing element 1:
 "stopped (driver start failed): the local[127 chars]hand"
 
   (1,
--  'refused: the synthetic harness is not signed in; next: resume thr_synthetic1 '
+-  'refused: the synthetic harness is not signed in; next: resume <synthetic thread id> '
 -  'by hand')
 +  "stopped (driver start failed): the local driver refused #7's start 3 times; "
 +  'next: withheld, as it held a credential, a private id or a machine path; run '

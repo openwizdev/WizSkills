@@ -9,6 +9,8 @@ HASH_ANYWHERE = {".py", ".pyi", ".toml"}
 SLASH = {".rs", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"}
 CSS = {".css"}
 HTML = {".html", ".htm"}
+EXCLUDED = re.compile(r"(^|/)(vendor|vendored|third_party|third-party|node_modules)/|(^|/)fixtures/comments/"
+                      r"|\.min\.(js|css)$")
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 ENCODING = re.compile(r"^#.*coding[:=]")
 SWITCH = re.compile(r"^(noqa|type: ignore|pragma:|pylint:|fmt: (off|on|skip)|ruff:|mypy:|pyright:|isort:|eslint"
@@ -51,6 +53,8 @@ class Block:
 
 
 def language(path):
+    if EXCLUDED.search(path):
+        return None
     name = path.rsplit("/", 1)[-1]
     suffix = "." + name.rsplit(".", 1)[-1] if "." in name else ""
     for kind in (HASH, SLASH, CSS, HTML):
@@ -165,8 +169,9 @@ def blocks(path, hunks):
     if suffix is None:
         return found, top
     preamble = bool(hunks) and bool(hunks[0]) and hunks[0][0][0] == 1
-    for hunk in hunks:
+    for number, hunk in enumerate(hunks):
         state, run = {}, None
+        preamble = preamble and number == 0
         for line_no, text, added in hunk:
             if (line_no == 1 and text.startswith("#!")) or (
                     line_no <= 2 and suffix in {".py", ".pyi"} and ENCODING.match(text)):

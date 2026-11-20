@@ -241,8 +241,9 @@ class Conversation(unittest.TestCase):
                 self.assertTrue(asked[-1]['agent'].startswith('Start the fleet %s now? It can cost money: ' % where))
                 self.assertFalse([t for t in turns if re.search(r'(?i)\bapprove\b', t.get('agent', ''))])
                 launch = [t['tool'] for t in turns if t.get('tool', [''])[0] == 'launch']
-                self.assertEqual(launch, [['launch', '--spec', '900'], ['launch', '--spec', '900', '--yes', '--confirm',
-                                                                       '@preview']])
+                self.assertEqual(launch, [['launch', '--spec', '900'],
+                                          ['launch', '--spec', '900', '--yes', '--confirm', '@preview'],
+                                          ['launch', '--spec', '900']])  # the preview, the yes, the read-back (R7)
 
     def test_every_gate_is_asked_before_its_effect(self):
         # catches: a repository created, a file written or setup run without its own yes first
@@ -284,16 +285,17 @@ class Replay(unittest.TestCase):
                 road = Road(self, journey)
                 for turn, result in road.replay_road():
                     self.assertEqual(result.returncode, turn['exit'], (turn['tool'], result.stdout, result.stderr))
-                spawns = road.spawns()
-                self.assertEqual(len(spawns), 1)
-                machine = spawns[0][spawns[0].index('--machine') + 1]
-                self.assertEqual(machine, journey['host'])
+                self.assertEqual(road.spawns(), [], "the start is launch-fleet's own path, never a one-off thread")
                 outputs = {tuple(args): result.stdout for args, result in road.calls}
+                launches = [result.stdout for args, result in road.calls if args == ['launch', '--spec', '900']]
                 ask = next(t['agent'] for t in journey['turns'] if t.get('gate') == 'start_fleet')
-                self.assertIn(ask, outputs[('launch', '--spec', '900')].splitlines())
-                launch = next(result.stdout for args, result in road.calls if args[:4] == ['launch', '--spec', '900', '--yes'])
+                self.assertIn(ask, launches[0].splitlines())
+                yes = next(result.stdout for args, result in road.calls if args[:4] == ['launch', '--spec', '900', '--yes'])
                 fleet = next(t['agent'] for t in journey['turns'] if t.get('say') == 'fleet-start')
-                self.assertIn(fleet, launch.splitlines())
+                self.assertNotIn(fleet, yes.splitlines(), 'not before the activation record reads back')
+                self.assertIn(fleet, launches[-1].splitlines())
+                adapters = 'OPENWIZ_ADAPTERS=%s' % (road.dir / 'adapters')
+                self.assertEqual(adapters in yes, journey['host'] == 'local', 'the loop finds the local driver (R2)')
                 merged = outputs[('first-merge', '--pr', '911')].splitlines()
                 for moment in ('merged', 'offer'):
                     said = next(t['agent'] for t in journey['turns'] if t.get('say') == moment)
@@ -456,10 +458,14 @@ class SteeringOff(unittest.TestCase):
         road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
         preview = road.helper(['launch', '--spec', '900'])
         self.assertEqual(preview.returncode, 12, preview.stdout)
-        started = road.helper(['launch', '--spec', '900', '--yes', '--confirm',
-                               re.findall(r'(?m)^Confirmation: ([0-9a-f]{64})$', preview.stdout)[0]])
+        yes = road.helper(['launch', '--spec', '900', '--yes', '--confirm',
+                           re.findall(r'(?m)^Confirmation: ([0-9a-f]{64})$', preview.stdout)[0]])
+        self.assertEqual(yes.returncode, 0, yes.stdout)
+        road.change({'world': 'fleet_record'})  # launch-fleet's own start path, read back (R7)
+        started = road.helper(['launch', '--spec', '900'])
         self.assertEqual(started.returncode, 0, started.stdout)
-        self.assertEqual(len(road.spawns()), 1)
+        self.assertEqual(road.saved()['launch']['state'], 'started')
+        self.assertEqual(road.spawns(), [])
 
 
 class LaunchYes(unittest.TestCase):
@@ -487,9 +493,10 @@ class LaunchYes(unittest.TestCase):
                 other = road.helper(['launch', '--spec', '900', '--yes', '--confirm', '0' * 64])
                 self.assertEqual(other.returncode, 5, other.stdout)
                 self.assertEqual(road.spawns(), [], 'no fleet starts without the yes to this preview')
-                started = road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest[0]])
-                self.assertEqual(started.returncode, 0, started.stdout)
-                self.assertEqual(len(road.spawns()), 1)
+                said_yes = road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest[0]])
+                self.assertEqual(said_yes.returncode, 0, said_yes.stdout)
+                self.assertEqual(road.saved()['launch']['state'], 'authorized', 'only that yes hands the start over')
+                self.assertEqual(road.spawns(), [])
 
 
 class PermissionMode(unittest.TestCase):

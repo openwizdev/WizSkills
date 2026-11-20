@@ -272,8 +272,20 @@
         "--confirm",
         "@preview"
       ],
-      "exit": 0,
-      "spawn": 0
+      "exit": 0
+    },
+    {
+      "step": "launch",
+      "world": "fleet_record"
+    },
+    {
+      "step": "launch",
+      "tool": [
+        "launch",
+        "--spec",
+        "900"
+      ],
+      "exit": 0
     },
     {
       "step": "launch",

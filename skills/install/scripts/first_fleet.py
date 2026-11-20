@@ -54,13 +54,14 @@ local host only once its setting is on the default branch). It
 reads launch-fleet's own frontier (../../launch-fleet/scripts/fleet.sh
 frontier, which checks that to-tickets's approval is current), keeps this
 spec's tickets, reads the fleet settings setup wrote (every builder table the
-user's choice, each reviewer from the other model family), and starts one
-fleet thread for the spec, with launch-fleet's own brief. That thread makes
-its own loop, which runs the spec's check (`fleet.sh spec <S>`), records
-itself on the spec and starts the frontier's builders. It never calls the engine or
-the engine's tick. The launch is saved before the start runs, and is never run
-twice: a repeat only reads the spec's fleet record and progress, and an
-uncertain start stays uncertain until that record reads back. Every command
+user's choice, each reviewer from the other model family). On the yes it
+starts nothing itself: it saves the yes and names launch-fleet's own start
+path (references/launch.md: the project's loops, then "Starting one": the
+spec's loop, its private loop-map entry and the `launch-fleet: fleet active,
+loop fleet-<S>` record), which the orchestrator follows. It says the fleet
+started only once that record reads back from a record author, and never
+starts a fleet a second way. It never calls the engine or the engine's tick.
+Every command
 checks the checkout is the repository this onboarding recorded.
 
 `choose` records the choice for where the agents run, then reads the fleet's
@@ -1306,21 +1307,6 @@ def review(choices, rules):
     return want, reviewer
 
 
-def brief(spec, repo):
-    """launch-fleet's own fleet-thread brief ("Fleet threads", "Starting one"), literally."""
-    return ("You are the fleet thread for spec #%d of %s. Use the launch-fleet skill. Read "
-            "'skills/launch-fleet/SKILL.md' if present, otherwise find '*/skills/launch-fleet/SKILL.md' only inside "
-            "your own harness's configured plugin cache: Codex uses CODEX_HOME/plugins/cache (default "
-            "HOME/.codex/plugins/cache); Claude uses CLAUDE_CODE_PLUGIN_CACHE_DIR/cache when set, otherwise "
-            "CLAUDE_CONFIG_DIR/plugins/cache (default HOME/.claude/plugins/cache); for another harness use its "
-            "installation metadata. Prefer active installation metadata over cache scanning when available. During "
-            "cache scans exclude other harness caches, source checkouts, orphaned versions marked .orphaned_at, and "
-            "targets outside the selected cache. Follow symlinks and deduplicate real paths. Verify "
-            ".claude-plugin/plugin.json manifest name openwiz and entry ./skills/launch-fleet; report missing, "
-            "unreadable or ambiguous matches, otherwise read the unique matching file and follow it; do its Fleet "
-            "threads section, first wake." % (spec, repo))
-
-
 def fleet_recorded(spec, env):
     """Only configured record authors settle a start; unread input stays unknown."""
     bodies = record_comments(spec, env)
@@ -1413,15 +1399,23 @@ def launch(got):
     env = repository(state.value.get('repo'))
     previous = state.value.get('launch')
     if previous and previous['spec'] == spec and previous['state'] != 'refused':
+        # R7: the start is launch-fleet's own (references/launch.md, "Starting one"): it counts only once launch-fleet's
+        # activation record, `launch-fleet: fleet active, loop fleet-<S>`, reads back from a record author.
         recorded = fleet_recorded(spec, env)
-        if previous['state'] in ('pending', 'uncertain') and recorded:
+        if previous['state'] != 'started' and recorded:
             previous['state'] = 'started'
-            state.save()
-        settled = previous['state'] == 'started'
-        print('Spec #%d already started once (%s); not starting again.' % (
-            spec, 'its fleet thread was started' if settled else 'uncertain: never a retry'))
+            if not state.save():
+                raise Exit(10, "Could not save the fleet's start; run this again to read it.")
+            print(record_line(spec, recorded))
+            print(teach('The fleet starting', (str(len(previous.get('tickets') or [])),)))
+            return 0
+        if previous['state'] == 'started':
+            print('Spec #%d already started once; not starting again.' % spec)
+            print(record_line(spec, recorded))
+            return 0
         print(record_line(spec, recorded))
-        return 0 if settled else 6
+        print(handoff(spec, state.value['repo'], host))
+        return 6
     # Review R4: the carried setup must still be what setup verifies now.
     if not isinstance(carried.get('setup_state'), str):
         withdraw(state)
@@ -1490,46 +1484,34 @@ def launch(got):
         print('Confirmation: %s' % digest)
         print("Nothing started. Ask exactly that; on the user's yes, run again with --yes --confirm %s." % digest)
         return 12
-    state.value['launch'] = {'spec': spec, 'state': 'pending', 'effects': digest, 'tickets': starts}
+    state.value['launch'] = {'spec': spec, 'state': 'authorized', 'effects': digest, 'tickets': starts}
     if not state.save():
-        raise Exit(10, 'Could not save the launch record; ' + NOTHING)
-    argv = ['room-cli', 'thread', 'spawn', '--parent-self', '--project', carried['project'],
-            '--machine', 'local' if local else 'cloud', '--provider', builder['harness'], '--model', builder['model'],
-            '--reasoning-level', builder['effort'], '--title', 'Fleet #%d: %s' % (spec, title),
-            '--prompt', brief(spec, state.value['repo'])]
-    try:
-        result = subprocess.run(argv, capture_output=True, timeout=600, env=env)
-    except (FileNotFoundError, PermissionError):
-        # Review R2: room-cli never ran, so nothing was dispatched.
-        state.value['launch']['state'] = 'refused'
-        state.value.pop('preview', None)
-        saved = state.save()
-        raise Exit(5 if saved else 6, 'room-cli could not be run, so no fleet thread was dispatched; nothing started. '
-                   'Fix the Cloudroom installation, then preview again and ask again.' if saved else
-                   'room-cli could not be run, but that could not be saved; the start stays pending until read.')
-    except (OSError, subprocess.TimeoutExpired):
-        result = None
-    ended = 'started' if result is not None and result.returncode == 0 else 'uncertain'
-    state.value['launch']['state'] = ended
-    if not state.save():
-        print('Could not save the outcome; the start stays uncertain and is never retried.')
-        ended = 'uncertain'
-    if ended != 'started':
-        print('Whether the fleet thread started is uncertain. Never start it again by hand: run this command again '
-              "to read the spec's fleet record, or look for the thread in Cloudroom.")
-        return 6
-    print("Started spec #%d's fleet thread %s (%s), through launch-fleet; its first wake makes its loop, records "
-          'itself and starts the builders.' % (spec, where, agents))
-    print(teach('The fleet starting', (str(len(starts)),)))
+        raise Exit(10, 'Could not save the start the user said yes to; ' + NOTHING)
+    print("The user said yes to starting spec #%d's fleet %s. Nothing is started by this command: the fleet starts "
+          "through launch-fleet's own start path, and is said started only once its activation record reads back."
+          % (spec, where))
+    print(handoff(spec, state.value['repo'], host))
     return 0
+
+
+def handoff(spec, repo, host):
+    """launch-fleet's own start path, named for the orchestrator to follow; never a second copy of it (R7)."""
+    adapters = host.get('adapters') if host.get('agents') == 'local' else None
+    return ("Next, as this project's orchestrator, follow launch-fleet's Launch section (references/launch.md) for "
+            'spec #%d of %s: its two project loops and the GitHub messages question, then "Starting one": the spec\'s '
+            "loop, its entry in the private loop map, read back, and the record `%s%d`, read back.%s Then run "
+            'launch --spec %d again: it says the fleet started only once that record reads back. Never start it a '
+            'second way.' % (spec, repo, FLEET_RECORD, spec,
+                             ' Its loop runs builders on this machine, so give it OPENWIZ_ADAPTERS=%s, where '
+                             "launch-fleet's host.py finds the local driver." % adapters if adapters else '', spec))
 
 
 def record_line(spec, recorded):
     if recorded is None:
         return "The spec's fleet record could not be read right now."
     if recorded:
-        return 'Spec #%d has its fleet record: the fleet thread made its loop and runs the spec.' % spec
-    return 'Spec #%d has no fleet record yet: its fleet thread has not finished its first wake.' % spec
+        return "Spec #%d has its fleet record: launch-fleet's loop runs the spec." % spec
+    return "Spec #%d has no fleet record yet: launch-fleet's start has not read back." % spec
 
 
 def watch(got):
@@ -1647,9 +1629,10 @@ def resume(got):
     elif not value.get('setup'):
         step = ('connect', '%sConnect %s with the installed tools, then run continue.' % (
             'Setup already prepared it; ' if candidate == repo else '', repo))
-    elif spec and launched.get('spec') == spec and launched.get('state') in ('pending', 'uncertain'):
-        step = ('launch', 'The start of spec #%d is uncertain: run launch --spec %d to read its fleet record; '
-                'never start it again.' % (spec, spec))
+    elif spec and launched.get('spec') == spec and launched.get('state') in ('authorized', 'pending', 'uncertain'):
+        step = ('launch', "The user said yes to starting spec #%d: finish launch-fleet's start path (references/"
+                'launch.md, "Starting one"), then run launch --spec %d to read its fleet record back; never start it '
+                'a second way.' % (spec, spec))
     elif spec and launched.get('spec') == spec and launched.get('state') == 'started' and value.get('merge'):
         step = ('offer', 'Say the closing offer, as first-merge printed it.')
     elif spec and launched.get('spec') == spec and launched.get('state') == 'started':

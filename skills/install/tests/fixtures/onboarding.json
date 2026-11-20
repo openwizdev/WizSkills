@@ -340,17 +340,25 @@
       "--confirm",
       "@preview"
      ],
-     "exit": 0,
-     "spawn": 0
+     "exit": 0
+    },
+    {
+     "step": "launch",
+     "world": "fleet_record"
+    },
+    {
+     "step": "launch",
+     "tool": [
+      "launch",
+      "--spec",
+      "900"
+     ],
+     "exit": 0
     },
     {
      "step": "launch",
      "say": "fleet-start",
      "agent": "The plan passed its checks, so the fleet started: 2 builders, each on one small ticket. Watch them work at openwiz.dev/app; nothing for you to do until the first merge."
-    },
-    {
-     "step": "watch",
-     "world": "fleet_record"
     },
     {
      "step": "watch",
@@ -717,17 +725,25 @@
       "--confirm",
       "@preview"
      ],
-     "exit": 0,
-     "spawn": 0
+     "exit": 0
+    },
+    {
+     "step": "launch",
+     "world": "fleet_record"
+    },
+    {
+     "step": "launch",
+     "tool": [
+      "launch",
+      "--spec",
+      "900"
+     ],
+     "exit": 0
     },
     {
      "step": "launch",
      "say": "fleet-start",
      "agent": "The plan passed its checks, so the fleet started: 3 builders, each on one small ticket. Watch them work at openwiz.dev/app; nothing for you to do until the first merge."
-    },
-    {
-     "step": "watch",
-     "world": "fleet_record"
     },
     {
      "step": "watch",
@@ -1150,17 +1166,25 @@
       "--confirm",
       "@preview"
      ],
-     "exit": 0,
-     "spawn": 0
+     "exit": 0
+    },
+    {
+     "step": "launch",
+     "world": "fleet_record"
+    },
+    {
+     "step": "launch",
+     "tool": [
+      "launch",
+      "--spec",
+      "900"
+     ],
+     "exit": 0
     },
     {
      "step": "launch",
      "say": "fleet-start",
      "agent": "The plan passed its checks, so the fleet started: 3 builders, each on one small ticket. Watch them work at openwiz.dev/app; nothing for you to do until the first merge."
-    },
-    {
-     "step": "watch",
-     "world": "fleet_record"
     },
     {
      "step": "watch",

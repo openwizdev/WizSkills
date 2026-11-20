@@ -1060,21 +1060,37 @@ class Resume(unittest.TestCase):
 
 
     def test_an_existing_repository_prepared_before_continue_resumes_at_connect(self):
-        # catches: #1571, an owner who prepared an existing repository in setup and
-        # was interrupted before continue is offered a repository again (Next: project),
-        # inviting a second repository while Connect is under way.
+        # catches: #1571, an owner who confirmed an existing repository and prepared it
+        # in setup, interrupted before continue, is offered a repository again
+        # (Next: project), inviting a second repository while Connect is under way.
         j = Journey(self)
         other = 'synthetic-owner/synthetic-existing'
+        bound = j.helper(['select', '--repo', other])
+        self.assertEqual(bound.returncode, 0, bound.stdout)
         j.write_setup(setup_state(repository=other))
+        for more in ((), ('--setup-state', str(j.setup_dir))):
+            said = self.next(j, *more)
+            self.assertEqual(said.splitlines()[0], 'Next: connect.', said)
+            self.assertIn('Repository: %s.' % other, said)
+            self.assertIn('run continue', said)
+        self.assertEqual(j.helper(['select', '--repo', REPO]).returncode, 5, 'one repository per onboarding')
+        self.assertEqual(j.helper(['create-repo', '--repo', REPO, '--yes']).returncode, 5, 'and no demo beside it')
+        self.assertEqual(j.gh_creates(), [], 'nothing created')
+
+    def test_a_prepared_repository_is_never_taken_as_this_onboardings_selection(self):
+        # catches: review R2, a repository setup prepared for an earlier project on this
+        # host taken as this onboarding's selection (Next: connect for the wrong repository)
+        # when this onboarding recorded none.
+        j = Journey(self)
+        previous = 'synthetic-owner/previous-project'
+        j.write_setup(setup_state(repository=previous))
         said = self.next(j, '--setup-state', str(j.setup_dir))
-        self.assertEqual(said.splitlines()[0], 'Next: connect.', said)
-        self.assertIn('Repository: %s.' % other, said)
-        self.assertIn('run continue', said)
-        bare = self.next(j)
-        self.assertEqual(bare.splitlines()[0], 'Next: project.', 'without the setup state nothing is known yet')
-        self.assertIn('--setup-state', bare, 'and it says how to recognise a prepared repository')
+        self.assertEqual(said.splitlines()[0], 'Next: project.', said)
+        self.assertNotIn('Repository:', said)
+        self.assertIn(previous, said, 'the candidate is named for the owner to confirm')
+        self.assertIn('select --repo %s' % previous, said)
         (j.setup_dir / 'setup/state.json').chmod(0o644)
-        self.assertEqual(self.next(j, '--setup-state', str(j.setup_dir)).splitlines()[0], 'Next: project.',
+        self.assertNotIn(previous, self.next(j, '--setup-state', str(j.setup_dir)),
                          'a setup store others can read or replace is never trusted')
 
     def test_a_local_choice_resumes_at_choose_the_agents(self):
@@ -1115,6 +1131,27 @@ class Resume(unittest.TestCase):
         self.assertEqual({k: v for k, v in json.loads(j.state.read_text())['choices'].items() if k in j.settings},
                          j.settings, 'the read-back keeps the recorded choice')
 
+
+    def test_a_recorded_launch_resumes_before_the_agent_checks(self):
+        # catches: review R1, a launched or uncertain first fleet saved before the
+        # builder-table read-back existed sent back to Choose the agents, losing its
+        # progress or its never-start-again recovery.
+        def older(j):
+            state = json.loads(j.state.read_text())
+            state['choices'].pop('builder_tables', None)
+            j.state.write_text(json.dumps(state))
+        j = Journey(self)
+        j.replay()
+        older(j)
+        self.assertEqual(self.next(j).splitlines()[0], 'Next: watch.')
+        k = Journey(self)
+        k.replay(until='launch')
+        self.assertEqual(k.tool(PREVIEW).returncode, 12)
+        self.assertEqual(k.tool(dict(YES, spawn=1)).returncode, 6)
+        older(k)
+        said = self.next(k)
+        self.assertEqual(said.splitlines()[0], 'Next: launch.', said)
+        self.assertIn('never start it again', said)
 
     def test_a_connected_repository_outlives_a_withdrawn_setup_after_an_absent_demo(self):
         # catches: an absent demo create counted as "no repository" once setup is

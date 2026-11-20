@@ -266,7 +266,9 @@ class SteeringWording(unittest.TestCase):
         text = (HERE.parent / 'SKILL.md').read_text()
         post = text.split('Post it as a spec comment', 1)[1].split('\n## ', 1)[0]
         steer = text.split('## 5. Steer', 1)[1].split('\n\nPlanning grants', 1)[0]
-        invites = 'comment here to steer' in post.lower() or "owner's comments on the video steer" in steer
+        head = text.split('\n## 1.', 1)[0]  # the description line and the intro
+        invites = ('comment here to steer' in post.lower() or "owner's comments on the video steer" in steer
+                   or 'steers a spec through its video' in head or 'watches to steer' in head)
         if COMMENT_STEERING_ON:
             self.assertTrue(invites, 'comment steering is on but the video post does not invite it')
         else:

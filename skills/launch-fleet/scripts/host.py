@@ -21,15 +21,20 @@ every run. A driver answer is taken only in exactly its v1 shape.
 A refused start or wake (#1446) is tried twice more, 1 then 2 seconds later. If
 the third try is refused too, the fleet's status note on #N says
 `stopped (driver start failed)` and #N gets one `launch-fleet: driver start
-failed` comment with the driver's `next` text; a refusal while both are there
-writes neither again. The next start or wake that succeeds marks that comment
+failed` comment; a refusal while both are there writes neither again. The
+comment never carries the driver's own words: it gives a fixed reason, the exit
+category (`exit 1: refused`) and a pointer to an entry of the owner-only (0600)
+log `driver-failures.log` beside $LAUNCH_FLEET_RUNS, which alone keeps the
+driver's raw `error` and `next` (the orchestrator's decision on R3, as KN3's
+driver did for its R5). The next start or wake that succeeds marks that comment
 cleared and posts a `done` fleet note. The fleet note is written as the fleet
 agent: $LAUNCH_FLEET_HARNESS, $LAUNCH_FLEET_MODEL and $LAUNCH_FLEET_SKILLS, as
 status.py's --harness, --model and --skills; with any unset, only the fleet
-note is skipped, with a warning on stderr naming them. The driver's text reaches the
-ticket and stdout only when it holds no credential, private id or machine path
-(status.py's and post.py's rules, any URL with user info, and any value of an environment variable
-named as a secret, as the driver kit checks); otherwise it is withheld whole.
+note is skipped, with a warning on stderr naming them. On stdout the driver's
+text appears only when it holds no credential, private id or machine path
+(status.py's and post.py's rules, any URL with user info, with or without a
+scheme, and any value of an environment variable named as a secret, as the
+driver kit checks); otherwise it is withheld whole.
 A stop or an unknown answer is never retried: a run may exist.
 
 Exit 0: `host: <name>`, `host: none`, `started #N on <host>`, `woke ...` or
@@ -83,8 +88,10 @@ CLEARED = MARK + ', cleared'
 FLEET = ('LAUNCH_FLEET_HARNESS', 'LAUNCH_FLEET_MODEL', 'LAUNCH_FLEET_SKILLS')
 WITHHELD = 'withheld, as it held a credential, a private id or a machine path; run the driver by hand'
 SECRET_NAME = re.compile(r'TOKEN|SECRET|PASSWORD|CREDENTIAL|_KEY$|^KEY')  # the driver kit's rule
-# R3: any URL with user info (`user@` or `user:password@` before its host), with or without a scheme.
-USERINFO = re.compile(r'(?:[a-z][a-z0-9+.-]*:)?//[^\s/?#@]*@', re.I)
+# R3: any URL with user info (`user@` or `user:password@` before its host), with or without a scheme;
+# stdout only, as the ticket never carries the driver's words (the decision on R3 at 90aed73).
+USERINFO = re.compile(r'(?:[a-z][a-z0-9+.-]*:)?//[^\s/?#@]*@|(?<![\w.%+-])[^\s/?#@:]+:[^\s/?#@]*@[a-z0-9]', re.I)
+LOG = 'driver-failures.log'                       # owner-only, beside LAUNCH_FLEET_RUNS: the driver's own words
 
 
 class Unreadable(Exception):
@@ -96,11 +103,11 @@ class Outcome(Exception):
 
 
 class Refused(Outcome):
-    """The driver refused, in v1's shape: its error and next, each already public()."""
+    """The driver refused, in v1's shape. Its raw words go only to the owner-only driver log; the line is public()."""
 
     def __init__(self, error, next_):
-        super().__init__('refused: %s; next: %s' % (error, next_))
-        self.next = next_
+        super().__init__('refused: %s; next: %s' % (public(error), public(next_)))
+        self.error, self.next = error, next_
 
 
 def public(text):
@@ -188,7 +195,7 @@ def call(host, command, given):
     answer = strict(r.stdout)
     if r.returncode == 1 and isinstance(answer, dict) and set(answer) == {'error', 'next'} \
             and all(isinstance(v, str) and 0 < len(v) <= 300 and '\n' not in v for v in answer.values()):
-        raise Refused(public(answer['error']), public(answer['next']))
+        raise Refused(answer['error'], answer['next'])
     if r.returncode != 0 or not isinstance(answer, dict) or set(answer) != ANSWERS[command] \
             or not isinstance(answer['run'], str) or not RUN.fullmatch(answer['run']) \
             or any(answer[k] is not True for k in ANSWERS[command] - {'run'}) \
@@ -245,22 +252,45 @@ def note(repo, n, state, step):
         raise post.Stop('the fleet note was not written: %s' % (r.stderr.strip() or 'status.py exit %d' % r.returncode))
 
 
-def report(repo, n, host, command, next_):
+def logged(repo, n, host, command, refusal):
+    """Append the driver's raw refusal to the owner-only log beside the runs file; its entry's time, or None."""
+    stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    entry = {'time': stamp, 'repo': repo, 'ticket': int(n), 'host': host, 'command': command, 'exit': 1,
+             'error': refusal.error, 'next': refusal.next}
+    try:
+        fd = os.open(str(runs_path().with_name(LOG)), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            os.write(fd, (json.dumps(entry, sort_keys=True) + '\n').encode())
+        finally:
+            os.close(fd)
+    except (OSError, Unreadable):
+        return None
+    return stamp
+
+
+def report(repo, n, host, command, entry):
     """After the third refusal: the fleet note and one comment on #N, each only when #N lacks it.
 
-    Each is tried even when the other failed (R1 of the review at 1f9c7f6); post.Stop names every failure."""
+    The comment never carries the driver's words (the orchestrator's decision on R3 at 90aed73): a fixed
+    reason, the exit category and a pointer to the owner-only log's entry. Each write is tried even when the
+    other failed (R1 of the review at 1f9c7f6); post.Stop names every failure."""
     stopped, comments = reports(repo, n)
-    failed = []
+    failed = [] if entry else ['the driver log %s could not be written' % LOG]
     if not stopped:
         try:
-            note(repo, n, 'stopped', "the %s driver refused this builder's %s 3 times; what to do next is in a "
-                                     "comment here" % (host, command))
+            note(repo, n, 'stopped', "the %s driver refused this builder's %s 3 times; the reason is in a comment "
+                                     "here" % (host, command))
         except Exception as e:
             failed.append(why(e))
     if not comments:
+        where = ("the fleet's owner can read them in the private driver log, `%s` beside `LAUNCH_FLEET_RUNS`, entry "
+                 "%s for #%s." % (LOG, entry, n)) if entry else \
+            "they could not be saved to the fleet owner's private driver log, so run the driver by hand to read them."
         try:
-            post.comment(repo, int(n), "%s\n\nThe %s driver could not %s this ticket's builder after 3 tries. What "
-                                       "it says to do next: %s" % (MARK, host, command, next_))
+            post.comment(repo, int(n), "%s\n\nThe %s driver refused to %s this ticket's builder 3 times (exit 1: "
+                                       "refused). Its own words are kept off this public ticket: %s"
+                                       % (MARK, host, command, where))
         except Exception as e:
             failed.append(why(e))
     if failed:
@@ -294,9 +324,9 @@ def attempt(repo, n, host, command, given):
         return tried(host, command, given)
     except Refused as refusal:
         line = "stopped (%s): the %s driver refused #%s's %s 3 times; next: %s" % (FAILED, host, n, command,
-                                                                                refusal.next)
+                                                                                public(refusal.next))
         try:
-            report(repo, n, host, command, refusal.next)
+            report(repo, n, host, command, logged(repo, n, host, command, refusal))
         except Exception as e:  # nothing started: the next refusal writes what is missing
             line += "; unknown: the ticket's report is incomplete (%s)" % why(e)
         raise Outcome(line)

@@ -434,6 +434,32 @@ class Write(Tracker):
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
         self.assertRegex(retry.stdout, r'(?m)^#12: needs-info put back: synthetic-owner ')
 
+    def test_only_an_exact_record_of_this_login_s_application_takes_the_label_off(self):
+        # catches (#1737): a damaged or foreign record (a boolean or negative event, a repeated or
+        # extra key, another login) read as proof, so a write deletes a label it can't show it added.
+        good = '{"login": "openwiz[bot]", "event": 0}'
+        cases = {good: ['ready-for-agent'],
+                 '{"login": "openwiz[bot]", "event": true}': None,
+                 '{"login": "openwiz[bot]", "event": -1}': None,
+                 '{"login": "openwiz[bot]", "event": "0"}': None,
+                 '{"login": "openwiz[bot]", "event": 5, "event": 0}': None,
+                 '{"login": "openwiz[bot]", "event": 0, "ticket": 12}': None,
+                 '{"login": "synthetic-owner", "event": 0}': None,
+                 '[0]': None}
+        for record, labels in cases.items():
+            with self.subTest(record):
+                self.setUp()
+                self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+                self.save()
+                asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+                self.assertEqual(asked.returncode, 0, asked.stderr)
+                [kept] = (self.dir / 'state').rglob('*.json')
+                self.assertEqual(json.loads(kept.read_text()), json.loads(good))
+                kept.write_text(record)
+                back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+                self.assertEqual(back.returncode, 0, back.stderr)
+                self.assertEqual(self.ticket()['labels'], labels or ['ready-for-agent', 'needs-info'])
+
     def test_needs_info_stays_while_any_agent_asks_and_a_failed_clear_recovers(self):
         # catches (R1): one agent leaving asking clearing the label another live agent's
         # question needs, or a failed label write that a retry or check never repairs.

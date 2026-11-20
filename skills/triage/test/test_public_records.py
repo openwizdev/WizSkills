@@ -247,8 +247,19 @@ class FeedbackPath(unittest.TestCase):
                 self.assert_refused(case(rep), why)
 
     def test_unreadable_input_is_exit_2(self):
-        # catches: a malformed case read as a decision.
-        for raw in ["not json", "[]", json.dumps({"report": report()})]:
+        # catches: a malformed case read as a decision: a repeated key silently
+        # replaced, an unknown code or field ignored, a string "false" read as true.
+        good = json.dumps(case())
+        bad = [json.loads(good) for _ in range(6)]
+        bad[0]["report"]["pull_request"] = "false"
+        bad[1]["criteria"]["approved"] = True
+        bad[2]["extra"] = 1
+        bad[3]["report"]["labels"] = [{"name": "feedback"}]
+        bad[4]["brief"]["labels"] = ["ready-for-agent"]
+        bad[5]["report"]["number"] = True
+        for raw in ["not json", "[]", json.dumps({"report": report()}),
+                    good.replace('"version": "9.4.2"', '"version": "9.4.2", "version": "1.0.0"'),
+                    *map(json.dumps, bad)]:
             with self.subTest(raw=raw):
                 rc, _, text = plan(raw)
                 self.assertEqual(rc, 2, text)

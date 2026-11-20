@@ -652,6 +652,31 @@ class ExpiredLogin(Base):
         self.assertFalse((self.tmp / 'driver-ran').exists())
         self.assertNotIn('expired-login', self.saved()['lessons'])
 
+    def test_on_macos_only_the_expired_login_probe_is_skipped_with_a_plain_line(self):
+        # catches (J289): a Mac, where Landlock, seccomp and /proc don't exist, refusing the lesson (so the skill
+        # can never finish there) or running the driver unisolated
+        import contextlib
+        import io
+        from unittest import mock
+        self.begin()
+        driver = self.probing_driver('mac', 'open(%r, "w").write("x")' % str(self.tmp / 'driver-ran'))
+        out = io.StringIO()
+        with mock.patch.object(wd.sys, 'platform', 'darwin'), contextlib.redirect_stdout(out):
+            code = wd.main(['lesson', 'expired-login', '--state', str(self.state), '--driver', str(driver),
+                            '--harness', 'exampleagent'])
+        self.assertEqual(code, 3, out.getvalue())
+        self.assertEqual(out.getvalue(), 'expired-login not run: this Mac cannot isolate the probe (it needs '
+                                         'Linux), so it is skipped; check that lesson on Linux\n')
+        self.assertFalse((self.tmp / 'driver-ran').exists())
+        self.assertEqual(self.saved()['lessons']['expired-login'], 'not run')
+        live = self.tmp / 'live.json'
+        live.write_text('{"state": "running"}')
+        self.wd('lesson', 'live-shape', '--state', self.state, '--live', live, '--fixture', live, check=0)
+        self.kit()
+        self.wd('stop-all', '--state', self.state, check=0)
+        p = self.wd('report', '--state', self.state, check=0)
+        self.assertIn('expired-login not run', p.stdout)
+
     def test_a_driver_that_never_runs_the_stand_in_proves_nothing(self):
         # catches (R5): a lesson read as passing although the driver never ran the stand-in harness
         self.begin()

@@ -40,7 +40,7 @@ A yes covers this one attempt only: not later feedback, edits, other destination
 
 | Phase | Tell the user |
 | --- | --- |
-| `sent` | The issue was created and read back, with its link. This proves only that the public issue exists, not that Jake's agents have read it, queued it or will reply. OpenWiz's triage adds the `feedback` label when it reads the report; if a fix for it merges, the issue gets one comment naming the pull request and the release that will carry it |
+| `sent` | The issue was created and read back, with its link. This proves only that the public issue exists, not that Jake's agents have read it, queued it or will reply. OpenWiz's triage adds the `feedback` label when it reads the report. The issue gets one comment naming the pull request and the release that will carry the fix only if triage sends it to a fleet and that fix merges; a report held for the owner can close without that comment |
 | `failed` | GitHub refused it, so no issue was created. They can preview it again and, after a new yes, try once more |
 | `uncertain` | OpenWiz cannot tell whether the issue was created. Nothing will be sent again for it. Give them the helper's `check` link to look |
 | `refused` | Nothing was sent, and why. The draft is kept |

@@ -26,10 +26,13 @@ check: exit 0 no mismatch, 1 mismatches printed, 2 could not read. It never writ
 repair (#1592): the wake's check and fix. For each asking note with no needs-info it reads
 the ticket's notes again and, while a live note still asks, records the repair in its own
 fleet note (working), adds the label and reads again. Once no live note asks, it takes off
-only the application it made since that record, puts back a person's application its DELETE
-took, and edits its note to done. A wake that stops part way leaves the note working; the
-next wake settles that ticket from it. It prints each change and every other mismatch, one
-report line each: exit 0 nothing to report, 1 lines printed, 2 `status check failed: <why>`.
+only the application its own POST made in this wake, puts back a person's application its
+DELETE took, and edits its note to done. A wake that stops part way leaves the note working;
+the next wake settles that ticket from it. It deletes only under a GitHub App's own login
+(#1702): a needs-info it didn't apply in this wake, or any needs-info while it acts as a
+person's own account, stays and is reported. It prints each change and every other
+mismatch, one report line each: exit 0 nothing to report, 1 lines printed, 2
+`status check failed: <why>`.
 Every GitHub call goes through `gh api`.
 """
 import argparse
@@ -634,23 +637,19 @@ def by(event, login):
     return isinstance(actor, str) and actor.lower() == login.lower()
 
 
-def cleanup(repo, n, login, since, labelled):
-    """Take off the needs-info this repair applied (#68 R2): only when its application, made since
-    its record, is the last one. GitHub's DELETE takes whatever label is there when it lands, so
-    the timeline is read again after it: a person's application that landed between the read and
-    the DELETE is put back, and reported. The report lines."""
+def cleanup(repo, n, login, mine, labelled):
+    """Take off the needs-info this wake's own POST applied (#68 R2): only when that application,
+    event MINE of the label timeline, is still the last one. GitHub's DELETE takes whatever label is
+    there when it lands, so the timeline is read again after it: a person's application that landed
+    between the read and the DELETE is put back, and reported. The report lines."""
     events = label_events(repo, n)
-    mine = [k for k, e in enumerate(events) if e['event'] == 'labeled' and by(e, login)
-            and isinstance(e.get('created_at'), str) and e['created_at'] >= since]
-    if not mine:
-        return []
     if labelled():
         last = max(k for k, e in enumerate(events) if e['event'] == 'labeled')
-        if last != mine[-1]:
+        if last != mine:
             return []
         gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
         events = label_events(repo, n)
-    after = events[mine[-1] + 1:]
+    after = events[mine + 1:]
     off = [k for k, e in enumerate(after) if e['event'] == 'unlabeled' and by(e, login)]
     if not off:
         return []
@@ -660,6 +659,27 @@ def cleanup(repo, n, login, since, labelled):
     gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
     who = people[-1]['actor']['login']
     return [f'#{n}: {ASKING_LABEL} put back: {who} applied it as the repair took it off; check whose it is']
+
+
+def app(login):
+    """#82 R1: only a GitHub App's own login (`<name>[bot]`, which no person can sign in as)
+    tells the repair's label events from a person's. Under any other login, such as a person's
+    own account shared with the agents, the repair never deletes: it reports instead."""
+    return login.endswith('[bot]')
+
+
+def left(repo, n, login, labelled):
+    """#1702: a needs-info this wake can't prove it applied stays. While agents post as a person's
+    own account, an application under the repair's login may be that person's hold, or a put-back
+    of one, so it is reported, never taken off. The report lines."""
+    if not labelled():
+        return []
+    # Silent only when the last listed application is provably someone else's.
+    applied = [e for e in label_events(repo, n) if e['event'] == 'labeled']
+    if applied and not by(applied[-1], login):
+        return []
+    return [f'#{n}: {ASKING_LABEL} left on: no note asks, and the repair can\'t tell whether it or a person '
+            'added it; check whose it is']
 
 
 def settle(repo, n, authors, login, base, pending):
@@ -679,18 +699,24 @@ def settle(repo, n, authors, login, base, pending):
     if pending is None:
         if still is None or labelled():
             return []
-        mine = [x for x in notes(pages(comments), authors) if x[1]['agent'] == 'fleet' and x[3] == login.lower()]
-        note_id, since = record(repo, n, base, 'working', REPAIRING, mine[-1][0] if mine else None)
+        fleet = [x for x in notes(pages(comments), authors) if x[1]['agent'] == 'fleet' and x[3] == login.lower()]
+        note_id = record(repo, n, base, 'working', REPAIRING, fleet[-1][0] if fleet else None)[0]
     else:
-        note_id, since = pending[0], pending[2].strftime('%Y-%m-%dT%H:%M:%SZ')
-    report = []
+        note_id = pending[0]
+    report, mine = [], None
     if still is not None and not labelled():
+        # #1702: the label's own application is the one new event its POST leaves, under its login.
+        # One from an earlier wake can't be told from a person's under the same login.
+        before = len(label_events(repo, n))
         gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+        new = label_events(repo, n)[before:]
+        if app(login) and len(new) == 1 and new[0]['event'] == 'labeled' and by(new[0], login):
+            mine = before
         still = asking()
         if still is not None:
             report.append(f'#{n} note {still[0]} {still[1]["agent"]} asking: {ASKING_LABEL} added')
     if still is None:
-        report += cleanup(repo, n, login, since, labelled)
+        report += left(repo, n, login, labelled) if mine is None else cleanup(repo, n, login, mine, labelled)
     record(repo, n, base, 'done', REPAIRED, note_id)
     return report
 

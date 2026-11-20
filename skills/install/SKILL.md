@@ -69,7 +69,7 @@ Done when the user has seen it.
 
 ## 5. First fleet
 
-Continue only if the user wants a first fleet; otherwise finish with the install and any outstanding setup steps. Pass one owner-only `--state <file>` outside the project to every `first_fleet.py` command (`python3 <this skill's folder>/scripts/first_fleet.py`), from the project's clone. To resume, run `first_fleet.py next --state <file>`: it reads only that file and prints the first unfinished step and its command. Exits: 0 done, 1 read failure, 2 usage, 5 refused, 6 uncertain, 7 busy, 10 state unavailable, 12 preview awaiting `--yes`.
+Continue only if the user wants a first fleet; otherwise finish with the install and any outstanding setup steps. Pass one owner-only `--state <file>` outside the project to every `first_fleet.py` command (`python3 <this skill's folder>/scripts/first_fleet.py`), from the project's clone. To resume, run `first_fleet.py next --state <file> --setup-state <state>`: it reads only that file and the repository setup prepared, and prints the first unfinished step and its command. Exits: 0 done, 1 read failure, 2 usage, 5 refused, 6 uncertain, 7 busy, 10 state unavailable, 12 preview awaiting `--yes`.
 
 ### 1. Choose a project
 
@@ -100,7 +100,7 @@ Done when the user confirms the grill's summary.
 
 ### 4. Choose the agents
 
-Harness, model and effort were answered at Connect. Ask only where the agents run: Cloud (recommended; it uses Cloud Credits) or Local. Save `openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup --agents cloud|local` (without a carried setup, ask the three and pass `--harness --model --effort`). Then run `setup` so both builder tables name exactly these settings, sourced to the user's decision; setup keeps reviewers in the other family. Local is not available yet: say so, and offer Cloud or stopping.
+Harness, model and effort were answered at Connect. Ask only where the agents run: Cloud (recommended; it uses Cloud Credits) or Local. Save `openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup --agents cloud|local` (without a carried setup, ask the three and pass `--harness --model --effort`). Then run `setup` so both builder tables name exactly these settings, sourced to the user's decision; setup keeps reviewers in the other family. Then run the same `choose` again: it reads the tables back. Local is not available yet: say so, and offer Cloud or stopping.
 
 Done when the choice is recorded and the builder tables match it.
 

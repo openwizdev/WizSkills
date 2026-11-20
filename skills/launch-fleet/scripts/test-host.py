@@ -320,8 +320,8 @@ class Failures(unittest.TestCase):
         p.fault(post='fail')
         code, out, _ = p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')
         self.assertEqual(code, 1)
-        self.assertTrue(out.startswith('%s: the local driver refused #7\'s start 3 times; next: %s; unknown: the ticket '
-                                       'was not told (' % (STOPPED, NEXT)), out)
+        self.assertTrue(out.startswith('%s: the local driver refused #7\'s start 3 times; next: %s; unknown: the ticket\'s '
+                                       'report is incomplete (' % (STOPPED, NEXT)), out)
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')[0], 1)
         self.assertEqual((p.fleet_notes(), len(p.failures())), ([STOPPED], 1))
 
@@ -334,8 +334,8 @@ class Failures(unittest.TestCase):
                                                "tries. What it says to do next: " + NEXT)])
         self.assertEqual(p.fleet_notes(), [])
         self.assertEqual(code, 1)
-        self.assertTrue(out.startswith('%s: the local driver refused #7\'s start 3 times; next: %s; unknown: the ticket '
-                                       'was not told (the fleet note was not written: ' % (STOPPED, NEXT)), out)
+        self.assertTrue(out.startswith('%s: the local driver refused #7\'s start 3 times; next: %s; unknown: the ticket\'s '
+                                       'report is incomplete (the fleet note was not written: ' % (STOPPED, NEXT)), out)
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')[0], 1)
         self.assertEqual((p.fleet_notes(), len(p.failures())), ([STOPPED], 1))
 

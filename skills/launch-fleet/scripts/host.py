@@ -36,8 +36,9 @@ Exit 0: `host: <name>`, `host: none`, `started #N on <host>`, `woke ...` or
 `stopped ...`; after a start or wake, a second line `unknown: ...` when #N's
 failure report could not be cleared (the next success clears it). Exit 1, one
 line: `stopped (driver start failed): the <host> driver refused #N's <start|wake>
-3 times; next: <its next>`, ending `; unknown: the ticket was not told (<why>)`
-when the report failed (the next refusal writes it); `refused: <driver's
+3 times; next: <its next>`, ending `; unknown: the ticket's report is incomplete (<why>)`
+when the note or the comment failed (each is tried; the next refusal writes what
+is missing); `refused: <driver's
 error>; next: <its next>` for a stop, or another refusal (nothing was started
 or saved); `no run: ...` (use today's room-cli route); `unknown: ...` (a run
 may exist: reconcile before any retry).
@@ -242,24 +243,46 @@ def note(repo, n, state, step):
 
 
 def report(repo, n, host, command, next_):
-    """After the third refusal: the fleet note and one comment on #N, each only when #N lacks it."""
+    """After the third refusal: the fleet note and one comment on #N, each only when #N lacks it.
+
+    Each is tried even when the other failed (R1 of the review at 1f9c7f6); post.Stop names every failure."""
     stopped, comments = reports(repo, n)
+    failed = []
     if not stopped:
-        note(repo, n, 'stopped', "the %s driver refused this builder's %s 3 times; what to do next is in a comment "
-                                 "here" % (host, command))
+        try:
+            note(repo, n, 'stopped', "the %s driver refused this builder's %s 3 times; what to do next is in a "
+                                     "comment here" % (host, command))
+        except Exception as e:
+            failed.append(why(e))
     if not comments:
-        post.comment(repo, int(n), "%s\n\nThe %s driver could not %s this ticket's builder after 3 tries. What it "
-                                   "says to do next: %s" % (MARK, host, command, next_))
+        try:
+            post.comment(repo, int(n), "%s\n\nThe %s driver could not %s this ticket's builder after 3 tries. What "
+                                       "it says to do next: %s" % (MARK, host, command, next_))
+        except Exception as e:
+            failed.append(why(e))
+    if failed:
+        raise post.Stop('; '.join(failed))
 
 
 def clear(repo, n, host, done):
-    """After a success: mark #N's failure comments cleared and follow a stopped fleet note with a done one."""
+    """After a success: mark #N's failure comments cleared and follow a stopped fleet note with a done one.
+
+    Each write is tried even when another failed, as report()'s are; post.Stop names every failure."""
     stopped, comments = reports(repo, n)
+    failed = []
     for c in comments:
-        post.edit(repo, c['id'], CLEARED + c['body'][len(MARK):] + '\n\nCleared: the %s driver %s it later.'
-                  % (host, done))
+        try:
+            post.edit(repo, c['id'], CLEARED + c['body'][len(MARK):] + '\n\nCleared: the %s driver %s it later.'
+                      % (host, done))
+        except Exception as e:
+            failed.append(why(e))
     if stopped:
-        note(repo, n, 'done', 'the %s driver %s this builder on a later try' % (host, done))
+        try:
+            note(repo, n, 'done', 'the %s driver %s this builder on a later try' % (host, done))
+        except Exception as e:
+            failed.append(why(e))
+    if failed:
+        raise post.Stop('; '.join(failed))
 
 
 def attempt(repo, n, host, command, given):
@@ -272,7 +295,7 @@ def attempt(repo, n, host, command, given):
         try:
             report(repo, n, host, command, refusal.next)
         except Exception as e:  # nothing started: the next refusal writes what is missing
-            line += '; unknown: the ticket was not told (%s)' % why(e)
+            line += "; unknown: the ticket's report is incomplete (%s)" % why(e)
         raise Outcome(line)
 
 
@@ -286,8 +309,8 @@ def cleared(repo, n, host, done):
 
 
 def why(e):
-    """A GitHub step's failure, for a line: post.py's and status.py's own reason, or only the error's kind."""
-    return str(e).split(': ', 1)[-1] if isinstance(e, post.Stop) else type(e).__name__
+    """A GitHub step's failure, for a line: its reason without post.py's outcome word, or only the error's kind."""
+    return re.sub(r'^(?:unknown|refused): ', '', str(e)) if isinstance(e, post.Stop) else type(e).__name__
 
 
 def runs_path():

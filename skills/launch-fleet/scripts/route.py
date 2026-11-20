@@ -18,9 +18,16 @@
                              or `wake fleet #S: unresolved`. Every other line of the wake is
                              printed unchanged. No ticket: prints nothing, exit 0. A refused
                              lookup or wake: its exit status and reason.
+  route.py gh api ARGS...    `gh api ARGS...` for a call that sends or reads a webhook, started with a
+                             clean environment: only the names in KEEP pass (how gh finds itself,
+                             its login, host and repository, certificates and a proxy). Every other
+                             setting is dropped, so no trace setting reaches it: GH_DEBUG, DEBUG,
+                             GODEBUG or one a later release adds. Standard input, output and the
+                             exit status are gh's own. Needs no GH_REPO.
 
 Exit 2 with the reason on stderr for bad arguments or a read that fails or is
-partial. It only reads; it never prints a webhook address or a thread id.
+partial. refs, loop and tick only read; gh writes only what its caller pipes in. None of
+them prints a webhook address or a thread id.
 """
 import json
 import os
@@ -101,8 +108,25 @@ def tick(home, source, path, numbers):
         print(line)
     return 0
 
+# The environment a webhook's `gh api` call keeps; everything else, trace settings above all, is dropped.
+KEEP = ('PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'LC_ALL',
+        'GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GH_HOST', 'GH_REPO',
+        'GH_CONFIG_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR',
+        'DBUS_SESSION_BUS_ADDRESS', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+        'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy')
+
+
+def quiet_gh(args):
+    env = {k: os.environ[k] for k in KEEP if k in os.environ}
+    try:
+        os.execvpe('gh', ['gh', 'api', *args], env)
+    except OSError as e:
+        raise Refused('cannot start gh: %s' % e.strerror)
+
 
 def main(argv):
+    if argv[:2] == ['gh', 'api'] and len(argv) > 2:
+        return quiet_gh(argv[2:])
     home = os.environ.get('GH_REPO', '')
     if not REPO.fullmatch(home):
         raise Refused('GH_REPO must be the project repository, owner/name')
@@ -118,7 +142,7 @@ def main(argv):
         return 0
     if len(argv) >= 4 and argv[0] == 'tick' and REPO.fullmatch(argv[1]) and all(NUMBER.fullmatch(a) for a in argv[3:]):
         return tick(home, argv[1], argv[2], [int(a) for a in argv[3:]])
-    raise Refused('usage: route.py refs OWNER/NAME N... | route.py loop FILE S | route.py tick OWNER/NAME FILE N...')
+    raise Refused('usage: route.py refs OWNER/NAME N... | route.py loop FILE S | route.py tick OWNER/NAME FILE N... | route.py gh api ARGS...')
 
 
 if __name__ == '__main__':

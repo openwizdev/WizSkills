@@ -272,7 +272,7 @@ class Setup(unittest.TestCase):
             self.assertNotRegex(tail, r"(^|[^|&])>|\btee\b|--slurpfile|--rawfile", c)
         for c in commands:
             if 'loop hook' in c:
-                self.assertRegex(c, r"\|\s*(env (-u \w+ )+)?gh api --method POST '?repos/[^ ]+/hooks'? --input -", c)
+                self.assertRegex(re.sub(r'<[^<>]*>', 'X', c), r"\|\s*python3 -I \"X/scripts/route\.py\" gh api --method (POST|PATCH) '?repos/[^ ]+/hooks(/X)?'? --input -", c)
             if 'loop create' in c and '--webhook' in c:
                 self.assertIn('| jq -r .id', c)
 

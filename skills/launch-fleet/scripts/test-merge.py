@@ -548,9 +548,15 @@ MERGED = 'merged %s; cost posted ' % ('f' * 40)
 
 
 def ticket(spec, siblings=(('CLOSED', 11),), repo=REPO, more=False):
-    """Ticket #12 of spec #40: `spec` is the spec's body, `siblings` its other planned tickets."""
-    nodes = [{'number': n, 'state': s, 'repository': {'nameWithOwner': repo}} for s, n in siblings]
-    nodes.append({'number': 12, 'state': 'OPEN', 'repository': {'nameWithOwner': repo}})
+    """Ticket #12 of spec #40: `spec` is the spec's body, `siblings` its other planned tickets, each
+    (state, number) or (state, number, its closing pull requests as (number, state, in the merge queue))."""
+    def node(state, n, prs=()):
+        refs = [{'number': p, 'state': st, 'isInMergeQueue': q, 'repository': {'nameWithOwner': repo}}
+                for p, st, q in prs]
+        return {'number': n, 'state': state, 'repository': {'nameWithOwner': repo},
+                'closedByPullRequestsReferences': {'pageInfo': {'hasNextPage': False}, 'nodes': refs}}
+    nodes = [node(*x) for x in siblings]
+    nodes.append(node('OPEN', 12, [(7, 'OPEN', False)]))
     return {'12': {'number': 12, 'parent': {'number': 40, 'body': spec, 'repository': {'nameWithOwner': repo},
                                             'subIssues': {'pageInfo': {'hasNextPage': more}, 'nodes': nodes}}}}
 
@@ -586,7 +592,7 @@ class LateLook(unittest.TestCase):
 
     def ask(self, w, text=EVIDENCE):
         (w.dir / 'evidence.txt').write_text(text)
-        return self.run_merge(w, 'ask', REPO, 7, HEAD, '--ticket', 12, w.dir / 'evidence.txt')
+        return self.run_merge(w, 'ask', REPO, 7, HEAD, 'check', '--ticket', 12, w.dir / 'evidence.txt')
 
     def add(self, w, *comments):
         value = w.load()
@@ -710,7 +716,7 @@ class LateLook(unittest.TestCase):
         w = World(self, pr=pr(closes=closes((TICKETS, 12))), others={TICKETS: {'tickets': ticket(VISIBLE, repo=TICKETS)}})
         project(w, PRINTS)
         (w.dir / 'evidence.txt').write_text(EVIDENCE)
-        self.assertEqual(self.run_merge(w, 'ask', REPO, 7, HEAD, '--ticket', '%s#12' % TICKETS, w.dir / 'evidence.txt'),
+        self.assertEqual(self.run_merge(w, 'ask', REPO, 7, HEAD, 'check', '--ticket', '%s#12' % TICKETS, w.dir / 'evidence.txt'),
                          (0, 'ask posted 5001'))
         self.assertEqual(w.others[TICKETS].bodies(40), [ASKED % HEAD])
         self.assertEqual(w.bodies(40), [])
@@ -752,6 +758,49 @@ class LateLook(unittest.TestCase):
                                  (1, 'unknown: the checkpoints contract could not be read; nothing was merged'))
                 self.assertEqual(self.merges(w), [])
 
+    def test_a_sibling_already_queued_or_merged_makes_this_the_final_merge(self):
+        # catches (review R1): two tickets of a user-visible spec both entering the merge queue while
+        # each still sees the other open, so the final merge lands without the owner's late look.
+        queued = [('OPEN', 11, [(6, 'OPEN', True)])]
+        for name, siblings in [('queued', queued), ('merged, not yet closed', [('OPEN', 11, [(6, 'MERGED', False)])]),
+                               ('queued, beside a closed one', [('CLOSED', 10)] + queued)]:
+            with self.subTest(name):
+                w = World(self, pr=pr(isMergeQueueEnabled=True), tickets=ticket(VISIBLE, siblings=siblings))
+                project(w, PRINTS)
+                code, out = self.run_merge(w, 'merge', REPO, 7, HEAD, 'check', 'APPROVE 1', '--ticket', 12)
+                self.assertEqual((code, out), (1, 'held: ask-due: post the evidence ask on %s#40 with merge.py ask'
+                                               % REPO))
+                self.assertEqual(w.writes(), [])
+        with self.subTest('a sibling still in review'):
+            w = World(self, pr=pr(isMergeQueueEnabled=True),
+                      tickets=ticket(VISIBLE, siblings=[('OPEN', 11, [(6, 'OPEN', False)])]))
+            project(w, PRINTS)
+            self.assertEqual(self.run_merge(w, 'merge', REPO, 7, HEAD, 'check', 'APPROVE 1', '--ticket', 12),
+                             (0, 'queued; recorded 5001'))
+
+    def test_an_ask_waits_for_a_green_mergeable_head(self):
+        # catches (review R2): the owner asked to look at evidence for a head the fleet can't merge,
+        # because a required check turned red or the head conflicts after the hold was read.
+        w = self.world(VISIBLE)
+        self.assertEqual(self.merge(w)[1], 'held: ask-due: post the evidence ask on %s#40 with merge.py ask' % REPO)
+        value = w.load()
+        value['pr']['checks'] = [{'__typename': 'CheckRun', 'name': 'check', 'conclusion': 'FAILURE'}]
+        w.save(value)
+        self.assertEqual(self.ask(w), (1, 'refused: no ask for a head that cannot merge: not every required check '
+                                          'is green on it: check'))
+        for state in ('CONFLICTING', 'UNKNOWN'):
+            with self.subTest(state):
+                w = self.world(VISIBLE)
+                w.update(pr=pr(mergeable=state))
+                self.assertEqual(self.ask(w), (1, 'refused: no ask for a head that cannot merge: mergeable: ' + state))
+                self.assertEqual(w.writes(), [])
+        with self.subTest('merge offers no ask for a conflicting head'):
+            w = self.world(VISIBLE)
+            w.update(pr=pr(mergeable='CONFLICTING'))
+            self.assertEqual(self.merge(w), (1, 'blocked: not mergeable: CONFLICTING; recorded 5001'))
+            self.assertEqual(w.bodies(40), [])
+            self.assertEqual(self.merges(w), [])
+
     def test_the_documented_late_look_commands_run_as_written(self):
         # catches: reviews.md's `look` or `ask` command naming a verb, argument order or path
         # merge.py doesn't take, so a held merge's ask is never posted and it waits forever.
@@ -762,7 +811,7 @@ class LateLook(unittest.TestCase):
         w = self.world(VISIBLE)
         (w.dir / 'evidence.txt').write_text(EVIDENCE)
         values = {"<this skill's folder>": str(HERE.parent), '<owner>/<repo>': REPO, '<P>': '7', '<commit>': HEAD,
-                  '<N>': '12', '<file>': str(w.dir / 'evidence.txt')}
+                  '<checks>': 'check', '<N>': '12', '<file>': str(w.dir / 'evidence.txt')}
         for verb, want in [('look', 'held: ask-due: post the evidence ask on %s#40 with merge.py ask' % REPO),
                            ('ask', 'ask posted 5001'),
                            ('look', 'held: look-due: the late look asked on %s#40 is not recorded' % REPO)]:

@@ -325,6 +325,20 @@ class Failures(unittest.TestCase):
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')[0], 1)
         self.assertEqual((p.fleet_notes(), len(p.failures())), ([STOPPED], 1))
 
+    def test_a_lost_note_write_still_posts_the_failure_comment_in_the_same_run(self):
+        # R1 of the review at 1f9c7f6: the note and the comment are written apart, so one failing never hides the other.
+        p = Project(self)
+        p.fault(post='fail')  # the first POST is the fleet note's
+        code, out, _ = p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')
+        self.assertEqual(p.failures(), [(MARK, "The local driver could not start this ticket's builder after 3 "
+                                               "tries. What it says to do next: " + NEXT)])
+        self.assertEqual(p.fleet_notes(), [])
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith('%s: the local driver refused #7\'s start 3 times; next: %s; unknown: the ticket '
+                                       'was not told (the fleet note was not written: ' % (STOPPED, NEXT)), out)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')[0], 1)
+        self.assertEqual((p.fleet_notes(), len(p.failures())), ([STOPPED], 1))
+
     def test_a_clearing_github_lost_keeps_the_saved_run_and_the_next_success_clears(self):
         p = Project(self)
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')[0], 1)

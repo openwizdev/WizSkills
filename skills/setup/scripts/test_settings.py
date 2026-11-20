@@ -123,6 +123,50 @@ class Check(unittest.TestCase):
         self.assertIn('triage-labels.md: wontfix: label wontfix is not in the tracker', out)
         self.assertIn('triage-labels.md: needs-info: label needs-info is in the tracker 2 times', out)
 
+    def test_a_second_record_authors_row_is_refused_and_named(self):
+        # catches: setup verifying a repair that left two Record authors rows,
+        # which the review helper then refuses, so no review is admitted (#1500).
+        row = '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |\n'
+        old = '| Record authors | `synthetic-old` |\n'
+        code, out = self.check(self.project(**{'fleet.md': FLEET.replace(row, row + old)}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: GitHub identity: Record authors row 2 of 2: %s' % old.strip(), out)
+        # A second GitHub identity section is read as the readers read it, not skipped.
+        code, out = self.check(self.project(**{'fleet.md': FLEET + '\n## GitHub identity\n\n' + old}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('Record authors row 2 of 2', out)
+
+    def test_a_record_authors_cell_is_validated_whole(self):
+        # catches: a row the readers refuse whole (text beside the logins, an extra
+        # cell) passed because each backticked login parsed on its own.
+        row = '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |'
+        for bad in (row.replace(', `synthetic-owner`', ' and `synthetic-owner`'), row + ' note |'):
+            code, out = self.check(self.project(**{'fleet.md': FLEET.replace(row, bad)}))
+            self.assertEqual(code, 5, bad + '\n' + out)
+            self.assertIn('fleet.md: GitHub identity: Record authors needs one or more exact logins', out)
+
+    def test_a_duplicate_or_malformed_spawn_flag_is_refused_and_named(self):
+        # catches: setup verifying an agent table the first-fleet launch reader
+        # refuses: a second --model left in a note, or a value that is not one token (#1520).
+        for title, provider, model in (('Builder', 'claude-code', 'syn-claude-1'),
+                                       ('Builder for small tickets', 'codex', 'syn-codex-1'),
+                                       ('Reviewer for Claude-built', 'codex', 'syn-codex-1'),
+                                       ('Reviewer for GPT-built', 'claude-code', 'syn-claude-1')):
+            good = table(title, provider, model)
+            noted = good.replace('Source: synthetic decision.', 'Was `--model syn-old`. Source: synthetic decision.')
+            code, out = self.check(self.project(**{'fleet.md': FLEET.replace(good, noted)}))
+            self.assertEqual(code, 5, out)
+            self.assertIn('fleet.md: %s: --model appears 2 times' % title, out)
+            split = good.replace('`--reasoning-level high`', '`--reasoning-level high extra`')
+            code, out = self.check(self.project(**{'fleet.md': FLEET.replace(good, split)}))
+            self.assertEqual(code, 5, out)
+            self.assertIn('fleet.md: %s: malformed `--reasoning-level high extra`' % title, out)
+        # A repeated section heading adds its flags to the same section, as launch reads it.
+        extra = '## Builder\n\nOld: `--provider codex`.\n\n'
+        code, out = self.check(self.project(**{'fleet.md': FLEET.replace('## Test commands', extra + '## Test commands')}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Builder: --provider appears 2 times', out)
+
     def test_usage_errors_exit_2(self):
         # catches: a mistyped command read as a verified project.
         result = subprocess.run([sys.executable, '-I', str(SCRIPT), 'verify'], capture_output=True, text=True)

@@ -970,6 +970,63 @@ class Refuse(Tracker):
         self.assertEqual((why.returncode, why.stdout, self.calls()), (2, '', []))
         self.assertRegex(why.stderr, r'^status\.py: refused: state: ')
 
+    def test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name(self):
+        # catches (#1384): a C:/ or D:/ drive path, an scp-style host:/ path or an api_key:,
+        # access_token: or auth: value reaching the public note, or a refusal that hides
+        # which kind of private text it found.
+        cases = [
+            ('--step', 'copied C:/Users/example/x', 'a machine path'),
+            ('--step', 'worked in D:/work/repo', 'a machine path'),
+            ('--step', 'synced synthetic-host:/srv/data/x', 'a machine path'),
+            ('--harness', 'Codex on box:/var/synthetic/run', 'a machine path'),
+            ('--step', 'set api_key: synthetic-value', 'a credential'),
+            ('--step', 'set access_token: synthetic-value', 'a credential'),
+            ('--step', 'sent auth: synthetic-value', 'a credential'),
+            # Review R1: a remote or local path whose parts are quoted, escaped or hold a space.
+            ('--step', "synced synthetic-host:'/release files/notes.txt'", 'a machine path'),
+            ('--step', r'synced synthetic-host:/release\ files/notes.txt', 'a machine path'),
+            ('--step', 'synced synthetic-host:~/notes', 'a machine path'),
+            ('--step', "ran it in '/release files/notes.txt'", 'a machine path'),
+            ('--step', r'ran it in /release\ files/notes.txt', 'a machine path'),
+            # Review R3: a versioned credential name, in either form.
+            ('--step', 'updated oauth2_token: synthetic-value', 'a credential'),
+            ('--step', 'updated oauth2_token=synthetic-value', 'a credential'),
+            ('--step', 'set aws2_key: synthetic-value', 'a credential'),
+            # Review R4: a credential in a web link's query or fragment, outside its path.
+            ('--step', 'checked https://example.com/render?debug=api_key:synthetic-value', 'a credential'),
+            ('--step', 'checked https://example.com/x?api_key:synthetic-value', 'a credential'),
+            ('--step', 'checked https://example.com/docs/auth:overview#access_token:synthetic-value',
+             'a credential'),
+            ('--step', 'synced https://example.com/a?from=synthetic-host:/srv/data/x', 'a machine path'),
+        ]
+        for flag, value, what in cases:
+            with self.subTest(flag=flag, value=value):
+                self.save()
+                (self.dir / 'gh.log').unlink(missing_ok=True)
+                result = self.run_status(*self.args(flag, value))
+                self.assertEqual((result.returncode, result.stdout), (2, ''))
+                self.assertEqual(result.stderr.strip(), f'status.py: refused: {FIELD[flag]}: holds {what}')
+                self.assertEqual(self.calls(), [])
+                self.assertEqual(self.load(), self.world)
+        # Ordinary notes near those shapes still write, and (review R2) a note holding a public
+        # link with a colon in its path writes and can be edited again in place.
+        good = [('--step', 'checked https://github.com/acme/home/pull/1 at 10:30'),
+                ('--step', 'ratio 2:1 on the key path'),
+                ('--step', 'opened https://example.com/docs/auth:overview and https://example.com/a:/b'),
+                ('--preview', 'https://example.com/releases:/web/current'),
+                ('--preview', 'https://example.com/docs/auth:overview'),
+                ('--preview', 'https://example.com/x/c:/api_key:v2'),
+                ('--step', 'opened https://example.com/docs/auth:overview?page=2#setup')]
+        for flag, value in good:
+            with self.subTest(flag=flag, value=value):
+                self.save()
+                first = self.run_status(*self.args(flag, value))
+                self.assertEqual((first.returncode, first.stdout),
+                                 (0, '#12: builder working, status note 9001 posted\n'), first.stderr)
+                again = self.run_status(*self.args(flag, value), '--note', '9001')
+                self.assertEqual((again.returncode, again.stdout),
+                                 (0, '#12: builder working, status note 9001 edited\n'), again.stderr)
+
     def test_the_schema_and_the_writer_agree_on_each_shape(self):
         # catches: the schema the app validates with and the writer accepting different values.
         schema = json.loads(SCHEMA.read_text())

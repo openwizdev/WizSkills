@@ -1,0 +1,6 @@
+$ python3 -I skills/launch-fleet/scripts/test-status.py Refuse.test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name   # review R4 cases after the fix
+.
+----------------------------------------------------------------------
+Ran 1 test in 5.862s
+
+OK

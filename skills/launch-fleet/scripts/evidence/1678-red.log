@@ -1,0 +1,110 @@
+FFFFFFF
+======================================================================
+FAIL: test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name (__main__.Refuse.test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name) (flag='--step', value='copied C:/Users/example/x')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-status.py", line 896, in test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name
+    self.assertEqual((result.returncode, result.stdout), (2, ''))
+AssertionError: Tuples differ: (0, '#12: builder working, status note 9001 posted\n') != (2, '')
+
+First differing element 0:
+0
+2
+
+- (0, '#12: builder working, status note 9001 posted\n')
++ (2, '')
+
+======================================================================
+FAIL: test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name (__main__.Refuse.test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name) (flag='--step', value='worked in D:/work/repo')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-status.py", line 896, in test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name
+    self.assertEqual((result.returncode, result.stdout), (2, ''))
+AssertionError: Tuples differ: (0, '#12: builder working, status note 9001 posted\n') != (2, '')
+
+First differing element 0:
+0
+2
+
+- (0, '#12: builder working, status note 9001 posted\n')
++ (2, '')
+
+======================================================================
+FAIL: test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name (__main__.Refuse.test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name) (flag='--step', value='synced synthetic-host:/srv/data/x')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-status.py", line 896, in test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name
+    self.assertEqual((result.returncode, result.stdout), (2, ''))
+AssertionError: Tuples differ: (0, '#12: builder working, status note 9001 posted\n') != (2, '')
+
+First differing element 0:
+0
+2
+
+- (0, '#12: builder working, status note 9001 posted\n')
++ (2, '')
+
+======================================================================
+FAIL: test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name (__main__.Refuse.test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name) (flag='--harness', value='Codex on box:/var/synthetic/run')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-status.py", line 896, in test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name
+    self.assertEqual((result.returncode, result.stdout), (2, ''))
+AssertionError: Tuples differ: (0, '#12: builder working, status note 9001 posted\n') != (2, '')
+
+First differing element 0:
+0
+2
+
+- (0, '#12: builder working, status note 9001 posted\n')
++ (2, '')
+
+======================================================================
+FAIL: test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name (__main__.Refuse.test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name) (flag='--step', value='set api_key: synthetic-value')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-status.py", line 896, in test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name
+    self.assertEqual((result.returncode, result.stdout), (2, ''))
+AssertionError: Tuples differ: (0, '#12: builder working, status note 9001 posted\n') != (2, '')
+
+First differing element 0:
+0
+2
+
+- (0, '#12: builder working, status note 9001 posted\n')
++ (2, '')
+
+======================================================================
+FAIL: test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name (__main__.Refuse.test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name) (flag='--step', value='set access_token: synthetic-value')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-status.py", line 896, in test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name
+    self.assertEqual((result.returncode, result.stdout), (2, ''))
+AssertionError: Tuples differ: (0, '#12: builder working, status note 9001 posted\n') != (2, '')
+
+First differing element 0:
+0
+2
+
+- (0, '#12: builder working, status note 9001 posted\n')
++ (2, '')
+
+======================================================================
+FAIL: test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name (__main__.Refuse.test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name) (flag='--step', value='sent auth: synthetic-value')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-status.py", line 896, in test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name
+    self.assertEqual((result.returncode, result.stdout), (2, ''))
+AssertionError: Tuples differ: (0, '#12: builder working, status note 9001 posted\n') != (2, '')
+
+First differing element 0:
+0
+2
+
+- (0, '#12: builder working, status note 9001 posted\n')
++ (2, '')
+
+----------------------------------------------------------------------
+Ran 1 test in 2.119s
+
+FAILED (failures=7)

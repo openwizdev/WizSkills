@@ -78,6 +78,23 @@ PREVIEW = re.compile(r'https://(?![^/:]*\.(?:local|internal|lan|localhost)(?:[:/
                      r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?::[0-9]{1,5})?(?:/[^\s"<>?#@\\]*)?')
 CONTROL = re.compile(r'[\x00-\x1f\x7f]')
 QUOTE = re.compile('["“”]')
+# A web link's host, optional numeric port and path, up to a space, a quote mark or the start
+# of its query or fragment: the query and fragment stay visible to every rule (review R4).
+LINK = re.compile(r'\bhttps?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[^\s"\'<>?#]*)?', re.I)
+# One part of a path: no slash; an escaped character, or a space inside the part, is part of it.
+PART = r'(?:[\w.~+-]|\\.)(?:[\w.~+-]|\\.| (?=[\w.~+-]))*'
+
+
+class OffLinks:
+    """A rule read with each web link's path taken out, so that path never trips it (#1384)."""
+
+    def __init__(self, pattern, flags=0):
+        self.pattern = re.compile(pattern, flags)
+
+    def search(self, text):
+        return self.pattern.search(LINK.sub('link', text))
+
+
 # What a note never holds. A guard fails closed: every thr_ token, synthetic or not.
 PRIVATE = (
     ('a thread id', re.compile(r'(?<![A-Za-z0-9])thr_', re.I)),
@@ -85,14 +102,18 @@ PRIVATE = (
     ('a machine path', re.compile(
         r'(?<![\w.:/~-])(?:~/|/(?:Users|home|root|tmp|var|private|mnt|Volumes|opt|srv|code)(?:/|\b))', re.I)),
     ('a machine path', re.compile(r'(?<![A-Za-z0-9])[A-Za-z]:\\')),
+    # #1384: a C:/ drive or an scp-style host:/, host:'/ or host:~/ path, outside a web link's path.
+    ('a machine path', OffLinks(r'[\w.-]:[\'"]?~?/(?!/)')),
     # R3: any absolute path of two or more parts; a URL's own path is preceded by its host.
-    ('a machine path', re.compile(r'(?<![\w.:/~@%$}\\-])/[\w.~+-]+/[\w.~+-]')),
+    ('a machine path', re.compile(rf'(?<![\w.:/~@%$}}\\-])/{PART}/[\w.~+-]')),
     ('a machine path', re.compile(r'\$\{?HOME\b|%(?:USERPROFILE|HOMEPATH|HOMEDRIVE|APPDATA|LOCALAPPDATA)%', re.I)),
     ('a machine path', re.compile(r'\\\\[\w.$-]+\\')),
     ('a machine path', re.compile(r'\bfile:', re.I)),
     ('a credential', re.compile(
-        r'\b(?:[a-z_]*token|[a-z_]*key|secret|password|passwd|pwd|sig|signature|auth|credentials?)\s*=', re.I)),
+        r'\b(?:[a-z0-9_]*token|[a-z0-9_]*key|secret|password|passwd|pwd|sig|signature|auth|credentials?)\s*=', re.I)),
     ('a credential', re.compile(r'\b(?:password|passwd|secret|token)\s*:\s*\S|\bbearer\s+\S', re.I)),
+    # #1384: a colon-form key, token or auth value, versioned names included, outside a web link's path.
+    ('a credential', OffLinks(r'\b(?:[a-z0-9_]*token|[a-z0-9_]*key|auth)\s*:\s*\S', re.I)),
     ('a credential', re.compile(r'\bgh[pousr]_[A-Za-z0-9]{8,}|\bgithub_pat_|\bAKIA[0-9A-Z]{16}\b'
                                 r'|\bxox[abprs]-|\bsk-[A-Za-z0-9_-]{16,}')),
 )

@@ -313,6 +313,23 @@ class Doctor(unittest.TestCase):
         self.assertEqual(lines, ['2. GitHub App: setup has no prepared project. ' + fix,
                                  '4. Harness: setup has no prepared project. ' + fix, 'Doctor: 2 problems.'])
 
+    # catches: the credential guard refusing an ordinary long setting, so a normal project loses its preview.
+    def test_long_ordinary_setting_still_gets_the_preview(self):
+        self.s.project.update(repository='synthetic-owner/other', model='syn-model-2026-11-20-long-name',
+                              project='SYNPROJECT0123456789ABCDEFGH')
+        self.s.save()
+        self.assertIn(' --model=syn-model-2026-11-20-long-name ', self.lines(self.s.run())[0])
+
+    # catches: a credential-shaped saved setting repeated on the harness line (#65 R3, same cause).
+    def test_credential_shaped_setting_is_not_named_on_the_harness_line(self):
+        self.s.project['model'] = LEAK
+        self.s.observations['harness'] = 'harness_unavailable'
+        self.s.save()
+        line = self.only(self.s.run())
+        self.assertNotIn(LEAK, line)
+        self.assertTrue(line.startswith('4. Harness: the saved harness, model or effort is not offered '
+                                        '(harness_unavailable). Fix: '), line)
+
     # catches: a first run with no state file told only to check, which can't select a project (#65 R1).
     def test_setup_not_run_yet_names_the_prepare_step(self):
         (self.s.state / 'setup/state.json').unlink()

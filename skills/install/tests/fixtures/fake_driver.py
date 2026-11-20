@@ -3,7 +3,9 @@
 as OpenWiz 583f2ae; its `version` answer here is that driver's VERSION, byte for byte).
 
 It answers only `version`, as the local driver does: its name, the records it
-speaks and what it can do. Every call is logged to $FAKE_DRIVER_LOG as one
+speaks and what it can do. The name is $FAKE_DRIVER_NAME (default `local`), so
+one fake stands in for each driver a build carries (DW9, #2006); with
+$FAKE_DRIVER_FAIL set, `version` refuses in driver v1's error shape. Every call is logged to $FAKE_DRIVER_LOG as one
 JSON line. Any other command exits 99, so a test sees the onboarding start,
 wake or stop a run itself (only launch-fleet does that). All values are synthetic.
 """
@@ -18,7 +20,10 @@ def main(argv):
     if argv != ['version']:
         sys.stderr.write('fake driver: unexpected call\n')
         return 99
-    print(json.dumps({'driver': 'local', 'records': ['openwiz:records v1'],
+    if os.environ.get('FAKE_DRIVER_FAIL'):
+        print(json.dumps({'error': 'synthetic: not signed in', 'next': 'sign in to the synthetic host'}))
+        return 1
+    print(json.dumps({'driver': os.environ.get('FAKE_DRIVER_NAME', 'local'), 'records': ['openwiz:records v1'],
                       'can': ['start', 'wake', 'stop', 'many-at-once']}))
     return 0
 

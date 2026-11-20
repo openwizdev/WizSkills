@@ -499,6 +499,101 @@ class LaunchYes(unittest.TestCase):
                 self.assertEqual(road.spawns(), [])
 
 
+class Drivers(unittest.TestCase):
+    """DW9 (#2006): the road offers every driver the installed build carries that answers `version`."""
+
+    def road(self, name='fresh-project', boat_fails=False):
+        road = Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
+        for host in ('cloudroom', 'boat'):  # the local driver is Road's own
+            folder = road.dir / 'adapters' / host
+            folder.mkdir()
+            env = 'FAKE_DRIVER_NAME=%s %s' % (host, 'FAKE_DRIVER_FAIL=1 ' if host == 'boat' and boat_fails else '')
+            (folder / 'driver').write_text('#!/bin/sh\n%sexec "%s" -I "%s" "$@"\n' % (
+                env, sys.executable, FIXTURES / 'fake_driver.py'))
+            (folder / 'driver').chmod(0o755)
+        boat = road.dir / 'bin/boat'  # boat.dev's own CLI, which only its driver ever runs
+        boat.write_text('#!/bin/sh\necho "$0 $*" >> "%s"\nexit 97\n' % (road.dir / 'boat.log'))
+        boat.chmod(0o755)
+        return road
+
+    def test_a_build_with_the_local_cloudroom_and_boat_drivers_offers_all_three(self):
+        # catches: the road offering its fixed two (this machine, Cloudroom) while the build carries boat.dev
+        road = self.road()
+        offer = road.helper(['where'])
+        self.assertEqual(offer.returncode, 12, offer.stdout)
+        offered = re.findall(r'(?m)^- (\S+): (.+)$', offer.stdout)
+        self.assertEqual([name for name, _ in offered], ['local', 'cloud', 'boat'], offer.stdout)
+        self.assertIn('boat.dev', dict(offered)['boat'])
+        self.assertNotIn('Not offered', offer.stdout)
+        self.assertNotIn('host', road.saved())
+        self.assertFalse((road.dir / 'boat.log').exists(), 'only version is called: nothing starts on boat.dev')
+
+    def test_a_driver_whose_version_fails_is_not_offered_and_the_road_says_why(self):
+        # catches: a broken driver offered (its start would fail later), or dropped without a word
+        road = self.road(boat_fails=True)
+        offer = road.helper(['where'])
+        self.assertEqual(offer.returncode, 12, offer.stdout)
+        self.assertEqual(re.findall(r'(?m)^- (\S+):', offer.stdout), ['local', 'cloud'], offer.stdout)
+        refused = [line for line in offer.stdout.splitlines() if line.startswith('Not offered: boat')]
+        self.assertEqual(len(refused), 1, offer.stdout)
+        self.assertIn('version', refused[0])
+        self.assertNotIn('synthetic: not signed in', offer.stdout, "the driver's own words stay off the road")
+        picked = road.helper(['where', '--agents', 'boat', '--yes'])
+        self.assertEqual(picked.returncode, 5, picked.stdout)
+        self.assertNotIn('host', road.saved())
+
+    def test_picking_boat_writes_the_host_line_launch_fleet_reads_after_the_same_preview_and_yes(self):
+        # catches: boat.dev recorded without its preview and yes, written as anything but `Host: boat`, carrying
+        # this machine's permission mode row, or launched without a yes naming boat.dev and its cost
+        road = self.road()
+        preview = road.helper(['where', '--agents', 'boat'])
+        self.assertEqual(preview.returncode, 12, preview.stdout)
+        self.assertIn('boat.dev', preview.stdout)
+        self.assertIn('bills', preview.stdout)
+        self.assertNotIn('host', road.saved())
+        self.assertEqual(road.helper(['where', '--agents', 'boat', '--yes']).returncode, 0)
+        self.assertEqual(road.saved()['host'], {'agents': 'boat', 'harnesses': [],
+                                                'adapters': str(road.dir / 'adapters')})
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting',
+                         skip=lambda t: t.get('tool', [''])[0] == 'where')
+        self.assertEqual(road.saved()['choices']['agents'], 'boat')
+        self.assertEqual(road.helper(['mode']).returncode, 5, 'a permission mode is for this machine only')
+        preview = road.helper(['setting'])
+        self.assertEqual(preview.returncode, 12, preview.stdout)
+        self.assertIn('`Host: boat`', preview.stdout)
+        self.assertNotIn('host_pulls', json.loads(road.world_path.read_text()))
+        self.assertEqual(road.helper(['setting', '--yes']).returncode, 0)
+        world = json.loads(road.world_path.read_text())
+        self.assertEqual(len(world['host_pulls']), 1)
+        branch = world['branches']['openwiz/host-setting']
+        self.assertEqual(sorted(branch), ['docs/agents/host.md'], 'only the host line; no permission mode row')
+        self.assertEqual(re.findall(r'(?m)^Host:.*$', branch['docs/agents/host.md']), ['Host: boat'])
+        road.origin_write({'docs/agents/host.md': branch['docs/agents/host.md']})  # the owner merges it
+        world['host_pulls'][0]['state'] = 'MERGED'
+        road.world = world
+        road.save_world()
+        which = subprocess.run([sys.executable, '-I', str(SKILL_DIR.parent / 'launch-fleet/scripts/host.py'), 'which'],
+                               env=road.env(), capture_output=True, text=True, cwd=road.dir, timeout=60)
+        self.assertEqual(which.stdout.strip(), 'host: boat', which.stderr)
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch',
+                         skip=lambda t: 'world' in t or t.get('tool', [''])[0] != 'spec' and 'tool' in t
+                         or 'setup' in t)
+        road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
+        launch = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(launch.returncode, 12, launch.stdout)
+        ask = [line for line in launch.stdout.splitlines() if '?' in line]
+        self.assertEqual(len(ask), 1, launch.stdout)
+        self.assertIn('on boat.dev', ask[0])
+        self.assertIn('can cost money', ask[0])
+        self.assertIn('bills', ask[0])
+        digest = re.findall(r'(?m)^Confirmation: ([0-9a-f]{64})$', launch.stdout)[0]
+        said_yes = road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest])
+        self.assertEqual(said_yes.returncode, 0, said_yes.stdout)
+        self.assertIn('OPENWIZ_ADAPTERS=%s' % (road.dir / 'adapters'), said_yes.stdout)
+        self.assertEqual(road.spawns(), [])
+        self.assertFalse((road.dir / 'boat.log').exists(), 'the road itself never runs boat')
+
+
 class PermissionMode(unittest.TestCase):
     """J254 A (#1358, comment 7030207384): on this machine the owner picks the harness permission mode once."""
 

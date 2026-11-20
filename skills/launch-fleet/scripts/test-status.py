@@ -51,12 +51,19 @@ def races(key):
     # or a person adding a label (an event under that person's login).
     stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     for rival in world.pop(key, []):
+        if 'fail_once' in rival:
+            world.setdefault('fail_once', []).append(rival['fail_once'])
+            continue
         it = next(i for i in world['issues'] if i['number'] == rival['issue'])
         if 'edit' in rival:
             c = next(x for x in it['comments'] if x['id'] == rival['edit'])
             c.setdefault('edits', [c['body']]).append(rival['body'])
             c.setdefault('edited_at', [c['updated']]).append(stamp)
             c['body'] = rival['body']; c['updated'] = stamp
+        elif 'unlabel' in rival:
+            if rival['unlabel'] in it['labels']:
+                it['labels'].remove(rival['unlabel'])
+                it.setdefault('events', []).append({'event': 'unlabeled', 'label': {'name': rival['unlabel']}, 'actor': {'login': rival['by']}})
         elif rival['label'] not in it['labels']:
             it['labels'].append(rival['label'])
             it.setdefault('events', []).append({'event': 'labeled', 'label': {'name': rival['label']}, 'actor': {'login': rival['by']}})
@@ -163,6 +170,7 @@ if seg[0] == 'issues' and seg[2:] == ['labels'] and method == 'POST':
             it.setdefault('events', []).append({'event': 'labeled', 'label': {'name': l}, 'actor': {'login': world['login']}})
     save(); out([{'name': l} for l in it['labels']])
 if seg[0] == 'issues' and len(seg) == 4 and seg[2] == 'labels' and method == 'DELETE':
+    races('race_delete')
     it = issue(seg[1])
     if seg[3] not in it['labels']: fail(404, 'Label does not exist')
     it['labels'].remove(seg[3])
@@ -1102,6 +1110,46 @@ class WakeRepair(Tracker):
                 code, report = self.wake()
                 self.assertEqual((code, report), (0, []))
                 self.assertEqual(self.ticket()['labels'], labels)
+
+    def asking_on_12(self, **race):
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note(state='asking', step='asked which file to change')))
+        self.world.update(race)
+        self.save()
+
+    def timeline(self):
+        return [(e['event'], e['actor']['login']) for e in self.ticket().get('events', [])]
+
+    def test_a_repair_whose_read_after_its_label_write_fails_is_settled_by_the_next_wake(self):
+        # catches: a label the repair wrote as the builder resumed, left on the ticket because the
+        # read after the write failed, and never looked at again (#68 R1).
+        resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
+        failing = {'fail_once': f'GET repos/{REPO}/issues/12/comments?per_page=100&page=1'}
+        self.asking_on_12(race_label=[resume, failing])
+        code, report = self.wake()
+        self.assertEqual(code, 2)
+        self.assertEqual(len(report), 1, report)
+        self.assertRegex(report[0], r'^status check failed: could not repair #12: ')
+        self.wake()
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+        self.assertEqual(self.timeline(), [('labeled', BOT), ('unlabeled', BOT)])
+        self.assertEqual(self.wake(), (0, []))
+
+    def test_a_person_who_reapplies_needs_info_as_the_repair_takes_it_off_keeps_it(self):
+        # catches: the repair's DELETE landing on a needs-info a person removed and applied again
+        # after the repair read who added it last (#68 R2).
+        resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                 {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
+        self.asking_on_12(race_label=[resume], race_delete=again)
+        code, report = self.wake()
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual((code, len(report)), (1, 1), report)
+        self.assertRegex(report[0], r'^#12: needs-info put back: ')
+        self.assertEqual(self.timeline(), [('labeled', BOT), ('unlabeled', 'synthetic-owner'),
+                                           ('labeled', 'synthetic-owner'), ('unlabeled', BOT), ('labeled', BOT)])
+        # The next wake leaves the person's hold alone.
+        self.assertEqual(self.wake(), (0, []))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
     def test_a_repair_that_fails_part_way_still_reports_what_it_changed(self):
         # catches: a label written on one ticket and then left out of the report because a

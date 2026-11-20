@@ -209,6 +209,25 @@ class Copy(Base):
                 self.assertEqual(lines[1:3], ['', line])
                 self.assertEqual([x for x in lines if x.startswith('Login:')], [line])
 
+    def test_a_cloud_copy_names_its_api_key_variable_never_a_value(self):
+        # catches: a cloud driver's README that never names the variable its API key goes in (driver v1, "The login
+        # line"), or a copy that writes a value, or names a variable for a login that stays on the machine
+        self.begin()
+        repo = self.tmp / 'repo'
+        self.wd('copy', '--state', self.state, '--openwiz', OPENWIZ, '--into', repo, '--login', 'host',
+                '--key-variable', 'EXAMPLEHOST_API_KEY', check=0)
+        lines = (repo / 'adapters' / 'examplehost' / 'README.md').read_text().split('\n')
+        self.assertEqual(lines[1:5], ['', 'Login: held by examplehost', '',
+                                      'API key: set `EXAMPLEHOST_API_KEY` yourself; the driver never asks for it.'])
+        for name, args in (('a value', ['--login', 'host', '--key-variable', 'EXAMPLEHOST_API_KEY=%s' % SECRET]),
+                           ('a lower-case name', ['--login', 'host', '--key-variable', 'examplehost_key']),
+                           ('a machine login', ['--login', 'machine', '--key-variable', 'EXAMPLEHOST_API_KEY'])):
+            with self.subTest(name):
+                p = self.wd('copy', '--state', self.state, '--openwiz', OPENWIZ, '--into', self.tmp / name, *args,
+                            check=1)
+                self.assertIn('key variable', p.stdout)
+                self.assertFalse((self.tmp / name).exists())
+
     def test_copy_never_overwrites(self):
         # catches: a rerun replacing the user's fixed driver with the template again
         self.begin()

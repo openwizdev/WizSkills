@@ -859,6 +859,16 @@ class CommentPass(unittest.TestCase):
         code, findings, out = self.comment_pass(diff)
         self.assertEqual((code, findings), (0, []), out)
 
+    def test_excluded_paths_and_a_later_hunk_are_judged_as_the_contract_says(self):
+        diff = "".join(new_file(path, [f"x = 1  {marker} planted on purpose"]) for path, marker in (
+            ("vendor/lib.py", "#"), ("a/third_party/b.py", "#"), ("web/app.min.js", "//"),
+            ("contracts/fixtures/comments/cases/python.py", "#")))
+        diff += ("diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n"
+                 "@@ -1,1 +1,1 @@\n # SPDX-License-Identifier: MIT\n@@ -40,0 +41,1 @@\n"
+                 "+# Copyright 2026 Example\n")
+        code, findings, out = self.comment_pass(diff)
+        self.assertEqual([f.split(": ", 2)[:2] for f in findings], [["src/app.py:41", "comment"]], out)
+
     def test_a_block_comment_is_judged_once_at_its_first_added_line(self):
         diff = new_file("web/app.js", [
             "const a = 1;", "/*", " * Needed because Safari caches the old bundle,",

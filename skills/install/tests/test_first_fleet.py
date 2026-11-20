@@ -1073,6 +1073,9 @@ class Resume(unittest.TestCase):
         bare = self.next(j)
         self.assertEqual(bare.splitlines()[0], 'Next: project.', 'without the setup state nothing is known yet')
         self.assertIn('--setup-state', bare, 'and it says how to recognise a prepared repository')
+        (j.setup_dir / 'setup/state.json').chmod(0o644)
+        self.assertEqual(self.next(j, '--setup-state', str(j.setup_dir)).splitlines()[0], 'Next: project.',
+                         'a setup store others can read or replace is never trusted')
 
     def test_a_local_choice_resumes_at_choose_the_agents(self):
         # catches: #1571, a saved Local answer counted as a finished Choose the agents,

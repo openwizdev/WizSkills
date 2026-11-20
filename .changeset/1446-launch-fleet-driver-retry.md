@@ -1,5 +1,5 @@
 ---
-"launch-fleet": major
+"launch-fleet": minor
 ---
 
-launch-fleet tries a refused driver start or wake twice more, then marks the ticket's fleet note `stopped (driver start failed)` and leaves one comment with the driver's next step, cleared by the next success; host.py now needs the fleet's harness, model and skills in its environment.
+launch-fleet tries a refused driver start or wake twice more, then marks the ticket's fleet note `stopped (driver start failed)` and leaves one comment with the driver's next step, cleared by the next success; set LAUNCH_FLEET_HARNESS, LAUNCH_FLEET_MODEL and LAUNCH_FLEET_SKILLS for that note, as without them only the note is skipped.

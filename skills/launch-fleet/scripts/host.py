@@ -25,7 +25,8 @@ failed` comment with the driver's `next` text; a refusal while both are there
 writes neither again. The next start or wake that succeeds marks that comment
 cleared and posts a `done` fleet note. The fleet note is written as the fleet
 agent: $LAUNCH_FLEET_HARNESS, $LAUNCH_FLEET_MODEL and $LAUNCH_FLEET_SKILLS, as
-status.py's --harness, --model and --skills. The driver's text reaches the
+status.py's --harness, --model and --skills; with any unset, only the fleet
+note is skipped, with a warning on stderr naming them. The driver's text reaches the
 ticket and stdout only when it holds no credential, private id or machine path
 (status.py's and post.py's rules, and any value of an environment variable
 named as a secret, as the driver kit checks); otherwise it is withheld whole.
@@ -41,7 +42,7 @@ error>; next: <its next>` for a stop, or another refusal (nothing was started
 or saved); `no run: ...` (use today's room-cli route); `unknown: ...` (a run
 may exist: reconcile before any retry).
 Exit 2, `host.py: <why>` on stderr: an unreadable setting, driver or runs file,
-unwritable run state or no fleet identity; nothing was started.
+or unwritable run state; nothing was started.
 The driver gets the caller's environment unchanged; this script reads no login.
 """
 import fcntl
@@ -203,12 +204,14 @@ def tried(host, command, given):
 
 
 def fleet():
-    """The fleet agent's harness, model and skills for its status note, checked before any driver runs."""
+    """The fleet agent's harness, model and skills for its status note, or None, with a warning on stderr, when
+    any is unset: then only the fleet note is skipped (the J87 planner's ruling; requiring them waits for 0.1.1)."""
     values = [os.environ.get(name, '') for name in FLEET]
-    for name, value in zip(FLEET, values):
-        if not value:
-            raise Unreadable('set %s for the fleet\'s status note (status.py\'s --%s)'
-                             % (name, name.rsplit('_', 1)[1].lower()))
+    missing = [name for name, value in zip(FLEET, values) if not value]
+    if missing:
+        print('host.py: warning: %s unset, so the fleet status note was not written' % ', '.join(missing),
+              file=sys.stderr)
+        return None
     return values
 
 
@@ -226,7 +229,10 @@ def reports(repo, n):
 
 
 def note(repo, n, state, step):
-    harness, model, skills = fleet()
+    identity = fleet()
+    if identity is None:
+        return
+    harness, model, skills = identity
     why = ['--why', FAILED] if state == 'stopped' else []
     r = subprocess.run([sys.executable, '-I', str(HERE / 'status.py'), 'write', '--repo', repo, '--ticket', n,
                         '--agent', 'fleet', '--state', state, *why, '--harness', harness, '--model', model,
@@ -358,7 +364,6 @@ def main(argv):
         if host is None:
             raise Outcome('refused: no host is chosen in %s' % SETTING)
         driver(host)
-        fleet()
         ready(repo)
         if run and not run.get('stopped'):
             raise Outcome(live % (n, run['host']))
@@ -381,7 +386,6 @@ def main(argv):
         raise Outcome('no run: #%s was not started through a driver' % n)
     unclear = None
     if kind == 'wake':
-        fleet()
         attempt(repo, n, run['host'], kind, {'run': run['run']})
         unclear = cleared(repo, n, run['host'], 'woke')
     else:

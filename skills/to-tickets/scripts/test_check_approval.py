@@ -19,6 +19,7 @@ import unittest
 
 HERE = Path(__file__).resolve().parent
 CHECKER = Path(os.environ.get("CHECK_APPROVAL_SH", HERE / "check-approval.sh"))
+CONTRACT = HERE.parents[2] / "contracts" / "checkpoints.v1.md"
 LABELS = """# Triage labels
 
 ## Labels
@@ -41,6 +42,9 @@ FLEET = """# Fleet settings
 ## Standing merge rules
 """
 FACTORY = {"login": "openwiz[bot]"}
+OLD_SPEC = "## Problem Statement\n\nSynthetic problem.\n\n## Proof\n\nSynthetic proof.\n"
+CUTOFF = "2026-11-21T00:00:00Z"
+ANSWERS = "## Checkpoints\n\n- One-way door: yes\n- User-visible: no\n"
 OUTSIDER = {"login": "synthetic-outsider"}
 
 
@@ -57,7 +61,9 @@ def fixture(spec, label="ready-for-agent"):
         'plan-graph revision v2\n```\n\n</details>\n'
     )
     return {
-        "graph": {"subIssues": {"totalCount": 6, "nodes": [{"number": n} for n in numbers]}},
+        # A spec created before the checkpoints change, without the section.
+        "graph": {"subIssues": {"totalCount": 6, "nodes": [{"number": n} for n in numbers]},
+                  "createdAt": "2026-11-01T00:00:00Z", "body": OLD_SPEC},
         "comments": [[{"id": 100, "user": dict(FACTORY), "body": body}]],
         "labels_doc": LABELS,
         "fleet_doc": FLEET,
@@ -100,7 +106,8 @@ elif args == ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{ow
     key = "tracker_doc"
 elif args == ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/fleet.md"]:
     key = "fleet_doc"
-elif args == ["issue", "view", n, "--json", "subIssues"]:
+elif args in (["issue", "view", n, "--json", "body,createdAt,subIssues"],
+              ["issue", "view", n, "--json", "subIssues"]):
     key = "graph"
 elif args == ["api", "--paginate", "repos/{owner}/{repo}/issues/" + n + "/comments?per_page=100"]:
     key = "comments"
@@ -126,8 +133,10 @@ class ApprovalTest(unittest.TestCase):
     def test_documented_handoff_from_plugin_consumer(self):
         with tempfile.TemporaryDirectory(prefix="approval-consumer-") as folder:
             tmp = Path(folder)
-            installed = tmp / "plugin cache" / "to-tickets"
+            installed = tmp / "plugin cache" / "skills" / "to-tickets"
             (installed / "scripts").mkdir(parents=True)
+            (tmp / "plugin cache" / "contracts").mkdir()
+            shutil.copy2(CONTRACT, tmp / "plugin cache" / "contracts" / "checkpoints.v1.md")
             shutil.copy2(HERE.parent / "SKILL.md", installed / "SKILL.md")
             shutil.copy2(CHECKER, installed / "scripts" / "check-approval.sh")
             commands = re.findall(r'`(sh [^`]*scripts/check-approval\.sh"? <spec>)`',
@@ -161,12 +170,12 @@ class ApprovalTest(unittest.TestCase):
                 ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/triage-labels.md"],
                 ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/issue-tracker.md"],
                 ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/fleet.md"],
-                ["issue", "view", "172", "--json", "subIssues"],
+                ["issue", "view", "172", "--json", "body,createdAt,subIssues"],
                 ["api", "--paginate", "repos/{owner}/{repo}/issues/172/comments?per_page=100"],
                 ["repo", "view", "--json", "isPrivate"],
             ])
 
-    def run_check(self, world, spec=172, status=0, reason=None, argument=None):
+    def run_check(self, world, spec=172, status=0, reason=None, argument=None, checker=CHECKER):
         with tempfile.TemporaryDirectory(prefix="approval-fixture-") as folder:
             tmp = Path(folder)
             (tmp / "gh").write_text(FAKE_GH)
@@ -175,7 +184,7 @@ class ApprovalTest(unittest.TestCase):
             env = dict(os.environ, PATH=str(tmp) + os.pathsep + os.environ["PATH"],
                        FAKE_WORLD=str(tmp / "world.json"), FAKE_LOG=str(tmp / "calls"),
                        FAKE_SPEC=str(spec))
-            result = subprocess.run(["sh", str(CHECKER), str(spec) if argument is None else argument],
+            result = subprocess.run(["sh", str(checker), str(spec) if argument is None else argument],
                                     env=env, text=True, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, status, result.stdout + result.stderr)
             if status == 0:
@@ -190,7 +199,7 @@ class ApprovalTest(unittest.TestCase):
                     ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/triage-labels.md"],
                     ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/issue-tracker.md"],
                 ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/fleet.md"],
-                    ["issue", "view", str(spec), "--json", "subIssues"],
+                    ["issue", "view", str(spec), "--json", "body,createdAt,subIssues"],
                     ["api", "--paginate", f"repos/{{owner}}/{{repo}}/issues/{spec}/comments?per_page=100"],
                     ["repo", "view", "--json", "isPrivate"],
                 ])
@@ -325,6 +334,93 @@ class ApprovalTest(unittest.TestCase):
                             self.assertNotRegex(line, '["“”]')
                             self.assertTrue(lines[i + 1].startswith("Private record: "))
         self.assertEqual(len(found), 5)
+
+    # RC2 (#1830): each spec's two checkpoint answers (contracts/checkpoints.v1.md).
+    def spec_world(self, body, created=CUTOFF):
+        w = fixture(172)
+        w["graph"]["body"] = body
+        w["graph"]["createdAt"] = created
+        return w
+
+    def test_new_spec_without_both_answers_is_refused(self):
+        # catches: a spec planned after the change approved with no checkpoint
+        # answers, so the fleet reads it as early only and never holds its merge.
+        for created in (CUTOFF, "2027-01-01T00:00:00Z"):
+            for body in (OLD_SPEC, OLD_SPEC + "\n```text\n" + ANSWERS + "```\n"):
+                with self.subTest(created=created, body=body):
+                    self.run_check(self.spec_world(body, created), status=1,
+                                   reason="no ## Checkpoints section")
+        self.run_check(self.spec_world(OLD_SPEC + "\n## Checkpoints\n\n- One-way door: no\n"),
+                       status=1, reason="checkpoints are invalid (answer-missing)")
+
+    def test_new_spec_with_both_answers_passes(self):
+        # catches: valid answers refused, or the section misread when it sits
+        # between other sections, after a quoted example or with CRLF lines.
+        for door in ("yes", "no"):
+            for visible in ("yes", "yes, a release", "no"):
+                section = f"## Checkpoints\n\n- One-way door: {door}\n- User-visible: {visible}\n\n"
+                for body in (section + OLD_SPEC, OLD_SPEC + "\n" + section,
+                             "```synthetic status```\n\n" + section,
+                             "~~~\n## Checkpoints\n~~~\n" + section,
+                             (section + OLD_SPEC).replace("\n", "\r\n")):
+                    with self.subTest(body=body):
+                        self.run_check(self.spec_world(body))
+
+    def test_invalid_answers_are_refused_for_every_spec(self):
+        # catches: a malformed section read as absent (early only) or as
+        # answered, on a new spec or on one planned before the change.
+        cases = [
+            (" ## Checkpoints\n\n- One-way door: yes\n- User-visible: no\n", "section-heading"),
+            ("## Checkpoint answers\n\n- One-way door: yes\n- User-visible: no\n", "section-heading"),
+            ("### checkpoints\n", "section-heading"),
+            ("##Checkpoints\n", "section-heading"),
+            ("Checkpoints\n-----------\n", "section-heading"),
+            (ANSWERS + "\n" + ANSWERS, "section-repeated"),
+            ("## Checkpoints\n\n- One-way door: yes\n", "answer-missing"),
+            ("## Checkpoints\n\n", "answer-missing"),
+            ("## Checkpoints\n\n- User-visible: no\n- One-way door: yes\n", "answer-line"),
+            ("## Checkpoints\n\n- One-way door: maybe\n- User-visible: no\n", "answer-line"),
+            ("## Checkpoints\n\n- One-way door: yes\n- User-visible: no, a release\n", "answer-line"),
+            ("## Checkpoints\n\n- One-way door: yes \n- User-visible: no\n", "answer-line"),
+            (ANSWERS + "Because synthetic.\n", "answer-line"),
+            (ANSWERS + "### Why\n", "answer-line"),
+        ]
+        for created in (CUTOFF, "2026-11-01T00:00:00Z"):
+            for section, code in cases:
+                with self.subTest(created=created, section=section):
+                    self.run_check(self.spec_world(OLD_SPEC + "\n" + section, created),
+                                   status=1, reason=f"checkpoints are invalid ({code})")
+
+    def test_spec_planned_before_the_change_reads_early_only(self):
+        # catches: a spec planned before the change, without the section,
+        # refused by the new rule instead of keeping today's behaviour (P4).
+        for created in ("2026-11-20T23:59:59Z", "2026-01-01T00:00:00Z"):
+            with self.subTest(created=created):
+                self.run_check(self.spec_world(OLD_SPEC, created))
+
+    def test_unreadable_spec_or_contract_refuses(self):
+        # catches: a missing body, creation time or contract read as a spec
+        # planned before the change, so every new spec passes unanswered.
+        for key, value in (("body", None), ("createdAt", None), ("createdAt", "yesterday"),
+                           ("createdAt", "2026-11-21")):
+            with self.subTest(key=key, value=value):
+                w = fixture(172)
+                w["graph"][key] = value
+                self.run_check(w, status=1, reason="cannot read spec #172's body")
+        with tempfile.TemporaryDirectory(prefix="approval-contract-") as folder:
+            copy_ = Path(folder) / "skills" / "to-tickets" / "scripts" / "check-approval.sh"
+            copy_.parent.mkdir(parents=True)
+            shutil.copy2(CHECKER, copy_)
+            for text in (None, "# no forms block\n",
+                         CONTRACT.read_text().replace('"## Checkpoints"', '"## Checkpoints",,')):
+                with self.subTest(contract=text and text[:20]):
+                    contracts = Path(folder) / "contracts"
+                    shutil.rmtree(contracts, ignore_errors=True)
+                    if text is not None:
+                        contracts.mkdir()
+                        (contracts / "checkpoints.v1.md").write_text(text)
+                    self.run_check(fixture(172), status=1, reason="cannot read the checkpoint forms",
+                                   checker=copy_)
 
     def test_historical_shapes(self):
         for spec in (172, 330):

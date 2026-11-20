@@ -17,6 +17,9 @@ run (#1447): a heartbeat before COMMAND starts and every --every seconds (defaul
 while it runs: an edit of note ID as it reads now, only its time set to now, so GitHub's
 updated_at, which alone counts toward the 30-minute lease, is new (a note written this same
 second waits for the next). A beat whose read shows the note done or stopped writes nothing.
+A beat adds needs-info for an asking note as a write does, but never takes it off (#1720): a
+hold a person set, or one the repair put back, stays; the agent's own write leaving asking
+settles the label.
 A failed beat is reported and tried again after 60 seconds (or --every, if shorter). When no
 beat can start 120 seconds before the lease of the last good one ends, or on the fence exit,
 it stops COMMAND's whole process group (SIGTERM, then SIGKILL to any of it left after 10
@@ -500,7 +503,11 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
     asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)
     if asking and ASKING_LABEL not in labels:
         gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
-    elif not asking and ASKING_LABEL in labels and asked_last_by(repo, n, login):
+    elif not beat and not asking and ASKING_LABEL in labels and asked_last_by(repo, n, login):
+        # #1720: a heartbeat never takes needs-info off. Under one App login no read binds a
+        # label event to its own POST: another writer's hold (a repair's put-back, triage's
+        # needs-info) can land just before it and look the same. The agent's own write leaving
+        # asking settles the label.
         gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
     print(f'#{n}: {kind} {state}, status note {note_id} {verb}', file=out)
     return fields

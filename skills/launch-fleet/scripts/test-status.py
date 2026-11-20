@@ -1183,7 +1183,9 @@ class FleetRun(Tracker):
 
 # #1447: the command under status.py run. It records its pid; `long` waits for the first beat
 # and two more (or 30 seconds) and exits 7, and the others wait for the first beat, then change
-# note 104 as another writer would, and keep running until stopped. Every value is synthetic.
+# note 104 as another writer would, and keep running until stopped; `resumed` and `answered`
+# (the agent's own status write, the command line it is given) turn an asking note working and
+# exit 0 after the next beat. Every value is synthetic.
 ACTOR = r'''
 import fcntl, json, os, sys, time
 from datetime import datetime, timedelta, timezone
@@ -1216,10 +1218,24 @@ with open(world + '.lock', 'w') as lock:
         # The note lapsed (a long stall) and a newer builder claimed the ticket.
         mine['updated'] = stamp(40)
         it['comments'].append({'id': 105, 'author': 'openwiz[bot]', 'body': sys.argv[3], 'updated': stamp(0)})
+    elif mode == 'answered':
+        pass
+    elif mode == 'resumed':
+        # The agent got its answer and wrote working over its asking note.
+        mine['body'] = mine['body'].replace('state: asking', 'state: working'); mine['updated'] = stamp(0)
     else:
         mine['body'] = mine['body'].replace('state: working', 'state: ' + mode); mine['updated'] = stamp(0)
     json.dump(w, open(world, 'w'))
     open(out + '.mark', 'w').write(str(calls()))
+if mode == 'answered':
+    # The agent got its answer and resumed as build-ticket says: its own status write, working.
+    import subprocess
+    subprocess.run([sys.executable, '-I'] + sys.argv[3:], check=True, stdout=subprocess.DEVNULL)
+if mode in ('resumed', 'answered'):
+    end, beats = time.monotonic() + 30, calls('"PATCH"')
+    while calls('"PATCH"') < beats + 1 and time.monotonic() < end:
+        time.sleep(0.05)
+    sys.exit(0)
 time.sleep(60)
 '''
 
@@ -1278,6 +1294,58 @@ class Run(Tracker):
         for stamp in (beat, mine['updated']):  # the beat's time, and GitHub's updated_at
             self.assertLess(abs((datetime.now(timezone.utc) - datetime.strptime(
                 stamp, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)).total_seconds()), 60)
+
+    def test_a_run_s_label_is_cleared_by_its_agent_s_own_resume(self):
+        # catches: a needs-info the run's beat added staying on after its agent writes working
+        # (the label stuck after the answer), or a later beat adding it again.
+        self.asking_run()
+        result, _ = self.run_command('answered', str(SCRIPT), 'write', '--repo', REPO, '--ticket', '12',
+                                     '--agent', 'builder', '--state', 'working', '--harness', 'Claude Code',
+                                     '--model', 'Opus 5.5 Medium', '--skills', SKILLS, '--step', 'got the answer',
+                                     '--note', '104')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+        self.assertEqual([(e['event'], e['actor']['login']) for e in self.ticket()['events']],
+                         [('labeled', BOT), ('unlabeled', BOT)])
+        self.assertIn('state: working', self.ticket()['comments'][3]['body'])
+
+    def asking_run(self, **race):
+        """Note 104 asks with no needs-info; the run's first beat adds it; RACE lands as named."""
+        self.ticket(self.world)['comments'][3] = comment(104, BOT, note(state='asking'), minutes=25)
+        self.world.update(race)
+
+    def test_a_heartbeat_never_takes_off_a_same_app_hold_that_landed_before_its_post(self):
+        # catches: a heartbeat taking another same-App writer's application (a put-back, or
+        # triage's hold) landing just before its own no-op POST for its own, and deleting it
+        # once the note is working (#83 R1).
+        hold = {'issue': 12, 'label': 'needs-info', 'by': BOT}
+        self.asking_run(race_label=[hold])
+        result, _ = self.run_command('resumed')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual([(e['event'], e['actor']['login']) for e in self.ticket()['events']], [('labeled', BOT)])
+
+    def test_a_failed_event_read_after_the_first_beat_label_still_starts_the_command(self):
+        # catches: a temporary event-read error after the first beat's label write aborting the
+        # run before its command starts (#83 R2).
+        failing = {'fail_once': f'GET repos/{REPO}/issues/12/events?per_page=100&page=1'}
+        self.asking_run(race_label=[failing])
+        result, _ = self.run_command('resumed')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(Path(self.out + '.pid').exists())
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
+    def test_a_hold_reapplied_as_the_heartbeat_clears_its_label_survives_a_failed_read(self):
+        # catches: a heartbeat whose DELETE takes a person's reapplied needs-info and, on a
+        # temporary event-read error, never puts it back (#83 R3).
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                 {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'},
+                 {'fail_once': f'GET repos/{REPO}/issues/12/events?per_page=100&page=1'}]
+        self.asking_run(race_delete=again)
+        result, _ = self.run_command('resumed')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertNotIn(('DELETE', f'repos/{REPO}/issues/12/labels/needs-info'), self.writes())
 
     def test_run_stops_the_command_when_a_newer_builder_holds_the_claim(self):
         # catches: a heartbeat that keeps the work running, or takes the ticket back, after its
@@ -1546,6 +1614,22 @@ class WakeRepair(Tracker):
         # The next wake leaves the person's hold alone.
         self.assertEqual(self.wake(), (0, []))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
+    def test_a_working_heartbeat_after_the_repair_put_back_a_hold_keeps_it(self):
+        # catches: a heartbeat taking off a person's needs-info that the repair put back under the
+        # same App login, because the label's last application looks like its own (#1712).
+        resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                 {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
+        self.asking_on_12(race_label=[resume], race_delete=again)
+        self.wake()
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        before = self.timeline()
+        beat = self.run_status('run', '--repo', REPO, '--ticket', '12', '--agent', 'builder', '--note', '104',
+                               '--', sys.executable, '-I', '-c', 'pass')
+        self.assertEqual(beat.returncode, 0, beat.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual(self.timeline(), before)
 
     def test_a_person_who_reapplies_needs_info_after_the_repair_added_it_keeps_it(self):
         # catches: the repair taking off a needs-info whose last application is a person's,

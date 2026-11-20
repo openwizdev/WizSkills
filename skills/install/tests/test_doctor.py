@@ -67,13 +67,16 @@ def runtime_pin(runtime):
 '''
 
 # The checkout's driver kit: Kit(args, ticket).version() -> ('pass'|'fail', what), as kit.py's.
-FAKE_KIT = r'''import json, subprocess
+# Like kit.py's call(), it adds to Kit.leaks when the driver's output holds a credential shape.
+FAKE_KIT = r'''import json, re, subprocess
 class Kit:
     def __init__(self, args, ticket):
-        self.args = args
+        self.args, self.leaks = args, []
     def version(self):
         try:
             p = subprocess.run([self.args.driver, 'version'], capture_output=True, text=True, timeout=30)
+            if re.search(r'gh[pousr]_[A-Za-z0-9]{20,}', p.stdout + p.stderr):
+                self.leaks.append('the driver printed a credential')
             v = json.loads(p.stdout)
         except (OSError, ValueError) as e:
             return 'fail', 'version printed no single JSON value'
@@ -86,6 +89,10 @@ class Kit:
 GOOD_DRIVER = ('#!/bin/sh\necho \'{"driver": "synthetic", "records": ["openwiz:records v1"], '
                '"can": ["start", "wake", "stop"]}\'\n')
 BAD_DRIVER = '#!/bin/sh\necho \'{"error": "synthetic driver refuses version"}\'\nexit 1\n'
+LEAK = 'ghp_' + 'L' * 36  # a credential shape only the driver knows, never the doctor's environment
+LEAKY_DRIVER = '#!/bin/sh\necho \'{"error": "synthetic refusal %s"}\'\nexit 1\n' % LEAK
+V2_DRIVER = ('#!/bin/sh\necho \'{"driver": "synthetic", "records": ["openwiz:records v2"], '
+             '"can": ["start", "wake", "stop"]}\'\n')
 
 
 def write(path, text, mode=0o644):
@@ -115,7 +122,8 @@ class Setup:
         write(self.driver, GOOD_DRIVER, 0o755)
         self.observations = {'github_app': 'app_verified', 'harness': 'harness_listed'}
         self.project = {'repository': REPO, 'project': 'syn-project', 'harness': 'syn-harness',
-                        'model': 'syn-model', 'effort': 'high'}
+                        'model': 'syn-model', 'effort': 'high', 'operator': 'synthetic-owner',
+                        'service_issue': 7, 'answer_thread': 'syn-thread', 'runtime': None}
         self.identity = None
         self.save()
 
@@ -229,16 +237,42 @@ class Doctor(unittest.TestCase):
         self.s.save()
         self.assertEqual(self.s.run().returncode, 0)
 
-    # catches: setup prepared for another repository read as this one's evidence.
+    # catches: setup prepared for another repository read as this one's evidence, or a prepare fix
+    # missing a flag setup.py prepare requires (it exits 2 as printed; #1578 item 4).
     def test_setup_for_another_repository(self):
         self.s.project['repository'] = 'synthetic-owner/other'
         self.s.save()
         lines = self.lines(self.s.run())
-        fix = ('Fix: python3 -I -B %s/runtime/setup/setup.py prepare --state-dir %s --repository %s ...'
-               % (self.s.build, self.s.state, REPO))
+        fix = ('Fix: python3 -I -B %s/runtime/setup/setup.py prepare --state-dir %s --repository %s '
+               '--project syn-project --operator synthetic-owner --service-issue 7 --answer-thread syn-thread '
+               '--harness syn-harness --model syn-model --effort high (a preview: change what differs for %s, '
+               'confirm it with --yes --operation, then python3 -I -B %s/runtime/setup/setup.py check --state-dir %s)'
+               % (self.s.build, self.s.state, REPO, REPO, self.s.build, self.s.state))
         self.assertEqual(lines, ['2. GitHub App: setup is prepared for synthetic-owner/other. ' + fix,
                                  '4. Harness: setup is prepared for synthetic-owner/other. ' + fix,
                                  'Doctor: 2 problems.'])
+
+    # catches: a prepare fix with "..." for the values setup asks the person (it exits 2 as printed; #1578 item 4).
+    def test_no_prepared_project_names_the_prepare_step(self):
+        self.s.project = None
+        self.s.save()
+        lines = self.lines(self.s.run())
+        fix = ("Fix: prepare setup for %s with the setup skill's Prepare step (it asks for the CloudRoom project, "
+               'operator, service issue, answer thread, harness, model and effort), then python3 -I -B '
+               '%s/runtime/setup/setup.py check --state-dir %s' % (REPO, self.s.build, self.s.state))
+        self.assertEqual(lines, ['2. GitHub App: setup has no prepared project. ' + fix,
+                                 '4. Harness: setup has no prepared project. ' + fix, 'Doctor: 2 problems.'])
+
+    # catches: an App installed on all repositories told to install the App (#1578 item 2).
+    def test_app_on_all_repositories_is_told_to_select_repositories(self):
+        self.s.observations['github_app'] = 'app_all_repositories'
+        self.s.save()
+        self.assertEqual(self.only(self.s.run()),
+                         "2. GitHub App: not verified (app_all_repositories). Fix: switch OpenWiz's GitHub App "
+                         'installation on synthetic-owner to Only select repositories, including %s (Settings > '
+                         'Applications > Installed GitHub Apps > Configure, or the organization\'s Settings > GitHub '
+                         'Apps), then python3 -I -B %s/runtime/setup/setup.py check --state-dir %s'
+                         % (REPO, self.s.build, self.s.state))
 
     # catches: a writer who isn't a record author passing (status.py's R4 check).
     def test_acting_login_not_a_record_author(self):
@@ -253,21 +287,53 @@ class Doctor(unittest.TestCase):
         self.assertEqual(self.only(self.s.run()),
                          '3. Record author: gh could not name the acting login. Fix: gh auth login')
 
-    # catches: a harness the setup check refused passing as signed in.
-    def test_harness_not_signed_in(self):
+    # catches: a saved harness, model or effort that isn't offered passing, or told to sign in,
+    # which leaves the selection in place (#1578 item 3).
+    def test_harness_selection_not_offered(self):
         self.s.observations['harness'] = 'harness_unavailable'
         self.s.save()
         self.assertEqual(self.only(self.s.run()),
-                         '4. Harness: not verified (harness_unavailable). Fix: sign in to syn-harness in CloudRoom, '
-                         'then python3 -I -B %s/runtime/setup/setup.py check --state-dir %s'
-                         % (self.s.build, self.s.state))
+                         '4. Harness: syn-harness, syn-model, high effort is not offered (harness_unavailable). '
+                         'Fix: choose a harness, model and effort that openwiz models --json offers and prepare setup '
+                         "again with them (the setup skill's Prepare step), then python3 -I -B "
+                         '%s/runtime/setup/setup.py check --state-dir %s' % (self.s.build, self.s.state))
 
-    # catches: a driver that refuses version passing (the driver kit's version check).
+    # catches: a driver that refuses version passing, or an unflagged refusal withheld (the driver
+    # kit's version check); a separate driver is updated or replaced, not the checkout (#1578 item 5).
     def test_driver_does_not_answer_version(self):
         write(self.s.driver, BAD_DRIVER, 0o755)
         self.assertEqual(self.only(self.s.run()),
                          '5. Driver: %s does not answer version: synthetic driver refuses version. '
+                         'Fix: update or replace the driver at %s so it answers version for this OpenWiz, '
+                         'then the doctor again' % (self.s.driver, self.s.driver))
+
+    # catches: a separate driver advertising only openwiz:records v2 told to pull OpenWiz (#1578 item 5).
+    def test_separate_incompatible_driver_is_told_to_update_that_driver(self):
+        write(self.s.driver, V2_DRIVER, 0o755)
+        self.assertEqual(self.only(self.s.run()),
+                         '5. Driver: %s does not answer version: it names no openwiz:records v1. '
+                         'Fix: update or replace the driver at %s so it answers version for this OpenWiz, '
+                         'then the doctor again' % (self.s.driver, self.s.driver))
+
+    # catches: the checkout's own driver told to do anything but update the checkout.
+    def test_checkout_driver_is_told_to_pull_openwiz(self):
+        self.s.driver = self.s.openwiz / 'adapters/driver'
+        write(self.s.driver, V2_DRIVER, 0o755)
+        self.assertEqual(self.only(self.s.run()),
+                         '5. Driver: %s does not answer version: it names no openwiz:records v1. '
                          'Fix: git -C %s pull --ff-only, then the doctor again' % (self.s.driver, self.s.openwiz))
+
+    # catches: a driver refusal the kit flags as holding a credential printed for the agent to relay
+    # (#1578 item 1).
+    def test_flagged_driver_refusal_is_withheld(self):
+        write(self.s.driver, LEAKY_DRIVER, 0o755)
+        result = self.s.run()
+        self.assertNotIn(LEAK, result.stdout + result.stderr)
+        self.assertEqual(self.only(result),
+                         '5. Driver: %s refused version, and the driver kit flags its answer as possibly holding a '
+                         'credential, so the doctor withholds it. Fix: run %s version in your own terminal, not '
+                         'through an agent, to read it; then update or replace that driver, then the doctor again'
+                         % (self.s.driver, self.s.driver))
 
     # catches: a build whose packaged skills are gone passing (setup.py's runtime_pin).
     def test_skills_not_installed(self):

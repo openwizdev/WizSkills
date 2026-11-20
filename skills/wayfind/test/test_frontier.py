@@ -169,7 +169,7 @@ class FrontierTest(unittest.TestCase):
     def test_only_record_authors_claim_or_release(self):
         # catches #1508: an outsider's comment reserving a question, or
         # releasing a record author's claim so a later claim reads `yours`.
-        comments = [(99, CLAIM, OUTSIDER), (100, CLAIM), (101, 'wayfind: released 100', OUTSIDER),
+        comments = [(98, CLAIM, 'synthetic-factory'), (99, CLAIM, OUTSIDER), (100, CLAIM), (101, 'wayfind: released 100', OUTSIDER),
                     (102, CLAIM, 'synthetic-factory', 'Bot')]
         fixture = {'9': served(question(9, comments=comments))}
         self.assertEqual(self.run_script(fixture, 'holder', '9', '--mine', '102')[0].stdout,
@@ -241,10 +241,13 @@ class FrontierTest(unittest.TestCase):
             'repeats a cursor': chain(102, 'q1', {'1@q1': a_map(1, [question(5)], 102, 'q1')}),
             'total changes': chain(101, 'q1', {'1@q1': a_map(1, [question(5)], 102)}),
             'no cursor': chain(101, '', {}),
+            'a node not an object': {'1': served(dict(question(1), labels=conn(['wayfind:grill'])))},
+            'next page not a boolean': {'1': served({'number': 1, 'subIssues': dict(
+                conn([question(9)]), pageInfo={'hasNextPage': 'false', 'endCursor': 'q1'})})},
         }
         for name, fixture in cases.items():
             with self.subTest(name):
-                result, _ = self.run_script(fixture, 'map', '1')
+                result, _ = self.run_script(fixture, 'holder' if name.startswith('a node') else 'map', '1')
                 self.assertEqual((result.returncode, result.stdout), (2, ''))
                 self.assertTrue(result.stderr.startswith('frontier: '), result.stderr)
 

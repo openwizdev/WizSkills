@@ -19,7 +19,10 @@ updated_at, which alone counts toward the 30-minute lease, is new (a note writte
 second waits for the next). A beat whose read shows the note done or stopped writes nothing.
 A beat adds needs-info for an asking note as a write does, but never takes it off (#1720): a
 hold a person set, or one the repair put back, stays; the agent's own write leaving asking
-settles the label.
+settles the label. A write takes needs-info off only when this machine's private record shows
+a write's own POST applied it, under a GitHub App's own login, and that application is still
+the last one (#1737). Any other needs-info stays, and the write prints
+`#<n>: needs-info left on: ...` after its own line.
 A failed beat is reported and tried again after 60 seconds (or --every, if shorter). When no
 beat can start 120 seconds before the lease of the last good one ends, or on the fence exit,
 it stops COMMAND's whole process group (SIGTERM, then SIGKILL to any of it left after 10
@@ -49,6 +52,7 @@ import signal
 import subprocess
 import sys
 import time
+from urllib.parse import quote
 
 sys.dont_write_bytecode = True
 
@@ -413,12 +417,65 @@ def stop_group(proc):
     proc.wait()
 
 
-def asked_last_by(repo, n, login):
-    """True when the issue's events show LOGIN added needs-info last (R1: the writer's own label)."""
-    added = [e for e in pages(f'repos/{repo}/issues/{n}/events')
-             if e.get('event') == 'labeled' and (e.get('label') or {}).get('name') == ASKING_LABEL]
-    actor = (added[-1].get('actor') or {}).get('login') if added else None
-    return isinstance(actor, str) and actor.lower() == login.lower()
+def proof(repo, n):
+    """#1737: this machine's private record of the needs-info application a write's own POST made
+    on one ticket, outside the checkout and never posted."""
+    home = os.environ.get('XDG_STATE_HOME') or os.path.join(os.path.expanduser('~'), '.local', 'state')
+    return Path(home, 'openwiz', 'needs-info', f'{quote(repo.lower(), safe="")}-{n}.json')
+
+
+def forget(repo, n):
+    try:
+        proof(repo, n).unlink()
+    except OSError:
+        pass
+
+
+def add_own(repo, n, login):
+    """#1737: add needs-info, and record the application as this writer's only when it is the one
+    new event its POST left, under a GitHub App's own login, as the repair proves its own (#1702).
+    The events are read just before the POST, so a hold landing earlier is never taken for it. Any
+    other outcome, or a failed read, records nothing: a later write leaves the label on."""
+    forget(repo, n)
+    try:
+        before = len(label_events(repo, n))
+    except Failed:
+        before = None
+    gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+    if before is None or not app(login):
+        return
+    try:
+        new = label_events(repo, n)[before:]
+    except Failed:
+        return
+    if len(new) == 1 and new[0]['event'] == 'labeled' and by(new[0], login):
+        path = proof(repo, n)
+        try:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path.with_suffix('.tmp').write_text(json.dumps({'login': login.lower(), 'event': before}))
+            os.replace(path.with_suffix('.tmp'), path)
+        except OSError:
+            pass
+
+
+def take_own(repo, n, login):
+    """#1737: no live note asks and needs-info is on. Take off only the application this machine's
+    record shows a write's own POST made, while it is still the last one (the repair's cleanup,
+    which puts back a person's application that lands as it deletes). Any other needs-info, such
+    as triage's hold or a put-back under the same login, stays and is reported. The report lines."""
+    def labelled():
+        return ASKING_LABEL in [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+    try:
+        own = json.loads(proof(repo, n).read_text())
+    except (OSError, ValueError):
+        own = None
+    mine = own.get('event') if isinstance(own, dict) and own.get('login') == login.lower() else None
+    report = cleanup(repo, n, login, mine, labelled, 'this write') if isinstance(mine, int) else []
+    if not report and labelled():
+        report = [f'#{n}: {ASKING_LABEL} left on: no note asks, and this writer can\'t show its own write '
+                  'added it; a person takes it off']
+    forget(repo, n)
+    return report
 
 
 def write(args, now, beat=False, out=sys.stdout, retried=False):
@@ -522,15 +579,18 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
     # R1: settle needs-info from what GitHub shows now, so a retry repairs a failed label write.
     labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
     asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)
+    report = []
     if asking and ASKING_LABEL not in labels:
-        gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
-    elif not beat and not asking and ASKING_LABEL in labels and asked_last_by(repo, n, login):
-        # #1720: a heartbeat never takes needs-info off. Under one App login no read binds a
-        # label event to its own POST: another writer's hold (a repair's put-back, triage's
-        # needs-info) can land just before it and look the same. The agent's own write leaving
-        # asking settles the label.
-        gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
+        add_own(repo, n, login)
+    elif not beat and not asking and ASKING_LABEL in labels:
+        # #1720: a heartbeat never takes needs-info off. The agent's own write leaving asking
+        # takes off only the application its record proves its own (#1737).
+        report = take_own(repo, n, login)
+    elif not beat and not asking:
+        forget(repo, n)
     print(f'#{n}: {kind} {state}, status note {note_id} {verb}', file=out)
+    for line in report:
+        print(line, file=out)
     return fields
 
 
@@ -686,14 +746,14 @@ def by(event, login):
     return isinstance(actor, str) and actor.lower() == login.lower()
 
 
-def cleanup(repo, n, login, mine, labelled):
+def cleanup(repo, n, login, mine, labelled, taker='the repair'):
     """Take off the needs-info this wake's own POST applied (#68 R2): only when that application,
     event MINE of the label timeline, is still the last one. GitHub's DELETE takes whatever label is
     there when it lands, so the timeline is read again after it: a person's application that landed
     between the read and the DELETE is put back, and reported. The report lines."""
     events = label_events(repo, n)
     if labelled():
-        last = max(k for k, e in enumerate(events) if e['event'] == 'labeled')
+        last = max((k for k, e in enumerate(events) if e['event'] == 'labeled'), default=None)
         if last != mine:
             return []
         gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
@@ -707,7 +767,7 @@ def cleanup(repo, n, login, mine, labelled):
         return []
     gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
     who = people[-1]['actor']['login']
-    return [f'#{n}: {ASKING_LABEL} put back: {who} applied it as the repair took it off; check whose it is']
+    return [f'#{n}: {ASKING_LABEL} put back: {who} applied it as {taker} took it off; check whose it is']
 
 
 def app(login):

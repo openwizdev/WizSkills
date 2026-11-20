@@ -872,27 +872,33 @@ class Refuse(Tracker):
         result = self.run_status(*self.args('--skills', ', '.join(at(name) for name in listed[:5])))
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_each_skill_is_bound_to_its_own_installed_version(self):
-        # catches (#1527): a truthful note refused because a skill's own front-matter version
-        # differs from the bundle's, or one skill's version accepted for another skill.
-        package = self.dir / 'package'
+    def package(self, skills, folder):
+        """A synthetic installed package under FOLDER: bundle 0.1.2 listing build-ticket,
+        launch-fleet and no-front-matter, each SKILLS name's SKILL.md as its text (then a
+        body), and the writer's own skill folder as installed. Returns its scripts folder."""
+        package = self.dir / folder
         (package / '.claude-plugin').mkdir(parents=True)
         (package / '.claude-plugin/plugin.json').write_text(json.dumps({
             'name': 'openwiz', 'version': '0.1.2',
             'skills': ['./skills/build-ticket', './skills/launch-fleet', './skills/no-front-matter']}))
-        # The writer's own skill folder as installed, then each SKILL.md's front matter.
         shutil.copytree(HERE.parent, package / 'skills/launch-fleet', ignore=shutil.ignore_patterns('__pycache__'))
         shutil.copytree(ROOT / 'contracts', package / 'contracts')
-        for name, head in (('build-ticket', 'name: build-ticket\nversion: 0.2.0'),
-                           ('launch-fleet', 'name: launch-fleet\nversion: 0.3.1'),
-                           # Listed but not installed: no folder for triage, and a
-                           # skill whose front matter has no version.
-                           ('no-front-matter', 'name: no-front-matter'),
-                           # Installed folder, but the manifest doesn't list it.
-                           ('unlisted', 'name: unlisted\nversion: 0.2.0')):
+        for name, head in skills.items():
             (package / 'skills' / name).mkdir(parents=True, exist_ok=True)
-            (package / 'skills' / name / 'SKILL.md').write_text(f'---\n{head}\n---\n\n# {name}\n')
-        scripts = package / 'skills/launch-fleet/scripts'
+            (package / 'skills' / name / 'SKILL.md').write_text(f'{head}\n# {name}\n')
+        return package / 'skills/launch-fleet/scripts'
+
+    def test_each_skill_is_bound_to_its_own_installed_version(self):
+        # catches (#1527): a truthful note refused because a skill's own front-matter version
+        # differs from the bundle's, or one skill's version accepted for another skill.
+        scripts = self.package({
+            'build-ticket': '---\nname: build-ticket\nversion: 0.2.0\n---\n',
+            'launch-fleet': '---\nname: launch-fleet\nversion: 0.3.1\n---\n',
+            # Listed but not installed: no folder for triage, and a
+            # skill whose front matter has no version.
+            'no-front-matter': '---\nname: no-front-matter\n---\n',
+            # Installed folder, but the manifest doesn't list it.
+            'unlisted': '---\nname: unlisted\nversion: 0.2.0\n---\n'}, 'package')
         for value in ('build-ticket@0.1.2', 'launch-fleet@0.2.0', 'build-ticket@0.2.0, launch-fleet@0.2.0',
                       'triage@0.2.0', 'unlisted@0.2.0', 'no-front-matter@0.1.2', 'no-front-matter@0.2.0'):
             with self.subTest(skills=value):
@@ -909,6 +915,36 @@ class Refuse(Tracker):
         posted = [c for c in self.ticket()['comments'] if c['author'] == BOT]
         self.assertEqual(len(posted), 1)
         self.assertIn('\nskills: build-ticket@0.2.0, launch-fleet@0.3.1\n', posted[0]['body'])
+
+    def test_a_skill_version_is_read_only_from_one_declaration_in_its_first_front_matter(self):
+        # catches (#1663 R1): a YAML-quoted version (which the skill rules and the release
+        # accept) refused; a version read from the body past an empty front matter or from a
+        # later block; or the first of two declarations taken as the skill's version.
+        cases = [
+            ('double-quoted', '---\nname: build-ticket\nversion: "0.2.0"\n---\n', '0.2.0'),
+            ('single-quoted', "---\nname: build-ticket\nversion: '0.2.0'\n---\n", '0.2.0'),
+            ('empty front matter, version in the body', '---\n---\nversion: 0.2.0\n---\n', None),
+            ('version in a second block', '---\nname: build-ticket\n---\n---\nversion: 0.2.0\n---\n', None),
+            ('declared twice', '---\nname: build-ticket\nversion: 0.2.0\nversion: 0.3.0\n---\n', None),
+            ('declared twice, the same', '---\nname: build-ticket\nversion: 0.2.0\nversion: 0.2.0\n---\n', None),
+            ('mismatched quotes', '---\nname: build-ticket\nversion: "0.2.0\'\n---\n', None),
+            ('no closing line', '---\nname: build-ticket\nversion: 0.2.0\n', None),
+        ]
+        for i, (name, text, version) in enumerate(cases):
+            with self.subTest(name):
+                scripts = self.package({'build-ticket': text}, f'package-{i}')
+                for value in ('build-ticket@0.2.0', 'build-ticket@0.3.0'):
+                    self.save()
+                    (self.dir / 'gh.log').unlink(missing_ok=True)
+                    result = self.run_status(*self.args('--skills', value), script=scripts / 'status.py')
+                    if value == f'build-ticket@{version}':
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        posted = [c for c in self.ticket()['comments'] if c['author'] == BOT]
+                        self.assertEqual(len(posted), 1)
+                        self.assertIn(f'\nskills: {value}\n', posted[0]['body'])
+                    else:
+                        self.assertEqual((result.returncode, result.stdout, self.calls()), (2, '', []), value)
+                        self.assertIn('installed', result.stderr)
 
     def test_private_or_bad_text_is_refused_before_any_call(self):
         # catches: a thread id, machine path (any absolute one), CloudRoom id, credential,

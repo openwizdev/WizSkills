@@ -26,8 +26,8 @@ JSON file, <dir>/run.json. Exit 0: done; 1: refused (the last line says why), or
 2: the kit could not run; 3: skipped on the user's no. It never reads, asks for, prints or stores a login, token or key: GitHub is
 reached only through the user's own signed-in `gh`. The kit reaches the driver through `proxy`, which
 records each run its `start` answers, once the kit's own checks accept that answer, for stop-all. The
-expired-login probe runs the driver under Landlock and seccomp, or not at all. Python 3.9+, standard library,
-Linux (/proc).
+expired-login probe runs the driver under Landlock and seccomp, or not at all, so on macOS it alone is skipped.
+Python 3.9+, standard library, Linux or macOS.
 """
 import argparse
 import ctypes
@@ -729,6 +729,13 @@ def cmd_lesson(a):
     if not field('harness', a.harness):
         raise Refused('%s is not a harness name: 1 to 40 lower-case letters, digits or -, starting with a letter'
                       % a.harness)
+    if sys.platform == 'darwin':  # Landlock, seccomp and /proc are Linux's: on a Mac only this probe is skipped
+        state['lessons']['expired-login'] = 'not run'
+        mark_clock(state)
+        save(a.state, state)
+        print('expired-login not run: this Mac cannot isolate the probe (it needs Linux), so it is skipped; check '
+              'that lesson on Linux')
+        return 3
     if consent(state, a.asked, 'expired-login') == 'skip':
         state['lessons']['expired-login'] = 'not run'
         mark_clock(state)

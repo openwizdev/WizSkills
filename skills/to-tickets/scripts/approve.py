@@ -8,7 +8,9 @@ revision.sh's text for the same spec. The checks, all of them every time:
 
   links        check-links.sh passes on the graph read
   relies       check-relies.sh passes on each open agent ticket's body, a path
-               a direct blocker owns counting as planned
+               counting as planned when a direct blocker owns that file, or a
+               folder or pattern containing it, in the ticket's own repository
+               (the one all its owned paths name)
   sizes        each open ticket says exactly one `Size: S`, `M` or `L`
   width        no cycle, and no arrow another chain of arrows already implies
   owned paths  each open agent ticket owns exact repository paths, and no two
@@ -112,6 +114,13 @@ def overlap(a, b):
     return all(fnmatch.fnmatchcase(p, q) or fnmatch.fnmatchcase(q, p) for p, q in zip(x, y))
 
 
+def contains(own, path):
+    """An owned path holds a file: it is that file, or a folder or pattern
+    whose every segment matches the file's leading segments."""
+    x, y = own.rstrip('/').split('/'), path.split('/')
+    return len(x) <= len(y) and all(fnmatch.fnmatchcase(q, p) for p, q in zip(x, y))
+
+
 def relies_paths(body):
     lines = [line for line in body.split('\n') if line.startswith('**Relies on:**')]
     return re.findall(r'`([^`]+)`', lines[0]) if len(lines) == 1 else []
@@ -161,9 +170,11 @@ def check_relies(tickets, owners, root):
     why = []
     for t in tickets:
         blockers = [b['number'] for b in t['blocked_by']]
+        repos = {repo for repo, _, _ in owners.get(t['number'], [])}
         planned = []
         for path in relies_paths(t['body']):
-            if any(overlap(own, path) for b in blockers for _, own, _ in owners.get(b, [])):
+            if len(repos) == 1 and any(repo in repos and contains(own, path)
+                                       for b in blockers for repo, own, _ in owners.get(b, [])):
                 planned += ['--planned', path]
         out = subprocess.run(['sh', str(RELIES), '--root', str(root), *planned], input=t['body'],
                              capture_output=True, text=True)

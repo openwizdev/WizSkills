@@ -1,6 +1,6 @@
 ---
 name: to-spec
-description: Turn a confirmed grill into a spec issue, run to-tickets on it, and make the spec's narrated steering video. Use when a grill is confirmed or the owner steers a spec through its video. No human step between grill and fleet.
+description: Turn a confirmed grill into a spec issue, run to-tickets on it, and make the spec's narrated steering video. Use when a grill is confirmed or the owner steers a spec through the orchestrator. No human step between grill and fleet.
 version: 0.2.0
 ---
 
@@ -9,7 +9,8 @@ version: 0.2.0
 The owner's one active step is answering and confirming the grill (J202). From
 there the orchestrator writes the spec, has [to-tickets](../to-tickets/SKILL.md)
 cut and approve the plan by its own checks, and makes one video the owner
-watches to steer. Nothing is asked between them. In OpenWiz,
+watches, then steers through the orchestrator. Nothing is asked between them.
+In OpenWiz,
 [the roads page](https://github.com/openwizdev/OpenWiz/blob/main/docs/agents/roads.md)
 describes when this road applies.
 

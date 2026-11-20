@@ -477,7 +477,9 @@ class PermissionMode(unittest.TestCase):
         road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
         result = road.helper(['launch', '--spec', '900'])
         self.assertEqual(result.returncode, 5, result.stdout)
-        self.assertIn('Harness permission mode', result.stdout)
+        self.assertIn('| Harness permission mode | `acceptEdits` |', result.stdout, 'names the exact row to save')
+        self.assertIn('docs/agents/fleet.md', result.stdout)
+        self.assertIn('run mode, then setting, and merge it', result.stdout, 'and how the owner saves it')
         self.assertEqual(road.spawns(), [])
 
     def test_the_mode_is_one_fleet_md_row_and_an_owners_row_is_never_overwritten(self):

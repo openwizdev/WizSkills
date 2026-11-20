@@ -57,7 +57,12 @@ blind); a merge that closes no linked issue adds nothing.
 
 `settle` is the cost a queued merge still owes: it reads the newest record
 author's queue receipt on the pull request and runs `cost` at that commit
-(`refused: ...` while it isn't merged there), or prints `no queued merge`.
+(`refused: ...` while it isn't merged there), or prints `no queued merge`
+(with the landed outcome when the pull request merged directly). Any `landed
+unknown:` makes it `unknown: ...` (exit 1), so the work stays open for a later
+wake, which reads the report again. A landed comment is read back after
+posting; when an earlier one is there too, the earliest stands and ours is
+deleted.
 """
 import importlib.util
 import json
@@ -239,7 +244,17 @@ def land(fix, report, auth):
     after = post.thread(repo, report) or []
     if not any(c.get('id') == made['id'] and c.get('body') == body and post.ours(c, auth) for c in after):
         return f'landed unknown: the comment on {at} could not be read back, so reconcile {at}'
-    return f"landed posted {made['id']} on {at}"
+    # Another run may have read before either wrote (#127 R2, ruling 7044043399 on #1848): the
+    # earliest landed comment stands, and a later one of ours is deleted.
+    earliest = min(c['id'] for c in after if post.ours(c, auth) and type(c.get('id')) is int
+                   and LANDED_ANY.fullmatch(c.get('body') or ''))
+    if earliest == made['id']:
+        return f"landed posted {made['id']} on {at}"
+    post.gh('api', '--method', 'DELETE', f"repos/{repo}/issues/comments/{made['id']}")
+    back = post.thread(repo, report)
+    if back is None or any(c.get('id') == made['id'] for c in back):
+        return f"landed unknown: our duplicate {made['id']} on {at} could not be deleted, so reconcile {at}"
+    return f'landed already posted {earliest}'
 
 
 def landed(repo, number, p):
@@ -322,7 +337,15 @@ def _cost(repo, number, home, ticket, extra):
 
 def settle(repo, number, ticket, extra=()):
     found = receipts(repo, number)
-    return cost(repo, number, found[-1][0], ticket, extra) if found else 'no queued merge'
+    if found:
+        told = cost(repo, number, found[-1][0], ticket, extra)
+    else:  # a direct merge still owes its landed comment (#127 R1)
+        main, p = snapshot(repo, number)
+        merged = where(main, p, (p or {}).get('headRefOid')).startswith('merged ')
+        told = 'no queued merge' + (landed(repo, number, p) if merged else '')
+    if '; landed unknown: ' in told:
+        raise Stop('unknown: ' + told)
+    return told
 
 
 def merge(repo, number, head, checks, body, ticket, checked, extra):

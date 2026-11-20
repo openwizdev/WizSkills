@@ -614,7 +614,8 @@ class Landed(unittest.TestCase):
         self.assertTrue(out.endswith('; cost posted 5002; landed posted 5001 on openwizdev/OpenWiz#9101'), out)
         self.assertEqual(self.merge(w), (0, 'merged %s; cost already posted 5002; landed already posted 5001'
                                          % ('c' * 40)))
-        self.assertEqual(w.run('merge.py', 'settle', DEST, 9201, 9106, cwd=w.dir / 'project'), (0, 'no queued merge'))
+        self.assertEqual(w.run('merge.py', 'settle', DEST, 9201, 9106, cwd=w.dir / 'project'),
+                         (0, 'no queued merge; landed already posted 5001'))
         self.assertEqual(self.posts(w), [(9101, LANDED)])
         self.assertEqual(w.bodies(9106), ['launch-fleet: cost unknown (PR #9201): no cost command'])
 

@@ -4,6 +4,7 @@
   first_fleet.py continue --state FILE --setup-state DIR [--explained]
   first_fleet.py decisions --state FILE --setup-state DIR [--yes]
   first_fleet.py create-repo --state FILE --repo OWNER/NAME [--yes]
+  first_fleet.py select --state FILE --repo OWNER/NAME
   first_fleet.py choose --state FILE --options FILE (--harness P --model M --effort E | --from-setup) --agents cloud|local
   first_fleet.py spec --state FILE --spec N --repo OWNER/NAME
   first_fleet.py launch --state FILE --spec N [--yes --confirm DIGEST]
@@ -22,6 +23,9 @@ on --yes: it saves the name first, creates it with its disclosed initial README
 commit in that one create (#1074: init proposes the brain on its default
 branch), reads back the repository, default branch and commit, and reads before
 any retry of a create whose answer was lost. It never pushes into a repository.
+
+`select` records the existing repository the owner confirmed, before Connect,
+as this onboarding's one repository; it reads and changes nothing else.
 
 `launch` starts the first fleet the way launch-fleet starts every fleet: it
 reads launch-fleet's own frontier (../../launch-fleet/scripts/fleet.sh
@@ -44,8 +48,10 @@ stays recorded but unfinished, since a Local fleet cannot launch yet.
 
 `next` reads only the state file and prints the first unfinished step and
 what to run there, so a fresh session resumes without repeating an effect.
-With --setup-state it also reads, never writes, the repository setup already
-prepared, so an owner interrupted before `continue` resumes at Connect (#1571).
+With --setup-state it also reads, never writes, the repository setup
+prepared: for the selected repository that is Connect's progress; with no
+selection it is only a candidate for the owner to confirm with `select`, since
+setup may have prepared it for an earlier project (#1571).
 
 The state file is private and owner-only; keep it outside the checkout. It
 holds the user's choices, the carried setup facts, this onboarding's spec and
@@ -73,6 +79,7 @@ OPTIONS = {
     'continue': ({'--state', '--setup-state'}, {'--explained'}, set()),
     'decisions': ({'--state', '--setup-state'}, {'--yes'}, set()),
     'create-repo': ({'--state', '--repo'}, {'--yes'}, set()),
+    'select': ({'--state', '--repo'}, set(), set()),
     'choose': ({'--state', '--options', '--agents'}, {'--from-setup'}, {'--harness', '--model', '--effort'}),
     'spec': ({'--state', '--spec', '--repo'}, set(), set()),
     'launch': ({'--state', '--spec'}, {'--yes'}, {'--confirm'}),
@@ -114,7 +121,8 @@ def strict(text):
 
 def parse(argv):
     if not argv or argv[0] not in OPTIONS:
-        raise Exit(2, 'usage: first_fleet.py continue|create-repo|choose|spec|launch|progress|next ... (see its header)')
+        raise Exit(2, 'usage: first_fleet.py continue|create-repo|select|choose|spec|launch|progress|next ... '
+                      '(see its header)')
     values, switches, optional = OPTIONS[argv[0]]
     got, rest = {}, argv[1:]
     while rest:
@@ -514,6 +522,24 @@ def create_repo(got):
         raise Exit(5, 'GitHub did not create %s; nothing created. Try again only after the user says yes again.' % name)
     raise Exit(6, 'Whether %s was created with its default branch and initial commit is uncertain; read it back '
                   'before any retry (run this again).' % name)
+
+
+def select(got):
+    """The existing repository the owner confirmed, bound to this onboarding before Connect."""
+    state = State(got['--state'])
+    name = got['--repo']
+    if state.value.get('repo') not in (None, name):
+        raise Exit(5, 'This onboarding is for %s; it takes no second repository; nothing recorded.'
+                   % state.value['repo'])
+    record = state.value.get('created')
+    if record and record['repo'] != name and record['state'] != 'absent':
+        raise Exit(5, 'This onboarding already made %s; it takes no second repository; nothing recorded.'
+                   % record['repo'])
+    state.value['repo'] = name
+    if not state.save():
+        raise Exit(10, 'Could not save the repository; nothing recorded.')
+    print('Recorded: this onboarding is for %s. Connect it next.' % name)
+    return 0
 
 
 # --- Choices ----------------------------------------------------------------
@@ -938,18 +964,25 @@ def resume(got):
     demo = created.get('repo') if created.get('state') != 'absent' else None  # an absent create made nothing
     repo, spec = value.get('repo') or demo, value.get('spec')
     folder = got.get('--setup-state')
-    if not repo and folder:
-        repo = prepared(folder)  # #1571: selected and prepared in setup, Connect not yet carried
+    candidate = prepared(folder) if folder else None
     choices = value.get('choices') or {}
     if created.get('state') in ('pending', 'uncertain'):
         step = ('project', 'Creating %s is %s: run create-repo --repo %s --yes again; it reads before it creates.'
                 % (created['repo'], created['state'], created['repo']))
+    elif not repo and candidate:
+        step = ('project', 'This onboarding has no repository yet. Setup prepared %s, perhaps for an earlier '
+                'project: ask the owner whether this first fleet is for it. On their yes, run select --repo %s; '
+                'otherwise offer the ideas, then choose or create its one repository.' % (candidate, candidate))
     elif not repo:
-        step = ('project', 'Offer the ideas, then choose or create its one repository.' + (
-            '' if folder else ' If setup already prepared one for this onboarding, run next again with '
-            '--setup-state <state> to resume there.'))
+        step = ('project', 'Offer the ideas, then choose or create its one repository.')
     elif not value.get('setup'):
-        step = ('connect', 'Connect %s with the installed tools, then run continue.' % repo)
+        step = ('connect', '%sConnect %s with the installed tools, then run continue.' % (
+            'Setup already prepared it; ' if candidate == repo else '', repo))
+    elif spec and launched.get('spec') == spec and launched.get('state') in ('pending', 'uncertain'):
+        step = ('launch', 'The start of spec #%d is uncertain: run launch --spec %d to read its fleet record; '
+                'never start it again.' % (spec, spec))
+    elif spec and launched.get('spec') == spec and launched.get('state') == 'started':
+        step = ('watch', 'Run progress --spec %d.' % spec)
     elif not choices:
         step = ('grill', 'Run the grill unless its summary is already confirmed; then choose the agents.')
     elif choices.get('agents') != 'cloud':
@@ -959,11 +992,6 @@ def resume(got):
                                      tables_line(choices, 'have not read back this choice yet')))
     elif not spec:
         step = ('plan', 'Confirm the spec, approve the exact plan, then run spec --spec <N> --repo %s.' % repo)
-    elif launched.get('spec') == spec and launched.get('state') in ('pending', 'uncertain'):
-        step = ('launch', 'The start of spec #%d is uncertain: run launch --spec %d to read its fleet record; '
-                'never start it again.' % (spec, spec))
-    elif launched.get('spec') == spec and launched.get('state') == 'started':
-        step = ('watch', 'Run progress --spec %d.' % spec)
     else:
         step = ('launch', 'Preview with launch --spec %d and ask for a yes to exactly that.' % spec)
     print('Next: %s.' % step[0])
@@ -982,6 +1010,8 @@ def main(argv):
             return connect_decisions(got)
         if command == 'create-repo':
             return create_repo(got)
+        if command == 'select':
+            return select(got)
         if command == 'choose':
             return choose(got)
         if command == 'spec':

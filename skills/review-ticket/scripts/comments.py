@@ -11,7 +11,7 @@ CSS = {".css"}
 HTML = {".html", ".htm"}
 EXCLUDED = re.compile(r"(^|/)(vendor|vendored|third_party|third-party|node_modules)/|(^|/)fixtures/comments/"
                       r"|\.min\.(js|css)$")
-HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 SHEBANG = {"python": ".py", "sh": ".sh", "bash": ".sh", "dash": ".sh", "zsh": ".sh", "node": ".js"}
 DOCSTRING = re.compile(r"^\s*[rRuU]?(\"\"\"|''')")
 ENCODING = re.compile(r"^#.*coding[:=]")
@@ -69,25 +69,29 @@ def language(path, first_line):
 
 
 def files(diff):
-    path, numbered, line_no = None, {}, None
+    path, numbered, line_no, old_left, new_left = None, {}, None, 0, 0
     for raw in diff.splitlines():
+        if old_left > 0 or new_left > 0:
+            if raw.startswith("-"):
+                old_left -= 1
+            elif raw.startswith("+"):
+                numbered[path][-1].append((line_no, raw[1:], True))
+                line_no, new_left = line_no + 1, new_left - 1
+            elif raw.startswith(" ") or raw == "":
+                numbered[path][-1].append((line_no, raw[1:], False))
+                line_no, old_left, new_left = line_no + 1, old_left - 1, new_left - 1
+            continue
         if raw.startswith("diff --git "):
-            path, line_no = None, None
+            path = None
         elif raw.startswith("+++ "):
             target = raw[4:]
             path = target[2:] if target.startswith("b/") else None
             if path is not None:
                 numbered.setdefault(path, [])
-        elif path is None:
-            continue
-        elif (hunk := HUNK.match(raw)):
-            line_no = int(hunk.group(1))
+        elif path is not None and (hunk := HUNK.match(raw)):
+            old_left = int(hunk.group(1) or 1)
+            line_no, new_left = int(hunk.group(2)), int(hunk.group(3) or 1)
             numbered[path].append([])
-        elif line_no is None or raw.startswith("-") or raw.startswith("\\"):
-            continue
-        elif raw.startswith("+") or raw.startswith(" ") or raw == "":
-            numbered[path][-1].append((line_no, raw[1:], raw.startswith("+")))
-            line_no += 1
     return numbered
 
 

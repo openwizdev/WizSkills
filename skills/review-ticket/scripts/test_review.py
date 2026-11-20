@@ -853,7 +853,7 @@ class CommentPass(unittest.TestCase):
 
     def test_it_reads_only_the_lines_the_diff_adds(self):
         diff = ("diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n"
-                "@@ -10,4 +10,4 @@\n # Kept because the old importer needs it, do not remove.\n"
+                "@@ -10,3 +10,3 @@\n # Kept because the old importer needs it, do not remove.\n"
                 "-x = 1  # workaround for the old reader\n+x = 2\n y = 3\n"
                 "@@ -40,2 +40,4 @@\n z = 4\n+/* not python, but a string: */\n+w = '# not a comment'\n q = 5\n")
         code, findings, out = self.comment_pass(diff)

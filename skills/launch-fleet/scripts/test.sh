@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=839      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 16
+CASES=842      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 16
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1539,6 +1539,20 @@ start #13: W3: widget page (spec #10)
 EOF
 expect 'steer: a help comment repeating the cue is no new video and keeps the stop (R3)' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "stop") | say(10; 1004; "10:05"; "launch-fleet: held by stop 1003") | say(10; 1005; "10:10"; "To steer, reply on the video.\n\nComment here to steer: stop, reset, or anything else.")' -- check < /dev/null
 expect 'steer: the fleet'"'"'s own bold records are no steer' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "**Needs you:** stop and look at #13")' -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+# R2 (planner ruling, J87): with the video posted from the owner's login, agents
+# and the owner share one login, so no comment steers; the wake says so once.
+OFF_WHY='comments on the video steer nothing while agents post from the same login as the owner, until the OpenWiz App identity (OpenWiz #1402) is in use; the owner steers through the orchestrator'
+expect 'steer: under the shared login an agent'"'"'s note steers nothing, and steering off is noted (R2)' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | issue(10; .comments[-1].author = "Synthetic-Owner") | owner_says(10; 1003; "10:00"; "Reset the cache before the next run.")' -- check <<EOF
+look #10: $OFF_WHY
+start #13: W3: widget page (spec #10)
+EOF
+expect 'steer: under the shared login the owner'"'"'s stop steers nothing either (R2)' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | issue(10; .comments[-1].author = "synthetic-owner") | owner_says(10; 1003; "10:00"; "Stop.")' -- check <<EOF
+look #10: $OFF_WHY
+start #13: W3: widget page (spec #10)
+EOF
+expect 'steer: under the shared login steering off is noted only once (R2)' 0 check.json "merge12 | machine_only | video(10; 1002; \"09:00\") | issue(10; .comments[-1].author = \"Synthetic-Owner\") | owner_says(10; 1003; \"10:00\"; \"Keep the page plain.\") | say(10; 1004; \"10:05\"; \"launch-fleet: look: $OFF_WHY\") | owner_says(10; 1005; \"10:10\"; \"reset\")" -- check <<EOF
 start #13: W3: widget page (spec #10)
 EOF
 

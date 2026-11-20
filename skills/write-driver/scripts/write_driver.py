@@ -4,6 +4,7 @@
     write_driver.py begin --state <dir>
     write_driver.py host --state <dir> --host <host> --costly yes|no
     write_driver.py copy --state <dir> --openwiz <checkout> --into <repository folder> --login machine|host
+                        [--key-variable <NAME>]
     write_driver.py ticket --host <host> --account <login> --out <folder>
     write_driver.py ask --state <dir> --operation kit|expired-login|host [--step <host step>] --effect <effect>
     write_driver.py reply --state <dir> --file <the user's next message>
@@ -377,20 +378,28 @@ def cmd_host(a):
 LOGIN = {'machine': 'Login: stays on your machine', 'host': 'Login: held by {host}'}
 
 
-def login_line(readme, line):
-    """Open the README, right under its title, with exactly this login line, and no other."""
+KEY_VARIABLE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
+
+
+def login_line(readme, line, key_variable=None):
+    """Open the README, right under its title, with exactly this login line, and no other; for a cloud host that
+    takes an API key, the name of the variable the user sets for it under that line, never a value."""
     lines = readme.read_text(encoding='utf-8').split('\n') if readme.exists() else []
     if not lines or not lines[0].startswith('# '):
         raise Refused('the template README.md has no title to put the login line under: write it by hand')
-    rest = [x for x in lines[1:] if not x.startswith('Login:')]
+    rest = [x for x in lines[1:] if not x.startswith(('Login:', 'API key:'))]
     while rest and not rest[0].strip():
         rest.pop(0)
-    readme.write_text('\n'.join([lines[0], '', line, ''] + rest), encoding='utf-8')
+    key = ['API key: set `%s` yourself; the driver never asks for it.' % key_variable, ''] if key_variable else []
+    readme.write_text('\n'.join([lines[0], '', line, ''] + key + rest), encoding='utf-8')
 
 
 def cmd_copy(a):
     state = load(a.state)
     host = state['host']
+    if a.key_variable is not None and (a.login != 'host' or not KEY_VARIABLE.fullmatch(a.key_variable)):
+        raise Refused('the key variable is a name only (capital letters, digits and _), for a login the host '
+                      'holds: never a value')
     src = Path(a.openwiz) / 'adapters' / 'template'
     dest = Path(a.into) / 'adapters' / host
     if dest.exists():
@@ -416,7 +425,7 @@ def cmd_copy(a):
                 new = new.replace(old, to.format(**values))
             if new != text:
                 path.write_text(new, encoding='utf-8')
-        login_line(tmp / host / 'README.md', LOGIN[a.login].format(host=host))
+        login_line(tmp / host / 'README.md', LOGIN[a.login].format(host=host), a.key_variable)
         os.replace(tmp / host, dest)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -983,6 +992,7 @@ def parser():
     p.add_argument('--costly', choices=('yes', 'no'), required=True)
     p = cmd('copy')
     p.add_argument('--login', choices=tuple(LOGIN), required=True)
+    p.add_argument('--key-variable')
     p.add_argument('--openwiz', required=True)
     p.add_argument('--into', required=True)
     p = cmd('ticket')

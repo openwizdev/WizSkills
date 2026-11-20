@@ -1,14 +1,29 @@
 #!/usr/bin/env python3
 """The install skill's first-fleet checks (#1108, joined to install in #636). Standard library only.
 
+  first_fleet.py where --state FILE --agents local|cloud [--yes]
   first_fleet.py continue --state FILE --setup-state DIR [--explained]
   first_fleet.py decisions --state FILE --setup-state DIR [--yes]
   first_fleet.py create-repo --state FILE --repo OWNER/NAME [--yes]
-  first_fleet.py choose --state FILE --options FILE (--harness P --model M --effort E | --from-setup) --agents cloud|local
+  first_fleet.py setting --state FILE [--yes]
+  first_fleet.py grill --state FILE --confirmed URL
+  first_fleet.py choose --state FILE --options FILE (--harness P --model M --effort E | --from-setup) [--agents cloud|local]
   first_fleet.py spec --state FILE --spec N --repo OWNER/NAME
-  first_fleet.py launch --state FILE --spec N [--yes --confirm DIGEST]
+  first_fleet.py launch --state FILE --spec N
   first_fleet.py progress --state FILE --spec N --openwiz PROGRAM
+  first_fleet.py first-merge --state FILE --pr N
   first_fleet.py next --state FILE
+
+The onboarding road (#1358): `where` records where the agents run, this
+machine through OpenWiz's local driver or Cloudroom, only on the user's answer
+(--yes), after checking what that needs and printing the teacher's walk-through
+for anything missing; it never runs a sign-in. `setting` writes that choice to
+the project's host setting, docs/agents/host.md (records v1, section 6), as one
+pull request the user merges, only on --yes; Cloudroom needs no file. `grill`
+records the private comment URL of the user's yes to the grill in chat; the
+plan then approves itself by its checks (to-tickets' machine plan approval),
+and no plan approval is asked. `first-merge` reads a merged pull request back
+from GitHub and prints the teacher's merged line and closing offer.
 
 It adds no approval, planner or engine. `continue` carries what install and
 setup already recorded in the installed OpenWiz state (DIR is its `<state>`):
@@ -23,16 +38,17 @@ commit in that one create (#1074: init proposes the brain on its default
 branch), reads back the repository, default branch and commit, and reads before
 any retry of a create whose answer was lost. It never pushes into a repository.
 
-`launch` starts the first fleet the way launch-fleet starts every fleet: it
+`launch` starts the first fleet the way launch-fleet starts every fleet, with
+no question: only from the spec's latest approval when it is the machine plan
+approval of this onboarding's confirmed grill, on the host the user chose (a
+local host only once its setting is on the default branch). It
 reads launch-fleet's own frontier (../../launch-fleet/scripts/fleet.sh
 frontier, which checks that to-tickets's approval is current), keeps this
 spec's tickets, reads the fleet settings setup wrote (every builder table the
 user's choice, each reviewer from the other model family), and starts one
 fleet thread for the spec, with launch-fleet's own brief. That thread makes
 its own loop, which runs the spec's check (`fleet.sh spec <S>`), records
-itself on the spec and starts the frontier's builders. A preview prints a
-confirmation digest of its exact effects; `--yes --confirm DIGEST` starts only
-if a fresh read still has exactly those effects. It never calls the engine or
+itself on the spec and starts the frontier's builders. It never calls the engine or
 the engine's tick. The launch is saved before the start runs, and is never run
 twice: a repeat only reads the spec's fleet record and progress, and an
 uncertain start stays uncertain until that record reads back. Every command
@@ -48,12 +64,14 @@ its one launch record.
 Exits: 0 done; 1 a read failed; 2 usage; 5 refused, nothing started;
 6 uncertain, never retried; 7 busy; 10 state unavailable; 12 preview, awaiting --yes.
 """
+import base64
 import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -64,12 +82,16 @@ import urllib.parse
 LAUNCH_FLEET = Path(__file__).resolve().parents[2] / 'launch-fleet'
 FLEET_SH = LAUNCH_FLEET / 'scripts/fleet.sh'
 OPTIONS = {
+    'where': ({'--state', '--agents'}, {'--yes'}, set()),
+    'setting': ({'--state'}, {'--yes'}, set()),
+    'grill': ({'--state', '--confirmed'}, set(), set()),
+    'first-merge': ({'--state', '--pr'}, set(), set()),
     'continue': ({'--state', '--setup-state'}, {'--explained'}, set()),
     'decisions': ({'--state', '--setup-state'}, {'--yes'}, set()),
     'create-repo': ({'--state', '--repo'}, {'--yes'}, set()),
-    'choose': ({'--state', '--options', '--agents'}, {'--from-setup'}, {'--harness', '--model', '--effort'}),
+    'choose': ({'--state', '--options'}, {'--from-setup'}, {'--harness', '--model', '--effort', '--agents'}),
     'spec': ({'--state', '--spec', '--repo'}, set(), set()),
-    'launch': ({'--state', '--spec'}, {'--yes'}, {'--confirm'}),
+    'launch': ({'--state', '--spec'}, set(), set()),
     'progress': ({'--state', '--spec', '--openwiz'}, set(), set()),
     'next': ({'--state'}, set(), set()),
 }
@@ -86,6 +108,12 @@ NAMES = {'cloudroom': 'CloudRoom', 'harness': 'Agent harness', 'personal_github'
          'github_app': 'OpenWiz GitHub App', 'project': 'Project'}
 REPOSITORY = r'[A-Za-z0-9][-A-Za-z0-9]*/[-A-Za-z0-9_.]+'
 FLEET_RECORD = 'launch-fleet: fleet active, loop fleet-'
+GRILL = r'https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/(issues|pull)/[1-9][0-9]*#issuecomment-[1-9][0-9]*'
+TEACH = Path(__file__).resolve().parents[1] / 'teach.md'
+# Harnesses this machine can run, by setup's provider name: the local driver's harness program (#1368).
+PROGRAMS = {'claude-code': 'claude', 'codex': 'codex'}
+HOST_FILE = 'docs/agents/host.md'
+HOST_BRANCH = 'openwiz/host-setting'
 
 
 class Exit(Exception):
@@ -108,7 +136,8 @@ def strict(text):
 
 def parse(argv):
     if not argv or argv[0] not in OPTIONS:
-        raise Exit(2, 'usage: first_fleet.py continue|create-repo|choose|spec|launch|progress|next ... (see its header)')
+        raise Exit(2, 'usage: first_fleet.py where|continue|decisions|create-repo|setting|grill|choose|spec|launch|'
+                      'progress|first-merge|next ... (see its header)')
     values, switches, optional = OPTIONS[argv[0]]
     got, rest = {}, argv[1:]
     while rest:
@@ -131,8 +160,10 @@ def parse(argv):
                           'setup already recorded')
     if '--spec' in got and not re.fullmatch(r'[1-9][0-9]{0,9}', got['--spec']):
         raise Exit(2, 'usage: --spec takes an issue number')
-    if argv[0] == 'launch' and ('--confirm' in got) != bool(got.get('--yes')) or not re.fullmatch(r'[0-9a-f]{64}', got.get('--confirm', '0' * 64)):
-        raise Exit(2, 'usage: --yes takes --confirm with the digest of the preview the user said yes to')
+    if '--pr' in got and not re.fullmatch(r'[1-9][0-9]{0,9}', got['--pr']):
+        raise Exit(2, 'usage: --pr takes a pull request number')
+    if '--confirmed' in got and not re.fullmatch(GRILL, got['--confirmed']):
+        raise Exit(2, "usage: --confirmed takes the private comment URL of the user's yes to the grill")
     if '--repo' in got and not re.fullmatch(REPOSITORY, got['--repo']):
         raise Exit(2, 'usage: --repo takes owner/name')
     if '--agents' in got and got['--agents'] not in ('cloud', 'local'):
@@ -176,7 +207,7 @@ class State:
             value = strict(self.path.read_text(encoding='utf-8'))
         except (OSError, ValueError):
             raise Exit(10, 'The onboarding state is unreadable; ' + NOTHING)
-        known = {'created', 'choices', 'repo', 'spec', 'preview', 'launch', 'setup'}
+        known = {'created', 'choices', 'repo', 'spec', 'launch', 'setup', 'host', 'setting', 'grill', 'merge', 'preview'}
         if not isinstance(value, dict) or set(value) - known:
             raise Exit(10, 'The onboarding state has an unknown shape; ' + NOTHING)
         return value
@@ -204,6 +235,113 @@ def run(argv, env=None):
         return subprocess.run(argv, capture_output=True, timeout=600, env=env)
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+# --- The teacher (teach.md, #1359) -------------------------------------------
+
+def teach(heading, fill=(), which=0):
+    """teach.md's line under `## heading`, each `<...>` filled in order and the rest of its words kept."""
+    try:
+        section = TEACH.read_text(encoding='utf-8').split('\n## ' + heading + '\n', 1)[1].split('\n## ', 1)[0]
+        line = [text[2:] for text in section.split('\n') if text.startswith('> ')][which]
+    except (OSError, IndexError):
+        raise Exit(1, "The teacher's lines (teach.md) are unreadable; " + NOTHING)
+    fill = list(fill)
+    line = re.sub(r'`?<[^>]+>`?', lambda _: fill.pop(0), line)
+    assert not fill
+    return line
+
+
+# --- Interfaces of tickets not merged yet (#1358's stubs) ----------------------
+# Each is one thin call against the interface its pull request defines; swap it
+# when that ticket merges.
+
+def local_driver(env):
+    """KN3 (#1368, OpenWiz #1455): the local driver's `version` answer, or None.
+
+    The driver is `$OPENWIZ_ADAPTERS/local/driver` (driver v1), as launch-fleet's
+    host.py (#1371, WizSkills #64) finds it. Only `version` is called here: it starts nothing."""
+    adapters = env.get('OPENWIZ_ADAPTERS', '')
+    path = Path(adapters, 'local/driver')
+    if not os.path.isabs(adapters) or not path.is_file() or not os.access(path, os.X_OK):
+        return None
+    result = run([str(path), 'version'], env)
+    try:
+        assert result is not None and result.returncode == 0
+        version = strict(result.stdout.decode('utf-8'))
+        assert version['driver'] == 'local' and 'start' in version['can']
+        return version
+    except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError):
+        return None
+
+
+def host_setting(env, repo):
+    """KN6 (#1371, OpenWiz #1498): the host the default branch's docs/agents/host.md names, or None for no file.
+
+    Records v1 section 6: exactly one `Host: <name>` line, the name a driver's folder
+    name. Swap for launch-fleet's `host.py which` (WizSkills #64) once it merges."""
+    result = run(['gh', 'api', '--include', 'repos/%s/contents/%s' % (repo, HOST_FILE),
+                  '-H', 'Accept: application/vnd.github.raw+json'], env)
+    if result is None:
+        raise Exit(1, 'Could not read the host setting (%s); %s' % (HOST_FILE, NOTHING))
+    head, _, body = result.stdout.decode('utf-8', 'replace').replace('\r\n', '\n').partition('\n\n')
+    status = re.match(r'HTTP/[0-9.]+ ([0-9]{3})', head)
+    if status and status[1] == '404':
+        return None
+    if result.returncode != 0 or not status or status[1] != '200':
+        raise Exit(1, 'Could not read the host setting (%s); %s' % (HOST_FILE, NOTHING))
+    lines = re.findall(r'(?m)^Host:[ \t]*(.*?)[ \t]*$', body)
+    if len(lines) != 1 or not re.fullmatch(r'[a-z0-9]+(-[a-z0-9]+)*', lines[0]) or len(lines[0]) > 40:
+        raise Exit(5, '%s needs exactly one `Host: <name>` line; fix it, or ask to change it; %s' % (HOST_FILE, NOTHING))
+    return lines[0]
+
+
+# --- Where agents run (#1358) ---------------------------------------------------
+
+def where(got):
+    """Check what the chosen place needs, print the walk-through for anything missing, and record it on --yes."""
+    state = State(got['--state'])
+    agents, env = got['--agents'], gh_env()
+    missing = []
+    login = run(['gh', 'api', 'user', '--jq', '.login'], env)
+    if login is None or login.returncode != 0 or not login.stdout.strip():
+        missing.append(('a GitHub sign-in', 'https://github.com/login',
+                        'Then run `gh auth login` yourself in a terminal on this machine.'))
+    harnesses = []
+    if agents == 'local':
+        harnesses = sorted(h for h, program in PROGRAMS.items() if shutil.which(program, path=env.get('PATH')))
+        if not harnesses:
+            missing.append(('Claude Code or Codex installed and signed in on this machine',
+                            'https://docs.anthropic.com/en/docs/claude-code/setup', None))
+    elif not shutil.which('room-cli', path=env.get('PATH')):
+        missing.append(('the Cloudroom app, signed in', 'https://cloudroom.dev', None))
+    if missing:
+        for what, link, then in missing:
+            print(teach('Where agents run', (what, link), which=1))
+            if then:
+                print(then)
+        raise Exit(5, 'Nothing recorded: run this again once the user says done.')
+    if agents == 'local' and local_driver(env) is None:
+        raise Exit(5, "This OpenWiz has no local driver to run agents on this machine (set OPENWIZ_ADAPTERS to "
+                      "OpenWiz's adapters folder, or update OpenWiz); choose Cloudroom, or stop; nothing recorded.")
+    if agents == 'local':
+        print('Agents run on this machine through OpenWiz\'s local driver, with %s you are signed into, while this '
+              'machine is awake. Their model use is billed by that harness, as it is today.' % ', '.join(harnesses))
+    else:
+        print('Agents run in Cloudroom, many at once. They use your Cloud Credits: unknown until measured. '
+              'Model-provider charges are separate.')
+    print('OpenWiz is free now.')
+    if not got.get('--yes'):
+        print("Nothing recorded. Ask where agents run; on the user's answer, run again with that --agents and --yes.")
+        return 12
+    if state.value.get('launch'):
+        raise Exit(5, 'This onboarding already launched its fleet; ask to change the host setting instead.')
+    state.value['host'] = {'agents': agents, 'harnesses': harnesses}
+    state.value.pop('setting', None)
+    if not state.save():
+        raise Exit(10, 'Could not save where agents run; nothing recorded.')
+    print('Recorded: agents run %s.' % ('on this machine' if agents == 'local' else 'in Cloudroom'))
+    return 0
 
 
 # --- The continuation from install and setup (#636) ----------------------
@@ -510,10 +648,118 @@ def create_repo(got):
                   'before any retry (run this again).' % name)
 
 
+# --- The host setting (records v1, section 6) --------------------------------
+
+def host_text():
+    return ('# Where agents run\n\nOpenWiz starts, wakes and stops this project\'s agents through the host named '
+            'below: a driver in OpenWiz\'s adapters/ folder. `local` is the machine the agents run on. To change '
+            'it, ask your agent to edit this one line.\n\nHost: local\n')
+
+
+def host_pull(repo, env):
+    """The host setting pull request's URL and state, or None when there is none; Exit when unreadable."""
+    result = run(['gh', 'pr', 'list', '--repo', repo, '--head', HOST_BRANCH, '--state', 'all',
+                  '--json', 'url,state'], env)
+    try:
+        assert result is not None and result.returncode == 0
+        pulls = strict(result.stdout.decode('utf-8'))
+        assert isinstance(pulls, list) and len(pulls) <= 1
+        return (pulls[0]['url'], pulls[0]['state']) if pulls else None
+    except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError):
+        raise Exit(6, 'Could not read whether the host setting pull request exists; run this again to read it.')
+
+
+def setting(got):
+    """Write where agents run to docs/agents/host.md, as one pull request the user merges, only on --yes."""
+    state = State(got['--state'])
+    host = state.value.get('host')
+    repo = (state.value.get('setup') or {}).get('repository')
+    if not host or not repo:
+        raise Exit(5, 'Ask where agents run (where) and connect the repository (continue) first; nothing written.')
+    env = repository(repo)
+    want = 'local' if host['agents'] == 'local' else None
+    now = host_setting(env, repo)
+    if now == want:
+        state.value['setting'] = {'host': want, 'state': 'merged'}
+        if not state.save():
+            raise Exit(10, 'Could not save the host setting; nothing written.')
+        print('The host setting already matches: %s.' % (
+            'Host: local, on the default branch' if want else 'no host file, so Cloudroom, the default'))
+        return 0
+    if now is not None:
+        raise Exit(5, '%s already says Host: %s on the default branch; OpenWiz never overwrites it. Ask the user '
+                      'whether to change that line, or answer where agents run again; nothing written.' % (HOST_FILE, now))
+    recorded = state.value.get('setting') or {}
+    if recorded.get('state') in ('pending', 'opened'):
+        found = host_pull(repo, env)
+        if found:
+            state.value['setting'] = {'host': 'local', 'state': 'opened', 'pull': found[0]}
+            state.save()
+            print('The host setting pull request is open: %s. The user merges it; launch waits for it.' % found[0])
+            return 0
+    print('Effect: write one file, %s, holding `Host: local` and a line on how to change it, on a new branch %s of '
+          '%s, and open one pull request for you to merge. Nothing else is written.' % (HOST_FILE, HOST_BRANCH, repo))
+    if not got.get('--yes'):
+        print("Nothing written. On the user's yes to exactly this, run again with --yes.")
+        return 12
+    state.value['setting'] = {'host': 'local', 'state': 'pending'}
+    if not state.save():
+        raise Exit(10, 'Could not save the host setting first; nothing written.')
+    base = run(['gh', 'api', 'repos/%s' % repo, '--jq', '.default_branch'], env)
+    branch = base.stdout.decode('utf-8', 'replace').strip() if base is not None and base.returncode == 0 else ''
+    if not branch:
+        raise Exit(1, "Could not read the default branch; nothing written.")
+    tip = run(['gh', 'api', 'repos/%s/git/ref/heads/%s' % (repo, branch), '--jq', '.object.sha'], env)
+    sha = tip.stdout.decode('utf-8', 'replace').strip() if tip is not None and tip.returncode == 0 else ''
+    if not re.fullmatch(r'[0-9a-f]{40}', sha):
+        raise Exit(1, "Could not read the default branch's tip; nothing written.")
+    run(['gh', 'api', '-X', 'POST', 'repos/%s/git/refs' % repo, '-f', 'ref=refs/heads/' + HOST_BRANCH,
+         '-f', 'sha=' + sha], env)
+    content = base64.b64encode(host_text().encode()).decode()
+    have = run(['gh', 'api', '--include', 'repos/%s/contents/%s?ref=%s' % (repo, HOST_FILE, HOST_BRANCH),
+                '-H', 'Accept: application/vnd.github.raw+json'], env)
+    if have is None or not have.stdout.decode('utf-8', 'replace').replace('\r\n', '\n').endswith(host_text()):
+        run(['gh', 'api', '-X', 'PUT', 'repos/%s/contents/%s' % (repo, HOST_FILE), '-f',
+             'message=Where agents run: Host: local', '-f', 'content=' + content, '-f', 'branch=' + HOST_BRANCH], env)
+    if host_pull(repo, env) is None:
+        run(['gh', 'pr', 'create', '--repo', repo, '--head', HOST_BRANCH, '--base', branch, '--title',
+             'Where agents run: this machine', '--body', 'Adds %s with `Host: local`: OpenWiz starts this '
+             "project's agents through its local driver, on the machine they run on (records v1, section 6). "
+             'Merge it to start the first fleet there.' % HOST_FILE], env)
+    found = host_pull(repo, env)
+    if found is None:
+        raise Exit(6, 'Whether the host setting pull request was opened is uncertain; run this again to read it '
+                      'before anything else.')
+    state.value['setting'] = {'host': 'local', 'state': 'opened', 'pull': found[0]}
+    if not state.save():
+        raise Exit(6, 'The host setting pull request is open (%s), but that could not be saved.' % found[0])
+    print('Opened %s. The user merges it; launch waits for it on the default branch.' % found[0])
+    return 0
+
+
+def grill(got):
+    """Record the user's yes to the grill, given in this chat and saved privately as a comment."""
+    state = State(got['--state'])
+    if state.value.get('launch') and state.value.get('grill') != got['--confirmed']:
+        raise Exit(5, 'This onboarding already launched from its grill; it plans one first fleet.')
+    state.value['grill'] = got['--confirmed']
+    if not state.save():
+        raise Exit(10, "Could not save the grill's confirmation; nothing recorded.")
+    print("Recorded: the user confirmed the grill in chat. Next: to-spec, which runs to-tickets; the plan approves "
+          'itself by its checks, and no plan approval is asked.')
+    return 0
+
+
 # --- Choices ----------------------------------------------------------------
 
 def choose(got):
     state = State(got['--state'])
+    host = state.value.get('host')
+    if not host:
+        raise Exit(5, 'Ask where agents run first (where); nothing recorded.')
+    if got.get('--agents', host['agents']) != host['agents']:
+        raise Exit(5, 'The user said agents run %s; answer where again to change it; nothing recorded.' % (
+            'on this machine' if host['agents'] == 'local' else 'in Cloudroom'))
     if got.get('--from-setup'):
         carried = state.value.get('setup')
         if not carried:
@@ -532,10 +778,12 @@ def choose(got):
         raise Exit(5, 'That harness, model and effort are not among the offered options; nothing recorded.')
     if settings['harness'] not in FAMILY:
         raise Exit(5, "The fleet's review rules cover Claude Code and Codex builders only; nothing recorded.")
-    state.value['choices'] = dict(settings, agents=got['--agents'])
+    if host['agents'] == 'local' and settings['harness'] not in host['harnesses']:
+        raise Exit(5, '%s is not on this machine, so its agents cannot run here; nothing recorded.' % settings['harness'])
+    state.value['choices'] = dict(settings, agents=host['agents'])
     if not state.save():
         raise Exit(10, 'Could not save the choices; nothing recorded.')
-    where = 'in the Cloud' if got['--agents'] == 'cloud' else 'on this computer (Local)'
+    where = 'in Cloudroom' if host['agents'] == 'cloud' else 'on this machine'
     print('Recorded: builders use %s %s %s%s, and run %s.' % (
         settings['harness'], settings['model'], settings['effort'],
         ' (as prepared in setup)' if got.get('--from-setup') else '', where))
@@ -680,6 +928,36 @@ def brief(spec, repo):
 
 def fleet_recorded(spec, env):
     """Only configured record authors settle a start; unread input stays unknown."""
+    bodies = record_comments(spec, env)
+    if bodies is None:
+        return None
+    return any(body.split('\n')[0].strip() == FLEET_RECORD + str(spec) for body in bodies)
+
+
+def plan_approved(spec, env, confirmed):
+    """Exit unless the spec's latest plan approval is to-tickets' machine plan approval of this grill.
+
+    Read from record authors only; launch-fleet's frontier then checks it is current."""
+    bodies = record_comments(spec, env)
+    if bodies is None:
+        raise Exit(1, "Could not read the spec's plan approval; " + NOTHING)
+    latest = None
+    for body in bodies:
+        lines = [line.strip() for line in body.split('\n') if line.strip()]
+        if lines and (lines[0].startswith('**Plan graph approved by') or lines[0].startswith('**Machine plan approval, ')):
+            latest = lines
+    if latest is None or not re.fullmatch(r'\*\*Machine plan approval, [0-9]{4}-[0-9]{2}-[0-9]{2}, revision '
+                                          r'[1-9][0-9]*:\*\* links, relies, sizes, width and owned paths passed\.',
+                                          latest[0]):
+        raise Exit(5, "Spec #%d's latest plan approval is not to-tickets' machine plan approval: run to-tickets on "
+                      'it; no plan approval is asked; %s' % (spec, NOTHING))
+    if len(latest) < 2 or latest[1] != 'Grill confirmed: ' + confirmed:
+        raise Exit(5, "Spec #%d's machine plan approval is not for the grill the user confirmed in this chat; %s"
+                   % (spec, NOTHING))
+
+
+def record_comments(spec, env):
+    """The spec's comment bodies by configured record authors, or None when unread."""
     settings = run(['gh', 'api', 'repos/%s/contents/docs/agents/fleet.md' % env['GH_REPO'],
                     '-H', 'Accept: application/vnd.github.raw+json'], env)
     if settings is None or settings.returncode != 0:
@@ -717,8 +995,7 @@ def fleet_recorded(spec, env):
             return None
     except (UnicodeDecodeError, ValueError):
         return None
-    return any(c['author'] is not None and c['author'].lower() in authors
-               and c['body'].split('\n')[0].strip() == FLEET_RECORD + str(spec) for c in comments)
+    return [c['body'] for c in comments if c['author'] is not None and c['author'].lower() in authors]
 
 
 def launch(got):
@@ -730,9 +1007,14 @@ def launch(got):
     carried = state.value.get('setup')
     if not carried:
         raise Exit(5, 'No verified setup was carried into this onboarding (run continue first); ' + NOTHING)
+    host, confirmed = state.value.get('host'), state.value.get('grill')
+    if not host:
+        raise Exit(5, 'The user has not said where agents run (where); ' + NOTHING)
+    if not confirmed:
+        raise Exit(5, 'The user has not confirmed the grill in this chat (grill --confirmed); ' + NOTHING)
     choices = state.value.get('choices')
-    if not choices:
-        raise Exit(5, 'The harness, model, effort and agent location are not chosen yet; ' + NOTHING)
+    if not choices or choices.get('agents') != host['agents']:
+        raise Exit(5, 'The harness, model and effort are not chosen for where agents run yet (choose); ' + NOTHING)
     env = repository(state.value.get('repo'))
     previous = state.value.get('launch')
     if previous and previous['spec'] == spec and previous['state'] != 'refused':
@@ -753,61 +1035,39 @@ def launch(got):
     if any(current[k] != carried.get(k) for k in current):
         withdraw(state)
         raise Exit(5, 'Setup changed since it was carried; run continue again; ' + NOTHING)
-    if choices['agents'] != 'cloud':
-        raise Exit(5, "Local fleet agents are not available yet: launch-fleet starts the fleet thread and its "
-                      'builders in the Cloud. Choose Cloud, or stop here; ' + NOTHING)
+    local = host['agents'] == 'local'
+    named = host_setting(env, state.value['repo'])
+    if named != ('local' if local else None):
+        raise Exit(5, 'The host setting on the default branch says %s, but the user chose %s: %s; %s' % (
+            'Host: ' + named if named else 'no host', 'this machine' if local else 'Cloudroom',
+            'merge the host setting pull request first (setting)' if local and named is None else
+            'answer where agents run again, or ask to change that line', NOTHING))
+    if local and local_driver(env) is None:
+        raise Exit(5, "This OpenWiz's local driver no longer answers, so no agent can run on this machine; " + NOTHING)
+    plan_approved(spec, env, confirmed)
     ready = frontier(env)
     title, members = spec_facts(spec, env)
     starts = sorted(n for n in ready if n in members)
     if not starts:
-        raise Exit(5, 'No approved ticket of spec #%d is ready to start: the plan is unapproved, changed since its '
-                      'approval, or still blocked; %s' % (spec, NOTHING))
+        raise Exit(5, 'No approved ticket of spec #%d is ready to start: the plan changed since its checks passed, '
+                      'or is still blocked; %s' % (spec, NOTHING))
     builder, reviewer = review(choices, fleet_rules(env, state.value['repo']))
-    effects = {'repo': state.value['repo'], 'spec': spec, 'project': carried['project'], 'title': title,
-               'fleet_thread': builder, 'builder': builder, 'reviewer': reviewer,
-               'tickets': [[n, ready[n]] for n in starts]}
-    digest = hashlib.sha256(json.dumps(effects, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    if got.get('--yes'):
-        shown = state.value.get('preview') or {}
-        if got['--confirm'] != digest or shown.get('effects') != digest or shown.get('spec') != spec:
-            raise Exit(5, 'The effects changed since the preview the user said yes to (or it was never shown); '
-                          'preview again and ask again; ' + NOTHING)
-    agents = '%s %s %s' % (builder['harness'], builder['model'], builder['effort'])
-    print('Ready to start the first fleet for spec #%d, through launch-fleet, in the Cloud (CloudRoom project %s):'
-          % (spec, carried['project']))
-    print('1 fleet thread, %s. It makes its own loop, which checks spec #%d every 10 minutes '
-          "(launch-fleet's fleet.sh spec %d), and records itself on the spec." % (agents, spec, spec))
-    print('Then %d builders, each %s, on the approved frontier:' % (len(starts), agents))
-    for ticket in starts:
-        print('#%d %s' % (ticket, ready[ticket]))
-    print('Each pull request is reviewed by %s %s %s, from the other model family.' % (
-        reviewer['harness'], reviewer['model'], reviewer['effort']))
-    print('Cloud Credits: unknown until measured. Model-provider charges are separate.')
-    if not got.get('--yes'):
-        state.value['preview'] = {'spec': spec, 'effects': digest}
-        if not state.save():
-            raise Exit(10, 'Could not save the preview; ' + NOTHING)
-        print('Confirmation: %s' % digest)
-        print('Nothing started. Show this to the user; on their yes to exactly these effects, run again with '
-              '--yes --confirm %s.' % digest)
-        return 12
-    state.value['launch'] = {'spec': spec, 'state': 'pending', 'effects': digest, 'tickets': starts}
+    state.value['launch'] = {'spec': spec, 'state': 'pending', 'tickets': starts}
     if not state.save():
         raise Exit(10, 'Could not save the launch record; ' + NOTHING)
+    agents = '%s %s %s' % (builder['harness'], builder['model'], builder['effort'])
     argv = ['room-cli', 'thread', 'spawn', '--parent-self', '--project', carried['project'],
-            '--machine', 'cloud', '--provider', builder['harness'], '--model', builder['model'],
+            '--machine', 'local' if local else 'cloud', '--provider', builder['harness'], '--model', builder['model'],
             '--reasoning-level', builder['effort'], '--title', 'Fleet #%d: %s' % (spec, title),
             '--prompt', brief(spec, state.value['repo'])]
     try:
         result = subprocess.run(argv, capture_output=True, timeout=600, env=env)
     except (FileNotFoundError, PermissionError):
-        # Review R2: room-cli never ran, so nothing was dispatched. A fresh
-        # preview and yes are needed before another try.
+        # Review R2: room-cli never ran, so nothing was dispatched.
         state.value['launch']['state'] = 'refused'
-        state.value.pop('preview', None)
         saved = state.save()
         raise Exit(5 if saved else 6, 'room-cli could not be run, so no fleet thread was dispatched; nothing started. '
-                   'Fix the CloudRoom installation, then preview again and ask again.' if saved else
+                   'Fix the Cloudroom installation, then run launch again.' if saved else
                    'room-cli could not be run, but that could not be saved; the start stays pending until read.')
     except (OSError, subprocess.TimeoutExpired):
         result = None
@@ -816,13 +1076,21 @@ def launch(got):
     if not state.save():
         print('Could not save the outcome; the start stays uncertain and is never retried.')
         ended = 'uncertain'
-    if ended == 'started':
-        print("Started spec #%d's fleet thread. Its first wake makes its loop, records itself and starts the "
-              'builders.' % spec)
-        return 0
-    print('Whether the fleet thread started is uncertain. Never start it again by hand: run this command again '
-          "to read the spec's fleet record, or look for the thread in CloudRoom.")
-    return 6
+    if ended != 'started':
+        print('Whether the fleet thread started is uncertain. Never start it again by hand: run this command again '
+              "to read the spec's fleet record, or look for the thread in Cloudroom.")
+        return 6
+    print("Started spec #%d's fleet thread %s (%s), through launch-fleet. Its loop checks the spec every 10 minutes, "
+          'records itself on the spec and starts a builder (%s) for each of:' % (
+              spec, 'on this machine' if local else 'in Cloudroom', agents, agents))
+    for ticket in starts:
+        print('#%d %s' % (ticket, ready[ticket]))
+    print('Each pull request is reviewed by %s %s %s, from the other model family.' % (
+        reviewer['harness'], reviewer['model'], reviewer['effort']))
+    if not local:
+        print('Cloud Credits: unknown until measured. Model-provider charges are separate.')
+    print(teach('The fleet starting', (str(len(starts)),)))
+    return 0
 
 
 def record_line(spec, recorded):
@@ -867,6 +1135,35 @@ def progress(spec, program, env):
     return 0
 
 
+def first_merge(got):
+    """The first merge, read back from GitHub: the teacher's merged line, then the closing offer."""
+    state = State(got['--state'])
+    spec, launched = state.value.get('spec'), state.value.get('launch') or {}
+    if not spec or launched.get('spec') != spec or launched.get('state') != 'started':
+        raise Exit(5, "This onboarding's fleet has not started; there is no first merge to read.")
+    env = repository(state.value.get('repo'))
+    pull = gh_json(['pr', 'view', got['--pr'], '--repo', state.value['repo'], '--json',
+                    'number,url,title,state,mergedAt,closingIssuesReferences'], env, 'the pull request')
+    try:
+        closes = {issue['number'] for issue in pull['closingIssuesReferences']}
+        assert pull['number'] == int(got['--pr']) and isinstance(pull['url'], str) and isinstance(pull['title'], str)
+        merged = pull['state'] == 'MERGED' and isinstance(pull['mergedAt'], str)
+    except (KeyError, TypeError, AssertionError):
+        raise Exit(1, 'The pull request did not read back completely; no merge counted.')
+    if not merged:
+        raise Exit(5, '%s has not merged; a merge counts only when GitHub reads it back.' % pull['url'])
+    _, members = spec_facts(spec, env)
+    if not closes & members:
+        raise Exit(5, "%s closes no ticket of spec #%d, so it is not this fleet's merge." % (pull['url'], spec))
+    state.value['merge'] = pull['url']
+    if not state.save():
+        raise Exit(10, 'Could not save the first merge.')
+    repo = state.value['repo']
+    print(teach('Merged', (pull['url'], ' '.join(pull['title'].split()), repo)))
+    print(teach('The closing offer', (repo.split('/')[1],)))
+    return 0
+
+
 def resume(got):
     """The first unfinished first-fleet step, from the saved state alone."""
     state = State.__new__(State)  # read only: no lock, nothing opened for writing
@@ -877,24 +1174,37 @@ def resume(got):
     created, launched = value.get('created') or {}, value.get('launch') or {}
     demo = created.get('repo') if created.get('state') != 'absent' else None  # an absent create made nothing
     repo, spec = value.get('repo') or demo, value.get('spec')
-    if created.get('state') in ('pending', 'uncertain'):
+    host, setting_ = value.get('host'), value.get('setting') or {}
+    if not host:
+        step = ('where', "Say the teacher's opening lines, then ask where agents run and run where --agents "
+                'local|cloud --yes on the answer.')
+    elif created.get('state') in ('pending', 'uncertain'):
         step = ('project', 'Creating %s is %s: run create-repo --repo %s --yes again; it reads before it creates.'
                 % (created['repo'], created['state'], created['repo']))
     elif not repo:
-        step = ('project', 'Offer the ideas, then choose or create its one repository.')
+        step = ('project', 'Offer the three choices, with ideas.md for anyone without an idea, then choose or '
+                'create its one repository.')
     elif not value.get('setup'):
         step = ('connect', 'Connect %s with the installed tools, then run continue.' % repo)
+    elif setting_.get('state') not in ('opened', 'merged'):
+        step = ('setting', 'Run setting%s.' % (' again: its pull request is uncertain' if setting_ else ''))
+    elif not value.get('grill'):
+        step = ('grill', "Run the short grill; on the user's yes in chat, run grill --confirmed <its comment URL>.")
     elif not value.get('choices'):
-        step = ('grill', 'Run the grill unless its summary is already confirmed; then choose the agents.')
+        step = ('agents', 'Run choose --from-setup.')
     elif not spec:
-        step = ('plan', 'Confirm the spec, approve the exact plan, then run spec --spec <N> --repo %s.' % repo)
+        step = ('plan', 'Run to-spec, which runs to-tickets; no plan approval is asked. Then run spec --spec <N> '
+                '--repo %s.' % repo)
     elif launched.get('spec') == spec and launched.get('state') in ('pending', 'uncertain'):
         step = ('launch', 'The start of spec #%d is uncertain: run launch --spec %d to read its fleet record; '
                 'never start it again.' % (spec, spec))
+    elif launched.get('spec') == spec and launched.get('state') == 'started' and value.get('merge'):
+        step = ('offer', 'Say the closing offer, as first-merge printed it.')
     elif launched.get('spec') == spec and launched.get('state') == 'started':
-        step = ('watch', 'Run progress --spec %d.' % spec)
+        step = ('watch', "Run progress --spec %d, say the teacher's line for each moment, and run first-merge "
+                '--pr <N> when a pull request merges.' % spec)
     else:
-        step = ('launch', 'Preview with launch --spec %d and ask for a yes to exactly that.' % spec)
+        step = ('launch', 'Run launch --spec %d; it asks nothing.' % spec)
     print('Next: %s.' % step[0])
     if repo:
         print('Repository: %s.' % repo)
@@ -905,6 +1215,14 @@ def resume(got):
 def main(argv):
     try:
         command, got = parse(argv)
+        if command == 'where':
+            return where(got)
+        if command == 'setting':
+            return setting(got)
+        if command == 'grill':
+            return grill(got)
+        if command == 'first-merge':
+            return first_merge(got)
         if command == 'continue':
             return carry_on(got)
         if command == 'decisions':

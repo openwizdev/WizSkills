@@ -215,9 +215,10 @@ class Check(unittest.TestCase):
         self.assertEqual(code, 5, out)
         self.assertIn('fleet.md: no ## GitHub identity section', out)
 
-    def test_setup_and_the_readers_refuse_the_same_settings(self):
-        # catches: setup and the review or launch reader disagreeing on one
-        # file, so setup verifies settings the fleet then refuses (#1500, #1520).
+    def test_setup_never_verifies_settings_the_readers_refuse(self):
+        # catches: setup verifying a file the real review or launch reader then
+        # refuses (#1500, #1520). Setup may be stricter: on a tab-separated flag
+        # beside an old note, launch reads the old model, so setup refuses (R2).
         review = reader(SKILLS / 'review-ticket/scripts/review.py')
         launch = reader(SKILLS / 'install/scripts/first_fleet.py')
         row = '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |'
@@ -247,7 +248,7 @@ class Check(unittest.TestCase):
             tables = all(launch.agent(sections[t]) for t in ('Builder', 'Builder for small tickets',
                                                              'Reviewer for Claude-built', 'Reviewer for GPT-built'))
             code, out = self.check(self.project(**{'fleet.md': text}))
-            self.assertEqual(code == 0, authors and tables, text + '\n' + out)
+            self.assertTrue(code != 0 or (authors and tables), text + '\n' + out)
 
     def test_usage_errors_exit_2(self):
         # catches: a mistyped command read as a verified project.

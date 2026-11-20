@@ -5,8 +5,8 @@
 
 Reads the four files in DIR/docs/agents/ (default: the current folder) and
 names each missing or unsafe setting: a missing file or section, a builder or
-reviewer table without each of its three flags exactly once as one token, a
-template placeholder, a reviewer from the builder's model family, not exactly
+reviewer table or Fixer family row without each of its three flags exactly
+once as one token, a template placeholder, a reviewer from the builder's model family, not exactly
 one valid Record authors row, or a triage role without exactly one label. FILE is the saved output of
 `gh label list --limit 500 --json name`; with it, each mapped label must exist
 in the tracker exactly once. It writes nothing and runs nothing.
@@ -49,19 +49,44 @@ def read(path, problems):
         return None
 
 
-def sections(text):
+def sections(text, exact=False):
+    """Each heading's body; a repeated heading adds to it, as the fleet's readers read it.
+
+    Launch strips the title; review (exact) strips only the whole line, so
+    `##  GitHub identity` is not its section.
+    """
     found = {}
     for part in re.split(r'^## ', text, flags=re.M)[1:]:
         title, _, body = part.partition('\n')
-        # A repeated heading adds to the same section, as the fleet's readers read it.
-        found[title.strip()] = found.get(title.strip(), '') + body
+        title = title.rstrip() if exact else title.strip()
+        found[title] = found.get(title, '') + body
     return found
 
 
+def token(flag):
+    return r'(?<![\w-])--%s(?![\w-])' % flag
+
+
+def fixer(body, problems):
+    """Each Fixer family row carries each flag exactly once, as `--flag value`."""
+    rows = [line for line in body.splitlines() if line.startswith('|')
+            and not re.fullmatch(r'\|[\s|:-]*', line)][1:]
+    for row in rows:
+        family = row.split('|')[1].strip()
+        for flag in FLAGS:
+            found = list(re.finditer(token(flag), row))
+            if not found:
+                problems.append('fleet.md: Fixer: %s: no --%s' % (family, flag))
+            elif len(found) > 1:
+                problems.append('fleet.md: Fixer: %s: --%s appears %d times' % (family, flag, len(found)))
+            elif not re.match(r' (?!--)[^\s`|]+(?=[ `|])', row[found[0].end():]):
+                problems.append('fleet.md: Fixer: %s: malformed --%s' % (family, flag))
+
+
 def fleet(text, problems):
-    found = sections(text)
+    found, exact = sections(text), sections(text, exact=True)
     for title in SECTIONS:
-        if title not in found:
+        if title not in (exact if title == 'GitHub identity' else found):
             problems.append('fleet.md: no ## %s section' % title)
     for title in TABLES:
         body = found.get(title)
@@ -69,25 +94,28 @@ def fleet(text, problems):
             continue
         values = {}
         for flag in FLAGS:
-            # Launch takes each flag exactly once, as one backticked token.
-            found_flags = re.findall(r'`--%s(?: ([^`]*))?`' % flag, body)
-            if not found_flags:
+            # Launch takes each flag exactly once, as one backticked `--flag value`:
+            # count every backticked mention first, whatever follows it.
+            spans = [span for span in re.findall(r'`([^`]*)`', body) for _ in re.finditer(token(flag), span)]
+            if not spans:
                 problems.append('fleet.md: %s: no --%s' % (title, flag))
-            elif len(found_flags) > 1:
-                problems.append('fleet.md: %s: --%s appears %d times' % (title, flag, len(found_flags)))
-            elif re.search(r'<[^>]*>', found_flags[0]):
-                problems.append('fleet.md: %s: unfilled %s' % (title, found_flags[0]))
-            elif not re.fullmatch(r'\S+', found_flags[0]):
-                problems.append('fleet.md: %s: malformed `--%s %s`' % (title, flag, found_flags[0]))
+            elif len(spans) > 1:
+                problems.append('fleet.md: %s: --%s appears %d times' % (title, flag, len(spans)))
+            elif re.search(r'<[^>]*>', spans[0]):
+                problems.append('fleet.md: %s: unfilled %s' % (title, spans[0].partition(' ')[2]))
+            elif not re.fullmatch(r'--%s [^\s`]+' % flag, spans[0]):
+                problems.append('fleet.md: %s: malformed `%s`' % (title, spans[0]))
             else:
-                values[flag] = found_flags[0]
+                values[flag] = spans[0].partition(' ')[2]
         provider = values.get('provider')
         if title in REVIEWS and provider:
             if provider not in FAMILY:
                 problems.append('fleet.md: %s: %s has no known model family' % (title, provider))
             elif FAMILY[provider] == REVIEWS[title]:
                 problems.append('fleet.md: %s: %s is not from another model family' % (title, provider))
-    identity = found.get('GitHub identity')
+    if 'Fixer' in found:
+        fixer(found['Fixer'], problems)
+    identity = exact.get('GitHub identity')
     if identity is not None:
         rows = re.findall(r'^\| *Record authors *\|.*$', identity, re.M)
         cells = rows[0].split('|') if len(rows) == 1 else []

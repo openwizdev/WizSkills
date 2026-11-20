@@ -108,23 +108,44 @@ def plan(case):
             "brief": {"title": title, "body": body, "labels": ["ready-for-agent"], "milestone": version}}
 
 
+CASE_KEYS = {"report", "criteria", "version", "brief"}
+REPORT_KEYS = {"number", "author", "pull_request", "title", "body", "labels", "milestone", "comments"}
+
+
+def unique(pairs):
+    keys = [key for key, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise Unreadable("a key appears twice")
+    return dict(pairs)
+
+
 def read(path):
+    """The case, in exactly its shape: known keys, each once, each of its type."""
     try:
         raw = sys.stdin.read() if path == "-" else open(path, encoding="utf-8").read()
-        case = json.loads(raw)
+        case = json.loads(raw, object_pairs_hook=unique)
     except (OSError, UnicodeDecodeError, ValueError) as err:
         raise Unreadable(f"cannot read the case: {err.__class__.__name__}")
-    if not isinstance(case, dict) or not isinstance(case.get("report"), dict) or not isinstance(case.get("criteria"), dict):
-        raise Unreadable("the case needs a report object and a criteria object")
-    report = case["report"]
+    if not isinstance(case, dict) or not CASE_KEYS >= set(case) or not {"report", "criteria"} <= set(case):
+        raise Unreadable("the case holds a report, criteria and, for a fleet, version and brief, nothing else")
+    report, criteria, brief = case["report"], case["criteria"], case.get("brief")
+    if not isinstance(report, dict) or not REPORT_KEYS >= set(report):
+        raise Unreadable("the report holds only " + ", ".join(sorted(REPORT_KEYS)))
     shapes = {"number": int, "title": str, "body": str, "labels": list}
-    if any(not isinstance(report.get(key), kind) or isinstance(report.get(key), bool) for key, kind in shapes.items()):
+    if any(type(report.get(key)) is not kind for key, kind in shapes.items()):
         raise Unreadable("the report needs number, title, body and labels")
     if not all(isinstance(label, str) for label in report["labels"]):
         raise Unreadable("the report's labels must be names")
+    if type(report.get("pull_request", False)) is not bool:
+        raise Unreadable("the report's pull_request must be true or false")
     if report.get("milestone") is not None and not isinstance(report["milestone"], str):
         raise Unreadable("the report's milestone must be a title or null")
     report.setdefault("milestone", None)
+    if not isinstance(criteria, dict) or not set(CODES) >= set(criteria) or any(
+            value is not None and type(value) is not bool for value in criteria.values()):
+        raise Unreadable("criteria holds only the six codes, each true, false or null")
+    if brief is not None and (not isinstance(brief, dict) or set(brief) != {"title", "body"}):
+        raise Unreadable("the brief holds exactly a title and a body")
     return case
 
 

@@ -178,7 +178,7 @@ class FeedbackPath(unittest.TestCase):
         # catches: a report that fails any one code (or one triage can't judge)
         # going to a fleet anyway.
         for code in ALL_CLEAR:
-            for value in (False, None, "yes"):
+            for value in (False, None):
                 with self.subTest(code=code, value=value):
                     criteria = dict(ALL_CLEAR, **{code: value})
                     self.assert_held(case(criteria=criteria), code)
@@ -250,7 +250,8 @@ class FeedbackPath(unittest.TestCase):
         # catches: a malformed case read as a decision: a repeated key silently
         # replaced, an unknown code or field ignored, a string "false" read as true.
         good = json.dumps(case())
-        bad = [json.loads(good) for _ in range(6)]
+        bad = [json.loads(good) for _ in range(7)]
+        bad[6]["criteria"]["small"] = "yes"
         bad[0]["report"]["pull_request"] = "false"
         bad[1]["criteria"]["approved"] = True
         bad[2]["extra"] = 1

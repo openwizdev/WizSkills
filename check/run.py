@@ -27,6 +27,7 @@ SUITES = {
     'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py']],
     'triage': [['python3', '-I', 'skills/triage/test/test_find_work.py'],
                ['python3', '-I', 'skills/triage/test/test_public_records.py']],
+    'feedback': [['python3', '-I', 'skills/feedback/test/test_feedback.py']],
     'install': [['python3', '-I', 'skills/install/tests/test_first_fleet.py'],
                 ['python3', '-I', 'skills/install/tests/test_doctor.py']],
     'huntr': [['sh', 'skills/huntr/scripts/test.sh']],
@@ -78,6 +79,7 @@ SUITES = {
 # SKILL.md carries exactly, on a line of its own, instead of his notice.
 ORIGINAL = "**Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills."
 SOURCE_LINES = {
+    'feedback': ORIGINAL,
     'hill-climb': ORIGINAL,
     'huntr': ORIGINAL,
     'image': ORIGINAL,

@@ -36,6 +36,23 @@ read it back, and on a resume confirm any uncertain write before retrying. For
 an already approved plan, use [the hold-first procedure](../to-tickets/changes.md)
 before changing the spec.
 
+Every spec carries its two checkpoint answers
+([checkpoints.v1](../../contracts/checkpoints.v1.md)), filled from the grill and
+confirmed with the spec, in this section:
+
+```text
+## Checkpoints
+
+- One-way door: yes
+- User-visible: no
+```
+
+Early only (`yes`, `no`) is the default. Write `User-visible: yes` when users
+will see the change, `yes, a release` when the spec publishes a release, and
+`One-way door: no` only when the grill settled that it can be undone. Reasons
+go in other sections, never on these lines. to-tickets' approval check refuses
+a new spec without both answers.
+
 ## 3. Cut the plan
 
 Run [to-tickets](../to-tickets/SKILL.md) on the spec now, with the grill

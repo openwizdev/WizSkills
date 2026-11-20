@@ -7,7 +7,8 @@
 # fingerprint currentness;
 # revision.sh and launch-fleet retain those checks unchanged.
 # Usage: sh skills/to-tickets/scripts/check-approval.sh <spec issue number>
-# Exit 0: valid table; 1: invalid table or unreadable graph; 2: bad arguments.
+# Exit 0: valid table and checkpoint answers; 1: invalid table, invalid or
+# missing answers, or an unreadable graph; 2: bad arguments.
 set -u
 spec=${1:-}
 case $spec in
@@ -65,7 +66,7 @@ awk '/^## /{on = ($0 == "## GitHub identity")} on && /^[|] *Record authors *[|]/
     | [scan("`([^`]*)`") | .[0] | ascii_downcase]' "$work/authors.txt" > "$work/authors.json" 2> /dev/null ||
   fail 'docs/agents/fleet.md names no record authors (its "## GitHub identity" table'"'"'s "Record authors" row)'
 
-gh issue view "$spec" --json subIssues > "$work/graph" || fail "cannot read spec #$spec's tickets"
+gh issue view "$spec" --json body,createdAt,subIssues > "$work/graph" || fail "cannot read spec #$spec's tickets"
 # gh may cap a connection. Never treat a partial graph as a complete row set.
 jq -es '
   def num: type == "number" and . > 0 and . == floor;
@@ -163,4 +164,61 @@ jq -er --arg records "$private_records" --argjson private "$private" --slurpfile
   cat "$work/error" >&2
   fail "spec #$spec's posted approval table is invalid; correct it before labelling or handoff"
 }
+# The spec's two checkpoint answers, read with the forms block of
+# contracts/checkpoints.v1.md. A spec created before the cutoff and without
+# the section was planned before checkpoints existed: it reads as early only.
+checkpoints_since=2026-11-21T00:00:00Z
+here=$(cd -P "$(dirname "$0")" && pwd -P) || fail 'cannot find this script'
+awk '/^```checkpoints-v1$/ {n++; on = 1; next} on && /^```$/ {on = 0; next} on {print}
+     END {if (n != 1) exit 1}' "$here/../../../contracts/checkpoints.v1.md" > "$work/forms-raw" 2> /dev/null &&
+  jq -es 'if length == 1 and (.[0] | type == "object")
+       and all(.[0] | (.section, .section_like, .setext_text, .setext_underline, .section_end,
+                       .fence, .one_way_door, .user_visible); type == "string")
+    then .[0] else error("bad forms") end' "$work/forms-raw" > "$work/forms.json" 2> /dev/null ||
+  fail 'cannot read the checkpoint forms from contracts/checkpoints.v1.md'
+reading=$(jq -esr --slurpfile forms "$work/forms.json" --arg since "$checkpoints_since" '
+  $forms[0] as $f
+  | def whole($form): test("\\A(?:" + $form + ")\\z");
+    def fence: capture("\\A {0,3}(?<f>`+|~+)").f;
+  .[0]
+  | if (.body | type) == "string"
+       and (.createdAt | type == "string" and test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z"))
+    then . else error("unreadable spec") end
+  | (.createdAt >= $since) as $new
+  | (.body | gsub("\r\n"; "\n") | gsub("\r"; "\n") | split("\n")) as $lines
+  | ($lines | length) as $n
+  | (reduce $lines[] as $line ({open: null, inside: []};
+      if .open == null then
+        if ($line | whole($f.fence)) then .open = ($line | fence) | .inside += [true]
+        else .inside += [false] end
+      else
+        .inside += [true]
+        | if ($line | test("\\A {0,3}(`+|~+)[ \\t]*\\z"))
+             and ($line | fence) as $close
+             | ($close[0:1] == .open[0:1] and ($close | length) >= (.open | length))
+          then .open = null else . end
+      end) | .inside) as $inside
+  | [range(0; $n) | select($inside[.] | not)] as $outside
+  | if any($outside[]; . as $i | $lines[$i] as $line
+        | (($line | whole($f.section_like)) and ($line | whole($f.section) | not))
+          or (($line | whole($f.setext_text)) and $i + 1 < $n and ($inside[$i + 1] | not)
+              and ($lines[$i + 1] | whole($f.setext_underline))))
+    then "invalid section-heading"
+    else [$outside[] | select($lines[.] | whole($f.section))] as $starts
+    | if ($starts | length) == 0 then (if $new then "absent-new" else "absent" end)
+      elif ($starts | length) > 1 then "invalid section-repeated"
+      else (first($outside[] | select(. > $starts[0] and ($lines[.] | whole($f.section_end)))) // $n) as $stop
+      | [$lines[$starts[0] + 1:$stop][] | select(test("\\S"))] as $answers
+      | if ($answers | length) < 2 then "invalid answer-missing"
+        elif ($answers | length) == 2 and ($answers[0] | whole($f.one_way_door))
+             and ($answers[1] | whole($f.user_visible)) then "answered"
+        else "invalid answer-line" end
+      end
+    end
+' "$work/graph" 2> /dev/null) || fail "cannot read spec #$spec's body and creation time"
+case $reading in
+  answered | absent) ;;
+  absent-new) fail "spec #$spec has no ## Checkpoints section; a spec created on or after $checkpoints_since needs both answers (contracts/checkpoints.v1.md)" ;;
+  *) fail "spec #$spec's checkpoints are invalid (${reading#invalid }); write both answers as contracts/checkpoints.v1.md says" ;;
+esac
 echo "check-approval.sh: #$spec approval table is valid"

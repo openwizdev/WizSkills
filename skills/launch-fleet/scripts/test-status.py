@@ -1192,6 +1192,50 @@ class WakeRepair(Tracker):
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
         self.assertEqual(len(self.timeline()), 4)
 
+    def test_a_retry_after_a_put_back_whose_note_edit_failed_keeps_the_hold(self):
+        # catches: the next wake's retry taking the repair's put-back of a person's needs-info for
+        # its own new application and deleting the person's hold (#1700, #68 R3).
+        resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                 {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
+        # The repair's fleet note is the next comment; its final edit (to done) fails once.
+        self.world['fail_once'] = [f'PATCH repos/{REPO}/issues/comments/{self.world["next_id"] + 1}']
+        self.asking_on_12(race_label=[resume], race_delete=again)
+        code, report = self.wake()
+        self.assertEqual(code, 2, report)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        code, report = self.wake()
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual((code, len(report)), (1, 1), report)
+        self.assertRegex(report[0], r'^#12: needs-info ')
+        self.assertEqual(self.timeline()[-2:], [('unlabeled', BOT), ('labeled', BOT)])
+        self.assertEqual(self.wake(), (0, []))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
+    def test_with_one_login_a_needs_info_from_before_this_wake_is_never_deleted(self):
+        # catches: while agents and Jake share one login, the repair deleting Jake's hand-added
+        # needs-info because a repair from an earlier wake was left part way and the label's
+        # application carries the repair's login (#1702 case 2).
+        self.asking_on_12(fail_once=[f'POST repos/{REPO}/issues/12/labels'])
+        code, report = self.wake()
+        self.assertEqual(code, 2, report)
+        self.world = self.load()
+        it = self.ticket(self.world)
+        # Jake marks the ticket by hand, under the fleet's own login, and the builder resumes.
+        it['labels'].append('needs-info')
+        it.setdefault('events', []).append({'event': 'labeled', 'label': {'name': 'needs-info'},
+                                            'actor': {'login': BOT}, 'created_at': ago(0)})
+        resumed = next(c for c in it['comments'] if c['id'] == 104)
+        resumed.update(body=note(state='working', step='got the answer'), updated=ago(1))
+        self.save()
+        code, report = self.wake()
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual((code, len(report)), (1, 1), report)
+        self.assertRegex(report[0], r'^#12: needs-info ')
+        self.assertEqual(self.timeline(), [('labeled', BOT)])
+        self.assertEqual(self.wake(), (0, []))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
     def test_a_repair_that_fails_part_way_still_reports_what_it_changed(self):
         # catches: a label written on one ticket and then left out of the report because a
         # later ticket's repair failed, so the wake never records that it changed anything.

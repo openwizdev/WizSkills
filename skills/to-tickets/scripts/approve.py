@@ -10,7 +10,9 @@ revision.sh's text for the same spec. The checks, all of them every time:
   relies       check-relies.sh passes on each open agent ticket's body, a path
                counting as planned when a direct blocker owns that file, or a
                folder or pattern containing it, in the ticket's own repository
-               (the one all its owned paths name)
+               (the one all its owned paths name); --root is the checkout of
+               the graph's repository, so a ticket in any other repository
+               must have each Relies on file planned
   sizes        each open ticket says exactly one `Size: S`, `M` or `L`
   width        no cycle, and no arrow another chain of arrows already implies
   owned paths  each open agent ticket owns exact repository paths, and no two
@@ -116,9 +118,11 @@ def overlap(a, b):
 
 def contains(own, path):
     """An owned path holds a file: it is that file, or a folder or pattern
-    whose every segment matches the file's leading segments."""
+    whose every segment matches the file's leading segments. A path ending in
+    `/` is a folder: it holds only what lies strictly below it."""
     x, y = own.rstrip('/').split('/'), path.split('/')
-    return len(x) <= len(y) and all(fnmatch.fnmatchcase(q, p) for p, q in zip(x, y))
+    longest = len(y) - 1 if own.endswith('/') else len(y)
+    return len(x) <= longest and all(fnmatch.fnmatchcase(q, p) for p, q in zip(x, y))
 
 
 def relies_paths(body):
@@ -166,20 +170,30 @@ def check_links(graph_text):
     return []
 
 
-def check_relies(tickets, owners, root):
+def check_relies(tickets, owners, root, root_repo):
     why = []
     for t in tickets:
         blockers = [b['number'] for b in t['blocked_by']]
         repos = {repo for repo, _, _ in owners.get(t['number'], [])}
-        planned = []
+        planned, unplanned = [], []
         for path in relies_paths(t['body']):
             if len(repos) == 1 and any(repo in repos and contains(own, path)
                                        for b in blockers for repo, own, _ in owners.get(b, [])):
                 planned += ['--planned', path]
-        out = subprocess.run(['sh', str(RELIES), '--root', str(root), *planned], input=t['body'],
+            else:
+                unplanned.append(path)
+        # Only the graph repository has a checkout here: any other ticket's
+        # files are form-checked only, and each must be planned.
+        in_root = repos == {root_repo}
+        checked = planned if in_root else planned + [a for p in unplanned for a in ('--planned', p)]
+        out = subprocess.run(['sh', str(RELIES), '--root', str(root), *checked], input=t['body'],
                              capture_output=True, text=True)
         if out.returncode != 0:
             why.append(f'#{t["number"]}: ' + (out.stderr.strip().splitlines() or ['refused'])[-1])
+        elif unplanned and not in_root:
+            where = f'`{next(iter(repos))}`' if len(repos) == 1 else 'more than one repository'
+            why.append(f'#{t["number"]}: Relies on: `{unplanned[0]}` is in {where}, which --root is not; '
+                       'a direct blocker there must own it')
     return why
 
 
@@ -335,7 +349,7 @@ def main():
         open_tickets = [t for t in graph['tickets'] if t['state'] == 'OPEN']
         agents = [t for t in open_tickets if not human(t)]
         owned_why, owners = check_owned(graph, agents)
-        failures += [('relies', why) for why in check_relies(agents, owners, args.root.resolve())]
+        failures += [('relies', why) for why in check_relies(agents, owners, args.root.resolve(), graph['repo'].lower())]
         size_why, sizes = check_sizes(open_tickets)
         failures += [('sizes', why) for why in size_why]
         width_why, chain, widest = check_width(graph)

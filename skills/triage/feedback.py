@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Triage's feedback path (openwiz.feedback-loop.v1, FL3 #1845).
+
+python3 -I feedback.py plan <case.json | ->
+
+The case is one JSON object: the report as GitHub shows it ("number",
+"pull_request", "title", "body", "labels", "milestone"), triage's "criteria"
+(the contract's six codes, each true, false or null for can't tell), and, for a
+report going to a fleet, "version" (the next release, X.Y.Z) and "brief"
+("title", "body"). It prints the outcome as one JSON object: the report's exact
+labels and milestone, "report_comments" (always empty: triage never replies on
+a report), the brief to create or null, and the owner's private note or null.
+
+It sends nothing. A report goes to a fleet only when every code is exactly true
+and its words show no instruction or private-looking text; anything else is
+held for the owner. Exit 0 prints the outcome, 1 refuses (last line says why),
+2 is unreadable input. Python 3 standard library only.
+"""
+import json
+import re
+import sys
+
+CODES = ("defect", "reproducible", "small", "no_guarded_change", "no_instructions", "nothing_private")
+MARKER = re.compile(r"^OpenWiz feedback operation [0-9a-f]{32}$")
+VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+LINK_LINE = re.compile(r"^Report: #", re.M)
+URL = re.compile(r"\b(?:https?|ftp|file)://\S+|\bwww\.\S+", re.I)
+# A backstop under triage's own reading, which the report's words may steer:
+# text addressed to an agent, or anything to run or follow.
+INSTRUCTION = re.compile(
+    r"`|https?://|\bwww\.|^\s*\$ |\b(?:agents?|assistants?|AI|LLMs?|claude|codex|gpt)\b\s*[,:(]"
+    r"|\b(?:system|assistant|developer)\s*:|\bignore (?:all|any|previous|prior|your|the above)\b"
+    r"|\b(?:run|execute|curl|wget|sudo|pip install|npm install)\b.*(?:\||;|&&|\.sh\b)",
+    re.I | re.M)
+PRIVATE = re.compile(
+    r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[abpr]-[\w-]{10,})"
+    r"|(?:^|[\s(\"'])(?:/Users/|/home/|/root/|~/|[A-Za-z]:\\)"
+    r"|\bthr_[A-Za-z0-9]+|\b[\w.+-]+@[\w-]+\.[\w.-]+\b|-----BEGIN [A-Z ]*PRIVATE KEY-----",
+    re.M)
+
+
+class Refused(Exception):
+    pass
+
+
+class Unreadable(Exception):
+    pass
+
+
+def is_report(report):
+    if report.get("pull_request"):
+        return False
+    lines = report["body"].split("\n")
+    marked = len(lines) >= 3 and lines[-2] == "" and bool(MARKER.match(lines[-1]))
+    return "feedback" in report["labels"] or marked
+
+
+def words(report):
+    """The report's own words, without the marker line the contract adds."""
+    body = report["body"]
+    lines = body.split("\n")
+    if lines and MARKER.match(lines[-1]):
+        body = "\n".join(lines[:-1])
+    return report["title"] + "\n" + body
+
+
+def copied(report, text):
+    """The first piece of the report the brief repeats: a link, code or a line."""
+    pieces = URL.findall(report["body"]) + re.findall(r"`+([^`]+)`+", report["body"])
+    pieces += [line.strip() for line in report["body"].split("\n") if len(line.strip()) >= 24]
+    return next((p for p in pieces if p.strip() and p.strip() in text), None)
+
+
+def plan(case):
+    report, criteria = case["report"], case["criteria"]
+    if not is_report(report):
+        raise Refused(f"#{report['number']} is not a report: no feedback label and no marker line last")
+    if report["milestone"] is not None or "needs-triage" in report["labels"]:
+        raise Refused(f"#{report['number']} is already triaged: it has a milestone or needs-triage")
+    failed = [code for code in CODES if criteria.get(code) is not True]
+    text = words(report)
+    if INSTRUCTION.search(text) and "no_instructions" not in failed:
+        failed.append("no_instructions")
+    if PRIVATE.search(text) and "nothing_private" not in failed:
+        failed.append("nothing_private")
+    if failed:
+        return {"outcome": "held", "report": report["number"], "report_labels": ["feedback", "needs-triage"],
+                "report_milestone": None, "report_comments": [], "brief": None,
+                "note": f"#{report['number']} held for the owner: not " + ", ".join(failed)}
+    version, brief = case.get("version"), case.get("brief")
+    if not isinstance(version, str) or not VERSION.match(version):
+        raise Refused("the fleet outcome needs the next release's version, X.Y.Z, as the milestone")
+    if not isinstance(brief, dict) or not isinstance(brief.get("title"), str) or not isinstance(brief.get("body"), str):
+        raise Unreadable("the brief needs a title and a body")
+    title, body = brief["title"], brief["body"]
+    if not title.strip() or "\n" in title:
+        raise Refused("the brief needs a one-line title in triage's own words")
+    link = f"\n\nReport: #{report['number']}"
+    if not body.endswith(link) or len(LINK_LINE.findall(body)) != 1 or not body[:-len(link)].strip():
+        raise Refused(f"the brief must end with a blank line and then its only report link, {link.strip()}, "
+                      "with no trailing newline")
+    if URL.search(body) or "```" in body:
+        raise Refused("the brief carries a link or a code block; a brief copies no link, command or code")
+    rest = body[:-len(link)]
+    if copied(report, rest):
+        raise Refused("the brief copies the report's words; write it in triage's own words")
+    return {"outcome": "fleet", "report": report["number"], "report_labels": ["feedback"],
+            "report_milestone": version, "report_comments": [], "note": None,
+            "brief": {"title": title, "body": body, "labels": ["ready-for-agent"], "milestone": version}}
+
+
+def read(path):
+    try:
+        raw = sys.stdin.read() if path == "-" else open(path, encoding="utf-8").read()
+        case = json.loads(raw)
+    except (OSError, UnicodeDecodeError, ValueError) as err:
+        raise Unreadable(f"cannot read the case: {err.__class__.__name__}")
+    if not isinstance(case, dict) or not isinstance(case.get("report"), dict) or not isinstance(case.get("criteria"), dict):
+        raise Unreadable("the case needs a report object and a criteria object")
+    report = case["report"]
+    shapes = {"number": int, "title": str, "body": str, "labels": list}
+    if any(not isinstance(report.get(key), kind) or isinstance(report.get(key), bool) for key, kind in shapes.items()):
+        raise Unreadable("the report needs number, title, body and labels")
+    if not all(isinstance(label, str) for label in report["labels"]):
+        raise Unreadable("the report's labels must be names")
+    if report.get("milestone") is not None and not isinstance(report["milestone"], str):
+        raise Unreadable("the report's milestone must be a title or null")
+    report.setdefault("milestone", None)
+    return case
+
+
+def main(argv):
+    if len(argv) != 2 or argv[0] != "plan":
+        print("usage: feedback.py plan <case.json | ->", file=sys.stderr)
+        return 2
+    try:
+        print(json.dumps(plan(read(argv[1])), ensure_ascii=True, indent=2))
+        return 0
+    except Refused as why:
+        print(f"feedback: refused: {why}", file=sys.stderr)
+        return 1
+    except Unreadable as why:
+        print(f"feedback: {why}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

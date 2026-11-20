@@ -39,3 +39,7 @@ FAIL the selected cases ran: 3 cases ran, not 1: is "steer: under the shared log
 FAIL steer: a stop on the video holds the fleet and asks to record it: unexpected output:
 ok   every gh call was one of fleet.sh's reads
 1 cases, 1 failed
+## Mutation 7 (WS33): any comment ending in a cue counts as the video
+FAIL steer: a help comment repeating WS33's new cue is no video, so no notice (WS33): unexpected output:
+ok   every gh call was one of fleet.sh's reads
+1 cases, 1 failed

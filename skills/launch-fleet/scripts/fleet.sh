@@ -1310,13 +1310,15 @@ def plan_current($s): latest($s) as $a | $a.fingerprint as $f | $f != null and $
 def owner_at($s): [$s.comments.nodes[] | approval | select(.machine | not)] | max_by(.id) | .at;
 # #1340: to-spec'"'"'s steering video is the spec'"'"'s latest comment that is exactly
 # its link line, a blank line and "Comment here to steer: stop, reset, or
-# anything else." (R3). R2 (decision 7030919773): no comment on it steers, in
+# anything else." (R3), or since WS33 (#1736) "Steering by comment is off for
+# now: tell your orchestrator what to change (stop, reset, or anything else)."
+# R2 (decision 7030919773): no comment on it steers, in
 # any mode and whoever posted the video, until #1402'"'"'s identity separation is
 # verified: no author can yet prove a comment is the owner'"'"'s. A spec with a
 # video gets one look saying so (steer_lines); the owner steers through the
 # orchestrator.
 def video: [.comments.nodes[] | select(.body | gsub("\r"; "") | sub("\\s+$"; "")
-  | test("^\\[Watch the narrated spec\\]\\(https://[^\\s<>()\\\\`]+\\)\n\nComment here to steer: stop, reset, or anything else\\.$"))] | max_by(.databaseId);
+  | test("^\\[Watch the narrated spec\\]\\(https://[^\\s<>()\\\\`]+\\)\n\n(Comment here to steer: stop, reset, or anything else|Steering by comment is off for now: tell your orchestrator what to change \\(stop, reset, or anything else\\))\\.$"))] | max_by(.databaseId);
 def current($s): plan_current($s);
 def spec_rec($s; $re): any($s | records[]; .r | test($re));
 # The latest fleet record routes the spec to its loop. Fresh wakes keep the

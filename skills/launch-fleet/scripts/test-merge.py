@@ -333,26 +333,28 @@ class Documented(unittest.TestCase):
         argv, settled = self.archive_rule()
         receipt = comment(4000, 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD)
         merged = dict(state='MERGED', mergeCommit={'oid': 'c' * 40})
+        # name: (pull request, its comments, the fault, archives now, archives on the next wake)
         cases = {
-            'settled': (pr(**merged), {'7': [receipt]}, {}),
-            'never queued': (pr(**merged), {'7': []}, {}),
-            'receipt read fails': (pr(**merged), {'7': [receipt]}, {'read': 'fail'}),
-            'cost write fails': (pr(**merged), {'7': [receipt]}, {'post': 'fail'}),
-            'cost write lost': (pr(**merged), {'7': [receipt]}, {'post': 'lost'}),
+            'settled': (pr(**merged), [receipt], {}, True, True),
+            'never queued': (pr(**merged), [], {}, True, True),
+            'receipt read fails': (pr(**merged), [receipt], {'read': 'fail'}, False, True),
+            'cost write fails': (pr(**merged), [receipt], {'post': 'fail'}, False, True),
+            'cost write lost': (pr(**merged), [receipt], {'post': 'lost'}, False, True),
             'still queued': (pr(isMergeQueueEnabled=True, isInMergeQueue=True,
-                                mergeQueueEntry={'headCommit': {'oid': HEAD}}), {'7': [receipt]}, {}),
+                                mergeQueueEntry={'headCommit': {'oid': HEAD}}), [receipt], {}, False, False),
         }
-        for name, (value, comments, faults) in cases.items():
+        for name, (value, comments, faults, now, later) in cases.items():
             with self.subTest(name):
-                w = World(self, pr=value, comments=comments, faults=faults)
+                w = World(self, pr=value, comments={'7': comments}, faults=faults)
                 root = project(w, PRINTS)
-                r = subprocess.run(argv, capture_output=True, text=True, env=w.env, cwd=root, timeout=60)
-                out = r.stdout.strip()
-                archives = r.returncode == 0 and any(out.startswith(x) for x in settled)
-                # Archiving is safe only when the cost is on the ticket, or no queued merge owes one.
-                owed = bool(comments['7'])
-                costed = any(b.startswith('launch-fleet: cost') for b in w.bodies(12))
-                self.assertEqual(archives, costed or not owed, (out, r.stderr))
+                for want in (now, later):  # this wake, then the next one, the fault gone
+                    r = subprocess.run(argv, capture_output=True, text=True, env=w.env, cwd=root, timeout=60)
+                    out = r.stdout.strip()
+                    archives = any(out.startswith(x) for x in settled)
+                    self.assertEqual(archives, want, (out, r.stderr))
+                    # Never archived while a queued merge's cost is missing from the ticket.
+                    costs = [b for b in w.bodies(12) if b.startswith('launch-fleet: cost')]
+                    self.assertTrue(not archives or costs or not comments, (out, costs))
 
 
 class CrossRepository(unittest.TestCase):

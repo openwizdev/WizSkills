@@ -2,4 +2,4 @@
 "launch-fleet": patch
 ---
 
-A `status.py run` heartbeat never removes a `needs-info` hold it didn't add. It takes off only the label its own run applied, under a GitHub App's own login, so a hold a person set, or one the wake's repair put back, stays.
+A `status.py run` heartbeat never removes `needs-info`. It still adds the label for an asking note, and the agent's own status write leaving asking clears it, so a hold a person set, or one the wake's repair put back, stays.

@@ -773,5 +773,99 @@ class Review(unittest.TestCase):
                 self.assertEqual(self.state()["writes"], 0)
 
 
+COMMENTS = Path(__file__).with_name("comments.py")
+
+
+def new_file(path, lines):
+    body = "".join(f"+{line}\n" for line in lines)
+    return (f"diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n"
+            f"@@ -0,0 +1,{len(lines)} @@\n{body}")
+
+
+class CommentPass(unittest.TestCase):
+    def comment_pass(self, diff, *args):
+        out = subprocess.run([sys.executable, "-I", str(COMMENTS), "-", *args], input=diff,
+                             text=True, capture_output=True, timeout=30)
+        findings = [line for line in out.stdout.splitlines() if not line.startswith("check ")]
+        return out.returncode, findings, out.stdout
+
+    def assert_code_fix(self, finding):
+        fix = finding.split(" Fix: ", 1)[1]
+        self.assertRegex(fix, r"\b(name|extract|type|test|check|delete|remove|fix the cause)")
+        self.assertNotRegex(fix.lower(), r"reword|rephrase|clarify|shorten|rewrite the comment")
+
+    def test_a_justification_comment_is_a_finding_that_names_the_code_fix(self):
+        diff = new_file("src/prices.py", [
+            "from db import fetch_price", "", "_cache = {}", "",
+            "# We check the cache before the database on purpose: the database call",
+            "# is slow and the suite timed out without it, so keep this order.",
+            "def lookup(sku):", "    if sku in _cache:", "        return _cache[sku]",
+            "    _cache[sku] = fetch_price(sku)", "    return _cache[sku]"])
+        code, findings, out = self.comment_pass(diff)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(len(findings), 1, out)
+        self.assertTrue(findings[0].startswith("src/prices.py:5: justification: "), out)
+        self.assert_code_fix(findings[0])
+
+    def test_only_allowed_kinds_give_no_finding(self):
+        diff = new_file("tools/sync.py", [
+            "#!/usr/bin/env python3", "# SPDX-License-Identifier: MIT", "import subprocess", "",
+            "# External: the vendor API rejects a batch over 100 items, https://example.com/vendor/limits",
+            "LIMIT = 100", "# SECURITY: the token never reaches the log; send() redacts it first.",
+            "# Private record: https://github.com/jparker2006/ClosedWiz/issues/9001#issuecomment-9000000001",
+            "# comment-ok: the synthetic runner reads this line as its job name",
+            "import vendored  # noqa: E402 -- the path is set up above",
+            "URL = 'https://example.com/#anchor'  ", "PATTERN = \"a // b # c\""]) + new_file(
+            "src/lib.rs", ["// SPDX-License-Identifier: MIT", "pub fn f() {}",
+                           "// SAFETY: the buffer outlives every reader.", "unsafe fn g() {}"])
+        code, findings, out = self.comment_pass(diff)
+        self.assertEqual((code, findings), (0, []), out)
+
+    def test_a_workaround_comment_and_bare_suppressions_are_findings(self):
+        diff = new_file("src/app.py", [
+            "import os", "# TODO: hack for now, the writer races the reader", "x = os.getcwd()",
+            "y = x.upper()  # type: ignore"]) + new_file("src/lib.rs", [
+                "#[allow(dead_code)]", "fn unused() {}", "fn used() {} // eslint-disable-line"])
+        code, findings, out = self.comment_pass(diff)
+        self.assertEqual(code, 1, out)
+        self.assertEqual([f.split(": ", 2)[:2] for f in findings],
+                         [["src/app.py:2", "workaround"], ["src/app.py:4", "suppression"],
+                          ["src/lib.rs:1", "suppression"], ["src/lib.rs:3", "suppression"]], out)
+        for finding in findings:
+            self.assert_code_fix(finding)
+
+    def test_an_allowed_form_it_has_not_earned_is_a_finding(self):
+        diff = new_file("src/app.py", [
+            "# External: our own runner is slow, https://github.com/openwizdev/OpenWiz/issues/12",
+            "A = 1", "# comment-ok:", "B = 2", "# SAFETY:", "C = 3", "# Copyright 2026 Example", "D = 4"])
+        code, findings, out = self.comment_pass(diff)
+        self.assertEqual([f.split(": ", 2)[:2] for f in findings],
+                         [["src/app.py:1", "external-link"], ["src/app.py:3", "escape-tag-reason"],
+                          ["src/app.py:5", "comment"], ["src/app.py:7", "comment"]], out)
+        for finding in findings:
+            self.assert_code_fix(finding)
+
+    def test_doc_comments_pass_only_in_a_published_docs_path(self):
+        diff = new_file("crates/sdk/src/lib.rs", ["/// Returns the answer.", "pub fn answer() -> u8 { 42 }"])
+        self.assertEqual(self.comment_pass(diff, "--docs", "crates/sdk/")[:2], (0, []))
+        code, findings, out = self.comment_pass(diff)
+        self.assertEqual([f.split(": ", 2)[:2] for f in findings], [["crates/sdk/src/lib.rs:1", "comment"]], out)
+
+    def test_it_reads_only_the_lines_the_diff_adds(self):
+        diff = ("diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n"
+                "@@ -10,4 +10,4 @@\n # Kept because the old importer needs it, do not remove.\n"
+                "-x = 1  # workaround for the old reader\n+x = 2\n y = 3\n"
+                "@@ -40,2 +40,4 @@\n z = 4\n+/* not python, but a string: */\n+w = '# not a comment'\n q = 5\n")
+        code, findings, out = self.comment_pass(diff)
+        self.assertEqual((code, findings), (0, []), out)
+
+    def test_a_block_comment_is_judged_once_at_its_first_added_line(self):
+        diff = new_file("web/app.js", [
+            "const a = 1;", "/*", " * Needed because Safari caches the old bundle,",
+            " * so we bust it here.", " */", "const b = `${a} // not a comment`;"])
+        code, findings, out = self.comment_pass(diff)
+        self.assertEqual([f.split(": ", 2)[:2] for f in findings], [["web/app.js:2", "justification"]], out)
+
+
 if __name__ == "__main__":
     unittest.main()

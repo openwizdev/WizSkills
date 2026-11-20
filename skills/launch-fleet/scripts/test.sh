@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=839      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py
+CASES=841      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -659,6 +659,13 @@ withdraw #13: start refused: ready-for-agent was last added at 2026-11-01T09:00:
 EOF
 expect 'KN13: an issue approved on its own needs a maintainer'"'"'s label too' 0 check.json 'own_approval(70; 7001; "10:00") | labelled(70; "09:00"; outsider)' -- check <<EOF
 look #70: start refused: ready-for-agent was last added at 2026-11-01T09:00:00Z by someone who is not a maintainer; a maintainer must add it again
+EOF
+
+expect 'KN13 R1: edited the same second as the label on an issue approved on its own: refused' 0 check.json 'own_approval(70; 7001; "10:00") | labelled(70; "09:00"; "Synthetic-Owner") | body_edited(70; "09:00"; outsider)' -- check <<EOF
+look #70: start refused: the ticket was edited at 2026-11-01T09:00:00Z, the same second ready-for-agent was added, so which came first can't be read; a maintainer must add it again
+EOF
+expect 'KN13 R1: a claim on an issue edited the same second as its label withdraws' 0 check.json 'own_approval(70; 7001; "10:00") | labelled(70; "09:00"; "Synthetic-Owner") | body_edited(70; "09:00"; outsider) | say(70; 7002; "11:55"; "launch-fleet: starting")' -- claim 70 7002 <<EOF
+withdraw #70: start refused: the ticket was edited at 2026-11-01T09:00:00Z, the same second ready-for-agent was added, so which came first can't be read; a maintainer must add it again
 EOF
 
 expect 'a claimed start is left alone for 10 minutes' 0 check.json 'merge12 | say(13; 1301; "11:55"; "launch-fleet: starting")' -- check < /dev/null

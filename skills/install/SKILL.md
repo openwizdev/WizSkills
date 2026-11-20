@@ -119,7 +119,7 @@ Done when both settings match the answers, or their pull request is open.
 
 ### 7. Plan
 
-The plan checks itself. Run `to-spec` with the confirmed grill. It writes the spec, runs `to-tickets`, whose checks record the machine plan approval, and makes the spec's video. Say **The spec and its video** with its video link. Ask nothing here: no spec or plan approval. When a check refuses, re-cut the plan; never ask the user to approve it instead. Then run `first_fleet.py spec --spec <N> --repo <owner>/<name>`.
+The plan checks itself. Run `to-spec` with the confirmed grill. It writes the spec, runs `to-tickets`, whose checks record the machine plan approval, and makes the spec's video. Say **The spec and its video** with its video link. Ask nothing here: no spec or plan approval. For now the owner steers through the orchestrator: what they want changed goes to this chat, never a comment on the video, which steers nothing until OpenWiz #1402. launch-fleet's one-time notice saying so is normal, not a hold. When a check refuses, re-cut the plan; never ask the user to approve it instead. Then run `first_fleet.py spec --spec <N> --repo <owner>/<name>`.
 
 Done when the machine plan approval is on the spec and `spec` saved it.
 

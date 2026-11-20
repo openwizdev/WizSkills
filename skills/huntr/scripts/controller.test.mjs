@@ -575,3 +575,39 @@ test('W1 the last wake and a pause after claiming finish with release; record on
   assert.match(section('## 5. Record the result and finish this hunt'), /`record` only when this run holds no live lease/);
   assert.doesNotMatch(section('## 5. Record the result and finish this hunt'), /`record` \(off, paused, blocked/);
 });
+
+// WS23 review R1 (#1656): a wake that cannot read the switch issue does not know whether its lease
+// is lost, so `due` keeps that apart (exit 3) from a lease that is really gone or taken (exit 2).
+scenario('D6 due: an unreadable switch issue exits 3, never the lost-lease exit 2; after it recovers the holder releases', w => {
+  w.state.comments = [{id: 100, ...on}];
+  assert.equal(w.run(lease, ['claim', 'synthetic-final']).status, 0);
+  w.state.readFailure = true;
+  const unread = w.run(lease, ['due', 'synthetic-final', 'hunter']);
+  assert.equal(unread.status, 3, unread.stderr);
+  assert.equal(unread.stdout, '');
+  assert.match(unread.stderr, /switch issue read failed: the lease is unknown, so end the turn and retry on the next wake/);
+  w.state.readFailure = false;
+  assert.equal(JSON.parse(w.run(lease, ['due', 'synthetic-final', 'hunter']).stdout).holder.run, 'synthetic-final');
+  const {r: published} = publish(w, {run: 'synthetic-final', slices: [], gaps: []});
+  assert.equal(published.status, 0, published.stderr);
+  assert.equal(w.run(lease, ['release', 'synthetic-final', join(w.dir, 'index.md')]).status, 0);
+  assert.equal(w.run(lease, ['claim', 'synthetic-next']).status, 0);
+  // A lease that is really gone or taken is still exit 2: the wake's lost-lease route.
+  const taken = w.run(lease, ['due', 'synthetic-final', 'scheduled']);
+  assert.equal(taken.status, 2); assert.match(taken.stderr, /held by synthetic-next/);
+  w.advance(46);
+  const expired = w.run(lease, ['due', 'synthetic-next', 'scheduled']);
+  assert.equal(expired.status, 2); assert.match(expired.stderr, /no live lease/);
+});
+
+// WS23 review R1 and R2 (#1656): the steps a controller follows on an unknown lease and when
+// dispatch leaves no hunter running or queued.
+test('W2 an unreadable wake retries instead of recording, and a dispatch with nothing running finishes at once', () => {
+  const skill = readFileSync(join(here, '../SKILL.md'), 'utf8');
+  const section = heading => skill.split(`\n${heading}\n`)[1].split('\n## ')[0].replace(/\s+/g, ' ');
+  const wake = section('## On every wake');
+  assert.match(wake, /Exit 2 \(the lease is lost or taken\): file nothing more, post unfiled candidates as a step 5 `record`, and archive\./);
+  assert.match(wake, /Exit 3 \(unreadable\): change nothing and end the turn; the next wake retries\./);
+  assert.match(section('## 2. Plan and dispatch hunters'),
+    /If no slice is running or queued \(every slice blocked\), finish the hunt now \(step 5\) with `release`\. Otherwise end the turn\./);
+});

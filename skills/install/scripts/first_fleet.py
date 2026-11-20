@@ -907,6 +907,25 @@ def raw(repo, path, env, ref=None):
     return body
 
 
+def blob(repo, path, env, ref):
+    """A file's text on ref and its blob SHA, from one read (None, None when it isn't there); Exit when unreadable."""
+    result = run(['gh', 'api', '--include', 'repos/%s/contents/%s?ref=%s' % (repo, path, ref)], env)
+    text = result.stdout.decode('utf-8', 'replace').replace('\r\n', '\n') if result is not None else ''
+    head, _, body = text.partition('\n\n')
+    status = re.match(r'HTTP/[0-9.]+ ([0-9]{3})', head)
+    if status and status[1] == '404':
+        return None, None
+    try:
+        assert result is not None and result.returncode == 0 and status and status[1] == '200'
+        found = strict(body)
+        assert found['type'] == 'file' and found['encoding'] == 'base64'
+        assert re.fullmatch(r'[0-9a-f]{40}', found['sha'])
+        data = base64.b64decode(found['content'], validate=False)
+        return data.decode('utf-8', 'replace').replace('\r\n', '\n'), found['sha']
+    except (AssertionError, ValueError, KeyError, TypeError):
+        raise Exit(1, 'Could not read %s on %s; nothing written.' % (path, ref))
+
+
 def host_pull(repo, env):
     """The host setting pull request's URL and state, or None when there is none; Exit when unreadable."""
     result = run(['gh', 'pr', 'list', '--repo', repo, '--head', HOST_BRANCH, '--state', 'all',
@@ -1043,7 +1062,10 @@ def setting(got):
         if tip_of(HOST_BRANCH) is None:
             raise Exit(6, 'Whether branch %s was made is uncertain; run this again to read it before anything else.'
                        % HOST_BRANCH)
-    have = {path: raw(repo, path, env, HOST_BRANCH) for path in writes}
+    # R4: each file and its blob SHA from one read; the write names exactly that blob, so GitHub refuses it when
+    # anyone changed the file after this check.
+    read = {path: blob(repo, path, env, HOST_BRANCH) for path in writes}
+    have = {path: read[path][0] for path in writes}
     for path in writes:
         if have[path] not in (want[path], based[path]):
             raise Exit(5, 'Branch %s already holds another %s; OpenWiz never writes over it. The owner deletes that '
@@ -1052,18 +1074,20 @@ def setting(got):
     for path in writes:
         if have[path] == want[path]:
             continue
-        blob = ''
-        if have[path] is not None:
-            found = run(['gh', 'api', 'repos/%s/contents/%s?ref=%s' % (repo, path, HOST_BRANCH), '--jq', '.sha'], env)
-            blob = found.stdout.decode('utf-8', 'replace').strip() if found is not None and found.returncode == 0 else ''
-            if not re.fullmatch(r'[0-9a-f]{40}', blob):
-                raise Exit(6, 'Could not read %s on %s; run this again to read it before anything else.' % (
-                    path, HOST_BRANCH))
+        checked = read[path][1]
         put = ['gh', 'api', '-X', 'PUT', 'repos/%s/contents/%s' % (repo, path), '-f',
                'message=Where agents run: Host: local, %s' % picked, '-f',
                'content=' + base64.b64encode(want[path].encode()).decode(), '-f', 'branch=' + HOST_BRANCH]
-        wrote = run(put + (['-f', 'sha=' + blob] if blob else []), env)
+        wrote = run(put + (['-f', 'sha=' + checked] if checked else []), env)
         if wrote is None or wrote.returncode != 0:
+            try:
+                now = blob(repo, path, env, HOST_BRANCH)
+            except Exit:
+                now = read[path]  # unreadable: the uncertain write below says to read the branch first
+            if now != read[path] and now[0] != want[path]:
+                raise Exit(5, '%s on %s changed while OpenWiz was writing it, so GitHub refused the write and the '
+                              'other change was kept; no pull request was opened. Read the branch, then run this '
+                              'again.' % (path, HOST_BRANCH))
             raise Exit(6, 'Writing %s on %s failed or is uncertain; run this again to read the branch before '
                           'anything else.' % (path, HOST_BRANCH))
     for path in writes:

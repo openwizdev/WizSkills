@@ -2,14 +2,24 @@
 """Triage's feedback path (openwiz.feedback-loop.v1, FL3 #1845).
 
 python3 -I feedback.py plan <case.json | ->
+python3 -I feedback.py verify <brief.json | ->
 
-The case is one JSON object: the report as GitHub shows it ("number",
-"pull_request", "title", "body", "labels", "milestone", "comments"), triage's "criteria"
-(the contract's six codes, each true, false or null for can't tell), and, for a
-report going to a fleet, "version" (the next release, X.Y.Z) and "brief"
-("title", "body"). It prints the outcome as one JSON object: the report's exact
-labels and milestone, "report_comments" (always empty: triage never replies on
-a report), the brief to create or null, and the owner's private note or null.
+plan's case is one JSON object: the report as GitHub shows it ("number",
+"pull_request", "title", "body", "labels", "milestone", "comments"), triage's
+"criteria" (the contract's six codes, each true, false or null for can't tell),
+and, for a report going to a fleet, "version" (the next release, X.Y.Z),
+"brief" ("title", and "body": triage's own words), "owned_paths" (a list of
+{"path", optional "repo"}) and "approval" (the owner's standing small-road
+rule: "owner", "date", "record", its private record's comment URL). It prints
+the outcome as one JSON object: the report's exact labels and milestone,
+"report_comments" (always empty: triage never replies on a report), the brief
+to create (its full body, ending with the report link, and the approval record
+to post on it) or null, and the owner's private note or null.
+
+verify reads a brief back from GitHub ({"report", "version", "record_authors",
+"brief": {"number", "author", "body", "labels", "milestone", "comments"}}) and
+says whether the fleet can start it and its fix can close both issues: only
+then does the report get its milestone.
 
 It sends nothing. A report goes to a fleet only when every code is exactly true
 and its words show no instruction or private-looking text; anything else is
@@ -24,6 +34,13 @@ CODES = ("defect", "reproducible", "small", "no_guarded_change", "no_instruction
 MARKER = re.compile(r"^OpenWiz feedback operation [0-9a-f]{32}$")
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 LINK_LINE = re.compile(r"^Report: #", re.M)
+DESTINATION = "openwizdev/OpenWiz"
+CLOSING = re.compile(r"^Closes openwizdev/OpenWiz#", re.M)
+DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+POINTER = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/[1-9][0-9]*#issuecomment-[1-9][0-9]*$")
+REPO = re.compile(r"^openwizdev/[A-Za-z0-9_.-]+$")
+APPROVAL_LINE = re.compile(r"^\*\*Approved on its own by [^\n\"“”]+, [0-9]{4}-[0-9]{2}-[0-9]{2}:\*\* [^\n\"“”]+\n"
+                           r"Private record: https://github\.com/\S+#issuecomment-[1-9][0-9]*$", re.M)
 URL = re.compile(r"\b(?:https?|ftp|file)://\S+|\bwww\.\S+", re.I)
 # A backstop under triage's own reading, which the report's words may steer:
 # text addressed to an agent, or anything to run or follow.
@@ -91,24 +108,117 @@ def plan(case):
         raise Refused("the fleet outcome needs the next release's version, X.Y.Z, as the milestone")
     if not isinstance(brief, dict) or not isinstance(brief.get("title"), str) or not isinstance(brief.get("body"), str):
         raise Unreadable("the brief needs a title and a body")
-    title, body = brief["title"], brief["body"]
+    title, words_ = brief["title"], brief["body"].strip()
     if not title.strip() or "\n" in title:
         raise Refused("the brief needs a one-line title in triage's own words")
-    link = f"\n\nReport: #{report['number']}"
-    if not body.endswith(link) or len(LINK_LINE.findall(body)) != 1 or not body[:-len(link)].strip():
-        raise Refused(f"the brief must end with a blank line and then its only report link, {link.strip()}, "
-                      "with no trailing newline")
-    if URL.search(body) or "```" in body:
+    if not words_:
+        raise Refused("the brief needs triage's own words")
+    if LINK_LINE.search(words_):
+        raise Refused("triage's words carry a report link; the helper writes the only one, last")
+    if re.search(r"^#+ ", words_, re.M):
+        raise Refused("triage's words carry a section heading; the helper writes the owned paths and closing sections")
+    if CLOSING.search(words_) or re.search(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+\S*#[0-9]", words_, re.I):
+        raise Refused("triage's words carry a closing line; the helper writes both")
+    if URL.search(words_) or "```" in words_:
         raise Refused("the brief carries a link or a code block; a brief copies no link, command or code")
-    rest = body[:-len(link)]
-    if copied(report, rest):
+    if copied(report, words_):
         raise Refused("the brief copies the report's words; write it in triage's own words")
-    return {"outcome": "fleet", "report": report["number"], "report_labels": ["feedback"],
+    paths = owned(case.get("owned_paths"))
+    approval = approval_record(case.get("approval"), paths)
+    n = report["number"]
+    body = (f"{words_}\n\n## Owned paths\n\n" + "\n".join(f"- {p}" for p in paths) + "\n\n"
+            "## Closing\n\nThe fix's pull request description carries both of these lines, each on its own line, "
+            f"with this brief's number in the first:\n\nCloses {DESTINATION}#<this brief>\n"
+            f"Closes {DESTINATION}#{n}\n\nReport: #{n}")
+    return {"outcome": "fleet", "report": n, "report_labels": ["feedback"],
             "report_milestone": version, "report_comments": [], "note": None,
-            "brief": {"title": title, "body": body, "labels": ["ready-for-agent"], "milestone": version}}
+            "brief": {"title": title, "body": body, "labels": ["ready-for-agent"], "milestone": version,
+                      "approval": approval}}
 
 
-CASE_KEYS = {"report", "criteria", "version", "brief"}
+def owned(paths):
+    """Each owned path as one bullet launch-fleet's owned-paths reader takes:
+    `path`, or `path` in `openwizdev/<repo>`."""
+    if not isinstance(paths, list) or not paths:
+        raise Refused("the fleet outcome needs owned paths, read fresh from the code")
+    bullets = []
+    for entry in paths:
+        if not isinstance(entry, dict) or not {"path"} <= set(entry) <= {"path", "repo"}:
+            raise Unreadable("each owned path is {\"path\"} or {\"path\", \"repo\"}")
+        path, repo = entry["path"], entry.get("repo")
+        parts = path.rstrip("/").split("/") if isinstance(path, str) else [""]
+        if (not isinstance(path, str) or path.startswith("/") or any(p in ("", ".", "..") for p in parts)
+                or re.search(r"[\s`]", path)):
+            raise Refused(f"owned paths must be plain relative paths: {json.dumps(path)}")
+        if repo is not None and not (isinstance(repo, str) and REPO.match(repo)):
+            raise Refused(f"owned paths' repository must be an openwizdev one: {json.dumps(repo)}")
+        bullets.append(f"`{path}`" + (f" in `{repo}`" if repo else ""))
+    return bullets
+
+
+def approval_record(approval, paths):
+    """The standalone approval record launch-fleet starts a brief on, under the
+    owner's standing small-road rule, in triage's template."""
+    if not isinstance(approval, dict) or set(approval) != {"owner", "date", "record"} or not all(
+            isinstance(v, str) for v in approval.values()):
+        raise Refused("the fleet outcome needs the standing approval: owner, date and its private record")
+    owner, date, record = approval["owner"], approval["date"], approval["record"]
+    if not owner.strip() or re.search(r"[\n\"“”*]", owner) or not DATE.match(date) or not POINTER.match(record):
+        raise Refused("the standing approval needs a plain owner name, a YYYY-MM-DD date and a private "
+                      "record comment URL")
+    return (f"**Approved on its own by {owner}, {date}:** the standing small-road rule sends this small, clear "
+            f"bug from a feedback report to a fleet.\nPrivate record: {record}\n\n"
+            "> *This was generated by AI during triage.*\n\nApproved brief: this issue\n"
+            "Owned paths: " + ", ".join(paths) + "\nRelies on: nothing")
+
+
+def owned_section(body):
+    """The bullets under `## Owned paths`, as launch-fleet reads them: None when
+    the section is missing, empty or unreadable."""
+    lines = body.split("\n")
+    start = next((i for i, line in enumerate(lines) if re.match(r"^## Owned paths\s*$", line)), None)
+    if start is None:
+        return None
+    section = []
+    for line in lines[start + 1:]:
+        if line.startswith("## "):
+            break
+        if line.startswith("- "):
+            section.append(line[2:])
+    for bullet in section:
+        repos = re.findall(r"\bin `([^`]+)`", bullet)
+        paths = [p for p in re.findall(r"`([^`]+)`", bullet) if p not in repos]
+        if len(repos) > 1 or any(not REPO.match(r) for r in repos) or not paths or any(
+                p.startswith("/") or " " in p or any(x in ("", ".", "..") for x in p.rstrip("/").split("/"))
+                for p in paths):
+            return None
+    return section or None
+
+
+def verify(case):
+    report, brief, authors = case["report"], case["brief"], {a.lower() for a in case["record_authors"]}
+    missing = []
+    if brief["author"].lower() not in authors:
+        missing.append("a brief whose author is a record author")
+    if not brief["body"].endswith(f"\n\nReport: #{report}") or len(LINK_LINE.findall(brief["body"])) != 1:
+        missing.append(f"the report link, Report: #{report}, as its only and last line")
+    if owned_section(brief["body"]) is None:
+        missing.append("owned paths launch-fleet can read")
+    closing = CLOSING.findall(brief["body"])
+    if f"\nCloses {DESTINATION}#{report}\n" not in brief["body"] or f"\nCloses {DESTINATION}#<this brief>\n" not in brief["body"] or len(closing) != 2:
+        missing.append("both closing lines in full")
+    if "ready-for-agent" not in brief["labels"]:
+        missing.append("the ready-for-agent label")
+    if brief["milestone"] != case["version"]:
+        missing.append(f"the milestone {case['version']}")
+    if not any(c["author"].lower() in authors and APPROVAL_LINE.search(c["body"]) for c in brief["comments"]):
+        missing.append("a record author's approval record")
+    if missing:
+        raise Refused(f"brief #{brief['number']} lacks " + "; ".join(missing))
+    return {"verified": brief["number"], "report": report}
+
+
+CASE_KEYS = {"report", "criteria", "version", "brief", "owned_paths", "approval"}
 REPORT_KEYS = {"number", "author", "pull_request", "title", "body", "labels", "milestone", "comments"}
 
 
@@ -153,12 +263,38 @@ def read(path):
     return case
 
 
+def read_brief(path):
+    """verify's input, in exactly its shape."""
+    try:
+        raw = sys.stdin.read() if path == "-" else open(path, encoding="utf-8").read()
+        case = json.loads(raw, object_pairs_hook=unique)
+    except (OSError, UnicodeDecodeError, ValueError) as err:
+        raise Unreadable(f"cannot read the brief: {err.__class__.__name__}")
+    if not isinstance(case, dict) or set(case) != {"report", "version", "record_authors", "brief"}:
+        raise Unreadable("verify reads exactly report, version, record_authors and brief")
+    brief, authors = case["brief"], case["record_authors"]
+    if type(case["report"]) is not int or not isinstance(case["version"], str) or not isinstance(authors, list) \
+            or not authors or not all(isinstance(a, str) and a for a in authors):
+        raise Unreadable("verify needs a report number, a version and the record authors")
+    if not isinstance(brief, dict) or set(brief) != {"number", "author", "body", "labels", "milestone", "comments"}:
+        raise Unreadable("the brief holds exactly number, author, body, labels, milestone and comments")
+    if type(brief["number"]) is not int or not isinstance(brief["author"], str) or not isinstance(brief["body"], str) \
+            or not isinstance(brief["labels"], list) or not all(isinstance(x, str) for x in brief["labels"]) \
+            or not (brief["milestone"] is None or isinstance(brief["milestone"], str)) \
+            or not isinstance(brief["comments"], list) or not all(
+                isinstance(c, dict) and set(c) == {"author", "body"} and all(isinstance(v, str) for v in c.values())
+                for c in brief["comments"]):
+        raise Unreadable("the brief's fields have the wrong types")
+    return case
+
+
 def main(argv):
-    if len(argv) != 2 or argv[0] != "plan":
-        print("usage: feedback.py plan <case.json | ->", file=sys.stderr)
+    commands = {"plan": lambda path: plan(read(path)), "verify": lambda path: verify(read_brief(path))}
+    if len(argv) != 2 or argv[0] not in commands:
+        print("usage: feedback.py plan|verify <file | ->", file=sys.stderr)
         return 2
     try:
-        print(json.dumps(plan(read(argv[1])), ensure_ascii=True, indent=2))
+        print(json.dumps(commands[argv[0]](argv[1]), ensure_ascii=True, indent=2))
         return 0
     except Refused as why:
         print(f"feedback: refused: {why}", file=sys.stderr)

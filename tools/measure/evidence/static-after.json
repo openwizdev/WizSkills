@@ -1,5 +1,5 @@
 {
-  "commit": "dc48e732b7c6f4405ffe66f1f171843595d2e194",
+  "commit": "d2c11c9b32edfe4d7046544b9cdf12fdd3eecb84",
   "tokenizer": {
     "package": "js-tiktoken",
     "version": "1.0.21",
@@ -16,14 +16,14 @@
     "build-ticket.regression": {
       "fragments": {
         "skills/build-ticket/SKILL.md": 2435,
-        "contracts/open-development.v1.md": 10781,
-        "skills/build-ticket/checklist.md": 1922,
+        "contracts/open-development.v1.md": 10660,
+        "skills/build-ticket/checklist.md": 1935,
         "skills/review-ticket/SKILL.md": 3151,
-        "skills/launch-fleet/SKILL.md": 4399,
+        "skills/launch-fleet/SKILL.md": 5383,
         "skills/launch-fleet/references/identity.md": 788,
         "contracts/github-identity.v1.md": 3508
       },
-      "loaded_path_tokens": 26984
+      "loaded_path_tokens": 27860
     },
     "diagnose.reproduce": {
       "fragments": {
@@ -35,12 +35,12 @@
       "fragments": {
         "skills/grill/SKILL.md": 1056,
         "skills/grill/references/records.md": 909,
-        "contracts/open-development.v1.md": 10781,
-        "contracts/decisions.v1.md": 6679,
+        "contracts/open-development.v1.md": 10660,
+        "contracts/decisions.v1.md": 6520,
         "contracts/decisions.v1.schema.json": 3817,
         "skills/grill/assets/grill.md": 146
       },
-      "loaded_path_tokens": 23388
+      "loaded_path_tokens": 23108
     },
     "handoff.resume": {
       "fragments": {
@@ -56,10 +56,10 @@
     },
     "huntr.intake": {
       "fragments": {
-        "skills/huntr/SKILL.md": 1902,
+        "skills/huntr/SKILL.md": 2265,
         "skills/diagnose/SKILL.md": 1277
       },
-      "loaded_path_tokens": 3179
+      "loaded_path_tokens": 3542
     },
     "image.capture": {
       "fragments": {
@@ -69,53 +69,53 @@
     },
     "install.pinned": {
       "fragments": {
-        "skills/install/SKILL.md": 2890
+        "skills/install/SKILL.md": 2933
       },
-      "loaded_path_tokens": 2890
+      "loaded_path_tokens": 2933
     },
     "launch-fleet.wake": {
       "fragments": {
-        "skills/launch-fleet/SKILL.md": 4399,
+        "skills/launch-fleet/SKILL.md": 5383,
         "skills/launch-fleet/overload.md": 1481,
-        "skills/launch-fleet/references/builders.md": 2140,
-        "skills/launch-fleet/references/records.md": 1400,
-        "contracts/open-development.v1.md": 10781,
+        "skills/launch-fleet/references/builders.md": 2927,
+        "skills/launch-fleet/references/records.md": 1715,
+        "contracts/open-development.v1.md": 10660,
         "skills/launch-fleet/references/identity.md": 788,
         "contracts/github-identity.v1.md": 3508
       },
-      "loaded_path_tokens": 24497
+      "loaded_path_tokens": 26462
     },
     "onboard.resume": {
       "fragments": {
-        "skills/install/SKILL.md": 2890,
+        "skills/install/SKILL.md": 2933,
         "contracts/cli.v1.md": 4248,
         "skills/setup/SKILL.md": 1645,
         "skills/setup/templates/fleet.md": 1242,
-        "contracts/open-development.v1.md": 10781,
+        "contracts/open-development.v1.md": 10660,
         "contracts/github-identity.v1.md": 3508,
         "skills/grill/SKILL.md": 1056,
         "skills/grill/references/records.md": 909,
         "skills/grill/assets/grill.md": 146,
-        "contracts/decisions.v1.md": 6679,
+        "contracts/decisions.v1.md": 6520,
         "contracts/decisions.v1.schema.json": 3817,
         "skills/to-spec/SKILL.md": 929,
         "skills/to-spec/spec.md": 242,
         "skills/to-spec/video.md": 640,
-        "skills/to-tickets/SKILL.md": 946,
-        "skills/to-tickets/tickets.md": 769,
+        "skills/to-tickets/SKILL.md": 1108,
+        "skills/to-tickets/tickets.md": 788,
         "contracts/plan-links.v1.md": 4245
       },
-      "loaded_path_tokens": 44692
+      "loaded_path_tokens": 44636
     },
     "plan-graph.approval": {
       "fragments": {
-        "skills/to-tickets/SKILL.md": 946,
-        "skills/to-tickets/tickets.md": 769,
+        "skills/to-tickets/SKILL.md": 1108,
+        "skills/to-tickets/tickets.md": 788,
         "contracts/plan-links.v1.md": 4245,
-        "contracts/decisions.v1.md": 6679,
+        "contracts/decisions.v1.md": 6520,
         "contracts/decisions.v1.schema.json": 3817
       },
-      "loaded_path_tokens": 16456
+      "loaded_path_tokens": 16478
     },
     "research.synthesis": {
       "fragments": {
@@ -126,50 +126,50 @@
     "review-ticket.exact-head": {
       "fragments": {
         "skills/review-ticket/SKILL.md": 3151,
-        "contracts/open-development.v1.md": 10781
+        "contracts/open-development.v1.md": 10660
       },
-      "loaded_path_tokens": 13932
+      "loaded_path_tokens": 13811
     },
     "setup.repair": {
       "fragments": {
         "skills/setup/SKILL.md": 1645,
         "skills/setup/templates/fleet.md": 1242,
-        "contracts/open-development.v1.md": 10781
+        "contracts/open-development.v1.md": 10660
       },
-      "loaded_path_tokens": 13668
+      "loaded_path_tokens": 13547
     },
     "to-spec.chain": {
       "fragments": {
         "skills/to-spec/SKILL.md": 929,
         "skills/to-spec/spec.md": 242,
         "skills/to-spec/video.md": 640,
-        "skills/to-tickets/SKILL.md": 946,
-        "skills/to-tickets/tickets.md": 769,
+        "skills/to-tickets/SKILL.md": 1108,
+        "skills/to-tickets/tickets.md": 788,
         "contracts/plan-links.v1.md": 4245,
-        "contracts/decisions.v1.md": 6679,
+        "contracts/decisions.v1.md": 6520,
         "contracts/decisions.v1.schema.json": 3817
       },
-      "loaded_path_tokens": 18267
+      "loaded_path_tokens": 18289
     },
     "triage.dispatch": {
       "fragments": {
         "skills/triage/SKILL.md": 2029,
-        "contracts/open-development.v1.md": 10781,
+        "contracts/open-development.v1.md": 10660,
         "skills/triage/AGENT-BRIEF.md": 926
       },
-      "loaded_path_tokens": 13736
+      "loaded_path_tokens": 13615
     },
     "wayfind.resume": {
       "fragments": {
-        "skills/wayfind/SKILL.md": 1568,
+        "skills/wayfind/SKILL.md": 1710,
         "skills/grill/SKILL.md": 1056,
         "skills/grill/references/records.md": 909,
-        "contracts/open-development.v1.md": 10781,
-        "contracts/decisions.v1.md": 6679,
+        "contracts/open-development.v1.md": 10660,
+        "contracts/decisions.v1.md": 6520,
         "contracts/decisions.v1.schema.json": 3817,
         "skills/grill/assets/grill.md": 146
       },
-      "loaded_path_tokens": 24956
+      "loaded_path_tokens": 24818
     },
     "where-are-we.status": {
       "fragments": {

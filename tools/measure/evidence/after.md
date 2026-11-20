@@ -3,9 +3,9 @@
 The 0.2.0 candidate is measured against [WS1's baseline](README.md) with the
 same harness and convention: [the counting convention](../README.md#comparable-static-loaded-path-count),
 the [case stops](../cases.md#static-path-boundaries), `js-tiktoken@1.0.21` and
-`o200k_base`. The candidate is WizSkills
-`dc48e732b7c6f4405ffe66f1f171843595d2e194`. launch-fleet is counted again
-once #1340 (WizSkills #60) merges.
+`o200k_base`. The candidate is the 0.2.0 first-bundle commit, WizSkills
+`d2c11c9b32edfe4d7046544b9cdf12fdd3eecb84`, cut after every release blocker merged. The first count used
+`dc48e732b7c6f4405ffe66f1f171843595d2e194`; this one replaces it.
 
 - [Candidate path manifest](after-paths.json): the same case IDs and stops,
   with each candidate's required paths.
@@ -32,23 +32,23 @@ to-tickets, which is how to-spec now works.
 | Skill | Case | Tokens before | Tokens after | Change | Result |
 | --- | --- | ---: | ---: | ---: | --- |
 | ask-wiz | `ask-wiz.route` | 7,588 | 2,097 | -72% | pass |
-| build-ticket | `build-ticket.regression` | 53,161 | 26,984 | -49% | pass |
+| build-ticket | `build-ticket.regression` | 53,161 | 27,860 | -48% | pass |
 | diagnose | `diagnose.reproduce` | 2,220 | 1,277 | -42% | pass |
-| grill | `grill.new` | 26,553 | 23,388 | -12% | pass |
+| grill | `grill.new` | 26,553 | 23,108 | -13% | pass |
 | handoff | `handoff.resume` | 1,667 | 1,022 | -39% | pass |
 | hill-climb | `hill-climb.select` | 6,432 | 2,979 | -54% | pass |
-| huntr | `huntr.intake` | 7,246 | 3,179 | -56% | pass |
+| huntr | `huntr.intake` | 7,246 | 3,542 | -51% | pass |
 | image | `image.capture` | 2,684 | 1,779 | -34% | pass |
-| install | `install.pinned` | 2,690 | 2,890 | +7% | **fail** |
-| install (onboard merged) | `onboard.resume` | 90,611 | 44,692 | -51% | pass |
-| launch-fleet | `launch-fleet.wake` | 43,331 | 24,497 | -43% | pass |
+| install | `install.pinned` | 2,690 | 2,933 | +9% | **fail** |
+| install (onboard merged) | `onboard.resume` | 90,611 | 44,636 | -51% | pass |
+| launch-fleet | `launch-fleet.wake` | 43,331 | 26,462 | -39% | pass |
 | research | `research.synthesis` | 2,785 | 1,469 | -47% | pass |
-| review-ticket | `review-ticket.exact-head` | 22,300 | 13,932 | -38% | pass |
-| setup | `setup.repair` | 14,940 | 13,668 | -9% | pass |
-| to-spec | `to-spec.chain` | 38,193 | 18,267 | -52% | pass |
-| to-tickets | `plan-graph.approval` | 38,193 | 16,456 | -57% | pass |
-| triage | `triage.dispatch` | 15,643 | 13,736 | -12% | pass |
-| wayfind | `wayfind.resume` | 29,913 | 24,956 | -17% | pass |
+| review-ticket | `review-ticket.exact-head` | 22,300 | 13,811 | -38% | pass |
+| setup | `setup.repair` | 14,940 | 13,547 | -9% | pass |
+| to-spec | `to-spec.chain` | 38,193 | 18,289 | -52% | pass |
+| to-tickets | `plan-graph.approval` | 38,193 | 16,478 | -57% | pass |
+| triage | `triage.dispatch` | 15,643 | 13,615 | -13% | pass |
+| wayfind | `wayfind.resume` | 29,913 | 24,818 | -17% | pass |
 | where-are-we | `where-are-we.status` | 1,676 | 1,112 | -34% | pass |
 
 install's own case fails. Its single entrypoint grew from 99 to 139 lines
@@ -65,9 +65,9 @@ the catalog, and plan-graph split into to-spec and to-tickets.
 | Measure | Before | After | Change | Result |
 | --- | ---: | ---: | ---: | --- |
 | Skills in the catalog | 21 | 18 | -3 | pass (SK-A's 18) |
-| Entrypoint lines, all skills | 4,740 | 1,591 | -66% | pass |
-| Entrypoint words, all skills | 79,650 | 22,027 | -72% | pass |
-| Packaged tokens, the 18 cases measured both times | 369,633 | 220,113 | -40% | pass |
+| Entrypoint lines, all skills | 4,740 | 1,623 | -66% | pass |
+| Entrypoint words, all skills | 79,650 | 23,148 | -71% | pass |
+| Packaged tokens, the 18 cases measured both times | 369,633 | 222,545 | -40% | pass |
 | Skills whose case loads fewer tokens | | 17 of 18 | | install fails |
 
 The 18 cases are the 17 skills' own cases plus `onboard.resume`, all
@@ -88,17 +88,17 @@ The spec's aim is 50 to 100 lines with no hard cap. Every skill longer than
 | grill | 238 | 89 | 3,960 | 750 | |
 | handoff | 99 | 59 | 1,289 | 707 | |
 | hill-climb | 468 | 107 | 4,188 | 1,882 | Keeps the design run's taste-brief and judging rules in its steps |
-| huntr | 103 | 131 | 3,703 | 1,228 | Wrapped at 80 columns: its words fell 67% while its lines grew |
+| huntr | 103 | 152 | 3,703 | 1,484 | Wrapped at 80 columns: its words fell 60% while its lines grew |
 | image | 213 | 77 | 1,780 | 1,176 | |
-| install | 99 | 139 | 1,782 | 1,814 | Holds onboard's first fleet too: install and onboard had 240 lines before |
-| launch-fleet | 720 | 130 | 18,244 | 2,787 | Its line and record tables, one row per kind, are 47 of its lines |
+| install | 99 | 139 | 1,782 | 1,838 | Holds onboard's first fleet too: install and onboard had 240 lines before |
+| launch-fleet | 720 | 132 | 18,244 | 3,439 | Its line and record tables, one row per kind, are 49 of its lines |
 | research | 168 | 76 | 2,041 | 1,030 | |
 | review-ticket | 476 | 98 | 7,757 | 1,995 | |
 | setup | 93 | 74 | 1,954 | 1,053 | |
 | to-spec | 580 (plan-graph) | 75 | 9,008 (plan-graph) | 586 | |
-| to-tickets | 580 (plan-graph) | 76 | 9,008 (plan-graph) | 573 | |
+| to-tickets | 580 (plan-graph) | 85 | 9,008 (plan-graph) | 672 | |
 | triage | 185 | 103 | 2,812 | 1,366 | Keeps its disposition table, one row per outcome |
-| wayfind | 163 | 70 | 2,489 | 1,059 | |
+| wayfind | 163 | 70 | 2,489 | 1,149 | |
 | where-are-we | 58 | 54 | 1,177 | 773 | |
 
 Removed: feedback (65 lines), feedback-triage (83), onboard (141), overnight
@@ -110,7 +110,7 @@ The fleet ran WS1's four observed cases once each at the candidate pin, on
 the same host, model and effort as the baseline (Codex, Sol 6.2, Medium). The
 [receipts](after-trials.json) are copied from the
 [trial record](https://github.com/openwizdev/OpenWiz/issues/1187#issuecomment-7026277760).
-Each attempt made zero retries.
+Each attempt made zero retries. The trials ran at the first count's pin, `dc48e73`, before the release blockers merged, and their receipts carry that commit. No trial has run at the first-bundle commit.
 
 | Case | Before | After | Result |
 | --- | --- | --- | --- |

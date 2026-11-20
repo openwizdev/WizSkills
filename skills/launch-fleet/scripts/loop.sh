@@ -67,9 +67,15 @@ export GH_REPO
 # as GH_TOKEN and git its own credential helper, or, when it gets none, prints
 # the contract's one note and runs the wake as today's account. The old key
 # secret below is then never used. With no service configured, nothing changes.
-if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "${LAUNCH_FLEET_TOKEN_STEP:-}" ]; then
+# The marker is this shell's process id: the helper keeps it (exec), so the wake
+# it runs sees it as its parent's id, or as its own after a fallback (the
+# helper execs the wake). An inherited marker matches neither and is ignored.
+inside=
+case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
+unset LAUNCH_FLEET_TOKEN_STEP
+if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ]; then
   helper=$(cd -P "$(dirname "$0")" && pwd)/github-app/agent-token.py
-  LAUNCH_FLEET_TOKEN_STEP=1
+  LAUNCH_FLEET_TOKEN_STEP=$$
   export LAUNCH_FLEET_TOKEN_STEP
   exec python3 -I "$helper" run --requester fleet-check --repository "$GH_REPO" --read -- sh "$0"
 fi
@@ -84,9 +90,8 @@ fi
 # unchanged probe asks what that identity can read; never an inherited value.
 app=
 unset LAUNCH_FLEET_GITHUB_AUTH
-if [ -n "${LAUNCH_FLEET_TOKEN_STEP:-}" ]; then
+if [ -n "$inside" ]; then
   # Inside the helper's run: its token is in use only when it marked the run.
-  unset LAUNCH_FLEET_TOKEN_STEP
   if [ -n "${OPENWIZ_AGENT_TOKEN_RUN:-}" ]; then
     LAUNCH_FLEET_GITHUB_AUTH=installation
     export LAUNCH_FLEET_GITHUB_AUTH

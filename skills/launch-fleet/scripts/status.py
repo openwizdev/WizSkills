@@ -14,11 +14,13 @@ reads back too (#1441): it steps down when another live note of its kind appeare
 puts back a release a sibling wake wrote between its read and its edit.
 run (#1447): a heartbeat before COMMAND starts and every --every seconds (default 600)
 while it runs: an edit of note ID as it reads now, only its time set to now, so GitHub's
-updated_at, which alone counts toward the 30-minute lease, is new. A beat whose read shows
-the note done or stopped writes nothing. On the fence exit it stops COMMAND (its process
-group: SIGTERM, then SIGKILL after 10 seconds) and exits 3. Otherwise it exits as COMMAND
-does; a failed beat is reported and tried again at the next beat. A refusal or failure
-before COMMAND starts exits 2.
+updated_at, which alone counts toward the 30-minute lease, is new (a note written this same
+second waits for the next). A beat whose read shows the note done or stopped writes nothing.
+A failed beat is reported and tried again after 60 seconds (or --every, if shorter). When no
+beat can start 120 seconds before the lease of the last good one ends, or on the fence exit,
+it stops COMMAND's whole process group (SIGTERM, then SIGKILL to any of it left after 10
+seconds) and exits 3. Otherwise it exits as COMMAND does. A refusal or failure before COMMAND
+starts exits 2.
 check: exit 0 no mismatch, 1 mismatches printed, 2 could not read. It never writes.
 Every GitHub call goes through `gh api`.
 """
@@ -32,13 +34,18 @@ import re
 import signal
 import subprocess
 import sys
+import time
 
 sys.dont_write_bytecode = True
 
 MARKER = '<!-- openwiz:status v1 -->'
 LEASE = timedelta(minutes=30)
 EVERY = 600         # run's default seconds between beats: three beats in each lease
-EVERY_MOST = 900    # at most half the lease, so one failed beat never lets the note lapse
+EVERY_MOST = 900    # at most half the lease, leaving room to retry a failed beat
+RETRY = 60          # seconds before a failed beat is tried again (#62 R3)
+MARGIN = 120        # seconds a beat's GitHub calls may take: no beat starts later than this
+                    # before the lease ends, counted from the start of the last good beat
+GRACE = 10          # seconds between SIGTERM and SIGKILL when run stops the command
 KINDS = ('builder', 'reviewer', 'fleet')
 STATES = ('working', 'asking', 'done', 'stopped')
 CLAIMING = ('working', 'asking')
@@ -258,14 +265,15 @@ EDITS = '''query($id: ID!, $n: Int!) {
 HISTORY = 20
 
 
-def replaced(made, fields):
+def replaced(made, fields, floor=None):
     """The note under this writer's edits, from GitHub's edit history (newest first, each the
     full body), or None when there is none. It skips this edit's own earlier tries, which a retry
     after exit 2 leaves (the same write: the same fields but the time), so a release under the
     first try is still found, but only a release that landed once the oldest try had started
     (its editedAt at or after that try's time, which the writer stamps before it reads). A release
     this agent read and then resumed stays under its resume (#57 R1). Later edits by others may
-    sit above this edit."""
+    sit above this edit. A heartbeat passes FLOOR, the time of the note it last saw written
+    and read back: earlier beats at or under it are acknowledged, never retries (#62 R2)."""
     try:
         found = gh('POST', 'graphql', {'query': EDITS, 'variables': {'id': made['node_id'], 'n': HISTORY}})
         nodes = found['data']['node']['userContentEdits']['nodes']
@@ -281,7 +289,8 @@ def replaced(made, fields):
         raise Failed(f'note {made.get("id")} was edited but its edit history does not hold the edit')
     same = {key: value for key, value in fields.items() if key != 'time'}
     first = k = k + 1
-    while k < len(versions) and versions[k] and dict(versions[k], time=None) == dict(same, time=None):
+    while (k < len(versions) and versions[k] and dict(versions[k], time=None) == dict(same, time=None)
+           and not (floor is not None and versions[k]['time'] <= floor)):
         k += 1
     if k < len(versions):
         if k > first and versions[k] and versions[k]['state'] not in CLAIMING:
@@ -297,6 +306,57 @@ def replaced(made, fields):
     return None
 
 
+def step_down(found, note_id, kind, fields, repo):
+    """After a claim edit: when another live note of its kind exists, stop this one and Stop."""
+    other = next((x for x in found if x[0] != note_id and x[1]['agent'] == kind
+                  and live(x, datetime.now(timezone.utc))), None)
+    if other:
+        gh('PATCH', f'repos/{repo}/issues/comments/{note_id}',
+           {'body': body(dict(fields, state='stopped (lost claim)'))})
+        raise Stop(f'note {other[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
+
+
+def next_beat(now, ok_at, every, failed):
+    """#62 R3: seconds until the next beat, or None when no beat can still land inside the lease.
+    OK_AT is when the last good beat started (its edit landed after), FAILED whether the last beat
+    failed. A failed beat is tried again after RETRY seconds, never later than MARGIN seconds
+    before the lease ends."""
+    deadline = ok_at + LEASE.total_seconds() - MARGIN
+    if now >= deadline:
+        return None
+    due = now + min(RETRY, every) if failed else ok_at + every
+    return max(0, min(due, deadline) - now)
+
+
+def stop_group(proc):
+    """#62 R1: stop the command's whole process group: SIGTERM, then SIGKILL to whatever of the
+    group is left after GRACE seconds, even once the command itself has exited."""
+    def alive():
+        proc.poll()
+        try:
+            os.killpg(proc.pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+    if not alive():
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    end = time.monotonic() + GRACE
+    while time.monotonic() < end and alive():
+        time.sleep(0.1)
+    if alive():
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    proc.wait()
+
+
 def asked_last_by(repo, n, login):
     """True when the issue's events show LOGIN added needs-info last (R1: the writer's own label)."""
     added = [e for e in pages(f'repos/{repo}/issues/{n}/events')
@@ -305,7 +365,7 @@ def asked_last_by(repo, n, login):
     return isinstance(actor, str) and actor.lower() == login.lower()
 
 
-def write(args, now, beat=False, out=sys.stdout):
+def write(args, now, beat=False, out=sys.stdout, retried=False):
     """One write. A BEAT (#1447) takes the note's own fields as its re-read shows them, with
     only time set to now, and stops on a note that is done or stopped: it never reopens one."""
     if not beat:
@@ -341,6 +401,15 @@ def write(args, now, beat=False, out=sys.stdout):
             if own[1]['state'] not in CLAIMING:
                 raise Stop(f'note {args.note} is {own[1]["state"]}: a heartbeat never reopens it')
             fields = dict(own[1], time=now.strftime('%Y-%m-%dT%H:%M:%SZ'))
+            if fields == own[1]:
+                # #62 R4: written this very second. An unchanged body is no edit on GitHub, so
+                # wait for the next second and read again.
+                if retried:
+                    raise Failed(f'note {args.note} already holds this second; nothing to beat')
+                time.sleep(1)
+                return write(args, datetime.now(timezone.utc), beat, out, retried=True)
+            if args.floor is None:
+                args.floor = own[1]['time']
             state = args.state = fields['state']
         # R2: whoever holds the claim now, older or newer, fences out every other note of its kind.
         first = holder(found, kind, now)
@@ -369,7 +438,13 @@ def write(args, now, beat=False, out=sys.stdout):
         # writer never read, landed under its edit (a sibling wake's), is put back: a release is
         # never lost (P3), even when a later edit has changed the note since (#1463 R1). A
         # release it read, it may resume, as a builder answering a review does.
-        prior = parse(replaced(made, fields))
+        try:
+            prior = parse(replaced(made, fields, args.floor if beat else None))
+        except Failed:
+            # #62 R2: an edit history that can't settle the release still leaves the claim to
+            # a newer live holder: step down first, then report the failure.
+            step_down(found, note_id, kind, fields, repo)
+            raise
         if prior and prior['state'] not in CLAIMING and prior != own[1]:
             if mine is None:
                 raise Failed(f'note {note_id} was edited over a release but not read back')
@@ -387,12 +462,7 @@ def write(args, now, beat=False, out=sys.stdout):
             raise Stop(f'note {first[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
     if verb == 'edited' and args.state in CLAIMING:
         # #1441: a newer note that claimed while this one had lapsed keeps the claim (P1, P2, P4).
-        other = next((x for x in found if x[0] != note_id and x[1]['agent'] == kind
-                      and live(x, datetime.now(timezone.utc))), None)
-        if other:
-            gh('PATCH', f'repos/{repo}/issues/comments/{note_id}',
-               {'body': body(dict(fields, state='stopped (lost claim)'))})
-            raise Stop(f'note {other[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
+        step_down(found, note_id, kind, fields, repo)
     # R1: settle needs-info from what GitHub shows now, so a retry repairs a failed label write.
     labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
     asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)
@@ -401,6 +471,7 @@ def write(args, now, beat=False, out=sys.stdout):
     elif not asking and ASKING_LABEL in labels and asked_last_by(repo, n, login):
         gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
     print(f'#{n}: {kind} {state}, status note {note_id} {verb}', file=out)
+    return fields
 
 
 def run(args):
@@ -413,8 +484,10 @@ def run(args):
     if args.note is None or not re.fullmatch(r'[1-9][0-9]*', args.note):
         refuse('note', 'not a comment id')
     every = int(args.every)
+    args.floor = None
+    ok_at = time.monotonic()
     try:
-        write(args, datetime.now(timezone.utc), beat=True, out=sys.stderr)
+        args.floor = write(args, datetime.now(timezone.utc), beat=True, out=sys.stderr)['time']
     except Stop as error:
         raise Stop(f'{error}; the command was not started')
     # Its own process group, so a stop reaches everything COMMAND started.
@@ -425,33 +498,33 @@ def run(args):
     # A run that is itself stopped stops COMMAND too, through the cleanup below.
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda number, _: sys.exit(128 + number))
+    failed, finished = False, False
     try:
         while True:
+            wait = next_beat(time.monotonic(), ok_at, every, failed)
+            if wait is None:
+                raise Stop(f'note {args.note} could not be kept live inside the lease; the command is stopped')
             try:
-                code = proc.wait(timeout=every)
+                code = proc.wait(timeout=wait)
+                finished = True
                 return code if code >= 0 else 128 - code
             except subprocess.TimeoutExpired:
                 pass
+            started = time.monotonic()
             try:
-                write(args, datetime.now(timezone.utc), beat=True, out=sys.stderr)
+                args.floor = write(args, datetime.now(timezone.utc), beat=True, out=sys.stderr)['time']
+                ok_at, failed = started, False
             except Stop as error:
                 raise Stop(f'{error}; the command is stopped')
             except (Failed, KeyError, TypeError, IndexError, ValueError) as error:
-                # The note stays live for the lease; the next beat tries again, and its fence
-                # still stops the command if another note claimed the ticket meanwhile.
-                print(f'status.py: heartbeat failed, next in {every}s: {error}', file=sys.stderr)
+                # The note stays live until the lease ends; the beat is tried again well before
+                # that, and its fence still stops the command if another note claimed meanwhile.
+                failed = True
+                print(f'status.py: heartbeat failed, trying again in {min(RETRY, every)}s: {error}',
+                      file=sys.stderr)
     finally:
-        if proc.poll() is None:
-            for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, None)):
-                try:
-                    os.killpg(proc.pid, sig)
-                    proc.wait(timeout=wait)
-                    break
-                except ProcessLookupError:
-                    break
-                except subprocess.TimeoutExpired:
-                    continue
-
+        if not finished:
+            stop_group(proc)
 
 QUERY = '''query($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) {

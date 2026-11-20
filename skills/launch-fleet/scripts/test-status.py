@@ -103,9 +103,9 @@ def page(items, query):
 parts = urlsplit(path); query = parse_qs(parts.query)
 seg = [unquote(s) for s in parts.path.split('/')]
 def edit(c, text):
-    # GitHub keeps a comment's edit history: its first edit records the original too. An edit
-    # that leaves the body as it was is no edit: no history entry, no new updated_at (#62 R4).
-    if text == c['body']:
+    # GitHub keeps a comment's edit history: its first edit records the original too. A world
+    # can leave an unchanged body unrecorded, no history entry and no new updated_at (#62 R4).
+    if text == c['body'] and world.get('noop_unrecorded'):
         return
     c.setdefault('edits', [c['body']]).append(text)
     c.setdefault('edited_at', [c['updated']]).append(now)
@@ -1213,7 +1213,7 @@ class Run(Tracker):
         # catches (#62 R2): earlier beats, alike but for time, read as retries of this one, so a
         # full history (or one that can't be read) fails the read-back before the holder check,
         # and the old note, refreshed live, keeps the claim from the newer builder.
-        for case in ('twenty earlier beats', 'an unreadable history'):
+        for case in ('twenty earlier beats', 'an unreadable history', 'twenty earlier beats, no rival'):
             with self.subTest(case=case):
                 self.setUp()
                 stamps = [f'2030-01-01T00:{i:02d}:00Z' for i in range(20)]
@@ -1221,6 +1221,13 @@ class Run(Tracker):
                 mine.update(body=note(time=stamps[-1]), updated=ago(40),
                             edits=[note(time=t) for t in stamps], edited_at=stamps)
                 self.world['history_fails'] = case == 'an unreadable history'
+                if case.endswith('no rival'):
+                    # A long build's own beats are acknowledged, not retries: the beats go on.
+                    mine['updated'] = ago(5)
+                    result, _ = self.run_command('long')
+                    self.assertEqual(result.returncode, 7, result.stderr)
+                    self.assertEqual(self.ticket()['comments'][3]['body'].split('\n')[2], 'state: working')
+                    continue
                 self.world['race_edit'] = [{'author': BOT, 'body': note(step='a newer builder claimed')}]
                 result, _ = self.run_command('long')
                 self.assertEqual((result.returncode, result.stderr.splitlines()[-1:]), (3, [
@@ -1267,6 +1274,7 @@ class Run(Tracker):
         spec.loader.exec_module(status)
         pinned = datetime.now(timezone.utc).replace(microsecond=0)
         self.ticket(self.world)['comments'][3]['body'] = note(time=pinned.strftime('%Y-%m-%dT%H:%M:%SZ'))
+        self.world['noop_unrecorded'] = True
         self.save()
         clock = {'slept': 0}
 

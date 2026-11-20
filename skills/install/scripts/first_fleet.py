@@ -246,10 +246,11 @@ def teach(heading, fill=(), which=0):
         line = [text[2:] for text in section.split('\n') if text.startswith('> ')][which]
     except (OSError, IndexError):
         raise Exit(1, "The teacher's lines (teach.md) are unreadable; " + NOTHING)
+    holes = re.findall(r'`?<[^>]+>`?', line)
+    if len(holes) != len(fill):
+        raise Exit(1, "teach.md's %s line has %d blanks, not %d; %s" % (heading, len(holes), len(fill), NOTHING))
     fill = list(fill)
-    line = re.sub(r'`?<[^>]+>`?', lambda _: fill.pop(0), line)
-    assert not fill
-    return line
+    return re.sub(r'`?<[^>]+>`?', lambda _: fill.pop(0), line)
 
 
 # --- Interfaces of tickets not merged yet (#1358's stubs) ----------------------
@@ -269,7 +270,8 @@ def local_driver(env):
     try:
         assert result is not None and result.returncode == 0
         version = strict(result.stdout.decode('utf-8'))
-        assert version['driver'] == 'local' and 'start' in version['can']
+        assert isinstance(version, dict) and version['driver'] == 'local'
+        assert isinstance(version['can'], list) and 'start' in version['can']
         return version
     except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError):
         return None
@@ -664,6 +666,8 @@ def host_pull(repo, env):
         assert result is not None and result.returncode == 0
         pulls = strict(result.stdout.decode('utf-8'))
         assert isinstance(pulls, list) and len(pulls) <= 1
+        assert all(isinstance(p, dict) and set(p) == {'url', 'state'} and isinstance(p['url'], str)
+                   and p['state'] in ('OPEN', 'MERGED', 'CLOSED') for p in pulls)
         return (pulls[0]['url'], pulls[0]['state']) if pulls else None
     except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError):
         raise Exit(6, 'Could not read whether the host setting pull request exists; run this again to read it.')
@@ -692,6 +696,9 @@ def setting(got):
     recorded = state.value.get('setting') or {}
     if recorded.get('state') in ('pending', 'opened'):
         found = host_pull(repo, env)
+        if found and found[1] == 'CLOSED':
+            raise Exit(5, 'The host setting pull request %s was closed without merging; the user reopens and merges '
+                          'it, or answers where agents run again; nothing written.' % found[0])
         if found:
             state.value['setting'] = {'host': 'local', 'state': 'opened', 'pull': found[0]}
             state.save()
@@ -1145,8 +1152,11 @@ def first_merge(got):
     pull = gh_json(['pr', 'view', got['--pr'], '--repo', state.value['repo'], '--json',
                     'number,url,title,state,mergedAt,closingIssuesReferences'], env, 'the pull request')
     try:
+        assert isinstance(pull, dict) and isinstance(pull['closingIssuesReferences'], list)
         closes = {issue['number'] for issue in pull['closingIssuesReferences']}
+        assert all(type(n) is int for n in closes) and type(pull['number']) is int
         assert pull['number'] == int(got['--pr']) and isinstance(pull['url'], str) and isinstance(pull['title'], str)
+        assert pull['state'] in ('OPEN', 'MERGED', 'CLOSED') and (pull['mergedAt'] is None or isinstance(pull['mergedAt'], str))
         merged = pull['state'] == 'MERGED' and isinstance(pull['mergedAt'], str)
     except (KeyError, TypeError, AssertionError):
         raise Exit(1, 'The pull request did not read back completely; no merge counted.')

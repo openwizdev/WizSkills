@@ -65,7 +65,8 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-limit-recovery.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-post.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-merge.py'],
-                     ['python3', '-I', 'skills/launch-fleet/scripts/test-brief.py']],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-brief.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py']],
     # Not a skill: the check's own version rule and changesets (WS18).
     'check': [['python3', '-I', 'check/test_versions.py'],
               ['python3', '-I', 'check/test_changesets.py']],

@@ -1,0 +1,8 @@
+ERROR: test_an_unreadable_spec_or_contract_merges_nothing (__main__.LateLook.test_an_unreadable_spec_or_contract_merges_nothing) [no page info]
+AttributeError: 'NoneType' object has no attribute 'get'
+FAIL: test_an_unreadable_spec_or_contract_merges_nothing (__main__.LateLook.test_an_unreadable_spec_or_contract_merges_nothing) [a state it does not know]
+AssertionError: Tuples differ: (0, 'merged ffffffffffffffffffffffffffffff[25 chars]001') != (1, 'unknown: the spec of synthetic-owner/[52 chars]ged')
+FAIL: test_an_unreadable_spec_or_contract_merges_nothing (__main__.LateLook.test_an_unreadable_spec_or_contract_merges_nothing) [a body that is not text]
+AssertionError: Tuples differ: (0, 'merged ffffffffffffffffffffffffffffff[25 chars]001') != (1, 'unknown: the spec of synthetic-owner/[52 chars]ged')
+Ran 1 test in 3.547s
+FAILED (failures=2, errors=1)

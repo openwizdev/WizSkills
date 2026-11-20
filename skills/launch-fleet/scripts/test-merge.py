@@ -28,7 +28,7 @@ TICKETS = 'synthetic-owner/synthetic-tickets'
 # own world (FAKE_WORLDS) and answers the pull request's closing issues from
 # its world's `closes`, so a write to the wrong repository lands where a test sees it.
 # A world's `faults: {"read": "fail"}` fails its next comment-list read. A ticket's spec query
-# (RC3, #1831) is answered from the world's `tickets`, by number.
+# (RC3, #1831) is answered from the world's `tickets`, by number; a world without them has no spec.
 ROUTER = r'''import json, os, subprocess, sys
 args = sys.argv[1:]
 named = dict(a.split('=', 1) for a in args if a.split('=', 1)[0] in ('owner', 'name'))
@@ -50,7 +50,9 @@ if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'parent {' 
     with open(path) as f:
         world = json.load(f)
     number = next(a.split('=', 1)[1] for a in args if a.startswith('number='))
-    print(json.dumps({'data': {'repository': {'issue': world.get('tickets', {}).get(number)}}}))
+    tickets = world.get('tickets')
+    issue = {'number': int(number), 'parent': None} if tickets is None else tickets.get(number)
+    print(json.dumps({'data': {'repository': {'issue': issue}}}))
     sys.exit(0)
 r = subprocess.run([sys.executable, '-I', %r, *args], env=dict(os.environ, FAKE_WORLD=path),
                    capture_output=True, text=True)
@@ -721,6 +723,19 @@ class LateLook(unittest.TestCase):
         w = self.world(VISIBLE, more=True)
         self.assertEqual(self.merge(w), (1, "unknown: spec %s#40's planned tickets could not be read whole; "
                                             'nothing was merged' % REPO))
+        for name, change in [('a state it does not know', lambda t: t['parent']['subIssues']['nodes'][0].update(state='MERGED')),
+                             ('no page info', lambda t: t['parent']['subIssues'].update(pageInfo=None)),
+                             ('a body that is not text', lambda t: t['parent'].update(body=None)),
+                             ('no such ticket', lambda t: t.clear())]:
+            with self.subTest(name):
+                w = self.world(VISIBLE)
+                value = w.load()
+                change(value['tickets']['12'])
+                value['tickets'] = {k: v for k, v in value['tickets'].items() if v} or {'12': None}
+                w.save(value)
+                self.assertEqual(self.merge(w), (1, 'unknown: the spec of %s#12 could not be read; nothing was merged'
+                                                 % REPO))
+                self.assertEqual(self.merges(w), [])
         w = self.world(VISIBLE)
         w.update(faults={'read': 'fail'})
         self.assertEqual(self.merge(w), (1, 'unknown: the comments on %s#40 could not be read; nothing was merged'
@@ -733,6 +748,28 @@ class LateLook(unittest.TestCase):
         self.assertEqual((code, out.getvalue().strip()),
                          (1, 'unknown: the checkpoints contract could not be read; nothing was merged'))
         self.assertEqual(self.merges(w), [])
+
+    def test_the_documented_late_look_commands_run_as_written(self):
+        # catches: reviews.md's `look` or `ask` command naming a verb, argument order or path
+        # merge.py doesn't take, so a held merge's ask is never posted and it waits forever.
+        text = (HERE.parent / 'references/reviews.md').read_text()
+        found = dict((m.group(2), m.group(1)) for m in
+                     re.finditer(r'`(python3 -I [^`]*merge\.py"? (look|ask) [^`]*)`', text))
+        self.assertEqual(sorted(found), ['ask', 'look'])
+        w = self.world(VISIBLE)
+        (w.dir / 'evidence.txt').write_text(EVIDENCE)
+        values = {"<this skill's folder>": str(HERE.parent), '<owner>/<repo>': REPO, '<P>': '7', '<commit>': HEAD,
+                  '<N>': '12', '<file>': str(w.dir / 'evidence.txt')}
+        for verb, want in [('look', 'held: ask-due: post the evidence ask on %s#40 with merge.py ask' % REPO),
+                           ('ask', 'ask posted 5001'),
+                           ('look', 'held: look-due: the late look asked on %s#40 is not recorded' % REPO)]:
+            command = found[verb]
+            for name, value in values.items():
+                command = command.replace(name, value)
+            argv = shlex.split(command)
+            self.assertEqual(argv[:2], ['python3', '-I'])
+            self.assertNotRegex(' '.join(argv), r'<[^>]+>', 'a placeholder left unfilled')
+            self.assertEqual(self.run_merge(w, *argv[3:]), (0, want))
 
     def test_the_fixture_is_the_contract(self):
         # catches: the tests' copy of the checkpoints contract drifting from the one merge.py reads

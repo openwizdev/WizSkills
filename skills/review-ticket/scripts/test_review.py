@@ -884,17 +884,51 @@ class CommentPass(unittest.TestCase):
 
     def test_a_repository_with_no_checker_gets_one_line(self):
         self.git("rm", "-q", "tools/comment-check/check.py")
+        self.git("commit", "-q", "-m", "no checker")
         code, findings, out = self.comment_pass({"src/app.py": "# workaround for the old runner\nx = 1\n"})
         self.assertEqual((code, out.splitlines()), (3, [
             "no checker: tools/comment-check/check.py is missing here and no --checker was given; "
             "read the diff's comments yourself"]))
 
     def test_another_checker_location_is_used_with_checker(self):
-        (self.repo / "lint").mkdir()
-        self.git("mv", "tools/comment-check/check.py", "lint/comments.py")
+        self.git("rm", "-q", "tools/comment-check/check.py")
+        self.git("commit", "-q", "-m", "no checker")
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(outside)])
+        (outside / "comments.py").write_text(CHECKER.read_text(encoding="utf-8"), encoding="utf-8")
         code, kinds, out = self.kinds({"src/app.py": "# workaround for the old runner\nx = 1\n"},
-                                      "--checker", str(self.repo / "lint" / "comments.py"))
+                                      "--checker", str(outside / "comments.py"))
         self.assertEqual(kinds, [["src/app.py:1", "workaround"]], out)
+
+    def planted(self):
+        mark = Path(tempfile.mkdtemp()) / "ran"
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(mark.parent)])
+        return mark, f"import pathlib\npathlib.Path({str(mark)!r}).write_text('ran')\n"
+
+    def test_a_checker_the_pull_request_changes_never_runs(self):
+        mark, planted = self.planted()
+        code, kinds, out = self.kinds({"tools/comment-check/check.py": planted,
+                                       "src/app.py": "# workaround for the old runner\nx = 1\n"})
+        self.assertFalse(mark.exists(), "the pull request's checker ran")
+        self.assertEqual(kinds, [["src/app.py:1", "workaround"]], out)
+
+    def test_a_checker_the_pull_request_adds_never_runs(self):
+        self.git("rm", "-q", "tools/comment-check/check.py")
+        self.git("commit", "-q", "-m", "no checker")
+        mark, planted = self.planted()
+        code, findings, out = self.comment_pass({"tools/comment-check/check.py": planted,
+                                                 "src/app.py": "# workaround for the old runner\nx = 1\n"})
+        self.assertFalse(mark.exists(), "the pull request's checker ran")
+        self.assertEqual((code, len(out.splitlines())), (3, 1), out)
+        self.assertTrue(out.startswith("no checker: "), out)
+
+    def test_a_checker_inside_the_reviewed_checkout_is_refused(self):
+        mark, planted = self.planted()
+        code, findings, out = self.comment_pass({"lint/comments.py": planted},
+                                                "--checker", str(self.repo / "lint" / "comments.py"))
+        self.assertFalse(mark.exists(), "a checker from the reviewed checkout ran")
+        self.assertEqual((code, len(out.splitlines())), (2, 1), out)
+        self.assertTrue(out.startswith("refused: "), out)
 
 if __name__ == "__main__":
     unittest.main()

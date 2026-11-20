@@ -51,7 +51,8 @@ Early only (`yes`, `no`) is the default. Write `User-visible: yes` when users
 will see the change, `yes, a release` when the spec publishes a release, and
 `One-way door: no` only when the grill settled that it can be undone. Reasons
 go in other sections, never on these lines. to-tickets' approval check refuses
-a new spec without both answers.
+a spec created from 2026-11-21 (UTC) without both answers; an older spec
+without the section reads as early only.
 
 ## 3. Cut the plan
 

@@ -1,5 +1,5 @@
 ---
-"install": major
+"install": minor
 "launch-fleet": patch
 ---
 

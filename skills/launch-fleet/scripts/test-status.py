@@ -291,6 +291,10 @@ class Tracker(unittest.TestCase):
             ]}],
         }
         self.page = '100'
+        # #1737: the writer's private record of its own label applications stays in this test.
+        state = mock.patch.dict(os.environ, {'XDG_STATE_HOME': str(self.dir / 'state')})
+        state.start()
+        self.addCleanup(state.stop)
 
     def save(self):
         (self.dir / 'world.json').write_text(json.dumps(self.world))
@@ -376,6 +380,23 @@ class Write(Tracker):
         self.assertEqual((done.returncode, done.stdout), (0, '#12: builder done, status note 104 edited\n'))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info', 'held'])
         self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')])
+
+    def test_leaving_asking_keeps_a_same_login_hold_it_cannot_show_it_added(self):
+        # catches (#1737): a write leaving asking deleting the needs-info triage set under the
+        # writer's own login before the agent asked, because its last application carries that
+        # login; or leaving it on without saying so.
+        ticket = self.ticket(self.world)
+        ticket['labels'] = ['ready-for-agent', 'needs-info']
+        ticket['events'] = [{'event': 'labeled', 'label': {'name': 'needs-info'}, 'actor': {'login': BOT}}]
+        ticket['comments'].append(comment(104, BOT, note()))
+        self.save()
+        asking = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual((asking.returncode, asking.stdout), (0, '#12: builder asking, status note 104 edited\n'))
+        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertRegex(back.stdout, r'^#12: builder working, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
+        self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
 
     def test_needs_info_stays_while_any_agent_asks_and_a_failed_clear_recovers(self):
         # catches (R1): one agent leaving asking clearing the label another live agent's
@@ -1687,6 +1708,22 @@ class WakeRepair(Tracker):
         self.assertEqual(beat.returncode, 0, beat.stderr)
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
         self.assertEqual(self.timeline(), before)
+
+    def test_a_resume_write_after_the_repair_put_back_a_hold_keeps_it(self):
+        # catches (#1737): the agent's own write leaving asking taking off a person's needs-info
+        # that the repair put back under the same App login (#1712's case, on the plain write).
+        resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                 {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
+        self.asking_on_12(race_label=[resume], race_delete=again)
+        self.wake()
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        before = self.timeline()
+        back = self.write('working', 'pushed the fix', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual(self.timeline(), before)
+        self.assertRegex(back.stdout, r'(?m)^#12: needs-info left on: ')
 
     def test_a_person_who_reapplies_needs_info_after_the_repair_added_it_keeps_it(self):
         # catches: the repair taking off a needs-info whose last application is a person's,

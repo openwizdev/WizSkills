@@ -38,6 +38,6 @@ test_an_unreadable_state_is_a_stop (__main__.Read.test_an_unreadable_state_is_a_
 test_where_it_stands (__main__.Read.test_where_it_stands) ... ok
 
 ----------------------------------------------------------------------
-Ran 38 tests in 23.748s
+Ran 38 tests in 25.034s
 
 OK

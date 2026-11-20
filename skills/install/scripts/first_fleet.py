@@ -139,10 +139,8 @@ TEACH = Path(__file__).resolve().parents[1] / 'teach.md'
 # Harnesses this machine can run, by setup's provider name: the local driver's harness program (#1368).
 PROGRAMS = {'claude-code': 'claude', 'codex': 'codex'}
 HOST_FILE = 'docs/agents/host.md'
-DRIVER_NAME = r'[a-z0-9]+(?:-[a-z0-9]+)*'  # a driver's name, as launch-fleet's host.py reads a `Host:` line
-# DW9 (#2006): what the road says about a driver it knows; any other driver that answers is offered by its name.
-# `cloudroom` is offered as `cloud` (no host file: launch-fleet's own Cloudroom route), so no driver may be
-# named `cloud`, and `template` is the copyable example driver, not a host.
+DRIVER_NAME = r'[a-z0-9]+(?:-[a-z0-9]+)*'
+VERSION_WAIT = 60
 HOSTS = {
     'local': {'label': 'this machine', 'where': 'on this machine'},
     'boat': {'label': 'boat.dev, each agent in its own cloud sandbox', 'where': 'on boat.dev',
@@ -321,7 +319,7 @@ def driver_answer(env, adapters, name):
     path = Path(adapters, name, 'driver')
     if not os.path.isabs(adapters) or not path.is_file() or not os.access(path, os.X_OK):
         return None, 'there is no runnable driver'
-    result = run([str(path), 'version'], env, timeout=60)  # `version` starts nothing; a hung one isn't offered
+    result = run([str(path), 'version'], env, timeout=VERSION_WAIT)
     if result is None:
         return None, 'its `version` did not answer'
     if result.returncode != 0:
@@ -344,7 +342,10 @@ def local_driver(env, adapters):
 
 
 def installed_drivers(env, adapters):
-    """DW9 (#2006): every driver in the build's adapters folder, by name, each its `version` answer or why not."""
+    """Every driver in the build's adapters folder, by name, each its `version` answer or why not (DW9, #2006).
+
+    Cloudroom is offered as `cloud`, launch-fleet's own route with no host file, so its driver and the name
+    `cloud` are not listed; `template` is the copyable example driver, not a host."""
     try:
         names = sorted(p.name for p in Path(adapters).iterdir() if p.name not in NOT_HOSTS
                        and re.fullmatch(DRIVER_NAME, p.name) and len(p.name) <= 40 and Path(p, 'driver').exists()) \
@@ -1102,7 +1103,7 @@ def setting(got):
     if not host or not repo:
         raise Exit(5, 'Ask where agents run (where) and connect the repository (continue) first; nothing written.')
     picked = (state.value.get('mode') or {}).get('mode')
-    name = None if host['agents'] == 'cloud' else host['agents']  # the `Host:` line launch-fleet reads (DW9)
+    name = None if host['agents'] == 'cloud' else host['agents']
     local = name == 'local'
     if local and not picked:
         raise Exit(5, 'Ask the owner to pick the harness permission mode first (mode); nothing written.')
@@ -1158,7 +1159,7 @@ def setting(got):
     if not got.get('--yes'):
         print("Nothing written. On the user's yes to exactly this, run again with --yes.")
         return 12
-    based = {HOST_FILE: None, MODE_FILE: fleet if local else None}  # on the default branch (no host.md there)
+    based = {HOST_FILE: None, MODE_FILE: fleet if local else None}
     state.value['setting'] = {'host': name, 'state': 'pending', 'mode': picked}
     if not state.save():
         raise Exit(10, 'Could not save the host setting first; nothing written.')

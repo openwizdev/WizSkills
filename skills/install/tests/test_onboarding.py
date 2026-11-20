@@ -348,7 +348,6 @@ class Where(unittest.TestCase):
         self.assertEqual(local.returncode, 0, local.stdout)
         self.assertEqual(road.saved()['host'], {'agents': 'local', 'harnesses': ['claude-code'],
                                                 'adapters': str(road.dir / 'adapters')})
-        # each where lists the build's drivers (DW9, #2006), and only ever by `version`: nothing starts
         self.assertEqual(road.driver_calls(), [['version'], ['version']])
 
 
@@ -503,16 +502,16 @@ class LaunchYes(unittest.TestCase):
 class Drivers(unittest.TestCase):
     """DW9 (#2006): the road offers every driver the installed build carries that answers `version`."""
 
-    def road(self, name='fresh-project', boat_fails=False):
+    def road(self, name='fresh-project', boat='FAKE_DRIVER_NAME=boat '):
         road = Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
-        for host in ('cloudroom', 'boat'):  # the local driver is Road's own
+        for host in ('cloudroom', 'boat'):
             folder = road.dir / 'adapters' / host
             folder.mkdir()
-            env = 'FAKE_DRIVER_NAME=%s %s' % (host, 'FAKE_DRIVER_FAIL=1 ' if host == 'boat' and boat_fails else '')
+            env = boat if host == 'boat' else 'FAKE_DRIVER_NAME=%s ' % host
             (folder / 'driver').write_text('#!/bin/sh\n%sexec "%s" -I "%s" "$@"\n' % (
                 env, sys.executable, FIXTURES / 'fake_driver.py'))
             (folder / 'driver').chmod(0o755)
-        boat = road.dir / 'bin/boat'  # boat.dev's own CLI, which only its driver ever runs
+        boat = road.dir / 'bin/boat'
         boat.write_text('#!/bin/sh\necho "$0 $*" >> "%s"\nexit 97\n' % (road.dir / 'boat.log'))
         boat.chmod(0o755)
         return road
@@ -531,17 +530,21 @@ class Drivers(unittest.TestCase):
 
     def test_a_driver_whose_version_fails_is_not_offered_and_the_road_says_why(self):
         # catches: a broken driver offered (its start would fail later), or dropped without a word
-        road = self.road(boat_fails=True)
-        offer = road.helper(['where'])
-        self.assertEqual(offer.returncode, 12, offer.stdout)
-        self.assertEqual(re.findall(r'(?m)^- (\S+):', offer.stdout), ['local', 'cloud'], offer.stdout)
-        refused = [line for line in offer.stdout.splitlines() if line.startswith('Not offered: boat')]
-        self.assertEqual(len(refused), 1, offer.stdout)
-        self.assertIn('version', refused[0])
-        self.assertNotIn('synthetic: not signed in', offer.stdout, "the driver's own words stay off the road")
-        picked = road.helper(['where', '--agents', 'boat', '--yes'])
-        self.assertEqual(picked.returncode, 5, picked.stdout)
-        self.assertNotIn('host', road.saved())
+        for boat, why in (('FAKE_DRIVER_NAME=boat FAKE_DRIVER_FAIL=1 ', 'failed (exit 1)'),
+                          ('FAKE_DRIVER_NAME=local ', 'names another driver')):
+            with self.subTest(why):
+                road = self.road(boat=boat)
+                offer = road.helper(['where'])
+                self.assertEqual(offer.returncode, 12, offer.stdout)
+                self.assertEqual(re.findall(r'(?m)^- (\S+):', offer.stdout), ['local', 'cloud'], offer.stdout)
+                refused = [line for line in offer.stdout.splitlines() if line.startswith('Not offered: ')]
+                self.assertEqual(len(refused), 1, offer.stdout)
+                self.assertTrue(refused[0].startswith('Not offered: boat: '), refused[0])
+                self.assertIn(why, refused[0])
+                self.assertNotIn('synthetic: not signed in', offer.stdout, "the driver's own words stay off the road")
+                picked = road.helper(['where', '--agents', 'boat', '--yes'])
+                self.assertEqual(picked.returncode, 5, picked.stdout)
+                self.assertNotIn('host', road.saved())
 
     def test_picking_boat_writes_the_host_line_launch_fleet_reads_after_the_same_preview_and_yes(self):
         # catches: boat.dev recorded without its preview and yes, written as anything but `Host: boat`, carrying
@@ -571,7 +574,7 @@ class Drivers(unittest.TestCase):
         changed = sorted(p for p in set(branch) | set(world['files']) if branch.get(p) != world['files'].get(p))
         self.assertEqual(changed, ['docs/agents/host.md'], 'only the host line; no permission mode row')
         self.assertEqual(re.findall(r'(?m)^Host:.*$', branch['docs/agents/host.md']), ['Host: boat'])
-        road.origin_write({'docs/agents/host.md': branch['docs/agents/host.md']})  # the owner merges it
+        road.origin_write({'docs/agents/host.md': branch['docs/agents/host.md']})
         world['host_pulls'][0]['state'] = 'MERGED'
         road.world = world
         road.save_world()

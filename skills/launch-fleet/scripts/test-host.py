@@ -247,6 +247,74 @@ class Host(unittest.TestCase):
 STOPPED = 'stopped (driver start failed)'
 
 
+TOKEN = 'synthetic-ga4-token-0123456789'   # fixtures/token_service.py's synthetic token
+WRITE = {'metadata': 'read', 'contents': 'write', 'issues': 'write', 'pull_requests': 'write', 'checks': 'read',
+         'actions': 'read'}
+NOTE = "openwiz: no openwiz[bot] token (unavailable); using the owner's GitHub account"
+
+
+class Token(unittest.TestCase):
+    """GA4 (OpenWiz #1846): a driver start and a wake each get the builder's token from the agent helper."""
+
+    def service(self, p):
+        """The synthetic token service on the local route, and an empty private token folder."""
+        private = p.dir / 'token-private'
+        private.mkdir(mode=0o700)
+        p.service_log = p.dir / 'service.log'
+        return dict(OPENWIZ_TOKEN_SERVICE=str(HERE / 'fixtures/token_service.py'), OPENWIZ_TOKEN_SERVICE_ROUTE='local',
+                    OPENWIZ_AGENT_TOKEN_DIR=str(private), FAKE_SERVICE_LOG=str(p.service_log))
+
+    def requests(self, p):
+        return [json.loads(line) for line in p.service_log.read_text().splitlines()] if p.service_log.exists() else []
+
+    def exposed(self, p, *outputs):
+        """Every place a token must never be: output, the driver's log and input, the runs file, GitHub."""
+        texts = [*outputs, p.log.read_text() if p.log.exists() else '', p.runs.read_text() if p.runs.exists() else '',
+                 p.world.read_text(), *(json.dumps(r['argv']) for r in self.requests(p))]
+        return [t for t in texts if TOKEN in t]
+
+    def test_a_driver_start_and_a_wake_each_get_the_builders_token_from_the_helper(self):
+        # catches: a builder started or woken through a driver without asking the helper, so it acts as the owner
+        p = Project(self)
+        env = self.service(p)
+        started = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env)
+        self.assertEqual(started, (0, 'started #7 on local', ''))
+        self.assertEqual([r['request'] for r in self.requests(p)], [{
+            'schema': 'openwiz.token-service.v1', 'kind': 'request', 'requester': 'builder-7',
+            'repositories': [REPO], 'permissions': WRITE}])
+        held = [f for f in (p.dir / 'token-private').iterdir()]
+        self.assertEqual(len(held), 1)
+        self.assertEqual(held[0].stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(held[0].read_text())['token'], TOKEN)  # the builder's private place only
+        self.assertEqual(p.calls()[0]['input'], {'repository': REPO, 'ticket': 7, 'skill': 'build-ticket',
+                                                 'harness': 'claude', 'model': 'claude-opus-5-5'})
+        held[0].unlink()  # the wake must ask again, not lean on the start's token
+        woke = p.host('wake', REPO, 7, **env)
+        self.assertEqual(woke, (0, 'woke #7 on local', ''))
+        self.assertEqual([r['request']['requester'] for r in self.requests(p)], ['builder-7', 'builder-7'])
+        self.assertEqual(self.exposed(p, *started[1:], *woke[1:]), [])
+
+    def test_a_refused_token_falls_back_with_one_note_and_the_start_goes_on(self):
+        # catches: a failed mint stopping the start, or falling back silently or with more than the one note
+        p = Project(self)
+        env = dict(self.service(p), FAKE_SERVICE_REFUSE='1')
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env), (0, 'started #7 on local', NOTE))
+        self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', NOTE))
+        self.assertEqual(len(self.requests(p)), 2)
+        self.assertEqual(list((p.dir / 'token-private').iterdir()), [])
+
+    def test_with_no_service_no_helper_runs_and_starts_are_as_today(self):
+        # catches: the token step running, or making its private folder, when no service is configured
+        p = Project(self)
+        env = self.service(p)
+        (p.dir / 'token-private').rmdir()
+        env['OPENWIZ_TOKEN_SERVICE'] = ''  # set but empty is not configured, as the helper reads it
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env), (0, 'started #7 on local', ''))
+        self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', ''))
+        self.assertEqual(self.requests(p), [])
+        self.assertFalse((p.dir / 'token-private').exists())
+
+
 class Failures(unittest.TestCase):
     """#1446: a refused start or wake is tried three times in all, then reported on the ticket once."""
 

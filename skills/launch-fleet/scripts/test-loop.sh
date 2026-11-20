@@ -11,6 +11,8 @@ mkdir -p "$work/bin" "$work/plugin cache/skills/launch-fleet/scripts/carried" \
 cp "$HERE/loop.sh" "$HERE/fleet.sh" "$HERE/records.py" "$work/plugin cache/skills/launch-fleet/scripts/"
 cp "$HERE/../../to-tickets/revision.sh" "$HERE/../../to-tickets/check-links.sh" "$work/plugin cache/skills/to-tickets/"
 cp "$HERE/carried/alarm.py" "$work/plugin cache/skills/launch-fleet/scripts/carried/"
+mkdir "$work/plugin cache/skills/launch-fleet/scripts/github-app"
+cp "$HERE/github-app/agent-token.py" "$work/plugin cache/skills/launch-fleet/scripts/github-app/"
 mkdir "$work/linked skills"
 ln -s "$work/plugin cache/skills/launch-fleet" "$work/linked skills/launch-fleet"
 # GI7 (#2549): the fake gh also records the token each call gets (synthetic).
@@ -99,6 +101,8 @@ mkdir -p "$work/installed/skills/launch-fleet/scripts/carried" "$work/installed/
 cp "$HERE/loop.sh" "$HERE/fleet.sh" "$HERE/records.py" "$work/installed/skills/launch-fleet/scripts/"
 cp "$HERE/../../to-tickets/revision.sh" "$HERE/../../to-tickets/check-links.sh" "$work/installed/skills/to-tickets/"
 cp "$HERE/carried/alarm.py" "$work/installed/skills/launch-fleet/scripts/carried/"
+mkdir "$work/installed/skills/launch-fleet/scripts/github-app"
+cp "$HERE/github-app/agent-token.py" "$work/installed/skills/launch-fleet/scripts/github-app/"
 rm -rf "$work/cache"
 status=0
 sh "$work/installed/skills/launch-fleet/scripts/loop.sh" > "$work/out" 2> "$work/err" || status=$?
@@ -143,6 +147,32 @@ rm "$work/bin/openwiz"
 (PATH="$work/bin:/usr/bin:/bin" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj identity 'none account' \
   "loop.sh: no openwiz to mint the App token; GitHub as today's account")
 echo "ok   without the secret, openwiz or a token, the check runs as today's account and says so (#2549)"
+
+# GA4 (OpenWiz #1846): with a token service configured, the wake reads GitHub with
+# a read-only openwiz[bot] token from the agent helper, never the old key secret;
+# a refused mint falls back to today's account with the contract's one note.
+ga4=synthetic-ga4-token-0123456789
+mkdir -m 700 "$work/token-private"
+service() { # the synthetic service on the local route, and the old key secret that it must replace
+  export OPENWIZ_TOKEN_SERVICE="$FIX/token_service.py" OPENWIZ_TOKEN_SERVICE_ROUTE=local \
+    OPENWIZ_AGENT_TOKEN_DIR="$work/token-private" FAKE_SERVICE_LOG="$work/service.log" \
+    OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj
+  : > "$work/service.log"
+}
+(service; identity "$ga4 installation" '')
+[ "$(jq -c .request "$work/service.log")" = '{"schema":"openwiz.token-service.v1","kind":"request","requester":"fleet-check","repositories":["synthetic-owner/synthetic-repo"],"permissions":{"metadata":"read","contents":"read","issues":"read","pull_requests":"read","checks":"read","actions":"read"}}' ]
+[ "$(jq -c .argv "$work/service.log")" = '["mint"]' ]
+! grep -q "$ga4" "$work/out" "$work/err" "$work/gh.log"
+echo 'ok   with a token service the wake reads GitHub with the helper'"'"'s read-only token and prints none (#1846)'
+(service; export FAKE_SERVICE_REFUSE=1; identity 'none account' \
+  "openwiz: no openwiz[bot] token (unavailable); using the owner's GitHub account")
+[ "$(wc -l < "$work/service.log" | tr -d ' ')" = 1 ]
+[ -z "$(ls -A "$work/token-private")" ]
+echo "ok   a refused mint runs the wake as today's account with the contract's one note (#1846)"
+(service; export OPENWIZ_TOKEN_SERVICE= PATH="$work/bin:/usr/bin:/bin"
+  identity 'none account' "loop.sh: no openwiz to mint the App token; GitHub as today's account")
+[ ! -s "$work/service.log" ]
+echo 'ok   with no service configured the wake is exactly as today (#1846)'
 
 # Failed refreshes and first clones must not emit work or leave runtime files.
 mv "$work/remote" "$work/offline"

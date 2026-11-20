@@ -1198,6 +1198,43 @@ class Run(Tracker):
                 self.assertEqual(self.ticket()['labels'], labels)
                 self.assertEqual([(e['event'], e['actor']['login']) for e in self.ticket()['events']], timeline)
 
+    def asking_run(self, **race):
+        """Note 104 asks with no needs-info; the run's first beat adds it; RACE lands as named."""
+        self.ticket(self.world)['comments'][3] = comment(104, BOT, note(state='asking'), minutes=25)
+        self.world.update(race)
+
+    def test_a_heartbeat_never_takes_off_a_same_app_hold_that_landed_before_its_post(self):
+        # catches: a heartbeat taking another same-App writer's application (a put-back, or
+        # triage's hold) landing just before its own no-op POST for its own, and deleting it
+        # once the note is working (#83 R1).
+        hold = {'issue': 12, 'label': 'needs-info', 'by': BOT}
+        self.asking_run(race_label=[hold])
+        result, _ = self.run_command('resumed')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual([(e['event'], e['actor']['login']) for e in self.ticket()['events']], [('labeled', BOT)])
+
+    def test_a_failed_event_read_after_the_first_beat_label_still_starts_the_command(self):
+        # catches: a temporary event-read error after the first beat's label write aborting the
+        # run before its command starts (#83 R2).
+        failing = {'fail_once': f'GET repos/{REPO}/issues/12/events?per_page=100&page=1'}
+        self.asking_run(race_label=[failing])
+        result, _ = self.run_command('resumed')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(Path(self.out + '.pid').exists())
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
+    def test_a_hold_reapplied_as_the_heartbeat_clears_its_label_survives_a_failed_read(self):
+        # catches: a heartbeat whose DELETE takes a person's reapplied needs-info and, on a
+        # temporary event-read error, never puts it back (#83 R3).
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                 {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'},
+                 {'fail_once': f'GET repos/{REPO}/issues/12/events?per_page=100&page=1'}]
+        self.asking_run(race_delete=again)
+        result, _ = self.run_command('resumed')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
     def test_run_stops_the_command_when_a_newer_builder_holds_the_claim(self):
         # catches: a heartbeat that keeps the work running, or takes the ticket back, after its
         # note lapsed and a newer builder claimed it (the fence exit).

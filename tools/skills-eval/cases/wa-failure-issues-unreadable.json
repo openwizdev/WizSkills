@@ -1,0 +1,121 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "wa-failure-issues-unreadable",
+ "skills": [
+  "where-are-we"
+ ],
+ "category": "failure",
+ "brief": "Use the where-are-we skill (read 'skills/where-are-we/SKILL.md') for example/project: where are we?",
+ "world": {
+  "github": {
+   "issues": {},
+   "pulls": {}
+  },
+  "scripts": [
+   {
+    "argv": [
+     "script",
+     "skills/where-are-we/scripts/read-github.py"
+    ],
+    "out": "{\"issues\": {\"state\": \"unconfirmed\", \"reason\": \"gh exited 1\"}, \"pulls\": {\"state\": \"read\", \"items\": []}}\n",
+    "code": 2
+   },
+   {
+    "argv": [
+     "gh",
+     "issue",
+     "list"
+    ],
+    "out": "HTTP 502: Bad Gateway\n",
+    "code": 1
+   }
+  ]
+ },
+ "expect": {
+  "actions": [
+   {
+    "any": [
+     {
+      "run": "script skills/where-are-we/scripts/read-github.py"
+     },
+     {
+      "run": "gh issue list"
+     }
+    ]
+   }
+  ],
+  "allow": [],
+  "forbid": [
+   {
+    "write": "gh issue comment"
+   },
+   {
+    "write": "gh issue edit"
+   },
+   {
+    "write": "room-cli thread spawn"
+   }
+  ],
+  "end": "end_turn",
+  "final": "Facts: the issue read failed (gh exited 1); the pull request read worked and found none open. Says the issues could not be read (unconfirmed); never reports zero or no open issues."
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "reports issues unconfirmed",
+    "events": [
+     [
+      "read",
+      "script skills/where-are-we/scripts/read-github.py"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "a run that ends without a final message is incomplete",
+    "reason": "incomplete",
+    "events": [
+     [
+      "read",
+      "script skills/where-are-we/scripts/read-github.py"
+     ]
+    ],
+    "final": "",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   },
+   {
+    "why": "the reply says the opposite of what the case requires",
+    "reason": "bad-final",
+    "events": [
+     [
+      "read",
+      "script skills/where-are-we/scripts/read-github.py"
+     ]
+    ],
+    "final": "There are no open issues.",
+    "judgment": {
+     "verdict": "fail",
+     "reason": "control: contradicts the rule"
+    }
+   },
+   {
+    "why": "a reply nobody judged is unverified, never a pass",
+    "reason": "unjudged",
+    "events": [
+     [
+      "read",
+      "script skills/where-are-we/scripts/read-github.py"
+     ]
+    ]
+   }
+  ]
+ }
+}

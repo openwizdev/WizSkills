@@ -10,7 +10,10 @@ closing offer after a merge read back from GitHub. All values are synthetic.
 import json
 from pathlib import Path
 import re
+import shutil
+import stat
 import sys
+import tempfile
 import unittest
 
 sys.dont_write_bytecode = True
@@ -87,8 +90,16 @@ class Road(Journey):
         harness = self.dir / 'bin/claude'
         harness.write_text('#!/bin/sh\necho "$0 $*" >> "%s"\nexit 97\n' % (self.dir / 'harness.log'))
         harness.chmod(0o755)
-        self.extra_env.update(OPENWIZ_ADAPTERS=str(self.dir / 'adapters'),
+        # KN3's host-side state on the owner's machine, outside the repository checkout (KN3 security R6)
+        self.host_state = Path(tempfile.mkdtemp(prefix='host-state-'))
+        case.addCleanup(shutil.rmtree, self.host_state, True)
+        self.extra_env.update(OPENWIZ_ADAPTERS=str(self.dir / 'adapters'), OPENWIZ_LOCAL_STATE=str(self.host_state),
                               FAKE_DRIVER_LOG=str(self.dir / 'driver.log'), FAKE_GH_ARGV_LOG=str(self.dir / 'gh-argv.log'))
+
+    def approvals(self):
+        """This machine's host-side permission approvals, as KN3's setup step (stubbed) saves them."""
+        path = self.host_state / 'approvals.json'
+        return json.loads(path.read_text()) if path.exists() else None
 
     def machine_approve(self, grill=GRILL, comment=90001):
         self.approve(comment=comment, grill=grill)
@@ -507,6 +518,58 @@ class PermissionMode(unittest.TestCase):
         self.assertEqual(refused.returncode, 5, refused.stdout)
         self.assertIn('`default`', refused.stdout)
         self.assertNotIn('host_pulls', json.loads(road.world_path.read_text()))
+
+
+class HostApproval(unittest.TestCase):
+    """KN3 security R6, option A (#1358, comment 7031005254): one pick, a host-side approval and the fleet.md row."""
+
+    def road(self, name='always-wanted'):
+        return Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
+
+    def test_the_pick_writes_this_machines_approval_once_and_never_widens_it(self):
+        # catches: the approval never written, written inside the repository or readable by others, or replaced by a
+        # wider mode on a second answer
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
+        self.assertIsNone(road.approvals())
+        self.assertEqual(road.helper(['mode', '--mode', 'acceptEdits']).returncode, 0)
+        self.assertEqual(road.approvals(), {road.repo: {'claude': 'acceptEdits'}})
+        path = road.host_state / 'approvals.json'
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertFalse(str(path.resolve()).startswith(str(road.dir.resolve())), 'outside the repository')
+        wider = road.helper(['mode', '--mode', 'bypassPermissions'])
+        self.assertEqual(wider.returncode, 5, wider.stdout)
+        self.assertEqual(road.approvals(), {road.repo: {'claude': 'acceptEdits'}}, 'never widened')
+        self.assertFalse([c for c in road.gh_calls() if c[:1] == ['auth']])
+
+    def test_neither_a_row_nor_an_approval_alone_launches_on_this_machine(self):
+        # catches: a fleet started on this machine when the fleet.md row has no matching host-side approval, or the
+        # approval no matching row (KN3's start would refuse every builder), or a refusal that doesn't say what to do
+        cases = {'a row, no approval': None, 'a row, another approval': 'bypassPermissions'}
+        for name, approval in cases.items():
+            with self.subTest(name):
+                road = self.road()
+                road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
+                path = road.host_state / 'approvals.json'
+                if approval is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_text(json.dumps({road.repo: {'claude': approval}}))
+                road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
+                result = road.helper(['launch', '--spec', '900'])
+                self.assertEqual(result.returncode, 5, result.stdout)
+                self.assertIn('host-side approval', result.stdout)
+                self.assertIn('mode --mode acceptEdits', result.stdout, 'says what to do')
+                self.assertEqual(road.spawns(), [])
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
+        road.origin_write({'docs/agents/fleet.md': fleet_md(builder=CLAUDE, small=CLAUDE)})  # the approval, no row
+        road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
+        result = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(result.returncode, 5, result.stdout)
+        self.assertIn('| Harness permission mode | `acceptEdits` |', result.stdout)
+        self.assertIn('run mode, then setting, and merge it', result.stdout)
+        self.assertEqual(road.spawns(), [])
 
 
 class FirstMerge(unittest.TestCase):

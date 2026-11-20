@@ -4,7 +4,7 @@ The 0.2.0 candidate is measured against [WS1's baseline](README.md) with the
 same harness and convention: [the counting convention](../README.md#comparable-static-loaded-path-count),
 the [case stops](../cases.md#static-path-boundaries), `js-tiktoken@1.0.21` and
 `o200k_base`. The candidate is the 0.2.0 first-bundle commit, WizSkills
-`d2c11c9b32edfe4d7046544b9cdf12fdd3eecb84`, cut after every release blocker merged. The first count used
+`dd6279a31eb45f17f6fd6be26a073356efea02f0`, cut after every release blocker merged. The first count used
 `dc48e732b7c6f4405ffe66f1f171843595d2e194`; this one replaces it.
 
 - [Candidate path manifest](after-paths.json): the same case IDs and stops,
@@ -40,12 +40,12 @@ to-tickets, which is how to-spec now works.
 | huntr | `huntr.intake` | 7,246 | 3,542 | -51% | pass |
 | image | `image.capture` | 2,684 | 1,779 | -34% | pass |
 | install | `install.pinned` | 2,690 | 2,933 | +9% | **fail** |
-| install (onboard merged) | `onboard.resume` | 90,611 | 44,636 | -51% | pass |
-| launch-fleet | `launch-fleet.wake` | 43,331 | 26,462 | -39% | pass |
+| install (onboard merged) | `onboard.resume` | 90,611 | 44,668 | -51% | pass |
+| launch-fleet | `launch-fleet.wake` | 43,331 | 26,881 | -38% | pass |
 | research | `research.synthesis` | 2,785 | 1,469 | -47% | pass |
 | review-ticket | `review-ticket.exact-head` | 22,300 | 13,811 | -38% | pass |
 | setup | `setup.repair` | 14,940 | 13,547 | -9% | pass |
-| to-spec | `to-spec.chain` | 38,193 | 18,289 | -52% | pass |
+| to-spec | `to-spec.chain` | 38,193 | 18,321 | -52% | pass |
 | to-tickets | `plan-graph.approval` | 38,193 | 16,478 | -57% | pass |
 | triage | `triage.dispatch` | 15,643 | 13,615 | -13% | pass |
 | wayfind | `wayfind.resume` | 29,913 | 24,818 | -17% | pass |
@@ -65,9 +65,9 @@ the catalog, and plan-graph split into to-spec and to-tickets.
 | Measure | Before | After | Change | Result |
 | --- | ---: | ---: | ---: | --- |
 | Skills in the catalog | 21 | 18 | -3 | pass (SK-A's 18) |
-| Entrypoint lines, all skills | 4,740 | 1,623 | -66% | pass |
-| Entrypoint words, all skills | 79,650 | 23,148 | -71% | pass |
-| Packaged tokens, the 18 cases measured both times | 369,633 | 222,545 | -40% | pass |
+| Entrypoint lines, all skills | 4,740 | 1,624 | -66% | pass |
+| Entrypoint words, all skills | 79,650 | 23,166 | -71% | pass |
+| Packaged tokens, the 18 cases measured both times | 369,633 | 222,996 | -40% | pass |
 | Skills whose case loads fewer tokens | | 17 of 18 | | install fails |
 
 The 18 cases are the 17 skills' own cases plus `onboard.resume`, all
@@ -95,7 +95,7 @@ The spec's aim is 50 to 100 lines with no hard cap. Every skill longer than
 | research | 168 | 76 | 2,041 | 1,030 | |
 | review-ticket | 476 | 98 | 7,757 | 1,995 | |
 | setup | 93 | 74 | 1,954 | 1,053 | |
-| to-spec | 580 (plan-graph) | 75 | 9,008 (plan-graph) | 586 | |
+| to-spec | 580 (plan-graph) | 76 | 9,008 (plan-graph) | 604 | |
 | to-tickets | 580 (plan-graph) | 85 | 9,008 (plan-graph) | 672 | |
 | triage | 185 | 103 | 2,812 | 1,366 | Keeps its disposition table, one row per outcome |
 | wayfind | 163 | 70 | 2,489 | 1,149 | |

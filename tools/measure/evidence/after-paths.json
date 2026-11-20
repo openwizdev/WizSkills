@@ -1,5 +1,5 @@
 {
-  "commit": "d2c11c9b32edfe4d7046544b9cdf12fdd3eecb84",
+  "commit": "dd6279a31eb45f17f6fd6be26a073356efea02f0",
   "workflows": {
     "ask-wiz.route": [
       "skills/ask-wiz/SKILL.md",

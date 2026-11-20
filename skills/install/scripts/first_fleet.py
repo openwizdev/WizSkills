@@ -48,10 +48,11 @@ Orchestrator and Builder rows become the choice, the Small builder and Fixer
 follow the Builder, and the Reviewer stays when it is of the other model family,
 otherwise becomes the contract's recommended choice of that family, only when
 offered. A file with only the older tables gets the table inserted before
-them; the older tables are left as they are. Then it reads the fleet's
-settings back from the default branch: Choose the agents is done only once they
-name exactly that choice. Local stays recorded but unfinished, since a Local
-fleet cannot launch yet.
+them; the older tables are left as they are. It writes only inside the
+checkout, opening docs/ and docs/agents/ without following a link. Then it
+reads the default branch: Choose the agents is done only once its Models table
+has exactly the rows written. Local stays recorded but unfinished, since a
+Local fleet cannot launch yet.
 
 `next` reads only the state file and prints the first unfinished step and
 what to run there, so a fresh session resumes without repeating an effect.
@@ -587,16 +588,16 @@ def choose(got):
             env = repository(state.value.get('repo'))
         except Exit:
             env = None
-        wrote = None if env is None else write_models(settings, offered)
+        wrote, intended = (None, None) if env is None else write_models(settings, offered)
         try:
-            rules = None if env is None else fleet_rules(env, state.value['repo'])
+            remote = None if env is None else fleet_text(env, state.value['repo'])
         except Exit:
-            rules = None
-        if rules is not None:
+            remote = None
+        if remote is not None:
+            # Review R2: only the default branch's Models table with exactly the written rows reads back.
             try:
-                review(choices, rules)  # the launch's own check of the same tables
-                read = True
-            except Exit:
+                read = models_table(remote) == intended
+            except ValueError:
                 read = False
     if read:
         choices['builder_tables'] = 'read'
@@ -609,8 +610,7 @@ def choose(got):
     if got['--agents'] == 'local':
         print(LOCAL)
     elif read:
-        print("Read back: the fleet's settings on the default branch name exactly this choice for every builder, "
-              'with an other-family reviewer.')
+        print("Read back: the default branch's Models table has exactly the rows choose wrote.")
     else:
         print(tables_line(choices, 'could not be read' if read is None else 'do not name this choice yet'))
         return 1 if read is None else 0
@@ -656,11 +656,48 @@ def model_row(role, agent):
 
 
 def write_models(settings, offered):
-    """Write the choice into this checkout's Models table; the line to show, or Exit 5 with nothing written."""
+    """Write the choice into this checkout's Models table: (the line to show, the rows written), or Exit 5."""
     choice = (settings['harness'], settings['model'], settings['effort'])
     try:
-        assert stat.S_ISREG(os.lstat(FLEET_MD).st_mode)
-        text = FLEET_MD.read_text(encoding='utf-8')
+        folder = settings_folder()
+    except OSError:
+        raise Exit(5, 'This checkout has no docs/agents/ folder of its own (a missing or linked folder); run setup '
+                      'first; nothing recorded.')
+    try:
+        return write_in(folder, choice, offered)
+    finally:
+        os.close(folder)
+
+
+def settings_folder():
+    """Review R3: docs/agents/ of this checkout, opened one step at a time without following a link.
+
+    Every later read and write goes through this descriptor, so a folder
+    swapped for a link after this check is never followed either.
+    """
+    folder = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in FLEET_MD.parent.parts:
+            inner = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=folder)
+            os.close(folder)
+            folder = inner
+    except OSError:
+        os.close(folder)
+        raise
+    return folder
+
+
+def write_in(folder, choice, offered):
+    name = FLEET_MD.name
+    try:
+        handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=folder)
+        try:
+            info = os.fstat(handle)
+            assert stat.S_ISREG(info.st_mode)
+            with os.fdopen(os.dup(handle), 'rb') as source:
+                text = source.read().decode('utf-8')
+        finally:
+            os.close(handle)
     except (OSError, UnicodeError, AssertionError):
         raise Exit(5, 'This checkout has no readable docs/agents/fleet.md; run setup first; nothing recorded.')
     try:
@@ -700,24 +737,25 @@ def write_models(settings, offered):
                                          'Small builder': None, 'Fixer': None}
     except (ValueError, AssertionError):
         raise Exit(5, 'cannot be written to the Models table: %s; nothing recorded.' % ' '.join(choice))
+    intended = {'Orchestrator': choice, 'Builder': choice, 'Reviewer': reviewer, 'Small builder': None, 'Fixer': None}
     said = ('docs/agents/fleet.md: the Models table names %s for the Orchestrator and Builder, with %s as the '
             'Reviewer' % (' '.join(choice), ' '.join(reviewer)))
     if written == text:
-        return said + '; already written.'
-    folder = FLEET_MD.parent
-    handle, temporary = tempfile.mkstemp(dir=folder, prefix='.fleet-')
+        return said + '; already written.', intended
+    temporary = '.fleet-%s' % os.urandom(8).hex()
     try:
-        with os.fdopen(handle, 'w', encoding='utf-8') as out:
-            out.write(written)
-        os.chmod(temporary, stat.S_IMODE(os.stat(FLEET_MD).st_mode))
-        os.replace(temporary, FLEET_MD)
+        out = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                      stat.S_IMODE(info.st_mode), dir_fd=folder)
+        with os.fdopen(out, 'wb') as target:
+            target.write(written.encode('utf-8'))
+        os.replace(temporary, name, src_dir_fd=folder, dst_dir_fd=folder)
     except OSError:
         try:
-            os.unlink(temporary)
+            os.unlink(temporary, dir_fd=folder)
         except OSError:
             pass
         raise Exit(5, 'Could not write docs/agents/fleet.md; nothing recorded.')
-    return 'Wrote %s; commit it and merge it to the default branch.' % said
+    return 'Wrote %s; commit it and merge it to the default branch.' % said, intended
 
 
 def repository(recorded):
@@ -811,11 +849,16 @@ def agent(lines):
 
 def fleet_rules(env, repo):
     """The builder and reviewer tables of docs/agents/fleet.md on the default branch."""
+    return settings_rules(fleet_text(env, repo))
+
+
+def fleet_text(env, repo):
+    """docs/agents/fleet.md as the default branch holds it."""
     result = run(['gh', 'api', 'repos/%s/contents/docs/agents/fleet.md' % repo,
                   '-H', 'Accept: application/vnd.github.raw+json'], env)
     if result is None or result.returncode != 0:
         raise Exit(1, "Could not read the fleet settings (docs/agents/fleet.md); run setup; " + NOTHING)
-    return settings_rules(result.stdout.decode('utf-8', 'replace'))
+    return result.stdout.decode('utf-8', 'replace')
 
 
 def settings_rules(text):

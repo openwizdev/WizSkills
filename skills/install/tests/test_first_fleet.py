@@ -1162,8 +1162,7 @@ class ModelsTable(unittest.TestCase):
                 result = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
                 self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
                 self.assertEqual(target.read_text(), fleet_md(), 'the file outside the checkout is unchanged')
-                self.assertEqual(sorted(p.name for p in target.parent.iterdir()), ['agents', 'fleet.md'] if link == 'docs'
-                                 else ['fleet.md'], 'nothing staged outside')
+                self.assertEqual(sorted(p.name for p in target.parent.iterdir()), ['fleet.md'], 'nothing staged outside')
                 self.assertNotIn('choices', json.loads(j.state.read_text()))
 
     def test_the_launch_reads_the_models_table(self):
@@ -1221,6 +1220,8 @@ class Resume(unittest.TestCase):
         # catches: a resumed journey that restarts from the top, or jumps past an
         # unfinished step (a grill before Connect is carried, a launch before the spec is recorded).
         j = Journey(self)
+        j.world['files']['docs/agents/fleet.md'] = models_md()  # the Models table choose writes, merged
+        j.save_world()
         seen = []
         for turn in JOURNEY['turns']:
             if not seen or seen[-1] != turn['step']:

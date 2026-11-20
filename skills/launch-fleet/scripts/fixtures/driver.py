@@ -6,7 +6,8 @@ and stdin) to $FAKE_DRIVER_LOG as one JSON line and answers as a driver would:
 `start` a run id naming its host, `wake` and `stop` that run. With
 $FAKE_DRIVER_MODE `refuse` it fails as v1 says (exit 1, `error` and `next`);
 with `garbage` it answers something that is no run; with `extra`, a run with a
-repeated or unknown key. While $FAKE_DRIVER_HOLD names a file, it waits.
+repeated or unknown key. While $FAKE_DRIVER_HOLD names a file, it waits; $FAKE_DRIVER_BREAK names a
+folder it makes read-only.
 """
 import json
 import os
@@ -19,6 +20,8 @@ given = sys.stdin.read() if command in ('start', 'wake', 'stop') else ''
 with open(os.environ['FAKE_DRIVER_LOG'], 'a') as log:
     log.write(json.dumps({'host': host, 'command': command, 'input': json.loads(given) if given else None}) + '\n')
 mode = os.environ.get('FAKE_DRIVER_MODE', '')
+if os.environ.get('FAKE_DRIVER_BREAK'):  # the private state folder turns read-only during the start
+    os.chmod(os.environ['FAKE_DRIVER_BREAK'], 0o500)
 while os.environ.get('FAKE_DRIVER_HOLD') and os.path.exists(os.environ['FAKE_DRIVER_HOLD']):
     time.sleep(0.02)  # held by the test until it removes the file
 if mode == 'extra':

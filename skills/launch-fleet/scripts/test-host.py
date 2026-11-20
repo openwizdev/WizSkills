@@ -21,14 +21,26 @@ REPO = 'synthetic-owner/synthetic-repo'
 
 
 class Project:
-    """A synthetic checkout, its adapters folder and its private runs file."""
+    """A synthetic project: a bare origin whose default branch is `trunk`, a fleet checkout cloned from it,
+    an adapters folder and a private runs file. set() changes the setting on the default branch only."""
 
     def __init__(self, test, setting='Host: local\n', hosts=('local', 'cloudroom')):
         self.dir = Path(tempfile.mkdtemp())
         test.addCleanup(subprocess.run, ['rm', '-rf', str(self.dir)])
-        (self.dir / 'repo/docs/agents').mkdir(parents=True)
+        test.addCleanup(subprocess.run, ['chmod', '-R', 'u+w', str(self.dir)])
+        self.git_env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1',
+                            GIT_AUTHOR_NAME='synthetic', GIT_AUTHOR_EMAIL='synthetic@example.invalid',
+                            GIT_COMMITTER_NAME='synthetic', GIT_COMMITTER_EMAIL='synthetic@example.invalid')
+        self.git('init', '-q', '--bare', '-b', 'trunk', str(self.dir / 'origin.git'))
+        self.git('clone', '-q', str(self.dir / 'origin.git'), str(self.dir / 'writer'))
+        (self.dir / 'writer/docs/agents').mkdir(parents=True)
+        (self.dir / 'writer/README.md').write_text('synthetic\n')
+        self.git('-C', str(self.dir / 'writer'), 'add', '-A')
+        self.git('-C', str(self.dir / 'writer'), 'commit', '-q', '-m', 'start')
+        self.git('-C', str(self.dir / 'writer'), 'push', '-q', 'origin', 'trunk')
         if setting is not None:
             self.set(setting)
+        self.git('clone', '-q', str(self.dir / 'origin.git'), str(self.dir / 'repo'))
         for host in hosts:
             folder = self.dir / 'adapters' / host
             folder.mkdir(parents=True)
@@ -38,11 +50,18 @@ class Project:
         self.log = self.dir / 'driver.log'
         self.runs = self.dir / 'private/runs.json'
         self.runs.parent.mkdir()
-        self.env = dict(os.environ, OPENWIZ_ADAPTERS=str(self.dir / 'adapters'), LAUNCH_FLEET_RUNS=str(self.runs),
+        self.env = dict(self.git_env, OPENWIZ_ADAPTERS=str(self.dir / 'adapters'), LAUNCH_FLEET_RUNS=str(self.runs),
                         FAKE_DRIVER_LOG=str(self.log))
 
+    def git(self, *args):
+        subprocess.run(['git', *args], check=True, env=self.git_env, capture_output=True, timeout=60)
+
     def set(self, setting):
-        (self.dir / 'repo/docs/agents/host.md').write_text('# Host\n\nWhere this project\'s agents run.\n\n' + setting)
+        """Change the setting on origin's default branch; the fleet checkout keeps what it had."""
+        (self.dir / 'writer/docs/agents/host.md').write_text('# Host\n\nWhere this project\'s agents run.\n\n' + setting)
+        self.git('-C', str(self.dir / 'writer'), 'add', '-A')
+        self.git('-C', str(self.dir / 'writer'), 'commit', '-q', '-m', 'host')
+        self.git('-C', str(self.dir / 'writer'), 'push', '-q', 'origin', 'trunk')
 
     def host(self, *args, **env):
         r = subprocess.run([sys.executable, '-I', str(HERE / 'host.py'), *map(str, args)], cwd=self.dir / 'repo',
@@ -77,6 +96,8 @@ class Host(unittest.TestCase):
         p = Project(self)
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5')[0], 0)
         p.set('Host: cloudroom\n')
+        # R1: the default branch decides, not the fleet checkout's older copy.
+        self.assertIn('Host: local', (p.dir / 'repo/docs/agents/host.md').read_text())
         self.assertEqual(p.host('which'), (0, 'host: cloudroom', ''))
         self.assertEqual(p.host('start', REPO, 8, 'codex', 'gpt-6.1-sol'), (0, 'started #8 on cloudroom', ''))
         self.assertEqual(p.host('wake', REPO, 7), (0, 'woke #7 on local', ''))
@@ -131,6 +152,18 @@ class Host(unittest.TestCase):
         self.assertEqual((slow.communicate(timeout=60)[0].strip(), slow.returncode), ('started #7 on local', 0))
         self.assertEqual(p.saved()['runs'], {'7': {'host': 'local', 'run': 'local-run-7'},
                                              '8': {'host': 'local', 'run': 'local-run-8'}})
+
+    def test_unwritable_run_state_starts_nothing_and_a_lost_save_keeps_the_run(self):
+        # R3: the private state is checked before the driver runs; a save lost after a start names the run.
+        p = Project(self)
+        code, out, err = p.host('start', REPO, 7, 'claude', 'm', LAUNCH_FLEET_RUNS=str(p.dir / 'missing/runs.json'))
+        self.assertEqual((code, out), (2, ''))
+        self.assertTrue(err.startswith('host.py: '), err)
+        self.assertEqual(p.calls(), [])
+        code, out, _ = p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_BREAK=str(p.runs.parent))
+        self.assertEqual((code, out), (1, 'unknown: #7 started on local but its run was not saved; save run '
+                                          'local-run-7 on host local for #7 privately before anything else'))
+        self.assertEqual(len(p.calls()), 1)
 
     def test_no_run_or_no_setting_leaves_the_room_cli_route(self):
         p = Project(self, setting=None)

@@ -1100,6 +1100,22 @@ class WakeRepair(Tracker):
                 self.assertEqual((code, report), (0, []))
                 self.assertEqual(self.ticket()['labels'], labels)
 
+    def test_a_repair_that_fails_part_way_still_reports_what_it_changed(self):
+        # catches: a label written on one ticket and then left out of the report because a
+        # later ticket's repair failed, so the wake never records that it changed anything.
+        self.world['issues'] = [
+            {'number': n, 'state': 'open', 'labels': ['ready-for-agent'],
+             'comments': [comment(cid, BOT, note(state='asking'))]} for n, cid in ((12, 104), (13, 201))]
+        self.world['fail_once'] = [f'POST repos/{REPO}/issues/13/labels']
+        self.save()
+        code, report = self.wake()
+        self.assertEqual(code, 2)
+        self.assertEqual(report[:1], ['#12 note 104 builder asking: needs-info added'])
+        self.assertEqual(len(report), 2, report)
+        self.assertRegex(report[1], r'^status check failed: could not repair #13: ')
+        self.assertEqual([it['labels'] for it in self.load()['issues']],
+                         [['ready-for-agent', 'needs-info'], ['ready-for-agent']])
+
     def test_a_wake_whose_check_cannot_read_reports_a_failed_check(self):
         # catches: a checker read failure (exit 2) passing as a clean wake with nothing to report (#33 R2).
         self.world['fleet_md'] = None

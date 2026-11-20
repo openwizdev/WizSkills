@@ -700,6 +700,19 @@ SPEC_BODY = ("## Problem Statement\n\nFrom the synthetic grill `docs/grills/2026
              "a user can't take their widgets out.\n\n## Solution\n\nAn export button and an export command.\n")
 
 
+SPEC_GH = """#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["SPEC_LOG"], "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+if sys.argv[1:] != ["issue", "view", "9100", "--repo", "synthetic-owner/synthetic-repo", "--json", "body,createdAt"]:
+    sys.exit("unexpected gh call")
+spec = json.load(open(os.environ["SPEC_FILE"]))
+if spec is None:
+    sys.exit("planted read failure")
+print(json.dumps(spec))
+"""
+
+
 def body(n, size, owned, relies="nothing", links=(), done_by=None):
     """One ticket body as tickets.md asks for it."""
     parts = [f"## Parent\n\nTicket of spec #{SPEC}. Size: {size}.\n",
@@ -762,12 +775,20 @@ class MachineApproval(unittest.TestCase):
         self.root = self.tmp / "root"
         (self.root / "docs").mkdir(parents=True)
         (self.root / "docs/existing.md").write_text("Synthetic interface.\n")
+        # RC2 (#1830): approve.py reads the spec's body and creation time.
+        self.spec = {"body": SPEC_BODY, "createdAt": "2026-11-01T00:00:00Z"}
+        spec_bin = self.tmp / "spec-bin"
+        spec_bin.mkdir()
+        (spec_bin / "gh").write_text(SPEC_GH)
+        (spec_bin / "gh").chmod(0o755)
+        self.env = dict(os.environ, PATH=f"{spec_bin}:{os.environ['PATH']}",
+                        SPEC_FILE=str(self.tmp / "spec.json"), SPEC_LOG=str(self.tmp / "spec-calls"))
 
     def revision(self, tickets):
         """The revision text revision.sh prints for this plan on a fake GitHub."""
         state = self.tmp / "gh"
         (state / "bin").mkdir(parents=True, exist_ok=True)
-        issues = [{"number": SPEC, "title": "Synthetic spec", "body": SPEC_BODY, "state": "OPEN",
+        issues = [{"number": SPEC, "title": "Synthetic spec", "body": self.spec["body"], "state": "OPEN",
                    "parent": None, "milestone": "Synthetic", "blockedBy": [], "labels": [], "comments": []}]
         issues += [{"number": t["number"], "title": t["title"], "body": t["body"], "state": t["state"],
                     "parent": SPEC, "milestone": "Synthetic", "blockedBy": [b["number"] for b in t["blocked_by"]],
@@ -787,13 +808,14 @@ class MachineApproval(unittest.TestCase):
         return out.stdout
 
     def approve(self, tickets, revision=None, *extra):
+        (self.tmp / "spec.json").write_text(json.dumps(self.spec))
         (self.tmp / "graph.json").write_text(json.dumps(graph_read(tickets)))
         (self.tmp / "revision.txt").write_text(self.revision(tickets) if revision is None else revision)
         return subprocess.run(
             ["python3", "-I", str(APPROVE), "--graph", str(self.tmp / "graph.json"),
              "--revision", str(self.tmp / "revision.txt"), "--grill", GRILL, "--number", "1",
              "--date", "2026-11-19", "--root", str(self.root), *extra],
-            capture_output=True, text=True)
+            capture_output=True, text=True, env=self.env)
 
     def test_a_plan_that_passes_every_check_gets_a_record_bound_to_its_fingerprint(self):
         # catches: an approval that isn't bound to the exact revision checked,
@@ -828,17 +850,64 @@ class MachineApproval(unittest.TestCase):
         self.assertFalse(out.stdout.startswith("**Plan graph approved by"))
         self.assertNotIn("Private record:", out.stdout)
 
+    def test_machine_approval_needs_a_new_specs_checkpoint_answers(self):
+        # catches: the normal approval path (R1 on #209) issuing a record and
+        # ready labels for a new spec with no checkpoint answers, which the
+        # legacy check refuses.
+        answered = SPEC_BODY + "\n## Checkpoints\n\n- One-way door: yes\n- User-visible: no\n"
+        for created, text, refusal in (
+                (CUTOFF, SPEC_BODY, "spec #9100 has no ## Checkpoints section"),
+                ("2026-11-21T00:00:01Z", SPEC_BODY, "spec #9100 has no ## Checkpoints section"),
+                ("2026-11-01T00:00:00Z", SPEC_BODY + "\n## Checkpoint answers\n",
+                 "spec #9100's checkpoints are invalid (section-heading)"),
+                (CUTOFF, SPEC_BODY + "\n## Checkpoints\n\n- One-way door: yes\n",
+                 "spec #9100's checkpoints are invalid (answer-missing)"),
+                (CUTOFF, answered, None),
+                ("2026-11-20T23:59:59Z", SPEC_BODY, None)):
+            with self.subTest(created=created, text=text[-40:]):
+                self.spec = {"body": text, "createdAt": created}
+                out = self.approve(plan())
+                if refusal:
+                    self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+                    self.assertIn(f"approve: checkpoints: {refusal}", out.stderr)
+                else:
+                    self.assertEqual(out.returncode, 0, out.stderr)
+                    self.assertTrue(out.stdout.startswith("**Machine plan approval, 2026-11-19, revision 1:**"))
+                calls = [json.loads(line) for line in (self.tmp / "spec-calls").read_text().splitlines()]
+                self.assertEqual(calls[-1], ["issue", "view", "9100", "--repo", "synthetic-owner/synthetic-repo",
+                                             "--json", "body,createdAt"])
+
+    def test_machine_approval_checks_the_spec_its_revision_names(self):
+        # catches: answers checked on a spec body other than the one the
+        # fingerprint binds, or an unreadable spec read as one planned before
+        # the change.
+        tickets = plan()
+        revision = self.revision(tickets)
+        self.spec = {"body": SPEC_BODY + "\n## Checkpoints\n\n- One-way door: yes\n- User-visible: no\n",
+                     "createdAt": CUTOFF}
+        out = self.approve(tickets, revision)
+        self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+        self.assertIn("approve: checkpoints: spec #9100's body differs from the revision's", out.stderr)
+        for spec in (None, {"body": SPEC_BODY}, {"body": SPEC_BODY, "createdAt": "2026-11-01"}, []):
+            with self.subTest(spec=spec):
+                self.spec = spec
+                out = self.approve(tickets, revision)
+                self.assertEqual((out.returncode, out.stdout), (2, ""), out.stderr)
+                self.assertIn("approve: unreadable input:", out.stderr)
+
     def test_revision_two_needs_what_changed(self):
         # catches: a re-cut recorded without saying what changed since the last one.
         tickets = plan()
         (self.tmp / "graph.json").write_text(json.dumps(graph_read(tickets)))
         (self.tmp / "revision.txt").write_text(self.revision(tickets))
+        (self.tmp / "spec.json").write_text(json.dumps(self.spec))
         base = ["python3", "-I", str(APPROVE), "--graph", str(self.tmp / "graph.json"),
                 "--revision", str(self.tmp / "revision.txt"), "--grill", GRILL,
                 "--date", "2026-11-19", "--root", str(self.root), "--number", "2"]
-        missing = subprocess.run(base, capture_output=True, text=True)
+        missing = subprocess.run(base, capture_output=True, text=True, env=self.env)
         self.assertEqual((missing.returncode, missing.stdout), (2, ""))
-        given = subprocess.run(base + ["--changed", "the export page split off"], capture_output=True, text=True)
+        given = subprocess.run(base + ["--changed", "the export page split off"], capture_output=True, text=True,
+                               env=self.env)
         self.assertEqual(given.returncode, 0, given.stderr)
         self.assertIn("\nChanged since revision 1: the export page split off.\n", given.stdout)
 

@@ -1,0 +1,103 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "on-failure-checkpoint-fails",
+ "skills": [
+  "overnight"
+ ],
+ "category": "failure",
+ "brief": "Use the overnight skill (read 'skills/overnight/SKILL.md') for example/project. The night run is going; schedule the 9 am (UTC+1) checkpoint now.",
+ "world": {
+  "github": {
+   "issues": {},
+   "pulls": {}
+  },
+  "cloudroom": {
+   "self": "thr_synth_orch91"
+  },
+  "scripts": [
+   {
+    "argv": [
+     "room-cli",
+     "loop",
+     "create"
+    ],
+    "out": "error: the endpoint refused the schedule\n",
+    "code": 1,
+    "kind": "write"
+   },
+   {
+    "argv": [
+     "room-cli",
+     "automation",
+     "create"
+    ],
+    "out": "error: the endpoint refused the schedule\n",
+    "code": 1,
+    "kind": "write"
+   }
+  ]
+ },
+ "expect": {
+  "actions": [
+   {
+    "write": "room-cli loop"
+   }
+  ],
+  "allow": [
+   {
+    "write": "room-cli automation"
+   },
+   {
+    "write": "gh issue comment"
+   },
+   {
+    "write": "gh issue create"
+   },
+   {
+    "write": "git push"
+   },
+   {
+    "write": "gh pr create"
+   }
+  ],
+  "forbid": [
+   {
+    "run": "sleep"
+   },
+   {
+    "run": "room-cli thread spawn",
+    "contains": "sleep"
+   }
+  ],
+  "end": "end_turn"
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "records the failure and recovers without a sleep loop",
+    "events": [
+     [
+      "write",
+      "room-cli loop create --cron 0 8 * * *"
+     ]
+    ]
+   }
+  ],
+  "fail": [
+   {
+    "why": "waits with sleep instead",
+    "reason": "forbidden",
+    "events": [
+     [
+      "write",
+      "room-cli loop create"
+     ],
+     [
+      "read",
+      "sleep 30000"
+     ]
+    ]
+   }
+  ]
+ }
+}

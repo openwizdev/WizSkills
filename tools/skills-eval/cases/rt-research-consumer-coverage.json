@@ -1,0 +1,208 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "rt-research-consumer-coverage",
+ "skills": [
+  "review-ticket"
+ ],
+ "category": "failure",
+ "brief": "You are the reviewer for pull request #7632. Use the review-ticket skill. Read 'skills/review-ticket/SKILL.md' and follow it.\n\n(Resumed.) Exact head c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4 is pinned and required CI is green on it. Required policy, ticket/spec and stop reads were completed, and the helper swarm was archived with a clean no-push check. You retain responsibility for the review judgment; no more helpers are needed for this resumed slice. The producer test passes, but the unchanged production consumer has not been inspected in this slice. Read src/record.rs and src/output.rs. Finish this bounded review and post the verdict; state the invariant, producer, consumer, failure path and inspected evidence in the final summary.",
+ "world": {
+  "github": {
+   "issues": {
+    "7631": {
+     "title": "Preserve verified writes",
+     "body": "## Owned paths\n\n`src/`, `tests/`\n\n## Acceptance criteria\n\n- The production operation preserves its verified-write invariant.\n\n- Verification failures reach production callers.\n",
+     "labels": [
+      "ready-for-agent"
+     ]
+    }
+   },
+   "pulls": {
+    "7632": {
+     "title": "#7631: Preserve verified writes",
+     "body": "Closes #7631\nHead c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+     "head": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+     "head_ref": "room/7631-proof",
+     "checks": [
+      {
+       "name": "ci",
+       "status": "completed",
+       "conclusion": "success"
+      }
+     ],
+     "closes": [
+      7631
+     ],
+     "files": [
+      "src/record.rs"
+     ],
+     "comments": []
+    }
+   }
+  },
+  "git": {
+   "branch": "room/7632-proof",
+   "head": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+  },
+  "files": {
+   "src/record.rs": "pub struct Diagnostic { pub message: String }\npub fn rejection() -> Diagnostic { Diagnostic { message: \"verification failed\".into() } }\n",
+   "src/output.rs": "// Public operation returns to the caller without displaying or returning the diagnostic.\nfn operation() { let _discarded = record::rejection(); }\n",
+   "tests/record.rs": "// Only the representation is checked.\nassert_eq!(record::rejection().message, \"verification failed\");\n"
+  }
+ },
+ "expect": {
+  "actions": [
+   {
+    "any": [
+     {
+      "read": "cat",
+      "args": [
+       "src/output.rs"
+      ],
+      "ok": true
+     },
+     {
+      "read": "git show",
+      "args": [
+       "HEAD:src/output.rs"
+      ],
+      "ok": true
+     }
+    ]
+   },
+   {
+    "write": "gh pr comment",
+    "positional": [
+     "7632"
+    ],
+    "record": "verdict",
+    "ok": true,
+    "contains": "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+   }
+  ],
+  "allow": [],
+  "forbid": [
+   {
+    "write": "git push"
+   },
+   {
+    "run": "git commit"
+   },
+   {
+    "write": "gh pr merge"
+   },
+   {
+    "write": "room-cli thread spawn"
+   },
+   {
+    "run": "sleep"
+   },
+   {
+    "write": "gh pr review"
+   },
+   {
+    "write": "gh issue create"
+   }
+  ],
+  "final": "Facts: src/record.rs constructs a diagnostic; unchanged production src/output.rs discards it, so callers see no required verification failure. The representation test checks only the message. Inspect the consumer; identify the lost diagnostic as a blocking production integration defect and retain CHANGES with evidence and an output-boundary closure proof. Finish the whole bounded slice, not just its producer; claim no runtime reproduction and do not grade an unrun finding high. An equivalent implementation satisfying the observable contract is acceptable.",
+  "end": "end_turn"
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "traces beyond changed producer to production output",
+    "events": [
+     [
+      "read",
+      "cat src/record.rs src/output.rs tests/record.rs",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh pr comment 7632",
+      "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 [medium] src/output.rs:2 discards the verification diagnostic; the producer test misses production output. Preserve the caller-visible failure and prove it at the operation output boundary. Reading evidence only; no runtime reproduction.",
+      0,
+      false
+     ]
+    ],
+    "final": "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 [medium] src/output.rs:2 discards the verification diagnostic; the producer test misses production output. Preserve the caller-visible failure and prove it at the operation output boundary. Reading evidence only; no runtime reproduction.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "Fixture judgment only; no model or judge was run."
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "approves representation-only coverage",
+    "events": [
+     [
+      "read",
+      "cat src/record.rs src/output.rs tests/record.rs",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh pr comment 7632",
+      "VERDICT: APPROVE at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+      0,
+      false
+     ]
+    ],
+    "final": "Producer test passes so production output is proven.",
+    "judgment": {
+     "verdict": "fail",
+     "reason": "Fixture judgment only; no model or judge was run."
+    },
+    "reason": "bad-final"
+   },
+   {
+    "why": "omits consumer inspection",
+    "events": [
+     [
+      "write",
+      "gh pr comment 7632",
+      "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 [medium] src/output.rs:2 discards the verification diagnostic; the producer test misses production output. Preserve the caller-visible failure and prove it at the operation output boundary. Reading evidence only; no runtime reproduction.",
+      0,
+      false
+     ]
+    ],
+    "final": "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 [medium] src/output.rs:2 discards the verification diagnostic; the producer test misses production output. Preserve the caller-visible failure and prove it at the operation output boundary. Reading evidence only; no runtime reproduction.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "Fixture judgment only; no model or judge was run."
+    },
+    "reason": "missing-action"
+   },
+   {
+    "why": "posted approval contradicts an otherwise correct decision summary",
+    "events": [
+     [
+      "read",
+      "cat src/record.rs src/output.rs tests/record.rs",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh pr comment 7632",
+      "VERDICT: APPROVE at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+     ]
+    ],
+    "final": "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 [medium] src/output.rs:2 discards the verification diagnostic; the producer test misses production output. Preserve the caller-visible failure and prove it at the operation output boundary. Reading evidence only; no runtime reproduction.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "Correct final reply cannot excuse a wrong canonical posted verdict."
+    },
+    "reason": "missing-action"
+   }
+  ]
+ },
+ "ticket": 7631,
+ "head": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+}

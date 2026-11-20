@@ -18,8 +18,10 @@ python3 -I check/changesets.py release [--first] [--since REF] [--date YYYY-MM-D
     never tags, pushes or publishes. --since is the last release (default: the
     newest `v*` tag), for skills added or removed since. A changeset line for a
     skill removed since is dropped; its summary stays, under the bundle when it
-    named no remaining skill. Nothing is written or consumed unless Changesets
-    processed every pending changeset.
+    named no remaining skill. Only a note whose current contents Git committed
+    while that skill existed may name it; a new or edited one is refused.
+    Nothing is written or consumed unless Changesets processed every pending
+    changeset.
     --first cuts the first bundle, once: the plugin goes to 0.2.0 and every
     skill, already at 0.2.0, stays there, with the pending notes as its
     release notes. Until then the ordinary release refuses; after it, --first
@@ -289,6 +291,19 @@ def plan(names, versions, plugin_version, notes):
         return new, notes_by
 
 
+def older_skills(path, text):
+    """The skills that existed when Git last set this note's current contents: a removed one may stay
+    named. A note not committed as it stands (new, or edited since) gets none."""
+    rel = f'.changeset/{path.name}'
+    commit = git('log', '-1', '--format=%H', 'HEAD', '--', rel).strip()
+    if not commit:
+        return set()
+    p = subprocess.run(['git', 'show', f'HEAD:{rel}'], cwd=ROOT, capture_output=True)
+    if p.returncode or p.stdout.decode('utf-8', 'replace') != text:
+        return set()
+    return tree_skills(commit)
+
+
 def release(since, date, write, first=False):
     names = sorted(e.name for e in (ROOT / 'skills').iterdir() if (e / 'SKILL.md').is_file())
     if BUNDLE in names:
@@ -303,13 +318,11 @@ def release(since, date, write, first=False):
     if since is None:
         since = git('describe', '--tags', '--abbrev=0', '--match', 'v*', 'HEAD').strip()
     before = tree_skills(since)
-    touched = {p.split('/')[1] for p in git('log', '--format=', '--name-only', f'{since}..HEAD', '--',
-                                             'skills/').splitlines() if p.count('/') == 2 and p.endswith('/SKILL.md')}
-    gone = (before | touched) - set(names)
     skill_bumps, explicit, notes = {}, None, []
     for path in note_files:
+        text = path.read_text(encoding='utf-8')
         try:
-            releases, summary = parse_note(path.read_text(encoding='utf-8'), set(names), gone)
+            releases, summary = parse_note(text, set(names), older_skills(path, text))
         except ValueError as why:
             refused.append(f'release: .changeset/{path.name} {why}')
             continue

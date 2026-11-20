@@ -1076,7 +1076,8 @@ class WakeRepair(Tracker):
         resumed = note(state='working', step='got the answer')
         resume = {'issue': 12, 'edit': 104, 'body': resumed}
         person = {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}
-        add, remove = ('POST', f'repos/{REPO}/issues/12/labels'), ('DELETE', f'repos/{REPO}/issues/12/labels/needs-info')
+        # The ticket's label timeline, as GitHub shows and notifies it: (event, by whom).
+        add, remove = ('labeled', BOT), ('unlabeled', BOT)
         cases = {
             # The reviewer's reproduction: the builder resumes after the check reads the tracker.
             # Not even a moment's needs-info: the app would show a false wait.
@@ -1084,9 +1085,10 @@ class WakeRepair(Tracker):
             # The builder resumes as the label is written.
             'resumed at the label write': ({'race_label': [resume]}, ['ready-for-agent'], [add, remove]),
             # A person marks the ticket as the builder resumes: theirs stays.
-            'a person added it': ({'race_label': [resume, person]}, ['ready-for-agent', 'needs-info'], [add]),
+            'a person added it': ({'race_label': [resume, person]}, ['ready-for-agent', 'needs-info'],
+                                  [('labeled', 'synthetic-owner')]),
         }
-        for name, (race, labels, writes) in cases.items():
+        for name, (race, labels, timeline) in cases.items():
             with self.subTest(name):
                 self.setUp()
                 self.ticket(self.world)['comments'].append(comment(104, BOT, asking))
@@ -1094,7 +1096,8 @@ class WakeRepair(Tracker):
                 self.save()
                 self.wake()
                 self.assertEqual(self.ticket()['labels'], labels)
-                self.assertEqual(self.writes(), writes)
+                events = self.ticket().get('events', [])
+                self.assertEqual([(e['event'], e['actor']['login']) for e in events], timeline)
                 # The next wake sees nothing to fix or report on #12.
                 code, report = self.wake()
                 self.assertEqual((code, report), (0, []))

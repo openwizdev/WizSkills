@@ -156,35 +156,9 @@ else
 fi
 RECORD=''
 
-# C10 (#2317), Assumption A1: the one switch for the shared installation read
-# route. It is on only once the installation's credentials are configured:
-# C9's protected provisioning writes <state>/service/github-reads/installation.json
-# (<state> as the carried github-app/app.py beside carried/ resolves it). Off,
-# every read below is the `gh` read it was. On, repository REST reads except
-# G7's nightly workflow go through C8's read.py (carried byte for byte in
-# carried/ beside this script) as authority reads bound to this check's start; a missing helper or
-# a missing, expired or revoked
-# installation refuses it, and it never falls back to `gh`. GraphQL, the issue
-# search and revision.sh's reads stay on `gh`: C8 cannot express them (#2317's
-# reader gaps, docs/agents/fleet.md). G6: GI1's account probe (`user`) also
-# stays on `gh`: C8 accepts only repository endpoints, not personal identity.
-# G7: nightly-workflow reads stay on `gh`, preserving the absent-workflow skip;
-# C8 refuses non-200 responses without exposing their HTTP status.
-READS_STATE=${OPENWIZ_STATE_DIR:-}
-if [ -z "$READS_STATE" ]; then
-  case ${XDG_STATE_HOME:-} in /*) READS_STATE=$XDG_STATE_HOME/openwiz ;; *) READS_STATE=$HOME/.local/state/openwiz ;; esac
-fi
-INSTALLATION=no
-if [ -e "$READS_STATE/service/github-reads/installation.json" ] || [ -L "$READS_STATE/service/github-reads/installation.json" ]; then
-  INSTALLATION=yes
-fi
-READER=$(cd "$(dirname "$0")" && pwd)/carried/read.py
-CHALLENGE=$(date +%s)
 
 REPO=${GH_REPO:-}
 if [ -z "$REPO" ]; then
-  # The installation route reads only for an explicit caller repository.
-  [ "$INSTALLATION" = no ] || die "the installation read route needs GH_REPO=owner/name"
   REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || die "set GH_REPO=owner/name, or run inside a clone"
 fi
 case $REPO in
@@ -458,7 +432,6 @@ keep() {
 http_get() (
   endpoint=$1 destination=$2 media=${3:-application/vnd.github+json}
   # Like `gh api` without --paginate: the first page only.
-  if [ "$INSTALLATION" = yes ] && routed "$endpoint"; then installation_get "$endpoint" "$destination" "$media" single; exit; fi
   request=$(printf '%s\n' 'launch-fleet REST v1' "${GH_HOST:-github.com}" "$endpoint" "$media" | hash) || exit 1
   entry=$CACHE/rest-$request.json
   work=$(mktemp -d "$TMP/rest.XXXXXX") && rm -f "$destination.304" || exit 1
@@ -535,83 +508,15 @@ http_status() {
 http_etag() { awk 'tolower($1) == "etag:" { sub(/^[^:]*:[ ]*/, ""); sub(/\r$/, ""); print; exit }' "$1"; }
 http_body() { awk 'body { print } /^\r?$/ { body=1 }' "$1"; }
 
-# routed ENDPOINT: an endpoint the installation route reads (C8 accepts only
-# repos/<REPO>/), except G7, or a later page of one it already read.
-routed() {
-  case $1 in
-    "repos/$REPO/actions/workflows/"*) return 1 ;; # G7: keep HTTP-status outcomes
-    "repos/$REPO" | "repos/$REPO/"* | installation-page:*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-# installation_get ENDPOINT DESTINATION MEDIA [single]: one read through C8's
-# read.py, as an HTTP response for the parsers above: status 200, no cache
-# headers, and the body of its first page. C8 follows and checks every page
-# itself; each later page is kept in this check's temporary folder, and its
-# response names it as the next page (installation-page:FILE). A refusal or
-# deferral prints read.py's one line of fixed words and fails the read.
-installation_get() (
-  endpoint=$1 destination=$2 media=$3 single_page=${4:-}
-  case $endpoint in installation-page:*)
-    page=${endpoint#installation-page:}
-    case $page in "$TMP"/installation.*/http.[0-9]*) ;; *) exit 1 ;; esac
-    case $page in *..* | *[!A-Za-z0-9._/-]*) exit 1 ;; esac
-    cp "$page" "$destination"
-    exit
-  esac
-  [ -f "$READER" ] || { printf 'fleet.sh: installation read refused: the read helper is missing\n' >&2; exit 1; }
-  work=$(mktemp -d "$TMP/installation.XXXXXX") || exit 1
-  set -- rest "$REPO" "$endpoint" --accept "$media" --purpose authority --max-age 60 --challenge "$CHALLENGE"
-  [ "$single_page" != single ] || set -- "$@" --single-page
-  if ! python3 -I "$READER" "$@" > "$work/body" 2> "$work/error" < /dev/null; then
-    line=$(head -n 1 "$work/error" | LC_ALL=C grep -E '^(refused|deferred): [a-z-]+( until=[0-9]+)?$') || line='failed'
-    printf 'fleet.sh: installation read %s\n' "$line" >&2
-    exit 1
-  fi
-  if [ "$media" = application/vnd.github.raw+json ]; then
-    cp "$work/body" "$work/page.1" || exit 1
-  else
-    # One file per page body, exactly as read.py printed it.
-    python3 -I -c 'import json, sys
-text, at, n = open(sys.argv[1], encoding="utf-8").read(), 0, 0
-decoder = json.JSONDecoder()
-while text[at:].strip():
-    start = len(text) - len(text[at:].lstrip())
-    _, at = decoder.raw_decode(text, start)
-    n += 1
-    open("%s/page.%d" % (sys.argv[2], n), "w", encoding="utf-8").write(text[start:at] + "\n")
-if not n:
-    sys.exit(1)' "$work/body" "$work" || exit 1
-  fi
-  n=1
-  while [ -f "$work/page.$n" ]; do
-    next=$((n + 1))
-    { printf 'HTTP/1.1 200 OK\r\n'
-      [ ! -f "$work/page.$next" ] || printf 'X-OpenWiz-Next: installation-page:%s\r\n' "$work/http.$next"
-      printf '\r\n'
-      cat "$work/page.$n"; } > "$work/http.$n" || exit 1
-    n=$next
-  done
-  cp "$work/http.1" "$destination"
-)
 rest() (
   media=${3:-application/vnd.github+json}
-  if [ "$INSTALLATION" = yes ] && routed "$1"; then
-    installation_get "$1" "$2.http" "$media" && http_body "$2.http" > "$2" || exit 1
-  else
-    http_get "$1" "$2.http" "$media" && http_body "$2.http" > "$2" || exit 1
-  fi
+  http_get "$1" "$2.http" "$media" && http_body "$2.http" > "$2" || exit 1
   [ "$media" = application/vnd.github.raw+json ] || jq -se 'length == 1' "$2" > /dev/null
 )
 
 # Follow GitHub's next-page link, including after a 304. Cache each page by
 # its full endpoint; the cached response includes its original Link header.
 next_page() {
-  if [ "$INSTALLATION" = yes ]; then
-    next=$(awk '/^\r?$/ { exit } tolower($1) == "x-openwiz-next:" { sub(/^[^:]*:[ ]*/, ""); sub(/\r$/, ""); print; exit }' "$1") \
-      || return 1
-    [ -z "$next" ] || { printf '%s\n' "$next"; return 0; }
-  fi
   link=$(awk 'tolower($1) == "link:" { sub(/^[^:]*:[ ]*/, ""); sub(/\r$/, ""); print }' "$1") || return 1
   case $link in *'rel="next"'*) ;; *) return 0 ;; esac
   next=$(printf '%s\n' "$link" | tr ',' '\n' | sed -n 's/^[ ]*<\([^>]*\)>; *rel="next"[ ]*$/\1/p')
@@ -2490,13 +2395,9 @@ else
   singles
 fi
 world "$TMP/checks.json" "$TMP/labels.json" "$TMP/singles.json"
-# Installation privacy must be read successfully. Legacy gh failures mean public.
-# No API body is echoed.
+# A gh failure means public. No API body is echoed.
 if [ -n "$REPLAY" ]; then
   private=$(cat "$REPLAY/snap/private")
-elif [ "$INSTALLATION" = yes ]; then
-  private=$(rest "repos/$REPO" "$TMP/repository-rest.json" && jq -r '.private == true' "$TMP/repository-rest.json" 2> /dev/null) \
-    || die "can't read the repository's privacy through the installation"
 else
   private=$(gh repo view --json isPrivate --jq .isPrivate 2>/dev/null) || private=false
 fi

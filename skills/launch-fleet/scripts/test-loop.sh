@@ -45,14 +45,14 @@ mv "$work/approved.json" "$work/world.json"
 
 # This is the setup command's public seam. The uploaded file must carry all
 # three scripts; neither the install nor the consumer provides them at run time.
-python3 - "$HERE/../SKILL.md" "$work/linked skills/launch-fleet" "$work/loop.sh" <<'PY'
+python3 - "$HERE/../references/launch.md" "$work/linked skills/launch-fleet" "$work/loop.sh" <<'PY'
 import pathlib
 import subprocess
 import sys
 import textwrap
 
 text = pathlib.Path(sys.argv[1]).read_text()
-setup = text.split("## 1. Launch", 1)[1].split("```sh\n", 1)[1]
+setup = text.split("## Launch", 1)[1].split("```sh\n", 1)[1]
 setup = textwrap.dedent(setup.split('   room-cli loop create --name', 1)[0])
 setup = setup.replace("<this skill's folder>", sys.argv[2])
 setup = setup.replace("<owner>/<repo>", "synthetic-owner/synthetic-repo")

@@ -200,7 +200,9 @@ class SpecVideo(unittest.TestCase):
                     capture_output=True, text=True, env=env, cwd=Path.cwd())
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertEqual(result.stdout, '')
-                self.assertIn('animatic: moment 3:', result.stderr)
+                lines = result.stderr.splitlines()
+                self.assertEqual(len(lines), 1, result.stderr)
+                self.assertTrue(lines[0].startswith('animatic: moment 3: '), result.stderr)
                 self.assertEqual(list(out_dir.iterdir()), [], 'a refused build left a file at the output')
 
     @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')

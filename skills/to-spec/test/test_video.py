@@ -229,6 +229,29 @@ class SpecVideo(unittest.TestCase):
             'ffprobe', '-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'json', str(out_dir / 'spec.mp4')]))
         self.assertEqual(sorted(s['codec_type'] for s in meta['streams']), ['audio', 'video'])
 
+    @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
+    def test_build_never_touches_an_existing_file_beside_the_output(self):
+        # catches (#1691 R1): a file already at the renderer's staging name
+        # beside the output (left by an interrupted run, PID reused) deleted
+        # by the export's cleanup. `exec` keeps the shell's PID, so $$ is the
+        # renderer's PID and the old staging name is known before it starts.
+        shutil.copy(STORYBOARD, self.tmp / 'storyboard.json')
+        helper = self.tmp / 'voice.py'
+        helper.write_text(VOICE)
+        out_dir = self.tmp / 'deliverable'
+        out_dir.mkdir()
+        env = dict(os.environ, VOICE_MODE='tone', VOICE_LINE='')
+        launch = ('printf "keep me" > "$1/.spec.$$.partial.mp4"; '
+                  'exec node "$2" build "$3" -o "$1/spec.mp4" --tts-command "python3 -I $4 {out}"')
+        result = subprocess.run(['sh', '-c', launch, 'sh', str(out_dir), str(SCRIPT),
+                                 str(self.tmp / 'storyboard.json'), str(helper)],
+                                capture_output=True, text=True, env=env, cwd=Path.cwd())
+        planted = [p for p in out_dir.iterdir() if p.name.endswith('.partial.mp4')]
+        self.assertEqual(len(planted), 1, f'the existing file is gone: {result.stderr}')
+        self.assertEqual(planted[0].read_bytes(), b'keep me')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(sorted(p.name for p in out_dir.iterdir()), sorted([planted[0].name, 'spec.mp4']))
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

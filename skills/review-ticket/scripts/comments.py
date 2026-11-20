@@ -11,6 +11,21 @@ CSS = {".css"}
 HTML = {".html", ".htm"}
 EXCLUDED = re.compile(r"(^|/)(vendor|vendored|third_party|third-party|node_modules)/|(^|/)fixtures/comments/"
                       r"|\.min\.(js|css)$")
+LICENCE_FILE = re.compile(r"^(licen[cs]e|copying|notice)([.-].*)?$", re.I)
+GENERATED = re.compile(r"@generated|\bDO NOT EDIT\b")
+WORKFLOW = re.compile(r"(^|/)\.github/workflows/[^/]+\.ya?ml$|(^|/)action\.ya?ml$")
+PINNED = re.compile(r"^\s*(?:-\s+)?uses:\s*([\"']?)[^\s\"'#]+@[0-9a-f]{40}\1\s*$")
+VERSION = re.compile(r"^v?[0-9][0-9A-Za-z.+-]*$")
+YAML_BLOCK = re.compile(r"^(\s*(?:-\s+)?)([^\s#][^#]*?):\s*[|>][0-9+-]*\s*$")
+YAML_ITEM_BLOCK = re.compile(r"^(\s*)-\s+[|>][0-9+-]*\s*$")
+HTML_TAG = re.compile(r"<(/?)([A-Za-z][A-Za-z0-9-]*)")
+HTML_ATTR = re.compile(r"\s*([^\s\"'>/=]+)(?:\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s\"'>]+))?")
+JS_TYPES = re.compile(r"^(|module|(text|application)/(java|ecma)script)$", re.I)
+SHELL = {".sh", ".bash"}
+HEREDOC = re.compile(r"<<(-?)\s*([\"']?)([A-Za-z_][A-Za-z0-9_]*)\2")
+TERMINATOR = re.compile(r"^\s*([A-Z_][A-Z0-9_]*)\s*$")
+TRIPLE = re.compile(r"\"\"\"|'''")
+ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
 HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 SHEBANG = {"python": ".py", "sh": ".sh", "bash": ".sh", "dash": ".sh", "zsh": ".sh", "node": ".js"}
 DOCSTRING = re.compile(r"^\s*[rRuU]?(\"\"\"|''')")
@@ -44,6 +59,12 @@ FIX = {
 
 
 @dataclass
+class Note:
+    line: int
+    text: str
+
+
+@dataclass
 class Block:
     path: str
     lines: list
@@ -55,9 +76,9 @@ class Block:
 
 
 def language(path, first_line):
-    if EXCLUDED.search(path):
-        return None
     name = path.rsplit("/", 1)[-1]
+    if EXCLUDED.search(path) or LICENCE_FILE.match(name):
+        return None
     suffix = "." + name.rsplit(".", 1)[-1] if "." in name else ""
     if not suffix and first_line.startswith("#!"):
         programs = (word.rstrip("0123456789.") for word in first_line[2:].replace("/", " ").split())
@@ -66,6 +87,36 @@ def language(path, first_line):
         if suffix in kind:
             return suffix
     return None
+
+
+def unquote(quoted):
+    out, i = bytearray(), 1
+    while i < len(quoted) and quoted[i] != '"':
+        if quoted[i] == "\\" and quoted[i + 1:i + 4].isdigit():
+            out.append(int(quoted[i + 1:i + 4], 8))
+            i += 4
+        elif quoted[i] == "\\":
+            out.append(ESCAPES.get(quoted[i + 1], ord(quoted[i + 1])))
+            i += 2
+        else:
+            out += quoted[i].encode("utf-8")
+            i += 1
+    return bytes(out), quoted[1:i]
+
+
+def git_path(header):
+    if header.startswith('"'):
+        raw, inner = unquote(header)
+        if not raw.startswith(b"b/"):
+            return None
+        try:
+            name = raw[2:].decode("utf-8")
+            plain = not any(ord(c) < 32 or ord(c) == 127 for c in name)
+        except UnicodeDecodeError:
+            name, plain = raw[2:].decode("utf-8", "replace"), False
+        return name, name if plain else '"' + inner[2:] + '"'
+    header = header.split("\t", 1)[0]
+    return (header[2:], header[2:]) if header.startswith("b/") else None
 
 
 def files(diff):
@@ -84,8 +135,7 @@ def files(diff):
         if raw.startswith("diff --git "):
             path = None
         elif raw.startswith("+++ "):
-            target = raw[4:]
-            path = target[2:] if target.startswith("b/") else None
+            path = git_path(raw[4:])
             if path is not None:
                 numbered.setdefault(path, [])
         elif path is not None and (hunk := HUNK.match(raw)):
@@ -93,6 +143,14 @@ def files(diff):
             line_no, new_left = int(hunk.group(2)), int(hunk.group(3) or 1)
             numbered[path].append([])
     return numbered
+
+
+def scalar_starts(text, i):
+    before = text[:i].rstrip()
+    if not before or before[-1] in "[{,":
+        return True
+    return len(before) < i and before[-1] in ":?-" and (
+        before[-1] != "-" or before.lstrip() == "-" or before.endswith(" -"))
 
 
 def closing(text, i, quote):
@@ -103,14 +161,18 @@ def closing(text, i, quote):
     return -1
 
 
-def scan(suffix, text, state):
+def scan(suffix, text, state, offset=0):
     pieces, code, i = [], False, 0
-    quotes = {".rs": '"'}.get(suffix, "\"'`" if suffix in SLASH else "\"'")
+    if state.get("heredoc"):
+        if text.strip() == state["heredoc"]:
+            del state["heredoc"]
+        return pieces, True
+    quotes = {".rs": '"', ".html": "", ".htm": ""}.get(suffix, "\"'`" if suffix in SLASH else "\"'")
     while i < len(text):
         if state.get("block"):
             end = text.find(state["block"], i)
             stop = len(text) if end < 0 else end + len(state["block"])
-            pieces.append((text[i:stop], state["doc"]))
+            pieces.append((offset + i, text[i:stop], state["doc"]))
             if end < 0:
                 break
             state["block"], i = None, stop
@@ -123,6 +185,18 @@ def scan(suffix, text, state):
                 break
             state["quote"], i = None, end + len(state["quote"])
             continue
+        if "embed" in state:
+            close = re.compile(r"</" + state["tag"] + r"\b", re.I).search(text, i)
+            stop = close.start() if close else len(text)
+            if state["embed"]:
+                inner, inner_code = scan(state["embed"], text[i:stop], state["inner"], offset + i)
+                pieces, code = pieces + inner, code or inner_code
+            else:
+                code = code or bool(text[i:stop].strip())
+            if not close:
+                break
+            del state["embed"]
+            i = stop
         rest = text[i:]
         opener = None
         if suffix in HTML and rest.startswith("<!--"):
@@ -134,24 +208,42 @@ def scan(suffix, text, state):
         if opener:
             end = text.find(closer, i + len(opener))
             if end < 0:
-                pieces.append((rest, doc))
+                pieces.append((offset + i, rest, doc))
                 state.update(block=closer, doc=doc)
                 break
-            pieces.append((text[i:end + len(closer)], doc))
+            pieces.append((offset + i, text[i:end + len(closer)], doc))
             i = end + len(closer)
+            continue
+        if suffix in HTML and (tag := HTML_TAG.match(text, i)):
+            k, attributes = tag.end(), {}
+            while k < len(text) and text[k] != ">":
+                attribute = HTML_ATTR.match(text, k)
+                if attribute and attribute.end() > k:
+                    attributes[attribute.group(1).lower()] = (attribute.group(2) or "").strip("\"'").strip()
+                    k = attribute.end()
+                else:
+                    k += 1
+            name, code, i = tag.group(2).lower(), True, k + 1
+            if not tag.group(1) and name in ("script", "style"):
+                script = ".js" if JS_TYPES.match(attributes.get("type", "")) else None
+                state.update(embed=".css" if name == "style" else script, tag=name, inner={})
+            continue
+        if suffix in SHELL and rest.startswith("<<") and not rest.startswith("<<<") and (
+                heredoc := HEREDOC.match(text, i)):
+            state["heredoc"], code, i = heredoc.group(3), True, heredoc.end()
             continue
         if suffix in SLASH and rest.startswith("//"):
             doc = suffix == ".rs" and (rest.startswith("///") and not rest.startswith("////") or rest.startswith("//!"))
-            pieces.append((rest, doc))
+            pieces.append((offset + i, rest, doc))
             break
         if suffix in HASH and rest.startswith("#") and (i == 0 or text[i - 1].isspace() or suffix in HASH_ANYWHERE):
-            pieces.append((rest, False))
+            pieces.append((offset + i, rest, False))
             break
         if suffix in HASH_ANYWHERE and rest[:3] in ('"""', "'''"):
             state["quote"], i = rest[:3], i + 3
             code = True
             continue
-        if rest[0] in quotes:
+        if rest[0] in quotes and (suffix not in {".yml", ".yaml"} or scalar_starts(text, i)):
             state["quote"], i = rest[0], i + 1
             code = True
             continue
@@ -172,16 +264,46 @@ def strip(piece):
     return " ".join(part.strip().lstrip("*").strip() for part in text.splitlines()).strip()
 
 
+def unseen_context(suffix, hunk):
+    texts = [text for _, text, _ in hunk]
+    if suffix in {".yml", ".yaml"}:
+        return next((text for text in texts if text.strip()), "")[:1].isspace(), {}
+    if suffix in HTML:
+        seen = " ".join(texts).lower()
+        closes = [seen.find(f"</{tag}") for tag in ("script", "style")]
+        opens = [seen.find(f"<{tag}") for tag in ("script", "style")]
+        return any(c >= 0 and (o < 0 or c < o) for c, o in zip(closes, opens)), {}
+    if suffix in {".py", ".pyi"}:
+        quotes = [(text, mark) for text in texts for mark in TRIPLE.finditer(text)]
+        if len(quotes) % 2 and quotes[0][0][quotes[0][1].end():].strip() in ("", ")", ",", "),"):
+            return True, {"quote": quotes[0][1].group()}
+    if suffix in SHELL:
+        for text in texts:
+            if "<<" in text:
+                break
+            if (terminator := TERMINATOR.match(text)):
+                return True, {"heredoc": terminator.group(1)}
+    return False, {}
+
+
 def blocks(path, hunks):
     starts = bool(hunks) and bool(hunks[0]) and hunks[0][0][0] == 1
     suffix = language(path, hunks[0][0][1] if starts else "")
-    found, top = [], set()
+    found, top, notes = [], set(), []
     if suffix is None:
-        return found, top
-    preamble = starts
+        return found, top, notes
+    if starts and GENERATED.search("\n".join(text for n, text, _ in hunks[0] if n <= 5)):
+        return found, top, notes
+    workflow, preamble = bool(WORKFLOW.search(path)), starts
     for number, hunk in enumerate(hunks):
-        state, run, docstring, previous = {}, None, None, ""
+        state, run, docstring, previous, scalar = {}, None, None, "", None
         preamble = preamble and number == 0
+        if hunk and hunk[0][0] != 1:
+            unseen, state = unseen_context(suffix, hunk)
+            if unseen:
+                notes.append(Note(hunk[0][0], "the hunk starts inside something the diff doesn't show (a YAML "
+                                  "block scalar, a <script> or <style>, a string or a here-document): judge its "
+                                  "comments by hand"))
         for line_no, text, added in hunk:
             if docstring:
                 run.lines.append(line_no)
@@ -195,41 +317,56 @@ def blocks(path, hunks):
                 run = None
                 continue
             opens = DOCSTRING.match(text) if suffix in {".py", ".pyi"} and not state.get("quote") else None
-            if opens and (previous.endswith(":") or (preamble and not previous)):
+            if opens and (previous.endswith(":") or preamble):
                 delim = opens.group(1)
                 rest = text[opens.end():]
                 docstring = None if delim in rest else delim
                 run = Block(path, [line_no], rest.replace(delim, "").strip(), [line_no] if added else [], doc=True)
                 found.append(run)
-                previous = text.rstrip()
+                previous, preamble = text.rstrip(), False
                 continue
-            if text.strip():
-                previous = text.rstrip()
             if suffix == ".rs" and added and RUST_ALLOW.match(text):
                 found.append(Block(path, [line_no], text.strip(), [line_no], whole=False, rust_allow=True))
             continuing = run is not None and bool(state.get("block"))
-            pieces, code = scan(suffix, text, state)
+            indent = len(text) - len(text.lstrip(" "))
+            if scalar and (not text.strip() or indent > scalar[0]):
+                pieces, code = scan(".sh", text, state.setdefault("shell", {})) if scalar[1] else ([], True)
+            else:
+                scalar = None
+                pieces, code = scan(suffix, text, state)
+                before = text[:pieces[0][0]] if pieces else text
+                if suffix in {".yml", ".yaml"} and not state.get("quote"):
+                    if (opened := YAML_BLOCK.match(before)):
+                        scalar = (len(opened.group(1)), opened.group(2).strip() == "run")
+                        state["shell"] = {}
+                    elif (item := YAML_ITEM_BLOCK.match(before)):
+                        scalar = (len(item.group(1)), False)
+                if workflow and pieces and PINNED.match(before) and VERSION.match(strip(pieces[0][1])):
+                    pieces, code = pieces[1:], True
+            if code:
+                previous = (text[:pieces[0][0]] if pieces else text).rstrip()
             preamble = preamble and not code
             if not pieces:
                 run = None
                 continue
-            body = " ".join(strip(piece) for piece, _ in pieces)
-            doc = any(flag for _, flag in pieces)
             if preamble:
                 top.add(line_no)
-            joins = continuing or (run is not None and run.whole and not code and run.doc == doc
-                                   and run.lines[-1] == line_no - 1)
-            if joins:
-                run.lines.append(line_no)
-                run.text = (run.text + " " + body).strip()
-                if added:
-                    run.added.append(line_no)
-            else:
-                run = Block(path, [line_no], body, [line_no] if added else [], doc=doc, whole=not code)
-                found.append(run)
-            if code and not state.get("block"):
+            whole = not code and len(pieces) == 1
+            for index, (_, piece, doc) in enumerate(pieces):
+                body = strip(piece)
+                joins = index == 0 and (continuing or (
+                    whole and run is not None and run.whole and run.doc == doc and run.lines[-1] == line_no - 1))
+                if joins:
+                    run.lines.append(line_no)
+                    run.text = (run.text + " " + body).strip()
+                    if added:
+                        run.added.append(line_no)
+                else:
+                    run = Block(path, [line_no], body, [line_no] if added else [], doc=doc, whole=whole)
+                    found.append(run)
+            if not whole and not state.get("block"):
                 run = None
-    return found, top
+    return found, top, notes
 
 
 def judge(block, top, docs):
@@ -260,14 +397,15 @@ def judge(block, top, docs):
 
 def comment_pass(diff, docs):
     findings, checks = [], []
-    for path, hunks in files(diff).items():
-        found, top = blocks(path, hunks)
+    for (path, shown), hunks in files(diff).items():
+        found, top, notes = blocks(path, hunks)
+        checks += [f"check {shown}:{note.line}: context: {note.text}" for note in notes]
         for block in found:
             if not block.added:
                 continue
             verdict, kind = judge(block, top, docs)
             excerpt = block.text if len(block.text) <= 80 else block.text[:77] + "..."
-            where = f"{path}:{block.added[0]}"
+            where = f"{shown}:{block.added[0]}"
             if verdict == "finding":
                 findings.append(f"{where}: {kind}: {excerpt} Fix: {FIX[kind]}.")
             else:

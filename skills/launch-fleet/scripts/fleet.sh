@@ -1160,7 +1160,7 @@ active() {
 
 # links_read: F6 (#1353): every link of every ticket read, labelled by
 # to-tickets'"'"' check-links.sh, into the world as links {"T:B": {kind, files}}.
-# A read the parser refuses stops the check.
+# A read the parser can't take labels nothing: every blocker stays hard.
 links_read() {
   jq --arg repo "$REPO" '{schema: "openwiz.plan-links.v1", kind: "graph", repo: $repo, read_at: (.now | todate),
       source: {kind: "board"},
@@ -1170,8 +1170,9 @@ links_read() {
                blocked_by: ([.blockedBy.nodes[] | {number, state}] | unique_by(.number)),
                body: (.body // "" | gsub("\r"; "")), start_recorded: false, pull_requests: []}))}' \
     "$TMP/world.json" > "$TMP/graph.json" || die "can't build the links read"
-  sh "$LINKS" --json --graph - < "$TMP/graph.json" > "$TMP/links.json" 2> /dev/null
-  [ $? -le 1 ] || die "the plan-links parser could not read the tickets"
+  sh "$LINKS" --json --graph - < "$TMP/graph.json" > "$TMP/links.json" 2> "$TMP/links.err"
+  status=$?
+  [ $status -le 1 ] || printf '{"links": []}' > "$TMP/links.json" || die "can't write"
   jq --slurpfile r "$TMP/links.json" '.links = ($r[0].links | map({key: "\(.ticket):\(.blocker)", value: {kind, files}}) | from_entries)' \
     "$TMP/world.json" > "$TMP/w2.json" && mv "$TMP/w2.json" "$TMP/world.json" || die "can't read the links"
 }

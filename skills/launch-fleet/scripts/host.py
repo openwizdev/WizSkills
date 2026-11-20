@@ -7,11 +7,13 @@
   host.py stop OWNER/NAME N                  stop #N's run, on the host that started it
 
 Run from the project checkout. The setting is the one `Host: <name>` line of
-`docs/agents/host.md` (records v1, section 6); the driver is
+`docs/agents/host.md` on origin's default branch, read at its current tip and
+never from the checkout's copy (records v1, section 6); the driver is
 `$OPENWIZ_ADAPTERS/<name>/driver` (driver v1). Each run is saved privately in
 $LAUNCH_FLEET_RUNS, {"repo": "owner/name", "runs": {"N": {"host", "run"}}},
 before success is printed, so a wake or stop always reaches the driver that
-started the run, even after the setting changes. A ticket has one live run: a
+started the run, even after the setting changes. A start first checks that the
+runs file's folder is writable. A ticket has one live run: a
 new start replaces only a run its driver stopped (`"stopped": true`). Each
 save re-reads the file under the lock file beside it, so starts at once keep
 every run. A driver answer is taken only in exactly its v1 shape.
@@ -20,7 +22,8 @@ Exit 0: `host: <name>`, `host: none`, `started #N on <host>`, `woke ...` or
 `stopped ...`. Exit 1, one line: `refused: <driver's error>; next: <its next>`
 or another refusal (nothing was started or saved); `no run: ...` (use today's
 room-cli route); `unknown: ...` (a run may exist: reconcile before any retry).
-Exit 2, `host.py: <why>` on stderr: an unreadable setting, driver or runs file.
+Exit 2, `host.py: <why>` on stderr: an unreadable setting, driver or runs file, or
+unwritable run state; nothing was started.
 The driver gets the caller's environment unchanged; this script reads no login.
 """
 import fcntl
@@ -49,14 +52,40 @@ class Outcome(Exception):
     """Exit 1 with this line."""
 
 
-def chosen():
-    """The setting's host name, or None when the project has no setting file."""
-    if not SETTING.exists():
-        return None
+def git(*args):
     try:
-        lines = re.findall(r'(?m)^Host:[ \t]*(.*?)[ \t]*$', SETTING.read_text())
-    except (OSError, UnicodeDecodeError) as e:
-        raise Unreadable('%s is unreadable: %s' % (SETTING, e))
+        r = subprocess.run(['git', *args], capture_output=True, text=True, timeout=TIMEOUT, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise Unreadable('git %s did not run: %s' % (args[0], type(e).__name__))
+    return r.returncode, r.stdout
+
+
+def setting_text():
+    """The setting file on origin's default branch at its current tip, or None when that tip has no file.
+
+    Never the checkout's copy: a fleet's checkout can be older than the default branch (records v1, section 6)."""
+    code, out = git('ls-remote', '--symref', 'origin', 'HEAD')
+    branch = re.search(r'(?m)^ref: refs/heads/(\S+)\tHEAD$', out) if code == 0 else None
+    tip = re.search(r'(?m)^([0-9a-f]{40})\tHEAD$', out) if code == 0 else None
+    if not (branch and tip):
+        raise Unreadable("origin's default branch is unreadable: run from the project checkout, with origin reachable")
+    code, _ = git('fetch', '--quiet', '--no-tags', '--no-write-fetch-head', 'origin', 'refs/heads/' + branch[1])
+    if code != 0 or git('cat-file', '-e', tip[1] + '^{commit}')[0] != 0:
+        raise Unreadable("origin's default branch %s could not be fetched at %s" % (branch[1], tip[1]))
+    if git('cat-file', '-e', '%s:%s' % (tip[1], SETTING))[0] != 0:
+        return None
+    code, text = git('show', '%s:%s' % (tip[1], SETTING))
+    if code != 0:
+        raise Unreadable('%s is unreadable on %s' % (SETTING, branch[1]))
+    return text
+
+
+def chosen():
+    """The default branch's setting's host name, or None when the project has no setting file."""
+    text = setting_text()
+    if text is None:
+        return None
+    lines = re.findall(r'(?m)^Host:[ \t]*(.*?)[ \t]*$', text)
     if len(lines) != 1 or not NAME.fullmatch(lines[0]) or len(lines[0]) > 40:
         raise Unreadable('%s needs exactly one `Host: <name>` line, the name in lowercase letters, digits and '
                          'hyphens' % SETTING)
@@ -133,24 +162,37 @@ def load(repo):
     return value
 
 
+def ready(repo):
+    """Before a driver runs: the runs file's folder is writable and its lock opens, so a start can be saved."""
+    path = runs_path()
+    if not (path.parent.is_dir() and os.access(path.parent, os.W_OK | os.X_OK)):
+        raise Unreadable('%s is not a writable folder: create it, owner-only, before a start' % path.parent)
+    try:
+        with open(str(path) + '.lock', 'a'):
+            pass
+    except OSError as e:
+        raise Unreadable('the lock beside %s does not open: %s' % (path, e))
+    load(repo)
+
+
 def record(repo, change):
     """Under the runs file's lock, re-read it, apply change(runs) and save it owner-only, read back.
 
     False when the save or its read-back failed. Starts at once each keep their run."""
     path = runs_path()
-    with open(str(path) + '.lock', 'a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        value = load(repo)
-        change(value['runs'])
-        try:
+    try:
+        with open(str(path) + '.lock', 'a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            value = load(repo)
+            change(value['runs'])
             fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.runs-')
             with os.fdopen(fd, 'w') as f:
                 json.dump(value, f, sort_keys=True)
             os.chmod(tmp, 0o600)
             os.replace(tmp, path)
             return load(repo) == value
-        except (OSError, Unreadable):
-            return False
+    except (OSError, Unreadable):
+        return False
 
 
 def main(argv):
@@ -169,6 +211,7 @@ def main(argv):
         if host is None:
             raise Outcome('refused: no host is chosen in %s' % SETTING)
         driver(host)
+        ready(repo)
         if run and not run.get('stopped'):
             raise Outcome(live % (n, run['host']))
         new = call(host, 'start', {'repository': repo, 'ticket': int(n), 'skill': 'build-ticket',
@@ -179,8 +222,8 @@ def main(argv):
                 raise Outcome('unknown: #%s got a second run, %s on %s; stop one of them' % (n, new, host))
             runs[n] = {'host': host, 'run': new}
         if not record(repo, add):
-            raise Outcome('unknown: #%s started on %s but its run was not saved; save run %s for #%s privately '
-                          'before anything else' % (n, host, new, n))
+            raise Outcome('unknown: #%s started on %s but its run was not saved; save run %s on host %s for #%s '
+                          'privately before anything else' % (n, host, new, host, n))
         print('started #%s on %s' % (n, host))
         return 0
     if not run:

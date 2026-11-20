@@ -25,7 +25,7 @@ The orchestrator launches a fleet when the user approves a plan graph: check the
 
 ## Each wake
 
-1. **Read the state.** Read the project's settings and the spec's latest fleet record. Verify the private repository is private, then read the thread and loop maps from its latest default-branch revision into absolute paths for `LAUNCH_FLEET_STATE` and `LAUNCH_FLEET_LOOPS`. Unreadable state, ownership or a superseded record: post a thread-free `look` and stop.
+1. **Read the state.** Read the project's settings and the spec's latest fleet record. Verify the private repository is private, then read the thread, loop and run maps from its latest default-branch revision into absolute paths for `LAUNCH_FLEET_STATE`, `LAUNCH_FLEET_LOOPS` and `LAUNCH_FLEET_RUNS` (an empty run map, `{"repo":"owner/name","runs":{}}`, when it has none yet). Unreadable state, ownership or a superseded record: post a thread-free `look` and stop.
 2. **Admit the read.** Before an automatic refresh or nonessential poll, run `fleet.sh overload automatic-refresh` (or `nonessential-poll`) as [overload.md](overload.md) says. Exit 1 or 2, missing output or unknown data refuses that action; never fall back to an ungated read.
 3. **Read what is due**, from the project checkout:
    - a fleet wake: `sh "<this skill's folder>/scripts/fleet.sh" spec <S>`, through the project's review watchdog pass where its settings name one ([references/reviews.md](references/reviews.md));
@@ -117,7 +117,7 @@ The orchestrator bundles the spec's check, creates its loop as a child of the op
 
 ### Each wake
 
-Do "Each wake" above for `fleet.sh spec <S>`. Before any merge, require the same merge line from `fleet.sh every`. Read verdicts and quiet reviewers on GitHub, never from thread output. An unreachable archive or a required retirement is relayed privately to the planner or orchestrator and stays pending until confirmed. Save routing changes to the private repository's latest map, preserving other entries, and read them back before posting public success; on a race, re-read and reconcile.
+Do "Each wake" above for `fleet.sh spec <S>`. Before any merge, require the same merge line from `fleet.sh every`. Read verdicts and quiet reviewers on GitHub, never from thread output. An unreachable archive or a required retirement is relayed privately to the planner or orchestrator and stays pending until confirmed. Save routing changes, the run map's too, to the private repository's latest map, preserving other entries, and read them back before posting public success; on a race, re-read and reconcile.
 
 ## GitHub identity
 

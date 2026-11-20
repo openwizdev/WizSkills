@@ -290,8 +290,10 @@ try {
     "-vf", `scale=426:-1,tile=3x${Math.ceil(moments.length / 3)}`,
     "-frames:v", "1", path.join(build, "sheet.png")]);
 
-  // Staged beside the output, on its filesystem, so publishing is one link.
-  const partial = path.join(path.dirname(out), `.${path.basename(out, ".mp4")}.${process.pid}.partial.mp4`);
+  // Staged in a new folder of its own beside the output, on the output's
+  // filesystem, so publishing is one link and cleanup removes only ours.
+  const stage = fs.mkdtempSync(path.join(path.dirname(out), `.${path.basename(out, ".mp4")}.partial-`));
+  const partial = path.join(stage, "spec.mp4");
   try {
     run("ffmpeg", [...args, "-filter_complex", filters.join(";"), "-map", "[v]", "-map", "[a]", "-r", "30",
       "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", partial]);
@@ -302,7 +304,7 @@ try {
     if (!(loudest(partial) > -50)) throw new Error("the voice is not audible");
     fs.linkSync(partial, out); // never over a file that appeared meanwhile
   } finally {
-    fs.rmSync(partial, { force: true });
+    fs.rmSync(stage, { recursive: true, force: true });
   }
   let at = 0;
   const timeline = moments.map((m, i) => {

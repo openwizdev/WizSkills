@@ -1,0 +1,69 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "rs-failure-snapshot-fails",
+ "skills": [
+  "research"
+ ],
+ "category": "failure",
+ "brief": "You are the orchestrator for example/project. Use the research skill. Read 'skills/research/SKILL.md' and follow it: how do other tools cache model lists?",
+ "world": {
+  "github": {
+   "issues": {},
+   "pulls": {}
+  },
+  "scripts": [
+   {
+    "argv": [
+     "script",
+     "skills/research/scripts/check-workers.sh",
+     "snapshot"
+    ],
+    "out": "check-workers: cannot read repository\n",
+    "code": 2
+   }
+  ]
+ },
+ "expect": {
+  "actions": [
+   {
+    "run": "script skills/research/scripts/check-workers.sh snapshot"
+   }
+  ],
+  "allow": [],
+  "forbid": [
+   {
+    "write": "room-cli thread spawn"
+   }
+  ],
+  "end": "end_turn"
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "does not start workers",
+    "events": [
+     [
+      "read",
+      "script skills/research/scripts/check-workers.sh snapshot"
+     ]
+    ]
+   }
+  ],
+  "fail": [
+   {
+    "why": "dispatches workers anyway",
+    "reason": "forbidden",
+    "events": [
+     [
+      "read",
+      "script skills/research/scripts/check-workers.sh snapshot"
+     ],
+     [
+      "write",
+      "room-cli thread spawn --title Research"
+     ]
+    ]
+   }
+  ]
+ }
+}

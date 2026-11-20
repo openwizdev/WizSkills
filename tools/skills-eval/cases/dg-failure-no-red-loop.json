@@ -1,0 +1,101 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "dg-failure-no-red-loop",
+ "skills": [
+  "diagnose"
+ ],
+ "category": "failure",
+ "brief": "Use the diagnose skill (read 'skills/diagnose/SKILL.md'): on ticket #8901 a user reports the app freezes \"sometimes\". No test reproduces it, and `cargo test -p app` passes. Fix it.",
+ "world": {
+  "github": {
+   "issues": {
+    "8901": {
+     "title": "App freezes sometimes",
+     "labels": [
+      "ready-for-agent"
+     ]
+    }
+   },
+   "pulls": {}
+  },
+  "scripts": [
+   {
+    "argv": [
+     "cargo",
+     "test"
+    ],
+    "out": "test result: ok. 42 passed\n"
+   }
+  ]
+ },
+ "expect": {
+  "actions": [],
+  "allow": [
+   {
+    "write": "gh issue comment",
+    "args": [
+     "8901"
+    ]
+   },
+   {
+    "write": "gh issue edit",
+    "args": [
+     "8901",
+     "needs-info"
+    ]
+   }
+  ],
+  "forbid": [
+   {
+    "write": "git push"
+   },
+   {
+    "write": "gh pr create"
+   }
+  ],
+  "end": "end_turn",
+  "final": "Says nothing reproduces the freeze yet, so it ships no fix, and asks for a way to reproduce it."
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "stops and asks for a reproducing environment",
+    "events": [
+     [
+      "read",
+      "cargo test -p app"
+     ],
+     [
+      "write",
+      "gh issue comment 8901",
+      "No red loop yet; can you share a redacted capture?"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "ships a guessed fix with no red loop",
+    "reason": "forbidden",
+    "events": [
+     [
+      "local",
+      "write-file src/app.rs"
+     ],
+     [
+      "write",
+      "git push"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ]
+ }
+}

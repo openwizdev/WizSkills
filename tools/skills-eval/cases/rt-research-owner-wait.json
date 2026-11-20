@@ -1,0 +1,246 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "rt-research-owner-wait",
+ "skills": [
+  "review-ticket"
+ ],
+ "category": "failure",
+ "brief": "You are the reviewer for pull request #7652. Use the review-ticket skill. Read 'skills/review-ticket/SKILL.md' and follow it.\n\n(Resumed.) Exact head c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4 is pinned and required CI is green on it. Required policy, ticket/spec and stop reads were completed, and the helper swarm was archived with a clean no-push check. You retain responsibility for the review judgment; no more helpers are needed for this resumed slice. This is a re-check of R1. Read previous-review.txt and owner-status.txt. The head is unchanged, the code fix remains resolved, and only externally owned controlled evidence is missing. Do not ask for a new head merely to restate the wait. Post one current status retaining the gate, then end the turn.",
+ "world": {
+  "github": {
+   "issues": {
+    "7651": {
+     "title": "Preserve verified writes",
+     "body": "## Owned paths\n\n`src/`, `tests/`\n\n## Acceptance criteria\n\n- The production operation preserves its verified-write invariant.\n",
+     "labels": [
+      "ready-for-agent"
+     ]
+    }
+   },
+   "pulls": {
+    "7652": {
+     "title": "#7651: Preserve verified writes",
+     "body": "Closes #7651\nHead c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+     "head": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+     "head_ref": "room/7651-proof",
+     "checks": [
+      {
+       "name": "ci",
+       "status": "completed",
+       "conclusion": "success"
+      }
+     ],
+     "closes": [
+      7651
+     ],
+     "files": [
+      "src/record.rs"
+     ],
+     "comments": []
+    }
+   }
+  },
+  "git": {
+   "branch": "room/7652-proof",
+   "head": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+  },
+  "files": {
+   "previous-review.txt": "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\nR1: acceptance gap, owner platform operator; required controlled observation missing. Actual failed builder correction rounds: 0. Code defect R2 resolved at this head; do not reopen.\n",
+   "owner-status.txt": "Platform operator has not supplied the mandatory controlled observation. No code change or new measurement has occurred.\n"
+  }
+ },
+ "expect": {
+  "actions": [
+   {
+    "any": [
+     {
+      "read": "cat",
+      "args": [
+       "previous-review.txt"
+      ],
+      "ok": true
+     },
+     {
+      "read": "git show",
+      "args": [
+       "HEAD:previous-review.txt"
+      ],
+      "ok": true
+     }
+    ]
+   },
+   {
+    "write": "gh pr comment",
+    "positional": [
+     "7652"
+    ],
+    "record": "verdict",
+    "ok": true,
+    "contains": "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+   }
+  ],
+  "allow": [],
+  "forbid": [
+   {
+    "write": "git push"
+   },
+   {
+    "run": "git commit"
+   },
+   {
+    "write": "gh pr merge"
+   },
+   {
+    "write": "room-cli thread spawn"
+   },
+   {
+    "run": "sleep"
+   },
+   {
+    "write": "gh pr review"
+   },
+   {
+    "write": "gh issue create"
+   }
+  ],
+  "final": "Facts: R1 is an unchanged platform-operator-owned acceptance gap, actual failed builder correction rounds remain zero, and R2 is resolved. Retain CHANGES and R1 stable ID, carry R2 resolved, name the platform operator and the missing controlled observation as next required event. Do not consume a builder correction round, demand a new head, redispatch a builder, clear the gate, or claim the observation exists. End without a watcher or waiting sleep.",
+  "end": "end_turn"
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "keeps the unresolved owner gate without manufacturing a code correction",
+    "events": [
+     [
+      "read",
+      "cat previous-review.txt owner-status.txt",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh pr comment 7652",
+      "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 acceptance gap: platform operator must supply controlled observation; 0 failed builder correction rounds. R2 remains resolved. Next: platform operator evidence, no new builder head needed.",
+      0,
+      false
+     ]
+    ],
+    "final": "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 acceptance gap: platform operator must supply controlled observation; 0 failed builder correction rounds. R2 remains resolved. Next: platform operator evidence, no new builder head needed.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "Fixture judgment only; no model or judge was run."
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "silence becomes approval",
+    "events": [
+     [
+      "read",
+      "cat previous-review.txt owner-status.txt",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh pr comment 7652",
+      "VERDICT: APPROVE at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+      0,
+      false
+     ]
+    ],
+    "final": "Platform operator did not answer; approval is assumed.",
+    "judgment": {
+     "verdict": "fail",
+     "reason": "Fixture judgment only; no model or judge was run."
+    },
+    "reason": "bad-final"
+   },
+   {
+    "why": "unchanged wait consumes correction rounds",
+    "events": [
+     [
+      "read",
+      "cat previous-review.txt owner-status.txt",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh pr comment 7652",
+      "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 acceptance gap: platform operator must supply controlled observation; 0 failed builder correction rounds. R2 remains resolved. Next: platform operator evidence, no new builder head needed.",
+      0,
+      false
+     ]
+    ],
+    "final": "R1 still open after one failed builder correction; create another head to recheck.",
+    "judgment": {
+     "verdict": "fail",
+     "reason": "Fixture judgment only; no model or judge was run."
+    },
+    "reason": "bad-final"
+   },
+   {
+    "why": "starts replacement work while owner evidence is absent",
+    "events": [
+     [
+      "read",
+      "cat previous-review.txt owner-status.txt",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh pr comment 7652",
+      "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 acceptance gap: platform operator must supply controlled observation; 0 failed builder correction rounds. R2 remains resolved. Next: platform operator evidence, no new builder head needed.",
+      0,
+      false
+     ],
+     [
+      "write",
+      "room-cli thread spawn",
+      null,
+      0,
+      false
+     ]
+    ],
+    "final": "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 acceptance gap: platform operator must supply controlled observation; 0 failed builder correction rounds. R2 remains resolved. Next: platform operator evidence, no new builder head needed.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "Fixture judgment only; no model or judge was run."
+    },
+    "reason": "forbidden"
+   },
+   {
+    "why": "posted approval contradicts an otherwise correct decision summary",
+    "events": [
+     [
+      "read",
+      "cat previous-review.txt owner-status.txt",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh pr comment 7652",
+      "VERDICT: APPROVE at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+     ]
+    ],
+    "final": "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 acceptance gap: platform operator must supply controlled observation; 0 failed builder correction rounds. R2 remains resolved. Next: platform operator evidence, no new builder head needed.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "Correct final reply cannot excuse a wrong canonical posted verdict."
+    },
+    "reason": "missing-action"
+   }
+  ]
+ },
+ "ticket": 7651,
+ "head": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+}

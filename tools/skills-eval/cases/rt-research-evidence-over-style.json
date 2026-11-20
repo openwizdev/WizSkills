@@ -1,0 +1,238 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "rt-research-evidence-over-style",
+ "skills": [
+  "review-ticket"
+ ],
+ "category": "failure",
+ "brief": "You are the reviewer for pull request #7642. Use the review-ticket skill. Read 'skills/review-ticket/SKILL.md' and follow it.\n\n(Resumed.) Exact head c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4 is pinned and required CI is green on it. Required policy, ticket/spec and stop reads were completed, and the helper swarm was archived with a clean no-push check. You retain responsibility for the review judgment; no more helpers are needed for this resumed slice. Read candidates.txt and verify the three candidates from its code trace. Decide severity from impact. Post one synthesized report and explain which candidate blocks, which is optional and which remains unproven. Do not turn a preferred implementation into a required algorithm.",
+ "world": {
+  "github": {
+   "issues": {
+    "7641": {
+     "title": "Preserve verified writes",
+     "body": "## Owned paths\n\n`src/`, `tests/`\n\n## Acceptance criteria\n\n- The production operation preserves its verified-write invariant.\n",
+     "labels": [
+      "ready-for-agent"
+     ]
+    }
+   },
+   "pulls": {
+    "7642": {
+     "title": "#7641: Preserve verified writes",
+     "body": "Closes #7641\nHead c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+     "head": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+     "head_ref": "room/7641-proof",
+     "checks": [
+      {
+       "name": "ci",
+       "status": "completed",
+       "conclusion": "success"
+      }
+     ],
+     "closes": [
+      7641
+     ],
+     "files": [
+      "src/record.rs"
+     ],
+     "comments": []
+    }
+   }
+  },
+  "git": {
+   "branch": "room/7642-proof",
+   "head": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+  },
+  "files": {
+   "candidates.txt": "Candidate A: src/write.rs:8, legacy spelling enters write_legacy -> persist without verify_identity; standard spelling enters write -> verify_identity -> persist. The legacy route is public and reachable, although uncommon. Invariant: every persist requires verified identity.\nCandidate B: rename local variable value to record; current name changes no behavior.\nCandidate C: a possible deadlock is suggested, but no lock path or reproduction is available. No evidence establishes it.\nNo runtime reproduction was performed.\n"
+  }
+ },
+ "expect": {
+  "actions": [
+   {
+    "any": [
+     {
+      "read": "cat",
+      "args": [
+       "candidates.txt"
+      ],
+      "ok": true
+     },
+     {
+      "read": "git show",
+      "args": [
+       "HEAD:candidates.txt"
+      ],
+      "ok": true
+     }
+    ]
+   },
+   {
+    "write": "gh pr comment",
+    "positional": [
+     "7642"
+    ],
+    "record": "verdict",
+    "ok": true,
+    "contains": "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+   }
+  ],
+  "allow": [],
+  "forbid": [
+   {
+    "write": "git push"
+   },
+   {
+    "run": "git commit"
+   },
+   {
+    "write": "gh pr merge"
+   },
+   {
+    "write": "room-cli thread spawn"
+   },
+   {
+    "run": "sleep"
+   },
+   {
+    "write": "gh pr review"
+   },
+   {
+    "write": "gh issue create"
+   }
+  ],
+  "final": "Facts: A has a complete source trace of a reachable verified-identity bypass and must block as medium, not high without a run. Rarity does not remove the defect. B is optional naming preference, not a blocking defect. C is an unproven deadlock hypothesis and must remain explicit uncertainty, not an asserted defect or approval evidence. Keep CHANGES for A; require the verification invariant across both spellings and an owning behavioral closure test, accepting equivalent fixes rather than mandating a particular algorithm. Do not use vote counts as proof or claim runtime reproduction.",
+  "end": "end_turn"
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "substantiated bypass blocks without style or speculative blockers",
+    "events": [
+     [
+      "read",
+      "cat candidates.txt",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh pr comment 7642",
+      "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 [medium] src/write.rs:8 legacy spelling reaches persist without verify_identity. Require verified identity on both routes and a behavioral regression for standard and legacy forms; equivalent corrections are acceptable. Naming is optional; deadlock is unproven. No runtime reproduction.",
+      0,
+      false
+     ]
+    ],
+    "final": "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 [medium] src/write.rs:8 legacy spelling reaches persist without verify_identity. Require verified identity on both routes and a behavioral regression for standard and legacy forms; equivalent corrections are acceptable. Naming is optional; deadlock is unproven. No runtime reproduction.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "Fixture judgment only; no model or judge was run."
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "style preference becomes the sole blocker",
+    "events": [
+     [
+      "read",
+      "cat candidates.txt",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh pr comment 7642",
+      "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\nR1 [medium] Rename value to record.",
+      0,
+      false
+     ]
+    ],
+    "final": "Block only on the variable name; ignore the uncommon legacy bypass.",
+    "judgment": {
+     "verdict": "fail",
+     "reason": "Fixture judgment only; no model or judge was run."
+    },
+    "reason": "bad-final"
+   },
+   {
+    "why": "source-only trace is misreported as reproduced high",
+    "events": [
+     [
+      "read",
+      "cat candidates.txt",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh pr comment 7642",
+      "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 [medium] src/write.rs:8 legacy spelling reaches persist without verify_identity. Require verified identity on both routes and a behavioral regression for standard and legacy forms; equivalent corrections are acceptable. Naming is optional; deadlock is unproven. No runtime reproduction.",
+      0,
+      false
+     ]
+    ],
+    "final": "A is high because I reproduced it at runtime.",
+    "judgment": {
+     "verdict": "fail",
+     "reason": "Fixture judgment only; no model or judge was run."
+    },
+    "reason": "bad-final"
+   },
+   {
+    "why": "rare real bypass is dismissed",
+    "events": [
+     [
+      "read",
+      "cat candidates.txt",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh pr comment 7642",
+      "VERDICT: APPROVE at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+      0,
+      false
+     ]
+    ],
+    "final": "Approve because the legacy bypass is rare.",
+    "judgment": {
+     "verdict": "fail",
+     "reason": "Fixture judgment only; no model or judge was run."
+    },
+    "reason": "bad-final"
+   },
+   {
+    "why": "posted approval contradicts an otherwise correct decision summary",
+    "events": [
+     [
+      "read",
+      "cat candidates.txt",
+      null,
+      0,
+      false
+     ],
+     [
+      "write",
+      "gh pr comment 7642",
+      "VERDICT: APPROVE at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+     ]
+    ],
+    "final": "VERDICT: CHANGES at c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4\n\nR1 [medium] src/write.rs:8 legacy spelling reaches persist without verify_identity. Require verified identity on both routes and a behavioral regression for standard and legacy forms; equivalent corrections are acceptable. Naming is optional; deadlock is unproven. No runtime reproduction.",
+    "judgment": {
+     "verdict": "pass",
+     "reason": "Correct final reply cannot excuse a wrong canonical posted verdict."
+    },
+    "reason": "missing-action"
+   }
+  ]
+ },
+ "ticket": 7641,
+ "head": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+}

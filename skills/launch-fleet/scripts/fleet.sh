@@ -129,6 +129,8 @@ if command -v sha256sum > /dev/null 2>&1; then SHA=sha256sum
 elif command -v shasum > /dev/null 2>&1; then SHA='shasum -a 256'
 else die "neither sha256sum nor shasum is installed"; fi
 REVISION=${LAUNCH_FLEET_REVISION:-$(cd "$(dirname "$0")" && pwd)/../../to-tickets/revision.sh}
+# F6 (#1353): the plan-links parser, to-tickets'"'"' check-links.sh, labels each link.
+LINKS=${LAUNCH_FLEET_LINKS:-$(cd "$(dirname "$0")" && pwd)/../../to-tickets/check-links.sh}
 
 NOW=${LAUNCH_FLEET_NOW:-$(date -u +%s)}
 is_number "$NOW" || die "LAUNCH_FLEET_NOW must be a number of seconds"
@@ -183,7 +185,8 @@ case $SELF in *[!0-9a-f]* | '') CACHE='' ;; esac
 
 # The fields of a ticket, and of an issue approved on its own.
 TICKET='number
-        timelineItems(itemTypes: [LABELED_EVENT], last: 20) { nodes { ... on LabeledEvent { createdAt label { name } } } }
+        lastEditedAt editor { __typename login }
+        timelineItems(itemTypes: [LABELED_EVENT], last: 20) { nodes { ... on LabeledEvent { createdAt actor { __typename login } label { name } } } }
         closedByPullRequestsReferences(first: 5, includeClosedPrs: true) {
           pageInfo { hasNextPage }
           nodes {
@@ -289,6 +292,12 @@ query() {
         }
       }
     } }
+  }
+}' ;;
+    Writer) printf '%s\n' 'query Writer($owner: String!, $name: String!, $login: String!) {
+  rateLimit { cost remaining limit resetAt }
+  repository(owner: $owner, name: $name) {
+    collaborators(query: $login, first: 10) { edges { permission node { login } } }
   }
 }' ;;
     Merged) printf '%s\n' 'query Merged($owner: String!, $name: String!, $cursor: String) {
@@ -588,7 +597,7 @@ comment_facts() (
           and (.body | type) == "string" and (.created_at | type) == "string"
           and (.updated_at | type) == "string"))
       | {pageInfo: {hasPreviousPage: false},
-         nodes: (authored($a[0]) | map({databaseId: .id, createdAt: .created_at, updatedAt: .updated_at, body}))}' \
+         nodes: (authored($a[0]) | map({databaseId: .id, createdAt: .created_at, updatedAt: .updated_at, body, author: (.user.login | ascii_downcase)}))}' \
       "$TMP/comments-$n.raw" > "$TMP/comments-$n.json" 2> /dev/null; then
     exit 0
   fi
@@ -1124,6 +1133,64 @@ $n
     || die "can't read the issues"
 }
 
+# active: F6'"'"'s collision scope for a start claim (#1353): every open issue of
+# the repository labelled ready-for-agent, in a spec or not, read in full into
+# active.json, so the claim sees running and claimed work of every fleet. A
+# search that lists fewer than it counts stops the claim.
+active() {
+  label=$(jq -er '."ready-for-agent"' "$TMP/labels.json") || die "can't read the labels"
+  q="repo:$REPO is:issue is:open label:\"$label\""
+  encoded=$(jq -rn --arg q "$q" '$q | @uri') || die "can't encode the open work search"
+  endpoint="search/issues?q=$encoded&per_page=100" pages=0 listed=0 total=0
+  : > "$TMP/active-ids.txt" && : > "$TMP/singles.txt" || die "can't write"
+  while [ -n "$endpoint" ]; do
+    pages=$((pages + 1))
+    [ $pages -le 11 ] || die "the search for open work did not end"
+    rest "$endpoint" "$TMP/search.json" || die "can't read the open work"
+    jq -e 'type == "object" and .incomplete_results == false and (.total_count | type == "number")
+      and (.items | type) == "array" and all(.items[]; (.node_id | type) == "string" and (.number | type) == "number")' \
+      "$TMP/search.json" > /dev/null || die "can't read the open work"
+    total=$(jq .total_count "$TMP/search.json") && n=$(jq '.items | length' "$TMP/search.json") || die "can't read the open work"
+    listed=$((listed + n))
+    jq -r '.items[].node_id' "$TMP/search.json" >> "$TMP/active-ids.txt" || die "can't read the open work"
+    endpoint=$(next_page "$TMP/search.json.http") || die "can't read the open work search pagination"
+  done
+  [ "$listed" = "$total" ] || die "the search listed $listed of $total open tickets, so a colliding start could be missed"
+  set --
+  while read -r id; do
+    set -- "$@" -f "ids[]=$id"
+    [ $# -lt 100 ] || { single_nodes "$@"; set --; }
+  done < "$TMP/active-ids.txt"
+  [ $# -eq 0 ] || single_nodes "$@"
+  jq -s . "$TMP/singles.txt" > "$TMP/active.json" && hydrate "$TMP/active.json" || die "can't read the open work"
+}
+
+# links_read: F6 (#1353): every link of every ticket read, labelled by
+# to-tickets'"'"' check-links.sh, into the world as links {"T:B": {kind, files}}.
+# A read the parser can't take labels nothing: every blocker stays hard.
+links_read() {
+  jq --arg repo "$REPO" '{schema: "openwiz.plan-links.v1", kind: "graph", repo: $repo, read_at: (.now | todate),
+      source: {kind: "board"},
+      tickets: ([.specs[].subIssues.nodes[], .singles[], .active[]] | map(select(.blockedBy != null)) | unique_by(.number)
+        | map({number, title: (if (.title // "") == "" then "#\(.number)" else .title end), state,
+               labels: ([.labels.nodes[]?.name] | unique), milestone: null, parent: null,
+               blocked_by: ([.blockedBy.nodes[] | {number, state}] | unique_by(.number)),
+               body: (.body // "" | gsub("\r"; "")), start_recorded: false, pull_requests: []}))}' \
+    "$TMP/world.json" > "$TMP/graph.json" || die "can't build the links read"
+  sh "$LINKS" --json --graph - < "$TMP/graph.json" > "$TMP/links.json" 2> "$TMP/links.err"
+  status=$?
+  [ $status -le 1 ] || printf '{"links": []}' > "$TMP/links.json" || die "can't write"
+  jq --slurpfile r "$TMP/links.json" '.links = ($r[0].links | map({key: "\(.ticket):\(.blocker)", value: {kind, files}}) | from_entries)' \
+    "$TMP/world.json" > "$TMP/w2.json" && mv "$TMP/w2.json" "$TMP/world.json" || die "can't read the links"
+}
+
+# selection: F6'"'"'s start set, admitted in number order, into the world.
+selection() {
+  jqw -j 'start_selection | tojson' > "$TMP/selected.json" \
+    && jq --slurpfile s "$TMP/selected.json" '.selected = $s[0]' "$TMP/world.json" > "$TMP/w2.json" \
+    && mv "$TMP/w2.json" "$TMP/world.json" || die "can't work out the start set"
+}
+
 # single_nodes -f ids[]=ID...: issues read in full, by id, into singles.txt.
 single_nodes() {
   gql Nodes "$TMP/nodes.json" "$@"
@@ -1191,23 +1258,68 @@ def refused_lately($last; $k): $last != null and ($last.r | test("^" + $k + " (r
 def look($n; $rs; $why): ($why | gsub("\\bthr_[A-Za-z0-9][A-Za-z0-9_-]*"; "[private thread]")) as $why | if any($rs[]; (.r | gsub("\\bthr_[A-Za-z0-9][A-Za-z0-9_-]*"; "[private thread]")) == "look: \($why)") then empty else "look #\($n): \($why)" end;
 
 # A spec'"'"'s approved plan graph: its latest comment that starts
-# "**Plan graph approved by" (the to-tickets skill'"'"'s record): the revision
+# "**Plan graph approved by" (the to-tickets skill'"'"'s record), or to-tickets'"'"'
+# machine plan approval (#1340, decisions.v1), read whole: its header, grill
+# line, checks summary, optional changed line, table, fingerprint and revision
+# text, in that layout, the table naming exactly the revision text'"'"'s tickets,
+# titles and blockers. Anything less is no approval. Either has the revision
 # number, a table with one row per ticket (| #<n> | <title> | <blocked by> |
-# <label> |), and "Fingerprint: <the SHA-256 of the revision text>".
+# <label> |), and "Fingerprint: <the SHA-256 of the revision text>"; a machine
+# record also its revision text, which the check hashes ($W.machine_text).
+def at_($l; $i): $l[$i] // "";
+def machine_record($ls): ($ls | until(length == 0 or .[-1] != ""; .[:-1])) as $l
+  | (at_($l; 0) | capture("^\\*\\*Machine plan approval, [0-9]{4}-[0-9]{2}-[0-9]{2}, revision (?<n>[1-9][0-9]*):\\*\\* links, relies, sizes, width and owned paths passed\\.$") | .n | tonumber) as $n
+  | select(at_($l; 1) | test("^Grill confirmed: https://github\\.com/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/(issues|pull)/[1-9][0-9]*#issuecomment-[1-9][0-9]*$"))
+  | select(at_($l; 2) == "" and at_($l; 4) == "")
+  | (at_($l; 3) | capture("^Checks: (?<t>[1-9][0-9]*) tickets; links [0-9]+; relies [0-9]+; sizes S [0-9]+, M [0-9]+, L [0-9]+; width: chain [0-9]+, widest [0-9]+; owned paths [0-9]+\\.$") | .t | tonumber) as $t
+  | (if $n > 1 then (select((at_($l; 5) | test("^Changed since revision \($n - 1): .+\\.$")) and at_($l; 6) == "") | 7) else 5 end) as $k
+  | select(at_($l; $k) == "| Ticket | Title | Blocked by | Label |" and at_($l; $k + 1) == "| --- | --- | --- | --- |")
+  | ($k + 2 + $t) as $j
+  | [$l[$k + 2:$j][] | capture("^\\| #(?<n>[1-9][0-9]*) \\| (?<title>.+) \\| (?<b>none|#[1-9][0-9]*(?: #[1-9][0-9]*)*) \\| (?<label>ready-for-agent|ready-for-human|none) \\|$")
+     | {number: (.n | tonumber), title: (.title | gsub("\\\\\\|"; "|")), blockers: .b, label: .label}] as $rows
+  | select(($rows | length) == $t and at_($l; $j) == "")
+  | (at_($l; $j + 1) | capture("^Fingerprint: `(?<f>[0-9a-f]{64})`$") | .f) as $f
+  | select(at_($l; $j + 2) == "" and at_($l; $j + 3) == "<details><summary>Revision text</summary>"
+      and at_($l; $j + 4) == "" and at_($l; $j + 5) == "```text"
+      and ($l | length) >= $j + 9 and $l[-3] == "```" and $l[-2] == "" and $l[-1] == "</details>")
+  | $l[$j + 6:-3] as $rev
+  | select(at_($rev; 0) == "plan-graph revision v2" and (at_($rev; 1) | test("^spec #[1-9][0-9]* body sha256 [0-9a-f]{64}$")))
+  | [$rev[2:][] | capture("^ticket #(?<n>[1-9][0-9]*) blocked-by (?<b>none|#[1-9][0-9]*(?: #[1-9][0-9]*)*) body sha256 [0-9a-f]{64} title (?<title>.+)$")
+     | {number: (.n | tonumber), title, blockers: .b}] as $named
+  | select(($named | length) == ($rev | length) - 2
+      and ($named | sort_by(.number)) == ($rows | map({number, title, blockers}) | sort_by(.number)))
+  | {revision: $n, fingerprint: $f, text: (($rev | join("\n")) + "\n"), rows: ($rows | map({number, label: .label}))};
 def approval: (.body | lines) as $ls | ($ls | map(select(test("\\S"))) | first // "" | sub("^\\s+"; "")) as $head
-  | if ($head | startswith("**Plan graph approved by")) | not then empty else
-      {id: .databaseId, at: .createdAt,
+  | if ($head | startswith("**Plan graph approved by")) then
+      {id: .databaseId, at: .createdAt, machine: false,
        revision: ([$head | capture(", revision (?<n>[0-9]+):\\*\\*") | .n | tonumber] | first),
        fingerprint: ([$ls[] | capture("^\\s*Fingerprint:\\s*`?(?<f>[0-9a-f]{64})`?\\s*$") | .f] | first),
        rows: [$ls[] | select(test("^\\|\\s*#[0-9]+\\s*\\|")) | split("|") | map(sub("^\\s+"; "") | sub("\\s+$"; "")) | .[1:-1]
-              | select(length >= 4) | {number: (.[0] | ltrimstr("#") | tonumber), label: .[-1]}]} end;
+              | select(length >= 4) | {number: (.[0] | ltrimstr("#") | tonumber), label: .[-1]}]}
+    else (.databaseId as $id | .createdAt as $at | [machine_record($ls)] | first // empty | {id: $id, at: $at, machine: true} + .) end;
 def latest($s): [$s.comments.nodes[] | approval] | max_by(.id);
 def subs($s): [$s.subIssues.nodes[].number];
 def row($s): . as $t | [latest($s).rows[]? | select(.number == $t.number)] | first;
 # Current: the latest approval'"'"'s fingerprint is the one to-tickets'"'"'s
 # revision.sh gives the plan now ($W.fingerprints, read only for a spec with a
 # ticket that could start). Anything else is stale: nothing under it starts.
-def current($s): latest($s).fingerprint as $f | $f != null and $f == $W.fingerprints["\($s.number)"];
+def plan_current($s): latest($s) as $a | $a.fingerprint as $f | $f != null and $f == $W.fingerprints["\($s.number)"]
+  and (($a.machine | not) or $f == ($W.machine_text // {})["\($s.number)"]);
+# R1: a contract hold is released by the owner'"'"'s approval (or a C2 record in
+# its form), never by a machine revision.
+def owner_at($s): [$s.comments.nodes[] | approval | select(.machine | not)] | max_by(.id) | .at;
+# #1340: to-spec'"'"'s steering video is the spec'"'"'s latest comment that is exactly
+# its link line, a blank line and "Comment here to steer: stop, reset, or
+# anything else." (R3), or since WS33 (#1736) "Steering by comment is off for
+# now: tell your orchestrator what to change (stop, reset, or anything else)."
+# R2 (decision 7030919773): no comment on it steers, in
+# any mode and whoever posted the video, until #1402'"'"'s identity separation is
+# verified: no author can yet prove a comment is the owner'"'"'s. A spec with a
+# video gets one look saying so (steer_lines); the owner steers through the
+# orchestrator.
+def video: [.comments.nodes[] | select(.body | gsub("\r"; "") | sub("\\s+$"; "")
+  | test("^\\[Watch the narrated spec\\]\\(https://[^\\s<>()\\\\`]+\\)\n\n(Comment here to steer: stop, reset, or anything else|Steering by comment is off for now: tell your orchestrator what to change \\(stop, reset, or anything else\\))\\.$"))] | max_by(.databaseId);
+def current($s): plan_current($s);
 def spec_rec($s; $re): any($s | records[]; .r | test($re));
 # The latest fleet record routes the spec to its loop. Fresh wakes keep the
 # existing assignments, including agents whose records predate the loop.
@@ -1343,7 +1455,7 @@ def hits($s): . as $t | cutoff($s) as $c | relies as $ps
            | select(. != null) | select(. as $f | any($ps[]; . as $p | $f | matches($p)))] | unique)}
        | select(.files | length > 0)] | sort_by(.pr) end;
 def due_notes($s): records as $rs | [hits($s)[] | .pr as $p | select(any($rs[]; .r | test("^(held for|noted) #\($p)\\b")) | not)];
-def held($s): ([records[] | kind("held for") | select(.r | startswith("held for ordering:") | not) | .at] | max) as $h | approved_at($s) as $a
+def held($s): ([records[] | kind("held for") | select(.r | startswith("held for ordering:") | not) | .at] | max) as $h | (if $s == null then own else owner_at($s) end) as $a
   | $h != null and ($a == null or $h > $a);
 # Every hold comment of any kind, as read: a `held ...` record (contract,
 # ordering, manual, live), an `Orchestrator: **held` instruction, or a plain
@@ -1363,7 +1475,7 @@ def held_since: [.timelineItems.nodes[]? | select(.label.name == "held") | .crea
 # hold comment since the label last went on must be a contract `held for #<P>`
 # record. A manual, live, ordering or plain hold there, newer or older than the
 # approval, keeps it held: each keeps its own release evidence.
-def released($s): held_since as $since | approved_at($s) as $a
+def released($s): held_since as $since | (if $s == null then own else owner_at($s) end) as $a
   | ([records[] | kind("held for") | select(.r | startswith("held for ordering:") | not) | .at | select($since != null and . >= $since)] | max) as $h
   | $h != null and $a != null and $a > $h
     and all(hold_comments[] | select(.at >= $since); .r | test("^held for #[1-9][0-9]{0,8}(\\b|$)"));
@@ -1394,18 +1506,108 @@ def ordering_inflight: (ordering_open_claims | length) > 0;
 def release_candidate($s): labelled_held and released($s) and (ordering_inflight | not);
 def release_due($s): release_candidate($s)
   and ($s == null or (current($s) and $W.fingerprint_agreement["\($s.number)"] == true));
+# F6 (#1353): only a hard blocker holds a start. A native blocker is context,
+# and holds nothing, only when to-tickets'"'"' check-links.sh (the plan-links
+# parser, $W.links) reads its one line as a `file` line naming a file, its
+# blocker is read here with owned paths, neither the blocker'"'"'s owned paths
+# nor the line'"'"'s files hold an input the ticket relies on, and the two
+# tickets'"'"' owned paths don'"'"'t clash. Anything else is hard.
+def scope_tickets: [$W.specs[].subIssues.nodes[], $W.singles[], ($W.active // [])[]];
+# Owned paths exactly as to-tickets'"'"' approve.py reads them: the lines under
+# `## Owned paths` to the next `## `, each `- ` bullet'"'"'s backticked paths, in
+# its one `in \`owner/repo\`` repository or this one, shared when the bullet
+# says `(shared`. [] when the ticket has no such section (a legacy ticket
+# claims no path); null when the section can'"'"'t be read as approval reads it.
+def owned_paths: ((.body // "") | split("\n")) as $l
+  | ([range(0; $l | length) | select($l[.] | rtrimstr("\r") | test("^## Owned paths\\s*$"))] | first) as $h
+  | if $h == null then [] else
+      ([$l[$h + 1:][] | rtrimstr("\r")] | (([to_entries[] | select(.value | startswith("## ")) | .key] | first) // length) as $e | .[:$e]
+       | map(select(startswith("- ")) | .[2:])) as $bullets
+      | if ($bullets | length) == 0 then null else
+          [$bullets[] | . as $b | [scan("\\bin `([^`]+)`") | .[0]] as $repos
+           | if ($repos | length) > 1 or any($repos[]; test("^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$") | not) then {bad: true}
+             else ([scan("`([^`]+)`") | .[0] | select(. as $p | any($repos[]; . == $p) | not)]) as $ps
+               | if ($ps | length) == 0 then {bad: true}
+                 else $ps[] | (rtrimstr("/") | split("/")) as $parts
+                   | if startswith("/") or any($parts[]; . == "" or . == "." or . == "..") or contains(" ") then {bad: true}
+                     else {repo: (if ($repos | length) == 1 then $repos[0] | ascii_downcase else $W.repo end),
+                           path: ., shared: ($b | contains("(shared"))} end end end]
+          | if any(.[]; .bad) then null else . end end end;
+# fnmatch.fnmatchcase, as approve.py matches a path segment: * ? [seq] [!seq].
+def glob_re: explode as $c | ($c | length) as $n
+  | {i: 0, out: "^"} | until(.i >= $n;
+      $c[.i] as $ch
+      | if $ch == 42 then .out += ".*" | .i += 1
+        elif $ch == 63 then .out += "." | .i += 1
+        elif $ch == 91 then
+          (.i + 1) as $j0 | (if $j0 < $n and $c[$j0] == 33 then $j0 + 1 else $j0 end) as $j1
+          | (if $j1 < $n and $c[$j1] == 93 then $j1 + 1 else $j1 end) as $j2
+          | ([range($j2; $n) | select($c[.] == 93)] | first) as $close
+          | if $close == null then .out += "\\[" | .i += 1
+            else ($c[.i + 1:$close] | implode | gsub("\\\\"; "\\\\") | gsub("(?<x>[&~|])"; "\\\(.x)")) as $body
+              | .out += "[" + (if ($body | startswith("!")) then "^" + $body[1:]
+                               elif ($body | test("^[\\^\\[]")) then "\\" + $body else $body end) + "]"
+              | .i = $close + 1 end
+        else ([$ch] | implode) as $x
+          | .out += (if ($x | test("[.+?^${}()|\\[\\]\\\\]")) then "\\" + $x else $x end) | .i += 1 end)
+  | .out + "$";
+def segment($p): . as $f | $f | test($p | glob_re);
+def overlaps($a; $b): ($a | rtrimstr("/") | split("/")) as $x | ($b | rtrimstr("/") | split("/")) as $y
+  | all(range([($x | length), ($y | length)] | min); $x[.] as $p | $y[.] as $q | ($p | segment($q)) or ($q | segment($p)));
+# Two tickets'"'"' owned paths clash: one claims no path ([]) never clashes; an
+# unreadable side (null) always does; otherwise an overlap in one repository
+# where not both bullets say `(shared`.
+def paths_clash($a; $b): if $a == [] or $b == [] then false elif $a == null or $b == null then true
+  else any($a[]; . as $x | any($b[]; .repo == $x.repo and overlaps(.path; $x.path) and ((.shared and $x.shared) | not))) end;
+def context_blocker($n): . as $t | $W.links["\($t.number):\($n)"] as $link
+  | ([scope_tickets[] | select(.number == $n)] | first) as $b
+  | $link != null and $link.kind == "file" and ($link.files | length) > 0 and $b != null
+    and (($b | owned_paths) as $bp | $bp != null and ($bp | length) > 0
+      and ([$t | relies[]] as $in | any($in[]; . as $i | any(($bp | map(.path))[], $link.files[]; overlaps($i; .))) | not)
+      and (paths_clash($t | owned_paths; $bp) | not));
+def hard_blockers_done: . as $t | all(.blockedBy.nodes[]; blocker_done or (.number as $n | $t | context_blocker($n)));
 # Same ordinary start guards, before requiring a ready label or no held label.
 # The release path must be able to check these while ready is still removed.
 def start_clear($s):
   ([has_role("needs-info"), has_role("needs-triage"), has_role("ready-for-human"), has_role("wontfix")] | any | not)
-  and all(.blockedBy.nodes[]; blocker_done)
+  and hard_blockers_done
   and start.state == "queued"
   and (open_prs | length) == 0
   and (held($s) | not);
 def ready_but_current($s): has_role("ready-for-agent") and start_clear($s)
   and (labelled_held | not) and (ordering_inflight | not);
-def ready($s): ready_but_current($s) and ($s == null or current($s));
-def may_start($s): ready($s) and (refused_lately(start.last; "start") | not);
+# KN13 (#1448): the text of a ticket is an order only from people the project
+# trusts. The latest labelled event of the ready label must be by a maintainer (a
+# record author, or a collaborator with write access, read only for a ticket
+# that could otherwise start), and the body unedited since, by anyone; else a
+# maintainer must put the label on again. GraphQL names the bot of an App without
+# "[bot]". Who added it can'"'"'t be read (not in the last 20 labelled events,
+# or no actor) refuses too.
+def login_of: if type != "object" or (.login | type) != "string" then null
+  elif .__typename == "Bot" then "\(.login)[bot]" else .login end
+  | if . == null then null else ascii_downcase end;
+def approval_label: $W.labels["ready-for-agent"] as $l | [.timelineItems.nodes[]? | select(.label.name == $l)] | max_by(.createdAt);
+def maintainer: . != null and (among($W.authors) or among($W.writers));
+def approver_why: approval_label as $e | $W.labels["ready-for-agent"] as $l
+  | if $e == null then "who added \($l) can'"'"'t be read"
+    elif ($e.actor | login_of | maintainer | not) then "\($l) was last added at \($e.createdAt) by someone who is not a maintainer"
+    elif .lastEditedAt != null and .lastEditedAt > $e.createdAt then "the ticket was edited at \(.lastEditedAt), after \($l) was added at \($e.createdAt)"
+    # GitHub'"'"'s times are to the second: an edit in the label'"'"'s own second
+    # may have come after it (R1 on WizSkills#67).
+    elif .lastEditedAt != null and .lastEditedAt == $e.createdAt then "the ticket was edited at \(.lastEditedAt), the same second \($l) was added, so which came first can'"'"'t be read"
+    else null end
+  | if . == null then null else "start refused: \(.); a maintainer must add it again" end;
+def ready_unchecked($s): ready_but_current($s) and ($s == null or current($s));
+def ready($s): ready_unchecked($s) and approver_why == null;
+def unrefused_ready($s): ready($s) and (refused_lately(start.last; "start") | not);
+# F6 (#1353): a running ticket is an open one with a builder (or a claim) or
+# a pull request. The start set is admitted in number order: each ready ticket
+# whose owned paths clash with no running ticket'"'"'s and no ticket admitted
+# before it ($W.selected, worked out once a read, after the fingerprints).
+# An unreadable Owned paths section is never admitted.
+def running_clash: . as $t | owned_paths as $mine
+  | any(scope_tickets[] | select(.number != $t.number and .state == "OPEN" and building); paths_clash($mine; owned_paths));
+def may_start($s): unrefused_ready($s) and (.number as $n | any(($W.selected // [])[]; . == $n));
 # A fleet thread'"'"'s takeover (ClosedWiz#192) starts a builder too, so it keeps
 # every gate of an ordinary start (Sol R1 on #1517): approved and current,
 # ready, no other triage label, its blockers merged and no hold.
@@ -1413,7 +1615,7 @@ def may_start($s): ready($s) and (refused_lately(start.last; "start") | not);
 # recorded builder and its open pull request.
 def takeover_clear($s): has_role("ready-for-agent")
   and ([has_role("needs-info"), has_role("needs-triage"), has_role("ready-for-human"), has_role("wontfix")] | any | not)
-  and all(.blockedBy.nodes[]; blocker_done)
+  and hard_blockers_done and (running_clash | not)
   and (held($s) | not) and (labelled_held | not) and (ordering_inflight | not);
 def takeover_ready($s): takeover_clear($s) and current($s);
 # The orchestrator archived the old builder: "old builder archived, thread <id>".
@@ -1591,13 +1793,16 @@ def ticket_lines_now($s): . as $t
              else empty end end),
       (if has_role("needs-info") then
          # A question or answer edited since it was asked counts as new (R1 on #1442).
-         ([plain[] | .updatedAt // .createdAt] | max) as $q | ([records[] | kind("asked the orchestrator") | .at] | max) as $a
+         ([plain[] | .updatedAt // .createdAt] | max) as $q | ([records[] | kind("asked the orchestrator|granted") | .at] | max) as $a
          | if $a == null or ($q != null and $q > $a) then "needs-info #\(.number): a question for the orchestrator" else empty end
        else empty end),
       (start as $st
        | if $st.state == "queued" then
            (if may_start($s) then "start #\(.number): \(.title) (\(where($s))"
-              + (if $st.last then "; retry after \"\($st.last.r)\"" else "" end) + ")" else empty end)
+              + (if $st.last then "; retry after \"\($st.last.r)\"" else "" end) + ")"
+            elif ready_unchecked($s) and (refused_lately(start.last; "start") | not) and approver_why != null then
+              records as $rs | look(.number; $rs; approver_why)
+            else empty end)
          elif $st.state == "claimed" then
            # From the edit that made it a claim: a takeover edits an older record
            # to "starting" (Sol R3 on #1517); a new claim'"'"'s edit is its creation.
@@ -1740,18 +1945,24 @@ def approval_lines: . as $s | records as $srs | latest($s) as $a
     elif ($a.rows | length) == 0 then look(.number; $srs; "its latest plan graph approval lists no tickets")
     else
       ($W.fingerprints["\($s.number)"] // null) as $now
-      | if $now == null or current($s) then empty
+      | if $now == null or plan_current($s) then empty
+        elif $a.machine and $a.fingerprint == $now then look($s.number; $srs; "its latest machine plan approval'"'"'s revision text is not the plan its fingerprint names")
         else "changed since revision \($a.revision // "?") (fingerprint now \($now[:12]))" as $what
         | if any($s | records[]; .r == "needs approval: \($what)") then empty
           else "re-approve #\($s.number): \($what)" end end
     end;
+
+# R2 (decision 7030919773): with a video, one look, once: its "look: <reason>"
+# record settles it. Comments on the video steer nothing.
+def steer_lines: .number as $n | records as $srs
+  | if video != null then look($n; $srs; "comments on the video steer nothing until the identity separation of OpenWiz #1402 is verified; the owner steers through the orchestrator") else empty end;
 
 def spec_lines: . as $s | records as $srs
   | if .subIssues.pageInfo.hasNextPage then look(.number; $srs; "more than 100 tickets, so its graph can'"'"'t all be read")
     elif .comments.pageInfo.hasPreviousPage then look(.number; $srs; "comment history could not be read in full")
     else
       latest($s) as $a
-      | approval_lines,
+      | approval_lines, steer_lines,
         ($s.subIssues.nodes[] | ticket_lines($s)),
         (if $a == null or ($a.rows | length) == 0 then empty
          else [$s.subIssues.nodes[] | select(.state == "OPEN" and row($s) == null and (follow_up($s) | not)) | .number] as $pending
@@ -1783,10 +1994,21 @@ def is_named($s): ($s | has("named") | not) or (.number | among($s.named));
 def part_lines: . as $s | records as $srs
   | if .subIssues.pageInfo.hasNextPage or (.total // 0) > 100 then look(.number; $srs; "more than 100 tickets, so its graph can'"'"'t all be read")
     elif .comments.pageInfo.hasPreviousPage then look(.number; $srs; "comment history could not be read in full")
-    else approval_lines, (.subIssues.nodes[] | select(is_named($s)) | ticket_lines($s)) end;
+    else approval_lines, steer_lines, (.subIssues.nodes[] | select(is_named($s)) | ticket_lines($s)) end;
 
 def candidates: ($W.specs[] as $s | $s.subIssues.nodes[] | select(is_named($s)) | {t: ., s: $s}),
   ($W.singles[] | {t: ., s: null});
+def start_selection: [candidates | .s as $s | .t
+    | select(.state == "OPEN" and is_approved($s) and (looks | length) == 0 and unrefused_ready($s))
+    | {number, paths: owned_paths} as $c | select($c.paths != null and (running_clash | not)) | $c]
+  | unique_by(.number) | reduce .[] as $c ([]; if any(.[]; paths_clash(.paths; $c.paths)) then . else . + [$c] end)
+  | map(.number);
+# The users who labelled a ticket that could otherwise start, not record
+# authors: their write access is read (Writer), once each.
+def writers_wanted: [candidates | .s as $s | .t
+  | select(.state == "OPEN" and is_approved($s) and (looks | length) == 0 and ready_unchecked($s))
+  | approval_label | .actor | select(type == "object" and .__typename == "User") | login_of
+  | select(. != null and (among($W.authors) | not))] | unique | .[];
 # Only existing, readable builders can be resumed; this never starts one.
 def waiters: candidates | .s as $s | .t
   | select(.state == "OPEN" and is_approved($s) and (looks | length) == 0 and builder != null)
@@ -1852,7 +2074,18 @@ def claim: $W.claim.n as $n | $W.claim.id as $id
             elif (open_prs | length) > 0 then "withdraw #\($n): pull request #\(open_prs[0].number) is open"
             elif (looks | length) > 0 then "withdraw #\($n): \(looks[0])"
             elif refused_lately($st.last; "start") then "withdraw #\($n): its start was refused less than 10 minutes ago"
-            elif ready($s) then "go #\($n)"
+            elif ready_unchecked($s) and approver_why != null then "withdraw #\($n): \(approver_why)"
+            elif ready($s) then
+              # F6 (#1353): the gate every builder start passes. $W.active is
+              # every open ready ticket of the repository; a clash with one
+              # running, or claimed by an older claim, withdraws this one.
+              owned_paths as $mine
+              | ([scope_tickets[] | select(.number != $n and .state == "OPEN" and paths_clash($mine; owned_paths))
+                  | select((open_prs | length) > 0 or (start | .state != "queued" and (.state != "claimed" or .rec.id < $id)))
+                  | .number] | unique | first) as $m
+              | if $mine == null then "withdraw #\($n): its owned paths can'"'"'t be read as the plan approval reads them"
+                elif $m != null then "withdraw #\($n): its owned paths collide with #\($m), which is running or claimed first"
+                else "go #\($n)" end
             else "withdraw #\($n): it is not on the frontier now" end end
     else
       ([candidates | .s as $s | .t | select(.state == "OPEN" and is_approved($s)) | . as $t
@@ -1885,13 +2118,33 @@ jqw() {
 
 # world CHECKS LABELS SINGLES: what was read, as one JSON file.
 world() {
-  jq -n --argjson now "$NOW" --arg default "$DEFAULT" --slurpfile specs "$TMP/specs.json" \
+  jq -n --argjson now "$NOW" --arg default "$DEFAULT" --arg repo "$REPO" --slurpfile specs "$TMP/specs.json" \
     --slurpfile checks "$1" --slurpfile labels "$2" --slurpfile singles "$3" --arg claim "${CLAIM_N:+$CLAIM_N $CLAIM_ID}" \
-    --slurpfile followups "$TMP/followups.json" --arg spec "${SPEC:-}" \
-    '{now: $now, default: $default, specs: $specs[0], singles: $singles[0], checks: $checks[0], labels: $labels[0],
-      followups: $followups[0], spec: (if $spec == "" then null else ($spec | tonumber) end),
+    --slurpfile followups "$TMP/followups.json" --arg spec "${SPEC:-}" --slurpfile authors "$TMP/authors.json" \
+    '{now: $now, default: $default, repo: ($repo | ascii_downcase), specs: $specs[0], singles: $singles[0], checks: $checks[0], labels: $labels[0],
+      followups: $followups[0], authors: $authors[0], writers: [], spec: (if $spec == "" then null else ($spec | tonumber) end),
       claim: (if $claim == "" then null else ($claim | split(" ") | {n: (.[0] | tonumber), id: (.[1] | tonumber)}) end),
-      fingerprints: {}, branches: {}, merged: [], prfiles: {}}' > "$TMP/world.json" || die "can't build the world"
+      fingerprints: {}, branches: {}, merged: [], prfiles: {}, active: [], links: {}, selected: null}' > "$TMP/world.json" || die "can't build the world"
+}
+
+# writers: KN13 (#1448). The write access of each user writers_wanted names,
+# into the world's writers: one small GraphQL read each, only for a ticket
+# that could otherwise start and that no record author labelled. A read that
+# fails or answers anything else grants nothing: that ticket is refused.
+writers() {
+  printf '[]' > "$TMP/writers.json" && jqw 'writers_wanted' > "$TMP/writers-wanted.txt" \
+    || die "can't list who labelled the tickets"
+  while IFS= read -r login; do
+    case $login in '' | -* | *[!a-z0-9-]*) continue ;; esac
+    if ( gql Writer "$TMP/writer.json" -f login="$login" ) 2> /dev/null \
+      && jq -e --arg l "$login" 'any(.data.repository.collaborators.edges[]?; (.node.login | ascii_downcase) == $l
+           and (.permission | IN("ADMIN", "MAINTAIN", "WRITE")))' "$TMP/writer.json" > /dev/null 2>&1; then
+      jq --arg l "$login" '. + [$l]' "$TMP/writers.json" > "$TMP/writers.next" && mv "$TMP/writers.next" "$TMP/writers.json" \
+        || die "can't write"
+    fi
+  done < "$TMP/writers-wanted.txt"
+  jq --slurpfile w "$TMP/writers.json" '.writers = $w[0]' "$TMP/world.json" > "$TMP/world.next" \
+    && mv "$TMP/world.next" "$TMP/world.json" || die "can't write"
 }
 
 # unticked_hash FILE: FILE's SHA-256 as to-tickets’ revision.sh hashes a body:
@@ -1971,12 +2224,20 @@ fingerprints() {
         [ ${#k} != 64 ] || keep "spec-$s.fingerprint" "$k $f"
       fi
     fi
-    printf '%s"%s":{"hash":"%s","agreed":%s}' "$sep" "$s" "$f" "$agreed" >> "$TMP/fingerprints.json" || die "can't write"
+    # #1340 R4: a machine approval'"'"'s own revision text, hashed, so its table
+    # and text are bound to the plan its fingerprint names.
+    t=''
+    if jqw -j "[\$W.specs[] | select(.number == $s)] | first | latest(.) | select(.machine) | .text" > "$TMP/machine-$s.txt"; then
+      [ ! -s "$TMP/machine-$s.txt" ] || t=$(hash < "$TMP/machine-$s.txt") || die "can't hash the machine approval of #$s"
+    else die "can't read the machine approval of #$s"; fi
+    case $t in *[!0-9a-f]*) t='' ;; esac
+    printf '%s"%s":{"hash":"%s","agreed":%s,"text":"%s"}' "$sep" "$s" "$f" "$agreed" "$t" >> "$TMP/fingerprints.json" || die "can't write"
     sep=','
   done
   printf '}' >> "$TMP/fingerprints.json" || die "can't write"
   jq --slurpfile f "$TMP/fingerprints.json" '.fingerprints = ($f[0] | with_entries(.value = .value.hash))
-    | .fingerprint_agreement = ($f[0] | with_entries(.value = .value.agreed))' "$TMP/world.json" > "$TMP/w2.json" \
+    | .fingerprint_agreement = ($f[0] | with_entries(.value = .value.agreed))
+    | .machine_text = ($f[0] | with_entries(.value = .value.text))' "$TMP/world.json" > "$TMP/w2.json" \
     && mv "$TMP/w2.json" "$TMP/world.json" || die "can't record the fingerprints"
 }
 
@@ -2373,6 +2634,10 @@ if [ "$cmd" = wake ] || [ "$cmd" = claim ]; then
   items
   settings
   wake_world
+  # A start claim on a ticket reads every fleet'"'"'s open work (F6, #1353).
+  if [ "$cmd" = claim ] && jq -se --argjson n "$CLAIM_N" 'any(.[]; .number == $n and .subIssuesSummary != null)' "$TMP/items.txt" > /dev/null; then
+    active
+  fi
 elif [ "$cmd" = spec ]; then
   # A fleet thread's check: the check's reads, of its own spec alone; none
   # at all past the probe when nothing it read has changed (GI1).
@@ -2395,6 +2660,10 @@ else
   singles
 fi
 world "$TMP/checks.json" "$TMP/labels.json" "$TMP/singles.json"
+if [ -f "$TMP/active.json" ]; then
+  jq --slurpfile a "$TMP/active.json" '.active = $a[0]' "$TMP/world.json" > "$TMP/w2.json" \
+    && mv "$TMP/w2.json" "$TMP/world.json" || die "can't read the open work"
+fi
 # A gh failure means public. No API body is echoed.
 if [ -n "$REPLAY" ]; then
   private=$(cat "$REPLAY/snap/private")
@@ -2406,7 +2675,9 @@ python3 "$(dirname "$0")/records.py" "$REPO" "$private" < "$TMP/world.json" > "$
   && mv "$TMP/resolved.json" "$TMP/world.json" || die "can't resolve fleet records"
 case $cmd in check | wake | spec | every) branches; waits ;; claim) waits ;; esac
 merges
-[ "$cmd" = holds ] || fingerprints
+[ "$cmd" = holds ] || { fingerprints; writers; }
+links_read
+selection
 jqw "$cmd" > "$TMP/out.txt" || die "can't work out what is due"
 case $(head -n 1 "$TMP/out.txt") in error\ *) die "$(head -n 1 "$TMP/out.txt" | cut -c7-)" ;; esac
 if grep -q '^guard #' "$TMP/out.txt"; then

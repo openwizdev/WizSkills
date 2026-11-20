@@ -18,14 +18,16 @@
 // PNG (playwright-core's Chromium: $OPENWIZ_CHROMIUM, else `chromium` on
 // PATH), lines -> WAV (--tts-command, else espeak-ng, espeak or say), and
 // ffmpeg stitches a constant 30 fps H.264/AAC MP4, verified with ffprobe,
-// plus build/sheet.png, every frame in order. Everything lands in `build/`
-// beside the storyboard. playwright-core is read from the working folder's
+// plus build/sheet.png, every frame in order. Frames, lines and the sheet land
+// in `build/` beside the storyboard; the MP4 is staged beside its output, on
+// the output's filesystem, and published only once verified, never over a file. playwright-core is read from the working folder's
 // node_modules, else $ANIMATIC_HOME (default ~/.cache/animatic), where it is
 // installed, pinned, on first use.
 //
 // --tts-command, as in Matt's: the line arrives on stdin and as {text}; {out}
 // is a path with no extension, and the command writes {out}.wav (or .mp3,
-// .aiff): it is converted to WAV here.
+// .aiff): it is converted to WAV here. Each moment needs its own new, audible
+// take and a command that exits 0, or the build fails and names the moment.
 //
 // Exit 0: done, one short report on stdout. 1: refused or failed, one
 // `animatic: <why>` line per reason on stderr. 2: bad arguments.
@@ -208,19 +210,31 @@ const run = (cmd, args, opts = {}) => {
 const duration = (f) => Number(run("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", f]).trim());
 const toWav = (src, wav) => run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-i", src, "-ac", "1", "-ar", "48000", wav]);
 
+const loudest = (f) => {
+  const r = spawnSync("ffmpeg", ["-nostdin", "-i", f, "-af", "volumedetect", "-vn", "-f", "null", "-"], { encoding: "utf8" });
+  return Number(((r.stderr ?? "").match(/max_volume: (-?[\d.]+) dB/) ?? [])[1]);
+};
+
 const voice = (text, wav) => {
   const base = wav.replace(/\.wav$/, ".src");
+  const dir = path.dirname(base);
+  const ours = () => fs.readdirSync(dir).filter((f) => f.startsWith(path.basename(base) + ".")).map((f) => path.join(dir, f));
+  for (const f of [wav, ...ours()]) fs.rmSync(f, { force: true }); // only a take made now counts
   if (flags["tts-command"]) {
     const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
     const cmd = flags["tts-command"].replaceAll("{out}", q(base)).replaceAll("{text}", q(text));
-    spawnSync("sh", ["-c", cmd], { input: text, stdio: ["pipe", "ignore", "pipe"] });
+    const r = spawnSync("sh", ["-c", cmd], { input: text, stdio: ["pipe", "ignore", "pipe"], encoding: "utf8" });
+    if (r.status !== 0) {
+      for (const f of ours()) fs.rmSync(f, { force: true });
+      const last = (r.stderr || "").trim().split("\n").pop();
+      throw new Error(`the voice command failed (${r.error ? r.error.message : r.signal ?? `exit ${r.status}`})${last ? `: ${last}` : ""}`);
+    }
   } else if (engine === "say") {
     run("say", [...(flags.voice ? ["-v", flags.voice] : []), "-o", `${base}.aiff`, text]);
   } else {
     run(engine, [...(flags.voice ? ["-v", flags.voice] : []), "-w", `${base}.wav`, text]);
   }
-  const dir = path.dirname(base);
-  const made = fs.readdirSync(dir).filter((f) => f.startsWith(path.basename(base) + ".")).map((f) => path.join(dir, f));
+  const made = ours();
   const src = made.find((f) => fs.statSync(f).size > 0);
   try {
     if (!src) throw new Error(`the voice wrote nothing for "${text.slice(0, 60)}"`);
@@ -230,6 +244,7 @@ const voice = (text, wav) => {
   }
   const d = duration(wav);
   if (!(d > 0.2)) throw new Error(`the voice came back empty for "${text.slice(0, 60)}"`);
+  if (!(loudest(wav) > -50)) throw new Error(`the voice is silent for "${text.slice(0, 60)}"`);
   return d;
 };
 
@@ -251,7 +266,16 @@ try {
   } finally {
     await browser.close();
   }
-  const lengths = moments.map((m, i) => voice(m.say, path.join(build, `line-${pad(i)}.wav`)) + HOLD);
+  const voiced = [];
+  const lengths = moments.map((m, i) => {
+    try {
+      return voice(m.say, path.join(build, `line-${pad(i)}.wav`)) + HOLD;
+    } catch (e) {
+      voiced.push(`moment ${i + 1}: ${e.message}`);
+      return 0;
+    }
+  });
+  if (voiced.length) fail(voiced);
 
   const args = ["-nostdin", "-v", "error"];
   const filters = [];
@@ -261,25 +285,27 @@ try {
       `[${2 * i + 1}:a]aformat=sample_rates=48000:channel_layouts=stereo,apad=whole_dur=${lengths[i].toFixed(3)},atrim=duration=${lengths[i].toFixed(3)}[a${i}]`);
   });
   filters.push(`${moments.map((_, i) => `[v${i}][a${i}]`).join("")}concat=n=${moments.length}:v=1:a=1[v][a]`);
-  const partial = path.join(build, "spec.partial.mp4");
-  fs.rmSync(partial, { force: true });
-  run("ffmpeg", [...args, "-filter_complex", filters.join(";"), "-map", "[v]", "-map", "[a]", "-r", "30",
-    "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", partial]);
-
-  const meta = JSON.parse(run("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", partial]));
-  const kinds = meta.streams.map((s) => s.codec_type).sort().join(",");
   const total = lengths.reduce((a, b) => a + b, 0);
-  if (kinds !== "audio,video") throw new Error(`the MP4 holds ${kinds}, not one video and one audio track`);
-  if (Math.abs(Number(meta.format.duration) - total) > 0.25) throw new Error(`the MP4 runs ${meta.format.duration} s, not ${total.toFixed(2)} s`);
-  const loud = spawnSync("ffmpeg", ["-nostdin", "-i", partial, "-af", "volumedetect", "-vn", "-f", "null", "-"], { encoding: "utf8" }).stderr;
-  const max = Number((loud.match(/max_volume: (-?[\d.]+) dB/) ?? [])[1]);
-  if (!(max > -50)) throw new Error("the voice is not audible");
-
   run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-framerate", "1", "-i", path.join(build, "frame-%02d.png"),
     "-vf", `scale=426:-1,tile=3x${Math.ceil(moments.length / 3)}`,
     "-frames:v", "1", path.join(build, "sheet.png")]);
-  fs.linkSync(partial, out);
-  fs.rmSync(partial);
+
+  // Staged in a new folder of its own beside the output, on the output's
+  // filesystem, so publishing is one link and cleanup removes only ours.
+  const stage = fs.mkdtempSync(path.join(path.dirname(out), `.${path.basename(out, ".mp4")}.partial-`));
+  const partial = path.join(stage, "spec.mp4");
+  try {
+    run("ffmpeg", [...args, "-filter_complex", filters.join(";"), "-map", "[v]", "-map", "[a]", "-r", "30",
+      "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", partial]);
+    const meta = JSON.parse(run("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", partial]));
+    const kinds = meta.streams.map((s) => s.codec_type).sort().join(",");
+    if (kinds !== "audio,video") throw new Error(`the MP4 holds ${kinds}, not one video and one audio track`);
+    if (Math.abs(Number(meta.format.duration) - total) > 0.25) throw new Error(`the MP4 runs ${meta.format.duration} s, not ${total.toFixed(2)} s`);
+    if (!(loudest(partial) > -50)) throw new Error("the voice is not audible");
+    fs.linkSync(partial, out); // never over a file that appeared meanwhile
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
   let at = 0;
   const timeline = moments.map((m, i) => {
     const line = `  ${pad(i)}  ${at.toFixed(1).padStart(5)} s  ${m.frame.type === "title" ? "title   " : `${m.frame.type.padEnd(8)}`}${m.frame.step ? ` step ${m.frame.step}` : "       "}  ${m.say.slice(0, 60)}`;

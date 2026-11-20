@@ -348,7 +348,8 @@ class Where(unittest.TestCase):
         self.assertEqual(local.returncode, 0, local.stdout)
         self.assertEqual(road.saved()['host'], {'agents': 'local', 'harnesses': ['claude-code'],
                                                 'adapters': str(road.dir / 'adapters')})
-        self.assertEqual(road.driver_calls(), [['version']])
+        # each where lists the build's drivers (DW9, #2006), and only ever by `version`: nothing starts
+        self.assertEqual(road.driver_calls(), [['version'], ['version']])
 
 
 class Setting(unittest.TestCase):
@@ -562,11 +563,13 @@ class Drivers(unittest.TestCase):
         self.assertEqual(preview.returncode, 12, preview.stdout)
         self.assertIn('`Host: boat`', preview.stdout)
         self.assertNotIn('host_pulls', json.loads(road.world_path.read_text()))
-        self.assertEqual(road.helper(['setting', '--yes']).returncode, 0)
+        wrote = road.helper(['setting', '--yes'])
+        self.assertEqual(wrote.returncode, 0, wrote.stdout + wrote.stderr)
         world = json.loads(road.world_path.read_text())
         self.assertEqual(len(world['host_pulls']), 1)
         branch = world['branches']['openwiz/host-setting']
-        self.assertEqual(sorted(branch), ['docs/agents/host.md'], 'only the host line; no permission mode row')
+        changed = sorted(p for p in set(branch) | set(world['files']) if branch.get(p) != world['files'].get(p))
+        self.assertEqual(changed, ['docs/agents/host.md'], 'only the host line; no permission mode row')
         self.assertEqual(re.findall(r'(?m)^Host:.*$', branch['docs/agents/host.md']), ['Host: boat'])
         road.origin_write({'docs/agents/host.md': branch['docs/agents/host.md']})  # the owner merges it
         world['host_pulls'][0]['state'] = 'MERGED'

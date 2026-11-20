@@ -183,7 +183,8 @@ case $SELF in *[!0-9a-f]* | '') CACHE='' ;; esac
 
 # The fields of a ticket, and of an issue approved on its own.
 TICKET='number
-        timelineItems(itemTypes: [LABELED_EVENT], last: 20) { nodes { ... on LabeledEvent { createdAt label { name } } } }
+        lastEditedAt editor { __typename login }
+        timelineItems(itemTypes: [LABELED_EVENT], last: 20) { nodes { ... on LabeledEvent { createdAt actor { __typename login } label { name } } } }
         closedByPullRequestsReferences(first: 5, includeClosedPrs: true) {
           pageInfo { hasNextPage }
           nodes {
@@ -289,6 +290,12 @@ query() {
         }
       }
     } }
+  }
+}' ;;
+    Writer) printf '%s\n' 'query Writer($owner: String!, $name: String!, $login: String!) {
+  rateLimit { cost remaining limit resetAt }
+  repository(owner: $owner, name: $name) {
+    collaborators(query: $login, first: 10) { edges { permission node { login } } }
   }
 }' ;;
     Merged) printf '%s\n' 'query Merged($owner: String!, $name: String!, $cursor: String) {
@@ -1461,7 +1468,29 @@ def start_clear($s):
   and (held($s) | not);
 def ready_but_current($s): has_role("ready-for-agent") and start_clear($s)
   and (labelled_held | not) and (ordering_inflight | not);
-def ready($s): ready_but_current($s) and ($s == null or current($s));
+# KN13 (#1448): the text of a ticket is an order only from people the project
+# trusts. The latest labelled event of the ready label must be by a maintainer (a
+# record author, or a collaborator with write access, read only for a ticket
+# that could otherwise start), and the body unedited since, by anyone; else a
+# maintainer must put the label on again. GraphQL names the bot of an App without
+# "[bot]". Who added it can'"'"'t be read (not in the last 20 labelled events,
+# or no actor) refuses too.
+def login_of: if type != "object" or (.login | type) != "string" then null
+  elif .__typename == "Bot" then "\(.login)[bot]" else .login end
+  | if . == null then null else ascii_downcase end;
+def approval_label: $W.labels["ready-for-agent"] as $l | [.timelineItems.nodes[]? | select(.label.name == $l)] | max_by(.createdAt);
+def maintainer: . != null and (among($W.authors) or among($W.writers));
+def approver_why: approval_label as $e | $W.labels["ready-for-agent"] as $l
+  | if $e == null then "who added \($l) can'"'"'t be read"
+    elif ($e.actor | login_of | maintainer | not) then "\($l) was last added at \($e.createdAt) by someone who is not a maintainer"
+    elif .lastEditedAt != null and .lastEditedAt > $e.createdAt then "the ticket was edited at \(.lastEditedAt), after \($l) was added at \($e.createdAt)"
+    # GitHub'"'"'s times are to the second: an edit in the label'"'"'s own second
+    # may have come after it (R1 on WizSkills#67).
+    elif .lastEditedAt != null and .lastEditedAt == $e.createdAt then "the ticket was edited at \(.lastEditedAt), the same second \($l) was added, so which came first can'"'"'t be read"
+    else null end
+  | if . == null then null else "start refused: \(.); a maintainer must add it again" end;
+def ready_unchecked($s): ready_but_current($s) and ($s == null or current($s));
+def ready($s): ready_unchecked($s) and approver_why == null;
 def may_start($s): ready($s) and (refused_lately(start.last; "start") | not);
 # A fleet thread'"'"'s takeover (ClosedWiz#192) starts a builder too, so it keeps
 # every gate of an ordinary start (Sol R1 on #1517): approved and current,
@@ -1654,7 +1683,10 @@ def ticket_lines_now($s): . as $t
       (start as $st
        | if $st.state == "queued" then
            (if may_start($s) then "start #\(.number): \(.title) (\(where($s))"
-              + (if $st.last then "; retry after \"\($st.last.r)\"" else "" end) + ")" else empty end)
+              + (if $st.last then "; retry after \"\($st.last.r)\"" else "" end) + ")"
+            elif ready_unchecked($s) and (refused_lately(start.last; "start") | not) and approver_why != null then
+              records as $rs | look(.number; $rs; approver_why)
+            else empty end)
          elif $st.state == "claimed" then
            # From the edit that made it a claim: a takeover edits an older record
            # to "starting" (Sol R3 on #1517); a new claim'"'"'s edit is its creation.
@@ -1856,6 +1888,12 @@ def part_lines: . as $s | records as $srs
 
 def candidates: ($W.specs[] as $s | $s.subIssues.nodes[] | select(is_named($s)) | {t: ., s: $s}),
   ($W.singles[] | {t: ., s: null});
+# The users who labelled a ticket that could otherwise start, not record
+# authors: their write access is read (Writer), once each.
+def writers_wanted: [candidates | .s as $s | .t
+  | select(.state == "OPEN" and is_approved($s) and (looks | length) == 0 and ready_unchecked($s))
+  | approval_label | .actor | select(type == "object" and .__typename == "User") | login_of
+  | select(. != null and (among($W.authors) | not))] | unique | .[];
 # Only existing, readable builders can be resumed; this never starts one.
 def waiters: candidates | .s as $s | .t
   | select(.state == "OPEN" and is_approved($s) and (looks | length) == 0 and builder != null)
@@ -1921,6 +1959,7 @@ def claim: $W.claim.n as $n | $W.claim.id as $id
             elif (open_prs | length) > 0 then "withdraw #\($n): pull request #\(open_prs[0].number) is open"
             elif (looks | length) > 0 then "withdraw #\($n): \(looks[0])"
             elif refused_lately($st.last; "start") then "withdraw #\($n): its start was refused less than 10 minutes ago"
+            elif ready_unchecked($s) and approver_why != null then "withdraw #\($n): \(approver_why)"
             elif ready($s) then "go #\($n)"
             else "withdraw #\($n): it is not on the frontier now" end end
     else
@@ -1956,11 +1995,31 @@ jqw() {
 world() {
   jq -n --argjson now "$NOW" --arg default "$DEFAULT" --slurpfile specs "$TMP/specs.json" \
     --slurpfile checks "$1" --slurpfile labels "$2" --slurpfile singles "$3" --arg claim "${CLAIM_N:+$CLAIM_N $CLAIM_ID}" \
-    --slurpfile followups "$TMP/followups.json" --arg spec "${SPEC:-}" \
+    --slurpfile followups "$TMP/followups.json" --arg spec "${SPEC:-}" --slurpfile authors "$TMP/authors.json" \
     '{now: $now, default: $default, specs: $specs[0], singles: $singles[0], checks: $checks[0], labels: $labels[0],
-      followups: $followups[0], spec: (if $spec == "" then null else ($spec | tonumber) end),
+      followups: $followups[0], authors: $authors[0], writers: [], spec: (if $spec == "" then null else ($spec | tonumber) end),
       claim: (if $claim == "" then null else ($claim | split(" ") | {n: (.[0] | tonumber), id: (.[1] | tonumber)}) end),
       fingerprints: {}, branches: {}, merged: [], prfiles: {}}' > "$TMP/world.json" || die "can't build the world"
+}
+
+# writers: KN13 (#1448). The write access of each user writers_wanted names,
+# into the world's writers: one small GraphQL read each, only for a ticket
+# that could otherwise start and that no record author labelled. A read that
+# fails or answers anything else grants nothing: that ticket is refused.
+writers() {
+  printf '[]' > "$TMP/writers.json" && jqw 'writers_wanted' > "$TMP/writers-wanted.txt" \
+    || die "can't list who labelled the tickets"
+  while IFS= read -r login; do
+    case $login in '' | -* | *[!a-z0-9-]*) continue ;; esac
+    if ( gql Writer "$TMP/writer.json" -f login="$login" ) 2> /dev/null \
+      && jq -e --arg l "$login" 'any(.data.repository.collaborators.edges[]?; (.node.login | ascii_downcase) == $l
+           and (.permission | IN("ADMIN", "MAINTAIN", "WRITE")))' "$TMP/writer.json" > /dev/null 2>&1; then
+      jq --arg l "$login" '. + [$l]' "$TMP/writers.json" > "$TMP/writers.next" && mv "$TMP/writers.next" "$TMP/writers.json" \
+        || die "can't write"
+    fi
+  done < "$TMP/writers-wanted.txt"
+  jq --slurpfile w "$TMP/writers.json" '.writers = $w[0]' "$TMP/world.json" > "$TMP/world.next" \
+    && mv "$TMP/world.next" "$TMP/world.json" || die "can't write"
 }
 
 # unticked_hash FILE: FILE's SHA-256 as to-tickets’ revision.sh hashes a body:
@@ -2483,7 +2542,7 @@ python3 "$(dirname "$0")/records.py" "$REPO" "$private" < "$TMP/world.json" > "$
   && mv "$TMP/resolved.json" "$TMP/world.json" || die "can't resolve fleet records"
 case $cmd in check | wake | spec | every) branches; waits ;; claim) waits ;; esac
 merges
-[ "$cmd" = holds ] || fingerprints
+[ "$cmd" = holds ] || { fingerprints; writers; }
 jqw "$cmd" > "$TMP/out.txt" || die "can't work out what is due"
 case $(head -n 1 "$TMP/out.txt") in error\ *) die "$(head -n 1 "$TMP/out.txt" | cut -c7-)" ;; esac
 if grep -q '^guard #' "$TMP/out.txt"; then

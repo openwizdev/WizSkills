@@ -5,15 +5,27 @@ python3 -I check/changesets.py check --base REF
     The pull request gate. Every skill the commits since REF change (anything
     under skills/<name>/ except the SKILL.md `version:` line) must be named in
     a changeset the same commits add; a removed skill needs a new changeset
-    naming `wizskills`. Every pending changeset must be well formed.
-python3 -I check/changesets.py release [--since REF] [--date YYYY-MM-DD] [--write]
+    naming `wizskills`. Every pending changeset must be well formed, and a
+    Markdown file Changesets ignores (a hidden name, README.md in any case,
+    AGENTS.md, CLAUDE.md, GEMINI.md) is refused. A new or edited changeset
+    names only skills that exist; an older one keeps the skills since removed.
+python3 -I check/changesets.py release [--first] [--since REF] [--date YYYY-MM-DD] [--write]
     Runs the pinned Changesets (`npm ci` first) over the pending changesets in
     a throwaway workspace with one package per skill, then prints each skill's
     bump, the bundle's own bump by J206's rules and its CHANGELOG section. A dry
     run unless --write, which sets the bumped skills' `version:` lines, the
     plugin's version and CHANGELOG.md, and deletes the consumed changesets. It
     never tags, pushes or publishes. --since is the last release (default: the
-    newest `v*` tag), for skills added or removed since.
+    newest `v*` tag), for skills added or removed since. A changeset line for a
+    skill removed since is dropped; its summary stays, under the bundle when it
+    named no remaining skill. Only a note whose current contents Git committed
+    while that skill existed may name it; a new or edited one is refused.
+    Nothing is written or consumed unless Changesets processed every pending
+    changeset.
+    --first cuts the first bundle, once: the plugin goes to 0.2.0 and every
+    skill, already at 0.2.0, stays there, with the pending notes as its
+    release notes. Until then the ordinary release refuses; after it, --first
+    refuses and the ordinary bump rules apply.
 
 Exit 0 pass, 1 refused, 2 unusable input or setup. Python 3.11+ and Git; release
 also needs Node.
@@ -38,6 +50,10 @@ VERSION_LINE = re.compile(r'version: *["\']?([^"\'\s]+)["\']? *')
 PLAIN = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)')
 SHAPE = 'opens with `---`, one `"<skill>": patch|minor|major` line each, then `---` and a summary'
 CHANGESETS = 'node_modules/@changesets/cli/bin.js'
+# The pinned reader (@changesets/read 1.0.1) skips these, hidden names and README.md in any case.
+IGNORED = ('AGENTS.md', 'CLAUDE.md', 'GEMINI.md')
+IGNORED_WHY = 'is a name Changesets ignores: rename it (see .changeset/README.md)'
+FIRST = '0.2.0'
 
 
 class Unusable(Exception):
@@ -51,13 +67,19 @@ def git(*args):
     return p.stdout.decode('utf-8')
 
 
-def parse_note(text, skills):
-    """(releases {name: bump}, summary), or raise ValueError(why)."""
+class Anything:
+    def __contains__(self, _):
+        return True
+
+
+def parse_note(text, skills, gone=()):
+    """(releases {name: bump}, summary), or raise ValueError(why). A name in `gone` (a skill
+    removed since the note landed) is left out of the releases."""
     lines = text.split('\n')
     if lines[0] != '---' or '---' not in lines[1:]:
         raise ValueError(SHAPE)
     end = lines.index('---', 1)
-    releases = {}
+    releases, dropped = {}, set()
     for line in lines[1:end]:
         m = RELEASE_LINE.fullmatch(line)
         if not m:
@@ -65,12 +87,15 @@ def parse_note(text, skills):
         name, bump = m.group(1) or m.group(2) or m.group(3), m.group(4)
         if bump not in BUMPS:
             raise ValueError('a bump is patch, minor or major')
-        if name in releases:
+        if name in releases or name in dropped:
             raise ValueError(f'names `{name}` twice')
         if name != BUNDLE and name not in skills:
-            raise ValueError(f'`{name}` is not a skill or `{BUNDLE}`')
+            if name not in gone:
+                raise ValueError(f'`{name}` is not a skill or `{BUNDLE}`')
+            dropped.add(name)
+            continue
         releases[name] = bump
-    if not releases:
+    if not releases and not dropped:
         raise ValueError(f'names no skill and no `{BUNDLE}`')
     summary = '\n'.join(lines[end + 1:]).strip()
     if not summary:
@@ -78,9 +103,15 @@ def parse_note(text, skills):
     return releases, summary
 
 
-def is_note(rel):
+def note_kind(rel):
+    """'note', 'ignored' (a Markdown file the pinned reader skips) or None, for a path under .changeset/."""
     parts = rel.split('/')
-    return len(parts) == 2 and parts[0] == '.changeset' and parts[1].endswith('.md') and parts[1] != 'README.md'
+    if len(parts) != 2 or parts[0] != '.changeset' or not parts[1].endswith('.md') or parts[1] == 'README.md':
+        return None
+    name = parts[1]
+    if name.startswith('.') or name.lower() == 'readme.md' or name in IGNORED:
+        return 'ignored'
+    return 'note'
 
 
 def without_version(text):
@@ -97,6 +128,16 @@ def without_version(text):
 def tree_skills(ref):
     return {p.split('/')[1] for p in git('ls-tree', '-r', '--name-only', ref, '--', 'skills/').splitlines()
             if p.count('/') == 2 and p.endswith('/SKILL.md')}
+
+
+def blobs(ref):
+    """{path: blob} of the files directly under .changeset/ at ref."""
+    out = {}
+    for line in git('ls-tree', '-z', ref, '--', '.changeset/').split('\0'):
+        if line:
+            meta, path = line.split('\t', 1)
+            out[path] = meta.split()[2]
+    return out
 
 
 def check(base):
@@ -116,11 +157,19 @@ def check(base):
         changed.add(name)
     refusals, named = [], set()
     added = {p for p in git('diff', '--name-only', '--no-renames', '--diff-filter=A', '-z', merge_base, 'HEAD',
-                            '--', '.changeset/').split('\0') if is_note(p)}
-    pending = sorted(p for p in git('ls-tree', '--name-only', 'HEAD', '--', '.changeset/').splitlines() if is_note(p))
-    for rel in pending:
+                            '--', '.changeset/').split('\0') if note_kind(p)}
+    older = blobs(merge_base)
+    for rel, blob in sorted(blobs('HEAD').items()):
+        kind = note_kind(rel)
+        if kind == 'ignored':
+            refusals.append(f'{rel} {IGNORED_WHY}')
+            continue
+        if kind is None:
+            continue
+        # An older note was checked when it landed; a skill it names may since have been removed.
+        gone = Anything() if older.get(rel) == blob else ()
         try:
-            releases, _ = parse_note(git('show', f'HEAD:{rel}'), head_skills)
+            releases, _ = parse_note(git('show', f'HEAD:{rel}'), head_skills, gone)
         except ValueError as why:
             refusals.append(f'{rel} {why}')
             continue
@@ -153,10 +202,13 @@ def skill_version(path):
 
 
 def bumped(version, bump):
+    """The bumped version, or (major, minor) when bump is None."""
     m = PLAIN.fullmatch(version)
     if not m:
         raise Unusable(f'the plugin version {version} is not a plain X.Y.Z')
     x, y, z = map(int, m.groups())
+    if bump is None:
+        return x, y
     return {'major': f'{x + 1}.0.0', 'minor': f'{x}.{y + 1}.0', 'patch': f'{x}.{y}.{z + 1}'}[bump]
 
 
@@ -200,7 +252,8 @@ def bullets(changelog):
 
 
 def plan(names, versions, plugin_version, notes):
-    """Run the pinned Changesets in a throwaway workspace: ({skill: new}, {name: bullets})."""
+    """Run the pinned Changesets over notes [(file name, text)] in a throwaway workspace:
+    ({skill: new}, {name: bullets})."""
     if not (ROOT / CHANGESETS).is_file():
         raise Unusable('Changesets is not installed: run `npm ci` at the repository root')
     with tempfile.TemporaryDirectory(prefix='wizskills-release-') as tmp:
@@ -216,14 +269,18 @@ def plan(names, versions, plugin_version, notes):
         (work / 'package-lock.json').write_text(json.dumps({'lockfileVersion': 3, 'packages': {}}))
         (work / '.changeset').mkdir()
         shutil.copy(ROOT / '.changeset/config.json', work / '.changeset/config.json')
-        for note in notes:
-            shutil.copy(note, work / '.changeset' / note.name)
+        for name, text in notes:
+            (work / '.changeset' / name).write_text(text, encoding='utf-8')
         (work / 'node_modules').symlink_to(ROOT / 'node_modules')
         env = {k: v for k, v in os.environ.items() if k not in ('GH_TOKEN', 'GITHUB_TOKEN')}
         p = subprocess.run(['node', str(work / CHANGESETS), 'version'], cwd=work, capture_output=True,
                            text=True, env={**env, 'CI': '1'})
         if p.returncode:
             raise Unusable('Changesets refused the pending changesets: ' + ' '.join(p.stderr.split()[-12:]))
+        left = sorted(name for name, _ in notes if (work / '.changeset' / name).exists())
+        if left:
+            raise Unusable('Changesets did not process ' + ', '.join(f'.changeset/{n}' for n in left)
+                           + ': nothing written')
         new, notes_by = {}, {}
         for name, folder in packages.items():
             version = json.loads((folder / 'package.json').read_text())['version']
@@ -234,45 +291,84 @@ def plan(names, versions, plugin_version, notes):
         return new, notes_by
 
 
-def release(since, date, write):
+def older_skills(path, text):
+    """The skills that existed when Git last set this note's current contents: a removed one may stay
+    named. A note not committed as it stands (new, or edited since) gets none."""
+    rel = f'.changeset/{path.name}'
+    commit = git('log', '-1', '--format=%H', 'HEAD', '--', rel).strip()
+    if not commit:
+        return set()
+    p = subprocess.run(['git', 'show', f'HEAD:{rel}'], cwd=ROOT, capture_output=True)
+    if p.returncode or p.stdout.decode('utf-8', 'replace') != text:
+        return set()
+    return tree_skills(commit)
+
+
+def release(since, date, write, first=False):
     names = sorted(e.name for e in (ROOT / 'skills').iterdir() if (e / 'SKILL.md').is_file())
     if BUNDLE in names:
         raise Unusable(f'a skill may not be named `{BUNDLE}`, the bundle')
-    note_files = sorted(p for p in (ROOT / '.changeset').glob('*.md') if p.name != 'README.md')
-    if not note_files:
+    files = sorted(p for p in (ROOT / '.changeset').iterdir() if p.is_file())
+    kinds = {p: note_kind(f'.changeset/{p.name}') for p in files}
+    note_files = [p for p in files if kinds[p] == 'note']
+    refused = [f'release: .changeset/{p.name} {IGNORED_WHY}' for p in files if kinds[p] == 'ignored']
+    if not note_files and not refused:
         print('release: nothing pending')
         return 0
-    skill_bumps, explicit, refused = {}, None, []
+    if since is None:
+        since = git('describe', '--tags', '--abbrev=0', '--match', 'v*', 'HEAD').strip()
+    before = tree_skills(since)
+    skill_bumps, explicit, notes = {}, None, []
     for path in note_files:
+        text = path.read_text(encoding='utf-8')
         try:
-            releases, _ = parse_note(path.read_text(encoding='utf-8'), set(names))
+            releases, summary = parse_note(text, set(names), older_skills(path, text))
         except ValueError as why:
             refused.append(f'release: .changeset/{path.name} {why}')
             continue
+        if not releases:
+            releases = {BUNDLE: 'patch'}  # it named only removed skills: its summary goes with the bundle
         for name, bump in releases.items():
             if name == BUNDLE:
                 explicit = max(explicit or bump, bump, key=BUMPS.index)
             else:
                 skill_bumps[name] = max(skill_bumps.get(name, bump), bump, key=BUMPS.index)
+        lines = ['---', *(f'"{n}": {b}' for n, b in releases.items()), '---', '', summary, '']
+        notes.append((path.name, '\n'.join(lines)))
     if refused:
         print('\n'.join(refused))
         return 1
-    if since is None:
-        since = git('describe', '--tags', '--abbrev=0', '--match', 'v*', 'HEAD').strip()
-    before = {p.split('/')[1] for p in git('ls-tree', '-r', '--name-only', since, '--', 'skills/').splitlines()
-              if p.count('/') == 2 and p.endswith('/SKILL.md')}
     added, removed = sorted(set(names) - before), sorted(before - set(names))
     versions = {n: skill_version(ROOT / 'skills' / n / 'SKILL.md') for n in names}
     plugin_path = ROOT / '.claude-plugin/plugin.json'
     plugin_data = json.loads(plugin_path.read_text(encoding='utf-8'))
-    bump, why = bundle_bump(skill_bumps, explicit, added, removed)
-    version = bumped(plugin_data['version'], bump)
-    new, notes_by = plan(names, versions, plugin_data['version'], note_files)
+    due = bumped(plugin_data['version'], None) < (0, 2)
+    if first and not due:
+        print(f'release: --first cuts the first bundle once; {BUNDLE} is already {plugin_data["version"]}')
+        return 1
+    if due and not first:
+        print(f'release: the first bundle is {FIRST} with every skill at {FIRST}: run `release --first`')
+        return 1
+    if first:
+        off = [f'`{n}` is {versions[n]}' for n in names if versions[n] != FIRST]
+        if off:
+            print(f'release: --first needs every skill at {FIRST}: ' + ', '.join(off))
+            return 1
+        bump, why, version = 'first bundle', f'the first bundle, every skill at {FIRST}', FIRST
+    else:
+        bump, why = bundle_bump(skill_bumps, explicit, added, removed)
+        version = bumped(plugin_data['version'], bump)
+    new, notes_by = plan(names, versions, plugin_data['version'], notes)
+    if first:
+        new = {}  # the wave's notes are already in the initialised 0.2.0 versions
+        shown = {n: FIRST for n in notes_by if n != BUNDLE}
+    else:
+        shown = new
     section = [f'## {version} - {date}', '']
     section += [f'- Skills added: {", ".join(f"`{n}`" for n in added)}.'] if added else []
     section += [f'- Skills removed: {", ".join(f"`{n}`" for n in removed)}.'] if removed else []
     section += [f'- {b}' for b in notes_by.get(BUNDLE, [])]
-    section += [f'- `{n}` {new[n]}: {b}' for n in sorted(new) for b in notes_by.get(n, [])]
+    section += [f'- `{n}` {shown[n]}: {b}' for n in sorted(shown) for b in notes_by.get(n, [])]
     print(f'release: {BUNDLE} {plugin_data["version"]} -> {version} ({bump})')
     print(f'why: {why}')
     for n in sorted(new):
@@ -327,6 +423,7 @@ def main(argv):
     rel.add_argument('--since')
     rel.add_argument('--date', default=datetime.datetime.now(datetime.timezone.utc).date().isoformat())
     rel.add_argument('--write', action='store_true')
+    rel.add_argument('--first', action='store_true')
     args = parser.parse_args(argv)
     if args.command == 'release' and not valid_date(args.date):
         print('changesets: --date is YYYY-MM-DD', file=sys.stderr)
@@ -334,7 +431,7 @@ def main(argv):
     try:
         if args.command == 'check':
             return check(args.base)
-        return release(args.since, args.date, args.write)
+        return release(args.since, args.date, args.write, args.first)
     except Unusable as why:
         print(f'changesets: {why}', file=sys.stderr)
         return 2

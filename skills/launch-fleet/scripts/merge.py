@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Merge one approved pull request at its exact head, then post the ticket's cost (WS8, #1181).
+"""Merge one approved pull request at its exact head, then post the ticket's cost (WS8, #1181; WS26, #1670).
 
-  merge.py read  OWNER/NAME PR HEAD
-  merge.py admit OWNER/NAME PR HEAD CHECKS
-  merge.py merge OWNER/NAME PR HEAD CHECKS BODY --ticket N [--base-rule-checked] [-- COST ARGS]
-  merge.py cost  OWNER/NAME PR HEAD TICKET [-- COST ARGS]
+  merge.py read   OWNER/NAME PR HEAD
+  merge.py admit  OWNER/NAME PR HEAD CHECKS
+  merge.py merge  OWNER/NAME PR HEAD CHECKS BODY --ticket TICKET [--base-rule-checked] [-- COST ARGS]
+  merge.py cost   OWNER/NAME PR HEAD TICKET [-- COST ARGS]
+  merge.py settle OWNER/NAME PR TICKET [-- COST ARGS]
 
 `read` prints where the pull request stands: `merged <commit>`, `queued`,
 `open, the merge queue is on|off[; it left the queue at <time>: <reason>]` or
@@ -16,17 +17,36 @@ comma-separated. Both only read.
 --match-head-commit` (never `--admin`), reads it back and records the outcome:
 `merged <commit>; cost ...` (exit 0), `queued; recorded <id>` (exit 0),
 `pending: ...` (exit 0, nothing recorded: read again next wake),
-`blocked: <why>; recorded <id>` (exit 1). Without a merge queue it merges only
+`blocked: <why>; recorded <id>` (exit 1). The queue receipt (`launch-fleet:
+merge queued <commit>`) is what tells a later removal from a fresh enqueue and
+what `settle` reads, so it is recorded before the enqueue: a receipt it can't
+confirm prints `not queued: ...` (exit 1) and nothing is enqueued; the next run
+reuses a receipt that did land. A pull request read as queued without its
+receipt gets one then (`queued; recorded <id>`, or `queued; receipt
+unconfirmed ...`, exit 1). Without a merge queue it merges only
 with `--base-rule-checked`, after you applied fleet.md's base rule and
 `fleet.sh every` still prints this merge line. BODY names the APPROVE and the
 plan approval that allowed it.
 
+TICKET is `N` or `OWNER/NAME#N`, and must be one of the issues the pull
+request closes: a bare `N` names its one closing issue numbered N, in whatever
+repository; anything else is `refused: ...` before any write.
+
 `cost`, also run by `merge` after a verified merge, runs the project's FM4
 command `tools/collector/cost_line.py --repo OWNER/NAME --pr PR [COST ARGS]`
 from the current directory and posts `launch-fleet: cost: <its line>` on the
-ticket, or `launch-fleet: cost unknown (PR #PR): <why>`; never a zero for an
-unknown part. It posts once: `cost already posted <id>` names an earlier
-record author's record. It refuses before a verified merge at HEAD.
+ticket, in the ticket's own repository, or `launch-fleet: cost unknown (PR
+<ref>): <why>`; never a zero for an unknown part. <ref> is `#PR`, or
+`OWNER/NAME#PR` when the ticket lives in another repository; FM4's command
+costs only tickets in the pull request's repository, so such a ticket's cost
+is unknown. It posts once: `cost already posted <id>` names an earlier record
+author's record, matching the pull request's repository in any letter case;
+when the ticket's records can't be read it prints `unknown: ...` and posts
+nothing. It refuses before a verified merge at HEAD.
+
+`settle` is the cost a queued merge still owes: it reads the newest record
+author's queue receipt on the pull request and runs `cost` at that commit
+(`refused: ...` while it isn't merged there), or prints `no queued merge`.
 """
 import importlib.util
 import json
@@ -46,12 +66,15 @@ QUERY = '''query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { defaultBranchRef { name } pullRequest(number: $number) {
     state baseRefName headRefOid isMergeQueueEnabled isInMergeQueue mergeable mergeCommit { oid }
     mergeQueueEntry { headCommit { oid } }
+    closingIssuesReferences(first: 50) { pageInfo { hasNextPage } nodes { number repository { nameWithOwner } } }
     timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 1) {
       nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } } }
     commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 50) { pageInfo { hasNextPage }
       nodes { __typename ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } }'''
 COST = 'tools/collector/cost_line.py'
 SHA = re.compile(r'[0-9a-f]{40}')
+TICKET = re.compile(r'(?:([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#)?([1-9][0-9]{0,11})')
+QUEUED = re.compile(r'launch-fleet: merge queued ([0-9a-f]{40})\b')
 
 
 def snapshot(repo, number):
@@ -110,6 +133,33 @@ def admission(main, p, head, checks):
     return 'wait: whether the merge queue is on is unknown'
 
 
+def ticket_of(repo, number, p, ticket):
+    """The (repository, number) of the closing issue TICKET names, or a refusal."""
+    named, n = TICKET.fullmatch(ticket).groups()
+    refs = (p or {}).get('closingIssuesReferences') or {}
+    if (refs.get('pageInfo') or {}).get('hasNextPage') is not False:
+        raise Stop(f'refused: the issues PR #{number} closes could not be read whole')
+    found = {(r, i['number']) for i in refs.get('nodes') or []
+             if isinstance(i, dict) and type(i.get('number')) is int
+             and isinstance(r := (i.get('repository') or {}).get('nameWithOwner'), str)}
+    match = [(r, i) for r, i in found if i == int(n) and (named is None or r.casefold() == named.casefold())]
+    if not match:
+        raise Stop(f'refused: PR #{number} does not close {ticket}')
+    if len(match) > 1:
+        raise Stop(f'refused: PR #{number} closes two issues numbered {n}; name it as OWNER/NAME#{n}')
+    return match[0]
+
+
+def receipts(repo, number):
+    """The record authors' queue receipts on the pull request as (commit, comment id), oldest first."""
+    auth = post.authors(repo)
+    items = post.thread(repo, number)
+    if items is None:
+        raise Stop(f'unknown: #{number} could not be read; run it again next wake')
+    return [(m.group(1), c.get('id')) for c in items if post.ours(c, auth)
+            for m in [QUEUED.match((c.get('body') or '').split('\n', 1)[0])] if m]
+
+
 def record(repo, number, body):
     try:
         return post.comment(repo, number, body).split()[-1]
@@ -118,16 +168,25 @@ def record(repo, number, body):
 
 
 def cost(repo, number, head, ticket, extra=()):
-    state = where(*snapshot(repo, number), head)
+    main, p = snapshot(repo, number)
+    state = where(main, p, head)
     if not state.startswith('merged '):
         raise Stop(f'refused: no verified merge at {head} ({state})')
-    auth = post.authors(repo)
-    for c in post.thread(repo, ticket) or []:
+    home, ticket = ticket_of(repo, number, p, ticket)
+    same = home.casefold() == repo.casefold()
+    ref = f'(PR #{number})' if same else f'(PR {repo}#{number})'
+    auth = post.authors(home)
+    items = post.thread(home, ticket)
+    if items is None:
+        raise Stop(f'unknown: the cost records on {home}#{ticket} could not be read; nothing was posted')
+    for c in items:
         first = (c.get('body') or '').split('\n', 1)[0]
-        if post.ours(c, auth) and first.startswith('launch-fleet: cost') and f'(PR #{number})' in first:
+        if post.ours(c, auth) and first.startswith('launch-fleet: cost') and ref.casefold() in first.casefold():
             return f"cost already posted {c['id']}"
-    body = f'launch-fleet: cost unknown (PR #{number}): '
-    if not Path(COST).is_file():
+    body = f'launch-fleet: cost unknown {ref}: '
+    if not same:
+        body += "the cost command costs only tickets in the pull request's repository"
+    elif not Path(COST).is_file():
         body += 'no cost command'
     else:
         try:
@@ -143,38 +202,57 @@ def cost(repo, number, head, ticket, extra=()):
             body += 'unexpected cost output'
         else:
             body += reason.group(1) if reason else 'the cost command failed'
-    return 'cost posted ' + post.comment(repo, ticket, body).split()[-1]
+    return 'cost posted ' + post.comment(home, ticket, body).split()[-1]
+
+
+def settle(repo, number, ticket, extra=()):
+    found = receipts(repo, number)
+    return cost(repo, number, found[-1][0], ticket, extra) if found else 'no queued merge'
 
 
 def merge(repo, number, head, checks, body, ticket, checked, extra):
     def blocked(why):
         raise Stop(f'blocked: {why}; recorded ' + record(repo, number, f'launch-fleet: merge blocked {head}: {why}'))
 
+    def receipt(fail):
+        """The queue receipt for HEAD, the newest one or a new one; `fail` prefixes an unconfirmed write."""
+        mine = [i for h, i in receipts(repo, number) if h == head]
+        if mine:
+            return mine[-1]
+        try:
+            return post.comment(repo, number, f'launch-fleet: merge queued {head}: {body}').split()[-1]
+        except Stop as outcome:
+            raise Stop(f'{fail} ({outcome}); run it again next wake')
+
     main, p = snapshot(repo, number)
     state = where(main, p, head)
     if state.startswith('merged '):
         return state + '; ' + cost(repo, number, head, ticket, extra)
     if state == 'queued':
-        return 'queued; the queue merges it or lets it go'
+        if any(h == head for h, _ in receipts(repo, number)):
+            return 'queued; the queue merges it or lets it go'
+        return 'queued; recorded ' + str(receipt('queued; receipt unconfirmed'))
     if state.startswith('stop: '):
         blocked(state[6:])
-    if '; it left the queue at ' in state:
-        auth = post.authors(repo)
-        if any(post.ours(c, auth) and (c.get('body') or '').startswith(f'launch-fleet: merge queued {head}')
-               for c in post.thread(repo, number) or []):
-            blocked('left the merge queue: ' + state.split(': ', 1)[1])
+    ticket_of(repo, number, p, ticket)
+    if '; it left the queue at ' in state and any(h == head for h, _ in receipts(repo, number)):
+        blocked('left the merge queue: ' + state.split(': ', 1)[1])
     admit = admission(main, p, head, checks)
     if admit.startswith('wait: '):
         blocked(admit[6:])
     if admit.startswith('base rule: ') and not checked:
         raise Stop(admit + '; check the base rule and fleet.sh every, then pass --base-rule-checked')
+    # Save before you send: the queue may merge it or let it go before any later wake, and the
+    # receipt is what settle and the removal guard read then.
+    kept = receipt('not queued: the queue receipt is unconfirmed, so nothing was enqueued') \
+        if admit.startswith('admit: ') else None
     done = post.gh('pr', 'merge', str(number), '--repo', repo, '--merge', '--match-head-commit', head,
                    '--body', body) is not None
     state = where(*snapshot(repo, number), head)
     if state.startswith('merged '):
         return state + '; ' + cost(repo, number, head, ticket, extra)
     if state == 'queued':
-        return 'queued; recorded ' + record(repo, number, f'launch-fleet: merge queued {head}: {body}')
+        return 'queued; recorded ' + str(kept or receipt('queued; receipt unconfirmed'))
     if state.startswith('open') and done:
         return 'pending: the merge command succeeded but it still reads open; read it again next wake'
     blocked(state[6:] if state.startswith('stop: ') else state)
@@ -187,10 +265,11 @@ def main(argv):
         argv, extra = argv[:at], argv[at + 1:]
     usage = __doc__.split('\n\n')[1]
     try:
-        verb, repo, number, head, *rest = argv
+        verb, repo, number, *rest = argv
+        head = None if verb == 'settle' else rest.pop(0)  # settle reads its commit from the queue receipt
         number = int(number) if re.fullmatch(r'[1-9][0-9]{0,11}', number) else None
-        ok = post.REPO.fullmatch(repo) and number and SHA.fullmatch(head)
-    except ValueError:
+        ok = post.REPO.fullmatch(repo) and number and (head is None or SHA.fullmatch(head))
+    except (ValueError, IndexError):
         ok = False
     if not ok:
         print(usage, file=sys.stderr)
@@ -200,11 +279,13 @@ def main(argv):
             print(where(*snapshot(repo, number), head))
         elif verb == 'admit' and len(rest) == 1:
             print(admission(*snapshot(repo, number), head, rest[0].split(',')))
-        elif verb == 'cost' and len(rest) == 1 and rest[0].isdigit():
-            print(cost(repo, number, head, int(rest[0]), extra))
-        elif verb == 'merge' and len(rest) >= 4 and rest[2] == '--ticket' and rest[3].isdigit() \
+        elif verb == 'cost' and len(rest) == 1 and TICKET.fullmatch(rest[0]):
+            print(cost(repo, number, head, rest[0], extra))
+        elif verb == 'settle' and len(rest) == 1 and TICKET.fullmatch(rest[0]):
+            print(settle(repo, number, rest[0], extra))
+        elif verb == 'merge' and len(rest) >= 4 and rest[2] == '--ticket' and TICKET.fullmatch(rest[3]) \
                 and set(rest[4:]) <= {'--base-rule-checked'}:
-            print(merge(repo, number, head, rest[0].split(','), rest[1], int(rest[3]),
+            print(merge(repo, number, head, rest[0].split(','), rest[1], rest[3],
                         '--base-rule-checked' in rest[4:], extra))
         else:
             print(usage, file=sys.stderr)

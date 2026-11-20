@@ -1,7 +1,7 @@
 ---
 name: diagnose
 description: Diagnose a hard bug, unexplained test failure, flaky CI test or performance regression, starting from a command that goes red on it. Use for a stuck builder or the orchestrator's optional diagnosis inside a decision on a parked finding; not for planned work (build-ticket) or hunting unreported problems (huntr).
-version: 0.2.1
+version: 0.2.0
 ---
 
 # Diagnose

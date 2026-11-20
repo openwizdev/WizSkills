@@ -388,6 +388,37 @@ class Launch(unittest.TestCase):
         self.assertEqual(road.spawns(), [])
 
 
+@unittest.skipUnless(WS17, WS17_WHY)
+class LaunchYes(unittest.TestCase):
+    """Orchestrator ruling on #1358 (comment 7029073685): starting a fleet that can spend money is a gate."""
+
+    def test_no_fleet_starts_without_the_yes_that_names_the_host_and_its_cost(self):
+        # catches: a fleet started with no yes, with a yes to no preview or another preview, or asked for
+        # without naming where it runs and that it can cost money
+        for name, where in (('fresh-project', 'in Cloudroom'), ('always-wanted', 'on this machine')):
+            with self.subTest(name):
+                road = Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
+                road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
+                road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
+                preview = road.helper(['launch', '--spec', '900'])
+                self.assertEqual(preview.returncode, 12, preview.stdout)
+                self.assertEqual(road.spawns(), [])
+                ask = [line for line in preview.stdout.splitlines() if line.endswith('?')]
+                self.assertEqual(len(ask), 1, preview.stdout)
+                self.assertIn(where, ask[0])
+                self.assertIn('can cost money', ask[0])
+                digest = re.findall(r'(?m)^Confirmation: ([0-9a-f]{64})$', preview.stdout)
+                self.assertEqual(len(digest), 1, preview.stdout)
+                bare = road.helper(['launch', '--spec', '900', '--yes'])
+                self.assertEqual(bare.returncode, 2, bare.stdout)
+                other = road.helper(['launch', '--spec', '900', '--yes', '--confirm', '0' * 64])
+                self.assertEqual(other.returncode, 5, other.stdout)
+                self.assertEqual(road.spawns(), [], 'no fleet starts without the yes to this preview')
+                started = road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest[0]])
+                self.assertEqual(started.returncode, 0, started.stdout)
+                self.assertEqual(len(road.spawns()), 1)
+
+
 class FirstMerge(unittest.TestCase):
     def test_the_closing_offer_follows_only_a_merge_read_back_for_this_spec(self):
         # catches: the closing offer made on a count, an open pull request, or a merge from another spec

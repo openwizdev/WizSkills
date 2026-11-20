@@ -23,6 +23,13 @@ with open(os.environ['FIXTURE_LOG'], 'a') as log:
 if args[:2] != ['api', 'graphql']:
     sys.exit(90)
 values = dict(a.split('=', 1) for a in args if '=' in a and not a.startswith('query='))
+query = next(a for a in args if a.startswith('query='))
+# GitHub refuses a cursor bound to more than one connection (a nested one
+# gets INVALID_CURSOR_ARGUMENTS) and a declared variable no field uses.
+declared, uses = '$after: String' in query, query.count('after: $after')
+if (declared, uses) not in ((False, 0), (True, 1)) or ('after' in values and not declared):
+    print(json.dumps({'errors': [{'type': 'INVALID_CURSOR_ARGUMENTS'}]}))
+    sys.exit(1)
 key = values.get('number', 'fleet') + ('@' + values['after'] if 'after' in values else '')
 served = json.load(open(os.environ['FIXTURE']))[key]
 if served == 'fail':

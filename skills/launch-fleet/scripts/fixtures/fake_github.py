@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""A synthetic `gh` for post.py's and merge.py's tests (WS8). Never networked.
+"""A synthetic `gh` for post.py's and merge.py's tests (WS8), and host.py's (#1446). Never networked.
 
 The world is the JSON file named by FAKE_WORLD. Each write is appended to its
 `writes`. `faults` makes the next matching call fail: `post`, `patch` or
 `merge` set to `fail` (no effect, exit 1) or `lost` (the effect happens, the
 response is lost: exit 1). `merge` may also be `queue` (the queue takes it).
 """
+from datetime import datetime, timezone
 import json
 import os
 import sys
@@ -34,6 +35,17 @@ def flag(name):
         if a.startswith(name + '='):
             return a.split('=', 1)[1]
     return None
+
+
+def body():
+    """A write's body: a -f/-F field, or status.py's JSON on stdin (--input -)."""
+    if '--input' in args:
+        return json.load(sys.stdin)['body']
+    return field('body')
+
+
+def stamp():
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 def field(name):
@@ -105,8 +117,8 @@ if args[:2] != ['api', 'graphql'] and args[0] == 'api':
         if kind == 'fail':
             fail('HTTP 502')
         world['next_id'] += 1
-        c = {'id': world['next_id'], 'body': field('body'), 'user': {'login': world['me']},
-             'created_at': '2026-01-01T00:00:00Z'}
+        c = {'id': world['next_id'], 'body': body(), 'user': {'login': world['me']},
+             'created_at': '2026-01-01T00:00:00Z', 'updated_at': stamp(), 'node_id': 'N%d' % world['next_id']}
         comments(parts[1]).append(c)
         world['writes'].append({'post': int(parts[1]), 'body': c['body']})
         save()
@@ -121,14 +133,19 @@ if args[:2] != ['api', 'graphql'] and args[0] == 'api':
             kind = fault('patch')
             if kind == 'fail':
                 fail('HTTP 502')
-            c['body'] = field('body')
+            c['body'] = body()
+            c['updated_at'] = stamp()
             world['writes'].append({'patch': c['id'], 'body': c['body']})
             save()
             if kind == 'lost':
                 fail('connection reset')
         out(c)
+    if method == 'GET' and parts[0] == 'issues' and len(parts) == 2:
+        out({'number': int(parts[1]), 'labels': [{'name': n} for n in world.get('labels', [])]})
     if method == 'GET' and parts[0] == 'issues' and parts[2:] == ['comments']:
-        page = comments(parts[1])
+        query = dict(x.split('=', 1) for x in endpoint.partition('?')[2].split('&') if '=' in x)
+        later = query.get('page', '1') != '1'
+        page = [] if later else comments(parts[1])  # status.py pages until an empty one
         out([page] if '--slurp' in args else page)
     fail('unexpected api call: %s' % ' '.join(args))
 

@@ -459,6 +459,25 @@ class Removal(unittest.TestCase):
             '- `alpha` 0.3.0: Alpha and beta learn a step.',
         ]))
 
+    def test_release_refuses_a_new_or_edited_note_naming_a_removed_skill(self):
+        # catches: release --write dropping a removed skill's line and consuming a note the gate refuses
+        for case in ('new', 'edited', 'uncommitted'):
+            with self.subTest(case=case):
+                repo = self.removal()
+                if case == 'new':
+                    repo.note('later', {'alpha': 'patch', 'beta': 'patch'}, 'Alpha and beta change again.')
+                    repo.commit('a later pull request')
+                    name = 'later'
+                else:
+                    repo.note('beta-fix', {'beta': 'minor'}, 'Beta gets a bigger fix.')
+                    if case == 'edited':
+                        repo.commit('edits an older note')
+                    name = 'beta-fix'
+                before = repo.snapshot()
+                self.assertEqual(repo.run('release', '--date', '2026-01-02', '--write'),
+                                 (1, [f'release: .changeset/{name}.md `beta` is not a skill or `wizskills`']))
+                self.assertEqual(repo.snapshot(), before)
+
     def test_release_refuses_a_note_naming_a_skill_that_never_was(self):
         # catches: the removed-skill leniency accepting any unknown name at release
         repo = self.removal()

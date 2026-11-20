@@ -142,10 +142,10 @@ on the brief), exactly, as one line with no trailing newline. Two briefs
 linking the same report lead to one comment.
 
 ```text
-Landed: the fix for this report merged in #<pull request> and will ship in OpenWiz <version>.
+Landed: the fix for this report merged in <pull request> and will ship in OpenWiz <version>.
 ```
 
-`<pull request>` is the merged pull request's number on the destination;
+`<pull request>` is the merged pull request named in full as `<owner>/<repo>#<n>`, in any `openwizdev` repository (for example `openwizdev/WizSkills#127`); a pull request elsewhere posts nothing;
 `<version>` is the report's milestone title, `X.Y.Z` (digits only, the release
 that will carry the fix). It is posted **once per report**, ever: when a record
 author's comment on the report already has this form (any pull request, any
@@ -195,6 +195,7 @@ These prove the rules on fixtures only, never a live report.
   },
   "report_link": "^Report: #([1-9][0-9]*)$",
   "version": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
-  "landed": "Landed: the fix for this report merged in #{pr} and will ship in OpenWiz {version}."
+  "pull_request": "^openwizdev/[A-Za-z0-9._-]+#[1-9][0-9]*$",
+  "landed": "Landed: the fix for this report merged in {pull_request} and will ship in OpenWiz {version}."
 }
 ```

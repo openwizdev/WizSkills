@@ -46,12 +46,27 @@ from urllib.parse import urlsplit, parse_qs, unquote
 args = sys.argv[1:]
 world_path = os.environ['FAKE_GH_WORLD']
 world = json.load(open(world_path))
+def races(key):
+    # #1592: what lands at that moment, as the world names it: an agent's edit of its note,
+    # or a person adding a label (an event under that person's login).
+    stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    for rival in world.pop(key, []):
+        it = next(i for i in world['issues'] if i['number'] == rival['issue'])
+        if 'edit' in rival:
+            c = next(x for x in it['comments'] if x['id'] == rival['edit'])
+            c.setdefault('edits', [c['body']]).append(rival['body'])
+            c.setdefault('edited_at', [c['updated']]).append(stamp)
+            c['body'] = rival['body']; c['updated'] = stamp
+        elif rival['label'] not in it['labels']:
+            it['labels'].append(rival['label'])
+            it.setdefault('events', []).append({'event': 'labeled', 'label': {'name': rival['label']}, 'actor': {'login': rival['by']}})
 if args[:2] == ['issue', 'edit']:
     # launch-fleet's fix for an asking note without needs-info: gh issue edit N --repo R --add-label L.
     n, opts = int(args[2]), dict(zip(args[3::2], args[4::2]))
     assert opts['--repo'] == world['repo'] and set(opts) == {'--repo', '--add-label'}, args
     with open(os.environ['FAKE_GH_LOG'], 'a') as log:
         log.write(json.dumps({'method': 'EDIT', 'path': 'issue %d' % n, 'body': opts['--add-label']}) + '\n')
+    races('race_label')
     it = next(i for i in world['issues'] if i['number'] == n)
     if opts['--add-label'] not in it['labels']:
         it['labels'].append(opts['--add-label'])
@@ -120,13 +135,17 @@ if path == 'graphql':
     open_issues = [it for it in world['issues'] if it['state'] == 'open']
     start = int(v.get('cursor') or 0)
     chunk = open_issues[start:start + size]
-    out({'data': {'repository': {'issues': {
+    answer = ({'data': {'repository': {'issues': {
         'pageInfo': {'hasNextPage': start + size < len(open_issues), 'endCursor': str(start + size)},
         'nodes': [{'number': it['number'], 'labels': {'nodes': [{'name': l} for l in it['labels']]},
                    'comments': {'pageInfo': {'hasNextPage': len(it['comments']) > size},
                                 'nodes': [{'databaseId': c['id'], 'author': {'login': c['author']} if c['author'] else None,
                                            'body': c['body'], 'updatedAt': c['updated']} for c in it['comments'][:size]]},
                    'closedByPullRequestsReferences': {'nodes': it.get('prs', [])}} for it in chunk]}}}})
+    # What lands once the checker has read the tracker (#1592).
+    if world.get('race_after_scan'):
+        races('race_after_scan'); save()
+    out(answer)
 assert '/'.join(seg[:3]) == 'repos/' + world['repo'], path
 seg = seg[3:]
 if method == 'GET' and seg == ['contents', 'docs', 'agents', 'fleet.md']:
@@ -136,6 +155,7 @@ if method == 'GET' and seg == ['contents', 'docs', 'agents', 'fleet.md']:
 if seg[0] == 'issues' and len(seg) == 2 and method == 'GET':
     it = issue(seg[1]); out({'number': it['number'], 'state': it['state'], 'labels': [{'name': l} for l in it['labels']]})
 if seg[0] == 'issues' and seg[2:] == ['labels'] and method == 'POST':
+    races('race_label')
     it = issue(seg[1])
     for l in body['labels']:
         if l not in it['labels']:
@@ -1032,6 +1052,68 @@ class FleetRun(Tracker):
         added += [{'labels': [c['body']]} for c in self.calls() if c['method'] == 'EDIT']
         self.assertTrue(added)
         self.assertTrue(all(set(b['labels']) <= LABELS for b in added), added)
+
+
+class WakeRepair(Tracker):
+    """#1592 (P4 R1, R2): the wake's status step, run as launch-fleet documents it, while the
+    builder resumes. Expected labels come from the contract: needs-info only while a live note
+    is asking, and a needs-info a person added last stays."""
+
+    step = FleetRun.step
+
+    def wake(self):
+        """The wake's status step as SKILL.md documents it: its one status call, then the
+        documented label fix for each asking line when it documents one. The report is
+        what the call prints, which the wake passes on as its actions."""
+        call = span('launch-fleet', r'`(python3 -I [^`]*status\.py (?:check|repair) [^`]*)`')
+        self.assertIsNotNone(call, 'launch-fleet has no one status call')
+        seen = self.step(filled('launch-fleet', call, {'<owner>/<repo>': REPO}))
+        report = seen.stdout.splitlines()
+        fix = span('launch-fleet', r'`(gh issue edit [^`]*--add-label needs-info[^`]*)`')
+        for line in report if fix else ():
+            if line.endswith(': no needs-info label'):
+                n = line.split(' ')[0][1:]
+                done = self.step(filled('launch-fleet', fix, {'<N>': n, '<owner>/<repo>': REPO}))
+                self.assertEqual(done.returncode, 0, done.stderr)
+        return seen.returncode, [x for x in report if not (fix and x.endswith(': no needs-info label'))]
+
+    def test_a_builder_that_resumes_during_the_wake_is_never_marked_as_needing_the_user(self):
+        # catches: the wake adding needs-info from its earlier read after the builder resumed
+        # (#33 R1), or removing a needs-info a person added.
+        asking = note(state='asking', step='asked which file to change')
+        resumed = note(state='working', step='got the answer')
+        resume = {'issue': 12, 'edit': 104, 'body': resumed}
+        person = {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}
+        cases = {
+            # The reviewer's reproduction: the builder resumes after the check reads the tracker.
+            'resumed after the read': ({'race_after_scan': [resume]}, ['ready-for-agent']),
+            # The builder resumes as the label is written.
+            'resumed at the label write': ({'race_label': [resume]}, ['ready-for-agent']),
+            # A person marks the ticket as the builder resumes: theirs stays.
+            'a person added it': ({'race_label': [resume, person]}, ['ready-for-agent', 'needs-info']),
+        }
+        for name, (race, labels) in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                self.ticket(self.world)['comments'].append(comment(104, BOT, asking))
+                self.world.update(race)
+                self.save()
+                self.wake()
+                self.assertEqual(self.ticket()['labels'], labels)
+                # The next wake sees nothing to fix or report on #12.
+                code, report = self.wake()
+                self.assertEqual((code, report), (0, []))
+                self.assertEqual(self.ticket()['labels'], labels)
+
+    def test_a_wake_whose_check_cannot_read_reports_a_failed_check(self):
+        # catches: a checker read failure (exit 2) passing as a clean wake with nothing to report (#33 R2).
+        self.world['fleet_md'] = None
+        self.save()
+        code, report = self.wake()
+        self.assertEqual(code, 2)
+        self.assertEqual(len(report), 1, report)
+        self.assertRegex(report[0], r'^status check failed: could not read: ')
+        self.assertEqual(self.writes(), [])
 
 
 if __name__ == '__main__':

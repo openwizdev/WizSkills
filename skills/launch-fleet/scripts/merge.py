@@ -18,10 +18,12 @@ comma-separated. Both only read.
 `merged <commit>; cost ...` (exit 0), `queued; recorded <id>` (exit 0),
 `pending: ...` (exit 0, nothing recorded: read again next wake),
 `blocked: <why>; recorded <id>` (exit 1). The queue receipt (`launch-fleet:
-merge queued <commit>`) is what tells a later removal from a fresh enqueue: a
-receipt it can't confirm prints `queued; receipt unconfirmed (<why>); ...`
-(exit 1), and a later run that reads it queued without its receipt records it
-then (`queued; recorded <id>`). Without a merge queue it merges only
+merge queued <commit>`) is what tells a later removal from a fresh enqueue and
+what `settle` reads, so it is recorded before the enqueue: a receipt it can't
+confirm prints `not queued: ...` (exit 1) and nothing is enqueued; the next run
+reuses a receipt that did land. A pull request read as queued without its
+receipt gets one then (`queued; recorded <id>`, or `queued; receipt
+unconfirmed ...`, exit 1). Without a merge queue it merges only
 with `--base-rule-checked`, after you applied fleet.md's base rule and
 `fleet.sh every` still prints this merge line. BODY names the APPROVE and the
 plan approval that allowed it.
@@ -38,7 +40,9 @@ ticket, in the ticket's own repository, or `launch-fleet: cost unknown (PR
 `OWNER/NAME#PR` when the ticket lives in another repository; FM4's command
 costs only tickets in the pull request's repository, so such a ticket's cost
 is unknown. It posts once: `cost already posted <id>` names an earlier record
-author's record. It refuses before a verified merge at HEAD.
+author's record, matching the pull request's repository in any letter case;
+when the ticket's records can't be read it prints `unknown: ...` and posts
+nothing. It refuses before a verified merge at HEAD.
 
 `settle` is the cost a queued merge still owes: it reads the newest record
 author's queue receipt on the pull request and runs `cost` at that commit
@@ -147,12 +151,12 @@ def ticket_of(repo, number, p, ticket):
 
 
 def receipts(repo, number):
-    """The commits of the record authors' queue receipts on the pull request, oldest first."""
+    """The record authors' queue receipts on the pull request as (commit, comment id), oldest first."""
     auth = post.authors(repo)
     items = post.thread(repo, number)
     if items is None:
         raise Stop(f'unknown: #{number} could not be read; run it again next wake')
-    return [m.group(1) for c in items if post.ours(c, auth)
+    return [(m.group(1), c.get('id')) for c in items if post.ours(c, auth)
             for m in [QUEUED.match((c.get('body') or '').split('\n', 1)[0])] if m]
 
 
@@ -172,9 +176,12 @@ def cost(repo, number, head, ticket, extra=()):
     same = home.casefold() == repo.casefold()
     ref = f'(PR #{number})' if same else f'(PR {repo}#{number})'
     auth = post.authors(home)
-    for c in post.thread(home, ticket) or []:
+    items = post.thread(home, ticket)
+    if items is None:
+        raise Stop(f'unknown: the cost records on {home}#{ticket} could not be read; nothing was posted')
+    for c in items:
         first = (c.get('body') or '').split('\n', 1)[0]
-        if post.ours(c, auth) and first.startswith('launch-fleet: cost') and ref in first:
+        if post.ours(c, auth) and first.startswith('launch-fleet: cost') and ref.casefold() in first.casefold():
             return f"cost already posted {c['id']}"
     body = f'launch-fleet: cost unknown {ref}: '
     if not same:
@@ -199,44 +206,53 @@ def cost(repo, number, head, ticket, extra=()):
 
 
 def settle(repo, number, ticket, extra=()):
-    heads = receipts(repo, number)
-    return cost(repo, number, heads[-1], ticket, extra) if heads else 'no queued merge'
+    found = receipts(repo, number)
+    return cost(repo, number, found[-1][0], ticket, extra) if found else 'no queued merge'
 
 
 def merge(repo, number, head, checks, body, ticket, checked, extra):
     def blocked(why):
         raise Stop(f'blocked: {why}; recorded ' + record(repo, number, f'launch-fleet: merge blocked {head}: {why}'))
 
-    def queued():
+    def receipt(fail):
+        """The queue receipt for HEAD, the newest one or a new one; `fail` prefixes an unconfirmed write."""
+        mine = [i for h, i in receipts(repo, number) if h == head]
+        if mine:
+            return mine[-1]
         try:
-            receipt = post.comment(repo, number, f'launch-fleet: merge queued {head}: {body}')
-            return 'queued; recorded ' + receipt.split()[-1]
+            return post.comment(repo, number, f'launch-fleet: merge queued {head}: {body}').split()[-1]
         except Stop as outcome:
-            raise Stop(f'queued; receipt unconfirmed ({outcome}); the next run records it if it is missing')
+            raise Stop(f'{fail} ({outcome}); run it again next wake')
 
     main, p = snapshot(repo, number)
     state = where(main, p, head)
     if state.startswith('merged '):
         return state + '; ' + cost(repo, number, head, ticket, extra)
     if state == 'queued':
-        return 'queued; the queue merges it or lets it go' if head in receipts(repo, number) else queued()
+        if any(h == head for h, _ in receipts(repo, number)):
+            return 'queued; the queue merges it or lets it go'
+        return 'queued; recorded ' + str(receipt('queued; receipt unconfirmed'))
     if state.startswith('stop: '):
         blocked(state[6:])
     ticket_of(repo, number, p, ticket)
-    if '; it left the queue at ' in state and head in receipts(repo, number):
+    if '; it left the queue at ' in state and any(h == head for h, _ in receipts(repo, number)):
         blocked('left the merge queue: ' + state.split(': ', 1)[1])
     admit = admission(main, p, head, checks)
     if admit.startswith('wait: '):
         blocked(admit[6:])
     if admit.startswith('base rule: ') and not checked:
         raise Stop(admit + '; check the base rule and fleet.sh every, then pass --base-rule-checked')
+    # Save before you send: the queue may merge it or let it go before any later wake, and the
+    # receipt is what settle and the removal guard read then.
+    kept = receipt('not queued: the queue receipt is unconfirmed, so nothing was enqueued') \
+        if admit.startswith('admit: ') else None
     done = post.gh('pr', 'merge', str(number), '--repo', repo, '--merge', '--match-head-commit', head,
                    '--body', body) is not None
     state = where(*snapshot(repo, number), head)
     if state.startswith('merged '):
         return state + '; ' + cost(repo, number, head, ticket, extra)
     if state == 'queued':
-        return queued()
+        return 'queued; recorded ' + str(kept or receipt('queued; receipt unconfirmed'))
     if state.startswith('open') and done:
         return 'pending: the merge command succeeded but it still reads open; read it again next wake'
     blocked(state[6:] if state.startswith('stop: ') else state)

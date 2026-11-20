@@ -338,6 +338,7 @@ MODES = {
 def saved_mode(env):
     """The permission mode the default branch's MODE_FILE saves, or None; read as launch-fleet's host.py reads
     the host setting, from this checkout's origin."""
+    sys.dont_write_bytecode = True  # never write bytecode into launch-fleet's folder
     spec = importlib.util.spec_from_file_location('launch_fleet_host', HOST_PY)
     module = importlib.util.module_from_spec(spec)
     try:

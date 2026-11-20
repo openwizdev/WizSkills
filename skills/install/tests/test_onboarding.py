@@ -20,7 +20,7 @@ import unittest
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_first_fleet import (CLAUDE, FIXTURES, GRILL, WS17, WS17_WHY, Journey, SKILL_DIR,  # noqa: E402
+from test_first_fleet import (CLAUDE, FIXTURES, GRILL, Journey, SKILL_DIR,  # noqa: E402
                               demo_repository, fleet_md, github, setup_state, skill_steps)
 
 ROAD = json.loads((FIXTURES / 'onboarding.json').read_text())
@@ -266,7 +266,6 @@ class Conversation(unittest.TestCase):
                 self.assertTrue(2 <= len(offer['ideas']) <= 3)
 
 
-@unittest.skipUnless(WS17, WS17_WHY)
 class Replay(unittest.TestCase):
     """Each choice, replayed to its first merge against the fakes."""
 
@@ -427,9 +426,8 @@ class Launch(unittest.TestCase):
         self.assertEqual(road.spawns(), [])
 
 
-@unittest.skipUnless(WS17, WS17_WHY)
 class SteeringOff(unittest.TestCase):
-    """WS17 R2 (decision 7030919773): video comments steer nothing; fleet.sh says so once, and that is normal."""
+    """WS17 R2 (#1340, decision 7030919773): video comments steer nothing; fleet.sh says so once, and that is normal."""
 
     def test_a_spec_with_its_video_and_the_one_time_notice_still_launches(self):
         # catches: the road reading launch-fleet's one-time "steering is off" look, or a comment on the video, as a
@@ -456,7 +454,6 @@ class SteeringOff(unittest.TestCase):
         self.assertEqual(len(road.spawns()), 1)
 
 
-@unittest.skipUnless(WS17, WS17_WHY)
 class LaunchYes(unittest.TestCase):
     """Orchestrator ruling on #1358 (comment 7029073685): starting a fleet that can spend money is a gate."""
 

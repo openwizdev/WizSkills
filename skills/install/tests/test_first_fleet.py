@@ -30,10 +30,6 @@ NOW = 1793534400  # 2026-11-01T12:00:00Z, the synthetic clock fleet.sh reads
 REPO = JOURNEY['repo']
 CODEX = ('codex', 'syn-codex-model-01', 'high')
 GRILL = 'https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-71'
-# Stub until #1340 (WizSkills #60) merges: launch-fleet's frontier on main does
-# not read to-tickets' machine plan approval yet, so no fleet can start from one.
-WS17 = 'Machine plan approval' in (SKILL_DIR.parent / 'launch-fleet/scripts/fleet.sh').read_text()
-WS17_WHY = 'stub: launch-fleet on main does not read machine plan approvals until #1340 (WizSkills #60) merges'
 CLAUDE = ('claude-code', 'syn-claude-model-01', 'high')
 
 
@@ -594,7 +590,6 @@ class Continuation(unittest.TestCase):
 
 
 class Launch(unittest.TestCase):
-    @unittest.skipUnless(WS17, WS17_WHY)
     def test_the_whole_journey_starts_one_fleet_thread_through_launch_fleet(self):
         # #636 (J87 Q1): the first fleet starts as launch-fleet starts every
         # fleet; catches any engine or tick call, a second start, or a start
@@ -634,7 +629,6 @@ class Launch(unittest.TestCase):
             self.assertIn(line, watch)
         self.assertEqual(stat.S_IMODE(j.state.stat().st_mode), 0o600, 'owner-only state')
 
-    @unittest.skipUnless(WS17, WS17_WHY)
     def test_repeat_and_reload_never_start_again(self):
         j = Journey(self)
         j.replay()
@@ -643,7 +637,6 @@ class Launch(unittest.TestCase):
         self.assertIn('already started', again.stdout)
         self.assertEqual(len(j.spawns()), 1)
 
-    @unittest.skipUnless(WS17, WS17_WHY)
     def test_an_uncertain_start_is_never_retried_and_settles_only_on_its_record(self):
         j = Journey(self)
         j.replay(until='launch')
@@ -664,7 +657,6 @@ class Launch(unittest.TestCase):
         self.assertIn('has its fleet record', third.stdout)
         self.assertEqual(len(j.spawns()), 1, 'never a second start')
 
-    @unittest.skipUnless(WS17, WS17_WHY)
     def test_uncertain_launch_accepts_only_configured_record_authors(self):
         # Catches #1096 F1: outsider text settling an uncertain launch, or an
         # unread author policy/comment read being treated as a started fleet.
@@ -732,7 +724,6 @@ class Launch(unittest.TestCase):
                 self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'started')
         self.assertEqual(len(j.spawns()), 1, 'reconciliation never dispatches another fleet')
 
-    @unittest.skipUnless(WS17, WS17_WHY)
     def test_a_start_cut_short_before_its_outcome_settles_on_its_record(self):
         # Review R1: catches a start interrupted after the spawn and before its
         # outcome was saved staying pending for ever, even once its fleet record exists.
@@ -751,7 +742,6 @@ class Launch(unittest.TestCase):
         self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'started')
         self.assertEqual(len(j.spawns()), 1, 'never a second start')
 
-    @unittest.skipUnless(WS17, WS17_WHY)
     def test_a_start_that_could_not_run_is_refused_and_previewed_again(self):
         # Review R2: catches a known no-dispatch (room-cli not found) recorded as
         # uncertain, which would block every later start.
@@ -802,7 +792,6 @@ class Launch(unittest.TestCase):
                 self.assertIn('nothing started', result.stdout)
                 self.assertEqual(j.spawns(), [])
 
-    @unittest.skipUnless(WS17, WS17_WHY)
     def test_another_specs_frontier_is_not_this_fleets(self):
         # Catches a first fleet that would also start an approved ticket of
         # another spec in the same repository.
@@ -820,7 +809,6 @@ class Launch(unittest.TestCase):
         self.assertIn('#903 S3: sheep flee the dog', shown.stdout)
         self.assertNotIn('#951', shown.stdout)
 
-    @unittest.skipUnless(WS17, WS17_WHY)
     def test_the_yes_binds_the_preview_the_user_saw(self):
         # The user said yes to two starts; a third ticket becoming ready before
         # the yes runs must not start without a new preview and yes.
@@ -1085,8 +1073,6 @@ class Resume(unittest.TestCase):
             if not seen or seen[-1] != turn['step']:
                 seen.append(turn['step'])
                 expected = {'teach': 'where', 'run': 'where', 'start': 'project'}.get(turn['step'], turn['step'])
-                if turn['step'] == 'watch' and not WS17:
-                    expected = 'launch'  # the stubbed frontier starts nothing yet (WS17_WHY)
                 self.assertEqual(self.next(j).splitlines()[0], 'Next: %s.' % expected, turn['step'])
             if 'plan' in turn:
                 j.plan(turn['plan'])
@@ -1097,8 +1083,7 @@ class Resume(unittest.TestCase):
                                           settings=tuple(j.settings[k] for k in ('harness', 'model', 'effort'))))
             elif 'tool' in turn:
                 j.tool(turn)
-        if WS17:
-            self.assertIn('progress --spec 900', self.next(j))
+        self.assertIn('progress --spec 900', self.next(j))
 
     def test_an_interrupted_or_withdrawn_step_is_resumed_not_skipped(self):
         # catches: an uncertain create or start reported as done (inviting a second
@@ -1114,13 +1099,12 @@ class Resume(unittest.TestCase):
 
         j = Journey(self)
         j.replay(until='launch')
-        if WS17:
-            self.assertEqual(j.tool(PREVIEW).returncode, 12)
-            self.assertEqual(j.tool(dict(YES, spawn=1)).returncode, 6)
-            said = self.next(j)
-            self.assertEqual(said.splitlines()[0], 'Next: launch.')
-            self.assertIn('uncertain', said)
-            self.assertIn('never start it again', said)
+        self.assertEqual(j.tool(PREVIEW).returncode, 12)
+        self.assertEqual(j.tool(dict(YES, spawn=1)).returncode, 6)
+        said = self.next(j)
+        self.assertEqual(said.splitlines()[0], 'Next: launch.')
+        self.assertIn('uncertain', said)
+        self.assertIn('never start it again', said)
 
         j.write_setup(setup_state(overrides={'personal_github': 'identity_no_push'}))
         self.assertEqual(j.helper(['continue']).returncode, 5)
@@ -1212,7 +1196,6 @@ class Resume(unittest.TestCase):
                          j.settings, 'the read-back keeps the recorded choice')
 
 
-    @unittest.skipUnless(WS17, WS17_WHY)
     def test_a_recorded_launch_resumes_before_the_agent_checks(self):
         # catches: review R1, a launched or uncertain first fleet saved before the
         # builder-table read-back existed sent back to Choose the agents, losing its

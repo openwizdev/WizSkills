@@ -661,6 +661,26 @@ class Review(unittest.TestCase):
         out = self.run_helper("check", self.file("wrong.md", wrong), "--repo", SKILLS, "--pr", "7")
         self.assertIn("R3: the decision grades it polish with Polish issue: #64", out.stdout.splitlines())
 
+    def test_a_log_and_merge_check_raises_no_new_finding_on_unchanged_code(self):
+        # catches (#1450): the log-and-merge check skipping the unchanged-code
+        # guard, so its report at the parked head (every file unchanged) slips
+        # in a new polish finding, with a compare call it never needs.
+        parked = self.parked_world(f"**Orchestrator decision:** log and merge: R3 at {NEWER}. Polish issues: #64. "
+                                   "Why: the log stays local.")
+        approve = parked.replace("VERDICT: CHANGES", "VERDICT: APPROVE").replace(
+            "- **R3 [blocking]** still open after the re-check: still logged.\n"
+            "  Risk: privacy: a cook's sync token reaches a shared log.",
+            "- **R3 [polish]** Polish issue: #64.").replace(
+            "Next: park R3 as a decision for Jake.", "Next: none open. It merges by the project's merge rules.").replace(
+            "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60.",
+            "- **R4 [polish]** Polish issue: #60.\n"
+            "- **R5 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #61.")
+        out = self.run_helper("check", self.file("approve.md", approve), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn(f"R5: `src/export.rs` is unchanged since {NEWER[:7]}; a re-check raises a new finding there "
+                      "only as a Risk: security, privacy or data-loss blocker", out.stdout.splitlines())
+        self.assertFalse([c for c in self.state()["calls"] if "/compare/" in " ".join(c)], self.state()["calls"])
+
     def test_unmatched_or_unauthorized_decisions_keep_the_park(self):
         # catches (R1): a decision from a non-record author, for other ids or
         # for another head releasing a parked finding.

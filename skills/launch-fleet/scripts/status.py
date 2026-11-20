@@ -42,6 +42,7 @@ mismatch, one report line each: exit 0 nothing to report, 1 lines printed, 2
 Every GitHub call goes through `gh api`.
 """
 import argparse
+import contextlib
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
@@ -425,6 +426,29 @@ def proof(repo, n):
     return home / 'openwiz' / 'needs-info' / f'{quote(repo.lower(), safe="")}-{n}.json'
 
 
+@contextlib.contextmanager
+def settling(repo, n):
+    """#119 R1: one needs-info settlement per ticket at a time on this machine, under a lock beside
+    the record, so an older write's settle never forgets the record of a newer write's application.
+    It yields whether the lock is held. Without it (no fcntl, or a lock file that can't be opened)
+    the settle runs unlocked and keeps no new record, so a later write leaves the label on."""
+    lock = None
+    try:
+        import fcntl
+        proof(repo, n).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lock = open(proof(repo, n).with_suffix('.lock'), 'a')
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    except (ImportError, OSError):
+        if lock is not None:
+            lock.close()
+            lock = None
+    try:
+        yield lock is not None
+    finally:
+        if lock is not None:
+            lock.close()
+
+
 def forget(repo, n):
     try:
         proof(repo, n).unlink()
@@ -432,7 +456,7 @@ def forget(repo, n):
         pass
 
 
-def add_own(repo, n, login):
+def add_own(repo, n, login, locked):
     """#1737: add needs-info, and record the application as this writer's only when it is the one
     new event its POST left, under a GitHub App's own login, as the repair proves its own (#1702).
     The events are read just before the POST, so a hold landing earlier is never taken for it. Any
@@ -443,7 +467,7 @@ def add_own(repo, n, login):
     except Failed:
         before = None
     gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
-    if before is None or not app(login):
+    if before is None or not app(login) or not locked:
         return
     try:
         new = label_events(repo, n)[before:]
@@ -588,15 +612,18 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
         # #1441: a newer note that claimed while this one had lapsed keeps the claim (P1, P2, P4).
         step_down(found, note_id, kind, fields, repo)
     # R1: settle needs-info from what GitHub shows now, so a retry repairs a failed label write.
-    labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
-    asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)
+    # #119 R1: the notes and labels are read again inside this machine's lock for the ticket.
     report = []
-    if asking and ASKING_LABEL not in labels:
-        add_own(repo, n, login)
-    elif not beat and not asking:
-        # #1720: a heartbeat never takes needs-info off. The agent's own write leaving asking
-        # takes off only the application its record proves its own (#1737).
-        report = take_own(repo, n, login, labels)
+    with settling(repo, n) as locked:
+        found = notes(pages(comments), authors)
+        labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+        asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)
+        if asking and ASKING_LABEL not in labels:
+            add_own(repo, n, login, locked)
+        elif not beat and not asking:
+            # #1720: a heartbeat never takes needs-info off. The agent's own write leaving asking
+            # takes off only the application its record proves its own (#1737).
+            report = take_own(repo, n, login, labels)
     print(f'#{n}: {kind} {state}, status note {note_id} {verb}', file=out)
     for line in report:
         print(line, file=out)

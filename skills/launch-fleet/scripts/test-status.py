@@ -481,7 +481,7 @@ class Write(Tracker):
             'case " $* " in *" DELETE "*) if [ ! -e ' + str(self.dir / 'started') + ' ]; then\n'
             '  : > ' + str(self.dir / 'started') + '\n'
             '  (' + shlex.join(reviewer) + ' >/dev/null 2>&1; echo $? > ' + str(done) + '.tmp; mv ' + str(done)
-            + '.tmp ' + str(done) + ') &\n'
+            + '.tmp ' + str(done) + ') </dev/null >/dev/null 2>&1 &\n'
             '  n=0; while [ ! -e ' + str(done) + ' ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done\n'
             'fi;; esac\nexit $code\n')
         back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')

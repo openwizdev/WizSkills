@@ -194,7 +194,8 @@ The offline callable seam is defined in `protocol.py` beside the examples:
 `reason`, `next: end`, `effects: []`. States/reasons are exact schema enums;
 there is no executable pending callback. Every finite pass records its result
 or unresolved operation and ends. Later events/scheduled passes resume it;
-no watcher, poll loop or waiting sleep and no reset of 2 + 1 correction counts.
+no watcher, poll loop or waiting sleep and no reset of review-round counts
+(one review plus one re-check, then at most one fresh round).
 
 `snapshot` is **private derived execution data**, never a public attestation or
 record to post. Its schema fixes repository/spec/ticket/current approval/head,
@@ -303,5 +304,6 @@ private envelope/API. This schema is separate and does not change its wire
 fields or implement Rust parity. A mechanical due item is a candidate; an agent
 applies authorized judgment and records a refusal when evidence/authority is
 missing. Approval currentness, other applicable review selection (including
-the assignment's exact-head review), CI, M1/re-test, verified merge, 2 + 1,
+the assignment's exact-head review), CI, M1/re-test, verified merge, the review-round
+limit (one review plus one re-check, then at most one fresh round),
 privacy and every live/machine/activation/spending/release/publication gate stay.

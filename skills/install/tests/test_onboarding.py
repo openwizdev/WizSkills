@@ -330,7 +330,6 @@ class Setting(unittest.TestCase):
         self.assertEqual(len(world['host_pulls']), 1)
         text = world['branches']['openwiz/host-setting']['docs/agents/host.md']
         self.assertEqual(re.findall(r'(?m)^Host:.*$', text), ['Host: local'])
-        self.assertEqual(re.findall(r'(?m)^Permission mode:.*$', text), ['Permission mode: acceptEdits'])
         self.assertEqual(road.saved()['setting']['state'], 'opened')
 
     def test_cloudroom_writes_no_host_file_and_a_conflicting_one_is_never_overwritten(self):
@@ -467,12 +466,40 @@ class PermissionMode(unittest.TestCase):
         self.assertNotIn('host_pulls', json.loads(road.world_path.read_text()))
         road = self.road('always-wanted')
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
-        road.origin_write({'docs/agents/host.md': '# Where agents run\n\nHost: local\n'})
+        # The mode anywhere but KN3's one fleet.md row is no saved mode: the driver reads only that row.
+        road.origin_write({'docs/agents/host.md': '# Where agents run\n\nHost: local\n\nPermission mode: acceptEdits\n',
+                           'docs/agents/fleet.md': road.world['files']['docs/agents/fleet.md']})
         road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
         result = road.helper(['launch', '--spec', '900'])
         self.assertEqual(result.returncode, 5, result.stdout)
-        self.assertIn('permission mode', result.stdout)
+        self.assertIn('Harness permission mode', result.stdout)
         self.assertEqual(road.spawns(), [])
+
+    def test_the_mode_is_one_fleet_md_row_and_an_owners_row_is_never_overwritten(self):
+        # catches: the mode saved where KN3's driver doesn't read it, a second row, the rest of fleet.md lost,
+        # or an owner's saved row replaced without asking
+        road = self.road('small-change')
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting')
+        before = road.world['files']['docs/agents/fleet.md']
+        for _ in range(2):
+            result = road.helper(['setting', '--yes'])
+            self.assertEqual(result.returncode, 0, result.stdout)
+        world = json.loads(road.world_path.read_text())
+        self.assertEqual(len(world['host_pulls']), 1)
+        fleet = world['branches']['openwiz/host-setting'].get('docs/agents/fleet.md', '')
+        self.assertEqual(re.findall(r'(?m)^\| Harness permission mode \|.*$', fleet),
+                         ['| Harness permission mode | `acceptEdits` |'])
+        self.assertTrue(fleet.startswith(before.rstrip('\n')), 'every other line of fleet.md stays')
+        road = self.road('small-change')
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting')
+        owned = road.world['files']['docs/agents/fleet.md'] + '\n| Harness permission mode | `default` |\n'
+        road.world['files']['docs/agents/fleet.md'] = owned
+        road.save_world()
+        road.origin_write({'docs/agents/fleet.md': owned})
+        refused = road.helper(['setting', '--yes'])
+        self.assertEqual(refused.returncode, 5, refused.stdout)
+        self.assertIn('`default`', refused.stdout)
+        self.assertNotIn('host_pulls', json.loads(road.world_path.read_text()))
 
 
 class FirstMerge(unittest.TestCase):

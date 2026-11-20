@@ -879,7 +879,7 @@ class CommentPass(unittest.TestCase):
         self.assertEqual([f.split(": ", 2)[:2] for f in findings],
                          [["src/app.py:1", "comment"], ["src/app.py:3", "comment"], ["bin/tool:3", "workaround"],
                           ["bin/run:2", "comment"]], out)
-        self.assertEqual(self.comment_pass(diff, "--docs", "src/")[1], ["bin/tool:3: workaround: workaround for the "
+        self.assertEqual(self.comment_pass(diff, "--docs", "src/", "--docs", "bin/")[1], ["bin/tool:3: workaround: workaround for the "
                          "old runner Fix: " + "fix the cause, or turn the rule it guards into a test or a check (red "
                          "first), then delete the comment."])
 

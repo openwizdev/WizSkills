@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -297,13 +298,13 @@ class Tracker(unittest.TestCase):
     def writes(self):
         return [(c['method'], c['path']) for c in self.calls() if c['method'] != 'GET' and c['path'] != 'graphql']
 
-    def run_status(self, *args):
+    def run_status(self, *args, script=SCRIPT):
         env = dict(os.environ, PATH=str(self.dir / 'bin') + ':' + os.environ['PATH'],
                    FAKE_GH_WORLD=str(self.dir / 'world.json'), FAKE_GH_LOG=str(self.dir / 'gh.log'),
                    FAKE_GH_PAGE=self.page)
         for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_REPO'):
             env.pop(key, None)
-        return subprocess.run([sys.executable, '-I', str(SCRIPT), *args], env=env,
+        return subprocess.run([sys.executable, '-I', str(script), *args], env=env,
                               capture_output=True, text=True, timeout=60)
 
     def write(self, state, step, time, *extra, agent='builder'):
@@ -509,6 +510,19 @@ class Claims(Tracker):
                     self.assertEqual(self.load(), self.world)
                 else:
                     self.assertEqual(self.writes(), [('POST', 'repos/example/tracker/issues/12/comments')])
+
+    def test_a_note_written_before_per_skill_versions_still_reads(self):
+        # catches (#1663): a reader that binds versions too, so every note written at the
+        # bundle's version reads as unknown: its claim ignored, and its own agent fenced out.
+        old = note(skills='build-ticket@0.1.2, launch-fleet@0.1.2')
+        self.ticket(self.world)['comments'].append(comment(104, BOT, old))
+        self.save()
+        result = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
+        self.assertEqual((result.returncode, result.stdout, self.writes()), (3, '', []), result.stderr)
+        result = self.write('working', 'resumed the build', '2030-01-02T03:05:00Z', '--note', '104')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')])
+        self.assertEqual(self.ticket()['comments'][3]['body'], note(step='resumed the build', time='2030-01-02T03:05:00Z'))
 
     def test_the_fence_stops_a_writer_whose_note_is_no_longer_live(self):
         # catches: an agent writing on after its claim was stopped, lost or taken by another kind,
@@ -850,6 +864,44 @@ class Refuse(Tracker):
         listed = sorted(path.rsplit('/', 1)[1] for path in manifest['skills'])
         result = self.run_status(*self.args('--skills', ', '.join(f'{name}@{VERSION}' for name in listed[:5])))
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_each_skill_is_bound_to_its_own_installed_version(self):
+        # catches (#1527): a truthful note refused because a skill's own front-matter version
+        # differs from the bundle's, or one skill's version accepted for another skill.
+        package = self.dir / 'package'
+        (package / '.claude-plugin').mkdir(parents=True)
+        (package / '.claude-plugin/plugin.json').write_text(json.dumps({
+            'name': 'openwiz', 'version': '0.1.2',
+            'skills': ['./skills/build-ticket', './skills/launch-fleet', './skills/no-front-matter']}))
+        # The writer's own skill folder as installed, then each SKILL.md's front matter.
+        shutil.copytree(HERE.parent, package / 'skills/launch-fleet', ignore=shutil.ignore_patterns('__pycache__'))
+        shutil.copytree(ROOT / 'contracts', package / 'contracts')
+        for name, head in (('build-ticket', 'name: build-ticket\nversion: 0.2.0'),
+                           ('launch-fleet', 'name: launch-fleet\nversion: 0.3.1'),
+                           # Listed but not installed: no folder for triage, and a
+                           # skill whose front matter has no version.
+                           ('no-front-matter', 'name: no-front-matter'),
+                           # Installed folder, but the manifest doesn't list it.
+                           ('unlisted', 'name: unlisted\nversion: 0.2.0')):
+            (package / 'skills' / name).mkdir(parents=True, exist_ok=True)
+            (package / 'skills' / name / 'SKILL.md').write_text(f'---\n{head}\n---\n\n# {name}\n')
+        scripts = package / 'skills/launch-fleet/scripts'
+        for value in ('build-ticket@0.1.2', 'launch-fleet@0.2.0', 'build-ticket@0.2.0, launch-fleet@0.2.0',
+                      'triage@0.2.0', 'unlisted@0.2.0', 'no-front-matter@0.1.2', 'no-front-matter@0.2.0'):
+            with self.subTest(skills=value):
+                # A fresh tracker each time, so one wrongly accepted value can't hide another.
+                self.save()
+                (self.dir / 'gh.log').unlink(missing_ok=True)
+                result = self.run_status(*self.args('--skills', value), script=scripts / 'status.py')
+                self.assertEqual((result.returncode, result.stdout, self.calls()), (2, '', []))
+                self.assertIn('installed', result.stderr)
+        self.save()
+        result = self.run_status(*self.args('--skills', 'build-ticket@0.2.0, launch-fleet@0.3.1'),
+                                 script=scripts / 'status.py')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        posted = [c for c in self.ticket()['comments'] if c['author'] == BOT]
+        self.assertEqual(len(posted), 1)
+        self.assertIn('\nskills: build-ticket@0.2.0, launch-fleet@0.3.1\n', posted[0]['body'])
 
     def test_private_or_bad_text_is_refused_before_any_call(self):
         # catches: a thread id, machine path (any absolute one), CloudRoom id, credential,

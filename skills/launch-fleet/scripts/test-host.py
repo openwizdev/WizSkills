@@ -348,6 +348,7 @@ class Failures(unittest.TestCase):
         self.assertEqual(out.split('\n')[0], 'started #7 on local')
         self.assertTrue(out.split('\n')[1].startswith('unknown: the failure report on #7 was not cleared ('), out)
         self.assertEqual(p.saved()['runs'], {'7': {'host': 'local', 'run': 'local-run-7'}})
+        self.assertEqual(p.fleet_notes(), [STOPPED, 'done'])  # R1's cause on the clearing route: written apart
         self.assertEqual(p.host('wake', REPO, 7), (0, 'woke #7 on local', ''))
         self.assertEqual(p.fleet_notes(), [STOPPED, 'done'])
         self.assertEqual([first for first, _ in p.failures()], [MARK + ', cleared'])

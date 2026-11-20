@@ -21,3 +21,28 @@ First extra element 0:
 Ran 1 test in 3.388s
 
 FAILED (failures=1)
+
+$ python3 -I skills/launch-fleet/scripts/test-host.py Failures.test_a_clearing_github_lost_keeps_the_saved_run_and_the_next_success_clears   # R1 on the clearing route, before the fix
+F
+======================================================================
+FAIL: test_a_clearing_github_lost_keeps_the_saved_run_and_the_next_success_clears (__main__.Failures.test_a_clearing_github_lost_keeps_the_saved_run_and_the_next_success_clears)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<checkout>/skills/launch-fleet/scripts/test-host.py", line 351, in test_a_clearing_github_lost_keeps_the_saved_run_and_the_next_success_clears
+    self.assertEqual(p.fleet_notes(), [STOPPED, 'done'])  # R1's cause on the clearing route: written apart
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: ['stopped (driver start failed)'] != ['stopped (driver start failed)', 'done']
+
+Second list contains 1 additional elements.
+First extra element 1:
+'done'
+
+- ['stopped (driver start failed)']
++ ['stopped (driver start failed)', 'done']
+?                                 ++++++++
+
+
+----------------------------------------------------------------------
+Ran 1 test in 3.763s
+
+FAILED (failures=1)

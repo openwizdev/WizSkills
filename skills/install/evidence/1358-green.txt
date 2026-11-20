@@ -1,25 +1,25 @@
-# #1358 green, at branch head 88f05d1 (main merged in at 6675c28)
+# #1358 green, at branch head 83a0bc5 (main merged in at cdf9554); KN3's permission-mode row as OpenWiz #1455 defines it at 585867d, behind the KN3 stub
 
-## On the branch (launch-fleet from main: WS17 not merged, its starts stubbed; KN3's permission-mode field stubbed)
+## On the branch (launch-fleet from main: WS17 not merged, its starts stubbed)
 $ python3 -I skills/install/tests/test_onboarding.py
-Ran 19 tests in 16.078s
+Ran 20 tests in 20.329s
 
 OK (skipped=2)
 $ python3 -I skills/install/tests/test_first_fleet.py
-Ran 41 tests in 54.877s
+Ran 41 tests in 54.153s
 
 OK (skipped=9)
 $ python3 -I skills/install/tests/test_doctor.py
-Ran 31 tests in 3.714s
+Ran 31 tests in 3.528s
 
 OK
 
-## On a scratch merge of 88f05d1 with WizSkills #60 (room/1340-fleet-auto-start at 7374b28), never pushed: nothing skipped
+## On a scratch merge of 83a0bc5 with WizSkills #60 (room/1340-fleet-auto-start at 7374b28), never pushed: nothing skipped
 $ python3 -I skills/install/tests/test_onboarding.py
-Ran 19 tests in 71.835s
+Ran 20 tests in 73.491s
 
 OK
 $ python3 -I skills/install/tests/test_first_fleet.py
-Ran 41 tests in 192.542s
+Ran 41 tests in 185.041s
 
 OK

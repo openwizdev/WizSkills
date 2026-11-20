@@ -134,7 +134,7 @@ Traceback (most recent call last):
 AssertionError: False is not true : not built yet
 
 ======================================================================
-FAIL: test_private_identities_are_refused_with_zero_writes (__main__.Post.test_private_identities_are_refused_with_zero_writes) (body='launch-fleet: look: builder thr_abc and thr_def both match')
+FAIL: test_private_identities_are_refused_with_zero_writes (__main__.Post.test_private_identities_are_refused_with_zero_writes) (body='launch-fleet: look: builder <thread> and <thread> both match')
 ----------------------------------------------------------------------
 Traceback (most recent call last):
   File "skills/launch-fleet/scripts/test-post.py", line 82, in test_private_identities_are_refused_with_zero_writes

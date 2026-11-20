@@ -18,10 +18,11 @@ the ticket's notes again and, while a live note still asks, records the repair i
 fleet note (working), adds the label and reads again. Once no live note asks, it takes off
 only the application its own POST made in this wake, puts back a person's application its
 DELETE took, and edits its note to done. A wake that stops part way leaves the note working;
-the next wake settles that ticket from it but never deletes (#1702): while agents post as a
-person's own account, a needs-info it can't prove it applied in this wake stays and is
-reported. It prints each change and every other mismatch, one report line each: exit 0
-nothing to report, 1 lines printed, 2 `status check failed: <why>`.
+the next wake settles that ticket from it. It deletes only under a GitHub App's own login
+(#1702): a needs-info it didn't apply in this wake, or any needs-info while it acts as a
+person's own account, stays and is reported. It prints each change and every other
+mismatch, one report line each: exit 0 nothing to report, 1 lines printed, 2
+`status check failed: <why>`.
 Every GitHub call goes through `gh api`.
 """
 import argparse
@@ -517,6 +518,13 @@ def cleanup(repo, n, login, mine, labelled):
     return [f'#{n}: {ASKING_LABEL} put back: {who} applied it as the repair took it off; check whose it is']
 
 
+def app(login):
+    """#82 R1: only a GitHub App's own login (`<name>[bot]`, which no person can sign in as)
+    tells the repair's label events from a person's. Under any other login, such as a person's
+    own account shared with the agents, the repair never deletes: it reports instead."""
+    return login.endswith('[bot]')
+
+
 def left(repo, n, login, labelled):
     """#1702: a needs-info this wake can't prove it applied stays. While agents post as a person's
     own account, an application under the repair's login may be that person's hold, or a put-back
@@ -559,7 +567,7 @@ def settle(repo, n, authors, login, base, pending):
         before = len(label_events(repo, n))
         gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
         new = label_events(repo, n)[before:]
-        if len(new) == 1 and new[0]['event'] == 'labeled' and by(new[0], login):
+        if app(login) and len(new) == 1 and new[0]['event'] == 'labeled' and by(new[0], login):
             mine = before
         still = asking()
         if still is not None:

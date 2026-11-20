@@ -167,7 +167,7 @@ jq -er --arg records "$private_records" --argjson private "$private" --slurpfile
 # The spec's two checkpoint answers, read with the forms block of
 # contracts/checkpoints.v1.md. A spec created before the cutoff and without
 # the section was planned before checkpoints existed: it reads as early only.
-checkpoints_since=2026-11-21T00:00:00Z
+CHECKPOINTS_SINCE=2026-11-21T00:00:00Z
 here=$(cd -P "$(dirname "$0")" && pwd -P) || fail 'cannot find this script'
 awk '/^```checkpoints-v1$/ {n++; on = 1; next} on && /^```$/ {on = 0; next} on {print}
      END {if (n != 1) exit 1}' "$here/../../../contracts/checkpoints.v1.md" > "$work/forms-raw" 2> /dev/null &&
@@ -176,7 +176,7 @@ awk '/^```checkpoints-v1$/ {n++; on = 1; next} on && /^```$/ {on = 0; next} on {
                        .fence, .one_way_door, .user_visible); type == "string")
     then .[0] else error("bad forms") end' "$work/forms-raw" > "$work/forms.json" 2> /dev/null ||
   fail 'cannot read the checkpoint forms from contracts/checkpoints.v1.md'
-reading=$(jq -esr --slurpfile forms "$work/forms.json" --arg since "$checkpoints_since" '
+reading=$(jq -esr --slurpfile forms "$work/forms.json" --arg since "$CHECKPOINTS_SINCE" '
   $forms[0] as $f
   | def whole($form): test("\\A(?:" + $form + ")\\z");
     def fence: capture("\\A {0,3}(?<f>`+|~+)").f;
@@ -218,7 +218,7 @@ reading=$(jq -esr --slurpfile forms "$work/forms.json" --arg since "$checkpoints
 ' "$work/graph" 2> /dev/null) || fail "cannot read spec #$spec's body and creation time"
 case $reading in
   answered | absent) ;;
-  absent-new) fail "spec #$spec has no ## Checkpoints section; a spec created on or after $checkpoints_since needs both answers (contracts/checkpoints.v1.md)" ;;
+  absent-new) fail "spec #$spec has no ## Checkpoints section; a spec created on or after $CHECKPOINTS_SINCE needs both answers (contracts/checkpoints.v1.md)" ;;
   *) fail "spec #$spec's checkpoints are invalid (${reading#invalid }); write both answers as contracts/checkpoints.v1.md says" ;;
 esac
 echo "check-approval.sh: #$spec approval table is valid"

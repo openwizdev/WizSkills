@@ -398,6 +398,21 @@ class ApprovalTest(unittest.TestCase):
             with self.subTest(created=created):
                 self.run_check(self.spec_world(OLD_SPEC, created))
 
+    def test_cutoff_boundary(self):
+        # catches: an off-by-one or timezone slip that refuses old specs or
+        # lets new ones skip the answers.
+        script = CHECKER.read_text()
+        self.assertEqual(re.findall(r"^CHECKPOINTS_SINCE=(\S+)$", script, re.M), [CUTOFF])
+        self.assertEqual(script.count("2026-11-21"), 1)
+        for created, status in (("2026-11-20T23:59:59Z", 0), (CUTOFF, 1), ("2026-11-21T00:00:01Z", 1)):
+            with self.subTest(created=created):
+                self.run_check(self.spec_world(OLD_SPEC, created), status=status,
+                               reason="no ## Checkpoints section")
+        for created in ("2026-11-21T00:00:00+01:00", "2026-11-20T23:59:59-01:00"):
+            with self.subTest(created=created):
+                self.run_check(self.spec_world(OLD_SPEC, created), status=1,
+                               reason="cannot read spec #172's body")
+
     def test_unreadable_spec_or_contract_refuses(self):
         # catches: a missing body, creation time or contract read as a spec
         # planned before the change, so every new spec passes unanswered.

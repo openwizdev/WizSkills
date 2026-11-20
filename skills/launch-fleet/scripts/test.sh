@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=880      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 20
+CASES=882      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 22
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1649,6 +1649,16 @@ start #13: W3: widget page (spec #10)
 EOF
 expect 'steer: the factory App'"'"'s note is no owner steer (R2)' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | say(10; 1003; "10:00"; "Reset the cache before the next run.")' -- check <<EOF
 look #10: $OFF_ALL
+start #13: W3: widget page (spec #10)
+EOF
+# WS33 (#1736): to-spec's video now invites steering through the orchestrator;
+# that exact record is a video too, so its spec still gets the notice.
+NEW_CUE='Steering by comment is off for now: tell your orchestrator what to change (stop, reset, or anything else).'
+expect 'steer: a video with WS33'"'"'s new wording gets the notice (WS33)' 0 check.json "merge12 | machine_only | say(10; 1002; \"09:00\"; \"[Watch the narrated spec](https://example.com/synthetic/spec.mp4)\\n\\n$NEW_CUE\") | owner_says(10; 1003; \"10:00\"; \"Stop.\")" -- check <<EOF
+look #10: $OFF_ALL
+start #13: W3: widget page (spec #10)
+EOF
+expect 'steer: a help comment repeating WS33'"'"'s new cue is no video, so no notice (WS33)' 0 check.json "merge12 | machine_only | say(10; 1005; \"10:10\"; \"To steer, ask the orchestrator.\\n\\n$NEW_CUE\")" -- check <<EOF
 start #13: W3: widget page (spec #10)
 EOF
 expect 'steer: a help comment repeating the cue is no video, so no notice (R3)' 0 check.json 'merge12 | machine_only | say(10; 1005; "10:10"; "To steer, reply on the video.\n\nComment here to steer: stop, reset, or anything else.")' -- check <<EOF

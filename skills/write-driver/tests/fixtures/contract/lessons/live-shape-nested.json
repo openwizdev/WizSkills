@@ -1,0 +1,13 @@
+{
+  "lesson": "live-shape",
+  "live": {
+    "sandbox": {
+      "id": "sb-synthetic-1",
+      "state": "idle"
+    }
+  },
+  "fixture": {
+    "id": "sb-synthetic-1",
+    "state": "idle"
+  }
+}

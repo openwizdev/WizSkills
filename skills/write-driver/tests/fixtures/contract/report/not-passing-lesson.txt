@@ -1,0 +1,4 @@
+Your examplehost driver reached 5 of 5 after 34 minutes; not passing yet.
+Kit: version pass, start pass, wake pass, stop pass, token pass
+Live lessons: live-shape fail, wake-after-turn pass, expired-login pass
+Stopped: everything it started (2)

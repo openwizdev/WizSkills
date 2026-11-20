@@ -84,8 +84,8 @@ class Token(unittest.TestCase):
              (('diagnose',), 'diagnose', 'OWNER/NAME'),
              (('fleet', 4001, 'synthetic-owner/synthetic-repo'), 'fleet-4001', 'synthetic-owner/synthetic-repo'),
              (('wake', 4001, 'synthetic-owner/synthetic-repo'), 'fleet-4001', 'synthetic-owner/synthetic-repo'),
-             (('tick', 'synthetic-owner/synthetic-repo', 'thr_synorch1'), 'fleet-tick', 'synthetic-owner/synthetic-repo'),
-             (('wakes', 'synthetic-owner/synthetic-repo', 'thr_synorch1'), 'fleet-tick',
+             (('tick', 'synthetic-owner/synthetic-repo', 'thr_syn-orch'), 'fleet-tick', 'synthetic-owner/synthetic-repo'),
+             (('wakes', 'synthetic-owner/synthetic-repo', 'thr_syn-orch'), 'fleet-tick',
               'synthetic-owner/synthetic-repo')]
 
     def test_with_a_service_every_brief_starts_and_runs_through_the_helper(self):

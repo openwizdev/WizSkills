@@ -1060,8 +1060,8 @@ class ModelsTable(unittest.TestCase):
         self.assertEqual(written[:start] + written[end:], fleet_md(), 'nothing outside the inserted table changes')
         self.assertIn('| Builder | Codex | syn-codex-model-01 | High |', written, 'the names set writes')
         self.assertIn('docs/agents/fleet.md', result.stdout)
-        self.assertEqual(json.loads(j.state.read_text())['choices'],
-                         dict(j.settings, agents='cloud', builder_tables='read'), 'the merged older tables read back')
+        self.assertEqual(json.loads(j.state.read_text())['choices'], dict(j.settings, agents='cloud'),
+                         'older tables on the default branch never read back a Models table write')
         again = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
         self.assertEqual((again.returncode, j.checkout.read_text()), (0, written), 'a repeat writes nothing new')
 
@@ -1115,6 +1115,55 @@ class ModelsTable(unittest.TestCase):
                 result = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
                 self.assertEqual(result.returncode, 5, result.stdout)
                 self.assertEqual(j.checkout.read_text() if j.checkout.exists() else None, local)
+                self.assertNotIn('choices', json.loads(j.state.read_text()))
+
+    def test_only_the_written_models_table_on_the_default_branch_reads_back(self):
+        # catches: review R2 of WizSkills#120, a choice marked read back from
+        # matching older tables, or from a Models table with another Orchestrator
+        # or Reviewer, so a resumed session plans and launches before the written
+        # table reaches the default branch.
+        j = Journey(self)
+        j.replay(until='agents')
+        for name, remote in (('older tables', fleet_md()), ('other orchestrator', models_md(orchestrator=CLAUDE)),
+                             ('other reviewer', models_md(reviewer=CLAUDE[:2] + ('xhigh',))),
+                             ('own small builder', models_md(small=CODEX))):
+            with self.subTest(name):
+                j.world['files']['docs/agents/fleet.md'] = remote
+                j.save_world()
+                result = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn('builder_tables', json.loads(j.state.read_text())['choices'], result.stdout)
+                said = j.helper(['next']).stdout
+                self.assertEqual(said.splitlines()[0], 'Next: agents.', said)
+        j.world['files']['docs/agents/fleet.md'] = models_md()
+        j.save_world()
+        result = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+        self.assertEqual(json.loads(j.state.read_text())['choices'].get('builder_tables'), 'read', result.stdout)
+        self.assertEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: plan.')
+
+    def test_a_linked_settings_folder_is_never_written(self):
+        # catches: review R3 of WizSkills#120, a symlinked docs/ or docs/agents/
+        # in the checkout sending the write to a file outside it.
+        for link in ('docs', 'docs/agents'):
+            with self.subTest(link):
+                j = Journey(self)
+                j.replay(until='agents')
+                outside = Path(tempfile.mkdtemp(prefix='outside-'))
+                self.addCleanup(shutil.rmtree, outside, True)
+                target = outside / ('agents' if link == 'docs' else '') / 'fleet.md'
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(fleet_md())
+                shutil.rmtree(j.dir / 'docs')
+                if link == 'docs':
+                    os.symlink(outside, j.dir / 'docs')
+                else:
+                    (j.dir / 'docs').mkdir()
+                    os.symlink(outside, j.dir / 'docs/agents')
+                result = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+                self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
+                self.assertEqual(target.read_text(), fleet_md(), 'the file outside the checkout is unchanged')
+                self.assertEqual(sorted(p.name for p in target.parent.iterdir()), ['agents', 'fleet.md'] if link == 'docs'
+                                 else ['fleet.md'], 'nothing staged outside')
                 self.assertNotIn('choices', json.loads(j.state.read_text()))
 
     def test_the_launch_reads_the_models_table(self):
@@ -1277,7 +1326,7 @@ class Resume(unittest.TestCase):
         self.assertIn("fleet's settings on the default branch", said)
         self.assertEqual(json.loads(j.state.read_text())['choices'], dict(j.settings, agents='cloud'),
                          'the recorded choice survives the restart')
-        j.world['files']['docs/agents/fleet.md'] = fleet_md()  # setup made both builder tables the choice
+        j.world['files']['docs/agents/fleet.md'] = models_md()  # the written Models table, merged
         j.save_world()
         self.assertEqual(self.next(j).splitlines()[0], 'Next: agents.', 'only a read-back settles the tables')
         again = j.helper(['choose', '--from-setup', '--agents', 'cloud'])

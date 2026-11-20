@@ -165,6 +165,15 @@ class FeedbackPath(unittest.TestCase):
         self.assertEqual(rc, 0, text)
         self.assertEqual(out["report_labels"], ["feedback"])
 
+    def test_plain_words_with_a_named_button_still_go_to_a_fleet(self):
+        # catches: the instruction backstop holding every report that names a
+        # button in backticks or says "run" in prose, so no report ever reaches a fleet.
+        for body in ["The `Save` button does nothing when I run a plan; nothing changes.",
+                     "Pressing `Approve` twice shows the plan twice."]:
+            with self.subTest(body=body):
+                rc, out, text = plan(case(report(body=body, labels=["feedback"])))
+                self.assertEqual((rc, out and out["outcome"]), (0, "fleet"), text)
+
     def test_big_or_unclear_report_is_held_for_the_owner(self):
         # catches: a report that fails any one code (or one triage can't judge)
         # going to a fleet anyway.

@@ -427,6 +427,53 @@ class LaunchYes(unittest.TestCase):
                 self.assertEqual(len(road.spawns()), 1)
 
 
+class PermissionMode(unittest.TestCase):
+    """J254 A (#1358, comment 7030207384): on this machine the owner picks the harness permission mode once."""
+
+    def road(self, name):
+        return Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
+
+    def test_the_question_explains_each_mode_and_picks_none_for_the_owner(self):
+        # catches: a mode picked, defaulted or widened for the owner, a mode outside the harness's own list
+        # recorded, or the question touching a login
+        road = self.road('small-change')
+        road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
+        asked = road.helper(['mode'])
+        self.assertEqual(asked.returncode, 12, asked.stdout)
+        listed = re.findall(r'(?m)^- (\S+): (.+)$', asked.stdout)
+        self.assertEqual([m for m, _ in listed], ['default', 'acceptEdits', 'bypassPermissions'], asked.stdout)
+        self.assertTrue(all(len(why.split()) >= 5 for _, why in listed), 'each mode explained in plain words')
+        self.assertNotRegex(asked.stdout, r'(?i)recommend|default choice|\(suggested\)')
+        self.assertNotIn('mode', road.saved())
+        wider = road.helper(['mode', '--mode', 'danger-full-access'])
+        self.assertEqual(wider.returncode, 5, wider.stdout)
+        self.assertNotIn('mode', road.saved())
+        picked = road.helper(['mode', '--mode', 'acceptEdits'])
+        self.assertEqual(picked.returncode, 0, picked.stdout)
+        self.assertEqual(road.saved()['mode'], {'harness': 'claude-code', 'mode': 'acceptEdits'})
+        self.assertFalse([c for c in road.gh_calls() if c[:1] == ['auth']])
+        road = self.road('fresh-project')
+        road.replay_road(stop=until('setting'))
+        self.assertEqual(road.helper(['mode']).returncode, 5, 'Cloudroom asks no local permission mode')
+
+    def test_no_fleet_starts_on_this_machine_before_the_mode_is_saved(self):
+        # catches: a fleet started on this machine whose saved setting names no permission mode (KN3's start
+        # would refuse every builder), or a host setting opened before the owner picked one
+        road = self.road('always-wanted')
+        road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
+        unpicked = road.helper(['setting', '--yes'])
+        self.assertEqual(unpicked.returncode, 5, unpicked.stdout)
+        self.assertNotIn('host_pulls', json.loads(road.world_path.read_text()))
+        road = self.road('always-wanted')
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
+        road.origin_write({'docs/agents/host.md': '# Where agents run\n\nHost: local\n'})
+        road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
+        result = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(result.returncode, 5, result.stdout)
+        self.assertIn('permission mode', result.stdout)
+        self.assertEqual(road.spawns(), [])
+
+
 class FirstMerge(unittest.TestCase):
     def test_the_closing_offer_follows_only_a_merge_read_back_for_this_spec(self):
         # catches: the closing offer made on a count, an open pull request, or a merge from another spec

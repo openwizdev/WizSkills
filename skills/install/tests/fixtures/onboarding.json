@@ -152,6 +152,33 @@
     {
      "step": "setting",
      "tool": [
+      "mode"
+     ],
+     "exit": 12
+    },
+    {
+     "step": "setting",
+     "agent": "Your agents on this machine need a permission mode for Claude Code, picked by you once: default (it stops and waits for you before each edit or command, so an unattended builder stalls), acceptEdits (it edits files on its own and still asks before running a command) or bypassPermissions (it edits files and runs any command without asking). I pick none for you. Which one?"
+    },
+    {
+     "step": "setting",
+     "user": "acceptEdits.",
+     "answers": {
+      "permission_mode": "acceptEdits"
+     }
+    },
+    {
+     "step": "setting",
+     "tool": [
+      "mode",
+      "--mode",
+      "acceptEdits"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "setting",
+     "tool": [
       "setting"
      ],
      "exit": 12
@@ -931,6 +958,33 @@
      "tool": [
       "continue",
       "--explained"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "setting",
+     "tool": [
+      "mode"
+     ],
+     "exit": 12
+    },
+    {
+     "step": "setting",
+     "agent": "Your agents on this machine need a permission mode for Claude Code, picked by you once: default (it stops and waits for you before each edit or command, so an unattended builder stalls), acceptEdits (it edits files on its own and still asks before running a command) or bypassPermissions (it edits files and runs any command without asking). I pick none for you. Which one?"
+    },
+    {
+     "step": "setting",
+     "user": "acceptEdits.",
+     "answers": {
+      "permission_mode": "acceptEdits"
+     }
+    },
+    {
+     "step": "setting",
+     "tool": [
+      "mode",
+      "--mode",
+      "acceptEdits"
      ],
      "exit": 0
     },

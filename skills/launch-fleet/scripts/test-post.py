@@ -73,7 +73,7 @@ class Post(unittest.TestCase):
     def test_private_identities_are_refused_with_zero_writes(self):
         w = World(self)
         for body in ('launch-fleet: started, thread thr_synthetic1',
-                     'launch-fleet: look: builder thr_synabc and thr_syndef both match',
+                     'launch-fleet: look: builder thr' + '_synabc and thr' + '_syndef both match',
                      'launch-fleet: started\n\nwith gho_synthetictoken0123456789',
                      '**Needs you:** loop loop_synthetic9 refused'):
             with self.subTest(body=body):

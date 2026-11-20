@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=841      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py
+CASES=860      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1258,6 +1258,30 @@ expect 'needs-info: the question goes to the orchestrator' 0 check.json 'issue(1
 needs-info #12: a question for the orchestrator
 EOF
 expect 'needs-info already asked: quiet' 0 check.json 'issue(12; .labels += ["needs-answer"]) | say(12; 1202; "11:00"; "Which store?") | say(12; 1203; "11:05"; "launch-fleet: asked the orchestrator")' -- check < /dev/null
+expect 'F4: a self-grant record answers the question' 0 check.json 'issue(12; .labels += ["needs-answer"]) | say(12; 1202; "11:00"; "May I read the issue timeline?") | say(12; 1203; "11:05"; "launch-fleet: granted read route: the issue timeline, under the API rules")' -- check < /dev/null
+# R2 (review of #1353): the claim, the gate every builder start passes, reads
+# every open ready ticket in the repository and refuses a start whose owned
+# paths collide with one running, or claimed by an older claim.
+OWN13='def own($n; $p): issue($n; .body = "## Owned paths\n\n- `\($p)`\n\n**Relies on:** nothing\n");
+  def claim13: merge12 | own(13; "src/page/") | say(13; 1301; "11:55"; "launch-fleet: starting");
+  def other_spec: .issues += [{number: 80, title: "Synthetic spec: other", state: "OPEN", parent: null, labels: [], blockedBy: [], body: "The spec.", comments: []},
+    {number: 81, title: "X1: other page work", state: "OPEN", parent: 80, labels: ["ready-for-agent"], blockedBy: [],
+     body: "## Owned paths\n\n- `src/page/index.md`\n", comments: [{id: 8101, at: at("11:00"), body: "launch-fleet: started"}]}];'
+expect 'F6 claim: no collider, go' 0 check.json "$OWN13"' claim13' -- claim 13 1301 <<EOF
+go #13
+EOF
+expect 'F6 claim: a running ticket outside the spec on the same paths withdraws' 0 check.json "$OWN13"' claim13 | own(70; "src/") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+withdraw #13: its owned paths collide with #70, which is running or claimed first
+EOF
+expect 'F6 claim: a running ticket of another spec on the same paths withdraws' 0 check.json "$OWN13"' claim13 | other_spec' -- claim 13 1301 <<EOF
+withdraw #13: its owned paths collide with #81, which is running or claimed first
+EOF
+expect 'F6 claim: an older colliding claim wins' 0 check.json "$OWN13"' claim13 | own(70; "src/page/a.md") | say(70; 1300; "11:50"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
+withdraw #13: its owned paths collide with #70, which is running or claimed first
+EOF
+expect 'F6 claim: a newer colliding claim loses' 0 check.json "$OWN13"' claim13 | own(70; "src/page/a.md") | say(70; 1302; "11:56"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
+go #13
+EOF
 expect 'needs-info: a new question after the last one was asked' 0 check.json 'issue(12; .labels += ["needs-answer"]) | say(12; 1202; "11:00"; "Which store?") | say(12; 1203; "11:05"; "launch-fleet: asked the orchestrator") | say(12; 1204; "11:30"; "And one more thing?")' -- check <<EOF
 needs-info #12: a question for the orchestrator
 EOF
@@ -1882,6 +1906,61 @@ $FRONTIER
 EOF
 log_has 'the frontier read in pages of one' 1 '^graphql Specs'
 log_has 'the frontier read in pages of one' 20 '^issues page='
+# F6 (#1353): only a hard blocker holds a start. A `file` link (the two only
+# share files) is context; owned paths that collide with a running ticket, or
+# with a lower-numbered ticket starting in the same read, hold it instead.
+OWNS='def owns($n; $line; $links): issue($n; .body = "## Owned paths\n\n- \($line)\n\n**Relies on:** `docs/gadget.md`\n\n## Links\n\n\($links)\n");'
+expect 'F6: a ticket whose only open link is context starts' 0 frontier.json "$OWNS"' owns(43; "`gadget/spike.md`"; "none") | owns(42; "`gadget/writer.md`"; "- #43 file: `gadget/notes.md`")' -- frontier <<EOF
+#41 G1: gadget reader
+#42 G2: gadget writer
+#45 G5: gadget import
+#55 G11: gadget filter
+EOF
+expect 'F6: an open hard blocker still holds a start' 0 frontier.json "$OWNS"' owns(42; "`gadget/writer.md`"; "- #43 real: the spike findings, which the writer follows")' -- frontier <<EOF
+$FRONTIER
+EOF
+expect 'F6: a blocker with no link line is hard' 0 frontier.json "$OWNS"' owns(42; "`gadget/writer.md`"; "- #44 file: `gadget/notes.md`")' -- frontier <<EOF
+$FRONTIER
+EOF
+expect 'F6: a path colliding with a running ticket holds a start' 0 frontier.json "$OWNS"' owns(48; "`gadget/`"; "none") | owns(41; "`gadget/reader.md`"; "none")' -- frontier <<EOF
+#45 G5: gadget import
+#55 G11: gadget filter
+EOF
+expect 'F6: shared or other-repository paths do not collide' 0 frontier.json "$OWNS"' owns(48; "`gadget/*.md` (shared: the colours line)"; "none") | owns(41; "`gadget/reader.md` (shared: the reader line)"; "none") | owns(49; "`gadget/` in `synthetic-owner/other-repo`"; "none")' -- frontier <<EOF
+$FRONTIER
+EOF
+expect 'F6: of two colliding ready tickets the lower starts first' 0 frontier.json "$OWNS"' owns(45; "`gadget/io/`"; "none") | owns(55; "`gadget/io/filter.md`"; "none")' -- frontier <<EOF
+#41 G1: gadget reader
+#45 G5: gadget import
+EOF
+# R1 (review of #1353): a file link is context only when check-links.sh
+# reads it as a file link naming a file, its blocker's owned paths are read,
+# and none of the ticket's relied-on inputs is the blocker's or the link's.
+SPIKE=' owns(43; "`gadget/spike.md`"; "none") |'
+expect 'F6: an empty file reason is unlabelled, so hard' 0 frontier.json "$OWNS$SPIKE"' owns(42; "`gadget/writer.md`"; "- #43 file:")' -- frontier <<EOF
+$FRONTIER
+EOF
+expect 'F6: a malformed Links section labels nothing' 0 frontier.json "$OWNS$SPIKE"' owns(42; "`gadget/writer.md`"; "- #43 file: `gadget/notes.md`\nnone")' -- frontier <<EOF
+$FRONTIER
+EOF
+expect 'F6: a file link whose blocker owns a relied-on input is hard' 0 frontier.json "$OWNS"' owns(43; "`docs/`"; "none") | owns(42; "`gadget/writer.md`"; "- #43 file: `gadget/notes.md`")' -- frontier <<EOF
+$FRONTIER
+EOF
+expect 'F6: a file link naming a relied-on input is hard' 0 frontier.json "$OWNS$SPIKE"' owns(42; "`gadget/writer.md`"; "- #43 file: `docs/gadget.md`")' -- frontier <<EOF
+$FRONTIER
+EOF
+expect 'F6: a file link whose blocker owns no path it can read is hard' 0 frontier.json "$OWNS"' owns(42; "`gadget/writer.md`"; "- #43 file: `gadget/notes.md`")' -- frontier <<EOF
+$FRONTIER
+EOF
+# R3: approval's fnmatch patterns, brackets and question marks too.
+expect 'F6: a bracket or question-mark pattern collides as approval reads it' 0 frontier.json "$OWNS"' owns(48; "`gadget/[rw]eader.md`"; "none") | owns(41; "`gadget/reader.md`"; "none") | owns(49; "`gadget/fil?er.md`"; "none") | owns(55; "`gadget/filter.md`"; "none")' -- frontier <<EOF
+#45 G5: gadget import
+EOF
+# R4: admitted in number order, each against running work and those admitted.
+expect 'F6: a ticket held only by an unadmitted collider still starts' 0 frontier.json "$OWNS"' owns(41; "`gadget/reader.md`"; "none") | owns(45; "`gadget/`"; "none") | owns(55; "`gadget/writer.md`"; "none")' -- frontier <<EOF
+#41 G1: gadget reader
+#55 G11: gadget filter
+EOF
 expect 'a closed blocker is not enough: with a verified merge it is' 0 frontier.json 'merged_pr(74; 43; "09:00"; [])' -- frontier <<EOF
 #41 G1: gadget reader
 #42 G2: gadget writer

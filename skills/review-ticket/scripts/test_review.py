@@ -887,7 +887,7 @@ class CommentPass(unittest.TestCase):
         self.git("commit", "-q", "-m", "no checker")
         code, findings, out = self.comment_pass({"src/app.py": "# workaround for the old runner\nx = 1\n"})
         self.assertEqual((code, out.splitlines()), (3, [
-            "no checker: tools/comment-check/check.py is missing here and no --checker was given; "
+            "no checker: the base revision has no tools/comment-check/check.py and no --checker was given; "
             "read the diff's comments yourself"]))
 
     def test_another_checker_location_is_used_with_checker(self):

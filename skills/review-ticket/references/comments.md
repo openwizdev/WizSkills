@@ -6,15 +6,15 @@ Read this when the diff adds or changes a comment. The project's comments contra
 
 Only the pull request's diff: the comment lines it adds or changes between `origin/<base>` and `<head>`, with the code around each one. A comment the diff doesn't touch is never a finding, however stale; the pass is not a sweep of the repository.
 
-Start with the helper. It runs the reviewed repository's own comments checker, the one the contract has every repository carry in its tools/comment-check folder, in diff mode, so what counts as a comment, a block and an excluded file is exactly what the contract and CI say:
+Start with the helper. It runs the reviewed repository's own comments checker, the one the contract has every repository carry in its tools/comment-check folder, taken from the pull request's **base** revision (never the head or the checkout, which the pull request controls), in diff mode, so what counts as a comment, a block and an excluded file is exactly what the contract and CI say:
 
 ```sh
 python3 -I <this skill's folder>/scripts/comments.py --base origin/<base> --head <head> [--checker <path>] [--docs <published path>]... [--exclude <glob>]...
 ```
 
-Run it from the project checkout (or pass `--repo <checkout>`); pass the same `--docs` and `--exclude` the repository's CI names. `--checker` runs a checker kept somewhere else. It prints one `<file>:<line>: <kind>: <the line> Fix: <the code fix>.` per block the checker reports, then one `check <file>:<line>: <kind>: <the line>` per added line that wears an allowed form, and exits 1 with findings, 0 without, 2 when Git or the checker fails. Its kinds are `justification`, `workaround`, `suppression`, `external-link`, `escape-tag-reason`, `comment` and `unreadable`; the kind is read from the reported line, so read the whole block before you report it. Each `check` line is yours to judge, below.
+Run it from the project checkout (or pass `--repo <checkout>`); pass the same `--docs` and `--exclude` the repository's CI names. `--checker` runs a trusted checker kept outside the reviewed checkout instead; one inside it is refused. It prints one `<file>:<line>: <kind>: <the line> Fix: <the code fix>.` per block the checker reports, then one `check <file>:<line>: <kind>: <the line>` per added line that wears an allowed form, and exits 1 with findings, 0 without, 2 when Git or the checker fails or a `--checker` is refused. Its kinds are `justification`, `workaround`, `suppression`, `external-link`, `escape-tag-reason`, `comment` and `unreadable`; the kind is read from the reported line, so read the whole block before you report it. Each `check` line is yours to judge, below.
 
-With no checker it prints one `no checker:` line and exits 3. Then read the diff's comments yourself against the kinds below, and never guess what the checker would have said.
+When the base revision has no checker and no `--checker` is given, it prints one `no checker:` line and exits 3. Then read the diff's comments yourself against the kinds below, and never guess what the checker would have said.
 
 ## What stays
 

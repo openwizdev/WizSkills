@@ -3,6 +3,7 @@ import argparse
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 DEFAULT_CHECKER = "tools/comment-check/check.py"
@@ -106,28 +107,47 @@ def comment_pass(repo, checker, base, head, docs, exclude):
 
 def main():
     parser = argparse.ArgumentParser(description=(
-        "review-ticket's comment pass: runs the reviewed repository's comments checker in diff mode between the "
-        "pull request's base and head, prints each block it reports as a finding with its code fix, and a check "
+        "review-ticket's comment pass: runs the comments checker from the pull request's base revision (never "
+        "the head's) in diff mode between the pull request's base and head, prints each block it reports as a finding with its code fix, and a check "
         "line for each added line that wears an allowed form. Exits 1 with findings, 0 without, 2 when the "
         "checker or Git fails, 3 when there is no checker."))
     parser.add_argument("--base", required=True, help="the pull request's base revision")
     parser.add_argument("--head", default="HEAD", help="the pull request's head revision")
     parser.add_argument("--repo", default=".", help="the reviewed repository's checkout")
-    parser.add_argument("--checker", help=f"the checker to run, if not the repository's {DEFAULT_CHECKER}")
+    parser.add_argument("--checker", help=(f"a trusted checker outside the reviewed checkout, run instead of the "
+                                           f"base revision's {DEFAULT_CHECKER}"))
     parser.add_argument("--docs", action="append", default=[], help="passed to the checker (repeatable)")
     parser.add_argument("--exclude", action="append", default=[], help="passed to the checker (repeatable)")
     args = parser.parse_args()
     repo = Path(args.repo).resolve()
-    checker = Path(args.checker).resolve() if args.checker else repo / DEFAULT_CHECKER
-    if not checker.is_file():
-        if args.checker:
-            print(f"no checker: {args.checker} is not a file; read the diff's comments yourself")
-        else:
-            print(f"no checker: {DEFAULT_CHECKER} is missing here and no --checker was given; "
-                  "read the diff's comments yourself")
-        return 3
     try:
-        findings, checks, code = comment_pass(repo, checker, args.base, args.head, args.docs, args.exclude)
+        top = Path(git(repo, "rev-parse", "--show-toplevel").decode().strip()).resolve()
+        git(repo, "rev-parse", "--verify", "--quiet", f"{args.base}^{{commit}}")
+    except subprocess.CalledProcessError as error:
+        print(f"unreadable: git failed: {error.stderr.decode('utf-8', 'replace').strip() or args.base}")
+        return 2
+    try:
+        if args.checker:
+            checker = Path(args.checker).resolve()
+            if checker.is_relative_to(top):
+                print(f"refused: --checker {args.checker} is inside the reviewed checkout, which the pull request "
+                      "controls; give a checker from outside it")
+                return 2
+            if not checker.is_file():
+                print(f"no checker: {args.checker} is not a file; read the diff's comments yourself")
+                return 3
+            findings, checks, code = comment_pass(repo, checker, args.base, args.head, args.docs, args.exclude)
+        else:
+            try:
+                trusted = git(repo, "show", f"{args.base}:{DEFAULT_CHECKER}")
+            except subprocess.CalledProcessError:
+                print(f"no checker: the base revision has no {DEFAULT_CHECKER} and no --checker was given; "
+                      "read the diff's comments yourself")
+                return 3
+            with tempfile.TemporaryDirectory() as folder:
+                checker = Path(folder) / "check.py"
+                checker.write_bytes(trusted)
+                findings, checks, code = comment_pass(repo, checker, args.base, args.head, args.docs, args.exclude)
     except subprocess.CalledProcessError as error:
         print(f"unreadable: git failed: {error.stderr.decode('utf-8', 'replace').strip()}")
         return 2

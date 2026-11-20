@@ -12,6 +12,7 @@ Nothing reaches GitHub or a host.
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,9 @@ import unittest
 
 HERE = Path(__file__).resolve().parent
 REPO = 'synthetic-owner/synthetic-repo'
-VERSION = json.loads((HERE.parents[2] / '.claude-plugin/plugin.json').read_text())['version']
+# launch-fleet's own installed version, its SKILL.md front matter, which the status writer
+# binds (#1663); the bundle's version can differ from it.
+VERSION = re.search(r'(?m)^version: ([0-9.]+)$', (HERE.parent / 'SKILL.md').read_text()).group(1)
 FLEET_MD = ('# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n'
             '| Record authors | `openwiz[bot]`, `synthetic-owner` |\n')
 MARK = 'launch-fleet: driver start failed'

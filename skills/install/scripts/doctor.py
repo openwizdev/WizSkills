@@ -15,7 +15,8 @@ own line with the command that fixes it:
   3. Record author: the acting gh login is one (status.py's author check).
   4. Harness: the last setup check listed it (as for the App).
   5. Driver: PROGRAM answers `version` (the OpenWiz checkout's driver kit,
-     kernel/driver-kit/kit.py); skipped without --driver.
+     kernel/driver-kit/kit.py); skipped without --driver. An answer the kit
+     flags as possibly holding a credential is withheld, never printed.
   6. Skills: the installed build carries its skills (the build's
      setup.py runtime_pin).
 
@@ -179,18 +180,19 @@ def driver(args):
         verdict, what = checker.version()
     except Exception as error:  # a kit that can't run is a problem to report, never a crash
         return [('the driver kit could not run (%s)' % type(error).__name__, pull)]
-    if verdict == 'pass':
+    leaks = getattr(checker, 'leaks', None)
+    if verdict == 'pass' and leaks == []:
         return []
     # A driver outside the checkout is its own program: pulling OpenWiz leaves it as it is (#1578 item 5).
     found = shutil.which(args.driver) or args.driver
     inside = Path(args.openwiz).resolve() in Path(found).resolve().parents
     update = pull if inside else ('update or replace the driver at %s so it answers version for this OpenWiz, '
                                   'then the doctor again' % shlex.quote(args.driver))
-    if getattr(checker, 'leaks', None):
-        # The kit flags the driver's answer as possibly holding a credential: never repeat it (#1578 item 1).
-        return [('%s refused version, and the driver kit flags its answer as possibly holding a credential, so '
-                 'the doctor withholds it' % args.driver,
-                 'run %s version in your own terminal, not through an agent, to read it; then %s'
+    if leaks != []:
+        # The kit flags the driver's answer as possibly holding a credential, or can't say (a kit without
+        # the flag): never repeat it, even when version otherwise passed (#1578 item 1).
+        return [("%s's version answer may hold a credential (%s), so the doctor withholds it"
+                 % (args.driver, 'the driver kit flags it' if leaks else 'this driver kit cannot check it'), 'run %s version in your own terminal, not through an agent, to read it; then %s'
                  % (shlex.quote(args.driver), update))]
     return [('%s does not answer version: %s' % (args.driver, what), update)]
 

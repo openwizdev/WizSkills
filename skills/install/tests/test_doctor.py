@@ -64,6 +64,9 @@ def runtime_pin(runtime):
     if not all((Path(runtime) / 'skills' / n / 'SKILL.md').is_file() for n in SKILLS):
         return None
     return parts[1] + ' ' + parts[2]
+if __name__ == '__main__':  # a printed command's argv, as setup.py would get it
+    import json, os, sys
+    open(os.path.join(os.environ['FAKE_DIR'], 'setup.log'), 'w').write(json.dumps(sys.argv[1:]))
 '''
 
 # The checkout's driver kit: Kit(args, ticket).version() -> ('pass'|'fail', what), as kit.py's.
@@ -251,6 +254,18 @@ class Doctor(unittest.TestCase):
         self.assertEqual(lines, ['2. GitHub App: setup is prepared for synthetic-owner/other. ' + fix,
                                  '4. Harness: setup is prepared for synthetic-owner/other. ' + fix,
                                  'Doctor: 2 problems.'])
+
+    # catches: a saved prepare value a shell splits or expands: run the fix through sh, read setup.py's argv.
+    def test_printed_prepare_fix_runs_as_printed(self):
+        self.s.project.update(repository='synthetic-owner/other', operator="Syn Owner $HOME 'x'")
+        self.s.save()
+        fix = self.lines(self.s.run())[0].split('. Fix: ', 1)[1].split(' (a preview', 1)[0]
+        env = {'PATH': '/usr/bin:/bin', 'FAKE_DIR': str(self.s.fake), 'HOME': 'expanded'}
+        subprocess.run(['sh', '-c', fix.replace('python3', sys.executable, 1)], env=env, capture_output=True)
+        self.assertEqual(json.loads((self.s.fake / 'setup.log').read_text()),
+                         ['prepare', '--state-dir', str(self.s.state), '--repository', REPO, '--project', 'syn-project',
+                          '--operator', "Syn Owner $HOME 'x'", '--service-issue', '7', '--answer-thread', 'syn-thread',
+                          '--harness', 'syn-harness', '--model', 'syn-model', '--effort', 'high'])
 
     # catches: a prepare fix with "..." for the values setup asks the person (it exits 2 as printed; #1578 item 4).
     def test_no_prepared_project_names_the_prepare_step(self):

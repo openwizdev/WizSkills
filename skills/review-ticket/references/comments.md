@@ -4,15 +4,17 @@ Read this when the diff adds or changes a comment. The project's comments contra
 
 ## What it reads
 
-Only the pull request's diff: the comment lines it adds or changes, in `git diff --find-renames origin/<base>...<head>`, with the code around each one. A comment the diff doesn't touch is never a finding, however stale; the pass is not a sweep of the repository. A comment is one block, as the contract groups it: a trailing comment, a run of whole-line comments, or one block comment. The contract's excluded files are skipped: vendored folders, minified files, `fixtures/comments/`, licence files (`LICENSE`, `LICENCE`, `COPYING`, `NOTICE` with any suffix) and a file whose first five lines, shown in the diff, carry `@generated` or `DO NOT EDIT`. The diff can't show `.gitattributes` marks, a generated marker in lines it leaves out, or the repository's own `--exclude` globs in its CI: check those yourself before reporting a finding in such a file.
+Only the pull request's diff: the comment lines it adds or changes between `origin/<base>` and `<head>`, with the code around each one. A comment the diff doesn't touch is never a finding, however stale; the pass is not a sweep of the repository.
 
-Start with the helper, which reads that diff and nothing else:
+Start with the helper. It runs the reviewed repository's own comments checker, the one the contract has every repository carry in its tools/comment-check folder, in diff mode, so what counts as a comment, a block and an excluded file is exactly what the contract and CI say:
 
 ```sh
-git diff --find-renames origin/<base>...<head> | python3 -I <this skill's folder>/scripts/comments.py - [--docs <published path>]...
+python3 -I <this skill's folder>/scripts/comments.py --base origin/<base> --head <head> [--checker <path>] [--docs <published path>]... [--exclude <glob>]...
 ```
 
-It prints one `<file>:<line>: <kind>: <the comment> Fix: <the code fix>.` line per block outside the allowed kinds, then one `check <file>:<line>: <kind>: <the comment>` line per allowed block, and exits 1 with findings, 0 without, 2 on an unreadable diff. Its kinds are `justification`, `workaround`, `suppression`, `external-link`, `escape-tag-reason` and `comment`. Each finding line is a candidate: read the code around it before you report it. Each `check` line is yours to judge, below. It reads paths as Git writes them (quoted or tab-ended) and the comment forms of Rust, Python, shell, YAML, TOML, JavaScript, TypeScript, CSS and HTML as the contract defines them: JavaScript and CSS inside `<script>` and `<style>`, shell inside a YAML `run:` block, no comments in other YAML block scalars or in here-documents, a docstring after a `def` or `class` line or at a file's top, and a workflow's pinned-action version as code. A hunk that starts inside something the diff doesn't show (a block scalar, a `<script>`, a string, a here-document) gets a `check <file>:<line>: context:` line: judge that hunk's comments by hand. A script with no extension is read only when the diff holds its shebang line.
+Run it from the project checkout (or pass `--repo <checkout>`); pass the same `--docs` and `--exclude` the repository's CI names. `--checker` runs a checker kept somewhere else. It prints one `<file>:<line>: <kind>: <the line> Fix: <the code fix>.` per block the checker reports, then one `check <file>:<line>: <kind>: <the line>` per added line that wears an allowed form, and exits 1 with findings, 0 without, 2 when Git or the checker fails. Its kinds are `justification`, `workaround`, `suppression`, `external-link`, `escape-tag-reason`, `comment` and `unreadable`; the kind is read from the reported line, so read the whole block before you report it. Each `check` line is yours to judge, below.
+
+With no checker it prints one `no checker:` line and exits 3. Then read the diff's comments yourself against the kinds below, and never guess what the checker would have said.
 
 ## What stays
 

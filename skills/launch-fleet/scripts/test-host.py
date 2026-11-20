@@ -300,20 +300,23 @@ class Failures(unittest.TestCase):
         token, thread = 'gh' + 'p_synthetic0123456789abcdef', 'thr' + '_synthetic1'  # no literal in the diff
         leaks = {'a token': 'export token=%s and retry' % token,
                  'a thread id': 'resume %s by hand' % thread, 'a machine path': 'edit /srv/synthetic/driver.conf',
-                 'a secret value': 'use %s to sign in' % secret}
+                 'a secret value': 'use %s to sign in' % secret,
+                 # R3 of the re-check at 004afb6: a URL's user info, password or not, from the driver's own config.
+                 'a URL password': 'sign in at https://svc-account:made-up-pass-42@driver.example.invalid/login',
+                 'a URL user': 'open ssh://made-up-user@driver.example.invalid to sign in'}
         for name, text in leaks.items():
             with self.subTest(name):
                 p = Project(self)
                 code, out, _ = p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse', FAKE_DRIVER_NEXT=text,
                                       SYNTHETIC_API_TOKEN=secret)
+                world = json.dumps(p.github())
+                for part in (token, thread, '/srv/', secret, 'made-up-pass-42', 'made-up-user'):
+                    self.assertNotIn(part, world)  # the ticket first: the public boundary
                 withheld = 'withheld, as it held a credential, a private id or a machine path; run the driver by hand'
                 self.assertEqual((code, out), (1, '%s: the local driver refused #7\'s start 3 times; next: %s'
                                                % (STOPPED, withheld)))
                 self.assertEqual(p.failures(), [(MARK, "The local driver could not start this ticket's builder after "
                                                        "3 tries. What it says to do next: " + withheld)])
-                world = json.dumps(p.github())
-                for part in (token, thread, '/srv/', secret):
-                    self.assertNotIn(part, world)
 
     def test_a_report_github_lost_is_written_by_the_next_failure(self):
         p = Project(self)

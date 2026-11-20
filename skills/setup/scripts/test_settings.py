@@ -45,6 +45,24 @@ FLEET = ('# Fleet settings\n\nIntro.\n\n'
            '## Standing merge rules\n\nNone yet: every merge waits for the user.\n\nSource: synthetic.\n\n'
            '## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n'
            '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |\n\nSource: synthetic.\n')
+
+def models(*rows):
+    """A Models section in the models contract's form (openwiz.models.v1), rows as written."""
+    return ('## Models\n\nOne line.\n\n| Role | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
+            '| --- | --- | --- | --- | --- |\n' + ''.join(row + '\n' for row in rows) + '\nSource: synthetic decision.\n\n')
+
+
+def choice(role, provider, model, effort='medium'):
+    return '| %s | Synthetic | Synthetic | Medium | `--provider %s --model %s --reasoning-level %s` |' % (
+        role, provider, model, effort)
+
+
+MODELS = models(choice('Orchestrator', 'claude-code', 'syn-claude-1'), choice('Builder', 'claude-code', 'syn-claude-1'),
+                choice('Reviewer', 'codex', 'syn-codex-1'), '| Small builder | follows Builder | | | |',
+                '| Fixer | follows Builder | | | |')
+OLDER = FLEET[FLEET.index('## Builder\n'):FLEET.index('## Test commands')]
+NEW = FLEET.replace(OLDER, MODELS)
+TEMPLATE = Path(__file__).resolve().parents[1] / 'templates/fleet.md'
 ROLES = ('needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix')
 LABELS = ('# Triage labels\n\n## Labels\n\n| Role | Label here | Meaning |\n| --- | --- | --- |\n'
           + ''.join('| `%s` | `%s` | Synthetic |\n' % (r, r) for r in ROLES))
@@ -249,6 +267,76 @@ class Check(unittest.TestCase):
                                                              'Reviewer for Claude-built', 'Reviewer for GPT-built'))
             code, out = self.check(self.project(**{'fleet.md': text}))
             self.assertTrue(code != 0 or (authors and tables), text + '\n' + out)
+
+    def test_one_models_table_reads_back_verified(self):
+        # catches: a project in the models contract's form (#1807) refused for
+        # lacking the older builder and reviewer tables, so a fresh setup never verifies.
+        code, out = self.check(self.project(**{'fleet.md': NEW}))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.splitlines()[-1], 'Settings: verified (4 files).')
+        # Small builder and Fixer may be absent (they follow) or carry their own choice.
+        mixed = NEW.replace('| Small builder | follows Builder | | | |\n', '').replace(
+            '| Fixer | follows Builder | | | |', choice('Fixer', 'codex', 'vendor/syn-codex-2'))
+        code, out = self.check(self.project(**{'fleet.md': mixed}))
+        self.assertEqual(code, 0, out)
+        # Both forms present: the Models table is read, the older tables still checked.
+        code, out = self.check(self.project(**{'fleet.md': FLEET.replace(OLDER, MODELS + OLDER)}))
+        self.assertEqual(code, 0, out)
+
+    def test_the_template_carries_the_one_models_table(self):
+        # catches: setup writing the five older model tables for a new project
+        # instead of the one Models table (#1807), or a template whose table
+        # breaks the contract's form so only its placeholders are left to fill.
+        template = TEMPLATE.read_text()
+        for title in ('Builder', 'Builder for small tickets', 'Reviewer for Claude-built', 'Reviewer for GPT-built',
+                      'Fixer'):
+            self.assertNotIn('\n## %s\n' % title, template)
+        self.assertEqual(template.count('\n## Models\n'), 1)
+        code, out = self.check(self.project(**{'fleet.md': template}))
+        self.assertEqual(code, 5, out)
+        models = [line for line in out.splitlines() if 'Models' in line]
+        self.assertEqual(models, ['fleet.md: Models: Orchestrator: unfilled', 'fleet.md: Models: Builder: unfilled',
+                                  'fleet.md: Models: Reviewer: unfilled'], out)
+
+    def test_a_broken_models_table_is_refused_by_name_never_read_past(self):
+        # catches: a Models table the contract's readers refuse verified by setup,
+        # or a broken one passed because the older tables below it are whole.
+        follows = '| Small builder | follows Builder | | | |'
+        builder = choice('Builder', 'claude-code', 'syn-claude-1')
+        cases = {
+            'header': (NEW.replace('| Effort |', '| Level |'), 'fleet.md: Models: the header is not the contract\'s'),
+            'order': (NEW.replace(builder + '\n' + choice('Reviewer', 'codex', 'syn-codex-1'),
+                                  choice('Reviewer', 'codex', 'syn-codex-1') + '\n' + builder),
+                      'fleet.md: Models: rows not Orchestrator, Builder, Reviewer, then optional Small builder, Fixer'),
+            'missing': (NEW.replace(builder + '\n', ''),
+                        'fleet.md: Models: rows not Orchestrator, Builder, Reviewer, then optional Small builder, Fixer'),
+            'follow cells': (NEW.replace(follows, '| Small builder | follows Builder | Opus | | |'),
+                             'fleet.md: Models: Small builder: a following row has empty Model, Effort and flags'),
+            'reviewer follows': (NEW.replace(choice('Reviewer', 'codex', 'syn-codex-1'),
+                                             '| Reviewer | follows Builder | | | |'),
+                                 'fleet.md: Models: Reviewer: only Small builder and Fixer may follow'),
+            'flags': (NEW.replace(builder, builder.replace('--model syn-claude-1 ', '--model  syn-claude-1 ')),
+                      'fleet.md: Models: Builder: the flags are not one exact `--provider --model --reasoning-level`'),
+            'model id': (NEW.replace(builder, builder.replace('syn-claude-1', 'vendor//syn')),
+                         'fleet.md: Models: Builder: the flags are not one exact `--provider --model --reasoning-level`'),
+            'empty name': (NEW.replace(builder, builder.replace('| Synthetic | Synthetic |', '| | Synthetic |')),
+                           'fleet.md: Models: Builder: Harness, Model and Effort need names'),
+            'second heading': (NEW + '## Models\n\nOld.\n', 'fleet.md: Models: more than one ## Models heading'),
+            'same family': (NEW.replace(choice('Reviewer', 'codex', 'syn-codex-1'),
+                                        choice('Reviewer', 'claude-code', 'syn-claude-2')),
+                            'fleet.md: Models: Reviewer: claude-code is not from another model family than the Builder'),
+            'unknown family': (NEW.replace(choice('Reviewer', 'codex', 'syn-codex-1'),
+                                           choice('Reviewer', 'syn-harness', 'syn-1')),
+                               'fleet.md: Models: Reviewer: syn-harness has no known model family'),
+        }
+        for name, (text, line) in cases.items():
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': text}))
+                self.assertEqual(code, 5, out)
+                self.assertIn(line, out.splitlines())
+        broken = FLEET.replace(OLDER, cases['order'][0][cases['order'][0].index('## Models'):].split('## Test')[0] + OLDER)
+        code, out = self.check(self.project(**{'fleet.md': broken}))
+        self.assertEqual(code, 5, 'never falls back to the older tables past a broken Models table\n' + out)
 
     def test_usage_errors_exit_2(self):
         # catches: a mistyped command read as a verified project.

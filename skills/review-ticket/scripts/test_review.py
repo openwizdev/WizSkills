@@ -873,10 +873,12 @@ class CommentPass(unittest.TestCase):
         diff = new_file("src/app.py", [
             '"""Module notes."""', "def f():", '    """Set the state, as the old runner did."""',
             '    x = """not a docstring"""', "    return x"]) + new_file(
-            "bin/tool", ["#!/usr/bin/env bash", "set -e", "# workaround for the old runner", "echo hi"])
+            "bin/tool", ["#!/usr/bin/env bash", "set -e", "# workaround for the old runner", "echo hi"]) + new_file(
+            "bin/run", ["#!/usr/bin/env python3", '"""Run the tool."""', "print(1)"])
         code, findings, out = self.comment_pass(diff)
         self.assertEqual([f.split(": ", 2)[:2] for f in findings],
-                         [["src/app.py:1", "comment"], ["src/app.py:3", "comment"], ["bin/tool:3", "workaround"]], out)
+                         [["src/app.py:1", "comment"], ["src/app.py:3", "comment"], ["bin/tool:3", "workaround"],
+                          ["bin/run:2", "comment"]], out)
         self.assertEqual(self.comment_pass(diff, "--docs", "src/")[1], ["bin/tool:3: workaround: workaround for the "
                          "old runner Fix: " + "fix the cause, or turn the rule it guards into a test or a check (red "
                          "first), then delete the comment."])

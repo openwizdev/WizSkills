@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -178,6 +179,19 @@ class Conversation(unittest.TestCase):
         for words in ('ideas.md', 'teach.md', 'grill --confirmed', 'first-merge'):
             self.assertIn(words, text)
         self.assertNotRegex(text, r'(?i)exact-plan approval|approve the plan|demo repository \(recommended\)')
+
+    def test_the_owner_steers_through_the_orchestrator_never_by_video_comment(self):
+        # catches: the road teaching the owner to steer by commenting on the spec's video, which steers nothing
+        # until #1402 (decision 7030919773, #1358 comment 7031096002), or leaving the owner no way to steer
+        text = (SKILL_DIR / 'SKILL.md').read_text()
+        plan = text.split('### 7. Plan\n', 1)[1].split('\n### ', 1)[0]
+        self.assertIn('steers through the orchestrator', plan)
+        for name, words in (('SKILL.md', text), ('teach.md', TEACH)):
+            self.assertNotRegex(words, r'(?i)comment[^.\n]*\bto steer\b|\bsteer[^.\n]*\bby comment|stop, reset, or anything else',
+                                name)
+        for journey in ROAD['journeys']:
+            said = ' '.join(t.get('agent', '') for t in journey['turns'])
+            self.assertNotRegex(said, r'(?i)comment[^.]*\bsteer|\bsteer[^.]*comment', journey['name'])
 
     def test_each_road_follows_the_skills_steps_in_order(self):
         # catches: a road whose recorded steps skip, repeat or reorder the packaged skill's steps
@@ -410,6 +424,35 @@ class Launch(unittest.TestCase):
         self.assertEqual(result.returncode, 5, result.stdout)
         self.assertIn('exactly one `Host: <name>` line', result.stdout)
         self.assertEqual(road.spawns(), [])
+
+
+@unittest.skipUnless(WS17, WS17_WHY)
+class SteeringOff(unittest.TestCase):
+    """WS17 R2 (decision 7030919773): video comments steer nothing; fleet.sh says so once, and that is normal."""
+
+    def test_a_spec_with_its_video_and_the_one_time_notice_still_launches(self):
+        # catches: the road reading launch-fleet's one-time "steering is off" look, or a comment on the video, as a
+        # hold or an error, so a first fleet never starts
+        road = Road(self, next(j for j in ROAD['journeys'] if j['name'] == 'fresh-project'))
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
+        road.world = json.loads(road.world_path.read_text())
+        road.world['issues'][0]['comments'] += [
+            {'id': 90010, 'at': '2026-11-01T10:30:00Z', 'body': '[Watch the narrated spec](https://openwiz.dev/app/'
+             'videos/syn-900)\n\nComment here to steer: stop, reset, or anything else.'},
+            {'id': 90011, 'at': '2026-11-01T10:40:00Z', 'body': 'stop'}]
+        road.save_world()
+        notice = subprocess.run(['sh', str(SKILL_DIR.parent / 'launch-fleet/scripts/fleet.sh'), 'spec', '900'],
+                                env=road.env(), cwd=road.dir, capture_output=True, text=True, timeout=300)
+        self.assertEqual([line for line in notice.stdout.splitlines() if 'steer' in line],
+                         ['look #900: comments on the video steer nothing until the identity separation of OpenWiz '
+                          '#1402 is verified; the owner steers through the orchestrator'], notice.stdout + notice.stderr)
+        road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
+        preview = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(preview.returncode, 12, preview.stdout)
+        started = road.helper(['launch', '--spec', '900', '--yes', '--confirm',
+                               re.findall(r'(?m)^Confirmation: ([0-9a-f]{64})$', preview.stdout)[0]])
+        self.assertEqual(started.returncode, 0, started.stdout)
+        self.assertEqual(len(road.spawns()), 1)
 
 
 @unittest.skipUnless(WS17, WS17_WHY)

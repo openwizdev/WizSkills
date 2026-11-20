@@ -113,8 +113,10 @@ A report is **small and clear** only when every one of these holds:
 | **Held for the owner** | Any code fails, or triage can't tell | Labels exactly `feedback` and `needs-triage`; no milestone | No brief. Triage's short note goes to the owner's private queue, never to the report |
 
 A brief copies no link, command or code from the report. The fix's pull
-request closes both the brief and the report (`Closes #<brief>`,
-`Closes #<report>`).
+request closes both the brief and the report with one line each, in full,
+`Closes openwizdev/OpenWiz#<brief>` and `Closes openwizdev/OpenWiz#<report>`,
+whichever `openwizdev` repository the pull request is in. A bare `Closes #<n>`
+closes an issue in the pull request's own repository, never on the destination.
 
 ## The report link
 
@@ -195,6 +197,7 @@ These prove the rules on fixtures only, never a live report.
   },
   "report_link": "^Report: #([1-9][0-9]*)$",
   "version": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+  "closing": "^Closes openwizdev/OpenWiz#([1-9][0-9]*)$",
   "pull_request": "^openwizdev/[A-Za-z0-9._-]+#[1-9][0-9]*$",
   "landed": "Landed: the fix for this report merged in {pull_request} and will ship in OpenWiz {version}."
 }

@@ -81,7 +81,9 @@ PRIVATE = (
     ('a CloudRoom id', re.compile(r'(?<![A-Za-z0-9])(?:proj|prj|mch|usr|acct|auto|cr)_[A-Za-z0-9]', re.I)),
     ('a machine path', re.compile(
         r'(?<![\w.:/~-])(?:~/|/(?:Users|home|root|tmp|var|private|mnt|Volumes|opt|srv|code)(?:/|\b))', re.I)),
-    ('a machine path', re.compile(r'(?<![A-Za-z0-9])[A-Za-z]:\\')),
+    ('a machine path', re.compile(r'(?<![A-Za-z0-9])[A-Za-z]:[\\/]')),
+    # #1384: an scp-style host:/part/part; a URL's scheme is followed by //, not a part.
+    ('a machine path', re.compile(r'[\w.-]:/[\w.~+-]+/[\w.~+-]')),
     # R3: any absolute path of two or more parts; a URL's own path is preceded by its host.
     ('a machine path', re.compile(r'(?<![\w.:/~@%$}\\-])/[\w.~+-]+/[\w.~+-]')),
     ('a machine path', re.compile(r'\$\{?HOME\b|%(?:USERPROFILE|HOMEPATH|HOMEDRIVE|APPDATA|LOCALAPPDATA)%', re.I)),
@@ -89,7 +91,7 @@ PRIVATE = (
     ('a machine path', re.compile(r'\bfile:', re.I)),
     ('a credential', re.compile(
         r'\b(?:[a-z_]*token|[a-z_]*key|secret|password|passwd|pwd|sig|signature|auth|credentials?)\s*=', re.I)),
-    ('a credential', re.compile(r'\b(?:password|passwd|secret|token)\s*:\s*\S|\bbearer\s+\S', re.I)),
+    ('a credential', re.compile(r'\b(?:password|passwd|secret|[a-z_]*token|[a-z_]*key|auth)\s*:\s*\S|\bbearer\s+\S', re.I)),
     ('a credential', re.compile(r'\bgh[pousr]_[A-Za-z0-9]{8,}|\bgithub_pat_|\bAKIA[0-9A-Z]{16}\b'
                                 r'|\bxox[abprs]-|\bsk-[A-Za-z0-9_-]{16,}')),
 )

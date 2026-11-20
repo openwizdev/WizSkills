@@ -57,12 +57,12 @@ Write `storyboard.json` in a work folder outside any repo, as
   sharing needs publication authority. Confirm playback there, then
   `node "<this skill's folder>/scripts/animatic.mjs" link "$url"` gives the line.
 - Post it as a spec comment, never in the body (that would change the plan's
-  fingerprint): the link, then `Comment here to steer: stop, reset, or anything else.`
+  fingerprint): the link, then `Steering by comment is off for now: tell your orchestrator what to change (stop, reset, or anything else).`
 
 ## 5. Steer
 
-The owner's comments on the video steer the fleet (launch-fleet reads them):
-stop holds it, reset re-cuts the plan through
+Steering by comment is off for now (until OpenWiz #1402), so the owner steers
+through their orchestrator: stop holds the fleet, reset re-cuts the plan through
 [the hold-first procedure](../to-tickets/changes.md) and makes a new video, and
 anything else is a steer to act on. A changed spec or plan always gets a new
 machine approval and a new video.

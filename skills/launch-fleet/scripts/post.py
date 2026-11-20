@@ -88,7 +88,7 @@ def comment(repo, number, body):
         raise Stop(f'unknown: #{number} could not be read before writing; nothing was written')
     seen = {c.get('id') for c in before}
     made = read_json('api', '--method', 'POST', f'repos/{repo}/issues/{number}/comments', '-f', f'body={body}')
-    if not isinstance(made, dict) or made.get('id') is None:
+    if not isinstance(made, dict) or type(made.get('id')) is not int:
         # Without a receipt nothing ties a new identical record to this write:
         # another wake may have posted it under the same login (#1555).
         raise Stop(f'unknown: the write on #{number} returned no receipt, so no record is adopted; '

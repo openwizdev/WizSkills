@@ -338,18 +338,22 @@ class Failures(unittest.TestCase):
         self.assertEqual(p.fleet_notes(), [STOPPED, 'done'])
         self.assertEqual([first for first, _ in p.failures()], [MARK + ', cleared'])
 
-    def test_no_fleet_identity_starts_or_wakes_nothing(self):
+    def test_no_fleet_identity_still_starts_retries_and_comments_but_writes_no_note(self):
+        # J87 planner ruling, relayed by the fleet manager: unset identity skips only the fleet note, with a warning.
         p = Project(self)
-        code, out, err = p.host('start', REPO, 7, 'claude', 'm', LAUNCH_FLEET_SKILLS='')
-        self.assertEqual((code, out), (2, ''))
-        self.assertIn('LAUNCH_FLEET_SKILLS', err)
-        self.assertEqual(p.calls(), [])
-        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm')[0], 0)
-        code, out, err = p.host('wake', REPO, 7, LAUNCH_FLEET_HARNESS='')
-        self.assertEqual((code, out), (2, ''))
-        self.assertIn('LAUNCH_FLEET_HARNESS', err)
-        self.assertEqual([c['command'] for c in p.calls()], ['start'])
-
+        unset = dict(LAUNCH_FLEET_HARNESS='', LAUNCH_FLEET_MODEL='', LAUNCH_FLEET_SKILLS='')
+        code, out, err = p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse', **unset)
+        self.assertEqual((code, out), (1, '%s: the local driver refused #7\'s start 3 times; next: %s' % (STOPPED, NEXT)))
+        self.assertEqual([c['command'] for c in p.calls()], ['start'] * 3)
+        self.assertEqual(p.fleet_notes(), [])
+        self.assertEqual(p.failures(), [(MARK, "The local driver could not start this ticket's builder after 3 "
+                                               "tries. What it says to do next: " + NEXT)])
+        self.assertEqual(err, 'host.py: warning: LAUNCH_FLEET_HARNESS, LAUNCH_FLEET_MODEL, LAUNCH_FLEET_SKILLS '
+                              'unset, so the fleet status note was not written')
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', **unset)[:2], (0, 'started #7 on local'))
+        self.assertEqual([first for first, _ in p.failures()], [MARK + ', cleared'])
+        self.assertEqual(p.fleet_notes(), [])
+        self.assertEqual(p.host('wake', REPO, 7, LAUNCH_FLEET_MODEL=''), (0, 'woke #7 on local', ''))
 
 if __name__ == '__main__':
     unittest.main()

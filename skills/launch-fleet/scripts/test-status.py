@@ -1132,8 +1132,9 @@ class WakeRepair(Tracker):
 
     def test_a_repair_whose_read_after_its_label_write_fails_is_settled_by_the_next_wake(self):
         # catches: a label the repair wrote as the builder resumed, left on the ticket because the
-        # read after the write failed, and never looked at again (#68 R1). Under one shared login
-        # the next wake can't tell it from a person's, so it reports it and leaves it (#1702).
+        # read after the write failed, and never looked at again (#68 R1). Changed by #1702: the
+        # next wake no longer deletes it (a label from an earlier wake may be a person's hold),
+        # so it reports it and leaves it. Keeper: this test, which still fails if it is never reported.
         resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
         failing = {'fail_once': f'GET repos/{REPO}/issues/12/comments?per_page=100&page=1'}
         self.asking_on_12(race_label=[resume, failing])

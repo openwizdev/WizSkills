@@ -750,6 +750,8 @@ class ModelsTable(unittest.TestCase):
             'second table': ('| Effort | Medium | `--reasoning-level medium` |\n\n## Builder for',
                              '| Effort | Medium | `--reasoning-level medium` |\n\nText.\n\n| A | B | C |\n\n'
                              '## Builder for'),
+            'one table split by text': ('| Model | Opus 5.5 | `--model claude-opus-5-5` |\n| Effort',
+                                        '| Model | Opus 5.5 | `--model claude-opus-5-5` |\n\nText.\n\n| Effort'),
             'wrong header': ('## Builder\n\nOne per ticket, on its own branch.\n\n| Setting | Value | '
                              '`room-cli thread spawn` flag |', '## Builder\n\nOne per ticket, on its own branch.'
                              '\n\n| Setting | Value | Flag |'),

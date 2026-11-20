@@ -2,51 +2,17 @@
 
 Every fleet in this project starts from these settings. The fleet skills read this file instead of naming any project's agents, commands or rules. Each value names its source; when a source changes, run the `setup` skill again (or edit the line by hand) so the two agree.
 
-## Builder
+## Models
 
-One per ticket. It builds its ticket on its own branch, and never reviews or merges.
+One table for every agent the fleet starts, in the models contract's form (`openwiz.models.v1`). The Orchestrator starts each spec's fleet thread. The Builder builds each ticket on its own branch, and never reviews or merges. The Reviewer reviews each pull request's exact head, and never edits. The Small builder (tickets with an exact `polish`, `huntr` or `proposal` label) and the Fixer follow the Builder unless their row names a choice of its own. A pull request is reviewed by the other model family than its builder: the Reviewer, or the Builder when the Reviewer is the builder's family; otherwise the review waits, and is never swapped for another model. Change a row with `openwiz models set`, or edit it by hand.
 
-| Setting | Value | `room-cli thread spawn` flag |
-| --- | --- | --- |
-| Harness | <harness, for example Claude Code> | `--provider <id>` |
-| Model | <model, for example Opus 5.5> | `--model <id>` |
-| Effort | <effort, for example XHigh> | `--reasoning-level <level>` |
-
-Source: <a linked source file, or decider, date and plain decision with a Markdown private-record comment link>.
-
-## Builder for small tickets
-
-Tickets with an exact `polish`, `huntr` or `proposal` label use this table; every other ticket uses `## Builder`.
-
-| Setting | Value | `room-cli thread spawn` flag |
-| --- | --- | --- |
-| Harness | <harness, for example Codex> | `--provider <id>` |
-| Model | <model, for example Sol 6.1> | `--model <id>` |
-| Effort | <effort, for example High> | `--reasoning-level <level>` |
-
-Source: <a linked source file, or decider, date and plain decision with a Markdown private-record comment link>.
-
-## Reviewer for Claude-built
-
-One per pull request, from a different model family than the builder. It reviews the exact head and never edits. If it can't be started, the review waits: it is never swapped for another model.
-
-| Setting | Value | `room-cli thread spawn` flag |
-| --- | --- | --- |
-| Harness | Codex | `--provider codex` |
-| Model | <model, for example Sol 6.1> | `--model <id>` |
-| Effort | <effort, for example High> | `--reasoning-level <level>` |
-
-Source: <a linked source file, or decider, date and plain decision with a Markdown private-record comment link>.
-
-## Reviewer for GPT-built
-
-Use the verified builder's provider, from its branch-matching `start checked` record and that exact thread's provider read. Unknown or conflicting family waits; existing reviewers retain their thread.
-
-| Setting | Value | `room-cli thread spawn` flag |
-| --- | --- | --- |
-| Harness | Claude Code | `--provider claude-code` |
-| Model | <model, for example Opus 5.5> | `--model <id>` |
-| Effort | <effort, for example High> | `--reasoning-level <level>` |
+| Role | Harness | Model | Effort | `room-cli thread spawn` flags |
+| --- | --- | --- | --- | --- |
+| Orchestrator | <harness, for example Claude Code> | <model, for example Opus 5.5> | <effort, for example Medium> | `--provider <id> --model <id> --reasoning-level <level>` |
+| Builder | <harness, for example Claude Code> | <model, for example Opus 5.5> | <effort, for example Medium> | `--provider <id> --model <id> --reasoning-level <level>` |
+| Reviewer | <harness from the other family, for example Codex> | <model, for example Sol 6.2> | <effort, for example Medium> | `--provider <id> --model <id> --reasoning-level <level>` |
+| Small builder | follows Builder | | | |
+| Fixer | follows Builder | | | |
 
 Source: <a linked source file, or decider, date and plain decision with a Markdown private-record comment link>.
 

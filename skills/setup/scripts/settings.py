@@ -6,7 +6,8 @@
 Reads the four files in DIR/docs/agents/ (default: the current folder) and
 names each missing or unsafe setting: a missing file or section, a builder or
 reviewer table or Fixer family row without each of its three flags exactly
-once as one token, a template placeholder, a reviewer from the builder's model family, not exactly
+once as one token, a template placeholder, a reviewer from the builder's model family, a
+`## Models` table outside the models contract's form (openwiz.models.v1, #1807), not exactly
 one valid Record authors row, or a triage role without exactly one label. FILE is the saved output of
 `gh label list --limit 500 --json name`; with it, each mapped label must exist
 in the tracker exactly once. It writes nothing and runs nothing.
@@ -30,6 +31,11 @@ ROLES = ('needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wo
 # The whole Record authors cell, as the review and launch-fleet readers take it.
 LOGIN = r'`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`'
 CELL = re.compile(r'\s*%s(?:\s*,\s*%s)*\s*' % (LOGIN, LOGIN))
+# The models contract's table (openwiz.models.v1): its header, rows and one ids rule.
+MODELS_HEADER = ['Role', 'Harness', 'Model', 'Effort', '`room-cli thread spawn` flags']
+MODEL_ROWS = ('Orchestrator', 'Builder', 'Reviewer', 'Small builder', 'Fixer')
+ID = r'[A-Za-z0-9._-]+'
+FLAGS_CELL = re.compile(r'`--provider (%s) --model (%s(?:/%s)*) --reasoning-level (%s)`' % (ID, ID, ID, ID))
 USAGE = 'usage: settings.py check [--root DIR] [--labels FILE]'
 
 
@@ -63,6 +69,60 @@ def sections(text, exact=False):
     return found
 
 
+def cells(line):
+    return [cell.strip() for cell in line.strip()[1:-1].split('|')] if line.strip().endswith('|') else None
+
+
+def models(text):
+    """The `## Models` table as {role: (provider, model, effort), or None when it follows}; None without one.
+
+    Raises ValueError whose one argument lists each break of the models
+    contract: the first structural one, or every row's. The table is the
+    section's first table.
+    """
+    lines = text.split('\n')
+    headings = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Models']
+    if not headings:
+        return None
+    if len(headings) > 1:
+        raise ValueError(['more than one ## Models heading'])
+    rows = []
+    for line in lines[headings[0] + 1:]:
+        if line.startswith('## '):
+            break
+        if line.startswith('|'):
+            rows.append(line)
+        elif rows:
+            break
+    if len(rows) < 2 or cells(rows[0]) != MODELS_HEADER or cells(rows[1]) != ['---'] * 5:
+        raise ValueError(["the header is not the contract's"])
+    body = [cells(row) for row in rows[2:]]
+    names = [row[0] if row and len(row) == 5 else None for row in body]
+    if names[:3] != list(MODEL_ROWS[:3]) or names[3:] not in ([], ['Small builder'], ['Fixer'],
+                                                             ['Small builder', 'Fixer']):
+        raise ValueError(['rows not Orchestrator, Builder, Reviewer, then optional Small builder, Fixer'])
+    found, broken = {}, []
+    for role, harness, model, effort, flags in body:
+        match = FLAGS_CELL.fullmatch(flags)
+        if harness == 'follows Builder':
+            found[role] = None
+            if role not in MODEL_ROWS[3:]:
+                broken.append('%s: only Small builder and Fixer may follow' % role)
+            elif model or effort or flags:
+                broken.append('%s: a following row has empty Model, Effort and flags' % role)
+        elif re.search(r'<[^>]*>', ''.join((harness, model, effort, flags))):
+            broken.append('%s: unfilled' % role)
+        elif not (harness and model and effort):
+            broken.append('%s: Harness, Model and Effort need names' % role)
+        elif not match:
+            broken.append('%s: the flags are not one exact `--provider --model --reasoning-level`' % role)
+        else:
+            found[role] = match.groups()
+    if broken:
+        raise ValueError(broken)
+    return found
+
+
 def token(flag):
     return r'(?<![\w-])--%s(?![\w-])' % flag
 
@@ -85,7 +145,19 @@ def fixer(body, problems):
 
 def fleet(text, problems):
     found, exact = sections(text), sections(text, exact=True)
-    for title in SECTIONS:
+    try:
+        table = models(text)
+    except ValueError as error:
+        problems.extend('fleet.md: Models: %s' % line for line in error.args[0])
+        table = False  # refused: never read past it to the older tables
+    if table:
+        builder, reviewer = table['Builder'][0], table['Reviewer'][0]
+        if reviewer not in FAMILY:
+            problems.append('fleet.md: Models: Reviewer: %s has no known model family' % reviewer)
+        elif FAMILY[reviewer] == FAMILY.get(builder):
+            problems.append('fleet.md: Models: Reviewer: %s is not from another model family than the Builder'
+                            % reviewer)
+    for title in SECTIONS if table is None else SECTIONS[len(TABLES):]:
         if title not in (exact if title == 'GitHub identity' else found):
             problems.append('fleet.md: no ## %s section' % title)
     for title in TABLES:

@@ -66,8 +66,9 @@ def served(issue):
     return {'data': {'repository': {'issue': issue}}}
 
 
-def a_map(n, questions, total=None, after=None):
+def a_map(n, questions, total=None, after=None, labels=('wayfind:map',)):
     return served({'number': n, 'title': 'Synthetic map', 'state': 'OPEN',
+                   'labels': conn([{'name': name} for name in labels]),
                    'subIssues': conn(questions, total, after)})
 
 
@@ -127,6 +128,20 @@ class FrontierTest(unittest.TestCase):
         # catches: an empty frontier read as "nothing to do" when questions
         # remain open, or a clear map mistaken for an unread one.
         result, _ = self.run_script({'2': a_map(2, [question(20, state='CLOSED')])}, 'map', '2')
+        self.assertEqual((result.returncode, result.stdout), (0, 'no open question\n'))
+
+    def test_an_issue_without_the_map_label_is_never_a_clear_map(self):
+        # catches #1617: an ordinary issue (or one whose label is only a
+        # question's kind) read as a map, so `no open question` admits to-spec.
+        cases = {'ordinary issue': a_map(3, [], labels=()),
+                 'other labels only': a_map(3, [question(30)], labels=('bug', 'wayfind:grill')),
+                 'no labels field': served({'number': 3, 'subIssues': conn([])})}
+        for name, issue in cases.items():
+            with self.subTest(name):
+                result, _ = self.run_script({'3': issue}, 'map', '3')
+                self.assertEqual((result.returncode, result.stdout), (2, ''))
+                self.assertTrue(result.stderr.startswith('frontier: '), result.stderr)
+        result, _ = self.run_script({'3': a_map(3, [], labels=('bug', 'wayfind:map'))}, 'map', '3')
         self.assertEqual((result.returncode, result.stdout), (0, 'no open question\n'))
 
     def test_earliest_unreleased_claim_holds(self):
@@ -192,7 +207,12 @@ class FrontierTest(unittest.TestCase):
         # catches #1508: a missing or malformed Record authors row read as
         # "anyone may claim" instead of refusing the read.
         for name, text in {'no fleet file': None, 'no row': '# Fleet\n\n## GitHub identity\n\n',
-                           'malformed row': '# Fleet\n\n## GitHub identity\n\n| Record authors | x y |\n'
+                           'malformed row': '# Fleet\n\n## GitHub identity\n\n| Record authors | x y |\n',
+                           # catches #1696: an extra column after the logins read as their cell.
+                           'extra column': FLEET.replace('`Synthetic-Recorder` |',
+                                                         '`Synthetic-Recorder` | synthetic note |'),
+                           'text after the row': FLEET.replace('`Synthetic-Recorder` |',
+                                                               '`Synthetic-Recorder` | synthetic'),
                            }.items():
             with self.subTest(name):
                 fixture = {'fleet': fleet(text), '9': served(question(9, comments=[(100, CLAIM)]))}

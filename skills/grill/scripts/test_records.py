@@ -229,6 +229,25 @@ class Records(unittest.TestCase):
         self.assertEqual(result.stdout, b"verified request 81 (open)\n")
         self.assertEqual(self.state()["writes"], 2)
 
+    def test_same_id_refuses_a_changed_or_superseded_request(self):
+        # catches #1252: a reused request id reporting `verified request` for
+        # a saved proposal whose wording changed, or one already superseded.
+        changed = ROUND.replace("Use text.", "Use CSV.")
+        for name in ("changed wording", "superseded"):
+            with self.subTest(name):
+                self.setUp()
+                self.publish()
+                if name == "superseded":
+                    self.assertEqual(self.call("supersede", "81").returncode, 0)
+                else:
+                    self.write_state(source=self.encoded(changed))
+                writes = self.state()["writes"]
+                result = self.call("publish", "round-one")
+                self.assertEqual((result.returncode, result.stdout), (2, b""))
+                self.assertIn(b"existing request differs", result.stderr)
+                self.assertEqual(self.state()["writes"], writes)
+                self.assertEqual(len(self.state()["comments"]), 1)
+
     def test_ambiguous_absent_response_never_issues_second_post(self):
         self.write_state(lose=True, drop=True)
         for _ in range(2):

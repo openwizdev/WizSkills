@@ -570,9 +570,9 @@ scenario('D5 a controller paused after claiming cannot record past its live leas
 test('W1 the last wake and a pause after claiming finish with release; record only without a live lease', () => {
   const skill = readFileSync(join(here, '../SKILL.md'), 'utf8');
   const section = heading => skill.split(`\n${heading}\n`)[1].split('\n## ')[0].replace(/\s+/g, ' ');
-  assert.match(section('## On every wake'), /every slice is reported or blocked[^.]*\bfinish the hunt \(step 5\) with `release`/i);
-  assert.match(section('## 1. Check whether to hunt'), /`hunt: false` ends the hunt as paused[^.]*step 5[^.]*`release`/);
-  assert.match(section('## 5. Record the result and finish this hunt'), /`record` only when this run holds no live lease/);
+  assert.match(section('## On every wake'), /every slice is reported or blocked[^.]*\bfinish the hunt \(step 5\)/i);
+  assert.match(section('## 1. Check whether to hunt'), /`hunt: false` ends the hunt as paused: finish it \(step 5\)/);
+  assert.match(section('## 5. Record the result and finish this hunt'), /to finish the hunt, `lease\.mjs finish <run> <index>`/);
   assert.doesNotMatch(section('## 5. Record the result and finish this hunt'), /`record` \(off, paused, blocked/);
 });
 
@@ -585,7 +585,7 @@ scenario('D6 due: an unreadable switch issue exits 3, never the lost-lease exit 
   const unread = w.run(lease, ['due', 'synthetic-final', 'hunter']);
   assert.equal(unread.status, 3, unread.stderr);
   assert.equal(unread.stdout, '');
-  assert.match(unread.stderr, /switch issue read failed: the lease is unknown, so end the turn and retry on the next wake/);
+  assert.match(unread.stderr, /switch issue read failed: the lease is unknown, so file nothing this wake/);
   w.state.readFailure = false;
   assert.equal(JSON.parse(w.run(lease, ['due', 'synthetic-final', 'hunter']).stdout).holder.run, 'synthetic-final');
   const {r: published} = publish(w, {run: 'synthetic-final', slices: [], gaps: []});
@@ -606,8 +606,82 @@ test('W2 an unreadable wake retries instead of recording, and a dispatch with no
   const skill = readFileSync(join(here, '../SKILL.md'), 'utf8');
   const section = heading => skill.split(`\n${heading}\n`)[1].split('\n## ')[0].replace(/\s+/g, ' ');
   const wake = section('## On every wake');
-  assert.match(wake, /Exit 2 \(the lease is lost or taken\): file nothing more, post unfiled candidates as a step 5 `record`, and archive\./);
-  assert.match(wake, /Exit 3 \(unreadable\): change nothing and end the turn; the next wake retries\./);
+  assert.match(wake, /Exit 2 \(the lease is lost or taken\): file nothing more, put unfiled candidates in the record and finish the hunt \(step 5\)\./);
+  assert.match(wake, /Exit 3 \(unreadable\): file nothing this wake; go on with steps 3 and 4, and end the turn only while hunters are still running or queued\./);
   assert.match(section('## 2. Plan and dispatch hunters'),
-    /If no slice is running or queued \(every slice blocked\), finish the hunt now \(step 5\) with `release`\. Otherwise end the turn\./);
+    /If no slice is running or queued \(every slice blocked\), finish the hunt now \(step 5\)\. Otherwise end the turn\./);
+  const finish = section('## 5. Record the result and finish this hunt');
+  assert.match(finish, /Exit 3 means nothing was confirmed posted: finalization is pending\. Keep the record and index in resumable state, stay open and rerun `finish` on the next wake; it reuses an index already posted\./);
+  assert.match(finish, /If no wake comes, the lease expires 45 minutes after its last renewal and the next scheduled controller resumes from the latest verified record\./);
+});
+
+// WS23 planner's call on review R1 (#1656): the terminal write needs no wake after it. `finish` reads
+// the lease a bounded number of times, releases while this run holds it, records after a confirmed
+// loss, and when the lease stays unreadable still posts the index under a release line: a release
+// line frees only its own run's lease, so it is safe whoever holds the lease.
+const readsOf = w => w.calls().filter(c => c[0] === 'api').length;
+function finalWorld(w, comments = [{id: 100, ...on}]) {
+  w.env.HUNTR_LEASE_RETRY_MS = '0';
+  w.state.comments = comments;
+  const {r} = publish(w, {run: 'synthetic-final', slices: [], gaps: []});
+  assert.equal(r.status, 0, r.stderr);
+  return {file: join(w.dir, 'index.md'), text: readFileSync(join(w.dir, 'index.md'), 'utf8')};
+}
+const finish = w => w.run(lease, ['finish', 'synthetic-final', join(w.dir, 'index.md')]);
+scenario('F1 finish after a brief read failure on the last wake releases the held lease and posts the final index', w => {
+  w.state.comments = [{id: 100, ...on}];
+  assert.equal(w.run(lease, ['claim', 'synthetic-final']).status, 0);
+  const {text} = finalWorld(w, w.state.comments);
+  w.state.readFailures = 2;
+  const r = finish(w);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), {finished: 'release', verified: true, comment: w.state.comments.at(-1).id, holder: null});
+  assert.equal(w.state.comments.at(-1).body, `huntr lease: release synthetic-final\n\n${text}`);
+  assert.equal(w.run(lease, ['claim', 'synthetic-next']).status, 0);
+});
+scenario('F2 finish while the lease stays unreadable reads it a bounded four times, posts under a release line and frees only its own lease', w => {
+  for (const [holder, after] of [['synthetic-final', null], ['synthetic-other', 'synthetic-other']]) {
+    w.state = {comments: [{id: 100, ...on}]};
+    rmSync(w.env.HUNTR_FAKE_LOG, {force: true});
+    assert.equal(w.run(lease, ['claim', holder]).status, 0);
+    const {text} = finalWorld(w, w.state.comments);
+    w.state.readFailure = true;
+    const reads = readsOf(w);
+    const r = finish(w);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readsOf(w) - reads, 4, 'four reads, then it stops reading');
+    assert.deepEqual(JSON.parse(r.stdout), {finished: 'release', verified: false, comment: w.state.comments.at(-1).id});
+    assert.equal(w.state.comments.at(-1).body, `huntr lease: release synthetic-final\n\n${text}`);
+    w.state.readFailure = false;
+    assert.equal(JSON.parse(w.run(lease, ['status']).stdout).holder?.run ?? null, after, holder);
+  }
+});
+scenario('F3 finish after a confirmed loss records the index without a lease line', w => {
+  const {text} = finalWorld(w, [{id: 100, ...on}, {id: 101, created_at: at(-10), body: claimLine('synthetic-other')}]);
+  const r = finish(w);
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.finished, 'record');
+  assert.equal(out.holder.run, 'synthetic-other');
+  assert.equal(w.state.comments.at(-1).body, text);
+});
+scenario('F4 finish with GitHub down keeps finalization pending, and a rerun reuses an index already posted', w => {
+  w.state.comments = [{id: 100, ...on}];
+  assert.equal(w.run(lease, ['claim', 'synthetic-final']).status, 0);
+  finalWorld(w, w.state.comments);
+  Object.assign(w.state, {readFailure: true, postFailure: true});
+  const posts = w.posts().length;
+  const down = finish(w);
+  assert.equal(down.status, 3);
+  assert.equal(down.stdout, '');
+  assert.match(down.stderr, /finalization pending: nothing was confirmed posted; keep the index and rerun finish/);
+  Object.assign(w.state, {readFailure: false, postFailure: false});
+  const up = finish(w);
+  assert.equal(up.status, 0, up.stderr);
+  assert.equal(JSON.parse(up.stdout).finished, 'release');
+  const again = finish(w);
+  assert.equal(again.status, 0, again.stderr);
+  assert.deepEqual(JSON.parse(again.stdout), {finished: 'already', verified: true, comment: JSON.parse(up.stdout).comment, holder: null});
+  assert.equal(w.posts().length, posts + 2, 'one failed post, one release, no duplicate');
+  assert.equal(w.run(lease, ['claim', 'synthetic-next']).status, 0);
 });

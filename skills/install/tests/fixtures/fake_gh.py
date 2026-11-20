@@ -13,9 +13,19 @@ the repository but exits 1 with no answer, as a timed-out create. Creation and
 It also answers the launch's read of a spec's comments (#636: `api --paginate
 repos/R/issues/N/comments?per_page=100 --jq EXPR`) from launch-fleet's synthetic
 world, through jq as gh does, or fails it when $FAKE_GH_COMMENTS_FAIL is set.
+The onboarding road (#1358) adds the host setting pull request and the first
+merge's read-back, from the same launch-fleet world: its `default` branch's
+`files`, `branches` (name to files), `host_pulls` and `onboard_pulls`; `put_fails` makes every
+contents write fail; `edit_after_read` (branch to path to text) is another writer's edit landing
+once, right after that file is next read on that branch. Blob SHAs are git's, and a contents write
+naming another blob than the file's current one is refused, as GitHub does. `compare/BASE...HEAD`
+lists each file a branch adds, changes or deletes against the default branch. When
+$FAKE_GH_ARGV_LOG is set, every call is logged there as one JSON line.
 Every other call goes to launch-fleet's fake gh unchanged, which refuses writes.
 All values are synthetic.
 """
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -98,7 +108,119 @@ def default_ref(target, name, branch):
     return 0 if status == 200 else 1
 
 
+def blob_sha(text):
+    data = text.encode()
+    return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+
+
+def road(argv):
+    """The host setting pull request and the first merge's read-back, or None when not one of their calls."""
+    path = Path(os.environ['FAKE_GH_WORLD'])
+    world = json.loads(path.read_text())
+    r = 'repos/%s' % world['repo']
+    branches, pulls = world.setdefault('branches', {}), world.setdefault('host_pulls', [])
+
+    def save():
+        path.write_text(json.dumps(world))
+
+    def http(status, body):
+        sys.stdout.write('HTTP/2.0 %d Fixture\r\nContent-Type: text/plain\r\n\r\n%s' % (status, body))
+        return 0 if status == 200 else 1
+
+    def edited(ref, name):  # another writer's edit, landing right after this read
+        edit = world.get('edit_after_read', {}).get(ref, {})
+        if name in edit:
+            branches[ref][name] = edit.pop(name)
+            save()
+
+    raw = ['-H', 'Accept: application/vnd.github.raw+json']
+    if argv[:2] == ['api', '--include'] and len(argv) in (3, 5) and argv[3:] in ([], raw):
+        match = re.fullmatch(re.escape(r + '/contents/') + r'([^?]+)(?:\?ref=(.+))?', argv[2])
+        if match:
+            files = world['files'] if match[2] in (None, world['default']) else branches.get(match[2])
+            if files is None or match[1] not in files:
+                return http(404, '{"message": "Not Found"}')
+            text = files[match[1]]
+            edited(match[2], match[1])
+            return http(200, text if argv[3:] else json.dumps({
+                'type': 'file', 'sha': blob_sha(text), 'encoding': 'base64',
+                'content': base64.b64encode(text.encode()).decode()}))
+    match = re.fullmatch(re.escape(r + '/compare/') + r'([^.]+)\.\.\.(.+)', argv[1]) if len(argv) == 2 else None
+    if match and argv[0] == 'api':
+        base, head = world['files'], branches.get(match[2])
+        if match[1] != world['default'] or head is None:
+            sys.stderr.write('gh: Not Found (HTTP 404)\n')
+            return 1
+        files = [{'filename': name, 'status': 'removed' if name not in head else 'added' if name not in base
+                  else 'modified'} for name in sorted(set(base) | set(head)) if base.get(name) != head.get(name)]
+        print(json.dumps({'status': 'ahead', 'files': files}))
+        return 0
+    if argv == ['api', r, '--jq', '.default_branch']:
+        print(world['default'])
+        return 0
+    match = re.fullmatch(re.escape(r + '/git/ref/heads/') + '(.+)', argv[1]) if len(argv) == 4 else None
+    if match and argv[0] == 'api' and argv[2:] == ['--jq', '.object.sha']:
+        if match[1] != world['default'] and match[1] not in branches:
+            sys.stderr.write('gh: Not Found (HTTP 404)\n')
+            return 1
+        print(('a' if match[1] == world['default'] else 'b') * 40)
+        return 0
+    if argv[:4] == ['api', '-X', 'POST', r + '/git/refs'] and len(argv) == 8:
+        name = argv[5][len('ref=refs/heads/'):]
+        if name in branches:
+            sys.stderr.write('gh: Reference already exists (HTTP 422)\n')
+            return 1
+        branches[name] = dict(world['files'])  # a new branch holds its base's files
+        save()
+        return 0
+    match = re.fullmatch(re.escape(r + '/contents/') + r'(docs/agents/[^?]+)', argv[3]) if len(argv) > 3 else None
+    if argv[:3] == ['api', '-X', 'PUT'] and match and len(argv) in (10, 12):
+        fields = dict(value.split('=', 1) for value in argv[5::2])
+        if world.get('put_fails'):
+            sys.stderr.write('gh: synthetic server error (HTTP 502)\n')
+            return 1
+        files = branches.get(fields['branch'])
+        if files is None or (match[1] in files) != ('sha' in fields) or (  # GitHub needs the sha to replace a file
+                match[1] in files and fields['sha'] != blob_sha(files[match[1]])):
+            sys.stderr.write('gh: sha mismatch (HTTP 409)\n')
+            return 1
+        files[match[1]] = base64.b64decode(fields['content']).decode()
+        save()
+        return 0
+    match = re.fullmatch(re.escape(r + '/contents/') + r'([^?]+)\?ref=(.+)', argv[1]) if len(argv) == 4 else None
+    if match and argv[0] == 'api' and argv[2:] == ['--jq', '.sha']:
+        if match[1] not in branches.get(match[2], {}):
+            sys.stderr.write('gh: Not Found (HTTP 404)\n')
+            return 1
+        print(blob_sha(branches[match[2]][match[1]]))
+        return 0
+    if argv[:2] == ['pr', 'list'] and argv[2:4] == ['--repo', world['repo']]:
+        head = argv[argv.index('--head') + 1]
+        print(json.dumps([{'url': p['url'], 'state': p['state']} for p in pulls if p['head'] == head]))
+        return 0
+    if argv[:2] == ['pr', 'create'] and argv[2:4] == ['--repo', world['repo']]:
+        head = argv[argv.index('--head') + 1]
+        if head not in branches or any(p['head'] == head for p in pulls):
+            return 1
+        pulls.append({'head': head, 'state': 'OPEN', 'url': 'https://github.com/%s/pull/%d' % (
+            world['repo'], 950 + len(pulls))})
+        save()
+        print(pulls[-1]['url'])
+        return 0
+    if argv[:2] == ['pr', 'view'] and argv[3:5] == ['--repo', world['repo']]:
+        found = [p for p in world.get('onboard_pulls', []) if p['number'] == int(argv[2])]
+        if not found:
+            sys.stderr.write('GraphQL: Could not resolve to a PullRequest\n')
+            return 1
+        print(json.dumps({k: found[0][k] for k in argv[6].split(',')}))
+        return 0
+    return None
+
+
 def main(argv):
+    if os.environ.get('FAKE_GH_ARGV_LOG'):
+        with open(os.environ['FAKE_GH_ARGV_LOG'], 'a') as log:
+            log.write(json.dumps(argv) + '\n')
     if argv == ['api', 'user', '--jq', '.login']:
         state = json.loads(Path(os.environ['FAKE_GH_REPOS']).read_text())
         if state.get('signed_out'):
@@ -112,6 +234,10 @@ def main(argv):
         match = re.fullmatch(r'repos/([^/]+/[^/]+)/git/ref/heads/(.+)', argv[4])
         if match:
             return default_ref(argv[4], match[1], match[2])
+    if os.environ.get('FAKE_GH_WORLD'):
+        answered = road(argv)
+        if answered is not None:
+            return answered
     if argv[:2] == ['api', '--paginate'] and len(argv) == 5 and argv[3] == '--jq':
         match = re.fullmatch(r'repos/([^/]+/[^/]+)/issues/([0-9]+)/comments\?per_page=100', argv[2])
         world = json.loads(Path(os.environ['FAKE_GH_WORLD']).read_text())

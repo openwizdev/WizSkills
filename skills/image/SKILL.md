@@ -1,7 +1,7 @@
 ---
 name: image
 description: Generate or edit pictures, make the target picture a visible UI change needs before it is built, and capture real pages at phone and desktop widths. Use for image generation, UI targets and review, diagrams, charts, and hill-climb's per-round pictures and screenshots; for running the climb itself, use hill-climb.
-version: 0.2.0
+version: 0.2.1
 ---
 
 # Pictures and UI

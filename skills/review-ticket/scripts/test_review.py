@@ -773,5 +773,162 @@ class Review(unittest.TestCase):
                 self.assertEqual(self.state()["writes"], 0)
 
 
+COMMENTS = Path(__file__).with_name("comments.py")
+CHECKER = Path(__file__).with_name("fixtures") / "comment-check" / "check.py"
+SHA = "1234567890" * 4
+
+
+class CommentPass(unittest.TestCase):
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.repo)])
+        self.git("init", "-q")
+        self.write({"tools/comment-check/check.py": CHECKER.read_text(encoding="utf-8"),
+                    "old.py": "x = 1  # workaround kept from before\n"})
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "base")
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Builder", "-c", "user.email=b@example.com",
+                        *args], check=True, capture_output=True)
+
+    def write(self, files):
+        for name, text in files.items():
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+
+    def comment_pass(self, files, *args):
+        self.write(files)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "head")
+        out = subprocess.run([sys.executable, "-I", str(COMMENTS), "--base", "HEAD^", "--repo", str(self.repo),
+                              *args], text=True, capture_output=True, timeout=60)
+        findings = [line for line in out.stdout.splitlines() if not line.startswith("check ")]
+        return out.returncode, findings, out.stdout + out.stderr
+
+    def kinds(self, files, *args):
+        code, findings, out = self.comment_pass(files, *args)
+        return code, [f.split(": ", 2)[:2] for f in findings], out
+
+    def assert_code_fix(self, finding):
+        fix = finding.split(" Fix: ", 1)[1]
+        self.assertRegex(fix, r"\b(name|extract|type|test|check|delete|remove|fix the cause)")
+        self.assertNotRegex(fix.lower(), r"reword|rephrase|clarify|shorten|rewrite the comment")
+
+    def test_a_justification_comment_is_a_finding_that_names_the_code_fix(self):
+        code, findings, out = self.comment_pass({"src/prices.py": (
+            "_cache = {}\n\n# We check the cache first on purpose: the suite timed out without it.\n"
+            "def lookup(sku):\n    return _cache.get(sku)\n")})
+        self.assertEqual(code, 1, out)
+        self.assertEqual(len(findings), 1, out)
+        self.assertTrue(findings[0].startswith("src/prices.py:3: justification: "), out)
+        self.assert_code_fix(findings[0])
+
+    def test_only_allowed_kinds_give_no_finding_and_each_gets_a_check_line(self):
+        code, findings, out = self.comment_pass({"tools/sync.py": (
+            "#!/usr/bin/env python3\n# SPDX-License-Identifier: MIT\nimport subprocess\n\n"
+            "# External: the vendor API rejects a batch over 100 items, https://example.com/vendor/limits\n"
+            "LIMIT = 100\n\n# SECURITY: the token never reaches the log; send() redacts it first.\nA = 1\n\n"
+            "# comment-ok: the synthetic runner reads this line as its job name\nB = 2\n"
+            "import os  # noqa: E402 -- the path is set up above\nURL = 'https://example.com/#anchor'\n")})
+        self.assertEqual((code, findings), (0, []), out)
+        for kind in ("2: licence", "5: external", "8: warning", "11: escape", "13: suppression"):
+            self.assertIn(f"check tools/sync.py:{kind}: ", out)
+
+    def test_a_workaround_comment_and_a_bare_suppression_are_findings(self):
+        code, kinds, out = self.kinds({"src/app.py": (
+            "import os\n# TODO: hack for now, the writer races the reader\nx = os.getcwd()\n"
+            "y = x.upper()  # type: ignore\n")})
+        self.assertEqual(kinds, [["src/app.py:2", "workaround"], ["src/app.py:4", "suppression"]], out)
+        for finding in out.splitlines():
+            self.assert_code_fix(finding)
+
+    def test_an_unearned_escape_tag_and_external_link_are_findings(self):
+        code, kinds, out = self.kinds({"src/app.py": (
+            "# comment-ok:\nA = 1\n# External: our runner, https://github.com/openwizdev/OpenWiz/issues/12\nB = 2\n")})
+        self.assertEqual(kinds, [["src/app.py:1", "escape-tag-reason"], ["src/app.py:3", "external-link"]], out)
+
+    def test_old_comments_never_count(self):
+        self.assertEqual(self.kinds({"old.py": "x = 2  # workaround kept from before\n"})[:2], (1, [
+            ["old.py:1", "workaround"]]))
+        self.assertEqual(self.kinds({"new.py": "y = 1\n"})[:2], (0, []))
+
+    def test_r1_spaced_and_accented_paths_are_read(self):
+        text = "# Workaround for the old runner\nprint(1)\n"
+        code, kinds, out = self.kinds({"task runner.py": text, "café.py": text})
+        self.assertEqual(sorted(kinds), [["café.py:1", "workaround"], ["task runner.py:1", "workaround"]], out)
+
+    def test_r2_script_yaml_docstring_and_pinned_action(self):
+        code, kinds, out = self.kinds({
+            "index.html": "<p>hi</p>\n<script>\n// Workaround for the old runner\n</script>\n"
+                          '<script type="application/json">\n{"a": "// not script"}\n</script>\n',
+            "config.yml": "text: |\n  # Shown to the user as text\n",
+            "tool.py": '# SPDX-License-Identifier: MIT\n"""Workaround for the old runner."""\nprint(1)\n',
+            ".github/workflows/check.yml": f"steps:\n  - uses: owner/action@{SHA} # v7.0.1\n"})
+        self.assertEqual(sorted(kinds), [["index.html:3", "workaround"], ["tool.py:2", "workaround"]], out)
+
+    def test_r3_two_block_comments_on_one_line_are_two_findings(self):
+        code, kinds, out = self.kinds({"app.js": (
+            "let a = /* first workaround */ 1, b = /* second workaround */ 2;\n"
+            "let c = /* SAFETY: synthetic invariant */ 1, d = /* third workaround */ 2;\n")})
+        self.assertEqual(kinds, [["app.js:1", "workaround"], ["app.js:1", "workaround"], ["app.js:2", "workaround"]],
+                         out)
+
+    def test_r4_licence_and_generated_files_are_excluded(self):
+        code, kinds, out = self.kinds({
+            "generated.py": "# @generated\n# Workaround for the old runner\nx = 1\n",
+            "LICENSE.py": "# Distribution terms\nx = 1\n",
+            "late.py": "x = 1\n" * 5 + "# DO NOT EDIT: workaround for the old runner\n"})
+        self.assertEqual(kinds, [["late.py:6", "workaround"]], out)
+
+    def test_a_repository_with_no_checker_gets_one_line(self):
+        self.git("rm", "-q", "tools/comment-check/check.py")
+        self.git("commit", "-q", "-m", "no checker")
+        code, findings, out = self.comment_pass({"src/app.py": "# workaround for the old runner\nx = 1\n"})
+        self.assertEqual((code, out.splitlines()), (3, [
+            "no checker: the base revision has no tools/comment-check/check.py and no --checker was given; "
+            "read the diff's comments yourself"]))
+
+    def test_another_checker_location_is_used_with_checker(self):
+        self.git("rm", "-q", "tools/comment-check/check.py")
+        self.git("commit", "-q", "-m", "no checker")
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(outside)])
+        (outside / "comments.py").write_text(CHECKER.read_text(encoding="utf-8"), encoding="utf-8")
+        code, kinds, out = self.kinds({"src/app.py": "# workaround for the old runner\nx = 1\n"},
+                                      "--checker", str(outside / "comments.py"))
+        self.assertEqual(kinds, [["src/app.py:1", "workaround"]], out)
+
+    def planted(self):
+        mark = Path(tempfile.mkdtemp()) / "ran"
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(mark.parent)])
+        return mark, f"import pathlib\npathlib.Path({str(mark)!r}).write_text('ran')\n"
+
+    def test_a_checker_the_pull_request_changes_never_runs(self):
+        mark, planted = self.planted()
+        code, kinds, out = self.kinds({"tools/comment-check/check.py": planted,
+                                       "src/app.py": "# workaround for the old runner\nx = 1\n"})
+        self.assertFalse(mark.exists(), "the pull request's checker ran")
+        self.assertEqual(kinds, [["src/app.py:1", "workaround"]], out)
+
+    def test_a_checker_the_pull_request_adds_never_runs(self):
+        self.git("rm", "-q", "tools/comment-check/check.py")
+        self.git("commit", "-q", "-m", "no checker")
+        mark, planted = self.planted()
+        code, findings, out = self.comment_pass({"tools/comment-check/check.py": planted,
+                                                 "src/app.py": "# workaround for the old runner\nx = 1\n"})
+        self.assertFalse(mark.exists(), "the pull request's checker ran")
+        self.assertEqual((code, len(out.splitlines())), (3, 1), out)
+        self.assertTrue(out.startswith("no checker: "), out)
+
+    def test_a_checker_inside_the_reviewed_checkout_is_refused(self):
+        mark, planted = self.planted()
+        code, findings, out = self.comment_pass({"lint/comments.py": planted},
+                                                "--checker", str(self.repo / "lint" / "comments.py"))
+        self.assertFalse(mark.exists(), "a checker from the reviewed checkout ran")
+        self.assertEqual((code, len(out.splitlines())), (2, 1), out)
+        self.assertTrue(out.startswith("refused: "), out)
+
 if __name__ == "__main__":
     unittest.main()

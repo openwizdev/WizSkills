@@ -270,7 +270,7 @@ class Failures(unittest.TestCase):
     def test_the_drivers_own_words_stay_in_the_owners_log_never_on_the_ticket(self):
         # The orchestrator's decision on R3 at 90aed73: no free text of the driver's ever reaches the ticket.
         p = Project(self)
-        words = 'reach svc:made-up-pass-44@driver.example.invalid, then ask the synthetic operator'
+        words = 'reach svc:made-up-pass-44@example.invalid, then ask the synthetic operator'
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse', FAKE_DRIVER_NEXT=words)[0], 1)
         world = json.dumps(p.github())
         for part in ('made-up-pass-44', 'synthetic operator', 'not signed in'):
@@ -333,10 +333,10 @@ class Failures(unittest.TestCase):
                  'a thread id': 'resume %s by hand' % thread, 'a machine path': 'edit /srv/synthetic/driver.conf',
                  'a secret value': 'use %s to sign in' % secret,
                  # R3 of the re-check at 004afb6: a URL's user info, password or not, from the driver's own config.
-                 'a URL password': 'sign in at https://svc-account:made-up-pass-42@driver.example.invalid/login',
-                 'a URL user': 'open ssh://made-up-user@driver.example.invalid to sign in',
+                 'a URL password': 'sign in at https://svc-account:made-up-pass-42@example.invalid/login',
+                 'a URL user': 'open ssh://made-up-user@example.invalid to sign in',
                  # The decision on R3: a schemeless endpoint, as libcurl guesses its protocol.
-                 'a schemeless URL password': 'set the endpoint to svc:made-up-pass-43@driver.example.invalid/api'}
+                 'a schemeless URL password': 'set the endpoint to svc:made-up-pass-43@example.invalid/api'}
         for name, text in leaks.items():
             with self.subTest(name):
                 p = Project(self)

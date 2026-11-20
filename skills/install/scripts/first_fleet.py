@@ -363,6 +363,71 @@ def saved_mode(env):
     return values[0] if values else None
 
 
+# Stub until KN3 pushes its setup step (security R6, option A): the same pick saved as a host-side approval
+# on the owner's machine, per repository and harness, outside the repository; KN3's start refuses unless the
+# fleet.md row matches it. Stubbed as one owner-only file in KN3's own state folder ($OPENWIZ_LOCAL_STATE,
+# default ~/.local/state/openwiz-local): {"owner/name": {"<harness program>": "<mode>"}}. Swap
+# approval_file(), host_approval() and approve_host() for KN3's command when it pushes.
+def approval_file(env):
+    folder = env.get('OPENWIZ_LOCAL_STATE') or os.path.expanduser('~/.local/state/openwiz-local')
+    return Path(folder) / 'approvals.json'
+
+
+def read_approvals(env):
+    path = approval_file(env)
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        raise Exit(1, "This machine's host-side approvals are unreadable; " + NOTHING)
+    try:
+        assert stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077
+        value = strict(path.read_text(encoding='utf-8'))
+        assert isinstance(value, dict) and all(
+            re.fullmatch(REPOSITORY, repo) and isinstance(modes, dict) and all(
+                isinstance(h, str) and isinstance(m, str) and re.fullmatch(MODE_VALUE, m) for h, m in modes.items())
+            for repo, modes in value.items())
+        return value
+    except (OSError, ValueError, AssertionError):
+        raise Exit(1, "This machine's host-side approvals (%s) must be one owner-only JSON file in KN3's form; "
+                      '%s' % (path, NOTHING))
+
+
+def host_approval(env, repo, program):
+    """The mode this machine approves for this repository and harness, or None."""
+    return read_approvals(env).get(repo, {}).get(program)
+
+
+def approve_host(env, repo, program, picked):
+    """Save the owner's pick as this machine's approval; never change or widen one already saved."""
+    approvals = read_approvals(env)
+    have = approvals.get(repo, {}).get(program)
+    if have == picked:
+        return
+    if have is not None:
+        raise Exit(5, 'This machine already approves %s for %s with %s; OpenWiz never changes or widens it. Ask the '
+                      'owner which mode they mean; nothing recorded.' % (have, repo, program))
+    approvals.setdefault(repo, {})[program] = picked
+    path = approval_file(env)
+    temp = None
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, temp = tempfile.mkstemp(prefix='approvals.', suffix='.new', dir=path.parent)
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            json.dump(approvals, handle, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    except OSError:
+        if temp is not None:
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
+        raise Exit(10, "Could not save this machine's host-side approval; nothing recorded.")
+
+
 def mode_section(picked):
     return ('\n## Harness permission mode\n\nThe mode the owner picked for builders on this machine; the local '
             'driver passes it to the harness unchanged. To change it, ask your agent to edit this one row.\n\n'
@@ -786,11 +851,13 @@ def mode(got):
     if recorded.get('state') in ('pending', 'opened', 'merged') and recorded.get('mode') != got['--mode']:
         raise Exit(5, 'The host setting already carries %s; ask the owner to change that line instead; '
                       'nothing recorded.' % (recorded.get('mode') or 'no permission mode'))
+    approve_host(os.environ, carried['repository'], PROGRAMS[harness], got['--mode'])
     state.value['mode'] = {'harness': harness, 'mode': got['--mode']}
     if not state.save():
         raise Exit(10, 'Could not save the permission mode; nothing recorded.')
-    print('Recorded: agents on this machine run %s with the %s permission mode the owner picked.' % (
-        harness, got['--mode']))
+    print('Recorded: agents on this machine run %s with the %s permission mode the owner picked, saved as this '
+          "machine's host-side approval for %s (outside the repository); the host setting adds the matching %s "
+          'row.' % (harness, got['--mode'], carried['repository'], MODE_FILE))
     return 0
 
 
@@ -1254,6 +1321,14 @@ def launch(got):
         raise Exit(5, 'No `%s `%s` |` row, the Harness permission mode the owner picked, is in %s on the default '
                       "branch, and the local driver starts no agent without it: run mode, then setting, and merge "
                       'it; %s' % (MODE_ROW, picked or '<mode>', MODE_FILE, NOTHING))
+    if local:
+        program = PROGRAMS[choices['harness']]
+        approved = host_approval(env, state.value['repo'], program)
+        if approved != picked:
+            raise Exit(5, "This machine's host-side approval for %s with %s is %s, not the `%s` row %s saves, and "
+                          "KN3's start refuses unless they match: run mode --mode %s to save the owner's pick here, "
+                          'or ask the owner which mode they mean; %s' % (
+                              state.value['repo'], program, approved or 'missing', picked, MODE_FILE, picked, NOTHING))
     if local and local_driver(env) is None:
         raise Exit(5, "This OpenWiz's local driver no longer answers, so no agent can run on this machine; " + NOTHING)
     plan_approved(spec, env, confirmed)

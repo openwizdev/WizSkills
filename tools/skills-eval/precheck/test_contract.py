@@ -8,6 +8,7 @@ import copy
 from datetime import timedelta
 import importlib.util
 import json
+import os
 import re
 from pathlib import Path
 import subprocess
@@ -17,10 +18,23 @@ import unittest
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[2]
+
+
+def openwiz(rel):
+    """A file of the OpenWiz checkout at the pinned commit, passed in as OPENWIZ_CHECKOUT (#1487)."""
+    root = os.environ.get('OPENWIZ_CHECKOUT')
+    path = Path(root) / rel if root else None
+    if path is None or not path.is_file():
+        print(f'OPENWIZ_CHECKOUT: {path} is missing' if root else
+              f'OPENWIZ_CHECKOUT is not set: pass an OpenWiz checkout at the pinned commit (it reads {rel})',
+              file=sys.stderr)
+        raise SystemExit(2)
+    return path
+
+
 FIX = HERE / 'contract-fixtures'
 _spec = importlib.util.spec_from_file_location(
-    'eb5_contract', ROOT / 'tools/collector/experiment_contract.py')
+    'eb5_contract', openwiz('tools/collector/experiment_contract.py'))
 C = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(C)
 
@@ -157,8 +171,8 @@ class Contract(unittest.TestCase):
     def setUp(self):
         self.record = C.read(FIX / 'complete.json')
         self.current = copy.deepcopy(self.record['request'])
-        self.bundle = C.read(ROOT / 'tools/collector/fixtures/bottlenecks-contract/accepted.json')
-        self.journey = C.read(ROOT / 'tools/collector/fixtures/journey/journeys.json')
+        self.bundle = C.read(openwiz('tools/collector/fixtures/bottlenecks-contract/accepted.json'))
+        self.journey = C.read(openwiz('tools/collector/fixtures/journey/journeys.json'))
 
     def check(self):
         return assess(self.record, self.current, self.bundle, self.journey, at='2030-01-03T14:00:00Z')

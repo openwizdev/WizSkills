@@ -366,7 +366,21 @@ import subprocess
 import tempfile
 import datetime as dt
 
-sys.path.insert(2, str(HERE.parents[1] / 'collector'))
+
+
+def openwiz(rel):
+    """A file of the OpenWiz checkout at the pinned commit, passed in as OPENWIZ_CHECKOUT (#1487)."""
+    root = os.environ.get('OPENWIZ_CHECKOUT')
+    path = Path(root) / rel if root else None
+    if path is None or not path.is_file():
+        print(f'OPENWIZ_CHECKOUT: {path} is missing' if root else
+              f'OPENWIZ_CHECKOUT is not set: pass an OpenWiz checkout at the pinned commit (it reads {rel})',
+              file=sys.stderr)
+        raise SystemExit(2)
+    return path
+
+
+sys.path.insert(2, str(openwiz('tools/collector/experiment_contract.py').parent))
 sys.dont_write_bytecode = True  # leave no cache in the war-room checkout
 import experiment_contract as X
 

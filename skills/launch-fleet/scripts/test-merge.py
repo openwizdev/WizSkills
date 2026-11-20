@@ -20,6 +20,7 @@ TICKETS = 'synthetic-owner/synthetic-tickets'
 # The shared fake serves one repository. This router gives each repository its
 # own world (FAKE_WORLDS) and answers the pull request's closing issues from
 # its world's `closes`, so a write to the wrong repository lands where a test sees it.
+# A world's `faults: {"read": "fail"}` fails its next comment-list read.
 ROUTER = r'''import json, os, subprocess, sys
 args = sys.argv[1:]
 named = dict(a.split('=', 1) for a in args if a.split('=', 1)[0] in ('owner', 'name'))
@@ -30,6 +31,13 @@ for i, a in enumerate(args):
     elif a.startswith('repos/'):
         repo = '/'.join(a.split('/')[1:3])
 path = json.loads(os.environ.get('FAKE_WORLDS') or '{}').get(repo, os.environ['FAKE_WORLD'])
+if args[0] == 'api' and '--method' not in args and any(a.split('?')[0].endswith('/comments') for a in args):
+    with open(path) as f:
+        world = json.load(f)
+    if world.get('faults', {}).pop('read', None) == 'fail':
+        with open(path, 'w') as f:
+            json.dump(world, f)
+        sys.exit('HTTP 502')
 r = subprocess.run([sys.executable, '-I', %r, *args], env=dict(os.environ, FAKE_WORLD=path),
                    capture_output=True, text=True)
 out = r.stdout
@@ -315,6 +323,31 @@ class CrossRepository(unittest.TestCase):
         self.assertEqual(w.bodies(12), [])
 
 
+    def merged_once(self):
+        w = self.world([(TICKETS, 12)], state='MERGED', mergeCommit={'oid': 'c' * 40})
+        project(w, PRINTS)
+        self.assertEqual(w.run('merge.py', 'cost', REPO, 7, HEAD, 12, cwd=w.dir / 'project'), (0, 'cost posted 5001'))
+        return w
+
+    def test_a_case_variant_of_the_pull_requests_repository_finds_the_same_record(self):
+        # catches: a retry with another letter case of the same PR repository posting a second
+        # cost record on the ticket (R2).
+        w = self.merged_once()
+        self.assertEqual(w.run('merge.py', 'cost', REPO.upper(), 7, HEAD, 12, cwd=w.dir / 'project'),
+                         (0, 'cost already posted 5001'))
+        self.assertEqual(len(w.others[TICKETS].bodies(12)), 1)
+
+    def test_an_unreadable_duplicate_lookup_posts_nothing(self):
+        # catches: a failed read of the ticket's records taken as "none yet", so a retry posts a
+        # second cost record (R2).
+        w = self.merged_once()
+        w.others[TICKETS].update(faults={'read': 'fail'})
+        code, out = w.run('merge.py', 'cost', REPO, 7, HEAD, 12, cwd=w.dir / 'project')
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith('unknown: '), out)
+        self.assertEqual(len(w.others[TICKETS].bodies(12)), 1)
+
+
 class Queue(unittest.TestCase):
     """#1616 and #1631: what the merge queue owes across wakes."""
 
@@ -353,20 +386,20 @@ class Queue(unittest.TestCase):
         self.assertEqual(w.run('merge.py', 'settle', REPO, 7, 12, cwd=w.dir / 'project'), (0, 'no queued merge'))
         self.assertEqual(w.writes(), [])
 
-    def test_a_failed_queue_receipt_fails_and_a_later_read_repairs_it(self):
-        # catches: a lost queue receipt reported as success and never restored, so a later removal
-        # re-enqueues the same head (#1631).
+    def test_an_unconfirmed_queue_receipt_enqueues_nothing(self):
+        # catches: an enqueue whose receipt failed, so the queue can merge it (no cost to settle) or
+        # let it go (re-enqueued at the same head) before any later wake repairs it (#1631, R1).
         w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'post': 'fail'})
         project(w, PRINTS)
         code, out = self.merge(w)
         self.assertEqual(code, 1)
-        self.assertTrue(out.startswith('queued; receipt unconfirmed ('), out)
-        self.assertEqual(w.bodies(7), [])
+        self.assertTrue(out.startswith('not queued: '), out)
+        self.assertEqual((w.bodies(7), w.writes(), w.load()['pr']['isInMergeQueue']), ([], [], False))
         self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
         self.assertEqual(w.bodies(7), [self.receipt()])
         self.assertEqual(self.merge(w), (0, 'queued; the queue merges it or lets it go'))
         self.assertEqual(w.bodies(7), [self.receipt()])
-        # The queue lets it go: the repaired receipt blocks a second enqueue at that head.
+        # The queue lets it go: the receipt blocks a second enqueue at that head.
         value = w.load()
         value['pr'].update(isInMergeQueue=False, mergeQueueEntry=None,
                            left={'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks'})
@@ -374,18 +407,32 @@ class Queue(unittest.TestCase):
         self.assertEqual(self.merge(w), (1, 'blocked: left the merge queue: failed checks; recorded 5002'))
         self.assertEqual(sum('merge' in x for x in w.writes()), 1)
 
-    def test_a_lost_queue_receipt_response_is_not_posted_twice(self):
-        # catches: the repair duplicating a receipt whose write happened but could not be read back.
-        w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'post': 'lost'}, me='someone-else')
+    def test_a_queued_pull_request_without_its_receipt_gets_one(self):
+        # catches: a pull request someone else queued staying without the receipt the removal guard
+        # and settle read (#1631).
+        queued = {'headCommit': {'oid': HEAD}}
+        w = World(self, pr=pr(isMergeQueueEnabled=True, isInMergeQueue=True, mergeQueueEntry=queued))
         project(w, PRINTS)
-        self.assertEqual(self.merge(w)[0], 1)
-        w.update(me='openwiz[bot]')
-        value = w.load()
-        value['comments']['7'][0]['user']['login'] = 'openwiz[bot]'
-        w.save(value)
+        self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
         self.assertEqual(self.merge(w), (0, 'queued; the queue merges it or lets it go'))
         self.assertEqual(w.bodies(7), [self.receipt()])
 
+    def test_a_receipt_written_but_not_read_back_is_not_posted_twice(self):
+        # catches: a retry duplicating a receipt whose write happened but could not be confirmed,
+        # or enqueueing before it is confirmed.
+        w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'post': 'lost'}, me='someone-else')
+        project(w, PRINTS)
+        code, out = self.merge(w)
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith('not queued: '), out)
+        self.assertFalse(any('merge' in x for x in w.writes()))
+        # The read-back missed it; the next wake reads it as the record author's.
+        value = w.load()
+        value['me'] = value['comments']['7'][0]['user']['login'] = 'openwiz[bot]'
+        w.save(value)
+        self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
+        self.assertEqual(w.bodies(7), [self.receipt()])
+        self.assertEqual(sum('merge' in x for x in w.writes()), 1)
 
 if __name__ == '__main__':
     unittest.main()

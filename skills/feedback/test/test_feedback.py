@@ -262,6 +262,35 @@ class Consent(Helper):
         self.assertEqual(len(self.creates()), 1)
 
 
+CONTRACT = HERE.parents[2] / 'contracts' / 'feedback-loop.v1.md'
+
+
+def loop_contract():
+    """The feedback-loop contract's machine-readable block, read from the copy."""
+    text = CONTRACT.read_text()
+    start = text.index('```feedback-loop-v1\n') + len('```feedback-loop-v1\n')
+    return json.loads(text[start:text.index('```', start)])
+
+
+class Report(Helper):
+    def test_filed_issue_is_a_report_by_marker_and_names_the_triage_label(self):
+        # openwiz.feedback-loop.v1: the agent route files title and body only,
+        # marker last after a blank line; triage, never the agent, adds the label.
+        loop = loop_contract()
+        op = self.draft()
+        a = self.preview(op)
+        _, sent = self.run_helper('send', op, '--preview-id', a['preview_id'], expect=0)
+        [create] = self.creates()
+        self.assertIn(loop['destination'], create['argv'][4])
+        filed = json.loads(create['stdin'])
+        self.assertEqual(sorted(filed), ['body', 'title'])
+        before, blank, marker = filed['body'].rsplit('\n', 2)
+        self.assertEqual((before, blank), (BODY, ''))
+        self.assertRegex(marker, loop['marker'])
+        self.assertIn(f"`{loop['label']}` label", sent['say'])
+        self.assertIn('pull request and the release', sent['say'])
+
+
 class Outcomes(Helper):
     def send(self, expect):
         op = self.draft()

@@ -585,7 +585,8 @@ class Landed(unittest.TestCase):
 
     def test_a_report_landed_by_an_earlier_fix_gets_nothing(self):
         # catches: the once-per-report rule read per pull request, so a second fix posts again.
-        earlier = comment(4000, 'Landed: the fix for this report merged in openwizdev/WizSite#9200 and will ship in OpenWiz 9.4.1.')
+        earlier = comment(4000, 'Landed: the fix for this report merged in openwizdev/WizSite#9200 '
+                                'and will ship in OpenWiz 9.4.1.')
         w = self.world({'9108': brief(9108), '9101': REPORT}, close=(9108,), comments={'9101': [earlier]})
         project(w, None)
         self.assertEqual(self.merge(w, 9108)[1].split('; ')[-1], 'landed already posted 4000')
@@ -657,7 +658,7 @@ class Landed(unittest.TestCase):
         code, out, dest = self.cross()
         self.assertEqual(code, 0, out)
         self.assertEqual(self.posts(dest), [(9101, LANDED.replace(DEST, SKILLS))])
-        self.assertTrue(out.endswith('; landed posted 5002 on openwizdev/OpenWiz#9101'), out)
+        self.assertTrue(out.endswith('; landed posted 5001 on openwizdev/OpenWiz#9101'), out)
 
     def test_a_fix_outside_openwizdev_posts_nothing(self):
         # catches: another owner's merge (a fork, a lookalike repository) speaking on a report.

@@ -7,7 +7,7 @@
   merge.py cost   OWNER/NAME PR HEAD TICKET [-- COST ARGS]
   merge.py settle OWNER/NAME PR TICKET [-- COST ARGS]
   merge.py look   OWNER/NAME PR HEAD --ticket TICKET
-  merge.py ask    OWNER/NAME PR HEAD --ticket TICKET EVIDENCE-FILE
+  merge.py ask    OWNER/NAME PR HEAD CHECKS --ticket TICKET EVIDENCE-FILE
 
 `read` prints where the pull request stands: `merged <commit>`, `queued`,
 `open, the merge queue is on|off[; it left the queue at <time>: <reason>]` or
@@ -54,11 +54,15 @@ this head after its evidence ask: `held: ask-due|look-due|changes-asked: ...`
 (exit 1, nothing written). Every other merge, and a spec answered `no` or
 planned before the contract, flows as today. A spec, its planned tickets, its
 comments or the contract it can't read is `unknown: ...` and merges nothing.
-`look` prints the same reading (`flows: ...`, `released: ...` or `held: ...`)
-and only reads. `ask` posts the contract's evidence ask on the spec: its
-opening line for PR and HEAD, then EVIDENCE-FILE's `Evidence:` and `Look
-for:` lines; it refuses an ask the contract refuses (code links included) and
-posts one ask per head (`ask posted <id>`, `ask already posted <id>`).
+A sibling ticket whose closing pull request is in the merge queue or merged
+counts as closed, so two tickets queued one after the other leave the later
+one held. A held head that conflicts is `blocked: not mergeable: ...`, never
+offered an ask. `look` prints the same reading (`flows: ...`, `released: ...`
+or `held: ...`) and only reads. `ask` posts the contract's evidence ask on the
+spec: its opening line for PR and HEAD, then EVIDENCE-FILE's `Evidence:` and
+`Look for:` lines. It posts only for a head whose CHECKS are green and that is
+mergeable, refuses an ask the contract refuses (code links included) and posts
+one ask per head (`ask posted <id>`, `ask already posted <id>`).
 
 `settle` is the cost a queued merge still owes: it reads the newest record
 author's queue receipt on the pull request and runs `cost` at that commit
@@ -103,7 +107,9 @@ FORMS = {'section', 'section_like', 'setext_text', 'setext_underline', 'section_
 SPEC_QUERY = '''query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { issue(number: $number) { number parent { number body
     repository { nameWithOwner }
-    subIssues(first: 100) { pageInfo { hasNextPage } nodes { number state repository { nameWithOwner } } } } } } }'''
+    subIssues(first: 100) { pageInfo { hasNextPage } nodes { number state repository { nameWithOwner }
+      closedByPullRequestsReferences(first: 20, includeClosedPrs: true) { pageInfo { hasNextPage }
+        nodes { state isInMergeQueue } } } } } } } }'''
 
 
 def snapshot(repo, number):
@@ -341,6 +347,16 @@ def read_record(text, f):
     return first.group(1), int(first.group(3)), first.group(4), first.group(5)
 
 
+def closing(n):
+    """Whether a planned ticket is closed or on its way: a closing pull request merged or in the merge queue."""
+    refs = n['closedByPullRequestsReferences']
+    prs = [(r['state'], r['isInMergeQueue']) for r in refs['nodes']]
+    if (n['state'] not in ('OPEN', 'CLOSED') or refs['pageInfo']['hasNextPage'] is not False
+            or not all(st in ('OPEN', 'CLOSED', 'MERGED') and type(q) is bool for st, q in prs)):
+        raise TypeError(n)
+    return n['state'] == 'CLOSED' or any(st == 'MERGED' or q for st, q in prs)
+
+
 def spec_of(home, ticket):
     """(spec repository, number, body, final) for the ticket's spec, or None for a ticket with none."""
     owner, name = home.split('/')
@@ -352,16 +368,16 @@ def spec_of(home, ticket):
             return None
         where_, number, body = spec['repository']['nameWithOwner'], spec['number'], spec['body']
         page, nodes = spec['subIssues']['pageInfo']['hasNextPage'], spec['subIssues']['nodes']
-        states = {(n['repository']['nameWithOwner'].casefold(), n['number']): n['state'] for n in nodes}
+        states = {(n['repository']['nameWithOwner'].casefold(), n['number']): closing(n) for n in nodes}
         if not (isinstance(where_, str) and post.REPO.fullmatch(where_) and type(number) is int
-                and isinstance(body, str) and type(page) is bool and set(states.values()) <= {'OPEN', 'CLOSED'}):
+                and isinstance(body, str) and type(page) is bool):
             raise TypeError(spec)
     except (TypeError, KeyError, AttributeError):
         raise Stop(f'unknown: the spec of {home}#{ticket} could not be read; nothing was merged')
     if page:
         raise Stop(f"unknown: spec {where_}#{number}'s planned tickets could not be read whole; nothing was merged")
     states.pop((home.casefold(), ticket), None)
-    return where_, number, body, all(state == 'CLOSED' for state in states.values())
+    return where_, number, body, all(states.values())
 
 
 def look(repo, number, head, ticket, p):
@@ -413,7 +429,7 @@ def look_line(repo, number, head, ticket):
     return f'released: the late look on {ref} approved {head}' if why == 'released' else held(why, ref)
 
 
-def ask(repo, number, head, ticket, path):
+def ask(repo, number, head, checks, ticket, path):
     try:
         text = Path(path).read_text(encoding='utf-8')
     except (OSError, UnicodeDecodeError):
@@ -423,6 +439,10 @@ def ask(repo, number, head, ticket, path):
     state = where(main, p, head)
     if not state.startswith('open'):
         raise Stop(f'refused: no ask for a pull request that is not open at {head} ({state})')
+    admit = admission(main, p, head, checks)
+    if admit.startswith('wait: ') or p['mergeable'] != 'MERGEABLE':
+        why = admit[6:] if admit.startswith('wait: ') else f"mergeable: {p['mergeable']}"
+        raise Stop('refused: no ask for a head that cannot merge: ' + why)
     f = forms()
     code = read_ask(body, f)
     if code != (number, head):
@@ -468,6 +488,8 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
     if admit.startswith('wait: '):
         blocked(admit[6:])
     why, ref, _ = look(repo, number, head, ticket, p)
+    if why == 'ask-due' and p['mergeable'] == 'CONFLICTING':
+        blocked('not mergeable: CONFLICTING')
     if why not in ('flows', 'released'):
         raise Stop(held(why, ref))
     if admit.startswith('base rule: ') and not checked:
@@ -515,8 +537,8 @@ def main(argv):
             print(settle(repo, number, rest[0], extra))
         elif verb == 'look' and len(rest) == 2 and rest[0] == '--ticket' and TICKET.fullmatch(rest[1]):
             print(look_line(repo, number, head, rest[1]))
-        elif verb == 'ask' and len(rest) == 3 and rest[0] == '--ticket' and TICKET.fullmatch(rest[1]):
-            print(ask(repo, number, head, rest[1], rest[2]))
+        elif verb == 'ask' and len(rest) == 4 and rest[1] == '--ticket' and TICKET.fullmatch(rest[2]):
+            print(ask(repo, number, head, rest[0].split(','), rest[2], rest[3]))
         elif verb == 'merge' and len(rest) >= 4 and rest[2] == '--ticket' and TICKET.fullmatch(rest[3]) \
                 and set(rest[4:]) <= {'--base-rule-checked'}:
             print(merge(repo, number, head, rest[0].split(','), rest[1], rest[3],

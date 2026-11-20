@@ -5,6 +5,9 @@ python3 -I skills/launch-fleet/scripts/test-merge.py
 """
 import importlib.util
 from pathlib import Path
+import re
+import shlex
+import subprocess
 import sys
 import unittest
 
@@ -215,6 +218,39 @@ class Cost(unittest.TestCase):
         project(w, PRINTS)
         self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
         self.assertEqual(w.bodies(12)[-1], 'launch-fleet: cost: ' + LINE)
+
+
+class Documented(unittest.TestCase):
+    """#1622: SKILL.md's two merge commands, run as written from a consuming project's checkout
+    (the installed skill lives outside it), so the project's FM4 command resolves there."""
+
+    def commands(self):
+        text = (HERE.parent / 'SKILL.md').read_text()
+        found = re.findall(r'`(python3 -I [^`]*merge\.py (?:admit|merge) [^`]*)`', text)
+        self.assertEqual(len(found), 2, found)
+        values = {"<this skill's folder>": str(HERE.parent), '<owner>/<repo>': REPO, '<P>': '7',
+                  '<commit>': HEAD, '<checks>': 'check',
+                  '<the APPROVE and the plan approval it relies on>': 'APPROVE 1 and plan approval 2', '<N>': '12'}
+        argvs = []
+        for command in found:
+            for name, value in values.items():
+                command = command.replace(name, value)
+            argv = shlex.split(command)
+            self.assertNotRegex(' '.join(argv), r'<[^>]+>', 'a placeholder left unfilled')
+            argvs.append([sys.executable] + argv[1:])
+        return argvs
+
+    def test_the_documented_commands_run_from_the_project_checkout(self):
+        # catches: the merge commands naming scripts/merge.py relative to the consuming project,
+        # which has no such file, so an approved green PR is never admitted or merged (#1622).
+        w = World(self, pr=pr())
+        root = project(w, PRINTS)
+        admit, merge = self.commands()
+        for argv, want in [(admit, 'base rule: no merge queue; mergeable: MERGEABLE'),
+                           (merge + ['--base-rule-checked'], 'merged %s; cost posted 5001' % ('f' * 40))]:
+            r = subprocess.run(argv, capture_output=True, text=True, env=w.env, cwd=root, timeout=60)
+            self.assertEqual((r.returncode, r.stdout.strip()), (0, want), r.stderr)
+        self.assertEqual(w.bodies(12), ['launch-fleet: cost: ' + LINE])
 
 
 if __name__ == '__main__':

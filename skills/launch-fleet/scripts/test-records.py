@@ -483,5 +483,53 @@ class OpsPass(unittest.TestCase):
         self.assertEqual((done.returncode, done.stdout), (2, ''))
 
 
+def wake_steps():
+    """SKILL.md's "Each wake" steps in order, each with its indented continuation."""
+    section = (HERE.parent / 'SKILL.md').read_text().split('\n## Each wake\n')[1].split('\n| Line |')[0]
+    steps = []
+    for line in section.splitlines():
+        if re.match(r'\d+\. ', line):
+            steps.append(line)
+        elif steps and line.startswith('   '):
+            steps[-1] += '\n' + line
+    return steps
+
+
+def step_with(text):
+    found = [i for i, step in enumerate(wake_steps()) if text in step]
+    assert len(found) == 1, (text, found)
+    return found[0]
+
+
+class Dispatcher(unittest.TestCase):
+    """The wake's dispatcher text (#1164 WS27), read as an agent follows it."""
+
+    def test_a_nightly_only_tick_reaches_its_alert_and_the_status_check_before_any_no_work_exit(self):
+        # catches: a safety-net tick whose only line is `nightly red` calling `fleet.sh wake` with
+        # no numbers (a usage refusal) or ending "nothing due" before the alert and the status
+        # check run, so a red nightly on a quiet day never reaches the orchestrator (#1587).
+        r = subprocess.run(['sh', str(HERE / 'fleet.sh'), 'wake'], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 2, 'fleet.sh wake with no numbers is a usage refusal')
+        tick = next(x for x in wake_steps()[step_with('Read what is due')].splitlines() if 'safety-net tick' in x)
+        self.assertRegex(tick, r'`fleet\.sh wake <numbers>`[^;]*only when',
+                         'the safety net runs fleet.sh wake only when its lines name numbers')
+        self.assertIn('`nightly red` lines', tick)
+        exit_step = step_with('--reason "nothing due"')
+        self.assertGreater(exit_step, step_with('status.py repair'), 'the no-work exit comes before the status check')
+        self.assertGreater(exit_step, step_with('**Do every line**'), 'the no-work exit comes before the due lines')
+
+    def test_only_the_claimable_lines_claim_and_merge_and_archive_keep_their_own_guards(self):
+        # catches: the dispatcher requiring `fleet.sh claim` -> `go` before every line, though the
+        # claim checker admits only builder-start, review-start, resume and release claims, so an
+        # approved green merge or an archive after closure can never run (#1604).
+        step = wake_steps()[step_with('fleet.sh claim')]
+        sentence = next(x for x in re.split(r'(?<=\.) ', step) if 'fleet.sh claim' in x)
+        scoped = set(re.findall(r'`(start|review|resume|release|merge|archive|nightly red|re-test|CI failed)\b[^`]*`',
+                                sentence))
+        self.assertEqual(scoped, {'start', 'review', 'resume', 'release'}, sentence)
+        self.assertRegex(step, r'`merge`[^.]*Merging', 'a merge line keeps its own guards')
+        self.assertRegex(step, r'`archive`', 'an archive line keeps its own guard')
+
+
 if __name__ == '__main__':
     unittest.main()

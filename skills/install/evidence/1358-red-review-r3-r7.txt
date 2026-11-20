@@ -1,0 +1,28 @@
+$ python3 -I skills/install/tests/test_onboarding.py ReviewRound   # red: branch 76c0e5a plus the R3 and R7 tests (pre-rulings 7038682338)
+..F...F
+======================================================================
+FAIL: test_r3_without_node_the_video_is_skipped_in_one_line_and_the_fleet_still_starts (__main__.ReviewRound.test_r3_without_node_the_video_is_skipped_in_one_line_and_the_fleet_still_starts)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 762, in test_r3_without_node_the_video_is_skipped_in_one_line_and_the_fleet_still_starts
+    self.assertRegex(plan, r'Without Node[^.]*skip[^.]*video')
+AssertionError: Regex didn't match: 'Without Node[^.]*skip[^.]*video' not found in "\nThe plan checks itself. Run `to-spec` with the confirmed grill. It writes the spec, runs `to-tickets`, whose checks record the machine plan approval, and makes the spec's video. Say **The spec and its video** with its video link. Ask nothing here: no spec or plan approval. For now the owner steers through the orchestrator: what they want changed goes to this chat, never a comment on the video, which steers nothing until OpenWiz #1402. launch-fleet's one-time notice saying so is normal, not a hold. When a check refuses, re-cut the plan; never ask the user to approve it instead. Then run `first_fleet.py spec --spec <N> --repo <owner>/<name>`.\n\nDone when the machine plan approval is on the spec and `spec` saved it.\n"
+
+======================================================================
+FAIL: test_r7_the_fleet_starts_through_launch_fleets_start_path_not_a_one_off_thread (__main__.ReviewRound.test_r7_the_fleet_starts_through_launch_fleets_start_path_not_a_one_off_thread)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 778, in test_r7_the_fleet_starts_through_launch_fleets_start_path_not_a_one_off_thread
+    self.assertEqual(road.spawns(), [], 'no one-off thread')
+AssertionError: Lists differ: [['thread', 'spawn', '--parent-self', '--p[1218 chars]e."]] != []
+
+First list contains 1 additional elements.
+First extra element 0:
+['thread', 'spawn', '--parent-self', '--project', 'prj_synthetic', '--machine', 'cloud', '--provider', 'claude-code', '--model', 'syn-claude-model-01', '--reasoning-level', 'high', '--title', 'Fleet #900: 0.1.0 spec: browser to-do app', '--prompt', "You are the fleet thread for spec #900 of synthetic-owner/synthetic-todo. Use the launch-fleet skill. Read 'skills/launch-fleet/SKILL.md' if present, otherwise find '*/skills/launch-fleet/SKILL.md' only inside your own harness's configured plugin cache: Codex uses CODEX_HOME/plugins/cache (default HOME/.codex/plugins/cache); Claude uses CLAUDE_CODE_PLUGIN_CACHE_DIR/cache when set, otherwise CLAUDE_CONFIG_DIR/plugins/cache (default HOME/.claude/plugins/cache); for another harness use its installation metadata. Prefer active installation metadata over cache scanning when available. During cache scans exclude other harness caches, source checkouts, orphaned versions marked .orphaned_at, and targets outside the selected cache. Follow symlinks and deduplicate real paths. Verify .claude-plugin/plugin.json manifest name openwiz and entry ./skills/launch-fleet; report missing, unreadable or ambiguous matches, otherwise read the unique matching file and follow it; do its Fleet threads section, first wake."]
+
+Diff is 1435 characters long. Set self.maxDiff to None to see it. : no one-off thread
+
+----------------------------------------------------------------------
+Ran 7 tests in 22.570s
+
+FAILED (failures=2)

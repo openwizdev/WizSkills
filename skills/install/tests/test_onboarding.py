@@ -754,6 +754,40 @@ class ReviewRound(unittest.TestCase):
         self.assertEqual(road.approvals(), {'synthetic-owner/other': {'codex': 'read-only'},
                                             road.repo: {'claude': 'acceptEdits'}})
 
+    def test_r3_without_node_the_video_is_skipped_in_one_line_and_the_fleet_still_starts(self):
+        # catches: a Python-only install stopped at to-spec's Node-rendered video before the fleet can start, against
+        # the install guard that stops at anything needing Node (pre-ruling 7038682338)
+        text = (SKILL_DIR / 'SKILL.md').read_text()
+        plan = text.split('### 7. Plan\n', 1)[1].split('\n### ', 1)[0]
+        self.assertRegex(plan, r'Without Node[^.]*skip[^.]*video')
+        self.assertIn('the fleet still starts', plan)
+        self.assertRegex(text, r'(?m)^- \*\*Read JSON and exit codes.*\bNode\b')  # the guard it follows stays
+
+    def test_r7_the_fleet_starts_through_launch_fleets_start_path_not_a_one_off_thread(self):
+        # catches: a one-off thread spawned and its spawn counted as the fleet's start, or "started" said before
+        # launch-fleet's own activation record reads back (its loop, loop-map entry and record: references/launch.md)
+        road = self.road('fresh-project')
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
+        road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
+        preview = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(preview.returncode, 12, preview.stdout)
+        digest = re.findall(r'(?m)^Confirmation: ([0-9a-f]{64})$', preview.stdout)[0]
+        fleet = teach_lines()['The fleet starting'][0].split(':', 1)[0]
+        yes = road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest])
+        self.assertEqual(yes.returncode, 0, yes.stdout)
+        self.assertEqual(road.spawns(), [], 'no one-off thread')
+        self.assertNotIn(fleet, yes.stdout, 'not started until its activation record reads back')
+        self.assertIn('Starting one', yes.stdout, "it hands the start to launch-fleet's own path")
+        pending = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(pending.returncode, 6, pending.stdout)
+        self.assertNotIn(fleet, pending.stdout)
+        road.change({'world': 'fleet_record'})  # launch-fleet's activation record, by a record author
+        started = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(started.returncode, 0, started.stdout)
+        self.assertIn(fleet, started.stdout)
+        self.assertEqual(road.saved()['launch']['state'], 'started')
+        self.assertEqual(road.spawns(), [])
+
     def test_r6_a_merge_closing_another_repositorys_issue_is_not_the_first_merge(self):
         # catches: a merged pull request closing an issue with an onboarding ticket's number in another repository
         # taken as this fleet's first merge

@@ -12,6 +12,8 @@ HTML = {".html", ".htm"}
 EXCLUDED = re.compile(r"(^|/)(vendor|vendored|third_party|third-party|node_modules)/|(^|/)fixtures/comments/"
                       r"|\.min\.(js|css)$")
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+SHEBANG = {"python": ".py", "sh": ".sh", "bash": ".sh", "dash": ".sh", "zsh": ".sh", "node": ".js"}
+DOCSTRING = re.compile(r"^\s*[rRuU]?(\"\"\"|''')")
 ENCODING = re.compile(r"^#.*coding[:=]")
 SWITCH = re.compile(r"^(noqa|type: ignore|pragma:|pylint:|fmt: (off|on|skip)|ruff:|mypy:|pyright:|isort:|eslint"
                     r"|prettier-ignore|@ts-ignore|@ts-expect-error|@ts-nocheck|biome-ignore|shellcheck |yamllint "
@@ -52,11 +54,14 @@ class Block:
     rust_allow: bool = False
 
 
-def language(path):
+def language(path, first_line):
     if EXCLUDED.search(path):
         return None
     name = path.rsplit("/", 1)[-1]
     suffix = "." + name.rsplit(".", 1)[-1] if "." in name else ""
+    if not suffix and first_line.startswith("#!"):
+        programs = (word.rstrip("0123456789.") for word in first_line[2:].replace("/", " ").split())
+        suffix = SHEBANG.get(next((name for name in programs if name in SHEBANG), ""), "")
     for kind in (HASH, SLASH, CSS, HTML):
         if suffix in kind:
             return suffix
@@ -164,15 +169,34 @@ def strip(piece):
 
 
 def blocks(path, hunks):
-    suffix = language(path)
+    starts = bool(hunks) and bool(hunks[0]) and hunks[0][0][0] == 1
+    suffix = language(path, hunks[0][0][1] if starts else "")
     found, top = [], set()
     if suffix is None:
         return found, top
-    preamble = bool(hunks) and bool(hunks[0]) and hunks[0][0][0] == 1
+    preamble = starts
     for number, hunk in enumerate(hunks):
-        state, run = {}, None
+        state, run, docstring, previous = {}, None, None, ""
         preamble = preamble and number == 0
         for line_no, text, added in hunk:
+            if docstring:
+                run.lines.append(line_no)
+                run.text = (run.text + " " + text.strip().replace(docstring, "")).strip()
+                if added:
+                    run.added.append(line_no)
+                docstring = None if docstring in text else docstring
+                continue
+            opens = DOCSTRING.match(text) if suffix in {".py", ".pyi"} and not state.get("quote") else None
+            if opens and (previous.endswith(":") or (preamble and not previous)):
+                delim = opens.group(1)
+                rest = text[opens.end():]
+                docstring = None if delim in rest else delim
+                run = Block(path, [line_no], rest.replace(delim, "").strip(), [line_no] if added else [], doc=True)
+                found.append(run)
+                previous = text.rstrip()
+                continue
+            if text.strip():
+                previous = text.rstrip()
             if (line_no == 1 and text.startswith("#!")) or (
                     line_no <= 2 and suffix in {".py", ".pyi"} and ENCODING.match(text)):
                 run = None

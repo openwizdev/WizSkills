@@ -12,7 +12,7 @@ Start with the helper, which reads that diff and nothing else:
 git diff --find-renames origin/<base>...<head> | python3 -I <this skill's folder>/scripts/comments.py - [--docs <published path>]...
 ```
 
-It prints one `<file>:<line>: <kind>: <the comment> Fix: <the code fix>.` line per block outside the allowed kinds, then one `check <file>:<line>: <kind>: <the comment>` line per allowed block, and exits 1 with findings, 0 without, 2 on an unreadable diff. Its kinds are `justification`, `workaround`, `suppression`, `external-link`, `escape-tag-reason` and `comment`. Each finding line is a candidate: read the code around it before you report it. Each `check` line is yours to judge, below. It reads the comment forms of Rust, Python, shell, YAML, TOML, JavaScript, TypeScript, CSS and HTML by line; it doesn't see Python docstrings or a comment in a file whose language only its shebang names, so read those yourself.
+It prints one `<file>:<line>: <kind>: <the comment> Fix: <the code fix>.` line per block outside the allowed kinds, then one `check <file>:<line>: <kind>: <the comment>` line per allowed block, and exits 1 with findings, 0 without, 2 on an unreadable diff. Its kinds are `justification`, `workaround`, `suppression`, `external-link`, `escape-tag-reason` and `comment`. Each finding line is a candidate: read the code around it before you report it. Each `check` line is yours to judge, below. It reads the comment forms of Rust, Python, shell, YAML, TOML, JavaScript, TypeScript, CSS and HTML by line; it reads a Python docstring after a `def` or `class` line or at a file's top, and a script with no extension only when the diff holds its shebang line, so read the others yourself.
 
 ## What stays
 

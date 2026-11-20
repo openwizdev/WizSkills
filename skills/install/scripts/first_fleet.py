@@ -363,59 +363,113 @@ def saved_mode(env):
     return values[0] if values else None
 
 
-# Stub until KN3 pushes its setup step (security R6, option A): the same pick saved as a host-side approval
-# on the owner's machine, per repository and harness, outside the repository; KN3's start refuses unless the
-# fleet.md row matches it. Stubbed as one owner-only file in KN3's own state folder ($OPENWIZ_LOCAL_STATE,
-# default ~/.local/state/openwiz-local): {"owner/name": {"<harness program>": "<mode>"}}. Swap
-# approval_file(), host_approval() and approve_host() for KN3's command when it pushes.
+# KN3's host-side approval (security R6, option A), behind the KN3 stub until OpenWiz #1455 merges: the same
+# pick saved on the owner's machine, per repository and harness, outside the repository, in KN3's own form at
+# 857d107: $OPENWIZ_LOCAL_STATE/approvals.json (default ~/.local/state/openwiz-local), one JSON object
+# {"owner/name": {"claude"|"codex": "<mode>"}}, the user's own, mode 600. KN3's start refuses unless the
+# fleet.md row matches it, or if others can change the file.
 def approval_file(env):
     folder = env.get('OPENWIZ_LOCAL_STATE') or os.path.expanduser('~/.local/state/openwiz-local')
     return Path(folder) / 'approvals.json'
 
 
 def read_approvals(env):
+    """The approvals file's text and value, (None, {}) when there is none; Exit when KN3 would refuse it."""
     path = approval_file(env)
     try:
-        info = os.lstat(path)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     except FileNotFoundError:
-        return {}
+        return None, {}
     except OSError:
-        raise Exit(1, "This machine's host-side approvals are unreadable; " + NOTHING)
+        raise Exit(5, "This machine's approvals file (%s) is unreadable; fix it as the local driver's README shows, "
+                      'then run this again; %s' % (path, NOTHING))
+    with os.fdopen(fd, encoding='utf-8') as handle:
+        info, text = os.fstat(handle.fileno()), handle.read()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+        raise Exit(5, "Others can change this machine's approvals file (%s), so the local driver won't trust it. "
+                      'The owner makes it theirs and owner-only (chmod 600) themselves and checks what it approves, '
+                      'then runs this again; OpenWiz never changes its mode; %s' % (path, NOTHING))
     try:
-        assert stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077
-        value = strict(path.read_text(encoding='utf-8'))
-        assert isinstance(value, dict) and all(
-            re.fullmatch(REPOSITORY, repo) and isinstance(modes, dict) and all(
-                isinstance(h, str) and isinstance(m, str) and re.fullmatch(MODE_VALUE, m) for h, m in modes.items())
-            for repo, modes in value.items())
-        return value
-    except (OSError, ValueError, AssertionError):
-        raise Exit(1, "This machine's host-side approvals (%s) must be one owner-only JSON file in KN3's form; "
-                      '%s' % (path, NOTHING))
+        value = strict(text)
+        assert isinstance(value, dict)
+    except (ValueError, AssertionError):
+        raise Exit(5, "This machine's approvals file (%s) is not one JSON object with each key once; fix it as the "
+                      "local driver's README shows, then run this again; %s" % (path, NOTHING))
+    return text, value
 
 
 def host_approval(env, repo, program):
     """The mode this machine approves for this repository and harness, or None."""
-    return read_approvals(env).get(repo, {}).get(program)
+    entry = read_approvals(env)[1].get(repo)
+    mode = entry.get(program) if isinstance(entry, dict) else None
+    return mode if isinstance(mode, str) and re.fullmatch(MODE_VALUE, mode) else None
+
+
+def splice(text, repo, program, picked):
+    """text with only "repo": {"program": "picked"} added; every other byte kept."""
+    decoder, space = json.JSONDecoder(), re.compile(r'[ \t\n\r]*')
+    at = space.match(text, 0).end()
+    if text[at] != '{':
+        raise ValueError('not an object')
+    top = at
+    at = space.match(text, at + 1).end()
+    empty, target = text[at] == '}', None
+    while not empty:
+        if text[at] != '"':
+            raise ValueError('not a key')
+        key, at = json.decoder.scanstring(text, at + 1)
+        at = space.match(text, at).end()
+        if text[at] != ':':
+            raise ValueError('no colon')
+        at = space.match(text, at + 1).end()
+        if key == repo:
+            target = at
+        at = decoder.raw_decode(text, at)[1]
+        at = space.match(text, at).end()
+        if text[at] == ',':
+            at = space.match(text, at + 1).end()
+        elif text[at] == '}':
+            break
+        else:
+            raise ValueError('no comma')
+    pair = '%s: %s' % (json.dumps(program), json.dumps(picked))
+    if target is not None:
+        if text[target] != '{':
+            raise ValueError('not an object entry')
+        inner = space.match(text, target + 1).end()
+        return text[:target + 1] + pair + ('' if text[inner] == '}' else ', ') + text[target + 1:]
+    return text[:top + 1] + '%s: {%s}' % (json.dumps(repo), pair) + ('' if empty else ', ') + text[top + 1:]
 
 
 def approve_host(env, repo, program, picked):
-    """Save the owner's pick as this machine's approval; never change or widen one already saved."""
-    approvals = read_approvals(env)
-    have = approvals.get(repo, {}).get(program)
+    """Save the owner's pick as this machine's approval: add only this entry, never change or widen another."""
+    text, approvals = read_approvals(env)
+    entry = approvals.get(repo)
+    if entry is not None and not isinstance(entry, dict):
+        raise Exit(5, "This machine's approvals file has an entry for %s in another form; ask the owner to fix it; "
+                      'nothing recorded.' % repo)
+    have = (entry or {}).get(program)
     if have == picked:
         return
     if have is not None:
         raise Exit(5, 'This machine already approves %s for %s with %s; OpenWiz never changes or widens it. Ask the '
                       'owner which mode they mean; nothing recorded.' % (have, repo, program))
-    approvals.setdefault(repo, {})[program] = picked
-    path = approval_file(env)
-    temp = None
+    want = json.loads(json.dumps(approvals))
+    want.setdefault(repo, {})[program] = picked
+    try:
+        new = splice(text, repo, program, picked) if text is not None else json.dumps(want, indent=2) + '\n'
+        assert strict(new) == want
+    except (ValueError, IndexError, AssertionError):
+        raise Exit(5, "This machine's approvals file can't take one more entry without changing others; ask the "
+                      'owner to add %s: {%s: %s} themselves; nothing recorded.' % (
+                          json.dumps(repo), json.dumps(program), json.dumps(picked)))
+    path, temp = approval_file(env), None
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fd, temp = tempfile.mkstemp(prefix='approvals.', suffix='.new', dir=path.parent)
+        fd, temp = tempfile.mkstemp(prefix='.approvals.', suffix='.new', dir=path.parent)
         with os.fdopen(fd, 'w', encoding='utf-8') as handle:
-            json.dump(approvals, handle, sort_keys=True)
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(new)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp, path)

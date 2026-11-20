@@ -1394,18 +1394,50 @@ def ordering_inflight: (ordering_open_claims | length) > 0;
 def release_candidate($s): labelled_held and released($s) and (ordering_inflight | not);
 def release_due($s): release_candidate($s)
   and ($s == null or (current($s) and $W.fingerprint_agreement["\($s.number)"] == true));
+# F6 (#1353): only a hard blocker holds a start. A native blocker whose one
+# `## Links` line is `file` (the two tickets only share files) is context and
+# holds nothing; a real, unlabelled or missing line is hard. Shared files stay
+# safe through owned paths instead: see collision below.
+def section_lines($h): reduce ((.body // "") | lines[]) as $line ({on: false, out: []};
+    if ($line | test("^## " + $h + "\\s*$")) then .on = true
+    elif ($line | test("^#{1,6}\\s")) then .on = false
+    elif .on then .out += [$line] else . end) | .out;
+def context_blocker($n): [section_lines("Links")[] | capture("^- #(?<n>[1-9][0-9]{0,8}) (?<k>real|file):") | select(.n == "\($n)")]
+  | length == 1 and .[0].k == "file";
+def hard_blockers_done: . as $t | all(.blockedBy.nodes[]; blocker_done or (.number as $n | $t | context_blocker($n)));
+# Owned paths, as to-tickets'"'"' approve.py reads them: each bullet'"'"'s backticked
+# paths, in its one `in \`owner/repo\`` repository or this one, shared when the
+# bullet says `(shared`. Two paths overlap when one holds the other or a
+# pattern segment matches; two shared paths never collide.
+def owned_paths: [section_lines("Owned paths")[] | select(startswith("- ")) | . as $b
+  | [scan("\\bin `([^`]+)`") | .[0]] as $repos
+  | scan("`([^`]+)`") | .[0] | select(. as $p | any($repos[]; . == $p) | not)
+  | {repo: (if ($repos | length) == 1 then $repos[0] | ascii_downcase else $W.repo end), path: ., shared: ($b | contains("(shared"))}];
+def segment($p): . as $f | if ($p | contains("*")) then ($f | test("^" + ($p | gsub("(?<c>[.+?^${}()|\\[\\]\\\\])"; "\\\(.c)") | gsub("\\*"; "[^/]*")) + "$")) else $f == $p end;
+def overlaps($a; $b): ($a | rtrimstr("/") | split("/")) as $x | ($b | rtrimstr("/") | split("/")) as $y
+  | all(range([($x | length), ($y | length)] | min); $x[.] as $p | $y[.] as $q | ($p | segment($q)) or ($q | segment($p)));
+def collides($mine): . as $theirs | any($mine[]; . as $a | any($theirs[]; .repo == $a.repo and overlaps(.path; $a.path) and ((.shared and $a.shared) | not)));
 # Same ordinary start guards, before requiring a ready label or no held label.
 # The release path must be able to check these while ready is still removed.
 def start_clear($s):
   ([has_role("needs-info"), has_role("needs-triage"), has_role("ready-for-human"), has_role("wontfix")] | any | not)
-  and all(.blockedBy.nodes[]; blocker_done)
+  and hard_blockers_done
   and start.state == "queued"
   and (open_prs | length) == 0
   and (held($s) | not);
 def ready_but_current($s): has_role("ready-for-agent") and start_clear($s)
   and (labelled_held | not) and (ordering_inflight | not);
 def ready($s): ready_but_current($s) and ($s == null or current($s));
-def may_start($s): ready($s) and (refused_lately(start.last; "start") | not);
+def unrefused_ready($s): ready($s) and (refused_lately(start.last; "start") | not);
+# F6: a ticket waits while its owned paths collide with a running ticket'"'"'s
+# (an open one with a builder or a pull request), or with a lower-numbered
+# ticket that may start in this same read. A ticket naming no owned path
+# collides with nothing (to-tickets'"'"' approval refuses an agent ticket without).
+def collision: . as $t | owned_paths as $mine
+  | ($mine | length) > 0 and any($W.specs[] as $s2 | $s2.subIssues.nodes[]
+      | select(.number != $t.number and .state == "OPEN" and (owned_paths | collides($mine)))
+      | building or (.number < $t.number and is_approved($s2) and (looks | length) == 0 and unrefused_ready($s2)); .);
+def may_start($s): unrefused_ready($s) and (collision | not);
 # A fleet thread'"'"'s takeover (ClosedWiz#192) starts a builder too, so it keeps
 # every gate of an ordinary start (Sol R1 on #1517): approved and current,
 # ready, no other triage label, its blockers merged and no hold.
@@ -1413,7 +1445,7 @@ def may_start($s): ready($s) and (refused_lately(start.last; "start") | not);
 # recorded builder and its open pull request.
 def takeover_clear($s): has_role("ready-for-agent")
   and ([has_role("needs-info"), has_role("needs-triage"), has_role("ready-for-human"), has_role("wontfix")] | any | not)
-  and all(.blockedBy.nodes[]; blocker_done)
+  and hard_blockers_done
   and (held($s) | not) and (labelled_held | not) and (ordering_inflight | not);
 def takeover_ready($s): takeover_clear($s) and current($s);
 # The orchestrator archived the old builder: "old builder archived, thread <id>".
@@ -1591,7 +1623,7 @@ def ticket_lines_now($s): . as $t
              else empty end end),
       (if has_role("needs-info") then
          # A question or answer edited since it was asked counts as new (R1 on #1442).
-         ([plain[] | .updatedAt // .createdAt] | max) as $q | ([records[] | kind("asked the orchestrator") | .at] | max) as $a
+         ([plain[] | .updatedAt // .createdAt] | max) as $q | ([records[] | kind("asked the orchestrator|granted") | .at] | max) as $a
          | if $a == null or ($q != null and $q > $a) then "needs-info #\(.number): a question for the orchestrator" else empty end
        else empty end),
       (start as $st
@@ -1885,10 +1917,10 @@ jqw() {
 
 # world CHECKS LABELS SINGLES: what was read, as one JSON file.
 world() {
-  jq -n --argjson now "$NOW" --arg default "$DEFAULT" --slurpfile specs "$TMP/specs.json" \
+  jq -n --argjson now "$NOW" --arg default "$DEFAULT" --arg repo "$REPO" --slurpfile specs "$TMP/specs.json" \
     --slurpfile checks "$1" --slurpfile labels "$2" --slurpfile singles "$3" --arg claim "${CLAIM_N:+$CLAIM_N $CLAIM_ID}" \
     --slurpfile followups "$TMP/followups.json" --arg spec "${SPEC:-}" \
-    '{now: $now, default: $default, specs: $specs[0], singles: $singles[0], checks: $checks[0], labels: $labels[0],
+    '{now: $now, default: $default, repo: ($repo | ascii_downcase), specs: $specs[0], singles: $singles[0], checks: $checks[0], labels: $labels[0],
       followups: $followups[0], spec: (if $spec == "" then null else ($spec | tonumber) end),
       claim: (if $claim == "" then null else ($claim | split(" ") | {n: (.[0] | tonumber), id: (.[1] | tonumber)}) end),
       fingerprints: {}, branches: {}, merged: [], prfiles: {}}' > "$TMP/world.json" || die "can't build the world"

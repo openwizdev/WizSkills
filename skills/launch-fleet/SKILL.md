@@ -12,7 +12,7 @@ A **fleet** is the agents working one approved plan graph. Each spec has its own
 
 These hold on every line, before every effect.
 
-- **Approval.** Start only what `fleet.sh` prints. A ticket is on the **frontier** only when its spec's latest plan approval is current (to-tickets' `revision.sh` fingerprint matches), it is open with only the ready label, every blocker has a **verified merge** (closed by a pull request merged into the default branch), and it has no builder, open pull request or hold. A label alone approves nothing, a person's ticket is never started, and a stale or unreadable approval starts nothing.
+- **Approval.** Start only what `fleet.sh` prints. A ticket is on the **frontier** only when its spec's latest plan approval is current (to-tickets' `revision.sh` fingerprint matches), it is open with only the ready label, every **hard blocker** has a **verified merge** (closed by a pull request merged into the default branch), its owned paths don't collide with a running ticket's, and it has no builder, open pull request or hold. A blocker whose `## Links` line is `file` only shares context and holds nothing (F6); a `real`, unlabelled or missing line is hard. Two tickets collide when owned paths overlap in one repository and not both bullets say `(shared`; of two ready colliding tickets the lower number starts first. A label alone approves nothing, a person's ticket is never started, and a stale or unreadable approval starts nothing.
 - **Records.** A comment counts only when its author is in `fleet.md`'s `Record authors` row ("Record authors", below). Verdicts are read on GitHub, from the exact pull request, and hold only for the full 40-character head they name. No report, a timeout or an older head is never approval.
 - **Privacy.** Public records name tickets, pull requests, commits, branches and claim comments, never a thread id, loop id, webhook address or token. Write every issue or pull request record with `scripts/post.py`, which refuses those identities and reads the write back.
 - **Builder and reviewer apart.** The reviewer is always the other family, from `fleet.md`'s reviewer table for the builder's recorded family; unknown or conflicting family waits. Never swap a refused provider or model for another.
@@ -50,7 +50,7 @@ Done when every line is done and recorded and the check prints no line you could
 | `merge #P for #N at <commit>` | Merge it ("Merging", below) |
 | `archive #N` | Archive the agents it names (one already archived is done), then record `launch-fleet: archived` as the ticket's last comment |
 | `note`, `release`, `reconcile release` | [references/holds.md](references/holds.md). A relied-on file change never holds a ticket; uncertainty never relabels |
-| `needs-info #N` | A narrow same-intent path request goes to the ops agent's grant check ([references/ops.md](references/ops.md)); anything else goes to the orchestrator with a link, recorded `launch-fleet: asked the orchestrator` |
+| `needs-info #N` | Grant it yourself when it is one of the four bounded kinds (F4): a few-line supporting edit the ticket can't work without, an already-approved small pinned dependency's wiring, a read route under the API rules, or a truly necessary spec change: `python3 -I scripts/self-grant.py <owner>/<repo> <N> <supporting-edit\|dependency-wiring\|read-route\|spec-change> "<reason>" [--spec <S>]` records it with its reason (a spec change on the spec too); then tell the builder. It refuses a model or effort change: that goes to Jake. A narrow same-intent path request goes to the ops agent's grant check ([references/ops.md](references/ops.md)); anything else goes to the orchestrator with a link, recorded `launch-fleet: asked the orchestrator` |
 | `nightly red`, `person`, `re-approve`, `spec done`, `close spec`, live-check `look` | [references/user.md](references/user.md) |
 | `look #N: ...` | Tell the orchestrator what it says and record `launch-fleet: look: <the reason>` (scope and live-check looks: their reference) |
 | `wake fleet #S: ...` | Resolve `fleet-<S>` through the private loop map's `S` key, `room-cli loop run <that id>` once, nothing else for that spec. Missing: post `launch-fleet: look: fleet loop handle unresolved` |
@@ -73,6 +73,7 @@ The loop's memory: comments on GitHub, each starting `launch-fleet:`. Edit a cla
 | | `launch-fleet: release starting <hold comment id>` / `released ordering C` / `release failed C: <why>` / `release withdrawn C` | A release intent and its verified outcome; unresolved intents block starts |
 | | `launch-fleet: held for #<P>` / `noted #<P>` | An existing contract hold, or a builder told of a change |
 | | `launch-fleet: asked the orchestrator` | Its `needs-info` question was passed on |
+| | `launch-fleet: granted <kind>: <reason>` / `granted spec change on #<S>: <reason>` | The fleet granted itself one of F4's four kinds; it answers the question |
 | | `launch-fleet: told the user` | A person's ticket is ready, and the user knows |
 | | `launch-fleet: complete: <evidence>` | The orchestrator or owning fleet thread records a person's completed work and names its evidence; with the ticket closed, its dependents may start |
 | | `launch-fleet: waiting for #<B>` / `resume starting <wait comment id> for #<B>` / `resume sent <wait comment id> for #<B>` / `resume failed <wait comment id> for #<B>: <why>` / `resume withdrawn <wait comment id> for #<B>` | The builder waits for a verified merge, or was told to resume that wait |
@@ -87,6 +88,7 @@ The loop's memory: comments on GitHub, each starting `launch-fleet:`. Edit a cla
 | | `launch-fleet: merge main asked <commit>` | Its builder was told to merge `main` in, as its re-test ran on an old `main` |
 | | `launch-fleet: merge blocked <commit>: <why>` | The merge waits for someone |
 | A spec | `launch-fleet: needs approval: <what changed>` / `spec summary` | The user was asked, or told it is done |
+| | `launch-fleet: spec changed for #<N>: <reason>` | A truly necessary spec change the fleet granted itself for that ticket |
 | | `launch-fleet: fleet active, loop fleet-<S>` | The spec's loop's public handle (the real loop id stays under `S` in the private loop file). The latest counts. A separate `Wake mode: fresh` line keeps existing assignments across wakes |
 | | `launch-fleet: look: live check not recorded as passed` / `live check passed` | Evidence is missing (one alert), or a newer explicit pass has been verified and the wait is released; the pass line may append `: <evidence source>` |
 | | `launch-fleet: look: live check evidence to verify in comment <id>` | The tick inspected that new evidence comment without establishing the required pass; do not repeat its verification task |

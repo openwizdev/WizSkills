@@ -114,7 +114,7 @@ class FrontierTest(unittest.TestCase):
             '#13 no kind label: Synthetic question 13\n'
             '#15 no kind label: Synthetic question 15\n'
             '#16 frontier wayfind:grill: Synthetic question 16\n'))
-        self.assertEqual(len(reads), 1)
+        self.assertEqual(len(reads), 2)  # the record authors, then the map in one page
 
     def test_clear_map_says_so(self):
         # catches: an empty frontier read as "nothing to do" when questions
@@ -156,7 +156,8 @@ class FrontierTest(unittest.TestCase):
             'comments truncated': ({'1': a_map(1, [dict(question(11), comments=conn([], 101))])}, 'map'),
             'blockers truncated': ({'1': served(dict(question(1), blockedBy=conn([], 101)))}, 'holder'),
             'claim without its id': ({'1': served(dict(question(1), comments=conn(
-                [{'url': 'https://github.com/example/widgets/issues/1', 'body': CLAIM}])))}, 'holder'),
+                [dict(comment(1, 5, CLAIM), url='https://github.com/example/widgets/issues/1')])))},
+                                     'holder'),
         }
         for name, (fixture, verb) in cases.items():
             with self.subTest(name):

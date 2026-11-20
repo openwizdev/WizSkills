@@ -9,12 +9,20 @@
         #<n> no kind label: <title>      (not exactly one wayfind: kind)
       or `no open question` when every question is closed.
   python3 -I frontier.py holder <question> [--mine <claim comment id>]
-      `unclaimed`, `held by <id>`, `yours` (your claim holds) or `closed`.
+      `closed`, `no kind label`, `blocked by #<a> #<b>`, else `unclaimed`,
+      `held by <id>` or `yours` (your claim holds and nothing blocks it).
+      Work only on `yours`; on anything else release your claim and stop.
 
 A claim is a comment whose body is `wayfind: claimed`; its id is the
 numeric `#issuecomment-` suffix of its URL. `wayfind: released <id>` after
 it releases that claim. The earliest unreleased claim holds the question.
+Only a record author's claim or release counts: a login in the Record
+authors row of the `## GitHub identity` table of docs/agents/fleet.md on
+the repository's default branch. Anyone else's comment is ignored; a
+missing or malformed row trusts nobody and refuses the read.
 
+Every connection is read page by page, in order, through its cursors; a
+page chain that stops short, repeats a cursor or changes its total refuses.
 Exits 2 with the reason on stderr and nothing on stdout when any part of
 the read fails or is incomplete. Never read that as an empty frontier.
 Needs gh (signed in); uses GH_REPO or the current clone's repository.
@@ -28,12 +36,19 @@ KINDS = ('wayfind:grill', 'wayfind:research', 'wayfind:prototype', 'wayfind:task
 CLAIM = 'wayfind: claimed'
 RELEASE = re.compile(r'wayfind: released ([1-9][0-9]*)')
 COMMENT_ID = re.compile(r'#issuecomment-([1-9][0-9]*)')
-QUESTION = '''number title state
-  labels(first: 100) { totalCount nodes { name } }
-  blockedBy(first: 100) { totalCount nodes { number state } }
-  comments(first: 100) { totalCount nodes { url body } }'''
-QUERY = '''query($owner: String!, $repo: String!, $number: Int!) {
+LOGIN = re.compile(r'[a-z0-9][a-z0-9-]{0,38}(?:\[bot\])?')
+PAGE = '%s(first: 100, after: $after) { totalCount pageInfo { hasNextPage endCursor } nodes { %s } }'
+FIELDS = {'labels': 'name', 'blockedBy': 'number state',
+          'comments': 'url body author { __typename login }'}
+QUESTION = 'number title state ' + ' '.join(PAGE % item for item in FIELDS.items())
+FIELDS['subIssues'] = QUESTION
+QUERY = '''query($owner: String!, $repo: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $repo) { issue(number: $number) { %s } }
+}'''
+FLEET = '''query($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+    object(expression: "HEAD:docs/agents/fleet.md") { ... on Blob { text } }
+  }
 }'''
 
 
@@ -41,40 +56,96 @@ class Refuse(Exception):
     pass
 
 
-def read(number, fields):
+def graphql(what, query, values):
     try:
         out = subprocess.run(
             ['gh', 'api', 'graphql', '-F', 'owner={owner}', '-F', 'repo={repo}',
-             '-F', f'number={number}', '-f', 'query=' + QUERY % fields],
+             *values, '-f', 'query=' + query],
             capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise Refuse(f'gh could not run: {error}')
     if out.returncode != 0:
-        raise Refuse(f'gh failed reading #{number}')
+        raise Refuse(f'gh failed reading {what}')
     try:
         data = json.loads(out.stdout)
     except ValueError:
-        raise Refuse(f'gh returned no JSON for #{number}')
+        raise Refuse(f'gh returned no JSON for {what}')
     if not isinstance(data, dict) or data.get('errors'):
-        raise Refuse(f'GitHub returned an error for #{number}')
-    issue = ((data.get('data') or {}).get('repository') or {}).get('issue')
+        raise Refuse(f'GitHub returned an error for {what}')
+    repository = (data.get('data') or {}).get('repository')
+    return repository if isinstance(repository, dict) else {}
+
+
+def read(number, fields, after=None):
+    values = ['-F', f'number={number}'] + ([] if after is None else ['-f', f'after={after}'])
+    issue = graphql(f'#{number}', QUERY % fields, values).get('issue')
     if not isinstance(issue, dict):
         raise Refuse(f'#{number} is not a readable issue')
     return issue
 
 
+def record_authors():
+    blob = graphql('docs/agents/fleet.md', FLEET, []).get('object')
+    text = blob.get('text') if isinstance(blob, dict) else None
+    if not isinstance(text, str):
+        raise Refuse('no docs/agents/fleet.md on the default branch: trust nobody')
+    inside, rows = False, []
+    for row in text.splitlines():
+        if row.startswith('## '):
+            inside = row.strip().lower() == '## github identity'
+        elif inside and re.match(r'\|\s*Record authors\s*\|', row):
+            rows.append(row)
+    if len(rows) != 1:
+        raise Refuse('no single Record authors row in the GitHub identity table: trust nobody')
+    cells = [cell.strip() for cell in rows[0].split('|')[2].split(',')]
+    logins = [cell[1:-1].lower() if len(cell) > 2 and cell[0] == cell[-1] == '`' else ''
+              for cell in cells]
+    if not all(LOGIN.fullmatch(login) for login in logins):
+        raise Refuse('malformed Record authors row: trust nobody')
+    return set(logins)
+
+
 def nodes(issue, field):
-    connection = issue.get(field)
-    if not isinstance(connection, dict) or not isinstance(connection.get('nodes'), list):
-        raise Refuse(f'#{issue.get("number")} has no {field}')
-    if connection.get('totalCount') != len(connection['nodes']):
-        raise Refuse(f'#{issue.get("number")} has more {field} than one read returns')
-    return connection['nodes']
+    """Every node of one connection, in order, following and checking its cursors."""
+    if ('all', field) in issue:
+        return issue[('all', field)]
+    connection, found, cursors, total = issue.get(field), [], set(), None
+    while True:
+        if not isinstance(connection, dict) or not isinstance(connection.get('nodes'), list) \
+                or not isinstance(connection.get('pageInfo'), dict):
+            raise Refuse(f'#{issue.get("number")} has no {field}')
+        if found and connection.get('totalCount') != total:
+            raise Refuse(f'#{issue.get("number")} changed its {field} while being read')
+        total = connection.get('totalCount')
+        found += connection['nodes']
+        cursor = connection['pageInfo'].get('endCursor')
+        if connection['pageInfo'].get('hasNextPage') is not True:
+            break
+        if not isinstance(cursor, str) or not cursor or cursor in cursors:
+            raise Refuse(f'#{issue.get("number")} has a broken page chain in its {field}')
+        cursors.add(cursor)
+        connection = read(issue['number'], PAGE % (field, FIELDS[field]), cursor).get(field)
+    if total != len(found):
+        raise Refuse(f'#{issue.get("number")} has more {field} than its pages return')
+    issue[('all', field)] = found
+    return found
 
 
-def holder(issue):
+def author(comment):
+    """The comment's login as fleet.md writes it (an App as `<name>[bot]`), or None."""
+    who = comment.get('author')
+    login = who.get('login') if isinstance(who, dict) else None
+    if not isinstance(login, str):
+        return None
+    login = login.lower()
+    return login + '[bot]' if who.get('__typename') == 'Bot' and not login.endswith('[bot]') else login
+
+
+def holder(issue, authors):
     claims = []
     for comment in nodes(issue, 'comments'):
+        if author(comment) not in authors:
+            continue
         body = (comment.get('body') or '').strip()
         if body == CLAIM:
             found = COMMENT_ID.search(comment.get('url') or '')
@@ -86,33 +157,40 @@ def holder(issue):
     return claims[0] if claims else None
 
 
-def line(question):
+def standing(question):
+    """Why nobody may work on this question now, or its kind label when they may."""
     kinds = [l['name'] for l in nodes(question, 'labels') if l.get('name', '').startswith('wayfind:')]
     blockers = [b['number'] for b in nodes(question, 'blockedBy') if b.get('state') != 'CLOSED']
-    held = holder(question)
     if len(kinds) != 1 or kinds[0] not in KINDS:
-        what = 'no kind label'
-    elif blockers:
-        what = 'blocked by ' + ' '.join(f'#{n}' for n in blockers)
-    elif held:
-        what = f'held by {held}'
-    else:
-        what = f'frontier {kinds[0]}'
+        return False, 'no kind label'
+    if blockers:
+        return False, 'blocked by ' + ' '.join(f'#{n}' for n in blockers)
+    return True, kinds[0]
+
+
+def line(question, authors):
+    held = holder(question, authors)
+    eligible, what = standing(question)
+    if eligible:
+        what = f'held by {held}' if held else f'frontier {what}'
     return f'#{question["number"]} {what}: {question["title"]}'
 
 
 def main(argv):
     if len(argv) == 2 and argv[0] == 'map' and argv[1].isdigit():
-        issue = read(int(argv[1]), 'number subIssues(first: 100) { totalCount nodes { %s } }' % QUESTION)
-        lines = [line(q) for q in nodes(issue, 'subIssues') if q.get('state') == 'OPEN']
+        authors = record_authors()
+        issue = read(int(argv[1]), 'number ' + PAGE % ('subIssues', QUESTION))
+        lines = [line(q, authors) for q in nodes(issue, 'subIssues') if q.get('state') == 'OPEN']
         return '\n'.join(lines) if lines else 'no open question'
     if len(argv) in (2, 4) and argv[0] == 'holder' and argv[1].isdigit() and \
             (len(argv) == 2 or (argv[2] == '--mine' and argv[3].isdigit())):
+        authors = record_authors()
         issue = read(int(argv[1]), QUESTION)
-        nodes(issue, 'labels'), nodes(issue, 'blockedBy')
-        held = holder(issue)
+        held, (eligible, why) = holder(issue, authors), standing(issue)
         if issue.get('state') != 'OPEN':
             return 'closed'
+        if not eligible:
+            return why
         if held is None:
             return 'unclaimed'
         return 'yours' if len(argv) == 4 and held == argv[3] else f'held by {held}'

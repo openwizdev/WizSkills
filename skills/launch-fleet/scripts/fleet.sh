@@ -1427,6 +1427,9 @@ def approver_why: approval_label as $e | $W.labels["ready-for-agent"] as $l
   | if $e == null then "who added \($l) can'"'"'t be read"
     elif ($e.actor | login_of | maintainer | not) then "\($l) was last added at \($e.createdAt) by someone who is not a maintainer"
     elif .lastEditedAt != null and .lastEditedAt > $e.createdAt then "the ticket was edited at \(.lastEditedAt), after \($l) was added at \($e.createdAt)"
+    # GitHub'"'"'s times are to the second: an edit in the label'"'"'s own second
+    # may have come after it (R1 on WizSkills#67).
+    elif .lastEditedAt != null and .lastEditedAt == $e.createdAt then "the ticket was edited at \(.lastEditedAt), the same second \($l) was added, so which came first can'"'"'t be read"
     else null end
   | if . == null then null else "start refused: \(.); a maintainer must add it again" end;
 def ready_unchecked($s): ready_but_current($s) and ($s == null or current($s));

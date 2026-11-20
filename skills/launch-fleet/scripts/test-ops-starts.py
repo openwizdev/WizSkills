@@ -603,6 +603,10 @@ class ModelsTable(unittest.TestCase):
             self.assertEqual((run.returncode, run.stdout), (0, want))
         self.assertEqual(self.flags(orchestrator, 'builder').stdout,
                          '--provider claude-code --model claude-opus-5-5 --reasoning-level medium\n')
+        # The older tables have no Orchestrator: the fleet thread follows `## Builder`, never the small table.
+        older = self.flags((PROJECT / 'docs/agents/fleet.md').read_text(), 'fleet_thread')
+        self.assertEqual((older.returncode, older.stdout),
+                         (0, '--provider claude-code --model claude-opus-5-5 --reasoning-level high\n'))
 
     # catches: a same-family reviewer started on its own family's work (ADR 0008),
     # a review swapped to another model instead of waiting, or a missed fallback to the Builder.
@@ -646,7 +650,9 @@ class ModelsTable(unittest.TestCase):
                   ('`room-cli thread spawn` flags |', 'flags |'),
                   ('--model claude-opus-5-5 --reasoning-level medium` |\n| Reviewer',
                    '--model vendor//demo --reasoning-level medium` |\n| Reviewer'),
-                  ('## Loop', '## Models\n\n## Loop'))
+                  ('## Loop', '## Models\n\n## Loop'),
+                  ('| Reviewer | Codex | Sol 6.2 | Medium | `--provider codex --model gpt-6.2-sol '
+                   '--reasoning-level medium` |\n', ''))
         for old, new in breaks:
             with self.subTest(new):
                 broken = both.replace(old, new, 1)

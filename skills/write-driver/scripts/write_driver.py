@@ -5,7 +5,7 @@
     write_driver.py host --state <dir> --host <host> --costly yes|no
     write_driver.py copy --state <dir> --openwiz <checkout> --into <repository folder>
     write_driver.py ticket --host <host> --account <login> --out <folder>
-    write_driver.py ask --state <dir> --step <step> --effect <effect>
+    write_driver.py ask --state <dir> --operation kit|expired-login|host [--step <host step>] --effect <effect>
     write_driver.py reply --state <dir> --file <the user's next message>
     write_driver.py sign-in --state <dir> --harness <harness>
     write_driver.py kit --state <dir> --openwiz <checkout> --driver <program> --repo <owner/name> --ticket <n>
@@ -14,7 +14,6 @@
     write_driver.py lesson wake-after-turn --state <dir> --turn-ended yes|no --wake answered|error
                         --note-edited yes|no --second-note yes|no
     write_driver.py lesson expired-login --state <dir> --driver <program> --harness <h> [--asked <ask id>]
-    write_driver.py lesson record --state <dir> --file <lesson record>
     write_driver.py started run --state <dir> --driver <program> --run <run id>
     write_driver.py started add --state <dir> --what <what> -- <its stop command...>
     write_driver.py stop-all --state <dir>
@@ -25,14 +24,17 @@
 Every exact text comes from the contract's one `write-driver-v1` block. The run's state is one owner-only
 JSON file, <dir>/run.json. Exit 0: done; 1: refused (the last line says why), or a kit check failed;
 2: the kit could not run; 3: skipped on the user's no. It never reads, asks for, prints or stores a login, token or key: GitHub is
-reached only through the user's own signed-in `gh`. Python 3.9+, standard library, Linux (/proc).
+reached only through the user's own signed-in `gh`. The kit reaches the driver through `proxy`, which
+records each run it starts for stop-all. Python 3.9+, standard library, Linux (/proc).
 """
 import argparse
+import ctypes
 import json
 import math
 import os
 import re
-import secrets
+import shlex
+import signal
 import shutil
 import subprocess
 import sys
@@ -298,8 +300,16 @@ def passing(state):
             and all(state['lessons'].get(n) == 'pass' for n in forms()['lessons']))
 
 
+def changed(state):
+    """Evidence or tracked resources changed: the report and any share waiting for its yes no longer hold."""
+    state['report'] = None
+    if state['share'] and state['share']['state'] == 'previewed':
+        state['share'] = None
+
+
 def mark_clock(state):
     """The clock stops when the last of the kit's five checks and three lessons passes."""
+    changed(state)
     if passing(state):
         state['passed_at'] = state.get('passed_at') or time.time()
     else:
@@ -312,7 +322,7 @@ def elapsed(state):
     return '1 minute' if n == 1 else '%d minutes' % n
 
 
-def consent(state, ask_id, step_kind):
+def consent(state, ask_id, operation):
     """None to go ahead; 'skip' on the user's no. Refused when a costly step has no answered ask."""
     if not state['costly'] and ask_id is None:
         return None
@@ -322,11 +332,14 @@ def consent(state, ask_id, step_kind):
     ask = next((a for a in state['asks'] if a['id'] == ask_id), None)
     if ask is None:
         raise Refused('no ask %s' % ask_id)
+    if ask['operation'] != operation:
+        raise Refused('ask %s is not an ask for this step: it asked to %s; ask for this one (`ask --operation %s`)'
+                      % (ask_id, ask['step'], operation))
     if ask['answer'] is None:
         raise Refused('ask %s has no answer yet: wait for the user\'s next message, then run `reply`' % ask_id)
     if ask['used']:
         raise Refused('ask %s already covered one step: one ask covers one step, so ask again' % ask_id)
-    ask['used'] = step_kind
+    ask['used'] = True
     return None if ask['answer'] == 'yes' else 'skip'
 
 
@@ -405,15 +418,28 @@ def cmd_ticket(a):
     return 0
 
 
+# The steps this script runs itself, each asked for in these exact words; any other host step is `host`.
+OPERATIONS = {'kit': 'run the driver kit', 'expired-login': 'run the expired sign-in check with your driver'}
+
+
 def cmd_ask(a):
     state = load(a.state)
-    if CREDENTIAL.search(a.step):
+    if a.operation in OPERATIONS:
+        if a.step:
+            raise Refused('the %s step is asked for in its own words: drop --step' % a.operation)
+        step = OPERATIONS[a.operation]
+    elif not a.step:
+        raise Refused('name the one host step in plain words: --step')
+    else:
+        step = a.step
+    if CREDENTIAL.search(step):
         raise Refused('refused (credential): an ask never names a login, token or key, so it is never shown')
-    text = render('ask', step=a.step, host=state['host'], effect=a.effect)
+    text = render('ask', step=step, host=state['host'], effect=a.effect)
     if read_ask(text)['result'] != 'valid':
         raise Refused('refused (ask-form): that ask does not fit the contract')
     ask_id = 'ask-%d' % (len(state['asks']) + 1)
-    state['asks'].append({'id': ask_id, 'step': a.step, 'effect': a.effect, 'answer': None, 'used': False})
+    state['asks'].append({'id': ask_id, 'operation': a.operation, 'step': step, 'effect': a.effect,
+                          'answer': None, 'used': False})
     save(a.state, state)
     print(text)
     return 0
@@ -450,9 +476,18 @@ def cmd_kit(a):
         save(a.state, state)
         print('skipped on your no: Kit: ' + ', '.join('%s not run' % c for c in checks))
         return 3
+    state['kit'] = {}  # a rerun proves nothing until it reads: no earlier result survives it
+    mark_clock(state)
     save(a.state, state)
+    # The kit calls the driver through this proxy, so every run its `start` answers is recorded for stop-all,
+    # even when the kit's start check then fails and it never stops that run itself.
+    proxy = Path(a.state) / 'kit-driver'
+    proxy.write_text('#!/bin/sh\nexec %s -I %s proxy --state %s --driver %s "$@"\n' % tuple(
+        shlex.quote(x) for x in (sys.executable, os.path.abspath(__file__), os.path.abspath(a.state),
+                                 os.path.abspath(a.driver))))
+    proxy.chmod(0o700)
     argv = [sys.executable, '-I', str(Path(a.openwiz) / 'kernel' / 'driver-kit' / 'kit.py'), '--driver',
-            str(a.driver), '--repo', a.repo, '--ticket', str(a.ticket), '--harness', a.harness, '--model', a.model,
+            str(proxy), '--repo', a.repo, '--ticket', str(a.ticket), '--harness', a.harness, '--model', a.model,
             '--skill', a.skill, '--wait', str(a.wait)]
     try:
         p = subprocess.run(argv, capture_output=True, text=True)
@@ -460,6 +495,7 @@ def cmd_kit(a):
         print('the kit could not run: %s' % e.strerror)
         return 2
     sys.stdout.write(p.stdout)
+    state = load(a.state)  # the proxy recorded what the kit's runs started
     lines = p.stdout.rstrip('\n').split('\n') if p.stdout.strip() else []
     found = [KIT_LINE.fullmatch(line) for line in lines]
     names = [m[2] for m in found if m]
@@ -476,10 +512,33 @@ def cmd_kit(a):
     return 0 if p.returncode == 0 else 1
 
 
-def record_lesson(folder, state, record):
+def cmd_proxy(a):
+    """The kit's view of the driver: the driver itself, byte for byte, recording each run `start` answers."""
+    request = sys.stdin.buffer.read()
+    p = subprocess.run([a.driver, *a.args], input=request, capture_output=True)
+    if a.args == ['start'] and p.returncode == 0:
+        try:
+            run = json.loads(p.stdout)['run']
+        except (ValueError, KeyError, TypeError):
+            run = None
+        if isinstance(run, str) and re.fullmatch(r'[A-Za-z0-9._:-]{1,100}', run):
+            state = load(a.state)
+            state['started'].append({'what': 'driver run %s (started by the kit)' % run, 'argv': [a.driver, 'stop'],
+                                     'stdin': json.dumps({'run': run}), 'stopped': False})
+            state['stop_all'] = False
+            changed(state)
+            save(a.state, state)
+    sys.stdout.buffer.write(p.stdout)
+    sys.stderr.buffer.write(p.stderr)
+    return p.returncode
+
+
+def record_lesson(folder, state, record, expect_next=None):
     reading = read_lesson(json.dumps(record))
     if reading['result'] == 'invalid':
         raise Refused('that lesson record does not fit the contract (lesson-fields)')
+    if reading['result'] == 'pass' and expect_next is not None and record['answer']['next'] != expect_next:
+        reading = {'result': 'fail', 'code': 'no-sign-in-next'}  # a sign-in step for another harness or host
     state['lessons'][record['lesson']] = reading['result']
     mark_clock(state)
     save(folder, state)
@@ -498,39 +557,44 @@ def reply_text(path):
     return text[:-1] if text.endswith('\n') else text
 
 
-def marked(mark):
-    """Pids of live processes carrying this run's mark in their environment."""
-    found = []
+def descendants():
+    """Live processes under this one: what the probe's driver started, wherever its session went, since this
+    process is their subreaper. It reads only each process's parent from /proc/<pid>/stat, never an environment."""
+    while True:  # reap what has already exited here
+        try:
+            if os.waitpid(-1, os.WNOHANG)[0] == 0:
+                break
+        except ChildProcessError:
+            break
+    parents = {}
     for pid in filter(str.isdigit, os.listdir('/proc')):
         try:
-            with open('/proc/%s/environ' % pid, 'rb') as f:
-                if mark.encode() in f.read().split(b'\0'):
-                    with open('/proc/%s/stat' % pid) as s:
-                        if s.read().rpartition(')')[2].split()[0] != 'Z':
-                            found.append(int(pid))
+            with open('/proc/%s/stat' % pid) as f:
+                fields = f.read().rpartition(')')[2].split()
         except OSError:
             continue
+        if fields[0] != 'Z':
+            parents.setdefault(int(fields[1]), []).append(int(pid))
+    found, todo = set(), [os.getpid()]
+    while todo:
+        for child in parents.get(todo.pop(), []):
+            if child not in found:
+                found.add(child)
+                todo.append(child)
     return found
 
 
-STAND_IN = '''#!/bin/sh
+STAND_IN = """#!/bin/sh
 # write-driver's stand-in harness: its first turn ends at once on an expired sign-in. It is not the user's harness.
+: > %s
 echo "Your sign-in has expired. Please sign in again to continue."
 echo "Your sign-in has expired. Please sign in again to continue." >&2
 exit 1
-'''
+"""
 
 
 def cmd_lesson(a):
     state = load(a.state)
-    if a.lesson == 'record':
-        try:
-            record = strict(Path(a.file).read_text(encoding='utf-8'))
-        except ValueError:
-            raise Refused('that lesson record is not JSON with each key once (lesson-fields)')
-        if not isinstance(record, dict) or record.get('lesson') not in forms()['lessons']:
-            raise Refused('that lesson record does not fit the contract (lesson-fields)')
-        return record_lesson(a.state, state, record)
     if a.lesson == 'live-shape':
         return record_lesson(a.state, state, {'lesson': 'live-shape', 'live': reply_text(a.live),
                                               'fixture': reply_text(a.fixture)})
@@ -538,7 +602,12 @@ def cmd_lesson(a):
         return record_lesson(a.state, state, {'lesson': 'wake-after-turn', 'turn_ended': a.turn_ended == 'yes',
                                               'wake': a.wake, 'note_edited': a.note_edited == 'yes',
                                               'second_note': a.second_note == 'yes'})
-    # expired-login: the driver's own start, with a stand-in harness that ends its first turn on a sign-in line.
+    # expired-login: the driver's own `start`, against its own test fixtures, with a stand-in harness that ends
+    # its first turn on a sign-in line. Nothing of the caller's reaches it: an empty home, a PATH of the stand-in,
+    # the driver's fixtures and the system's programs, its own state folder, and no other variable.
+    if not field('harness', a.harness):
+        raise Refused('%s is not a harness name: 1 to 40 lower-case letters, digits or -, starting with a letter'
+                      % a.harness)
     if consent(state, a.asked, 'expired-login') == 'skip':
         state['lessons']['expired-login'] = 'not run'
         mark_clock(state)
@@ -546,18 +615,24 @@ def cmd_lesson(a):
         print('expired-login not run: skipped on your no')
         return 3
     save(a.state, state)
-    stand_in = Path(tempfile.mkdtemp(prefix='write-driver-stand-in-'))
-    mark = 'WRITE_DRIVER_LESSON=' + secrets.token_hex(8)
+    driver = os.path.abspath(a.driver)
+    box = Path(tempfile.mkdtemp(prefix='write-driver-probe-'))
     try:
-        harness = stand_in / a.harness
-        harness.write_text(STAND_IN)
-        harness.chmod(0o700)
-        env = dict(os.environ, PATH='%s%s%s' % (stand_in, os.pathsep, os.environ.get('PATH', '')),
-                   WRITE_DRIVER_LESSON=mark.partition('=')[2])
+        for name in ('bin', 'home', 'state'):
+            (box / name).mkdir(mode=0o700)
+        ran = box / 'ran'
+        fd = os.open(box / 'bin' / a.harness, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
+        with os.fdopen(fd, 'w') as f:
+            f.write(STAND_IN % shlex.quote(str(ran)))
+        env = {'PATH': os.pathsep.join([str(box / 'bin'), os.path.join(os.path.dirname(driver), 'fixtures'),
+                                        '/usr/local/bin', '/usr/bin', '/bin']),
+               'HOME': str(box / 'home'), 'LANG': 'C.UTF-8',
+               'OPENWIZ_%s_STATE' % state['host'].upper().replace('-', '_'): str(box / 'state')}
+        ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER: keep what it starts
         request = {'repository': 'example-user/%s-driver-kit' % state['host'], 'ticket': 1,
                    'skill': 'build-ticket', 'harness': a.harness, 'model': 'stand-in'}
-        p = subprocess.run([str(a.driver), 'start'], input=json.dumps(request), env=env, capture_output=True,
-                           text=True, timeout=300)
+        p = subprocess.run([driver, 'start'], input=json.dumps(request), env=env, capture_output=True, text=True,
+                           timeout=300, cwd=str(box / 'home'))
         try:
             answer = json.loads(p.stdout)
         except ValueError:
@@ -566,17 +641,27 @@ def cmd_lesson(a):
             answer = {'error': 'the driver printed no JSON object'}
         if p.returncode == 0 and isinstance(answer.get('run'), str):
             # It answered a run its first turn never keeps: stop it, as everything this skill started.
-            subprocess.run([str(a.driver), 'stop'], input=json.dumps({'run': answer['run']}), env=env,
-                           capture_output=True, text=True, timeout=300)
+            subprocess.run([driver, 'stop'], input=json.dumps({'run': answer['run']}), env=env,
+                           capture_output=True, text=True, timeout=300, cwd=str(box / 'home'))
         deadline = time.monotonic() + 5
-        while marked(mark) and time.monotonic() < deadline:
+        while descendants() and time.monotonic() < deadline:
             time.sleep(0.1)
-        left = bool(marked(mark))
+        left = descendants()
+        for pid in left:  # stop what it left, and say it was left
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        descendants()
+        if not ran.exists():
+            raise Refused('the driver never ran the stand-in harness %s, so this proves nothing: make `start` run '
+                          'the harness by its name on PATH, then check again' % a.harness)
     finally:
-        shutil.rmtree(stand_in, ignore_errors=True)
+        shutil.rmtree(box, ignore_errors=True)
     answer = {k: v if isinstance(v, str) else json.dumps(v) for k, v in answer.items()}
     return record_lesson(a.state, state, {'lesson': 'expired-login', 'exit': p.returncode, 'answer': answer,
-                                          'left_running': left})
+                                          'left_running': bool(left)},
+                         expect_next=render('sign_in_next', harness=a.harness, host=state['host']))
 
 
 def cmd_started(a):
@@ -591,6 +676,7 @@ def cmd_started(a):
         item = {'what': a.what, 'argv': argv, 'stdin': '', 'stopped': False}
     state['started'].append(item)
     state['stop_all'] = False
+    changed(state)
     save(a.state, state)
     print('will stop: %s' % item['what'])
     return 0
@@ -674,20 +760,36 @@ def driver_times():
             and [i['number'] for i in times] == [DRIVER_TIMES])
 
 
+def shareable(state):
+    """The report a share may come from: current, passing, and after everything started was stopped."""
+    report = state['report']
+    if (not report or not report['share_offer'] or not passing(state) or not state['stop_all']
+            or not all(i['stopped'] for i in state['started'])):
+        return None
+    return report
+
+
+def account_now():
+    """The signed-in gh's own account name, or None. Never a credential."""
+    p = gh(['api', 'user', '--jq', '.login'])
+    account = p.stdout.strip()
+    return account if p.returncode == 0 and field('account', account) else None
+
+
 def cmd_share(a):
     state = load(a.state)
     share = state['share']
     if a.step == 'offer':
         if share is not None:
             raise Refused('the share was already offered for this run: it is offered once')
-        report = state['report']
-        if not report or not report['share_offer']:
-            raise Refused('no share offer: only a passing run that stopped everything it started offers one')
+        report = shareable(state)
+        if not report:
+            raise Refused('no share offer: only a current passing report, after everything it started was '
+                          'stopped, offers one')
         if not driver_times():
             raise Refused("I can't find where driver times go, so I won't offer to share yours")
-        p = gh(['api', 'user', '--jq', '.login'])
-        account = p.stdout.strip()
-        if p.returncode != 0 or not field('account', account):
+        account = account_now()
+        if not account:
             raise Refused('your signed-in gh did not name its account, so there is no share offer')
         line = render('share_line', host=state['host'], time=report['time'])
         preview = render('share_preview', account=account, issue=str(DRIVER_TIMES), host=state['host'],
@@ -704,6 +806,14 @@ def cmd_share(a):
         share['state'] = 'declined'
         save(a.state, state)
         return 0
+    # The yes was to that preview: post only if it still holds, as that account, to the pinned issue.
+    report = shareable(state)
+    line = report and render('share_line', host=state['host'], time=report['time'])
+    if line != share['line'] or not driver_times() or account_now() != share['account']:
+        state['share'] = None
+        save(a.state, state)
+        raise Refused('the account, the Driver times issue or the report changed since that preview, so nothing '
+                      'was posted: it needs a fresh preview (`share offer`) and a fresh yes')
     share['state'] = 'posting'  # saved before the one attempt: never a second one
     save(a.state, state)
     try:
@@ -743,7 +853,8 @@ def parser():
     p.add_argument('--account', required=True)
     p.add_argument('--out', required=True)
     p = cmd('ask')
-    p.add_argument('--step', required=True)
+    p.add_argument('--operation', required=True, choices=('kit', 'expired-login', 'host'))
+    p.add_argument('--step')
     p.add_argument('--effect', required=True, choices=('cost money', 'start a machine',
                                                        'cost money and start a machine'))
     p = cmd('reply')
@@ -771,8 +882,6 @@ def parser():
     q.add_argument('--driver', required=True)
     q.add_argument('--harness', required=True)
     q.add_argument('--asked')
-    q = lesson.add_parser('record')
-    q.add_argument('--file', required=True)
     for q in lesson.choices.values():
         q.add_argument('--state', required=True)
     p = sub.add_parser('started')
@@ -786,6 +895,9 @@ def parser():
     for q in started.choices.values():
         q.add_argument('--state', required=True)
     cmd('stop-all')
+    p = cmd('proxy')
+    p.add_argument('--driver', required=True)
+    p.add_argument('args', nargs=argparse.REMAINDER)
     p = cmd('report')
     p.add_argument('--pr')
     p = sub.add_parser('share')
@@ -799,7 +911,7 @@ def parser():
 
 COMMANDS = {'begin': cmd_begin, 'host': cmd_host, 'copy': cmd_copy, 'ticket': cmd_ticket, 'ask': cmd_ask, 'reply': cmd_reply,
             'sign-in': cmd_sign_in, 'kit': cmd_kit, 'lesson': cmd_lesson, 'started': cmd_started,
-            'stop-all': cmd_stop_all, 'report': cmd_report, 'share': cmd_share}
+            'stop-all': cmd_stop_all, 'proxy': cmd_proxy, 'report': cmd_report, 'share': cmd_share}
 
 
 def main(argv):

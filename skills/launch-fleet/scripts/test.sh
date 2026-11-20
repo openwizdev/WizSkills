@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=869      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 26
+CASES=861      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 20
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1591,39 +1591,10 @@ FP=$(fp12 check.json 'merge12 | machine_only @@then@@ issue(14; .blockedBy = [12
 expect 'machine: a plan changed since its machine approval starts nothing' 0 check.json 'merge12 | machine_only @@then@@ issue(14; .blockedBy = [12])' -- check <<EOF
 re-approve #10: changed since revision 1 (fingerprint now $FP)
 EOF
-expect 'steer: a stop on the video holds the fleet and asks to record it' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "Stop.")' -- check <<EOF
-hold #10: the owner said stop on the video in comment 1003; nothing under the spec starts until a new video
-EOF
-expect 'steer: a recorded stop still holds the fleet' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "stop") | say(10; 1004; "10:05"; "launch-fleet: held by stop 1003")' -- check < /dev/null
-expect 'steer: a reset asks a re-cut and holds the fleet' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "Reset: the store should come after the page")' -- check <<EOF
-re-cut #10: the owner said reset on the video in comment 1003; re-cut the plan and make a new video
-EOF
-expect 'steer: a recorded reset still holds until the new video' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "reset") | say(10; 1004; "10:05"; "launch-fleet: re-cut asked 1003")' -- check < /dev/null
-expect 'steer: a new video ends the hold' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "stop") | say(10; 1004; "10:05"; "launch-fleet: held by stop 1003") | video(10; 1005; "10:30")' -- check <<EOF
-start #13: W3: widget page (spec #10)
-EOF
-expect 'steer: anything else is a steer the fleet reads, and the fleet goes on' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "Keep the page plain.")' -- check <<EOF
-steer #10: the owner steered on the video in comment 1003; read it and act on it
-start #13: W3: widget page (spec #10)
-EOF
-expect 'steer: a steer already read is not asked again' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "Keep the page plain.") | say(10; 1004; "10:05"; "launch-fleet: steer read 1003")' -- check <<EOF
-start #13: W3: widget page (spec #10)
-EOF
-expect 'steer: a stop before the video steers nothing' 0 check.json 'merge12 | machine_only | owner_says(10; 1002; "08:30"; "stop") | video(10; 1003; "09:00")' -- check <<EOF
-start #13: W3: widget page (spec #10)
-EOF
-expect 'steer: an outsider'"'"'s stop holds nothing' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | by(10; 1003; "10:00"; outsider; "stop")' -- check <<EOF
-start #13: W3: widget page (spec #10)
-EOF
-expect 'steer: the factory App'"'"'s note is no owner steer (R2)' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | say(10; 1003; "10:00"; "Reset the cache before the next run.")' -- check <<EOF
-start #13: W3: widget page (spec #10)
-EOF
-expect 'steer: a help comment repeating the cue is no new video and keeps the stop (R3)' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "stop") | say(10; 1004; "10:05"; "launch-fleet: held by stop 1003") | say(10; 1005; "10:10"; "To steer, reply on the video.\n\nComment here to steer: stop, reset, or anything else.")' -- check < /dev/null
-expect 'steer: the fleet'"'"'s own bold records are no steer' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "**Needs you:** stop and look at #13")' -- check <<EOF
-start #13: W3: widget page (spec #10)
-EOF
 # R2 (decision 7030919773): video comment steering is off in every mode until
-# #1402's identity separation is verified, whoever posted the video.
+# #1402's identity separation is verified, whoever posted the video. The hold,
+# re-cut and steer cases WS17 had are gone with that behaviour; the cases below
+# keep the one-time notice and prove no comment steers.
 OFF_ALL='comments on the video steer nothing until the identity separation of OpenWiz #1402 is verified; the owner steers through the orchestrator'
 expect 'steer: an App-posted video and a later shared-login agent note steer nothing (R2 decision)' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | owner_says(10; 1003; "10:00"; "Reset the cache before the next run.")' -- check <<EOF
 look #10: $OFF_ALL
@@ -1633,18 +1604,30 @@ expect 'steer: the owner'"'"'s stop on an App-posted video steers nothing either
 look #10: $OFF_ALL
 start #13: W3: widget page (spec #10)
 EOF
-# R2 (planner ruling, J87): with the video posted from the owner's login, agents
-# and the owner share one login, so no comment steers; the wake says so once.
-OFF_WHY='comments on the video steer nothing while agents post from the same login as the owner, until the OpenWiz App identity (OpenWiz #1402) is in use; the owner steers through the orchestrator'
 expect 'steer: under the shared login an agent'"'"'s note steers nothing, and steering off is noted (R2)' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | issue(10; .comments[-1].author = "Synthetic-Owner") | owner_says(10; 1003; "10:00"; "Reset the cache before the next run.")' -- check <<EOF
-look #10: $OFF_WHY
+look #10: $OFF_ALL
 start #13: W3: widget page (spec #10)
 EOF
 expect 'steer: under the shared login the owner'"'"'s stop steers nothing either (R2)' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | issue(10; .comments[-1].author = "synthetic-owner") | owner_says(10; 1003; "10:00"; "Stop.")' -- check <<EOF
-look #10: $OFF_WHY
+look #10: $OFF_ALL
 start #13: W3: widget page (spec #10)
 EOF
-expect 'steer: under the shared login steering off is noted only once (R2)' 0 check.json "merge12 | machine_only | video(10; 1002; \"09:00\") | issue(10; .comments[-1].author = \"Synthetic-Owner\") | owner_says(10; 1003; \"10:00\"; \"Keep the page plain.\") | say(10; 1004; \"10:05\"; \"launch-fleet: look: $OFF_WHY\") | owner_says(10; 1005; \"10:10\"; \"reset\")" -- check <<EOF
+expect 'steer: steering off is noted only once (R2)' 0 check.json "merge12 | machine_only | video(10; 1002; \"09:00\") | owner_says(10; 1003; \"10:00\"; \"Keep the page plain.\") | say(10; 1004; \"10:05\"; \"launch-fleet: look: $OFF_ALL\") | owner_says(10; 1005; \"10:10\"; \"reset\")" -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'steer: a stop before the video steers nothing' 0 check.json 'merge12 | machine_only | owner_says(10; 1002; "08:30"; "stop") | video(10; 1003; "09:00")' -- check <<EOF
+look #10: $OFF_ALL
+start #13: W3: widget page (spec #10)
+EOF
+expect 'steer: an outsider'"'"'s stop holds nothing' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | by(10; 1003; "10:00"; outsider; "stop")' -- check <<EOF
+look #10: $OFF_ALL
+start #13: W3: widget page (spec #10)
+EOF
+expect 'steer: the factory App'"'"'s note is no owner steer (R2)' 0 check.json 'merge12 | machine_only | video(10; 1002; "09:00") | say(10; 1003; "10:00"; "Reset the cache before the next run.")' -- check <<EOF
+look #10: $OFF_ALL
+start #13: W3: widget page (spec #10)
+EOF
+expect 'steer: a help comment repeating the cue is no video, so no notice (R3)' 0 check.json 'merge12 | machine_only | say(10; 1005; "10:10"; "To steer, reply on the video.\n\nComment here to steer: stop, reset, or anything else.")' -- check <<EOF
 start #13: W3: widget page (spec #10)
 EOF
 

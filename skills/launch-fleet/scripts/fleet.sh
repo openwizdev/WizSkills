@@ -1250,28 +1250,14 @@ def plan_current($s): latest($s) as $a | $a.fingerprint as $f | $f != null and $
 def owner_at($s): [$s.comments.nodes[] | approval | select(.machine | not)] | max_by(.id) | .at;
 # #1340: to-spec'"'"'s steering video is the spec'"'"'s latest comment that is exactly
 # its link line, a blank line and "Comment here to steer: stop, reset, or
-# anything else." (R3). R2 (planner ruling, J87): steering is on only when the
-# video was posted by an App login ("...[bot]"), that is when agents post as
-# the App. From the owner'"'"'s login, agents and the owner share one login and no
-# comment can prove it is the owner'"'"'s, so nothing steers and the wake says so
-# once (steer_off). With steering on, each later plain comment by the owner (a
-# record author that is not an App login) steers: first word "stop"
-# holds the fleet, "reset" holds it and asks for a re-cut and a new video, and
-# anything else is a steer the fleet reads. A bold record line ("**...", such as
-# "**Needs you:**"), a quote, a VERDICT or an Orchestrator line is no steer. A
-# held spec starts, takes over and releases nothing until a newer video.
-def app_login: (. // "") | endswith("[bot]");
+# anything else." (R3). R2 (decision 7030919773): no comment on it steers, in
+# any mode and whoever posted the video, until #1402'"'"'s identity separation is
+# verified: no author can yet prove a comment is the owner'"'"'s. A spec with a
+# video gets one look saying so (steer_lines); the owner steers through the
+# orchestrator.
 def video: [.comments.nodes[] | select(.body | gsub("\r"; "") | sub("\\s+$"; "")
   | test("^\\[Watch the narrated spec\\]\\(https://[^\\s<>()\\\\`]+\\)\n\nComment here to steer: stop, reset, or anything else\\.$"))] | max_by(.databaseId);
-def steer_off: video as $v | $v != null and ($v.author | app_login | not);
-def steers: video as $v | if $v == null or ($v.author | app_login | not) then [] else
-  [.comments.nodes[] | select(.databaseId > $v.databaseId and (.body | rec) == null and ((.author // "") | . != "" and (app_login | not)))
-   | (.body | first_line | sub("^\\s+"; "")) as $l
-   | select([$l | startswith("**", ">", "VERDICT:", "Orchestrator")] | any | not)
-   | {id: .databaseId, kind: (($l | ascii_downcase | capture("^(?<w>[a-z]+)") | .w) // "" | if . == "stop" or . == "reset" then . else "steer" end)}]
-  | sort_by(.id) end;
-def stopped: any(steers[]; .kind != "steer");
-def current($s): plan_current($s) and ($s | stopped | not);
+def current($s): plan_current($s);
 def spec_rec($s; $re): any($s | records[]; .r | test($re));
 # The latest fleet record routes the spec to its loop. Fresh wakes keep the
 # existing assignments, including agents whose records predate the loop.
@@ -1836,16 +1822,10 @@ def approval_lines: . as $s | records as $srs | latest($s) as $a
           else "re-approve #\($s.number): \($what)" end end
     end;
 
-# The video'"'"'s steers, each asked once, until its record: "held by stop <id>",
-# "re-cut asked <id>" or "steer read <id>". With steering off (R2), one look,
-# once: its "look: <reason>" record settles it.
+# R2 (decision 7030919773): with a video, one look, once: its "look: <reason>"
+# record settles it. Comments on the video steer nothing.
 def steer_lines: .number as $n | records as $srs
-  | if steer_off then look($n; $srs; "comments on the video steer nothing while agents post from the same login as the owner, until the OpenWiz App identity (OpenWiz #1402) is in use; the owner steers through the orchestrator") else empty end,
-    (steers[] | .id as $id
-  | {stop: ["held by stop", "hold", "the owner said stop on the video in comment \($id); nothing under the spec starts until a new video"],
-     reset: ["re-cut asked", "re-cut", "the owner said reset on the video in comment \($id); re-cut the plan and make a new video"],
-     steer: ["steer read", "steer", "the owner steered on the video in comment \($id); read it and act on it"]}[.kind] as [$r, $line, $why]
-  | if any($srs[]; .r == "\($r) \($id)") then empty else "\($line) #\($n): \($why)" end);
+  | if video != null then look($n; $srs; "comments on the video steer nothing until the identity separation of OpenWiz #1402 is verified; the owner steers through the orchestrator") else empty end;
 
 def spec_lines: . as $s | records as $srs
   | if .subIssues.pageInfo.hasNextPage then look(.number; $srs; "more than 100 tickets, so its graph can'"'"'t all be read")

@@ -99,7 +99,9 @@ Done when `continue` prints the carried setup and the acting identity.
 
 ### 4. Host setting
 
-Run `first_fleet.py setting`. For this machine it previews one pull request that adds `docs/agents/host.md` with `Host: local`, the setting launch-fleet reads; on the yes, run it with `--yes` and ask the user to merge it. For Cloudroom no file is needed: it says so and exits 0. It never overwrites a host the project already names.
+On this machine, first ask the owner to pick the harness permission mode, once. Run `first_fleet.py mode`: it lists that harness's modes, each with what it lets an agent do. Explain each one plainly, as printed, and recommend none: never pick, default or widen a mode for the owner, and touch no login. On their answer, run `first_fleet.py mode --mode <their pick>`. The local driver passes it to the harness unchanged and starts nothing without it.
+
+Then run `first_fleet.py setting`. For this machine it previews one pull request that adds `docs/agents/host.md` with `Host: local` and the owner's `Permission mode:`, the settings launch-fleet and the local driver read; on the yes, run it with `--yes` and ask the user to merge it. For Cloudroom no file is needed: it says so and exits 0. It never overwrites a host the project already names.
 
 Done when the setting matches the answer, or its pull request is open.
 

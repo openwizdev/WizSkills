@@ -1171,6 +1171,7 @@ class Resume(unittest.TestCase):
         j.replay(until='agents')
         state = json.loads(j.state.read_text())
         state['host'] = {'agents': 'local', 'harnesses': ['codex']}  # where --agents local --yes, recorded
+        state['mode'] = {'harness': 'codex', 'mode': 'workspace-write'}  # mode --mode, the owner's pick
         j.state.write_text(json.dumps(state))
         j.world['files']['docs/agents/fleet.md'] = fleet_md(builder=CLAUDE, small=CLAUDE)
         j.save_world()

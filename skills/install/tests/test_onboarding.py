@@ -314,7 +314,7 @@ class Where(unittest.TestCase):
 class Setting(unittest.TestCase):
     def connected(self, name='small-change'):
         road = Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
-        road.replay_road(stop=until('setting'))
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting')
         return road
 
     def test_this_machine_opens_one_host_setting_pull_request_only_on_yes(self):
@@ -330,6 +330,7 @@ class Setting(unittest.TestCase):
         self.assertEqual(len(world['host_pulls']), 1)
         text = world['branches']['openwiz/host-setting']['docs/agents/host.md']
         self.assertEqual(re.findall(r'(?m)^Host:.*$', text), ['Host: local'])
+        self.assertEqual(re.findall(r'(?m)^Permission mode:.*$', text), ['Permission mode: acceptEdits'])
         self.assertEqual(road.saved()['setting']['state'], 'opened')
 
     def test_cloudroom_writes_no_host_file_and_a_conflicting_one_is_never_overwritten(self):

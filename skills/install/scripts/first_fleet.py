@@ -6,6 +6,7 @@
   first_fleet.py decisions --state FILE --setup-state DIR [--yes]
   first_fleet.py create-repo --state FILE --repo OWNER/NAME [--yes]
   first_fleet.py select --state FILE --repo OWNER/NAME
+  first_fleet.py mode --state FILE [--mode MODE]
   first_fleet.py setting --state FILE [--yes]
   first_fleet.py grill --state FILE --confirmed URL
   first_fleet.py choose --state FILE --options FILE (--harness P --model M --effort E | --from-setup) [--agents cloud|local]
@@ -18,7 +19,9 @@
 The onboarding road (#1358): `where` records where the agents run, this
 machine through OpenWiz's local driver or Cloudroom, only on the user's answer
 (--yes), after checking what that needs and printing the teacher's walk-through
-for anything missing; it never runs a sign-in. `setting` writes that choice to
+for anything missing; it never runs a sign-in. On this machine `mode` lists
+the harness's permission modes, each explained, picks none, and records the
+one the owner names (J254 A); KN3's driver passes it unchanged. `setting` writes that choice to
 the project's host setting, docs/agents/host.md (records v1, section 6), as one
 pull request the user merges, only on --yes; Cloudroom needs no file. `grill`
 records the private comment URL of the user's yes to the grill in chat; the
@@ -81,6 +84,7 @@ Exits: 0 done; 1 a read failed; 2 usage; 5 refused, nothing started;
 import base64
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -98,6 +102,7 @@ FLEET_SH = LAUNCH_FLEET / 'scripts/fleet.sh'
 HOST_PY = LAUNCH_FLEET / 'scripts/host.py'
 OPTIONS = {
     'where': ({'--state', '--agents'}, {'--yes'}, set()),
+    'mode': ({'--state'}, set(), {'--mode'}),
     'setting': ({'--state'}, {'--yes'}, set()),
     'grill': ({'--state', '--confirmed'}, set(), set()),
     'first-merge': ({'--state', '--pr'}, set(), set()),
@@ -152,7 +157,7 @@ def strict(text):
 
 def parse(argv):
     if not argv or argv[0] not in OPTIONS:
-        raise Exit(2, 'usage: first_fleet.py where|continue|decisions|create-repo|select|setting|grill|choose|spec|launch|'
+        raise Exit(2, 'usage: first_fleet.py where|continue|decisions|create-repo|select|mode|setting|grill|choose|spec|launch|'
                       'progress|first-merge|next ... (see its header)')
     values, switches, optional = OPTIONS[argv[0]]
     got, rest = {}, argv[1:]
@@ -225,7 +230,7 @@ class State:
             value = strict(self.path.read_text(encoding='utf-8'))
         except (OSError, ValueError):
             raise Exit(10, 'The onboarding state is unreadable; ' + NOTHING)
-        known = {'created', 'choices', 'repo', 'spec', 'launch', 'setup', 'host', 'setting', 'grill', 'merge', 'preview'}
+        known = {'created', 'choices', 'repo', 'spec', 'launch', 'setup', 'host', 'setting', 'grill', 'merge', 'preview', 'mode'}
         if not isinstance(value, dict) or set(value) - known:
             raise Exit(10, 'The onboarding state has an unknown shape; ' + NOTHING)
         return value
@@ -311,6 +316,39 @@ def host_setting(env):
     if not named:
         raise Exit(1, 'Could not read the host setting (%s): %s; %s' % (HOST_FILE, why or 'no answer', NOTHING))
     return None if named[1] == 'none' else named[1]
+
+
+# Stub until KN3 (#1368, OpenWiz #1455) pushes its field: the harness permission mode the owner picks
+# once, saved in docs/agents/, which the local driver passes to the harness unchanged (J254 A). The file,
+# the field's name and each harness's modes are KN3's; swap these three when it pushes them.
+MODE_FILE = 'docs/agents/host.md'
+MODE_FIELD = 'Permission mode'
+MODES = {
+    'claude-code': [
+        ('default', 'it stops and waits for a person before each edit or command, so an unattended builder stalls'),
+        ('acceptEdits', 'it edits files on its own and still asks before running a command'),
+        ('bypassPermissions', 'it edits files and runs any command without asking anyone')],
+    'codex': [
+        ('read-only', 'it reads files and can change nothing, so a builder cannot write its code'),
+        ('workspace-write', 'it edits files and runs commands inside its own working folder only'),
+        ('danger-full-access', 'it edits any file and runs any command on this machine, with no sandbox')],
+}
+
+
+def saved_mode(env):
+    """The permission mode the default branch's MODE_FILE saves, or None; read as launch-fleet's host.py reads
+    the host setting, from this checkout's origin."""
+    spec = importlib.util.spec_from_file_location('launch_fleet_host', HOST_PY)
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        text = module.setting_text()
+    except Exception as error:  # host.py's Unreadable, or a missing git
+        raise Exit(1, 'Could not read %s from the default branch: %s; %s' % (MODE_FILE, error, NOTHING))
+    lines = re.findall(r'(?m)^%s:[ \t]*(.*?)[ \t]*$' % re.escape(MODE_FIELD), text or '')
+    if len(lines) > 1:
+        raise Exit(5, '%s names more than one `%s:` line; ask to fix it; %s' % (MODE_FILE, MODE_FIELD, NOTHING))
+    return lines[0] if lines else None
 
 
 # --- Where agents run (#1358) ---------------------------------------------------
@@ -667,10 +705,12 @@ def create_repo(got):
 
 # --- The host setting (records v1, section 6) --------------------------------
 
-def host_text():
+def host_text(picked):
     return ('# Where agents run\n\nOpenWiz starts, wakes and stops this project\'s agents through the host named '
             'below: a driver in OpenWiz\'s adapters/ folder. `local` is the machine the agents run on. To change '
-            'it, ask your agent to edit this one line.\n\nHost: local\n')
+            'it, ask your agent to edit this one line.\n\nHost: local\n\nThe harness runs with the permission mode '
+            'the owner picked; the driver passes it unchanged. To change it, ask your agent to edit this one line.'
+            '\n\n%s: %s\n' % (MODE_FIELD, picked))
 
 
 def host_pull(repo, env):
@@ -688,6 +728,42 @@ def host_pull(repo, env):
         raise Exit(6, 'Could not read whether the host setting pull request exists; run this again to read it.')
 
 
+def mode(got):
+    """This machine's harness permission mode: each one explained, none picked, the owner's recorded (J254 A)."""
+    state = State(got['--state'])
+    host, carried = state.value.get('host'), state.value.get('setup')
+    if not host or host['agents'] != 'local':
+        raise Exit(5, 'Only agents on this machine need a permission mode; Cloudroom sets its own. Nothing recorded.')
+    if not carried:
+        raise Exit(5, 'Connect the repository first (continue): the mode is for the harness it prepares; '
+                      'nothing recorded.')
+    harness = carried['settings']['harness']
+    modes = MODES.get(harness)
+    if not modes:
+        raise Exit(5, 'No permission modes are known for %s; nothing recorded.' % harness)
+    if '--mode' not in got:
+        print('%s on this machine runs with the permission mode the owner picks, once. The driver passes it '
+              'unchanged and never chooses or widens it:' % harness)
+        for name, why in modes:
+            print('- %s: %s' % (name, why))
+        print("Nothing recorded. Ask the owner which one, in those words, and pick none for them; on their answer, "
+              'run again with --mode <their pick>.')
+        return 12
+    if got['--mode'] not in [name for name, _ in modes]:
+        raise Exit(5, '%s is not one of %s\'s permission modes (%s); nothing recorded.' % (
+            got['--mode'], harness, ', '.join(name for name, _ in modes)))
+    recorded = state.value.get('setting') or {}
+    if recorded.get('state') in ('pending', 'opened', 'merged') and recorded.get('mode') != got['--mode']:
+        raise Exit(5, 'The host setting already carries %s; ask the owner to change that line instead; '
+                      'nothing recorded.' % (recorded.get('mode') or 'no permission mode'))
+    state.value['mode'] = {'harness': harness, 'mode': got['--mode']}
+    if not state.save():
+        raise Exit(10, 'Could not save the permission mode; nothing recorded.')
+    print('Recorded: agents on this machine run %s with the %s permission mode the owner picked.' % (
+        harness, got['--mode']))
+    return 0
+
+
 def setting(got):
     """Write where agents run to docs/agents/host.md, as one pull request the user merges, only on --yes."""
     state = State(got['--state'])
@@ -695,11 +771,17 @@ def setting(got):
     repo = (state.value.get('setup') or {}).get('repository')
     if not host or not repo:
         raise Exit(5, 'Ask where agents run (where) and connect the repository (continue) first; nothing written.')
+    picked = (state.value.get('mode') or {}).get('mode')
+    if host['agents'] == 'local' and not picked:
+        raise Exit(5, 'Ask the owner to pick the harness permission mode first (mode); nothing written.')
     env = repository(repo)
     want = 'local' if host['agents'] == 'local' else None
     now = host_setting(env)
+    if now == want and want and saved_mode(env) != picked:
+        raise Exit(5, '%s says Host: local but not `%s: %s`, the mode the owner picked; ask the owner to change '
+                      'that line; nothing written.' % (HOST_FILE, MODE_FIELD, picked))
     if now == want:
-        state.value['setting'] = {'host': want, 'state': 'merged'}
+        state.value['setting'] = {'host': want, 'state': 'merged', 'mode': picked}
         if not state.save():
             raise Exit(10, 'Could not save the host setting; nothing written.')
         print('The host setting already matches: %s.' % (
@@ -715,16 +797,17 @@ def setting(got):
             raise Exit(5, 'The host setting pull request %s was closed without merging; the user reopens and merges '
                           'it, or answers where agents run again; nothing written.' % found[0])
         if found:
-            state.value['setting'] = {'host': 'local', 'state': 'opened', 'pull': found[0]}
+            state.value['setting'] = {'host': 'local', 'state': 'opened', 'pull': found[0], 'mode': picked}
             state.save()
             print('The host setting pull request is open: %s. The user merges it; launch waits for it.' % found[0])
             return 0
-    print('Effect: write one file, %s, holding `Host: local` and a line on how to change it, on a new branch %s of '
-          '%s, and open one pull request for you to merge. Nothing else is written.' % (HOST_FILE, HOST_BRANCH, repo))
+    print('Effect: write one file, %s, holding `Host: local`, `%s: %s` and how to change each, on a new branch %s '
+          'of %s, and open one pull request for you to merge. Nothing else is written.' % (
+              HOST_FILE, MODE_FIELD, picked, HOST_BRANCH, repo))
     if not got.get('--yes'):
         print("Nothing written. On the user's yes to exactly this, run again with --yes.")
         return 12
-    state.value['setting'] = {'host': 'local', 'state': 'pending'}
+    state.value['setting'] = {'host': 'local', 'state': 'pending', 'mode': picked}
     if not state.save():
         raise Exit(10, 'Could not save the host setting first; nothing written.')
     base = run(['gh', 'api', 'repos/%s' % repo, '--jq', '.default_branch'], env)
@@ -737,12 +820,12 @@ def setting(got):
         raise Exit(1, "Could not read the default branch's tip; nothing written.")
     run(['gh', 'api', '-X', 'POST', 'repos/%s/git/refs' % repo, '-f', 'ref=refs/heads/' + HOST_BRANCH,
          '-f', 'sha=' + sha], env)
-    content = base64.b64encode(host_text().encode()).decode()
+    content = base64.b64encode(host_text(picked).encode()).decode()
     have = run(['gh', 'api', '--include', 'repos/%s/contents/%s?ref=%s' % (repo, HOST_FILE, HOST_BRANCH),
                 '-H', 'Accept: application/vnd.github.raw+json'], env)
-    if have is None or not have.stdout.decode('utf-8', 'replace').replace('\r\n', '\n').endswith(host_text()):
+    if have is None or not have.stdout.decode('utf-8', 'replace').replace('\r\n', '\n').endswith(host_text(picked)):
         run(['gh', 'api', '-X', 'PUT', 'repos/%s/contents/%s' % (repo, HOST_FILE), '-f',
-             'message=Where agents run: Host: local', '-f', 'content=' + content, '-f', 'branch=' + HOST_BRANCH], env)
+             'message=Where agents run: Host: local, %s' % picked, '-f', 'content=' + content, '-f', 'branch=' + HOST_BRANCH], env)
     if host_pull(repo, env) is None:
         run(['gh', 'pr', 'create', '--repo', repo, '--head', HOST_BRANCH, '--base', branch, '--title',
              'Where agents run: this machine', '--body', 'Adds %s with `Host: local`: OpenWiz starts this '
@@ -752,7 +835,7 @@ def setting(got):
     if found is None:
         raise Exit(6, 'Whether the host setting pull request was opened is uncertain; run this again to read it '
                       'before anything else.')
-    state.value['setting'] = {'host': 'local', 'state': 'opened', 'pull': found[0]}
+    state.value['setting'] = {'host': 'local', 'state': 'opened', 'pull': found[0], 'mode': picked}
     if not state.save():
         raise Exit(6, 'The host setting pull request is open (%s), but that could not be saved.' % found[0])
     print('Opened %s. The user merges it; launch waits for it on the default branch.' % found[0])
@@ -1110,6 +1193,11 @@ def launch(got):
             'Host: ' + named if named else 'no host', 'this machine' if local else 'Cloudroom',
             'merge the host setting pull request first (setting)' if local and named is None else
             'answer where agents run again, or ask to change that line', NOTHING))
+    picked = (state.value.get('mode') or {}).get('mode')
+    if local and (not picked or saved_mode(env) != picked):
+        raise Exit(5, 'No harness permission mode the owner picked is saved in %s on the default branch, and the '
+                      "local driver starts no agent without one: run mode, then setting, and merge it; %s" % (
+                          MODE_FILE, NOTHING))
     if local and local_driver(env) is None:
         raise Exit(5, "This OpenWiz's local driver no longer answers, so no agent can run on this machine; " + NOTHING)
     plan_approved(spec, env, confirmed)
@@ -1122,7 +1210,7 @@ def launch(got):
     builder, reviewer = review(choices, fleet_rules(env, state.value['repo']))
     where = 'on this machine' if local else 'in Cloudroom'
     effects = {'repo': state.value['repo'], 'spec': spec, 'project': carried['project'], 'title': title,
-               'host': host['agents'], 'builder': builder, 'reviewer': reviewer, 'grill': confirmed,
+               'host': host['agents'], 'mode': picked if local else None, 'builder': builder, 'reviewer': reviewer, 'grill': confirmed,
                'tickets': [[n, ready[n]] for n in starts]}
     digest = hashlib.sha256(json.dumps(effects, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     if got.get('--yes'):
@@ -1141,6 +1229,8 @@ def launch(got):
         cost = ('it uses your Cloud Credits, unknown until measured, and model-provider charges are separate'
                 if not local else 'every agent uses %s on this machine, whose model use is billed to you as it is '
                 'today' % builder['harness'])
+        if local:
+            print('Its agents run %s with the %s permission mode you picked.' % (builder['harness'], picked))
         print('Start the fleet %s now? It can cost money: %s.' % (where, cost))
         state.value['preview'] = {'spec': spec, 'effects': digest}
         if not state.save():
@@ -1312,6 +1402,9 @@ def resume(got):
     elif spec and launched.get('spec') == spec and launched.get('state') == 'started':
         step = ('watch', "Run progress --spec %d, say the teacher's line for each moment, and run first-merge "
                 '--pr <N> when a pull request merges.' % spec)
+    elif host['agents'] == 'local' and not value.get('mode'):
+        step = ('mode', 'Run mode, explain each permission mode as it prints, pick none for the owner, then run '
+                'mode --mode <their pick>.')
     elif setting_.get('state') not in ('opened', 'merged'):
         step = ('setting', 'Run setting%s.' % (' again: its pull request is uncertain' if setting_ else ''))
     elif not value.get('grill'):
@@ -1338,6 +1431,8 @@ def main(argv):
         command, got = parse(argv)
         if command == 'where':
             return where(got)
+        if command == 'mode':
+            return mode(got)
         if command == 'setting':
             return setting(got)
         if command == 'grill':

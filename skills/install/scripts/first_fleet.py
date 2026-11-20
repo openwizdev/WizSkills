@@ -926,6 +926,30 @@ def blob(repo, path, env, ref):
         raise Exit(1, 'Could not read %s on %s; nothing written.' % (path, ref))
 
 
+def pull_diff(repo, env, want):
+    """R4: the host-setting branch's whole diff against the default branch must be exactly the approved changes
+    (each file in want added or changed to its approved text, and nothing else); Exit 5 naming a file that differs."""
+    base = run(['gh', 'api', 'repos/%s' % repo, '--jq', '.default_branch'], env)
+    branch = base.stdout.decode('utf-8', 'replace').strip() if base is not None and base.returncode == 0 else ''
+    result = run(['gh', 'api', 'repos/%s/compare/%s...%s' % (repo, branch, HOST_BRANCH)], env) if branch else None
+    try:
+        assert result is not None and result.returncode == 0
+        files = strict(result.stdout.decode('utf-8'))['files']
+        assert isinstance(files, list) and len(files) < 300  # GitHub lists at most 300 files
+        changed = {f['filename']: f['status'] for f in files}
+        assert len(changed) == len(files) and all(isinstance(k, str) for k in changed)
+    except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError):
+        raise Exit(6, "Could not read the host setting pull request's changes; it is not ready. Run this again to "
+                      'read them before anything else.')
+    approved = {HOST_FILE: ('added',), MODE_FILE: ('modified',)}
+    for path in sorted(set(changed) | set(want)):
+        if (changed.get(path) not in approved.get(path, ()) or path not in want
+                or raw(repo, path, env, HOST_BRANCH) != want[path]):
+            raise Exit(5, 'Branch %s changes %s beyond the approved host setting, so its pull request is not '
+                          'ready and OpenWiz opens or reports nothing. The owner deletes that branch (closing its '
+                          'pull request), then run this again.' % (HOST_BRANCH, path))
+
+
 def host_pull(repo, env):
     """The host setting pull request's URL and state, or None when there is none; Exit when unreadable."""
     result = run(['gh', 'pr', 'list', '--repo', repo, '--head', HOST_BRANCH, '--state', 'all',
@@ -1016,6 +1040,12 @@ def setting(got):
             'Host: local and the %s permission mode, on the default branch' % picked if local
             else 'no host file, so Cloudroom, the default'))
         return 0
+    # R4: the exact files the pull request carries, from the default branch as it is now.
+    want = {}
+    if HOST_FILE in writes:
+        want[HOST_FILE] = host_text()
+    if MODE_FILE in writes:
+        want[MODE_FILE] = fleet.rstrip('\n') + '\n' + mode_section(picked)
     recorded = state.value.get('setting') or {}
     if recorded.get('state') in ('pending', 'opened'):
         found = host_pull(repo, env)
@@ -1023,6 +1053,7 @@ def setting(got):
             raise Exit(5, 'The host setting pull request %s was closed without merging; the user reopens and merges '
                           'it, or answers where agents run again; nothing written.' % found[0])
         if found:
+            pull_diff(repo, env, want)
             state.value['setting'] = {'host': 'local', 'state': 'opened', 'pull': found[0], 'mode': picked}
             state.save()
             print('The host setting pull request is open: %s. The user merges it; launch waits for it.' % found[0])
@@ -1034,12 +1065,6 @@ def setting(got):
     if not got.get('--yes'):
         print("Nothing written. On the user's yes to exactly this, run again with --yes.")
         return 12
-    # R4: the exact files the pull request carries, from the default branch as it is now.
-    want = {}
-    if HOST_FILE in writes:
-        want[HOST_FILE] = host_text()
-    if MODE_FILE in writes:
-        want[MODE_FILE] = fleet.rstrip('\n') + '\n' + mode_section(picked)
     based = {HOST_FILE: None, MODE_FILE: fleet}  # what each path holds on the default branch (no host.md there)
     state.value['setting'] = {'host': 'local', 'state': 'pending', 'mode': picked}
     if not state.save():
@@ -1094,6 +1119,7 @@ def setting(got):
         if raw(repo, path, env, HOST_BRANCH) != want[path]:
             raise Exit(6, '%s on %s did not read back as written; run this again to read it before anything else.'
                        % (path, HOST_BRANCH))
+    pull_diff(repo, env, want)
     if host_pull(repo, env) is None:
         run(['gh', 'pr', 'create', '--repo', repo, '--head', HOST_BRANCH, '--base', branch, '--title',
              'Where agents run: this machine', '--body', 'Adds `Host: local` to %s and the owner\'s harness '

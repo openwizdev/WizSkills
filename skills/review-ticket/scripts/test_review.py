@@ -774,20 +774,42 @@ class Review(unittest.TestCase):
 
 
 COMMENTS = Path(__file__).with_name("comments.py")
-
-
-def new_file(path, lines):
-    body = "".join(f"+{line}\n" for line in lines)
-    return (f"diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n"
-            f"@@ -0,0 +1,{len(lines)} @@\n{body}")
+CHECKER = Path(__file__).with_name("fixtures") / "comment-check" / "check.py"
+SHA = "1234567890" * 4
 
 
 class CommentPass(unittest.TestCase):
-    def comment_pass(self, diff, *args):
-        out = subprocess.run([sys.executable, "-I", str(COMMENTS), "-", *args], input=diff,
-                             text=True, capture_output=True, timeout=30)
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.repo)])
+        self.git("init", "-q")
+        self.write({"tools/comment-check/check.py": CHECKER.read_text(encoding="utf-8"),
+                    "old.py": "x = 1  # workaround kept from before\n"})
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "base")
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Builder", "-c", "user.email=b@example.com",
+                        *args], check=True, capture_output=True)
+
+    def write(self, files):
+        for name, text in files.items():
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+
+    def comment_pass(self, files, *args):
+        self.write(files)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "head")
+        out = subprocess.run([sys.executable, "-I", str(COMMENTS), "--base", "HEAD^", "--repo", str(self.repo),
+                              *args], text=True, capture_output=True, timeout=60)
         findings = [line for line in out.stdout.splitlines() if not line.startswith("check ")]
-        return out.returncode, findings, out.stdout
+        return out.returncode, findings, out.stdout + out.stderr
+
+    def kinds(self, files, *args):
+        code, findings, out = self.comment_pass(files, *args)
+        return code, [f.split(": ", 2)[:2] for f in findings], out
 
     def assert_code_fix(self, finding):
         fix = finding.split(" Fix: ", 1)[1]
@@ -795,171 +817,84 @@ class CommentPass(unittest.TestCase):
         self.assertNotRegex(fix.lower(), r"reword|rephrase|clarify|shorten|rewrite the comment")
 
     def test_a_justification_comment_is_a_finding_that_names_the_code_fix(self):
-        diff = new_file("src/prices.py", [
-            "from db import fetch_price", "", "_cache = {}", "",
-            "# We check the cache before the database on purpose: the database call",
-            "# is slow and the suite timed out without it, so keep this order.",
-            "def lookup(sku):", "    if sku in _cache:", "        return _cache[sku]",
-            "    _cache[sku] = fetch_price(sku)", "    return _cache[sku]"])
-        code, findings, out = self.comment_pass(diff)
+        code, findings, out = self.comment_pass({"src/prices.py": (
+            "_cache = {}\n\n# We check the cache first on purpose: the suite timed out without it.\n"
+            "def lookup(sku):\n    return _cache.get(sku)\n")})
         self.assertEqual(code, 1, out)
         self.assertEqual(len(findings), 1, out)
-        self.assertTrue(findings[0].startswith("src/prices.py:5: justification: "), out)
+        self.assertTrue(findings[0].startswith("src/prices.py:3: justification: "), out)
         self.assert_code_fix(findings[0])
 
-    def test_only_allowed_kinds_give_no_finding(self):
-        diff = new_file("tools/sync.py", [
-            "#!/usr/bin/env python3", "# SPDX-License-Identifier: MIT", "import subprocess", "",
-            "# External: the vendor API rejects a batch over 100 items, https://example.com/vendor/limits",
-            "LIMIT = 100", "# SECURITY: the token never reaches the log; send() redacts it first.",
-            "# Private record: https://github.com/jparker2006/ClosedWiz/issues/9001#issuecomment-9000000001",
-            "# comment-ok: the synthetic runner reads this line as its job name",
-            "import vendored  # noqa: E402 -- the path is set up above",
-            "URL = 'https://example.com/#anchor'  ", "PATTERN = \"a // b # c\""]) + new_file(
-            "src/lib.rs", ["// SPDX-License-Identifier: MIT", "pub fn f() {}",
-                           "// SAFETY: the buffer outlives every reader.", "unsafe fn g() {}"])
-        code, findings, out = self.comment_pass(diff)
+    def test_only_allowed_kinds_give_no_finding_and_each_gets_a_check_line(self):
+        code, findings, out = self.comment_pass({"tools/sync.py": (
+            "#!/usr/bin/env python3\n# SPDX-License-Identifier: MIT\nimport subprocess\n\n"
+            "# External: the vendor API rejects a batch over 100 items, https://example.com/vendor/limits\n"
+            "LIMIT = 100\n\n# SECURITY: the token never reaches the log; send() redacts it first.\nA = 1\n\n"
+            "# comment-ok: the synthetic runner reads this line as its job name\nB = 2\n"
+            "import os  # noqa: E402 -- the path is set up above\nURL = 'https://example.com/#anchor'\n")})
         self.assertEqual((code, findings), (0, []), out)
+        for kind in ("2: licence", "5: external", "8: warning", "11: escape", "13: suppression"):
+            self.assertIn(f"check tools/sync.py:{kind}: ", out)
 
-    def test_a_workaround_comment_and_bare_suppressions_are_findings(self):
-        diff = new_file("src/app.py", [
-            "import os", "# TODO: hack for now, the writer races the reader", "x = os.getcwd()",
-            "y = x.upper()  # type: ignore"]) + new_file("src/lib.rs", [
-                "#[allow(dead_code)]", "fn unused() {}", "fn used() {} // eslint-disable-line"])
-        code, findings, out = self.comment_pass(diff)
-        self.assertEqual(code, 1, out)
-        self.assertEqual([f.split(": ", 2)[:2] for f in findings],
-                         [["src/app.py:2", "workaround"], ["src/app.py:4", "suppression"],
-                          ["src/lib.rs:1", "suppression"], ["src/lib.rs:3", "suppression"]], out)
-        for finding in findings:
+    def test_a_workaround_comment_and_a_bare_suppression_are_findings(self):
+        code, kinds, out = self.kinds({"src/app.py": (
+            "import os\n# TODO: hack for now, the writer races the reader\nx = os.getcwd()\n"
+            "y = x.upper()  # type: ignore\n")})
+        self.assertEqual(kinds, [["src/app.py:2", "workaround"], ["src/app.py:4", "suppression"]], out)
+        for finding in out.splitlines():
             self.assert_code_fix(finding)
 
-    def test_an_allowed_form_it_has_not_earned_is_a_finding(self):
-        diff = new_file("src/app.py", [
-            "# External: our own runner is slow, https://github.com/openwizdev/OpenWiz/issues/12",
-            "A = 1", "# comment-ok:", "B = 2", "# SAFETY:", "C = 3", "# Copyright 2026 Example", "D = 4"])
-        code, findings, out = self.comment_pass(diff)
-        self.assertEqual([f.split(": ", 2)[:2] for f in findings],
-                         [["src/app.py:1", "external-link"], ["src/app.py:3", "escape-tag-reason"],
-                          ["src/app.py:5", "comment"], ["src/app.py:7", "comment"]], out)
-        for finding in findings:
-            self.assert_code_fix(finding)
+    def test_an_unearned_escape_tag_and_external_link_are_findings(self):
+        code, kinds, out = self.kinds({"src/app.py": (
+            "# comment-ok:\nA = 1\n# External: our runner, https://github.com/openwizdev/OpenWiz/issues/12\nB = 2\n")})
+        self.assertEqual(kinds, [["src/app.py:1", "escape-tag-reason"], ["src/app.py:3", "external-link"]], out)
 
-    def test_doc_comments_pass_only_in_a_published_docs_path(self):
-        diff = new_file("crates/sdk/src/lib.rs", ["/// Returns the answer.", "pub fn answer() -> u8 { 42 }"])
-        self.assertEqual(self.comment_pass(diff, "--docs", "crates/sdk/")[:2], (0, []))
-        code, findings, out = self.comment_pass(diff)
-        self.assertEqual([f.split(": ", 2)[:2] for f in findings], [["crates/sdk/src/lib.rs:1", "comment"]], out)
+    def test_old_comments_never_count(self):
+        self.assertEqual(self.kinds({"old.py": "x = 2  # workaround kept from before\n"})[:2], (1, [
+            ["old.py:1", "workaround"]]))
+        self.assertEqual(self.kinds({"new.py": "y = 1\n"})[:2], (0, []))
 
-    def test_it_reads_only_the_lines_the_diff_adds(self):
-        diff = ("diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n"
-                "@@ -10,3 +10,3 @@\n # Kept because the old importer needs it, do not remove.\n"
-                "-x = 1  # workaround for the old reader\n+x = 2\n y = 3\n"
-                "@@ -40,2 +40,4 @@\n z = 4\n+/* not python, but a string: */\n+w = '# not a comment'\n q = 5\n")
-        code, findings, out = self.comment_pass(diff)
-        self.assertEqual((code, findings), (0, []), out)
+    def test_r1_spaced_and_accented_paths_are_read(self):
+        text = "# Workaround for the old runner\nprint(1)\n"
+        code, kinds, out = self.kinds({"task runner.py": text, "café.py": text})
+        self.assertEqual(sorted(kinds), [["café.py:1", "workaround"], ["task runner.py:1", "workaround"]], out)
 
-    def test_excluded_paths_and_a_later_hunk_are_judged_as_the_contract_says(self):
-        diff = "".join(new_file(path, [f"x = 1  {marker} planted on purpose"]) for path, marker in (
-            ("vendor/lib.py", "#"), ("a/third_party/b.py", "#"), ("web/app.min.js", "//"),
-            ("contracts/fixtures/comments/cases/python.py", "#")))
-        diff += ("diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n"
-                 "@@ -1,1 +1,1 @@\n # SPDX-License-Identifier: MIT\n@@ -40,0 +41,1 @@\n"
-                 "+# Copyright 2026 Example\n")
-        code, findings, out = self.comment_pass(diff)
-        self.assertEqual([f.split(": ", 2)[:2] for f in findings], [["src/app.py:41", "comment"]], out)
+    def test_r2_script_yaml_docstring_and_pinned_action(self):
+        code, kinds, out = self.kinds({
+            "index.html": "<p>hi</p>\n<script>\n// Workaround for the old runner\n</script>\n"
+                          '<script type="application/json">\n{"a": "// not script"}\n</script>\n',
+            "config.yml": "text: |\n  # Shown to the user as text\n",
+            "tool.py": '# SPDX-License-Identifier: MIT\n"""Workaround for the old runner."""\nprint(1)\n',
+            ".github/workflows/check.yml": f"steps:\n  - uses: owner/action@{SHA} # v7.0.1\n"})
+        self.assertEqual(sorted(kinds), [["index.html:3", "workaround"], ["tool.py:2", "workaround"]], out)
 
-    def test_docstrings_and_shebang_scripts_are_read_from_the_diff(self):
-        diff = new_file("src/app.py", [
-            '"""Module notes."""', "def f():", '    """Set the state, as the old runner did."""',
-            '    x = """not a docstring"""', "    return x"]) + new_file(
-            "bin/tool", ["#!/usr/bin/env bash", "set -e", "# workaround for the old runner", "echo hi"]) + new_file(
-            "bin/run", ["#!/usr/bin/env python3", '"""Run the tool."""', "print(1)"])
-        code, findings, out = self.comment_pass(diff)
-        self.assertEqual([f.split(": ", 2)[:2] for f in findings],
-                         [["src/app.py:1", "comment"], ["src/app.py:3", "comment"], ["bin/tool:3", "workaround"],
-                          ["bin/run:2", "comment"]], out)
-        self.assertEqual(self.comment_pass(diff, "--docs", "src/", "--docs", "bin/")[1], ["bin/tool:3: workaround: workaround for the "
-                         "old runner Fix: " + "fix the cause, or turn the rule it guards into a test or a check (red "
-                         "first), then delete the comment."])
+    def test_r3_two_block_comments_on_one_line_are_two_findings(self):
+        code, kinds, out = self.kinds({"app.js": (
+            "let a = /* first workaround */ 1, b = /* second workaround */ 2;\n"
+            "let c = /* SAFETY: synthetic invariant */ 1, d = /* third workaround */ 2;\n")})
+        self.assertEqual(kinds, [["app.js:1", "workaround"], ["app.js:1", "workaround"], ["app.js:2", "workaround"]],
+                         out)
 
-    def test_an_added_line_that_looks_like_a_header_stays_in_its_hunk(self):
-        diff = new_file("web/count.js", ["let n = 0;", "++ n;", "-- n;", "// workaround for the old counter"])
-        code, findings, out = self.comment_pass(diff)
-        self.assertEqual([f.split(": ", 2)[:2] for f in findings], [["web/count.js:4", "workaround"]], out)
+    def test_r4_licence_and_generated_files_are_excluded(self):
+        code, kinds, out = self.kinds({
+            "generated.py": "# @generated\n# Workaround for the old runner\nx = 1\n",
+            "LICENSE.py": "# Distribution terms\nx = 1\n",
+            "late.py": "x = 1\n" * 5 + "# DO NOT EDIT: workaround for the old runner\n"})
+        self.assertEqual(kinds, [["late.py:6", "workaround"]], out)
 
-    def kinds(self, diff, *args):
-        code, findings, out = self.comment_pass(diff, *args)
-        return [f.split(": ", 2)[:2] for f in findings], out
+    def test_a_repository_with_no_checker_gets_one_line(self):
+        self.git("rm", "-q", "tools/comment-check/check.py")
+        code, findings, out = self.comment_pass({"src/app.py": "# workaround for the old runner\nx = 1\n"})
+        self.assertEqual((code, out.splitlines()), (3, [
+            "no checker: tools/comment-check/check.py is missing here and no --checker was given; "
+            "read the diff's comments yourself"]))
 
-    def test_git_quoted_and_tab_terminated_paths_are_read(self):
-        with tempfile.TemporaryDirectory() as folder:
-            diffs = []
-            for name in ("task runner.py", "café.py"):
-                Path(folder, name).write_text("# Workaround for the old runner\nprint(1)\n", encoding="utf-8")
-                diffs.append(subprocess.run(["git", "-c", "core.quotePath=true", "diff", "--no-index", "--",
-                                             "/dev/null", name], cwd=folder, capture_output=True).stdout)
-        diff = b"".join(diffs).decode("utf-8")
-        self.assertIn('"b/caf\\303\\251.py"', diff)
-        self.assertIn("b/task runner.py\t", diff)
-        self.assertEqual(self.kinds(diff)[0], [["task runner.py:1", "workaround"], ["café.py:1", "workaround"]])
-
-    def test_script_style_and_yaml_block_scalars_follow_the_contract(self):
-        sha = "1234567890" * 4
-        diff = new_file("index.html", [
-            "<p>hi</p>", "<script>", "// Workaround for the old runner", "</script>",
-            '<script type="application/json">', '{"a": "// not script"}', "</script>",
-            "<style>/* workaround for the old layout */</style>"]) + new_file("config.yml", [
-                "text: |", "  # Shown to the user as text", "job:", "  run: |",
-                "    # workaround for the old runner", "    echo hi"]) + new_file("tool.py", [
-                    "# SPDX-License-Identifier: MIT", '"""Workaround for the old runner."""', "print(1)"]) + new_file(
-            ".github/workflows/check.yml", ["steps:", f"  - uses: owner/action@{sha} # v7.0.1"]) + new_file(
-            "notes.yml", [f"  - uses: owner/action@{sha} # v7.0.1"])
-        self.assertEqual(self.kinds(diff)[0], [
-            ["index.html:3", "workaround"], ["index.html:8", "workaround"], ["config.yml:5", "workaround"],
-            ["tool.py:2", "workaround"], ["notes.yml:1", "comment"]])
-
-    def test_a_hunk_whose_context_the_diff_lacks_is_marked_for_the_reviewer(self):
-        diff = ("diff --git a/config.yml b/config.yml\n--- a/config.yml\n+++ b/config.yml\n"
-                "@@ -10,1 +10,2 @@\n   a: 1\n+  # shown as text, or a comment?\n")
-        out = self.comment_pass(diff)[2]
-        self.assertIn("check config.yml:10: context: ", out)
-
-    def test_here_documents_and_hunks_inside_strings_are_not_comments(self):
-        diff = new_file("run.sh", ["cat > fake <<'EOF'", "# shown as text", "EOF", "# workaround for the old runner",
-                                   'grep x <<< "$a"  # workaround for the old reader']) + (
-            "diff --git a/model.py b/model.py\n--- a/model.py\n+++ b/model.py\n@@ -18,2 +18,4 @@\n"
-            " P5 a heartbeat\n+    never reopens a final note (#1447)\n \"\"\"\n+x = 1  # workaround for the old reader\n"
-            "diff --git a/fake.sh b/fake.sh\n--- a/fake.sh\n+++ b/fake.sh\n@@ -40,1 +40,3 @@\n"
-            "+# shown as text\n EOF\n+# workaround for the old runner\n")
-        kinds, out = self.kinds(diff)
-        self.assertEqual(kinds, [["run.sh:4", "workaround"], ["run.sh:5", "workaround"],
-                                 ["model.py:21", "workaround"], ["fake.sh:42", "workaround"]], out)
-        self.assertIn("check model.py:18: context: ", out)
-        self.assertIn("check fake.sh:40: context: ", out)
-
-    def test_two_block_comments_on_one_line_are_two_blocks(self):
-        line = "let a = /* first workaround */ 1, b = /* second workaround */ 2;"
-        self.assertEqual(self.kinds(new_file("app.js", [line]))[0],
-                         [["app.js:1", "workaround"], ["app.js:1", "workaround"]])
-        mixed = line.replace("first workaround", "SAFETY: synthetic invariant")
-        kinds, out = self.kinds(new_file("app.js", [mixed]))
-        self.assertEqual(kinds, [["app.js:1", "workaround"]], out)
-        self.assertIn("check app.js:1: warning: SAFETY: synthetic invariant\n", out)
-
-    def test_licence_files_and_generated_files_are_excluded(self):
-        diff = new_file("generated.py", ["# @generated", "# Workaround for the old runner", "x = 1"]) + new_file(
-            "LICENSE.py", ["# Distribution terms", "x = 1"]) + new_file(
-            "late.py", ["x = 1"] * 5 + ["# DO NOT EDIT: workaround for the old runner"])
-        self.assertEqual(self.kinds(diff)[0], [["late.py:6", "workaround"]])
-
-    def test_a_block_comment_is_judged_once_at_its_first_added_line(self):
-        diff = new_file("web/app.js", [
-            "const a = 1;", "/*", " * Needed because Safari caches the old bundle,",
-            " * so we bust it here.", " */", "const b = `${a} // not a comment`;"])
-        code, findings, out = self.comment_pass(diff)
-        self.assertEqual([f.split(": ", 2)[:2] for f in findings], [["web/app.js:2", "justification"]], out)
-
+    def test_another_checker_location_is_used_with_checker(self):
+        (self.repo / "lint").mkdir()
+        self.git("mv", "tools/comment-check/check.py", "lint/comments.py")
+        code, kinds, out = self.kinds({"src/app.py": "# workaround for the old runner\nx = 1\n"},
+                                      "--checker", str(self.repo / "lint" / "comments.py"))
+        self.assertEqual(kinds, [["src/app.py:1", "workaround"]], out)
 
 if __name__ == "__main__":
     unittest.main()

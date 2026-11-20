@@ -2,7 +2,7 @@
 
 Read this for a `hold`, `re-cut` or `steer` line (#1340).
 
-to-spec posts the spec's video as a comment ending `Comment here to steer: stop, reset, or anything else.` Each later plain comment from a record author steers, by its first word: `stop` holds the fleet, `reset` holds it and asks for a re-cut and a new video, and anything else is a steer to read. A bold record line (`**...`), a quote, a `VERDICT` or an `Orchestrator` line is no steer. A held spec starts, takes over and releases nothing until a newer video; its running builders keep going until the orchestrator decides. A steer grants nothing: every action gate (publish, spend, secrets, deleting user data, cut-overs) keeps its own approval.
+to-spec posts the spec's video as a comment that is exactly its link line (`[Watch the narrated spec](<https URL>)`), a blank line and `Comment here to steer: stop, reset, or anything else.`; nothing else counts as a video. Each later plain comment from the owner (a record author that is not an App login, `...[bot]`) steers, by its first word: `stop` holds the fleet, `reset` holds it and asks for a re-cut and a new video, and anything else is a steer to read. A bold record line (`**...`), a quote, a `VERDICT` or an `Orchestrator` line is no steer. A held spec starts, takes over and releases nothing until a newer video; its running builders keep going until the orchestrator decides. A steer grants nothing: every action gate (publish, spend, secrets, deleting user data, cut-overs) keeps its own approval.
 
 | Line | Do |
 | --- | --- |

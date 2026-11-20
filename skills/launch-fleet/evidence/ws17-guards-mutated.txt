@@ -20,3 +20,11 @@ ok   steer: an outsider's stop holds nothing
 FAIL steer: the fleet's own bold records are no steer: unexpected output:
 ok   every gh call was one of fleet.sh's reads
 10 cases, 1 failed
+## Mutation 3 (review R4): the machine revision text is not hashed against the fingerprint
+FAIL machine: revision text that is not the plan its fingerprint names approves nothing (R4): unexpected output:
+ok   every gh call was one of fleet.sh's reads
+1 cases, 1 failed
+## Mutation 4 (review R2): App logins read as the owner
+FAIL steer: the factory App's note is no owner steer (R2): unexpected output:
+ok   every gh call was one of fleet.sh's reads
+1 cases, 1 failed

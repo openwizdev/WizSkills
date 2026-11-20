@@ -17,8 +17,8 @@ Take them from that line to setup, then down the onboarding road to their first 
 ## Guards
 
 - **Install permission is not work approval.** Installing or finishing setup approves nothing. The first fleet needs the user's answer to where agents run, their yes in this chat to the grill's summary, and, right before it starts, their yes to starting it on that host, which can cost money. The plan approves itself by to-tickets' checks (J203): no spec or plan approval is asked. Never write, fake or infer a yes, or ask for blanket consent.
-- **Show every effect, then wait for a yes to exactly it.** Where agents run, the fleet's start, sign-in, the App or its skip, project settings, the host setting, the brain, phone access and a new repository each preview first; confirm with that preview's own `--yes` or `--yes --operation <id>`. Creating a repository, any write, spend, secrets and publishing always ask; a teacher's line never stands in for that ask.
-- **Never touch a login.** A missing sign-in gets its walk-through and a link; the user signs in themselves. Never run a sign-in for them, and never read, pass or store a credential.
+- **Show every effect, then wait for a yes to exactly it.** Where agents run, the fleet's start, the App or its skip, project settings, the host setting, the brain, phone access and a new repository each preview first; confirm with that preview's own `--yes` or `--yes --operation <id>`. Creating a repository, any write, spend, secrets and publishing always ask; a teacher's line never stands in for that ask.
+- **Never touch a login.** A missing sign-in gets its walk-through and a link; the user signs in themselves, in their own terminal or browser. Never run a sign-in for them (no `github_login.py sign-in --yes`, no `gh auth login`), and never read, pass or store a credential. Continue only on the installed setup's read-only check.
 - **Credentials stay out of the conversation.** Never ask for a key or token in chat or put one in a prompt, argument, URL, log, issue or file. Keys go only through the tools' protected setup, into owner-only state on this computer or CloudRoom's secret store. Save the user's exact words only under [open-development](../../contracts/open-development.v1.md).
 - **Uncertain is never retried blindly.** Run the same command again: it reads its record first and never repeats an effect.
 - **Read JSON and exit codes, never a screen.** Run installed programs by absolute path. Python 3.9+ only: no Rust, Cargo, Node, npm or source build; if a step seems to need one, stop and say so.
@@ -34,7 +34,7 @@ git clone --depth 1 https://github.com/openwizdev/OpenWiz "$openwiz"
 python3 -I "$openwiz"/tools/install/install preflight
 ```
 
-It reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. Exit 5 names each missing item and its `next` step: tell the user plainly (CloudRoom: install the app and sign in; `gh`: install it and `gh auth login`).
+It reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. Exit 5 names each missing item and its `next` step: tell the user plainly what they do themselves (Cloudroom: install the app and sign in; `gh`: install it and run `gh auth login` in their own terminal).
 
 Done when preflight passes, or the user has each next step.
 
@@ -72,7 +72,7 @@ Continue only if the user wants their first build; otherwise finish with the ins
 
 ### 1. Where agents run
 
-Run `first_fleet.py where --agents local`. It checks this machine: a GitHub sign-in, Claude Code or Codex on `PATH`, and OpenWiz's local driver. For anything missing it prints **Where agents run**'s walk-through line with a link; say it as printed. The user signs in themselves; run it again when they say done. Exit 12 prints what this machine's agents cost. Then ask **Where agents run**'s question, suggesting this machine with the harness found, and add that cost and that Cloudroom uses Cloud Credits. Cloudroom is the cloud host today. On the answer, run `where --agents local|cloud --yes`. With no local driver, offer Cloudroom or stopping.
+Run `first_fleet.py where --agents local --build "$build"`. It checks this machine: a GitHub sign-in, Claude Code or Codex on `PATH`, and OpenWiz's local driver. For anything missing it prints **Where agents run**'s walk-through line with a link; say it as printed. The user signs in themselves; run it again when they say done. Exit 12 prints what this machine's agents cost. Then ask **Where agents run**'s question, suggesting this machine with the harness found, and add that cost and that Cloudroom uses Cloud Credits. Cloudroom is the cloud host today. On the answer, run `where --agents local|cloud --build "$build" --yes`: it records the verified build's `runtime/adapters` as this machine's drivers. With no local driver, offer Cloudroom or stopping.
 
 Done when `where` recorded the answer.
 
@@ -81,7 +81,7 @@ Done when `where` recorded the answer.
 Offer three ways to start: a small change in a repository they have, a fresh project from their idea, or something they've always wanted to build. Anyone without an idea gets two or three ideas from that choice's group in [ideas.md](ideas.md); their own idea always wins. Then its one repository:
 
 - **A repository they have:** confirm it, and that the fleet opens branches and pull requests there, then run `first_fleet.py select --repo <owner>/<name>`.
-- **A new repository:** sign in first with `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state>` (it reuses a verified login; signed out, preview, then `--yes` for GitHub's browser page). Then `first_fleet.py create-repo --repo <owner>/<name>` previews it and its one README commit; on the yes, add `--yes`. Exit 6: run it again. The user makes or picks its Cloudroom project.
+- **A new repository:** GitHub sign-in first, which the person does themselves: show them `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state> --yes` to run in their own terminal (it opens GitHub's browser page), and wait until they say done. Then run the read-only check, `python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir <state>`, and continue only when it reads their account. Then `first_fleet.py create-repo --repo <owner>/<name>` previews it and its one README commit; on the yes, add `--yes`. Exit 6: run it again. The user makes or picks its Cloudroom project.
 
 Done when the idea and one repository are chosen and read back. There is no second repository.
 
@@ -89,7 +89,7 @@ Done when the idea and one repository are chosen and read back. There is no seco
 
 For that repository, each tool previews and applies only on the yes (`--yes`, or `--yes --operation <id>` from its preview):
 
-1. **Sign-in:** `github_login.py sign-in --repository <owner>/<name> --state-dir <state>`. Only the account and push-access read-back count.
+1. **Sign-in:** run the read-only `github_login.py status --repository <owner>/<name> --state-dir <state>`. Only its account and push-access read-back count. Signed out, or without push access, the person fixes it themselves, as in step 2 (`github_login.py sign-in --repository <owner>/<name> --state-dir <state> --yes` in their own terminal); then run `status` again.
 2. **Prepare:** `setup.py prepare --state-dir <state> --repository <owner>/<name> ...` with the Cloudroom project and the harness, model and effort the user picks from `openwiz models --json`, one question each, with a recommendation. On this machine, offer only the harnesses `where` found.
 3. **The App, or an explicit skip:** recommend the App, set up as `setup`'s "The App" says. Only the user's answer selects `github_login.py skip-app`; an App failure never becomes a skip.
 4. **The brain:** `<build>/openwiz init --repository <owner>/<name> --state-dir <state> --json`, then `--yes --operation <id>`. Say in one line where it went; the user merges its pull request. For a public repository's private companion, run `first_fleet.py decisions --setup-state <state>`, then `--yes`, and ask the user to restart the OpenWiz server.
@@ -113,7 +113,7 @@ Done when the choice is recorded and the builder tables match it.
 
 On this machine, first ask the owner to pick the harness permission mode, once. Run `first_fleet.py mode`: it lists that harness's modes, each with what it lets an agent do. Explain each one plainly, as printed, and recommend none: never pick, default or widen a mode for the owner, and touch no login. On their answer, run `first_fleet.py mode --mode <their pick>`. From that one pick it saves this machine's host-side approval for the repository and harness, outside the repository, through the local driver's setup step; it never changes or widens an approval already saved. The host setting below adds the matching `fleet.md` row. The local driver passes the mode to the harness unchanged and starts nothing unless the row and the approval match.
 
-Then run `first_fleet.py setting`. For this machine it previews one pull request that adds `docs/agents/host.md` with `Host: local` (the host launch-fleet reads) and one row, `| Harness permission mode | `<their pick>` |`, to the `docs/agents/fleet.md` setup wrote (the mode the local driver reads), changing no other line. On the yes, run it with `--yes` and ask the user to merge it. It never adds a second row or replaces a mode the owner already saved: it names that row and asks. For Cloudroom no file is needed: it says so and exits 0. It never overwrites a host the project already names.
+Then run `first_fleet.py setting`. For this machine it previews one pull request that adds `docs/agents/host.md` with `Host: local` (the host launch-fleet reads) and one row, `| Harness permission mode | `<their pick>` |`, to the `docs/agents/fleet.md` setup wrote (the mode the local driver reads), changing no other line. On the yes, run it with `--yes` and ask the user to merge it. It never adds a second row or replaces a mode the owner already saved: it names that row and asks. It never writes over a branch `openwiz/host-setting` that holds anything else, and it says the pull request is ready only once both files read back from it exactly; a failed or uncertain write is said, never retried blindly: run it again to read the branch first. For Cloudroom no file is needed: it says so and exits 0. It never overwrites a host the project already names.
 
 Done when both settings match the answers, or their pull request is open.
 

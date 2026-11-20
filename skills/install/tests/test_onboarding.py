@@ -344,7 +344,8 @@ class Where(unittest.TestCase):
         self.assertNotIn('host', road.saved())
         local = road.helper(['where', '--agents', 'local', '--yes'])
         self.assertEqual(local.returncode, 0, local.stdout)
-        self.assertEqual(road.saved()['host'], {'agents': 'local', 'harnesses': ['claude-code']})
+        self.assertEqual(road.saved()['host'], {'agents': 'local', 'harnesses': ['claude-code'],
+                                                'adapters': str(road.dir / 'adapters')})
         self.assertEqual(road.driver_calls(), [['version']])
 
 
@@ -611,7 +612,8 @@ class HostApproval(unittest.TestCase):
         info = path.stat()
         self.assertEqual(info.st_uid, os.getuid())
         self.assertEqual(stat.S_IMODE(info.st_mode), 0o600)
-        self.assertEqual([p.name for p in road.host_state.iterdir()], ['approvals.json'], 'no temporary file left')
+        self.assertEqual(sorted(p.name for p in road.host_state.iterdir()), ['approvals.json', 'approvals.json.lock'],
+                         'no temporary file left; the lock every onboarding session shares stays')
 
     def test_an_approvals_file_others_can_change_is_refused_never_fixed(self):
         # catches: a group- or world-writable approvals file used or silently chmod-ed and written (KN3's start
@@ -731,6 +733,7 @@ class ReviewRound(unittest.TestCase):
         self.assertTrue(data.endswith(b'}\r\n'))
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
+        path = road.host_state / 'approvals.json'  # this road's own host folder
         lock = open(road.host_state / 'approvals.json.lock', 'a+')
         self.addCleanup(lock.close)
         fcntl.flock(lock, fcntl.LOCK_EX)  # another onboarding session is mid-update

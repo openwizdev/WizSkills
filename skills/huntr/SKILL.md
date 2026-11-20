@@ -55,8 +55,8 @@ Each exits 2 with its reason on stderr; a refused write posted nothing.
 5. `lease.mjs pace <timezone> <streak> <last-empty-at>` from that record;
    `<last-empty-at>` is an ISO instant with Z or an offset, never a bare
    local time. `hunt: false` ends the hunt as paused: finish it (step 5) with
-   `release`. Exit 2 means ask on the tracking issue and do only
-   independent reconciliation.
+   `release`. Exit 2 means ask on the tracking issue, do only independent
+   reconciliation, then finish the same way.
 6. Do any one-time reconciliation the settings name. Check the open cap.
    Leave approved fleets' files and resources to their started or claimed
    builders; reconcile an uncertain start before treating files as free.

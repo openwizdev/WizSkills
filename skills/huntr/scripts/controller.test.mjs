@@ -524,10 +524,10 @@ scenario('PB3 publish refuses another run\'s record and an unconfirmed post leav
 scenario('PC3 pace: an offset-free time is refused and an offset-bearing instant decides the same in every host zone', w => {
   const today = new Date().toISOString().slice(0, 10);
   const yesterday = new Date(Date.parse(today) - 86400000).toISOString().slice(0, 10);
-  const pace = (host, when) => {
+  const pace = (host, when, project = 'UTC') => {
     const saved = w.env.TZ;
     w.env.TZ = host;
-    try { return w.run(lease, ['pace', 'UTC', '2', when]); }
+    try { return w.run(lease, ['pace', project, '2', when]); }
     finally { if (saved === undefined) delete w.env.TZ; else w.env.TZ = saved; }
   };
   for (const host of ['UTC', 'America/Los_Angeles']) {
@@ -540,8 +540,9 @@ scenario('PC3 pace: an offset-free time is refused and an offset-bearing instant
     // One instant written three ways: yesterday in the project's zone, so the pause is over.
     for (const when of [`${yesterday}T23:00:00Z`, `${yesterday}T15:00:00-08:00`, `${today}T07:00:00.000+08:00`])
       assert.deepEqual(JSON.parse(pace(host, when).stdout), {hunt: true}, `${host} ${when}`);
-    const tomorrow = new Date(Date.parse(today) + 86400000).toISOString().slice(0, 10);
-    assert.deepEqual(JSON.parse(pace(host, `${today}T00:00:00Z`).stdout), {hunt: false, until: tomorrow}, host);
+    // An hour ago, at midday in the project's zone: paused until its next day, whatever the host zone.
+    const midday = zone(h => h >= 6 && h < 18), hourAgo = new Date(Date.now() - 3600000).toISOString();
+    assert.deepEqual(JSON.parse(pace(host, hourAgo, midday.tz).stdout), {hunt: false, until: nextDay(midday.local)}, host);
   }
   assert.deepEqual(w.calls(), [], 'pace reads no GitHub');
 });

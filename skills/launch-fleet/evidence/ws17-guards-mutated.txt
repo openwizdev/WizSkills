@@ -28,3 +28,14 @@ ok   every gh call was one of fleet.sh's reads
 FAIL steer: the factory App's note is no owner steer (R2): unexpected output:
 ok   every gh call was one of fleet.sh's reads
 1 cases, 1 failed
+## Mutation 5 (re-check R2): a video posted from the owner's login still turns steering on
+FAIL steer: under the shared login an agent's note steers nothing, and steering off is noted (R2): unexpected output:
+FAIL steer: under the shared login the owner's stop steers nothing either (R2): unexpected output:
+FAIL steer: under the shared login steering off is noted only once (R2): unexpected output:
+ok   every gh call was one of fleet.sh's reads
+FAIL the selected cases ran: 3 cases ran, not 1: is "steer: under the shared login*" a case's name?
+3 cases, 4 failed
+## Mutation 6 (re-check R2): steering is off even when the video was posted by the App
+FAIL steer: a stop on the video holds the fleet and asks to record it: unexpected output:
+ok   every gh call was one of fleet.sh's reads
+1 cases, 1 failed

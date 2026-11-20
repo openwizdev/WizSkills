@@ -13,16 +13,21 @@ from status.py. Ages are 5 minutes (live) or 31 to 90 minutes (lapsed) against
 the real clock, far from the 30-minute edge.
 """
 from datetime import datetime, timedelta, timezone
+import contextlib
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.dont_write_bytecode = True
 
@@ -98,7 +103,10 @@ def page(items, query):
 parts = urlsplit(path); query = parse_qs(parts.query)
 seg = [unquote(s) for s in parts.path.split('/')]
 def edit(c, text):
-    # GitHub keeps a comment's edit history: its first edit records the original too.
+    # GitHub keeps a comment's edit history: its first edit records the original too. An edit
+    # that leaves the body as it was is no edit: no history entry, no new updated_at (#62 R4).
+    if text == c['body']:
+        return
     c.setdefault('edits', [c['body']]).append(text)
     c.setdefault('edited_at', [c['updated']]).append(now)
     c['body'] = text; c['updated'] = now
@@ -1046,6 +1054,14 @@ from datetime import datetime, timedelta, timezone
 mode, out = sys.argv[1], sys.argv[2]
 world, log = os.environ['FAKE_GH_WORLD'], os.environ['FAKE_GH_LOG']
 open(out + '.pid', 'w').write(str(os.getpid()))
+if mode == 'stubborn':
+    # A worker that ignores SIGTERM, as some build and test runners do (#62 R1).
+    import subprocess
+    worker = subprocess.Popen([sys.executable, '-I', '-c',
+                               'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)'],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    open(out + '.worker', 'w').write(str(worker.pid))
+    mode = 'lost'
 def calls(what='\n'):
     return open(log).read().count(what) if os.path.exists(log) else 0
 if mode == 'long':
@@ -1070,6 +1086,20 @@ with open(world + '.lock', 'w') as lock:
     open(out + '.mark', 'w').write(str(calls()))
 time.sleep(60)
 '''
+
+
+def gone(pid):
+    """True when PID no longer runs: no such process, or only its exit status is left."""
+    try:
+        return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0] == 'Z'
+    except FileNotFoundError:
+        return True
+    except OSError:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        return False
 
 
 class Run(Tracker):
@@ -1170,6 +1200,97 @@ class Run(Tracker):
             'the command was not started']))
         self.assertEqual(self.ticket()['comments'][3]['body'], released)
         self.assertFalse(Path(self.out + '.pid').exists())
+
+    def test_a_stop_kills_a_worker_that_ignores_sigterm(self):
+        # catches (#62 R1): cleanup that waits only for the command itself, so a worker in its
+        # process group that ignores SIGTERM keeps running in the checkout after the fence exit.
+        result, _ = self.run_command('stubborn', note(step='claimed the ticket'))
+        self.assertEqual((result.returncode, result.stderr.splitlines()[-1:]),
+                         (3, ['status.py: stop: note 105 holds the builder claim; the command is stopped']))
+        self.assertTrue(gone(int(Path(self.out + '.worker').read_text())))
+
+    def test_a_lapsed_beat_steps_down_for_a_newer_holder_whatever_its_history(self):
+        # catches (#62 R2): earlier beats, alike but for time, read as retries of this one, so a
+        # full history (or one that can't be read) fails the read-back before the holder check,
+        # and the old note, refreshed live, keeps the claim from the newer builder.
+        for case in ('twenty earlier beats', 'an unreadable history'):
+            with self.subTest(case=case):
+                self.setUp()
+                stamps = [f'2030-01-01T00:{i:02d}:00Z' for i in range(20)]
+                mine = self.ticket(self.world)['comments'][3]
+                mine.update(body=note(time=stamps[-1]), updated=ago(40),
+                            edits=[note(time=t) for t in stamps], edited_at=stamps)
+                self.world['history_fails'] = case == 'an unreadable history'
+                self.world['race_edit'] = [{'author': BOT, 'body': note(step='a newer builder claimed')}]
+                result, _ = self.run_command('long')
+                self.assertEqual((result.returncode, result.stderr.splitlines()[-1:]), (3, [
+                    'status.py: stop: note 9001 holds the builder claim; note 104 is stopped (lost claim); '
+                    'the command was not started']))
+                self.assertEqual(self.ticket()['comments'][3]['body'].split('\n')[2], 'state: stopped (lost claim)')
+
+    def test_beats_keep_the_lease_through_a_failed_beat(self):
+        # catches (#62 R3): a schedule that waits a full interval after a failed beat, so with
+        # 900-second beats and a slow GitHub the note lapses while the command still runs; or
+        # one that keeps the command running once no beat can land inside the lease.
+        spec = importlib.util.spec_from_file_location('status_under_test', SCRIPT)
+        status = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(status)
+        lease = 1800
+        for every in (1, 60, 600, 900):
+            for fails in ([], [1], [1, 2, 3], list(range(1, 40))):
+                with self.subTest(every=every, fails=fails):
+                    # Each beat takes 1 second; beat n fails when n is in FAILS. Times in seconds.
+                    t, ok_at, n, failed, stopped = 0, 0, 0, False, None
+                    while t < 3 * lease and stopped is None:
+                        wait = status.next_beat(t, ok_at, every, failed)
+                        if wait is None:
+                            stopped = t
+                            break
+                        t += wait
+                        n += 1
+                        started, t = t, t + 1
+                        failed = n in fails
+                        if not failed:
+                            # The edit lands within the beat: GitHub's updated_at is at most t.
+                            self.assertLess(t - ok_at, lease, (every, fails, n))
+                            ok_at = started
+                    if stopped is not None:
+                        # The command stops while the last edit is still live, never after.
+                        self.assertLess(stopped - ok_at, lease)
+                        self.assertEqual(fails, list(range(1, 40)))
+
+    def test_a_first_beat_in_the_notes_own_second_still_changes_the_body(self):
+        # catches (#62 R4): a beat in the same UTC second as the note's time writes the same
+        # body, which GitHub records as no edit, so the read-back fails and the work never starts.
+        spec = importlib.util.spec_from_file_location('status_under_test', SCRIPT)
+        status = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(status)
+        pinned = datetime.now(timezone.utc).replace(microsecond=0)
+        self.ticket(self.world)['comments'][3]['body'] = note(time=pinned.strftime('%Y-%m-%dT%H:%M:%SZ'))
+        self.save()
+        clock = {'slept': 0}
+
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return pinned + timedelta(seconds=clock['slept'])
+        sleeper = type('Sleeper', (), {'sleep': staticmethod(lambda s: clock.update(slept=clock['slept'] + s)),
+                                         'monotonic': staticmethod(time.monotonic)})
+        env = {'PATH': str(self.dir / 'bin') + ':' + os.environ['PATH'], 'FAKE_GH_WORLD': str(self.dir / 'world.json'),
+               'FAKE_GH_LOG': str(self.dir / 'gh.log'), 'FAKE_GH_PAGE': self.page}
+        saved = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
+        err = io.StringIO()
+        try:
+            with mock.patch.dict(os.environ, env), mock.patch.object(status, 'datetime', Clock), \
+                    mock.patch.object(status, 'time', sleeper, create=True), contextlib.redirect_stderr(err):
+                code = status.main(['run', '--repo', REPO, '--ticket', '12', '--agent', 'builder', '--note', '104',
+                                    '--', sys.executable, '-I', '-c', 'raise SystemExit(5)'])
+        finally:
+            for sig, handler in saved.items():
+                signal.signal(sig, handler)
+        self.assertEqual(code, 5, err.getvalue())
+        beats = [c['body']['body'] for c in self.calls() if c['method'] == 'PATCH']
+        self.assertEqual(beats, [note(time=(pinned + timedelta(seconds=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))])
 
     def test_run_never_starts_the_command_on_a_released_note(self):
         # catches: a run that starts long work on a claim it no longer holds.

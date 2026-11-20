@@ -1442,6 +1442,22 @@ class WakeRepair(Tracker):
         self.assertEqual(self.wake(), (0, []))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
+    def test_a_working_heartbeat_after_the_repair_put_back_a_hold_keeps_it(self):
+        # catches: a heartbeat taking off a person's needs-info that the repair put back under the
+        # same App login, because the label's last application looks like its own (#1712).
+        resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                 {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
+        self.asking_on_12(race_label=[resume], race_delete=again)
+        self.wake()
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        before = self.timeline()
+        beat = self.run_status('run', '--repo', REPO, '--ticket', '12', '--agent', 'builder', '--note', '104',
+                               '--', sys.executable, '-I', '-c', 'pass')
+        self.assertEqual(beat.returncode, 0, beat.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual(self.timeline(), before)
+
     def test_a_person_who_reapplies_needs_info_after_the_repair_added_it_keeps_it(self):
         # catches: the repair taking off a needs-info whose last application is a person's,
         # because it applied the label itself earlier in the same wake.

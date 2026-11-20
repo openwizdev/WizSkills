@@ -1,0 +1,43 @@
+test_admission (__main__.Admit.test_admission) ... ok
+test_an_unavailable_cost_is_posted_unknown_never_zero (__main__.Cost.test_an_unavailable_cost_is_posted_unknown_never_zero) ... ok
+test_no_cost_line_before_a_verified_merge (__main__.Cost.test_no_cost_line_before_a_verified_merge) ... ok
+test_only_a_record_authors_cost_record_counts_as_posted (__main__.Cost.test_only_a_record_authors_cost_record_counts_as_posted) ... ok
+test_a_case_variant_of_the_pull_requests_repository_finds_the_same_record (__main__.CrossRepository.test_a_case_variant_of_the_pull_requests_repository_finds_the_same_record) ... ok
+test_a_ticket_the_pull_request_does_not_close_is_refused_before_any_write (__main__.CrossRepository.test_a_ticket_the_pull_request_does_not_close_is_refused_before_any_write) ... ok
+test_an_unreadable_duplicate_lookup_posts_nothing (__main__.CrossRepository.test_an_unreadable_duplicate_lookup_posts_nothing) ... ok
+test_the_cost_is_posted_on_the_tickets_own_repository_once (__main__.CrossRepository.test_the_cost_is_posted_on_the_tickets_own_repository_once) ... ok
+test_the_named_one_of_two_same_number_tickets_gets_it (__main__.CrossRepository.test_the_named_one_of_two_same_number_tickets_gets_it) ... ok
+test_the_archive_row_archives_only_after_a_settled_cost (__main__.Documented.test_the_archive_row_archives_only_after_a_settled_cost) ... ok
+test_the_documented_commands_run_from_the_project_checkout (__main__.Documented.test_the_documented_commands_run_from_the_project_checkout) ... ok
+test_a_brief_outside_openwiz_posts_nothing (__main__.Landed.test_a_brief_outside_openwiz_posts_nothing) ... ok
+test_a_fix_merged_in_another_openwizdev_repository_names_it_in_full (__main__.Landed.test_a_fix_merged_in_another_openwizdev_repository_names_it_in_full) ... ok
+test_a_fix_outside_openwizdev_posts_nothing (__main__.Landed.test_a_fix_outside_openwizdev_posts_nothing) ... ok
+test_a_lost_landed_response_is_reconciled_never_posted_twice (__main__.Landed.test_a_lost_landed_response_is_reconciled_never_posted_twice) ... ok
+test_a_merge_that_closes_no_report_posts_nothing (__main__.Landed.test_a_merge_that_closes_no_report_posts_nothing) ... ok
+test_a_merged_fix_posts_one_landed_comment_and_a_second_run_posts_nothing (__main__.Landed.test_a_merged_fix_posts_one_landed_comment_and_a_second_run_posts_nothing) ... ok
+test_a_report_found_by_its_marker_alone_gets_it (__main__.Landed.test_a_report_found_by_its_marker_alone_gets_it) ... ok
+test_a_report_landed_by_an_earlier_fix_gets_nothing (__main__.Landed.test_a_report_landed_by_an_earlier_fix_gets_nothing) ... ok
+test_an_unreadable_report_posts_nothing_and_says_unknown (__main__.Landed.test_an_unreadable_report_posts_nothing_and_says_unknown) ... ok
+test_only_a_record_authors_landed_comment_counts (__main__.Landed.test_only_a_record_authors_landed_comment_counts) ... ok
+test_two_briefs_linking_one_report_lead_to_one_comment (__main__.Landed.test_two_briefs_linking_one_report_lead_to_one_comment) ... ok
+test_a_direct_merge_needs_the_base_rule_checked (__main__.Merge.test_a_direct_merge_needs_the_base_rule_checked) ... ok
+test_a_lost_merge_response_is_read_back (__main__.Merge.test_a_lost_merge_response_is_read_back) ... ok
+test_a_merge_waits_for_its_admission_with_zero_writes (__main__.Merge.test_a_merge_waits_for_its_admission_with_zero_writes) ... ok
+test_a_queue_that_let_it_go_blocks_it (__main__.Merge.test_a_queue_that_let_it_go_blocks_it) ... ok
+test_a_refused_merge_is_blocked_and_recorded (__main__.Merge.test_a_refused_merge_is_blocked_and_recorded) ... ok
+test_a_verified_merge_posts_the_tickets_cost_line_once (__main__.Merge.test_a_verified_merge_posts_the_tickets_cost_line_once) ... ok
+test_merged_but_not_yet_read_back_waits_for_the_next_wake (__main__.Merge.test_merged_but_not_yet_read_back_waits_for_the_next_wake) ... ok
+test_the_head_moving_after_admission_never_merges_another_commit (__main__.Merge.test_the_head_moving_after_admission_never_merges_another_commit) ... ok
+test_the_queue_takes_it_and_its_record_says_what_allowed_it (__main__.Merge.test_the_queue_takes_it_and_its_record_says_what_allowed_it) ... ok
+test_a_queued_merge_gets_its_cost_before_the_archive (__main__.Queue.test_a_queued_merge_gets_its_cost_before_the_archive) ... ok
+test_a_queued_pull_request_without_its_receipt_gets_one (__main__.Queue.test_a_queued_pull_request_without_its_receipt_gets_one) ... ok
+test_a_receipt_written_but_not_read_back_is_not_posted_twice (__main__.Queue.test_a_receipt_written_but_not_read_back_is_not_posted_twice) ... ok
+test_an_unconfirmed_queue_receipt_enqueues_nothing (__main__.Queue.test_an_unconfirmed_queue_receipt_enqueues_nothing) ... ok
+test_without_a_queue_receipt_there_is_nothing_to_settle (__main__.Queue.test_without_a_queue_receipt_there_is_nothing_to_settle) ... ok
+test_an_unreadable_state_is_a_stop (__main__.Read.test_an_unreadable_state_is_a_stop) ... ok
+test_where_it_stands (__main__.Read.test_where_it_stands) ... ok
+
+----------------------------------------------------------------------
+Ran 38 tests in 23.748s
+
+OK

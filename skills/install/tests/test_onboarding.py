@@ -100,8 +100,8 @@ class Road(Journey):
             repos['signed_out'] = what == 'signed_out'
             self.repos.write_text(json.dumps(repos))
         elif what == 'merge_setting':
-            self.world['files']['docs/agents/host.md'] = self.world['branches']['openwiz/host-setting'][
-                'docs/agents/host.md']
+            self.origin_write({'docs/agents/host.md': self.world['branches']['openwiz/host-setting'][
+                'docs/agents/host.md']})
             self.world['host_pulls'][0]['state'] = 'MERGED'
             self.save_world()
         elif what == 'fleet_record':
@@ -331,8 +331,7 @@ class Setting(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertNotIn('branches', json.loads(road.world_path.read_text()))
         road = self.connected('fresh-project')
-        road.world['files']['docs/agents/host.md'] = '# Host\n\nHost: local\n'
-        road.save_world()
+        road.origin_write({'docs/agents/host.md': '# Host\n\nHost: local\n'})
         result = road.helper(['setting', '--yes'])
         self.assertEqual(result.returncode, 5, result.stdout)
         self.assertIn('Host: local', result.stdout)
@@ -382,10 +381,10 @@ class Launch(unittest.TestCase):
         result = road.helper(['launch', '--spec', '900'])
         self.assertEqual(result.returncode, 5, result.stdout)
         self.assertIn('host setting', result.stdout)
-        road.world['files']['docs/agents/host.md'] = 'Host: local\nHost: boat\n'
-        road.save_world()
+        road.origin_write({'docs/agents/host.md': 'Host: local\nHost: boat\n'})
         result = road.helper(['launch', '--spec', '900'])
         self.assertEqual(result.returncode, 5, result.stdout)
+        self.assertIn('exactly one `Host: <name>` line', result.stdout)
         self.assertEqual(road.spawns(), [])
 
 

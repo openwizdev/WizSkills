@@ -160,6 +160,13 @@ class Journey:
         for path in (self.openwiz, gh, room):
             path.chmod(0o755)
         self.world = {'repo': JOURNEY['repo'], 'default': 'main', 'files': dict(FILES), 'issues': [], 'pulls': []}
+        # The project checkout the helper runs in, and its origin: launch-fleet's host.py reads
+        # docs/agents/host.md from origin's default branch (records v1, section 6).
+        self.origin = self.dir / 'origin.git'
+        self.git('init', '-q', '--bare', '-b', 'main', str(self.origin))
+        self.git('init', '-q', '-b', 'main', str(self.dir))
+        self.git('-C', str(self.dir), 'remote', 'add', 'origin', str(self.origin))
+        self.origin_write({'README.md': '# synthetic\n'})
         self.save_world()
         self.room_script.write_text('{}')
         self.approval = None
@@ -167,6 +174,22 @@ class Journey:
         self.extra_env = {}
         said = answers(JOURNEY['turns'])
         self.settings = {k: said[k] for k in ('harness', 'model', 'effort')}
+
+    def git(self, *args):
+        return subprocess.run(['git', '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', *args],
+                              check=True, capture_output=True, timeout=60)
+
+    def origin_write(self, files):
+        """One commit on origin's default branch writing these files, as a merge there would."""
+        work = Path(tempfile.mkdtemp(prefix='origin-', dir=self.dir))
+        self.git('clone', '-q', str(self.origin), str(work))
+        for name, text in files.items():
+            (work / name).parent.mkdir(parents=True, exist_ok=True)
+            (work / name).write_text(text)
+        self.git('-C', str(work), 'add', '-A')
+        self.git('-C', str(work), 'commit', '-q', '-m', 'synthetic')
+        self.git('-C', str(work), 'push', '-q', 'origin', 'HEAD:main')
+        shutil.rmtree(work)
 
     def env(self):
         env = {k: v for k, v in os.environ.items() if k in ('HOME', 'LANG', 'LC_ALL', 'TMPDIR')}

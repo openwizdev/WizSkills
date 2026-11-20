@@ -81,6 +81,7 @@ import urllib.parse
 
 LAUNCH_FLEET = Path(__file__).resolve().parents[2] / 'launch-fleet'
 FLEET_SH = LAUNCH_FLEET / 'scripts/fleet.sh'
+HOST_PY = LAUNCH_FLEET / 'scripts/host.py'
 OPTIONS = {
     'where': ({'--state', '--agents'}, {'--yes'}, set()),
     'setting': ({'--state'}, {'--yes'}, set()),
@@ -253,12 +254,12 @@ def teach(heading, fill=(), which=0):
     return re.sub(r'`?<[^>]+>`?', lambda _: fill.pop(0), line)
 
 
-# --- Interfaces of tickets not merged yet (#1358's stubs) ----------------------
-# Each is one thin call against the interface its pull request defines; swap it
-# when that ticket merges.
+# --- Other tickets' interfaces (#1358) ------------------------------------------
+# local_driver() is a thin stub against the interface KN3's open pull request
+# defines; swap it when KN3 merges. host_setting() calls KN6's merged reader.
 
 def local_driver(env):
-    """KN3 (#1368, OpenWiz #1455): the local driver's `version` answer, or None.
+    """Stub until KN3 (#1368, OpenWiz #1455) merges: the local driver's `version` answer, or None.
 
     The driver is `$OPENWIZ_ADAPTERS/local/driver` (driver v1), as launch-fleet's
     host.py (#1371, WizSkills #64) finds it. Only `version` is called here: it starts nothing."""
@@ -277,25 +278,22 @@ def local_driver(env):
         return None
 
 
-def host_setting(env, repo):
-    """KN6 (#1371, OpenWiz #1498): the host the default branch's docs/agents/host.md names, or None for no file.
+def host_setting(env):
+    """KN6 (#1371): the host docs/agents/host.md names on the default branch, or None when it names none.
 
-    Records v1 section 6: exactly one `Host: <name>` line, the name a driver's folder
-    name. Swap for launch-fleet's `host.py which` (WizSkills #64) once it merges."""
-    result = run(['gh', 'api', '--include', 'repos/%s/contents/%s' % (repo, HOST_FILE),
-                  '-H', 'Accept: application/vnd.github.raw+json'], env)
+    Read by launch-fleet's own reader, `host.py which` (records v1, section 6), from this checkout's origin,
+    so the onboarding and the fleet read the same setting the same way."""
+    result = run([sys.executable, '-I', str(HOST_PY), 'which'], env)
     if result is None:
         raise Exit(1, 'Could not read the host setting (%s); %s' % (HOST_FILE, NOTHING))
-    head, _, body = result.stdout.decode('utf-8', 'replace').replace('\r\n', '\n').partition('\n\n')
-    status = re.match(r'HTTP/[0-9.]+ ([0-9]{3})', head)
-    if status and status[1] == '404':
-        return None
-    if result.returncode != 0 or not status or status[1] != '200':
-        raise Exit(1, 'Could not read the host setting (%s); %s' % (HOST_FILE, NOTHING))
-    lines = re.findall(r'(?m)^Host:[ \t]*(.*?)[ \t]*$', body)
-    if len(lines) != 1 or not re.fullmatch(r'[a-z0-9]+(-[a-z0-9]+)*', lines[0]) or len(lines[0]) > 40:
-        raise Exit(5, '%s needs exactly one `Host: <name>` line; fix it, or ask to change it; %s' % (HOST_FILE, NOTHING))
-    return lines[0]
+    out = result.stdout.decode('utf-8', 'replace').strip()
+    why = result.stderr.decode('utf-8', 'replace').strip().removeprefix('host.py: ')
+    if result.returncode == 2 and 'needs exactly one' in why:
+        raise Exit(5, '%s; fix it, or ask to change that line; %s' % (why, NOTHING))
+    named = re.fullmatch(r'host: ([a-z0-9]+(?:-[a-z0-9]+)*)', out) if result.returncode == 0 else None
+    if not named:
+        raise Exit(1, 'Could not read the host setting (%s): %s; %s' % (HOST_FILE, why or 'no answer', NOTHING))
+    return None if named[1] == 'none' else named[1]
 
 
 # --- Where agents run (#1358) ---------------------------------------------------
@@ -682,7 +680,7 @@ def setting(got):
         raise Exit(5, 'Ask where agents run (where) and connect the repository (continue) first; nothing written.')
     env = repository(repo)
     want = 'local' if host['agents'] == 'local' else None
-    now = host_setting(env, repo)
+    now = host_setting(env)
     if now == want:
         state.value['setting'] = {'host': want, 'state': 'merged'}
         if not state.save():
@@ -1043,7 +1041,7 @@ def launch(got):
         withdraw(state)
         raise Exit(5, 'Setup changed since it was carried; run continue again; ' + NOTHING)
     local = host['agents'] == 'local'
-    named = host_setting(env, state.value['repo'])
+    named = host_setting(env)
     if named != ('local' if local else None):
         raise Exit(5, 'The host setting on the default branch says %s, but the user chose %s: %s; %s' % (
             'Host: ' + named if named else 'no host', 'this machine' if local else 'Cloudroom',

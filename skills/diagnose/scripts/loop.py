@@ -139,7 +139,10 @@ def clean(args):
         if mode in (b'100644', b'100755'):
             staged[os.fsdecode(path)] = blob.decode()
     paths = set(staged) | {os.fsdecode(p) for p in filter(None, listed.split(b'\0'))}
-    blobs = read_blobs(root, set(staged.values()))
+    # Only a staged copy that may differ from its file can hold another tag.
+    differ = git(root, 'diff-files', '-z', '--name-only').split(b'\0')
+    changed = {os.fsdecode(p) for p in filter(None, differ)}
+    blobs = read_blobs(root, {staged[p] for p in changed if p in staged})
     left = []
     for path in sorted(paths):
         try:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """diagnose's loop helper: rate, tag and clean, on synthetic commands and Git trees only."""
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,24 @@ def counter(tmp, fail_on):
         'print("SYNTHETIC_SECRET_OUTPUT"); print("SYNTHETIC_SECRET_ERR", file=sys.stderr)\n'
         f'sys.exit(3 if k in {sorted(fail_on)!r} else 0)\n')
     return [sys.executable, '-I', str(script), str(Path(tmp) / 'count')]
+
+
+ALIVE = ('def alive(pid):\n'
+         '    try:\n'
+         '        state = open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()[0]\n'
+         '    except (FileNotFoundError, ProcessLookupError):\n'
+         '        return False\n'
+         '    return state != "Z"  # a zombie runs nothing\n')
+exec(ALIVE)
+
+
+def stop_workers(pids):
+    """Kill any worker a failing run left behind, so a red run leaks nothing."""
+    for pid in (int(p) for p in pids.read_text().split()) if pids.exists() else ():
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 class Rate(unittest.TestCase):
@@ -55,21 +74,32 @@ class Rate(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertEqual(r.stdout, 'rate: 2/2 failed; exits none; timeouts 2\n')
 
+    @unittest.skipUnless(os.path.isdir('/proc/self'), 'reads process states from /proc')
     def test_a_timed_out_attempts_workers_are_stopped_before_the_next_attempt(self):
         # catches: a timeout that kills only the direct command, so its worker
-        # writes into the fixture during the next attempt or after rate exits.
+        # still runs during the next attempt and after rate has exited.
         with tempfile.TemporaryDirectory() as tmp:
-            fixture = Path(tmp) / 'fixture'
-            worker = ('import pathlib, sys, time; time.sleep(1.5); '
-                      'open(sys.argv[1], "a").write("late\\n")')
-            parent = ('import pathlib, subprocess, sys, time; '
-                      f'subprocess.Popen([sys.executable, "-I", "-c", {worker!r}, sys.argv[1]]); '
-                      'open(sys.argv[1], "a").write("start\\n"); time.sleep(5)')
-            r = run('rate', '--runs', '2', '--timeout', '1', '--',
-                    sys.executable, '-I', '-c', parent, str(fixture))
+            script, pids, log = Path(tmp, 'runner.py'), Path(tmp, 'pids'), Path(tmp, 'log')
+            script.write_text(
+                'import os, subprocess, sys, time\n'
+                f'{ALIVE}'
+                'pids, log = sys.argv[1], sys.argv[2]\n'
+                'seen = [int(p) for p in open(pids).read().split()] if os.path.exists(pids) else []\n'
+                'open(log, "a").write("overlap\\n" if any(map(alive, seen)) else "start\\n")\n'
+                'worker = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"])\n'
+                'open(pids, "a").write(f"{worker.pid}\\n")\n'
+                'time.sleep(60)\n')
+            self.addCleanup(stop_workers, pids)
+            r = run('rate', '--runs', '2', '--timeout', '1.5', '--',
+                    sys.executable, '-I', str(script), str(pids), str(log))
             self.assertEqual((r.returncode, r.stdout), (1, 'rate: 2/2 failed; exits none; timeouts 2\n'))
-            time.sleep(1.5)
-            self.assertEqual(fixture.read_text(), 'start\nstart\n')
+            self.assertEqual(log.read_text(), 'start\nstart\n')
+            workers = [int(p) for p in pids.read_text().split()]
+            self.assertEqual(len(workers), 2)
+            deadline = time.monotonic() + 5  # a killed worker's exit is delivered, not instant
+            while any(map(alive, workers)) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertEqual([p for p in workers if alive(p)], [])
 
     def test_command_output_is_never_echoed(self):
         with tempfile.TemporaryDirectory() as tmp:

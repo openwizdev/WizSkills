@@ -1,4 +1,4 @@
-# launch-fleet test.sh at the #1759 fix with origin/main (1533fcb, WS17 included) merged in, run as TEST_SHARD=K/8 (map: group 1 to shard 1, the rest by number), each shard in the foreground.
+# launch-fleet test.sh at the #1759 fix with origin/main (3a9ac7d, WS17, KN11 and WS28 included) merged in, run as TEST_SHARD=K/8 (map: group 1 to shard 1, the rest by number), each shard in the foreground.
 $ TEST_SHARD=1/8 sh skills/launch-fleet/scripts/test.sh
 108 cases, 0 failed
 $ TEST_SHARD=2/8 sh skills/launch-fleet/scripts/test.sh

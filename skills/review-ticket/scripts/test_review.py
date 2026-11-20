@@ -888,6 +888,58 @@ class CommentPass(unittest.TestCase):
         code, findings, out = self.comment_pass(diff)
         self.assertEqual([f.split(": ", 2)[:2] for f in findings], [["web/count.js:4", "workaround"]], out)
 
+    def kinds(self, diff, *args):
+        code, findings, out = self.comment_pass(diff, *args)
+        return [f.split(": ", 2)[:2] for f in findings], out
+
+    def test_git_quoted_and_tab_terminated_paths_are_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            diffs = []
+            for name in ("task runner.py", "café.py"):
+                Path(folder, name).write_text("# Workaround for the old runner\nprint(1)\n", encoding="utf-8")
+                diffs.append(subprocess.run(["git", "-c", "core.quotePath=true", "diff", "--no-index", "--",
+                                             "/dev/null", name], cwd=folder, capture_output=True).stdout)
+        diff = b"".join(diffs).decode("utf-8")
+        self.assertIn('"b/caf\\303\\251.py"', diff)
+        self.assertIn("b/task runner.py\t", diff)
+        self.assertEqual(self.kinds(diff)[0], [["task runner.py:1", "workaround"], ["café.py:1", "workaround"]])
+
+    def test_script_style_and_yaml_block_scalars_follow_the_contract(self):
+        sha = "1234567890" * 4
+        diff = new_file("index.html", [
+            "<p>hi</p>", "<script>", "// Workaround for the old runner", "</script>",
+            '<script type="application/json">', '{"a": "// not script"}', "</script>",
+            "<style>/* workaround for the old layout */</style>"]) + new_file("config.yml", [
+                "text: |", "  # Shown to the user as text", "job:", "  run: |",
+                "    # workaround for the old runner", "    echo hi"]) + new_file("tool.py", [
+                    "# SPDX-License-Identifier: MIT", '"""Workaround for the old runner."""', "print(1)"]) + new_file(
+            ".github/workflows/check.yml", ["steps:", f"  - uses: owner/action@{sha} # v7.0.1"]) + new_file(
+            "notes.yml", [f"  - uses: owner/action@{sha} # v7.0.1"])
+        self.assertEqual(self.kinds(diff)[0], [
+            ["index.html:3", "workaround"], ["index.html:8", "workaround"], ["config.yml:5", "workaround"],
+            ["tool.py:2", "workaround"], ["notes.yml:1", "comment"]])
+
+    def test_a_hunk_whose_context_the_diff_lacks_is_marked_for_the_reviewer(self):
+        diff = ("diff --git a/config.yml b/config.yml\n--- a/config.yml\n+++ b/config.yml\n"
+                "@@ -10,1 +10,2 @@\n   a: 1\n+  # shown as text, or a comment?\n")
+        out = self.comment_pass(diff)[2]
+        self.assertIn("check config.yml:10: context: ", out)
+
+    def test_two_block_comments_on_one_line_are_two_blocks(self):
+        line = "let a = /* first workaround */ 1, b = /* second workaround */ 2;"
+        self.assertEqual(self.kinds(new_file("app.js", [line]))[0],
+                         [["app.js:1", "workaround"], ["app.js:1", "workaround"]])
+        mixed = line.replace("first workaround", "SAFETY: synthetic invariant")
+        kinds, out = self.kinds(new_file("app.js", [mixed]))
+        self.assertEqual(kinds, [["app.js:1", "workaround"]], out)
+        self.assertIn("check app.js:1: warning: SAFETY: synthetic invariant\n", out)
+
+    def test_licence_files_and_generated_files_are_excluded(self):
+        diff = new_file("generated.py", ["# @generated", "# Workaround for the old runner", "x = 1"]) + new_file(
+            "LICENSE.py", ["# Distribution terms", "x = 1"]) + new_file(
+            "late.py", ["x = 1"] * 5 + ["# DO NOT EDIT: workaround for the old runner"])
+        self.assertEqual(self.kinds(diff)[0], [["late.py:6", "workaround"]])
+
     def test_a_block_comment_is_judged_once_at_its_first_added_line(self):
         diff = new_file("web/app.js", [
             "const a = 1;", "/*", " * Needed because Safari caches the old bundle,",

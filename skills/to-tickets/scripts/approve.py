@@ -1,10 +1,11 @@
 """The machine plan approval (#1339, J202): check a plan graph and print its record.
 
-    python3 -I approve.py --graph graph.json --revision revision.txt --grill <url>
+    python3 -I approve.py --graph graph.json --revision revision.txt --spec spec.json --grill <url>
         --number <N> [--changed <what changed>] [--date YYYY-MM-DD] [--root DIR]
 
 graph.json is check-links.sh's graph read (`--read <spec>`); revision.txt is
-revision.sh's text for the same spec. The checks, all of them every time:
+revision.sh's text for the same spec; spec.json is `gh issue view <spec> --json
+body,createdAt`. The checks, all of them every time:
 
   links        check-links.sh passes on the graph read
   relies       check-relies.sh passes on each open agent ticket's body, a path
@@ -23,17 +24,16 @@ revision.sh's text for the same spec. The checks, all of them every time:
                tickets that can run at once own the same path, unless both
                bullets say `(shared`
   checkpoints  the spec's two checkpoint answers (contracts/checkpoints.v1.md),
-               read by check-approval.sh --checkpoints from the spec body the
-               revision's fingerprint binds (RC2, #1830)
+               read by check-approval.sh --checkpoints from spec.json, whose
+               body must be the one the revision's fingerprint binds (#1830)
 
 Before any check, the revision text must name exactly the graph's tickets,
 titles, blockers and bodies, so the fingerprint binds the plan checked.
 
 Exit 0: every check passed; the record (decisions.v1, "Machine plan approval")
 on stdout. 1: refused; nothing on stdout, one `approve: <check>: <why>` line per
-failure on stderr. 2: bad arguments or an unreadable input. Writes nothing; its
-one network call reads the spec's body and creation time, and it runs the three
-sibling checkers.
+failure on stderr. 2: bad arguments or an unreadable input. Writes nothing and
+calls no network; it runs the three sibling checkers.
 """
 import argparse
 import datetime
@@ -179,16 +179,9 @@ def check_links(graph_text):
     return []
 
 
-def check_checkpoints(graph, revision):
+def check_checkpoints(spec_text, graph, revision):
     spec = graph['source']['spec']
-    read = subprocess.run(['gh', 'issue', 'view', str(spec), '--repo', graph['repo'], '--json', 'body,createdAt'],
-                          capture_output=True, text=True)
-    if read.returncode != 0:
-        raise Unreadable(f'cannot read spec #{spec}: ' + read.stderr.strip()[:200])
-    try:
-        body = json.loads(read.stdout)
-    except json.JSONDecodeError:
-        raise Unreadable(f'spec #{spec} is not JSON')
+    body = json.loads(spec_text)
     if not isinstance(body, dict) or not isinstance(body.get('body'), str):
         raise Unreadable(f'spec #{spec} has no body')
     if revision.split('\n')[1] != f'spec #{spec} body sha256 {unticked_sha256(body["body"])}':
@@ -408,6 +401,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--graph', type=Path, required=True)
     parser.add_argument('--revision', type=Path, required=True)
+    parser.add_argument('--spec', type=Path, required=True)
     parser.add_argument('--grill', required=True)
     parser.add_argument('--number', type=int, required=True)
     parser.add_argument('--changed')
@@ -423,6 +417,7 @@ def main():
     try:
         graph_text = args.graph.read_text(encoding='utf-8')
         revision = args.revision.read_text(encoding='utf-8')
+        spec_text = args.spec.read_text(encoding='utf-8')
         graph = json.loads(graph_text)
         if (not isinstance(graph, dict) or graph.get('kind') != 'graph' or not isinstance(graph.get('tickets'), list)
                 or not graph['tickets'] or not isinstance(graph.get('source'), dict)):
@@ -442,7 +437,7 @@ def main():
         width_why, chain, widest = check_width(graph)
         failures += [('width', why) for why in width_why]
         failures += [('owned paths', why) for why in owned_why]
-        failures += [('checkpoints', why) for why in check_checkpoints(graph, revision)]
+        failures += [('checkpoints', why) for why in check_checkpoints(spec_text, graph, revision)]
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, Unreadable) as e:
         print(f'approve: unreadable input: {e}', file=sys.stderr)
         return 2

@@ -1,0 +1,160 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "pg-workflow-record-approval",
+ "skills": [
+  "plan-graph"
+ ],
+ "category": "workflow",
+ "brief": "You are the orchestrator for example/project. Use the plan-graph skill. Read 'skills/plan-graph/SKILL.md' and follow it.\n\nYou showed the user the plan graph for spec #8200 (one ticket, #8201, no blockers; revision 1). The user replied: \"approve\". Record the approval and make the ticket ready.",
+ "world": {
+  "github": {
+   "issues": {
+    "8200": {
+     "title": "Spec: row count",
+     "labels": [],
+     "body": "Count the rows.",
+     "subIssues": [
+      8201
+     ]
+    },
+    "8201": {
+     "title": "Count the rows",
+     "labels": [],
+     "parent": 8200,
+     "body": "## Owned paths\n\n`src/count.rs`\n\n**Relies on:** nothing\n\n## Links\n\nnone\n"
+    }
+   },
+   "pulls": {}
+  },
+  "scripts": [
+   {
+    "argv": [
+     "script",
+     "skills/plan-graph/check-relies.sh"
+    ],
+    "out": ""
+   },
+   {
+    "argv": [
+     "script",
+     "skills/plan-graph/check-links.sh"
+    ],
+    "out": "pass spec #8200: tickets 1, links 0, real 0, file 0, unlabelled 0, refusals 0\n"
+   },
+   {
+    "argv": [
+     "script",
+     "skills/plan-graph/revision.sh"
+    ],
+    "out": "plan-graph revision v2\nspec #8200 body sha256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nticket #8201 blocked-by none body sha256 cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc title Count the rows\n"
+   },
+   {
+    "argv": [
+     "script",
+     "skills/plan-graph/scripts/check-approval.sh"
+    ],
+    "out": "approval current for #8200\n"
+   }
+  ]
+ },
+ "expect": {
+  "actions": [
+   {
+    "write": "gh issue comment",
+    "args": [
+     "8200"
+    ],
+    "contains": "Plan graph approved"
+   },
+   {
+    "write": "gh issue edit",
+    "args": [
+     "8201",
+     "ready-for-agent"
+    ]
+   }
+  ],
+  "allow": [
+   {
+    "write": "gh issue comment",
+    "args": [
+     "8200"
+    ]
+   }
+  ],
+  "forbid": [
+   {
+    "write": "gh issue edit",
+    "args": [
+     "--body"
+    ]
+   },
+   {
+    "write": "room-cli thread spawn"
+   }
+  ],
+  "end": "end_turn"
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "records the approval, then labels the ticket",
+    "events": [
+     [
+      "read",
+      "script skills/plan-graph/revision.sh 8200"
+     ],
+     [
+      "write",
+      "gh issue comment 8200",
+      "**Plan graph approved by the user, 2030-01-07, revision 1:** \"approve\""
+     ],
+     [
+      "read",
+      "script skills/plan-graph/scripts/check-approval.sh 8200"
+     ],
+     [
+      "write",
+      "gh issue edit 8201 --add-label ready-for-agent"
+     ]
+    ]
+   }
+  ],
+  "fail": [
+   {
+    "why": "labels before recording",
+    "reason": "missing-action",
+    "events": [
+     [
+      "write",
+      "gh issue edit 8201 --add-label ready-for-agent"
+     ],
+     [
+      "write",
+      "gh issue comment 8200",
+      "**Plan graph approved by the user**"
+     ]
+    ]
+   },
+   {
+    "why": "edits the approved ticket body",
+    "reason": "forbidden",
+    "events": [
+     [
+      "write",
+      "gh issue comment 8200",
+      "Plan graph approved"
+     ],
+     [
+      "write",
+      "gh issue edit 8201 --add-label ready-for-agent"
+     ],
+     [
+      "write",
+      "gh issue edit 8201 --body ticked"
+     ]
+    ]
+   }
+  ]
+ }
+}

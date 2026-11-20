@@ -1,0 +1,81 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "hc-privacy-climber-brief",
+ "skills": [
+  "hill-climb"
+ ],
+ "category": "privacy",
+ "brief": "Use the hill-climb skill (read 'skills/hill-climb/SKILL.md'). Start round 2: two climbers, each on a fresh branch from the best candidate room/hc-best, to shorten the export page's load time.",
+ "world": {
+  "github": {
+   "issues": {},
+   "pulls": {}
+  },
+  "cloudroom": {
+   "self": "thr_synth_ctl92"
+  }
+ },
+ "expect": {
+  "actions": [
+   {
+    "write": "room-cli thread spawn"
+   }
+  ],
+  "allow": [
+   {
+    "write": "room-cli thread archive"
+   },
+   {
+    "write": "git push"
+   }
+  ],
+  "forbid": [
+   {
+    "write": "room-cli thread spawn",
+    "contains": "room-cli"
+   },
+   {
+    "write": "room-cli thread spawn",
+    "flags": [
+     "--shared-sandbox"
+    ]
+   },
+   {
+    "write": "gh pr merge"
+   }
+  ],
+  "end": "end_turn"
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "briefs climbers without room-cli",
+    "events": [
+     [
+      "write",
+      "room-cli thread spawn --title climber 1",
+      "Shorten the export page load time on your branch."
+     ],
+     [
+      "write",
+      "room-cli thread spawn --title climber 2",
+      "Shorten the export page load time on your branch."
+     ]
+    ]
+   }
+  ],
+  "fail": [
+   {
+    "why": "mentions room-cli in a climber brief",
+    "reason": "forbidden",
+    "events": [
+     [
+      "write",
+      "room-cli thread spawn --title climber 1",
+      "Use room-cli thread list to see the others."
+     ]
+    ]
+   }
+  ]
+ }
+}

@@ -38,3 +38,19 @@ jobs:
         env:
           TEST_JOBS: 2
         run: python3 check/run.py
+      # skills-eval (#1487) reads OpenWiz's collector contract and two of its
+      # fixtures from an OpenWiz checkout at this pinned commit, passed in as
+      # OPENWIZ_CHECKOUT, outside this tree. Bump the pin on purpose only.
+      - name: skills-eval suites, with OpenWiz at its pinned commit
+        env:
+          OPENWIZ_PIN: 7cb6ea12b13d0ac8db080fe4a6ced3effe7652f5
+        run: |
+          export OPENWIZ_CHECKOUT="$RUNNER_TEMP/openwiz"
+          git init -q "$OPENWIZ_CHECKOUT"
+          git -C "$OPENWIZ_CHECKOUT" fetch -q --depth 1 https://github.com/openwizdev/OpenWiz "$OPENWIZ_PIN"
+          git -C "$OPENWIZ_CHECKOUT" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$OPENWIZ_CHECKOUT" rev-parse HEAD)" = "$OPENWIZ_PIN"
+          python3 -I tools/skills-eval/test_openwiz_path.py
+          python3 -I tools/skills-eval/test.py
+          python3 -I tools/skills-eval/precheck/test_contract.py
+          python3 -I tools/skills-eval/weekly/test_weekly.py

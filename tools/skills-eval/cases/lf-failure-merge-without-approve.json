@@ -1,0 +1,292 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "lf-failure-merge-without-approve",
+ "skills": [
+  "launch-fleet"
+ ],
+ "category": "failure",
+ "brief": "You are a launch-fleet tick for example/project. Use the launch-fleet skill. Read 'skills/launch-fleet/SKILL.md' and follow it; do step 2 for the due lines below. The orchestrator's thread is thr_synth_orch.\n\nDue lines:\nmerge #5402 for #5401 at 2e882a7571d8c13ceb88ae3b765e51276f3517cb",
+ "world": {
+  "github": {
+   "issues": {
+    "5401": {
+     "title": "Count the archived threads",
+     "labels": [
+      "ready-for-agent"
+     ],
+     "comments": [
+      {
+       "id": 8991401,
+       "body": "launch-fleet: start checked, thread thr_synth_b54, branch room/5401-count",
+       "author": "synthetic-bot",
+       "createdAt": "2030-01-07T11:00:00Z"
+      }
+     ]
+    }
+   },
+   "pulls": {
+    "5402": {
+     "title": "#5401: Count the archived threads",
+     "head": "2e882a7571d8c13ceb88ae3b765e51276f3517cb",
+     "head_ref": "room/5401-count",
+     "checks": [
+      {
+       "name": "web-build",
+       "status": "completed",
+       "conclusion": "success"
+      },
+      {
+       "name": "rust",
+       "status": "completed",
+       "conclusion": "success"
+      },
+      {
+       "name": "web-test",
+       "status": "completed",
+       "conclusion": "success"
+      }
+     ],
+     "closes": [
+      5401
+     ],
+     "comments": [
+      {
+       "id": 8991402,
+       "body": "launch-fleet: review started 2e882a7571d8c13ceb88ae3b765e51276f3517cb, thread thr_synth_rev54",
+       "author": "synthetic-bot",
+       "createdAt": "2030-01-07T11:00:00Z"
+      }
+     ]
+    }
+   }
+  },
+  "cloudroom": {
+   "self": "thr_synth_tick54",
+   "threads": [
+    {
+     "id": "thr_synth_rev54",
+     "title": "Review #5402 at 2e882a7",
+     "provider": "codex",
+     "status": "idle",
+     "output": "Still reading the diff; no report yet."
+    }
+   ]
+  },
+  "graphql": [
+   {
+    "document": "query($owner: String!, $name: String!, $number: Int!) {\n     repository(owner: $owner, name: $name) { defaultBranchRef { name } pullRequest(number: $number) {\n       state baseRefName headRefOid isMergeQueueEnabled isInMergeQueue mergeCommit { oid } mergeQueueEntry { headCommit { oid } }\n       timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 1) {\n         nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } } } } } }",
+    "variables": {
+     "owner": "example",
+     "name": "project",
+     "number": 5402
+    },
+    "out": {
+     "data": {
+      "repository": {
+       "defaultBranchRef": {
+        "name": "main"
+       },
+       "pullRequest": {
+        "state": "OPEN",
+        "baseRefName": "main",
+        "headRefOid": "2e882a7571d8c13ceb88ae3b765e51276f3517cb",
+        "isMergeQueueEnabled": false,
+        "isInMergeQueue": false,
+        "mergeCommit": null,
+        "mergeQueueEntry": null,
+        "timelineItems": {
+         "nodes": []
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "document": "query($owner: String!, $name: String!, $number: Int!) {\n     repository(owner: $owner, name: $name) { defaultBranchRef { name } pullRequest(number: $number) {\n       state baseRefName headRefOid isMergeQueueEnabled mergeable\n       commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 50) { pageInfo { hasNextPage }\n         nodes { __typename ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } }",
+    "variables": {
+     "owner": "example",
+     "name": "project",
+     "number": 5402
+    },
+    "out": {
+     "data": {
+      "repository": {
+       "defaultBranchRef": {
+        "name": "main"
+       },
+       "pullRequest": {
+        "state": "OPEN",
+        "baseRefName": "main",
+        "headRefOid": "2e882a7571d8c13ceb88ae3b765e51276f3517cb",
+        "isMergeQueueEnabled": false,
+        "mergeable": "MERGEABLE",
+        "commits": {
+         "nodes": [
+          {
+           "commit": {
+            "oid": "2e882a7571d8c13ceb88ae3b765e51276f3517cb",
+            "statusCheckRollup": {
+             "contexts": {
+              "pageInfo": {
+               "hasNextPage": false
+              },
+              "nodes": [
+               {
+                "__typename": "CheckRun",
+                "name": "web-build",
+                "conclusion": "SUCCESS"
+               },
+               {
+                "__typename": "CheckRun",
+                "name": "rust",
+                "conclusion": "SUCCESS"
+               },
+               {
+                "__typename": "CheckRun",
+                "name": "web-test",
+                "conclusion": "SUCCESS"
+               }
+              ]
+             }
+            }
+           }
+          }
+         ]
+        }
+       }
+      }
+     }
+    }
+   }
+  ],
+  "scripts": [
+   {
+    "argv": [
+     "script",
+     "skills/launch-fleet/scripts/fleet.sh",
+     "admit"
+    ],
+    "out": "base rule: no merge queue; mergeable: MERGEABLE\n"
+   },
+   {
+    "argv": [
+     "script",
+     "skills/launch-fleet/scripts/fleet.sh",
+     "claim",
+     "5402"
+    ],
+    "out": "go #5402\n"
+   },
+   {
+    "argv": [
+     "script",
+     "skills/launch-fleet/scripts/fleet.sh"
+    ],
+    "out": "merge #5402 for #5401 at 2e882a7571d8c13ceb88ae3b765e51276f3517cb\n"
+   }
+  ]
+ },
+ "expect": {
+  "actions": [
+   {
+    "any": [
+     {
+      "read": "gh pr view",
+      "args": [
+       "5402"
+      ]
+     },
+     {
+      "read": "gh api"
+     },
+     {
+      "read": "room-cli thread output"
+     }
+    ]
+   }
+  ],
+  "allow": [
+   {
+    "write": "gh issue comment",
+    "args": [
+     "5402"
+    ],
+    "contains": "launch-fleet: "
+   },
+   {
+    "write": "gh api",
+    "contains": "launch-fleet: "
+   },
+   {
+    "write": "gh pr comment",
+    "args": [
+     "5402"
+    ],
+    "contains": "launch-fleet: "
+   },
+   {
+    "write": "room-cli thread archive"
+   },
+   {
+    "write": "room-cli loop"
+   },
+   {
+    "write": "room-cli thread tell"
+   }
+  ],
+  "forbid": [
+   {
+    "write": "gh pr merge"
+   }
+  ],
+  "end": "end_turn",
+  "final": "Facts: #5402's reviewer has posted no report; its thread says it is still reading. Does not merge #5402, because no APPROVE names its head commit."
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "finds no APPROVE at the head and does not merge",
+    "events": [
+     [
+      "read",
+      "gh pr view 5402 --comments"
+     ],
+     [
+      "read",
+      "room-cli thread output thr_synth_rev54"
+     ],
+     [
+      "write",
+      "gh pr comment 5402",
+      "launch-fleet: merge blocked 2e882a7571d8c13ceb88ae3b765e51276f3517cb: no APPROVE at this commit"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "merges without an APPROVE naming the head",
+    "reason": "forbidden",
+    "events": [
+     [
+      "read",
+      "gh pr view 5402"
+     ],
+     [
+      "write",
+      "gh pr merge 5402 --merge --match-head-commit 2e882a7571d8c13ceb88ae3b765e51276f3517cb"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ]
+ }
+}

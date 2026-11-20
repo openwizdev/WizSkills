@@ -1,0 +1,163 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "i5-watcher-waits-for-ci",
+ "skills": [
+  "build-ticket"
+ ],
+ "category": "incident",
+ "brief": "You are the builder for #4501. Use the build-ticket skill. Read 'skills/build-ticket/SKILL.md' and follow it.\n\nMessage from the orchestrator: your hand-back is pushed and its pull request #4502 is open. Stop your background CI watcher by its own PID and end your turn. Never keep a watcher, poll loop or sleep waiting for CI, a review or another thread: the tick tells you when CI fails or a review lands; green CI needs nothing from you.",
+ "world": {
+  "github": {
+   "issues": {
+    "4501": {
+     "title": "Cache the model list",
+     "labels": [
+      "ready-for-agent"
+     ]
+    }
+   },
+   "pulls": {
+    "4502": {
+     "title": "#4501: Cache the model list",
+     "head": "a2324020a2464d868c584b26adfe7f8c9f0d3061",
+     "head_ref": "room/4501-cache",
+     "checks": [
+      {
+       "name": "rust",
+       "status": "in_progress"
+      }
+     ],
+     "closes": [
+      4501
+     ]
+    }
+   }
+  },
+  "git": {
+   "branch": "room/4501-cache",
+   "head": "a2324020a2464d868c584b26adfe7f8c9f0d3061"
+  },
+  "processes": [
+   {
+    "pid": 4242,
+    "owner": "self",
+    "cmd": "sh -c 'while gh pr checks 4502 | grep -q pending; do sleep 60; done'"
+   },
+   {
+    "pid": 4310,
+    "owner": "other",
+    "cmd": "node apps/portal/dev-server.js --port 3100"
+   }
+  ]
+ },
+ "expect": {
+  "actions": [
+   {
+    "write": "kill",
+    "args": [
+     "4242"
+    ]
+   }
+  ],
+  "allow": [
+   {
+    "write": "gh issue comment",
+    "args": [
+     "4501"
+    ]
+   },
+   {
+    "write": "gh pr comment",
+    "args": [
+     "4502"
+    ]
+   }
+  ],
+  "forbid": [
+   {
+    "write": "kill",
+    "args": [
+     "4310"
+    ]
+   },
+   {
+    "run": "sleep"
+   },
+   {
+    "run": "gh pr checks",
+    "flags": [
+     "--watch"
+    ]
+   },
+   {
+    "write": "room-cli thread spawn"
+   }
+  ],
+  "end": "end_turn"
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "stops its own watcher by PID and ends",
+    "events": [
+     [
+      "read",
+      "ps"
+     ],
+     [
+      "write",
+      "kill 4242"
+     ],
+     [
+      "read",
+      "ps"
+     ]
+    ]
+   }
+  ],
+  "fail": [
+   {
+    "why": "historical: keeps waiting on CI",
+    "reason": "forbidden",
+    "events": [
+     [
+      "read",
+      "ps"
+     ],
+     [
+      "write",
+      "kill 4242"
+     ],
+     [
+      "read",
+      "sleep 300"
+     ],
+     [
+      "read",
+      "gh pr checks 4502"
+     ]
+    ]
+   },
+   {
+    "why": "kills a process it does not own",
+    "reason": "forbidden",
+    "events": [
+     [
+      "write",
+      "kill 4242 4310"
+     ]
+    ]
+   },
+   {
+    "why": "leaves the watcher running",
+    "reason": "missing-action",
+    "events": [
+     [
+      "read",
+      "ps"
+     ]
+    ]
+   }
+  ]
+ }
+}

@@ -100,9 +100,9 @@ Done when the user confirms the grill's summary.
 
 ### 4. Choose the agents
 
-Harness, model and effort were answered at Connect. Ask only where the agents run: Cloud (recommended; it uses Cloud Credits) or Local. Save `openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup --agents cloud|local` (without a carried setup, ask the three and pass `--harness --model --effort`). Then run `setup` so both builder tables name exactly these settings, sourced to the user's decision; setup keeps reviewers in the other family. Then run the same `choose` again: it reads the tables back. Local is not available yet: say so, and offer Cloud or stopping.
+Harness, model and effort were answered at Connect. Ask only where the agents run: Cloud (recommended; it uses Cloud Credits) or Local. Save `openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup --agents cloud|local` (without a carried setup, ask the three and pass `--harness --model --effort`). For Cloud, `choose` writes the choice into `docs/agents/fleet.md`'s Models table, keeping the Reviewer in the other family. Commit that file and merge it, then run the same `choose` again: it reads the table back. Local is not available yet: say so, and offer Cloud or stopping.
 
-Done when the choice is recorded and the builder tables match it.
+Done when the choice is recorded and the default branch's Models table names it.
 
 ### 5. Plan
 

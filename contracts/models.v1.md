@@ -255,8 +255,8 @@ the CLI's existing `openwiz.cli-error.v1` document. Exit numbers keep the
 
 **The CLI rows.** These are the CLI contract's forms `models.show`,
 `models.list` and `models.set`, with results `models.v1.schema.json#/$defs/show_report`,
-`list_report` and `set_report`; they are **not shipped** until MD2 (#1804)
-merges, and until then they are absent from `help --agent`'s catalogue and
+`list_report` and `set_report`; they ship with MD2 (#1804) and are listed
+in `help --agent`'s catalogue (`crates/cli/src/agent-catalogue.json`) and
 human help. Plain `openwiz models [--json]` is unchanged. `cli.v1.md` is a
 contract WizSkills carries byte for byte, so these rows live here until a
 WizSkills release carries them; `cli.v1.schema.json` already lists their

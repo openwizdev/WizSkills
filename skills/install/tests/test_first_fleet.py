@@ -1001,12 +1001,12 @@ class Resume(unittest.TestCase):
     """#1183: a fresh session resumes the first fleet from the private state alone.
     `next` reads only that state and names the first unfinished step."""
 
-    def next(self, j):
+    def next(self, j, *more):
         before = j.state.read_bytes() if j.state.exists() else None
         lock = Path(str(j.state) + '.lock')
         locked = lock.exists()
         calls = (j.gh_creates(), j.logged(), j.spawns())
-        result = j.helper(['next'])
+        result = j.helper(['next', *more])
         self.assertEqual(lock.exists(), locked, 'next opens nothing for writing, not even a lock')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(j.state.read_bytes() if j.state.exists() else None, before, 'next never writes the state')
@@ -1057,6 +1057,60 @@ class Resume(unittest.TestCase):
         j.write_setup(setup_state(overrides={'personal_github': 'identity_no_push'}))
         self.assertEqual(j.helper(['continue']).returncode, 5)
         self.assertEqual(self.next(j).splitlines()[0], 'Next: connect.', 'a withdrawn setup is connected again')
+
+
+    def test_an_existing_repository_prepared_before_continue_resumes_at_connect(self):
+        # catches: #1571, an owner who prepared an existing repository in setup and
+        # was interrupted before continue is offered a repository again (Next: project),
+        # inviting a second repository while Connect is under way.
+        j = Journey(self)
+        other = 'synthetic-owner/synthetic-existing'
+        j.write_setup(setup_state(repository=other))
+        said = self.next(j, '--setup-state', str(j.setup_dir))
+        self.assertEqual(said.splitlines()[0], 'Next: connect.', said)
+        self.assertIn('Repository: %s.' % other, said)
+        self.assertIn('run continue', said)
+        bare = self.next(j)
+        self.assertEqual(bare.splitlines()[0], 'Next: project.', 'without the setup state nothing is known yet')
+        self.assertIn('--setup-state', bare, 'and it says how to recognise a prepared repository')
+
+    def test_a_local_choice_resumes_at_choose_the_agents(self):
+        # catches: #1571, a saved Local answer counted as a finished Choose the agents,
+        # so a resumed owner confirms a spec and approves tickets before learning
+        # Local cannot launch (Next: plan).
+        j = Journey(self)
+        j.replay(until='agents')
+        self.assertEqual(j.helper(['choose', '--from-setup', '--agents', 'local']).returncode, 0)
+        said = self.next(j)
+        self.assertEqual(said.splitlines()[0], 'Next: agents.', said)
+        self.assertIn('Local', said)
+        self.assertIn('--agents cloud', said)
+        self.assertEqual(json.loads(j.state.read_text())['choices'], dict(j.settings, agents='local'),
+                         'the recorded answer survives the restart')
+
+    def test_a_cloud_choice_resumes_at_choose_the_agents_until_its_builder_tables_read_back(self):
+        # catches: #1571, a saved Cloud choice counted as a finished Choose the agents
+        # while setup has not yet made the builder tables name it, so a fresh session
+        # skips the pending builder settings (Next: plan).
+        j = Journey(self)
+        j.replay(until='agents')
+        j.world['files']['docs/agents/fleet.md'] = fleet_md(builder=CLAUDE, small=CLAUDE)
+        j.save_world()
+        chosen = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+        self.assertEqual(chosen.returncode, 0, chosen.stdout)
+        said = self.next(j)
+        self.assertEqual(said.splitlines()[0], 'Next: agents.', said)
+        self.assertIn('builder tables', said)
+        self.assertEqual(json.loads(j.state.read_text())['choices'], dict(j.settings, agents='cloud'),
+                         'the recorded choice survives the restart')
+        j.world['files']['docs/agents/fleet.md'] = fleet_md()  # setup made both builder tables the choice
+        j.save_world()
+        self.assertEqual(self.next(j).splitlines()[0], 'Next: agents.', 'only a read-back settles the tables')
+        again = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+        self.assertEqual(again.returncode, 0, again.stdout)
+        self.assertEqual(self.next(j).splitlines()[0], 'Next: plan.')
+        self.assertEqual({k: v for k, v in json.loads(j.state.read_text())['choices'].items() if k in j.settings},
+                         j.settings, 'the read-back keeps the recorded choice')
 
 
     def test_a_connected_repository_outlives_a_withdrawn_setup_after_an_absent_demo(self):

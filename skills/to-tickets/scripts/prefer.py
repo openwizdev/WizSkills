@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 import sys
 
+sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location('approve', HERE / 'approve.py')
 approve = importlib.util.module_from_spec(_spec)

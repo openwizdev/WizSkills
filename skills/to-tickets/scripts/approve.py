@@ -188,10 +188,10 @@ def check_sizes(tickets):
 
 def chain_width(after, planned, done):
     """The critical chain, the widest start wave (both in tickets) and the
-    tickets a cycle leaves unreached. `after` maps every ticket (planned and outside blockers) to the
-    tickets it blocks. The chain is the longest run of arrows through work
-    not yet done, outside blockers included; the waves count planned work only.
-    """
+    tickets a cycle leaves unreached. `after` maps every ticket (planned and
+    outside blockers) to the tickets it blocks. The chain is the longest run
+    of arrows through work not yet done, outside blockers included; the waves
+    count planned work only."""
     level, indegree = {}, {n: 0 for n in after}
     for n in after:
         for m in after[n]:

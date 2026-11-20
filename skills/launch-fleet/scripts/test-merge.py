@@ -56,8 +56,9 @@ if args[:2] == ['api', 'graphql'] and r.returncode == 0:
     node = value['data']['repository']['pullRequest']
     if node is not None:
         with open(path) as f:
-            closes = json.load(f)['pr'].get('closes', [])
-        node['closingIssuesReferences'] = {'pageInfo': {'hasNextPage': False}, 'nodes': closes}
+            world = json.load(f)
+        node['closingIssuesReferences'] = {'pageInfo': {'hasNextPage': False}, 'nodes': world['pr'].get('closes', [])}
+        node['repository'] = {'nameWithOwner': world['repo']}
     out = json.dumps(value)
 sys.stdout.write(out)
 sys.stderr.write(r.stderr)
@@ -528,7 +529,8 @@ class Queue(unittest.TestCase):
 # landed fixtures, as GitHub answers them. Every account, number and text is synthetic.
 DEST = 'openwizdev/OpenWiz'
 MARK = 'OpenWiz feedback operation 3f2a9c4e1b7d40a6958e0c2d7b1a4f63'
-LANDED = 'Landed: the fix for this report merged in #9201 and will ship in OpenWiz 9.4.2.'
+LANDED = 'Landed: the fix for this report merged in openwizdev/OpenWiz#9201 and will ship in OpenWiz 9.4.2.'
+SKILLS = 'openwizdev/WizSkills'
 
 
 def issue(number, body, login='openwiz[bot]', labels=(), milestone='9.4.2', **extra):
@@ -574,7 +576,7 @@ class Landed(unittest.TestCase):
         code, out = self.merge(w)
         self.assertEqual((code, out.split('; ')[0]), (0, 'merged ' + 'c' * 40), out)
         self.assertEqual(self.posts(w), [(9101, LANDED)])
-        self.assertTrue(out.endswith('; cost posted 5002; landed posted 5001 on #9101'), out)
+        self.assertTrue(out.endswith('; cost posted 5002; landed posted 5001 on openwizdev/OpenWiz#9101'), out)
         self.assertEqual(self.merge(w), (0, 'merged %s; cost already posted 5002; landed already posted 5001'
                                          % ('c' * 40)))
         self.assertEqual(w.run('merge.py', 'settle', DEST, 9201, 9106, cwd=w.dir / 'project'), (0, 'no queued merge'))
@@ -583,7 +585,7 @@ class Landed(unittest.TestCase):
 
     def test_a_report_landed_by_an_earlier_fix_gets_nothing(self):
         # catches: the once-per-report rule read per pull request, so a second fix posts again.
-        earlier = comment(4000, 'Landed: the fix for this report merged in #9200 and will ship in OpenWiz 9.4.1.')
+        earlier = comment(4000, 'Landed: the fix for this report merged in openwizdev/WizSite#9200 and will ship in OpenWiz 9.4.1.')
         w = self.world({'9108': brief(9108), '9101': REPORT}, close=(9108,), comments={'9101': [earlier]})
         project(w, None)
         self.assertEqual(self.merge(w, 9108)[1].split('; ')[-1], 'landed already posted 4000')
@@ -636,12 +638,38 @@ class Landed(unittest.TestCase):
         self.assertEqual(self.merge(w)[0], 0)
         self.assertEqual(self.posts(w), [(9101, LANDED)])
 
-    def test_another_repositorys_merge_posts_nothing(self):
-        # catches: `#<pull request>` naming another repository's number on the report.
-        w = self.world(self.issues, repo=REPO)
+    def cross(self, repo=SKILLS, issues=None, brief_repo=DEST, comments=None):
+        """A fix merged in REPO that closes OpenWiz's brief and report (planner ruling 7040055832 on #1848)."""
+        issues = issues or self.issues
+        refs = [{'number': n, 'repository': {'nameWithOwner': brief_repo if n == 9106 else DEST},
+                 'body': issues[str(n)]['body']} for n in (9106, 9101)]
+        value = pr(number=9201, closes=refs, state='MERGED', mergeCommit={'oid': 'c' * 40})
+        dest = {'issues': {} if brief_repo != DEST else issues, 'comments': comments or {}}
+        others = {DEST: dest} if repo != DEST else {}
+        w = World(self, repo=repo, pr=value, issues=issues if brief_repo != DEST else {}, others=others)
         project(w, None)
-        self.assertEqual(self.merge(w, repo=REPO)[0], 0)
-        self.assertEqual(self.posts(w), [])
+        code, out = self.merge(w, '%s#9106' % brief_repo, repo=repo)
+        return code, out, w.others[DEST] if DEST in w.others else w
+
+    def test_a_fix_merged_in_another_openwizdev_repository_names_it_in_full(self):
+        # catches: a fix that lands in WizSkills or WizSite never telling the reporter, or the
+        # comment's bare `#9201` naming OpenWiz's pull request 9201 instead of the fix.
+        code, out, dest = self.cross()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.posts(dest), [(9101, LANDED.replace(DEST, SKILLS))])
+        self.assertTrue(out.endswith('; landed posted 5002 on openwizdev/OpenWiz#9101'), out)
+
+    def test_a_fix_outside_openwizdev_posts_nothing(self):
+        # catches: another owner's merge (a fork, a lookalike repository) speaking on a report.
+        code, out, dest = self.cross(repo='synthetic-owner/WizSkills')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.posts(dest), [])
+
+    def test_a_brief_outside_openwiz_posts_nothing(self):
+        # catches: a report link on another repository's issue followed to an OpenWiz issue.
+        code, out, dest = self.cross(brief_repo=SKILLS)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.posts(dest), [])
 
     def test_a_lost_landed_response_is_reconciled_never_posted_twice(self):
         # catches: a blind retry after the response was lost, so the reporter is told twice.

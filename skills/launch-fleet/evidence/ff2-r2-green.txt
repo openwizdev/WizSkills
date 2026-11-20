@@ -1,5 +1,5 @@
 # FF2 R2 green, after the fix: python3 -I skills/launch-fleet/scripts/test-route.py
-# The same proof as ff2-r2-red.txt: real GitHub CLI 2.100.0, a local HTTPS fixture, GH_DEBUG=api and DEBUG=api, synthetic address only.
+# The same proof as ff2-r2-red.txt: real GitHub CLI 2.100.0, a local HTTPS fixture that reads each whole (chunked) body before answering, GH_DEBUG=api and DEBUG=api, synthetic address only.
 test_a_handle_resolves_to_its_spec_s_loop_id (__main__.Loop.test_a_handle_resolves_to_its_spec_s_loop_id) ... ok
 test_a_malformed_spec_number_is_refused (__main__.Loop.test_a_malformed_spec_number_is_refused) ... ok
 test_a_missing_handle_prints_nothing_and_exits_cleanly (__main__.Loop.test_a_missing_handle_prints_nothing_and_exits_cleanly) ... ok
@@ -21,4 +21,5 @@ test_the_project_s_own_numbers_go_straight_to_wake (__main__.Tick.test_the_proje
 Ran 16 tests in N s
 
 OK
-# Mutations, each restored after: dropping '-u DEBUG' from the setup's POST, or 'env -u ...' from the hook list, each fails SetupUnderTracing (FAILED (failures=1)).
+# Mutations, each restored after: dropping '-u DEBUG' from the setup's POST, or 'env -u ...' from the hook list, each fails SetupUnderTracing; so does the pre-fix launch.md from dd1b3a3 (FAILED (failures=2)).
+# Repeated: SetupUnderTracing 8 runs and the whole file 5 runs, all OK.

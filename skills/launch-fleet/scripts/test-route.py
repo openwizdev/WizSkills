@@ -295,17 +295,40 @@ def documented_hook_calls():
 
 
 class FakeGitHub(http.server.BaseHTTPRequestHandler):
-    """A local HTTPS GitHub that answers like the real one: a webhook's address comes back in `config.url`."""
+    """A local HTTPS GitHub that answers like the real one: a webhook's address comes back in `config.url`.
+
+    It reads each request's whole body first, chunked or not (`gh api --input -` streams stdin in chunks, with no
+    Content-Length), so it never answers or closes while gh is still writing."""
+    protocol_version = 'HTTP/1.1'
+    received = []  # the addresses webhooks were created with, in memory only
+
+    def body(self):
+        if 'chunked' in self.headers.get('Transfer-Encoding', '').lower():
+            data = b''
+            while True:
+                size = int(self.rfile.readline().split(b';')[0].strip() or b'0', 16)
+                if size == 0:
+                    while self.rfile.readline() not in (b'\r\n', b'\n', b''):
+                        pass  # trailers
+                    return data
+                data += self.rfile.read(size)
+                self.rfile.readline()
+        return self.rfile.read(int(self.headers.get('Content-Length') or 0))
+
     def answer(self):
-        body = self.rfile.read(int(self.headers.get('Content-Length') or 0))
-        hook = {'id': 7, 'events': ['issues'], 'active': True,
-                'config': {'url': json.loads(body)['config']['url'] if body else ADDRESS, 'content_type': 'json'}}
+        body = self.body()
+        url = json.loads(body)['config']['url'] if body else ADDRESS
+        if body:
+            FakeGitHub.received.append(url)
+        hook = {'id': 7, 'events': ['issues'], 'active': True, 'config': {'url': url, 'content_type': 'json'}}
         out = b'' if self.command == 'DELETE' else json.dumps([hook] if self.command == 'GET' else hook).encode()
         self.send_response(204 if self.command == 'DELETE' else 201 if self.command == 'POST' else 200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(out)))
+        if self.command != 'DELETE':
+            self.send_header('Content-Length', str(len(out)))
         self.end_headers()
         self.wfile.write(out)
+        self.wfile.flush()
     do_GET = do_POST = do_PATCH = do_DELETE = answer
 
     def log_message(self, *args):
@@ -329,6 +352,7 @@ class SetupUnderTracing(unittest.TestCase):
         tls.load_cert_chain(self.dir / 'cert.pem', self.dir / 'key.pem')
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), FakeGitHub)
         server.socket = tls.wrap_socket(server.socket, server_side=True)
+        FakeGitHub.received = []
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
@@ -363,6 +387,7 @@ class SetupUnderTracing(unittest.TestCase):
                     if f.is_file() and f.parent.name != 'bin':  # bin holds the synthetic room-cli itself
                         self.assertNotIn(b'SYNTHETIC-ADDRESS', f.read_bytes(), 'the address reaches %s' % f)
         self.assertTrue(any(c.startswith('room-cli loop hook') for c in calls), calls)
+        self.assertEqual(FakeGitHub.received, [ADDRESS], 'the setup really creates the webhook with the address')
         # Not vacuous: in this same environment, a plain gh call does trace its request and response bodies.
         r = subprocess.run(['sh', '-c', "gh api 'repos/{owner}/{repo}/hooks'"], capture_output=True, text=True,
                            env=self.env, cwd=self.dir, timeout=60)

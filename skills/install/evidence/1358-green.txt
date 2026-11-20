@@ -1,0 +1,21 @@
+# #1358 green, at branch head 385f281
+
+## On the branch (launch-fleet from main: WS17 not merged, its starts stubbed)
+$ python3 -I skills/install/tests/test_onboarding.py
+Ran 16 tests in 19.152s
+
+OK (skipped=1)
+$ python3 -I skills/install/tests/test_first_fleet.py
+Ran 35 tests in 71.071s
+
+OK (skipped=7)
+
+## On a scratch merge of 385f281 with WizSkills #60 (room/1340-fleet-auto-start at 42e473f), never pushed: nothing skipped
+$ python3 -I skills/install/tests/test_onboarding.py
+Ran 16 tests in 50.681s
+
+OK
+$ python3 -I skills/install/tests/test_first_fleet.py
+Ran 35 tests in 169.926s
+
+OK

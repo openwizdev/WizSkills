@@ -5,8 +5,9 @@
 
 Reads the four files in DIR/docs/agents/ (default: the current folder) and
 names each missing or unsafe setting: a missing file or section, a builder or
-reviewer table without its three flags, a template placeholder, a reviewer from the builder's model family, no Record authors
-row, or a triage role without exactly one label. FILE is the saved output of
+reviewer table without each of its three flags exactly once as one token, a
+template placeholder, a reviewer from the builder's model family, not exactly
+one valid Record authors row, or a triage role without exactly one label. FILE is the saved output of
 `gh label list --limit 500 --json name`; with it, each mapped label must exist
 in the tracker exactly once. It writes nothing and runs nothing.
 
@@ -26,7 +27,9 @@ FLAGS = ('provider', 'model', 'reasoning-level')
 FAMILY = {'claude-code': 'claude', 'codex': 'gpt'}
 REVIEWS = {'Reviewer for Claude-built': 'claude', 'Reviewer for GPT-built': 'gpt'}
 ROLES = ('needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix')
-LOGIN = r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\[bot\])?'
+# The whole Record authors cell, as the review and launch-fleet readers take it.
+LOGIN = r'`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`'
+CELL = re.compile(r'\s*%s(?:\s*,\s*%s)*\s*' % (LOGIN, LOGIN))
 USAGE = 'usage: settings.py check [--root DIR] [--labels FILE]'
 
 
@@ -50,7 +53,8 @@ def sections(text):
     found = {}
     for part in re.split(r'^## ', text, flags=re.M)[1:]:
         title, _, body = part.partition('\n')
-        found.setdefault(title.strip(), body)
+        # A repeated heading adds to the same section, as the fleet's readers read it.
+        found[title.strip()] = found.get(title.strip(), '') + body
     return found
 
 
@@ -65,13 +69,18 @@ def fleet(text, problems):
             continue
         values = {}
         for flag in FLAGS:
-            match = re.search(r'`--%s ([^`]+)`' % flag, body)
-            if not match:
+            # Launch takes each flag exactly once, as one backticked token.
+            found_flags = re.findall(r'`--%s(?: ([^`]*))?`' % flag, body)
+            if not found_flags:
                 problems.append('fleet.md: %s: no --%s' % (title, flag))
-            elif re.search(r'<[^>]*>', match[1]):
-                problems.append('fleet.md: %s: unfilled %s' % (title, match[1]))
+            elif len(found_flags) > 1:
+                problems.append('fleet.md: %s: --%s appears %d times' % (title, flag, len(found_flags)))
+            elif re.search(r'<[^>]*>', found_flags[0]):
+                problems.append('fleet.md: %s: unfilled %s' % (title, found_flags[0]))
+            elif not re.fullmatch(r'\S+', found_flags[0]):
+                problems.append('fleet.md: %s: malformed `--%s %s`' % (title, flag, found_flags[0]))
             else:
-                values[flag] = match[1]
+                values[flag] = found_flags[0]
         provider = values.get('provider')
         if title in REVIEWS and provider:
             if provider not in FAMILY:
@@ -80,11 +89,15 @@ def fleet(text, problems):
                 problems.append('fleet.md: %s: %s is not from another model family' % (title, provider))
     identity = found.get('GitHub identity')
     if identity is not None:
-        row = re.search(r'^\| Record authors \|([^|\n]*)\|', identity, re.M)
-        logins = re.findall(r'`([^`]*)`', row[1]) if row else []
-        if not row:
+        rows = re.findall(r'^\| *Record authors *\|.*$', identity, re.M)
+        cells = rows[0].split('|') if len(rows) == 1 else []
+        if not rows:
             problems.append('fleet.md: GitHub identity: no Record authors row')
-        elif not logins or not all(re.fullmatch(LOGIN, login) for login in logins):
+        elif len(rows) > 1:
+            for number, row in enumerate(rows[1:], 2):
+                problems.append('fleet.md: GitHub identity: Record authors row %d of %d: %s'
+                                % (number, len(rows), row.strip()))
+        elif len(cells) != 4 or cells[3].strip() or not CELL.fullmatch(cells[2]):
             problems.append('fleet.md: GitHub identity: Record authors needs one or more exact logins')
 
 

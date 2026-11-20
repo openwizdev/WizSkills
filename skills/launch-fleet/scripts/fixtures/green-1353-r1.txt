@@ -1,4 +1,4 @@
-$ TEST_JOBS=3 sh skills/launch-fleet/scripts/test.sh (F4 and F6 cases, and the summary)
+$ TEST_JOBS=4 sh skills/launch-fleet/scripts/test.sh, after merging main (F4 and F6 cases, and the summary)
 ok   F4: a self-grant record answers the question
 ok   F6 claim: no collider, go
 ok   F6 claim: a running ticket outside the spec on the same paths withdraws
@@ -18,7 +18,4 @@ ok   F6: a file link naming a relied-on input is hard
 ok   F6: a file link whose blocker owns no path it can read is hard
 ok   F6: a bracket or question-mark pattern collides as approval reads it
 ok   F6: a ticket held only by an unadmitted collider still starts
-835 cases, 0 failed
-$ sh skills/launch-fleet/scripts/test-loop.sh
-ok   a helper cannot terminate its quoted bundle early
-ok   unsafe repository names cannot generate a loop
+860 cases, 0 failed

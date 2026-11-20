@@ -3,14 +3,12 @@
 
 python3 -I skills/launch-fleet/scripts/test-brief.py
 """
-import importlib.util
 from pathlib import Path
 import subprocess
 import sys
 import unittest
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[2]
 HEAD = '0123456789abcdef0123456789abcdef01234567'
 OLD = 'fedcba9876543210fedcba9876543210fedcba98'
 
@@ -27,13 +25,6 @@ def lookup(skill):
 
 
 class Brief(unittest.TestCase):
-    def test_the_fleet_thread_brief_is_the_one_install_sends(self):
-        spec = importlib.util.spec_from_file_location('first_fleet', ROOT / 'skills/install/scripts/first_fleet.py')
-        first_fleet = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(first_fleet)
-        self.assertEqual(brief('fleet', 4001, 'synthetic-owner/synthetic-repo'),
-                         (0, first_fleet.brief(4001, 'synthetic-owner/synthetic-repo')))
-
     def test_each_brief_points_at_its_own_work_and_skill(self):
         cases = [
             (('builder', 12), 'You are the builder for #12. Use the build-ticket skill.', 'build-ticket'),
@@ -51,6 +42,11 @@ class Brief(unittest.TestCase):
              'launch-fleet'),
             (('wake', 4001, 'synthetic-owner/synthetic-repo'),
              'Fleet wake for synthetic-owner/synthetic-repo spec #4001. Use the launch-fleet skill.', 'launch-fleet'),
+            # The fleet thread's first-wake brief, which launch-fleet's own start path sends. Install's onboarding no
+            # longer sends one of its own (OpenWiz #1358, review R7), so it is checked here directly.
+            (('fleet', 4001, 'synthetic-owner/synthetic-repo'),
+             'You are the fleet thread for spec #4001 of synthetic-owner/synthetic-repo. Use the launch-fleet skill.',
+             'launch-fleet'),
         ]
         for args, start, skill in cases:
             with self.subTest(kind=args[0]):

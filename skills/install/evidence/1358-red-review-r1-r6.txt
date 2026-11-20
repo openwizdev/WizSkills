@@ -1,0 +1,51 @@
+$ python3 -I skills/install/tests/test_onboarding.py ReviewRound   # red: branch 70d1bc2 plus these tests (review 7038665551 R1, R2, R4, R5, R6)
+FFFFF
+======================================================================
+FAIL: test_r1_the_road_never_runs_a_sign_in_itself (__main__.ReviewRound.test_r1_the_road_never_runs_a_sign_in_itself)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 674, in test_r1_the_road_never_runs_a_sign_in_itself
+    self.assertRegex(line, r'\b(themselves|yourself)\b', line)
+AssertionError: Regex didn't match: '\\b(themselves|yourself)\\b' not found in 'It reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. Exit 5 names each missing item and its `next` step: tell the user plainly (CloudRoom: install the app and sign in; `gh`: install it and `gh auth login`).' : It reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. Exit 5 names each missing item and its `next` step: tell the user plainly (CloudRoom: install the app and sign in; `gh`: install it and `gh auth login`).
+
+======================================================================
+FAIL: test_r2_this_machine_finds_the_driver_in_the_verified_build (__main__.ReviewRound.test_r2_this_machine_finds_the_driver_in_the_verified_build)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 691, in test_r2_this_machine_finds_the_driver_in_the_verified_build
+    self.assertEqual(result.returncode, 0, result.stdout)
+AssertionError: 2 != 0 : usage: unknown or repeated option --build
+
+
+======================================================================
+FAIL: test_r4_an_existing_branch_or_a_failed_write_never_opens_the_host_setting (__main__.ReviewRound.test_r4_an_existing_branch_or_a_failed_write_never_opens_the_host_setting)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 707, in test_r4_an_existing_branch_or_a_failed_write_never_opens_the_host_setting
+    self.assertEqual(refused.returncode, 5, refused.stdout)
+AssertionError: 0 != 5 : Effect: on a new branch openwiz/host-setting of synthetic-owner/synthetic-quiz, add docs/agents/host.md holding `Host: local` and add one row, | Harness permission mode | `acceptEdits` |, to docs/agents/fleet.md, changing no other line, and open one pull request for you to merge. Nothing else is written.
+Opened https://github.com/synthetic-owner/synthetic-quiz/pull/950. The user merges it; launch waits for it on the default branch.
+
+
+======================================================================
+FAIL: test_r5_line_endings_and_another_sessions_approval_survive (__main__.ReviewRound.test_r5_line_endings_and_another_sessions_approval_survive)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 730, in test_r5_line_endings_and_another_sessions_approval_survive
+    self.assertIn(b'"synthetic-owner/other": {"codex": "read-only"}\r\n', data)
+AssertionError: b'"synthetic-owner/other": {"codex": "read-only"}\r\n' not found in b'{"synthetic-owner/synthetic-quiz": {"claude": "acceptEdits"}, \n  "synthetic-owner/other": {"codex": "read-only"}\n}\n'
+
+======================================================================
+FAIL: test_r6_a_merge_closing_another_repositorys_issue_is_not_the_first_merge (__main__.ReviewRound.test_r6_a_merge_closing_another_repositorys_issue_is_not_the_first_merge)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 768, in test_r6_a_merge_closing_another_repositorys_issue_is_not_the_first_merge
+    self.assertEqual(result.returncode, 5, result.stdout)
+AssertionError: 0 != 5 : https://github.com/synthetic-owner/synthetic-todo/pull/911 merged: #901: T1. That's your first build, now in synthetic-owner/synthetic-todo; see it at openwiz.dev/app, where the other tickets keep going without you.
+From here this chat can stay on as synthetic-todo's orchestrator, start a new project with you, or keep building this one. Which would you like? Come back anytime: open openwiz.dev/app or ask me where we are.
+
+
+----------------------------------------------------------------------
+Ran 5 tests in 4.361s
+
+FAILED (failures=5)

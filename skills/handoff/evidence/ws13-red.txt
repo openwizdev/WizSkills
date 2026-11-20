@@ -168,7 +168,7 @@ Traceback (most recent call last):
 AssertionError: 3 != 1 : 
 
 ======================================================================
-FAIL: test_secrets_and_thread_ids_are_refused_without_echoing_them (__main__.Handoff.test_secrets_and_thread_ids_are_refused_without_echoing_them) (secret='thr_ab')
+FAIL: test_secrets_and_thread_ids_are_refused_without_echoing_them (__main__.Handoff.test_secrets_and_thread_ids_are_refused_without_echoing_them) (secret='<thread>')
 ----------------------------------------------------------------------
 Traceback (most recent call last):
   File "<checkout>/skills/handoff/test/test_handoff.py", line 142, in test_secrets_and_thread_ids_are_refused_without_echoing_them

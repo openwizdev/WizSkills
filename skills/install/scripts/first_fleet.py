@@ -5,6 +5,7 @@
   first_fleet.py continue --state FILE --setup-state DIR [--explained]
   first_fleet.py decisions --state FILE --setup-state DIR [--yes]
   first_fleet.py create-repo --state FILE --repo OWNER/NAME [--yes]
+  first_fleet.py select --state FILE --repo OWNER/NAME
   first_fleet.py setting --state FILE [--yes]
   first_fleet.py grill --state FILE --confirmed URL
   first_fleet.py choose --state FILE --options FILE (--harness P --model M --effort E | --from-setup) [--agents cloud|local]
@@ -12,7 +13,7 @@
   first_fleet.py launch --state FILE --spec N [--yes --confirm DIGEST]
   first_fleet.py progress --state FILE --spec N --openwiz PROGRAM
   first_fleet.py first-merge --state FILE --pr N
-  first_fleet.py next --state FILE
+  first_fleet.py next --state FILE [--setup-state DIR]
 
 The onboarding road (#1358): `where` records where the agents run, this
 machine through OpenWiz's local driver or Cloudroom, only on the user's answer
@@ -38,6 +39,9 @@ commit in that one create (#1074: init proposes the brain on its default
 branch), reads back the repository, default branch and commit, and reads before
 any retry of a create whose answer was lost. It never pushes into a repository.
 
+`select` records the existing repository the owner confirmed, before Connect,
+as this onboarding's one repository; it reads and changes nothing else.
+
 `launch` starts the first fleet the way launch-fleet starts every fleet, only
 on the user's yes right before it (a preview names the host and that it can
 cost money, with a digest of its exact effects; `--yes --confirm DIGEST`
@@ -56,8 +60,16 @@ twice: a repeat only reads the spec's fleet record and progress, and an
 uncertain start stays uncertain until that record reads back. Every command
 checks the checkout is the repository this onboarding recorded.
 
+`choose` records the choice for where the agents run, then reads the fleet's
+builder tables back: the agents step is done only once both name exactly that
+choice (#1615).
+
 `next` reads only the state file and prints the first unfinished step and
 what to run there, so a fresh session resumes without repeating an effect.
+With --setup-state it also reads, never writes, the repository setup
+prepared: for the selected repository that is Connect's progress; with no
+selection it is only a candidate for the owner to confirm with `select`, since
+setup may have prepared it for an earlier project (#1571).
 
 The state file is private and owner-only; keep it outside the checkout. It
 holds the user's choices, the carried setup facts, this onboarding's spec and
@@ -92,11 +104,12 @@ OPTIONS = {
     'continue': ({'--state', '--setup-state'}, {'--explained'}, set()),
     'decisions': ({'--state', '--setup-state'}, {'--yes'}, set()),
     'create-repo': ({'--state', '--repo'}, {'--yes'}, set()),
+    'select': ({'--state', '--repo'}, set(), set()),
     'choose': ({'--state', '--options'}, {'--from-setup'}, {'--harness', '--model', '--effort', '--agents'}),
     'spec': ({'--state', '--spec', '--repo'}, set(), set()),
     'launch': ({'--state', '--spec'}, {'--yes'}, {'--confirm'}),
     'progress': ({'--state', '--spec', '--openwiz'}, set(), set()),
-    'next': ({'--state'}, set(), set()),
+    'next': ({'--state'}, set(), {'--setup-state'}),
 }
 FAMILY = {'claude-code': 'claude', 'codex': 'gpt'}
 REVIEWER = {'claude': 'Reviewer for Claude-built', 'gpt': 'Reviewer for GPT-built'}
@@ -139,7 +152,7 @@ def strict(text):
 
 def parse(argv):
     if not argv or argv[0] not in OPTIONS:
-        raise Exit(2, 'usage: first_fleet.py where|continue|decisions|create-repo|setting|grill|choose|spec|launch|'
+        raise Exit(2, 'usage: first_fleet.py where|continue|decisions|create-repo|select|setting|grill|choose|spec|launch|'
                       'progress|first-merge|next ... (see its header)')
     values, switches, optional = OPTIONS[argv[0]]
     got, rest = {}, argv[1:]
@@ -756,6 +769,23 @@ def grill(got):
         raise Exit(10, "Could not save the grill's confirmation; nothing recorded.")
     print("Recorded: the user confirmed the grill in chat. Next: to-spec, which runs to-tickets; the plan approves "
           'itself by its checks, and no plan approval is asked.')
+
+
+def select(got):
+    """The existing repository the owner confirmed, bound to this onboarding before Connect."""
+    state = State(got['--state'])
+    name = got['--repo']
+    if state.value.get('repo') not in (None, name):
+        raise Exit(5, 'This onboarding is for %s; it takes no second repository; nothing recorded.'
+                   % state.value['repo'])
+    record = state.value.get('created')
+    if record and record['repo'] != name and record['state'] != 'absent':
+        raise Exit(5, 'This onboarding already made %s; it takes no second repository; nothing recorded.'
+                   % record['repo'])
+    state.value['repo'] = name
+    if not state.save():
+        raise Exit(10, 'Could not save the repository; nothing recorded.')
+    print('Recorded: this onboarding is for %s. Connect it next.' % name)
     return 0
 
 
@@ -789,14 +819,43 @@ def choose(got):
         raise Exit(5, "The fleet's review rules cover Claude Code and Codex builders only; nothing recorded.")
     if host['agents'] == 'local' and settings['harness'] not in host['harnesses']:
         raise Exit(5, '%s is not on this machine, so its agents cannot run here; nothing recorded.' % settings['harness'])
-    state.value['choices'] = dict(settings, agents=host['agents'])
+    choices = dict(settings, agents=host['agents'])
+    read = None  # unread: the choice is recorded, its builder tables are not settled (#1615)
+    try:
+        rules = fleet_rules(repository(state.value.get('repo')), state.value['repo'])
+    except Exit:
+        rules = None
+    if rules is not None:
+        try:
+            review(choices, rules)  # the launch's own check of the same tables
+            read = True
+        except Exit:
+            read = False
+    if read:
+        choices['builder_tables'] = 'read'
+    state.value['choices'] = choices
     if not state.save():
         raise Exit(10, 'Could not save the choices; nothing recorded.')
-    where = 'in Cloudroom' if host['agents'] == 'cloud' else 'on this machine'
-    print('Recorded: builders use %s %s %s%s, and run %s.' % (
-        settings['harness'], settings['model'], settings['effort'],
-        ' (as prepared in setup)' if got.get('--from-setup') else '', where))
+    print(chosen_line(choices) + (' (as prepared in setup)' if got.get('--from-setup') else ''))
+    if read:
+        print("Read back: both of the fleet's builder tables name exactly this choice, with an other-family "
+              'reviewer.')
+    else:
+        print(tables_line(choices, 'could not be read' if read is None else 'do not name this choice yet'))
+        return 1 if read is None else 0
     return 0
+
+
+def chosen_line(choices):
+    where = 'in Cloudroom' if choices['agents'] == 'cloud' else 'on this machine'
+    return 'Recorded: builders use %s %s %s, and run %s.' % (
+        choices['harness'], choices['model'], choices['effort'], where)
+
+
+def tables_line(choices, why):
+    return ("The fleet's builder tables %s: run setup so both name exactly %s %s %s, with the reviewer from the "
+            'other family, then run choose again to read them back.' % (
+                why, choices['harness'], choices['model'], choices['effort']))
 
 
 def repository(recorded):
@@ -1197,6 +1256,24 @@ def first_merge(got):
     return 0
 
 
+def prepared(folder):
+    """The repository setup selected for this onboarding (its prepared project, or
+    else its sign-in), read only; None when there is none or it is unreadable."""
+    path = Path(folder) / 'setup/state.json'
+    try:
+        info = os.lstat(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            return None
+        value = strict(path.read_text(encoding='utf-8'))
+        assert value['schema'] == 'openwiz.setup-state.v1'
+        for record in (value.get('project'), value.get('identity')):
+            if isinstance(record, dict) and isinstance(record.get('repository'), str):
+                return record['repository'] if re.fullmatch(REPOSITORY, record['repository']) else None
+    except (OSError, ValueError, KeyError, TypeError, AssertionError):
+        pass
+    return None
+
+
 def resume(got):
     """The first unfinished first-fleet step, from the saved state alone."""
     state = State.__new__(State)  # read only: no lock, nothing opened for writing
@@ -1208,34 +1285,45 @@ def resume(got):
     demo = created.get('repo') if created.get('state') != 'absent' else None  # an absent create made nothing
     repo, spec = value.get('repo') or demo, value.get('spec')
     host, setting_ = value.get('host'), value.get('setting') or {}
+    folder = got.get('--setup-state')
+    candidate = prepared(folder) if folder else None
+    choices = value.get('choices') or {}
     if not host:
         step = ('where', "Say the teacher's opening lines, then ask where agents run and run where --agents "
                 'local|cloud --yes on the answer.')
     elif created.get('state') in ('pending', 'uncertain'):
         step = ('project', 'Creating %s is %s: run create-repo --repo %s --yes again; it reads before it creates.'
                 % (created['repo'], created['state'], created['repo']))
+    elif not repo and candidate:
+        step = ('project', 'This onboarding has no repository yet. Setup prepared %s, perhaps for an earlier '
+                'project: ask the owner whether this first fleet is for it. On their yes, run select --repo %s; '
+                'otherwise offer the ideas, then choose or create its one repository.' % (candidate, candidate))
     elif not repo:
         step = ('project', 'Offer the three choices, with ideas.md for anyone without an idea, then choose or '
                 'create its one repository.')
     elif not value.get('setup'):
-        step = ('connect', 'Connect %s with the installed tools, then run continue.' % repo)
+        step = ('connect', '%sConnect %s with the installed tools, then run continue.' % (
+            'Setup already prepared it; ' if candidate == repo else '', repo))
+    elif spec and launched.get('spec') == spec and launched.get('state') in ('pending', 'uncertain'):
+        step = ('launch', 'The start of spec #%d is uncertain: run launch --spec %d to read its fleet record; '
+                'never start it again.' % (spec, spec))
+    elif spec and launched.get('spec') == spec and launched.get('state') == 'started' and value.get('merge'):
+        step = ('offer', 'Say the closing offer, as first-merge printed it.')
+    elif spec and launched.get('spec') == spec and launched.get('state') == 'started':
+        step = ('watch', "Run progress --spec %d, say the teacher's line for each moment, and run first-merge "
+                '--pr <N> when a pull request merges.' % spec)
     elif setting_.get('state') not in ('opened', 'merged'):
         step = ('setting', 'Run setting%s.' % (' again: its pull request is uncertain' if setting_ else ''))
     elif not value.get('grill'):
         step = ('grill', "Run the short grill; on the user's yes in chat, run grill --confirmed <its comment URL>.")
-    elif not value.get('choices'):
+    elif not choices:
         step = ('agents', 'Run choose --from-setup.')
+    elif choices.get('builder_tables') != 'read':
+        step = ('agents', '%s %s' % (chosen_line(choices),
+                                     tables_line(choices, 'have not read back this choice yet')))
     elif not spec:
         step = ('plan', 'Run to-spec, which runs to-tickets; no plan approval is asked. Then run spec --spec <N> '
                 '--repo %s.' % repo)
-    elif launched.get('spec') == spec and launched.get('state') in ('pending', 'uncertain'):
-        step = ('launch', 'The start of spec #%d is uncertain: run launch --spec %d to read its fleet record; '
-                'never start it again.' % (spec, spec))
-    elif launched.get('spec') == spec and launched.get('state') == 'started' and value.get('merge'):
-        step = ('offer', 'Say the closing offer, as first-merge printed it.')
-    elif launched.get('spec') == spec and launched.get('state') == 'started':
-        step = ('watch', "Run progress --spec %d, say the teacher's line for each moment, and run first-merge "
-                '--pr <N> when a pull request merges.' % spec)
     else:
         step = ('launch', 'Preview with launch --spec %d and ask for a yes to exactly that.' % spec)
     print('Next: %s.' % step[0])
@@ -1262,6 +1350,8 @@ def main(argv):
             return connect_decisions(got)
         if command == 'create-repo':
             return create_repo(got)
+        if command == 'select':
+            return select(got)
         if command == 'choose':
             return choose(got)
         if command == 'spec':

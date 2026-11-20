@@ -68,7 +68,7 @@ Done when the user has heard both.
 
 ## 5. The onboarding road
 
-Continue only if the user wants their first build; otherwise finish with the install and any outstanding setup steps. Pass one owner-only `--state <file>` outside the project to every `first_fleet.py` command (`python3 <this skill's folder>/scripts/first_fleet.py`), from the project's clone once there is one. To resume, run `first_fleet.py next --state <file>`: it reads only that file and prints the first unfinished step and its command. Exits: 0 done, 1 read failure, 2 usage, 5 refused, 6 uncertain, 7 busy, 10 state unavailable, 12 preview awaiting `--yes`.
+Continue only if the user wants their first build; otherwise finish with the install and any outstanding setup steps. Pass one owner-only `--state <file>` outside the project to every `first_fleet.py` command (`python3 <this skill's folder>/scripts/first_fleet.py`), from the project's clone once there is one. To resume, run `first_fleet.py next --state <file> --setup-state <state>`: it reads only that file and the repository setup prepared, and prints the first unfinished step and its command. Exits: 0 done, 1 read failure, 2 usage, 5 refused, 6 uncertain, 7 busy, 10 state unavailable, 12 preview awaiting `--yes`.
 
 ### 1. Where agents run
 
@@ -80,7 +80,7 @@ Done when `where` recorded the answer.
 
 Offer three ways to start: a small change in a repository they have, a fresh project from their idea, or something they've always wanted to build. Anyone without an idea gets two or three ideas from that choice's group in [ideas.md](ideas.md); their own idea always wins. Then its one repository:
 
-- **A repository they have:** confirm it, and that the fleet opens branches and pull requests there.
+- **A repository they have:** confirm it, and that the fleet opens branches and pull requests there, then run `first_fleet.py select --repo <owner>/<name>`.
 - **A new repository:** sign in first with `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state>` (it reuses a verified login; signed out, preview, then `--yes` for GitHub's browser page). Then `first_fleet.py create-repo --repo <owner>/<name>` previews it and its one README commit; on the yes, add `--yes`. Exit 6: run it again. The user makes or picks its Cloudroom project.
 
 Done when the idea and one repository are chosen and read back. There is no second repository.
@@ -111,7 +111,7 @@ Done when `grill` recorded the confirmation.
 
 ### 6. Agents
 
-Harness, model and effort were answered at Connect. Save `openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup` (without a carried setup, ask the three and pass `--harness --model --effort`). Then run `setup` so both builder tables name exactly these settings, sourced to the user's decision; setup keeps reviewers in the other family.
+Harness, model and effort were answered at Connect. Save `openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup` (without a carried setup, ask the three and pass `--harness --model --effort`). Then run `setup` so both builder tables name exactly these settings, sourced to the user's decision; setup keeps reviewers in the other family. Then run the same `choose` again: it reads the tables back.
 
 Done when the choice is recorded and the builder tables match it.
 

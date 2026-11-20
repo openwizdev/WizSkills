@@ -178,6 +178,43 @@ class Check(unittest.TestCase):
         self.assertEqual(code, 5, out)
         self.assertIn('fleet.md: Builder: --provider appears 2 times', out)
 
+    def test_each_fixer_row_carries_each_flag_once(self):
+        # catches: a Fixer family row with a leftover second --model, or a
+        # malformed flag, verified although the fresh round cannot pick one model (R1).
+        fixer = ('## Fixer\n\nOne line.\n\n| Builder family | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
+                 '| --- | --- | --- | --- | --- |\n'
+                 '| Claude | Claude Code | Syn | High | `--provider claude-code --model syn-claude-1 --reasoning-level high` |\n'
+                 '| GPT | Codex | Syn | XHigh | `--provider codex --model syn-codex-1 --reasoning-level xhigh` |\n\n')
+        valid = FLEET.replace('## Test commands', fixer + '## Test commands')
+        code, out = self.check(self.project(**{'fleet.md': valid}))
+        self.assertEqual(code, 0, out)
+        twice = valid.replace('--model syn-claude-1 ', '--model syn-claude-1 --model syn-old ')
+        code, out = self.check(self.project(**{'fleet.md': twice}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Fixer: Claude: --model appears 2 times', out)
+        self.assertNotIn('Fixer: GPT', out)
+        missing = valid.replace(' --reasoning-level xhigh', ' --reasoning-level')
+        code, out = self.check(self.project(**{'fleet.md': missing}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Fixer: GPT: malformed --reasoning-level', out)
+
+    def test_a_malformed_flag_is_counted_beside_an_old_note(self):
+        # catches: a tab-separated new flag skipped, so an old well-formed flag
+        # in a note is read as the only one and launch picks the old model (R2).
+        good = table('Builder', 'claude-code', 'syn-claude-1')
+        bad = good.replace('`--model syn-claude-1`', '`--model\tsyn-new`').replace(
+            'Source: synthetic decision.', 'Was `--model syn-claude-1`. Source: synthetic decision.')
+        code, out = self.check(self.project(**{'fleet.md': FLEET.replace(good, bad)}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Builder: --model appears 2 times', out)
+
+    def test_the_identity_heading_is_read_exactly_as_review_reads_it(self):
+        # catches: `##  GitHub identity` (an extra space) verified although the
+        # review helper finds no record authors there and admits no review (R3).
+        code, out = self.check(self.project(**{'fleet.md': FLEET.replace('## GitHub identity', '##  GitHub identity')}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: no ## GitHub identity section', out)
+
     def test_setup_and_the_readers_refuse_the_same_settings(self):
         # catches: setup and the review or launch reader disagreeing on one
         # file, so setup verifies settings the fleet then refuses (#1500, #1520).
@@ -191,7 +228,9 @@ class Check(unittest.TestCase):
             row.replace('synthetic-owner', 'synthetic--owner'), '| Record authors | |')]
         cases += [FLEET.replace(builder, bad) for bad in (
             builder + 'Was `--model syn-old`.\n', builder.replace('`--provider claude-code`', '`--provider claude code`'),
-            builder.replace('`--model syn-claude-1`', '`--model  syn-claude-1`'))]
+            builder.replace('`--model syn-claude-1`', '`--model  syn-claude-1`'),
+            builder.replace('`--model syn-claude-1`', '`--model\tsyn-new`') + 'Was `--model syn-claude-1`.\n')]
+        cases.append(FLEET.replace('## GitHub identity', '##  GitHub identity'))
         for text in cases:
             try:
                 review.record_authors(text)

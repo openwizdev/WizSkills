@@ -324,14 +324,30 @@ class Failures(unittest.TestCase):
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')[0], 1)
         self.assertEqual((p.fleet_notes(), len(p.failures())), ([STOPPED], 1))
 
+    def test_a_clearing_github_lost_keeps_the_saved_run_and_the_next_success_clears(self):
+        p = Project(self)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')[0], 1)
+        p.fault(patch='fail')
+        code, out, _ = p.host('start', REPO, 7, 'claude', 'm')
+        self.assertEqual(code, 0)
+        self.assertEqual(out.split('\n')[0], 'started #7 on local')
+        self.assertTrue(out.split('\n')[1].startswith('unknown: the failure report on #7 was not cleared ('), out)
+        self.assertEqual(p.saved()['runs'], {'7': {'host': 'local', 'run': 'local-run-7'}})
+        self.assertEqual(p.host('wake', REPO, 7), (0, 'woke #7 on local', ''))
+        self.assertEqual(p.fleet_notes(), [STOPPED, 'done'])
+        self.assertEqual([first for first, _ in p.failures()], [MARK + ', cleared'])
+
     def test_no_fleet_identity_starts_or_wakes_nothing(self):
         p = Project(self)
-        for args in (('start', REPO, 7, 'claude', 'm'), ('wake', REPO, 7)):
-            with self.subTest(args[0]):
-                code, out, err = p.host(*args, LAUNCH_FLEET_SKILLS='')
-                self.assertEqual((code, out), (2, ''))
-                self.assertIn('LAUNCH_FLEET_SKILLS', err)
+        code, out, err = p.host('start', REPO, 7, 'claude', 'm', LAUNCH_FLEET_SKILLS='')
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('LAUNCH_FLEET_SKILLS', err)
         self.assertEqual(p.calls(), [])
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm')[0], 0)
+        code, out, err = p.host('wake', REPO, 7, LAUNCH_FLEET_HARNESS='')
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('LAUNCH_FLEET_HARNESS', err)
+        self.assertEqual([c['command'] for c in p.calls()], ['start'])
 
 
 if __name__ == '__main__':

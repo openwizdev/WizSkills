@@ -183,7 +183,7 @@ class Gate(unittest.TestCase):
 
 
 class Release(unittest.TestCase):
-    """`release`: Changesets turns the pending notes into per-skill bumps and one bundle."""
+    """`release` after the first bundle: Changesets turns the pending notes into per-skill bumps and one bundle."""
 
     def release(self, repo, *args):
         repo.commit('pending')
@@ -191,19 +191,19 @@ class Release(unittest.TestCase):
 
     def test_a_few_fixes_make_a_patch_bundle(self):
         # catches: wrong per-skill bumps or notes, or a dry run that writes files
-        repo = Repo(self, {'alpha': '0.2.0', 'beta': '0.2.0', 'gamma': '0.2.0'})
+        repo = Repo(self, {'alpha': '0.2.0', 'beta': '0.2.0', 'gamma': '0.2.0'}, plugin='0.2.0')
         repo.note('one', {'alpha': 'patch', 'beta': 'patch'}, 'Fixes a typo.')
         repo.note('two', {'beta': 'patch'}, 'Fixes a link.')
         repo.commit('pending')
         before = repo.snapshot()
         self.assertEqual(repo.run('release', '--date', '2026-01-02'), (0, [
-            'release: wizskills 0.1.2 -> 0.1.3 (patch)',
+            'release: wizskills 0.2.0 -> 0.2.1 (patch)',
             'why: 2 skills changed, all patch',
             'skill alpha: 0.2.0 -> 0.2.1 (patch)',
             'skill beta: 0.2.0 -> 0.2.1 (patch)',
             'dry run: nothing written',
             '',
-            '## 0.1.3 - 2026-01-02',
+            '## 0.2.1 - 2026-01-02',
             '',
             '- `alpha` 0.2.1: Fixes a typo.',
             '- `beta` 0.2.1: Fixes a typo.',
@@ -213,36 +213,36 @@ class Release(unittest.TestCase):
 
     def test_a_new_step_makes_a_minor_bundle(self):
         # catches: a skill's new ability shipping as a bundle patch
-        repo = Repo(self, {'alpha': '0.2.0'})
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
         repo.note('step', {'alpha': 'minor'}, 'Adds a step.')
         code, out = self.release(repo)
-        self.assertEqual((code, out[:3]), (0, ['release: wizskills 0.1.2 -> 0.2.0 (minor)',
+        self.assertEqual((code, out[:3]), (0, ['release: wizskills 0.2.0 -> 0.3.0 (minor)',
                                                "why: a skill's minor bump",
                                                'skill alpha: 0.2.0 -> 0.3.0 (minor)']))
 
     def test_many_fixes_make_a_minor_bundle(self):
         # catches: many changed skills shipping as a bundle patch
         skills = {n: '0.2.0' for n in ('alpha', 'beta', 'delta', 'gamma')}
-        repo = Repo(self, skills)
+        repo = Repo(self, skills, plugin='0.2.0')
         repo.note('many', {n: 'patch' for n in skills}, 'Fixes wording.')
         code, out = self.release(repo)
-        self.assertEqual((code, out[:2]), (0, ['release: wizskills 0.1.2 -> 0.2.0 (minor)',
+        self.assertEqual((code, out[:2]), (0, ['release: wizskills 0.2.0 -> 0.3.0 (minor)',
                                                'why: 4 skills changed']))
 
     def test_an_added_or_removed_skill_makes_a_minor_bundle(self):
         # catches: a catalog change since the last release shipping as a bundle patch
-        repo = Repo(self, {'alpha': '0.2.0', 'beta': '0.2.0'})
+        repo = Repo(self, {'alpha': '0.2.0', 'beta': '0.2.0'}, plugin='0.2.0')
         repo.remove('skills/beta')
         repo.write('skills/omega/SKILL.md', skill_md('omega', '0.1.0'))
         repo.note('catalog', {'omega': 'patch', 'wizskills': 'patch'}, 'Swaps beta for omega.')
         code, out = self.release(repo)
         self.assertEqual((code, out), (0, [
-            'release: wizskills 0.1.2 -> 0.2.0 (minor)',
+            'release: wizskills 0.2.0 -> 0.3.0 (minor)',
             'why: skills added: omega; skills removed: beta',
             'skill omega: 0.1.0 -> 0.1.1 (patch)',
             'dry run: nothing written',
             '',
-            '## 0.2.0 - 2026-01-02',
+            '## 0.3.0 - 2026-01-02',
             '',
             '- Skills added: `omega`.',
             '- Skills removed: `beta`.',
@@ -252,16 +252,16 @@ class Release(unittest.TestCase):
 
     def test_a_breaking_change_makes_a_major_bundle(self):
         # catches: a records-format change or a rename shipping as a minor or patch bundle
-        repo = Repo(self, {'alpha': '0.2.0', 'beta': '0.2.0'})
+        repo = Repo(self, {'alpha': '0.2.0', 'beta': '0.2.0'}, plugin='0.2.0')
         repo.note('records', {'alpha': 'major'}, 'Changes the record format.')
         code, out = self.release(repo)
-        self.assertEqual((code, out[:3]), (0, ['release: wizskills 0.1.2 -> 1.0.0 (major)',
+        self.assertEqual((code, out[:3]), (0, ['release: wizskills 0.2.0 -> 1.0.0 (major)',
                                                "why: a skill's major bump",
                                                'skill alpha: 0.2.0 -> 1.0.0 (major)']))
-        repo = Repo(self, {'alpha': '0.2.0'})
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
         repo.note('rename', {'alpha': 'patch', 'wizskills': 'major'}, 'Renames a skill.')
         code, out = self.release(repo)
-        self.assertEqual((code, out[:2]), (0, ['release: wizskills 0.1.2 -> 1.0.0 (major)',
+        self.assertEqual((code, out[:2]), (0, ['release: wizskills 0.2.0 -> 1.0.0 (major)',
                                                'why: `wizskills`: major in a changeset']))
 
     def test_nothing_pending_releases_nothing(self):
@@ -271,7 +271,7 @@ class Release(unittest.TestCase):
 
     def test_write_applies_the_plan(self):
         # catches: the written tree disagreeing with the dry run, or edits beyond the version line
-        repo = Repo(self, {'alpha': '0.2.0', 'beta': '0.2.0'})
+        repo = Repo(self, {'alpha': '0.2.0', 'beta': '0.2.0'}, plugin='0.2.0')
         repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
         code, out = self.release(repo, '--write')
         self.assertEqual((code, out[-1:]),
@@ -279,9 +279,9 @@ class Release(unittest.TestCase):
         self.assertEqual((repo.dir / 'skills/alpha/SKILL.md').read_text(), skill_md('alpha', '0.2.1'))
         self.assertEqual((repo.dir / 'skills/beta/SKILL.md').read_text(), skill_md('beta', '0.2.0'))
         plugin = json.loads((repo.dir / '.claude-plugin/plugin.json').read_text())
-        self.assertEqual(plugin['version'], '0.1.3')
+        self.assertEqual(plugin['version'], '0.2.1')
         self.assertEqual((repo.dir / 'CHANGELOG.md').read_text(),
-                         '# Changelog\n\n## 0.1.3 - 2026-01-02\n\n- `alpha` 0.2.1: Fixes a typo.\n\n'
+                         '# Changelog\n\n## 0.2.1 - 2026-01-02\n\n- `alpha` 0.2.1: Fixes a typo.\n\n'
                          '## 0.1.2 - 2026-01-01\n\n- Old line.\n')
         self.assertEqual(sorted(p.name for p in (repo.dir / '.changeset').iterdir()),
                          ['README.md', 'config.json'])
@@ -433,6 +433,7 @@ class Removal(unittest.TestCase):
         repo = self.removal({'beta': 'patch'})
         self.assertEqual(repo.run('check', '--base', 'main'), (1, [
             'changeset check: .changeset/remove-beta.md `beta` is not a skill or `wizskills`',
+            'changeset check: `beta` was removed but no new changeset names `wizskills`',
             'changeset check: fail']))
         repo = self.removal()
         repo.note('beta-fix', {'beta': 'minor'}, 'Beta gets a bigger fix.')

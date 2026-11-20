@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""diagnose's loop helper. Python 3.11+ standard library; prints one short line.
+"""diagnose's loop helper. Python 3.10+ standard library; prints one short line.
 
   loop.py rate --runs N [--timeout SECONDS] -- COMMAND...
       Run COMMAND N times (no shell, output discarded, never echoed) and print
@@ -38,9 +38,9 @@ def attempt(command, timeout):
     """One run's exit code, or None on a timeout. On POSIX the run gets its own
     process group, and a timeout or interruption kills that whole group, the
     workers it started included, before this returns."""
-    posix = os.name == 'posix'
+    posix = os.name == 'posix'  # start_new_session: Python 3.10's way to a new group
     proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, **({'process_group': 0} if posix else {}))
+                            stderr=subprocess.DEVNULL, start_new_session=posix)
     try:
         return proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -92,8 +92,8 @@ def rate(args):
     return 1 if failed else 0
 
 
-def git(root, *args):
-    done = subprocess.run(['git', *args], cwd=root, capture_output=True)
+def git(root, *args, input=None):
+    done = subprocess.run(['git', *args], cwd=root, capture_output=True, input=input)
     if done.returncode != 0:
         refuse('cannot read the Git work tree or index')
     return done.stdout
@@ -139,10 +139,16 @@ def clean(args):
         if mode in (b'100644', b'100755'):
             staged[os.fsdecode(path)] = blob.decode()
     paths = set(staged) | {os.fsdecode(p) for p in filter(None, listed.split(b'\0'))}
-    # Only a staged copy that may differ from its file can hold another tag.
-    differ = git(root, 'diff-files', '-z', '--name-only').split(b'\0')
-    changed = {os.fsdecode(p) for p in filter(None, differ)}
-    blobs = read_blobs(root, {staged[p] for p in changed if p in staged})
+    # Only a staged copy that differs from its file can hold another tag. Hash
+    # the files themselves: diff-files trusts index flags (sparse checkout,
+    # assume-unchanged) and would skip those entries.
+    present = sorted(p for p in staged if os.path.isfile(os.path.join(root, p)))
+    hashed = git(root, 'hash-object', '--no-filters', '--stdin-paths',
+                 input=''.join(f'{p}\n' for p in present).encode()).split()
+    if len(hashed) != len(present):
+        refuse('cannot read the Git work tree or index')
+    same = {p for p, h in zip(present, hashed) if h.decode() == staged[p]}
+    blobs = read_blobs(root, {blob for p, blob in staged.items() if p not in same})
     left = []
     for path in sorted(paths):
         try:

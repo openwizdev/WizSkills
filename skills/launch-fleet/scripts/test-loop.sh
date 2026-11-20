@@ -131,7 +131,7 @@ identity() { # "token identity" every gh call gets; the stderr line expected, or
   [ -z "$(grep -vx "$1" "$work/gh-token.log")" ]
   [ "$(grep -c '^fleet.sh: used ' "$work/err")" = 1 ]
   lines=1
-  [ -z "$2" ] || { grep -qx "$2" "$work/err"; lines=2; }
+  [ -z "$2" ] || { grep -qxF "$2" "$work/err"; lines=2; }
   [ "$(wc -l < "$work/err" | tr -d ' ')" = "$lines" ]
   ! grep -q "$token" "$work/out" "$work/err" "$work/openwiz.log"
 }
@@ -158,6 +158,7 @@ service() { # the synthetic service on the local route, and the old key secret t
     OPENWIZ_AGENT_TOKEN_DIR="$work/token-private" FAKE_SERVICE_LOG="$work/service.log" \
     OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj
   : > "$work/service.log"
+  rm -f "$work/token-private/"*  # each case asks afresh, not from the last case's cached token
 }
 (service; identity "$ga4 installation" '')
 [ "$(jq -c .request "$work/service.log")" = '{"schema":"openwiz.token-service.v1","kind":"request","requester":"fleet-check","repositories":["synthetic-owner/synthetic-repo"],"permissions":{"metadata":"read","contents":"read","issues":"read","pull_requests":"read","checks":"read","actions":"read"}}' ]

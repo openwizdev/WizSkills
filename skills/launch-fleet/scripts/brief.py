@@ -16,7 +16,15 @@ never goes into a public record.
 
 Exit 2 and print nothing for an unknown kind or a malformed target. The
 skill-file lookup belongs to the recipient, so it is printed unexpanded.
+
+With a token service configured (OPENWIZ_TOKEN_SERVICE set and non-empty, as
+the agent helper reads it), each brief ends with the token step (GA4, OpenWiz
+#1846; contracts/token-service.v1.md): the agent runs its GitHub commands
+through the agent helper as a requester named for its role, and keeps
+approvals, settings and workflow pushes on the owner's login. With none, every
+brief is exactly as before.
 """
+import os
 import re
 import sys
 
@@ -54,6 +62,27 @@ FORMS = {
               "Each wake section for the messages below. The orchestrator's thread is {1}."),
 }
 
+# Who asks, and for which repository, per brief (the contract's synthetic `requester` label).
+REQUESTERS = {'builder': ('builder-{0}', None), 'fresh': ('builder-{0}', None), 'reviewer': ('reviewer-{0}', None),
+              're-check': ('reviewer-{0}', None), 'diagnose': ('diagnose', None), 'fleet': ('fleet-{0}', '{1}'),
+              'wake': ('fleet-{0}', '{1}'), 'tick': ('fleet-tick', '{0}'), 'wakes': ('fleet-tick', '{0}')}
+TOKEN = (" GitHub token: run every gh or git command that reaches GitHub through the agent helper, the launch-fleet "
+         "skill's `scripts/github-app/agent-token.py` (find launch-fleet's SKILL.md as above): first "
+         "`python3 -I <helper> start --requester {who} --repository {repo}`, then "
+         "`python3 -I <helper> run --requester {who} --repository {repo} -- <command>` for each command, with the same "
+         "request every time and `--repository` once for each repository you read or write (all of one owner). Inside a run git "
+         "reaches GitHub over HTTPS only, never SSH. If it gets no token it says so once on stderr and runs the command as the owner's login: go on. Approvals, "
+         "repository settings and pushes that change `.github/workflows/` stay on the owner's login: run those "
+         "without the helper.")
+
+
+def token_step(kind, args):
+    """The brief's token sentence when a token service is configured, else nothing (exactly as today)."""
+    if not os.environ.get('OPENWIZ_TOKEN_SERVICE'):
+        return ''
+    who, repo = REQUESTERS[kind]
+    return TOKEN.format(who=who.format(*args), repo=repo.format(*args) if repo else 'OWNER/NAME')
+
 
 def main(argv):
     form = FORMS.get(argv[0]) if argv else None
@@ -62,7 +91,7 @@ def main(argv):
         return 2
     print(form[1].format(*argv[1:], **{k: LOOKUP.format(s=s) for k, s in
                                        (('b', 'build-ticket'), ('r', 'review-ticket'), ('d', 'diagnose'),
-                                        ('f', 'launch-fleet'))}))
+                                        ('f', 'launch-fleet'))}) + token_step(argv[0], argv[1:]))
     return 0
 
 

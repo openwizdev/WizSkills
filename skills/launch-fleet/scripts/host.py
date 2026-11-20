@@ -50,6 +50,15 @@ may exist: reconcile before any retry).
 Exit 2, `host.py: <why>` on stderr: an unreadable setting, driver or runs file,
 or unwritable run state; nothing was started.
 The driver gets the caller's environment unchanged; this script reads no login.
+
+The token step (GA4, OpenWiz #1846; contracts/token-service.v1.md): with a
+token service configured (OPENWIZ_TOKEN_SERVICE set and non-empty), a start
+and a wake first run the agent helper beside this script
+(`github-app/agent-token.py start --requester builder-N --repository OWNER/NAME`),
+which gets #N's builder its token into the builder's private token file. Only
+the helper's own stderr (its one fallback note) is passed on; its stdout is
+dropped. The step never changes the driver's input or environment, and a
+fallback never stops the start. With no service configured, it runs nothing.
 """
 import fcntl
 import importlib.util
@@ -182,6 +191,22 @@ def strict(text):
         return json.loads(text, object_pairs_hook=once)
     except ValueError:
         return None
+
+
+def token_step(repo, n):
+    """Get #N's builder its token through the agent helper; pass on only its stderr (the one fallback note)."""
+    if not os.environ.get('OPENWIZ_TOKEN_SERVICE'):
+        return
+    try:
+        r = subprocess.run([sys.executable, '-I', str(HERE / 'github-app/agent-token.py'), 'start', '--requester',
+                            'builder-%s' % n, '--repository', repo], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print('host.py: the agent helper did not run (%s); #%s starts as the owner\'s login' % (type(e).__name__, n),
+              file=sys.stderr)
+        return
+    if r.stderr:
+        sys.stderr.write(r.stderr)
 
 
 def call(host, command, given):
@@ -423,6 +448,7 @@ def main(argv):
         ready(repo)
         if run and not run.get('stopped'):
             raise Outcome(live % (n, run['host']))
+        token_step(repo, n)
         new = attempt(repo, n, host, 'start', {'repository': repo, 'ticket': int(n), 'skill': 'build-ticket',
                                                 'harness': argv[3], 'model': argv[4]})
 
@@ -442,6 +468,7 @@ def main(argv):
         raise Outcome('no run: #%s was not started through a driver' % n)
     unclear = None
     if kind == 'wake':
+        token_step(repo, n)
         attempt(repo, n, run['host'], kind, {'run': run['run']})
         unclear = cleared(repo, n, run['host'], 'woke')
     else:

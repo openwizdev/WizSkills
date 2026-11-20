@@ -23,7 +23,8 @@ TICKETS = 'synthetic-owner/synthetic-tickets'
 # The shared fake serves one repository. This router gives each repository its
 # own world (FAKE_WORLDS) and answers the pull request's closing issues from
 # its world's `closes`, so a write to the wrong repository lands where a test sees it.
-# A world's `faults: {"read": "fail"}` fails its next comment-list read.
+# A world's `faults: {"read": "fail"}` fails its next comment-list read, and its
+# `issues` answers one issue's read (the landed comment's brief and report).
 ROUTER = r'''import json, os, subprocess, sys
 args = sys.argv[1:]
 named = dict(a.split('=', 1) for a in args if a.split('=', 1)[0] in ('owner', 'name'))
@@ -34,6 +35,12 @@ for i, a in enumerate(args):
     elif a.startswith('repos/'):
         repo = '/'.join(a.split('/')[1:3])
 path = json.loads(os.environ.get('FAKE_WORLDS') or '{}').get(repo, os.environ['FAKE_WORLD'])
+issue = [a.split('/') for a in args if a.startswith('repos/')]
+if args[0] == 'api' and '--method' not in args and issue and len(issue[0]) == 5 and issue[0][3] == 'issues':
+    with open(path) as f:
+        found = json.load(f).get('issues', {}).get(issue[0][4])  # one issue, read whole (#1848)
+    sys.stdout.write(json.dumps(found)) if found else sys.exit('HTTP 404')
+    sys.exit(0)
 if args[0] == 'api' and '--method' not in args and any(a.split('?')[0].endswith('/comments') for a in args):
     with open(path) as f:
         world = json.load(f)
@@ -515,6 +522,158 @@ class Queue(unittest.TestCase):
         self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
         self.assertEqual(w.bodies(7), [self.receipt()])
         self.assertEqual(sum('merge' in x for x in w.writes()), 1)
+
+
+# The feedback-loop contract (v1, contracts/feedback-loop.v1.md in OpenWiz, FL1 #1840): its
+# landed fixtures, as GitHub answers them. Every account, number and text is synthetic.
+DEST = 'openwizdev/OpenWiz'
+MARK = 'OpenWiz feedback operation 3f2a9c4e1b7d40a6958e0c2d7b1a4f63'
+LANDED = 'Landed: the fix for this report merged in #9201 and will ship in OpenWiz 9.4.2.'
+
+
+def issue(number, body, login='openwiz[bot]', labels=(), milestone='9.4.2', **extra):
+    value = {'number': number, 'user': {'login': login}, 'body': body, 'labels': [{'name': x} for x in labels],
+             'milestone': milestone and {'title': milestone}}
+    value.update(extra)
+    return value
+
+
+def brief(number, report=9101, **extra):
+    return issue(number, 'Keep the approve button above the footer.\n\nReport: #%d' % report,
+                 labels=['ready-for-agent'], **extra)
+
+
+REPORT = issue(9101, 'On a 360-pixel screen the approve button sits under the footer.\n\n' + MARK,
+               login='synthetic-user', labels=['feedback'])
+
+
+class Landed(unittest.TestCase):
+    """P4 (#1848): a merged fix posts the contract's landed comment on its report, once."""
+
+    def world(self, issues, close=(9106, 9101), comments=None, repo=DEST, **extra):
+        refs = [{'number': n, 'repository': {'nameWithOwner': repo},
+                 'body': issues[str(n)]['body'] if str(n) in issues else ''} for n in close]
+        value = pr(number=9201, closes=refs, state='MERGED', mergeCommit={'oid': 'c' * 40})
+        return World(self, repo=repo, pr=value, issues=issues, comments=comments or {}, **extra)
+
+    def merge(self, w, ticket=9106, repo=DEST):
+        return w.run('merge.py', 'merge', repo, 9201, HEAD, 'check', 'APPROVE 1 and plan approval 2',
+                     '--ticket', ticket, cwd=w.dir / 'project')
+
+    def posts(self, w):
+        return [(x['post'], x['body']) for x in w.writes() if 'post' in x and not x['body'].startswith('launch-fleet:')]
+
+    def setUp(self):
+        self.issues = {'9106': brief(9106), '9101': REPORT}
+
+    def test_a_merged_fix_posts_one_landed_comment_and_a_second_run_posts_nothing(self):
+        # catches: a merge that never tells the reporter, or tells them again on every later run
+        # (a re-run after an unknown cost, or settle after the queue merged it).
+        w = self.world(self.issues)
+        project(w, None)
+        code, out = self.merge(w)
+        self.assertEqual((code, out.split('; ')[0]), (0, 'merged ' + 'c' * 40), out)
+        self.assertEqual(self.posts(w), [(9101, LANDED)])
+        self.assertTrue(out.endswith('; landed posted 5002 on #9101'), out)
+        self.assertEqual(self.merge(w), (0, 'merged %s; cost already posted 5001; landed already posted 5002'
+                                         % ('c' * 40)))
+        self.assertEqual(w.run('merge.py', 'settle', DEST, 9201, 9106, cwd=w.dir / 'project'), (0, 'no queued merge'))
+        self.assertEqual(self.posts(w), [(9101, LANDED)])
+        self.assertEqual(w.bodies(9106), ['launch-fleet: cost unknown (PR #9201): no cost command'])
+
+    def test_a_report_landed_by_an_earlier_fix_gets_nothing(self):
+        # catches: the once-per-report rule read per pull request, so a second fix posts again.
+        earlier = comment(4000, 'Landed: the fix for this report merged in #9200 and will ship in OpenWiz 9.4.1.')
+        w = self.world({'9108': brief(9108), '9101': REPORT}, close=(9108,), comments={'9101': [earlier]})
+        project(w, None)
+        self.assertEqual(self.merge(w, 9108)[1].split('; ')[-1], 'landed already posted 4000')
+        self.assertEqual(self.posts(w), [])
+
+    def test_only_a_record_authors_landed_comment_counts(self):
+        # catches: anyone pasting the landed line on a report silencing the real one.
+        forged = comment(4000, LANDED, login='synthetic-user')
+        w = self.world(self.issues, comments={'9101': [forged]})
+        project(w, None)
+        self.assertEqual(self.merge(w)[0], 0)
+        self.assertEqual(self.posts(w), [(9101, LANDED)])
+
+    def test_a_merge_that_closes_no_report_posts_nothing(self):
+        # catches: a landed comment on an ordinary ticket, a forged or misplaced link, a link to
+        # an issue that is no report, a pull request or a report with no version milestone.
+        plain = issue(9107, 'An ordinary ticket.', labels=['ready-for-agent'])
+        cases = {
+            'ordinary ticket': ({'9107': plain}, (9107,), 9107),
+            'report closed directly': ({'9101': REPORT}, (9101,), 9101),
+            'forged link': ({'9109': brief(9109, login='synthetic-user'), '9101': REPORT}, (9109,), 9109),
+            'link not last': ({'9109': issue(9109, 'Report: #9101\n\nMore words.'), '9101': REPORT}, (9109,), 9109),
+            'two links': ({'9109': issue(9109, 'Report: #9100\n\nReport: #9101'), '9101': REPORT}, (9109,), 9109),
+            'not a report': ({'9106': brief(9106), '9101': issue(9101, 'I saw this line:\n\n%s\n\nIs it a bug?' % MARK,
+                                                                  login='synthetic-user')}, (9106,), 9106),
+            'a pull request': ({'9106': brief(9106), '9101': dict(REPORT, pull_request={'url': 'x'})}, (9106,), 9106),
+            'no milestone': ({'9106': brief(9106), '9101': dict(REPORT, milestone=None)}, (9106,), 9106),
+            'not a version': ({'9106': brief(9106), '9101': dict(REPORT, milestone={'title': 'Later'})}, (9106,), 9106),
+        }
+        for name, (issues, close, ticket) in cases.items():
+            with self.subTest(name):
+                w = self.world(issues, close=close)
+                project(w, None)
+                code, out = self.merge(w, ticket)
+                self.assertEqual(code, 0, out)
+                self.assertEqual(self.posts(w), [])
+
+    def test_a_report_found_by_its_marker_alone_gets_it(self):
+        # catches: an agent-route report, which carries the marker before triage labels it, missed.
+        w = self.world({'9106': brief(9106), '9101': dict(REPORT, labels=[])})
+        project(w, None)
+        self.assertEqual(self.merge(w)[0], 0)
+        self.assertEqual(self.posts(w), [(9101, LANDED)])
+
+    def test_two_briefs_linking_one_report_lead_to_one_comment(self):
+        # catches: one comment per brief instead of per report.
+        w = self.world({'9106': brief(9106), '9108': brief(9108), '9101': REPORT}, close=(9106, 9108))
+        project(w, None)
+        self.assertEqual(self.merge(w)[0], 0)
+        self.assertEqual(self.posts(w), [(9101, LANDED)])
+
+    def test_another_repositorys_merge_posts_nothing(self):
+        # catches: `#<pull request>` naming another repository's number on the report.
+        w = self.world(self.issues, repo=REPO)
+        project(w, None)
+        self.assertEqual(self.merge(w, repo=REPO)[0], 0)
+        self.assertEqual(self.posts(w), [])
+
+    def test_a_lost_landed_response_is_reconciled_never_posted_twice(self):
+        # catches: a blind retry after the response was lost, so the reporter is told twice.
+        w = self.world(self.issues)
+        project(w, None)
+        # The cost record posts first; lose the landed comment's response only.
+        gh = w.dir / 'bin' / 'gh'
+        head, rest = gh.read_text().split('\n', 1)
+        lose = w.dir / 'lose.py'
+        lose.write_text('import json, os\nw = json.load(open(os.environ["FAKE_WORLD"]))\n'
+                        'w["faults"]["post"] = "lost"\njson.dump(w, open(os.environ["FAKE_WORLD"], "w"))\n')
+        gh.write_text('%s\ncase " $* " in *" POST "*"issues/9101/comments"*) "%s" -I "%s";; esac\n%s'
+                      % (head, sys.executable, lose, rest))
+        code, out = self.merge(w)
+        self.assertEqual(code, 0, out)
+        self.assertTrue(out.split('; ')[-1].startswith('landed unknown: '), out)
+        gh.write_text('%s\n%s' % (head, rest))
+        self.assertEqual(self.merge(w)[1].split('; ')[-1], 'landed already posted 5002')
+        self.assertEqual(self.posts(w), [(9101, LANDED)])
+
+    def test_an_unreadable_report_posts_nothing_and_says_unknown(self):
+        # catches: a failed read of the report's comments treated as none, then posting again.
+        earlier = comment(4000, LANDED)
+        w = self.world(self.issues, comments={'9101': [earlier]})
+        project(w, None)
+        value = w.load()
+        value['comments']['9106'] = [comment(3999, 'launch-fleet: cost unknown (PR #9201): no cost command')]
+        value['faults'] = {'read': 'fail'}
+        w.save(value)
+        code, out = self.merge(w)
+        self.assertEqual(code, 0, out)
+        self.assertTrue(out.split('; ')[-1].startswith('landed unknown: '), out)
+        self.assertEqual(self.posts(w), [])
 
 
 if __name__ == '__main__':

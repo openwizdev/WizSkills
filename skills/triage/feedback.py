@@ -4,7 +4,7 @@
 python3 -I feedback.py plan <case.json | ->
 
 The case is one JSON object: the report as GitHub shows it ("number",
-"pull_request", "title", "body", "labels", "milestone"), triage's "criteria"
+"pull_request", "title", "body", "labels", "milestone", "comments"), triage's "criteria"
 (the contract's six codes, each true, false or null for can't tell), and, for a
 report going to a fleet, "version" (the next release, X.Y.Z) and "brief"
 ("title", "body"). It prints the outcome as one JSON object: the report's exact
@@ -56,12 +56,12 @@ def is_report(report):
 
 
 def words(report):
-    """The report's own words, without the marker line the contract adds."""
+    """The report's own words and its comments', without the marker line."""
     body = report["body"]
     lines = body.split("\n")
     if lines and MARKER.match(lines[-1]):
         body = "\n".join(lines[:-1])
-    return report["title"] + "\n" + body
+    return "\n".join([report["title"], body] + [c["body"] for c in report.get("comments", [])])
 
 
 def copied(report, text):
@@ -138,6 +138,10 @@ def read(path):
         raise Unreadable("the report's labels must be names")
     if type(report.get("pull_request", False)) is not bool:
         raise Unreadable("the report's pull_request must be true or false")
+    comments = report.get("comments", [])
+    if not isinstance(comments, list) or not all(
+            isinstance(c, dict) and type(c.get("body")) is str and set(c) <= {"author", "body"} for c in comments):
+        raise Unreadable("the report's comments are objects with a body and an author")
     if report.get("milestone") is not None and not isinstance(report["milestone"], str):
         raise Unreadable("the report's milestone must be a title or null")
     report.setdefault("milestone", None)

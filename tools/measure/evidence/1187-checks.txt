@@ -1,0 +1,17 @@
+WS14 (#1187) local checks at the release candidate, before hand-back.
+
+python3 -I check/changesets.py check --base origin/main
+  changeset check: pass (no skill changed)
+
+TEST_JOBS=2 python3 check/run.py (stopped by a 50-minute local timeout inside launch-fleet's suites)
+  rules: pass
+  standalone: pass
+  suites run: 29; pass: 28; fail: 1
+  fail: image (skills/image/tests, test_fixed_at_bottom_keeps_full_page_and_first_screen_pixels):
+        the same test fails on main in this sandbox's browser; CI uses its pinned Chrome for Testing
+  not run here: launch-fleet's 15 suites (this change touches only its SKILL.md version line); CI runs them
+
+node tools/measure/static-count.cjs tools/measure/baseline-paths.json <js-tiktoken 1.0.21>
+  identical to tools/measure/evidence/static-baseline.json
+node tools/measure/static-count.cjs tools/measure/evidence/after-paths.json <js-tiktoken 1.0.21>
+  identical to tools/measure/evidence/static-after.json

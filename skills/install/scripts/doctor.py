@@ -55,6 +55,15 @@ def load(name, path):
 first_fleet = load('openwiz_first_fleet', SKILLS / 'install/scripts/first_fleet.py')
 settings = load('openwiz_settings', SKILLS / 'setup/scripts/settings.py')
 status = load('openwiz_status', SKILLS / 'launch-fleet/scripts/status.py')
+# A saved value that might be a credential is never printed (#65 R3): status.py's credential shapes, and,
+# failing closed for the one free-text value (the operator), any long unbroken run no name has.
+CREDENTIAL = [pattern for what, pattern in status.PRIVATE if what == 'a credential']
+TOKEN_LIKE = re.compile(r'[A-Za-z0-9_+/=-]{20,}')
+
+
+def unsafe(text, free=False):
+    return any(p.search(text) for p in CREDENTIAL) or bool(free and TOKEN_LIKE.search(text))
+
 MISSING_LABEL = re.compile(r'triage-labels\.md: [^:]+: label (.+) is not in the tracker')
 
 
@@ -102,24 +111,29 @@ def recorded(args, value, why, component):
     """(problem, fix) for one component's recorded setup check, or None when it holds."""
     check = 'python3 -I -B %s --state-dir %s' % (
         shlex.quote(str(Path(args.build) / 'runtime/setup/setup.py')) + ' check', shlex.quote(args.state_dir))
+    # Setup holds none of prepare's values, or none it may show: the Prepare step asks the person for them
+    # (#1578 item 4, #65 R1 and R3).
+    guided = ("prepare setup for %s with the install skill's Prepare step (2. Connect; it asks for the CloudRoom "
+              'project, operator, service issue, answer thread, harness, model and effort), then %s'
+              % (args.repo, check))
     if value is None:
-        return why, check
+        return why, guided if why == 'setup has not run yet' else check
     project = value.get('project')
-    step = "the setup skill's Prepare step"
+    step = "the install skill's Prepare step, 2. Connect"
     if not isinstance(project, dict) or not isinstance(project.get('repository'), str):
-        # Setup holds none of prepare's values yet; the Prepare step asks the person for them (#1578 item 4).
-        return 'setup has no prepared project', (
-            'prepare setup for %s with %s (it asks for the CloudRoom project, operator, service issue, answer '
-            'thread, harness, model and effort), then %s' % (args.repo, step, check))
+        return 'setup has no prepared project', guided
     if project['repository'].lower() != args.repo.lower():
-        # Every flag setup.py prepare requires, from the saved project, as a preview that saves nothing.
-        flags = [('--project', 'project'), ('--operator', 'operator'), ('--service-issue', 'service_issue'),
-                 ('--answer-thread', 'answer_thread'), ('--harness', 'harness'), ('--model', 'model'),
-                 ('--effort', 'effort')]
-        prepare = 'python3 -I -B %s prepare --state-dir %s --repository %s %s' % (
-            shlex.quote(str(Path(args.build) / 'runtime/setup/setup.py')), shlex.quote(args.state_dir),
-            shlex.quote(args.repo), ' '.join('%s %s' % (flag, shlex.quote(str(project.get(key))))
-                                             for flag, key in flags))
+        # Every flag setup.py prepare requires, from the saved project, as a preview that saves nothing. Each
+        # value is bound to its flag in one word, so a dash-leading value stays a value (#65 R2).
+        flags = [('--state-dir', args.state_dir), ('--repository', args.repo)] + [
+            (flag, str(project.get(key))) for flag, key in (
+                ('--project', 'project'), ('--operator', 'operator'), ('--service-issue', 'service_issue'),
+                ('--answer-thread', 'answer_thread'), ('--harness', 'harness'), ('--model', 'model'),
+                ('--effort', 'effort'))]
+        if any(unsafe(text, flag == '--operator') for flag, text in flags[2:]):
+            return 'setup is prepared for %s' % project['repository'], guided
+        prepare = 'python3 -I -B %s prepare %s' % (shlex.quote(str(Path(args.build) / 'runtime/setup/setup.py')),
+                                                   ' '.join(shlex.quote('%s=%s' % pair) for pair in flags))
         return 'setup is prepared for %s' % project['repository'], (
             '%s (a preview: change what differs for %s, confirm it with --yes --operation, then %s)'
             % (prepare, args.repo, check))
@@ -150,8 +164,8 @@ def recorded(args, value, why, component):
                 "install OpenWiz's GitHub App on %s from the setup page, then %s" % (args.repo, check))
     if code == 'harness_unavailable':
         # setup.py records this only when it read the offered catalogue and the selection isn't in it.
-        return ('%s, %s, %s effort is not offered (%s)' % (project.get('harness'), project.get('model'),
-                                                             project.get('effort'), code),
+        chosen = '%s, %s, %s effort' % (project.get('harness'), project.get('model'), project.get('effort'))
+        return ('%s is not offered (%s)' % ('the saved harness, model or effort' if unsafe(chosen) else chosen, code),
                 'choose a harness, model and effort that openwiz models --json offers and prepare setup again '
                 'with them (%s), then %s' % (step, check))
     return 'not verified (%s)' % code, 'sign in to %s in CloudRoom, then %s' % (project.get('harness'), check)
@@ -177,6 +191,12 @@ def driver(args):
     try:
         kit = load('openwiz_driver_kit', Path(args.openwiz) / 'kernel/driver-kit/kit.py')
         checker = kit.Kit(types.SimpleNamespace(driver=args.driver), None)
+        # The driver gets no token or other value of the doctor's environment, only what a program needs to
+        # start, and the kit's own run mark (#65 R4). A kit with no Kit.env could pass on everything: refuse it.
+        if not isinstance(getattr(checker, 'env', None), dict):
+            raise TypeError('Kit.env')
+        checker.env = dict({k: os.environ[k] for k in ('PATH', 'HOME', 'LANG') if k in os.environ},
+                           **{k: v for k, v in checker.env.items() if k == 'OPENWIZ_KIT_RUN'})
         verdict, what = checker.version()
     except Exception as error:  # a kit that can't run is a problem to report, never a crash
         return [('the driver kit could not run (%s)' % type(error).__name__, pull)]

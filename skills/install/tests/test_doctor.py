@@ -323,6 +323,17 @@ class Doctor(unittest.TestCase):
                          '5. Driver: %s does not answer version: it names no openwiz:records v1. '
                          'Fix: git -C %s pull --ff-only, then the doctor again' % (self.s.driver, self.s.openwiz))
 
+    # catches: a driver that answers version but prints a credential passing as clear (#1578 item 1).
+    def test_flagged_driver_answer_is_reported_and_withheld(self):
+        write(self.s.driver, GOOD_DRIVER.replace("echo '", "echo %s >&2\necho '" % LEAK, 1), 0o755)
+        result = self.s.run()
+        self.assertNotIn(LEAK, result.stdout + result.stderr)
+        self.assertEqual(self.only(result),
+                         "5. Driver: %s's version answer may hold a credential (the driver kit flags it), so the "
+                         'doctor withholds it. Fix: run %s version in your own terminal, not through an agent, to '
+                         'read it; then update or replace the driver at %s so it answers version for this OpenWiz, '
+                         'then the doctor again' % (self.s.driver, self.s.driver, self.s.driver))
+
     # catches: a driver refusal the kit flags as holding a credential printed for the agent to relay
     # (#1578 item 1).
     def test_flagged_driver_refusal_is_withheld(self):
@@ -330,10 +341,10 @@ class Doctor(unittest.TestCase):
         result = self.s.run()
         self.assertNotIn(LEAK, result.stdout + result.stderr)
         self.assertEqual(self.only(result),
-                         '5. Driver: %s refused version, and the driver kit flags its answer as possibly holding a '
-                         'credential, so the doctor withholds it. Fix: run %s version in your own terminal, not '
-                         'through an agent, to read it; then update or replace that driver, then the doctor again'
-                         % (self.s.driver, self.s.driver))
+                         "5. Driver: %s's version answer may hold a credential (the driver kit flags it), so the "
+                         'doctor withholds it. Fix: run %s version in your own terminal, not '
+                         'through an agent, to read it; then update or replace the driver at %s so it answers version '
+                         'for this OpenWiz, then the doctor again' % (self.s.driver, self.s.driver, self.s.driver))
 
     # catches: a build whose packaged skills are gone passing (setup.py's runtime_pin).
     def test_skills_not_installed(self):

@@ -1255,6 +1255,41 @@ class WakeRepair(Tracker):
         self.assertRegex(report[0], r'^#12: needs-info left on: ')
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
+    def shared_login(self, **race):
+        # #1702 R1: the fleet acts as a person's own account (a record author), as it does
+        # until the App rollout, so the person's label events carry the fleet's login.
+        self.world['login'] = 'synthetic-owner'
+        self.asking_on_12(**race)
+
+    def test_with_a_shared_login_a_hold_added_just_before_the_repair_post_stays(self):
+        # catches: under one shared login, the person's needs-info landing between the repair's
+        # last read and its POST (a no-op POST) taken as the repair's and deleted (#82 R1).
+        resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
+        person = {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}
+        self.shared_login(race_label=[person, resume])
+        code, report = self.wake()
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual((code, len(report)), (1, 1), report)
+        self.assertRegex(report[0], r'^#12: needs-info left on: ')
+        self.assertEqual(self.timeline(), [('labeled', 'synthetic-owner')])
+        self.assertEqual(self.wake(), (0, []))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
+    def test_with_a_shared_login_a_hold_reapplied_just_before_the_repair_delete_stays(self):
+        # catches: under one shared login, the person removing and re-applying needs-info just
+        # before the repair's DELETE, losing the hold because put-back only knows other logins (#82 R1).
+        resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                 {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
+        self.shared_login(race_label=[resume], race_delete=again)
+        code, report = self.wake()
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual((code, len(report)), (1, 1), report)
+        self.assertRegex(report[0], r'^#12: needs-info left on: ')
+        self.assertNotIn(('DELETE', f'repos/{REPO}/issues/12/labels/needs-info'), self.writes())
+        self.assertEqual(self.wake(), (0, []))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
     def test_a_repair_that_fails_part_way_still_reports_what_it_changed(self):
         # catches: a label written on one ticket and then left out of the report because a
         # later ticket's repair failed, so the wake never records that it changed anything.

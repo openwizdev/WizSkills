@@ -186,6 +186,10 @@ def blocks(path, hunks):
                     run.added.append(line_no)
                 docstring = None if docstring in text else docstring
                 continue
+            if (line_no == 1 and text.startswith("#!")) or (
+                    line_no <= 2 and suffix in {".py", ".pyi"} and ENCODING.match(text)):
+                run = None
+                continue
             opens = DOCSTRING.match(text) if suffix in {".py", ".pyi"} and not state.get("quote") else None
             if opens and (previous.endswith(":") or (preamble and not previous)):
                 delim = opens.group(1)
@@ -197,10 +201,6 @@ def blocks(path, hunks):
                 continue
             if text.strip():
                 previous = text.rstrip()
-            if (line_no == 1 and text.startswith("#!")) or (
-                    line_no <= 2 and suffix in {".py", ".pyi"} and ENCODING.match(text)):
-                run = None
-                continue
             if suffix == ".rs" and added and RUST_ALLOW.match(text):
                 found.append(Block(path, [line_no], text.strip(), [line_no], whole=False, rust_allow=True))
             continuing = run is not None and bool(state.get("block"))

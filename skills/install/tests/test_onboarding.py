@@ -744,6 +744,36 @@ class ReviewRound(unittest.TestCase):
         self.assertEqual(after.get('host_pulls', []), [])
         self.assertNotEqual((road.saved().get('setting') or {}).get('state'), 'opened')
 
+    def test_r4_a_branch_deleting_another_file_opens_nothing(self):
+        # catches: the host-setting pull request opened and reported ready while its branch also deletes an
+        # unrelated file, so merging the settings-only change loses it (final check 7044504045)
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting')
+        world = json.loads(road.world_path.read_text())
+        branch = dict(world['files'])
+        del branch['docs/agents/triage-labels.md']
+        world.setdefault('branches', {})['openwiz/host-setting'] = branch
+        road.world_path.write_text(json.dumps(world))
+        refused = road.helper(['setting', '--yes'])
+        self.assertEqual(refused.returncode, 5, refused.stdout)
+        self.assertIn('docs/agents/triage-labels.md', refused.stdout)
+        self.assertEqual(json.loads(road.world_path.read_text()).get('host_pulls', []), [])
+        self.assertNotEqual((road.saved().get('setting') or {}).get('state'), 'opened')
+
+    def test_r4_a_resumed_pull_request_with_an_extra_change_is_not_ready(self):
+        # catches: an already open host-setting pull request reported open and ready after its branch gained a
+        # change beyond the approved files (final check 7044504045)
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting')
+        self.assertEqual(road.helper(['setting', '--yes']).returncode, 0)
+        world = json.loads(road.world_path.read_text())
+        world['branches']['openwiz/host-setting']['docs/extra.md'] = 'another change\n'
+        road.world_path.write_text(json.dumps(world))
+        resumed = road.helper(['setting', '--yes'])
+        self.assertEqual(resumed.returncode, 5, resumed.stdout)
+        self.assertIn('docs/extra.md', resumed.stdout)
+        self.assertNotIn('is open', resumed.stdout)
+
     def test_r5_line_endings_and_another_sessions_approval_survive(self):
         # catches: CRLF rewritten to LF, and two onboarding sessions' read-modify-writes of the shared approvals file
         # losing one approval

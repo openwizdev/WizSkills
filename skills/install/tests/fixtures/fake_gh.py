@@ -18,7 +18,8 @@ merge's read-back, from the same launch-fleet world: its `default` branch's
 `files`, `branches` (name to files), `host_pulls` and `onboard_pulls`; `put_fails` makes every
 contents write fail; `edit_after_read` (branch to path to text) is another writer's edit landing
 once, right after that file is next read on that branch. Blob SHAs are git's, and a contents write
-naming another blob than the file's current one is refused, as GitHub does. When
+naming another blob than the file's current one is refused, as GitHub does. `compare/BASE...HEAD`
+lists each file a branch adds, changes or deletes against the default branch. When
 $FAKE_GH_ARGV_LOG is set, every call is logged there as one JSON line.
 Every other call goes to launch-fleet's fake gh unchanged, which refuses writes.
 All values are synthetic.
@@ -144,6 +145,16 @@ def road(argv):
             return http(200, text if argv[3:] else json.dumps({
                 'type': 'file', 'sha': blob_sha(text), 'encoding': 'base64',
                 'content': base64.b64encode(text.encode()).decode()}))
+    match = re.fullmatch(re.escape(r + '/compare/') + r'([^.]+)\.\.\.(.+)', argv[1]) if len(argv) == 2 else None
+    if match and argv[0] == 'api':
+        base, head = world['files'], branches.get(match[2])
+        if match[1] != world['default'] or head is None:
+            sys.stderr.write('gh: Not Found (HTTP 404)\n')
+            return 1
+        files = [{'filename': name, 'status': 'removed' if name not in head else 'added' if name not in base
+                  else 'modified'} for name in sorted(set(base) | set(head)) if base.get(name) != head.get(name)]
+        print(json.dumps({'status': 'ahead', 'files': files}))
+        return 0
     if argv == ['api', r, '--jq', '.default_branch']:
         print(world['default'])
         return 0

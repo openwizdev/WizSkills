@@ -1,0 +1,94 @@
+{
+ "schema": "openwiz.skills-eval.case.v1",
+ "id": "su-workflow-first-questions",
+ "skills": [
+  "setup"
+ ],
+ "category": "workflow",
+ "brief": "You are the orchestrator for example/project, a new project on GitHub. Use the setup skill. Read 'skills/setup/SKILL.md' and follow it.",
+ "world": {
+  "github": {
+   "issues": {},
+   "pulls": {}
+  },
+  "files": {
+   "docs/agents/fleet.md": null,
+   "docs/agents/issue-tracker.md": null,
+   "docs/agents/triage-labels.md": null,
+   "docs/agents/domain.md": null
+  }
+ },
+ "expect": {
+  "actions": [
+   {
+    "any": [
+     {
+      "read": "gh repo view"
+     },
+     {
+      "read": "gh label list"
+     }
+    ]
+   }
+  ],
+  "allow": [
+   {
+    "write": "gh label create"
+   },
+   {
+    "write": "git push"
+   },
+   {
+    "write": "gh pr create"
+   }
+  ],
+  "forbid": [
+   {
+    "write": "gh pr merge"
+   }
+  ],
+  "end": "end_turn",
+  "final": "Asks the user its setup questions (such as whether to keep the existing labels) before writing any settings."
+ },
+ "controls": {
+  "pass": [
+   {
+    "why": "reads the repository and labels",
+    "events": [
+     [
+      "read",
+      "gh repo view --json nameWithOwner"
+     ],
+     [
+      "read",
+      "gh label list"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ],
+  "fail": [
+   {
+    "why": "merges its own settings",
+    "reason": "forbidden",
+    "events": [
+     [
+      "read",
+      "gh repo view"
+     ],
+     [
+      "write",
+      "gh pr merge 6401"
+     ]
+    ],
+    "judgment": {
+     "verdict": "pass",
+     "reason": "control: meets the rule"
+    }
+   }
+  ]
+ }
+}

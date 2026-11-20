@@ -726,6 +726,24 @@ class ReviewRound(unittest.TestCase):
         self.assertNotEqual(failed.returncode, 0, failed.stdout)
         self.assertNotEqual((road.saved().get('setting') or {}).get('state'), 'opened')
 
+    def test_r4_an_edit_after_the_check_is_never_overwritten(self):
+        # catches: the branch file checked at one blob and the write sent with a later blob's SHA, so another
+        # writer's edit made in between is overwritten and the pull request reported ready (re-check 7043050251)
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting')
+        world = json.loads(road.world_path.read_text())
+        world.setdefault('branches', {})['openwiz/host-setting'] = dict(world['files'])  # as the default branch
+        theirs = world['files']['docs/agents/fleet.md'] + '\n| Harness permission mode | `default` |\n'
+        world['edit_after_read'] = {'openwiz/host-setting': {'docs/agents/fleet.md': theirs}}
+        road.world_path.write_text(json.dumps(world))
+        refused = road.helper(['setting', '--yes'])
+        self.assertEqual(refused.returncode, 5, refused.stdout)
+        self.assertIn('changed while', refused.stdout)
+        after = json.loads(road.world_path.read_text())
+        self.assertEqual(after['branches']['openwiz/host-setting']['docs/agents/fleet.md'], theirs, 'their edit kept')
+        self.assertEqual(after.get('host_pulls', []), [])
+        self.assertNotEqual((road.saved().get('setting') or {}).get('state'), 'opened')
+
     def test_r5_line_endings_and_another_sessions_approval_survive(self):
         # catches: CRLF rewritten to LF, and two onboarding sessions' read-modify-writes of the shared approvals file
         # losing one approval

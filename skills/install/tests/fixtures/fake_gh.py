@@ -16,12 +16,15 @@ world, through jq as gh does, or fails it when $FAKE_GH_COMMENTS_FAIL is set.
 The onboarding road (#1358) adds the host setting pull request and the first
 merge's read-back, from the same launch-fleet world: its `default` branch's
 `files`, `branches` (name to files), `host_pulls` and `onboard_pulls`; `put_fails` makes every
-contents write fail. When
+contents write fail; `edit_after_read` (branch to path to text) is another writer's edit landing
+once, right after that file is next read on that branch. Blob SHAs are git's, and a contents write
+naming another blob than the file's current one is refused, as GitHub does. When
 $FAKE_GH_ARGV_LOG is set, every call is logged there as one JSON line.
 Every other call goes to launch-fleet's fake gh unchanged, which refuses writes.
 All values are synthetic.
 """
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -104,6 +107,11 @@ def default_ref(target, name, branch):
     return 0 if status == 200 else 1
 
 
+def blob_sha(text):
+    data = text.encode()
+    return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+
+
 def road(argv):
     """The host setting pull request and the first merge's read-back, or None when not one of their calls."""
     path = Path(os.environ['FAKE_GH_WORLD'])
@@ -118,14 +126,24 @@ def road(argv):
         sys.stdout.write('HTTP/2.0 %d Fixture\r\nContent-Type: text/plain\r\n\r\n%s' % (status, body))
         return 0 if status == 200 else 1
 
+    def edited(ref, name):  # another writer's edit, landing right after this read
+        edit = world.get('edit_after_read', {}).get(ref, {})
+        if name in edit:
+            branches[ref][name] = edit.pop(name)
+            save()
+
     raw = ['-H', 'Accept: application/vnd.github.raw+json']
-    if argv[:2] == ['api', '--include'] and len(argv) == 5 and argv[3:] == raw:
+    if argv[:2] == ['api', '--include'] and len(argv) in (3, 5) and argv[3:] in ([], raw):
         match = re.fullmatch(re.escape(r + '/contents/') + r'([^?]+)(?:\?ref=(.+))?', argv[2])
         if match:
             files = world['files'] if match[2] in (None, world['default']) else branches.get(match[2])
             if files is None or match[1] not in files:
                 return http(404, '{"message": "Not Found"}')
-            return http(200, files[match[1]])
+            text = files[match[1]]
+            edited(match[2], match[1])
+            return http(200, text if argv[3:] else json.dumps({
+                'type': 'file', 'sha': blob_sha(text), 'encoding': 'base64',
+                'content': base64.b64encode(text.encode()).decode()}))
     if argv == ['api', r, '--jq', '.default_branch']:
         print(world['default'])
         return 0
@@ -151,7 +169,8 @@ def road(argv):
             sys.stderr.write('gh: synthetic server error (HTTP 502)\n')
             return 1
         files = branches.get(fields['branch'])
-        if files is None or (match[1] in files) != ('sha' in fields):  # GitHub needs the sha to replace a file
+        if files is None or (match[1] in files) != ('sha' in fields) or (  # GitHub needs the sha to replace a file
+                match[1] in files and fields['sha'] != blob_sha(files[match[1]])):
             sys.stderr.write('gh: sha mismatch (HTTP 409)\n')
             return 1
         files[match[1]] = base64.b64decode(fields['content']).decode()
@@ -162,7 +181,7 @@ def road(argv):
         if match[1] not in branches.get(match[2], {}):
             sys.stderr.write('gh: Not Found (HTTP 404)\n')
             return 1
-        print('c' * 40)
+        print(blob_sha(branches[match[2]][match[1]]))
         return 0
     if argv[:2] == ['pr', 'list'] and argv[2:4] == ['--repo', world['repo']]:
         head = argv[argv.index('--head') + 1]

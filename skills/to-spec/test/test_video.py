@@ -33,6 +33,32 @@ def can_render():
     return any((home / 'node_modules/playwright-core/package.json').is_file() for home in homes)
 
 
+def other_filesystem(than):
+    """A writable folder on a different filesystem from `than`, or None."""
+    for root in ['/dev/shm', os.environ.get('XDG_RUNTIME_DIR')]:
+        if root and os.path.isdir(root) and os.access(root, os.W_OK) and os.stat(root).st_dev != os.stat(than).st_dev:
+            return Path(root)
+    return None
+
+
+# A synthetic voice: a 0.5 s tone per line, except the line in $VOICE_LINE,
+# which gets what $VOICE_MODE says: `silent-exit-3` writes a 0.5 s silent WAV
+# and exits 3, `silent` writes it and exits 0, `nothing` writes no file.
+VOICE = '''
+import math, os, sys, wave
+text = sys.stdin.read()
+mode = os.environ['VOICE_MODE'] if text == os.environ['VOICE_LINE'] else 'tone'
+if mode == 'nothing':
+    sys.exit(0)
+w = wave.open(sys.argv[1] + '.wav', 'wb')
+w.setparams((1, 2, 16000, 0, 'NONE', ''))
+amp = 0 if mode.startswith('silent') else 8000
+w.writeframes(b''.join(int(amp * math.sin(i / 8)).to_bytes(2, 'little', signed=True) for i in range(8000)))
+w.close()
+sys.exit(3 if mode == 'silent-exit-3' else 0)
+'''
+
+
 class SpecVideo(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -143,6 +169,88 @@ class SpecVideo(unittest.TestCase):
                           key=lambda k: sum(abs(a - b) for a, b in zip(shot, pictures[k])))
             self.assertEqual(nearest, i, f'moment {i + 1} shows frame {nearest + 1}')
             start += length
+
+    @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
+    def test_a_failed_or_silent_voice_for_one_moment_fails_the_build_and_names_it(self):
+        # catches (#1545): a voice command's failure, a silent take for one
+        # moment hidden by the other moments' sound, or a stale take left from
+        # an earlier run, reaching the owner as a complete video.
+        helper = self.tmp / 'voice.py'
+        helper.write_text(VOICE)
+        cases = {
+            'fails, leaving a silent take': ('silent-exit-3', False),
+            'exits 0 with a silent take': ('silent', False),
+            'writes nothing beside a stale take': ('nothing', True),
+        }
+        for name, (mode, stale) in cases.items():
+            with self.subTest(name):
+                work = Path(tempfile.mkdtemp(dir=self.tmp))
+                shutil.copy(STORYBOARD, work / 'storyboard.json')
+                if stale:
+                    (work / 'build').mkdir()
+                    env = dict(os.environ, VOICE_MODE='tone', VOICE_LINE='')
+                    subprocess.run(['python3', '-I', str(helper), str(work / 'build/line-03.src')],
+                                   input='stale', text=True, env=env, check=True)
+                out_dir = work / 'deliverable'
+                out_dir.mkdir()
+                env = dict(os.environ, VOICE_MODE=mode, VOICE_LINE=self.moments[2]['say'])
+                result = subprocess.run(
+                    ['node', str(SCRIPT), 'build', str(work / 'storyboard.json'), '-o', str(out_dir / 'spec.mp4'),
+                     '--tts-command', f'python3 -I {helper} {{out}}'],
+                    capture_output=True, text=True, env=env, cwd=Path.cwd())
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, '')
+                lines = result.stderr.splitlines()
+                self.assertEqual(len(lines), 1, result.stderr)
+                self.assertTrue(lines[0].startswith('animatic: moment 3: '), result.stderr)
+                self.assertEqual(list(out_dir.iterdir()), [], 'a refused build left a file at the output')
+
+    @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
+    def test_build_exports_to_an_output_on_another_filesystem(self):
+        # catches (#1601): an MP4 requested on a mounted volume failing at the
+        # last step with a cross-device link, or leaving a partial file.
+        far = other_filesystem(self.tmp)
+        if far is None:
+            self.skipTest('no second writable filesystem (such as /dev/shm) here')
+        out_dir = Path(tempfile.mkdtemp(dir=far))
+        self.addCleanup(shutil.rmtree, out_dir)
+        shutil.copy(STORYBOARD, self.tmp / 'storyboard.json')
+        helper = self.tmp / 'voice.py'
+        helper.write_text(VOICE)
+        env = dict(os.environ, VOICE_MODE='tone', VOICE_LINE='')
+        result = subprocess.run(
+            ['node', str(SCRIPT), 'build', str(self.tmp / 'storyboard.json'), '-o', str(out_dir / 'spec.mp4'),
+             '--tts-command', f'python3 -I {helper} {{out}}'],
+            capture_output=True, text=True, env=env, cwd=Path.cwd())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([p.name for p in out_dir.iterdir()], ['spec.mp4'])
+        self.assertEqual([p.name for p in (self.tmp / 'build').iterdir() if 'partial' in p.name], [])
+        meta = json.loads(subprocess.check_output([
+            'ffprobe', '-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'json', str(out_dir / 'spec.mp4')]))
+        self.assertEqual(sorted(s['codec_type'] for s in meta['streams']), ['audio', 'video'])
+
+    @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
+    def test_build_never_touches_an_existing_file_beside_the_output(self):
+        # catches (#1691 R1): a file already at the renderer's staging name
+        # beside the output (left by an interrupted run, PID reused) deleted
+        # by the export's cleanup. `exec` keeps the shell's PID, so $$ is the
+        # renderer's PID and the old staging name is known before it starts.
+        shutil.copy(STORYBOARD, self.tmp / 'storyboard.json')
+        helper = self.tmp / 'voice.py'
+        helper.write_text(VOICE)
+        out_dir = self.tmp / 'deliverable'
+        out_dir.mkdir()
+        env = dict(os.environ, VOICE_MODE='tone', VOICE_LINE='')
+        launch = ('printf "keep me" > "$1/.spec.$$.partial.mp4"; '
+                  'exec node "$2" build "$3" -o "$1/spec.mp4" --tts-command "python3 -I $4 {out}"')
+        result = subprocess.run(['sh', '-c', launch, 'sh', str(out_dir), str(SCRIPT),
+                                 str(self.tmp / 'storyboard.json'), str(helper)],
+                                capture_output=True, text=True, env=env, cwd=Path.cwd())
+        planted = [p for p in out_dir.iterdir() if p.name.endswith('.partial.mp4')]
+        self.assertEqual(len(planted), 1, f'the existing file is gone: {result.stderr}')
+        self.assertEqual(planted[0].read_bytes(), b'keep me')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(sorted(p.name for p in out_dir.iterdir()), sorted([planted[0].name, 'spec.mp4']))
 
 
 if __name__ == '__main__':

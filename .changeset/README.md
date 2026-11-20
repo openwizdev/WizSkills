@@ -24,4 +24,4 @@ Builders read the decision record before the verdict.
   release does.
 
 `python3 -I check/changesets.py check --base origin/main` runs the same gate as
-CI. [README.md](../README.md#versions) says how a release bundles the notes.
+CI. [docs/versions.md](../docs/versions.md) says how a release bundles the notes.

@@ -1037,10 +1037,20 @@ class FleetRun(Tracker):
         self.assertIsNotNone(base, f'{skill} has no one status write line')
         self.assertIn(f' --agent {kind} ', base)
         values = {'<repo>': REPO, '<N>': '12', '<harness>': 'Claude Code', '<model>': 'Opus 5.5 Medium',
-                  '<skills>': at(skill)}
+                  '<skills>': self.reported(skill)}
         self.assertEqual(set(re.findall('<[^<>]*>', base)) - {"<this skill's folder>"},
                          set(values) | {'<state>', '<step>'}, f'{skill}: a placeholder the agent cannot fill')
         return lambda state, step, *extra: filled(skill, base, dict(values, **{'<state>': state, '<step>': step})) + list(extra)
+
+    def reported(self, skill):
+        """<skills> as the skill's status line tells its agent to fill it (#1663): the version from
+        the source that line names, so a line naming a version the writer refuses fails here."""
+        rule = span(skill, r'`<skills>` lists each skill you ran as `<skill>@<version>`, at (.*?)(?:; |\. )')
+        self.assertIsNotNone(rule, f'{skill}: its status line names no version for <skills>')
+        sources = {'.claude-plugin/plugin.json': skill + '@' + VERSION, 'SKILL.md': at(skill)}
+        named = [value for source, value in sources.items() if f'`{source}`' in rule]
+        self.assertEqual(len(named), 1, f'{skill}: its status line names no one version source')
+        return named[0]
 
     def step(self, argv, *extra):
         env = dict(os.environ, PATH=str(self.dir / 'bin') + ':' + os.environ['PATH'],

@@ -1,0 +1,18 @@
+$ python3 -I skills/launch-fleet/scripts/test-status.py FleetRun
+F
+======================================================================
+FAIL: test_a_synthetic_fleet_run_moves_each_note_in_place_and_the_wake_fixes_or_reports (__main__.FleetRun.test_a_synthetic_fleet_run_moves_each_note_in_place_and_the_wake_fixes_or_reports)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-status.py", line 1093, in test_a_synthetic_fleet_run_moves_each_note_in_place_and_the_wake_fixes_or_reports
+    posted = run(build, 'working', 'claimed the ticket')
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/launch-fleet/scripts/test-status.py", line 1090, in run
+    self.assertEqual(result.returncode, 0, result.stderr)
+AssertionError: 2 != 0 : status.py: refused: skills: a skill or version the installed package does not have
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.049s
+
+FAILED (failures=1)

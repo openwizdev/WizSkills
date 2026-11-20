@@ -875,6 +875,35 @@ class Refuse(Tracker):
         self.assertEqual((why.returncode, why.stdout, self.calls()), (2, '', []))
         self.assertRegex(why.stderr, r'^status\.py: refused: state: ')
 
+    def test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name(self):
+        # catches (#1384): a C:/ or D:/ drive path, an scp-style host:/ path or an api_key:,
+        # access_token: or auth: value reaching the public note, or a refusal that hides
+        # which kind of private text it found.
+        cases = [
+            ('--step', 'copied C:/Users/example/x', 'a machine path'),
+            ('--step', 'worked in D:/work/repo', 'a machine path'),
+            ('--step', 'synced synthetic-host:/srv/data/x', 'a machine path'),
+            ('--harness', 'Codex on box:/var/synthetic/run', 'a machine path'),
+            ('--step', 'set api_key: synthetic-value', 'a credential'),
+            ('--step', 'set access_token: synthetic-value', 'a credential'),
+            ('--step', 'sent auth: synthetic-value', 'a credential'),
+        ]
+        for flag, value, what in cases:
+            with self.subTest(flag=flag, value=value):
+                self.save()
+                (self.dir / 'gh.log').unlink(missing_ok=True)
+                result = self.run_status(*self.args(flag, value))
+                self.assertEqual((result.returncode, result.stdout), (2, ''))
+                self.assertEqual(result.stderr.strip(), f'status.py: refused: {FIELD[flag]}: holds {what}')
+                self.assertEqual(self.calls(), [])
+                self.assertEqual(self.load(), self.world)
+        # Ordinary notes near those shapes still write.
+        for value in ['checked https://github.com/acme/home/pull/1 at 10:30', 'ratio 2:1 on the key path']:
+            with self.subTest(value=value):
+                self.save()
+                result = self.run_status(*self.args('--step', value))
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_the_schema_and_the_writer_agree_on_each_shape(self):
         # catches: the schema the app validates with and the writer accepting different values.
         schema = json.loads(SCHEMA.read_text())

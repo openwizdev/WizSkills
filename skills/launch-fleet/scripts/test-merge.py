@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import unittest
 
+sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('test_post', HERE / 'test-post.py')
 T = importlib.util.module_from_spec(spec)
@@ -52,11 +53,9 @@ class World(T.World):
     def __init__(self, test, others=None, **extra):
         super().__init__(test, **extra)
         (self.dir / 'router.py').write_text(ROUTER)
-        (self.dir / 'bin/gh').write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, self.dir / 'router.py'))
-        self.others = {}
-        for repo, value in (others or {}).items():
-            other = T.World(test, repo=repo, **value)
-            self.others[repo] = other
+        gh = '#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, self.dir / 'router.py')
+        (self.dir / 'bin/gh').write_text(gh)
+        self.others = {repo: T.World(test, repo=repo, **value) for repo, value in (others or {}).items()}
         self.env['FAKE_WORLDS'] = json.dumps({r: str(o.path) for r, o in self.others.items()})
 
 
@@ -361,7 +360,7 @@ class Queue(unittest.TestCase):
         project(w, PRINTS)
         code, out = self.merge(w)
         self.assertEqual(code, 1)
-        self.assertTrue(out.startswith('queued; not recorded ('), out)
+        self.assertTrue(out.startswith('queued; receipt unconfirmed ('), out)
         self.assertEqual(w.bodies(7), [])
         self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
         self.assertEqual(w.bodies(7), [self.receipt()])

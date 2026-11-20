@@ -262,7 +262,7 @@ class Cost(unittest.TestCase):
     def test_an_unavailable_cost_is_posted_unknown_never_zero(self):
         for script, reason in ((REFUSES, 'PR #7 closes more than one ticket'), (None, 'no cost command'),
                                ('print("Ticket #13 cost (PR #7): builder 0 credits")\n', 'unexpected cost output'),
-                               ('import sys\nprint("oops thr_x", file=sys.stderr)\nsys.exit(1)\n',
+                               ('import sys\nprint("oops thr_synx", file=sys.stderr)\nsys.exit(1)\n',
                                 'the cost command failed')):
             with self.subTest(reason=reason):
                 w = self.merged()

@@ -497,16 +497,16 @@ def repair(args, now):
 
     authors, found = guarded('could not read', read)
     login = viewer()
-    report = []
+    reported = 0
     for n, line in found:
         # Without its own login the repair can't tell its label from a person's: it reports.
         if line.endswith(f': no {ASKING_LABEL} label') and login is not None:
             line = guarded(f'could not repair #{n}', lambda: settle(args.repo, n, authors, login))
         if line is not None:
-            report.append(line)
-    for line in report:
-        print(line)
-    return 1 if report else 0
+            # Each line as it is settled: a later failure never hides an earlier change.
+            print(line, flush=True)
+            reported += 1
+    return 1 if reported else 0
 
 
 def main(argv):

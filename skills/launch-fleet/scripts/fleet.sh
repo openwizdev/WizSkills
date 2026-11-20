@@ -1616,8 +1616,11 @@ def unrefused_ready($s): ready($s) and (refused_lately(start.last; "start") | no
 # whose owned paths clash with no running ticket'"'"'s and no ticket admitted
 # before it ($W.selected, worked out once a read, after the fingerprints).
 # An unreadable Owned paths section is never admitted.
+# R1 (review of #1759): an issue whose comment history is not read in full may have
+# a builder, so it holds a colliding start as a running one does.
+def history_unread: .comments.pageInfo.hasPreviousPage == true;
 def running_clash: . as $t | owned_paths as $mine
-  | any(scope_tickets[] | select(.number != $t.number and .state == "OPEN" and building); paths_clash($mine; owned_paths));
+  | any(scope_tickets[] | select(.number != $t.number and .state == "OPEN" and (building or history_unread)); paths_clash($mine; owned_paths));
 def may_start($s): unrefused_ready($s) and (.number as $n | any(($W.selected // [])[]; . == $n));
 # A fleet thread'"'"'s takeover (ClosedWiz#192) starts a builder too, so it keeps
 # every gate of an ordinary start (Sol R1 on #1517): approved and current,
@@ -2091,10 +2094,12 @@ def claim: $W.claim.n as $n | $W.claim.id as $id
               # every open ready ticket of the repository; a clash with one
               # running, or claimed by an older claim, withdraws this one.
               owned_paths as $mine
-              | ([scope_tickets[] | select(.number != $n and .state == "OPEN" and paths_clash($mine; owned_paths))
-                  | select((open_prs | length) > 0 or (start | .state != "queued" and (.state != "claimed" or .rec.id < $id)))
+              | [scope_tickets[] | select(.number != $n and .state == "OPEN" and paths_clash($mine; owned_paths))] as $near
+              | ([$near[] | select(history_unread) | .number] | unique | first) as $u
+              | ([$near[] | select((open_prs | length) > 0 or (start | .state != "queued" and (.state != "claimed" or .rec.id < $id)))
                   | .number] | unique | first) as $m
               | if $mine == null then "withdraw #\($n): its owned paths can'"'"'t be read as the plan approval reads them"
+                elif $u != null then "withdraw #\($n): its owned paths collide with #\($u), whose start history can'"'"'t be read"
                 elif $m != null then "withdraw #\($n): its owned paths collide with #\($m), which is running or claimed first"
                 else "go #\($n)" end
             else "withdraw #\($n): it is not on the frontier now" end end

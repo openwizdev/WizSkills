@@ -17,6 +17,9 @@ run (#1447): a heartbeat before COMMAND starts and every --every seconds (defaul
 while it runs: an edit of note ID as it reads now, only its time set to now, so GitHub's
 updated_at, which alone counts toward the 30-minute lease, is new (a note written this same
 second waits for the next). A beat whose read shows the note done or stopped writes nothing.
+A beat adds needs-info for an asking note as a write does, but never takes it off (#1720): a
+hold a person set, or one the repair put back, stays; the agent's own write leaving asking
+settles the label.
 A failed beat is reported and tried again after 60 seconds (or --every, if shorter). When no
 beat can start 120 seconds before the lease of the last good one ends, or on the fence exit,
 it stops COMMAND's whole process group (SIGTERM, then SIGKILL to any of it left after 10
@@ -75,6 +78,23 @@ PREVIEW = re.compile(r'https://(?![^/:]*\.(?:local|internal|lan|localhost)(?:[:/
                      r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?::[0-9]{1,5})?(?:/[^\s"<>?#@\\]*)?')
 CONTROL = re.compile(r'[\x00-\x1f\x7f]')
 QUOTE = re.compile('["“”]')
+# A web link's host, optional numeric port and path, up to a space, a quote mark or the start
+# of its query or fragment: the query and fragment stay visible to every rule (review R4).
+LINK = re.compile(r'\bhttps?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[^\s"\'<>?#]*)?', re.I)
+# One part of a path: no slash; an escaped character, or a space inside the part, is part of it.
+PART = r'(?:[\w.~+-]|\\.)(?:[\w.~+-]|\\.| (?=[\w.~+-]))*'
+
+
+class OffLinks:
+    """A rule read with each web link's path taken out, so that path never trips it (#1384)."""
+
+    def __init__(self, pattern, flags=0):
+        self.pattern = re.compile(pattern, flags)
+
+    def search(self, text):
+        return self.pattern.search(LINK.sub('link', text))
+
+
 # What a note never holds. A guard fails closed: every thr_ token, synthetic or not.
 PRIVATE = (
     ('a thread id', re.compile(r'(?<![A-Za-z0-9])thr_', re.I)),
@@ -82,14 +102,18 @@ PRIVATE = (
     ('a machine path', re.compile(
         r'(?<![\w.:/~-])(?:~/|/(?:Users|home|root|tmp|var|private|mnt|Volumes|opt|srv|code)(?:/|\b))', re.I)),
     ('a machine path', re.compile(r'(?<![A-Za-z0-9])[A-Za-z]:\\')),
+    # #1384: a C:/ drive or an scp-style host:/, host:'/ or host:~/ path, outside a web link's path.
+    ('a machine path', OffLinks(r'[\w.-]:[\'"]?~?/(?!/)')),
     # R3: any absolute path of two or more parts; a URL's own path is preceded by its host.
-    ('a machine path', re.compile(r'(?<![\w.:/~@%$}\\-])/[\w.~+-]+/[\w.~+-]')),
+    ('a machine path', re.compile(rf'(?<![\w.:/~@%$}}\\-])/{PART}/[\w.~+-]')),
     ('a machine path', re.compile(r'\$\{?HOME\b|%(?:USERPROFILE|HOMEPATH|HOMEDRIVE|APPDATA|LOCALAPPDATA)%', re.I)),
     ('a machine path', re.compile(r'\\\\[\w.$-]+\\')),
     ('a machine path', re.compile(r'\bfile:', re.I)),
     ('a credential', re.compile(
-        r'\b(?:[a-z_]*token|[a-z_]*key|secret|password|passwd|pwd|sig|signature|auth|credentials?)\s*=', re.I)),
+        r'\b(?:[a-z0-9_]*token|[a-z0-9_]*key|secret|password|passwd|pwd|sig|signature|auth|credentials?)\s*=', re.I)),
     ('a credential', re.compile(r'\b(?:password|passwd|secret|token)\s*:\s*\S|\bbearer\s+\S', re.I)),
+    # #1384: a colon-form key, token or auth value, versioned names included, outside a web link's path.
+    ('a credential', OffLinks(r'\b(?:[a-z0-9_]*token|[a-z0-9_]*key|auth)\s*:\s*\S', re.I)),
     ('a credential', re.compile(r'\bgh[pousr]_[A-Za-z0-9]{8,}|\bgithub_pat_|\bAKIA[0-9A-Z]{16}\b'
                                 r'|\bxox[abprs]-|\bsk-[A-Za-z0-9_-]{16,}')),
 )
@@ -149,24 +173,45 @@ def shaped(fields):
 
 
 def bound(skills):
-    """R5: every reported skill is one the installed package lists, at its version.
+    """R5 (#1663): every reported skill is one the installed package lists, at that skill's
+    own installed version: the `version:` line of its SKILL.md front matter (J205).
 
-    The package is the one supplying this script; its manifest is the evidence.
-    Which skills an agent actually ran is its caller's record (AP2).
+    The package is the one supplying this script; its manifest and the listed skills'
+    SKILL.md files are the evidence. Only a write binds: a note already posted reads by its
+    shape alone, whichever version it names. Which skills an agent actually ran is its
+    caller's record (AP2).
     """
     try:
-        manifest = json.loads(MANIFEST.read_text())
-        version, listed = manifest['version'], manifest['skills']
-        if not (isinstance(version, str) and re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version)
-                and isinstance(listed, list) and all(isinstance(x, str) for x in listed)):
+        listed = json.loads(MANIFEST.read_text())['skills']
+        if not (isinstance(listed, list) and all(isinstance(x, str) for x in listed)):
             raise ValueError('malformed')
     except (OSError, ValueError, KeyError, TypeError):
         refuse('skills', 'the installed package has no readable manifest')
     names = {x[len('./skills/'):] for x in listed if x.startswith('./skills/')}
     for item in skills.split(', '):
         name, _, at = item.partition('@')
-        if name not in names or at != version:
-            refuse('skills', f'a skill or version the installed package (openwiz {version}) does not have')
+        if name not in names or at != installed(name):
+            refuse('skills', 'a skill or version the installed package does not have')
+
+
+def installed(name):
+    """NAME's installed version, or None: the one `version:` declaration of the first front-matter
+    block of its SKILL.md (the `---` lines opening the file and the next `---` line), plain or
+    YAML-quoted, as `<major>.<minor>.<patch>` in digits. None when it is missing or declared twice."""
+    try:
+        lines = (MANIFEST.parents[1] / 'skills' / name / 'SKILL.md').read_text().split('\n')
+    except (OSError, UnicodeDecodeError):
+        return None
+    if lines[0] != '---' or '---' not in lines[1:]:
+        return None
+    front = lines[1:lines.index('---', 1)]
+    found = [line[len('version:'):].strip() for line in front if line.startswith('version:')]
+    if len(found) != 1:
+        return None
+    value = found[0]
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
+        value = value[1:-1]
+    return value if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', value) else None
 
 
 def body(fields):
@@ -479,7 +524,11 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
     asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)
     if asking and ASKING_LABEL not in labels:
         gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
-    elif not asking and ASKING_LABEL in labels and asked_last_by(repo, n, login):
+    elif not beat and not asking and ASKING_LABEL in labels and asked_last_by(repo, n, login):
+        # #1720: a heartbeat never takes needs-info off. Under one App login no read binds a
+        # label event to its own POST: another writer's hold (a repair's put-back, triage's
+        # needs-info) can land just before it and look the same. The agent's own write leaving
+        # asking settles the label.
         gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
     print(f'#{n}: {kind} {state}, status note {note_id} {verb}', file=out)
     return fields

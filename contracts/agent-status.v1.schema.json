@@ -21,7 +21,7 @@
       "$ref": "#/$defs/short"
     },
     "skills": {
-      "description": "Every skill the agent ran, each <skill>@<version>, joined by ', '. The shape only: a writer also requires each to be a skill of its installed package at that package's version.",
+      "description": "Every skill the agent ran, each <skill>@<version>, joined by ', '. The shape only: a writer also requires each to be a skill of its installed package at that skill's installed version (its SKILL.md front matter).",
       "type": "string",
       "maxLength": 300,
       "pattern": "^[a-z0-9]+(-[a-z0-9]+)*@[0-9]+\\.[0-9]+\\.[0-9]+(, [a-z0-9]+(-[a-z0-9]+)*@[0-9]+\\.[0-9]+\\.[0-9]+)*$"

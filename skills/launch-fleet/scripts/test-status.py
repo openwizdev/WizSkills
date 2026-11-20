@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -40,10 +41,17 @@ REPO = 'example/tracker'
 BOT = 'openwiz[bot]'
 FLEET_MD = '# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n| Record authors | `openwiz[bot]`, `synthetic-owner` |\n'
 MARKER = '<!-- openwiz:status v1 -->'
-# The installed package supplying status.py (this checkout). Inputs name its real
-# version, so a release bump never turns a good value into an invented one.
+# The installed package supplying status.py (this checkout). Inputs name each skill's real
+# installed version (its SKILL.md front matter, #1663), so a release bump never turns a good
+# value into an invented one.
 VERSION = json.loads((ROOT / '.claude-plugin/plugin.json').read_text())['version']
-SKILLS = 'build-ticket@' + VERSION
+
+
+def at(name):
+    return name + '@' + re.search(r'(?m)^version: (.+)$', (ROOT / 'skills' / name / 'SKILL.md').read_text()).group(1)
+
+
+SKILLS = at('build-ticket')
 
 FAKE_GH = r'''
 import fcntl, json, os, sys
@@ -297,13 +305,13 @@ class Tracker(unittest.TestCase):
     def writes(self):
         return [(c['method'], c['path']) for c in self.calls() if c['method'] != 'GET' and c['path'] != 'graphql']
 
-    def run_status(self, *args):
+    def run_status(self, *args, script=SCRIPT):
         env = dict(os.environ, PATH=str(self.dir / 'bin') + ':' + os.environ['PATH'],
                    FAKE_GH_WORLD=str(self.dir / 'world.json'), FAKE_GH_LOG=str(self.dir / 'gh.log'),
                    FAKE_GH_PAGE=self.page)
         for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_REPO'):
             env.pop(key, None)
-        return subprocess.run([sys.executable, '-I', str(SCRIPT), *args], env=env,
+        return subprocess.run([sys.executable, '-I', str(script), *args], env=env,
                               capture_output=True, text=True, timeout=60)
 
     def write(self, state, step, time, *extra, agent='builder'):
@@ -335,7 +343,7 @@ class Write(Tracker):
         pr = 'https://github.com/example/skills/pull/31'
         back = self.write('working', 'handed back; CI is green', '2030-01-02T05:00:00Z', '--note', '9001',
                           '--pr', pr, '--preview', 'https://31.example-site.pages.dev',
-                          '--skills', f'build-ticket@{VERSION}, diagnose@{VERSION}')
+                          '--skills', f"{SKILLS}, {at('diagnose')}")
         self.assertEqual((back.returncode, back.stdout), (0, '#12: builder working, status note 9001 edited\n'))
         world = self.load()
         self.assertEqual(self.ticket(world)['labels'], ['ready-for-agent'])
@@ -343,7 +351,7 @@ class Write(Tracker):
         self.assertEqual(self.ticket(world)['comments'][1]['body'], note())
         self.assertEqual(self.ticket(world)['comments'][3]['body'],
                          note(step='handed back; CI is green', time='2030-01-02T05:00:00Z', pr=pr,
-                              preview='https://31.example-site.pages.dev', skills=f'build-ticket@{VERSION}, diagnose@{VERSION}'))
+                              preview='https://31.example-site.pages.dev', skills=f"{SKILLS}, {at('diagnose')}"))
         self.assertEqual(self.writes(), [
             ('POST', 'repos/example/tracker/issues/12/comments'),
             ('PATCH', 'repos/example/tracker/issues/comments/9001'),
@@ -509,6 +517,19 @@ class Claims(Tracker):
                     self.assertEqual(self.load(), self.world)
                 else:
                     self.assertEqual(self.writes(), [('POST', 'repos/example/tracker/issues/12/comments')])
+
+    def test_a_note_written_before_per_skill_versions_still_reads(self):
+        # catches (#1663): a reader that binds versions too, so every note written at the
+        # bundle's version reads as unknown: its claim ignored, and its own agent fenced out.
+        old = note(skills='build-ticket@0.1.2, launch-fleet@0.1.2')
+        self.ticket(self.world)['comments'].append(comment(104, BOT, old))
+        self.save()
+        result = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
+        self.assertEqual((result.returncode, result.stdout, self.writes()), (3, '', []), result.stderr)
+        result = self.write('working', 'resumed the build', '2030-01-02T03:05:00Z', '--note', '104')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')])
+        self.assertEqual(self.ticket()['comments'][3]['body'], note(step='resumed the build', time='2030-01-02T03:05:00Z'))
 
     def test_the_fence_stops_a_writer_whose_note_is_no_longer_live(self):
         # catches: an agent writing on after its claim was stopped, lost or taken by another kind,
@@ -776,7 +797,7 @@ GOOD_SHAPE = [
     ('--why', 'lease expired'),
     ('--step', 'x' * 300),
     ('--model', 'm' * 60),
-    ('--skills', f'build-ticket@{VERSION}, review-ticket@{VERSION}'),
+    ('--skills', f"{SKILLS}, {at('review-ticket')}"),
     ('--skills', ', '.join([SKILLS] * FITS)),
     ('--step', 'checked https://github.com/acme/home/pull/1 and a/home/b'),
     ('--step', 'changed skills/launch-fleet/scripts/status.py and/or its test'),
@@ -786,10 +807,10 @@ GOOD_SHAPE = [
 ]
 # R5: well-formed (the schema takes them) but not what the installed package holds.
 UNBOUND = [
-    'made-up-skill@' + VERSION,
+    'made-up-skill@' + SKILLS.split('@')[1],
     'build-ticket@9.9.9',
-    f'build-ticket@{VERSION}, launch-fleet@10.20.30',
-    'build-ticket@' + VERSION + '0',
+    f'{SKILLS}, launch-fleet@10.20.30',
+    SKILLS + '0',
 ]
 FIELD = {'--agent': 'agent', '--state': 'state', '--why': 'state', '--harness': 'harness', '--model': 'model',
          '--skills': 'skills',
@@ -848,8 +869,82 @@ class Refuse(Tracker):
                 self.assertEqual((result.returncode, result.stdout, self.calls()), (2, '', []))
                 self.assertIn('installed package', result.stderr)
         listed = sorted(path.rsplit('/', 1)[1] for path in manifest['skills'])
-        result = self.run_status(*self.args('--skills', ', '.join(f'{name}@{VERSION}' for name in listed[:5])))
+        result = self.run_status(*self.args('--skills', ', '.join(at(name) for name in listed[:5])))
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def package(self, skills, folder):
+        """A synthetic installed package under FOLDER: bundle 0.1.2 listing build-ticket,
+        launch-fleet and no-front-matter, each SKILLS name's SKILL.md as its text (then a
+        body), and the writer's own skill folder as installed. Returns its scripts folder."""
+        package = self.dir / folder
+        (package / '.claude-plugin').mkdir(parents=True)
+        (package / '.claude-plugin/plugin.json').write_text(json.dumps({
+            'name': 'openwiz', 'version': '0.1.2',
+            'skills': ['./skills/build-ticket', './skills/launch-fleet', './skills/no-front-matter']}))
+        shutil.copytree(HERE.parent, package / 'skills/launch-fleet', ignore=shutil.ignore_patterns('__pycache__'))
+        shutil.copytree(ROOT / 'contracts', package / 'contracts')
+        for name, head in skills.items():
+            (package / 'skills' / name).mkdir(parents=True, exist_ok=True)
+            (package / 'skills' / name / 'SKILL.md').write_text(f'{head}\n# {name}\n')
+        return package / 'skills/launch-fleet/scripts'
+
+    def test_each_skill_is_bound_to_its_own_installed_version(self):
+        # catches (#1527): a truthful note refused because a skill's own front-matter version
+        # differs from the bundle's, or one skill's version accepted for another skill.
+        scripts = self.package({
+            'build-ticket': '---\nname: build-ticket\nversion: 0.2.0\n---\n',
+            'launch-fleet': '---\nname: launch-fleet\nversion: 0.3.1\n---\n',
+            # Listed but not installed: no folder for triage, and a
+            # skill whose front matter has no version.
+            'no-front-matter': '---\nname: no-front-matter\n---\n',
+            # Installed folder, but the manifest doesn't list it.
+            'unlisted': '---\nname: unlisted\nversion: 0.2.0\n---\n'}, 'package')
+        for value in ('build-ticket@0.1.2', 'launch-fleet@0.2.0', 'build-ticket@0.2.0, launch-fleet@0.2.0',
+                      'triage@0.2.0', 'unlisted@0.2.0', 'no-front-matter@0.1.2', 'no-front-matter@0.2.0'):
+            with self.subTest(skills=value):
+                # A fresh tracker each time, so one wrongly accepted value can't hide another.
+                self.save()
+                (self.dir / 'gh.log').unlink(missing_ok=True)
+                result = self.run_status(*self.args('--skills', value), script=scripts / 'status.py')
+                self.assertEqual((result.returncode, result.stdout, self.calls()), (2, '', []))
+                self.assertIn('installed', result.stderr)
+        self.save()
+        result = self.run_status(*self.args('--skills', 'build-ticket@0.2.0, launch-fleet@0.3.1'),
+                                 script=scripts / 'status.py')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        posted = [c for c in self.ticket()['comments'] if c['author'] == BOT]
+        self.assertEqual(len(posted), 1)
+        self.assertIn('\nskills: build-ticket@0.2.0, launch-fleet@0.3.1\n', posted[0]['body'])
+
+    def test_a_skill_version_is_read_only_from_one_declaration_in_its_first_front_matter(self):
+        # catches (#1663 R1): a YAML-quoted version (which the skill rules and the release
+        # accept) refused; a version read from the body past an empty front matter or from a
+        # later block; or the first of two declarations taken as the skill's version.
+        cases = [
+            ('double-quoted', '---\nname: build-ticket\nversion: "0.2.0"\n---\n', '0.2.0'),
+            ('single-quoted', "---\nname: build-ticket\nversion: '0.2.0'\n---\n", '0.2.0'),
+            ('empty front matter, version in the body', '---\n---\nversion: 0.2.0\n---\n', None),
+            ('version in a second block', '---\nname: build-ticket\n---\n---\nversion: 0.2.0\n---\n', None),
+            ('declared twice', '---\nname: build-ticket\nversion: 0.2.0\nversion: 0.3.0\n---\n', None),
+            ('declared twice, the same', '---\nname: build-ticket\nversion: 0.2.0\nversion: 0.2.0\n---\n', None),
+            ('mismatched quotes', '---\nname: build-ticket\nversion: "0.2.0\'\n---\n', None),
+            ('no closing line', '---\nname: build-ticket\nversion: 0.2.0\n', None),
+        ]
+        for i, (name, text, version) in enumerate(cases):
+            with self.subTest(name):
+                scripts = self.package({'build-ticket': text}, f'package-{i}')
+                for value in ('build-ticket@0.2.0', 'build-ticket@0.3.0'):
+                    self.save()
+                    (self.dir / 'gh.log').unlink(missing_ok=True)
+                    result = self.run_status(*self.args('--skills', value), script=scripts / 'status.py')
+                    if value == f'build-ticket@{version}':
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        posted = [c for c in self.ticket()['comments'] if c['author'] == BOT]
+                        self.assertEqual(len(posted), 1)
+                        self.assertIn(f'\nskills: {value}\n', posted[0]['body'])
+                    else:
+                        self.assertEqual((result.returncode, result.stdout, self.calls()), (2, '', []), value)
+                        self.assertIn('installed', result.stderr)
 
     def test_private_or_bad_text_is_refused_before_any_call(self):
         # catches: a thread id, machine path (any absolute one), CloudRoom id, credential,
@@ -874,6 +969,63 @@ class Refuse(Tracker):
         why = self.run_status(*self.args('--state', 'working') + ['--why', 'lease expired'])
         self.assertEqual((why.returncode, why.stdout, self.calls()), (2, '', []))
         self.assertRegex(why.stderr, r'^status\.py: refused: state: ')
+
+    def test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name(self):
+        # catches (#1384): a C:/ or D:/ drive path, an scp-style host:/ path or an api_key:,
+        # access_token: or auth: value reaching the public note, or a refusal that hides
+        # which kind of private text it found.
+        cases = [
+            ('--step', 'copied C:/Users/example/x', 'a machine path'),
+            ('--step', 'worked in D:/work/repo', 'a machine path'),
+            ('--step', 'synced synthetic-host:/srv/data/x', 'a machine path'),
+            ('--harness', 'Codex on box:/var/synthetic/run', 'a machine path'),
+            ('--step', 'set api_key: synthetic-value', 'a credential'),
+            ('--step', 'set access_token: synthetic-value', 'a credential'),
+            ('--step', 'sent auth: synthetic-value', 'a credential'),
+            # Review R1: a remote or local path whose parts are quoted, escaped or hold a space.
+            ('--step', "synced synthetic-host:'/release files/notes.txt'", 'a machine path'),
+            ('--step', r'synced synthetic-host:/release\ files/notes.txt', 'a machine path'),
+            ('--step', 'synced synthetic-host:~/notes', 'a machine path'),
+            ('--step', "ran it in '/release files/notes.txt'", 'a machine path'),
+            ('--step', r'ran it in /release\ files/notes.txt', 'a machine path'),
+            # Review R3: a versioned credential name, in either form.
+            ('--step', 'updated oauth2_token: synthetic-value', 'a credential'),
+            ('--step', 'updated oauth2_token=synthetic-value', 'a credential'),
+            ('--step', 'set aws2_key: synthetic-value', 'a credential'),
+            # Review R4: a credential in a web link's query or fragment, outside its path.
+            ('--step', 'checked https://example.com/render?debug=api_key:synthetic-value', 'a credential'),
+            ('--step', 'checked https://example.com/x?api_key:synthetic-value', 'a credential'),
+            ('--step', 'checked https://example.com/docs/auth:overview#access_token:synthetic-value',
+             'a credential'),
+            ('--step', 'synced https://example.com/a?from=synthetic-host:/srv/data/x', 'a machine path'),
+        ]
+        for flag, value, what in cases:
+            with self.subTest(flag=flag, value=value):
+                self.save()
+                (self.dir / 'gh.log').unlink(missing_ok=True)
+                result = self.run_status(*self.args(flag, value))
+                self.assertEqual((result.returncode, result.stdout), (2, ''))
+                self.assertEqual(result.stderr.strip(), f'status.py: refused: {FIELD[flag]}: holds {what}')
+                self.assertEqual(self.calls(), [])
+                self.assertEqual(self.load(), self.world)
+        # Ordinary notes near those shapes still write, and (review R2) a note holding a public
+        # link with a colon in its path writes and can be edited again in place.
+        good = [('--step', 'checked https://github.com/acme/home/pull/1 at 10:30'),
+                ('--step', 'ratio 2:1 on the key path'),
+                ('--step', 'opened https://example.com/docs/auth:overview and https://example.com/a:/b'),
+                ('--preview', 'https://example.com/releases:/web/current'),
+                ('--preview', 'https://example.com/docs/auth:overview'),
+                ('--preview', 'https://example.com/x/c:/api_key:v2'),
+                ('--step', 'opened https://example.com/docs/auth:overview?page=2#setup')]
+        for flag, value in good:
+            with self.subTest(flag=flag, value=value):
+                self.save()
+                first = self.run_status(*self.args(flag, value))
+                self.assertEqual((first.returncode, first.stdout),
+                                 (0, '#12: builder working, status note 9001 posted\n'), first.stderr)
+                again = self.run_status(*self.args(flag, value), '--note', '9001')
+                self.assertEqual((again.returncode, again.stdout),
+                                 (0, '#12: builder working, status note 9001 edited\n'), again.stderr)
 
     def test_the_schema_and_the_writer_agree_on_each_shape(self):
         # catches: the schema the app validates with and the writer accepting different values.
@@ -949,7 +1101,7 @@ class Check(Tracker):
 
 SKILLS_DIR = ROOT / 'skills'
 # launch-fleet's status step, filled as the fleet fills it (#1592).
-FLEET = {'<owner>/<repo>': REPO, '<harness>': 'Codex', '<model>': 'Sol 6.1 High', '<skills>': 'launch-fleet@' + VERSION}
+FLEET = {'<owner>/<repo>': REPO, '<harness>': 'Codex', '<model>': 'Sol 6.1 High', '<skills>': at('launch-fleet')}
 LABELS = {'ready-for-agent', 'needs-info'}
 
 
@@ -978,10 +1130,20 @@ class FleetRun(Tracker):
         self.assertIsNotNone(base, f'{skill} has no one status write line')
         self.assertIn(f' --agent {kind} ', base)
         values = {'<repo>': REPO, '<N>': '12', '<harness>': 'Claude Code', '<model>': 'Opus 5.5 Medium',
-                  '<skills>': f'{skill}@{VERSION}'}
+                  '<skills>': self.reported(skill)}
         self.assertEqual(set(re.findall('<[^<>]*>', base)) - {"<this skill's folder>"},
                          set(values) | {'<state>', '<step>'}, f'{skill}: a placeholder the agent cannot fill')
         return lambda state, step, *extra: filled(skill, base, dict(values, **{'<state>': state, '<step>': step})) + list(extra)
+
+    def reported(self, skill):
+        """<skills> as the skill's status line tells its agent to fill it (#1663): the version from
+        the source that line names, so a line naming a version the writer refuses fails here."""
+        rule = span(skill, r'`<skills>` lists each skill you ran as `<skill>@<version>`, at (.*?)(?:; |\. )')
+        self.assertIsNotNone(rule, f'{skill}: its status line names no version for <skills>')
+        sources = {'.claude-plugin/plugin.json': skill + '@' + VERSION, 'SKILL.md': at(skill)}
+        named = [value for source, value in sources.items() if f'`{source}`' in rule]
+        self.assertEqual(len(named), 1, f'{skill}: its status line names no one version source')
+        return named[0]
 
     def step(self, argv, *extra):
         env = dict(os.environ, PATH=str(self.dir / 'bin') + ':' + os.environ['PATH'],
@@ -1078,7 +1240,9 @@ class FleetRun(Tracker):
 
 # #1447: the command under status.py run. It records its pid; `long` waits for the first beat
 # and two more (or 30 seconds) and exits 7, and the others wait for the first beat, then change
-# note 104 as another writer would, and keep running until stopped. Every value is synthetic.
+# note 104 as another writer would, and keep running until stopped; `resumed` and `answered`
+# (the agent's own status write, the command line it is given) turn an asking note working and
+# exit 0 after the next beat. Every value is synthetic.
 ACTOR = r'''
 import fcntl, json, os, sys, time
 from datetime import datetime, timedelta, timezone
@@ -1111,10 +1275,24 @@ with open(world + '.lock', 'w') as lock:
         # The note lapsed (a long stall) and a newer builder claimed the ticket.
         mine['updated'] = stamp(40)
         it['comments'].append({'id': 105, 'author': 'openwiz[bot]', 'body': sys.argv[3], 'updated': stamp(0)})
+    elif mode == 'answered':
+        pass
+    elif mode == 'resumed':
+        # The agent got its answer and wrote working over its asking note.
+        mine['body'] = mine['body'].replace('state: asking', 'state: working'); mine['updated'] = stamp(0)
     else:
         mine['body'] = mine['body'].replace('state: working', 'state: ' + mode); mine['updated'] = stamp(0)
     json.dump(w, open(world, 'w'))
     open(out + '.mark', 'w').write(str(calls()))
+if mode == 'answered':
+    # The agent got its answer and resumed as build-ticket says: its own status write, working.
+    import subprocess
+    subprocess.run([sys.executable, '-I'] + sys.argv[3:], check=True, stdout=subprocess.DEVNULL)
+if mode in ('resumed', 'answered'):
+    end, beats = time.monotonic() + 30, calls('"PATCH"')
+    while calls('"PATCH"') < beats + 1 and time.monotonic() < end:
+        time.sleep(0.05)
+    sys.exit(0)
 time.sleep(60)
 '''
 
@@ -1173,6 +1351,58 @@ class Run(Tracker):
         for stamp in (beat, mine['updated']):  # the beat's time, and GitHub's updated_at
             self.assertLess(abs((datetime.now(timezone.utc) - datetime.strptime(
                 stamp, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)).total_seconds()), 60)
+
+    def test_a_run_s_label_is_cleared_by_its_agent_s_own_resume(self):
+        # catches: a needs-info the run's beat added staying on after its agent writes working
+        # (the label stuck after the answer), or a later beat adding it again.
+        self.asking_run()
+        result, _ = self.run_command('answered', str(SCRIPT), 'write', '--repo', REPO, '--ticket', '12',
+                                     '--agent', 'builder', '--state', 'working', '--harness', 'Claude Code',
+                                     '--model', 'Opus 5.5 Medium', '--skills', SKILLS, '--step', 'got the answer',
+                                     '--note', '104')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+        self.assertEqual([(e['event'], e['actor']['login']) for e in self.ticket()['events']],
+                         [('labeled', BOT), ('unlabeled', BOT)])
+        self.assertIn('state: working', self.ticket()['comments'][3]['body'])
+
+    def asking_run(self, **race):
+        """Note 104 asks with no needs-info; the run's first beat adds it; RACE lands as named."""
+        self.ticket(self.world)['comments'][3] = comment(104, BOT, note(state='asking'), minutes=25)
+        self.world.update(race)
+
+    def test_a_heartbeat_never_takes_off_a_same_app_hold_that_landed_before_its_post(self):
+        # catches: a heartbeat taking another same-App writer's application (a put-back, or
+        # triage's hold) landing just before its own no-op POST for its own, and deleting it
+        # once the note is working (#83 R1).
+        hold = {'issue': 12, 'label': 'needs-info', 'by': BOT}
+        self.asking_run(race_label=[hold])
+        result, _ = self.run_command('resumed')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual([(e['event'], e['actor']['login']) for e in self.ticket()['events']], [('labeled', BOT)])
+
+    def test_a_failed_event_read_after_the_first_beat_label_still_starts_the_command(self):
+        # catches: a temporary event-read error after the first beat's label write aborting the
+        # run before its command starts (#83 R2).
+        failing = {'fail_once': f'GET repos/{REPO}/issues/12/events?per_page=100&page=1'}
+        self.asking_run(race_label=[failing])
+        result, _ = self.run_command('resumed')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(Path(self.out + '.pid').exists())
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
+    def test_a_hold_reapplied_as_the_heartbeat_clears_its_label_survives_a_failed_read(self):
+        # catches: a heartbeat whose DELETE takes a person's reapplied needs-info and, on a
+        # temporary event-read error, never puts it back (#83 R3).
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                 {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'},
+                 {'fail_once': f'GET repos/{REPO}/issues/12/events?per_page=100&page=1'}]
+        self.asking_run(race_delete=again)
+        result, _ = self.run_command('resumed')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertNotIn(('DELETE', f'repos/{REPO}/issues/12/labels/needs-info'), self.writes())
 
     def test_run_stops_the_command_when_a_newer_builder_holds_the_claim(self):
         # catches: a heartbeat that keeps the work running, or takes the ticket back, after its
@@ -1441,6 +1671,22 @@ class WakeRepair(Tracker):
         # The next wake leaves the person's hold alone.
         self.assertEqual(self.wake(), (0, []))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
+    def test_a_working_heartbeat_after_the_repair_put_back_a_hold_keeps_it(self):
+        # catches: a heartbeat taking off a person's needs-info that the repair put back under the
+        # same App login, because the label's last application looks like its own (#1712).
+        resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                 {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
+        self.asking_on_12(race_label=[resume], race_delete=again)
+        self.wake()
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        before = self.timeline()
+        beat = self.run_status('run', '--repo', REPO, '--ticket', '12', '--agent', 'builder', '--note', '104',
+                               '--', sys.executable, '-I', '-c', 'pass')
+        self.assertEqual(beat.returncode, 0, beat.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual(self.timeline(), before)
 
     def test_a_person_who_reapplies_needs_info_after_the_repair_added_it_keeps_it(self):
         # catches: the repair taking off a needs-info whose last application is a person's,

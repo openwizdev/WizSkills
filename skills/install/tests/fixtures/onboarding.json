@@ -1,0 +1,1124 @@
+{
+ "about": "Three recorded onboarding roads (#1358), one per first choice, synthetic throughout. \"say\" turns are the teacher's lines (teach.md) at their moments; tool turns run the packaged helper against recording fakes; world turns change the synthetic GitHub as the user or the fleet would.",
+ "journeys": [
+  {
+   "name": "small-change",
+   "choice": "A small change in a repository I have.",
+   "repo": "synthetic-owner/synthetic-notes",
+   "host": "local",
+   "signed_out": true,
+   "existing": true,
+   "turns": [
+    {
+     "step": "explain",
+     "say": "up-front",
+     "agent": "OpenWiz is a factory of coding agents: they turn one thing you want into small tickets, build each one, review each other's work and merge it."
+    },
+    {
+     "step": "explain",
+     "say": "up-front",
+     "agent": "First I ask you a few short questions, you say yes here when the summary matches, and the agents build it, aiming for your first merged pull request within the hour."
+    },
+    {
+     "step": "explain",
+     "say": "up-front",
+     "agent": "Watch everything at openwiz.dev/app; nothing is created, written, spent or published without your yes here in this chat."
+    },
+    {
+     "step": "explain",
+     "say": "install-done",
+     "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is on this machine. Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
+    },
+    {
+     "step": "where",
+     "tool": [
+      "where",
+      "--agents",
+      "local"
+     ],
+     "exit": 5,
+     "world": "signed_out"
+    },
+    {
+     "step": "where",
+     "say": "missing",
+     "agent": "You need a GitHub sign-in first: open https://github.com/login and sign in yourself, because I never touch your login. Say done here when you're in."
+    },
+    {
+     "step": "where",
+     "user": "Done."
+    },
+    {
+     "step": "where",
+     "world": "signed_in"
+    },
+    {
+     "step": "where",
+     "tool": [
+      "where",
+      "--agents",
+      "local"
+     ],
+     "exit": 12
+    },
+    {
+     "step": "where",
+     "say": "where",
+     "agent": "Your agents need a place to run: this machine, with Claude Code you're already signed into, or Cloudroom or another cloud host to run many at once. Which would you like?"
+    },
+    {
+     "step": "where",
+     "user": "This machine.",
+     "answers": {
+      "agents": "local"
+     }
+    },
+    {
+     "step": "where",
+     "tool": [
+      "where",
+      "--agents",
+      "local",
+      "--yes"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "choose",
+     "agent": "Three ways to start: a small change in a repository you have, a fresh project from your idea, or something you have always wanted to build. Which one, and do you want a few ideas?"
+    },
+    {
+     "step": "choose",
+     "user": "A small change in a repository I have. Ideas, please.",
+     "answers": {
+      "choice": "A small change in a repository I have."
+     }
+    },
+    {
+     "step": "choose",
+     "agent": "A few ideas: A clearer README; One missing test; A friendlier error message. Pick one, change one or bring your own.",
+     "ideas": [
+      "A clearer README",
+      "One missing test",
+      "A friendlier error message"
+     ]
+    },
+    {
+     "step": "choose",
+     "user": "A friendlier error message."
+    },
+    {
+     "step": "choose",
+     "agent": "It goes in synthetic-owner/synthetic-notes, and the fleet opens branches and pull requests there. Use it?",
+     "gate": "write"
+    },
+    {
+     "step": "choose",
+     "user": "Yes.",
+     "permits": [
+      "write"
+     ]
+    },
+    {
+     "step": "connect",
+     "setup": "personal_login"
+    },
+    {
+     "step": "connect",
+     "agent": "Setup is next for synthetic-owner/synthetic-notes: sign in to GitHub in your browser yourself, prepare the project and make its private brain. Each effect is shown first; go ahead?",
+     "gate": "setup"
+    },
+    {
+     "step": "connect",
+     "user": "Go ahead; skip the App. Claude Code, syn-claude-model-01, high.",
+     "permits": [
+      "setup"
+     ],
+     "answers": {
+      "app_choice": "skip",
+      "harness": "claude-code",
+      "model": "syn-claude-model-01",
+      "effort": "high"
+     }
+    },
+    {
+     "step": "connect",
+     "tool": [
+      "continue",
+      "--explained"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "setting",
+     "tool": [
+      "setting"
+     ],
+     "exit": 12
+    },
+    {
+     "step": "setting",
+     "agent": "This writes one file, docs/agents/host.md (Host: local), on a new branch of synthetic-owner/synthetic-notes and opens one pull request for you to merge. Open it?",
+     "gate": "write"
+    },
+    {
+     "step": "setting",
+     "user": "Yes.",
+     "permits": [
+      "write"
+     ]
+    },
+    {
+     "step": "setting",
+     "tool": [
+      "setting",
+      "--yes"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "setting",
+     "agent": "The host setting pull request is open; merge it on GitHub yourself when you are ready."
+    },
+    {
+     "step": "setting",
+     "world": "merge_setting"
+    },
+    {
+     "step": "setting",
+     "user": "Merged."
+    },
+    {
+     "step": "grill",
+     "say": "grill-start",
+     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+    },
+    {
+     "step": "grill",
+     "agent": "Q1: Which message: the failed-save one (recommended)? Q2: Should it name the file (recommended)?"
+    },
+    {
+     "step": "grill",
+     "user": "Your recommendations."
+    },
+    {
+     "step": "grill",
+     "agent": "Summary: the failed-save message names the file, says what went wrong and what to do next, with a test."
+    },
+    {
+     "step": "grill",
+     "say": "grill-summary",
+     "agent": "That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off."
+    },
+    {
+     "step": "grill",
+     "user": "Yes."
+    },
+    {
+     "step": "grill",
+     "tool": [
+      "grill",
+      "--confirmed",
+      "https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-71"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "agents",
+     "tool": [
+      "choose",
+      "--from-setup"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "plan",
+     "plan": {
+      "spec": {
+       "number": 900,
+       "title": "0.1.0 spec: friendlier save error",
+       "body": "Synthetic spec: 0.1.0 spec: friendlier save error.\n"
+      },
+      "tickets": [
+       {
+        "number": 901,
+        "title": "E1: the save error says what went wrong",
+        "blockers": []
+       },
+       {
+        "number": 902,
+        "title": "E2: the save error says what to do next",
+        "blockers": []
+       },
+       {
+        "number": 903,
+        "title": "E3: a test for both messages",
+        "blockers": [
+         901,
+         902
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "step": "plan",
+     "approve": "machine"
+    },
+    {
+     "step": "plan",
+     "say": "spec",
+     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. Watch its short video at https://openwiz.dev/app/videos/syn-900 or see it at openwiz.dev/app; nothing for you to do while the plan checks itself."
+    },
+    {
+     "step": "plan",
+     "tool": [
+      "spec",
+      "--spec",
+      "900",
+      "--repo",
+      "synthetic-owner/synthetic-notes"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "launch",
+     "tool": [
+      "launch",
+      "--spec",
+      "900"
+     ],
+     "exit": 0,
+     "spawn": 0
+    },
+    {
+     "step": "launch",
+     "say": "fleet-start",
+     "agent": "The plan passed its checks, so the fleet started: 2 builders, each on one small ticket. Watch them work at openwiz.dev/app; nothing for you to do until the first merge."
+    },
+    {
+     "step": "watch",
+     "world": "fleet_record"
+    },
+    {
+     "step": "watch",
+     "tool": [
+      "progress",
+      "--spec",
+      "900"
+     ],
+     "exit": 0,
+     "progress": [
+      "in_review",
+      "building",
+      "blocked"
+     ]
+    },
+    {
+     "step": "watch",
+     "say": "pr-opened",
+     "agent": "A builder opened https://github.com/synthetic-owner/synthetic-notes/pull/911 for #901 E1: the save error says what went wrong: the change plus its proof that it works. See it at openwiz.dev/app; another agent reviews it next, nothing needed from you."
+    },
+    {
+     "step": "watch",
+     "tool": [
+      "progress",
+      "--spec",
+      "900"
+     ],
+     "exit": 0,
+     "progress": [
+      "in_review",
+      "building",
+      "blocked"
+     ]
+    },
+    {
+     "step": "watch",
+     "say": "reviewed",
+     "agent": "https://github.com/synthetic-owner/synthetic-notes/pull/911 was reviewed: approved, so it merges next. Follow it at openwiz.dev/app; still nothing for you to do."
+    },
+    {
+     "step": "watch",
+     "world": "merged",
+     "pull": {
+      "number": 911,
+      "closes": 901,
+      "title": "#901: E1: the save error says what went wrong"
+     }
+    },
+    {
+     "step": "watch",
+     "tool": [
+      "progress",
+      "--spec",
+      "900"
+     ],
+     "exit": 0,
+     "progress": [
+      "merged",
+      "building",
+      "blocked"
+     ]
+    },
+    {
+     "step": "watch",
+     "tool": [
+      "first-merge",
+      "--pr",
+      "911"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "watch",
+     "say": "merged",
+     "agent": "https://github.com/synthetic-owner/synthetic-notes/pull/911 merged: #901: E1: the save error says what went wrong. That's your first build, now in synthetic-owner/synthetic-notes; see it at openwiz.dev/app, where the other tickets keep going without you."
+    },
+    {
+     "step": "watch",
+     "say": "offer",
+     "agent": "From here this chat can stay on as synthetic-notes's orchestrator, start a new project with you, or keep building this one. Which would you like? Come back anytime: open openwiz.dev/app or ask me where we are."
+    },
+    {
+     "step": "watch",
+     "user": "Keep building."
+    }
+   ]
+  },
+  {
+   "name": "fresh-project",
+   "choice": "A fresh project from my idea.",
+   "repo": "synthetic-owner/synthetic-todo",
+   "host": "cloud",
+   "signed_out": false,
+   "existing": false,
+   "turns": [
+    {
+     "step": "explain",
+     "say": "up-front",
+     "agent": "OpenWiz is a factory of coding agents: they turn one thing you want into small tickets, build each one, review each other's work and merge it."
+    },
+    {
+     "step": "explain",
+     "say": "up-front",
+     "agent": "First I ask you a few short questions, you say yes here when the summary matches, and the agents build it, aiming for your first merged pull request within the hour."
+    },
+    {
+     "step": "explain",
+     "say": "up-front",
+     "agent": "Watch everything at openwiz.dev/app; nothing is created, written, spent or published without your yes here in this chat."
+    },
+    {
+     "step": "explain",
+     "say": "install-done",
+     "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is on this machine. Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
+    },
+    {
+     "step": "where",
+     "tool": [
+      "where",
+      "--agents",
+      "local"
+     ],
+     "exit": 12
+    },
+    {
+     "step": "where",
+     "say": "where",
+     "agent": "Your agents need a place to run: this machine, with Claude Code you're already signed into, or Cloudroom or another cloud host to run many at once. Which would you like?"
+    },
+    {
+     "step": "where",
+     "user": "Cloudroom, please.",
+     "answers": {
+      "agents": "cloud"
+     }
+    },
+    {
+     "step": "where",
+     "tool": [
+      "where",
+      "--agents",
+      "cloud",
+      "--yes"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "choose",
+     "agent": "Three ways to start: a small change in a repository you have, a fresh project from your idea, or something you have always wanted to build. Which one, and do you want a few ideas?"
+    },
+    {
+     "step": "choose",
+     "user": "A fresh project from my idea. Ideas, please.",
+     "answers": {
+      "choice": "A fresh project from my idea."
+     }
+    },
+    {
+     "step": "choose",
+     "agent": "A few ideas: A to-do app; A personal site; A unit or tip converter. Pick one, change one or bring your own.",
+     "ideas": [
+      "A to-do app",
+      "A personal site",
+      "A unit or tip converter"
+     ]
+    },
+    {
+     "step": "choose",
+     "user": "A to-do app."
+    },
+    {
+     "step": "choose",
+     "tool": [
+      "create-repo",
+      "--repo",
+      "synthetic-owner/synthetic-todo"
+     ],
+     "exit": 12
+    },
+    {
+     "step": "choose",
+     "agent": "This creates one private GitHub repository, synthetic-owner/synthetic-todo, with your gh identity and one README commit. Create it?",
+     "gate": "create_repository"
+    },
+    {
+     "step": "choose",
+     "user": "Yes.",
+     "permits": [
+      "create_repository"
+     ]
+    },
+    {
+     "step": "choose",
+     "tool": [
+      "create-repo",
+      "--repo",
+      "synthetic-owner/synthetic-todo",
+      "--yes"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "connect",
+     "setup": "personal_login"
+    },
+    {
+     "step": "connect",
+     "agent": "Setup is next for synthetic-owner/synthetic-todo: sign in to GitHub in your browser yourself, prepare the project and make its private brain. Each effect is shown first; go ahead?",
+     "gate": "setup"
+    },
+    {
+     "step": "connect",
+     "user": "Go ahead; skip the App. Claude Code, syn-claude-model-01, high.",
+     "permits": [
+      "setup"
+     ],
+     "answers": {
+      "app_choice": "skip",
+      "harness": "claude-code",
+      "model": "syn-claude-model-01",
+      "effort": "high"
+     }
+    },
+    {
+     "step": "connect",
+     "tool": [
+      "continue",
+      "--explained"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "setting",
+     "tool": [
+      "setting"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "grill",
+     "say": "grill-start",
+     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+    },
+    {
+     "step": "grill",
+     "agent": "Q1: One list (recommended) or several? Q2: Saved in the browser (recommended)?"
+    },
+    {
+     "step": "grill",
+     "user": "Your recommendations."
+    },
+    {
+     "step": "grill",
+     "agent": "Summary: one to-do list in the browser: add, tick off and delete tasks, saved on this machine."
+    },
+    {
+     "step": "grill",
+     "say": "grill-summary",
+     "agent": "That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off."
+    },
+    {
+     "step": "grill",
+     "user": "Yes."
+    },
+    {
+     "step": "grill",
+     "tool": [
+      "grill",
+      "--confirmed",
+      "https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-71"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "agents",
+     "tool": [
+      "choose",
+      "--from-setup"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "plan",
+     "plan": {
+      "spec": {
+       "number": 900,
+       "title": "0.1.0 spec: browser to-do app",
+       "body": "Synthetic spec: 0.1.0 spec: browser to-do app.\n"
+      },
+      "tickets": [
+       {
+        "number": 901,
+        "title": "T1: add a task",
+        "blockers": []
+       },
+       {
+        "number": 902,
+        "title": "T2: tick a task off",
+        "blockers": []
+       },
+       {
+        "number": 903,
+        "title": "T3: delete a task",
+        "blockers": []
+       },
+       {
+        "number": 904,
+        "title": "T4: tasks saved on this machine",
+        "blockers": [
+         901
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "step": "plan",
+     "approve": "machine"
+    },
+    {
+     "step": "plan",
+     "say": "spec",
+     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. Watch its short video at https://openwiz.dev/app/videos/syn-900 or see it at openwiz.dev/app; nothing for you to do while the plan checks itself."
+    },
+    {
+     "step": "plan",
+     "tool": [
+      "spec",
+      "--spec",
+      "900",
+      "--repo",
+      "synthetic-owner/synthetic-todo"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "launch",
+     "tool": [
+      "launch",
+      "--spec",
+      "900"
+     ],
+     "exit": 0,
+     "spawn": 0
+    },
+    {
+     "step": "launch",
+     "say": "fleet-start",
+     "agent": "The plan passed its checks, so the fleet started: 3 builders, each on one small ticket. Watch them work at openwiz.dev/app; nothing for you to do until the first merge."
+    },
+    {
+     "step": "watch",
+     "world": "fleet_record"
+    },
+    {
+     "step": "watch",
+     "tool": [
+      "progress",
+      "--spec",
+      "900"
+     ],
+     "exit": 0,
+     "progress": [
+      "in_review",
+      "building",
+      "building",
+      "blocked"
+     ]
+    },
+    {
+     "step": "watch",
+     "say": "pr-opened",
+     "agent": "A builder opened https://github.com/synthetic-owner/synthetic-todo/pull/911 for #901 T1: add a task: the change plus its proof that it works. See it at openwiz.dev/app; another agent reviews it next, nothing needed from you."
+    },
+    {
+     "step": "watch",
+     "tool": [
+      "progress",
+      "--spec",
+      "900"
+     ],
+     "exit": 0,
+     "progress": [
+      "in_review",
+      "building",
+      "building",
+      "blocked"
+     ]
+    },
+    {
+     "step": "watch",
+     "say": "reviewed",
+     "agent": "https://github.com/synthetic-owner/synthetic-todo/pull/911 was reviewed: approved, so it merges next. Follow it at openwiz.dev/app; still nothing for you to do."
+    },
+    {
+     "step": "watch",
+     "world": "merged",
+     "pull": {
+      "number": 911,
+      "closes": 901,
+      "title": "#901: T1: add a task"
+     }
+    },
+    {
+     "step": "watch",
+     "tool": [
+      "progress",
+      "--spec",
+      "900"
+     ],
+     "exit": 0,
+     "progress": [
+      "merged",
+      "building",
+      "building",
+      "blocked"
+     ]
+    },
+    {
+     "step": "watch",
+     "tool": [
+      "first-merge",
+      "--pr",
+      "911"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "watch",
+     "say": "merged",
+     "agent": "https://github.com/synthetic-owner/synthetic-todo/pull/911 merged: #901: T1: add a task. That's your first build, now in synthetic-owner/synthetic-todo; see it at openwiz.dev/app, where the other tickets keep going without you."
+    },
+    {
+     "step": "watch",
+     "say": "offer",
+     "agent": "From here this chat can stay on as synthetic-todo's orchestrator, start a new project with you, or keep building this one. Which would you like? Come back anytime: open openwiz.dev/app or ask me where we are."
+    },
+    {
+     "step": "watch",
+     "user": "Keep building."
+    }
+   ]
+  },
+  {
+   "name": "always-wanted",
+   "choice": "Something I've always wanted to build.",
+   "repo": "synthetic-owner/synthetic-quiz",
+   "host": "local",
+   "signed_out": false,
+   "existing": false,
+   "turns": [
+    {
+     "step": "explain",
+     "say": "up-front",
+     "agent": "OpenWiz is a factory of coding agents: they turn one thing you want into small tickets, build each one, review each other's work and merge it."
+    },
+    {
+     "step": "explain",
+     "say": "up-front",
+     "agent": "First I ask you a few short questions, you say yes here when the summary matches, and the agents build it, aiming for your first merged pull request within the hour."
+    },
+    {
+     "step": "explain",
+     "say": "up-front",
+     "agent": "Watch everything at openwiz.dev/app; nothing is created, written, spent or published without your yes here in this chat."
+    },
+    {
+     "step": "explain",
+     "say": "install-done",
+     "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is on this machine. Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
+    },
+    {
+     "step": "where",
+     "tool": [
+      "where",
+      "--agents",
+      "local"
+     ],
+     "exit": 12
+    },
+    {
+     "step": "where",
+     "say": "where",
+     "agent": "Your agents need a place to run: this machine, with Claude Code you're already signed into, or Cloudroom or another cloud host to run many at once. Which would you like?"
+    },
+    {
+     "step": "where",
+     "user": "This machine.",
+     "answers": {
+      "agents": "local"
+     }
+    },
+    {
+     "step": "where",
+     "tool": [
+      "where",
+      "--agents",
+      "local",
+      "--yes"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "choose",
+     "agent": "Three ways to start: a small change in a repository you have, a fresh project from your idea, or something you have always wanted to build. Which one, and do you want a few ideas?"
+    },
+    {
+     "step": "choose",
+     "user": "Something I've always wanted to build. Ideas, please.",
+     "answers": {
+      "choice": "Something I've always wanted to build."
+     }
+    },
+    {
+     "step": "choose",
+     "agent": "A few ideas: A simple browser game; A countdown page; A quiz on something they love. Pick one, change one or bring your own.",
+     "ideas": [
+      "A simple browser game",
+      "A countdown page",
+      "A quiz on something they love"
+     ]
+    },
+    {
+     "step": "choose",
+     "user": "A quiz on something I love."
+    },
+    {
+     "step": "choose",
+     "tool": [
+      "create-repo",
+      "--repo",
+      "synthetic-owner/synthetic-quiz"
+     ],
+     "exit": 12
+    },
+    {
+     "step": "choose",
+     "agent": "This creates one private GitHub repository, synthetic-owner/synthetic-quiz, with your gh identity and one README commit. Create it?",
+     "gate": "create_repository"
+    },
+    {
+     "step": "choose",
+     "user": "Yes.",
+     "permits": [
+      "create_repository"
+     ]
+    },
+    {
+     "step": "choose",
+     "tool": [
+      "create-repo",
+      "--repo",
+      "synthetic-owner/synthetic-quiz",
+      "--yes"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "connect",
+     "setup": "personal_login"
+    },
+    {
+     "step": "connect",
+     "agent": "Setup is next for synthetic-owner/synthetic-quiz: sign in to GitHub in your browser yourself, prepare the project and make its private brain. Each effect is shown first; go ahead?",
+     "gate": "setup"
+    },
+    {
+     "step": "connect",
+     "user": "Go ahead; skip the App. Claude Code, syn-claude-model-01, high.",
+     "permits": [
+      "setup"
+     ],
+     "answers": {
+      "app_choice": "skip",
+      "harness": "claude-code",
+      "model": "syn-claude-model-01",
+      "effort": "high"
+     }
+    },
+    {
+     "step": "connect",
+     "tool": [
+      "continue",
+      "--explained"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "setting",
+     "tool": [
+      "setting"
+     ],
+     "exit": 12
+    },
+    {
+     "step": "setting",
+     "agent": "This writes one file, docs/agents/host.md (Host: local), on a new branch of synthetic-owner/synthetic-quiz and opens one pull request for you to merge. Open it?",
+     "gate": "write"
+    },
+    {
+     "step": "setting",
+     "user": "Yes.",
+     "permits": [
+      "write"
+     ]
+    },
+    {
+     "step": "setting",
+     "tool": [
+      "setting",
+      "--yes"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "setting",
+     "agent": "The host setting pull request is open; merge it on GitHub yourself when you are ready."
+    },
+    {
+     "step": "setting",
+     "world": "merge_setting"
+    },
+    {
+     "step": "setting",
+     "user": "Merged."
+    },
+    {
+     "step": "grill",
+     "say": "grill-start",
+     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+    },
+    {
+     "step": "grill",
+     "agent": "Q1: Ten multiple-choice questions (recommended)? Q2: Score shown at the end (recommended)?"
+    },
+    {
+     "step": "grill",
+     "user": "Your recommendations."
+    },
+    {
+     "step": "grill",
+     "agent": "Summary: a ten-question multiple-choice quiz about sheep, with a start screen and a score at the end."
+    },
+    {
+     "step": "grill",
+     "say": "grill-summary",
+     "agent": "That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off."
+    },
+    {
+     "step": "grill",
+     "user": "Yes."
+    },
+    {
+     "step": "grill",
+     "tool": [
+      "grill",
+      "--confirmed",
+      "https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-71"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "agents",
+     "tool": [
+      "choose",
+      "--from-setup"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "plan",
+     "plan": {
+      "spec": {
+       "number": 900,
+       "title": "0.1.0 spec: a quiz about synthetic sheep",
+       "body": "Synthetic spec: 0.1.0 spec: a quiz about synthetic sheep.\n"
+      },
+      "tickets": [
+       {
+        "number": 901,
+        "title": "Q1: ten questions on one page",
+        "blockers": []
+       },
+       {
+        "number": 902,
+        "title": "Q2: a score at the end",
+        "blockers": []
+       },
+       {
+        "number": 903,
+        "title": "Q3: a start screen",
+        "blockers": []
+       }
+      ]
+     }
+    },
+    {
+     "step": "plan",
+     "approve": "machine"
+    },
+    {
+     "step": "plan",
+     "say": "spec",
+     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. Watch its short video at https://openwiz.dev/app/videos/syn-900 or see it at openwiz.dev/app; nothing for you to do while the plan checks itself."
+    },
+    {
+     "step": "plan",
+     "tool": [
+      "spec",
+      "--spec",
+      "900",
+      "--repo",
+      "synthetic-owner/synthetic-quiz"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "launch",
+     "tool": [
+      "launch",
+      "--spec",
+      "900"
+     ],
+     "exit": 0,
+     "spawn": 0
+    },
+    {
+     "step": "launch",
+     "say": "fleet-start",
+     "agent": "The plan passed its checks, so the fleet started: 3 builders, each on one small ticket. Watch them work at openwiz.dev/app; nothing for you to do until the first merge."
+    },
+    {
+     "step": "watch",
+     "world": "fleet_record"
+    },
+    {
+     "step": "watch",
+     "tool": [
+      "progress",
+      "--spec",
+      "900"
+     ],
+     "exit": 0,
+     "progress": [
+      "in_review",
+      "building",
+      "building"
+     ]
+    },
+    {
+     "step": "watch",
+     "say": "pr-opened",
+     "agent": "A builder opened https://github.com/synthetic-owner/synthetic-quiz/pull/911 for #901 Q1: ten questions on one page: the change plus its proof that it works. See it at openwiz.dev/app; another agent reviews it next, nothing needed from you."
+    },
+    {
+     "step": "watch",
+     "tool": [
+      "progress",
+      "--spec",
+      "900"
+     ],
+     "exit": 0,
+     "progress": [
+      "in_review",
+      "building",
+      "building"
+     ]
+    },
+    {
+     "step": "watch",
+     "say": "reviewed",
+     "agent": "https://github.com/synthetic-owner/synthetic-quiz/pull/911 was reviewed: approved, so it merges next. Follow it at openwiz.dev/app; still nothing for you to do."
+    },
+    {
+     "step": "watch",
+     "world": "merged",
+     "pull": {
+      "number": 911,
+      "closes": 901,
+      "title": "#901: Q1: ten questions on one page"
+     }
+    },
+    {
+     "step": "watch",
+     "tool": [
+      "progress",
+      "--spec",
+      "900"
+     ],
+     "exit": 0,
+     "progress": [
+      "merged",
+      "building",
+      "building"
+     ]
+    },
+    {
+     "step": "watch",
+     "tool": [
+      "first-merge",
+      "--pr",
+      "911"
+     ],
+     "exit": 0
+    },
+    {
+     "step": "watch",
+     "say": "merged",
+     "agent": "https://github.com/synthetic-owner/synthetic-quiz/pull/911 merged: #901: Q1: ten questions on one page. That's your first build, now in synthetic-owner/synthetic-quiz; see it at openwiz.dev/app, where the other tickets keep going without you."
+    },
+    {
+     "step": "watch",
+     "say": "offer",
+     "agent": "From here this chat can stay on as synthetic-quiz's orchestrator, start a new project with you, or keep building this one. Which would you like? Come back anytime: open openwiz.dev/app or ask me where we are."
+    },
+    {
+     "step": "watch",
+     "user": "Keep building."
+    }
+   ]
+  }
+ ]
+}

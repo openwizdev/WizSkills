@@ -311,6 +311,50 @@ class Documented(unittest.TestCase):
         self.assertEqual(w.bodies(12), ['launch-fleet: cost: ' + LINE])
 
 
+    def archive_rule(self):
+        """The archive row's settle command, filled, and the results it may archive after."""
+        row = next(x for x in (HERE.parent / 'SKILL.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
+        found = re.findall(r'`(python3 -I [^`]*merge\.py"? settle [^`]*)`', row)
+        self.assertEqual(len(found), 1, row)
+        command = found[0]
+        for name, value in {"<this skill's folder>": str(HERE.parent), '<owner>/<repo>': REPO, '<P>': '7', '<N>': '12'}.items():
+            command = command.replace(name, value)
+        argv = shlex.split(command)
+        self.assertNotRegex(' '.join(argv), r'<[^>]+>', 'a placeholder left unfilled')
+        after = re.search(r'archives? only after ([^;.]*)', row)
+        self.assertIsNotNone(after, 'the archive row names no settled results that let it archive')
+        settled = [x.split(' <')[0] for x in re.findall(r'`([^`]+)`', after.group(1))]
+        return [sys.executable] + argv[1:], settled
+
+    def test_the_archive_row_archives_only_after_a_settled_cost(self):
+        # catches: the archive row archiving on a settle result that confirms no cost record (an
+        # `unknown:` read or write, a `refused:`), after which fleet.sh prints no archive line and
+        # the queued merge's cost is never posted (#115 R2).
+        argv, settled = self.archive_rule()
+        receipt = comment(4000, 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD)
+        merged = dict(state='MERGED', mergeCommit={'oid': 'c' * 40})
+        cases = {
+            'settled': (pr(**merged), {'7': [receipt]}, {}),
+            'never queued': (pr(**merged), {'7': []}, {}),
+            'receipt read fails': (pr(**merged), {'7': [receipt]}, {'read': 'fail'}),
+            'cost write fails': (pr(**merged), {'7': [receipt]}, {'post': 'fail'}),
+            'cost write lost': (pr(**merged), {'7': [receipt]}, {'post': 'lost'}),
+            'still queued': (pr(isMergeQueueEnabled=True, isInMergeQueue=True,
+                                mergeQueueEntry={'headCommit': {'oid': HEAD}}), {'7': [receipt]}, {}),
+        }
+        for name, (value, comments, faults) in cases.items():
+            with self.subTest(name):
+                w = World(self, pr=value, comments=comments, faults=faults)
+                root = project(w, PRINTS)
+                r = subprocess.run(argv, capture_output=True, text=True, env=w.env, cwd=root, timeout=60)
+                out = r.stdout.strip()
+                archives = r.returncode == 0 and any(out.startswith(x) for x in settled)
+                # Archiving is safe only when the cost is on the ticket, or no queued merge owes one.
+                owed = bool(comments['7'])
+                costed = any(b.startswith('launch-fleet: cost') for b in w.bodies(12))
+                self.assertEqual(archives, costed or not owed, (out, r.stderr))
+
+
 class CrossRepository(unittest.TestCase):
     """#1502: the pull request lives in one repository and closes a ticket in another."""
 

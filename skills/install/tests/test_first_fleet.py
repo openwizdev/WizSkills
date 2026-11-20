@@ -48,6 +48,34 @@ def fleet_md(builder=CODEX, small=CODEX, for_gpt=CLAUDE, for_claude=CODEX):
             '## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n| Record authors | `synthetic-factory[bot]` |\n')
 
 
+def models_md(orchestrator=CODEX, builder=CODEX, reviewer=CLAUDE, small=None, fixer=None):
+    """fleet_md() with the one Models table (openwiz.models.v1) in place of the older tables."""
+    def row(role, agent):
+        if agent is None:
+            return '| %s | follows Builder | | | |\n' % role
+        return '| %s | Synthetic | Synthetic | Synthetic | `--provider %s --model %s --reasoning-level %s` |\n' % (
+            role, *agent)
+    table = ('## Models\n\nSynthetic.\n\n| Role | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
+             '| --- | --- | --- | --- | --- |\n' + row('Orchestrator', orchestrator) + row('Builder', builder)
+             + row('Reviewer', reviewer) + row('Small builder', small) + row('Fixer', fixer) + '\nSource: synthetic.\n\n')
+    text = fleet_md()
+    return text[:text.index('## Builder\n')] + table + text[text.index('## CI checks'):]
+
+
+SETTINGS = SKILL_DIR.parent / 'setup/scripts/settings.py'
+OPUS = ('claude-code', 'claude-opus-5-5', 'medium')  # the contract's recommended other-family choices (J255)
+SOL = ('codex', 'gpt-6.2-sol', 'medium')
+
+
+def offering(*agents):
+    """The journey's offered options plus each extra (provider, model, effort)."""
+    options = json.loads(json.dumps(JOURNEY['options']))
+    for provider, model, effort in agents:
+        harness = next(h for h in options['harnesses'] if h['provider'] == provider)
+        harness['models'].append({'model': model, 'efforts': [effort]})
+    return options
+
+
 FILES = {
     'docs/agents/fleet.md': fleet_md(),
     'docs/agents/triage-labels.md': (
@@ -155,6 +183,9 @@ class Journey:
         for path in (self.openwiz, gh, room):
             path.chmod(0o755)
         self.world = {'repo': JOURNEY['repo'], 'default': 'main', 'files': dict(FILES), 'issues': [], 'pulls': []}
+        self.checkout = self.dir / 'docs/agents/fleet.md'  # setup's file in this checkout, as merged
+        self.checkout.parent.mkdir(parents=True)
+        self.checkout.write_text(FILES['docs/agents/fleet.md'])
         self.save_world()
         self.room_script.write_text('{}')
         self.approval = None
@@ -995,6 +1026,129 @@ class DemoRepository(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stdout)
         self.assertEqual(self.world(j)['repos'], world['repos'], 'a repeat only reads')
         self.assertEqual(self.writes(j), [['POST', 'user/repos']])
+
+
+class ModelsTable(unittest.TestCase):
+    """#1807: the first-fleet choice writes the Models table, and its launch reads it."""
+
+    def models(self, text):
+        sys.dont_write_bytecode = True
+        spec = __import__('importlib.util').util.spec_from_file_location('settings', SETTINGS)
+        module = __import__('importlib.util').util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.models(text)
+
+    def chosen(self, j, local, options=None):
+        j.replay(until='agents')
+        j.checkout.write_text(local)
+        if options is not None:
+            j.options.write_text(json.dumps(options))
+        return j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+
+    def test_a_cloud_choice_writes_the_models_table_before_the_older_tables(self):
+        # catches: the choice recorded but never written, so a new project's
+        # fleet starts whatever setup left in the table, or a write that drops
+        # or edits the older tables and prose it does not own.
+        j = Journey(self)
+        result = self.chosen(j, fleet_md())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        written = j.checkout.read_text()
+        self.assertEqual(self.models(written), {'Orchestrator': CODEX, 'Builder': CODEX, 'Reviewer': CLAUDE,
+                                                'Small builder': None, 'Fixer': None},
+                         'the choice, with the older GPT-built reviewer kept as the other-family Reviewer')
+        start, end = written.index('## Models\n'), written.index('## Builder\n')
+        self.assertEqual(written[:start] + written[end:], fleet_md(), 'nothing outside the inserted table changes')
+        self.assertIn('| Builder | Codex | syn-codex-model-01 | High |', written, 'the names set writes')
+        self.assertIn('docs/agents/fleet.md', result.stdout)
+        self.assertEqual(json.loads(j.state.read_text())['choices'], dict(j.settings, agents='cloud'))
+        again = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+        self.assertEqual((again.returncode, j.checkout.read_text()), (0, written), 'a repeat writes nothing new')
+
+    def test_a_models_table_gets_the_choice_and_keeps_an_other_family_reviewer(self):
+        # catches: an overridden Small builder or Fixer left on another model
+        # (the launch refuses it), or a Reviewer row the user chose rewritten.
+        j = Journey(self)
+        local = models_md(orchestrator=CLAUDE, builder=CLAUDE, reviewer=CLAUDE[:2] + ('xhigh',), small=CLAUDE,
+                          fixer=CODEX)
+        result = self.chosen(j, local)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        written = j.checkout.read_text()
+        self.assertEqual(self.models(written), {'Orchestrator': CODEX, 'Builder': CODEX, 'Reviewer': CLAUDE[:2] + ('xhigh',),
+                                                'Small builder': None, 'Fixer': None})
+        reviewer = next(line for line in local.splitlines() if line.startswith('| Reviewer |'))
+        self.assertIn(reviewer + '\n', written, 'the kept Reviewer row as written')
+        self.assertEqual(written.replace(written[written.index('| Role |'):written.index('\nSource')], ''),
+                         local.replace(local[local.index('| Role |'):local.index('\nSource')], ''))
+
+    def test_a_same_family_reviewer_becomes_the_offered_recommendation_or_nothing_is_recorded(self):
+        # catches: the choice written beside a Reviewer of its own family, so
+        # every review of the first fleet's work waits, or a reviewer written
+        # that the user's harnesses do not offer.
+        local = models_md(reviewer=SOL)
+        j = Journey(self)
+        refused = self.chosen(j, local)
+        self.assertEqual(refused.returncode, 5, refused.stdout)
+        self.assertIn('claude-code claude-opus-5-5 medium', refused.stdout)
+        self.assertEqual(j.checkout.read_text(), local)
+        self.assertNotIn('choices', json.loads(j.state.read_text()), 'nothing recorded')
+        k = Journey(self)
+        result = self.chosen(k, local, offering(OPUS))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        written = k.checkout.read_text()
+        self.assertEqual(self.models(written)['Reviewer'], OPUS)
+        self.assertIn('| Reviewer | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 '
+                      '--reasoning-level medium` |', written)
+
+    def test_a_broken_or_missing_settings_file_is_never_written(self):
+        # catches: a write past a Models table the readers refuse, or a new
+        # fleet.md made where setup has not run.
+        broken = models_md().replace('| Effort |', '| Level |')
+        for name, local in (('broken', broken), ('missing', None)):
+            with self.subTest(name):
+                j = Journey(self)
+                j.replay(until='agents')
+                if local is None:
+                    j.checkout.unlink()
+                else:
+                    j.checkout.write_text(local)
+                result = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+                self.assertEqual(result.returncode, 5, result.stdout)
+                self.assertEqual(j.checkout.read_text() if j.checkout.exists() else None, local)
+                self.assertNotIn('choices', json.loads(j.state.read_text()))
+
+    def test_the_launch_reads_the_models_table(self):
+        # catches: the launch reading only the older tables, so a project in the
+        # new form never starts, or its fleet thread started on the Builder
+        # instead of the Orchestrator row.
+        j = Journey(self)
+        j.replay(until='launch')
+        j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CLAUDE)
+        j.save_world()
+        preview = j.tool(PREVIEW)
+        self.assertEqual(preview.returncode, 12, preview.stdout + preview.stderr)
+        for line in ('1 fleet thread, claude-code syn-claude-model-01 high', 'each codex syn-codex-model-01 high',
+                     'reviewed by claude-code syn-claude-model-01 high'):
+            self.assertIn(line, preview.stdout)
+        self.assertEqual(j.tool(YES).returncode, 0)
+        flags = j.spawns()[0][3:]
+        flags = dict(zip(flags[0::2], flags[1::2]))
+        self.assertEqual((flags['--provider'], flags['--model'], flags['--reasoning-level']), CLAUDE)
+
+    def test_the_launch_refuses_a_models_table_its_choice_or_family_rule_breaks(self):
+        # catches: a launch past a broken Models table, an overridden Small
+        # builder, or a review that would wait under the cross-family rule.
+        for name, text in (('broken', models_md().replace('| Effort |', '| Level |')),
+                           ('small builder differs', models_md(small=CLAUDE)),
+                           ('reviews wait', models_md(reviewer=SOL)),
+                           ('two headings', models_md() + '## Models\n')):
+            with self.subTest(name):
+                j = Journey(self)
+                j.replay(until='launch')
+                j.world['files']['docs/agents/fleet.md'] = text
+                j.save_world()
+                result = j.tool(PREVIEW)
+                self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
+                self.assertNotIn('Confirmation:', result.stdout)
 
 
 class Resume(unittest.TestCase):

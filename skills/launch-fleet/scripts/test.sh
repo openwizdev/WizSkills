@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=882      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 22
+CASES=887      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 22; #1759 added 5
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1294,6 +1294,17 @@ EOF
 expect 'F6 claim: a running ticket of another spec on the same paths withdraws' 0 check.json "$OWN13"' claim13 | other_spec' -- claim 13 1301 <<EOF
 withdraw #13: its owned paths collide with #81, which is running or claimed first
 EOF
+# #1750: a running ticket whose ready label came off on a manual hold keeps
+# its builder, so it still collides.
+HELD81='issue(81; .labels = ["held"]) | say(81; 8102; "11:10"; "launch-fleet: held manual: owner decision required")'
+expect 'F6 claim: a running ticket of another spec on hold still withdraws' 0 check.json "$OWN13"' claim13 | other_spec | '"$HELD81" -- claim 13 1301 <<EOF
+withdraw #13: its owned paths collide with #81, which is running or claimed first
+EOF
+# R1 (review of #1759): a colliding issue whose comments can't be read may
+# have a builder, so the claim withdraws.
+expect 'F6 claim: a colliding held ticket whose history can'"'"'t be read withdraws' 0 check.json "$OWN13"' claim13 | other_spec | '"$HELD81" FAKE_GH_FAIL=issue_comments_81_page=1 -- claim 13 1301 <<EOF
+withdraw #13: its owned paths collide with #81, whose start history can't be read
+EOF
 expect 'F6 claim: an older colliding claim wins' 0 check.json "$OWN13"' claim13 | own(70; "src/page/a.md") | say(70; 1300; "11:50"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
 withdraw #13: its owned paths collide with #70, which is running or claimed first
 EOF
@@ -2005,6 +2016,12 @@ expect 'F6: a ticket whose only open link is context starts' 0 frontier.json "$O
 #42 G2: gadget writer
 #45 G5: gadget import
 #55 G11: gadget filter
+EOF
+# #1753: the native blocker is matched by node identity, not number. Another
+# repository's #43 is unread and unmerged, so it stays hard even though local
+# #43's disjoint paths would make the file link context.
+expect 'F6: a native blocker in another repository with a local twin number is hard' 0 frontier.json "$OWNS"' owns(43; "`gadget/spike.md`"; "none") | owns(42; "`gadget/writer.md`"; "- #43 file: `gadget/notes.md`") | .dependencyResponses = {"42": [{number: 43, node_id: "I_synthetic_other_43", state: "open"}]}' -- frontier <<EOF
+$FRONTIER
 EOF
 expect 'F6: an open hard blocker still holds a start' 0 frontier.json "$OWNS"' owns(42; "`gadget/writer.md`"; "- #43 real: the spike findings, which the writer follows")' -- frontier <<EOF
 $FRONTIER
@@ -3319,6 +3336,10 @@ EOF
 # Sol self-review 2 (#192): a takeover start that CloudRoom refused, or that
 # failed, is tried again, and never strands the pull request.
 ARCH12="$TOOK12 | say(12; 1291; \"10:20\"; \"launch-fleet: old builder archived, thread thr_syn12\")"
+# #1750: a takeover starts a builder too, so a held running ticket of another
+# spec on the same paths holds it, as it withdraws a start claim.
+expect 'takeover: a running ticket of another spec on hold holds a takeover start' 0 check.json "$OWN13"' other_spec | '"$HELD81"' | own(12; "src/store/") | issue(81; .body = "## Owned paths\n\n- `src/store/index.md`\n")'" | $ARCH12" -- spec 10 < /dev/null
+expect 'takeover: a colliding held ticket whose history can'"'"'t be read holds a takeover start' 0 check.json "$OWN13"' other_spec | '"$HELD81"' | own(12; "src/store/") | issue(81; .body = "## Owned paths\n\n- `src/store/index.md`\n")'" | $ARCH12" FAKE_GH_FAIL=issue_comments_81_page=1 -- spec 10 < /dev/null
 expect 'takeover: a refused takeover start waits 10 minutes, and nothing goes to a builder' 0 check.json "$ARCH12 | edit(12; 1201; \"11:55\"; \"launch-fleet: start refused: synthetic reason\")" -- spec 10 < /dev/null
 expect 'takeover: a refused takeover start is tried again 10 minutes on' 0 check.json "$ARCH12 | edit(12; 1201; \"11:45\"; \"launch-fleet: start refused: synthetic reason\")" -- spec 10 <<EOF
 take over #12: builder thread thr_syn12 is archived; start a builder to continue branch room/12-w2-widget-store-bbbb (its record: comment 1201; retry after "start refused: synthetic reason")

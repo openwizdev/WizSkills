@@ -1,0 +1,23 @@
+$ python3 -I skills/install/tests/test_onboarding.py HostApproval   # red: branch 2c6cf1d plus these tests (KN3 #1455 at 857d107: other entries byte for byte, owner and 600, writable-by-others refused)
+F.F.
+======================================================================
+FAIL: test_an_approvals_file_others_can_change_is_refused_never_fixed (__main__.HostApproval.test_an_approvals_file_others_can_change_is_refused_never_fixed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 621, in test_an_approvals_file_others_can_change_is_refused_never_fixed
+    self.assertEqual(refused.returncode, 5, refused.stdout)
+AssertionError: 1 != 5 : This machine's host-side approvals (<tmp>) must be one owner-only JSON file in KN3's form; nothing started.
+
+
+======================================================================
+FAIL: test_the_approval_adds_only_this_entry_keeps_every_other_byte_and_is_owner_only_600 (__main__.HostApproval.test_the_approval_adds_only_this_entry_keeps_every_other_byte_and_is_owner_only_600)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 604, in test_the_approval_adds_only_this_entry_keeps_every_other_byte_and_is_owner_only_600
+    self.assertIn(kept, text, 'every other entry byte for byte')
+AssertionError: '"synthetic-owner/other": {\n    "codex": "read-only"\n  }' not found in '{"synthetic-owner/other": {"codex": "read-only"}, "synthetic-owner/synthetic-quiz": {"claude": "acceptEdits", "codex": "workspace-write"}}' : every other entry byte for byte
+
+----------------------------------------------------------------------
+Ran 4 tests in 10.173s
+
+FAILED (failures=2)

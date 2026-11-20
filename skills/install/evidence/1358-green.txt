@@ -1,21 +1,21 @@
-# #1358 green, at branch head 385f281
+# #1358 green, at branch head 8e4ee0f (main merged in at 0d656e8: KN6 #1371 is in)
 
 ## On the branch (launch-fleet from main: WS17 not merged, its starts stubbed)
 $ python3 -I skills/install/tests/test_onboarding.py
-Ran 16 tests in 19.152s
+Ran 16 tests in 13.098s
 
 OK (skipped=1)
 $ python3 -I skills/install/tests/test_first_fleet.py
-Ran 35 tests in 71.071s
+Ran 35 tests in 50.134s
 
 OK (skipped=7)
 
-## On a scratch merge of 385f281 with WizSkills #60 (room/1340-fleet-auto-start at 42e473f), never pushed: nothing skipped
+## On a scratch merge of 8e4ee0f with WizSkills #60 (room/1340-fleet-auto-start at 4bde59a), never pushed: nothing skipped
 $ python3 -I skills/install/tests/test_onboarding.py
-Ran 16 tests in 50.681s
+Ran 16 tests in 35.251s
 
 OK
 $ python3 -I skills/install/tests/test_first_fleet.py
-Ran 35 tests in 169.926s
+Ran 35 tests in 114.347s
 
 OK

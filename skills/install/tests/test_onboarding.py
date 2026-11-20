@@ -7,6 +7,7 @@ the road's own steps one at a time: where agents run, the host setting, the
 grill confirmed in chat, the launch from the plan's machine approval, and the
 closing offer after a merge read back from GitHub. All values are synthetic.
 """
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -127,7 +128,7 @@ class Road(Journey):
             self.world.setdefault('onboard_pulls', []).append({
                 'number': pull['number'], 'url': 'https://github.com/%s/pull/%d' % (self.repo, pull['number']),
                 'title': pull['title'], 'state': 'MERGED', 'mergedAt': '2026-11-01T12:40:00Z',
-                'closingIssuesReferences': [{'number': pull['closes']}]})
+                'closingIssuesReferences': [closing(self.repo, pull['closes'])]})
             self.save_world()
 
     def replay_road(self, stop=None, skip=None):
@@ -160,6 +161,12 @@ class Road(Journey):
 
     def saved(self):
         return json.loads(self.state.read_text()) if self.state.exists() else {}
+
+
+def closing(repo, number):
+    """One closing issue as `gh pr view --json closingIssuesReferences` gives it: repository-qualified."""
+    owner, name = repo.split('/')
+    return {'number': number, 'repository': {'name': name, 'owner': {'login': owner}}}
 
 
 def until(step):
@@ -651,6 +658,117 @@ class HostApproval(unittest.TestCase):
         self.assertEqual(road.spawns(), [])
 
 
+class ReviewRound(unittest.TestCase):
+    """Review 7038665551 at 70d1bc2: R1, R2, R4, R5 and R6, each red first."""
+
+    def road(self, name='always-wanted'):
+        return Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
+
+    def test_r1_the_road_never_runs_a_sign_in_itself(self):
+        # catches: the onboarding agent told to run a sign-in (`sign-in --yes`, `gh auth login`) instead of showing the
+        # person the command and waiting, then continuing on the installed setup's read-only check
+        text = (SKILL_DIR / 'SKILL.md').read_text()
+        lines = [line for line in text.splitlines() if 'github_login.py sign-in' in line or 'auth login' in line]
+        self.assertTrue(lines)
+        for line in lines:
+            self.assertRegex(line, r'\b(themselves|yourself)\b', line)
+        self.assertIn('github_login.py status', text, "the agent's own step is the read-only check")
+        road = self.road('fresh-project')
+        road.change({'world': 'signed_out'})
+        result = road.helper(['where', '--agents', 'cloud', '--yes'])
+        self.assertEqual(result.returncode, 5, result.stdout)
+        self.assertFalse([c for c in road.gh_calls() if c[:2] == ['auth', 'login']])
+
+    def test_r2_this_machine_finds_the_driver_in_the_verified_build(self):
+        # catches: a fresh install's local driver missed because only OPENWIZ_ADAPTERS was read, so "this machine"
+        # says there is no driver and sends the user to Cloudroom
+        road = self.road()
+        del road.extra_env['OPENWIZ_ADAPTERS']
+        build = road.dir / 'build'
+        (build / 'runtime/adapters').mkdir(parents=True)
+        shutil.copytree(road.dir / 'adapters/local', build / 'runtime/adapters/local')
+        result = road.helper(['where', '--agents', 'local', '--build', str(build), '--yes'])
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(road.saved()['host']['adapters'], str(build / 'runtime/adapters'))
+        self.assertEqual(road.driver_calls(), [['version']])
+
+    def test_r4_an_existing_branch_or_a_failed_write_never_opens_the_host_setting(self):
+        # catches: a second mode row or another host written onto an existing openwiz/host-setting branch, or a pull
+        # request reported ready after its file write failed
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting')
+        world = json.loads(road.world_path.read_text())
+        other = dict(world['files'])
+        other['docs/agents/fleet.md'] += '\n| Harness permission mode | `default` |\n'
+        other['docs/agents/host.md'] = '# Where agents run\n\nHost: boat\n'
+        world.setdefault('branches', {})['openwiz/host-setting'] = other
+        road.world_path.write_text(json.dumps(world))
+        refused = road.helper(['setting', '--yes'])
+        self.assertEqual(refused.returncode, 5, refused.stdout)
+        after = json.loads(road.world_path.read_text())
+        self.assertEqual(after.get('host_pulls', []), [])
+        self.assertEqual(after['branches']['openwiz/host-setting'], other, 'the branch is left as it was')
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting')
+        world = json.loads(road.world_path.read_text())
+        world['put_fails'] = True
+        road.world_path.write_text(json.dumps(world))
+        failed = road.helper(['setting', '--yes'])
+        self.assertNotEqual(failed.returncode, 0, failed.stdout)
+        self.assertNotEqual((road.saved().get('setting') or {}).get('state'), 'opened')
+
+    def test_r5_line_endings_and_another_sessions_approval_survive(self):
+        # catches: CRLF rewritten to LF, and two onboarding sessions' read-modify-writes of the shared approvals file
+        # losing one approval
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
+        path = road.host_state / 'approvals.json'
+        path.write_bytes(b'{\r\n  "synthetic-owner/other": {"codex": "read-only"}\r\n}\r\n')
+        path.chmod(0o600)
+        self.assertEqual(road.helper(['mode', '--mode', 'acceptEdits']).returncode, 0)
+        data = path.read_bytes()
+        self.assertIn(b'"synthetic-owner/other": {"codex": "read-only"}\r\n', data)
+        self.assertTrue(data.endswith(b'}\r\n'))
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
+        lock = open(road.host_state / 'approvals.json.lock', 'a+')
+        self.addCleanup(lock.close)
+        fcntl.flock(lock, fcntl.LOCK_EX)  # another onboarding session is mid-update
+        snapshot = {}
+        proc = subprocess.Popen([sys.executable, '-I', str(SKILL_DIR / 'scripts/first_fleet.py'), 'mode', '--mode',
+                                 'acceptEdits', '--state', str(road.state)], env=road.env(), cwd=road.dir,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass  # waiting for the other session, as it should
+        snapshot['synthetic-owner/other'] = {'codex': 'read-only'}  # that session writes what it read, plus its own
+        path.write_text(json.dumps(snapshot))
+        path.chmod(0o600)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        out, _ = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, out)
+        self.assertEqual(road.approvals(), {'synthetic-owner/other': {'codex': 'read-only'},
+                                            road.repo: {'claude': 'acceptEdits'}})
+
+    def test_r6_a_merge_closing_another_repositorys_issue_is_not_the_first_merge(self):
+        # catches: a merged pull request closing an issue with an onboarding ticket's number in another repository
+        # taken as this fleet's first merge
+        road = self.road('fresh-project')
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
+        saved = road.saved()
+        saved['launch'] = {'spec': 900, 'state': 'started', 'tickets': [901, 902, 903]}
+        road.state.write_text(json.dumps(saved))
+        world = json.loads(road.world_path.read_text())
+        world['onboard_pulls'] = [{'number': 911, 'url': 'https://github.com/%s/pull/911' % road.repo,
+                                   'title': '#901: T1', 'state': 'MERGED', 'mergedAt': '2026-11-01T12:40:00Z',
+                                   'closingIssuesReferences': [closing('synthetic-owner/elsewhere', 901)]}]
+        road.world_path.write_text(json.dumps(world))
+        result = road.helper(['first-merge', '--pr', '911'])
+        self.assertEqual(result.returncode, 5, result.stdout)
+        self.assertNotIn(teach_lines()['The closing offer'][0][:20], result.stdout)
+
+
 class FirstMerge(unittest.TestCase):
     def test_the_closing_offer_follows_only_a_merge_read_back_for_this_spec(self):
         # catches: the closing offer made on a count, an open pull request, or a merge from another spec
@@ -661,9 +779,9 @@ class FirstMerge(unittest.TestCase):
         road.state.write_text(json.dumps(saved))
         offer = teach_lines()['The closing offer'][0][:20]
         pulls = [{'number': 911, 'url': 'https://github.com/%s/pull/911' % road.repo, 'title': '#901: T1',
-                  'state': 'OPEN', 'mergedAt': None, 'closingIssuesReferences': [{'number': 901}]},
+                  'state': 'OPEN', 'mergedAt': None, 'closingIssuesReferences': [closing(road.repo, 901)]},
                  {'number': 912, 'url': 'https://github.com/%s/pull/912' % road.repo, 'title': '#77: other',
-                  'state': 'MERGED', 'mergedAt': '2026-11-01T12:40:00Z', 'closingIssuesReferences': [{'number': 77}]}]
+                  'state': 'MERGED', 'mergedAt': '2026-11-01T12:40:00Z', 'closingIssuesReferences': [closing(road.repo, 77)]}]
         road.world['onboard_pulls'] = pulls
         road.save_world()
         for number in (911, 912):

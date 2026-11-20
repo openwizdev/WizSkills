@@ -15,7 +15,8 @@ repos/R/issues/N/comments?per_page=100 --jq EXPR`) from launch-fleet's synthetic
 world, through jq as gh does, or fails it when $FAKE_GH_COMMENTS_FAIL is set.
 The onboarding road (#1358) adds the host setting pull request and the first
 merge's read-back, from the same launch-fleet world: its `default` branch's
-`files`, `branches` (name to files), `host_pulls` and `onboard_pulls`. When
+`files`, `branches` (name to files), `host_pulls` and `onboard_pulls`; `put_fails` makes every
+contents write fail. When
 $FAKE_GH_ARGV_LOG is set, every call is logged there as one JSON line.
 Every other call goes to launch-fleet's fake gh unchanged, which refuses writes.
 All values are synthetic.
@@ -146,6 +147,9 @@ def road(argv):
     match = re.fullmatch(re.escape(r + '/contents/') + r'(docs/agents/[^?]+)', argv[3]) if len(argv) > 3 else None
     if argv[:3] == ['api', '-X', 'PUT'] and match and len(argv) in (10, 12):
         fields = dict(value.split('=', 1) for value in argv[5::2])
+        if world.get('put_fails'):
+            sys.stderr.write('gh: synthetic server error (HTTP 502)\n')
+            return 1
         files = branches.get(fields['branch'])
         if files is None or (match[1] in files) != ('sha' in fields):  # GitHub needs the sha to replace a file
             sys.stderr.write('gh: sha mismatch (HTTP 409)\n')

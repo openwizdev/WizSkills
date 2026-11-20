@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=860      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py
+CASES=863      # includes the two CW-G fresh wake cases and #1759's three; WS8 moved the re-check case to test-brief.py
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -3238,12 +3238,12 @@ EOF
 expect "fleet: a spec's check refuses a number with a leading zero" 2 check.json . -- spec 010 <<EOF
 usage: fleet.sh
 EOF
-# #1750: a takeover starts a builder too, so a held running ticket of another
-# spec on the same paths holds it, as it withdraws a start claim.
-expect 'takeover: a running ticket of another spec on hold holds a takeover start' 0 check.json "$OWN13"' other_spec | '"$HELD81"' | own(12; "src/store/") | issue(81; .body = "## Owned paths\n\n- `src/store/index.md`\n")'" | $TOOK12 | say(12; 1291; \"10:20\"; \"launch-fleet: old builder archived, thread thr_syn12\")" -- spec 10 < /dev/null
 # Sol self-review 2 (#192): a takeover start that CloudRoom refused, or that
 # failed, is tried again, and never strands the pull request.
 ARCH12="$TOOK12 | say(12; 1291; \"10:20\"; \"launch-fleet: old builder archived, thread thr_syn12\")"
+# #1750: a takeover starts a builder too, so a held running ticket of another
+# spec on the same paths holds it, as it withdraws a start claim.
+expect 'takeover: a running ticket of another spec on hold holds a takeover start' 0 check.json "$OWN13"' other_spec | '"$HELD81"' | own(12; "src/store/") | issue(81; .body = "## Owned paths\n\n- `src/store/index.md`\n")'" | $ARCH12" -- spec 10 < /dev/null
 expect 'takeover: a refused takeover start waits 10 minutes, and nothing goes to a builder' 0 check.json "$ARCH12 | edit(12; 1201; \"11:55\"; \"launch-fleet: start refused: synthetic reason\")" -- spec 10 < /dev/null
 expect 'takeover: a refused takeover start is tried again 10 minutes on' 0 check.json "$ARCH12 | edit(12; 1201; \"11:45\"; \"launch-fleet: start refused: synthetic reason\")" -- spec 10 <<EOF
 take over #12: builder thread thr_syn12 is archived; start a builder to continue branch room/12-w2-widget-store-bbbb (its record: comment 1201; retry after "start refused: synthetic reason")

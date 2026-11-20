@@ -7,7 +7,8 @@ and stdin) to $FAKE_DRIVER_LOG as one JSON line and answers as a driver would:
 $FAKE_DRIVER_MODE `refuse` it fails as v1 says (exit 1, `error` and `next`);
 with `garbage` it answers something that is no run; with `extra`, a run with a
 repeated or unknown key. While $FAKE_DRIVER_HOLD names a file, it waits; $FAKE_DRIVER_BREAK names a
-folder it makes read-only.
+folder it makes read-only. $FAKE_DRIVER_REFUSALS=K refuses only a command's first K calls in the log
+(#1446), and $FAKE_DRIVER_NEXT replaces a refusal's `next` text.
 """
 import json
 import os
@@ -28,8 +29,13 @@ if mode == 'extra':
     print('{"run": "%s-run-1", "run": "%s-run-2"}' % (host, host) if command == 'start'
           else json.dumps({'run': json.loads(given)['run'], 'woke': True, 'token': 'synthetic'}))
     sys.exit(0)
+if os.environ.get('FAKE_DRIVER_REFUSALS'):
+    with open(os.environ['FAKE_DRIVER_LOG']) as log:
+        made = sum(json.loads(line)['command'] == command for line in log)
+    mode = 'refuse' if made <= int(os.environ['FAKE_DRIVER_REFUSALS']) else mode
 if mode == 'refuse':
-    print(json.dumps({'error': 'the synthetic harness is not signed in', 'next': 'sign in to the harness, then start again'}))
+    print(json.dumps({'error': 'the synthetic harness is not signed in',
+                      'next': os.environ.get('FAKE_DRIVER_NEXT', 'sign in to the harness, then start again')}))
     sys.exit(1)
 if mode == 'garbage':
     print('started, probably')

@@ -1276,6 +1276,12 @@ EOF
 expect 'F6 claim: a running ticket of another spec on the same paths withdraws' 0 check.json "$OWN13"' claim13 | other_spec' -- claim 13 1301 <<EOF
 withdraw #13: its owned paths collide with #81, which is running or claimed first
 EOF
+# #1750: a running ticket whose ready label came off on a manual hold keeps
+# its builder, so it still collides.
+HELD81='issue(81; .labels = ["held"]) | say(81; 8102; "11:10"; "launch-fleet: held manual: owner decision required")'
+expect 'F6 claim: a running ticket of another spec on hold still withdraws' 0 check.json "$OWN13"' claim13 | other_spec | '"$HELD81" -- claim 13 1301 <<EOF
+withdraw #13: its owned paths collide with #81, which is running or claimed first
+EOF
 expect 'F6 claim: an older colliding claim wins' 0 check.json "$OWN13"' claim13 | own(70; "src/page/a.md") | say(70; 1300; "11:50"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
 withdraw #13: its owned paths collide with #70, which is running or claimed first
 EOF
@@ -1915,6 +1921,12 @@ expect 'F6: a ticket whose only open link is context starts' 0 frontier.json "$O
 #42 G2: gadget writer
 #45 G5: gadget import
 #55 G11: gadget filter
+EOF
+# #1753: the native blocker is matched by node identity, not number. Another
+# repository's #43 is unread and unmerged, so it stays hard even though local
+# #43's disjoint paths would make the file link context.
+expect 'F6: a native blocker in another repository with a local twin number is hard' 0 frontier.json "$OWNS"' owns(43; "`gadget/spike.md`"; "none") | owns(42; "`gadget/writer.md`"; "- #43 file: `gadget/notes.md`") | .dependencyResponses = {"42": [{number: 43, node_id: "I_synthetic_other_43", state: "open"}]}' -- frontier <<EOF
+$FRONTIER
 EOF
 expect 'F6: an open hard blocker still holds a start' 0 frontier.json "$OWNS"' owns(42; "`gadget/writer.md`"; "- #43 real: the spike findings, which the writer follows")' -- frontier <<EOF
 $FRONTIER
@@ -3226,6 +3238,9 @@ EOF
 expect "fleet: a spec's check refuses a number with a leading zero" 2 check.json . -- spec 010 <<EOF
 usage: fleet.sh
 EOF
+# #1750: a takeover starts a builder too, so a held running ticket of another
+# spec on the same paths holds it, as it withdraws a start claim.
+expect 'takeover: a running ticket of another spec on hold holds a takeover start' 0 check.json "$OWN13"' other_spec | '"$HELD81"' | own(12; "src/store/") | issue(81; .body = "## Owned paths\n\n- `src/store/index.md`\n")'" | $TOOK12 | say(12; 1291; \"10:20\"; \"launch-fleet: old builder archived, thread thr_syn12\")" -- spec 10 < /dev/null
 # Sol self-review 2 (#192): a takeover start that CloudRoom refused, or that
 # failed, is tried again, and never strands the pull request.
 ARCH12="$TOOK12 | say(12; 1291; \"10:20\"; \"launch-fleet: old builder archived, thread thr_syn12\")"

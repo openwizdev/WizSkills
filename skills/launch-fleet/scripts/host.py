@@ -28,7 +28,7 @@ agent: $LAUNCH_FLEET_HARNESS, $LAUNCH_FLEET_MODEL and $LAUNCH_FLEET_SKILLS, as
 status.py's --harness, --model and --skills; with any unset, only the fleet
 note is skipped, with a warning on stderr naming them. The driver's text reaches the
 ticket and stdout only when it holds no credential, private id or machine path
-(status.py's and post.py's rules, and any value of an environment variable
+(status.py's and post.py's rules, any URL with user info, and any value of an environment variable
 named as a secret, as the driver kit checks); otherwise it is withheld whole.
 A stop or an unknown answer is never retried: a run may exist.
 
@@ -83,6 +83,8 @@ CLEARED = MARK + ', cleared'
 FLEET = ('LAUNCH_FLEET_HARNESS', 'LAUNCH_FLEET_MODEL', 'LAUNCH_FLEET_SKILLS')
 WITHHELD = 'withheld, as it held a credential, a private id or a machine path; run the driver by hand'
 SECRET_NAME = re.compile(r'TOKEN|SECRET|PASSWORD|CREDENTIAL|_KEY$|^KEY')  # the driver kit's rule
+# R3: any URL with user info (`user@` or `user:password@` before its host), with or without a scheme.
+USERINFO = re.compile(r'(?:[a-z][a-z0-9+.-]*:)?//[^\s/?#@]*@', re.I)
 
 
 class Unreadable(Exception):
@@ -104,7 +106,8 @@ class Refused(Outcome):
 def public(text):
     """The driver's own text, or WITHHELD when any part of it could be private (#1446)."""
     secrets = [v for k, v in os.environ.items() if SECRET_NAME.search(k.upper()) and len(v) >= 8]
-    if any(p.search(text) for _, p in status.PRIVATE) or post.PRIVATE.search(text) or any(v in text for v in secrets):
+    if any(p.search(text) for _, p in status.PRIVATE) or post.PRIVATE.search(text) or USERINFO.search(text) \
+            or any(v in text for v in secrets):
         return WITHHELD
     return text
 

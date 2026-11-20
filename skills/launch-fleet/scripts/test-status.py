@@ -40,11 +40,13 @@ VERSION = json.loads((ROOT / '.claude-plugin/plugin.json').read_text())['version
 SKILLS = 'build-ticket@' + VERSION
 
 FAKE_GH = r'''
-import json, os, sys
+import fcntl, json, os, sys
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, parse_qs, unquote
 args = sys.argv[1:]
 world_path = os.environ['FAKE_GH_WORLD']
+# One call at a time, as GitHub settles each write: a run's command edits the world too (#1447).
+lock = open(world_path + '.lock', 'w'); fcntl.flock(lock, fcntl.LOCK_EX)
 world = json.load(open(world_path))
 if args[:2] == ['issue', 'edit']:
     # launch-fleet's fix for an asking note without needs-info: gh issue edit N --repo R --add-label L.
@@ -876,6 +878,108 @@ class FleetRun(Tracker):
         added += [{'labels': [c['body']]} for c in self.calls() if c['method'] == 'EDIT']
         self.assertTrue(added)
         self.assertTrue(all(set(b['labels']) <= LABELS for b in added), added)
+
+
+# #1447: the command under status.py run. It records its pid; `long` sleeps and exits 7, and
+# the others wait for the first heartbeat, then change note 104 as another writer would, and
+# keep running until stopped. Every value is synthetic.
+ACTOR = r'''
+import fcntl, json, os, sys, time
+from datetime import datetime, timedelta, timezone
+mode, out = sys.argv[1], sys.argv[2]
+world, log = os.environ['FAKE_GH_WORLD'], os.environ['FAKE_GH_LOG']
+open(out + '.pid', 'w').write(str(os.getpid()))
+if mode == 'long':
+    time.sleep(3.5); open(out + '.done', 'w').close(); sys.exit(7)
+def calls():
+    return open(log).read().count('\n') if os.path.exists(log) else 0
+while '"PATCH"' not in (open(log).read() if os.path.exists(log) else ''):
+    time.sleep(0.05)
+with open(world + '.lock', 'w') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    w = json.load(open(world)); it = w['issues'][0]
+    mine = next(c for c in it['comments'] if c['id'] == 104)
+    stamp = lambda m: (datetime.now(timezone.utc) - timedelta(minutes=m)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    if mode == 'lost':
+        # The note lapsed (a long stall) and a newer builder claimed the ticket.
+        mine['updated'] = stamp(40)
+        it['comments'].append({'id': 105, 'author': 'openwiz[bot]', 'body': sys.argv[3], 'updated': stamp(0)})
+    else:
+        mine['body'] = mine['body'].replace('state: working', 'state: ' + mode); mine['updated'] = stamp(0)
+    json.dump(w, open(world, 'w'))
+    open(out + '.mark', 'w').write(str(calls()))
+time.sleep(60)
+'''
+
+
+class Run(Tracker):
+    def setUp(self):
+        super().setUp()
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note(), minutes=25))
+        (self.dir / 'actor.py').write_text(ACTOR)
+        self.out = str(self.dir / 'actor')
+
+    def run_command(self, mode, *extra):
+        self.save()
+        started = datetime.now()
+        result = self.run_status('run', '--repo', REPO, '--ticket', '12', '--agent', 'builder', '--note', '104',
+                                 '--every', '1', '--', sys.executable, '-I', str(self.dir / 'actor.py'),
+                                 mode, self.out, *extra)
+        return result, (datetime.now() - started).total_seconds()
+
+    def assert_stopped(self):
+        pid = int(Path(self.out + '.pid').read_text())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+        mark = int(Path(self.out + '.mark').read_text())
+        self.assertEqual([c for c in self.calls()[mark:] if c['method'] == 'PATCH'], [])
+
+    def test_run_keeps_the_note_live_across_a_long_command(self):
+        # catches: a run whose note lapses during long work (no edit, or an edit GitHub would not
+        # record), a beat that changes anything but time, or a lost exit status of the command.
+        result, _ = self.run_command('long')
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertTrue(Path(self.out + '.done').exists())
+        beats = [c for c in self.calls() if c['method'] == 'PATCH']
+        self.assertGreaterEqual(len(beats), 3, beats)
+        self.assertTrue(all(c['path'] == f'repos/{REPO}/issues/comments/104' for c in beats), beats)
+        mine = self.ticket()['comments'][3]
+        time = mine['body'].rsplit('time: ', 1)[1]
+        self.assertEqual(mine['body'], note(time=time))
+        for stamp in (time, mine['updated']):  # the beat's time, and GitHub's updated_at
+            self.assertLess(abs((datetime.now(timezone.utc) - datetime.strptime(
+                stamp, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)).total_seconds()), 60)
+
+    def test_run_stops_the_command_when_a_newer_builder_holds_the_claim(self):
+        # catches: a heartbeat that keeps the work running, or takes the ticket back, after its
+        # note lapsed and a newer builder claimed it (the fence exit).
+        result, took = self.run_command('lost', note(step='claimed the ticket'))
+        self.assertEqual((result.returncode, result.stderr.splitlines()[-1:]),
+                         (3, ['status.py: stop: note 105 holds the builder claim; the command is stopped']))
+        self.assertLess(took, 30)
+        self.assert_stopped()
+
+    def test_a_heartbeat_never_reopens_a_done_or_stopped_note(self):
+        # catches: a heartbeat that writes working on each beat, reopening a note its agent
+        # released mid-run, or that keeps the work running after the release.
+        for state in ('done', 'stopped'):
+            with self.subTest(state=state):
+                self.setUp()
+                result, took = self.run_command(state)
+                self.assertEqual((result.returncode, result.stderr.splitlines()[-1:]), (3, [
+                    f'status.py: stop: note 104 is {state}: a heartbeat never reopens it; the command is stopped']))
+                self.assertLess(took, 30)
+                self.assertEqual(self.ticket()['comments'][3]['body'].split('\n')[2], 'state: ' + state)
+                self.assert_stopped()
+
+    def test_run_never_starts_the_command_on_a_released_note(self):
+        # catches: a run that starts long work on a claim it no longer holds.
+        self.ticket(self.world)['comments'][3]['body'] = note(state='done')
+        result, _ = self.run_command('long')
+        self.assertEqual((result.returncode, result.stderr.splitlines()[-1:]), (3, [
+            'status.py: stop: note 104 is done: a heartbeat never reopens it; the command was not started']))
+        self.assertFalse(Path(self.out + '.pid').exists())
+        self.assertEqual(self.writes(), [])
 
 
 if __name__ == '__main__':

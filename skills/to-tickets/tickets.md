@@ -52,6 +52,6 @@ the spec and `release` for Jake's release go. Include the version in an external
 blocker's title. Use verified merge evidence for `merged`, an existing builder
 for `building` and `waiting` before either. A closed blocker needs independent
 merge evidence. When redrawing, read the states fresh and leave the approval
-record intact. The critical path is a longest dependency chain, including
-external blockers. If chat cannot render Mermaid, send the rendered picture
+record intact. The critical path is a longest chain of hard links (a `file` link into a
+builder's ticket only shares context, F6), including external blockers. If chat cannot render Mermaid, send the rendered picture
 inline and retain the Mermaid block on the issue.

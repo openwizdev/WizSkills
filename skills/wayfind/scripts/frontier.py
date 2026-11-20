@@ -2,15 +2,18 @@
 """Read a wayfind map's frontier, or who holds one question's claim.
 
   python3 -I frontier.py map <map>
-      One line per open question, in the map's order:
+      <map> is the map's issue number. The issue must carry the `wayfind:map`
+      label; any other issue refuses. One line per open question, in the
+      map's order:
         #<n> frontier <kind label>: <title>
         #<n> blocked by #<a> #<b>: <title>
         #<n> held by <claim comment id>: <title>
         #<n> no kind label: <title>      (not exactly one wayfind: kind)
       or `no open question` when every question is closed.
   python3 -I frontier.py holder <question> [--mine <claim comment id>]
-      `closed`, `no kind label`, `blocked by #<a> #<b>`, else `unclaimed`,
-      `held by <id>` or `yours` (your claim holds and nothing blocks it).
+      <question> is the question's issue number. `closed`, `no kind label`,
+      `blocked by #<a> #<b>`, else `unclaimed`, `held by <id>` or `yours`
+      (your claim holds and nothing blocks it).
       Work only on `yours`; on anything else release your claim and stop.
 
 A claim is a comment whose body is `wayfind: claimed`; its id is the
@@ -19,19 +22,22 @@ it releases that claim. The earliest unreleased claim holds the question.
 Only a record author's claim or release counts: a login in the Record
 authors row of the `## GitHub identity` table of docs/agents/fleet.md on
 the repository's default branch. Anyone else's comment is ignored; a
-missing or malformed row trusts nobody and refuses the read.
+missing or malformed row (anything but `| Record authors | <logins> |`)
+trusts nobody and refuses the read.
 
 Every connection is read page by page, in order, through its cursors; a
 page chain that stops short, repeats a cursor or changes its total refuses.
 Exits 2 with the reason on stderr and nothing on stdout when any part of
 the read fails or is incomplete. Never read that as an empty frontier.
-Needs gh (signed in); uses GH_REPO or the current clone's repository.
+Needs gh (signed in). Every issue number names an issue in one repository:
+GH_REPO when set, else the current clone's.
 """
 import json
 import re
 import subprocess
 import sys
 
+MAP = 'wayfind:map'
 KINDS = ('wayfind:grill', 'wayfind:research', 'wayfind:prototype', 'wayfind:task')
 CLAIM = 'wayfind: claimed'
 RELEASE = re.compile(r'wayfind: released ([1-9][0-9]*)')
@@ -100,7 +106,10 @@ def record_authors():
             rows.append(row)
     if len(rows) != 1:
         raise Refuse('no single Record authors row in the GitHub identity table: trust nobody')
-    cells = [cell.strip() for cell in rows[0].split('|')[2].split(',')]
+    columns = rows[0].split('|')
+    if len(columns) != 4 or columns[3].strip():
+        raise Refuse('malformed Record authors row: trust nobody')
+    cells = [cell.strip() for cell in columns[2].split(',')]
     logins = [cell[1:-1].lower() if len(cell) > 2 and cell[0] == cell[-1] == '`' else ''
               for cell in cells]
     if not all(LOGIN.fullmatch(login) for login in logins):
@@ -184,7 +193,10 @@ def line(question, authors):
 def main(argv):
     if len(argv) == 2 and argv[0] == 'map' and argv[1].isdigit():
         authors = record_authors()
-        issue = read(int(argv[1]), 'number ' + PAGE % ('subIssues', '', QUESTION))
+        issue = read(int(argv[1]), 'number ' + PAGE % ('labels', '', FIELDS['labels'])
+                     + ' ' + PAGE % ('subIssues', '', QUESTION))
+        if MAP not in [label.get('name') for label in nodes(issue, 'labels')]:
+            raise Refuse(f'#{argv[1]} has no {MAP} label: not a map')
         lines = [line(q, authors) for q in nodes(issue, 'subIssues') if q.get('state') == 'OPEN']
         return '\n'.join(lines) if lines else 'no open question'
     if len(argv) in (2, 4) and argv[0] == 'holder' and argv[1].isdigit() and \

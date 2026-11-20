@@ -90,7 +90,14 @@ def critical_path(outgoing, incoming):
 
 def picture(data):
     cards, outgoing, incoming = read_graph(data)
-    path = critical_path(outgoing, incoming)
+    critical_path(outgoing, incoming)  # every link: refuses a cycle
+    # F6 (#1353): a file link into a builder's ticket only shares context, so
+    # the chain and the start count read hard links alone; a person's ticket
+    # waits for every link.
+    hard_out = {b: {t: e for t, e in out.items() if e['kind'] != 'file' or cards[t]['role'] != 'builder'}
+                for b, out in outgoing.items()}
+    hard_in = {t: [b for b in blockers if t in hard_out[b]] for t, blockers in incoming.items()}
+    path = critical_path(hard_out, hard_in)
     bold_edges = dict(zip(path, path[1:]))
     ids = {ticket: index for index, ticket in enumerate(cards)}
     rows = ['```mermaid', 'flowchart LR']
@@ -131,7 +138,7 @@ def picture(data):
     if bold:
         rows.append(f'  linkStyle {",".join(map(str, bold))} stroke-width:4px')
     ready = sum(card['role'] == 'builder' and card['state'] == 'waiting'
-                and all(cards[blocker]['state'] == 'merged' for blocker in incoming[ticket])
+                and all(cards[blocker]['state'] == 'merged' for blocker in hard_in[ticket])
                 for ticket, card in cards.items())
     total = sum(card['role'] != 'external' for card in cards.values())
     rows.extend(['```', '', f'Longest chain: {len(path) - 1} links ({" → ".join(path)}).',

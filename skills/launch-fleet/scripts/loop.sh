@@ -25,7 +25,7 @@ if [ "${1:-}" = --bundle ]; then
   repository "$2" || die 'GH_REPO must be owner/name'
   [ $# = 2 ] || spec_number "$3" || die "FLEET_SPEC must be a spec's number"
   source=$(cd -P "$(dirname "$0")/../.." && pwd) || die "can't find the installed skills"
-  files='launch-fleet/scripts/loop.sh launch-fleet/scripts/fleet.sh launch-fleet/scripts/records.py to-tickets/revision.sh launch-fleet/scripts/carried/alarm.py'
+  files='launch-fleet/scripts/loop.sh launch-fleet/scripts/fleet.sh launch-fleet/scripts/records.py to-tickets/revision.sh to-tickets/check-links.sh launch-fleet/scripts/carried/alarm.py'
   for file in $files; do
     [ -r "$source/$file" ] || die "can't read installed $file"
     # The quoted heredoc must preserve every byte, without interpreting shell
@@ -113,7 +113,8 @@ fi
 # consumer clone's skills/ is data to read, never code to run.
 scripts=$guard_scripts
 LAUNCH_FLEET_REVISION=$scripts/to-tickets/revision.sh
-export LAUNCH_FLEET_REVISION
+LAUNCH_FLEET_LINKS=$scripts/to-tickets/check-links.sh
+export LAUNCH_FLEET_REVISION LAUNCH_FLEET_LINKS
 # Refresh may have overlapped another observation. Recheck before the poll.
 overload nonessential-poll
 if [ -n "$FLEET_SPEC" ]; then exec sh "$scripts/launch-fleet/scripts/fleet.sh" spec "$FLEET_SPEC"; fi

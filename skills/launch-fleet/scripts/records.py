@@ -54,6 +54,8 @@ def discover():
         if r.returncode:
             return None
         rows = json.loads(r.stdout, object_pairs_hook=unique)
+        if isinstance(rows, dict):  # the Cloud CLI's {"children": [...]}; a Local one's --json is a bare list
+            rows = rows.get('children')
         if not isinstance(rows, list) or any(not isinstance(t, dict) or not isinstance(t.get('id'), str)
                                             or not ID.fullmatch(t['id']) for t in rows):
             return None

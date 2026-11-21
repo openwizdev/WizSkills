@@ -39,3 +39,26 @@ AssertionError: ('tools/install/install', 'skills') not found in {('runtime/setu
 Ran 34 tests in 3.675s
 
 FAILED (failures=3)
+
+# #2139 red run 2: python3 -I skills/install/tests/test_first_fleet.py -k decisions_pair_is_written (the server-restart line); paths made repository-relative.
+FF
+======================================================================
+FAIL: test_the_decisions_pair_is_written_once_and_only_on_yes (__main__.Continuation.test_the_decisions_pair_is_written_once_and_only_on_yes) [no settings file]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_first_fleet.py", line 490, in test_the_decisions_pair_is_written_once_and_only_on_yes
+    self.assertNotIn('server', said.lower())
+AssertionError: 'server' unexpectedly found in "effect: set decisions' repository pair in the private settings: public synthetic-owner/synthetic-sheep, private synthetic-owner/synthetic-sheep-brain. restart the openwiz server afterwards.\nnothing changed. on the user's yes to exactly this, run again with --yes.\n"
+
+======================================================================
+FAIL: test_the_decisions_pair_is_written_once_and_only_on_yes (__main__.Continuation.test_the_decisions_pair_is_written_once_and_only_on_yes) [an existing settings file]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_first_fleet.py", line 490, in test_the_decisions_pair_is_written_once_and_only_on_yes
+    self.assertNotIn('server', said.lower())
+AssertionError: 'server' unexpectedly found in "effect: set decisions' repository pair in the private settings: public synthetic-owner/synthetic-sheep, private synthetic-owner/synthetic-sheep-brain. restart the openwiz server afterwards.\nnothing changed. on the user's yes to exactly this, run again with --yes.\n"
+
+----------------------------------------------------------------------
+Ran 1 test in 0.204s
+
+FAILED (failures=2)

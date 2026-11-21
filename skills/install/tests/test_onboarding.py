@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -35,6 +36,17 @@ MOMENTS = {'up-front': ('Up front', None), 'install-done': ('Install done', 0), 
            'offer': ('The closing offer', 0)}
 ORDER = ['up-front', 'up-front', 'up-front', 'install-done', 'where', 'grill-start', 'grill-summary', 'spec',
          'fleet-start', 'pr-opened', 'reviewed', 'merged', 'offer']
+
+
+def fake_driver(path, folder, **values):
+    """A fake driver at path whose log paths and values are its own: the road gives a probe no caller variable."""
+    values = dict(FAKE_DRIVER_LOG=str(folder / 'driver.log'), FAKE_DRIVER_SEEN=str(folder / 'driver-seen.log'),
+                  **values)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('#!/bin/sh\nexec env %s "%s" -I "%s" "$@"\n' % (
+        ' '.join('%s=%s' % (k, shlex.quote(v)) for k, v in values.items()), sys.executable,
+        FIXTURES / 'fake_driver.py'))
+    path.chmod(0o755)
 
 
 def teach_lines():
@@ -85,11 +97,7 @@ class Road(Journey):
         self.settings = {'harness': 'claude-code', 'model': 'syn-claude-model-01', 'effort': 'high'}
         repos = [demo_repository(self.repo)] if journey['existing'] else []
         self.repos.write_text(github(repos))
-        adapters = self.dir / 'adapters/local'
-        adapters.mkdir(parents=True)
-        driver = adapters / 'driver'
-        driver.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, FIXTURES / 'fake_driver.py'))
-        driver.chmod(0o755)
+        fake_driver(self.dir / 'adapters/local/driver', self.dir)
         harness = self.dir / 'bin/claude'
         harness.write_text('#!/bin/sh\necho "$0 $*" >> "%s"\nexit 97\n' % (self.dir / 'harness.log'))
         harness.chmod(0o755)
@@ -153,6 +161,10 @@ class Road(Journey):
 
     def gh_calls(self):
         path = self.dir / 'gh-argv.log'
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def driver_seen(self):
+        path = self.dir / 'driver-seen.log'
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def driver_calls(self):
@@ -348,7 +360,7 @@ class Where(unittest.TestCase):
         self.assertEqual(local.returncode, 0, local.stdout)
         self.assertEqual(road.saved()['host'], {'agents': 'local', 'harnesses': ['claude-code'],
                                                 'adapters': str(road.dir / 'adapters')})
-        self.assertEqual(road.driver_calls(), [['version']])
+        self.assertEqual(road.driver_calls(), [['version'], ['version']])
 
 
 class Setting(unittest.TestCase):
@@ -497,6 +509,167 @@ class LaunchYes(unittest.TestCase):
                 self.assertEqual(said_yes.returncode, 0, said_yes.stdout)
                 self.assertEqual(road.saved()['launch']['state'], 'authorized', 'only that yes hands the start over')
                 self.assertEqual(road.spawns(), [])
+
+
+class Drivers(unittest.TestCase):
+    """DW9 (#2006): the road offers every driver the installed build carries that answers `version`."""
+
+    def road(self, name='fresh-project', boat=None):
+        road = Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
+        fake_driver(road.dir / 'adapters/cloudroom/driver', road.dir, FAKE_DRIVER_NAME='cloudroom')
+        fake_driver(road.dir / 'adapters/boat/driver', road.dir, **(boat or {'FAKE_DRIVER_NAME': 'boat'}))
+        boat = road.dir / 'bin/boat'
+        boat.write_text('#!/bin/sh\necho "$0 $*" >> "%s"\nexit 97\n' % (road.dir / 'boat.log'))
+        boat.chmod(0o755)
+        return road
+
+    def test_a_build_with_the_local_cloudroom_and_boat_drivers_offers_all_three(self):
+        # catches: the road offering its fixed two (this machine, Cloudroom) while the build carries boat.dev
+        road = self.road()
+        offer = road.helper(['where'])
+        self.assertEqual(offer.returncode, 12, offer.stdout)
+        offered = re.findall(r'(?m)^- (\S+): (.+)$', offer.stdout)
+        self.assertEqual([name for name, _ in offered], ['local', 'cloud', 'boat'], offer.stdout)
+        self.assertIn('boat.dev', dict(offered)['boat'])
+        self.assertNotIn('Not offered', offer.stdout)
+        self.assertNotIn('host', road.saved())
+        self.assertFalse((road.dir / 'boat.log').exists(), 'only version is called: nothing starts on boat.dev')
+
+    def test_a_driver_whose_version_fails_is_not_offered_and_the_road_says_why(self):
+        # catches: a broken driver offered (its start would fail later), or dropped without a word
+        for boat, why in (({'FAKE_DRIVER_NAME': 'boat', 'FAKE_DRIVER_FAIL': '1'}, 'failed (exit 1)'),
+                          ({'FAKE_DRIVER_NAME': 'local'}, 'names another driver')):
+            with self.subTest(why):
+                road = self.road(boat=boat)
+                offer = road.helper(['where'])
+                self.assertEqual(offer.returncode, 12, offer.stdout)
+                self.assertEqual(re.findall(r'(?m)^- (\S+):', offer.stdout), ['local', 'cloud'], offer.stdout)
+                refused = [line for line in offer.stdout.splitlines() if line.startswith('Not offered: ')]
+                self.assertEqual(len(refused), 1, offer.stdout)
+                self.assertTrue(refused[0].startswith('Not offered: boat: '), refused[0])
+                self.assertIn(why, refused[0])
+                self.assertNotIn('synthetic: not signed in', offer.stdout, "the driver's own words stay off the road")
+                picked = road.helper(['where', '--agents', 'boat', '--yes'])
+                self.assertEqual(picked.returncode, 5, picked.stdout)
+                self.assertNotIn('host', road.saved())
+
+    def test_picking_boat_writes_the_host_line_launch_fleet_reads_after_the_same_preview_and_yes(self):
+        # catches: boat.dev recorded without its preview and yes, written as anything but `Host: boat`, carrying
+        # this machine's permission mode row, or launched without a yes naming boat.dev and its cost
+        road = self.road()
+        preview = road.helper(['where', '--agents', 'boat'])
+        self.assertEqual(preview.returncode, 12, preview.stdout)
+        self.assertIn('boat.dev', preview.stdout)
+        self.assertIn('bills', preview.stdout)
+        self.assertNotIn('host', road.saved())
+        self.assertEqual(road.helper(['where', '--agents', 'boat', '--yes']).returncode, 0)
+        self.assertEqual(road.saved()['host'], {'agents': 'boat', 'harnesses': [],
+                                                'adapters': str(road.dir / 'adapters')})
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting',
+                         skip=lambda t: t.get('tool', [''])[0] == 'where')
+        self.assertEqual(road.saved()['choices']['agents'], 'boat')
+        self.assertEqual(road.helper(['mode']).returncode, 5, 'a permission mode is for this machine only')
+        preview = road.helper(['setting'])
+        self.assertEqual(preview.returncode, 12, preview.stdout)
+        self.assertIn('`Host: boat`', preview.stdout)
+        self.assertNotIn('host_pulls', json.loads(road.world_path.read_text()))
+        wrote = road.helper(['setting', '--yes'])
+        self.assertEqual(wrote.returncode, 0, wrote.stdout + wrote.stderr)
+        world = json.loads(road.world_path.read_text())
+        self.assertEqual(len(world['host_pulls']), 1)
+        branch = world['branches']['openwiz/host-setting']
+        changed = sorted(p for p in set(branch) | set(world['files']) if branch.get(p) != world['files'].get(p))
+        self.assertEqual(changed, ['docs/agents/host.md'], 'only the host line; no permission mode row')
+        self.assertEqual(re.findall(r'(?m)^Host:.*$', branch['docs/agents/host.md']), ['Host: boat'])
+        road.origin_write({'docs/agents/host.md': branch['docs/agents/host.md']})
+        world['host_pulls'][0]['state'] = 'MERGED'
+        road.world = world
+        road.save_world()
+        which = subprocess.run([sys.executable, '-I', str(SKILL_DIR.parent / 'launch-fleet/scripts/host.py'), 'which'],
+                               env=road.env(), capture_output=True, text=True, cwd=road.dir, timeout=60)
+        self.assertEqual(which.stdout.strip(), 'host: boat', which.stderr)
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch',
+                         skip=lambda t: 'world' in t or t.get('tool', [''])[0] != 'spec' and 'tool' in t
+                         or 'setup' in t)
+        road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
+        launch = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(launch.returncode, 12, launch.stdout)
+        ask = [line for line in launch.stdout.splitlines() if '?' in line]
+        self.assertEqual(len(ask), 1, launch.stdout)
+        self.assertIn('on boat.dev', ask[0])
+        self.assertIn('can cost money', ask[0])
+        self.assertIn('bills', ask[0])
+        digest = re.findall(r'(?m)^Confirmation: ([0-9a-f]{64})$', launch.stdout)[0]
+        said_yes = road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest])
+        self.assertEqual(said_yes.returncode, 0, said_yes.stdout)
+        self.assertIn('OPENWIZ_ADAPTERS=%s' % (road.dir / 'adapters'), said_yes.stdout)
+        self.assertEqual(road.spawns(), [])
+        self.assertFalse((road.dir / 'boat.log').exists(), 'the road itself never runs boat')
+
+
+    def test_r1_a_version_probe_gets_no_caller_variable_and_no_stdin(self):
+        # catches: a credential exported for onboarding handed to every discovered driver before the owner picks one
+        road = self.road()
+        road.extra_env.update(SYNTHETIC_ONBOARD_TOKEN='synthetic-marker-not-a-credential',
+                              SYNTHETIC_CALLER_MARKER='synthetic-marker')
+        argv = [sys.executable, '-I', str(SKILL_DIR / 'scripts/first_fleet.py'), 'where', '--state', str(road.state)]
+        offer = subprocess.run(argv, env=road.env(), input='', capture_output=True, text=True, cwd=road.dir,
+                               timeout=120)
+        self.assertEqual(offer.returncode, 12, offer.stdout)
+        seen = road.driver_seen()
+        self.assertEqual(sorted(s['name'] for s in seen), ['boat', 'local'], 'cloudroom is offered as cloud, unprobed')
+        for call in seen:
+            self.assertEqual(call['argv'], ['version'])
+            self.assertNotIn('SYNTHETIC_ONBOARD_TOKEN', call['env'])
+            self.assertNotIn('SYNTHETIC_CALLER_MARKER', call['env'])
+            self.assertIn('PATH', call['env'])
+            self.assertTrue(call['stdin_null'], call)
+
+    def test_r2_a_version_answer_outside_driver_v1s_schema_is_not_offered(self):
+        # catches: a driver with an incompatible version answer listed as a working host
+        good = {'driver': 'boat', 'records': ['openwiz:records v1'], 'can': ['start', 'wake', 'stop', 'own-sandbox']}
+        bad = [dict(good, records=[1]), dict(good, records=[]), dict(good, records=['openwiz:records v2']),
+               dict(good, records=['openwiz:records v1', 'openwiz:records v1']),
+               dict(good, can=['start', 'wake', 'stop', 'fly']), dict(good, can=['start', 'start', 'wake', 'stop']),
+               dict(good, can=['start', 'wake']), dict(good, extra=True), dict(good, driver=7), ['boat']]
+        for answer in [good] + bad:
+            with self.subTest(answer=answer):
+                road = self.road(boat={'FAKE_DRIVER_NAME': 'boat', 'FAKE_DRIVER_ANSWER': json.dumps(answer)})
+                offer = road.helper(['where'])
+                self.assertEqual(offer.returncode, 12, offer.stdout)
+                offered = re.findall(r'(?m)^- (\S+):', offer.stdout)
+                if answer is good:
+                    self.assertEqual(offered, ['local', 'cloud', 'boat'], offer.stdout)
+                    continue
+                self.assertEqual(offered, ['local', 'cloud'], offer.stdout)
+                self.assertEqual(re.findall(r'(?m)^Not offered: (\S+): ', offer.stdout), ['boat'], offer.stdout)
+
+    def test_r3_each_driver_host_says_where_its_login_lives_even_with_its_cli_installed(self):
+        # catches: a signed-out boat.dev account taken as ready because its CLI is installed
+        road = self.road()
+        fake_driver(road.dir / 'adapters/acme/driver', road.dir, FAKE_DRIVER_NAME='acme')
+        boat = road.helper(['where', '--agents', 'boat'])
+        self.assertEqual(boat.returncode, 12, boat.stdout)
+        self.assertIn('Login: held by boat.dev', boat.stdout)
+        self.assertIn('dashboard', boat.stdout)
+        ask = [line for line in boat.stdout.splitlines() if line.endswith('?')]
+        self.assertEqual(len(ask), 1, boat.stdout)
+        self.assertIn('signed in', ask[0])
+        self.assertFalse((road.dir / 'boat.log').exists(), 'the user signs in; the road never runs boat')
+        acme = road.helper(['where', '--agents', 'acme'])
+        self.assertEqual(acme.returncode, 12, acme.stdout)
+        self.assertIn('https://github.com/openwizdev/OpenWiz/blob/main/adapters/acme/README.md', acme.stdout)
+        self.assertIn('Login:', acme.stdout)
+
+    def test_r4_resuming_before_the_host_lists_from_the_build_and_previews_before_the_yes(self):
+        # catches: a resumed road listing only Cloudroom, or saving a host before its cost preview
+        road = self.road()
+        out = road.helper(['next']).stdout
+        self.assertIn('where --build <build>', out)
+        preview = 'where --agents <the pick> --build <build>'
+        self.assertIn(preview, out)
+        self.assertLess(out.index(preview), out.index('--yes'), out)
+        self.assertNotRegex(out, r'<the pick>[^.;]*--yes')
 
 
 class PermissionMode(unittest.TestCase):

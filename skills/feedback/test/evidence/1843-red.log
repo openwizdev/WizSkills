@@ -1,0 +1,14 @@
+test_filed_issue_is_a_report_by_marker_and_names_the_triage_label (__main__.Report.test_filed_issue_is_a_report_by_marker_and_names_the_triage_label) ... FAIL
+
+======================================================================
+FAIL: test_filed_issue_is_a_report_by_marker_and_names_the_triage_label (__main__.Report.test_filed_issue_is_a_report_by_marker_and_names_the_triage_label)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 290, in test_filed_issue_is_a_report_by_marker_and_names_the_triage_label
+    self.assertIn(f"`{loop['label']}` label", sent['say'])
+AssertionError: '`feedback` label' not found in "The public issue was created and read back. This proves only that the issue exists, not that Jake's agents have read it."
+
+----------------------------------------------------------------------
+Ran 1 test in 0.329s
+
+FAILED (failures=1)

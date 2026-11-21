@@ -16,6 +16,14 @@ One table for every agent the fleet starts, in the models contract's form (`open
 
 Source: <a linked source file, or decider, date and plain decision with a Markdown private-record comment link>.
 
+## Roster
+
+Who may take which role, in the roster contract's form (`openwiz.roster.v1`). It starts with one entry: the person's own harness, which may take every role, on the driver setup chose. Every entry writes on GitHub as the person's own OpenWiz App, the person being the GitHub login that owns it. A fleet gives a role only to an entry that lists it, the first in table order. To add a host or a bot, add its row by hand and run `setup`'s check.
+
+| Name | Kind | Driver | Roles | Writes as |
+| --- | --- | --- | --- | --- |
+| <the person's harness, for example Claude Code> | harness | <driver, for example local> | orchestrator, builder, reviewer, helper | <the person's GitHub login>'s App |
+
 ## Labels
 
 The triage labels and their names here are in `triage-labels.md`. A fleet adds one label of its own:

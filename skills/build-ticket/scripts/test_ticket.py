@@ -37,6 +37,9 @@ Ticket X1 of spec #40.
 """
 
 START = 'launch-fleet: started'
+NOREPLY = '7+jparker@users.noreply.github.com'
+PERSONAL = 'pat@example.invalid'          # synthetic stand-in for a personal address
+GLOBAL = f'[user]\n\tname = Pat Person\n\temail = {PERSONAL}\n'
 
 
 def issue(state='OPEN', labels=('ready-for-agent',), blockers=(), body=BODY, number=41):
@@ -77,13 +80,15 @@ class Case(unittest.TestCase):
         self.save({'issues': {'41': issue()}, 'user': {'login': 'jparker', 'id': 7},
                    'comments': {'41': [{'id': 1, 'user': {'login': 'example[bot]'}, 'body': START}]},
                    'pr_head': HEAD, 'checkout_repo': REPO})
+        self.gitconfig = self.dir / 'global.gitconfig'     # the machine's personal global identity
+        self.gitconfig.write_text(GLOBAL)
         self.origin = self.dir / 'origin.git'
-        subprocess.run(['git', 'init', '-q', '--bare', str(self.origin)], check=True)
+        subprocess.run(['git', 'init', '-q', '--bare', str(self.origin)], check=True, env=self.env())
         self.repo = self.dir / 'checkout'
         self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
-        self.git('config', 'user.name', 'test')
-        self.git('config', 'user.email', 'test@example.invalid')
+        self.git('config', 'user.name', 'jparker')
+        self.git('config', 'user.email', NOREPLY)
         self.git('remote', 'add', 'origin', str(self.origin))
         self.write('docs/agents/fleet.md', FLEET)
         self.write('src/export/run.py', 'x = 1\n')
@@ -120,21 +125,27 @@ class Case(unittest.TestCase):
             for i, (login, body) in enumerate(items, 1)]
         self.save(world)
 
-    def git(self, *args):
+    def env(self, **extra):
+        env = {k: v for k, v in os.environ.items()
+               if k not in ('GH_TOKEN', 'GITHUB_TOKEN') and not k.startswith(('GIT_AUTHOR_', 'GIT_COMMITTER_'))}
+        env.update(GIT_CONFIG_GLOBAL=str(self.gitconfig), GIT_CONFIG_NOSYSTEM='1', **extra)
+        return env
+
+    def git(self, *args, **extra):
         return subprocess.run(['git', *args], cwd=self.repo, check=True, capture_output=True,
-                              text=True).stdout
+                              text=True, env=self.env(**extra)).stdout
 
     def write(self, rel, text):
         path = self.repo / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 
-    def commit(self, message='change'):
+    def commit(self, message='change', **extra):
         self.git('add', '-A')
-        self.git('commit', '-q', '-m', message)
+        self.git('commit', '-q', '-m', message, **extra)
 
-    def run_ticket(self, *args, timeout=60):
-        env = {k: v for k, v in os.environ.items() if k not in ('GH_TOKEN', 'GITHUB_TOKEN')}
+    def run_ticket(self, *args, timeout=60, **extra):
+        env = self.env(**extra)
         env['PATH'] = f'{self.bin}{os.pathsep}{env.get("PATH", "")}'
         env['FAKE_GH_WORLD'] = str(self.world)
         r = subprocess.run([sys.executable, '-I', str(SCRIPT), *args], cwd=self.repo, env=env,
@@ -520,6 +531,91 @@ class Author(Case):
         got = [self.git('config', key).strip() for key in ('user.name', 'user.email')]
         self.assertEqual(got, ['jparker', '7+jparker@users.noreply.github.com'])
         self.assertEqual(out, 'author: jparker <7+jparker@users.noreply.github.com>\n')
+
+    def test_author_commit_is_noreply_over_a_personal_global_identity(self):
+        # catches: a builder that commits with the identity the machine's global config gives it
+        self.git('config', '--unset', 'user.name')
+        self.git('config', '--unset', 'user.email')
+        self.write('src/export/run.py', 'x = 2\n')
+        self.commit('before author')
+        self.assertEqual(self.git('log', '-1', '--format=%ae %ce').split(), [PERSONAL, PERSONAL])
+        code, out, err = self.run_ticket('author')
+        self.assertEqual(code, 0, err)
+        self.write('src/export/run.py', 'x = 3\n')
+        self.commit('after author')
+        self.assertEqual(self.git('log', '-1', '--format=%an <%ae> %cn <%ce>'),
+                         f'jparker <{NOREPLY}> jparker <{NOREPLY}>\n')
+
+    def test_author_refuses_an_identity_that_still_overrides_it(self):
+        # catches: author reporting success while the environment still commits as someone else
+        for key in ('GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_EMAIL'):
+            with self.subTest(key=key):
+                code, out, err = self.run_ticket('author', **{key: PERSONAL})
+                who = 'author' if 'AUTHOR' in key else 'committer'
+                self.assertEqual((code, last(out)), (1, f'author refused: the {who} git would use '
+                                                        f'is not {NOREPLY}; unset what overrides it'))
+                self.assertNotIn(PERSONAL, out + err)
+
+    def test_author_refuses_a_login_it_cannot_read(self):
+        self.update(user={'login': 'bad login!', 'id': 7})
+        code, _, err = self.run_ticket('author')
+        self.assertEqual(code, 2)
+        self.assertIn('unexpected shape', err)
+        self.assertEqual(self.git('config', 'user.email').strip(), NOREPLY)   # left as it was
+
+
+class Identity(Case):
+    """`push` refuses before pushing when an outgoing commit is not by a GitHub noreply address."""
+
+    def remote_work(self, branch='work'):
+        return self.git('ls-remote', 'origin', f'refs/heads/{branch}').strip()
+
+    def test_push_refuses_a_commit_without_a_noreply_author_or_committer(self):
+        # catches: a personal (or lookalike) address reaching GitHub in a pushed commit
+        cases = [('author', {'GIT_AUTHOR_EMAIL': PERSONAL}),
+                 ('committer', {'GIT_COMMITTER_EMAIL': PERSONAL}),
+                 ('author', {'GIT_AUTHOR_EMAIL': NOREPLY + '.example.invalid'}),
+                 ('committer', {'GIT_COMMITTER_EMAIL': 'noreply@example.invalid'})]
+        for i, (who, extra) in enumerate(cases):
+            with self.subTest(who=who, extra=extra):
+                self.git('checkout', '-q', '-b', f'work-{i}', 'main')
+                self.write('src/export/run.py', f'x = {10 + i}\n')
+                self.commit('personal', **extra)
+                sha = self.git('rev-parse', 'HEAD').strip()
+                receipt = self.dir / f'receipt-{i}.txt'
+                code, out, err = self.run_ticket('push', str(receipt), '--', 'git', 'push', '-q', 'origin', 'HEAD')
+                self.assertEqual((code, last(out)), (1, f'push refused: commit {sha[:12]} {who} is not '
+                                                        'a GitHub noreply address; nothing pushed'), err)
+                self.assertEqual((self.remote_work(f'work-{i}'), receipt.exists()), ('', False))
+                self.assertNotIn(PERSONAL, out + err)
+
+    def test_push_refuses_an_earlier_unpushed_commit_too(self):
+        # catches: checking only HEAD while an earlier outgoing commit carries the personal address
+        self.git('config', '--unset', 'user.email')                        # falls back to the global one
+        self.write('src/export/run.py', 'x = 2\n')
+        self.commit('red')
+        red = self.git('rev-parse', 'HEAD').strip()
+        self.git('config', 'user.email', NOREPLY)
+        self.write('src/export/run.py', 'x = 3\n')
+        self.commit('green')
+        code, out, _ = self.run_ticket('push', str(self.dir / 'r.txt'), '--', 'git', 'push', '-q', 'origin', 'HEAD')
+        self.assertEqual((code, last(out)), (1, f'push refused: commit {red[:12]} author is not '
+                                                'a GitHub noreply address; nothing pushed'))
+        self.assertEqual(self.remote_work(), '')
+
+    def test_push_checks_only_commits_not_already_on_the_remote(self):
+        # catches: refusing work someone else already pushed (main's commits keep their own identity)
+        self.git('checkout', '-q', 'main')
+        self.write('src/other.py', 'y = 2\n')
+        self.commit('upstream', GIT_AUTHOR_EMAIL=PERSONAL, GIT_COMMITTER_EMAIL=PERSONAL)
+        self.git('push', '-q', 'origin', 'main')
+        self.git('checkout', '-q', 'work')
+        self.git('merge', '-q', '--no-edit', 'main')
+        self.write('src/export/run.py', 'x = 2\n')
+        self.commit('mine')
+        code, out, err = self.run_ticket('push', str(self.dir / 'r.txt'), '--', 'git', 'push', '-q', 'origin', 'HEAD')
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.remote_work().split()[0], self.git('rev-parse', 'HEAD').strip())
 
 
 if __name__ == '__main__':

@@ -123,3 +123,11 @@ AssertionError: '0.2.0' == '0.2.0'
 Ran 39 tests in 3.797s
 
 FAILED (failures=2)
+
+# #2139 red run 5 (rehearsal 4): python3 -I skills/install/tests/test_doctor.py at 216bb6d with only the new assertions; failure lines only.
+FAIL: test_a_new_session_resumes_from_installed_files_at_the_first_unfinished_step (__main__.SkillCommandsMatchPackage.test_a_new_session_resumes_from_installed_files_at_the_first_unfinished_step)
+FAIL: test_step_4_overwrites_the_installed_copy_and_checks_it_by_content (__main__.SkillCommandsMatchPackage.test_step_4_overwrites_the_installed_copy_and_checks_it_by_content)
+Ran 39 tests in 3.682s
+FAILED (failures=2)
+AssertionError: 'OPENWIZ_STATE_DIR="$state"' not found in '## Resume\n\nA new session, whatever the user said ("continue", or the one line again), starts here: find the first unfinished step and resum
+AssertionError: 'git clone --depth 1 --branch maint/0.2 https://github.com/openwizdev/WizSkills' not found in '## 4. Skills into your agents, then a restart\n\nOnly now, with setup checked and the log

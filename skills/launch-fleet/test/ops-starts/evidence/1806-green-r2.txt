@@ -1,0 +1,16 @@
+$ python3 -I skills/launch-fleet/test/ops-protocol/test_protocol.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-effects.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-grants.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-inbox.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-records.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-status.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-ops-starts.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-on1.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-limit-replacement.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-limit-recovery.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-post.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-merge.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-brief.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-host.py -> 0 OK
+$ python3 -I skills/launch-fleet/scripts/test-route.py -> 0 OK
+changeset check: pass (launch-fleet)

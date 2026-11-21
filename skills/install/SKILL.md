@@ -130,21 +130,21 @@ It copies the 18 skills into `<root>/skills` and into each agent folder present 
 **A skill of the user's own with one of these names refuses the whole step** (`"outcome": "refused"`, exit 5, nothing copied): an entry reads `refused` with `next` "`<folder>` is not an OpenWiz copy; nothing was changed". It names only the first such folder per agent, so find them all (this skill's folder is the one you read it from; with none on this computer, run the overwrite block's `git clone` below first and use `"$wizskills"/skills/install`):
 
 ```sh
-python3 -I <this skill's folder>/scripts/skill_clash.py list --build "$build"
+python3 -I <this skill's folder>/scripts/skill_clash.py list --build "$build" --root <root>
 ```
 
-It only reads. Show the user every `clashes` folder (`path`, and its `rename_to`), then ask exactly its `question`, word for word, and nothing else, for example: "You already have your own skills named handoff and research. Rename yours to handoff-mine and research-mine (and their name lines) so OpenWiz can install? They keep working under the new names. (yes/no)". When a `<name>-mine` is already taken, it picks `<name>-mine-2` and the question says so.
+It only reads, and checks the agent folders exactly as the installer does, as if the moves were done. When `blocked` is empty, show the user every `clashes` folder (`path`, and its `rename_to`), then ask exactly its `question`, word for word, and nothing else, for example: "You already have your own skills named handoff and research. Rename yours to handoff-mine and research-mine (and their name lines) so OpenWiz can install? They keep working under the new names. (yes/no)". When a `<name>-mine` is already taken, it picks `<name>-mine-2` and the question says so.
 
 - **Yes:** do the moves yourself, with the `operation` that `list` printed:
 
   ```sh
-  python3 -I <this skill's folder>/scripts/skill_clash.py rename --build "$build" --yes --operation <operation>
+  python3 -I <this skill's folder>/scripts/skill_clash.py rename --build "$build" --root <root> --yes --operation <operation>
   ```
 
-  It moves each folder to its `rename_to` and sets its SKILL.md `name:` line to match, then checks each one (the new folder has the new name line, the old path is gone): exit 0 and every entry `moved`. Then run `install skills` again and carry on with the checks above. Exit 5 means the folders changed since `list`: nothing moved; run `list` again and ask again. Exit 6 names a move that did not check out: report it and stop.
+  It moves each folder to its `rename_to` and sets its SKILL.md `name:` line to match, then checks each one (the new folder has the new name line, the old path is gone): exit 0 and every entry `moved`. Then run `install skills` again and carry on with the checks above. Exit 5 means the folders changed since `list`, or the installer would now refuse: nothing moved; run `list` again. Exit 6 names a move that did not check out: report it and stop.
 - **No:** say plainly that OpenWiz's skills were not installed in any of your agents, and stop. Move nothing.
 
-Never move, rename or delete a user's skill without that yes, and never touch a folder OpenWiz put there (it holds `.openwiz-skill`): `skill_clash.py` leaves those alone. A `blocked` entry is a link or a file, not a folder: show it to the user and stop; never move it.
+Never move, rename or delete a user's skill without that yes, and never touch a folder OpenWiz put there (it holds `.openwiz-skill`): `skill_clash.py` leaves those alone. When `blocked` has entries, there is no `question` and nothing may move: something the installer would still refuse after the renames (a linked folder such as `~/.config`, a skill whose `SKILL.md` is a link, a stray folder). Show each `path` and its `why`, say OpenWiz's skills were not installed, and stop.
 
 Then make every installed copy of this skill this one, the whole folder. The copy `install skills` just wrote comes from the 0.1.0 package: it is older (`version: 0.2.0`), its `SKILL.md` and scripts still name a setup page and a server 0.1.0 removed, and a new session loads it whatever the user says. Take this skill's own folder: the one you read it from when it is on this computer (a WizSkills clone or plugin: set `src` to it and skip the clone), otherwise a fresh clone of WizSkills (it installs nothing). Then overwrite each agent folder that holds OpenWiz's copy (marked by `.openwiz-skill`), and check every file by content:
 

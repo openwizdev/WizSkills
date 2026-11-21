@@ -703,7 +703,8 @@ class SkillNameClash(unittest.TestCase):
 
     def run_clash(self, *args):
         env = {'HOME': str(self.home), 'PATH': '/usr/bin:/bin'}
-        return subprocess.run([sys.executable, '-I', str(CLASH), *args, '--build', str(self.build)],
+        return subprocess.run([sys.executable, '-I', str(CLASH), *args, '--build', str(self.build),
+                               '--root', str(self.home / '.local/lib/openwiz')],
                               env=env, capture_output=True, text=True)
 
     def tree(self):
@@ -783,8 +784,9 @@ class SkillNameClash(unittest.TestCase):
     # catches: step 4 still saying only "report it", so a stranger has to invent the next instruction.
     def test_step_4_asks_once_and_says_what_no_means(self):
         step4 = SKILL.read_text()[SKILL.read_text().index('## 4. '):SKILL.read_text().index('## 5. ')]
-        for words in ('scripts/skill_clash.py list --build "$build"',
-                      'scripts/skill_clash.py rename --build "$build" --yes --operation <operation>',
+        for words in ('scripts/skill_clash.py list --build "$build" --root <root>',
+                      'scripts/skill_clash.py rename --build "$build" --root <root> --yes --operation <operation>',
+                      'there is no `question` and nothing may move',
                       'ask exactly its `question`, word for word', 'run `install skills` again',
                       "OpenWiz's skills were not installed", 'and stop', '<name>-mine-2',
                       'Never move, rename or delete a user\'s skill without that yes'):

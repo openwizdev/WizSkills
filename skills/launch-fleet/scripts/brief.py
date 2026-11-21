@@ -68,10 +68,13 @@ REQUESTERS = {'builder': ('builder-{0}', None), 'fresh': ('builder-{0}', None), 
               'wake': ('fleet-{0}', '{1}'), 'tick': ('fleet-tick', '{0}'), 'wakes': ('fleet-tick', '{0}')}
 TOKEN = (" GitHub token: run every gh or git command that reaches GitHub through the agent helper, the launch-fleet "
          "skill's `scripts/github-app/agent-token.py` (find launch-fleet's SKILL.md as above): first "
-         "`python3 -I <helper> start --requester {who} --repository {repo}`, then "
-         "`python3 -I <helper> run --requester {who} --repository {repo} -- <command>` for each command, with the same "
+         "`env -u OPENWIZ_GITHUB_APP_KEY python3 -I <helper> start --requester {who} --repository {repo}`, then "
+         "`env -u OPENWIZ_GITHUB_APP_KEY python3 -I <helper> run --requester {who} --repository {repo} -- <command>` "
+         "for each command, with the same "
          "request every time and `--repository` once for each repository you read or write (all of one owner). Inside a run git "
-         "reaches GitHub over HTTPS only, never SSH. If it gets no token it says so once on stderr and runs the command as the owner's login: go on. Approvals, "
+         "reaches GitHub over HTTPS only, never SSH. The helper is your only App-token route: never run "
+         "`openwiz github token`, the App-token block in launch-fleet's `references/identity.md`, or any command with "
+         "`OPENWIZ_GITHUB_APP_KEY` in its environment. If it gets no token it says so once on stderr and runs the command as the owner's login: go on. Approvals, "
          "repository settings and pushes that change `.github/workflows/` stay on the owner's login: run those "
          "without the helper.")
 

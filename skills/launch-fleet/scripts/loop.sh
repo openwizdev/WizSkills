@@ -66,7 +66,8 @@ export GH_REPO
 # `run`, as the read-only requester fleet-check. The helper hands gh its token
 # as GH_TOKEN and git its own credential helper, or, when it gets none, prints
 # the contract's one note and runs the wake as today's account. The old key
-# secret below is then never used. With no service configured, nothing changes.
+# secret below is then never used, and is cleared first, so it never reaches
+# the helper or any child. With no service configured, nothing changes.
 # The marker is this shell's process id: the helper keeps it (exec), so the wake
 # it runs sees it as its parent's id, or as its own after a fallback (the
 # helper execs the wake). An inherited marker matches neither and is ignored.
@@ -74,6 +75,8 @@ inside=
 case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
 unset LAUNCH_FLEET_TOKEN_STEP
 if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ]; then
+  # R2: the superseded key secret never reaches the helper, the wake or its children.
+  unset OPENWIZ_GITHUB_APP_KEY
   helper=$(cd -P "$(dirname "$0")" && pwd)/github-app/agent-token.py
   LAUNCH_FLEET_TOKEN_STEP=$$
   export LAUNCH_FLEET_TOKEN_STEP

@@ -433,6 +433,13 @@ class ApprovalTest(unittest.TestCase):
         w["comments"][0][0]["body"] = w["comments"][0][0]["body"].replace("| #173 |", "| other-owner/other-repo#173 |")
         self.run_check(w, status=1, reason="approval table line `| other-owner/other-repo#173 | Synthetic ticket 173 | none | ready-for-agent |` names other-owner/other-repo#173, not this repository")
 
+    def test_a_title_naming_another_repository_refuses_nothing(self):
+        w = fixture(172)
+        w["repo"] = {"isPrivate": False, "nameWithOwner": "synthetic-owner/synthetic-repo"}
+        w["comments"][0][0]["body"] = w["comments"][0][0]["body"].replace(
+            "Synthetic ticket 173", "Synthetic ticket 173, after other-owner/other-repo#5")
+        self.run_check(w)
+
     def test_long_form_row_is_refused_when_this_repository_is_unknown(self):
         w = fixture(172)
         w["comments"][0][0]["body"] = w["comments"][0][0]["body"].replace("| #173 |", "| synthetic-owner/synthetic-repo#173 |")

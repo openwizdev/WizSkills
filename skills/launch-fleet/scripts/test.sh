@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=898      # #2096 added 11; includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 22; #1759 added 5
+CASES=900      # #2096 added 13; includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 22; #1759 added 5
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1636,6 +1636,12 @@ release #70: ordering hold 7003; issue #11 merged to main; restore ready-for-age
 EOF
 expect 'long form: a wait naming another repository is refused with its line' 0 check.json 'say(12; 1202; "11:00"; "launch-fleet: waiting for other-owner/other-repo#71") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check <<EOF
 look #12: comment 1202's line \`launch-fleet: waiting for other-owner/other-repo#71\` names other-owner/other-repo#71, not this repository
+EOF
+expect 'long form: a title naming another repository refuses nothing' 0 check.json 'merge12 | issue(10; .comments[0].body |= sub("\\| W3: widget page \\|"; "| W3: widget page, after other-owner/other-repo#5 |"))' -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'long form: prose after a wait naming another repository refuses nothing' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator: **wait for #71.** It ports other-owner/other-repo#5.") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check <<EOF
+resume #12: #71 merged; tell its builder, thread thr_syn12 (wait comment 1202)
 EOF
 expect 'long form: a raised refusal is not raised again' 0 check.json 'say(12; 1202; "11:00"; "launch-fleet: waiting for other-owner/other-repo#71") | say(12; 1203; "11:05"; "launch-fleet: look: comment 1202'"'"'s line `launch-fleet: waiting for other-owner/other-repo#71` names other-owner/other-repo#71, not this repository")' -- check < /dev/null
 

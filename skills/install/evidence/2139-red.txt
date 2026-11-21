@@ -62,3 +62,41 @@ AssertionError: 'server' unexpectedly found in "effect: set decisions' repositor
 Ran 1 test in 0.204s
 
 FAILED (failures=2)
+
+# #2139 red run 3 (rehearsal 2's findings): python3 -I skills/install/tests/test_doctor.py at 9c66caf with only the new tests; paths made repository-relative.
+...............................F.FF..
+======================================================================
+FAIL: test_every_cloudroom_code_has_a_row (__main__.SkillCommandsMatchPackage.test_every_cloudroom_code_has_a_row)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 563, in test_every_cloudroom_code_has_a_row
+    self.assertEqual(sorted(set(json.loads(PACKAGE.read_text())['cloudroom_codes']) - rows), [])
+AssertionError: Lists differ: ['cloudroom_source_unchecked'] != []
+
+First list contains 1 additional elements.
+First extra element 0:
+'cloudroom_source_unchecked'
+
+- ['cloudroom_source_unchecked']
++ []
+
+======================================================================
+FAIL: test_removal_names_each_entry_and_never_deletes_a_folder_whole (__main__.SkillCommandsMatchPackage.test_removal_names_each_entry_and_never_deletes_a_folder_whole)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 571, in test_removal_names_each_entry_and_never_deletes_a_folder_whole
+    self.assertIn('`%s`' % name, removal)
+AssertionError: '`ask-wiz`' not found in "## Recovery and removal\n\nIf something seems wrong, run `install status --root <root>`: it verifies the selected build and changes nothing. A changed file reads `installed asset mismatch`, and `install` refuses the same way; then, on the user's yes, remove OpenWiz as below and install again from step 2.\n\nTo remove OpenWiz, delete `<root>`; there is no server to stop. That deletes the build and, with the default `<state>` (`<root>/state`), the settings too: setup, sign-in and project records. A custom `<state>` outside `<root>` stays unless the user asks. It leaves the skill copies `install skills` made, each marked by an `.openwiz-skill` file, in `~/.claude/skills`, `~/.codex/skills` (or `$CODEX_HOME/skills`), `~/.cursor/skills`, `~/.config/opencode/skills` and `~/.grok/skills`: delete only folders with that mark, on the yes. Removal revokes nothing: show the user how to uninstall the App or remove repositories from it, delete any phone-access tunnel or rule, and delete the fleet loops in CloudRoom. Never remove or revoke anything without their yes.\n"
+
+======================================================================
+FAIL: test_skills_and_the_restart_come_after_setup_and_the_logins (__main__.SkillCommandsMatchPackage.test_skills_and_the_restart_come_after_setup_and_the_logins)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 554, in test_skills_and_the_restart_come_after_setup_and_the_logins
+    self.assertLess(order.index(step), skills, step)
+AssertionError: 7 not less than 4 : ('runtime/setup/setup.py', 'check')
+
+----------------------------------------------------------------------
+Ran 37 tests in 3.703s
+
+FAILED (failures=3)

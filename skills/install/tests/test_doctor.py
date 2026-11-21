@@ -475,6 +475,7 @@ class Doctor(unittest.TestCase):
 # flags, against what OpenWiz 0.1.0's own --help prints (fixtures/openwiz-0.1.0-commands.json, read from
 # the published package). A step naming a command the package lacks stops a stranger's install there.
 SKILL = Path(__file__).resolve().parents[1] / 'SKILL.md'
+LINE = 'maint/0.2'  # the WizSkills line this copy of the skill is on
 PACKAGE = Path(__file__).resolve().parent / 'fixtures/openwiz-0.1.0-commands.json'
 # The bare names the skill's prose uses, by the tool each one means.
 BARE = {'install': 'tools/install/install', 'setup.py': 'runtime/setup/setup.py',
@@ -487,9 +488,8 @@ def skill_commands(text):
     fenced line and inline span whose first word, after `python3` and its options, names a packaged tool."""
     import re
     spans = []
-    for block in re.findall(r'```[a-z]*\n(.*?)```', text, re.S):
-        spans += block.split('\n')
-    spans += re.findall(r'`([^`\n]+)`', re.sub(r'```[a-z]*\n.*?```', '', text, flags=re.S))
+    for match in re.finditer(r'```[a-z]*\n(.*?)```|`([^`\n]+)`', text, re.S):
+        spans += match[1].split('\n') if match[1] is not None else [match[2]]
     found = []
     for span in spans:
         words = [w.strip('"\'[]') for w in span.split()]
@@ -544,14 +544,44 @@ class SkillCommandsMatchPackage(unittest.TestCase):
         self.assertTrue(any(t == 'openwiz' and s == '' and '--build-identity' in f
                             for t, s, f, _ in self.commands), 'no `<root>/current/openwiz --build-identity`')
 
+    # catches: the skills copied, and the restart that loads them, before the logins and setup's check
+    # (#2139): the restarted agent then loads the 0.1.0 package's older install skill mid-install.
+    def test_skills_and_the_restart_come_after_setup_and_the_logins(self):
+        order = [(tool, sub) for tool, sub, _, _ in self.commands]
+        skills = order.index(('tools/install/install', 'skills'))
+        for step in [('runtime/setup/setup.py', 'check'), ('runtime/cloudroom/cloudroom.py', 'sign-in'),
+                     ('runtime/setup/github_login.py', 'sign-in')]:
+            self.assertLess(order.index(step), skills, step)
+        text = SKILL.read_text()
+        self.assertIn('The installed copy of this skill is older than this one', text)
+        self.assertIn('https://github.com/openwizdev/WizSkills/blob/%s/skills/install/SKILL.md' % LINE, text)
+
+    # catches: a CloudRoom code 0.1.0 prints with no row, so the agent improvises its next step.
+    def test_every_cloudroom_code_has_a_row(self):
+        rows = {code for line in SKILL.read_text().split('\n') if line.startswith('| `cloudroom_')
+                for code in __import__('re').findall(r'`(cloudroom_[a-z_]+)`', line.split(' | ')[0])}
+        self.assertEqual(sorted(set(json.loads(PACKAGE.read_text())['cloudroom_codes']) - rows), [])
+
+    # catches: a removal that deletes <root> or <state> whole (the user's own files go with it), or
+    # leaves the agent guessing which skill folders are OpenWiz's.
+    def test_removal_names_each_entry_and_never_deletes_a_folder_whole(self):
+        text = SKILL.read_text()
+        removal = text[text.index('## Recovery and removal'):]
+        for name in json.loads(PACKAGE.read_text())['skills']:
+            self.assertIn('`%s`' % name, removal)
+        for entry in ('`current`', '`channel.json`', '`install.lock`', '`skills/`', '`setup/`', '`cloudroom/`',
+                      '`config.json`', '`app/`', '`state.json`', '`loops/`', '`clone/`', 'ls -A', 'rmdir'):
+            self.assertIn(entry, removal)
+        self.assertNotRegex(removal, r'(?i)\bdelete `<root>`|rm -rf')
+
     # catches: a parser that finds nothing passing the check above vacuously.
     def test_the_reader_finds_a_synthetic_skill_s_commands(self):
         text = ('Run `install open --root <root> --browser` and\n\n```sh\n'
                 'python3 -I "$openwiz"/tools/install/install skills --root <root>\n```\n'
                 'then `<root>/current/openwiz --build-identity` and `git clone x "$openwiz"`.\n')
         self.assertEqual([c[:3] for c in skill_commands(text)],
-                         [('tools/install/install', 'skills', ['--root']),
-                          ('tools/install/install', 'open', ['--browser', '--root']),
+                         [('tools/install/install', 'open', ['--browser', '--root']),
+                          ('tools/install/install', 'skills', ['--root']),
                           ('openwiz', '', ['--build-identity'])])
 
 

@@ -1375,6 +1375,60 @@ class ModelsTable(unittest.TestCase):
         self.assertEqual(j.state.read_bytes(), saved, 'read-only after activation')
         self.assertEqual(j.spawns(), [], 'the launch starts nothing itself')
 
+    def authorized(self):
+        j = Journey(self)
+        j.replay(until='launch')
+        j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CODEX)
+        j.save_world()
+        self.assertEqual(j.tool(PREVIEW).returncode, 12)
+        said_yes = j.tool(YES)
+        self.assertEqual(said_yes.returncode, 0, said_yes.stdout)
+        return j, said_yes
+
+    def test_an_unknown_record_or_orchestrator_never_repeats_the_handoff(self):
+        handoff = "follow launch-fleet's Launch section"
+        for name in ('record unread, orchestrator unchanged', 'no orchestrator in the settings'):
+            with self.subTest(name):
+                j, _ = self.authorized()
+                if name.startswith('record'):
+                    j.extra_env = {'FAKE_GH_COMMENTS_FAIL': '1'}
+                else:
+                    text = models_md(orchestrator=CODEX)
+                    j.world['files']['docs/agents/fleet.md'] = (
+                        text[:text.index('## Models\n')] + text[text.index('## CI checks'):])
+                    j.save_world()
+                saved = j.state.read_bytes()
+                retry = j.tool(YES)
+                self.assertEqual(retry.returncode, 6, retry.stdout + retry.stderr)
+                self.assertNotIn(handoff, retry.stdout)
+                self.assertNotIn('Traceback', retry.stderr)
+                self.assertEqual(j.state.read_bytes(), saved, 'nothing withdrawn or saved while unknown')
+
+    def test_the_start_path_is_bound_to_the_orchestrator_the_user_said_yes_to(self):
+        j, said_yes = self.authorized()
+        approved = '--provider %s --model %s --reasoning-level %s' % CODEX
+        gate = 'ops-starts.py flags --repo %s fleet_thread' % REPO
+        retry = j.tool(YES)
+        self.assertEqual(retry.returncode, 6, retry.stdout)
+        for said in (said_yes.stdout, retry.stdout):
+            self.assertIn('`%s`' % approved, said, 'the handoff names the approved Orchestrator')
+            self.assertIn(gate, said, "the handoff checks launch-fleet's own start reader first")
+            self.assertIn('--provider codex --model syn-codex-model-01 --reasoning high', said)
+        resumed = j.helper(['next']).stdout
+        self.assertIn('run launch --spec 900 first', resumed, 'a resumed start goes through the same check')
+        reader = [sys.executable, '-I', str(SKILL_DIR.parent / 'launch-fleet/scripts/ops-starts.py'), 'flags', '--repo',
+                  REPO, 'fleet_thread']
+        now = subprocess.run(reader, env=j.env(), cwd=j.dir, capture_output=True, text=True, timeout=60)
+        self.assertEqual((now.returncode, now.stdout.strip()), (0, approved), 'the check passes while unchanged')
+        j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CLAUDE)
+        j.save_world()
+        moved = subprocess.run(reader, env=j.env(), cwd=j.dir, capture_output=True, text=True, timeout=60)
+        self.assertEqual(moved.returncode, 0, moved.stderr)
+        self.assertNotEqual(moved.stdout.strip(), approved, 'the check the handoff names catches the change')
+        again = j.tool(YES)
+        self.assertEqual(again.returncode, 5, again.stdout)
+        self.assertIn('preview again and ask again', again.stdout)
+
 
 class Resume(unittest.TestCase):
     """#1183: a fresh session resumes the first fleet from the private state alone.

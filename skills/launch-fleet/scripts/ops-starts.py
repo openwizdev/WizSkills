@@ -4,8 +4,8 @@
 The ops agent reads GitHub and CloudRoom completely and supplies the facts per
 candidate (see ../test/ops-starts/README.md). This module checks every start
 gate, selects the configured settings and the other-family reviewer from
-docs/agents/fleet.md's Models table (MD4, #1806; the older five tables without
-one), builds or reuses the one durable `intent` for each eligible start, and runs it through #1456's ops pass and OB3's boundary. Under
+docs/agents/fleet.md, builds or reuses the one durable `intent` for each
+eligible start, and runs it through #1456's ops pass and OB3's boundary. Under
 OB-A1 every start stays disabled: `effect_boundary` is never called, and the
 result is recorded and the pass ends. Nothing here waits, polls or retries.
 """
@@ -66,8 +66,6 @@ def digest(value):
                                      allow_nan=False).encode()).hexdigest()
 
 
-# MD4 (#1806): every start reads the one Models table of the models contract
-# (contracts/models.v1.md, openwiz.models.v1), with the older five tables as the fallback.
 FAMILY = {'claude-code': 'claude', 'codex': 'gpt'}
 OLDER = ('Builder', 'Builder for small tickets', 'Reviewer for Claude-built', 'Reviewer for GPT-built', 'Fixer')
 MODELS_HEADER = ['Role', 'Harness', 'Model', 'Effort', '`room-cli thread spawn` flags']
@@ -78,7 +76,6 @@ LOOP = re.compile(r'[A-Za-z0-9_-]+')
 ROLES = (('Orchestrator', 'orchestrator'), ('Builder', 'builder'), ('Reviewer', 'reviewer'),
          ('Small builder', 'small_builder'), ('Fixer', 'fixer'))
 ID = re.compile(r'[A-Za-z0-9._-]+')
-# What each start spawns, by name: the CLI's `flags [START]`.
 STARTS = {'fleet_thread': ('roles', 'orchestrator'), 'builder': ('roles', 'builder'),
           'small_builder': ('roles', 'small_builder'), 'review_of_claude_built': ('reviews', 'claude'),
           'review_of_gpt_built': ('reviews', 'gpt'), 'fix_round_for_claude_builder': ('fixers', 'claude'),
@@ -96,7 +93,6 @@ def _cells(line):
 
 
 def _section(text, name):
-    """The lines under exactly one `## <name>` heading, to the next `## `; None when absent."""
     lines = _lines(text)
     at = [i for i, line in enumerate(lines) if line == '## ' + name]
     if len(at) > 1:
@@ -127,7 +123,6 @@ def _flags(cell):
 
 
 def _models_table(lines):
-    """The section's first table, exactly as the contract's Models table form says."""
     start = next((i for i, line in enumerate(lines) if line.startswith('|')), None)
     if start is None:
         raise ValueError('fleet settings: no Models table')
@@ -164,8 +159,6 @@ def _models_table(lines):
 
 
 def _one_table(lines, header, name):
-    """The body rows of a section's one table: exactly one table, its header and separator exact,
-    every row as wide as the header (as strict as OpenWiz's reader of the older tables)."""
     at = [i for i, line in enumerate(lines) if line.startswith('|')]
     if not at or at[-1] - at[0] + 1 != len(at):
         raise ValueError(f'fleet settings: not exactly one "{name}" table')
@@ -208,12 +201,10 @@ def _older_tables(text):
         if len(mine) != 1:
             raise ValueError(f'fleet settings: not exactly one Fixer row {family}')
         choice = _choice(mine[0][1:4], *_flags(mine[0][4]))
-        # The fixer rule: a fix round runs on the original builder's family, or waits (R3).
         fixers.append(choice if FAMILY.get(choice['provider']) == own_family else None)
     if len(rows) != 2:
         raise ValueError('fleet settings: a Fixer table without exactly its Claude and GPT rows')
     builder, small, for_claude, for_gpt = tables
-    # As today: each reviewer table names exactly the other family, and both builder tables a known one.
     if (for_claude['provider'] != 'codex' or for_gpt['provider'] != 'claude-code'
             or {builder['provider'], small['provider']} - set(FAMILY)):
         raise ValueError('fleet settings: builder/reviewer tables break the family rule')
@@ -228,7 +219,6 @@ def _older_tables(text):
 
 
 def read_models(text):
-    """Every role, review and fix round of docs/agents/fleet.md; a broken table refuses, never guessed."""
     section = _section(text, 'Models')
     if section is None:
         if not any(line == '## ' + name for name in OLDER for line in _lines(text)):
@@ -238,17 +228,14 @@ def read_models(text):
     builder, reviewer, fixer = (roles[k]['choice'] for k in ('builder', 'reviewer', 'fixer'))
     reviews, fixers = {}, {}
     for family in ('claude', 'gpt'):
-        # The cross-family rule (ADR 0008): the Reviewer, else the Builder, of a known other family; else waits.
         reviews[family] = next((dict(choice=c) for c in (reviewer, builder)
                                 if FAMILY.get(c['provider']) not in (None, family)), dict(choice=None))
-        # The fixer rule: the Fixer, else the Reviewer, of the original builder's family; else waits.
         fixers[family] = next((dict(choice=c) for c in (fixer, reviewer)
                                if FAMILY.get(c['provider']) == family), dict(choice=None))
     return dict(read='models_table', roles=roles, reviews=reviews, fixers=fixers)
 
 
 def read_fleet(repo):
-    """docs/agents/fleet.md as GitHub's default branch has it now (R1): never the checkout's copy."""
     if type(repo) is not str or not REPO.fullmatch(repo) or repo.split('/')[1] in ('.', '..'):
         raise ValueError(f'not a repository: {repo!r}')
     try:
@@ -263,7 +250,6 @@ def read_fleet(repo):
 
 
 def loop_agent(models, listing, loop):
-    """Whether a spec loop's saved agent is the Orchestrator row: None when it is, else the update (R4)."""
     if not LOOP.fullmatch(loop):
         raise ValueError(f'not a loop id: {loop!r}')
     items = listing.get('automations') if type(listing) is dict else None
@@ -280,7 +266,6 @@ def loop_agent(models, listing, loop):
 
 
 def spawn_flags(models):
-    """Each start's `room-cli thread spawn` flags, or None where its rule waits."""
     out = {}
     for start, (kind, key) in STARTS.items():
         c = models[kind][key]['choice']
@@ -534,11 +519,10 @@ def main():
 
             def refuse(*_):
                 raise RuntimeError('OB-A1: starts are disabled')
-            # The consumer project's settings, from its default branch at this pass.
             out = plan(world, read_fleet(world.get('repository') if type(world) is dict else None), refuse,
                        bench, limits)
         elif len(args) in (3, 4) and args[:2] == ['flags', '--repo'] and (len(args) == 3 or args[3] in STARTS):
-            flags = spawn_flags(read_models(read_fleet(args[2])))  # read at each start
+            flags = spawn_flags(read_models(read_fleet(args[2])))
             if len(args) == 3:
                 out = [flags]
             elif flags[args[3]] is None:

@@ -542,9 +542,28 @@ class SkillCommandsMatchPackage(unittest.TestCase):
             self.assertIn('${CODEX_HOME:-$HOME/.codex}/skills', part)
         self.assertNotIn('never `$CODEX_HOME`', text)
 
-    def test_removal_deletes_only_marked_copies(self):
+    def test_removal_lists_skill_folders_and_deletes_none(self):
+        import re
         removal = self.parts()[3]
-        self.assertIn('[ -f "$d/$s/.openwiz-skill" ]', removal)
+        blocks = re.findall(r'```sh\n(.*?)```', '\n'.join(l[3:] if l.startswith('   ') else l
+                                                          for l in removal.split('\n')), re.S)
+        self.assertTrue(blocks)
+        with tempfile.TemporaryDirectory() as home:
+            for skills in ('.claude/skills', 'codex-home/skills'):
+                for name in ('install', 'research'):
+                    folder = Path(home) / skills / name
+                    folder.mkdir(parents=True)
+                    (folder / 'SKILL.md').write_text('# synthetic\n')
+                (Path(home) / skills / 'install/.openwiz-skill').write_text('not a valid receipt\n')
+            before = sorted(str(q.relative_to(home)) for q in Path(home).rglob('*'))
+            env = {'HOME': home, 'PATH': '/usr/bin:/bin', 'CODEX_HOME': str(Path(home) / 'codex-home')}
+            listed = ''.join(subprocess.run(['sh', '-c', b], env=env, capture_output=True, text=True).stdout
+                             for b in blocks)
+            self.assertEqual(sorted(str(q.relative_to(home)) for q in Path(home).rglob('*')), before)
+        for skills in ('.claude/skills', 'codex-home/skills'):
+            for name in ('install', 'research'):
+                self.assertIn('%s/%s/%s' % (home, skills, name), listed)
+        self.assertIn('recognise as OpenWiz', removal)
 
     def test_an_uncertain_cloudroom_install_is_retried_with_its_operation(self):
         row = next(l for l in self.parts()[0].split('\n') if l.startswith('| `cloudroom_install_uncertain`'))

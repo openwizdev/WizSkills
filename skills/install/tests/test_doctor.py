@@ -486,7 +486,7 @@ class SkillCommandsMatchPackage(unittest.TestCase):
                      ('runtime/setup/github_login.py', 'sign-in')]:
             self.assertLess(order.index(step), skills, step)
         text = SKILL.read_text()
-        self.assertIn('The installed copy of this skill is older than this one', text)
+        self.assertIn('is older than this one; if you are told to install again, follow this skill', text)
         self.assertIn('https://github.com/openwizdev/WizSkills/blob/%s/skills/install/SKILL.md' % LINE, text)
 
     def test_every_cloudroom_code_has_a_row(self):
@@ -503,6 +503,29 @@ class SkillCommandsMatchPackage(unittest.TestCase):
                       '`config.json`', '`app/`', '`state.json`', '`loops/`', '`clone/`', 'ls -A', 'rmdir'):
             self.assertIn(entry, removal)
         self.assertNotRegex(removal, r'(?i)\bdelete `<root>`|rm -rf')
+
+    def test_step_4_overwrites_the_installed_copy_and_checks_it_by_content(self):
+        import re
+        text = SKILL.read_text()
+        mine = re.search(r'^version: (\S+)$', text, re.M)[1]
+        self.assertNotEqual(mine, json.loads(PACKAGE.read_text())['installed_install_skill_version'])
+        step4 = text[text.index('## 4. '):text.index('## 5. ')]
+        self.assertIn('https://raw.githubusercontent.com/openwizdev/WizSkills/%s/skills/install/SKILL.md' % LINE, step4)
+        for home in ('.claude/skills', '.codex/skills', 'CODEX_HOME'):
+            self.assertIn(home, step4)
+        self.assertIn("grep -q 'install ope[n] '", step4)
+        self.assertIn('version: %s' % mine, step4)
+
+    def test_a_new_session_resumes_from_installed_files_at_the_first_unfinished_step(self):
+        text = SKILL.read_text()
+        self.assertIn('\n## Resume', text)
+        resume = text[text.index('## Resume'):text.index('## 1. ')]
+        for words in ('first unfinished step', 'readlink <root>/current', '--build-identity', 'setup.py check',
+                      'version: '):
+            self.assertIn(words, resume)
+        after = text[text.index('## 5. '):text.index('## Recovery and removal')]
+        self.assertNotIn('$openwiz', resume + after)
+        self.assertNotRegex(text, r'\]\(\.\./\.\./contracts/')
 
     def test_the_reader_finds_a_synthetic_skill_s_commands(self):
         text = ('Run `install open --root <root> --browser` and\n\n```sh\n'

@@ -34,7 +34,7 @@ git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$open
 python3 -I "$openwiz"/tools/install/install preflight
 ```
 
-It reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` (one of `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`) for the next step. Exit 5 names each missing item and its `next` step: tell the user plainly (CloudRoom: install the app, open it once and sign in; `gh`: install it and `gh auth login`). Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`).
+It reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) is unsupported for 0.1.0: the `openwiz` binary runs there, but CloudRoom offers no Intel Mac build today, so say so plainly and stop before installing. Exit 5 names each missing item and its `next` step: tell the user plainly (CloudRoom: install the app, open it once and sign in; `gh`: install it and `gh auth login`). Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`).
 
 Done when preflight passes, or the user has each next step.
 
@@ -82,7 +82,7 @@ It prints one bare code per component and no next step, so read each code below.
 | `cloudroom_login_verified` | Done: signed in now. |
 | `cloudroom_not_installed` | `cloudroom.py install --state-dir <state>` previews CloudRoom's checksum-checked installer; on the yes, `cloudroom.py install --yes --operation <id> --state-dir <state>`. Then sign in. |
 | `cloudroom_installed`, `cloudroom_reused`, `cloudroom_login_missing`, `cloudroom_login_unknown` | `cloudroom.py sign-in --state-dir <state>` opens CloudRoom's own sign-in once (or the app, the first time); the user signs in there, never in chat. Then `status`. |
-| `cloudroom_unsupported` | No CloudRoom installer for this computer. On an Intel Mac, the user installs CloudRoom by hand from `https://cloudroom.dev/download`, opens it once and signs in; then `status` reads it. Otherwise stop: 0.1.0 needs CloudRoom. |
+| `cloudroom_unsupported` | CloudRoom offers no build for this computer (an Intel Mac, or Linux on ARM). OpenWiz 0.1.0 needs CloudRoom, so the install cannot be completed here yet: say so plainly and stop. |
 | `cloudroom_installing` | An install is running: `status` again shortly. |
 | `cloudroom_install_uncertain` | `cloudroom.py install --state-dir <state>` again: it reconciles first. |
 | `cloudroom_install_failed` | Preview `install` again and ask again. |

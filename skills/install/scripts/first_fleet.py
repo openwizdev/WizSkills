@@ -1733,7 +1733,12 @@ def launch(got):
             print('Spec #%d already started once; not starting again.' % spec)
             print(record_line(spec, recorded))
             return 0
-        orchestrator = fleet_rules(env, state.value['repo'])['orchestrator']
+        try:
+            orchestrator = fleet_rules(env, state.value['repo'])['orchestrator']
+        except Exit:
+            print(record_line(spec, recorded))
+            raise Exit(6, "The fleet settings' Orchestrator could not be read, so the user's yes cannot be matched to "
+                          'it yet; run this again; ' + NOTHING)
         if orchestrator != previous.get('orchestrator'):
             print(record_line(spec, recorded))
             now = ' '.join(orchestrator[k] for k in ('harness', 'model', 'effort'))

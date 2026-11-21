@@ -1266,12 +1266,6 @@ class ModelsTable(unittest.TestCase):
             self.assertIn(line, preview.stdout)
         j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CODEX)
         j.save_world()
-        j.extra_env = {'FAKE_GH_COMMENTS_FAIL': '1'}
-        unread = j.tool(YES)
-        self.assertEqual(unread.returncode, 6, 'an unread record keeps the yes uncertain\n' + unread.stdout)
-        self.assertNotIn(handoff, unread.stdout)
-        self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'authorized', 'never withdrawn unread')
-        j.extra_env = {}
         moved = j.tool(YES)
         self.assertEqual(moved.returncode, 5, 'a yes to one Orchestrator never covers another\n' + moved.stdout)
         self.assertEqual(j.spawns(), [], 'the launch starts nothing itself')
@@ -1338,8 +1332,20 @@ class ModelsTable(unittest.TestCase):
         same = j.tool(YES)
         self.assertEqual(same.returncode, 6, 'an unchanged Orchestrator still repeats the handoff\n' + same.stdout)
         self.assertIn(handoff, same.stdout)
+        j.world['files'].pop('docs/agents/fleet.md')
+        j.save_world()
+        unknown = j.tool(YES)
+        self.assertEqual(unknown.returncode, 6, 'unread settings keep the yes uncertain\n' + unknown.stdout)
+        self.assertNotIn(handoff, unknown.stdout)
+        self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'authorized', 'never withdrawn unread')
         j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CLAUDE)
         j.save_world()
+        j.extra_env = {'FAKE_GH_COMMENTS_FAIL': '1'}
+        unread = j.tool(YES)
+        self.assertEqual(unread.returncode, 6, 'an unread record keeps the yes uncertain\n' + unread.stdout)
+        self.assertNotIn(handoff, unread.stdout)
+        self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'authorized', 'never withdrawn unread')
+        j.extra_env = {}
         moved = j.tool(YES)
         self.assertEqual(moved.returncode, 5, moved.stdout + moved.stderr)
         self.assertNotIn(handoff, moved.stdout)

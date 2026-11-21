@@ -417,6 +417,7 @@ class Doctor(unittest.TestCase):
 
 
 SKILL = Path(__file__).resolve().parents[1] / 'SKILL.md'
+LINE = 'main'
 PACKAGE = Path(__file__).resolve().parent / 'fixtures/openwiz-0.1.0-commands.json'
 BARE = {'install': 'tools/install/install', 'setup.py': 'runtime/setup/setup.py',
         'github_login.py': 'runtime/setup/github_login.py', 'cloudroom.py': 'runtime/cloudroom/cloudroom.py',
@@ -426,9 +427,8 @@ BARE = {'install': 'tools/install/install', 'setup.py': 'runtime/setup/setup.py'
 def skill_commands(text):
     import re
     spans = []
-    for block in re.findall(r'```[a-z]*\n(.*?)```', text, re.S):
-        spans += block.split('\n')
-    spans += re.findall(r'`([^`\n]+)`', re.sub(r'```[a-z]*\n.*?```', '', text, flags=re.S))
+    for match in re.finditer(r'```[a-z]*\n(.*?)```|`([^`\n]+)`', text, re.S):
+        spans += match[1].split('\n') if match[1] is not None else [match[2]]
     found = []
     for span in spans:
         words = [w.strip('"\'[]') for w in span.split()]
@@ -479,13 +479,38 @@ class SkillCommandsMatchPackage(unittest.TestCase):
         self.assertTrue(any(t == 'openwiz' and s == '' and '--build-identity' in f
                             for t, s, f, _ in self.commands), 'no `<root>/current/openwiz --build-identity`')
 
+    def test_skills_and_the_restart_come_after_setup_and_the_logins(self):
+        order = [(tool, sub) for tool, sub, _, _ in self.commands]
+        skills = order.index(('tools/install/install', 'skills'))
+        for step in [('runtime/setup/setup.py', 'check'), ('runtime/cloudroom/cloudroom.py', 'sign-in'),
+                     ('runtime/setup/github_login.py', 'sign-in')]:
+            self.assertLess(order.index(step), skills, step)
+        text = SKILL.read_text()
+        self.assertIn('The installed copy of this skill is older than this one', text)
+        self.assertIn('https://github.com/openwizdev/WizSkills/blob/%s/skills/install/SKILL.md' % LINE, text)
+
+    def test_every_cloudroom_code_has_a_row(self):
+        rows = {code for line in SKILL.read_text().split('\n') if line.startswith('| `cloudroom_')
+                for code in __import__('re').findall(r'`(cloudroom_[a-z_]+)`', line.split(' | ')[0])}
+        self.assertEqual(sorted(set(json.loads(PACKAGE.read_text())['cloudroom_codes']) - rows), [])
+
+    def test_removal_names_each_entry_and_never_deletes_a_folder_whole(self):
+        text = SKILL.read_text()
+        removal = text[text.index('## Recovery and removal'):]
+        for name in json.loads(PACKAGE.read_text())['skills']:
+            self.assertIn('`%s`' % name, removal)
+        for entry in ('`current`', '`channel.json`', '`install.lock`', '`skills/`', '/setup/`', '/cloudroom/`',
+                      '`config.json`', '`app/`', '`state.json`', '`loops/`', '`clone/`', 'ls -A', 'rmdir'):
+            self.assertIn(entry, removal)
+        self.assertNotRegex(removal, r'(?i)\bdelete `<root>`|rm -rf')
+
     def test_the_reader_finds_a_synthetic_skill_s_commands(self):
         text = ('Run `install open --root <root> --browser` and\n\n```sh\n'
                 'python3 -I "$openwiz"/tools/install/install skills --root <root>\n```\n'
                 'then `<root>/current/openwiz --build-identity` and `git clone x "$openwiz"`.\n')
         self.assertEqual([c[:3] for c in skill_commands(text)],
-                         [('tools/install/install', 'skills', ['--root']),
-                          ('tools/install/install', 'open', ['--browser', '--root']),
+                         [('tools/install/install', 'open', ['--browser', '--root']),
+                          ('tools/install/install', 'skills', ['--root']),
                           ('openwiz', '', ['--build-identity'])])
 
 

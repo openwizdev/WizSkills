@@ -7,8 +7,7 @@ Reads the four files in DIR/docs/agents/ (default: the current folder) and
 names each missing or unsafe setting: a missing file or section, a builder or
 reviewer table or Fixer family row without each of its three flags exactly
 once as one token, a template placeholder, a reviewer from the builder's model family, not exactly
-one valid Record authors row, a Roster the roster contract (openwiz.roster.v1)
-refuses, by its first broken rule, or a triage role without exactly one label. FILE is the saved output of
+one valid Record authors row, or a triage role without exactly one label. FILE is the saved output of
 `gh label list --limit 500 --json name`; with it, each mapped label must exist
 in the tracker exactly once. It writes nothing and runs nothing.
 
@@ -120,7 +119,6 @@ def models(text):
 
 
 def word(text, most, chars, sep):
-    """1 to most ASCII characters from chars, sep never first, last or doubled."""
     return (0 < len(text) <= most and all(c in chars or c == sep for c in text)
             and text[0] != sep and text[-1] != sep and sep * 2 not in text)
 
@@ -129,11 +127,6 @@ ALNUM = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 
 
 def roster(text):
-    """The Roster's entries, None with no Roster; a broken one raises its one refusal line.
-
-    As the roster contract's reference reader reads it: the section, then the
-    header, then each row's cells left to right, first broken rule only.
-    """
     lines = [line.rstrip() for line in text.split('\n')]
 
     def is_roster(word):

@@ -68,8 +68,6 @@ LABELS = ('# Triage labels\n\n## Labels\n\n| Role | Label here | Meaning |\n| --
           + ''.join('| `%s` | `%s` | Synthetic |\n' % (r, r) for r in ROLES))
 FILES = {'fleet.md': FLEET, 'triage-labels.md': LABELS,
          'issue-tracker.md': '# Issue tracker: GitHub\n\nSynthetic.\n', 'domain.md': '# Domain docs\n\nSynthetic.\n'}
-# The roster contract (openwiz.roster.v1): its starting Roster row and its
-# refusal lines, copied as the contract and its fixtures write them.
 STARTING = "| Claude Code | harness | local | orchestrator, builder, reviewer, helper | syn-owner's App |"
 ROSTER_HEADER = '| Name | Kind | Driver | Roles | Writes as |\n| --- | --- | --- | --- | --- |\n'
 
@@ -356,19 +354,15 @@ class Check(unittest.TestCase):
                 self.assertTrue(rules['reviewer_claude'] and rules['orchestrator'], text)
 
     def test_a_fresh_setup_writes_the_starting_roster_and_its_check_passes_it(self):
-        # catches: setup writing no Roster, or one its own check (and so the
-        # fleet's Roster readers) refuses, or a row not the contract's starting form.
         template = TEMPLATE.read_text()
         self.assertEqual(template.count('\n## Roster\n'), 1, 'the template writes one Roster')
         section = '## Roster\n' + template.split('\n## Roster\n', 1)[1].split('\n## ', 1)[0]
         rows = [line for line in section.splitlines() if line.startswith('|')]
         self.assertEqual(rows[:2], ROSTER_HEADER.splitlines())
         self.assertEqual(len(rows), 3, 'one starting row')
-        # Unfilled, the row is refused by name, never verified.
         code, out = self.check(self.project(**{'fleet.md': with_roster(section)}))
         self.assertEqual(code, 5, out)
         self.assertTrue(any(line.startswith('fleet.md: Roster refused: row 1') for line in out.splitlines()), out)
-        # Every user the same: setup fills the person's own harness, driver and login.
         for harness, driver, person in (('Claude Code', 'local', 'syn-owner'), ('Codex', 'cloudroom', 'syn-maker')):
             values = iter((harness, driver, person))
             filled = section.replace(rows[2], re.sub(r'<[^>]*>', lambda _: next(values), rows[2]))
@@ -377,7 +371,6 @@ class Check(unittest.TestCase):
                 self.assertIn('\n' + STARTING + '\n', filled)
             code, out = self.check(self.project(**{'fleet.md': with_roster(filled)}))
             self.assertEqual(code, 0, out)
-        # Valid Rosters of every kind of entry read back the same way, and no Roster is today's.
         for text in (with_roster(roster("| Demo Bot | bot | demo-bot | orchestrator | syn-owner's App |",
                                         "| Claude Code | harness | cloudroom | builder, reviewer | syn-owner's App |",
                                         "| Own computer | host | local | helper,builder | syn-owner's App |")),
@@ -389,8 +382,6 @@ class Check(unittest.TestCase):
             self.assertEqual(code, 0, out)
 
     def test_a_malformed_roster_or_unknown_role_is_refused_by_name(self):
-        # catches: a broken Roster verified, so the fleet's reader refuses it at
-        # the first start (or a reader that skips it starts the wrong entry).
         good = "| Claude Code | harness | local | builder | syn-owner's App |"
         cases = {
             'role': (roster(good, "| Demo Bot | bot | demo-bot | orchestrator, deployer | syn-owner's App |"),

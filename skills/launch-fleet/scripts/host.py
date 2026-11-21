@@ -62,9 +62,12 @@ its environment (for a start, a wake and a stop) gains #N's own `gh` and `git`
 first on PATH: two shims, kept in `agent-token-bin/` beside LAUNCH_FLEET_RUNS,
 that run each call through the helper's `run` with that same request, so the
 builder the driver starts does its GitHub work as the App in its own
-environment, one helper run per call. The legacy OPENWIZ_GITHUB_APP_KEY is
-removed from the helper's and the driver's environment, and from each shimmed
-call. With no service configured, it runs nothing and changes nothing.
+environment, one helper run per call. Each shim drops its own folder from PATH
+and passes the helper the command's name, never a resolved path, so the
+helper's own git guard runs first and git never holds the token (R3). The
+legacy OPENWIZ_GITHUB_APP_KEY is removed from this script's environment before
+it spawns anything (its own Git reads included), and from each shimmed call.
+With no service configured, it runs nothing and changes nothing.
 """
 import fcntl
 import importlib.util
@@ -206,7 +209,7 @@ def token_step(repo, n):
         return
     try:
         r = subprocess.run([sys.executable, '-I', str(HERE / 'github-app/agent-token.py'), 'start', '--requester',
-                            'builder-%s' % n, '--repository', repo], stdin=subprocess.DEVNULL, env=without_key(),
+                            'builder-%s' % n, '--repository', repo], stdin=subprocess.DEVNULL,
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as e:
         print('host.py: the agent helper did not run (%s); #%s starts as the owner\'s login' % (type(e).__name__, n),
@@ -226,19 +229,15 @@ for part in $PATH; do [ "$part" = {folder} ] || rest=${{rest:+$rest:}}$part; don
 unset IFS
 PATH=$rest
 export PATH
-real=$(command -v {name}) || {{ echo "openwiz: no {name} on PATH" >&2; exit 127; }}
+command -v {name} > /dev/null || {{ echo "openwiz: no {name} on PATH" >&2; exit 127; }}
 unset {key}
-exec {python} -I {helper} run --requester builder-{n} --repository {repo} -- "$real" "$@"
+exec {python} -I {helper} run --requester builder-{n} --repository {repo} -- {name} "$@"
 """
 DRIVER_ENV = None                               # the driver's environment; None is the caller's, unchanged
 
 
 def configured():
     return bool(os.environ.get('OPENWIZ_TOKEN_SERVICE'))
-
-
-def without_key():
-    return {k: v for k, v in os.environ.items() if k != LEGACY_KEY}
 
 
 def builder_env(repo, n):
@@ -258,7 +257,7 @@ def builder_env(repo, n):
             os.replace(tmp, folder / name)
     except OSError as e:
         raise Unreadable("can't write #%s's gh and git shims in %s (%s)" % (n, folder, type(e).__name__))
-    env = without_key()
+    env = dict(os.environ)
     env['PATH'] = '%s%s%s' % (folder, os.pathsep, env.get('PATH', os.defpath))
     return env
 
@@ -485,6 +484,8 @@ def record(repo, change):
 
 def main(argv):
     global DRIVER_ENV
+    if configured():  # R2: before any child, the Git reads included, never after
+        os.environ.pop(LEGACY_KEY, None)
     kind = argv[0] if argv else ''
     if kind == 'which' and len(argv) == 1:
         print('host: %s' % (chosen() or 'none'))

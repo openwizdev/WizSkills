@@ -9,6 +9,9 @@
 # the spec's number after --bundle OWNER/REPO): then it runs that spec's check
 # alone (`fleet.sh spec <FLEET_SPEC>`).
 # Exit as the check exits; 2 when the clone can't be made or updated.
+# GA4 (OpenWiz #1846), R2: with a token service configured, the superseded key
+# secret is removed before anything runs, so no child ever gets it.
+[ -z "${OPENWIZ_TOKEN_SERVICE:-}" ] || unset OPENWIZ_GITHUB_APP_KEY
 die() { printf 'loop.sh: %s\n' "$*" >&2; exit 2; }
 repository() {
   case $1 in
@@ -39,6 +42,7 @@ if [ "${1:-}" = --bundle ]; then
     printf '#!/bin/sh\nGH_REPO=%s\nexport GH_REPO\n' "$2"
     [ $# = 2 ] || printf 'FLEET_SPEC=%s\nexport FLEET_SPEC\n' "$3"
     cat <<'OPENWIZ_BUNDLE_BOOTSTRAP'
+[ -z "${OPENWIZ_TOKEN_SERVICE:-}" ] || unset OPENWIZ_GITHUB_APP_KEY
 runtime=$(mktemp -d) || { echo "loop.sh: can't unpack the bundled loop" >&2; exit 2; }
 trap 'rm -rf "$runtime"' EXIT
 trap 'exit 2' HUP INT TERM
@@ -66,8 +70,9 @@ export GH_REPO
 # `run`, as the read-only requester fleet-check. The helper hands gh its token
 # as GH_TOKEN and git its own credential helper, or, when it gets none, prints
 # the contract's one note and runs the wake as today's account. The old key
-# secret below is then never used, and is cleared first, so it never reaches
-# the helper or any child. With no service configured, nothing changes.
+# secret below is then never used: it was removed at entry (above, and first in
+# a bundle's bootstrap), so it never reaches the helper or any child. With no
+# service configured, nothing changes.
 # The marker is this shell's process id: the helper keeps it (exec), so the wake
 # it runs sees it as its parent's id, or as its own after a fallback (the
 # helper execs the wake). An inherited marker matches neither and is ignored.
@@ -75,8 +80,6 @@ inside=
 case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
 unset LAUNCH_FLEET_TOKEN_STEP
 if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ]; then
-  # R2: the superseded key secret never reaches the helper, the wake or its children.
-  unset OPENWIZ_GITHUB_APP_KEY
   helper=$(cd -P "$(dirname "$0")" && pwd)/github-app/agent-token.py
   LAUNCH_FLEET_TOKEN_STEP=$$
   export LAUNCH_FLEET_TOKEN_STEP

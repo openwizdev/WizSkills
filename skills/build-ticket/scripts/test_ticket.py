@@ -669,9 +669,21 @@ class Identity(Case):
         self.git('merge', '-q', '--no-edit', theirs)
         self.write('src/export/run.py', 'x = 2\n')
         self.commit('mine')
-        self.git('update-ref', '-d', 'refs/remotes/origin/main')
+        (upstream / 'src' / 'other.py').write_text('y = 8\n')
+        for args in (['commit', '-q', '-am', 'newer'], ['push', '-q', 'origin', 'main']):
+            subprocess.run(['git', *args], cwd=upstream, check=True, capture_output=True,
+                           env=self.env(GIT_AUTHOR_EMAIL=PERSONAL, GIT_COMMITTER_EMAIL=PERSONAL))
+        newer = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=upstream, check=True, capture_output=True,
+                               text=True).stdout.strip()
+
+        def held():
+            return subprocess.run(['git', 'cat-file', '-e', newer], cwd=self.repo, capture_output=True,
+                                  env=self.env()).returncode == 0
+
+        self.assertFalse(held())
         code, out, err = self.run_ticket('push', str(self.dir / 'r.txt'), '--', 'git', 'push', '-q', 'origin', 'HEAD')
         self.assertEqual(code, 0, out + err)
+        self.assertTrue(held())
 
     def test_push_judges_against_the_url_the_push_goes_to(self):
         elsewhere = self.dir / 'elsewhere.git'

@@ -1,32 +1,4 @@
 #!/usr/bin/env python3
-"""Triage's feedback path (openwiz.feedback-loop.v1, FL3 #1845).
-
-python3 -I feedback.py plan <case.json | ->
-python3 -I feedback.py verify <brief.json | ->
-
-plan's case is one JSON object: the report as GitHub shows it ("number",
-"pull_request", "title", "body", "labels", "milestone", "comments"), triage's
-"criteria" (the contract's six codes, each true, false or null for can't tell),
-and, for a report going to a fleet, "version" (the next release, X.Y.Z),
-"brief" ("title", and "body": triage's own words), "owned_paths" (a list of
-{"path", optional "repo"}; none holds the report), "relies_on" (paths, or
-empty) and "approval" (the owner's standing approval
-for the feedback loop: "owner", "date", "record", its private record's comment URL). It prints
-the outcome as one JSON object: the report's exact labels and milestone,
-"report_comments" (always empty: triage never replies on a report), the brief
-to create (its full body, ending with the report link, and the approval record
-to post on it) or null, and the owner's private note or null.
-
-verify reads a brief back from GitHub ({"report", "version", "record_authors",
-"brief": {"number", "author", "body", "labels", "milestone", "comments"}}) and
-says whether the fleet can start it and its fix can close both issues: only
-then does the report get its milestone.
-
-It sends nothing. A report goes to a fleet only when every code is exactly true
-and its words show no instruction or private-looking text; anything else is
-held for the owner. Exit 0 prints the outcome, 1 refuses (last line says why),
-2 is unreadable input. Python 3 standard library only.
-"""
 import json
 import re
 import sys
@@ -43,8 +15,6 @@ REPO = re.compile(r"^openwizdev/[A-Za-z0-9_.-]+$")
 APPROVAL_LINE = re.compile(r"^\*\*Approved on its own by [^\n\"“”]+, [0-9]{4}-[0-9]{2}-[0-9]{2}:\*\* [^\n\"“”]+\n"
                            r"Private record: https://github\.com/\S+#issuecomment-[1-9][0-9]*$", re.M)
 URL = re.compile(r"\b(?:https?|ftp|file)://\S+|\bwww\.\S+", re.I)
-# A backstop under triage's own reading, which the report's words may steer:
-# text addressed to an agent, or anything to run or follow.
 INSTRUCTION = re.compile(
     r"```|`[^`\n]*[\s|;&$<>/\\=][^`\n]*`|https?://|\bwww\.|^\s*\$ |\b(?:agents?|assistants?|AI|LLMs?|claude|codex|gpt)\b\s*[,:(]"
     r"|\b(?:system|assistant|developer)\s*:|\bignore (?:all|any|previous|prior|your|the above)\b"
@@ -74,7 +44,6 @@ def is_report(report):
 
 
 def words(report):
-    """The report's own words and its comments', without the marker line."""
     body = report["body"]
     lines = body.split("\n")
     if lines and MARKER.match(lines[-1]):
@@ -83,8 +52,6 @@ def words(report):
 
 
 def copied(report, text):
-    """Whether the brief repeats a whole line of the report (its marker included).
-    A report with a link or code in it is already held, so lines are enough."""
     return any(line.strip() in text for line in report["body"].split("\n") if len(line.strip()) >= 24)
 
 
@@ -142,8 +109,6 @@ def plan(case):
 
 
 def owned(paths):
-    """Each owned path as one bullet launch-fleet's owned-paths reader takes:
-    `path`, or `path` in `openwizdev/<repo>`."""
     if not isinstance(paths, list) or not paths:
         raise Refused("the fleet outcome needs owned paths, read fresh from the code")
     bullets = []
@@ -162,16 +127,12 @@ def owned(paths):
 
 
 def relied(paths):
-    """The Relies on value: each path in backticks, or nothing."""
     if not isinstance(paths, list) or not all(isinstance(p, str) and p and not re.search(r"[\s`]", p) for p in paths):
         raise Refused("relies on is a list of plain paths, empty for nothing")
     return ", ".join(f"`{p}`" for p in paths) or "nothing"
 
 
 def approval_record(approval, paths, relies):
-    """The standalone approval record launch-fleet starts a brief on, in
-    to-tickets' approval-on-its-own form, naming the owner's standing approval
-    for the feedback loop (the J87 planner's ruling on #128)."""
     if not isinstance(approval, dict) or set(approval) != {"owner", "date", "record"} or not all(
             isinstance(v, str) for v in approval.values()):
         raise Refused("the fleet outcome needs the standing approval: owner, date and its private record")
@@ -185,8 +146,6 @@ def approval_record(approval, paths, relies):
 
 
 def owned_section(body):
-    """The bullets under `## Owned paths`, as launch-fleet reads them: None when
-    the section is missing, empty or unreadable."""
     lines = body.split("\n")
     start = next((i for i, line in enumerate(lines) if re.match(r"^## Owned paths\s*$", line)), None)
     if start is None:
@@ -242,7 +201,6 @@ def unique(pairs):
 
 
 def read(path):
-    """The case, in exactly its shape: known keys, each once, each of its type."""
     try:
         raw = sys.stdin.read() if path == "-" else open(path, encoding="utf-8").read()
         case = json.loads(raw, object_pairs_hook=unique)
@@ -276,7 +234,6 @@ def read(path):
 
 
 def read_brief(path):
-    """verify's input, in exactly its shape."""
     try:
         raw = sys.stdin.read() if path == "-" else open(path, encoding="utf-8").read()
         case = json.loads(raw, object_pairs_hook=unique)

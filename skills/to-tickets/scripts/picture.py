@@ -1,4 +1,3 @@
-"""Render the proposed or read-back ticket graph as one Mermaid picture."""
 from collections import deque
 import json
 import re
@@ -90,10 +89,7 @@ def critical_path(outgoing, incoming):
 
 def picture(data):
     cards, outgoing, incoming = read_graph(data)
-    critical_path(outgoing, incoming)  # every link: refuses a cycle
-    # F6 (#1353): a file link into a builder's ticket only shares context, so
-    # the chain and the start count read hard links alone; a person's ticket
-    # waits for every link.
+    critical_path(outgoing, incoming)
     hard_out = {b: {t: e for t, e in out.items() if e['kind'] != 'file' or cards[t]['role'] != 'builder'}
                 for b, out in outgoing.items()}
     hard_in = {t: [b for b in blockers if t in hard_out[b]] for t, blockers in incoming.items()}

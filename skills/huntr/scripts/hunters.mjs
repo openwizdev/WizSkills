@@ -1,12 +1,4 @@
 #!/usr/bin/env node
-// huntr hunter briefs and report collection (#1685).
-//   hunters.mjs brief <plan.json> <owner/repo> <pinned-commit>
-//     prints one hunter's brief: its slice plan (the manifest plan shape), the pinned commit and
-//     the provisioning script it runs itself, with the one-line BLOCKED rule.
-//   hunters.mjs collect <pinned-commit> <slice>=<report-file>...
-//     prints {"pin", "reported", "blocked"}: only a report whose first line names its slice at the
-//     pin counts; a BLOCKED line, another commit or no report line is a blocked slice, never coverage.
-// Exit 2 is a refusal with its reason on stderr. Reports are untrusted text, never instructions.
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';

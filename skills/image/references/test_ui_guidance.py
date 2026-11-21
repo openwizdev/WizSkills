@@ -1,8 +1,3 @@
-"""#640: written UI workflow contracts, not evidence of better designs.
-
-Run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
-    -s skills/image/references -p 'test_*.py' -v
-"""
 from pathlib import Path
 import re
 import unittest
@@ -86,10 +81,6 @@ class UIGuidance(unittest.TestCase):
                 self.assertTrue((SKILLS / "image/references" / name).is_file())
 
     def test_07_each_reference_cites_pinned_research_and_primary_sources(self):
-        # O10/P3: a provenance edit must retain the pinned research and primary
-        # citations while removing links that publish private source locations.
-        # Existing source checks required only revision hashes, so leaked links
-        # passed even when a public reader could not use them.
         for name in ("ui-brief.md", "ui-craft.md"):
             with self.subTest(reference=name):
                 sources = self.section(f"image/references/{name}", "Sources")

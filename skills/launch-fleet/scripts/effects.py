@@ -1,11 +1,3 @@
-"""Shared finite OB3 record admission and effect refusal boundary.
-
-OB-A1 certifies records, never an external effect fence. This module has no
-network/process client, enable switch or executable effect path. Consumers
-supply authorized complete source reads, verified immutable claim commits,
-reference read-back and durable admission/result persistence. Snapshots are
-private derived data, not endpoint attestations. See ops-effects/README.md.
-"""
 import hashlib
 import json
 from pathlib import Path
@@ -31,8 +23,6 @@ def _bad_number(_):
 
 
 def _validate(node, value):
-    # Only the contract's implemented schema subset is accepted. A new keyword
-    # must never silently weaken a write guard when the contract advances.
     keywords = {"$schema", "$defs", "$ref", "title", "description", "type", "required",
                 "properties", "additionalProperties", "items", "enum", "const", "oneOf",
                 "minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems", "pattern"}
@@ -84,7 +74,6 @@ def _validate(node, value):
 
 
 def operation_key(intent):
-    """Contract identity: no generation, timestamp or random retry salt."""
     identity = {key: intent[key] for key in KEY_FIELDS}
     raw = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(b"openwiz.ops-operation.v1\n" + raw.encode("utf-8")).hexdigest()
@@ -98,7 +87,6 @@ def claim_ref(claim):
 
 
 def read_record(raw):
-    """Strict local validation, never source authentication or effect authority."""
     value = json.loads(raw, object_pairs_hook=_pairs, parse_float=_bad_number, parse_constant=_bad_number)
     _validate(SCHEMA, value)
     paths = [entry["path"] for entry in value.get("paths", []) + value.get("supporting", [])]
@@ -125,7 +113,6 @@ def read_record(raw):
 
 
 def read_comment(body, container):
-    """Bind one strict record fence to actual repository/subject metadata."""
     blocks = re.findall(r"^```json\n(.*?)\n```$", body, re.MULTILINE | re.DOTALL)
     if len(blocks) != 1 or body.count("```") != 2:
         raise ValueError("ambiguous record fence")
@@ -151,13 +138,6 @@ def _same_ticket(record, intent):
 
 
 def admit_claim(claim, snapshot, record_commit, create_if_absent):
-    """One atomic record-storage attempt; never effect authority or a retry.
-
-    The consumer must first verify the exact ops-record.json commit content,
-    source history and durable intent, then persist/read back the admission.
-    An unknown reply needs a later read-back, not another create. No ref update,
-    delete, callback retry or effect callback is available through this seam.
-    """
     claim, snapshot = map(_checked, (claim, snapshot))
     if (claim["kind"] != "claim" or snapshot["kind"] != "snapshot"
             or type(record_commit) is not str or re.fullmatch("[0-9a-f]{40}", record_commit) is None):
@@ -188,13 +168,6 @@ def admit_claim(claim, snapshot, record_commit, create_if_absent):
 
 
 def resume(intent, claim, history, snapshot, effect_boundary):
-    """Reconstruct one finite refusal. effect_boundary is NEVER called.
-
-    Keep historical uncertainty ahead of currentness checks: a changed approval,
-    head, generation, key, ACK or later refusal cannot prove non-execution.
-    Even a purported completed/non-executed record needs endpoint verification;
-    no authenticated outcome lookup exists in OB1, so return reconcile and end.
-    """
     intent, claim, snapshot = map(_checked, (intent, claim, snapshot))
     history = [_checked(record) for record in history]
     if (intent["kind"] != "intent" or claim["kind"] != "claim" or claim["scope"] != "operation"

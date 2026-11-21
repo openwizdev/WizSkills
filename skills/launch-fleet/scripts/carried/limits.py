@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Read factory stage goals; settings alone authorize no action."""
 import argparse
 import json
 from pathlib import Path
@@ -11,7 +10,6 @@ STAGES = ('builder_start', 'reviewer_start', 'merge', 'fix_after_changes',
 
 
 def read(path):
-    """Return all five explicit goals or raise ValueError/OSError; no fallback."""
     content = Path(path).read_text(encoding='ascii')
     if not re.fullmatch(r'[\t\r\n\x20-\x7e]*', content):
         raise ValueError('invalid stage-limit settings')
@@ -32,8 +30,11 @@ def read(path):
     return {'schema': 'closedwiz.factory-limits.v1', 'minutes': minutes}
 
 
+DESCRIPTION = 'Read factory stage goals; settings alone authorize no action.'
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument('--settings', type=Path,
                         default=Path(__file__).resolve().with_name('limits.conf'))
     args = parser.parse_args()

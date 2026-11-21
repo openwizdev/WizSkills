@@ -1,35 +1,4 @@
 #!/usr/bin/env python3
-"""WizSkills' changesets: one note per pull request, per-skill bumps, bundle releases (J205, J206).
-
-python3 -I check/changesets.py check --base REF
-    The pull request gate. Every skill the commits since REF change (anything
-    under skills/<name>/ except the SKILL.md `version:` line) must be named in
-    a changeset the same commits add; a removed skill needs a new changeset
-    naming `wizskills`. Every pending changeset must be well formed, and a
-    Markdown file Changesets ignores (a hidden name, README.md in any case,
-    AGENTS.md, CLAUDE.md, GEMINI.md) is refused. A new or edited changeset
-    names only skills that exist; an older one keeps the skills since removed.
-python3 -I check/changesets.py release [--first] [--since REF] [--date YYYY-MM-DD] [--write]
-    Runs the pinned Changesets (`npm ci` first) over the pending changesets in
-    a throwaway workspace with one package per skill, then prints each skill's
-    bump, the bundle's own bump by J206's rules and its CHANGELOG section. A dry
-    run unless --write, which sets the bumped skills' `version:` lines, the
-    plugin's version and CHANGELOG.md, and deletes the consumed changesets. It
-    never tags, pushes or publishes. --since is the last release (default: the
-    newest `v*` tag), for skills added or removed since. A changeset line for a
-    skill removed since is dropped; its summary stays, under the bundle when it
-    named no remaining skill. Only a note whose current contents Git committed
-    while that skill existed may name it; a new or edited one is refused.
-    Nothing is written or consumed unless Changesets processed every pending
-    changeset.
-    --first cuts the first bundle, once: the plugin goes to 0.2.0 and every
-    skill, already at 0.2.0, stays there, with the pending notes as its
-    release notes. Until then the ordinary release refuses; after it, --first
-    refuses and the ordinary bump rules apply.
-
-Exit 0 pass, 1 refused, 2 unusable input or setup. Python 3.11+ and Git; release
-also needs Node.
-"""
 import argparse
 import datetime
 import json
@@ -50,7 +19,6 @@ VERSION_LINE = re.compile(r'version: *["\']?([^"\'\s]+)["\']? *')
 PLAIN = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)')
 SHAPE = 'opens with `---`, one `"<skill>": patch|minor|major` line each, then `---` and a summary'
 CHANGESETS = 'node_modules/@changesets/cli/bin.js'
-# The pinned reader (@changesets/read 1.0.1) skips these, hidden names and README.md in any case.
 IGNORED = ('AGENTS.md', 'CLAUDE.md', 'GEMINI.md')
 IGNORED_WHY = 'is a name Changesets ignores: rename it (see .changeset/README.md)'
 FIRST = '0.2.0'
@@ -73,8 +41,6 @@ class Anything:
 
 
 def parse_note(text, skills, gone=()):
-    """(releases {name: bump}, summary), or raise ValueError(why). A name in `gone` (a skill
-    removed since the note landed) is left out of the releases."""
     lines = text.split('\n')
     if lines[0] != '---' or '---' not in lines[1:]:
         raise ValueError(SHAPE)
@@ -104,7 +70,6 @@ def parse_note(text, skills, gone=()):
 
 
 def note_kind(rel):
-    """'note', 'ignored' (a Markdown file the pinned reader skips) or None, for a path under .changeset/."""
     parts = rel.split('/')
     if len(parts) != 2 or parts[0] != '.changeset' or not parts[1].endswith('.md') or parts[1] == 'README.md':
         return None
@@ -115,7 +80,6 @@ def note_kind(rel):
 
 
 def without_version(text):
-    """SKILL.md text with its front matter's `version:` line dropped."""
     lines = text.split('\n')
     if lines[:1] == ['---'] and '---' in lines[1:]:
         end = lines.index('---', 1)
@@ -123,15 +87,12 @@ def without_version(text):
     return '\n'.join(lines)
 
 
-# ---- The pull request gate ----
-
 def tree_skills(ref):
     return {p.split('/')[1] for p in git('ls-tree', '-r', '--name-only', ref, '--', 'skills/').splitlines()
             if p.count('/') == 2 and p.endswith('/SKILL.md')}
 
 
 def blobs(ref):
-    """{path: blob} of the files directly under .changeset/ at ref."""
     out = {}
     for line in git('ls-tree', '-z', ref, '--', '.changeset/').split('\0'):
         if line:
@@ -166,7 +127,6 @@ def check(base):
             continue
         if kind is None:
             continue
-        # An older note was checked when it landed; a skill it names may since have been removed.
         gone = Anything() if older.get(rel) == blob else ()
         try:
             releases, _ = parse_note(git('show', f'HEAD:{rel}'), head_skills, gone)
@@ -190,8 +150,6 @@ def check(base):
     return 0
 
 
-# ---- The release ----
-
 def skill_version(path):
     lines = path.read_text(encoding='utf-8').split('\n')
     end = lines.index('---', 1) if lines[:1] == ['---'] and '---' in lines[1:] else 0
@@ -202,7 +160,6 @@ def skill_version(path):
 
 
 def bumped(version, bump):
-    """The bumped version, or (major, minor) when bump is None."""
     m = PLAIN.fullmatch(version)
     if not m:
         raise Unusable(f'the plugin version {version} is not a plain X.Y.Z')
@@ -213,7 +170,6 @@ def bumped(version, bump):
 
 
 def bundle_bump(skill_bumps, explicit, added, removed):
-    """J206: patch for a few fixes, minor for many changes or a catalog change, major for a break."""
     reasons = {b: [] for b in BUMPS}
     if explicit:
         reasons[explicit].append(f'`{BUNDLE}`: {explicit} in a changeset')
@@ -237,7 +193,6 @@ def bundle_bump(skill_bumps, explicit, added, removed):
 
 
 def bullets(changelog):
-    """The newest section's bullets of a Changesets CHANGELOG.md, one line each."""
     out, seen = [], 0
     for line in changelog.read_text(encoding='utf-8').split('\n'):
         if line.startswith('## '):
@@ -252,8 +207,6 @@ def bullets(changelog):
 
 
 def plan(names, versions, plugin_version, notes):
-    """Run the pinned Changesets over notes [(file name, text)] in a throwaway workspace:
-    ({skill: new}, {name: bullets})."""
     if not (ROOT / CHANGESETS).is_file():
         raise Unusable('Changesets is not installed: run `npm ci` at the repository root')
     with tempfile.TemporaryDirectory(prefix='wizskills-release-') as tmp:
@@ -292,8 +245,6 @@ def plan(names, versions, plugin_version, notes):
 
 
 def older_skills(path, text):
-    """The skills that existed when Git last set this note's current contents: a removed one may stay
-    named. A note not committed as it stands (new, or edited since) gets none."""
     rel = f'.changeset/{path.name}'
     commit = git('log', '-1', '--format=%H', 'HEAD', '--', rel).strip()
     if not commit:
@@ -327,7 +278,7 @@ def release(since, date, write, first=False):
             refused.append(f'release: .changeset/{path.name} {why}')
             continue
         if not releases:
-            releases = {BUNDLE: 'patch'}  # it named only removed skills: its summary goes with the bundle
+            releases = {BUNDLE: 'patch'}
         for name, bump in releases.items():
             if name == BUNDLE:
                 explicit = max(explicit or bump, bump, key=BUMPS.index)
@@ -360,7 +311,7 @@ def release(since, date, write, first=False):
         version = bumped(plugin_data['version'], bump)
     new, notes_by = plan(names, versions, plugin_data['version'], notes)
     if first:
-        new = {}  # the wave's notes are already in the initialised 0.2.0 versions
+        new = {}
         shown = {n: FIRST for n in notes_by if n != BUNDLE}
     else:
         shown = new

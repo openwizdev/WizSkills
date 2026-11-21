@@ -1,4 +1,3 @@
-"""Non-browser selection proofs; harness fixtures always fail, never emit screenshots."""
 import os
 from pathlib import Path
 import sys

@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""post.py on a synthetic GitHub (WS8, #1181): public records, read back.
-
-python3 -I skills/launch-fleet/scripts/test-post.py
-"""
 import json
 import os
 from pathlib import Path
@@ -18,7 +14,6 @@ FLEET_MD = ('# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --
 
 
 class World:
-    """One synthetic repository and a `gh` on PATH that serves it."""
 
     def __init__(self, test, **extra):
         self.dir = Path(tempfile.mkdtemp())
@@ -93,18 +88,13 @@ class Post(unittest.TestCase):
         self.assertEqual(w.run('post.py', 'comment', REPO, 3, '**Needs you:** spec #3 changed since revision 2')[0], 0)
 
     def test_a_lost_response_is_unknown_and_left_for_reconciliation(self):
-        # catches: (#1555) a write whose response is lost adopting the one new
-        # identical record, which a second wake can equally have written.
         w = World(self, comments={'12': [comment(4000, 'launch-fleet: starting')]}, faults={'post': 'lost'})
         code, out = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')
         self.assertEqual((code, out.split(' ')[0]), (1, 'unknown:'), out)
         self.assertEqual(len(w.writes()), 1)
 
     def test_another_wakes_identical_record_is_never_adopted(self):
-        # catches: (#1555) a failed write returning another wake's identical
-        # claim id as its own, so both wakes proceed as owners of one claim.
         w = World(self, faults={'post': 'fail'})
-        # The other wake's identical claim lands while this wake's write is in flight.
         inject = w.dir / 'other_wake.py'
         inject.write_text('import json, os\nw = json.load(open(os.environ["FAKE_WORLD"]))\n'
                           'w["comments"].setdefault("12", []).append(%r)\n'
@@ -122,7 +112,6 @@ class Post(unittest.TestCase):
         self.assertTrue(out.startswith('unknown: '), out)
 
     def test_identical_text_from_anyone_else_is_not_the_record(self):
-        # The response is lost, and the only new comment with these words is not a record author's.
         w = World(self, me='someone-else', faults={'post': 'lost'})
         code, out = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')
         self.assertEqual(code, 1)
@@ -160,12 +149,8 @@ class Post(unittest.TestCase):
 
 
 class SelfGrant(unittest.TestCase):
-    """self-grant.py (#1353, F4): a wake grants and records the four bounded
-    kinds itself, each with its reason; a model or effort change is refused."""
 
     def test_each_kind_is_recorded_with_its_reason(self):
-        # catches: a grant made without a record, or recorded without its
-        # reason, so nobody can audit what the fleet allowed itself.
         w = World(self)
         cases = [('supporting-edit', 'two lines in check/run.py, which runs the new test',
                   'launch-fleet: granted supporting edit: two lines in check/run.py, which runs the new test'),
@@ -184,8 +169,6 @@ class SelfGrant(unittest.TestCase):
         self.assertEqual(len(w.writes()), 5)
 
     def test_a_model_or_effort_change_or_any_other_ask_is_refused(self):
-        # catches: a fleet that grants itself a stronger model or effort, or
-        # anything outside the four kinds, instead of asking.
         w = World(self)
         for kind, why in (('model', 'refused: a model or effort change is never a self-grant; ask Jake'),
                           ('effort', 'refused: a model or effort change is never a self-grant; ask Jake'),
@@ -200,8 +183,6 @@ class SelfGrant(unittest.TestCase):
         self.assertEqual(w.writes(), [])
 
     def test_a_spec_change_not_read_back_records_no_grant(self):
-        # catches: a ticket told its spec changed when the spec record may
-        # never have been written.
         w = World(self, faults={'post': 'fail'})
         code, out = w.run('self-grant.py', REPO, 12, 'spec-change', 'the proof names the after bench', '--spec', 3)
         self.assertEqual(code, 1)

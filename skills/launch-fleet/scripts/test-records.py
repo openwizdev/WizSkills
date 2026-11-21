@@ -248,6 +248,22 @@ class Fleet(unittest.TestCase):
         self.assertEqual(self.run_fleet('claim', '12', '1203'), 'go #12\n')
 
 
+    def test_long_form_resume_claim_keeps_its_private_thread(self):
+        # #2096: a resume claim naming this repository in the long form (any case) is read as #11's,
+        # so its private thread is attached, exactly as for the short form.
+        outs = []
+        for ref in ('#11', 'Example/Public#11'):
+            with self.subTest(ref=ref):
+                self.issue(12)['comments'] = self.issue(12)['comments'][:1] + [
+                    dict(id=1202, at='2026-11-01T11:00:00Z', body='launch-fleet: waiting for #11'),
+                    dict(id=1203, at='2026-11-01T11:40:00Z', body=f'launch-fleet: resume starting 1202 for {ref}')]
+                path = self.dir / 'private.json'
+                path.write_text(json.dumps({'repo': self.world['repo'], 'threads': {'comment:1203': 'thr_synsender'}}))
+                self.env['LAUNCH_FLEET_STATE'] = str(path)
+                outs.append(self.run_fleet('wake', '12'))
+        self.assertIn('reconcile resume #12: wait comment 1202 for #11; reconcile comment 1203', outs[0])
+        self.assertEqual(outs[1], outs[0])
+
 def load(path, name):
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, path)

@@ -68,16 +68,9 @@ starts a fleet a second way. It never calls the engine or the engine's tick.
 Every command
 checks the checkout is the repository this onboarding recorded.
 
-`choose` records the choice for where the agents run, and writes it into
-this checkout's `docs/agents/fleet.md` Models table (openwiz.models.v1, #1807):
-the Orchestrator and Builder rows become the choice, the Small builder and
-Fixer follow the Builder, and the Reviewer stays when it is of the other model
-family, otherwise becomes the contract's recommended choice of that family,
-only when offered. A file with only the older tables gets the table inserted
-before them; the older tables are left as they are. It writes only inside the
-checkout, opening docs/ and docs/agents/ without following a link. Then it
-reads the default branch: the agents step is done only once its Models table
-has exactly the rows written (#1615).
+`choose` records the choice for where the agents run, then reads the fleet's
+builder tables back: the agents step is done only once both name exactly that
+choice (#1615).
 
 `next` reads only the state file and prints the first unfinished step and
 what to run there, so a fresh session resumes without repeating an effect.
@@ -130,8 +123,6 @@ OPTIONS = {
 }
 FAMILY = {'claude-code': 'claude', 'codex': 'gpt'}
 REVIEWER = {'claude': 'Reviewer for Claude-built', 'gpt': 'Reviewer for GPT-built'}
-# The models contract (openwiz.models.v1): setup's reader of its table, the
-# recommended choice per family (J255), and the names `set` writes.
 SETTINGS = Path(__file__).resolve().parents[2] / 'setup/scripts/settings.py'
 FLEET_MD = Path('docs/agents/fleet.md')
 OLDER = ('Builder', 'Builder for small tickets', REVIEWER['claude'], REVIEWER['gpt'], 'Fixer')
@@ -1329,7 +1320,7 @@ def choose(got):
     if host['agents'] == 'local' and settings['harness'] not in host['harnesses']:
         raise Exit(5, '%s is not on this machine, so its agents cannot run here; nothing recorded.' % settings['harness'])
     choices = dict(settings, agents=host['agents'])
-    read = None  # unread: the choice is recorded, its Models table is not settled (#1615)
+    read = None
     try:
         env = repository(state.value.get('repo'))
     except Exit:
@@ -1340,7 +1331,6 @@ def choose(got):
     except Exit:
         remote = None
     if remote is not None:
-        # Review R2 of WizSkills#120: only the default branch's Models table with exactly the written rows reads back.
         try:
             read = models_table(remote) == intended
         except ValueError:
@@ -1374,7 +1364,6 @@ def tables_line(choices, why):
 
 
 def models_table(text):
-    """setup's reader of the Models table: its choices, None without one; ValueError lists each break."""
     sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location('openwiz_setup_settings', SETTINGS)
     module = importlib.util.module_from_spec(spec)
@@ -1395,7 +1384,6 @@ def model_row(role, agent):
 
 
 def write_models(settings, offered):
-    """Write the choice into this checkout's Models table: (the line to show, the rows written), or Exit 5."""
     choice = (settings['harness'], settings['model'], settings['effort'])
     try:
         folder = settings_folder()
@@ -1409,11 +1397,6 @@ def write_models(settings, offered):
 
 
 def settings_folder():
-    """Review R3: docs/agents/ of this checkout, opened one step at a time without following a link.
-
-    Every later read and write goes through this descriptor, so a folder
-    swapped for a link after this check is never followed either.
-    """
     folder = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
     try:
         for part in FLEET_MD.parent.parts:
@@ -1594,7 +1577,6 @@ def fleet_rules(env, repo):
 
 
 def fleet_text(env, repo):
-    """docs/agents/fleet.md as the default branch holds it."""
     result = run(['gh', 'api', 'repos/%s/contents/docs/agents/fleet.md' % repo,
                   '-H', 'Accept: application/vnd.github.raw+json'], env)
     if result is None or result.returncode != 0:
@@ -1603,7 +1585,6 @@ def fleet_text(env, repo):
 
 
 def settings_rules(text):
-    """The fleet's agents: the Models table's (openwiz.models.v1), else the older tables'."""
     try:
         table = models_table(text)
     except ValueError as error:
@@ -1615,14 +1596,12 @@ def settings_rules(text):
         return dict(zip(('harness', 'model', 'effort'), table.get(role) or table['Builder']))
     rules = {'orchestrator': named('Orchestrator'), 'builder': named('Builder'), 'builder_small': named('Small builder')}
     for family in REVIEWER:
-        # The cross-family rule: the Reviewer, else the Builder, of a known other family; else the review waits.
         rules['reviewer_' + family] = next((named(role) for role in ('Reviewer', 'Builder')
                                             if FAMILY.get(table[role][0]) not in (None, family)), None)
     return rules
 
 
 def older_rules(text):
-    """The older builder and reviewer tables; the Orchestrator follows the Builder."""
     found, name = {}, None
     for line in text.split('\n'):
         if line.startswith('## '):
@@ -1800,7 +1779,7 @@ def launch(got):
                       'or is still blocked; %s' % (spec, NOTHING))
     rules = fleet_rules(env, state.value['repo'])
     builder, reviewer = review(choices, rules)
-    orchestrator = rules['orchestrator']  # the Models table's Orchestrator; the older tables' Builder (#1807)
+    orchestrator = rules['orchestrator']
     where = where_of(host['agents'])
     effects = {'fleet_thread': orchestrator, 'repo': state.value['repo'], 'spec': spec, 'project': carried['project'], 'title': title,
                'host': host['agents'], 'mode': picked if local else None, 'builder': builder, 'reviewer': reviewer, 'grill': confirmed,

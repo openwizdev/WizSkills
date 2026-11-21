@@ -6,8 +6,7 @@
 Reads the four files in DIR/docs/agents/ (default: the current folder) and
 names each missing or unsafe setting: a missing file or section, a builder or
 reviewer table or Fixer family row without each of its three flags exactly
-once as one token, a template placeholder, a reviewer from the builder's model family, a
-`## Models` table outside the models contract's form (openwiz.models.v1, #1807), not exactly
+once as one token, a template placeholder, a reviewer from the builder's model family, not exactly
 one valid Record authors row, or a triage role without exactly one label. FILE is the saved output of
 `gh label list --limit 500 --json name`; with it, each mapped label must exist
 in the tracker exactly once. It writes nothing and runs nothing.
@@ -31,7 +30,6 @@ ROLES = ('needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wo
 # The whole Record authors cell, as the review and launch-fleet readers take it.
 LOGIN = r'`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`'
 CELL = re.compile(r'\s*%s(?:\s*,\s*%s)*\s*' % (LOGIN, LOGIN))
-# The models contract's table (openwiz.models.v1): its header, rows and one ids rule.
 MODELS_HEADER = ['Role', 'Harness', 'Model', 'Effort', '`room-cli thread spawn` flags']
 MODEL_ROWS = ('Orchestrator', 'Builder', 'Reviewer', 'Small builder', 'Fixer')
 ID = r'[A-Za-z0-9._-]+'
@@ -74,12 +72,6 @@ def cells(line):
 
 
 def models(text):
-    """The `## Models` table as {role: (provider, model, effort), or None when it follows}; None without one.
-
-    Raises ValueError whose one argument lists each break of the models
-    contract: the first structural one, or every row's. The table is the
-    section's first table.
-    """
     lines = text.split('\n')
     headings = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Models']
     if not headings:
@@ -149,7 +141,7 @@ def fleet(text, problems):
         table = models(text)
     except ValueError as error:
         problems.extend('fleet.md: Models: %s' % line for line in error.args[0])
-        table = False  # refused: never read past it to the older tables
+        table = False
     if table:
         builder, reviewer = table['Builder'][0], table['Reviewer'][0]
         if reviewer not in FAMILY:

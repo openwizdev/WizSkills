@@ -47,7 +47,6 @@ FLEET = ('# Fleet settings\n\nIntro.\n\n'
            '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |\n\nSource: synthetic.\n')
 
 def models(*rows):
-    """A Models section in the models contract's form (openwiz.models.v1), rows as written."""
     return ('## Models\n\nOne line.\n\n| Role | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
             '| --- | --- | --- | --- | --- |\n' + ''.join(row + '\n' for row in rows) + '\nSource: synthetic decision.\n\n')
 
@@ -269,24 +268,17 @@ class Check(unittest.TestCase):
             self.assertTrue(code != 0 or (authors and tables), text + '\n' + out)
 
     def test_one_models_table_reads_back_verified(self):
-        # catches: a project in the models contract's form (#1807) refused for
-        # lacking the older builder and reviewer tables, so a fresh setup never verifies.
         code, out = self.check(self.project(**{'fleet.md': NEW}))
         self.assertEqual(code, 0, out)
         self.assertEqual(out.splitlines()[-1], 'Settings: verified (4 files).')
-        # Small builder and Fixer may be absent (they follow) or carry their own choice.
         mixed = NEW.replace('| Small builder | follows Builder | | | |\n', '').replace(
             '| Fixer | follows Builder | | | |', choice('Fixer', 'codex', 'vendor/syn-codex-2'))
         code, out = self.check(self.project(**{'fleet.md': mixed}))
         self.assertEqual(code, 0, out)
-        # Both forms present: the Models table is read, the older tables still checked.
         code, out = self.check(self.project(**{'fleet.md': FLEET.replace(OLDER, MODELS + OLDER)}))
         self.assertEqual(code, 0, out)
 
     def test_the_template_carries_the_one_models_table(self):
-        # catches: setup writing the five older model tables for a new project
-        # instead of the one Models table (#1807), or a template whose table
-        # breaks the contract's form so only its placeholders are left to fill.
         template = TEMPLATE.read_text()
         for title in ('Builder', 'Builder for small tickets', 'Reviewer for Claude-built', 'Reviewer for GPT-built',
                       'Fixer'):
@@ -299,8 +291,6 @@ class Check(unittest.TestCase):
                                   'fleet.md: Models: Reviewer: unfilled'], out)
 
     def test_a_broken_models_table_is_refused_by_name_never_read_past(self):
-        # catches: a Models table the contract's readers refuse verified by setup,
-        # or a broken one passed because the older tables below it are whole.
         follows = '| Small builder | follows Builder | | | |'
         builder = choice('Builder', 'claude-code', 'syn-claude-1')
         cases = {
@@ -339,8 +329,6 @@ class Check(unittest.TestCase):
         self.assertEqual(code, 5, 'never falls back to the older tables past a broken Models table\n' + out)
 
     def test_the_launch_reads_every_models_table_setup_verifies(self):
-        # catches: setup verifying a Models table the first-fleet launch then
-        # refuses, or one whose reviews it reads as waiting (#1807).
         launch = reader(SKILLS / 'install/scripts/first_fleet.py')
         builder = choice('Builder', 'claude-code', 'syn-claude-1')
         reviewer = choice('Reviewer', 'codex', 'syn-codex-1')

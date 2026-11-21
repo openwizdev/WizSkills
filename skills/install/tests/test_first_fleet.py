@@ -50,7 +50,6 @@ def fleet_md(builder=CODEX, small=CODEX, for_gpt=CLAUDE, for_claude=CODEX):
 
 
 def models_md(orchestrator=CODEX, builder=CODEX, reviewer=CLAUDE, small=None, fixer=None):
-    """fleet_md() with the one Models table (openwiz.models.v1) in place of the older tables."""
     def row(role, agent):
         if agent is None:
             return '| %s | follows Builder | | | |\n' % role
@@ -64,12 +63,11 @@ def models_md(orchestrator=CODEX, builder=CODEX, reviewer=CLAUDE, small=None, fi
 
 
 SETTINGS = SKILL_DIR.parent / 'setup/scripts/settings.py'
-OPUS = ('claude-code', 'claude-opus-5-5', 'medium')  # the contract's recommended other-family choices (J255)
+OPUS = ('claude-code', 'claude-opus-5-5', 'medium')
 SOL = ('codex', 'gpt-6.2-sol', 'medium')
 
 
 def offering(*agents):
-    """The journey's offered options plus each extra (provider, model, effort)."""
     options = json.loads(json.dumps(JOURNEY['options']))
     for provider, model, effort in agents:
         harness = next(h for h in options['harnesses'] if h['provider'] == provider)
@@ -191,7 +189,7 @@ class Journey:
         self.git('init', '-q', '-b', 'main', str(self.dir))
         self.git('-C', str(self.dir), 'remote', 'add', 'origin', str(self.origin))
         self.origin_write({'README.md': '# synthetic\n'})
-        self.checkout = self.dir / 'docs/agents/fleet.md'  # setup's file in this checkout, as merged
+        self.checkout = self.dir / 'docs/agents/fleet.md'
         self.checkout.parent.mkdir(parents=True)
         self.checkout.write_text(FILES['docs/agents/fleet.md'])
         self.save_world()
@@ -1042,7 +1040,6 @@ class DemoRepository(unittest.TestCase):
 
 
 class ModelsTable(unittest.TestCase):
-    """#1807: the first-fleet choice writes the Models table, and its launch reads it."""
 
     def models(self, text):
         sys.dont_write_bytecode = True
@@ -1059,9 +1056,6 @@ class ModelsTable(unittest.TestCase):
         return j.helper(['choose', '--from-setup', '--agents', 'cloud'])
 
     def test_a_cloud_choice_writes_the_models_table_before_the_older_tables(self):
-        # catches: the choice recorded but never written, so a new project's
-        # fleet starts whatever setup left in the table, or a write that drops
-        # or edits the older tables and prose it does not own.
         j = Journey(self)
         result = self.chosen(j, fleet_md())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -1079,8 +1073,6 @@ class ModelsTable(unittest.TestCase):
         self.assertEqual((again.returncode, j.checkout.read_text()), (0, written), 'a repeat writes nothing new')
 
     def test_a_models_table_gets_the_choice_and_keeps_an_other_family_reviewer(self):
-        # catches: an overridden Small builder or Fixer left on another model
-        # (the launch refuses it), or a Reviewer row the user chose rewritten.
         j = Journey(self)
         local = models_md(orchestrator=CLAUDE, builder=CLAUDE, reviewer=CLAUDE[:2] + ('xhigh',), small=CLAUDE,
                           fixer=CODEX)
@@ -1095,9 +1087,6 @@ class ModelsTable(unittest.TestCase):
                          local.replace(local[local.index('| Role |'):local.index('\nSource')], ''))
 
     def test_a_same_family_reviewer_becomes_the_offered_recommendation_or_nothing_is_recorded(self):
-        # catches: the choice written beside a Reviewer of its own family, so
-        # every review of the first fleet's work waits, or a reviewer written
-        # that the user's harnesses do not offer.
         local = models_md(reviewer=SOL)
         j = Journey(self)
         refused = self.chosen(j, local)
@@ -1114,8 +1103,6 @@ class ModelsTable(unittest.TestCase):
                       '--reasoning-level medium` |', written)
 
     def test_a_broken_or_missing_settings_file_is_never_written(self):
-        # catches: a write past a Models table the readers refuse, or a new
-        # fleet.md made where setup has not run.
         broken = models_md().replace('| Effort |', '| Level |')
         for name, local in (('broken', broken), ('missing', None)):
             with self.subTest(name):
@@ -1131,10 +1118,6 @@ class ModelsTable(unittest.TestCase):
                 self.assertNotIn('choices', json.loads(j.state.read_text()))
 
     def test_only_the_written_models_table_on_the_default_branch_reads_back(self):
-        # catches: review R2 of WizSkills#120, a choice marked read back from
-        # matching older tables, or from a Models table with another Orchestrator
-        # or Reviewer, so a resumed session plans and launches before the written
-        # table reaches the default branch.
         j = Journey(self)
         j.replay(until='agents')
         for name, remote in (('older tables', fleet_md()), ('other orchestrator', models_md(orchestrator=CLAUDE)),
@@ -1155,8 +1138,6 @@ class ModelsTable(unittest.TestCase):
         self.assertNotEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: agents.', 'the agents step is done')
 
     def test_a_linked_settings_folder_is_never_written(self):
-        # catches: review R3 of WizSkills#120, a symlinked docs/ or docs/agents/
-        # in the checkout sending the write to a file outside it.
         for link in ('docs', 'docs/agents'):
             with self.subTest(link):
                 j = Journey(self)
@@ -1179,9 +1160,6 @@ class ModelsTable(unittest.TestCase):
                 self.assertNotIn('choices', json.loads(j.state.read_text()))
 
     def test_the_launch_reads_the_models_table(self):
-        # catches: the launch reading only the older tables, so a project in the
-        # new form never starts, or its fleet thread shown (and confirmed) on the
-        # Builder instead of the Orchestrator row.
         j = Journey(self)
         j.replay(until='launch')
         j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CLAUDE)
@@ -1198,8 +1176,6 @@ class ModelsTable(unittest.TestCase):
         self.assertEqual(j.spawns(), [], 'the launch starts nothing itself')
 
     def test_the_launch_refuses_a_models_table_its_choice_or_family_rule_breaks(self):
-        # catches: a launch past a broken Models table, an overridden Small
-        # builder, or a review that would wait under the cross-family rule.
         for name, text in (('broken', models_md().replace('| Effort |', '| Level |')),
                            ('small builder differs', models_md(small=CLAUDE)),
                            ('reviews wait', models_md(reviewer=SOL)),
@@ -1234,7 +1210,7 @@ class Resume(unittest.TestCase):
         # catches: a resumed journey that restarts from the top, or jumps past an
         # unfinished step (a grill before Connect is carried, a launch before the spec is recorded).
         j = Journey(self)
-        j.world['files']['docs/agents/fleet.md'] = models_md()  # the Models table choose writes, merged
+        j.world['files']['docs/agents/fleet.md'] = models_md()
         j.save_world()
         seen = []
         for turn in JOURNEY['turns']:
@@ -1336,7 +1312,7 @@ class Resume(unittest.TestCase):
         self.assertIn("fleet's settings on the default branch", said)
         self.assertEqual(json.loads(j.state.read_text())['choices'], dict(j.settings, agents='local'),
                          'the recorded answer survives the restart')
-        j.world['files']['docs/agents/fleet.md'] = models_md()  # the written Models table, merged
+        j.world['files']['docs/agents/fleet.md'] = models_md()
         j.save_world()
         self.assertEqual(j.helper(['choose', '--from-setup']).returncode, 0)
         self.assertEqual(self.next(j).splitlines()[0], 'Next: setting.', 'the host setting follows the agents (#1358)')
@@ -1356,7 +1332,7 @@ class Resume(unittest.TestCase):
         self.assertIn("fleet's settings on the default branch", said)
         self.assertEqual(json.loads(j.state.read_text())['choices'], dict(j.settings, agents='cloud'),
                          'the recorded choice survives the restart')
-        j.world['files']['docs/agents/fleet.md'] = models_md()  # the written Models table, merged
+        j.world['files']['docs/agents/fleet.md'] = models_md()
         j.save_world()
         self.assertEqual(self.next(j).splitlines()[0], 'Next: agents.', 'only a read-back settles the tables')
         again = j.helper(['choose', '--from-setup', '--agents', 'cloud'])

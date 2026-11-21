@@ -335,8 +335,8 @@ def connect_decisions(got):
     except (OSError, ValueError, AssertionError):
         raise Exit(10, 'The private settings file is unreadable; nothing changed.')
     print('Effect: set Decisions\' repository pair in the private settings: public %s/%s, private %s/%s. '
-          'Restart the OpenWiz server afterwards.' % (pair['public']['owner'], pair['public']['name'],
-                                                    pair['private']['owner'], pair['private']['name']))
+          'Nothing else changes.' % (pair['public']['owner'], pair['public']['name'],
+                                     pair['private']['owner'], pair['private']['name']))
     if not got.get('--yes'):
         print("Nothing changed. On the user's yes to exactly this, run again with --yes.")
         return 12
@@ -360,7 +360,7 @@ def connect_decisions(got):
             except OSError:
                 pass
         raise Exit(10, 'Could not write the private settings; nothing changed.')
-    print('Decisions now reads the companion. Restart the OpenWiz server, then run continue.')
+    print('Decisions now reads the companion. Run the setup check, then run continue.')
     return 0
 
 

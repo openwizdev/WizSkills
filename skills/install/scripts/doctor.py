@@ -161,10 +161,8 @@ def recorded(args, value, why, component):
                 'GitHub Apps), then %s' % (args.repo.split('/')[0], args.repo, check))
     if component == 'github_app':
         return ('not verified (%s)' % code,
-                "set up OpenWiz's GitHub App for %s with python3 -I -B %s --repo %s --state-dir %s (preview, then "
-                "--yes --operation <id>), then %s" % (
-                    args.repo, shlex.quote(str(Path(args.build) / 'runtime/github-app/setup.py')),
-                    shlex.quote(args.repo), shlex.quote(args.state_dir), check))
+                "set up OpenWiz's GitHub App for %s with %s, as the setup skill's \"The App\" says, then %s" % (
+                    args.repo, shlex.quote(str(Path(args.build) / 'runtime/github-app/setup.py')), check))
     if code == 'harness_unavailable':
         # setup.py records this only when it read the offered catalogue and the selection isn't in it.
         chosen = '%s, %s, %s effort' % (project.get('harness'), project.get('model'), project.get('effort'))

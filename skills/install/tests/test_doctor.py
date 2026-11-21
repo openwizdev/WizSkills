@@ -234,9 +234,9 @@ class Doctor(unittest.TestCase):
         self.s.save()
         self.assertEqual(self.only(self.s.run()),
                          '2. GitHub App: not verified (app_missing). Fix: set up OpenWiz\'s GitHub App for %s with '
-                         'python3 -I -B %s/runtime/github-app/setup.py --repo %s --state-dir %s (preview, then '
-                         '--yes --operation <id>), then python3 -I -B %s/runtime/setup/setup.py check --state-dir %s'
-                         % (REPO, self.s.build, REPO, self.s.state, self.s.build, self.s.state))
+                         '%s/runtime/github-app/setup.py, as the setup skill\'s "The App" says, then '
+                         'python3 -I -B %s/runtime/setup/setup.py check --state-dir %s'
+                         % (REPO, self.s.build, self.s.build, self.s.state))
 
     # catches: an old App check counted as current.
     def test_app_check_out_of_date(self):

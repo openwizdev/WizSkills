@@ -1,0 +1,9 @@
+# #1358: OpenWiz's merged local driver (KN3 #1368, OpenWiz #1455, merge 583f2ae) reads what the road writes
+# A one-off check, not a CI test (WizSkills CI has no OpenWiz checkout): it loads adapters/local/driver at 583f2ae
+# and calls its own approved_mode() and permission_mode() on an approvals.json written by first_fleet.approve_host()
+# (beside a pre-existing synthetic entry) and a fleet.md holding first_fleet.mode_section(). Synthetic values only.
+
+merged driver approved_mode: acceptEdits
+merged driver permission_mode: acceptEdits
+other entry kept: {'codex': 'read-only'}
+file mode: 0o600

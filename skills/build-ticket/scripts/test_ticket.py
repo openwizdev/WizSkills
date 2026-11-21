@@ -687,6 +687,23 @@ class Identity(Case):
         code, out, err = self.run_ticket('push', str(self.dir / 'r.txt'), '--', 'git', 'push', '-q', 'origin', 'HEAD')
         self.assertEqual(code, 0, out + err)
 
+    def test_push_judges_against_the_url_the_push_goes_to(self):
+        # R1: a separate push URL is where the commits land, so it is what is read
+        elsewhere = self.dir / 'elsewhere.git'
+        subprocess.run(['git', 'init', '-q', '--bare', str(elsewhere)], check=True, env=self.env())
+        self.write('src/other.py', 'y = 2\n')
+        self.commit('theirs', GIT_AUTHOR_EMAIL=PERSONAL, GIT_COMMITTER_EMAIL=PERSONAL)
+        theirs = self.git('rev-parse', 'HEAD').strip()
+        self.git('push', '-q', 'origin', 'HEAD:main')                          # held by the fetch URL only
+        self.git('remote', 'set-url', '--push', 'origin', str(elsewhere))
+        self.write('src/export/run.py', 'x = 2\n')
+        self.commit('mine')
+        code, out, _ = self.run_ticket('push', str(self.dir / 'r.txt'), '--', 'git', 'push', '-q', 'origin', 'HEAD')
+        self.assertEqual((code, last(out)), (1, f'push refused: commit {theirs[:12]} author is not '
+                                                'a GitHub noreply address; nothing pushed'))
+        self.assertEqual(subprocess.run(['git', '--git-dir', str(elsewhere), 'for-each-ref'], check=True,
+                                        capture_output=True, text=True, env=self.env()).stdout, '')
+
     def test_push_refuses_when_origin_cannot_be_read(self):
         self.git('remote', 'set-url', 'origin', str(self.dir / 'missing.git'))
         code, out, err = self.run_ticket('push', str(self.dir / 'r.txt'), '--', 'git', 'push', '-q', 'origin', 'HEAD')
@@ -696,13 +713,16 @@ class Identity(Case):
     def test_push_refuses_a_command_that_sends_anything_but_head_to_origin(self):
         # R1: the check binds to the refs the command sends
         self.git('branch', '-q', 'extra', 'main')
+        self.write('src/export/run.py', 'x = 2\n')
+        self.commit('mine')
         commands = [['true'], ['sh', '-c', 'git push origin HEAD'], ['git', 'push'], ['git', 'push', 'origin'],
                     ['git', 'push', 'other', 'HEAD'], ['git', 'push', '--all', 'origin'],
                     ['git', 'push', '--mirror', 'origin'], ['git', 'push', '--tags', 'origin', 'HEAD'],
                     ['git', 'push', '--follow-tags', 'origin', 'HEAD'], ['git', 'push', '--repo=other', 'HEAD'],
                     ['git', 'push', 'origin', 'HEAD', 'extra'], ['git', 'push', 'origin', ':work'],
                     ['git', 'push', 'origin', 'extra:refs/heads/work'], ['git', 'push', '--delete', 'origin', 'work']]
-        for command in commands:
+        configs = [('push.followTags', 'true'), ('remote.origin.mirror', 'true')]
+        for command in commands + [['git', '-c', f'{k}={v}', 'push', 'origin', 'HEAD'] for k, v in configs]:
             with self.subTest(command=command):
                 code, out, _ = self.run_ticket('push', str(self.dir / 'r.txt'), '--', *command)
                 self.assertEqual((code, last(out)), (1, 'push refused: the command must push HEAD to origin '

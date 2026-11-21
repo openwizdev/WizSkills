@@ -1,0 +1,5 @@
+Share your time? I would post this one line, once, as example-user on openwizdev/OpenWiz#9001 (Driver times), where anyone can read it:
+
+examplehost: 5 of 5 in 23 minutes
+
+Say yes to post it, or no to keep it to yourself.

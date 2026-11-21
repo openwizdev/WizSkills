@@ -1,22 +1,4 @@
 #!/usr/bin/env python3
-"""Grant and record one of the fleet's four bounded self-grants (#1353, F4).
-
-  self-grant.py OWNER/NAME TICKET KIND REASON [--spec SPEC]
-
-KIND is one of:
-  supporting-edit    a few-line supporting edit the ticket can't work without
-  dependency-wiring  wiring an already-approved, small, pinned dependency
-  read-route         a read route under the API rules
-  spec-change        a truly necessary spec change (needs --spec): recorded on
-                     the spec first, then on the ticket
-
-Each grant is one public record on the ticket, written with post.py and read
-back: `launch-fleet: granted <kind>: <reason>`. A model or effort change is
-never a self-grant (ask Jake), and anything else goes to the orchestrator: both
-exit 1 with `refused: ...` and write nothing. Prints post.py's lines; exit 1
-with `unknown: ...` when a record can't be read back (a spec change then
-records no grant); exit 2 on a bad command line.
-"""
 import argparse
 import importlib.util
 from pathlib import Path
@@ -32,8 +14,11 @@ KINDS = ('supporting-edit', 'dependency-wiring', 'read-route', 'spec-change')
 NEVER = ('model', 'effort')
 
 
+DESCRIPTION = "Grant and record one of the fleet's four bounded self-grants (#1353, F4)."
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument('repo')
     parser.add_argument('ticket', type=int)
     parser.add_argument('kind')

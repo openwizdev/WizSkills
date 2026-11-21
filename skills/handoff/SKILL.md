@@ -1,7 +1,7 @@
 ---
 name: handoff
 description: Keep the orchestrator's one-page handoff file in the private repository current, so a new orchestrator can take over without the old chat. Use after the user approves a plan graph, before an orchestrator retires, and first thing when taking over as orchestrator. Orchestrator only.
-version: 0.2.0
+version: 0.3.0
 ---
 
 # Handoff

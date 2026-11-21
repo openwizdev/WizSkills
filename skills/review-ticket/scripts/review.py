@@ -1,19 +1,3 @@
-"""Review mechanics for review-ticket: pin the head, check and post the report, file a follow-up.
-
-  pin --repo O/R --pr N --head SHA           which review is due at the assigned head, or why none is
-  check REPORT --repo O/R --pr N --head SHA  admission, then the report's contract lines
-  post REPORT --repo O/R --pr N --head SHA   admission and check again, post once, read back
-  follow-up --repo TICKET_REPO ...   file one polish issue or logged blocker for triage, once
-  self-check DESCRIPTION [--base REF]       the builder's own pass on its checkout, before any review
-
-Each command reads one pull-request snapshot and admits it (open, ready, a
-ticket, the assigned head, every required check green there) before anything
-else (self-check reads only the local checkout and description, before a pull
-request exists). Settings are read from the base branch, never the pull request's head.
-Only comments by the `Record authors` row of docs/agents/fleet.md count. Exit 0
-done, 1 a stop, report problems or an unknown write, 2 a refusal (unreadable
-or invalid settings, arguments). Python 3.11+ standard library and `gh`.
-"""
 import argparse
 import base64
 import json
@@ -50,7 +34,6 @@ DECISION = re.compile(rf"\*\*Orchestrator decision:\*\* (fix once more|log and m
 ADDITIONAL = re.compile(r"\*\*Additional\b[^*\n]*? check: `([^`]+)`")
 CLOSES = re.compile(r"(?im)^\s*(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+((?:[\w.-]+/[\w.-]+)?#[1-9][0-9]*)\b")
 LOGIN = r"`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`"
-# The whole cell, as launch-fleet's grants.py reads it: backticked logins separated by commas.
 AUTHORS_CELL = re.compile(rf"\s*{LOGIN}(?:\s*,\s*{LOGIN})*\s*")
 TEST_RULE = re.compile(r"\b(?:catches|no new test): \S")
 PRIVATE = re.compile(r"\b(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_-]{8,}|\bthr_[A-Za-z0-9]{4,}|(?i:\bbearer\s+[A-Za-z0-9._-]{8,})")
@@ -109,7 +92,6 @@ def cells(line):
 
 
 def record_authors(fleet):
-    """Lowercase logins from the one Record authors row, read whole as launch-fleet reads it, or a refusal."""
     heading, rows = None, []
     for line in fleet.splitlines():
         if line.startswith("## "):
@@ -123,7 +105,6 @@ def record_authors(fleet):
 
 
 def required_checks(fleet):
-    """Every check the ## CI checks section requires: the table's names and any **Additional ... check: `x`**."""
     lines = section(fleet, "## CI checks")
     names = [m[1] for line in lines if (row := cells(line)) and (m := re.fullmatch(r"`([^`]+)`", row[0]))]
     names += [n for n in ADDITIONAL.findall("\n".join(lines)) if n not in names]
@@ -172,7 +153,6 @@ def open_blockers(report):
 
 
 def rulings_lines(text):
-    """The stripped lines of the description's first unfenced ## Rulings section, or None without one."""
     lines, fenced, fence = text.splitlines(), [], False
     for line in lines:
         if line.lstrip().startswith(("```", "~~~")):
@@ -194,7 +174,6 @@ def description_rulings(text):
 
 
 def check(text, description, mode, head, earlier, decision=None, changed=None):
-    """Every contract line the report breaks; empty when it passes."""
     r, problems = parse(text), []
     if r["verdict"] is None:
         problems.append("the first line is VERDICT: APPROVE or CHANGES at the 40-character head")
@@ -293,7 +272,6 @@ def same(comment, text):
 
 
 def admit(repo, number, assigned, skip=None):
-    """One snapshot of the pull request, admitted at the assigned head, and the review it is due."""
     pr = get(f"repos/{repo}/pulls/{number}")
     head = pr["head"]["sha"]
     if pr.get("state") != "open":
@@ -358,9 +336,8 @@ def pin(repo, number, assigned):
 
 
 def changed_since(repo, last, head):
-    """Every file the compare from the last read head to this one changes; unreadable or truncated refuses."""
     files = get(f"repos/{repo}/compare/{last}...{head}").get("files")
-    if not isinstance(files, list) or len(files) >= 300:  # GitHub lists at most 300 files
+    if not isinstance(files, list) or len(files) >= 300:
         raise Refusal(f"cannot read every file changed since {last[:7]}")
     return {x["filename"] for x in files}
 
@@ -368,7 +345,11 @@ def changed_since(repo, last, head):
 def report_problems(path, repo, number, assigned):
     text = Path(path).read_text(encoding="utf-8").replace("\r\n", "\n")
     s = admit(repo, number, assigned, skip=text)
-    changed = changed_since(repo, s["last"]["head"], s["head"]) if s["mode"] in ("re-check", "final") else None
+    changed = None
+    if s["mode"] in ("re-check", "final"):
+        changed = changed_since(repo, s["last"]["head"], s["head"])
+    elif s["mode"] == "log-and-merge":
+        changed = set()
     return text, s, check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"], s["decision"], changed)
 
 
@@ -383,7 +364,6 @@ def git(*args):
 
 
 def self_check(path, base):
-    """The reviewer's mechanical checks on the builder's own hand-back: each miss, then the tally."""
     try:
         description = Path(path).read_text(encoding="utf-8").replace("\r\n", "\n")
     except (OSError, UnicodeDecodeError):
@@ -418,7 +398,7 @@ def self_check(path, base):
 def post(path, repo, number, assigned):
     text, s, problems = report_problems(path, repo, number, assigned)
     mine = [c for c in s["comments"] if authored(c, s["authors"]) and same(c, text)]
-    if mine:  # this exact report, naming this head, already stands as a record
+    if mine:
         return f"already posted {mine[0]['id']}"
     if problems:
         raise Stop("\n".join(problems))
@@ -428,7 +408,7 @@ def post(path, repo, number, assigned):
     if code == 0 and isinstance(made, dict) and made.get("id") is not None:
         back = gh(f"repos/{repo}/issues/comments/{made['id']}")[1]
         found = back if isinstance(back, dict) and same(back, text) else None
-    else:  # the response was lost: only a new comment of this report counts
+    else:
         found = next((c for c in pages(f"repos/{repo}/issues/{number}/comments?per_page=100")
                       if c.get("id") not in before and same(c, text)), None)
     if not found:
@@ -474,8 +454,27 @@ def follow_up(a):
     raise Stop("unknown: not found on read-back; list the issues before filing again")
 
 
+DESCRIPTION = (
+    'Review mechanics for review-ticket: pin the head, check and post the report, file a follow-up.\n'
+    '\n'
+    '  pin --repo O/R --pr N --head SHA           which review is due at the assigned head, or why none is\n'
+    "  check REPORT --repo O/R --pr N --head SHA  admission, then the report's contract lines\n"
+    '  post REPORT --repo O/R --pr N --head SHA   admission and check again, post once, read back\n'
+    '  follow-up --repo TICKET_REPO ...   file one polish issue or logged blocker for triage, once\n'
+    "  self-check DESCRIPTION [--base REF]       the builder's own pass on its checkout, before any review\n"
+    '\n'
+    'Each command reads one pull-request snapshot and admits it (open, ready, a\n'
+    'ticket, the assigned head, every required check green there) before anything\n'
+    'else (self-check reads only the local checkout and description, before a pull\n'
+    "request exists). Settings are read from the base branch, never the pull request's head.\n"
+    'Only comments by the `Record authors` row of docs/agents/fleet.md count. Exit 0\n'
+    'done, 1 a stop, report problems or an unknown write, 2 a refusal (unreadable\n'
+    'or invalid settings, arguments). Python 3.11+ standard library and `gh`.\n'
+)
+
+
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(description=DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="command", required=True)
     for name in ("pin", "check", "post"):
         c = sub.add_parser(name)

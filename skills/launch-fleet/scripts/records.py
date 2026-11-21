@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""Resolve fleet records from public facts. Thread identities never become public records.
-
-Optional private state: {"repo": "owner/name", "threads": {"builder:N": "...",
-"review:P:FULL_START_COMMIT": "...", "review:P:claim:COMMENT_ID": "...",
-"comment:COMMENT_ID": "..."}}.
-Readers never update it. Starters save it privately before recording success.
-"""
 import importlib.util
 import json
 import os
@@ -47,13 +40,21 @@ def private_state(repo):
     return value['threads']
 
 
+LOCAL_THREAD_LIST = ['room-cli', 'thread', 'list', '--include-archived', '--include-hidden', '--json']
+CLOUD_OWN_SUBAGENT_LIST = ['room-cli', 'thread', 'list', '--include-archived', '--json']
+CLOUD_REFUSES_INCLUDE_HIDDEN = 2
+
+
 def discover():
     try:
-        r = subprocess.run(['room-cli', 'thread', 'list', '--include-archived', '--include-hidden', '--json'],
-                           capture_output=True, text=True, timeout=10)
+        r = subprocess.run(LOCAL_THREAD_LIST, capture_output=True, text=True, timeout=10)
+        if r.returncode == CLOUD_REFUSES_INCLUDE_HIDDEN:
+            r = subprocess.run(CLOUD_OWN_SUBAGENT_LIST, capture_output=True, text=True, timeout=10)
         if r.returncode:
             return None
         rows = json.loads(r.stdout, object_pairs_hook=unique)
+        if isinstance(rows, dict):
+            rows = rows.get('children')
         if not isinstance(rows, list) or any(not isinstance(t, dict) or not isinstance(t.get('id'), str)
                                             or not ID.fullmatch(t['id']) for t in rows):
             return None
@@ -74,7 +75,6 @@ def choose(key, matches, state, threads):
     if saved and found and saved != found:
         return None, 'private state and CloudRoom disagree for ' + key
     if saved:
-        # A saved identity is authoritative when title discovery finds nothing.
         return saved, None
     return (found, None) if found else (None, 'no thread matches ' + key)
 
@@ -83,15 +83,12 @@ UNREADABLE, UNSET, MISSING = object(), object(), object()
 
 
 def driver_runs(repo):
-    """host.py's runs ({N: run}) from LAUNCH_FLEET_RUNS (#1371), stopped ones too.
-
-    UNSET when the wake restored no run map, MISSING when its file isn't there, UNREADABLE when it doesn't read."""
     path = os.environ.get('LAUNCH_FLEET_RUNS')
     if not path:
         return UNSET
     if not os.path.exists(path):
         return MISSING
-    sys.dont_write_bytecode = True  # never leave caches in an installed skill
+    sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location('launch_fleet_host', Path(__file__).resolve().parent / 'host.py')
     host = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(host)
@@ -107,7 +104,6 @@ def builder_thread(n, branch, threads, state, runs=None):
     if runs is MISSING:
         return None, 'the private run map LAUNCH_FLEET_RUNS was not restored from the private state'
     if isinstance(runs, dict) and str(n) in runs:
-        # Started through a host driver: host.py wakes and stops it (a stop answers again); no CloudRoom thread exists.
         return f'run:{n}', None
     saved = state.get(f'builder:{n}')
     if branch and any(t['id'] == saved and t.get('branch') is not None and t['branch'] != branch for t in threads or []):
@@ -122,7 +118,6 @@ def builder_thread(n, branch, threads, state, runs=None):
 
 
 def reviewer_thread(n, commit, threads, state, claim=None, retired=()):
-    # Claim IDs survive edits and distinguish replacements at the same head.
     saved = state.get(f'review:{n}:claim:{claim}')
     if saved:
         state = {**state, f'review:{n}:{commit}': saved}
@@ -133,7 +128,6 @@ def reviewer_thread(n, commit, threads, state, claim=None, retired=()):
 
 
 def annotate(world, repo, private, threads, state):
-    """Attach private routing metadata; preserve every original body and comment position."""
     runs = driver_runs(repo)
 
     def item(obj):
@@ -154,7 +148,6 @@ def annotate(world, repo, private, threads, state):
                 if ', thread ' + legacy[0] in line:
                     c['resolvedThread'] = legacy[0]
                 gave_up = re.fullmatch(rf'review failed {SHA}, thread thr_[A-Za-z0-9_-]+: .+', line)
-                # Historical private starts may put a model note after the thread.
                 line = re.sub(rf'^(review started {SHA}), thread thr_[A-Za-z0-9_-]+ \(.+\)$',
                               r'\1', line)
                 line = re.sub(r', thread thr_[A-Za-z0-9_-]+', '', line)
@@ -170,14 +163,11 @@ def annotate(world, repo, private, threads, state):
                     start = commit
                 edited_start = kind == 'review given up' and f'review:{obj["number"]}:claim:{c["databaseId"]}' in state
                 if kind == 'review started' or edited_start:
-                    # A retained start-claim key also marks the boundary after an edit.
                     span, start, start_claim = [], commit, c['databaseId']
                     if legacy and c.get('resolvedThread'):
                         routes[f'review:{obj["number"]}:{commit}'] = c['resolvedThread']
                 span.append(c)
                 if kind == 'review given up':
-                    # Preserve the retired identity for archival only. An edited start
-                    # has no public start commit left; its immutable claim key survives.
                     identity = state.get(f'review:{obj["number"]}:claim:{c["databaseId"]}')
                     identity = identity or state.get(f'review:{obj["number"]}:claim:{start_claim}')
                     identity = identity or next((r.get('archiveThread') or r.get('resolvedThread')
@@ -187,7 +177,6 @@ def annotate(world, repo, private, threads, state):
                     c['archiveThread'] = identity
                     if identity:
                         retired.add(identity)
-                    # An edited claim keeps its position; close records later in this span too.
                     for record in span:
                         record['reviewClosed'] = True
                         if record.get('resolvedThread'):
@@ -203,7 +192,7 @@ def annotate(world, repo, private, threads, state):
                 if any(record.get('givenUp') for record in span):
                     c['reviewClosed'] = True
                     c['recordError'] = None
-            if re.fullmatch(r'(?:resume starting [0-9]+ for #[0-9]+|release starting [0-9]+)', line):
+            if re.fullmatch(rf'(?:resume starting [0-9]+ for (?:(?i:{re.escape(repo)}))?#[0-9]+|release starting [0-9]+)', line):
                 c['resolvedThread'] = state.get('comment:' + str(c['databaseId']))
         for child in obj.get('subIssues', {}).get('nodes', []):
             item(child)
@@ -216,7 +205,7 @@ def annotate(world, repo, private, threads, state):
 
 def _effects():
     import importlib.util
-    sys.dont_write_bytecode = True  # never leave caches in an installed skill
+    sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location('ops_effects', Path(__file__).resolve().parent / 'effects.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -224,13 +213,6 @@ def _effects():
 
 
 def ops_owner(claims, effects=None):
-    """#1456: the current logical fleet owner from the complete admitted generation history.
-
-    The caller supplies every admitted generation claim it read back for one
-    repository/spec. Returns (repository, spec, generation, owner): the owner
-    belongs to that fleet only. A gap, fork or mixed history selects no owner
-    (ValueError); an empty history has generation 0 and no fleet or owner.
-    """
     effects = effects or _effects()
     claims = [effects.read_record(json.dumps(c, allow_nan=False)) for c in claims]
     if any(c['kind'] != 'claim' or c['scope'] != 'generation' for c in claims):
@@ -247,22 +229,6 @@ def ops_owner(claims, effects=None):
 
 
 def ops_pass(view, effect_boundary, effects=None):
-    """#1456: one finite pass over candidate operations; never executes an effect.
-
-    view: {"pass": {"generation", "owner"}, "generations": [admitted generation
-    claims], "operations": [{"intent", "claim", "history", "snapshot"}]}. The
-    handlers that build intents (#1480, #1481, #2112, #2338, #2339) supply the
-    operations. Every copy first goes through OB3's resume, whose effect
-    boundary stays uncalled under OB-A1, and its own records are checked to
-    hold together. Recorded uncertainty from any readable copy wins: the
-    operation is reconcile on its first valid copy, whatever its generation.
-    Otherwise a valid copy outside the current owner's fleet (repository, spec,
-    generation, owner) is refused stale_claim. Only a valid copy that is
-    reconciled or current consumes its key; a later copy of a consumed key
-    (project and spec ticks share keys) is a duplicate. Invalid, mismatched and
-    stale copies consume nothing and never block other operations. Returns one
-    schema-valid result per operation, in input order.
-    """
     effects = effects or _effects()
     repository, spec, generation, owner = ops_owner(view['generations'], effects)
     mine = (view['pass']['generation'], view['pass']['owner'])
@@ -279,9 +245,6 @@ def ops_pass(view, effect_boundary, effects=None):
         return isinstance(record, dict) and (record.get('repository'), record.get('spec')) == (repository, spec)
 
     def bound(intent, operation, outcome):
-        # A copy's own records must hold together. Checked with its history and
-        # snapshot uncertainty set aside, so uncertainty-first cannot vouch for a
-        # mismatched claim or snapshot.
         if outcome['reason'] in ('incomplete_read', 'stale_binding'):
             return False
         probe = effects.resume(intent, operation['claim'], [], dict(operation['snapshot'], uncertain_keys=[]),
@@ -289,8 +252,6 @@ def ops_pass(view, effect_boundary, effects=None):
         return probe['reason'] not in ('incomplete_read', 'stale_binding')
 
     def current(intent, operation):
-        # Both the operation's claim and its snapshot must belong to the current
-        # generation and owner before a non-reconcile copy may consume its key.
         claim, snapshot = operation['claim'], operation['snapshot']
         return (mine == (generation, owner) and all(map(fleet, (intent, claim, snapshot)))
                 and all((record['generation'], record['owner']) == (generation, owner)
@@ -313,7 +274,6 @@ def ops_pass(view, effect_boundary, effects=None):
         if not valid and unsure:
             outcome = result(intent, 'refused', 'stale_binding')
         candidates.append((intent, operation if valid else None, outcome, unsure))
-    # Proven uncertainty from any copy whose intent was readable stays with the operation.
     uncertain = {intent['operation_key'] for intent, _, _, unsure in candidates if unsure}
     consumed = set()
     results = []
@@ -328,7 +288,6 @@ def ops_pass(view, effect_boundary, effects=None):
             consumed.add(key)
             results.append(result(intent, 'reconcile', 'uncertain_outcome'))
         elif not current(intent, operation):
-            # A stale copy is refused and consumes nothing: a current copy may follow.
             results.append(result(intent, 'refused', 'stale_claim'))
         else:
             consumed.add(key)
@@ -350,7 +309,6 @@ def main():
         return 0
     world = json.load(sys.stdin)
     repo, private = sys.argv[1:]
-    # Avoid CloudRoom entirely for legacy-only inputs and ordinary frontier checks.
     def needed(x):
         if isinstance(x, dict):
             if isinstance(x.get('body'), str) and re.match(r'^launch-fleet: (started$|start checked, branch |review started |re-check sent )', first(x['body'])) and not ID.search(first(x['body'])):

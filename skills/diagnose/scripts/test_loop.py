@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""diagnose's loop helper: rate, tag and clean, on synthetic commands and Git trees only."""
 import os
 import signal
 import subprocess
@@ -18,7 +17,6 @@ def run(*args, cwd=None):
 
 
 def counter(tmp, fail_on):
-    """A synthetic flaky command: run k (from a counter file) fails when k is in fail_on."""
     script = Path(tmp) / 'flaky.py'
     script.write_text(
         'import sys, pathlib\n'
@@ -29,7 +27,6 @@ def counter(tmp, fail_on):
     return [sys.executable, '-I', str(script), str(Path(tmp) / 'count')]
 
 
-# Python 3.10's subprocess.Popen keyword parameters (its documented signature).
 POPEN_3_10 = {'bufsize', 'executable', 'stdin', 'stdout', 'stderr', 'preexec_fn', 'close_fds',
               'shell', 'cwd', 'env', 'universal_newlines', 'startupinfo', 'creationflags',
               'restore_signals', 'start_new_session', 'pass_fds', 'user', 'group',
@@ -45,7 +42,6 @@ exec(ALIVE)
 
 
 def stop_workers(pids):
-    """Kill any worker a failing run left behind, so a red run leaks nothing."""
     for pid in (int(p) for p in pids.read_text().split()) if pids.exists() else ():
         try:
             os.kill(pid, signal.SIGKILL)
@@ -82,8 +78,6 @@ class Rate(unittest.TestCase):
 
     @unittest.skipUnless(os.path.isdir('/proc/self'), 'reads process states from /proc')
     def test_a_timed_out_attempts_workers_are_stopped_before_the_next_attempt(self):
-        # catches: a timeout that kills only the direct command, so its worker
-        # still runs during the next attempt and after rate has exited.
         with tempfile.TemporaryDirectory() as tmp:
             script, pids, log = Path(tmp, 'runner.py'), Path(tmp, 'pids'), Path(tmp, 'log')
             script.write_text(
@@ -102,15 +96,12 @@ class Rate(unittest.TestCase):
             self.assertEqual(log.read_text(), 'start\nstart\n')
             workers = [int(p) for p in pids.read_text().split()]
             self.assertEqual(len(workers), 2)
-            deadline = time.monotonic() + 5  # a killed worker's exit is delivered, not instant
+            deadline = time.monotonic() + 5
             while any(map(alive, workers)) and time.monotonic() < deadline:
                 time.sleep(0.05)
             self.assertEqual([p for p in workers if alive(p)], [])
 
     def test_rate_runs_on_python_3_10s_subprocess(self):
-        # catches: a Popen keyword newer than Python 3.10 (such as
-        # process_group, 3.11), which crashes rate before its first run on a
-        # host whose python3 is 3.10. Popen is narrowed to 3.10's parameters.
         launcher = (
             'import runpy, subprocess, sys\n'
             f'ALLOWED = {sorted(POPEN_3_10)!r}\n'
@@ -190,8 +181,6 @@ class Clean(unittest.TestCase):
             self.assertEqual(r.stdout, 'left: 2 [DEBUG-a4f2] in src/app.py:2, src/probe.py:1\n')
 
     def test_a_tag_left_only_in_the_staged_copy_is_named(self):
-        # catches: clean reading only the working copy, so a staged probe the
-        # agent then removed from the file passes clean and is committed.
         with tempfile.TemporaryDirectory() as tmp:
             git_tree(tmp)
             Path(tmp, 'src/app.py').write_text('print("ready")\n# [DEBUG-a4f2]\n')
@@ -201,8 +190,6 @@ class Clean(unittest.TestCase):
             self.assertEqual((r.returncode, r.stdout), (1, 'left: 1 [DEBUG-a4f2] in src/app.py:2 (staged)\n'))
 
     def test_a_staged_file_deleted_from_the_work_tree_is_still_read(self):
-        # catches: skipping a path missing from the work tree while its staged
-        # blob, which Git will commit, still holds the tag.
         with tempfile.TemporaryDirectory() as tmp:
             git_tree(tmp)
             Path(tmp, 'src/probe.py').write_text('# [DEBUG-a4f2]\n')
@@ -212,8 +199,6 @@ class Clean(unittest.TestCase):
             self.assertEqual((r.returncode, r.stdout), (1, 'left: 1 [DEBUG-a4f2] in src/probe.py:1 (staged)\n'))
 
     def test_a_tag_removed_from_the_index_but_left_in_the_file_is_named_once(self):
-        # catches: the staged scan replacing the working-copy scan, or naming a
-        # line twice when the index and the file both hold it.
         with tempfile.TemporaryDirectory() as tmp:
             git_tree(tmp)
             Path(tmp, 'src/app.py').write_text('print("ready")\n# [DEBUG-a4f2]\n')
@@ -223,8 +208,6 @@ class Clean(unittest.TestCase):
             self.assertEqual((r.returncode, r.stdout), (1, 'left: 2 [DEBUG-a4f2] in src/app.py:2, src/both.py:1\n'))
 
     def test_an_unreadable_staged_copy_is_never_called_clean(self):
-        # catches: a staged blob Git cannot read being skipped, so clean
-        # passes without having seen what Git would commit.
         with tempfile.TemporaryDirectory() as tmp:
             git_tree(tmp)
             Path(tmp, 'src/probe.py').write_text('# [DEBUG-a4f2]\n')
@@ -238,9 +221,6 @@ class Clean(unittest.TestCase):
             self.assertIn('cannot read', r.stderr)
 
     def test_a_staged_tag_behind_index_flags_is_named(self):
-        # catches: trusting `git diff-files` to list every staged copy that
-        # differs from its file: it skips skip-worktree (sparse checkout) and
-        # assume-unchanged entries, so their staged tags were called clean.
         for flag in ('sparse-checkout', 'assume-unchanged'):
             with self.subTest(flag), tempfile.TemporaryDirectory() as tmp:
                 git_tree(tmp)

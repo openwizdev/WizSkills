@@ -1,9 +1,3 @@
-"""OB7 (#2112) synthetic ON1 evidence proofs; no endpoint effect, no private reads.
-
-Each case changes one source or record of a complete synthetic ON1 application
-and checks what the finite pass decides. The release effect stays disabled
-under OB-A1 even with complete evidence: the effect callback must never run.
-"""
 import copy
 import hashlib
 import importlib.util
@@ -39,7 +33,6 @@ def key(intent):
 
 
 def fixture():
-    """A complete, current ON1 application for synthetic ticket 9001."""
     ex = copy.deepcopy(EXAMPLES)
     record, snap, intent, grant = ex['on1'], ex['snapshot'], ex['intent'], ex['grant']
     approval = copy.deepcopy(record['approval'])
@@ -47,7 +40,6 @@ def fixture():
     intent.update(action='hold_release', destination='ops', assignment='ops-span-1', head=None,
                   rule=copy.deepcopy(rule), id='intent-release-1')
     intent['operation_key'] = key(intent)
-    # The exact inputs of OB2's own valid synthetic grant for #9001 (test-grants.py).
     bundle = dict(zip(('grant', 'envelope', 'intent', 'snapshot', 'sources', 'assessment', 'changes', 'history'),
                       test_grants.fixture()))
     grant = bundle['grant']
@@ -88,8 +80,6 @@ def never(*_):
 
 
 def run(change=None):
-    """Each case's pre-effect digest is resealed over its changed sources, so the
-    case proves its own check; `forged_before_digest` proves that seal."""
     record, snap, sources = fixture()
     if change:
         change(record, snap, sources)
@@ -108,60 +98,50 @@ def grant_of(sources):
 
 
 def grant_other_repository(record, snap, sources):
-    """R2: only the grant's repository changes."""
     grant_of(sources)['grant']['repository'] = 'synthetic/elsewhere'
 
 
 def unrelated_grant(record, snap, sources):
-    """R2: a grant valid in another repository, read with its own snapshot."""
     bundle = grant_of(sources)
     for value in [bundle['grant'], bundle['envelope'], bundle['intent'], bundle['snapshot']] + bundle['snapshot']['intents']:
         value['repository'] = 'synthetic/elsewhere'
 
 
 def stale_grant_material(record, snap, sources):
-    """R2: only a material digest changes."""
     bundle = grant_of(sources)
     for value in (bundle['grant'], bundle['snapshot']):
         value['material']['evidence_digest'] = 'e' * 64
 
 
 def ended_grant(record, snap, sources):
-    """R2: a later lifecycle event revoked the grant."""
     bundle = grant_of(sources)
     bundle['history'].append(dict(copy.deepcopy(bundle['grant']), id='grant-1-revoked', status='revoked'))
 
 
 def manual_history_kind(record, snap, sources):
-    """R3: the history says the covered hold is manual; the hold source says contract."""
     sources['hold']['history'][0]['kind'] = 'manual'
     record['hold']['history_digest'] = snap['history_digest'] = digest(sources['hold']['history'])
 
 
 def duplicate_history(record, snap, sources):
-    """R3: two history entries claim the covered hold's identity."""
     sources['hold']['history'].insert(0, dict(id=9009, kind='contract', created_at=18))
     record['hold']['history_digest'] = snap['history_digest'] = digest(sources['hold']['history'])
 
 
 def forged_evidence(record, snap, sources):
-    """R4: an unrelated valid digest in the record's evidence."""
     record['evidence'][0]['digest'] = 'c' * 64
 
 
 @sealed
 def forged_before_digest(record, snap, sources):
-    """R4: an unrelated valid digest as the pre-effect evidence."""
     record['verification']['before_digest'] = 'c' * 64
 
 
 def ready_tied_with_hold(record, snap, sources):
-    """R6: a ready label at the hold's own time, before the revision record."""
     sources['labels']['events'].append(dict(name='ready-for-agent', action='added', created_at=20))
 
 
 def unrelated_consumer(record, snap, sources):
-    """R8: the evidence covers #9002 while the release is for #9001."""
     other = dict(sources['consumers'][0], ticket=9002, grants=[])
     sources['consumers'] = [other]
     entry = dict(record['consumers'][0], ticket=9002, grants=[])
@@ -171,14 +151,12 @@ def unrelated_consumer(record, snap, sources):
 
 
 def duplicate_consumer(record, snap, sources):
-    """R8: the released ticket is evidenced twice."""
     sources['consumers'].append(copy.deepcopy(sources['consumers'][0]))
     record['consumers'].append(copy.deepcopy(record['consumers'][0]))
     snap['consumers'].append(copy.deepcopy(snap['consumers'][0]))
 
 
 def late_change(record, snap, sources):
-    """A second declared-contract merge through the inclusive cutoff, unassessed."""
     later = dict(commit='8' * 40, path='contracts/synthetic.v1.md', previous_path=None,
                  producer_ticket=8998, consumer_tickets=[9001])
     sources['cutoff'].update(end='8' * 40, changes=sources['cutoff']['changes'] + [later])
@@ -186,7 +164,6 @@ def late_change(record, snap, sources):
 
 
 def unassessed_rename(record, snap, sources):
-    """The inventory found a rename the record does not name by its old path."""
     sources['cutoff']['changes'][0]['previous_path'] = None
 
 
@@ -203,7 +180,6 @@ def newer_hold(record, snap, sources):
 
 
 def history_only_newer(record, snap, sources):
-    """Snapshot labels look clean, but the full history has a newer live hold."""
     sources['hold']['history'].append(dict(id=9012, kind='live', created_at=31))
 
 
@@ -276,7 +252,6 @@ def unmerged_producer(record, snap, sources):
 
 
 def additive_only(record, snap, sources):
-    """An 'additive field' summary in place of the actual merged delta."""
     sources['producer']['delta'] = 'additive optional field only'
 
 
@@ -314,7 +289,6 @@ def no_intent(record, snap, sources):
 
 
 def claimed_readback(record, snap, sources):
-    """A record claiming post-release read-backs that no enabled effect made."""
     record['verification']['after_digest'] = 'a' * 64
     record['verification']['labels_digest'] = 'b' * 64
 
@@ -324,7 +298,6 @@ def paused(record, snap, sources):
 
 
 def older_hold_active(record, snap, sources):
-    """An older manual hold, still unresolved, beside the covered contract hold."""
     sources['hold']['history'].insert(0, dict(id=9008, kind='manual', created_at=15))
     snap['holds'] = [9008, 9009]
 
@@ -346,7 +319,6 @@ def merge_outside_cutoff(record, snap, sources):
 
 REFUSED = 'refused'
 CASES = [
-    # name, change, state, reason
     ('a contract merge after the cutoff end', late_change, REFUSED, 'stale_binding'),
     ('a rename the record names differently', unassessed_rename, REFUSED, 'stale_binding'),
     ('a deletion missing from the record', deletion, REFUSED, 'stale_binding'),
@@ -413,17 +385,14 @@ class On1Proof(unittest.TestCase):
                 self.assertFalse(out['evidence_current'], name)
                 self.assertEqual((out['result']['state'], out['result']['reason']), (state, reason), out['detail'])
                 self.assertEqual((out['result']['next'], out['result']['effects']), ('end', []))
-                # R9: every outcome stays correlated with its durable intent.
                 self.assertEqual(out['result']['intent_id'], 'intent-release-1')
 
     def test_no_single_intent_raises_without_a_fabricated_reference(self):
-        # R9: no result names the ON1 record as if it were the intent.
         for change in (no_intent, lambda r, s, _: s['intents'].append(copy.deepcopy(s['intents'][0]))):
             with self.assertRaises(ValueError):
                 run(change)
 
     def test_string_flags_are_malformed_not_true(self):
-        # R5: each safety flag as the string "false" must fail, never certify.
         flags = [('cutoff', 'complete'), ('hold', 'complete'), ('producer', 'merged'), ('revision', 'table_complete'),
                  ('revision', 'relies_ok'), ('revision', 'links_ok'), ('labels', 'held'), ('labels', 'ready')]
         for source, flag in flags:
@@ -436,9 +405,6 @@ class On1Proof(unittest.TestCase):
                 run(change)
 
     def test_nested_approvals_are_strict_not_python_equal(self):
-        # R5 re-check: 3.0 == 3 and True == 1 in Python, so each source approval
-        # must pass the contract's strict approval shape before any comparison.
-        # The grant assessment's approval reaches grants.py's equality check too.
         def at(source):
             return {'consumer': lambda src: src['consumers'][0],
                     'assessment': lambda src: src['consumers'][0]['grants'][0]['assessment'],

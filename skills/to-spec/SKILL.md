@@ -1,7 +1,7 @@
 ---
 name: to-spec
 description: Turn a confirmed grill into a spec issue, run to-tickets on it, and make the spec's narrated steering video. Use when a grill is confirmed or the owner steers a spec through the orchestrator. No human step between grill and fleet.
-version: 0.2.0
+version: 0.2.1
 ---
 
 # To spec
@@ -35,6 +35,24 @@ milestone, creating it if missing. Give the spec no ticket label. Create it,
 read it back, and on a resume confirm any uncertain write before retrying. For
 an already approved plan, use [the hold-first procedure](../to-tickets/changes.md)
 before changing the spec.
+
+Every spec carries its two checkpoint answers
+([checkpoints.v1](../../contracts/checkpoints.v1.md)), filled from the grill and
+confirmed with the spec, in this section:
+
+```text
+## Checkpoints
+
+- One-way door: yes
+- User-visible: no
+```
+
+Early only (`yes`, `no`) is the default. Write `User-visible: yes` when users
+will see the change, `yes, a release` when the spec publishes a release, and
+`One-way door: no` only when the grill settled that it can be undone. Reasons
+go in other sections, never on these lines. to-tickets' approval check refuses
+a spec created on or after its `CHECKPOINTS_SINCE` date without both answers;
+an older spec without the section reads as early only.
 
 ## 3. Cut the plan
 

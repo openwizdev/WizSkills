@@ -1,10 +1,5 @@
 #!/bin/sh
-# #379: ticketless research snapshot/check. gh and jq only, GET requests only.
-# REST shapes: https://docs.github.com/en/rest/branches/branches#list-branches
-# https://docs.github.com/en/rest/pulls/pulls#list-pull-requests
-# Snapshot files contain private repository metadata: keep outside Git.
-# Exit 0 = checked surfaces unchanged or explicitly acknowledged;
-# 1 = unexplained changes; 2 = incomplete check. Neither 1 nor 2 is clean.
+# PRIVACY: snapshot files contain private repository metadata: keep them outside Git.
 set -u
 fail() { printf 'check-workers.sh: %s\n' "$*" >&2; exit 2; }
 usage() { fail 'usage: check-workers.sh snapshot | check SNAPSHOT [--allow EXACT-CHANGES.json]'; }
@@ -28,7 +23,6 @@ case $mode in
       [ "$3" = '--allow' ] || usage
       allow=$4
     fi
-    # Validate the saved snapshot before using its repository or contents.
     jq -e -s 'length == 1 and (.[0] | type == "object" and keys == ["items", "repo", "version"]
       and .version == 1 and (.repo | type) == "string" and (.items | type) == "object"
       and all(.items | to_entries[];
@@ -46,8 +40,6 @@ case $repo in
   *) fail 'repository must be owner/name' ;;
 esac
 
-# --slurp retains page boundaries, so even an empty or malformed page is checked.
-# Do not use updated_at on PRs: unrelated CI activity can update it.
 lib='
 def number: type == "number" and . > 0 and . == floor;
 def text: type == "string";
@@ -64,7 +56,6 @@ read_list() {
     || fail "cannot read $name (gh failed)"
   jq -e -c "$lib pages | $filter | unique_items" "$work/raw" > "$work/$name" 2> "$work/error" \
     || fail "cannot read $name (invalid or incomplete JSON)"
-  # More than one outer JSON value is also an incomplete/ambiguous read.
   jq -e -s 'length == 1' "$work/$name" >/dev/null || fail "cannot read $name (multiple responses)"
 }
 read_list branches 'branches?per_page=100' 'map(

@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-// A synthetic GitHub for the controller lease and hunter provisioning (#1685): no network.
-// State: comments [{id, created_at, body}], clock (ISO time of the next post, else now),
-// race (a rival body posted just before ours), readFailure, readFailures (fail only the next N
-// reads), postFailure, auth ('fail').
 import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 const file = process.env.HUNTR_FAKE_STATE;

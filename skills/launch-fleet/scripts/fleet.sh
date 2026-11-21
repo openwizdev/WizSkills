@@ -637,7 +637,7 @@ issue_facts() (
       and (.body == null or (.body | type) == "string") and (.state | IN("open", "closed")))
     |         select((.labels | type) == "array" and all(.labels[]; (.name | type) == "string")
           and (.updated_at | type) == "string")
-        | {number, title, state: (.state | ascii_upcase), body: (.body // ""), updatedAt: .updated_at,
+        | {number, id: (.node_id | if type == "string" then . else null end), title, state: (.state | ascii_upcase), body: (.body // ""), updatedAt: .updated_at,
            stateReason: (.state_reason | if type == "string" then ascii_upcase else null end),
            labels: {pageInfo: {hasNextPage: ((.labels | length) > 20)}, nodes: (.labels[:20] | map({name}))}}
       | . + {comments: $c[0], blockedBy: $b[0]}' "$facts.detail" > "$facts" || { rm -f "$facts"; exit 1; }
@@ -775,7 +775,7 @@ hydrate() (
   else printf '{}' > "$source.closures" || exit 1; fi
   jq --slurpfile c "$source.closures" 'with_entries(.value |=
     (if has("blockedBy") then .blockedBy.nodes |= map(. +
-      ($c[0][.node_id] // {closedByPullRequestsReferences: {nodes: []}}) | del(.node_id)) else . end))' \
+      ($c[0][.node_id] // {closedByPullRequestsReferences: {nodes: []}})) else . end))' \
     "$source.facts" > "$source.next" && mv "$source.next" "$source.facts" || exit 1
   jq --slurpfile facts "$source.facts" 'walk(if type == "object" and has("number")
     and (.closedByPullRequestsReferences.pageInfo != null or has("subIssues")
@@ -1133,16 +1133,9 @@ $n
     || die "can't read the issues"
 }
 
-# active: F6'"'"'s collision scope for a start claim (#1353): every open issue of
-# the repository labelled ready-for-agent, in a spec or not, read in full into
-# active.json, so the claim sees running and claimed work of every fleet. A
-# search that lists fewer than it counts stops the claim.
-active() {
-  label=$(jq -er '."ready-for-agent"' "$TMP/labels.json") || die "can't read the labels"
-  q="repo:$REPO is:issue is:open label:\"$label\""
-  encoded=$(jq -rn --arg q "$q" '$q | @uri') || die "can't encode the open work search"
+active_search() {
+  encoded=$(jq -rn --arg q "$1" '$q | @uri') || die "can't encode the open work search"
   endpoint="search/issues?q=$encoded&per_page=100" pages=0 listed=0 total=0
-  : > "$TMP/active-ids.txt" && : > "$TMP/singles.txt" || die "can't write"
   while [ -n "$endpoint" ]; do
     pages=$((pages + 1))
     [ $pages -le 11 ] || die "the search for open work did not end"
@@ -1156,6 +1149,22 @@ active() {
     endpoint=$(next_page "$TMP/search.json.http") || die "can't read the open work search pagination"
   done
   [ "$listed" = "$total" ] || die "the search listed $listed of $total open tickets, so a colliding start could be missed"
+}
+# active: F6'"'"'s collision scope for a builder start (#1353): every open issue
+# of the repository with live work, in a spec or not, read in full into
+# active.json, so a start sees running and claimed work of every fleet. Live
+# work is found whatever its labels (#1750): a ticket held by hand keeps its
+# builder records and its pull requests, so the ready label, any launch-fleet
+# record and a linked pull request are each searched. A search that lists
+# fewer than it counts stops the start.
+active() {
+  label=$(jq -er '."ready-for-agent"' "$TMP/labels.json") || die "can't read the labels"
+  : > "$TMP/active-ids.txt" && : > "$TMP/singles.txt" || die "can't write"
+  for q in "label:\"$label\"" '"launch-fleet" in:comments' 'linked:pr'; do
+    active_search "repo:$REPO is:issue is:open $q"
+  done
+  sort -u "$TMP/active-ids.txt" > "$TMP/active-ids.sorted" && mv "$TMP/active-ids.sorted" "$TMP/active-ids.txt" \
+    || die "can't write"
   set --
   while read -r id; do
     set -- "$@" -f "ids[]=$id"
@@ -1204,7 +1213,15 @@ single_nodes() {
 # an issue approved on its own.
 LIB='
 def lines: gsub("\r"; "") | split("\n");
-def first_line: ([lines[] | select(test("\\S"))] | first) // "";
+# #2096: an issue reference is #N or OWNER/NAME#N. A long form naming this
+# repository ($W.repo, compared case-insensitively) reads as #N everywhere a
+# line is parsed; one naming another repository stays as written, so no parse
+# reads it, and ref_looks refuses it naming its line.
+def long_ref: "(?<![A-Za-z0-9_./-])(?<o>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#(?<n>[1-9][0-9]*)";
+def short: gsub(long_ref; if (.o | ascii_downcase) == $W.repo then "#\(.n)" else "\(.o)#\(.n)" end);
+def foreign: [scan(long_ref) | select((.[0] | ascii_downcase) != $W.repo) | "\(.[0])#\(.[1])"] | unique;
+def first_text: ([lines[] | select(test("\\S"))] | first) // "";
+def first_line: first_text | short;
 def rec: (first_line | sub("^\\s+"; "")) as $l
   | if ($l | startswith("launch-fleet:")) then ($l | ltrimstr("launch-fleet:") | sub("^\\s+"; "") | sub("\\s+$"; "")) else null end;
 # In a claim ($W.claim: {n, id}), the claimed issue'"'"'s records are those older
@@ -1275,7 +1292,9 @@ def machine_record($ls): ($ls | until(length == 0 or .[-1] != ""; .[:-1])) as $l
   | (if $n > 1 then (select((at_($l; 5) | test("^Changed since revision \($n - 1): .+\\.$")) and at_($l; 6) == "") | 7) else 5 end) as $k
   | select(at_($l; $k) == "| Ticket | Title | Blocked by | Label |" and at_($l; $k + 1) == "| --- | --- | --- | --- |")
   | ($k + 2 + $t) as $j
-  | [$l[$k + 2:$j][] | capture("^\\| #(?<n>[1-9][0-9]*) \\| (?<title>.+) \\| (?<b>none|#[1-9][0-9]*(?: #[1-9][0-9]*)*) \\| (?<label>ready-for-agent|ready-for-human|none) \\|$")
+  | [$l[$k + 2:$j][] | capture("^\\| (?<t>[^ |]+) \\| (?<title>.+) \\| (?<b>[^|]+) \\| (?<label>ready-for-agent|ready-for-human|none) \\|$")
+     | (.t | short) as $ref | (.b | short) as $b
+     | select(($ref | test("^#[1-9][0-9]*$")) and ($b | test("^(none|#[1-9][0-9]*(?: #[1-9][0-9]*)*)$"))) | . + {n: $ref[1:], b: $b}
      | {number: (.n | tonumber), title: (.title | gsub("\\\\\\|"; "|")), blockers: .b, label: .label}] as $rows
   | select(($rows | length) == $t and at_($l; $j) == "")
   | (at_($l; $j + 1) | capture("^Fingerprint: `(?<f>[0-9a-f]{64})`$") | .f) as $f
@@ -1294,8 +1313,8 @@ def approval: (.body | lines) as $ls | ($ls | map(select(test("\\S"))) | first /
       {id: .databaseId, at: .createdAt, machine: false,
        revision: ([$head | capture(", revision (?<n>[0-9]+):\\*\\*") | .n | tonumber] | first),
        fingerprint: ([$ls[] | capture("^\\s*Fingerprint:\\s*`?(?<f>[0-9a-f]{64})`?\\s*$") | .f] | first),
-       rows: [$ls[] | select(test("^\\|\\s*#[0-9]+\\s*\\|")) | split("|") | map(sub("^\\s+"; "") | sub("\\s+$"; "")) | .[1:-1]
-              | select(length >= 4) | {number: (.[0] | ltrimstr("#") | tonumber), label: .[-1]}]}
+       rows: [$ls[] | short | select(test("^\\|\\s*#[0-9]+\\s*\\|")) | split("|") | map(sub("^\\s+"; "") | sub("\\s+$"; "")) | .[1:-1]
+              | select(length >= 4 and (.[-2] | foreign | length) == 0) | {number: (.[0] | ltrimstr("#") | tonumber), label: .[-1]}]}
     else (.databaseId as $id | .createdAt as $at | [machine_record($ls)] | first // empty | {id: $id, at: $at, machine: true} + .) end;
 def latest($s): [$s.comments.nodes[] | approval] | max_by(.id);
 def subs($s): [$s.subIssues.nodes[].number];
@@ -1421,6 +1440,15 @@ def waiting: [.comments.nodes[] | . as $c | (.body | first_line) as $line
 def pending_wait: waiting as $w | records as $rs
   | if $w != null and (any($rs[]; .r == "resume sent \($w.id) for #\($w.number)") | not) then $w else null end;
 
+# #2096: a record or orchestrator line in a shape that names one of this
+# repository'"'"'s issues, naming another repository'"'"'s instead: refused once,
+# naming its line, never skipped silently.
+# Only the reference in the shape'"'"'s own place counts, never prose after it.
+def ref_line: "^(?:launch-fleet:\\s*(?:waiting for|resume (?:starting|sent|failed|withdrawn) [0-9]+ for|held for ordering: (?:issue|PR)|held for|noted) |Orchestrator(?: \\([^\\r\\n]*\\))?: \\*\\*(?:(?:yes|confirmed)[,:] )?wait for )(?<r>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*)";
+def legacy_ordering_refs: "^Orchestrator: \\*\\*held for ordering only; the plan and its approval are unchanged\\.\\*\\* (?<r>(?:[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,8}) .+ Released \\(`ready-for-agent` back, `held` off\\) as soon as (?<release>(?:[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,8}) merges\\.$";
+def ref_looks: records as $rs | .number as $n | .comments.nodes[] | . as $c | (.body | first_text | sub("^\\s+"; "") | sub("\\s+$"; "")) as $l
+  | ([($l | capture(ref_line) | .r), ($l | capture(legacy_ordering_refs) | .r, .release) | foreign[]] | unique) as $f | select(($f | length) > 0)
+  | look($n; $rs; "comment \($c.databaseId)'"'"'s line `\($l | short)` names \($f | join(", ")), not this repository");
 def resume_claim($w): [records[] | select(.r | test("^resume starting \($w.id) for #\($w.number)(, thread thr_[A-Za-z0-9_-]+)?$"))] | min_by(.id);
 
 def looks: [
@@ -1559,13 +1587,15 @@ def overlaps($a; $b): ($a | rtrimstr("/") | split("/")) as $x | ($b | rtrimstr("
 # where not both bullets say `(shared`.
 def paths_clash($a; $b): if $a == [] or $b == [] then false elif $a == null or $b == null then true
   else any($a[]; . as $x | any($b[]; .repo == $x.repo and overlaps(.path; $x.path) and ((.shared and $x.shared) | not))) end;
-def context_blocker($n): . as $t | $W.links["\($t.number):\($n)"] as $link
-  | ([scope_tickets[] | select(.number == $n)] | first) as $b
+# #1753: the blocker is the local ticket with the exact node id of the dependency;
+# a same-number issue of another repository, or an id not read, stays hard.
+def context_blocker($d): . as $t | $d.number as $n | $W.links["\($t.number):\($n)"] as $link
+  | ([scope_tickets[] | select(.number == $n and (.id | type) == "string" and .id == $d.node_id)] | first) as $b
   | $link != null and $link.kind == "file" and ($link.files | length) > 0 and $b != null
     and (($b | owned_paths) as $bp | $bp != null and ($bp | length) > 0
       and ([$t | relies[]] as $in | any($in[]; . as $i | any(($bp | map(.path))[], $link.files[]; overlaps($i; .))) | not)
       and (paths_clash($t | owned_paths; $bp) | not));
-def hard_blockers_done: . as $t | all(.blockedBy.nodes[]; blocker_done or (.number as $n | $t | context_blocker($n)));
+def hard_blockers_done: . as $t | all(.blockedBy.nodes[]; blocker_done or (. as $d | $t | context_blocker($d)));
 # Same ordinary start guards, before requiring a ready label or no held label.
 # The release path must be able to check these while ready is still removed.
 def start_clear($s):
@@ -1605,8 +1635,11 @@ def unrefused_ready($s): ready($s) and (refused_lately(start.last; "start") | no
 # whose owned paths clash with no running ticket'"'"'s and no ticket admitted
 # before it ($W.selected, worked out once a read, after the fingerprints).
 # An unreadable Owned paths section is never admitted.
+# R1 (review of #1759): an issue whose comment history is not read in full may have
+# a builder, so it holds a colliding start as a running one does.
+def history_unread: .comments.pageInfo.hasPreviousPage == true;
 def running_clash: . as $t | owned_paths as $mine
-  | any(scope_tickets[] | select(.number != $t.number and .state == "OPEN" and building); paths_clash($mine; owned_paths));
+  | any(scope_tickets[] | select(.number != $t.number and .state == "OPEN" and (building or history_unread)); paths_clash($mine; owned_paths));
 def may_start($s): unrefused_ready($s) and (.number as $n | any(($W.selected // [])[]; . == $n));
 # A fleet thread'"'"'s takeover (ClosedWiz#192) starts a builder too, so it keeps
 # every gate of an ordinary start (Sol R1 on #1517): approved and current,
@@ -1775,6 +1808,7 @@ def ticket_lines_now($s): . as $t
           and (any(records[]; .r | test("^told the user\\b")) | not)
        then "person #\(.number): \(.title) (spec #\($s.number)) is ready, and only the user can do it" else empty end)
     else
+      ref_looks,
       ordering_lines($s),
       (if release_due($s) and (ordering_hold == null) then "release #\(.number): approved again since its hold; take the held label off" else empty end),
       (if building then due_notes($s)[]
@@ -1940,7 +1974,15 @@ def ticket_lines($s):
 
 # A spec'"'"'s approval: a look when it lists no tickets, a re-approve when the
 # plan changed since.
-def approval_lines: . as $s | records as $srs | latest($s) as $a
+# #2096: a table line of the latest approval whose Ticket or Blocked by cell
+# names another repository'"'"'s issue: refused, naming its line (that row
+# approves nothing). A title may name anything.
+def approval_refs($s): ([$s.comments.nodes[] | select(.body | first_text | sub("^\\s+"; "") | test("^\\*\\*(?:Plan graph approved by|Machine plan approval, )"))] | max_by(.databaseId)) as $c
+  | if $c == null then empty else
+      $c.body | lines[] | sub("\\s+$"; "") | select(startswith("|")) | . as $l
+      | (split("|")[1:-1] | select(length >= 4) | [(.[0], .[-2]) | foreign[]] | unique) as $f | select(($f | length) > 0)
+      | "its latest plan graph approval'"'"'s line `\($l | short)` names \($f | join(", ")), not this repository" end;
+def approval_lines: . as $s | records as $srs | (approval_refs($s) | look($s.number; $srs; .)), (latest($s) as $a
   | if $a == null then empty
     elif ($a.rows | length) == 0 then look(.number; $srs; "its latest plan graph approval lists no tickets")
     else
@@ -1950,7 +1992,7 @@ def approval_lines: . as $s | records as $srs | latest($s) as $a
         else "changed since revision \($a.revision // "?") (fingerprint now \($now[:12]))" as $what
         | if any($s | records[]; .r == "needs approval: \($what)") then empty
           else "re-approve #\($s.number): \($what)" end end
-    end;
+    end);
 
 # R2 (decision 7030919773): with a video, one look, once: its "look: <reason>"
 # record settles it. Comments on the video steer nothing.
@@ -2080,10 +2122,12 @@ def claim: $W.claim.n as $n | $W.claim.id as $id
               # every open ready ticket of the repository; a clash with one
               # running, or claimed by an older claim, withdraws this one.
               owned_paths as $mine
-              | ([scope_tickets[] | select(.number != $n and .state == "OPEN" and paths_clash($mine; owned_paths))
-                  | select((open_prs | length) > 0 or (start | .state != "queued" and (.state != "claimed" or .rec.id < $id)))
+              | [scope_tickets[] | select(.number != $n and .state == "OPEN" and paths_clash($mine; owned_paths))] as $near
+              | ([$near[] | select(history_unread) | .number] | unique | first) as $u
+              | ([$near[] | select((open_prs | length) > 0 or (start | .state != "queued" and (.state != "claimed" or .rec.id < $id)))
                   | .number] | unique | first) as $m
               | if $mine == null then "withdraw #\($n): its owned paths can'"'"'t be read as the plan approval reads them"
+                elif $u != null then "withdraw #\($n): its owned paths collide with #\($u), whose start history can'"'"'t be read"
                 elif $m != null then "withdraw #\($n): its owned paths collide with #\($m), which is running or claimed first"
                 else "go #\($n)" end
             else "withdraw #\($n): it is not on the frontier now" end end
@@ -2648,6 +2692,9 @@ elif [ "$cmd" = spec ]; then
     && mv "$TMP/spec-list.one" "$TMP/spec-list.sorted" || die "can't read the open issues"
   if [ -s "$TMP/spec-list.sorted" ]; then
     specs
+    # A takeover starts a builder too (#1750): once an old builder is
+    # archived, read every fleet's open work, as a start claim does.
+    if grep -q 'old builder archived' "$TMP/specs.json"; then active; fi
   else
     done_spec="fleet done #$SPEC: it is not an open spec; delete this fleet thread's loop and archive the thread"
     printf '[]' > "$TMP/specs.json" || die "can't write"

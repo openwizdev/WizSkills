@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=882      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 22
+CASES=903
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1180,6 +1180,8 @@ EOF
 expect 'R1: a plain bold wait without a period resumes' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator: **wait for #71** Once it merges, continue.") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check <<EOF
 resume #12: #71 merged; tell its builder, thread thr_syn12 (wait comment 1202)
 EOF
+again 'long form: an orchestrator wait for this repository resumes as #N does (#2096)' 'issue(12; .comments[-1].body |= sub("#71"; "SYNTHETIC-OWNER/synthetic-repo#71"))' -- check < "${last:-/dev/null}/out"
+again 'long form: prose after a wait naming another repository refuses nothing (#2096)' 'issue(12; .comments[-1].body = "Orchestrator: **wait for #71.** It ports other-owner/other-repo#5.")' -- check < "${last:-/dev/null}/out"
 expect 'R1: an unknown lead-in is not a wait instruction' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator (PC, ops): **do not wait for #71.**") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check < /dev/null
 expect 'R1: free-form prose alone is not a wait instruction' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator (PC, ops): **yes (Q6).** Once #71 has a verified merge, continue.") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check < /dev/null
 expect 'R1: a structured record covers a free-form orchestrator answer' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator (PC, ops): **yes (Q6).** Once #71 has a verified merge, continue.") | say(12; 1203; "11:00"; "launch-fleet: waiting for #71") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- wake 12 <<EOF
@@ -1192,6 +1194,7 @@ EOF
 expect 'stall: a structured wait resumes a standalone builder' 0 check.json 'own_approval(70; 7002; "10:00") | say(70; 7003; "10:01"; "launch-fleet: start checked, thread thr_syn70, branch room/70-link") | say(70; 7004; "11:00"; "launch-fleet: waiting for #11")' -- wake 70 <<EOF
 resume #70: #11 merged; tell its builder, thread thr_syn70 (wait comment 7004)
 EOF
+again 'long form: a waiting record for this repository resumes as #N does (#2096)' 'issue(70; .comments[-1].body = "launch-fleet: waiting for synthetic-owner/Synthetic-Repo#11")' -- wake 70 < "${last:-/dev/null}/out"
 expect 'stall: an open blocker keeps its builder waiting' 0 check.json "$WAIT12 | $MERGE71 | issue(71; .state = \"OPEN\")" -- check < /dev/null
 expect 'stall: a closed blocker without a merge keeps its builder waiting' 0 check.json "$WAIT12 | closed_single(71; \"11:30\")" -- check < /dev/null
 expect 'stall: a blocker merged to another base keeps its builder waiting' 0 check.json "$WAIT12 | $MERGE71 | pull(72; .base = \"release-1\")" -- check < /dev/null
@@ -1226,6 +1229,7 @@ CLAIM12="$WAIT12 | $MERGE71 | say(12; 1203; \"11:59\"; \"launch-fleet: resume st
 expect 'stall: oldest resume claim may deliver' 0 check.json "$CLAIM12" -- claim 12 1203 <<EOF
 go #12
 EOF
+again 'long form: a resume claim for this repository delivers as #N does (#2096)' 'issue(12; .comments[-1].body |= sub("for #71"; "for synthetic-owner/synthetic-repo#71"))' -- claim 12 1203 < "${last:-/dev/null}/out"
 expect 'stall: incomplete spec facts withdraw a resume claim' 0 check.json "$CLAIM12 | reduce range(100; 201) as \$n (.; ticket(\$n; \"Synthetic ticket\"; [\"ready-for-agent\"]; []))" -- claim 12 1203 <<EOF
 withdraw #12: that resume is not due or an older claim holds it
 EOF
@@ -1293,6 +1297,17 @@ withdraw #13: its owned paths collide with #70, which is running or claimed firs
 EOF
 expect 'F6 claim: a running ticket of another spec on the same paths withdraws' 0 check.json "$OWN13"' claim13 | other_spec' -- claim 13 1301 <<EOF
 withdraw #13: its owned paths collide with #81, which is running or claimed first
+EOF
+# #1750: a running ticket whose ready label came off on a manual hold keeps
+# its builder, so it still collides.
+HELD81='issue(81; .labels = ["held"]) | say(81; 8102; "11:10"; "launch-fleet: held manual: owner decision required")'
+expect 'F6 claim: a running ticket of another spec on hold still withdraws' 0 check.json "$OWN13"' claim13 | other_spec | '"$HELD81" -- claim 13 1301 <<EOF
+withdraw #13: its owned paths collide with #81, which is running or claimed first
+EOF
+# R1 (review of #1759): a colliding issue whose comments can't be read may
+# have a builder, so the claim withdraws.
+expect 'F6 claim: a colliding held ticket whose history can'"'"'t be read withdraws' 0 check.json "$OWN13"' claim13 | other_spec | '"$HELD81" FAKE_GH_FAIL=issue_comments_81_page=1 -- claim 13 1301 <<EOF
+withdraw #13: its owned paths collide with #81, whose start history can't be read
 EOF
 expect 'F6 claim: an older colliding claim wins' 0 check.json "$OWN13"' claim13 | own(70; "src/page/a.md") | say(70; 1300; "11:50"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
 withdraw #13: its owned paths collide with #70, which is running or claimed first
@@ -1592,6 +1607,37 @@ expect 'a low finding filed after the approval does not start, even labelled rea
 look #10: open sub-issue #15 is not in the approved plan
 EOF
 expect 'a low finding approved on its own still waits for its spec'"'"'s approval' 0 check.json 'ticket(15; "W5: a low finding"; ["ready-for-agent"]; []) | say(15; 1501; "11:00"; "**Approved on its own by Robin, 2026-11-01:** \"approve #15\"")' -- frontier < /dev/null
+
+LONG='gsub("(?<p>[| ])#(?<n>[1-9])"; "\(.p)Synthetic-Owner/synthetic-REPO#\(.n)")'
+TABLE_LONG="split(\"\\n\") | map(if startswith(\"| #\") then $LONG else . end) | join(\"\\n\")"
+expect 'long form: own approval rows in mixed case start the same frontier as #N' 0 check.json "merge12 | issue(10; .comments[0].body |= ($TABLE_LONG))" -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'long form: a machine record with long-form rows and blockers starts the same frontier' 0 check.json "merge12 | machine_only @@then@@ issue(10; .comments[0].body |= ($TABLE_LONG))" -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'long form: an approval row naming another repository is refused with its line' 0 check.json 'merge12 | issue(10; .comments[0].body |= sub("\n\\| #13 "; "\n| other-owner/other-repo#13 "))' -- check <<EOF
+look #10: its latest plan graph approval's line \`| other-owner/other-repo#13 | W3: widget page | #12 | ready-for-agent |\` names other-owner/other-repo#13, not this repository
+look #10: open sub-issue #13 is not in the approved plan
+EOF
+expect 'long form: a machine row naming another repository is refused with its line' 0 check.json 'merge12 | machine_only @@then@@ issue(10; .comments[0].body |= sub("\n\\| #13 "; "\n| other-owner/other-repo#13 "))' -- check <<EOF
+look #10: its latest plan graph approval's line \`| other-owner/other-repo#13 | W3: widget page | #12 | ready-for-agent |\` names other-owner/other-repo#13, not this repository
+EOF
+expect 'long form: a resume sent for this repository suppresses a repeat' 0 check.json "$WAIT12 | $MERGE71 | say(12; 1203; \"11:45\"; \"launch-fleet: resume sent 1202 for Synthetic-Owner/Synthetic-Repo#71\")" -- check < /dev/null
+expect 'long form: an ordering hold for this repository is released' 0 check.json 'own_approval(70; 7002; "10:00") | issue(70; .labels = ["held"]) | held_at(70; "11:09") | say(70; 7003; "11:10"; "launch-fleet: held for ordering: issue synthetic-owner/synthetic-repo#11 merges to main")' -- check <<EOF
+release #70: ordering hold 7003; issue #11 merged to main; restore ready-for-agent and remove held
+EOF
+expect 'long form: a wait naming another repository is refused with its line' 0 check.json 'say(12; 1202; "11:00"; "launch-fleet: waiting for other-owner/other-repo#71") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check <<EOF
+look #12: comment 1202's line \`launch-fleet: waiting for other-owner/other-repo#71\` names other-owner/other-repo#71, not this repository
+EOF
+expect 'long form: a human row whose blocker names another repository starts nothing (#2096 R1)' 0 check.json 'merge12 | issue(10; .comments[0].body |= sub("\n\\| #13 \\| W3: widget page \\| #12 \\|"; "\n| #13 | W3: widget page | other-owner/other-repo#12 |"))' -- check <<'EOF'
+look #10: its latest plan graph approval's line `| #13 | W3: widget page | other-owner/other-repo#12 | ready-for-agent |` names other-owner/other-repo#12, not this repository
+look #10: open sub-issue #13 is not in the approved plan
+EOF
+expect 'long form: a title naming another repository refuses nothing' 0 check.json 'merge12 | issue(10; .comments[0].body |= sub("\\| W3: widget page \\|"; "| W3: widget page, after other-owner/other-repo#5 |"))' -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'long form: a raised refusal is not raised again' 0 check.json 'say(12; 1202; "11:00"; "launch-fleet: waiting for other-owner/other-repo#71") | say(12; 1203; "11:05"; "launch-fleet: look: comment 1202'"'"'s line `launch-fleet: waiting for other-owner/other-repo#71` names other-owner/other-repo#71, not this repository")' -- check < /dev/null
 
 ### #1340: a machine plan approval starts the fleet; the video's comments steer it
 
@@ -2005,6 +2051,12 @@ expect 'F6: a ticket whose only open link is context starts' 0 frontier.json "$O
 #42 G2: gadget writer
 #45 G5: gadget import
 #55 G11: gadget filter
+EOF
+# #1753: the native blocker is matched by node identity, not number. Another
+# repository's #43 is unread and unmerged, so it stays hard even though local
+# #43's disjoint paths would make the file link context.
+expect 'F6: a native blocker in another repository with a local twin number is hard' 0 frontier.json "$OWNS"' owns(43; "`gadget/spike.md`"; "none") | owns(42; "`gadget/writer.md`"; "- #43 file: `gadget/notes.md`") | .dependencyResponses = {"42": [{number: 43, node_id: "I_synthetic_other_43", state: "open"}]}' -- frontier <<EOF
+$FRONTIER
 EOF
 expect 'F6: an open hard blocker still holds a start' 0 frontier.json "$OWNS"' owns(42; "`gadget/writer.md`"; "- #43 real: the spike findings, which the writer follows")' -- frontier <<EOF
 $FRONTIER
@@ -3319,6 +3371,10 @@ EOF
 # Sol self-review 2 (#192): a takeover start that CloudRoom refused, or that
 # failed, is tried again, and never strands the pull request.
 ARCH12="$TOOK12 | say(12; 1291; \"10:20\"; \"launch-fleet: old builder archived, thread thr_syn12\")"
+# #1750: a takeover starts a builder too, so a held running ticket of another
+# spec on the same paths holds it, as it withdraws a start claim.
+expect 'takeover: a running ticket of another spec on hold holds a takeover start' 0 check.json "$OWN13"' other_spec | '"$HELD81"' | own(12; "src/store/") | issue(81; .body = "## Owned paths\n\n- `src/store/index.md`\n")'" | $ARCH12" -- spec 10 < /dev/null
+expect 'takeover: a colliding held ticket whose history can'"'"'t be read holds a takeover start' 0 check.json "$OWN13"' other_spec | '"$HELD81"' | own(12; "src/store/") | issue(81; .body = "## Owned paths\n\n- `src/store/index.md`\n")'" | $ARCH12" FAKE_GH_FAIL=issue_comments_81_page=1 -- spec 10 < /dev/null
 expect 'takeover: a refused takeover start waits 10 minutes, and nothing goes to a builder' 0 check.json "$ARCH12 | edit(12; 1201; \"11:55\"; \"launch-fleet: start refused: synthetic reason\")" -- spec 10 < /dev/null
 expect 'takeover: a refused takeover start is tried again 10 minutes on' 0 check.json "$ARCH12 | edit(12; 1201; \"11:45\"; \"launch-fleet: start refused: synthetic reason\")" -- spec 10 <<EOF
 take over #12: builder thread thr_syn12 is archived; start a builder to continue branch room/12-w2-widget-store-bbbb (its record: comment 1201; retry after "start refused: synthetic reason")
@@ -3540,6 +3596,12 @@ expect 'ordering: missing label timeline cannot prove ownership' 0 check.json "$
 expect 'ordering: needs info prevents release' 0 check.json "$ORDER13 | $ORDER71 | issue(13; .labels += [\"needs-answer\"]) | say(13; 1302; \"11:20\"; \"launch-fleet: asked the orchestrator\")" -- check < /dev/null
 expect 'ordering: malformed extra release condition stays held' 0 check.json "$ORDER13 | $ORDER71 | edit(13; 1301; \"11:10\"; \"launch-fleet: held for ordering: issue #71 merges to main and live passes\")" -- check < /dev/null
 expect 'ordering: legacy explicit ordering-only record is reconciled' 0 check.json "$ORDERLEGACY | $ORDER71" -- check <<EOF_ORDER
+release #13: ordering hold 1301; issue #71 merged to main; restore ready-for-agent and remove held
+EOF_ORDER
+expect 'ordering: a legacy hold naming another repository is refused with its line (#2096 R2)' 0 check.json "$ORDERLEGACY | $ORDER71 | issue(13; .comments[-1].body |= (sub(\"\\\\*\\\\* #71 \"; \"** other-owner/other-repo#71 \") | sub(\"as soon as #71\"; \"as soon as other-owner/other-repo#71\")))" -- check <<'EOF_ORDER'
+look #13: comment 1301's line `Orchestrator: **held for ordering only; the plan and its approval are unchanged.** other-owner/other-repo#71 (approved on its own tonight) edits `fleet.sh`, which this ticket owns too, so the two never run at once. Released (`ready-for-agent` back, `held` off) as soon as other-owner/other-repo#71 merges.` names other-owner/other-repo#71, not this repository
+EOF_ORDER
+expect 'ordering: a legacy hold naming this repository in mixed case is released (#2096 R2)' 0 check.json "$ORDERLEGACY | $ORDER71 | issue(13; .comments[-1].body |= (sub(\"\\\\*\\\\* #71 \"; \"** Synthetic-Owner/SYNTHETIC-repo#71 \") | sub(\"as soon as #71\"; \"as soon as synthetic-owner/Synthetic-Repo#71\")))" -- check <<'EOF_ORDER'
 release #13: ordering hold 1301; issue #71 merged to main; restore ready-for-agent and remove held
 EOF_ORDER
 expect 'ordering: legacy mismatched release issue stays held' 0 check.json "$ORDERLEGACY | $ORDER71 | issue(13; .comments[-1].body |= sub(\"as soon as #71\"; \"as soon as #11\"))" -- check < /dev/null

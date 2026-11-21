@@ -40,6 +40,8 @@ New assignments follow the current orchestrator ruling. Existing agents keep the
 
 Run `python3 check/run.py` at the repository root. The hosted workflow installs the pinned test-only browser tools first and runs the suite with `TEST_JOBS=2`. Source: [WizSkills CI](../../.github/workflows/ci.yml).
 
+Evidence (red and green runs, logs, screenshots, review captures) goes in the pull request's description or comments, never in the tree.
+
 ## CI checks
 
 | Check | Runs | Required by fleet on |

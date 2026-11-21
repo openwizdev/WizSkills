@@ -1,7 +1,7 @@
 ---
 name: install
-description: Install OpenWiz from its one line, "Install OpenWiz from github.com/openwizdev/OpenWiz", then optionally run a resumable first fleet. Checks the machine, installs the verified prebuilt release (no Rust or Node), checks setup's connections, and on the first-fleet branch connects one repository and starts its fleet through launch-fleet. Use to install, repair, update or remove OpenWiz, or to start or resume a first fleet. For a project's docs/agents/ settings alone, use setup.
-version: 0.2.0
+description: Install OpenWiz from its one line, "Install OpenWiz from github.com/openwizdev/OpenWiz", then optionally walk the resumable onboarding road to a first merged pull request. Checks the machine, installs the verified prebuilt release (no Rust or Node), checks setup's connections, asks where agents run, offers three ways to start, runs a short grill, and starts the fleet through launch-fleet once the plan passes its checks. Use to install, repair, update or remove OpenWiz, or to start or resume a first fleet. For a project's docs/agents/ settings alone, use setup.
+version: 0.3.1
 ---
 
 # Install OpenWiz
@@ -10,30 +10,51 @@ The user pasted one line into their agent:
 
 > Install OpenWiz from github.com/openwizdev/OpenWiz
 
-Take them from that line to setup, then to their first fleet if they want one. Every step reads before it writes and reuses what an earlier one recorded, so a repeat or a fresh session resumes at the first unfinished step. Tools: OpenWiz's installer (`tools/install/install`, over its `contracts/install.v1.md`) and installed runtime (`contracts/setup.v1.md`), the agent CLI ([cli.v1](../../contracts/cli.v1.md)), and for the first fleet `grill`, `to-spec`, `to-tickets` and `launch-fleet`. This skill adds no installer, engine, approval or planner, and never runs `openwiz engine` or `openwiz fleet tick`.
+Take them from that line to setup, then down the onboarding road to their first merged pull request if they want one. Every step reads before it writes and reuses what an earlier one recorded, so a repeat or a fresh session resumes at the first unfinished step. Tools: OpenWiz's installer (`tools/install/install`, over its `contracts/install.v1.md`) and installed runtime (`contracts/setup.v1.md`), the agent CLI ([cli.v1](https://github.com/openwizdev/WizSkills/blob/main/contracts/cli.v1.md)), and for the road `grill`, `to-spec`, `to-tickets` and `launch-fleet`, and this skill's [teach.md](teach.md) and [ideas.md](ideas.md). This skill adds no installer, engine, approval or planner, and never runs a fleet tick itself.
 
 **Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills.
 
 ## Guards
 
-- **Install permission is not work approval.** Installing or finishing setup approves no spec, plan or start. The first fleet needs the user's spec confirmation, exact-plan approval and a separate yes to start. Never write, fake or infer an approval, or ask for blanket consent.
-- **Show every effect, then wait for a yes to exactly it.** Sign-in, the App or its skip, project settings, the brain, phone access, the demo repository and the launch each preview first; confirm with that preview's own `--yes` or `--yes --operation <id>`.
-- **Credentials stay out of the conversation.** Never ask for a key or token in chat or put one in a prompt, argument, URL, log, issue or file. Keys go only through the tools' protected setup, into owner-only state on this computer or CloudRoom's secret store. Save the user's exact words only under [open-development](../../contracts/open-development.v1.md).
+- **Install permission is not work approval.** Installing or finishing setup approves nothing. The first fleet needs the user's answer to where agents run, their yes in this chat to the grill's summary, and, right before it starts, their yes to starting it on that host, which can cost money. The plan approves itself by to-tickets' checks (J203): no spec or plan approval is asked. Never write, fake or infer a yes, or ask for blanket consent.
+- **Show every effect, then wait for a yes to exactly it.** Where agents run, the fleet's start, the App or its skip, project settings, the host setting, the brain, phone access and a new repository each preview first; confirm with that preview's own `--yes` or `--yes --operation <id>`, where `<id>` is the preview's `operation_id` (for `cloudroom.py install`, the `operation_id` inside its `operation`). Creating a repository, any write, spend, secrets and publishing always ask; a teacher's line never stands in for that ask.
+- **Never touch a login.** A missing sign-in gets its walk-through and a link; the user signs in themselves, in their own terminal or browser. Never run a sign-in for them (no `github_login.py sign-in --yes`, no `gh auth login`), and never read, pass or store a credential. Continue only on the installed setup's read-only check.
+- **Credentials stay out of the conversation.** Never ask for a key or token in chat or put one in a prompt, argument, URL, log, issue or file. Keys go only through the tools' protected setup, into owner-only state on this computer or CloudRoom's secret store. Save the user's exact words only under [open-development](https://github.com/openwizdev/WizSkills/blob/main/contracts/open-development.v1.md).
 - **Uncertain is never retried blindly.** Run the same command again: it reads its record first and never repeats an effect.
-- **Read JSON and exit codes, never a screen.** Run installed programs by absolute path. Python 3.9+ only: no Rust, Cargo, Node, npm or source build; if a step seems to need one, stop and say so.
+- **Read JSON and exit codes, never a screen.** Run installed programs by absolute path: there is no `openwiz` on `PATH`; it is `<root>/current/openwiz`. Python 3.9+ only: no Rust, Cargo, Node, npm or source build; if a step seems to need one, stop and say so.
+- **OpenWiz 0.1.0 needs CloudRoom.** Its setup reads a signed-in CloudRoom wherever the agents run, and `continue` refuses without it. Say so before the install. There is no setup page or local server in 0.1.0: setup is the commands below.
 - **Free now; other charges are separate.** OpenWiz is free now. Paid plans come later. CloudRoom and model charges are separate and not included. More Cloud Credits are CloudRoom's own plan, from `https://cloudroom.dev/pricing`. Referral verification is unavailable. No referral is applied. Never add a code or parameter to that link.
 
-Keep `<root>` (default `$HOME/.local/lib/openwiz`), and the `build` and `state_root` paths `install` prints as `<build>` (also `build=<build>` in the shell) and `<state>`, all absolute and owner-only. Run runtime tools with `python3 -I -B` and `OPENWIZ_STATE_DIR=<state>`, and pass `--state-dir <state>`.
+Keep `<root>` (default `$HOME/.local/lib/openwiz`), and the `build` and `state_root` paths `install` prints as `<build>` (also `build=<build>` in the shell) and `<state>`, all absolute and owner-only. Run runtime tools with `python3 -I -B` and `OPENWIZ_STATE_DIR=<state>`, and pass `--state-dir <state>`. After a restart, read them from the installed files, as Resume says.
+
+## Resume
+
+A new session, whatever the user said ("continue", or the one line again), starts here: find the first unfinished step and resume there. Use only the installed files, never a temporary clone: a restart loses it.
+
+```sh
+<root>/current/openwiz --build-identity
+build=$(readlink <root>/current); state=${build%/service/builds/*}
+OPENWIZ_STATE_DIR="$state" python3 -I -B "$build"/runtime/setup/setup.py check --state-dir "$state"
+OPENWIZ_STATE_DIR="$state" python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir "$state"
+grep -m1 '^version:' ~/.claude/skills/install/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/install/SKILL.md"
+```
+
+`<root>` is `$HOME/.local/lib/openwiz` unless the user chose another. Take the first that holds:
+
+- No `<root>/current`, or `--build-identity` does not read 0.1.0: resume at step 1.
+- `check` does not read `cloudroom_login_verified`, or `status` does not read the GitHub account: resume at step 3. `identity_unreadable` means GitHub gave no clear answer: wait a minute and run `status` again; it clears.
+- The running agent's `install/SKILL.md` is missing, or does not read `version: 0.3.1`: resume at step 4. When that agent's folder holds OpenWiz's 18 skills, run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4.
+- Otherwise resume at step 5; for a first fleet already under way, at step 6 with `first_fleet.py next`.
 
 ## 1. Preflight
 
 ```sh
 openwiz=<private temporary folder>/openwiz
-git clone --depth 1 https://github.com/openwizdev/OpenWiz "$openwiz"
+git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$openwiz"
 python3 -I "$openwiz"/tools/install/install preflight
 ```
 
-It reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. Exit 5 names each missing item and its `next` step: tell the user plainly (CloudRoom: install the app and sign in; `gh`: install it and `gh auth login`).
+`git clone` may warn that `refs/tags/v0.1.0` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) is unsupported for 0.1.0: the `openwiz` binary runs there, but CloudRoom offers no Intel Mac build today, so say so plainly and stop before installing. Exit 5 names each missing item and its `next` step: tell the user plainly what they do themselves (CloudRoom: install the app, open it once and sign in; `gh`: install it and run `gh auth login` in their own terminal). Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`). Read its `checks` even on exit 0: `gh` reading `missing` does not stop preflight, but setup needs it. Then the user installs GitHub CLI first, from https://cli.github.com, and `gh --version` shows it is there; then continue.
 
 Done when preflight passes, or the user has each next step.
 
@@ -44,90 +65,179 @@ python3 -I "$openwiz"/tools/install/install download --target <target> --dir <pr
 python3 -I "$openwiz"/tools/install/install install --assets <private download folder> --target <target> --root <root>
 ```
 
-A refusal leaves the previous build selected: report it, never work around it. A checksum proves the files are the release's, not who published them.
+**While 0.1.0 is not yet GitHub's Latest release,** `download` refuses ("the step could not be completed safely") because `releases/latest/download/...` answers 404. Check that with `curl -sI https://github.com/openwizdev/OpenWiz/releases/latest/download/openwiz-<target>.sha256`. On a 404, and only then, fetch the same three files from the pinned tag into a new owner-only folder, then run the same `install` above:
 
-Done when `install` printed `"activated": true` with the version, target, `build` and `state_root`.
+```sh
+umask 077; mkdir <private download folder>
+for f in openwiz-<target>.sha256 openwiz-<target>.manifest.json openwiz-0.1.0-<target>.tar.gz; do
+  curl -fsSL --proto '=https' -o <private download folder>/"$f" https://github.com/openwizdev/OpenWiz/releases/download/v0.1.0/"$f"
+done
+```
+
+`install` checks the manifest against its checksum and every file against the manifest, as `download` would. Any other refusal leaves the previous build selected: report it, never work around it. A checksum proves the files are the release's, not who published them.
+
+Then prove the build:
+
+```sh
+<root>/current/openwiz --build-identity
+```
+
+It prints `"version":"0.1.0"` and the release's `source` commit. On Linux, a `weak version 'GLIBC_2.39' not found` line on stderr is harmless. OpenWiz's skills go into the user's agents at step 4, after setup.
+
+Done when `install` printed `"activated": true` with the version, target, `build` and `state_root`, and `--build-identity` read 0.1.0.
 
 ## 3. Setup and connections
 
 ```sh
-python3 -I "$openwiz"/tools/install/install open --root <root> --browser
 python3 -I -B "$build"/runtime/setup/setup.py check --state-dir <state>
 ```
 
-`open` serves only this build's setup page on `http://127.0.0.1:7370/setup` (add `--state-root <state>` for a custom state). Read each component's state (`verified`, `missing`, `refused`, `unknown`) and `next` step; only the check marks a component ready. Reuse the user's current CloudRoom sign-in and harnesses. GitHub, the App, the project and its brain wait for the repository the user picks under First fleet. Phone access is optional: `python3 -I -B "$build"/runtime/access/access.py`, as its README says. Run `check` after each change.
+It reads each connection and records only its own results in `<state>`. It prints one bare code per component and no next step, so read each code below. Run `check` again after each change.
 
-Done when CloudRoom reads `verified`, or the user chose to stop with the remaining `next` steps.
+**CloudRoom** (`cloudroom`), with `python3 -I -B "$build"/runtime/cloudroom/cloudroom.py status | install | sign-in --state-dir <state>`:
 
-## 4. Explain
+| Code | Next |
+| --- | --- |
+| `cloudroom_login_verified` | Done: signed in now. |
+| `cloudroom_not_installed` | `cloudroom.py install --state-dir <state>` previews CloudRoom's checksum-checked installer; on the yes, `cloudroom.py install --yes --operation <id> --state-dir <state>`. Then sign in. |
+| `cloudroom_installed`, `cloudroom_reused`, `cloudroom_login_missing`, `cloudroom_login_unknown` | The person signs in themselves: show them `cloudroom.py sign-in --state-dir <state>` to run in their own terminal (it opens CloudRoom's own sign-in once, or the app the first time), and wait until they say done. Then `status`. On Linux, sign-in needs a desktop session and FUSE (the AppImage needs `fusermount`, from `fuse3` or `libfuse2`): a headless VPS cannot sign in. If nothing opens within a minute, the user opens `~/Applications/Cloudroom.AppImage` themselves. |
+| `cloudroom_unsupported` | CloudRoom offers no build for this computer (an Intel Mac, or Linux on ARM). OpenWiz 0.1.0 needs CloudRoom, so the install cannot be completed here yet: say so plainly and stop. |
+| `cloudroom_source_unchecked` | `cloudroom.py install` could not read or check CloudRoom's published installer and its checksum (a network failure, or CloudRoom changed its download guide or release): nothing was proposed or downloaded. Run `install` again shortly. If it stays, `cloudroom.py install --yes --state-dir <state>` opens CloudRoom's download page once instead; the user installs CloudRoom from there, opens it once and signs in. Then `status`. |
+| `cloudroom_installing` | An install is running: `status` again shortly. |
+| `cloudroom_install_uncertain` | A plain `install` only shows the pending operation again. Read its `operation_id` from `cloudroom.py install --state-dir <state>` (inside `operation`), then reconcile that same operation: `cloudroom.py install --yes --operation <operation_id> --state-dir <state>`. Never preview a new install over it. |
+| `cloudroom_install_failed` | Preview `install` again and ask again. |
+| `cloudroom_install_declined` | The user said no: stop, or preview again only if they ask. |
+| `cloudroom_checksum_mismatch` | Nothing was installed: report it and stop. |
+| `cloudroom_destination_blocked` | Another file is at `~/Applications/Cloudroom.AppImage`: the user moves it, never you. |
+| `cloudroom_unreadable` | `check` again; if it stays, `status`. |
 
-Say this before asking about a project, once:
+**GitHub:** the read-only `python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir <state>` reads the account. Signed out, `github_login.py sign-in --state-dir <state>` without `--yes` only previews (`login_needed`): GitHub's own browser page and a one-time code, with no token pasted. The person signs in themselves: they run it with `--yes` in their own terminal; then run `status` again. `identity_unreadable` (from `status`, `sign-in` or `check`) means GitHub gave no clear answer: wait a minute and run it again; it clears. If it stays, `gh auth status` shows whether the user is signed in. `login_gh_missing` means GitHub CLI is not installed: the user installs it from https://cli.github.com, then `gh --version` shows it is there; run the sign-in preview again.
 
-> You bring an **idea**. I **grill** you with a few quick questions to settle it, then write it up as a **spec** for you to confirm. The spec becomes small **tickets**, a plan you approve as a whole. Each ticket gets its own **builder**, an agent that writes the code on its own branch. A **reviewer** from a different model family reviews each pull request independently, and approved, green work **merges** by the project's rules. Nothing starts until you approve the plan.
+**The rest** (`harness_unselected`, `identity_unselected`, `project_unprepared`, `app_missing`) is expected now: each waits for the repository the user picks on the onboarding road, and Connect sets it. Phone access is optional: `python3 -I -B "$build"/runtime/access/access.py configure --plan <private file> --state-dir <state>` previews it; `access.py --help` gives the plan's shape.
 
-Done when the user has seen it.
+Done when CloudRoom reads `cloudroom_login_verified` and GitHub's `status` reads the account, or the user chose to stop with the remaining next steps.
 
-## 5. First fleet
 
-Continue only if the user wants a first fleet; otherwise finish with the install and any outstanding setup steps. Pass one owner-only `--state <file>` outside the project to every `first_fleet.py` command (`python3 <this skill's folder>/scripts/first_fleet.py`), from the project's clone. To resume, run `first_fleet.py next --state <file> --setup-state <state>`: it reads only that file and the repository setup prepared, and prints the first unfinished step and its command. Exits: 0 done, 1 read failure, 2 usage, 5 refused, 6 uncertain, 7 busy, 10 state unavailable, 12 preview awaiting `--yes`.
+## 4. Skills into your agents, then a restart
 
-### 1. Choose a project
+Only now, with setup checked and the logins done, copy OpenWiz's skills into the user's agents:
 
-Offer three or four fun, one-line ideas made up for this user, plus "your own idea". Then ask where it goes:
+```sh
+python3 -I "$openwiz"/tools/install/install skills --root <root>
+```
 
-1. **A new private demo repository** (recommended). Sign in first: `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state>` (it reuses a verified login; signed out, preview, then `--yes` for GitHub's browser page). Then `first_fleet.py create-repo --repo <owner>/<name>` previews the repository and its one README commit; on the yes, add `--yes`. Exit 6: run it again. The user makes or picks its CloudRoom project.
-2. **An existing repository:** confirm it, and that the fleet opens branches and pull requests there, then run `first_fleet.py select --repo <owner>/<name>`.
+It copies the 18 skills into `<root>/skills` and into each agent folder present here: `~/.claude/skills` (Claude Code), `${CODEX_HOME:-$HOME/.codex}/skills` (Codex: `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise `~/.codex/skills`), `~/.cursor/skills`, `~/.config/opencode/skills` and `~/.grok/skills`. It prints `"outcome": "installed"` even when it copied nothing, so check two things: its `harnesses` entry for the agent you are running in reads `installed`, and that agent's folder, the entry's `path` (`ls ~/.claude/skills`, or for Codex `ls "${CODEX_HOME:-$HOME/.codex}/skills"`), now holds all 18 by name: `ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`. If the entry reads `absent`, that agent's folder (`~/.claude`, or for Codex `$CODEX_HOME` when set, otherwise `~/.codex`) is missing on this computer: tell the user which folder, that their agent has no OpenWiz skills, and its `next` step; never create the folder yourself. A skill of the user's own with the same name refuses the whole step: report it.
+
+Then make every installed copy of this skill this one, the whole folder. The copy `install skills` just wrote comes from the 0.1.0 package: it is older (`version: 0.2.0`), its `SKILL.md` and scripts still name a setup page and a server 0.1.0 removed, and a new session loads it whatever the user says. Take this skill's own folder: the one you read it from when it is on this computer (a WizSkills clone or plugin: set `src` to it and skip the clone), otherwise a fresh clone of WizSkills (it installs nothing). Then overwrite each agent folder that holds OpenWiz's copy (marked by `.openwiz-skill`), and check every file by content:
+
+```sh
+wizskills=<private temporary folder>/WizSkills
+git clone --depth 1 --branch main https://github.com/openwizdev/WizSkills "$wizskills"
+src="$wizskills"/skills/install
+fixed() { grep -q '^version: 0.3.1$' "$1/SKILL.md" && ! grep -q -e 'install ope[n] ' -e 'from the setup pag[e]' -e 'Restart the OpenWiz serve[r]' "$1/SKILL.md" "$1"/scripts/*.py; }
+if fixed "$src"; then echo "source ok"; else echo "NOT THIS SKILL: $src"; fi
+fixed "$src" && for d in "$HOME/.claude/skills" "$HOME/.codex/skills" ${CODEX_HOME:+"$CODEX_HOME/skills"} "$HOME/.cursor/skills" "$HOME/.config/opencode/skills" "$HOME/.grok/skills"; do
+  [ -f "$d/install/.openwiz-skill" ] || continue
+  cp -R "$src"/. "$d/install/"
+  same=yes; for f in $(cd "$src" && find . -type f); do cmp -s "$src/$f" "$d/install/$f" || same=no; done
+  if [ "$same" = yes ] && fixed "$d/install"; then echo "ok: $d/install"; else echo "STILL OLD: $d/install"; fi
+done
+```
+
+If it prints `NOT THIS SKILL` (the clone failed, or the branch still serves an older copy), nothing was copied: stop before the restart, say so, and try again shortly. A `STILL OLD` line means that folder's copy did not take (it may not be writable): report it and fix it before the restart; never restart onto an old copy. A later `install skills` run, such as a repair, writes the old copy again: repeat this block after it.
+
+An agent finds new skills only when it starts, so the user restarts it now: a new session of their agent, then exactly "continue the OpenWiz install". Ask them to type those words: a bare "continue" can load no skill at all. The new session loads this skill from the folder above and starts at Resume. Any installed copy that does not read `version: 0.3.1` is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md) and resume at the first unfinished step, as Resume says.
+
+Done when the running agent's folder holds the 18 skills by name and every `ok:` line printed with no `STILL OLD`, or the user knows which folder is missing, and the user knows to restart.
+
+## 5. Teach
+
+From here the agent is a teacher. At each moment named in **bold** below, say that moment's line from [teach.md](teach.md), filling each `<...>` from what just happened and keeping the rest of its words. Say **Up front**'s three lines once, then **Install done**.
+
+Done when the user has heard both.
+
+## 6. The onboarding road
+
+Continue only if the user wants their first build; otherwise finish with the install and any outstanding setup steps. Pass one owner-only `--state <file>` outside the project to every `first_fleet.py` command (`python3 <this skill's folder>/scripts/first_fleet.py`), from the project's clone once there is one. To resume, run `first_fleet.py next --state <file> --setup-state <state>`: it reads only that file and the repository setup prepared, and prints the first unfinished step and its command. Exits: 0 done, 1 read failure, 2 usage, 5 refused, 6 uncertain, 7 busy, 10 state unavailable, 12 preview awaiting `--yes`.
+
+### 1. Where agents run
+
+Run `first_fleet.py where --build "$build"`. It lists every host this OpenWiz can run agents on: Cloudroom (`cloud`), and each driver the verified build's `runtime/adapters` carries that answers `version`, such as this machine (`local`) and boat.dev (`boat`). A driver whose `version` fails is not offered: say its `Not offered:` line as printed. Ask **Where agents run**'s question, offering only the listed hosts, suggesting this machine when it is listed. On the answer, run `where --agents <its name> --build "$build"`. It checks what that host needs: a GitHub sign-in everywhere; on this machine Claude Code or Codex on `PATH`; for Cloudroom `room-cli`; for boat.dev the `boat` CLI. For anything missing it prints **Where agents run**'s walk-through line with a link; say it as printed. The user signs in themselves; run it again when they say done. Exit 12 prints what that host's agents cost; say it, and that Cloudroom uses Cloud Credits. For a driver host other than this machine it also prints where the login lives (boat.dev: `Login: held by boat.dev`, with its dashboard steps; any other: the driver's Login line) and one question asking whether the user has signed in there; ask it as printed. The user signs in themselves. On their yes, run it again with `--yes`: it records the pick, and for a driver host the build's `runtime/adapters`. A driver host's `Host: <name>` line, the one launch-fleet reads, is written at **Host setting**; Cloudroom needs none. With nothing usable listed, offer Cloudroom or stopping.
+
+Done when `where` recorded the answer.
+
+### 2. Choose a start
+
+Offer three ways to start: a small change in a repository they have, a fresh project from their idea, or something they've always wanted to build. Anyone without an idea gets two or three ideas from that choice's group in [ideas.md](ideas.md); their own idea always wins. Then its one repository:
+
+- **A repository they have:** confirm it, and that the fleet opens branches and pull requests there, then run `first_fleet.py select --repo <owner>/<name>`.
+- **A new repository:** GitHub sign-in first, which the person does themselves: show them `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state> --yes` to run in their own terminal (it opens GitHub's browser page), and wait until they say done. Then run the read-only check, `python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir <state>`, and continue only when it reads their account. Then `first_fleet.py create-repo --repo <owner>/<name>` previews it and its one README commit; on the yes, add `--yes`. Exit 6: run it again. The user makes or picks its Cloudroom project.
 
 Done when the idea and one repository are chosen and read back. There is no second repository.
 
-### 2. Connect
+### 3. Connect
 
 For that repository, each tool previews and applies only on the yes (`--yes`, or `--yes --operation <id>` from its preview):
 
-1. **Sign-in:** `github_login.py sign-in --repository <owner>/<name> --state-dir <state>`. Only the account and push-access read-back count.
-2. **Prepare:** `setup.py prepare --state-dir <state> --repository <owner>/<name> ...` with the CloudRoom project and the harness, model and effort the user picks from `openwiz models --json`, one question each, with a recommendation.
-3. **The App, or an explicit skip:** recommend the App, set up as `setup`'s "The App" says. Only the user's answer selects `github_login.py skip-app`; an App failure never becomes a skip.
-4. **The brain:** `<build>/openwiz init --repository <owner>/<name> --state-dir <state> --json`, then `--yes --operation <id>`. Say in one line where it went; the user merges its pull request. For a public repository's private companion, run `first_fleet.py decisions --setup-state <state>`, then `--yes`, and ask the user to restart the OpenWiz server.
+1. **Sign-in:** run the read-only `github_login.py status --repository <owner>/<name> --state-dir <state>`. Only its account and push-access read-back count. Signed out, or without push access, the person fixes it themselves, as in step 2 (`github_login.py sign-in --repository <owner>/<name> --state-dir <state> --yes` in their own terminal); then run `status` again.
+2. **Prepare:** `setup.py prepare --state-dir <state> --repository <owner>/<name> --project <project id> --operator <login> --service-issue <N> --answer-thread <thread id> --harness <harness> --model <model> --effort <effort>`, every flag required, one question each, with a recommendation:
+   - `--project`: the CloudRoom project the fleet runs in, by id (`<root>/current/openwiz ls --json` groups threads by project).
+   - `--operator`: the name a loop's on or off switch records as who did it; recommend the user's GitHub login.
+   - `--service-issue`: an open issue in that repository for OpenWiz's service records (not a pull request). With none, offer to open one, titled "OpenWiz service records", on the yes.
+   - `--answer-thread`: the user's CloudRoom thread in that project that gets the fleet's answers, from the same `ls`; another project's thread reads `project_answer_refused`.
+   - `--harness`, `--model`, `--effort`: what the user picks from `<root>/current/openwiz models --json`; on this machine, only the harnesses `where` found.
+
+   Without `--yes` it prints the effects and an operation id; on the yes, run it again with `--yes --operation <id>`.
+3. **The App, or an explicit skip:** recommend the App, set up with the installed `"$build"/runtime/github-app/setup.py` as the `setup` skill's "The App" says. Only the user's answer selects `github_login.py skip-app`; an App failure never becomes a skip.
+4. **The brain:** `<root>/current/openwiz init --repository <owner>/<name> --state-dir <state> --json`, then `--yes --operation <id>`. Say in one line where it went; the user merges its pull request. For a public repository's private companion, run `first_fleet.py decisions --setup-state <state>`, then `--yes`.
 5. **Carry it:** `setup.py check --state-dir <state>`, then `first_fleet.py continue --setup-state <state> --explained`. It refuses, naming each component that is missing, refused, unknown or stale, and withdraws what it carried before; follow that `next` step and run both again.
 
 Done when `continue` prints the carried setup and the acting identity.
 
-### 3. Grill
+### 4. Grill
 
-Run `grill` briefly: one or two rounds of at most three questions, each with a recommendation, steered to 4 to 7 small, mostly independent tickets. Save it as `grill` says.
+Say **The grill**'s first line, then run `grill` briefly: one or two rounds of at most three questions, each with a recommendation, steered to 4 to 7 small, mostly independent tickets, even for a small change. When its summary is ready, show it and say **The grill**'s second line. Only the user's yes here confirms it; anything else is a change to make. Save the yes as `grill` says, then run `first_fleet.py grill --confirmed <its private comment URL>`.
 
-Done when the user confirms the grill's summary.
+Done when `grill` recorded the confirmation.
 
-### 4. Choose the agents
+### 5. Agents
 
-Harness, model and effort were answered at Connect. Ask only where the agents run: Cloud (recommended; it uses Cloud Credits) or Local. Save `openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup --agents cloud|local` (without a carried setup, ask the three and pass `--harness --model --effort`). Then run `setup` so both builder tables name exactly these settings, sourced to the user's decision; setup keeps reviewers in the other family. Then run the same `choose` again: it reads the tables back. Local is not available yet: say so, and offer Cloud or stopping.
+Harness, model and effort were answered at Connect. Save `<root>/current/openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup` (without a carried setup, ask the three and pass `--harness --model --effort`). Then run `setup` so both builder tables name exactly these settings, sourced to the user's decision; setup keeps reviewers in the other family. Then run the same `choose` again: it reads the tables back.
 
 Done when the choice is recorded and the builder tables match it.
 
-### 5. Plan
+### 6. Host setting
 
-Run `to-spec` and wait for the user's spec confirmation. Run `to-tickets` for 4 to 7 small tickets with disjoint owned paths and few arrows, then wait for the user's exact-plan approval; a change request is not an approval. Then run `first_fleet.py spec --spec <N> --repo <owner>/<name>`.
+On this machine, first ask the owner to pick the harness permission mode, once. Run `first_fleet.py mode`: it lists that harness's modes, each with what it lets an agent do. Explain each one plainly, as printed, and recommend none: never pick, default or widen a mode for the owner, and touch no login. On their answer, run `first_fleet.py mode --mode <their pick>`. From that one pick it saves this machine's host-side approval for the repository and harness, outside the repository, through the local driver's setup step; it never changes or widens an approval already saved. The host setting below adds the matching `fleet.md` row. The local driver passes the mode to the harness unchanged and starts nothing unless the row and the approval match.
 
-Done when the approval record on the spec is current and `spec` saved it.
+Then run `first_fleet.py setting`. For a driver host other than this machine (boat.dev, or another the user picked) it previews one pull request that adds only `docs/agents/host.md` with `Host: <its name>`, the line launch-fleet reads, and no mode row; on the yes, run it with `--yes` and ask the user to merge it, as below. For this machine it previews one pull request that adds `docs/agents/host.md` with `Host: local` (the host launch-fleet reads) and one row, `| Harness permission mode | `<their pick>` |`, to the `docs/agents/fleet.md` setup wrote (the mode the local driver reads), changing no other line. On the yes, run it with `--yes` and ask the user to merge it. It never adds a second row or replaces a mode the owner already saved: it names that row and asks. It never writes over a branch `openwiz/host-setting` that holds anything else, and it says the pull request is ready only once both files read back from it exactly; a failed or uncertain write is said, never retried blindly: run it again to read the branch first. For Cloudroom no file is needed: it says so and exits 0. It never overwrites a host the project already names. The launch waits until the pull request is merged, for every driver host.
 
-### 6. Launch
+Done when both settings match the answers, or their pull request is open.
 
-Preview with `first_fleet.py launch --spec <N>`. Show its effects (one fleet thread and its loop, the frontier's builders and their other-family reviewer, Cloud Credits unknown until measured) and ask for a yes to exactly those. On the yes, run it with `--yes --confirm <the digest it printed>`. It refuses if anything changed since the preview: run `continue` or preview again and ask again. Exit 6 is uncertain: run it again to read the fleet record, never start by hand.
+### 7. Plan
 
-Done when the start is recorded, or recorded uncertain and reported so.
+The plan checks itself. Run `to-spec` with the confirmed grill. It writes the spec, runs `to-tickets`, whose checks record the machine plan approval, and makes the spec's video. Say **The spec and its video** with its video link. Without Node on `PATH`, skip to-spec's video step (it renders with `node`, which this install's guard never needs) and instead of that line say one line: `Your grill is now a spec at <spec link>; its video needs Node, which this install doesn't have, so there is none, and the fleet still starts.` The launch never waits for the video. Ask nothing here: no spec or plan approval. For now the owner steers through the orchestrator: what they want changed goes to this chat, never a comment on the video, which steers nothing until OpenWiz #1402. launch-fleet's one-time notice saying so is normal, not a hold. When a check refuses, re-cut the plan; never ask the user to approve it instead. Then run `first_fleet.py spec --spec <N> --repo <owner>/<name>`.
 
-### 7. Watch
+Done when the machine plan approval is on the spec and `spec` saved it.
 
-Run `first_fleet.py progress --spec <N> --openwiz <absolute path to openwiz>` when the user asks, and point them to the cockpit's Home and First hour pages. Unknown stays unknown, and a count is never a first merge. Reviews and merges follow on the fleet thread's loop. Then offer their next idea.
+### 8. Launch
 
-Done when the user has seen their agents' progress.
+Preview with `first_fleet.py launch --spec <N>`. It reads the spec's machine plan approval for this grill, the host the user chose (a driver host, this machine or boat.dev or another, only once its host setting is merged) and launch-fleet's own frontier, then prints the start's effects and one question that names the host and says it can cost money. Show the effects and ask that question as printed. This is the one yes before the fleet starts; never skip it, even though the cost was shown at **Where agents run**. On the yes, run it with `--yes --confirm <the digest it printed>`. It refuses if anything changed since the preview: preview again and ask again. It starts nothing itself: it saves the yes and names launch-fleet's own start path. As this project's orchestrator, follow launch-fleet's Launch section ([references/launch.md](../launch-fleet/references/launch.md)): the project's two loops, the GitHub messages question (a gate, in its own words), then "Starting one": the spec's loop, its private loop-map entry, read back, and the `launch-fleet: fleet active, loop fleet-<S>` record, read back. For every driver host (this machine, boat.dev or another), give that loop, which runs launch-fleet's `host.py`, `OPENWIZ_ADAPTERS` as `launch` printed it: without it `host.py` refuses every start. Cloudroom needs none. Then run `first_fleet.py launch --spec <N>` again: it says **The fleet starting** only once that record reads back; until then it exits 6. Never start the fleet a second way.
+
+Done when `launch` read the activation record back and printed **The fleet starting**.
+
+### 9. Watch
+
+Run `first_fleet.py progress --spec <N> --openwiz <root>/current/openwiz` when the user asks or a moment may have happened, and say each moment's line once: **A pull request opened**, then **Reviewed**. A count is never a merge. When a pull request merges, run `first_fleet.py first-merge --pr <number>`: it reads the merge back from GitHub and prints **Merged** and **The closing offer**; say both. On the answer: stay as the project's orchestrator (launch-fleet), start a new project (this road again, with a new state file), or keep building (the grill again, for the next idea).
+
+Done when the user has heard the closing offer.
 
 ## Doctor
 
 When setup or a fleet seems stuck, or the user asks whether setup is right, run the doctor from the project's clone:
 
 ```sh
-python3 -I <this skill's folder>/scripts/doctor.py --repo <owner>/<name> --state-dir <state> --build <build> --openwiz "$openwiz" [--driver <the driver this machine runs>]
+python3 -I <this skill's folder>/scripts/doctor.py --repo <owner>/<name> --state-dir <state> --build <build> --openwiz "$build"/runtime [--driver <the driver this machine runs>]
 ```
 
 In order, it checks the labels, the App, that the acting login is a record author, the harness, the driver's `version` and the skills, through the checks that already exist. It only reads. Show each problem line as it is; its `Fix:` is the command that fixes it. A sign-in fix is the user's to run: show it, never run it. Exit 0 prints one all-clear line; 5 prints the problems.
@@ -136,4 +246,21 @@ Done when it prints all clear, or the user has each fix.
 
 ## Recovery and removal
 
-If setup does not open, run `install status --root <root>` and `open` again; a failed bind never proves another page is OpenWiz's. To remove OpenWiz, stop only its own setup server and delete `<root>`; keep `<state>` unless the user asks. Removal revokes nothing: show the user how to uninstall the App or remove repositories from it, delete any phone-access tunnel or rule, and delete the fleet loops in CloudRoom. Never remove or revoke anything without their yes.
+If something seems wrong, verify the build with a fresh clone (it installs nothing): `openwiz=<new temporary folder>/openwiz`, step 1's `git clone`, then `python3 -I "$openwiz"/tools/install/install status --root <root>`. It verifies the selected build and changes nothing. A changed file reads `installed asset mismatch`, and `install` refuses the same way. To repair it and keep the settings, delete only the `<root>/current` link and the one build folder it points to (`<build>`, inside `<state>/service/builds/`), nothing else in `<state>/service/`, then run step 2's `install install` again.
+
+To remove OpenWiz, on the user's yes: there is no remove command and no server to stop. Never remove `<root>` or `<state>` as a whole: the installer accepts folders that already hold other files, so either may hold the user's own.
+
+1. `ls -A <root>`. A fresh install puts exactly `current`, `channel.json`, `install.lock`, `skills/` and, without a separate `--state-root`, `state/` (the `<state>`) there. Delete only `current`, `channel.json`, `install.lock` and `skills/`, and keep any of those names that was there before the install.
+2. `ls -A <state>`. OpenWiz's builds are the folders in `<state>/service/builds/`, each named by a 40-character source commit and holding an `install-manifest.json` whose `"source"` is that same name. Delete those folders. `<state>/service/` is never deleted as a whole.
+3. Only if the user wants their settings gone too: delete exactly these, when present: `<state>/setup/`, `<state>/cloudroom/`, and in `<state>/service/`: `config.json`, `app/` (the App's saved settings and key), `state.json`, `loops/` and `clone/`. Then `rmdir <state>/service/builds <state>/service <state>`, and last `rmdir <root>`. `rmdir` removes only an empty folder: leave any folder it refuses.
+4. The skill copies stay: you never delete a skill folder yourself, and leftover copies are harmless. If the user wants them gone, list the folders with OpenWiz's 18 skill names (`ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`) in each agent folder, show the list, and tell the user to look and remove only the ones they recognise as OpenWiz's, themselves, or keep them. A folder with one of these names may be the user's own skill.
+
+   ```sh
+   for d in "$HOME/.claude/skills" "${CODEX_HOME:-$HOME/.codex}/skills" "$HOME/.cursor/skills" "$HOME/.config/opencode/skills" "$HOME/.grok/skills"; do
+     for s in ask-wiz build-ticket diagnose grill handoff hill-climb huntr image install launch-fleet research review-ticket setup to-spec to-tickets triage wayfind where-are-we; do
+       [ -e "$d/$s" ] && echo "$d/$s"
+     done
+   done
+   ```
+
+Removal revokes nothing: show the user how to uninstall the App or remove repositories from it, delete any phone-access tunnel or rule, and delete the fleet loops in CloudRoom. Never remove or revoke anything without their yes.

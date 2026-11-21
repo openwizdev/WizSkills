@@ -12,6 +12,7 @@ issue body and progress in comments. Use these sections.
 | Implementation Decisions | Shared shapes, interfaces and expected interactions |
 | Testing Decisions | User-facing seams, behavior to prove and prior art |
 | Proof | Each claim and the fixture, review or live observation that proves it |
+| Checkpoints | The two checkpoint answers ([checkpoints.v1](../../contracts/checkpoints.v1.md)), filled from the grill and confirmed with the spec; early only (`One-way door: yes`, `User-visible: no`) is the default |
 | Live check | The smallest real check, when the spec touches the user's machine or account |
 | Out of Scope | Boundaries the owner settled |
 | Further Notes | Public-safe provenance; the video goes in a comment, not here |

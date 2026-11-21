@@ -1,0 +1,213 @@
+{
+ "contract": "openwiz:driver v1",
+ "commands": {
+  "version": {
+   "input": null,
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+     "driver",
+     "records",
+     "can"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "driver": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "maxLength": 40
+     },
+     "records": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+       "type": "string",
+       "pattern": "^openwiz:records v[1-9][0-9]{0,2}$"
+      }
+     },
+     "can": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+       "enum": [
+        "start",
+        "wake",
+        "stop",
+        "many-at-once",
+        "own-sandbox"
+       ]
+      },
+      "allOf": [
+       {
+        "contains": {
+         "const": "start"
+        }
+       },
+       {
+        "contains": {
+         "const": "wake"
+        }
+       },
+       {
+        "contains": {
+         "const": "stop"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  "schema": {
+   "input": null,
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object"
+   }
+  },
+  "start": {
+   "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+     "repository",
+     "ticket",
+     "skill",
+     "harness",
+     "model"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$"
+     },
+     "ticket": {
+      "type": "integer",
+      "minimum": 1
+     },
+     "skill": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "maxLength": 60
+     },
+     "harness": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,59}$"
+     },
+     "model": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@+-]{0,59}$"
+     }
+    }
+   },
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+     "run"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "run": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$"
+     }
+    }
+   }
+  },
+  "wake": {
+   "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+     "run"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "run": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$"
+     }
+    }
+   },
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+     "run",
+     "woke"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "run": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$"
+     },
+     "woke": {
+      "const": true
+     }
+    }
+   }
+  },
+  "stop": {
+   "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+     "run"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "run": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$"
+     }
+    }
+   },
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+     "run",
+     "stopped"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "run": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$"
+     },
+     "stopped": {
+      "const": true
+     }
+    }
+   }
+  }
+ },
+ "error": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+   "error",
+   "next"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "error": {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 300,
+    "pattern": "^[^\\u0000-\\u001f]*$"
+   },
+   "next": {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 300,
+    "pattern": "^[^\\u0000-\\u001f]*$"
+   }
+  }
+ }
+}

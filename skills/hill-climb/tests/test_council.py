@@ -1,4 +1,3 @@
-"""Council proofs (#1354). All identifiers, scores and references are synthetic."""
 import json
 import os
 from pathlib import Path
@@ -18,7 +17,6 @@ COUNCIL = ["J1", "J2", "J3"]
 
 
 def grid(judge, marks):
-    """marks: artifact -> (hierarchy, clarity) scores from one judge."""
     return [{"judge": judge, "artifact": artifact, "category": category,
              "score": score, "reason": "fixture"}
             for artifact, pair in marks.items()
@@ -31,14 +29,10 @@ def round_of(number, marks_by_judge):
                        for row in grid(judge, marks)]}
 
 
-# Round 0, the cheapest judge alone: A beats the reference R in both categories.
 CHEAP = {"J1": {"A": (7, 8), "B": (5, 9), "R": (6, 6)}}
-# The full council. Anthropic's judges favour A; OpenAI's ties A with R on
-# hierarchy, so A beats R on the council mean but not in every family.
 SPLIT = {"J1": {"A": (7, 8), "B": (5, 9), "R": (6, 6)},
          "J2": {"A": (6, 7), "B": (5, 5), "R": (6, 5)},
          "J3": {"A": (8, 8), "B": (4, 6), "R": (6, 7)}}
-# Every family scores A above R in every category.
 AGREED = {"J1": {"A": (7, 8), "B": (5, 9), "R": (6, 6)},
           "J2": {"A": (7, 7), "B": (5, 5), "R": (6, 5)},
           "J3": {"A": (8, 8), "B": (4, 6), "R": (6, 7)}}
@@ -95,13 +89,11 @@ class CouncilCLI(unittest.TestCase):
                                           "B": {"clarity": 9, "hierarchy": 5},
                                           "R": {"clarity": 6, "hierarchy": 6}})
         self.assertEqual(first["references"], ["R"])
-        # B wins clarity but loses hierarchy to R: only A beats R everywhere.
         self.assertEqual(first["leaders"], ["A"])
         self.assertEqual(first["top"], ["A"])
         self.assertEqual(first["best"], "A")
         self.assertEqual(result["next_phase"], "full")
         self.assertEqual(result["next_judges"], COUNCIL)
-        # A cheap round never counts towards the stop.
         self.assertEqual(result["consistent_rounds"], 0)
         self.assertFalse(result["stop"])
 
@@ -134,7 +126,6 @@ class CouncilCLI(unittest.TestCase):
         twice = self.good(council(CHEAP, AGREED, AGREED))
         self.assertEqual((twice["consistent_rounds"], twice["leader"], twice["stop"],
                           twice["reason"]), (2, "A", True, "references"))
-        # A full round without the leader resets the count.
         broken = self.good(council(CHEAP, AGREED, SPLIT, AGREED))
         self.assertEqual((broken["consistent_rounds"], broken["stop"]), (1, False))
         self.assertTrue(self.good(council(CHEAP, AGREED), window="1")["stop"])
@@ -160,8 +151,6 @@ class CouncilCLI(unittest.TestCase):
                          (None, 0, False))
 
     def test_a_leader_that_is_not_the_best_never_stops_the_run(self):
-        # Review R1: B has the higher mean (8 against 7) and is kept, but ties R
-        # on clarity; A beats R everywhere. The stop must certify the kept one.
         diverged = {"A": (7, 7), "B": (10, 6), "R": (6, 6)}
         result = self.good(council({"J1": diverged},
                                    *[{judge: diverged for judge in COUNCIL}] * 2))
@@ -171,11 +160,11 @@ class CouncilCLI(unittest.TestCase):
                           result["reason"]), (None, 0, False, "continue"))
 
     def test_cheapest_judge_first_is_enforced(self):
-        self.bad(council(SPLIT))  # the full council before the cheap judge is satisfied
-        self.bad(council(CHEAP, CHEAP))  # the cheap judge alone after it was satisfied
+        self.bad(council(SPLIT))
+        self.bad(council(CHEAP, CHEAP))
         late = council({"J1": {"A": (6, 8), "R": (6, 6)}}, CHEAP)
         self.assertEqual(self.good(late)["next_judges"], COUNCIL)
-        self.bad(council(CHEAP, AGREED, CHEAP))  # never back to the cheap seat
+        self.bad(council(CHEAP, AGREED, CHEAP))
 
     def test_scores_must_be_complete_integers_from_one_to_ten(self):
         for change in ({"score": 0}, {"score": 11}, {"score": 7.5}, {"score": True},
@@ -194,7 +183,7 @@ class CouncilCLI(unittest.TestCase):
         self.bad(council({"J1": {"A": (7, 8)}}))
         self.bad(council({"J1": {"R": (7, 8)}}))
         data = council(CHEAP)
-        data["artifacts"].pop()  # no reference at all
+        data["artifacts"].pop()
         data["rounds"] = []
         self.bad(data)
 
@@ -290,7 +279,6 @@ class CouncilInstructions(unittest.TestCase):
 
     def test_judges_never_see_the_target(self):
         self.rule("Judges never see the score being aimed for")
-        # R3: a brief that names the stop tells judges what their scores trigger.
         self.rule("A judge's brief holds the frozen rubric, the 1–10 scale, the categories "
                   "and the blind artifacts; never the stop condition")
 
@@ -303,8 +291,6 @@ class CouncilInstructions(unittest.TestCase):
                       "plus the per-round score table", self.text)
 
     def test_council_chart_keeps_reference_series_and_per_judge_table(self):
-        # R2: a chart of candidate scores alone hides the comparison with the
-        # named benchmarks round by round.
         self.assertIn("each category's council mean per round for the round's best candidate "
                       "and for each reference", self.text)
         self.assertIn("keep the per-judge `table` output behind it", self.text)

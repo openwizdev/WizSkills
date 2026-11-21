@@ -7,6 +7,7 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 | [`ask-wiz`](ask-wiz/SKILL.md) |
 | [`build-ticket`](build-ticket/SKILL.md) |
 | [`diagnose`](diagnose/SKILL.md) |
+| [`feedback`](feedback/SKILL.md) |
 | [`grill`](grill/SKILL.md) |
 | [`handoff`](handoff/SKILL.md) |
 | [`hill-climb`](hill-climb/SKILL.md) |
@@ -22,6 +23,7 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 | [`triage`](triage/SKILL.md) |
 | [`wayfind`](wayfind/SKILL.md) |
 | [`where-are-we`](where-are-we/SKILL.md) |
+| [`write-driver`](write-driver/SKILL.md) |
 
 ## Rules
 

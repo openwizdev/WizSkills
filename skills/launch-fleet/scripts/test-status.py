@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""P4 (#1254, revision 4): status.py on a synthetic tracker with a fake `gh`.
-
-Run: python3 -I skills/launch-fleet/scripts/test-status.py
-Every value here is synthetic. The fake gh keeps the tracker in a JSON file,
-logs every call, stamps GitHub's updated_at on each comment it writes, records
-who added or removed each label (the issue's events), answers GraphQL's viewer
-with the acting login, and refuses what GitHub refuses (editing another
-author's comment). A world can make one call fail once (`fail_once`) or leave
-comment ids out of comment reads (`unlisted`), as a flaky GitHub does. Expected notes,
-labels and lines come from the contract, contracts/agent-status.v1.md, never
-from status.py. Ages are 5 minutes (live) or 31 to 90 minutes (lapsed) against
-the real clock, far from the 30-minute edge.
-"""
 from datetime import datetime, timedelta, timezone
 import contextlib
 import importlib.util
@@ -41,9 +28,6 @@ REPO = 'example/tracker'
 BOT = 'openwiz[bot]'
 FLEET_MD = '# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n| Record authors | `openwiz[bot]`, `synthetic-owner` |\n'
 MARKER = '<!-- openwiz:status v1 -->'
-# The installed package supplying status.py (this checkout). Inputs name each skill's real
-# installed version (its SKILL.md front matter, #1663), so a release bump never turns a good
-# value into an invented one.
 VERSION = json.loads((ROOT / '.claude-plugin/plugin.json').read_text())['version']
 
 
@@ -252,7 +236,6 @@ def ago(minutes):
 
 def note(agent='builder', state='working', step='started the build', time='2030-01-02T03:00:00Z',
          pr=None, preview=None, harness='Claude Code', model='Opus 5.5 Medium', skills=SKILLS):
-    """The text form the contract fixes, key by key."""
     lines = [MARKER, 'agent: ' + agent, 'state: ' + state, 'harness: ' + harness, 'model: ' + model,
              'skills: ' + skills, 'step: ' + step, 'time: ' + time]
     lines += ['pr: ' + pr] if pr else []
@@ -267,7 +250,6 @@ def comment(cid, author, body, minutes=5):
 def contract_example():
     text = CONTRACT.read_text()
     section = text.split('Example (synthetic):\n\n```text\n', 1)[1]
-    # The example names the package version of its day; the writer names the installed one.
     return re.sub(r'(?m)^skills: build-ticket@[0-9.]+$', 'skills: ' + SKILLS, section.split('\n```', 1)[0])
 
 
@@ -285,12 +267,14 @@ class Tracker(unittest.TestCase):
             'repo': REPO, 'login': BOT, 'fleet_md': FLEET_MD, 'next_id': 9000,
             'issues': [{'number': 12, 'state': 'open', 'labels': ['ready-for-agent'], 'comments': [
                 comment(101, 'synthetic-owner', 'launch-fleet: started'),
-                # Anyone may comment on a public ticket: a planted marker is not a note.
                 comment(102, 'synthetic-outsider', note()),
                 comment(103, None, note()),
             ]}],
         }
         self.page = '100'
+        state = mock.patch.dict(os.environ, {'XDG_STATE_HOME': str(self.dir / 'state')})
+        state.start()
+        self.addCleanup(state.stop)
 
     def save(self):
         (self.dir / 'world.json').write_text(json.dumps(self.world))
@@ -314,10 +298,13 @@ class Tracker(unittest.TestCase):
         return subprocess.run([sys.executable, '-I', str(script), *args], env=env,
                               capture_output=True, text=True, timeout=60)
 
+    def write_argv(self, state, step, time, *extra, agent='builder'):
+        return [sys.executable, '-I', str(SCRIPT), 'write', '--repo', REPO, '--ticket', '12', '--agent', agent,
+                '--state', state, '--harness', 'Claude Code', '--model', 'Opus 5.5 Medium',
+                '--skills', SKILLS, '--step', step, '--time', time, *extra]
+
     def write(self, state, step, time, *extra, agent='builder'):
-        return self.run_status('write', '--repo', REPO, '--ticket', '12', '--agent', agent, '--state', state,
-                               '--harness', 'Claude Code', '--model', 'Opus 5.5 Medium',
-                               '--skills', SKILLS, '--step', step, '--time', time, *extra)
+        return self.run_status(*self.write_argv(state, step, time, *extra, agent=agent)[3:])
 
     def ticket(self, world=None):
         return next(it for it in (world or self.load())['issues'] if it['number'] == 12)
@@ -325,9 +312,6 @@ class Tracker(unittest.TestCase):
 
 class Write(Tracker):
     def test_second_run_edits_the_one_note_and_asking_sets_then_clears_needs_info(self):
-        # catches: a second run posting another note, the skills the agent passed not written
-        # as given, a stranger's planted marker taken as the agent's note, asking without needs-info, needs-info left after asking, or any
-        # building or in-review label written.
         self.save()
         first = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
         self.assertEqual((first.returncode, first.stdout, first.stderr),
@@ -362,8 +346,6 @@ class Write(Tracker):
         self.assertEqual([c['body'] for c in self.calls() if c['path'].endswith('/12/labels')], [{'labels': ['needs-info']}])
 
     def test_leaving_asking_keeps_a_needs_info_it_did_not_set(self):
-        # catches: an agent leaving asking clearing a needs-info a person set, or any other
-        # human-owned label touched.
         self.ticket(self.world)['labels'] = ['ready-for-agent', 'needs-info', 'held']
         self.ticket(self.world)['events'] = [
             {'event': 'labeled', 'label': {'name': 'needs-info'}, 'actor': {'login': BOT}},
@@ -373,19 +355,111 @@ class Write(Tracker):
         self.ticket(self.world)['comments'].append(comment(104, BOT, note(state='asking')))
         self.save()
         done = self.write('done', 'merged', '2030-01-02T06:00:00Z', '--note', '104')
-        self.assertEqual((done.returncode, done.stdout), (0, '#12: builder done, status note 104 edited\n'))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info', 'held'])
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertRegex(done.stdout, r'^#12: builder done, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
         self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')])
 
-    def test_needs_info_stays_while_any_agent_asks_and_a_failed_clear_recovers(self):
-        # catches (R1): one agent leaving asking clearing the label another live agent's
-        # question needs, or a failed label write that a retry or check never repairs.
+    def test_leaving_asking_keeps_a_same_login_hold_it_cannot_show_it_added(self):
         ticket = self.ticket(self.world)
         ticket['labels'] = ['ready-for-agent', 'needs-info']
         ticket['events'] = [{'event': 'labeled', 'label': {'name': 'needs-info'}, 'actor': {'login': BOT}}]
-        ticket['comments'] += [comment(104, BOT, note(state='asking')),
-                               comment(105, BOT, note(agent='reviewer', state='asking'))]
+        ticket['comments'].append(comment(104, BOT, note()))
         self.save()
+        asking = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual((asking.returncode, asking.stdout), (0, '#12: builder asking, status note 104 edited\n'))
+        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertRegex(back.stdout, r'^#12: builder working, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
+        self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
+
+    def test_with_a_shared_login_a_hold_added_just_before_the_write_post_stays(self):
+        self.world['login'] = 'synthetic-owner'
+        self.ticket(self.world)['comments'].append(comment(104, 'synthetic-owner', note()))
+        self.world['race_label'] = [{'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
+        self.save()
+        asking = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual(asking.returncode, 0, asking.stderr)
+        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertRegex(back.stdout, r'(?m)^#12: needs-info left on: ')
+
+    def test_a_hold_reapplied_as_the_write_clears_its_label_survives_a_failed_read(self):
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+        self.save()
+        asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual(asked.returncode, 0, asked.stderr)
+        self.world = self.load()
+        self.world['race_delete'] = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                                     {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'},
+                                     {'fail_once': f'GET repos/{REPO}/issues/12/events?per_page=100&page=1'}]
+        self.save()
+        failed = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(failed.returncode, 2, failed.stdout)
+        retry = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertRegex(retry.stdout, r'(?m)^#12: needs-info put back: synthetic-owner ')
+
+    def test_only_an_exact_record_of_this_login_s_application_takes_the_label_off(self):
+        good = '{"login": "openwiz[bot]", "event": 0}'
+        cases = {good: ['ready-for-agent'],
+                 '{"login": "openwiz[bot]", "event": true}': None,
+                 '{"login": "openwiz[bot]", "event": -1}': None,
+                 '{"login": "openwiz[bot]", "event": "0"}': None,
+                 '{"login": "openwiz[bot]", "event": 5, "event": 0}': None,
+                 '{"login": "openwiz[bot]", "event": 0, "ticket": 12}': None,
+                 '{"login": "synthetic-owner", "event": 0}': None,
+                 '[0]': None}
+        for record, labels in cases.items():
+            with self.subTest(record):
+                self.setUp()
+                self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+                self.save()
+                asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+                self.assertEqual(asked.returncode, 0, asked.stderr)
+                [kept] = (self.dir / 'state').rglob('*.json')
+                self.assertEqual(json.loads(kept.read_text()), json.loads(good))
+                kept.write_text(record)
+                back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+                self.assertEqual(back.returncode, 0, back.stderr)
+                self.assertEqual(self.ticket()['labels'], labels or ['ready-for-agent', 'needs-info'])
+
+    def test_an_older_resume_never_drops_the_proof_of_a_write_that_asked_meanwhile(self):
+        self.ticket(self.world)['comments'] += [comment(104, BOT, note()), comment(105, BOT, note(agent='reviewer'))]
+        self.save()
+        asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual(asked.returncode, 0, asked.stderr)
+        reviewer = self.write_argv('asking', 'asked about the fixture', '2030-01-02T04:30:00Z', '--note', '105',
+                                   agent='reviewer')
+        done = self.dir / 'reviewer.exit'
+        (self.dir / 'bin' / 'gh').write_text(
+            '#!/bin/sh\n' + sys.executable + ' -I -S ' + str(self.dir / 'gh.py') + ' "$@"; code=$?\n'
+            'case " $* " in *" DELETE "*) if [ ! -e ' + str(self.dir / 'started') + ' ]; then\n'
+            '  : > ' + str(self.dir / 'started') + '\n'
+            '  (' + shlex.join(reviewer) + ' >/dev/null 2>&1; echo $? > ' + str(done) + '.tmp; mv ' + str(done)
+            + '.tmp ' + str(done) + ') </dev/null >/dev/null 2>&1 &\n'
+            '  n=0; while [ ! -e ' + str(done) + ' ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done\n'
+            'fi;; esac\nexit $code\n')
+        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        end = time.monotonic() + 60
+        while not done.exists() and time.monotonic() < end:
+            time.sleep(0.1)
+        self.assertEqual(done.read_text(), '0\n')
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        resumed = self.write('working', 'got the fixture', '2030-01-02T06:00:00Z', '--note', '105', agent='reviewer')
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+        self.assertEqual((resumed.returncode, resumed.stdout), (0, '#12: reviewer working, status note 105 edited\n'))
+
+    def test_needs_info_stays_while_any_agent_asks_and_a_failed_clear_recovers(self):
+        self.ticket(self.world)['comments'] += [comment(104, BOT, note()),
+                                                comment(105, BOT, note(agent='reviewer', state='asking'))]
+        self.save()
+        asked = self.write('asking', 'asked which file to change', '2030-01-02T03:30:00Z', '--note', '104')
+        self.assertEqual(asked.returncode, 0, asked.stderr)
         builder = self.write('working', 'got the answer', '2030-01-02T04:00:00Z', '--note', '104')
         self.assertEqual((builder.returncode, builder.stdout), (0, '#12: builder working, status note 104 edited\n'))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
@@ -415,9 +489,6 @@ class Write(Tracker):
         self.assertEqual((check.returncode, check.stdout), (0, ''))
 
     def test_an_untrusted_posting_identity_never_counts_as_written(self):
-        # catches (R4): a writable login outside the record authors posting a note the app
-        # ignores, labelling the ticket, or reporting success; or a note GitHub doesn't
-        # list back counted as written.
         self.world['login'] = 'synthetic-unlisted'
         self.save()
         refused = self.write('asking', 'asked a question', '2030-01-02T03:00:00Z')
@@ -425,7 +496,6 @@ class Write(Tracker):
         self.assertIn('not a record author', refused.stderr)
         self.assertEqual(self.load(), self.world)
 
-        # Where the token can't name itself (an App), the posted note's author decides.
         self.world['viewer_fails'] = True
         self.save()
         (self.dir / 'gh.log').unlink()
@@ -451,7 +521,6 @@ class Write(Tracker):
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
 
     def test_a_note_past_the_first_page_is_found(self):
-        # catches: reading only the first page of comments, so a claim or the agent's own note is missed.
         self.ticket(self.world)['comments'] += [comment(104, 'synthetic-owner', 'note'),
                                                 comment(105, BOT, note(state='working')),
                                                 comment(106, BOT, note(agent='fleet'))]
@@ -465,7 +534,6 @@ class Write(Tracker):
         self.assertEqual([c['id'] for c in self.ticket()['comments']], [101, 102, 103, 104, 105, 106])
 
     def test_the_contract_example_is_what_the_writer_writes(self):
-        # catches: the writer's text drifting from the contract the app parses.
         self.save()
         result = self.write('working', 'opened the pull request; CI is running', '2030-01-02T03:04:05Z',
                             '--pr', 'https://github.com/example/site/pull/42',
@@ -474,7 +542,6 @@ class Write(Tracker):
         self.assertEqual(self.ticket()['comments'][-1]['body'], contract_example())
 
     def test_no_record_authors_refuses_before_any_write(self):
-        # catches: a writer that trusts every commenter when the record authors can't be read.
         for fleet_md in (None, '# Fleet settings\n', FLEET_MD.replace('`openwiz[bot]`, `synthetic-owner`', '')):
             with self.subTest(fleet_md=fleet_md):
                 self.world['fleet_md'] = fleet_md
@@ -489,9 +556,6 @@ class Write(Tracker):
 
 class Claims(Tracker):
     def test_the_oldest_live_note_of_a_kind_holds_the_claim(self):
-        # catches: a second builder claiming a ticket another builder holds, a lapsed or
-        # stopped note still blocking, another kind's note blocking a builder, or a note
-        # without a well-formed skills line read as a claim.
         cases = [
             ('a live builder note blocks', [comment(104, BOT, note())], 3),
             ('an asking builder note blocks', [comment(104, 'Synthetic-Owner', note(state='asking'))], 3),
@@ -519,8 +583,6 @@ class Claims(Tracker):
                     self.assertEqual(self.writes(), [('POST', 'repos/example/tracker/issues/12/comments')])
 
     def test_a_note_written_before_per_skill_versions_still_reads(self):
-        # catches (#1663): a reader that binds versions too, so every note written at the
-        # bundle's version reads as unknown: its claim ignored, and its own agent fenced out.
         old = note(skills='build-ticket@0.1.2, launch-fleet@0.1.2')
         self.ticket(self.world)['comments'].append(comment(104, BOT, old))
         self.save()
@@ -532,8 +594,6 @@ class Claims(Tracker):
         self.assertEqual(self.ticket()['comments'][3]['body'], note(step='resumed the build', time='2030-01-02T03:05:00Z'))
 
     def test_the_fence_stops_a_writer_whose_note_is_no_longer_live(self):
-        # catches: an agent writing on after its claim was stopped, lost or taken by another kind,
-        # or a lapsed note reviving over the live note that replaced it (R2).
         cases = [
             ('stopped by the fleet', [comment(104, BOT, note(state='stopped (lease expired)'))], '104'),
             ('an older live claim', [comment(104, BOT, note()), comment(105, BOT, note())], '105'),
@@ -554,7 +614,6 @@ class Claims(Tracker):
                 self.assertRegex(result.stderr, r'^status\.py: stop: ')
                 self.assertEqual(self.writes(), [])
                 self.assertEqual(self.load(), self.world)
-        # R2: a lapsed note can't come back over the live note that replaced it, newer or not.
         self.world = json.loads(json.dumps(base))
         self.ticket(self.world)['comments'] += [comment(104, BOT, note(), minutes=90), comment(105, BOT, note())]
         self.save()
@@ -564,7 +623,6 @@ class Claims(Tracker):
         self.assertIn('note 105 holds the builder claim', back.stderr)
         holder = self.write('working', 'pushed a fix', '2030-01-02T03:10:00Z', '--note', '105')
         self.assertEqual((holder.returncode, holder.stdout), (0, '#12: builder working, status note 105 edited\n'))
-        # A lapsed note that nobody took over is still its agent's: an edit revives it.
         self.world = json.loads(json.dumps(base))
         self.ticket(self.world)['comments'].append(comment(104, BOT, note(), minutes=90))
         self.save()
@@ -572,7 +630,6 @@ class Claims(Tracker):
         self.assertEqual((revived.returncode, revived.stdout), (0, '#12: builder working, status note 104 edited\n'))
 
     def test_a_writer_that_loses_the_race_stops_its_own_note(self):
-        # catches: two builders both keeping a claim when their notes reach GitHub together.
         self.ticket(self.world)['labels'] = ['ready-for-agent']
         self.world['race'] = [{'author': BOT, 'body': note(step='a rival started')}]
         self.save()
@@ -589,12 +646,8 @@ class Claims(Tracker):
 
 
 class EditRace(Tracker):
-    """#1441: KN10's finding on the edit path, which re-read before but never after its write."""
 
     def test_a_lapsed_note_whose_edit_lands_after_a_newer_claim_steps_down(self):
-        # catches: a lapsed builder's edit landing after a newer builder claimed and read back,
-        # so the lapsed note holds again as the oldest (P2), two notes stay live (P4) and the
-        # newer builder's succeeded claim no longer holds (P1).
         self.ticket(self.world)['comments'].append(comment(104, BOT, note(), minutes=90))
         self.world['race_edit'] = [{'author': BOT, 'body': note(step='a newer builder claimed')}]
         self.save()
@@ -607,9 +660,6 @@ class EditRace(Tracker):
         self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
 
     def test_an_edit_that_lands_over_a_sibling_release_puts_the_release_back(self):
-        # catches: two overlapping wakes of one agent, where the one that read working edits
-        # after its sibling released the note, and the release is lost (P3). A wake that read
-        # its note done may still resume it (FleetRun's builder answering a review).
         base = json.loads(json.dumps(self.world))
         for final in ('done', 'stopped (lease expired)'):
             with self.subTest(final):
@@ -626,8 +676,6 @@ class EditRace(Tracker):
                 self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
 
     def test_a_lost_release_is_put_back_even_when_a_later_edit_changed_the_note(self):
-        # catches: a release lost for good when the read-back fails because a sibling wake,
-        # reading the stale working note, edited it again before this wake read back (#1463 R1).
         self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
         released = note(state='done', step='the sibling wake handed back')
         self.world['race_edit'] = [{'edit': 104, 'body': released}]
@@ -640,14 +688,11 @@ class EditRace(Tracker):
         self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
 
     def test_a_retry_after_an_unread_history_still_puts_the_release_back(self):
-        # catches: a re-run of the same write (as exit 2 asks) whose edit sits on its own first
-        # try, so the sibling's release under that try is skipped and lost (#57 review).
         self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
         released = note(state='done', step='the sibling wake handed back')
         self.world['race_edit'] = [{'edit': 104, 'body': released}]
         self.world['history_fails'] = True
         self.save()
-        # The writer stamps time when it starts, before its read: here a minute before the release.
         first = self.write('working', 'CI finished', ago(1), '--note', '104')
         self.assertEqual((first.returncode, first.stdout), (2, ''))
         world = self.load()
@@ -659,9 +704,6 @@ class EditRace(Tracker):
         self.assertEqual(self.ticket()['comments'][-1]['body'], released)
 
     def test_a_resumed_done_note_written_again_holds(self):
-        # catches: the retry skip walking past this agent's own resume of a done note it read,
-        # so writing the same step again (or re-running after exit 2) puts the done back and
-        # exits 3, which stops build-ticket's fix round (#57 R1).
         base = json.loads(json.dumps(self.world))
         handed = note(state='done', step='handed back', pr='https://github.com/example/tracker/pull/31')
         for name in ('the same step again', 'a retry after exit 2'):
@@ -681,8 +723,6 @@ class EditRace(Tracker):
                 self.assertIn('state: working', self.ticket()['comments'][-1]['body'])
 
     def test_an_edit_steps_down_for_an_older_note_that_came_back_live(self):
-        # catches: an edit read-back that steps down only for a newer note, leaving two live
-        # notes when an older lapsed one was revived between this writer's read and its edit.
         self.ticket(self.world)['comments'] += [comment(104, BOT, note(step='a rival started'), minutes=90),
                                                 comment(105, BOT, note())]
         self.world['race_edit'] = [{'edit': 104, 'body': note(step='the rival came back')}]
@@ -693,8 +733,6 @@ class EditRace(Tracker):
         self.assertEqual(self.ticket()['comments'][-1]['body'], note(state='stopped (lost claim)', step='CI finished'))
 
     def test_an_edit_missing_from_its_history_fails(self):
-        # catches: a read-back that trusts an edit history not yet holding this edit, and so
-        # judges the wrong version as the one it replaced.
         self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
         self.world['history_stale'] = True
         self.save()
@@ -704,8 +742,6 @@ class EditRace(Tracker):
         self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')])
 
     def test_an_edit_whose_history_cannot_be_read_fails_closed(self):
-        # catches: a claim edit reported written when the writer never saw what it replaced,
-        # so a sibling's release could be lost without a word.
         self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
         self.world['history_fails'] = True
         self.save()
@@ -715,7 +751,6 @@ class EditRace(Tracker):
         self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')])
 
 
-# Each value is refused before any call (exit 2, no gh call). A field's flag and a value.
 PRIVATE = [
     ('--step', 'resumed thread thr_synbuilder1'),
     ('--step', 'ran it in /home/synthetic-dev/openwiz'),
@@ -724,7 +759,6 @@ PRIVATE = [
     ('--step', r'copied C:\Users\example\x'),
     ('--step', 'logs in /tmp/synthetic-run'),
     ('--step', 'on /code/synthetic-repo'),
-    # R3: an ordinary absolute path outside the old prefix list, and its other forms.
     ('--step', 'edited /etc/openwiz/config.toml'),
     ('--step', 'read /srv2/synthetic/settings.json'),
     ('--harness', 'Codex in $HOME/work'),
@@ -740,7 +774,6 @@ PRIVATE = [
     ('--skills', '~/skills/' + SKILLS),
     ('--skills', SKILLS + ', thr_synbuilder1'),
     ('--skills', '"' + SKILLS + '"'),
-    # R3: credentials in any field, and in a preview link's path.
     ('--step', 'deployed with token=synthetic-value'),
     ('--step', 'set password: synthetic-value'),
     ('--step', 'used key AKIAIOSFODNN7EXAMPLE'),
@@ -750,9 +783,7 @@ PRIVATE = [
     ('--step', 'Robin said \u201cship it\u201d'),
     ('--step', '> ship it'),
 ]
-# The most skills that fit in 300 characters, and one more.
 FITS = (300 + 2) // (len(SKILLS) + 2)
-# Shape refusals: the schema refuses them too.
 BAD_SHAPE = [
     ('--agent', 'helper'),
     ('--state', 'building'),
@@ -780,9 +811,8 @@ BAD_SHAPE = [
     ('--preview', 'javascript:alert(1)'),
     ('--preview', 'http://31.example-site.pages.dev'),
     ('--preview', 'https://example.invalid/<script>'),
-    # R3: a preview link is a public https page with no credentials, query or fragment.
-    ('--preview', 'https://synthetic:secret@31.example-site.pages.dev/app'),
-    ('--preview', 'https://synthetic-token@31.example-site.pages.dev/app'),
+    ('--preview', 'https://synthetic:secret@31.preview.example/app'),
+    ('--preview', 'https://synthetic-token@31.preview.example/app'),
     ('--preview', 'https://31.example-site.pages.dev/app?token=synthetic'),
     ('--preview', 'https://31.example-site.pages.dev/app?x=1'),
     ('--preview', 'https://31.example-site.pages.dev/app#access_token=synthetic'),
@@ -799,13 +829,12 @@ GOOD_SHAPE = [
     ('--model', 'm' * 60),
     ('--skills', f"{SKILLS}, {at('review-ticket')}"),
     ('--skills', ', '.join([SKILLS] * FITS)),
-    ('--step', 'checked https://github.com/acme/home/pull/1 and a/home/b'),
+    ('--step', 'checked https://github.com/home/example-site/pull/1 and a/home/example-b'),
     ('--step', 'changed skills/launch-fleet/scripts/status.py and/or its test'),
     ('--pr', 'https://github.com/example/skills/pull/31'),
     ('--preview', 'https://31.example-site.pages.dev/app/agents'),
     ('--preview', 'https://31.example-site.pages.dev:8443/'),
 ]
-# R5: well-formed (the schema takes them) but not what the installed package holds.
 UNBOUND = [
     'made-up-skill@' + SKILLS.split('@')[1],
     'build-ticket@9.9.9',
@@ -818,7 +847,6 @@ FIELD = {'--agent': 'agent', '--state': 'state', '--why': 'state', '--harness': 
 
 
 def valid(schema, node, value):
-    """The subset of JSON Schema 2020-12 the status schema uses."""
     if '$ref' in node:
         if not valid(schema, schema['$defs'][node['$ref'].split('/')[-1]], value):
             return False
@@ -856,14 +884,12 @@ class Refuse(Tracker):
         return args
 
     def test_reported_skills_are_bound_to_the_installed_package(self):
-        # catches (R5): a mistyped skill or an invented release written as if the agent ran it.
         schema = json.loads(SCHEMA.read_text())
         manifest = json.loads((ROOT / '.claude-plugin/plugin.json').read_text())
         self.assertIn('./skills/build-ticket', manifest['skills'])
         self.save()
         for value in UNBOUND:
             with self.subTest(skills=value):
-                # Well-formed, so only the package evidence can refuse it.
                 self.assertTrue(valid(schema, schema['properties']['skills'], value))
                 result = self.run_status(*self.args('--skills', value))
                 self.assertEqual((result.returncode, result.stdout, self.calls()), (2, '', []))
@@ -873,9 +899,6 @@ class Refuse(Tracker):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def package(self, skills, folder):
-        """A synthetic installed package under FOLDER: bundle 0.1.2 listing build-ticket,
-        launch-fleet and no-front-matter, each SKILLS name's SKILL.md as its text (then a
-        body), and the writer's own skill folder as installed. Returns its scripts folder."""
         package = self.dir / folder
         (package / '.claude-plugin').mkdir(parents=True)
         (package / '.claude-plugin/plugin.json').write_text(json.dumps({
@@ -889,20 +912,14 @@ class Refuse(Tracker):
         return package / 'skills/launch-fleet/scripts'
 
     def test_each_skill_is_bound_to_its_own_installed_version(self):
-        # catches (#1527): a truthful note refused because a skill's own front-matter version
-        # differs from the bundle's, or one skill's version accepted for another skill.
         scripts = self.package({
             'build-ticket': '---\nname: build-ticket\nversion: 0.2.0\n---\n',
             'launch-fleet': '---\nname: launch-fleet\nversion: 0.3.1\n---\n',
-            # Listed but not installed: no folder for triage, and a
-            # skill whose front matter has no version.
             'no-front-matter': '---\nname: no-front-matter\n---\n',
-            # Installed folder, but the manifest doesn't list it.
             'unlisted': '---\nname: unlisted\nversion: 0.2.0\n---\n'}, 'package')
         for value in ('build-ticket@0.1.2', 'launch-fleet@0.2.0', 'build-ticket@0.2.0, launch-fleet@0.2.0',
                       'triage@0.2.0', 'unlisted@0.2.0', 'no-front-matter@0.1.2', 'no-front-matter@0.2.0'):
             with self.subTest(skills=value):
-                # A fresh tracker each time, so one wrongly accepted value can't hide another.
                 self.save()
                 (self.dir / 'gh.log').unlink(missing_ok=True)
                 result = self.run_status(*self.args('--skills', value), script=scripts / 'status.py')
@@ -917,9 +934,6 @@ class Refuse(Tracker):
         self.assertIn('\nskills: build-ticket@0.2.0, launch-fleet@0.3.1\n', posted[0]['body'])
 
     def test_a_skill_version_is_read_only_from_one_declaration_in_its_first_front_matter(self):
-        # catches (#1663 R1): a YAML-quoted version (which the skill rules and the release
-        # accept) refused; a version read from the body past an empty front matter or from a
-        # later block; or the first of two declarations taken as the skill's version.
         cases = [
             ('double-quoted', '---\nname: build-ticket\nversion: "0.2.0"\n---\n', '0.2.0'),
             ('single-quoted', "---\nname: build-ticket\nversion: '0.2.0'\n---\n", '0.2.0'),
@@ -947,13 +961,9 @@ class Refuse(Tracker):
                         self.assertIn('installed', result.stderr)
 
     def test_private_or_bad_text_is_refused_before_any_call(self):
-        # catches: a thread id, machine path (any absolute one), CloudRoom id, credential,
-        # quoted words or a bad shape reaching the public note (in any field, skills and
-        # preview included), a note written with no skills line, or a refusal after a call.
         self.save()
         for flag, value in PRIVATE + BAD_SHAPE:
             with self.subTest(flag=flag, value=value):
-                # Each value on a fresh tracker, so one leak can't hide or fake another.
                 self.save()
                 (self.dir / 'gh.log').unlink(missing_ok=True)
                 result = self.run_status(*self.args(flag, value))
@@ -970,8 +980,56 @@ class Refuse(Tracker):
         self.assertEqual((why.returncode, why.stdout, self.calls()), (2, '', []))
         self.assertRegex(why.stderr, r'^status\.py: refused: state: ')
 
+    def test_forward_slash_drive_paths_host_paths_and_colon_keys_are_refused_by_name(self):
+        cases = [
+            ('--step', 'copied C:/Users/example/x', 'a machine path'),
+            ('--step', 'worked in D:/work/repo', 'a machine path'),
+            ('--step', 'synced synthetic-host:/srv/data/x', 'a machine path'),
+            ('--harness', 'Codex on box:/var/synthetic/run', 'a machine path'),
+            ('--step', 'set api_key: synthetic-value', 'a credential'),
+            ('--step', 'set access_token: synthetic-value', 'a credential'),
+            ('--step', 'sent auth: synthetic-value', 'a credential'),
+            ('--step', "synced synthetic-host:'/release files/notes.txt'", 'a machine path'),
+            ('--step', r'synced synthetic-host:/release\ files/notes.txt', 'a machine path'),
+            ('--step', 'synced synthetic-host:~/notes', 'a machine path'),
+            ('--step', "ran it in '/release files/notes.txt'", 'a machine path'),
+            ('--step', r'ran it in /release\ files/notes.txt', 'a machine path'),
+            ('--step', 'updated oauth2_token: synthetic-value', 'a credential'),
+            ('--step', 'updated oauth2_token=synthetic-value', 'a credential'),
+            ('--step', 'set aws2_key: synthetic-value', 'a credential'),
+            ('--step', 'checked https://example.com/render?debug=api_key:synthetic-value', 'a credential'),
+            ('--step', 'checked https://example.com/x?api_key:synthetic-value', 'a credential'),
+            ('--step', 'checked https://example.com/docs/auth:overview#access_token:synthetic-value',
+             'a credential'),
+            ('--step', 'synced https://example.com/a?from=synthetic-host:/srv/data/x', 'a machine path'),
+        ]
+        for flag, value, what in cases:
+            with self.subTest(flag=flag, value=value):
+                self.save()
+                (self.dir / 'gh.log').unlink(missing_ok=True)
+                result = self.run_status(*self.args(flag, value))
+                self.assertEqual((result.returncode, result.stdout), (2, ''))
+                self.assertEqual(result.stderr.strip(), f'status.py: refused: {FIELD[flag]}: holds {what}')
+                self.assertEqual(self.calls(), [])
+                self.assertEqual(self.load(), self.world)
+        good = [('--step', 'checked https://github.com/home/example-site/pull/1 at 10:30'),
+                ('--step', 'ratio 2:1 on the key path'),
+                ('--step', 'opened https://example.com/docs/auth:overview and https://example.com/a:/b'),
+                ('--preview', 'https://example.com/releases:/web/current'),
+                ('--preview', 'https://example.com/docs/auth:overview'),
+                ('--preview', 'https://example.com/x/c:/api_key:v2'),
+                ('--step', 'opened https://example.com/docs/auth:overview?page=2#setup')]
+        for flag, value in good:
+            with self.subTest(flag=flag, value=value):
+                self.save()
+                first = self.run_status(*self.args(flag, value))
+                self.assertEqual((first.returncode, first.stdout),
+                                 (0, '#12: builder working, status note 9001 posted\n'), first.stderr)
+                again = self.run_status(*self.args(flag, value), '--note', '9001')
+                self.assertEqual((again.returncode, again.stdout),
+                                 (0, '#12: builder working, status note 9001 edited\n'), again.stderr)
+
     def test_the_schema_and_the_writer_agree_on_each_shape(self):
-        # catches: the schema the app validates with and the writer accepting different values.
         schema = json.loads(SCHEMA.read_text())
         base = {'agent': 'builder', 'state': 'working', 'harness': 'Claude Code', 'model': 'Opus 5.5 Medium',
                 'skills': SKILLS, 'step': 'started the build', 'time': '2030-01-02T03:00:00Z'}
@@ -990,8 +1048,6 @@ class Refuse(Tracker):
 
 class Check(Tracker):
     def test_check_lists_each_planted_mismatch_and_changes_nothing(self):
-        # catches: a note GitHub contradicts or a lapsed claim the wake misses, a closed
-        # ticket, a stranger's note or a finished note reported, a page skipped, or a write.
         def pr(n, state):
             return {'number': n, 'state': state, 'url': 'https://github.com/example/skills/pull/%d' % n}
         def it(n, comments, labels=('ready-for-agent',), prs=(), state='open'):
@@ -1033,7 +1089,6 @@ class Check(Tracker):
         self.assertEqual((clean.returncode, clean.stdout, clean.stderr), (0, '', ''))
 
     def test_check_that_cannot_read_says_so(self):
-        # catches: a failed read reported as "no mismatch".
         self.world['repo'] = 'example/other'
         self.save()
         result = self.run_status('check', '--repo', REPO)
@@ -1043,19 +1098,16 @@ class Check(Tracker):
 
 
 SKILLS_DIR = ROOT / 'skills'
-# launch-fleet's status step, filled as the fleet fills it (#1592).
 FLEET = {'<owner>/<repo>': REPO, '<harness>': 'Codex', '<model>': 'Sol 6.1 High', '<skills>': at('launch-fleet')}
 LABELS = {'ready-for-agent', 'needs-info'}
 
 
 def span(skill, pattern):
-    """The one code span in SKILL.md matching PATTERN, or None."""
     found = re.findall(pattern, (SKILLS_DIR / skill / 'SKILL.md').read_text())
     return found[0] if len(found) == 1 else None
 
 
 def filled(skill, text, values):
-    """A skill's command with its placeholders filled and quoted, as a shell then reads it."""
     text = text.replace("<this skill's folder>", shlex.quote(str(SKILLS_DIR / skill)))
     for name, value in values.items():
         text = text.replace(name, shlex.quote(value))
@@ -1065,10 +1117,8 @@ def filled(skill, text, values):
 
 
 class FleetRun(Tracker):
-    """P4 (#1255): the status lines in build-ticket, review-ticket and launch-fleet, run as written."""
 
     def command(self, skill, kind):
-        """The skill's status write, filled for one step: (state, step, *extra) -> argv."""
         base = span(skill, r'`(python3 -I [^`]*status\.py write [^`]*)`')
         self.assertIsNotNone(base, f'{skill} has no one status write line')
         self.assertIn(f' --agent {kind} ', base)
@@ -1079,8 +1129,6 @@ class FleetRun(Tracker):
         return lambda state, step, *extra: filled(skill, base, dict(values, **{'<state>': state, '<step>': step})) + list(extra)
 
     def reported(self, skill):
-        """<skills> as the skill's status line tells its agent to fill it (#1663): the version from
-        the source that line names, so a line naming a version the writer refuses fails here."""
         rule = span(skill, r'`<skills>` lists each skill you ran as `<skill>@<version>`, at (.*?)(?:; |\. )')
         self.assertIsNotNone(rule, f'{skill}: its status line names no version for <skills>')
         sources = {'.claude-plugin/plugin.json': skill + '@' + VERSION, 'SKILL.md': at(skill)}
@@ -1097,7 +1145,6 @@ class FleetRun(Tracker):
         return subprocess.run(argv + list(extra), env=env, capture_output=True, text=True, timeout=60)
 
     def states(self):
-        """Each status note on #12 as (comment id, agent, state), read as the app reads the contract."""
         out = []
         for c in self.ticket()['comments']:
             lines = c['body'].split('\n')
@@ -1107,10 +1154,6 @@ class FleetRun(Tracker):
         return out
 
     def test_a_synthetic_fleet_run_moves_each_note_in_place_and_the_wake_fixes_or_reports(self):
-        # catches: a skill with no status line, a line pointing at a status.py that isn't there
-        # from its own folder, the wrong agent kind, a placeholder the agent can't fill, a later
-        # step posting a second note instead of editing its own, any state label written, or a
-        # wake that neither fixes an asking note's missing needs-info nor reports a lapsed claim.
         self.world['issues'] += [
             {'number': 13, 'state': 'open', 'labels': ['ready-for-agent'],
              'comments': [comment(201, BOT, note(state='asking'))]},
@@ -1143,12 +1186,10 @@ class FleetRun(Tracker):
         run(review, 'done', 'posted its verdict', '--note', str(reviewer))
         self.assertEqual(self.states(), [(builder, 'builder', 'done'), (reviewer, 'reviewer', 'done')])
 
-        # The pull request merges while the builder is back at work: merged is GitHub's word.
         run(build, 'working', 'answering the review', *mine, '--pr', pr)
         self.world = self.load()
         self.ticket(self.world)['prs'][0]['state'] = 'MERGED'
         self.save()
-        # #1592: the wake's one status call checks and fixes; its lines are the report.
         check = span('launch-fleet', r'`([^`]*status\.py repair[^`]*)`')
         self.assertIsNotNone(check, 'launch-fleet has no one status repair call')
         check = filled('launch-fleet', check, FLEET)
@@ -1168,8 +1209,6 @@ class FleetRun(Tracker):
                          [['ready-for-agent'], ['ready-for-agent', 'needs-info'], ['ready-for-agent']])
         self.assertEqual([c['id'] for c in self.ticket(world)['comments']], [101, 102, 103, builder, reviewer])
         self.assertEqual(self.states(), [(builder, 'builder', 'done'), (reviewer, 'reviewer', 'done')])
-        # Each agent edits only its own note, and no label but needs-info is ever written.
-        # #1592: the fleet's own note on #13 records its repair, and ends done.
         fleet = [c for c in world['issues'][1]['comments'] if c['body'].startswith(MARKER + '\nagent: fleet\n')]
         self.assertEqual([c['body'].split('\n')[2] for c in fleet], ['state: done'])
         edits = [c['path'] for c in self.calls() if c['method'] == 'PATCH']
@@ -1181,11 +1220,6 @@ class FleetRun(Tracker):
         self.assertTrue(all(set(b['labels']) <= LABELS for b in added), added)
 
 
-# #1447: the command under status.py run. It records its pid; `long` waits for the first beat
-# and two more (or 30 seconds) and exits 7, and the others wait for the first beat, then change
-# note 104 as another writer would, and keep running until stopped; `resumed` and `answered`
-# (the agent's own status write, the command line it is given) turn an asking note working and
-# exit 0 after the next beat. Every value is synthetic.
 ACTOR = r'''
 import fcntl, json, os, sys, time
 from datetime import datetime, timedelta, timezone
@@ -1241,7 +1275,6 @@ time.sleep(60)
 
 
 def gone(pid):
-    """True when PID no longer runs: no such process, or only its exit status is left."""
     try:
         return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0] == 'Z'
     except FileNotFoundError:
@@ -1277,27 +1310,21 @@ class Run(Tracker):
         self.assertEqual([c for c in self.calls()[mark:] if c['method'] == 'PATCH'], [])
 
     def test_run_keeps_the_note_live_across_a_long_command(self):
-        # catches: a run whose note lapses during long work (no edit, or an edit GitHub would not
-        # record), a beat that changes anything but time (asking rewritten as working), or a
-        # lost exit status of the command.
         self.ticket(self.world)['comments'][3]['body'] = note(state='asking')
         result, _ = self.run_command('long')
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertTrue(Path(self.out + '.done').exists())
         beats = [c for c in self.calls() if c['method'] == 'PATCH']
-        # The beat before the command, then one each second until the command sees the third.
         self.assertEqual(len(beats), 3, beats)
         self.assertTrue(all(c['path'] == f'repos/{REPO}/issues/comments/104' for c in beats), beats)
         mine = self.ticket()['comments'][3]
         beat = mine['body'].rsplit('time: ', 1)[1]
         self.assertEqual(mine['body'], note(state='asking', time=beat))
-        for stamp in (beat, mine['updated']):  # the beat's time, and GitHub's updated_at
+        for stamp in (beat, mine['updated']):
             self.assertLess(abs((datetime.now(timezone.utc) - datetime.strptime(
                 stamp, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)).total_seconds()), 60)
 
     def test_a_run_s_label_is_cleared_by_its_agent_s_own_resume(self):
-        # catches: a needs-info the run's beat added staying on after its agent writes working
-        # (the label stuck after the answer), or a later beat adding it again.
         self.asking_run()
         result, _ = self.run_command('answered', str(SCRIPT), 'write', '--repo', REPO, '--ticket', '12',
                                      '--agent', 'builder', '--state', 'working', '--harness', 'Claude Code',
@@ -1310,14 +1337,10 @@ class Run(Tracker):
         self.assertIn('state: working', self.ticket()['comments'][3]['body'])
 
     def asking_run(self, **race):
-        """Note 104 asks with no needs-info; the run's first beat adds it; RACE lands as named."""
         self.ticket(self.world)['comments'][3] = comment(104, BOT, note(state='asking'), minutes=25)
         self.world.update(race)
 
     def test_a_heartbeat_never_takes_off_a_same_app_hold_that_landed_before_its_post(self):
-        # catches: a heartbeat taking another same-App writer's application (a put-back, or
-        # triage's hold) landing just before its own no-op POST for its own, and deleting it
-        # once the note is working (#83 R1).
         hold = {'issue': 12, 'label': 'needs-info', 'by': BOT}
         self.asking_run(race_label=[hold])
         result, _ = self.run_command('resumed')
@@ -1326,8 +1349,6 @@ class Run(Tracker):
         self.assertEqual([(e['event'], e['actor']['login']) for e in self.ticket()['events']], [('labeled', BOT)])
 
     def test_a_failed_event_read_after_the_first_beat_label_still_starts_the_command(self):
-        # catches: a temporary event-read error after the first beat's label write aborting the
-        # run before its command starts (#83 R2).
         failing = {'fail_once': f'GET repos/{REPO}/issues/12/events?per_page=100&page=1'}
         self.asking_run(race_label=[failing])
         result, _ = self.run_command('resumed')
@@ -1336,8 +1357,6 @@ class Run(Tracker):
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
     def test_a_hold_reapplied_as_the_heartbeat_clears_its_label_survives_a_failed_read(self):
-        # catches: a heartbeat whose DELETE takes a person's reapplied needs-info and, on a
-        # temporary event-read error, never puts it back (#83 R3).
         again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
                  {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'},
                  {'fail_once': f'GET repos/{REPO}/issues/12/events?per_page=100&page=1'}]
@@ -1348,8 +1367,6 @@ class Run(Tracker):
         self.assertNotIn(('DELETE', f'repos/{REPO}/issues/12/labels/needs-info'), self.writes())
 
     def test_run_stops_the_command_when_a_newer_builder_holds_the_claim(self):
-        # catches: a heartbeat that keeps the work running, or takes the ticket back, after its
-        # note lapsed and a newer builder claimed it (the fence exit).
         result, took = self.run_command('lost', note(step='claimed the ticket'))
         self.assertEqual((result.returncode, result.stderr.splitlines()[-1:]),
                          (3, ['status.py: stop: note 105 holds the builder claim; the command is stopped']))
@@ -1357,8 +1374,6 @@ class Run(Tracker):
         self.assert_stopped()
 
     def test_a_heartbeat_never_reopens_a_done_or_stopped_note(self):
-        # catches: a heartbeat that writes working on each beat, reopening a note its agent
-        # released mid-run, or that keeps the work running after the release.
         for state in ('done', 'stopped'):
             with self.subTest(state=state):
                 self.setUp()
@@ -1370,8 +1385,6 @@ class Run(Tracker):
                 self.assert_stopped()
 
     def test_a_stopped_run_stops_its_command_and_a_missing_command_is_a_failure(self):
-        # catches: a run killed by its host (SIGTERM) that leaves its command running unwatched,
-        # or a command that can't start ending in a traceback instead of exit 2.
         self.save()
         env = dict(os.environ, PATH=str(self.dir / 'bin') + ':' + os.environ['PATH'],
                    FAKE_GH_WORLD=str(self.dir / 'world.json'), FAKE_GH_LOG=str(self.dir / 'gh.log'))
@@ -1394,8 +1407,6 @@ class Run(Tracker):
                          (2, ['status.py: command: could not start: No such file or directory']))
 
     def test_a_beat_that_lands_over_a_sibling_release_puts_it_back(self):
-        # catches: a beat whose read showed working while a sibling wake released the note just
-        # before the beat's edit landed, leaving working on top (#1441's read-back must cover beats).
         released = note(state='done', step='the sibling wake handed back')
         self.world['race_edit'] = [{'edit': 104, 'body': released}]
         result, _ = self.run_command('long')
@@ -1406,17 +1417,12 @@ class Run(Tracker):
         self.assertFalse(Path(self.out + '.pid').exists())
 
     def test_a_stop_kills_a_worker_that_ignores_sigterm(self):
-        # catches (#62 R1): cleanup that waits only for the command itself, so a worker in its
-        # process group that ignores SIGTERM keeps running in the checkout after the fence exit.
         result, _ = self.run_command('stubborn', note(step='claimed the ticket'))
         self.assertEqual((result.returncode, result.stderr.splitlines()[-1:]),
                          (3, ['status.py: stop: note 105 holds the builder claim; the command is stopped']))
         self.assertTrue(gone(int(Path(self.out + '.worker').read_text())))
 
     def test_a_lapsed_beat_steps_down_for_a_newer_holder_whatever_its_history(self):
-        # catches (#62 R2): earlier beats, alike but for time, read as retries of this one, so a
-        # full history (or one that can't be read) fails the read-back before the holder check,
-        # and the old note, refreshed live, keeps the claim from the newer builder.
         for case in ('twenty earlier beats', 'an unreadable history', 'twenty earlier beats, no rival'):
             with self.subTest(case=case):
                 self.setUp()
@@ -1426,7 +1432,6 @@ class Run(Tracker):
                             edits=[note(time=t) for t in stamps], edited_at=stamps)
                 self.world['history_fails'] = case == 'an unreadable history'
                 if case.endswith('no rival'):
-                    # A long build's own beats are acknowledged, not retries: the beats go on.
                     mine['updated'] = ago(5)
                     result, _ = self.run_command('long')
                     self.assertEqual(result.returncode, 7, result.stderr)
@@ -1440,9 +1445,6 @@ class Run(Tracker):
                 self.assertEqual(self.ticket()['comments'][3]['body'].split('\n')[2], 'state: stopped (lost claim)')
 
     def test_beats_keep_the_lease_through_a_failed_beat(self):
-        # catches (#62 R3): a schedule that waits a full interval after a failed beat, so with
-        # 900-second beats and a slow GitHub the note lapses while the command still runs; or
-        # one that keeps the command running once no beat can land inside the lease.
         spec = importlib.util.spec_from_file_location('status_under_test', SCRIPT)
         status = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(status)
@@ -1450,7 +1452,6 @@ class Run(Tracker):
         for every in (1, 60, 600, 900):
             for fails in ([], [1], [1, 2, 3], list(range(1, 40))):
                 with self.subTest(every=every, fails=fails):
-                    # Each beat takes 1 second; beat n fails when n is in FAILS. Times in seconds.
                     t, ok_at, n, failed, stopped = 0, 0, 0, False, None
                     while t < 3 * lease and stopped is None:
                         wait = status.next_beat(t, ok_at, every, failed)
@@ -1462,17 +1463,13 @@ class Run(Tracker):
                         started, t = t, t + 1
                         failed = n in fails
                         if not failed:
-                            # The edit lands within the beat: GitHub's updated_at is at most t.
                             self.assertLess(t - ok_at, lease, (every, fails, n))
                             ok_at = started
                     if stopped is not None:
-                        # The command stops while the last edit is still live, never after.
                         self.assertLess(stopped - ok_at, lease)
                         self.assertEqual(fails, list(range(1, 40)))
 
     def test_a_first_beat_in_the_notes_own_second_still_changes_the_body(self):
-        # catches (#62 R4): a beat in the same UTC second as the note's time writes the same
-        # body, which GitHub records as no edit, so the read-back fails and the work never starts.
         spec = importlib.util.spec_from_file_location('status_under_test', SCRIPT)
         status = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(status)
@@ -1505,7 +1502,6 @@ class Run(Tracker):
         self.assertEqual(beats, [note(time=(pinned + timedelta(seconds=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))])
 
     def test_run_never_starts_the_command_on_a_released_note(self):
-        # catches: a run that starts long work on a claim it no longer holds.
         self.ticket(self.world)['comments'][3]['body'] = note(state='done')
         result, _ = self.run_command('long')
         self.assertEqual((result.returncode, result.stderr.splitlines()[-1:]), (3, [
@@ -1515,16 +1511,10 @@ class Run(Tracker):
 
 
 class WakeRepair(Tracker):
-    """#1592 (P4 R1, R2): the wake's status step, run as launch-fleet documents it, while the
-    builder resumes. Expected labels come from the contract: needs-info only while a live note
-    is asking, and a needs-info a person added last stays."""
 
     step = FleetRun.step
 
     def wake(self):
-        """The wake's status step as SKILL.md documents it: its one status call, then the
-        documented label fix for each asking line when it documents one. The report is
-        what the call prints, which the wake passes on as its actions."""
         call = span('launch-fleet', r'`(python3 -I [^`]*status\.py (?:check|repair) [^`]*)`')
         self.assertIsNotNone(call, 'launch-fleet has no one status call')
         seen = self.step(filled('launch-fleet', call, FLEET))
@@ -1538,21 +1528,14 @@ class WakeRepair(Tracker):
         return seen.returncode, [x for x in report if not (fix and x.endswith(': no needs-info label'))]
 
     def test_a_builder_that_resumes_during_the_wake_is_never_marked_as_needing_the_user(self):
-        # catches: the wake adding needs-info from its earlier read after the builder resumed
-        # (#33 R1), or removing a needs-info a person added.
         asking = note(state='asking', step='asked which file to change')
         resumed = note(state='working', step='got the answer')
         resume = {'issue': 12, 'edit': 104, 'body': resumed}
         person = {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}
-        # The ticket's label timeline, as GitHub shows and notifies it: (event, by whom).
         add, remove = ('labeled', BOT), ('unlabeled', BOT)
         cases = {
-            # The reviewer's reproduction: the builder resumes after the check reads the tracker.
-            # Not even a moment's needs-info: the app would show a false wait.
             'resumed after the read': ({'race_after_scan': [resume]}, ['ready-for-agent'], []),
-            # The builder resumes as the label is written.
             'resumed at the label write': ({'race_label': [resume]}, ['ready-for-agent'], [add, remove]),
-            # A person marks the ticket as the builder resumes: theirs stays.
             'a person added it': ({'race_label': [resume, person]}, ['ready-for-agent', 'needs-info'],
                                   [('labeled', 'synthetic-owner')]),
         }
@@ -1566,7 +1549,6 @@ class WakeRepair(Tracker):
                 self.assertEqual(self.ticket()['labels'], labels)
                 events = self.ticket().get('events', [])
                 self.assertEqual([(e['event'], e['actor']['login']) for e in events], timeline)
-                # The next wake sees nothing to fix or report on #12.
                 code, report = self.wake()
                 self.assertEqual((code, report), (0, []))
                 self.assertEqual(self.ticket()['labels'], labels)
@@ -1580,10 +1562,6 @@ class WakeRepair(Tracker):
         return [(e['event'], e['actor']['login']) for e in self.ticket().get('events', [])]
 
     def test_a_repair_whose_read_after_its_label_write_fails_is_settled_by_the_next_wake(self):
-        # catches: a label the repair wrote as the builder resumed, left on the ticket because the
-        # read after the write failed, and never looked at again (#68 R1). Changed by #1702: the
-        # next wake no longer deletes it (a label from an earlier wake may be a person's hold),
-        # so it reports it and leaves it. Keeper: this test, which still fails if it is never reported.
         resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
         failing = {'fail_once': f'GET repos/{REPO}/issues/12/comments?per_page=100&page=1'}
         self.asking_on_12(race_label=[resume, failing])
@@ -1599,8 +1577,6 @@ class WakeRepair(Tracker):
         self.assertEqual(self.wake(), (0, []))
 
     def test_a_person_who_reapplies_needs_info_as_the_repair_takes_it_off_keeps_it(self):
-        # catches: the repair's DELETE landing on a needs-info a person removed and applied again
-        # after the repair read who added it last (#68 R2).
         resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
         again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
                  {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
@@ -1611,13 +1587,10 @@ class WakeRepair(Tracker):
         self.assertRegex(report[0], r'^#12: needs-info put back: ')
         self.assertEqual(self.timeline(), [('labeled', BOT), ('unlabeled', 'synthetic-owner'),
                                            ('labeled', 'synthetic-owner'), ('unlabeled', BOT), ('labeled', BOT)])
-        # The next wake leaves the person's hold alone.
         self.assertEqual(self.wake(), (0, []))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
     def test_a_working_heartbeat_after_the_repair_put_back_a_hold_keeps_it(self):
-        # catches: a heartbeat taking off a person's needs-info that the repair put back under the
-        # same App login, because the label's last application looks like its own (#1712).
         resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
         again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
                  {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
@@ -1631,9 +1604,21 @@ class WakeRepair(Tracker):
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
         self.assertEqual(self.timeline(), before)
 
+    def test_a_resume_write_after_the_repair_put_back_a_hold_keeps_it(self):
+        resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                 {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
+        self.asking_on_12(race_label=[resume], race_delete=again)
+        self.wake()
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        before = self.timeline()
+        back = self.write('working', 'pushed the fix', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual(self.timeline(), before)
+        self.assertRegex(back.stdout, r'(?m)^#12: needs-info left on: ')
+
     def test_a_person_who_reapplies_needs_info_after_the_repair_added_it_keeps_it(self):
-        # catches: the repair taking off a needs-info whose last application is a person's,
-        # because it applied the label itself earlier in the same wake.
         resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
         again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
                  {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
@@ -1644,8 +1629,6 @@ class WakeRepair(Tracker):
                                            ('labeled', 'synthetic-owner')])
 
     def test_a_repair_left_part_way_settles_only_its_own_application(self):
-        # catches: the next wake treating an older cleanup in the timeline as this repair's,
-        # and putting back a label nobody asked for now.
         old = [{'event': kind, 'label': {'name': 'needs-info'}, 'actor': {'login': who}, 'created_at': ago(60)}
                for kind, who in (('labeled', BOT), ('unlabeled', 'synthetic-owner'),
                                  ('labeled', 'synthetic-owner'), ('unlabeled', BOT))]
@@ -1662,12 +1645,9 @@ class WakeRepair(Tracker):
         self.assertEqual(len(self.timeline()), 4)
 
     def test_a_retry_after_a_put_back_whose_note_edit_failed_keeps_the_hold(self):
-        # catches: the next wake's retry taking the repair's put-back of a person's needs-info for
-        # its own new application and deleting the person's hold (#1700, #68 R3).
         resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
         again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
                  {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
-        # The repair's fleet note is the next comment; its final edit (to done) fails once.
         self.world['fail_once'] = [f'PATCH repos/{REPO}/issues/comments/{self.world["next_id"] + 1}']
         self.asking_on_12(race_label=[resume], race_delete=again)
         code, report = self.wake()
@@ -1682,15 +1662,11 @@ class WakeRepair(Tracker):
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
     def test_with_one_login_a_needs_info_from_before_this_wake_is_never_deleted(self):
-        # catches: while agents and Jake share one login, the repair deleting Jake's hand-added
-        # needs-info because a repair from an earlier wake was left part way and the label's
-        # application carries the repair's login (#1702 case 2).
         self.asking_on_12(fail_once=[f'POST repos/{REPO}/issues/12/labels'])
         code, report = self.wake()
         self.assertEqual(code, 2, report)
         self.world = self.load()
         it = self.ticket(self.world)
-        # Jake marks the ticket by hand, under the fleet's own login, and the builder resumes.
         it['labels'].append('needs-info')
         it.setdefault('events', []).append({'event': 'labeled', 'label': {'name': 'needs-info'},
                                             'actor': {'login': BOT}, 'created_at': ago(0)})
@@ -1706,8 +1682,6 @@ class WakeRepair(Tracker):
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
     def test_a_needs_info_whose_application_is_not_listed_yet_stays_and_is_reported(self):
-        # catches: a needs-info left on silently by a wake that settles an earlier wake's repair
-        # while GitHub's event list doesn't show who applied the label yet (#1702).
         self.asking_on_12(fail_once=[f'POST repos/{REPO}/issues/12/labels'])
         self.assertEqual(self.wake()[0], 2)
         self.world = self.load()
@@ -1722,14 +1696,10 @@ class WakeRepair(Tracker):
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
     def shared_login(self, **race):
-        # #1702 R1: the fleet acts as a person's own account (a record author), as it does
-        # until the App rollout, so the person's label events carry the fleet's login.
         self.world['login'] = 'synthetic-owner'
         self.asking_on_12(**race)
 
     def test_with_a_shared_login_a_hold_added_just_before_the_repair_post_stays(self):
-        # catches: under one shared login, the person's needs-info landing between the repair's
-        # last read and its POST (a no-op POST) taken as the repair's and deleted (#82 R1).
         resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
         person = {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}
         self.shared_login(race_label=[person, resume])
@@ -1742,8 +1712,6 @@ class WakeRepair(Tracker):
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
     def test_with_a_shared_login_a_hold_reapplied_just_before_the_repair_delete_stays(self):
-        # catches: under one shared login, the person removing and re-applying needs-info just
-        # before the repair's DELETE, losing the hold because put-back only knows other logins (#82 R1).
         resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
         again = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
                  {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
@@ -1757,8 +1725,6 @@ class WakeRepair(Tracker):
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
     def test_a_repair_that_fails_part_way_still_reports_what_it_changed(self):
-        # catches: a label written on one ticket and then left out of the report because a
-        # later ticket's repair failed, so the wake never records that it changed anything.
         self.world['issues'] = [
             {'number': n, 'state': 'open', 'labels': ['ready-for-agent'],
              'comments': [comment(cid, BOT, note(state='asking'))]} for n, cid in ((12, 104), (13, 201))]
@@ -1773,7 +1739,6 @@ class WakeRepair(Tracker):
                          [['ready-for-agent', 'needs-info'], ['ready-for-agent']])
 
     def test_a_wake_whose_check_cannot_read_reports_a_failed_check(self):
-        # catches: a checker read failure (exit 2) passing as a clean wake with nothing to report (#33 R2).
         self.world['fleet_md'] = None
         self.save()
         code, report = self.wake()

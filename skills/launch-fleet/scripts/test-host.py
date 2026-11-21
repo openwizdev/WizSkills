@@ -294,6 +294,40 @@ class Token(unittest.TestCase):
         self.assertEqual([r['request']['requester'] for r in self.requests(p)], ['builder-7', 'builder-7'])
         self.assertEqual(self.exposed(p, *started[1:], *woke[1:]), [])
 
+    def builder(self, p):
+        """A `gh` that, for the builder's own calls (FAKE_GH_PROBE), records `app` when it got the App's token,
+        else `owner`, and whether the legacy key variable reached it (never a value); then fake GitHub."""
+        (p.dir / 'bin/gh').write_text(
+            '#!/bin/sh\nif [ -n "${FAKE_GH_PROBE:-}" ]; then\n'
+            '  { [ "${GH_TOKEN:-}" = %s ] && printf app || printf owner\n'
+            '    [ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && printf " key\\n" || printf " no-key\\n"; } >> "$FAKE_GH_PROBE"\n'
+            'fi\nexec "%s" -I "%s" "$@"\n' % (TOKEN, sys.executable, HERE / 'fixtures/fake_github.py'))
+        p.first = p.dir / 'builder.log'
+        return dict(FAKE_DRIVER_BUILDER=str(p.first), OPENWIZ_GITHUB_APP_KEY='synthetic-legacy-sentinel')
+
+    def seen(self, p):
+        """What the builder's first GitHub operations used: its git helper and key presence, and gh's identity."""
+        first = [json.loads(line) for line in p.first.read_text().splitlines()] if p.first.exists() else []
+        gh = p.first.with_name(p.first.name + '.gh')
+        return first, gh.read_text().splitlines() if gh.exists() else []
+
+    def test_the_drivers_builder_does_its_first_github_operation_as_the_app_without_the_legacy_key(self):
+        # catches: a mint in the fleet process while the builder the driver starts still acts as the owner (R1),
+        # or the legacy key secret reaching the helper, the driver or the builder once a service is configured (R2)
+        p = Project(self)
+        env = dict(self.service(p), **self.builder(p))
+        started = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env)
+        self.assertEqual(started, (0, 'started #7 on local', ''))
+        woke = p.host('wake', REPO, 7, **env)
+        self.assertEqual(woke, (0, 'woke #7 on local', ''))
+        self.assertEqual(self.seen(p), (
+            [{'command': 'start', 'git_helper_is_the_apps': True, 'legacy_key': False},
+             {'command': 'wake', 'git_helper_is_the_apps': True, 'legacy_key': False}],
+            ['app no-key', 'app no-key']))
+        self.assertEqual({r['request']['requester'] for r in self.requests(p)}, {'builder-7'})
+        self.assertEqual([r['legacy_key'] for r in self.requests(p)], [False] * len(self.requests(p)))
+        self.assertEqual(self.exposed(p, *started[1:], *woke[1:]), [])
+
     def test_a_refused_token_falls_back_with_one_note_and_the_start_goes_on(self):
         # catches: a failed mint stopping the start, or falling back silently or with more than the one note
         p = Project(self)
@@ -308,9 +342,14 @@ class Token(unittest.TestCase):
         p = Project(self)
         env = self.service(p)
         (p.dir / 'token-private').rmdir()
-        env['OPENWIZ_TOKEN_SERVICE'] = ''  # set but empty is not configured, as the helper reads it
+        env.update(self.builder(p), OPENWIZ_TOKEN_SERVICE='')  # set but empty is not configured, as the helper reads it
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env), (0, 'started #7 on local', ''))
         self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', ''))
+        # Exactly as today: the builder works as the owner, with whatever the environment held (the legacy key too).
+        self.assertEqual(self.seen(p), (
+            [{'command': 'start', 'git_helper_is_the_apps': False, 'legacy_key': True},
+             {'command': 'wake', 'git_helper_is_the_apps': False, 'legacy_key': True}],
+            ['owner key', 'owner key']))
         self.assertEqual(self.requests(p), [])
         self.assertFalse((p.dir / 'token-private').exists())
 

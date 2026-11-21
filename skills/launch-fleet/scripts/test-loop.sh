@@ -16,8 +16,9 @@ cp "$HERE/github-app/agent-token.py" "$work/plugin cache/skills/launch-fleet/scr
 mkdir "$work/linked skills"
 ln -s "$work/plugin cache/skills/launch-fleet" "$work/linked skills/launch-fleet"
 # GI7 (#2549): the fake gh also records the token each call gets (synthetic).
-printf '#!/bin/sh\nprintf "%%s %%s\\n" "${GH_TOKEN:-none}" "${LAUNCH_FLEET_GITHUB_AUTH:-account}" >> "%s"\nexec "%s" -I -S "%s" "$@"\n' \
-  "$work/gh-token.log" "$(command -v python3)" "$FIX/gh.py" > "$work/bin/gh"
+# GA4 (#1846): and whether the legacy key variable reached it (presence only, never a value).
+printf '#!/bin/sh\nprintf "%%s %%s\\n" "${GH_TOKEN:-none}" "${LAUNCH_FLEET_GITHUB_AUTH:-account}" >> "%s"\n[ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && echo key >> "%s" || echo no-key >> "%s"\nexec "%s" -I -S "%s" "$@"\n' \
+  "$work/gh-token.log" "$work/gh-key.log" "$work/gh-key.log" "$(command -v python3)" "$FIX/gh.py" > "$work/bin/gh"
 chmod +x "$work/bin/gh"
 export PATH="$work/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo
 export FAKE_GH_REMOTE="$work/remote" FAKE_GH_WORLD="$work/world.json" FAKE_GH_LOG="$work/gh.log"
@@ -160,7 +161,10 @@ service() { # the synthetic service on the local route, and the old key secret t
   : > "$work/service.log"
   rm -f "$work/token-private/"*  # each case asks afresh, not from the last case's cached token
 }
-(service; identity "$ga4 installation" '')
+(service; : > "$work/gh-key.log"; identity "$ga4 installation" '')
+# R2: the legacy key secret, still provisioned beside the service, reaches neither the helper nor gh.
+[ -s "$work/gh-key.log" ] && [ -z "$(grep -vx no-key "$work/gh-key.log")" ]
+[ "$(jq -c .legacy_key "$work/service.log")" = false ]
 [ "$(jq -c .request "$work/service.log")" = '{"schema":"openwiz.token-service.v1","kind":"request","requester":"fleet-check","repositories":["synthetic-owner/synthetic-repo"],"permissions":{"metadata":"read","contents":"read","issues":"read","pull_requests":"read","checks":"read","actions":"read"}}' ]
 [ "$(jq -c .argv "$work/service.log")" = '["mint"]' ]
 ! grep -q "$ga4" "$work/out" "$work/err" "$work/gh.log"
@@ -168,8 +172,9 @@ echo 'ok   with a token service the wake reads GitHub with the helper'"'"'s read
 (service; export LAUNCH_FLEET_TOKEN_STEP=1; identity "$ga4 installation" '')
 [ "$(wc -l < "$work/service.log" | tr -d ' ')" = 1 ]
 echo 'ok   an inherited step marker never skips the helper (#1846)'
-(service; export FAKE_SERVICE_REFUSE=1; identity 'none account' \
+(service; : > "$work/gh-key.log"; export FAKE_SERVICE_REFUSE=1; identity 'none account' \
   "openwiz: no openwiz[bot] token (unavailable); using the owner's GitHub account")
+[ -s "$work/gh-key.log" ] && [ -z "$(grep -vx no-key "$work/gh-key.log")" ]
 [ "$(wc -l < "$work/service.log" | tr -d ' ')" = 1 ]
 [ -z "$(ls -A "$work/token-private")" ]
 echo "ok   a refused mint runs the wake as today's account with the contract's one note (#1846)"

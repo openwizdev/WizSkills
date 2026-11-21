@@ -8,7 +8,11 @@ $FAKE_DRIVER_MODE `refuse` it fails as v1 says (exit 1, `error` and `next`);
 with `garbage` it answers something that is no run; with `extra`, a run with a
 repeated or unknown key. While $FAKE_DRIVER_HOLD names a file, it waits; $FAKE_DRIVER_BREAK names a
 folder it makes read-only. $FAKE_DRIVER_REFUSALS=K refuses only a command's first K calls in the log
-(#1446), and $FAKE_DRIVER_NEXT replaces a refusal's `next` text.
+(#1446), and $FAKE_DRIVER_NEXT replaces a refusal's `next` text. With $FAKE_DRIVER_BUILDER naming a file,
+a start or wake also does what its builder would first do in the environment the driver hands it (GA4,
+OpenWiz #1846): one `gh api user`, which the test's `gh` records, and a read of the credential helper git
+would use for github.com, appended to that file as one JSON line. It records whether the legacy key
+variable is present, never a value.
 """
 import json
 import os
@@ -21,6 +25,15 @@ given = sys.stdin.read() if command in ('start', 'wake', 'stop') else ''
 with open(os.environ['FAKE_DRIVER_LOG'], 'a') as log:
     log.write(json.dumps({'host': host, 'command': command, 'input': json.loads(given) if given else None}) + '\n')
 mode = os.environ.get('FAKE_DRIVER_MODE', '')
+if os.environ.get('FAKE_DRIVER_BUILDER') and command in ('start', 'wake'):
+    import subprocess
+    subprocess.run(['gh', 'api', 'user'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, env=dict(os.environ, FAKE_GH_PROBE=os.environ['FAKE_DRIVER_BUILDER'] + '.gh'))
+    helpers = subprocess.run(['git', 'config', '--get-all', 'credential.https://github.com.helper'],
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True).stdout.splitlines()
+    with open(os.environ['FAKE_DRIVER_BUILDER'], 'a') as out:
+        out.write(json.dumps({'command': command, 'git_helper_is_the_apps': bool(helpers) and 'credential --snapshot'
+                              in helpers[-1], 'legacy_key': 'OPENWIZ_GITHUB_APP_KEY' in os.environ}) + '\n')
 if os.environ.get('FAKE_DRIVER_BREAK'):  # the private state folder turns read-only during the start
     os.chmod(os.environ['FAKE_DRIVER_BREAK'], 0o500)
 while os.environ.get('FAKE_DRIVER_HOLD') and os.path.exists(os.environ['FAKE_DRIVER_HOLD']):

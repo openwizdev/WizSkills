@@ -15,6 +15,9 @@ OLD = 'fedcba9876543210fedcba9876543210fedcba98'
 
 
 SERVICE = '/synthetic/openwiz/tools/github-app/token-service.py'
+EXCLUSIVE = ("The helper is your only App-token route: never run `openwiz github token`, the App-token block in "
+             "launch-fleet's `references/identity.md`, or any command with `OPENWIZ_GITHUB_APP_KEY` in its "
+             "environment.")
 OWNER_LOGIN = ("Approvals, repository settings and pushes that change `.github/workflows/` stay on the owner's "
                "login: run those without the helper.")
 
@@ -95,9 +98,11 @@ class Token(unittest.TestCase):
                 code, text = brief(*args, OPENWIZ_TOKEN_SERVICE=SERVICE)
                 self.assertEqual(code, 0)
                 self.assertIn("the launch-fleet skill's `scripts/github-app/agent-token.py`", text)
-                self.assertIn('`python3 -I <helper> start --requester %s --repository %s`' % (requester, repo), text)
-                self.assertIn('`python3 -I <helper> run --requester %s --repository %s -- <command>`'
+                self.assertIn('`env -u OPENWIZ_GITHUB_APP_KEY python3 -I <helper> start --requester %s --repository %s`'
                               % (requester, repo), text)
+                self.assertIn('`env -u OPENWIZ_GITHUB_APP_KEY python3 -I <helper> run --requester %s --repository %s '
+                              '-- <command>`' % (requester, repo), text)
+                self.assertIn(EXCLUSIVE, text)  # R2: the service is the only App-token route
                 self.assertIn(OWNER_LOGIN, text)
                 self.assertNotIn(SERVICE, text)  # the brief names no machine path
 
@@ -111,6 +116,7 @@ class Token(unittest.TestCase):
                     code, text = brief(*args, **env)
                     self.assertNotIn('agent-token', text)
                     self.assertNotIn(OWNER_LOGIN, text)
+                    self.assertNotIn(EXCLUSIVE, text)
 
 
 LOOKUP_BUILD = (

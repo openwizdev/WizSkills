@@ -29,7 +29,6 @@ function run(w, changeSettings) {
   try {
     mkdirSync(join(tmp, 'bin')); mkdirSync(join(tmp, 'docs/agents'), {recursive: true});
     symlinkSync(join(here, 'fixtures/gh.mjs'), join(tmp, 'bin/gh'));
-    // Before settings exist, still exercise the missing gate for the HU1 red run.
     const text = existsSync(settings) ? readFileSync(settings, 'utf8') : '';
     writeFileSync(join(tmp, 'docs/agents/huntr.md'), changeSettings ? changeSettings(text) : text);
     writeFileSync(join(tmp, 'world.json'), JSON.stringify(w));
@@ -95,7 +94,6 @@ const never = [
 ];
 for (const path of never) refuse(`HU2 never-list ${path}`, (_w, _r, t) => {t.body = body('bug fix', [path]);}, /never-list/);
 function add(r, t, started = true) {
-  // Old scope-parser regressions model work with an actual started builder.
   if (started && (t.parent || t.comments.nodes.some(c=>c.body.startsWith('**Approved on its own by '))))
     t.comments = conn([...t.comments.nodes, comment('launch-fleet: started, thread thr_synthetic', 999)]);
   r.issues.nodes.push(t); r.issues.totalCount++;
@@ -162,7 +160,6 @@ test('HU2 settings unreadable fails closed', () => {
   const result=run(world(), () => 'not a settings contract');assert.equal(result.status,2);assert.match(result.stderr,/settings/);assert.deepEqual(result.posts,[]);
 });
 
-// Boundaries found while checking the gate's untrusted-input and scope guards.
 refuse('HU2 unknown GraphQL envelope key', w=>{w.pages[0].unexpected=true;}, /GitHub/);
 refuse('HU2 duplicate label entry', (_w,_r,t)=>{t.labels=conn([{name:'huntr'},{name:'huntr'}]);}, /label/);
 refuse('HU2 candidate scope addition on never-list', (_w,_r,t)=>{t.comments=conn([comment('Owned paths added: `crates/core/src/limits.rs`')]);}, /never-list/);
@@ -216,7 +213,6 @@ refuse('HU1 comment-only proof is not a declared command',(_w,_r,t)=>{
   t.body=t.body.replace('synthetic-repro --fixture ordering','# no command');
 },/proof/);
 
-// PR #439 R1: real ticket prose, expressed entirely with synthetic paths/content.
 const reviewScopes = [
   ['annotated folder', '## Owned paths\n\n`tests/proof/` (new: `synthetic.rs`, `helpers/` with its fixtures).', 'tests/proof/new_case.rs'],
   ['glob', '## Owned paths\n\n`tests/fleet/b2_*.rs` (the proof cases).', 'tests/fleet/other_case.rs'],
@@ -280,7 +276,6 @@ for (const question of ['Owned paths: should we include `crates/core/src/ops.rs`
     const result=run(w);assert.equal(result.status,0,result.stderr);assert.equal(result.posts.length,1);
   });
 
-// PR #439 R3: authoritative widenings are not limited to a fixed line prefix.
 const widenedScopes = [
   ['inline answer', '**Q1: owned paths widened** to the synthetic files: `crates/core/src/fleet/synthetic_mod.rs`, `tests/fake-room-cli/synthetic_main.rs`, `tests/messaging/synthetic_allowlist.rs`.', ['crates/core/src/fleet/synthetic_mod.rs','tests/fake-room-cli/synthetic_main.rs','tests/messaging/synthetic_allowlist.rs']],
   ['list after prose', 'Orchestrator: **yes, approved.** Your owned paths now also include:\n- `crates/server/src/synthetic_api.rs`\n- `crates/server/src/synthetic_main.rs`', ['crates/server/src/synthetic_api.rs','crates/server/src/synthetic_main.rs']],
@@ -344,7 +339,6 @@ for (const [scope,note] of [
   const result=run(w);assert.equal(result.status,0,result.stderr);assert.equal(result.posts.length,1);
 });
 
-// PR #439 R4: an asserted widening needs readable paths, even outside a formal field.
 for (const note of [
   'Owned paths added: whatever this needs',
   'Owned paths widened to include the rest of the component',
@@ -369,7 +363,6 @@ for (const note of [
   const result=run(w);assert.equal(result.status,0,result.stderr);assert.equal(result.posts.length,1);
 });
 
-// #554: risk-tier gate contract, through the public CLI and fake GitHub only.
 for (const [tier,kind,paths] of [
   [0,'audit',[]], [1,'missing docs',['docs/synthetic.md']],
   [2,'cleanup',['crates/core/src/ops.rs']], [3,'accessibility fix',['apps/web/src/viewer.ts']],
@@ -434,7 +427,6 @@ refuse('HT builder starts between reads',w=>{
   w.sequence=[w.pages,second];
 },/overlap/);
 
-// Tier approval must not fall back to a blacklist of kind names.
 test('HT descriptive kind does not decide permission',()=>{
   const w=world(),t=w.pages[0].data.repository.issues.nodes[0];
   t.body=body('contract bug fix',['tests/synthetic.rs'],3);
@@ -461,7 +453,6 @@ test('R1 starting claim permits unrelated files',()=>{
   const result=run(w);assert.equal(result.status,0,result.stderr);assert.equal(result.posts.length,1);
 });
 
-// #900: conditional prose is not a declaration that ownership changed.
 for (const note of [
   'launch-fleet: stay inside the ticket unless scope is explicitly widened.',
   'Status: owned paths may be expanded after a separate approval.',
@@ -477,7 +468,6 @@ for (const note of [
   assert.equal(result.posts[0].number,'700');
 });
 
-// #900 R1: explicit attribution/approval prefixes do not hide declarations.
 for (const note of [
   'Orchestrator: **yes, approved.** Your owned paths now also include the rest of the component.',
   'Orchestrator: Your owned paths now also include the rest of the component.',
@@ -488,7 +478,6 @@ for (const note of [
   else add(r,issue(701,{body:'## Owned paths\n\n`tests/separate.rs`',labels:conn([]),comments:conn([comment('**Approved on its own by Jake, 2026-11-01:** yes'),comment(note,2)])}));
 },/unreadable owned paths declaration/);
 
-// #900 R2: an explicit policy condition does not assert a scope change.
 const conditionalScopes = [
   'Orchestrator: Scope is widened only if separate approval is granted; otherwise stay inside the ticket.',
   'Orchestrator: Scope is widened only after separate approval.',
@@ -512,7 +501,6 @@ for (const candidate of [false,true]) refuse(`#900 R2 later policy text does not
   else add(r,issue(701,{body:'## Owned paths\n\n`tests/separate.rs`',labels:conn([]),comments:conn([comment('**Approved on its own by Jake, 2026-11-01:** yes'),comment(note,2)])}));
 },/unreadable owned paths declaration/);
 
-// #900 R3: completed declarations require readable paths despite a condition.
 for (const note of [
   'Scope has been widened only after separate approval was granted, to include the rest of the component.',
   'Orchestrator: Owned paths have been expanded only after separate approval was granted, to include the rest of the component.',
@@ -533,8 +521,6 @@ for (const pointer of ['', 'https://github.com/example/public/issues/1#issuecomm
 }
 refuse('#1273 missing private record refuses approval', w => {w.pointerMissing=true;}, /private standing approval could not be read/);
 
-// #1244: the public CLI must use every page before making its approval decision.
-// All values and cursors below are synthetic; no live approval command is run.
 function paginate(w, target, number, field, nodes) {
   const pages=[];
   for (let i=0;i<nodes.length;i+=100) pages.push({totalCount:nodes.length,

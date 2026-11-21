@@ -1,13 +1,3 @@
-"""Finite OB7 (#2112) ON1 evidence checks. No release executor, network client or effect.
-
-The ops agent reads every source completely and supplies its values; this module
-recomputes the record's digests from them and refuses on anything missing,
-changed, racing or uncertain. Matching JSON is not authentication. Under OB-A1
-the hold-release effect stays disabled even when all evidence is current, so
-`effect_boundary` is never called. Sources are private helper inputs, not a new
-wire contract; the durable record and result use ops-dispatch v1, decoded by the
-pinned reference reader so schema semantics have one implementation.
-"""
 import copy
 import hashlib
 import importlib.util
@@ -22,7 +12,6 @@ spec = importlib.util.spec_from_file_location('grants', Path(__file__).resolve()
 grants = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(grants)
 BINDING = ('repository', 'spec', 'ticket', 'approval')
-# Exact source types: a string "false" must never pass as a checked flag (R5).
 OPTIONAL_STR = (str, type(None))
 TYPES = {
     'producer': dict(ticket=int, approval=dict, merge=str, merged=bool, delta=str),
@@ -36,7 +25,6 @@ TYPES = {
     'hold history': dict(id=int, kind=str, created_at=int),
     'label event': dict(name=str, action=str, created_at=int),
     'evidence': dict(evidence_class=str, source=str, value=str),
-    # The exact inputs of the existing OB2 grant check, per grant (R2).
     'grant': dict(grant=dict, envelope=dict, intent=dict, snapshot=dict, sources=dict, assessment=dict,
                   changes=list, history=list),
 }
@@ -104,10 +92,6 @@ def read_sources(sources):
     listed(sources['labels']['events'], 'label event')
     listed(sources['claims'], 'claim', str)
     listed(sources['evidence'], 'evidence')
-    # R5: 3.0 == 3 and True == 1 in Python, so every source approval must pass
-    # the contract's strict approval shape before any comparison uses it.
-    # That includes each grant assessment's approval, which grants.py compares too;
-    # an assessment without one is still refused there as incomplete.
     assessments = [bundle.get('assessment') for consumer in sources['consumers']
                    for bundle in consumer['grants'] if type(bundle) is dict]
     for value in [sources['producer']['approval'], sources['revision']['approval']] + [
@@ -118,7 +102,6 @@ def read_sources(sources):
 
 
 def bound_intent(record, snapshot):
-    """The one durable intent this operation belongs to, resolved before any check (R9)."""
     intents = [i for i in snapshot['intents'] if i['operation_key'] == record['operation_key']]
     if len(intents) != 1:
         raise ValueError('no single durable release intent for this operation')
@@ -126,7 +109,6 @@ def bound_intent(record, snapshot):
 
 
 def grant_valid(bundle, consumer, record, current):
-    """The existing OB2 grant check: binding, rule, recomputed material and lifecycle."""
     grant, snap = bundle['grant'], bundle['snapshot']
     return (type(grant) is dict and grant.get('ticket') == consumer['ticket'] == snap.get('ticket')
             and all(grant.get(k) == snap.get(k) == record[k] for k in ('repository', 'spec'))
@@ -135,31 +117,26 @@ def grant_valid(bundle, consumer, record, current):
 
 
 def assess(record, snapshot, sources, intent):
-    """Raise Refusal for the first failing check, in denial priority order."""
     labels, hold, revision = sources['labels'], sources['hold'], sources['revision']
     current = snapshot['approval']
     covered = [h for h in hold['history'] if h['id'] == hold['comment']]
 
-    # 1. Uncertainty first: nothing later can lower it.
     require(not snapshot['uncertain_keys'], 'an earlier operation on this ticket is unresolved',
             'reconcile', 'uncertain_outcome')
     require(labels['held'] and not labels['ready'],
             'partial or unexplained labels: reconcile before any other effect', 'reconcile', 'uncertain_outcome')
-    # A label event tied with the hold is not proved older than it (R6).
     require(all(e['created_at'] > revision['created_at'] for e in labels['events']
                 if e['created_at'] >= max([h['created_at'] for h in covered] or [0])),
             'a label changed at or after the hold but before the revision record', 'reconcile', 'uncertain_outcome')
     require(record['verification']['after_digest'] is None and record['verification']['labels_digest'] is None,
             'the record claims read-backs of a release no enabled effect could make', 'reconcile', 'uncertain_outcome')
 
-    # 2. Complete reads only; an unread page never proves absence.
     require(snapshot['complete'], 'the snapshot read is incomplete', reason='incomplete_read')
     require(sources['cutoff']['complete'] and record['cutoff']['complete'] and record['cutoff']['inclusive'],
             'the inclusive cutoff inventory is incomplete', reason='incomplete_read')
     require(hold['complete'] and record['verification']['history_complete'],
             'the hold history is incomplete', reason='incomplete_read')
 
-    # 3. Every other gate, newer hold and competing claim keeps the hold.
     gates = 'paused_or_revoked'
     require(not snapshot['paused'] and not snapshot['revoked'], 'paused or revoked', reason=gates)
     require(not record['other_gates'] and not snapshot['gates'], 'another gate remains', reason=gates)
@@ -170,7 +147,6 @@ def assess(record, snapshot, sources, intent):
     require(newest is not None and newest['id'] == hold['comment'], 'a newer hold is in the full history',
             reason=gates)
 
-    # 4. Binding: one current plan, one rule, one durable release intent.
     require(all(record[k] == snapshot[k] for k in BINDING)
             and record['subject'] == {'kind': 'issue', 'number': snapshot['ticket']}, 'stale record binding')
     require(record['rule']['name'] == 'on1' and record['rule'] == snapshot['rule']
@@ -179,24 +155,20 @@ def assess(record, snapshot, sources, intent):
             and intent['subject'] == record['subject'] and intent['rule'] == record['rule'],
             'the release intent is bound elsewhere')
 
-    # 5. The complete unchanged revision record precedes any label change.
     require(record['revision_record'] == revision['comment'] and revision['approval'] == current
             and revision['fingerprint_now'] == current['fingerprint'],
             'the plan is not the approved revision now')
     require(revision['table_complete'] and revision['relies_ok'] and revision['links_ok'],
             'the revision table, Relies on or link checks did not pass')
 
-    # 6. Producer: approved ticket, verified merge, actual delta.
     producer = sources['producer']
     require(producer['merged'] and producer['delta'], 'the producer merge is unverified')
     require(record['producer'] == snapshot['producer'] == dict(
         ticket=producer['ticket'], approval=producer['approval'], merge=producer['merge'],
         delta_digest=digest(producer['delta'])), 'the producer or its actual delta changed')
 
-    # 7. Consumers: current approval, unchanged scope/paths, valid grants.
     expected = []
     tickets = [c['ticket'] for c in sources['consumers']]
-    # The released ticket is one of the evidenced consumers, exactly once (R8).
     require(len(set(tickets)) == len(tickets) and tickets.count(snapshot['ticket']) == 1,
             'the released ticket is not exactly one evidenced consumer')
     for consumer in sources['consumers']:
@@ -212,7 +184,6 @@ def assess(record, snapshot, sources, intent):
                              links_digest=digest(consumer['links'])))
     require(record['consumers'] == snapshot['consumers'] == expected, 'a consumer changed since the assessment')
 
-    # 8. The whole inclusive cutoff, renames and deletions included.
     cutoff, changes = sources['cutoff'], sources['cutoff']['changes']
     require(record['cutoff']['start'] == cutoff['start'] and record['cutoff']['end'] == cutoff['end']
             == snapshot['cutoff'], 'the cutoff moved')
@@ -225,14 +196,12 @@ def assess(record, snapshot, sources, intent):
             and tickets <= {t for c in changes for t in c['consumer_tickets']},
             'a change through the cutoff has another producer or consumer')
 
-    # 9. The exact covered contract hold and its full history.
     ids = [h['id'] for h in hold['history']]
     require(hold['comment'] == record['hold']['comment'] and hold['kind'] == 'contract'
             and len(set(ids)) == len(ids) and len(covered) == 1 and covered[0]['kind'] == 'contract'
             and record['hold']['history_digest'] == snapshot['history_digest'] == digest(hold['history']),
             'not the exact covered contract hold')
 
-    # 10. Evidence and the pre-effect digest are recomputed from what was read (R4).
     try:
         grants.evidence_matches(record, sources)
     except ValueError as error:
@@ -242,17 +211,10 @@ def assess(record, snapshot, sources, intent):
 
 
 def pre_effect(sources):
-    """The digest of every source read before an effect, evidence included."""
     return digest(sources)
 
 
 def check_on1(record, snapshot, sources, effect_boundary):
-    """One finite pass: assess, record the result and end. Never calls effect_boundary.
-
-    Malformed records or sources raise ValueError. Otherwise the result is a
-    contract `result`: refused/reconcile with its reason, or disabled because
-    OB-A1 keeps the release effect off even for complete, current evidence.
-    """
     record, snapshot = checked(record, 'on1'), checked(snapshot, 'snapshot')
     sources = read_sources(copy.deepcopy(sources))
     intent = bound_intent(record, snapshot)

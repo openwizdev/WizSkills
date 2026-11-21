@@ -1,16 +1,3 @@
-"""The feedback helper's offline proofs (#2292), on a recording `gh`.
-
-python3 -I skills/feedback/test/test_feedback.py
-
-One case per sender and sharing row of contracts/feedback.v1.md's proof table,
-plus the record's privacy and recovery rules. Each case runs the helper as a
-user's agent would, in its own scratch folder: a synthetic account
-(`synthetic-user`), a private state directory, and a PATH holding only the
-recording `gh` (fake_gh.py). Expected values are the contract's, written by
-hand: exact create-call counts, exact request bytes, exact phases.
-Fixtures prove behaviour on fixtures only, never live delivery.
-"""
-
 import fcntl
 import json
 import os
@@ -47,9 +34,6 @@ os.write = write
 sys.argv = sys.argv[1:]
 runpy.run_path(sys.argv[0], run_name='__main__')
 '''
-# The folder sync after the first record save works; every later one fails with
-# EIO: in send, `sending` is durable, the create is made, then the outcome is
-# renamed into place but its folder cannot be synced.
 DIR_SYNC_FAILS_AFTER_FIRST = '''
 import errno, os, runpy, stat, sys
 real, syncs = os.fsync, []
@@ -63,8 +47,6 @@ os.fsync = fsync
 sys.argv = sys.argv[1:]
 runpy.run_path(sys.argv[0], run_name='__main__')
 '''
-# The disk fills after the first record save: in send, `sending` is saved and
-# the create is made, then the outcome cannot be saved.
 FULL_DISK_AFTER_FIRST = '''
 import errno, os, runpy, stat, sys
 real, saves = os.write, []
@@ -93,7 +75,6 @@ class Helper(unittest.TestCase):
         self.state = self.tmp / 'state'
         self.log = self.tmp / 'gh.log'
         self.log.write_text('')
-        # Planted private-looking context: the agent's environment and folder.
         self.work = self.tmp / SECRET_PATH.lstrip('/')
         self.work.mkdir(parents=True)
         (self.work / 'notes.txt').write_text(f'private notes {TOKEN}\n')
@@ -116,8 +97,6 @@ class Helper(unittest.TestCase):
                 env.pop(k, None)
             else:
                 env[k] = v
-        # A disk filling up mid-record, in this test's process only: the first
-        # write is short (half its bytes land), every later one fails ENOSPC.
         program = (['-c', SHORT_WRITE, str(HELPER)] if short_write
                    else ['-c', FULL_DISK_AFTER_FIRST, str(HELPER)] if full_disk_after_first
                    else ['-c', DIR_SYNC_FAILS_AFTER_FIRST, str(HELPER)] if dir_sync_fails_after_first else [str(HELPER)])
@@ -145,7 +124,6 @@ class Helper(unittest.TestCase):
     def preview(self, op):
         _, a = self.run_helper('preview', op, expect=0)
         self.assertEqual(a['phase'], 'previewed')
-        # The code a user's yes repeats, read from the preview's last line (C-F1).
         a['preview_id'] = a['preview'].rsplit('\n', 1)[1].removeprefix('To create it, reply: yes ')
         return a
 
@@ -185,8 +163,6 @@ class Consent(Helper):
         self.assertTrue(all(ch in '0123456789abcdef' for ch in op))
 
     def test_preview_and_status_hand_the_agent_no_send_key(self):
-        # C-F1: the code send accepts reaches the agent only inside the preview
-        # shown to the user, never as a field one run can pass straight to send.
         op = self.draft()
         _, a = self.run_helper('preview', op, expect=0)
         _, status = self.run_helper('status', op, expect=0)
@@ -266,7 +242,6 @@ CONTRACT = HERE.parents[2] / 'contracts' / 'feedback-loop.v1.md'
 
 
 def loop_contract():
-    """The feedback-loop contract's machine-readable block, read from the copy."""
     text = CONTRACT.read_text()
     start = text.index('```feedback-loop-v1\n') + len('```feedback-loop-v1\n')
     return json.loads(text[start:text.index('```', start)])
@@ -274,8 +249,6 @@ def loop_contract():
 
 class Report(Helper):
     def test_filed_issue_is_a_report_by_marker_and_names_the_triage_label(self):
-        # openwiz.feedback-loop.v1: the agent route files title and body only,
-        # marker last after a blank line; triage, never the agent, adds the label.
         loop = loop_contract()
         op = self.draft()
         a = self.preview(op)
@@ -288,8 +261,6 @@ class Report(Helper):
         self.assertEqual((before, blank), (BODY, ''))
         self.assertRegex(marker, loop['marker'])
         self.assertIn(f"`{loop['label']}` label", sent['say'])
-        # FL1's landed comment comes only through a brief triage sends to a fleet;
-        # a report held for the owner can close with no comment (#126 R1).
         self.assertIn('only if triage sends it to a fleet and that fix merges', sent['say'])
         self.assertIn('pull request and the release', sent['say'])
         self.assertIn('a report held for the owner can close without that comment', sent['say'])
@@ -376,12 +347,10 @@ class Outcomes(Helper):
 
 
 class Accounts(Helper):
-    """C-F4: no environment token and no second account silently chooses who sends."""
 
     def test_an_environment_token_is_refused_before_any_call(self):
         for name in ('GH_TOKEN', 'GITHUB_TOKEN'):
             with self.subTest(name):
-                # No stored login: the token alone would log in as synthetic-other.
                 self.world(accounts=[], token_user=OTHER)
                 op = self.draft(title=f'{TITLE} ({name})')
                 before = len(self.calls())
@@ -525,7 +494,6 @@ class Record(Helper):
         cases = {'empty title': (' ', BODY), 'two-line title': ('a\nb', BODY), 'long title': ('t' * 257, BODY),
                  'empty body': (TITLE, '\n'), 'own marker': (TITLE, 'x\nOpenWiz feedback operation ' + 'a' * 32),
                  'long body': (TITLE, 'b' * 65536),
-                 # Invisible format characters make the preview read unlike the stored text (C-F3).
                  'bidi override in title': ('fix \u202edrawkcab', BODY), 'bidi isolate in body': (TITLE, 'a \u2067b\u2069'),
                  'zero-width space in title': ('ap\u200bprove', BODY), 'zero-width joiner in body': (TITLE, 'x\u200dy'),
                  'byte order mark in body': (TITLE, '\ufeffbody'), 'tag character in body': (TITLE, 'x\U000e0041')}
@@ -541,8 +509,6 @@ class Record(Helper):
 
 
     def test_a_saved_draft_from_before_the_format_check_is_refused_at_preview(self):
-        # A draft saved before format characters were refused (C-F3, R1): its
-        # record holds U+202E. Resuming it previews nothing and calls no gh.
         for field in ('title', 'body'):
             with self.subTest(field):
                 op = self.draft(title=f'{TITLE} {field}')
@@ -563,8 +529,6 @@ class Record(Helper):
 
 
     def test_a_saved_preview_from_before_the_format_check_is_refused_at_send(self):
-        # A preview saved before format characters were refused (C-F3): its
-        # record holds U+202E. The yes to it creates nothing and calls no gh.
         for field in ('title', 'body'):
             with self.subTest(field):
                 op = self.draft(title=f'{TITLE} {field}')
@@ -588,7 +552,6 @@ class Record(Helper):
 
 
 class Duplicates(Helper):
-    """R1: while an operation with the same chosen text is uncertain or sending, no other attempt is made."""
 
     def make_uncertain(self, title=TITLE):
         op = self.draft(title=title)
@@ -635,7 +598,6 @@ class Duplicates(Helper):
         self.world(create={'kill_parent': True})
         self.run_helper('send', op, '--preview-id', a['preview_id'])
         self.assertEqual(self.record(op)['phase'], 'sending')
-        # The killed send's operation lock is held again, as by a send still in flight.
         fd = os.open(self.state / 'feedback' / f'{op}.lock', os.O_RDWR)
         self.addCleanup(os.close, fd)
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -646,7 +608,6 @@ class Duplicates(Helper):
 
 
 class Placement(Helper):
-    """R2: the record stays outside every repository, through symlinked ancestors too."""
 
     def test_a_symlinked_ancestor_into_a_repository_is_refused(self):
         repo = self.tmp / 'synthetic-repo'
@@ -664,7 +625,6 @@ class Placement(Helper):
 
 
 class Durability(Helper):
-    """R3: a record is replaced only once every byte is written and synced."""
 
     def test_a_short_write_then_a_full_disk_sends_nothing_and_keeps_the_record(self):
         op = self.draft()
@@ -761,7 +721,6 @@ class Share(Helper):
 
 
 class Capitals(Helper):
-    """RN6: GitHub may name the destination with any capitals; another repository is still refused."""
     SAME = ('openwizdev/openwiz', 'openwizdev/OpenWiz', 'OpenWizDev/OPENWIZ')
     FOREIGN = ('openwizdev/openwiz2', 'someone/openwiz', 'openwizdev/WizPlugins')
 
@@ -787,7 +746,7 @@ class Capitals(Helper):
         self.assertEqual(self.creates(), [])
 
     def test_created_issue_in_another_repository_is_not_sent(self):
-        self.world(name='openwizdev/openwiz2')  # the repository reads right; the created issue does not
+        self.world(name='openwizdev/openwiz2')
         op = self.draft()
         a = self.preview(op)
         _, sent = self.run_helper('send', op, '--preview-id', a['preview_id'], expect=1)

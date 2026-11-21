@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for build-ticket's ticket.py, run through its CLI on synthetic state.
-
-python3 -I skills/build-ticket/scripts/test_ticket.py -v
-"""
 import json
 import os
 from pathlib import Path
@@ -38,7 +34,7 @@ Ticket X1 of spec #40.
 
 START = 'launch-fleet: started'
 NOREPLY = '7+jparker@users.noreply.github.com'
-PERSONAL = 'pat@example.invalid'          # synthetic stand-in for a personal address
+PERSONAL = 'pat@example.invalid'
 GLOBAL = f'[user]\n\tname = Pat Person\n\temail = {PERSONAL}\n'
 
 
@@ -80,7 +76,7 @@ class Case(unittest.TestCase):
         self.save({'issues': {'41': issue()}, 'user': {'login': 'jparker', 'id': 7},
                    'comments': {'41': [{'id': 1, 'user': {'login': 'example[bot]'}, 'body': START}]},
                    'pr_head': HEAD, 'checkout_repo': REPO})
-        self.gitconfig = self.dir / 'global.gitconfig'     # the machine's personal global identity
+        self.gitconfig = self.dir / 'global.gitconfig'
         self.gitconfig.write_text(GLOBAL)
         self.origin = self.dir / 'origin.git'
         subprocess.run(['git', 'init', '-q', '--bare', str(self.origin)], check=True, env=self.env())
@@ -244,9 +240,9 @@ class Scope(Case):
     def test_scope_flags_every_unowned_side(self):
         self.git('mv', 'src/export/run.py', 'src/moved.py')
         self.git('commit', '-q', '-m', 'rename out')
-        self.write('src/other.py', 'y = 2\n')            # unstaged
-        self.write('src/export-extra/x.py', 'z\n')       # untracked, prefix look-alike
-        self.write('docs/export.md.bak', 'z\n')          # untracked, exact look-alike
+        self.write('src/other.py', 'y = 2\n')
+        self.write('src/export-extra/x.py', 'z\n')
+        self.write('docs/export.md.bak', 'z\n')
         code, out, _ = self.run_ticket('scope', REPO, '41')
         lines = out.splitlines()
         self.assertEqual(code, 1)
@@ -340,7 +336,6 @@ class Records(Case):
             self.assertTrue(line.endswith(expected), (decision, line))
 
     def test_records_binds_only_a_later_decision_naming_exactly_the_terminal_park(self):
-        # catches: a partial, early, incomplete or quoted-park decision resuming parked work
         report = (f'VERDICT: CHANGES at {HEAD}\n\n- **R1 [blocking]** x\n  Risk: security: y\n'
                   f'- **R2 [blocking]** x\n  Risk: security: y\n\nNext: park R1 and R2 as a decision for Jake.')
         exact = f'**Orchestrator decision:** fix once more: R1 and R2 at {HEAD}. Why: x'
@@ -375,7 +370,6 @@ class Records(Case):
         self.assertTrue(line.startswith('decision: comment 3 by owner-1: fix once more R1 and R2'), line)
 
     def test_records_reads_one_named_trusted_comment_on_a_ticket_or_pull_request(self):
-        # catches: an ordinary trusted comment read as the answer, or a fleet record left unread
         self.comments(41, ('owner-1', START),
                           ('example[bot]', 'Answer: yes, own tools/x.py too.'),
                           ('example[bot]', 'Evidence: a synthetic run, not an answer.'),
@@ -456,14 +450,14 @@ class Receipt(Case):
 
     def test_push_after_an_unrecorded_earlier_push_stays_unknown(self):
         receipt = self.dir / 'receipt.txt'
-        self.git('push', '-q', 'origin', 'main:refs/heads/work')     # branch made at the base
+        self.git('push', '-q', 'origin', 'main:refs/heads/work')
         code, out, err = self.run_ticket('push', str(receipt), '--', 'git', 'push', '-q', 'origin', 'HEAD')
         self.assertEqual(code, 0, err)
         self.assertTrue(receipt.exists(), out)
         receipt.unlink()
         self.write('src/export/run.py', 'x = 4\n')
         self.commit('checkpoint')
-        self.git('push', '-q', 'origin', 'HEAD')                      # a push with no receipt
+        self.git('push', '-q', 'origin', 'HEAD')
         self.write('src/export/run.py', 'x = 5\n')
         self.commit('hand-back')
         code, out, err = self.run_ticket('push', str(receipt), '--', 'git', 'push', '-q', 'origin', 'HEAD')
@@ -537,7 +531,6 @@ class Author(Case):
         self.assertEqual(out, 'author: jparker <7+jparker@users.noreply.github.com>\n')
 
     def test_author_commit_is_noreply_over_a_personal_global_identity(self):
-        # catches: a builder that commits with the identity the machine's global config gives it
         self.git('config', '--unset', 'user.name')
         self.git('config', '--unset', 'user.email')
         self.write('src/export/run.py', 'x = 2\n')
@@ -551,7 +544,6 @@ class Author(Case):
                          f'jparker <{NOREPLY}> jparker <{NOREPLY}>\n')
 
     def test_author_refuses_an_identity_that_still_overrides_it(self):
-        # catches: author reporting success while the environment still commits as someone else
         for key in ('GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_EMAIL'):
             with self.subTest(key=key):
                 code, out, err = self.run_ticket('author', **{key: PERSONAL})
@@ -574,17 +566,15 @@ class Author(Case):
         code, _, err = self.run_ticket('author')
         self.assertEqual(code, 2)
         self.assertIn('unexpected shape', err)
-        self.assertEqual(self.git('config', 'user.email').strip(), NOREPLY)   # left as it was
+        self.assertEqual(self.git('config', 'user.email').strip(), NOREPLY)
 
 
 class Identity(Case):
-    """`push` refuses before pushing when an outgoing commit is not by a GitHub noreply address."""
 
     def remote_work(self, branch='work'):
         return self.git('ls-remote', 'origin', f'refs/heads/{branch}').strip()
 
     def test_push_refuses_a_commit_without_a_noreply_author_or_committer(self):
-        # catches: a personal (or lookalike) address reaching GitHub in a pushed commit
         cases = [('author', {'GIT_AUTHOR_EMAIL': PERSONAL}),
                  ('committer', {'GIT_COMMITTER_EMAIL': PERSONAL}),
                  ('author', {'GIT_AUTHOR_EMAIL': NOREPLY + '.example.invalid'}),
@@ -607,8 +597,7 @@ class Identity(Case):
                 self.assertNotIn('Pat', out + err)
 
     def test_push_refuses_an_earlier_unpushed_commit_too(self):
-        # catches: checking only HEAD while an earlier outgoing commit carries the personal address
-        self.git('config', '--unset', 'user.email')                        # falls back to the global one
+        self.git('config', '--unset', 'user.email')
         self.write('src/export/run.py', 'x = 2\n')
         self.commit('red')
         red = self.git('rev-parse', 'HEAD').strip()
@@ -621,7 +610,6 @@ class Identity(Case):
         self.assertEqual(self.remote_work(), '')
 
     def test_push_checks_only_commits_not_already_on_the_remote(self):
-        # catches: refusing work someone else already pushed (main's commits keep their own identity)
         self.git('checkout', '-q', 'main')
         self.write('src/other.py', 'y = 2\n')
         self.commit('upstream', GIT_AUTHOR_EMAIL=PERSONAL, GIT_COMMITTER_EMAIL=PERSONAL)
@@ -635,7 +623,6 @@ class Identity(Case):
         self.assertEqual(self.remote_work().split()[0], self.git('rev-parse', 'HEAD').strip())
 
     def personal_commit_elsewhere(self, gitdir):
-        """A personal commit in a bare repository other than origin's current branches."""
         self.git('checkout', '-q', '-b', 'side', 'main')
         self.write('src/other.py', 'y = 9\n')
         self.commit('personal', GIT_AUTHOR_EMAIL=PERSONAL, GIT_COMMITTER_EMAIL=PERSONAL)
@@ -646,7 +633,6 @@ class Identity(Case):
         return sha
 
     def test_push_judges_against_what_origin_holds_now(self):
-        # R1: a stale tracking ref (origin's branch since deleted) or another remote's ref hides nothing
         other = self.dir / 'other.git'
         subprocess.run(['git', 'init', '-q', '--bare', str(other)], check=True, env=self.env())
         self.git('remote', 'add', 'other', str(other))
@@ -655,9 +641,9 @@ class Identity(Case):
                 self.git('checkout', '-q', '-b', f'work-{i}', 'main')
                 if where == 'stale':
                     sha = self.personal_commit_elsewhere(self.origin)
-                    self.git('fetch', '-q', 'origin')                          # origin/side now tracked
+                    self.git('fetch', '-q', 'origin')
                     subprocess.run(['git', '--git-dir', str(self.origin), 'branch', '-q', '-D', 'side'],
-                                   check=True, env=self.env())                 # gone from origin, still tracked
+                                   check=True, env=self.env())
                 else:
                     sha = self.personal_commit_elsewhere(other)
                     self.git('fetch', '-q', 'other')
@@ -670,7 +656,6 @@ class Identity(Case):
                 self.assertEqual(self.remote_work(f'work-{i}'), '')
 
     def test_push_fetches_a_tip_origin_holds_that_this_clone_lacks(self):
-        # R1: main moved on origin since the last fetch; its commits are origin's, not outgoing
         upstream = self.dir / 'upstream'
         subprocess.run(['git', 'clone', '-q', '-b', 'main', str(self.origin), str(upstream)], check=True, env=self.env())
         (upstream / 'src' / 'other.py').write_text('y = 7\n')
@@ -679,7 +664,7 @@ class Identity(Case):
                            env=self.env(GIT_AUTHOR_EMAIL=PERSONAL, GIT_COMMITTER_EMAIL=PERSONAL))
         theirs = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=upstream, check=True, capture_output=True,
                                 text=True).stdout.strip()
-        self.git('fetch', '-q', str(upstream), 'main')                         # the commit, no tracking ref
+        self.git('fetch', '-q', str(upstream), 'main')
         self.git('merge', '-q', '--no-edit', theirs)
         self.write('src/export/run.py', 'x = 2\n')
         self.commit('mine')
@@ -688,13 +673,12 @@ class Identity(Case):
         self.assertEqual(code, 0, out + err)
 
     def test_push_judges_against_the_url_the_push_goes_to(self):
-        # R1: a separate push URL is where the commits land, so it is what is read
         elsewhere = self.dir / 'elsewhere.git'
         subprocess.run(['git', 'init', '-q', '--bare', str(elsewhere)], check=True, env=self.env())
         self.write('src/other.py', 'y = 2\n')
         self.commit('theirs', GIT_AUTHOR_EMAIL=PERSONAL, GIT_COMMITTER_EMAIL=PERSONAL)
         theirs = self.git('rev-parse', 'HEAD').strip()
-        self.git('push', '-q', 'origin', 'HEAD:main')                          # held by the fetch URL only
+        self.git('push', '-q', 'origin', 'HEAD:main')
         self.git('remote', 'set-url', '--push', 'origin', str(elsewhere))
         self.write('src/export/run.py', 'x = 2\n')
         self.commit('mine')
@@ -711,7 +695,6 @@ class Identity(Case):
         self.assertIn("cannot read origin's branches and tags: nothing pushed", err)
 
     def test_push_refuses_a_command_that_sends_anything_but_head_to_origin(self):
-        # R1: the check binds to the refs the command sends
         self.git('branch', '-q', 'extra', 'main')
         self.write('src/export/run.py', 'x = 2\n')
         self.commit('mine')

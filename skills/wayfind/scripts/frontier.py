@@ -1,37 +1,4 @@
 #!/usr/bin/env python3
-"""Read a wayfind map's frontier, or who holds one question's claim.
-
-  python3 -I frontier.py map <map>
-      <map> is the map's issue number. The issue must carry the `wayfind:map`
-      label; any other issue refuses. One line per open question, in the
-      map's order:
-        #<n> frontier <kind label>: <title>
-        #<n> blocked by #<a> #<b>: <title>
-        #<n> held by <claim comment id>: <title>
-        #<n> no kind label: <title>      (not exactly one wayfind: kind)
-      or `no open question` when every question is closed.
-  python3 -I frontier.py holder <question> [--mine <claim comment id>]
-      <question> is the question's issue number. `closed`, `no kind label`,
-      `blocked by #<a> #<b>`, else `unclaimed`, `held by <id>` or `yours`
-      (your claim holds and nothing blocks it).
-      Work only on `yours`; on anything else release your claim and stop.
-
-A claim is a comment whose body is `wayfind: claimed`; its id is the
-numeric `#issuecomment-` suffix of its URL. `wayfind: released <id>` after
-it releases that claim. The earliest unreleased claim holds the question.
-Only a record author's claim or release counts: a login in the Record
-authors row of the `## GitHub identity` table of docs/agents/fleet.md on
-the repository's default branch. Anyone else's comment is ignored; a
-missing or malformed row (anything but `| Record authors | <logins> |`)
-trusts nobody and refuses the read.
-
-Every connection is read page by page, in order, through its cursors; a
-page chain that stops short, repeats a cursor or changes its total refuses.
-Exits 2 with the reason on stderr and nothing on stdout when any part of
-the read fails or is incomplete. Never read that as an empty frontier.
-Needs gh (signed in). Every issue number names an issue in one repository:
-GH_REPO when set, else the current clone's.
-"""
 import json
 import re
 import subprocess
@@ -43,8 +10,6 @@ CLAIM = 'wayfind: claimed'
 RELEASE = re.compile(r'wayfind: released ([1-9][0-9]*)')
 COMMENT_ID = re.compile(r'#issuecomment-([1-9][0-9]*)')
 LOGIN = re.compile(r'[a-z0-9][a-z0-9-]{0,38}(?:\[bot\])?')
-# Only the connection being advanced binds the cursor; every other one, nested
-# ones included, starts at its first page (GitHub refuses a shared cursor).
 PAGE = '%s(first: 100%s) { totalCount pageInfo { hasNextPage endCursor } nodes { %s } }'
 FIELDS = {'labels': 'name', 'blockedBy': 'number state',
           'comments': 'url body author { __typename login }'}
@@ -118,7 +83,6 @@ def record_authors():
 
 
 def nodes(issue, field):
-    """Every node of one connection, in order, following and checking its cursors."""
     if ('all', field) in issue:
         return issue[('all', field)]
     connection, found, cursors, total = issue.get(field), [], set(), None
@@ -146,7 +110,6 @@ def nodes(issue, field):
 
 
 def author(comment):
-    """The comment's login as fleet.md writes it (an App as `<name>[bot]`), or None."""
     who = comment.get('author')
     login = who.get('login') if isinstance(who, dict) else None
     if not isinstance(login, str):
@@ -172,7 +135,6 @@ def holder(issue, authors):
 
 
 def standing(question):
-    """Why nobody may work on this question now, or its kind label when they may."""
     kinds = [l['name'] for l in nodes(question, 'labels') if str(l.get('name')).startswith('wayfind:')]
     blockers = [b['number'] for b in nodes(question, 'blockedBy') if b.get('state') != 'CLOSED']
     if len(kinds) != 1 or kinds[0] not in KINDS:

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Fixture discovery only; any mutation is refused."""
 import json
 import os
 from pathlib import Path

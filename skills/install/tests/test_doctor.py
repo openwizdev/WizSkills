@@ -227,14 +227,16 @@ class Doctor(unittest.TestCase):
         self.assertEqual(self.only(self.s.run()),
                          '1. Labels: gh could not list the labels of %s. Fix: gh auth login' % REPO)
 
-    # catches: an App setup's check found missing passing as installed.
+    # catches: an App setup's check found missing passing as installed, or a fix that sends the
+    # person to the setup page 0.1.0 removed (#2139) instead of the packaged App tool.
     def test_app_not_installed(self):
         self.s.observations['github_app'] = 'app_missing'
         self.s.save()
         self.assertEqual(self.only(self.s.run()),
-                         '2. GitHub App: not verified (app_missing). Fix: install OpenWiz\'s GitHub App on %s '
-                         'from the setup page, then python3 -I -B %s/runtime/setup/setup.py check --state-dir %s'
-                         % (REPO, self.s.build, self.s.state))
+                         '2. GitHub App: not verified (app_missing). Fix: set up OpenWiz\'s GitHub App for %s with '
+                         '%s/runtime/github-app/setup.py, as the setup skill\'s "The App" says, then '
+                         'python3 -I -B %s/runtime/setup/setup.py check --state-dir %s'
+                         % (REPO, self.s.build, self.s.build, self.s.state))
 
     # catches: an old App check counted as current.
     def test_app_check_out_of_date(self):
@@ -467,6 +469,203 @@ class Doctor(unittest.TestCase):
         self.s.run()
         self.assertEqual((self.s.state / 'setup/state.json').read_bytes(), before)
         self.assertEqual(sorted(p.name for p in (self.s.state / 'setup').iterdir()), ['state.json'])
+
+
+# The install skill's commands (#2139): every packaged tool the skill names, with its subcommand and long
+# flags, against what OpenWiz 0.1.0's own --help prints (fixtures/openwiz-0.1.0-commands.json, read from
+# the published package). A step naming a command the package lacks stops a stranger's install there.
+SKILL = Path(__file__).resolve().parents[1] / 'SKILL.md'
+LINE = 'maint/0.2'  # the WizSkills line this copy of the skill is on
+PACKAGE = Path(__file__).resolve().parent / 'fixtures/openwiz-0.1.0-commands.json'
+# The bare names the skill's prose uses, by the tool each one means.
+BARE = {'install': 'tools/install/install', 'setup.py': 'runtime/setup/setup.py',
+        'github_login.py': 'runtime/setup/github_login.py', 'cloudroom.py': 'runtime/cloudroom/cloudroom.py',
+        'access.py': 'runtime/access/access.py', 'openwiz': 'openwiz'}
+
+
+def skill_commands(text):
+    """(tool, subcommand, long flags, the command's text) for each command in the skill's code: each
+    fenced line and inline span whose first word, after `python3` and its options, names a packaged tool."""
+    import re
+    spans = []
+    for match in re.finditer(r'```[a-z]*\n(.*?)```|`([^`\n]+)`', text, re.S):
+        spans += match[1].split('\n') if match[1] is not None else [match[2]]
+    found = []
+    for span in spans:
+        words = [w.strip('"\'[]') for w in span.split()]
+        while words and (words[0] == 'python3' or words[0].startswith('-') or '=' in words[0]):
+            words.pop(0)
+        if not words or words[0].startswith('$') and '/' not in words[0]:
+            continue
+        head = words[0].replace('"$openwiz"', '').replace('$openwiz', '')
+        tool = next((t for t in BARE.values() if t != 'openwiz' and head.endswith(t)), None)
+        if tool is None and (head in BARE or head.endswith('/openwiz')):
+            tool = BARE.get(head, 'openwiz')
+        if tool is None:
+            continue
+        rest = words[1:]
+        sub = rest[0] if rest and not rest[0].startswith('-') and not rest[0].startswith('<') else ''
+        flags = sorted({w.split('=')[0].rstrip('.,;:)') for w in rest if w.startswith('--')} - {'--help'})
+        if sub or flags:  # a bare tool name is a mention, not a command
+            found.append((tool, sub, flags, span))
+    return found
+
+
+class SkillCommandsMatchPackage(unittest.TestCase):
+    """Each command the install skill names exists in OpenWiz 0.1.0, with flags its --help lists."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.package = json.loads(PACKAGE.read_text())['tools']
+        cls.commands = skill_commands(SKILL.read_text())
+
+    # catches: a step naming a subcommand 0.1.0 removed (`install open`), or a flag it never had.
+    def test_every_named_command_is_in_the_package(self):
+        wrong = []
+        for tool, sub, flags, span in self.commands:
+            subs = self.package[tool]
+            if sub not in subs:
+                wrong.append('%s: no `%s` in 0.1.0 (%s)' % (span, sub, ', '.join(s or '(none)' for s in subs)))
+                continue
+            wrong += ['%s: 0.1.0 has no %s' % (span, f) for f in flags if f not in subs[sub]]
+        self.assertEqual(wrong, [])
+
+    # catches: an install that never puts the skills in the user's agent, never proves its build, or
+    # never reads setup and CloudRoom: the steps a stranger's install stalled without.
+    def test_the_install_path_names_its_steps(self):
+        named = {(tool, sub) for tool, sub, _, _ in self.commands}
+        for step in [('tools/install/install', 'preflight'), ('tools/install/install', 'download'),
+                     ('tools/install/install', 'install'), ('tools/install/install', 'skills'),
+                     ('tools/install/install', 'status'), ('runtime/setup/setup.py', 'check'),
+                     ('runtime/setup/setup.py', 'prepare'), ('runtime/cloudroom/cloudroom.py', 'status'),
+                     ('runtime/cloudroom/cloudroom.py', 'install'), ('runtime/cloudroom/cloudroom.py', 'sign-in'),
+                     ('runtime/setup/github_login.py', 'sign-in'), ('openwiz', '')]:
+            self.assertIn(step, named)
+        self.assertTrue(any(t == 'openwiz' and s == '' and '--build-identity' in f
+                            for t, s, f, _ in self.commands), 'no `<root>/current/openwiz --build-identity`')
+
+    # catches: the skills copied, and the restart that loads them, before the logins and setup's check
+    # (#2139): the restarted agent then loads the 0.1.0 package's older install skill mid-install.
+    def test_skills_and_the_restart_come_after_setup_and_the_logins(self):
+        order = [(tool, sub) for tool, sub, _, _ in self.commands]
+        skills = order.index(('tools/install/install', 'skills'))
+        for step in [('runtime/setup/setup.py', 'check'), ('runtime/cloudroom/cloudroom.py', 'sign-in'),
+                     ('runtime/setup/github_login.py', 'sign-in')]:
+            self.assertLess(order.index(step), skills, step)
+        text = SKILL.read_text()
+        self.assertIn('is older than this one; if you are told to install again, follow this skill', text)
+        self.assertIn('https://github.com/openwizdev/WizSkills/blob/%s/skills/install/SKILL.md' % LINE, text)
+
+    # catches: a CloudRoom code 0.1.0 prints with no row, so the agent improvises its next step.
+    def test_every_cloudroom_code_has_a_row(self):
+        rows = {code for line in SKILL.read_text().split('\n') if line.startswith('| `cloudroom_')
+                for code in __import__('re').findall(r'`(cloudroom_[a-z_]+)`', line.split(' | ')[0])}
+        self.assertEqual(sorted(set(json.loads(PACKAGE.read_text())['cloudroom_codes']) - rows), [])
+
+    # catches: a removal that deletes <root> or <state> whole (the user's own files go with it), or
+    # leaves the agent guessing which skill folders are OpenWiz's.
+    def test_removal_names_each_entry_and_never_deletes_a_folder_whole(self):
+        text = SKILL.read_text()
+        removal = text[text.index('## Recovery and removal'):]
+        for name in json.loads(PACKAGE.read_text())['skills']:
+            self.assertIn('`%s`' % name, removal)
+        for entry in ('`current`', '`channel.json`', '`install.lock`', '`skills/`', '/setup/`', '/cloudroom/`',
+                      '`config.json`', '`app/`', '`state.json`', '`loops/`', '`clone/`', 'ls -A', 'rmdir'):
+            self.assertIn(entry, removal)
+        self.assertNotRegex(removal, r'(?i)\bdelete `<root>`|rm -rf')
+
+    # catches: a restart, whatever the user says, loading the package's older install skill (#2139,
+    # rehearsal 3): step 4 must overwrite each installed copy with this skill and check it by content,
+    # and this skill's version must differ from the package's, so the check can tell them apart.
+    def test_step_4_overwrites_the_installed_copy_and_checks_it_by_content(self):
+        import re
+        text = SKILL.read_text()
+        mine = re.search(r'^version: (\S+)$', text, re.M)[1]
+        self.assertNotEqual(mine, json.loads(PACKAGE.read_text())['installed_install_skill_version'])
+        step4 = text[text.index('## 4. '):text.index('## 5. ')]
+        self.assertIn('git clone --depth 1 --branch %s https://github.com/openwizdev/WizSkills' % LINE, step4)
+        for home in ('.claude/skills', '.codex/skills', 'CODEX_HOME'):
+            self.assertIn(home, step4)
+        for words in ("'install ope[n] '", "'from the setup pag[e]'", "'Restart the OpenWiz serve[r]'",
+                      'cp -R "$src"/. "$d/install/"', 'cmp -s', 'version: %s' % mine):
+            self.assertIn(words, step4)
+        self.assertIn('"continue the OpenWiz install"', step4)
+        self.assertNotIn('any words do', text)
+
+    # catches: a resumed session reaching for the temporary clone, which the restart lost, or a fixed
+    # resume point that skips an unfinished sign-in (#2139, rehearsal 3).
+    def test_a_new_session_resumes_from_installed_files_at_the_first_unfinished_step(self):
+        text = SKILL.read_text()
+        self.assertIn('\n## Resume', text)
+        resume = text[text.index('## Resume'):text.index('## 1. ')]
+        for words in ('first unfinished step', 'readlink <root>/current', '--build-identity', 'setup.py check',
+                      'version: ', 'OPENWIZ_STATE_DIR="$state"', 'identity_unreadable'):
+            self.assertIn(words, resume)
+        self.assertIn('operation_id', text)
+        after = text[text.index('## 5. '):text.index('## Recovery and removal')]
+        self.assertNotIn('$openwiz', resume + after)
+        self.assertNotRegex(text, r'\]\(\.\./\.\./contracts/')
+
+    def parts(self):
+        text = SKILL.read_text()
+        return (text, text[text.index('## 4. '):text.index('## 5. ')], text[text.index('## Resume'):text.index('## 1. ')],
+                text[text.index('## Recovery and removal'):])
+
+    # catches: review R1 at ac29982: with CODEX_HOME set, 0.1.0 copies Codex's skills to
+    # $CODEX_HOME/skills, so a check of ~/.codex/skills looks in an unused folder.
+    def test_the_codex_folder_follows_codex_home(self):
+        text, step4, resume, removal = self.parts()
+        for part in (step4, resume, removal):
+            self.assertIn('${CODEX_HOME:-$HOME/.codex}/skills', part)
+        self.assertNotIn('never `$CODEX_HOME`', text)
+
+    # catches: review R2 at c4bd867: a removal that deletes a skill folder itself, even one whose
+    # ownership marker the real installer refuses as invalid. Removal only lists the folders, and the
+    # person removes the ones they recognise as OpenWiz's.
+    def test_removal_lists_skill_folders_and_deletes_none(self):
+        import re
+        removal = self.parts()[3]
+        blocks = re.findall(r'```sh\n(.*?)```', '\n'.join(l[3:] if l.startswith('   ') else l
+                                                          for l in removal.split('\n')), re.S)
+        self.assertTrue(blocks)
+        with tempfile.TemporaryDirectory() as home:
+            for skills in ('.claude/skills', 'codex-home/skills'):
+                for name in ('install', 'research'):
+                    folder = Path(home) / skills / name
+                    folder.mkdir(parents=True)
+                    (folder / 'SKILL.md').write_text('# synthetic\n')
+                (Path(home) / skills / 'install/.openwiz-skill').write_text('not a valid receipt\n')
+            before = sorted(str(q.relative_to(home)) for q in Path(home).rglob('*'))
+            env = {'HOME': home, 'PATH': '/usr/bin:/bin', 'CODEX_HOME': str(Path(home) / 'codex-home')}
+            listed = ''.join(subprocess.run(['sh', '-c', b], env=env, capture_output=True, text=True).stdout
+                             for b in blocks)
+            self.assertEqual(sorted(str(q.relative_to(home)) for q in Path(home).rglob('*')), before)
+        for skills in ('.claude/skills', 'codex-home/skills'):
+            for name in ('install', 'research'):
+                self.assertIn('%s/%s/%s' % (home, skills, name), listed)
+        self.assertIn('recognise as OpenWiz', removal)
+
+    # catches: review R3 at ac29982: a plain `install` never reconciles an uncertain CloudRoom install.
+    def test_an_uncertain_cloudroom_install_is_retried_with_its_operation(self):
+        row = next(l for l in self.parts()[0].split('\n') if l.startswith('| `cloudroom_install_uncertain`'))
+        self.assertIn('cloudroom.py install --yes --operation <operation_id> --state-dir <state>', row)
+
+    # catches: review R4 at ac29982: preflight passes with gh missing, then sign-in says login_gh_missing.
+    def test_a_missing_gh_gets_its_install_step(self):
+        text = self.parts()[0]
+        for words in ('login_gh_missing', 'https://cli.github.com', 'gh --version'):
+            self.assertIn(words, text)
+        self.assertIn('even on exit 0', text[text.index('## 1. '):text.index('## 2. ')])
+
+    # catches: a parser that finds nothing passing the check above vacuously.
+    def test_the_reader_finds_a_synthetic_skill_s_commands(self):
+        text = ('Run `install open --root <root> --browser` and\n\n```sh\n'
+                'python3 -I "$openwiz"/tools/install/install skills --root <root>\n```\n'
+                'then `<root>/current/openwiz --build-identity` and `git clone x "$openwiz"`.\n')
+        self.assertEqual([c[:3] for c in skill_commands(text)],
+                         [('tools/install/install', 'open', ['--browser', '--root']),
+                          ('tools/install/install', 'skills', ['--root']),
+                          ('openwiz', '', ['--build-identity'])])
 
 
 if __name__ == '__main__':

@@ -75,7 +75,7 @@ class Commands(unittest.TestCase):
             with self.subTest(path=path):
                 result = self.run_script(path, ['--help'])
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(words, ' '.join(result.stdout.split()) if '  ' not in words else result.stdout)
+                self.assertIn(words, ' '.join(result.stdout.split()))
 
     def test_usage_prints_each_command_list(self):
         for path, args, words in USAGE:

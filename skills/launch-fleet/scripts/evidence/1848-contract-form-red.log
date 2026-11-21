@@ -1,0 +1,22 @@
+F
+======================================================================
+FAIL: test_only_a_record_authors_landed_comment_counts (__main__.Landed.test_only_a_record_authors_landed_comment_counts)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-merge.py", line 603, in test_only_a_record_authors_landed_comment_counts
+    self.assertEqual(self.posts(w), [(9101, LANDED)])
+AssertionError: Lists differ: [] != [(9101, 'Landed: the fix for this report m[62 chars]2.')]
+
+Second list contains 1 additional elements.
+First extra element 0:
+(9101, 'Landed: the fix for this report merged in openwizdev/OpenWiz#9201 and will ship in OpenWiz 9.4.2.')
+
+- []
++ [(9101,
++   'Landed: the fix for this report merged in openwizdev/OpenWiz#9201 and will '
++   'ship in OpenWiz 9.4.2.')]
+
+----------------------------------------------------------------------
+Ran 1 test in 0.438s
+
+FAILED (failures=1)

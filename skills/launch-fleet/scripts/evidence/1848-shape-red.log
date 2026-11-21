@@ -1,0 +1,13 @@
+F
+======================================================================
+FAIL: test_a_merge_that_closes_no_report_posts_nothing (__main__.Landed.test_a_merge_that_closes_no_report_posts_nothing) [a bare milestone]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-merge.py", line 622, in test_a_merge_that_closes_no_report_posts_nothing
+    self.assertEqual(code, 0, out)
+AssertionError: 1 != 0 : 
+
+----------------------------------------------------------------------
+Ran 1 test in 3.752s
+
+FAILED (failures=1)

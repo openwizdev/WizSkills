@@ -388,24 +388,201 @@ class FeedbackPath(unittest.TestCase):
                 self.assertEqual(rc, 2, text)
                 self.assertTrue(text.strip().splitlines()[-1].startswith("feedback: "), text)
 
-    def test_skill_routes_reports_away_from_public_comments(self):
-        # catches: the general sort posting triage notes or a brief comment on a
-        # report, or a reply in words posted without the owner's yes.
+    def test_skill_routes_reports_to_the_feedback_path_as_untrusted_data(self):
+        # catches: the general sort missing the feedback path, so a report is
+        # sorted like any issue, or its words read as instructions.
         text = (ROOT / "skills/triage/SKILL.md").read_text()
-        self.assertIn("## Feedback reports\n", text)
         sort = text.split("## Sort an issue\n", 1)[1].split("\n## ", 1)[0]
         self.assertIn("[Feedback reports](#feedback-reports)", sort.split("\n2. ", 1)[0])
         section = text.split("## Feedback reports\n", 1)[1].split("\n## ", 1)[0]
         self.assertIn("feedback.py plan", section)
-        fleet = section.split("**`fleet`:**", 1)[1].split("\n   - ", 1)[0]
-        order = [fleet.index(step) for step in ("gh issue create", "post the printed `approval`",
-                                                "--add-label ready-for-agent", "feedback.py verify",
-                                                "milestone to the version")]
-        self.assertEqual(order, sorted(order), "create, approve, then label, verify, and only then the report")
-        self.assertNotIn("--label ready-for-agent", fleet, "the brief is created without its ready label")
-        self.assertIn("No comment on the report", section)
-        self.assertIn("explicit yes to the exact text", section)
         self.assertIn("untrusted public data", section)
+
+
+# R3 (#1942): the no-reply rule checked where it matters, at the GitHub write.
+# The run executes the `gh` commands the skill's step 3 documents for the
+# outcome, plus the report writes the helper prints, against a fake `gh` that
+# logs every call; a matched sentence could pass while a step comments.
+GH = r"""
+import json, os, sys
+world = os.environ["FAKE_GH_WORLD"]
+args = sys.argv[1:]
+with open(os.environ["FAKE_GH_LOG"], "a") as log:
+    log.write(json.dumps(args) + "\n")
+state = json.load(open(world))
+def opt(name, many=False):
+    found = [args[i + 1] for i, a in enumerate(args[:-1]) if a == name]
+    return found if many else (found[-1] if found else None)
+if args[:1] != ["issue"] or opt("--repo") != "openwizdev/OpenWiz":
+    sys.exit(3)
+verb = args[1]
+if verb == "create":
+    number = str(9200 + len(state) - 1)
+    state[number] = {"number": int(number), "author": {"login": "synthetic-owner"}, "title": opt("--title"),
+                     "body": open(opt("--body-file")).read(), "milestone": {"title": opt("--milestone")},
+                     "labels": [{"name": n} for n in opt("--label", True)], "comments": []}
+    print("https://github.com/openwizdev/OpenWiz/issues/" + number)
+else:
+    issue = state.get(args[2])
+    if issue is None:
+        sys.exit(1)
+    if verb == "comment":
+        body = opt("--body") if opt("--body") is not None else open(opt("--body-file")).read()
+        issue["comments"].append({"author": {"login": "synthetic-owner"}, "body": body})
+    elif verb == "edit":
+        names = [l["name"] for l in issue["labels"] if l["name"] not in opt("--remove-label", True)]
+        issue["labels"] = [{"name": n} for n in names + [n for n in opt("--add-label", True) if n not in names]]
+        if opt("--milestone") is not None:
+            issue["milestone"] = {"title": opt("--milestone")}
+    elif verb == "view":
+        print(json.dumps({k: issue[k] for k in opt("--json").split(",")}))
+    else:
+        sys.exit(3)
+json.dump(state, open(world, "w"))
+"""
+
+
+def documented(skill, outcome):
+    """The `gh` commands the Feedback reports step 3 bullet for this outcome names, in order."""
+    section = skill.split("## Feedback reports\n", 1)[1].split("\n## ", 1)[0]
+    bullet = section.split(f"- **`{outcome}`:**", 1)[1].split("\n   - ", 1)[0]
+    return re.findall(r"`(gh [^`]+)`", bullet)
+
+
+def workflow(data, skill=None):
+    """Triage's feedback path on a synthetic report: plan, then step 3 for the
+    printed outcome. Returns (plan output, every `gh` call, the issues after)."""
+    import os
+    import tempfile
+    skill = skill if skill is not None else (ROOT / "skills/triage/SKILL.md").read_text()
+    rc, out, text = plan(data)
+    if rc != 0:
+        raise AssertionError(text)
+    rep = data["report"]
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "gh.py").write_text(GH)
+        world, log = tmp / "world.json", tmp / "gh.log"
+        world.write_text(json.dumps({str(rep["number"]): {
+            "number": rep["number"], "author": {"login": rep["author"]}, "title": rep["title"],
+            "body": rep["body"], "milestone": None, "labels": [{"name": n} for n in rep["labels"]],
+            "comments": []}}))
+        env = dict(os.environ, FAKE_GH_WORLD=str(world), FAKE_GH_LOG=str(log))
+
+        def gh(*args):
+            run = subprocess.run(["python3", "-I", str(tmp / "gh.py"), *args], env=env,
+                                 capture_output=True, text=True, timeout=10)
+            if run.returncode != 0:
+                raise AssertionError(f"gh {' '.join(args)}: exit {run.returncode}")
+            return run.stdout
+
+        values = {"<report>": str(rep["number"])}
+        if out["brief"]:
+            (tmp / "body.md").write_text(out["brief"]["body"])
+            values.update({"<title>": out["brief"]["title"], "<body>": str(tmp / "body.md"),
+                           "<version>": out["brief"]["milestone"]})
+        for line in documented(skill, out["outcome"]):
+            argv = shlex.split(line)[1:]
+            unknown = [a for a in argv if re.fullmatch(r"<[^>]+>", a) and a not in values]
+            if unknown:
+                raise AssertionError(f"undocumented placeholder {unknown} in {line}")
+            stdout = gh(*[values.get(a, a) for a in argv])
+            if argv[:2] == ["issue", "create"]:
+                values["<brief>"] = stdout.strip().rsplit("/", 1)[1]
+                # "post the printed `approval` on it", before its ready label.
+                (tmp / "approval.md").write_text(out["brief"]["approval"])
+                gh("issue", "comment", values["<brief>"], "--repo", "openwizdev/OpenWiz",
+                   "--body-file", str(tmp / "approval.md"))
+            if argv[:2] == ["issue", "view"]:
+                read = json.loads(stdout)
+                rc, _, text = plan(json.dumps({
+                    "report": rep["number"], "version": out["brief"]["milestone"],
+                    "record_authors": ["synthetic-owner"], "brief": {
+                        "number": read["number"], "author": read["author"]["login"], "body": read["body"],
+                        "labels": [l["name"] for l in read["labels"]], "milestone": read["milestone"]["title"],
+                        "comments": [{"author": c["author"]["login"], "body": c["body"]}
+                                     for c in read["comments"]]}}), "verify")
+                if rc != 0:
+                    raise AssertionError(text)
+        # The report's own writes, exactly as the helper printed them.
+        edit = ["issue", "edit", str(rep["number"]), "--repo", "openwizdev/OpenWiz"]
+        for name in rep["labels"]:
+            if name not in out["report_labels"]:
+                edit += ["--remove-label", name]
+        for name in out["report_labels"]:
+            edit += ["--add-label", name]
+        if out["report_milestone"]:
+            edit += ["--milestone", out["report_milestone"]]
+        gh(*edit)
+        for body in out["report_comments"]:
+            gh("issue", "comment", str(rep["number"]), "--repo", "openwizdev/OpenWiz", "--body", body)
+        calls = [json.loads(line) for line in log.read_text().splitlines()]
+        return out, calls, json.loads(world.read_text())
+
+
+def writes(calls):
+    return [c for c in calls if c[:2] != ["issue", "view"]]
+
+
+def report_comments(calls, number=9101):
+    return [c for c in calls if c[:2] == ["issue", "comment"] and c[2] == str(number)]
+
+
+ASKS_FOR_A_REPLY = {"author": "synthetic-user", "body": "Please reply here when it is fixed."}
+
+
+class FeedbackWrites(unittest.TestCase):
+    def test_fleet_run_comments_only_on_the_brief(self):
+        # catches: a step that comments on the report (a brief, notes or a
+        # question), the brief labelled ready before its approval, or the
+        # report's milestone set before verify passed.
+        out, calls, issues = workflow(case())
+        self.assertEqual(out["outcome"], "fleet")
+        self.assertEqual(report_comments(calls), [])
+        self.assertEqual(issues["9101"]["comments"], [])
+        self.assertEqual([c[:3] for c in writes(calls)], [
+            ["issue", "create", "--repo"], ["issue", "comment", "9200"],
+            ["issue", "edit", "9200"], ["issue", "edit", "9101"]])
+        self.assertNotIn("--label", writes(calls)[0], "the brief is created without its ready label")
+        self.assertEqual([c["body"] for c in issues["9200"]["comments"]], [APPROVAL])
+        self.assertEqual(issues["9101"]["labels"], [{"name": "feedback"}])
+        self.assertEqual(issues["9101"]["milestone"], {"title": "9.4.2"})
+        last_view = max(i for i, c in enumerate(calls) if c[:2] == ["issue", "view"])
+        self.assertGreater(calls.index(writes(calls)[-1]), last_view, "the report waits for verify")
+
+    def test_held_run_writes_only_the_reports_labels(self):
+        # catches: a held report's note, question or reply posted on the report
+        # instead of going to the owner.
+        out, calls, issues = workflow(case(criteria=dict(ALL_CLEAR, small=None)))
+        self.assertEqual(out["outcome"], "held")
+        self.assertEqual(writes(calls), [["issue", "edit", "9101", "--repo", "openwizdev/OpenWiz",
+                                          "--add-label", "feedback", "--add-label", "needs-triage"]])
+        self.assertEqual(issues["9101"]["comments"], [])
+        self.assertIsNone(issues["9101"]["milestone"])
+
+    def test_a_reply_awaiting_the_owners_yes_is_never_attempted(self):
+        # catches: triage answering a reporter who asks for a reply, on either
+        # outcome, before the owner's explicit yes to the exact text.
+        for criteria in (None, dict(ALL_CLEAR, small=False)):
+            rep = report(labels=["feedback"], body="It breaks.")
+            rep["comments"] = [ASKS_FOR_A_REPLY]
+            with self.subTest(held=criteria is not None):
+                out, calls, issues = workflow(case(rep, criteria))
+                self.assertEqual(out["report_comments"], [])
+                self.assertEqual(report_comments(calls), [])
+                self.assertEqual(issues["9101"]["comments"], [])
+
+    def test_the_run_sees_a_documented_comment_on_the_report(self):
+        # catches: a run blind to the skill's own steps, which would pass
+        # whatever step 3 says (the sentence-matching gap R3 names).
+        skill = (ROOT / "skills/triage/SKILL.md").read_text()
+        held = "   - **`held`:** "
+        self.assertIn(held, skill)
+        mutant = skill.replace(held, held + "`gh issue comment <report> --repo openwizdev/OpenWiz --body held` ", 1)
+        _, calls, issues = workflow(case(criteria=dict(ALL_CLEAR, small=False)), mutant)
+        self.assertEqual(report_comments(calls), [["issue", "comment", "9101", "--repo", "openwizdev/OpenWiz",
+                                                   "--body", "held"]])
+        self.assertEqual([c["body"] for c in issues["9101"]["comments"]], ["held"])
 
 
 FLEET = ROOT / "skills/launch-fleet/scripts"

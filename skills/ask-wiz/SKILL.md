@@ -39,6 +39,7 @@ Done when the user has one named recommendation with its start words, and nothin
 | `where-are-we` | Read the current status and get one next move, at any point |
 | `triage` | Sort incoming bugs and ideas; approved work enters the fleet |
 | `diagnose` | Find a hard bug's cause from a tight failing loop, in the caller's scope |
+| `feedback` | Report an OpenWiz problem as one public issue, after its exact preview and your yes |
 | `huntr` | Find and prove small unplanned work under its configured approval gate |
 | `wayfind` | Map an effort too big or unclear for one grill, then hand it to `to-spec` |
 | `hill-climb` | Improve an outcome through judged candidates and human checkpoints |

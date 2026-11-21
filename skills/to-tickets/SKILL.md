@@ -51,7 +51,8 @@ and post it on the spec: the graph is the agents' document, never the owner's.
 ```sh
 sh "<this skill's folder>/check-links.sh" --read <spec> > graph.json
 sh "<this skill's folder>/revision.sh" <spec> > revision.txt
-python3 -I "<this skill's folder>/scripts/approve.py" --graph graph.json --revision revision.txt \
+gh issue view <spec> --json body,createdAt > spec.json
+python3 -I "<this skill's folder>/scripts/approve.py" --graph graph.json --revision revision.txt --spec spec.json \
   --grill <confirmation URL> --number <N> [--changed "<what changed>"] --root . > record.md
 ```
 

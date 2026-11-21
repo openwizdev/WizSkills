@@ -1,0 +1,24 @@
+FAIL: test_a_release_spec_is_held_the_same_way (__main__.LateLook.test_a_release_spec_is_held_the_same_way)
+AssertionError: Tuples differ: (2, '') != (0, 'ask posted 5001')
+FAIL: test_a_sibling_already_queued_or_merged_makes_this_the_final_merge (__main__.LateLook.test_a_sibling_already_queued_or_merged_makes_this_the_final_merge) [queued]
+AssertionError: Tuples differ: (0, 'queued; recorded 5001') != (1, 'held: ask-due: post the evidence ask [51 chars]ask')
+FAIL: test_a_sibling_already_queued_or_merged_makes_this_the_final_merge (__main__.LateLook.test_a_sibling_already_queued_or_merged_makes_this_the_final_merge) [merged, not yet closed]
+AssertionError: Tuples differ: (0, 'queued; recorded 5001') != (1, 'held: ask-due: post the evidence ask [51 chars]ask')
+FAIL: test_a_sibling_already_queued_or_merged_makes_this_the_final_merge (__main__.LateLook.test_a_sibling_already_queued_or_merged_makes_this_the_final_merge) [queued, beside a closed one]
+AssertionError: Tuples differ: (0, 'queued; recorded 5001') != (1, 'held: ask-due: post the evidence ask [51 chars]ask')
+FAIL: test_a_user_visible_specs_final_merge_waits_for_one_ask_and_the_late_look (__main__.LateLook.test_a_user_visible_specs_final_merge_waits_for_one_ask_and_the_late_look)
+AssertionError: Tuples differ: (2, '') != (0, 'ask posted 5001')
+FAIL: test_an_ask_that_shows_code_or_breaks_the_form_is_refused_before_any_write (__main__.LateLook.test_an_ask_that_shows_code_or_breaks_the_form_is_refused_before_any_write) [evidence-code]
+AssertionError: Tuples differ: (2, '') != (1, 'refused: the evidence ask is invalid: evidence-code')
+FAIL: test_an_ask_that_shows_code_or_breaks_the_form_is_refused_before_any_write (__main__.LateLook.test_an_ask_that_shows_code_or_breaks_the_form_is_refused_before_any_write) [evidence-missing]
+AssertionError: Tuples differ: (2, '') != (1, 'refused: the evidence ask is invalid: evidence-missing')
+FAIL: test_an_ask_that_shows_code_or_breaks_the_form_is_refused_before_any_write (__main__.LateLook.test_an_ask_that_shows_code_or_breaks_the_form_is_refused_before_any_write) [ask-line]
+AssertionError: Tuples differ: (2, '') != (1, 'refused: the evidence ask is invalid: ask-line')
+FAIL: test_an_ask_waits_for_a_green_mergeable_head (__main__.LateLook.test_an_ask_waits_for_a_green_mergeable_head)
+AssertionError: Tuples differ: (2, '') != (1, 'refused: no ask for a head that canno[52 chars]eck')
+FAIL: test_no_ask_while_nothing_is_held (__main__.LateLook.test_no_ask_while_nothing_is_held)
+AssertionError: Tuples differ: (2, '') != (1, 'refused: no late look is due: the merge flows')
+FAIL: test_the_ask_goes_to_the_specs_own_repository (__main__.LateLook.test_the_ask_goes_to_the_specs_own_repository)
+AssertionError: Tuples differ: (2, '') != (0, 'ask posted 5001')
+Ran 39 tests in 22.946s
+FAILED (failures=11)

@@ -1,0 +1,1 @@
+{"lesson": "expired-login", "exit": 1, "answer": {"error": "run run-synthetic01: the first turn ended at once", "next": ["sign in", "start again"]}, "left_running": false}

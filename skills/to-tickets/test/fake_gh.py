@@ -1,28 +1,3 @@
-"""A fake `gh` for revision.sh's test: `gh issue view` over a synthetic
-repository, as GitHub and gh answer it. Synthetic only; it never reaches a
-network.
-
-It answers only `gh issue view <n> --json <fields> [--jq <expr>]`, with the
-fields revision.sh reads (number, title, body, blockedBy, subIssues). Any
-other command, flag or field is refused (exit 2), so the test fails if the
-script ever asks GitHub anything else. An issue that does not exist, or one
-a world event made unreadable, fails as gh does (exit 1). The output is
-jq's, passed on byte for byte: GitHub keeps a body's CRLF line ends.
-
-    FAKE_GH_STATE=<dir> python3 -I fake_gh.py <gh arguments>
-    FAKE_GH_STATE=<dir> python3 -I fake_gh.py --world <event.json>
-
-<dir>/state.json is the repository: {"next_issue": n, "issues": [{"number",
-"title", "body", "state", "parent", "milestone", "blockedBy": [n, ...],
-"labels": [...], "comments": [...]}]}. A read never writes it. `--world`
-applies an event that is not a call of revision.sh (an edit, a label, a
-comment, a closed ticket, a blocker, a ticket added or dropped, a planted
-read error) and saves it.
-
-From the plan-graph dry run's fake (ClosedWiz#99) and #155's, cut down to
-revision.sh's one command when its test moved beside the skill (#191).
-"""
-
 import json
 import os
 import subprocess
@@ -33,11 +8,11 @@ FIELDS = {"number", "title", "body", "blockedBy", "subIssues"}
 
 
 class Refused(Exception):
-    """A call revision.sh never makes: exit 2."""
+    pass
 
 
 class NotFound(Exception):
-    """A read GitHub would fail: exit 1, as gh does."""
+    pass
 
 
 def load():
@@ -114,7 +89,6 @@ def view(state, args):
 
 
 def world(state, path):
-    """Each key is optional; every issue it names must exist."""
     with open(path, encoding="utf-8") as f:
         event = json.load(f)
     for n in event.get("close", []):

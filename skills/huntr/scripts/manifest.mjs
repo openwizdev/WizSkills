@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Read-only slice evidence. The controller persists stdout in its durable hunt record.
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -19,7 +18,6 @@ function exact(value, keys) {
 const read = path => json(readFileSync(path, 'utf8'));
 function json(raw) {
   const value = JSON.parse(raw);
-  // Same duplicate-key rejection as the approval gate; JSON.parse checks grammar first.
   const stack = [];
   for (const token of raw.match(/"(?:[^"\\]|\\.)*"|[{}\[\],:]|[^\s{}\[\],:]+/g) ?? []) {
     if (token === '{') stack.push({keys: new Set(), key: true});
@@ -92,8 +90,6 @@ function snapshot(input) {
     }
     files.push(...[...selected.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   }
-  // Canonical UTF-8 JSON: source/test/policy order, paths sorted within each kind,
-  // entry keys in kind/path/blob/mode order, no extra whitespace.
   return {version: 2, checker, base, plan: input, files_sha256: sha256(JSON.stringify(files)), result: null};
 }
 function check(input, previousPath) {
@@ -110,8 +106,6 @@ function check(input, previousPath) {
     return {decision: 'run', reason: 'unreadable manifest or checkout; record the gap'};
   }
 }
-// Prepare bounded issue comments without writing to GitHub. Base64 keeps each
-// part ASCII and preserves Unicode, quotes and JSON boundaries across parts.
 function pack(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('hunt record must be an object');
   const raw = JSON.stringify(value), sum = sha256(raw);

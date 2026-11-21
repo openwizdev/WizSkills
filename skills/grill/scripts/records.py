@@ -1,4 +1,3 @@
-"""Read a saved grill proposal and maintain its private decision request."""
 import argparse
 import base64
 import binascii
@@ -284,7 +283,7 @@ class Grill:
             try:
                 self.api(self.comments, method="POST", body=f"\x60\x60\x60json\n{compact(record)}\n\x60\x60\x60")
             except (subprocess.SubprocessError, ValueError, Refusal, OSError):
-                pass  # The effect is uncertain until the same PR reads it back.
+                pass
             comment_id = self.list_request(request_id)
         require(comment_id is not None, "write unresolved; reconcile the same request id")
         _, _, _, saved = self.comment(comment_id)
@@ -294,7 +293,6 @@ class Grill:
         print(f"verified request {comment_id} ({saved['status']})")
 
     def remember_attempt(self, request_id):
-        # Common Git dir covers linked worktrees. Record the intent before POST.
         git_dir = Path(run(["git", "rev-parse", "--git-common-dir"]).decode().rstrip("\n"))
         marker = git_dir / "grill-requests" / hashlib.sha256(
             f"{self.repo.lower()}:{request_id}".encode()).hexdigest()
@@ -394,8 +392,11 @@ class Grill:
         print(f"verified {updated['status']} {comment_id}")
 
 
+DESCRIPTION = 'Read a saved grill proposal and maintain its private decision request.'
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument("private_repo")
     parser.add_argument("pr", type=int)
     parser.add_argument("grill_file")

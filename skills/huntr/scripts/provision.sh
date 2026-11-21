@@ -1,12 +1,4 @@
 #!/bin/sh
-# huntr hunter provisioning (#1685), run by each hunter in its own sandbox from its brief:
-#   sh provision.sh <owner/repo> <pinned-commit> <absolute-dir> <slice>
-# It uses this sandbox's own GitHub login (never another's), clones the project into <dir> if no
-# checkout is there, fetches the pinned commit itself and checks it out. A copy with any staged,
-# unstaged or untracked change is refused, never cleaned: its edits stay. It prints exactly one line:
-#   huntr hunter: ready <slice> at <pin>                  (exit 0)
-#   huntr hunter: BLOCKED <slice> at <step>: <reason>     (exit 3)
-# Bad arguments exit 2 and run nothing. Command output is discarded: no token reaches the line.
 set -u
 [ $# -eq 4 ] || exit 2
 repo=$1 pin=$2 dir=$3 slice=$4
@@ -21,7 +13,6 @@ if [ ! -d "$dir/.git" ]; then
   if [ -e "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then blocked source "$dir is not a Git checkout"; fi
   gh repo clone "$repo" "$dir" -- --quiet --filter=blob:none >/dev/null 2>&1 || blocked clone "could not clone $repo"
 fi
-# The source must be exactly the pin: no change of anyone's, before or after the checkout.
 clean() {
   changes=$(git -C "$dir" status --porcelain --untracked-files=all 2>/dev/null) || blocked source "could not read $dir"
   [ -z "$changes" ] || blocked source "$dir has uncommitted changes"

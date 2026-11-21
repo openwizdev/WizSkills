@@ -359,11 +359,19 @@
               "const": "malformed"
             },
             "message": {
-              "enum": [
-                "malformed section: more than one ## Links section",
-                "malformed section: no lines",
-                "malformed section: a line is not a link line or none",
-                "malformed section: none must be the only line"
+              "anyOf": [
+                {
+                  "enum": [
+                    "malformed section: more than one ## Links section",
+                    "malformed section: no lines",
+                    "malformed section: a line is not a link line or none",
+                    "malformed section: none must be the only line"
+                  ]
+                },
+                {
+                  "type": "string",
+                  "pattern": "^malformed section: line `- [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]* (real|file):.*` names [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*, not this repository$"
+                }
               ]
             }
           }

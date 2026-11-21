@@ -97,8 +97,8 @@ class Fleet(unittest.TestCase):
         self.assertEqual(self.run_fleet('wake', '12'), f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')
 
     def test_builder_found_through_a_local_or_a_cloud_room_cli(self):
-        # #2063: a Local room-cli answers --json with a bare list (a table without it); the Cloud CLI with
-        # {"children": [...]}. Both find the same builder.
+        # #2063, #1969: a Local room-cli answers --json with a bare list (a table without it); the Cloud CLI
+        # refuses --include-hidden with exit 2 and answers {"children": [...]} without it. Both find the builder.
         self.pr['checks'][0]['conclusion'] = 'FAILURE'
         for cli in ('local', 'cloud'):
             with self.subTest(cli=cli):

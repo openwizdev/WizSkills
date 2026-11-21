@@ -688,6 +688,32 @@ class Identity(Case):
         self.assertEqual(subprocess.run(['git', '--git-dir', str(elsewhere), 'for-each-ref'], check=True,
                                         capture_output=True, text=True, env=self.env()).stdout, '')
 
+    def test_push_refuses_more_than_one_push_url(self):
+        self.write('src/other.py', 'y = 2\n')
+        self.commit('theirs', GIT_AUTHOR_EMAIL=PERSONAL, GIT_COMMITTER_EMAIL=PERSONAL)
+        self.git('push', '-q', 'origin', 'HEAD:main')
+        second = self.dir / 'second.git'
+        subprocess.run(['git', 'init', '-q', '--bare', str(second)], check=True, env=self.env())
+        self.write('src/export/run.py', 'x = 2\n')
+        self.commit('mine')
+        push = ['git', 'push', '-q', 'origin', 'HEAD']
+        configured = (['remote', 'set-url', '--add', '--push', 'origin', str(self.origin)],
+                      ['remote', 'set-url', '--add', '--push', 'origin', str(second)])
+        for how, command in (('configured', push),
+                             ('command line', ['git', '-c', f'remote.origin.pushurl={second}', *push[1:]])):
+            with self.subTest(how=how):
+                if how == 'configured':
+                    for args in configured:
+                        self.git(*args)
+                else:
+                    self.git('config', '--unset-all', 'remote.origin.pushurl')
+                    self.git('config', 'remote.origin.pushurl', str(self.origin))
+                code, out, err = self.run_ticket('push', str(self.dir / f'r-{how}.txt'), '--', *command)
+                self.assertEqual((code, out), (2, ''))
+                self.assertIn('origin has more than one push URL: nothing pushed', err)
+                self.assertEqual(subprocess.run(['git', '--git-dir', str(second), 'for-each-ref'], check=True,
+                                                capture_output=True, text=True, env=self.env()).stdout, '')
+
     def test_push_refuses_when_origin_cannot_be_read(self):
         self.git('remote', 'set-url', 'origin', str(self.dir / 'missing.git'))
         code, out, err = self.run_ticket('push', str(self.dir / 'r.txt'), '--', 'git', 'push', '-q', 'origin', 'HEAD')

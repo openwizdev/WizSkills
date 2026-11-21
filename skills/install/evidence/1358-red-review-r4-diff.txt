@@ -1,0 +1,27 @@
+Red run for final-check R4 (the host-setting pull request's whole diff), at 2429a7a's code plus these tests, before the fix.
+Command: cd skills/install/tests && python3 -m unittest test_onboarding.ReviewRound.test_r4_a_branch_deleting_another_file_opens_nothing test_onboarding.ReviewRound.test_r4_a_resumed_pull_request_with_an_extra_change_is_not_ready
+
+FF
+======================================================================
+FAIL: test_r4_a_branch_deleting_another_file_opens_nothing (test_onboarding.ReviewRound.test_r4_a_branch_deleting_another_file_opens_nothing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 758, in test_r4_a_branch_deleting_another_file_opens_nothing
+    self.assertEqual(refused.returncode, 5, refused.stdout)
+AssertionError: 0 != 5 : Effect: on a new branch openwiz/host-setting of synthetic-owner/synthetic-quiz, add docs/agents/host.md holding `Host: local` and add one row, | Harness permission mode | `acceptEdits` |, to docs/agents/fleet.md, changing no other line, and open one pull request for you to merge. Nothing else is written.
+Opened https://github.com/synthetic-owner/synthetic-quiz/pull/950. The user merges it; launch waits for it on the default branch.
+
+
+======================================================================
+FAIL: test_r4_a_resumed_pull_request_with_an_extra_change_is_not_ready (test_onboarding.ReviewRound.test_r4_a_resumed_pull_request_with_an_extra_change_is_not_ready)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 773, in test_r4_a_resumed_pull_request_with_an_extra_change_is_not_ready
+    self.assertEqual(resumed.returncode, 5, resumed.stdout)
+AssertionError: 0 != 5 : The host setting pull request is open: https://github.com/synthetic-owner/synthetic-quiz/pull/950. The user merges it; launch waits for it.
+
+
+----------------------------------------------------------------------
+Ran 2 tests in 3.047s
+
+FAILED (failures=2)

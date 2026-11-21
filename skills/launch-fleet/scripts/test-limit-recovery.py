@@ -1,13 +1,3 @@
-"""TL3 (#2338) synthetic recovery proofs; no endpoint effect, no private reads.
-
-Run: python3 -I skills/launch-fleet/scripts/test-limit-recovery.py
-
-Each case starts from one complete synthetic open miss (TL2's stage-bench row)
-and the ops agent's derived pull request facts, changes one thing, and checks
-which fix helper TL3 selects, what it records before any dispatch and what the
-finite pass decides. The effect callback must never run (OB-A1), and no refusal,
-disabled or uncertain result is ever counted as a recovery.
-"""
 import copy
 import importlib.util
 import json
@@ -46,7 +36,6 @@ def facts(**changes):
 
 
 class Selection(unittest.TestCase):
-    """Which helper an open, evidenced miss selects, from TL2's row and the PR facts."""
 
     def pick(self, row, value):
         return recovery.select(row, value)
@@ -83,7 +72,6 @@ class Selection(unittest.TestCase):
         for result in ('not missed', 'pending', 'unknown', 'gated', 'stale'):
             with self.subTest(result=result):
                 self.assertRefused(miss(result=result), facts(), 'not_missed')
-        # An ended miss is already over: the fix landed late, nothing to recover.
         self.assertRefused(miss(end='s13'), facts(), 'already_ended')
 
     def test_a_miss_with_source_gaps_is_unknown_history(self):
@@ -102,7 +90,6 @@ class Selection(unittest.TestCase):
                 self.assertRefused(miss(), facts(labels=labels), 'held')
 
     def test_an_unknown_builder_family_refuses(self):
-        # The helper must stay in the builder's family, or the reviewer family breaks.
         self.assertRefused(miss(), facts(family=None), 'unknown_history')
 
     def test_a_closed_or_merged_pull_request_refuses(self):
@@ -111,7 +98,6 @@ class Selection(unittest.TestCase):
                 self.assertRefused(miss(), facts(pr_state=state), 'not_open')
 
     def test_red_or_pending_ci_without_a_missed_stage_has_no_timer_of_its_own(self):
-        # A newer head waiting on CI, with no conflict, is the builder's: no sixth limit.
         self.assertRefused(miss(), facts(head=NEWER, ci='pending'), 'no_cause')
         self.assertRefused(miss(), facts(head=NEWER, ci='success'), 'no_cause')
 
@@ -138,7 +124,6 @@ class Selection(unittest.TestCase):
 
 
 class Recording(unittest.TestCase):
-    """The intent is recorded before dispatch; the finite pass decides; nothing executes."""
 
     def setUp(self):
         self.called = []
@@ -170,7 +155,6 @@ class Recording(unittest.TestCase):
         return claim
 
     def recorded(self, **changes):
-        """First pass: the proposed intent, as the ops agent records and reads it back."""
         [first] = self.run_pass([self.case(**changes)])
         self.assertEqual(first['state'], 'record_intent', first)
         return first['intent']
@@ -208,11 +192,9 @@ class Recording(unittest.TestCase):
 
     def test_the_same_miss_read_again_reuses_its_intent(self):
         intent = self.recorded()
-        # A later wake: the sequence counter moved on, the miss is the same miss.
         again = self.case(snapshot=self.snapshot([intent], next_sequence=5))
         [record] = self.run_pass([again])
         self.assertEqual((record['state'], record['intent']), ('admit_claim', intent))
-        # A different facts read of the same miss still names the same operation.
         proposed = self.run_pass([self.case(value=facts(labels=['ready-for-agent', 'polish']))])[0]['intent']
         self.assertEqual(proposed['operation_key'], intent['operation_key'])
 
@@ -232,10 +214,8 @@ class Recording(unittest.TestCase):
         moved = self.snapshot([intent], head=NEWER)
         [record] = self.run_pass([self.case(value=facts(head=NEWER, ci='failure'), snapshot=moved,
                                             claim=self.claim_for(intent))])
-        # The old findings-fix intent no longer matches the selected work: the builder moved.
         self.assertEqual(record['state'], 'record_intent')
         self.assertNotEqual(record['intent']['operation_key'], intent['operation_key'])
-        # Replaying the old intent against the moved head is refused, not executed.
         [old] = self.run_pass([self.case(snapshot=moved, claim=self.claim_for(intent))])
         self.assertEqual(old['state'], 'refused', old)
 
@@ -282,7 +262,6 @@ class Recording(unittest.TestCase):
         self.assertEqual((record['state'], record['reason'], record['intent']), ('refused', 'active_owner', None))
 
     def test_r1_a_snapshot_or_facts_for_another_ticket_propose_nothing(self):
-        # Review R1: the snapshot's ticket and approval must be the miss's ticket.
         [record] = self.run_pass([self.case(snapshot=self.snapshot(ticket=9999))])
         self.assertEqual((record['state'], record['reason'], record['intent']), ('refused', 'stale_binding', None))
         self.assertEqual(recovery.select(miss(), facts(ticket=9999))['reason'], 'stale_binding')
@@ -290,7 +269,6 @@ class Recording(unittest.TestCase):
         self.assertEqual((record['state'], record['reason'], record['intent']), ('refused', 'stale_binding', None))
 
     def test_r2_two_misses_at_one_head_propose_one_helper(self):
-        # Review R2: an unrecorded proposal reserves its PR head for the rest of the pass.
         conflicted = facts(conflict=True)
         records = self.run_pass([self.case(value=conflicted), self.case(row=miss('merge'), value=conflicted,
                                                                          intent_id='intent-tl3-2')])
@@ -299,7 +277,6 @@ class Recording(unittest.TestCase):
         self.assertIsNone(records[1]['intent'])
 
     def test_r3_no_claim_with_unsettled_history_reconciles_instead_of_admitting(self):
-        # Review R3: a lost claim read-back is never a reason to admit again.
         intent = self.recorded()
         bind = dict(intent_id=intent['id'], operation_key=intent['operation_key'], subject=intent['subject'],
                     rule=intent['rule'])
@@ -312,18 +289,15 @@ class Recording(unittest.TestCase):
                 [record] = self.run_pass([self.case(snapshot=dict(snap, **changes), history=history)])
                 self.assertEqual((record['state'], record['reason'], record['intent']),
                                  ('reconcile', 'uncertain_outcome', intent))
-        # An admitted claim that was not read back is an incomplete read, not a second admission.
         admitted = dict(admission, state='admitted')
         [record] = self.run_pass([self.case(snapshot=snap, history=[admitted])])
         self.assertEqual((record['state'], record['reason']), ('refused', 'incomplete_read'))
-        # Clear history still asks for the one admission.
         [record] = self.run_pass([self.case(snapshot=snap)])
         self.assertEqual(record['state'], 'admit_claim')
         with self.assertRaises(ValueError):
             self.run_pass([self.case(snapshot=snap, history=[dict(transport, kind='bogus')])])
 
     def test_r3_round2_ambiguous_or_foreign_history_never_requests_admission(self):
-        # Review R3, round 2: OB3's identity and binding checks apply before admit_claim too.
         intent = self.recorded()
         snap = self.snapshot([intent])
         bind = dict(intent_id=intent['id'], operation_key=intent['operation_key'], subject=intent['subject'],
@@ -339,17 +313,14 @@ class Recording(unittest.TestCase):
             with self.subTest(foreign={k: foreign[k] for k in ('intent_id', 'subject')}):
                 [record] = self.run_pass([self.case(snapshot=snap, history=[foreign])])
                 self.assertEqual((record['state'], record['reason']), ('refused', 'stale_binding'))
-        # A settled record that does belong to this intent still allows the one admission.
         [record] = self.run_pass([self.case(snapshot=snap, history=[done])])
         self.assertEqual(record['state'], 'admit_claim')
-        # One ambiguous case refuses alone: an unrelated case in the same pass still proceeds.
         records = self.run_pass([self.case(snapshot=snap, history=[done, conflicting]),
                                  self.case(value=facts(head=NEWER, conflict=True),
                                            snapshot=self.snapshot(head=NEWER), intent_id='intent-tl3-9')])
         self.assertEqual([r['state'] for r in records], ['refused', 'record_intent'])
 
     def test_r4_an_intent_recorded_under_another_rule_is_stale(self):
-        # Review R4: reuse requires the current dispatch rule, not just the same work.
         intent = self.recorded()
         newer = dict(DISPATCH, revision='c' * 64, comment=9005)
         for claim in (None, self.claim_for(intent)):
@@ -369,7 +340,6 @@ class Recording(unittest.TestCase):
 
 
 class Outcome(unittest.TestCase):
-    """Only a separately verified complete result counts as a recovery."""
 
     def record(self, state, reason='record_only'):
         result = dict(EXAMPLES['result'], state=state, reason=reason)

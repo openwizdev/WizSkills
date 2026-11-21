@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""frontier.py through its CLI, against a fake `gh` serving synthetic GraphQL.
-
-Each case runs the script with PATH holding only the fake `gh` and python3,
-so the real `gh` is never reached. All issue data is synthetic.
-
-Usage: python3 -I skills/wayfind/test/test_frontier.py
-"""
 import json
 from pathlib import Path
 import shutil
@@ -40,7 +33,6 @@ URL = 'https://github.com/example/widgets/issues/{n}#issuecomment-{c}'
 
 
 def conn(nodes, total=None, after=None):
-    """One connection page; `after` is the cursor of the next page, if any."""
     return {'totalCount': len(nodes) if total is None else total, 'nodes': nodes,
             'pageInfo': {'hasNextPage': after is not None, 'endCursor': after}}
 
@@ -102,8 +94,6 @@ class FrontierTest(unittest.TestCase):
             return result, reads
 
     def test_map_lists_each_open_question_and_its_frontier_in_map_order(self):
-        # catches: a closed, blocked, claimed or kind-less question offered as
-        # frontier, or the map's order lost so "the first frontier" changes.
         fixture = {'1': a_map(1, [
             question(14, kind='wayfind:research', title='Which API limits apply?'),
             question(10, state='CLOSED'),
@@ -122,17 +112,13 @@ class FrontierTest(unittest.TestCase):
             '#13 no kind label: Synthetic question 13\n'
             '#15 no kind label: Synthetic question 15\n'
             '#16 frontier wayfind:grill: Synthetic question 16\n'))
-        self.assertEqual(len(reads), 2)  # the record authors, then the map in one page
+        self.assertEqual(len(reads), 2)
 
     def test_clear_map_says_so(self):
-        # catches: an empty frontier read as "nothing to do" when questions
-        # remain open, or a clear map mistaken for an unread one.
         result, _ = self.run_script({'2': a_map(2, [question(20, state='CLOSED')])}, 'map', '2')
         self.assertEqual((result.returncode, result.stdout), (0, 'no open question\n'))
 
     def test_an_issue_without_the_map_label_is_never_a_clear_map(self):
-        # catches #1617: an ordinary issue (or one whose label is only a
-        # question's kind) read as a map, so `no open question` admits to-spec.
         cases = {'ordinary issue': a_map(3, [], labels=()),
                  'other labels only': a_map(3, [question(30)], labels=('bug', 'wayfind:grill')),
                  'no labels field': served({'number': 3, 'subIssues': conn([])})}
@@ -145,8 +131,6 @@ class FrontierTest(unittest.TestCase):
         self.assertEqual((result.returncode, result.stdout), (0, 'no open question\n'))
 
     def test_earliest_unreleased_claim_holds(self):
-        # catches: a later claim, or a released one, treated as the holder;
-        # the comment id taken from anything but the #issuecomment- suffix.
         for ids, holder in [([100, 101, 103], '100'), ([101, 103, 104], '103')]:
             with self.subTest(claims=ids):
                 comments = [(c, CLAIM) for c in ids] + [(110, 'wayfind: released 101')]
@@ -158,7 +142,6 @@ class FrontierTest(unittest.TestCase):
         self.assertEqual(result.stdout, 'unclaimed\n')
 
     def test_mine_says_yours_only_for_the_holding_claim(self):
-        # catches: an agent working on a question an earlier claim holds.
         comments = [(100, CLAIM), (101, CLAIM)]
         fixture = {'9': served(question(9, comments=comments))}
         self.assertEqual(self.run_script(fixture, 'holder', '9', '--mine', '100')[0].stdout, 'yours\n')
@@ -168,8 +151,6 @@ class FrontierTest(unittest.TestCase):
         self.assertEqual(self.run_script(closed, 'holder', '9', '--mine', '100')[0].stdout, 'closed\n')
 
     def test_incomplete_or_unreadable_read_prints_nothing_and_exits_2(self):
-        # catches: a partial read reported as a frontier or a holder, so a
-        # claim on an unread comment page or an unread question is missed.
         cases = {
             'gh fails': ({'1': 'fail'}, 'map'),
             'graphql error': ({'1': {'errors': [{'message': 'Synthetic'}]}}, 'map'),
@@ -189,8 +170,6 @@ class FrontierTest(unittest.TestCase):
 
 
     def test_only_record_authors_claim_or_release(self):
-        # catches #1508: an outsider's comment reserving a question, or
-        # releasing a record author's claim so a later claim reads `yours`.
         comments = [(98, CLAIM, 'synthetic-factory'), (99, CLAIM, OUTSIDER), (100, CLAIM), (101, 'wayfind: released 100', OUTSIDER),
                     (102, CLAIM, 'synthetic-factory', 'Bot')]
         fixture = {'9': served(question(9, comments=comments))}
@@ -204,11 +183,8 @@ class FrontierTest(unittest.TestCase):
                          '#9 frontier wayfind:grill: Synthetic question 9\n')
 
     def test_unreadable_record_authors_trust_nobody(self):
-        # catches #1508: a missing or malformed Record authors row read as
-        # "anyone may claim" instead of refusing the read.
         for name, text in {'no fleet file': None, 'no row': '# Fleet\n\n## GitHub identity\n\n',
                            'malformed row': '# Fleet\n\n## GitHub identity\n\n| Record authors | x y |\n',
-                           # catches #1696: an extra column after the logins read as their cell.
                            'extra column': FLEET.replace('`Synthetic-Recorder` |',
                                                          '`Synthetic-Recorder` | synthetic note |'),
                            'text after the row': FLEET.replace('`Synthetic-Recorder` |',
@@ -221,8 +197,6 @@ class FrontierTest(unittest.TestCase):
                 self.assertTrue(result.stderr.startswith('frontier: '), result.stderr)
 
     def test_a_blocked_or_kindless_question_is_never_yours(self):
-        # catches #1567: the holder check returning `yours` for a question
-        # whose blocker is still open, or that carries no single kind label.
         cases = [(question(9, blockers=[(7, 'CLOSED'), (8, 'OPEN')], comments=[(100, CLAIM)]),
                   'blocked by #8\n'),
                  (question(9, kind=None, comments=[(100, CLAIM)]), 'no kind label\n'),
@@ -235,8 +209,6 @@ class FrontierTest(unittest.TestCase):
                 self.assertEqual((result.returncode, result.stdout), (0, expected))
 
     def test_every_page_is_read_in_order(self):
-        # catches #1591: an open question with more than 100 comments making
-        # the whole map unreadable, or a later page's claim missed or reordered.
         notes = [(1000 + i, 'Synthetic note') for i in range(99)]
         first = dict(question(9, comments=notes + [(2000, CLAIM)]))
         first['comments'] = dict(conn(first['comments']['nodes'], 102, 'c1'))
@@ -249,7 +221,6 @@ class FrontierTest(unittest.TestCase):
                                         '#9 held by 2000: Synthetic question 9\n')
         fixture['9'] = served(first)
         self.assertEqual(self.run_script(fixture, 'holder', '9', '--mine', '2000')[0].stdout, 'yours\n')
-        # A map of more than 100 questions keeps the order across its pages.
         paged = {'1': a_map(1, [question(n) for n in range(10, 110)], 101, 'q1'),
                  '1@q1': a_map(1, [question(5)], 101)}
         result, _ = self.run_script(paged, 'map', '1')
@@ -259,8 +230,6 @@ class FrontierTest(unittest.TestCase):
             '#5 frontier wayfind:grill: Synthetic question 5'])
 
     def test_inconsistent_pages_refuse(self):
-        # catches #1591's other half: a page chain that stops short, repeats a
-        # cursor or changes its total accepted as a complete read.
         def chain(total, after, second):
             return {'1': a_map(1, [question(n) for n in range(10, 110)], total, after), **second}
         cases = {

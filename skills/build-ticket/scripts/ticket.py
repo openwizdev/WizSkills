@@ -1,22 +1,4 @@
 #!/usr/bin/env python3
-"""build-ticket's lookups and records. Python 3.11+ standard library, `gh`, `git`.
-
-  ticket.py read REPO N                     owned paths, links, blockers, fleet start, readiness
-  ticket.py scope REPO N [--base REF] [--supporting PATH]... [--owned PATH]...
-                                            every changed path: owned, supporting or OUT
-  ticket.py records REPO N [--ticket] [--comment ID] [--fleet-ref REF]
-                                            trusted verdict, bound decision and fleet record on pull
-                                            request N, or with --ticket the fleet record on ticket N;
-                                            --comment checks that one named comment on N is trusted
-  ticket.py author                          set git's author to the GitHub user's noreply
-  ticket.py push RECEIPT -- PUSH-COMMAND... run the push; keep the first success's receipt
-  ticket.py post-receipt REPO PR RECEIPT    post the receipt once as a record author, read back
-
-Exit 0 done, 1 refused (the last line says why), 2 an input it cannot read.
-It prints a short result, never a log, and writes only what its command names.
-Record authors come only from the `## GitHub identity` table of docs/agents/fleet.md
-at the fleet ref (default origin/main); without one valid row it trusts nobody.
-"""
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -69,12 +51,6 @@ def section(text, heading):
 
 
 def owned_bullets(body, ticket_repo):
-    """[{'text', 'paths': [(path, repo)], 'annotated', 'note'}] for each `## Owned paths` bullet.
-
-    A path is bound to the bullet's `in `owner/repo`` qualifier, else to the ticket's
-    repository. A bullet with words besides its paths, qualifiers and one note is
-    annotated: its paths are listed, and their conditions stay with the builder.
-    """
     out = []
     for line in section(body, 'owned paths'):
         if not line.startswith('- '):
@@ -282,11 +258,6 @@ def last_line(comment):
 
 
 def binding(c, at, verdict, head):
-    """Why decision `c` (index `at` among trusted comments) does not bind, or None if it does.
-
-    It binds only after the newest trusted verdict, when that verdict's terminal line parks
-    findings at the current head and the decision's complete line names exactly them there.
-    """
     m = DECISION.fullmatch(first_line(c))
     if not m or ids(m.group(3)) is None:
         return 'not a decision line'
@@ -383,7 +354,6 @@ def outside_checkout(path):
 
 
 def earlier_push(branch):
-    """True when origin's branch already holds work not on origin/main, None if unknown."""
     try:
         out = run(['git', 'ls-remote', 'origin', f'refs/heads/{branch}'], 'the remote branch')
     except Unreadable:
@@ -459,6 +429,20 @@ def cmd_post_receipt(repo, pr, receipt, ref):
     return 1
 
 
+USAGE = (
+    '  ticket.py read REPO N                     owned paths, links, blockers, fleet start, readiness\n'
+    '  ticket.py scope REPO N [--base REF] [--supporting PATH]... [--owned PATH]...\n'
+    '                                            every changed path: owned, supporting or OUT\n'
+    '  ticket.py records REPO N [--ticket] [--comment ID] [--fleet-ref REF]\n'
+    '                                            trusted verdict, bound decision and fleet record on pull\n'
+    '                                            request N, or with --ticket the fleet record on ticket N;\n'
+    '                                            --comment checks that one named comment on N is trusted\n'
+    "  ticket.py author                          set git's author to the GitHub user's noreply\n"
+    "  ticket.py push RECEIPT -- PUSH-COMMAND... run the push; keep the first success's receipt\n"
+    '  ticket.py post-receipt REPO PR RECEIPT    post the receipt once as a record author, read back'
+)
+
+
 def main(argv):
     try:
         args, flags = [], {'--base': [], '--supporting': [], '--owned': [], '--fleet-ref': [],
@@ -500,7 +484,7 @@ def main(argv):
             return cmd_post_receipt(args[1], int(args[2]), args[3], ref)
         raise ValueError
     except ValueError:
-        print(__doc__.split('\n\n')[1], file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     except Unreadable as e:
         print(f'ticket.py: {e}', file=sys.stderr)

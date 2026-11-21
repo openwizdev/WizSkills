@@ -1,16 +1,4 @@
 #!/bin/sh
-# Validate the posted latest approval's table before labelling or handoff.
-# Read-only: gh issue/repo view and paginated gh api GETs in gh's current repo.
-# Only the record authors' approvals count (#717): the Record authors row of
-# docs/agents/fleet.md, read from the default branch as launch-fleet reads it.
-# Checks the public form and table, not authority, pointer provenance or
-# fingerprint currentness;
-# revision.sh and launch-fleet retain those checks unchanged.
-# Usage: sh skills/to-tickets/scripts/check-approval.sh <spec issue number>
-# Exit 0: valid table and checkpoint answers; 1: invalid table, invalid or
-# missing answers, or an unreadable graph; 2: bad arguments.
-# --checkpoints <spec> checks only the answers in the spec JSON
-# ({"body","createdAt"}) on stdin, with no gh call; an unreadable input exits 2.
 set -u
 usage='usage: sh check-approval.sh [--checkpoints] <spec issue number>'
 mode=table
@@ -26,10 +14,6 @@ unreadable() { echo "check-approval.sh: $*" >&2; exit "$unreadable_exit"; }
 work=$(mktemp -d) || fail 'cannot make a temporary folder'
 trap 'rm -rf "$work"' EXIT
 
-# The spec's two checkpoint answers, read with the forms block of
-# contracts/checkpoints.v1.md. A spec created before the cutoff and without
-# the section was planned before checkpoints existed: it reads as early only.
-# Exit 1 refuses the answers; an unreadable input exits $unreadable_exit.
 checkpoints() {
 CHECKPOINTS_SINCE=2026-11-21T00:00:00Z
 here=$(cd -P "$(dirname "$0")" && pwd -P) || unreadable 'cannot find this script'
@@ -95,8 +79,6 @@ if [ "$mode" = checkpoints ]; then
   exit 0
 fi
 
-# Use the project mapping from the default branch, just as launch-fleet does.
-# Only the operative Labels table counts, never examples or prose elsewhere.
 gh api -H 'Accept: application/vnd.github.raw+json' \
   'repos/{owner}/{repo}/contents/docs/agents/triage-labels.md' > "$work/labels.md" ||
   fail 'cannot read project labels from docs/agents/triage-labels.md'
@@ -112,9 +94,6 @@ jq -Rne '
 ' < "$work/label-rows" > "$work/labels.json" 2> /dev/null ||
   fail 'project labels table must map ready-for-agent and ready-for-human exactly once to nonempty names'
 
-# The consumer project's configured private-records repository, read from the
-# default branch. Missing, malformed or duplicate settings refuse; cwd is not
-# a fallback for a project's separate records repository.
 gh api -H 'Accept: application/vnd.github.raw+json' \
   'repos/{owner}/{repo}/contents/docs/agents/issue-tracker.md' > "$work/tracker.md" ||
   fail 'cannot read project private records setting'
@@ -126,11 +105,6 @@ private_records=$(jq -Rner '
 ' < "$work/tracker.md" 2>/dev/null) || fail 'invalid project private records setting'
 [ -n "$private_records" ] || fail 'invalid project private records setting'
 
-# #717: the factory's identity, read as launch-fleet reads it: the one
-# "| Record authors | <cell> |" row of fleet.md's "## GitHub identity" table,
-# its whole cell backticked logins separated by commas. No row, an empty one,
-# any malformed or extra entry, or anything after the value cell refuses the
-# whole row, never keeping only the logins that did parse.
 gh api -H 'Accept: application/vnd.github.raw+json' \
   'repos/{owner}/{repo}/contents/docs/agents/fleet.md' > "$work/fleet.md" ||
   fail 'cannot read the record authors from docs/agents/fleet.md'
@@ -143,7 +117,6 @@ awk '/^## /{on = ($0 == "## GitHub identity")} on && /^[|] *Record authors *[|]/
   fail 'docs/agents/fleet.md names no record authors (its "## GitHub identity" table'"'"'s "Record authors" row)'
 
 gh issue view "$spec" --json body,createdAt,subIssues > "$work/graph" || fail "cannot read spec #$spec's tickets"
-# gh may cap a connection. Never treat a partial graph as a complete row set.
 jq -es '
   def num: type == "number" and . > 0 and . == floor;
   if length != 1 then error("not one graph") else .[0].subIssues end
@@ -155,7 +128,6 @@ jq -es '
 
 gh api --paginate "repos/{owner}/{repo}/issues/$spec/comments?per_page=100" > "$work/comments" ||
   fail "cannot read spec #$spec's comments"
-# Every page must be an array; missing fields or repeated pages are not a read.
 jq -es '
   def num: type == "number" and . > 0 and . == floor;
   if length > 0 and all(.[]; type == "array") then add else error("not whole pages") end
@@ -164,8 +136,6 @@ jq -es '
     then . else error("bad comments") end
 ' "$work/comments" > "$work/all-comments" 2> /dev/null || fail "cannot read spec #$spec's complete comments"
 
-# Only a positive private-repository read permits historical quoting records.
-# Missing, failed or malformed visibility reads use the public form check.
 private=false
 if gh repo view --json isPrivate > "$work/repo" 2> /dev/null &&
    jq -es 'length == 1 and (.[0] | type == "object" and .isPrivate == true)' \
@@ -173,10 +143,6 @@ if gh repo view --json isPrivate > "$work/repo" 2> /dev/null &&
   private=true
 fi
 
-# Same latest-record rule as launch-fleet: first nonblank line starts with
-# **Plan graph approved by; greatest comment ID wins, never an older good one.
-# #717: only among the record authors' comments, as launch-fleet drops every
-# other comment, and one with no author, before any rule sees it.
 jq -er --arg records "$private_records" --argjson private "$private" --slurpfile tickets "$work/tickets" --slurpfile labels "$work/labels.json" --slurpfile authors "$work/authors.json" '
   def trim: sub("^\\s+"; "") | sub("\\s+$"; "");
   def public_form:

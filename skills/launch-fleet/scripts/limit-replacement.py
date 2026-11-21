@@ -1,16 +1,3 @@
-"""TL4 (#2339): retire and replace a stuck owner after two ticket misses.
-
-One finite pass. The ops agent reads every source completely and supplies its
-values: the TL2 stage bench (`journey.py bench --stage-waits`), the private
-reconciliation reads below, and the ops-dispatch v1 snapshot, intent, claim and
-history. This module counts the owner's distinct evidenced misses, checks
-that a single branch writer can be proved, and selects at most one recorded
-replacement on the incumbent's existing branch. It has no network/process
-client, enable switch or executable effect path: retirement and start stay
-disabled under OB-A1, so `effect_boundary` is never called, and every
-unavailable boundary is returned as a gap for Jake. P5 remains Unverified.
-See ../test/limit-replacement/README.md.
-"""
 import copy
 import hashlib
 import importlib.util
@@ -33,16 +20,10 @@ limits = _load('factory_limits', HERE / 'carried/limits.py')
 LIMITS = HERE / 'carried/limits.conf'
 SCHEMA = 'closedwiz.limit-replacement.v1'
 BENCH = 'closedwiz.journey.stage-bench.v1'
-# The stages whose miss is the owner's own wait. builder_start comes before
-# any owner; reviewer_start/merge are dispatcher/reviewer waits;
-# builder_question_answer is the orchestrator's (ticket question Q2).
 OWNER_STAGES = ('fix_after_changes',)
 WAIT_KEYS = {'key', 'stage', 'tickets', 'pull_request', 'wait_minutes', 'wait_range_minutes', 'limit_minutes',
              'result', 'start', 'end', 'support', 'folded', 'gaps'}
 RESULTS = ('missed', 'not missed', 'pending', 'unknown', 'gated', 'stale')
-# An earlier start on this ticket is settled only when its effect was never
-# attempted. A purported completion or non-execution needs an endpoint lookup
-# that does not exist yet (#2244), so it stays uncertain.
 SETTLED = ('disabled', 'refused', 'superseded')
 UNSETTLED = {'transport': ('accepted', 'uncertain'),
              'completion': ('uncertain', 'completed', 'reconciled_not_executed'),
@@ -117,7 +98,6 @@ def read_sources(sources):
 
 
 def read_bench(bench):
-    """The TL2 stage-bench output, checked for internal agreement. A miss is a measured fact only."""
     shape(bench, 'bench', dict(schema=str, settings=dict, read_at=str, authority=str, stages=list,
                                waits=list, misses=list, sources=dict))
     if bench['schema'] != BENCH or bench['authority'] != 'none':
@@ -143,14 +123,12 @@ def read_bench(bench):
 
 
 def owner_misses(bench, sources):
-    """Distinct owner-stage misses on this ticket: the bench's, plus every earlier recorded one."""
     measured = {w['key'] for w in bench['waits'] if w['result'] == 'missed'
                 and w['stage'] in OWNER_STAGES and sources['ticket'] in w['tickets']}
     return sorted(measured | set(sources['recorded_misses']))
 
 
 def binding(sources):
-    """What a replacement intent's evidence digest binds: this ticket, branch, head and incumbent."""
     incumbent = sources['incumbent']
     return digest(dict(ticket=sources['ticket'], branch=incumbent['branch'], head=incumbent['head'],
                        incumbent=incumbent['assignment']))
@@ -171,44 +149,37 @@ def is_start(r, ticket):
 
 
 def selects(r, sources):
-    """A recorded start intent for this same replacement: ticket, branch, head and incumbent."""
     return is_start(r, sources['ticket']) and [e['digest'] for e in r['evidence']] == [binding(sources)]
 
 
 def assess(bench, sources, snapshot, history, current_limits, misses, intent):
-    """Raise Refusal for the first failing check, in denial priority order."""
     ticket, incumbent = sources['ticket'], sources['incumbent']
     same = [r for r in history if (r['repository'], r['ticket']) == (snapshot['repository'], ticket)]
 
-    # 1. Uncertainty first: nothing later can lower it.
     uncertain = ('reconcile', 'uncertain_outcome')
     require(not snapshot['uncertain_keys'], 'an earlier operation on this ticket is unresolved', *uncertain)
     require(not any(r.get('state') in UNSETTLED.get(r['kind'], ()) for r in same),
             'an earlier effect on this ticket has an unsettled outcome', *uncertain)
     own = intent and intent['operation_key']
     for start in [r for r in same + snapshot['intents'] if is_start(r, ticket) and r['operation_key'] != own]:
-        # A completion settles only its own start: same identities and the same binding (R1).
         done = [r for r in same if r['kind'] == 'completion' and r['operation_key'] == start['operation_key']
                 and r['intent_id'] == start['id']
                 and all(r[k] == start[k] for k in ('repository', 'spec', 'ticket', 'approval', 'subject'))]
         if start in snapshot['intents'] and selects(start, sources):
-            continue  # a claimant for this same selection: one is chosen when the intent is bound
+            continue
         require(any(r['state'] in SETTLED for r in done),
                 'an earlier start on this ticket may have run: its outcome is not settled', *uncertain)
 
-    # 2. Complete reads only; an unread page never proves absence.
     require(snapshot['complete'] and sources['complete'], 'a source read is incomplete', reason='incomplete_read')
     require(incumbent['activity'] != 'unknown', "the incumbent's activity is unread", reason='incomplete_read')
     require(incumbent['worktree'] != 'unknown', "the incumbent's uncommitted work is unread",
             reason='incomplete_read')
 
-    # 3. Every hold, gate, pause and the CS5 overload pause survive.
     gates = 'paused_or_revoked'
     require(not snapshot['paused'] and not snapshot['revoked'], 'paused or revoked', reason=gates)
     require(not snapshot['holds'] and not snapshot['gates'], 'a hold or another gate remains', reason=gates)
     require(sources['overload'] == 'clear', 'the overload pause is on or unknown', reason=gates)
 
-    # 4. Current limits, two evidenced misses and a single branch writer.
     require(bench['settings'] == current_limits, 'the bench was measured against other limits')
     require(len(misses) >= 2, 'fewer than two distinct owner misses: no replacement is evidenced')
     require(incumbent['activity'] == 'stopped', 'the incumbent is live: it could still write the branch')
@@ -217,13 +188,6 @@ def assess(bench, sources, snapshot, history, current_limits, misses, intent):
 
 
 def check(bench, sources, snapshot, intent=None, claim=None, history=(), effect_boundary=None, limits_path=LIMITS):
-    """One finite pass: decide, return the report to record, and end. Never calls effect_boundary.
-
-    Malformed inputs raise ValueError; an unreadable or invalid limits file
-    raises as `limits.read` does. Decisions: `none` (under two misses),
-    `record_intent` (record the proposed intent, read it back, end), or the
-    contract result's state for that intent (`disabled` once selected).
-    """
     sources = read_sources(copy.deepcopy(sources))
     bench = read_bench(copy.deepcopy(bench))
     snapshot = record(snapshot, 'snapshot')
@@ -265,13 +229,11 @@ def check(bench, sources, snapshot, intent=None, claim=None, history=(), effect_
             ticket=sources['ticket'], branch=incumbent['branch'], head=incumbent['head'],
             retire=incumbent['assignment'], replacement=intent['assignment'], reviewer=reviewer['assignment'],
             correction_rounds=dict(reviewer['correction_rounds']),
-            # The incumbent's code stays on the branch: its family stays conflicting.
             family_conflicts=sorted(set(reviewer['family_conflicts']) | {incumbent['family']})))
     return report
 
 
 def bind(intent, claim, history, snapshot, sources, effect_boundary):
-    """The intent must be this replacement's, the first claimant's, then OB3 decides the rest."""
     ticket, incumbent = sources['ticket'], sources['incumbent']
     evidence = binding(sources)
     require(intent['action'] == 'builder_start' and intent['destination'] == 'builder'

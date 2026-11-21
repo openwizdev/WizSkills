@@ -1,36 +1,4 @@
 #!/usr/bin/env node
-// to-spec's steering video (#1339, J204): an animatic, adapted from Matt
-// Pocock's `animatic` skill (storyboard, Playwright frames, voice, ffmpeg).
-// One still frame per moment, held while its one spoken line plays.
-//
-//   node animatic.mjs check <storyboard.json> [--target 90]
-//   node animatic.mjs build <storyboard.json> [-o spec.mp4] [--target 90] [--tts-command "<cmd>"] [--voice <name>]
-//   node animatic.mjs link <https url>
-//
-// A storyboard is a JSON array of moments, {"say", "frame"}, in playback
-// order. Frames are `title` (first, once), `user` (what changes for a user)
-// and `codebase` (what changes in the code), each change with its build
-// `step`: 1 first, never going back, never skipping. There is no graph,
-// diagram, image or page frame, and no line or frame may name a graph or a
-// bench: the graph stays on the spec as the agents' document.
-//
-// `build` checks first and renders nothing on a refusal. Then: frames ->
-// PNG (playwright-core's Chromium: $OPENWIZ_CHROMIUM, else `chromium` on
-// PATH), lines -> WAV (--tts-command, else espeak-ng, espeak or say), and
-// ffmpeg stitches a constant 30 fps H.264/AAC MP4, verified with ffprobe,
-// plus build/sheet.png, every frame in order. Frames, lines and the sheet land
-// in `build/` beside the storyboard; the MP4 is staged beside its output, on
-// the output's filesystem, and published only once verified, never over a file. playwright-core is read from the working folder's
-// node_modules, else $ANIMATIC_HOME (default ~/.cache/animatic), where it is
-// installed, pinned, on first use.
-//
-// --tts-command, as in Matt's: the line arrives on stdin and as {text}; {out}
-// is a path with no extension, and the command writes {out}.wav (or .mp3,
-// .aiff): it is converted to WAV here. Each moment needs its own new, audible
-// take and a command that exits 0, or the build fails and names the moment.
-//
-// Exit 0: done, one short report on stdout. 1: refused or failed, one
-// `animatic: <why>` line per reason on stderr. 2: bad arguments.
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -40,7 +8,7 @@ import path from "node:path";
 
 const WIDTH = 1280;
 const HEIGHT = 720;
-const HOLD = 0.4; // seconds each frame stays after its line
+const HOLD = 0.4;
 const PLAYWRIGHT = "playwright-core@1.64.1";
 const HOME = process.env.ANIMATIC_HOME ?? path.join(os.homedir(), ".cache", "animatic");
 const BANNED = /\b(bench(mark)?(s|ed|ing)?|graphs?)\b/i;
@@ -51,7 +19,6 @@ const fail = (reasons, code = 1) => {
   process.exit(code);
 };
 
-// ---- arguments ----
 const [verb, ...rest] = process.argv.slice(2);
 const flags = {};
 const positional = [];
@@ -69,7 +36,6 @@ if (!["check", "build", "link"].includes(verb) || positional.length !== 1) {
 const target = flags.target === undefined ? 90 : Number(flags.target);
 if (!Number.isFinite(target) || target < 0) fail("--target is seconds, 0 for none", 2);
 
-// ---- link ----
 if (verb === "link") {
   const url = positional[0];
   let parts;
@@ -88,9 +54,8 @@ if (verb === "link") {
   process.exit(0);
 }
 
-// ---- check ----
 const words = (s) => s.split(/\s+/).filter(Boolean).length;
-const seconds = (say) => words(say) / 2.6 + 0.3 + HOLD; // about 155 words a minute
+const seconds = (say) => words(say) / 2.6 + 0.3 + HOLD;
 
 const check = (moments) => {
   const why = [];
@@ -159,7 +124,6 @@ if (verb === "check") {
   process.exit(0);
 }
 
-// ---- build ----
 const out = path.resolve(flags.out ?? path.join(path.dirname(file), "spec.mp4"));
 if (fs.existsSync(out)) fail(`${out} exists; give a new output path`);
 if (!out.endsWith(".mp4")) fail("the output is an .mp4");
@@ -219,7 +183,7 @@ const voice = (text, wav) => {
   const base = wav.replace(/\.wav$/, ".src");
   const dir = path.dirname(base);
   const ours = () => fs.readdirSync(dir).filter((f) => f.startsWith(path.basename(base) + ".")).map((f) => path.join(dir, f));
-  for (const f of [wav, ...ours()]) fs.rmSync(f, { force: true }); // only a take made now counts
+  for (const f of [wav, ...ours()]) fs.rmSync(f, { force: true });
   if (flags["tts-command"]) {
     const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
     const cmd = flags["tts-command"].replaceAll("{out}", q(base)).replaceAll("{text}", q(text));
@@ -290,8 +254,6 @@ try {
     "-vf", `scale=426:-1,tile=3x${Math.ceil(moments.length / 3)}`,
     "-frames:v", "1", path.join(build, "sheet.png")]);
 
-  // Staged in a new folder of its own beside the output, on the output's
-  // filesystem, so publishing is one link and cleanup removes only ours.
   const stage = fs.mkdtempSync(path.join(path.dirname(out), `.${path.basename(out, ".mp4")}.partial-`));
   const partial = path.join(stage, "spec.mp4");
   try {
@@ -302,7 +264,7 @@ try {
     if (kinds !== "audio,video") throw new Error(`the MP4 holds ${kinds}, not one video and one audio track`);
     if (Math.abs(Number(meta.format.duration) - total) > 0.25) throw new Error(`the MP4 runs ${meta.format.duration} s, not ${total.toFixed(2)} s`);
     if (!(loudest(partial) > -50)) throw new Error("the voice is not audible");
-    fs.linkSync(partial, out); // never over a file that appeared meanwhile
+    fs.linkSync(partial, out);
   } finally {
     fs.rmSync(stage, { recursive: true, force: true });
   }

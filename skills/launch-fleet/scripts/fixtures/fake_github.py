@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""A synthetic `gh` for post.py's and merge.py's tests (WS8), and host.py's (#1446). Never networked.
-
-The world is the JSON file named by FAKE_WORLD. Each write is appended to its
-`writes`. `faults` makes the next matching call fail: `post`, `patch` or
-`merge` set to `fail` (no effect, exit 1) or `lost` (the effect happens, the
-response is lost: exit 1). `merge` may also be `queue` (the queue takes it).
-"""
 from datetime import datetime, timezone
 import json
 import os
@@ -38,7 +31,6 @@ def flag(name):
 
 
 def body():
-    """A write's body: a -f/-F field, or status.py's JSON on stdin (--input -)."""
     if '--input' in args:
         return json.load(sys.stdin)['body']
     return field('body')
@@ -145,7 +137,7 @@ if args[:2] != ['api', 'graphql'] and args[0] == 'api':
     if method == 'GET' and parts[0] == 'issues' and parts[2:] == ['comments']:
         query = dict(x.split('=', 1) for x in endpoint.partition('?')[2].split('&') if '=' in x)
         later = query.get('page', '1') != '1'
-        page = [] if later else comments(parts[1])  # status.py pages until an empty one
+        page = [] if later else comments(parts[1])
         out([page] if '--slurp' in args else page)
     fail('unexpected api call: %s' % ' '.join(args))
 

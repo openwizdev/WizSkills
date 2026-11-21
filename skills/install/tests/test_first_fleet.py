@@ -529,6 +529,9 @@ class Continuation(unittest.TestCase):
                 self.assertEqual(path.read_bytes() if path.exists() else None, before, 'a preview writes nothing')
                 done = j.helper(['decisions', '--yes'])
                 self.assertEqual(done.returncode, 0, done.stdout)
+                for said in (shown.stdout, done.stdout):
+                    self.assertNotIn('server', said.lower())
+                self.assertIn('then run continue', done.stdout)
                 written = json.loads(path.read_text())
                 kept = {k: v for k, v in (existing or {}).items() if k != 'decision_repositories'}
                 self.assertEqual(written, dict(kept, decision_repositories=pair), 'only that key changes')

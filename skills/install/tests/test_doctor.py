@@ -553,7 +553,7 @@ class SkillCommandsMatchPackage(unittest.TestCase):
                      ('runtime/setup/github_login.py', 'sign-in')]:
             self.assertLess(order.index(step), skills, step)
         text = SKILL.read_text()
-        self.assertIn('The installed copy of this skill is older than this one', text)
+        self.assertIn('is older than this one; if you are told to install again, follow this skill', text)
         self.assertIn('https://github.com/openwizdev/WizSkills/blob/%s/skills/install/SKILL.md' % LINE, text)
 
     # catches: a CloudRoom code 0.1.0 prints with no row, so the agent improvises its next step.
@@ -586,7 +586,7 @@ class SkillCommandsMatchPackage(unittest.TestCase):
         self.assertIn('https://raw.githubusercontent.com/openwizdev/WizSkills/%s/skills/install/SKILL.md' % LINE, step4)
         for home in ('.claude/skills', '.codex/skills', 'CODEX_HOME'):
             self.assertIn(home, step4)
-        self.assertIn("grep -q 'install open'", step4)
+        self.assertIn("grep -q 'install ope[n] '", step4)
         self.assertIn('version: %s' % mine, step4)
 
     # catches: a resumed session reaching for the temporary clone, which the restart lost, or a fixed

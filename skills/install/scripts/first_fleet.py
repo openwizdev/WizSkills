@@ -1733,26 +1733,25 @@ def launch(got):
             print('Spec #%d already started once; not starting again.' % spec)
             print(record_line(spec, recorded))
             return 0
+        print(record_line(spec, recorded))
+        if recorded is None:
+            raise Exit(6, "Whether launch-fleet's start already ran is unknown, so its start path is not named "
+                          'again; run this again; ' + NOTHING)
         try:
             orchestrator = fleet_rules(env, state.value['repo'])['orchestrator']
         except Exit:
-            print(record_line(spec, recorded))
-            raise Exit(6, "The fleet settings' Orchestrator could not be read, so the user's yes cannot be matched to "
-                          'it yet; run this again; ' + NOTHING)
+            orchestrator = None
+        if not orchestrator:
+            raise Exit(6, "The fleet settings name no readable Orchestrator, so the user's yes cannot be matched to "
+                          'it; fix the Models table, then run this again; ' + NOTHING)
         if orchestrator != previous.get('orchestrator'):
-            print(record_line(spec, recorded))
-            now = ' '.join(orchestrator[k] for k in ('harness', 'model', 'effort'))
-            if recorded is None:
-                raise Exit(6, "The fleet settings' Orchestrator is now %s, not the one the user said yes to, and "
-                              "the fleet record could not be read; run this again; %s" % (now, NOTHING))
             del state.value['launch']
             state.value.pop('preview', None)
             if not state.save():
                 raise Exit(10, 'Could not withdraw the yes; run this again; ' + NOTHING)
             raise Exit(5, "The fleet settings' Orchestrator is now %s, not the one the user said yes to: preview "
-                          'again and ask again; %s' % (now, NOTHING))
-        print(record_line(spec, recorded))
-        print(handoff(spec, state.value['repo'], host))
+                          'again and ask again; %s' % (agent_words(orchestrator), NOTHING))
+        print(handoff(spec, state.value['repo'], host, orchestrator))
         return 6
     # Review R4: the carried setup must still be what setup verifies now.
     if not isinstance(carried.get('setup_state'), str):
@@ -1833,21 +1832,32 @@ def launch(got):
     print("The user said yes to starting spec #%d's fleet %s. Nothing is started by this command: the fleet starts "
           "through launch-fleet's own start path, and is said started only once its activation record reads back."
           % (spec, where))
-    print(handoff(spec, state.value['repo'], host))
+    print(handoff(spec, state.value['repo'], host, orchestrator))
     return 0
 
 
-def handoff(spec, repo, host):
+def agent_words(agent):
+    return ' '.join(agent[k] for k in ('harness', 'model', 'effort'))
+
+
+def handoff(spec, repo, host, orchestrator):
     """launch-fleet's own start path, named for the orchestrator to follow; never a second copy of it (R7)."""
     adapters = host.get('adapters') if host.get('agents') != 'cloud' else None
+    approved = '--provider %s --model %s --reasoning-level %s' % (
+        orchestrator['harness'], orchestrator['model'], orchestrator['effort'])
     return ("Next, as this project's orchestrator, follow launch-fleet's Launch section (references/launch.md) for "
             'spec #%d of %s: its two project loops and the GitHub messages question, then "Starting one": the spec\'s '
-            "loop, its entry in the private loop map, read back, and the record `%s%d`, read back.%s Then run "
-            'launch --spec %d again: it says the fleet started only once that record reads back. Never start it a '
-            'second way.' % (spec, repo, FLEET_RECORD, spec,
-                             ' Its loop runs builders %s, so give it OPENWIZ_ADAPTERS=%s, where launch-fleet\'s '
-                             'host.py finds the %s driver.' % (where_of(host['agents']), adapters, host['agents'])
-                             if adapters else '', spec))
+            "loop, its entry in the private loop map, read back, and the record `%s%d`, read back.%s The user said "
+            'yes to the fleet thread `%s`: right before creating that loop, run launch-fleet\'s `ops-starts.py flags '
+            '--repo %s fleet_thread`, and only if it prints exactly that, create the loop with `--provider %s --model '
+            '%s --reasoning %s`. If it prints anything else, create nothing and run launch --spec %d again: it asks '
+            'for a fresh preview and yes. Then run launch --spec %d again: it says the fleet started only once that '
+            'record reads back. Never start it a second way.' % (
+                spec, repo, FLEET_RECORD, spec,
+                ' Its loop runs builders %s, so give it OPENWIZ_ADAPTERS=%s, where launch-fleet\'s '
+                'host.py finds the %s driver.' % (where_of(host['agents']), adapters, host['agents'])
+                if adapters else '', approved, repo, orchestrator['harness'], orchestrator['model'],
+                orchestrator['effort'], spec, spec))
 
 
 def record_line(spec, recorded):
@@ -1976,9 +1986,10 @@ def resume(got):
         step = ('connect', '%sConnect %s with the installed tools, then run continue.' % (
             'Setup already prepared it; ' if candidate == repo else '', repo))
     elif spec and launched.get('spec') == spec and launched.get('state') in ('authorized', 'pending', 'uncertain'):
-        step = ('launch', "The user said yes to starting spec #%d: finish launch-fleet's start path (references/"
-                'launch.md, "Starting one"), then run launch --spec %d to read its fleet record back; never start it '
-                'a second way.' % (spec, spec))
+        step = ('launch', "The user said yes to starting spec #%d: run launch --spec %d first, which checks the "
+                "Orchestrator is still the one the user said yes to and names the start path; finish launch-fleet's "
+                'start path (references/launch.md, "Starting one") exactly as it says, then run launch --spec %d to '
+                'read its fleet record back; never start it a second way.' % (spec, spec, spec))
     elif spec and launched.get('spec') == spec and launched.get('state') == 'started' and value.get('merge'):
         step = ('offer', 'Say the closing offer, as first-merge printed it.')
     elif spec and launched.get('spec') == spec and launched.get('state') == 'started':

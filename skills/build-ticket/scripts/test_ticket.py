@@ -570,19 +570,20 @@ class Author(Case):
 
 
 class Identity(Case):
-
     def remote_work(self, branch='work'):
         return self.git('ls-remote', 'origin', f'refs/heads/{branch}').strip()
 
     def test_push_refuses_a_commit_without_a_noreply_author_or_committer(self):
-        cases = [('author', {'GIT_AUTHOR_EMAIL': PERSONAL}),
-                 ('committer', {'GIT_COMMITTER_EMAIL': PERSONAL}),
-                 ('author', {'GIT_AUTHOR_EMAIL': NOREPLY + '.example.invalid'}),
-                 ('committer', {'GIT_COMMITTER_EMAIL': 'noreply@example.invalid'}),
-                 ('author name', {'GIT_AUTHOR_NAME': 'Pat Person'}),
-                 ('committer name', {'GIT_COMMITTER_NAME': 'Pat Person'}),
-                 ('author name', {'GIT_AUTHOR_NAME': 'jparker2'})]
-        for i, (who, extra) in enumerate(cases):
+        address = 'is not a GitHub noreply address'
+        name = "name is not its noreply address's login"
+        cases = [('author', address, {'GIT_AUTHOR_EMAIL': PERSONAL}),
+                 ('committer', address, {'GIT_COMMITTER_EMAIL': PERSONAL}),
+                 ('author', address, {'GIT_AUTHOR_EMAIL': NOREPLY + '.example.invalid'}),
+                 ('committer', address, {'GIT_COMMITTER_EMAIL': 'noreply@example.invalid'}),
+                 ('author', name, {'GIT_AUTHOR_NAME': 'Pat Person'}),
+                 ('committer', name, {'GIT_COMMITTER_NAME': 'Pat Person'}),
+                 ('author', name, {'GIT_AUTHOR_NAME': 'jparker2'})]
+        for i, (who, why, extra) in enumerate(cases):
             with self.subTest(who=who, extra=extra):
                 self.git('checkout', '-q', '-b', f'work-{i}', 'main')
                 self.write('src/export/run.py', f'x = {10 + i}\n')
@@ -590,8 +591,8 @@ class Identity(Case):
                 sha = self.git('rev-parse', 'HEAD').strip()
                 receipt = self.dir / f'receipt-{i}.txt'
                 code, out, err = self.run_ticket('push', str(receipt), '--', 'git', 'push', '-q', 'origin', 'HEAD')
-                self.assertEqual((code, last(out)), (1, f'push refused: commit {sha[:12]} {who} is not '
-                                                        'a GitHub noreply address; nothing pushed'), err)
+                self.assertEqual((code, last(out)), (1, f'push refused: commit {sha[:12]} {who} {why}; '
+                                                        'nothing pushed'), err)
                 self.assertEqual((self.remote_work(f'work-{i}'), receipt.exists()), ('', False))
                 self.assertNotIn(PERSONAL, out + err)
                 self.assertNotIn('Pat', out + err)

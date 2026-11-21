@@ -34,6 +34,8 @@ A ticket body gives each native blocker its reason in a `## Links` section, afte
 - #<n> file: <the shared files, in backticks>
 ```
 
+A line may name its blocker in the long form, `<owner>/<repo>#<n>`, when `<owner>/<repo>` is this repository (rule 4).
+
 or, when the ticket has no blocker, exactly:
 
 ```md
@@ -88,8 +90,8 @@ and the spec's own example of a file line:
 1. **Lines.** CRLF reads as LF. Trailing spaces and tabs are dropped from each line.
 2. **The heading** is a line that is exactly `## Links`. A heading inside a fenced code block, or inside or on the line of an HTML comment, is not one, as `check-relies.sh` reads its declaration: a fence opens on a line whose start, after leading whitespace, is three or more backticks or tildes, and closes on a line of only that character, at least as many, and trailing whitespace; a comment runs from a line containing `<!--` to a line containing `-->`, both lines included. Another heading level, or other words on the line, is not one either.
 3. **The section** is the lines after its heading, up to the next ATX heading (a line starting with one to six `#` and then a space, or only `#`s) or the end of the body. Fences and comments play no part inside the section: every line counts, so a fence or comment line there is malformed (rule 5). Blank lines in it are skipped.
-4. **Each other line** must be either `none` or a link line, matched whole: `- #<n> real:<reason>` or `- #<n> file:<reason>`, where `<n>` is a positive issue number without a leading zero, `- ` starts the line (a line with leading whitespace is not a link line), the kind is lowercase, and `<reason>` is the rest of the line with surrounding spaces and tabs dropped (it may be empty).
-5. **Malformed,** in this order, first match only: more than one `## Links` section; a section with no lines; a line that is neither a link line nor `none`; `none` beside any other line (another `none` included). A malformed section labels nothing: every native blocker of its ticket is unlabelled, and the ticket gets one malformed refusal, never a refusal per blocker.
+4. **Each other line** must be either `none` or a link line, matched whole: `- #<n> real:<reason>` or `- #<n> file:<reason>`, where `<n>` is a positive issue number without a leading zero, `- ` starts the line (a line with leading whitespace is not a link line), the kind is lowercase, and `<reason>` is the rest of the line with surrounding spaces and tabs dropped (it may be empty). A link line may also name its blocker in the long form: `- <owner>/<repo>#<n> real:<reason>` or `- <owner>/<repo>#<n> file:<reason>`, where `<owner>` and `<repo>` are each one or more of `A-Z a-z 0-9 _ . -` and `<owner>/<repo>` is the graph read's `repo`, compared case-insensitively. It reads exactly as `- #<n>` with the same kind and reason. A long-form line naming another repository is not a link line.
+5. **Malformed,** in this order, first match only: more than one `## Links` section; a section with no lines; a line that is neither a link line nor `none` (the first such line: when it would be a long-form link line but names another repository, the detail names that line; otherwise the detail is `a line is not a link line or none`); `none` beside any other line (another `none` included). A malformed section labels nothing: every native blocker of its ticket is unlabelled, and the ticket gets one malformed refusal, never a refusal per blocker.
 6. **A real line names behaviour:** at least three words outside backticks. Replace every backticked span (a pair of backticks and what's between them, paired from the left) with a space; split the rest on whitespace; strip each piece of leading and trailing `()[]{}"',.;:!?`; a word is a piece matching `^[A-Za-z]+(['-][A-Za-z]+)*'?$` (so `checker's`, `measures'` and `file-link` are words, and a path such as `contracts/plan-links.v1.md` is not).
 7. **A file line names a file:** at least one backticked span holding a repository-relative path: segments of `A-Z a-z 0-9 _ . -`, joined by single `/`, with an optional trailing `/` for a folder, no leading `/`, and no `.` or `..` segment. Its files are the contents of those path spans, exactly as written, in order, each once. Other spans and words may sit beside them and are not files. A path is checked by form only, never on disk: a link may name a planned file.
 
@@ -153,9 +155,9 @@ Standard error, one line each, in the JSON report's order: `Links: #<ticket>: <m
 | `duplicate` | `#<blocker> has more than one line` |
 | `real_without_behaviour` | `the real line for #<blocker> names no behaviour` |
 | `file_without_file` | `the file line for #<blocker> names no file in backticks` |
-| `malformed` | `malformed section: <detail>`, the detail one of `more than one ## Links section`, `no lines`, `a line is not a link line or none`, `none must be the only line` |
+| `malformed` | `malformed section: <detail>`, the detail one of `more than one ## Links section`, `no lines`, `a line is not a link line or none`, ``line `<line>` names <owner>/<repo>#<n>, not this repository``, `none must be the only line`, where `<line>` is the line as rule 1 reads it and `<owner>/<repo>#<n>` is written as in that line |
 
-A message never quotes the body, so no ticket text reaches standard error.
+A message never quotes the body, except the one malformed detail that names a long-form line for another repository: no other ticket text reaches standard error.
 
 ### The JSON report
 

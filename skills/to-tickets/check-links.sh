@@ -65,7 +65,8 @@ def valid_graph:
 
 # A body'"'"'s `## Links` section: null (none), {malformed: detail},
 # or {lines: [...]}, by the contract'"'"'s "Reading a section".
-def section:
+def long_form: capture("^- (?<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(?<n>[1-9][0-9]*) (?<kind>real|file):(?<reason>.*)$");
+def section($repo):
   (split("\r\n") | join("\n") | split("\n") | map(sub("[ \t]+$"; ""))) as $l
   | (reduce range(0; $l | length) as $i ({fence: null, comment: false, heads: []};
       $l[$i] as $line | ($line | sub("^\\s+"; "")) as $trim
@@ -82,9 +83,15 @@ def section:
     else
       ($l[$heads[0] + 1:]) as $rest
       | ([range(0; $rest | length) | select($rest[.] | test("^(#{1,6} |#{1,6}$)"))][0] // ($rest | length)) as $stop
-      | [$rest[0:$stop][] | select(. != "")] as $lines
+      | [$rest[0:$stop][] | select(. != "")
+         | (([long_form] | .[0]) // null) as $long
+         | if $long != null and ($long.repo | ascii_downcase) == ($repo | ascii_downcase) then "- #\($long.n) \($long.kind):\($long.reason)" else . end] as $lines
+      | ([$lines[] | select(. != "none" and (test("^- #[1-9][0-9]* (real|file):") | not))][0]) as $odd
       | if ($lines | length) == 0 then {malformed: "no lines"}
-        elif any($lines[]; . != "none" and (test("^- #[1-9][0-9]* (real|file):") | not)) then {malformed: "a line is not a link line or none"}
+        elif $odd != null then
+          (([$odd | long_form] | .[0]) // null) as $long
+          | if $long != null then {malformed: "line `\($odd)` names \($long.repo)#\($long.n), not this repository"}
+            else {malformed: "a line is not a link line or none"} end
         elif ($lines | length) > 1 and any($lines[]; . == "none") then {malformed: "none must be the only line"}
         elif $lines == ["none"] then {lines: []}
         else {lines: [$lines[] | capture("^- #(?<n>[1-9][0-9]*) (?<kind>real|file):(?<reason>.*)$") | .reason |= strip]}
@@ -105,10 +112,10 @@ def refusal($t; $n; $code; $message): {ticket: $t, number: $n, code: $code, mess
 def link($t; $b; $kind; $files): {ticket: $t, blocker: $b.number, blocker_state: $b.state, kind: $kind, files: $files};
 
 # One open ticket: {links, refusals}.
-def judge:
+def judge($repo):
   .number as $t
   | (.blocked_by | sort_by(.number)) as $b
-  | (.body | section) as $s
+  | (.body | section($repo)) as $s
   | if $s == null or $s.lines == [] then
       {links: [$b[] | link($t; .; "unlabelled"; [])],
        refusals: [$b[] | refusal($t; .number; "no_reason"; "#\(.number) has no reason line")]}
@@ -141,7 +148,8 @@ try (
   | need(([tostream] | length) == ($events | length); "a key is repeated")
   | valid_graph
   | ([.tickets[] | select(.state == "OPEN")] | sort_by(.number)) as $open
-  | [$open[] | judge] as $judged
+  | .repo as $repo
+  | [$open[] | judge($repo)] as $judged
   | [$judged[].links[]] as $links
   | [$judged[].refusals[]] as $refusals
   | ([$links[] | select(.kind == "real")] | length) as $real

@@ -12,6 +12,7 @@ The fixtures of the [plan links contract](../../../../contracts/plan-links.v1.md
 | `refuse-real-without-behaviour` | A real line that is only a path, two words, empty, or a bare path | `real_without_behaviour` |
 | `refuse-file-without-file` | A file line with no backticks, or a path leaving the repository | `file_without_file` |
 | `refuse-malformed` | Each malformed detail, including on a ticket with no blocker | `malformed` |
+| `own-long-form` | Lines naming a blocker in this repository's long form, in its own case and in mixed case; another repository's long form refused, its line named | `malformed` |
 | `external-blockers` | Blockers outside the read, with their reasons | pass |
 | `closed-blocker` | A closed blocker still needs its line and stops nothing; closed tickets are not checked | pass |
 | `low-stock` | A board read: building, held, waiting on Jake, blocked and ready tickets; the low-stock flag | pass |

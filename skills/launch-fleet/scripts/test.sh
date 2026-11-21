@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=887      # includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 22; #1759 added 5
+CASES=898      # #2096 added 11; includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 22; #1759 added 5
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1603,6 +1603,40 @@ expect 'a low finding filed after the approval does not start, even labelled rea
 look #10: open sub-issue #15 is not in the approved plan
 EOF
 expect 'a low finding approved on its own still waits for its spec'"'"'s approval' 0 check.json 'ticket(15; "W5: a low finding"; ["ready-for-agent"]; []) | say(15; 1501; "11:00"; "**Approved on its own by Robin, 2026-11-01:** \"approve #15\"")' -- frontier < /dev/null
+
+### #2096: a long-form reference to this repository reads as #N; another repository's is refused, naming its line
+
+LONG='gsub("(?<p>[| ])#(?<n>[1-9])"; "\(.p)Synthetic-Owner/synthetic-REPO#\(.n)")'
+TABLE_LONG="split(\"\\n\") | map(if startswith(\"| #\") then $LONG else . end) | join(\"\\n\")"
+expect 'long form: own approval rows in mixed case start the same frontier as #N' 0 check.json "merge12 | issue(10; .comments[0].body |= ($TABLE_LONG))" -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'long form: a machine record with long-form rows and blockers starts the same frontier' 0 check.json "merge12 | machine_only @@then@@ issue(10; .comments[0].body |= ($TABLE_LONG))" -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'long form: an approval row naming another repository is refused with its line' 0 check.json 'merge12 | issue(10; .comments[0].body |= sub("\n\\| #13 "; "\n| other-owner/other-repo#13 "))' -- check <<EOF
+look #10: its latest plan graph approval's line \`| other-owner/other-repo#13 | W3: widget page | #12 | ready-for-agent |\` names other-owner/other-repo#13, not this repository
+EOF
+expect 'long form: a machine row naming another repository is refused with its line' 0 check.json 'merge12 | machine_only @@then@@ issue(10; .comments[0].body |= sub("\n\\| #13 "; "\n| other-owner/other-repo#13 "))' -- check <<EOF
+look #10: its latest plan graph approval's line \`| other-owner/other-repo#13 | W3: widget page | #12 | ready-for-agent |\` names other-owner/other-repo#13, not this repository
+EOF
+expect 'long form: a waiting record for this repository resumes its builder' 0 check.json 'own_approval(70; 7002; "10:00") | say(70; 7003; "10:01"; "launch-fleet: start checked, thread thr_syn70, branch room/70-link") | say(70; 7004; "11:00"; "launch-fleet: waiting for synthetic-owner/Synthetic-Repo#11")' -- wake 70 <<EOF
+resume #70: #11 merged; tell its builder, thread thr_syn70 (wait comment 7004)
+EOF
+expect 'long form: an orchestrator wait for this repository resumes its builder' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator (PC, ops): **wait for SYNTHETIC-OWNER/synthetic-repo#71.** Once it merges, continue.") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check <<EOF
+resume #12: #71 merged; tell its builder, thread thr_syn12 (wait comment 1202)
+EOF
+expect 'long form: a resume claim for this repository may deliver' 0 check.json "$WAIT12 | $MERGE71 | say(12; 1203; \"11:59\"; \"launch-fleet: resume starting 1202 for synthetic-owner/synthetic-repo#71, thread thr_syntick1\")" -- claim 12 1203 <<EOF
+go #12
+EOF
+expect 'long form: a resume sent for this repository suppresses a repeat' 0 check.json "$WAIT12 | $MERGE71 | say(12; 1203; \"11:45\"; \"launch-fleet: resume sent 1202 for Synthetic-Owner/Synthetic-Repo#71\")" -- check < /dev/null
+expect 'long form: an ordering hold for this repository is released' 0 check.json 'own_approval(70; 7002; "10:00") | issue(70; .labels = ["held"]) | held_at(70; "11:09") | say(70; 7003; "11:10"; "launch-fleet: held for ordering: issue synthetic-owner/synthetic-repo#11 merges to main")' -- check <<EOF
+release #70: ordering hold 7003; issue #11 merged to main; restore ready-for-agent and remove held
+EOF
+expect 'long form: a wait naming another repository is refused with its line' 0 check.json 'say(12; 1202; "11:00"; "launch-fleet: waiting for other-owner/other-repo#71") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check <<EOF
+look #12: comment 1202's line \`launch-fleet: waiting for other-owner/other-repo#71\` names other-owner/other-repo#71, not this repository
+EOF
+expect 'long form: a raised refusal is not raised again' 0 check.json 'say(12; 1202; "11:00"; "launch-fleet: waiting for other-owner/other-repo#71") | say(12; 1203; "11:05"; "launch-fleet: look: comment 1202'"'"'s line `launch-fleet: waiting for other-owner/other-repo#71` names other-owner/other-repo#71, not this repository")' -- check < /dev/null
 
 ### #1340: a machine plan approval starts the fleet; the video's comments steer it
 

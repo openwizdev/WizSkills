@@ -1,18 +1,4 @@
 #!/bin/sh
-# The grill index (ClosedWiz#317): prints one Markdown table row for each grill
-# file, from the file itself, so no grill's pull request edits a shared file.
-#   sh skills/grill/scripts/index.sh [DIR]      # DIR: default docs/grills
-# Reads DIR/*.md but README.md, in file-name order. Each file's line 1 is
-# `# Grill: <topic> (<YYYY-MM-DD>)`, and its line 3, the status paragraph, has
-# one `Status:` (`**open**.`, or `**parked**` or `**confirmed**` by <User>,
-# <YYYY-MM-DD>) and a `Feeds` sentence. Fails closed: a file it can't read that
-# way is named on stderr, with every other bad file, and nothing is printed.
-# The default folder is the consumer project's own and optional: when it is
-# absent, nothing is read and it says so on stderr, printing no table. A DIR
-# that is named must exist.
-# Exit 0: the table (or no default folder); 1: a bad file; 2: a folder or a
-# file it can't read.
-# Test: sh skills/grill/scripts/test.sh
 set -u
 LC_ALL=C
 export LC_ALL
@@ -26,7 +12,7 @@ dir="${1:-docs/grills}"
 rows=''
 bad=0
 for f in "$dir"/*.md; do
-  [ -e "$f" ] || continue # no grill at all
+  [ -e "$f" ] || continue
   [ "${f##*/}" != README.md ] || continue
   [ -f "$f" ] && [ -r "$f" ] || { echo "index.sh: cannot read $f" >&2; exit 2; }
   row="$(awk -v file="$f" -v base="${f##*/}" '

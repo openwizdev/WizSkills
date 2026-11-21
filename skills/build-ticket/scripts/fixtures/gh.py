@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""Synthetic `gh` for ticket.py's tests. State is the JSON file in FAKE_GH_WORLD.
-
-Answers only the calls ticket.py makes; anything else exits 9 so a test sees it.
-Comments are kept per issue or pull request number.
-"""
 import json
 import os
 import re

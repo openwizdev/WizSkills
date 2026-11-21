@@ -1,4 +1,3 @@
-"""Public CLI proofs. All identifiers and observations here are synthetic."""
 import json
 import math
 import os
@@ -18,7 +17,6 @@ def manifest():
 
 
 def series(a="A", b="B", first="left", second="right"):
-    # The two records are the same pair shown in opposite orders.
     return [{"left": a, "right": b, "winner": first, "reason": "fixture"},
             {"left": b, "right": a, "winner": second, "reason": "fixture"}]
 
@@ -102,7 +100,6 @@ class CLI(unittest.TestCase):
                 self.bad("pairs", data)
 
     def test_two_candidate_worked_bradley_terry_strengths(self):
-        # A wins 3 of 4 observations. Half a prior win each -> 3.5:1.5 -> .7:.3.
         rows = series() + series(first="left", second="left")
         ranked = self.good("rank", results(rows))
         self.assertEqual(ranked["winner"], "A")
@@ -150,8 +147,6 @@ class CLI(unittest.TestCase):
         self.assertTrue(all(math.isfinite(row["log_strength"]) for row in ranked["ranking"]))
 
     def test_log_strength_preserves_a_tail_that_underflows(self):
-        # Each independent chain edge has two wins plus half a prior win
-        # against half a prior loss: exactly 5:1, so the log gap is log(5).
         names = [f"C{i:04d}" for i in range(501)]
         data = {**manifest(),
                 "candidates": [{"id": name, "family": "openai"} for name in names],
@@ -168,8 +163,6 @@ class CLI(unittest.TestCase):
                                    1.6094379124341003, places=7)
 
     def test_odds_against_the_baseline_come_from_the_fit(self):
-        # catches: chart odds computed by dividing display strengths, or
-        # against the wrong baseline. A won 3.5:1.5 with the prior (.7:.3).
         rows = series() + series(first="left", second="left")
         odds = self.good("odds", results(rows), "--baseline", "B")
         self.assertEqual(odds["baseline"], "B")
@@ -178,8 +171,6 @@ class CLI(unittest.TestCase):
         self.assertEqual(odds["odds"][1]["beats_baseline"], 0.5)
 
     def test_odds_stay_finite_when_display_strengths_underflow(self):
-        # catches: 0/0 or NaN when both strengths underflow to zero. Each
-        # chain step is exactly 5:1, so C0001 beats C0000 with 5/6.
         names = [f"C{i:04d}" for i in range(501)]
         data = {**manifest(),
                 "candidates": [{"id": name, "family": "openai"} for name in names],
@@ -192,7 +183,6 @@ class CLI(unittest.TestCase):
         self.assertTrue(all(0 <= value <= 1 for value in odds.values()))
 
     def test_odds_refuse_an_unknown_or_missing_baseline(self):
-        # catches: a chart against a baseline that is not in the stretch.
         self.bad("odds", results(), "--baseline", "Z")
         self.bad("odds", results())
 
@@ -201,7 +191,7 @@ class CLI(unittest.TestCase):
             self.bad("rank", results(rows))
         data = results()
         data["candidates"].append({"id": "C", "family": "openai"})
-        self.bad("rank", data)  # disconnected candidate is not rankable
+        self.bad("rank", data)
 
     def test_rank_refuses_bad_rows_and_family(self):
         for change in ({"left": "A", "right": "A"}, {"left": "Z"},
@@ -215,7 +205,6 @@ class CLI(unittest.TestCase):
         self.bad("rank", data)
 
     def test_stall_boundary_counts_unchanged_transitions(self):
-        # --window 2 means two completed rounds after selecting A: A,A,A.
         data = {"rounds": [{"round": 0, "winner": "A"},
                            {"round": 1, "winner": "A"}], "stopped_by_jake": False}
         self.assertEqual(self.good("stall", data, "--window", "2"),

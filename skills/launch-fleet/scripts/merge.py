@@ -7,6 +7,8 @@
   merge.py merge  OWNER/NAME PR HEAD CHECKS BODY --ticket TICKET [--base-rule-checked] [-- COST ARGS]
   merge.py cost   OWNER/NAME PR HEAD TICKET [-- COST ARGS]
   merge.py settle OWNER/NAME PR TICKET [-- COST ARGS]
+  merge.py look   OWNER/NAME PR HEAD --ticket TICKET
+  merge.py ask    OWNER/NAME PR HEAD CHECKS --ticket TICKET EVIDENCE-FILE
 
 `read` prints where the pull request stands: `merged <commit>`, `queued`,
 `open, the merge queue is on|off[; it left the queue at <time>: <reason>]` or
@@ -55,6 +57,24 @@ it closes that carries a report link (a record author's issue whose body ends wi
 report, or no `X.Y.Z` milestone) or `; landed unknown: <why>` (reconcile on the next run, never retried
 blind); a merge that closes no linked issue adds nothing.
 
+The late look (RC3, #1831; contracts/checkpoints.v1.md): `merge` holds the
+final merge of a user-visible spec (the merge of its last open planned ticket,
+where the spec answers `User-visible: yes` or `yes, a release`, or its answers
+are invalid) until a record author's late-look record by the owner approves
+this head after its evidence ask: `held: ask-due|look-due|changes-asked: ...`
+(exit 1, nothing written). Every other merge, and a spec answered `no` or
+planned before the contract, flows as today. A spec, its planned tickets, its
+comments or the contract it can't read is `unknown: ...` and merges nothing.
+A sibling ticket whose closing pull request is in the merge queue or merged
+counts as closed, so two tickets queued one after the other leave the later
+one held. A held head that conflicts is `blocked: not mergeable: ...`, never
+offered an ask. `look` prints the same reading (`flows: ...`, `released: ...`
+or `held: ...`) and only reads. `ask` posts the contract's evidence ask on the
+spec: its opening line for PR and HEAD, then EVIDENCE-FILE's `Evidence:` and
+`Look for:` lines. It posts only for a head whose CHECKS are green and that is
+mergeable, refuses an ask the contract refuses (code links included) and posts
+one ask per head (`ask posted <id>`, `ask already posted <id>`).
+
 `settle` is the cost a queued merge still owes: it reads the newest record
 author's queue receipt on the pull request and runs `cost` at that commit
 (`refused: ...` while it isn't merged there), or prints `no queued merge`
@@ -64,12 +84,14 @@ wake, which reads the report again. A landed comment is read back after
 posting; when an earlier one is there too, the earliest stands and ours is
 deleted.
 """
+import datetime
 import importlib.util
 import json
 from pathlib import Path
 import re
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -91,6 +113,19 @@ COST = 'tools/collector/cost_line.py'
 SHA = re.compile(r'[0-9a-f]{40}')
 TICKET = re.compile(r'(?:([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#)?([1-9][0-9]{0,11})')
 QUEUED = re.compile(r'launch-fleet: merge queued ([0-9a-f]{40})\b')
+# The late look (RC3): the checkpoints contract's forms and the open-development contract's deciders.
+CONTRACT = HERE.parents[2] / 'contracts/checkpoints.v1.md'
+DECIDERS = ('Jake',)
+QUOTES = '"\u201c\u201d'
+FORMS = {'section', 'section_like', 'setext_text', 'setext_underline', 'section_end', 'fence', 'one_way_door',
+         'user_visible', 'ask_opening', 'ask_evidence', 'ask_look_for', 'link_host', 'code_hosts', 'uploaded_hosts',
+         'uploaded_path', 'record_opening', 'record_pointer'}
+SPEC_QUERY = '''query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { issue(number: $number) { number parent { number body
+    repository { nameWithOwner }
+    subIssues(first: 100) { pageInfo { hasNextPage } nodes { number state repository { nameWithOwner }
+      closedByPullRequestsReferences(first: 20, includeClosedPrs: true) { pageInfo { hasNextPage }
+        nodes { state isInMergeQueue } } } } } } } }'''
 # The feedback-loop contract v1 (#1840): its destination, marker, report link, version and landed comment,
 # for a fix in any repository of the destination's owner, named in full (planner ruling 7040055832 on #1848).
 DESTINATION = 'openwizdev/OpenWiz'
@@ -348,6 +383,218 @@ def settle(repo, number, ticket, extra=()):
     return told
 
 
+def forms():
+    """The checkpoints contract's one `checkpoints-v1` block, compiled; refused when unreadable."""
+    try:
+        blocks = re.findall(r'^```checkpoints-v1\n(.*?)^```$', CONTRACT.read_text(encoding='utf-8'), re.M | re.S)
+        if len(blocks) != 1:
+            raise ValueError(blocks)
+        f = {k: re.compile(v) if isinstance(v, str) else set(v) for k, v in json.loads(blocks[0]).items()}
+        if not FORMS <= f.keys():
+            raise ValueError(FORMS - f.keys())
+        return f
+    except (OSError, ValueError, AttributeError, TypeError, re.error):
+        raise Stop('unknown: the checkpoints contract could not be read; nothing was merged')
+
+
+def lines_of(text):
+    return (text or '').replace('\r\n', '\n').replace('\r', '\n').split('\n')
+
+
+def late(body, f):
+    """Whether the spec body gives the owner a late look: answered user-visible, or invalid."""
+    lines = lines_of(body)
+    inside, opening = set(), None
+    for i, line in enumerate(lines):
+        if opening is None:
+            m = f['fence'].fullmatch(line)
+            if m:
+                opening = m.group(1)
+                inside.add(i)
+            continue
+        inside.add(i)
+        close = re.fullmatch(r' {0,3}(`+|~+)[ \t]*', line)
+        if close and close.group(1)[0] == opening[0] and len(close.group(1)) >= len(opening):
+            opening = None
+    outside = [i for i in range(len(lines)) if i not in inside]
+    for i in outside:
+        if (f['section_like'].fullmatch(lines[i]) and not f['section'].fullmatch(lines[i])) or (
+                f['setext_text'].fullmatch(lines[i]) and i + 1 in outside
+                and f['setext_underline'].fullmatch(lines[i + 1])):
+            return True  # section-heading: invalid reads as both yes
+    starts = [i for i in outside if f['section'].fullmatch(lines[i])]
+    if len(starts) != 1:
+        return bool(starts)  # absent is early only; section-repeated is invalid
+    answers = []
+    for i in range(starts[0] + 1, len(lines)):
+        if i not in inside and f['section_end'].fullmatch(lines[i]):
+            break
+        if lines[i].strip():
+            answers.append(lines[i])
+    user = f['user_visible'].fullmatch(answers[1]) if len(answers) == 2 else None
+    if not (user and f['one_way_door'].fullmatch(answers[0])):
+        return True
+    return user.group(1) != 'no'
+
+
+def link_code(url, f):
+    """None for an evidence link, else the contract's refusal code."""
+    try:
+        parts = urlsplit(url)
+        parts.port
+    except ValueError:
+        return 'evidence-link'
+    host = (parts.hostname or '').rstrip('.')
+    if ('\\' in url or parts.scheme.lower() != 'https' or not url[len(parts.scheme):].startswith('://')
+            or '@' in parts.netloc or not f['link_host'].fullmatch(host)):
+        return 'evidence-link'
+    if host in f['uploaded_hosts'] and f['uploaded_path'].fullmatch(parts.path):
+        return None
+    return 'evidence-code' if host in f['code_hosts'] else None
+
+
+def read_ask(text, f):
+    """(PR, commit) of a valid evidence ask, or its refusal code."""
+    lines = [x for x in lines_of(text) if x.strip()]
+    first = f['ask_opening'].fullmatch(lines[0]) if lines else None
+    if not first:
+        return 'ask-opening'
+    rest = lines[1:]
+    if not (rest and f['ask_evidence'].fullmatch(rest[0])):
+        return 'evidence-missing'
+    while rest and (m := f['ask_evidence'].fullmatch(rest[0])):
+        code = link_code(m.group(2), f)
+        if code:
+            return code
+        rest = rest[1:]
+    if len(rest) != 1 or not f['ask_look_for'].fullmatch(rest[0]):
+        return 'ask-line'
+    return int(first.group(1)), first.group(2)
+
+
+def read_record(text, f):
+    """(decider, PR, commit, outcome) of a valid late-look record, else None."""
+    lines = [x for x in lines_of(text) if x.strip()]
+    first = f['record_opening'].fullmatch(lines[0]) if lines else None
+    try:
+        datetime.date.fromisoformat(first.group(2))
+    except (AttributeError, ValueError):
+        return None
+    if any(q in first.group(6) for q in QUOTES) or len(lines) != 2 or not f['record_pointer'].fullmatch(lines[1]):
+        return None
+    return first.group(1), int(first.group(3)), first.group(4), first.group(5)
+
+
+def closing(n):
+    """Whether a planned ticket is closed or on its way: a closing pull request merged or in the merge queue."""
+    refs = n['closedByPullRequestsReferences']
+    prs = [(r['state'], r['isInMergeQueue']) for r in refs['nodes']]
+    if (n['state'] not in ('OPEN', 'CLOSED') or refs['pageInfo']['hasNextPage'] is not False
+            or not all(st in ('OPEN', 'CLOSED', 'MERGED') and type(q) is bool for st, q in prs)):
+        raise TypeError(n)
+    return n['state'] == 'CLOSED' or any(st == 'MERGED' or q for st, q in prs)
+
+
+def spec_of(home, ticket):
+    """(spec repository, number, body, final) for the ticket's spec, or None for a ticket with none."""
+    owner, name = home.split('/')
+    value = post.read_json('api', 'graphql', '-f', f'owner={owner}', '-f', f'name={name}', '-F', f'number={ticket}',
+                           '-f', f'query={SPEC_QUERY}')
+    try:
+        spec = value['data']['repository']['issue']['parent']
+        if spec is None:
+            return None
+        where_, number, body = spec['repository']['nameWithOwner'], spec['number'], spec['body']
+        page, nodes = spec['subIssues']['pageInfo']['hasNextPage'], spec['subIssues']['nodes']
+        states = {(n['repository']['nameWithOwner'].casefold(), n['number']): closing(n) for n in nodes}
+        if not (isinstance(where_, str) and post.REPO.fullmatch(where_) and type(number) is int
+                and isinstance(body, str) and type(page) is bool):
+            raise TypeError(spec)
+    except (TypeError, KeyError, AttributeError):
+        raise Stop(f'unknown: the spec of {home}#{ticket} could not be read; nothing was merged')
+    if page:
+        raise Stop(f"unknown: spec {where_}#{number}'s planned tickets could not be read whole; nothing was merged")
+    states.pop((home.casefold(), ticket), None)
+    return where_, number, body, all(states.values())
+
+
+def look(repo, number, head, ticket, p):
+    """The late look's reading for HEAD: ('flows'|'released'|<held why>, spec ref, the valid ask's id)."""
+    home, n = ticket_of(repo, number, p, ticket)
+    spec = spec_of(home, n)
+    if spec is None:
+        return 'flows', f'{home}#{n} has no spec', None
+    where_, s, body, final = spec
+    ref = f'{where_}#{s}'
+    if not final:
+        return 'flows', f'{home}#{n} is not the last open ticket of {ref}', None
+    f = forms()
+    if not late(body, f):
+        return 'flows', f'{ref} asks no late look', None
+    auth = post.authors(where_)
+    items = post.thread(where_, s)
+    if items is None:
+        raise Stop(f'unknown: the comments on {ref} could not be read; nothing was merged')
+    asked, newest = [], None
+    for c in items:
+        if not post.ours(c, auth):
+            continue
+        text = c.get('body') or ''
+        ask, rec = read_ask(text, f), read_record(text, f)
+        if ask == (number, head):
+            asked.append(c.get('id'))
+        elif rec and asked and rec[1:3] == (number, head) and rec[0] in DECIDERS:
+            newest = rec[3]
+    if not asked:
+        return 'ask-due', ref, None
+    return {None: 'look-due', 'approved': 'released'}.get(newest, 'changes-asked'), ref, asked[0]
+
+
+def held(why, ref):
+    return 'held: ' + why + ': ' + {'ask-due': f'post the evidence ask on {ref} with merge.py ask',
+                                    'look-due': f'the late look asked on {ref} is not recorded',
+                                    'changes-asked': f'the late look on {ref} asked for changes'}[why]
+
+
+def look_line(repo, number, head, ticket):
+    main, p = snapshot(repo, number)
+    state = where(main, p, head)
+    if state.startswith('stop: '):
+        raise Stop(state)
+    why, ref, _ = look(repo, number, head, ticket, p)
+    if why == 'flows':
+        return 'flows: ' + ref
+    return f'released: the late look on {ref} approved {head}' if why == 'released' else held(why, ref)
+
+
+def ask(repo, number, head, checks, ticket, path):
+    try:
+        text = Path(path).read_text(encoding='utf-8')
+    except (OSError, UnicodeDecodeError):
+        raise Stop(f'refused: {path} could not be read')
+    body = f'launch-fleet: late look asked #{number} at {head}\n\n' + text.strip()
+    main, p = snapshot(repo, number)
+    state = where(main, p, head)
+    if not state.startswith('open'):
+        raise Stop(f'refused: no ask for a pull request that is not open at {head} ({state})')
+    admit = admission(main, p, head, checks)
+    if admit.startswith('wait: ') or p['mergeable'] != 'MERGEABLE':
+        why = admit[6:] if admit.startswith('wait: ') else f"mergeable: {p['mergeable']}"
+        raise Stop('refused: no ask for a head that cannot merge: ' + why)
+    f = forms()
+    code = read_ask(body, f)
+    if code != (number, head):
+        raise Stop(f'refused: the evidence ask is invalid: {code}')
+    why, ref, asked = look(repo, number, head, ticket, p)
+    if why == 'flows':
+        raise Stop('refused: no late look is due: the merge flows')
+    if asked is not None:
+        return f'ask already posted {asked}'
+    where_, s = ref.rsplit('#', 1)
+    return 'ask ' + post.comment(where_, int(s), body)
+
+
+
 def merge(repo, number, head, checks, body, ticket, checked, extra):
     def blocked(why):
         raise Stop(f'blocked: {why}; recorded ' + record(repo, number, f'launch-fleet: merge blocked {head}: {why}'))
@@ -378,6 +625,11 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
     admit = admission(main, p, head, checks)
     if admit.startswith('wait: '):
         blocked(admit[6:])
+    why, ref, _ = look(repo, number, head, ticket, p)
+    if why == 'ask-due' and p['mergeable'] == 'CONFLICTING':
+        blocked('not mergeable: CONFLICTING')
+    if why not in ('flows', 'released'):
+        raise Stop(held(why, ref))
     if admit.startswith('base rule: ') and not checked:
         raise Stop(admit + '; check the base rule and fleet.sh every, then pass --base-rule-checked')
     # Save before you send: the queue may merge it or let it go before any later wake, and the
@@ -421,6 +673,10 @@ def main(argv):
             print(cost(repo, number, head, rest[0], extra))
         elif verb == 'settle' and len(rest) == 1 and TICKET.fullmatch(rest[0]):
             print(settle(repo, number, rest[0], extra))
+        elif verb == 'look' and len(rest) == 2 and rest[0] == '--ticket' and TICKET.fullmatch(rest[1]):
+            print(look_line(repo, number, head, rest[1]))
+        elif verb == 'ask' and len(rest) == 4 and rest[1] == '--ticket' and TICKET.fullmatch(rest[2]):
+            print(ask(repo, number, head, rest[0].split(','), rest[2], rest[3]))
         elif verb == 'merge' and len(rest) >= 4 and rest[2] == '--ticket' and TICKET.fullmatch(rest[3]) \
                 and set(rest[4:]) <= {'--base-rule-checked'}:
             print(merge(repo, number, head, rest[0].split(','), rest[1], rest[3],

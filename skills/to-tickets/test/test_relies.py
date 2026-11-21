@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""TV12: the public Relies-on validator, moved from OpenWiz skills.rs.
-
-Catches declarations that hide a dependency, bypass path validation or depend
-on Python at runtime. Synthetic inputs; the checker gets only sh and jq.
-"""
 from pathlib import Path
 import shutil
 import subprocess
@@ -122,10 +117,9 @@ class ReliesTest(unittest.TestCase):
 
 
 def approval_fixtures():
-    """approve.py's synthetic plan and runner from the approval suite."""
     import importlib.util
     import sys
-    sys.dont_write_bytecode = True  # leave no __pycache__ in the skill's folder
+    sys.dont_write_bytecode = True
     path = Path(__file__).resolve().parents[1] / 'scripts' / 'test_check_approval.py'
     spec = importlib.util.spec_from_file_location('approval_fixtures', path)
     module = importlib.util.module_from_spec(spec)
@@ -137,9 +131,6 @@ APPROVAL = approval_fixtures()
 
 
 class PlannedReliesTest(unittest.TestCase):
-    """approve.py (#1692, #1580): a missing Relies on file counts as planned only
-    when a direct blocker owns that exact file, or a folder or pattern that
-    contains it, in the dependent ticket's own repository."""
 
     setUp = APPROVAL.MachineApproval.setUp
     revision = APPROVAL.MachineApproval.revision
@@ -154,8 +145,6 @@ class PlannedReliesTest(unittest.TestCase):
         return tickets
 
     def test_a_blocker_in_another_repository_or_owning_only_a_child_plans_nothing(self):
-        # catches: #1580, a contract counted as planned because a blocker owns
-        # an overlapping path in the wrong repository, or only a path under it.
         contract = '- `contracts/export.v1.md`\n'
         cases = {
             'another repository': [(9101, contract, '- `contracts/export.v1.md` in `synthetic-owner/second-repo`\n')],
@@ -166,7 +155,6 @@ class PlannedReliesTest(unittest.TestCase):
             'a dependent in two repositories': [
                 (9102, '`app/export/` in `synthetic-owner/synthetic-repo`\n',
                  '`app/export/` in `synthetic-owner/synthetic-repo`\n- `web/export/` in `synthetic-owner/second-repo`\n')],
-            # Review R1: a folder at the file's own path holds only files below it.
             'a folder at the file\'s path': [(9101, contract, '- `contracts/export.v1.md/`\n')],
             'a folder pattern at the file\'s path': [(9101, contract, '- `contracts/*/`\n')],
         }
@@ -177,8 +165,6 @@ class PlannedReliesTest(unittest.TestCase):
                 self.assertIn('approve: relies: #9102:', out.stderr)
 
     def test_a_file_in_the_root_checkout_never_stands_in_for_another_repository(self):
-        # catches: review R2, a dependent in a second repository cleared by a
-        # copy of its Relies on file in --root, the graph repository's checkout.
         (self.root / 'contracts').mkdir()
         (self.root / 'contracts/export.v1.md').write_text('Synthetic contract.\n')
         in_second = (9102, '`app/export/` in `synthetic-owner/synthetic-repo`',
@@ -196,8 +182,6 @@ class PlannedReliesTest(unittest.TestCase):
                     self.assertIn('approve: relies: #9102:', out.stderr)
 
     def test_the_exact_file_or_a_containing_folder_in_the_same_repository_is_planned(self):
-        # catches: a fix so strict it refuses the plans #1339 accepts, so every
-        # contract-first plan would need a person again.
         contract = '- `contracts/export.v1.md`\n'
         cases = {
             'the exact file': [],

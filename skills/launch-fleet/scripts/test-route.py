@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""route.py on a synthetic GitHub (FF2, #1332): GitHub's messages from every repository reach the right fleet loop.
-
-python3 -I skills/launch-fleet/scripts/test-route.py
-
-Synthetic repositories, numbers and loop ids only. The fake `gh` serves one
-GraphQL answer from a JSON world and logs every call, so a test can count reads.
-"""
 import json
 import os
 import re
@@ -45,7 +38,6 @@ sys.exit(1 if errors else 0)
 '''
 
 
-# A fake `fleet.sh`, run by `sh`: it logs its arguments and prints the world's lines.
 FAKE_FLEET = r'''python3 -I -c '
 import json, os, sys
 w = json.load(open(os.environ["FAKE_WORLD"]))
@@ -60,7 +52,6 @@ sys.exit(w.get("fleet_code", 0))
 
 
 def pr(*closes, more=False):
-    """A pull request closing each `owner/name#N` in `closes`."""
     return {'__typename': 'PullRequest', 'closingIssuesReferences': {
         'pageInfo': {'hasNextPage': more},
         'nodes': [{'number': int(c.split('#')[1]), 'repository': {'nameWithOwner': c.split('#')[0]}}
@@ -89,7 +80,6 @@ class World:
                         ROUTE_FLEET_SH=str(fleet))
 
     def fleet(self, lines=(), code=0):
-        """What the fake `fleet.sh wake` prints, and its exit status."""
         self.world.update(fleet_lines=list(lines), fleet_code=code)
 
     def run(self, *args, env=None):
@@ -111,33 +101,26 @@ class World:
 
 class Refs(unittest.TestCase):
     def test_a_satellite_pull_request_names_the_project_ticket_it_closes(self):
-        # catches: a WizSkills, WizSite or WizRoom message whose pull request number is read as a project
-        # ticket, or read in its own repository, so its fleet is never woken (red on 2026-11-19: exit 2).
         w = World(self, items={'29': pr(HOME + '#1183')})
         self.assertEqual(w.run('refs', SAT, '29'), (0, '1183\n', ''))
         self.assertEqual(len(w.calls()), 1)
 
     def test_only_the_project_s_tickets_are_named_once_each_in_order(self):
-        # catches: a closing reference to a third repository's issue, or a duplicate, reaching fleet.sh wake.
         w = World(self, items={'7': pr(HOME + '#40', 'synthetic-org/other#41', SAT + '#3', HOME + '#12'),
                                '8': pr(HOME + '#12')})
         self.assertEqual(w.run('refs', SAT, '8', '7', '8'), (0, '12 40\n', ''))
         self.assertEqual(len(w.calls()), 1, 'one batched read for every number')
 
     def test_issues_unknown_numbers_and_unlinked_pull_requests_name_nothing(self):
-        # catches: a satellite issue or a missing number failing the whole wake instead of naming nothing.
         w = World(self, items={'5': ISSUE, '6': pr()})
         self.assertEqual(w.run('refs', SAT, '5', '6', '404'), (0, '', ''))
 
     def test_the_project_s_own_numbers_pass_through_unread(self):
-        # catches: the project's own wake loop paying a read, or dropping its numbers, for a satellite rule.
         w = World(self, repo=HOME)
         self.assertEqual(w.run('refs', HOME, '31', '12', '31'), (0, '12 31\n', ''))
         self.assertEqual(w.calls(), [])
 
     def test_a_partial_or_failed_read_is_never_a_quiet_nothing(self):
-        # catches: a pull request with more closing references than one page, or a failed read, waking no fleet
-        # while looking like "nothing due".
         for world, reason in ((World(self, items={'9': pr(HOME + '#1', more=True)}), 'more than one page'),
                               (World(self, fail=True), 'synthetic failure'),
                               (World(self, items={'9': pr(HOME + '#1')}, error='FORBIDDEN'), 'FORBIDDEN')):
@@ -146,7 +129,6 @@ class Refs(unittest.TestCase):
             self.assertIn(reason, err)
 
     def test_bad_arguments_are_refused_before_any_read(self):
-        # catches: a message value (a flag, a path, a query fragment) reaching gh or fleet.sh.
         w = World(self)
         for args in (('refs', SAT), ('refs', 'not a repo', '1'), ('refs', SAT, '-1'), ('refs', SAT, '1x'),
                      ('refs', SAT, '0'), ('refs', 'a/b/c', '1'), ('nope',)):
@@ -159,15 +141,12 @@ class Loop(unittest.TestCase):
     ID = '0f1e2d3c-synthetic-loop'
 
     def test_a_handle_resolves_to_its_spec_s_loop_id(self):
-        # catches: the wake running another spec's loop, or none, for a `wake fleet #S` line.
         w = World(self)
         path = w.loops({'repo': HOME, 'loops': {'10': self.ID, '40': 'other-synthetic-loop'}})
         self.assertEqual(w.run('loop', path, '10'), (0, self.ID + '\n', ''))
         self.assertEqual(w.calls(), [], 'the private map is read from disk only')
 
     def test_a_missing_handle_prints_nothing_and_exits_cleanly(self):
-        # catches: a missing or unusable loop map failing the wake, instead of leaving the spec to its own
-        # loop (the safety net) with no error.
         w = World(self)
         cases = {
             'no file': str(w.dir / 'absent.json'),
@@ -183,7 +162,6 @@ class Loop(unittest.TestCase):
             self.assertEqual(w.run('loop', path, '10'), (0, '', ''), name)
 
     def test_a_malformed_spec_number_is_refused(self):
-        # catches: a due line's text, rather than a spec number, choosing the key.
         w = World(self)
         path = w.loops({'repo': HOME, 'loops': {'10': self.ID}})
         for s in ('', '-10', '10 40', 'S'):
@@ -191,7 +169,6 @@ class Loop(unittest.TestCase):
 
 
 class Tick(unittest.TestCase):
-    """One webhook tick's group of messages, from the numbers to the effect lines it acts on."""
     ID = '0f1e2d3c-synthetic-loop'
 
     def world(self, **kw):
@@ -199,15 +176,12 @@ class Tick(unittest.TestCase):
         return w, w.loops({'repo': HOME, 'loops': {'10': self.ID}})
 
     def test_a_satellite_message_runs_its_spec_s_loop(self):
-        # catches: the tick's three steps (refs, wake, loop id) not joining up for another repository's message.
         w, path = self.world(items={'29': pr(HOME + '#13')})
         w.fleet(['wake fleet #10: room-cli loop run fleet-10'])
         self.assertEqual(w.run('tick', SAT, path, '29'), (0, 'wake fleet #10: room-cli loop run %s\n' % self.ID, ''))
         self.assertEqual([c for c in w.calls() if c[0] == 'fleet.sh'], [['fleet.sh', 'wake', '13']])
 
     def test_a_missing_handle_is_reported_privately_and_writes_nothing(self):
-        # catches (R1): a missing loop id posting a GitHub record, whose own issue_comment message comes back
-        # through the same webhook and wakes the same missing handle again, over and over.
         w, _ = self.world(items={'29': pr(HOME + '#13')})
         w.fleet(['wake fleet #10: room-cli loop run fleet-10'])
         for path in (str(w.dir / 'absent.json'), w.loops({'repo': HOME, 'loops': {}})):
@@ -216,14 +190,11 @@ class Tick(unittest.TestCase):
         self.assertTrue(gh and all(c[:2] == ['api', 'graphql'] and 'mutation' not in ' '.join(c) for c in gh), gh)
 
     def test_a_group_with_no_project_ticket_ends_quietly(self):
-        # catches (R3): a satellite issue, or a pull request closing nothing, calling `fleet.sh wake` with no
-        # numbers, which prints its usage and exits 2.
         w, path = self.world(items={'5': ISSUE, '6': pr(SAT + '#2')})
         self.assertEqual(w.run('tick', SAT, path, '5', '6'), (0, '', ''))
         self.assertEqual([c for c in w.calls() if c[0] == 'fleet.sh'], [])
 
     def test_the_project_s_own_numbers_go_straight_to_wake(self):
-        # catches: the project's own messages paying the satellite read, or losing a line wake prints.
         w, path = self.world(repo=HOME)
         w.fleet(['start #41: G1: gadget model (spec #40)', 'wake fleet #10: room-cli loop run fleet-10'])
         self.assertEqual(w.run('tick', HOME, path, '41', '13'),
@@ -232,7 +203,6 @@ class Tick(unittest.TestCase):
         self.assertEqual(w.calls(), [['fleet.sh', 'wake', '13', '41']])
 
     def test_a_failed_lookup_or_wake_is_a_failure(self):
-        # catches: a refused read or a refused `fleet.sh wake` passing as a quiet nothing due.
         w, path = self.world(fail=True)
         code, out, err = w.run('tick', SAT, path, '29')
         self.assertEqual((code, out), (2, ''))
@@ -246,8 +216,6 @@ class Tick(unittest.TestCase):
 
 class Setup(unittest.TestCase):
     def test_the_webhook_address_never_touches_a_file_or_an_argument(self):
-        # catches (R2): a setup step that saves the wake loop's address to a file, prints it, or passes it on a
-        # command line, where it outlives the step or shows in a process list.
         skill = HERE.parent
         text = '\n'.join(p.read_text() for p in sorted(skill.rglob('*.md')))
         self.assertFalse('launch-fleet-wakes.json' in text, 'a setup step saves the address to a file')
@@ -266,7 +234,7 @@ class Setup(unittest.TestCase):
         risky = [c for c in commands if ('loop create' in c and '--webhook' in c) or 'loop hook' in c]
         self.assertGreaterEqual(len(risky), 2, 'the wake loop is created and its address issued in the setup')
         for c in risky:
-            head, tail = re.sub(r'<[^<>]*>', 'X', c).split('room-cli loop', 1)  # placeholders aren't redirects
+            head, tail = re.sub(r'<[^<>]*>', 'X', c).split('room-cli loop', 1)
             self.assertNotRegex(head, r"(\$\(|`|=)\s*$", c)
             self.assertRegex(tail, r"\|\s*jq ", c)
             self.assertNotRegex(tail, r"(^|[^|&])>|\btee\b|--slurpfile|--rawfile", c)
@@ -279,13 +247,10 @@ class Setup(unittest.TestCase):
 
 
 ADDRESS = 'https://synthetic.invalid/wake/SYNTHETIC-ADDRESS-0000'
-# Every trace setting the caller's shell might hold: GitHub CLI's own (`GH_DEBUG`, the older `DEBUG`), Go's HTTP/2
-# frame log (`GODEBUG=http2debug=2`), and one no release knows yet, which only a clean environment drops.
 TRACING = {'GH_DEBUG': 'api', 'DEBUG': 'api', 'GODEBUG': 'http2debug=2', 'SYNTHETIC_FUTURE_TRACE': '1'}
 
 
 def documented_hook_calls():
-    """Every documented command whose `gh api` call sends or reads a webhook, with its placeholders filled in."""
     text = (HERE.parent / 'references/launch.md').read_text()
     fenced = [b.replace('\\\n', ' ') for b in re.findall(r'```sh\n(.*?)```', text, re.S)]
     spans = re.findall(r'`([^`\n]*gh api[^`\n]*)`', re.sub(r'```.*?```', '', text, flags=re.S))
@@ -294,9 +259,6 @@ def documented_hook_calls():
     return [re.sub(r'<[^<>]*>', lambda m: fill[m.group(0)], c) for c in calls]
 
 
-# A local HTTPS GitHub on Node's built-in modules: HTTP/2 (`h2`) or HTTP/1.1 (`h1`). It reads each whole request
-# body before answering, and returns a webhook's address in `config.url`, as GitHub does. It prints its port, then
-# one line per request naming the protocol, the method and whether the body carried the address (never the address).
 FAKE_GITHUB = r'''
 const [mode, key, cert, address] = process.argv.slice(2);
 const fs = require('fs');
@@ -321,7 +283,6 @@ server.listen(0, '127.0.0.1', () => console.log(server.address().port));
 
 
 class SetupUnderTracing(unittest.TestCase):
-    """The documented webhook commands run for real, with the real GitHub CLI and every trace setting on in the caller."""
 
     def setUp(self):
         for tool in ('gh', 'jq', 'openssl', 'node'):
@@ -334,10 +295,7 @@ class SetupUnderTracing(unittest.TestCase):
                         '-addext', 'subjectAltName=DNS:localhost', '-keyout', str(bin_ / 'key.pem'),
                         '-out', str(bin_ / 'cert.pem')], check=True, capture_output=True)
         (bin_ / 'fake-github.js').write_text(FAKE_GITHUB)
-        # Cloudroom's side: `loop hook` prints a fresh synthetic address on stdout, as the real one does.
         (bin_ / 'room-cli').write_text('#!/bin/sh\nprintf \'{"id":"loop_synthetic","url":"%s"}\\n\'\n' % ADDRESS)
-        # A shim in front of the real gh records whether the address is in its arguments or environment, and the
-        # names (never the values) of the environment gh starts with.
         (bin_ / 'gh').write_text('#!/bin/sh\ncase "$* $(env)" in *SYNTHETIC-ADDRESS*) echo leaked >> "%s";; esac\n'
                                  'env | sed "s/=.*//" >> "%s"\nexec "%s" "$@"\n'
                                  % (self.dir / 'shim.log', self.dir / 'names.log', shutil.which('gh')))
@@ -361,10 +319,6 @@ class SetupUnderTracing(unittest.TestCase):
         return subprocess.run(['sh', '-c', call], capture_output=True, text=True, env=env, cwd=self.dir, timeout=60)
 
     def test_tracing_never_shows_the_address(self):
-        # catches (R2): a webhook gh call that inherits a trace setting from the caller (GH_DEBUG=api, DEBUG=api,
-        # GODEBUG=http2debug=2 over HTTP/2, or one no list names yet), so the request or response body, address and
-        # all, reaches stderr before --jq filters stdout. It also fails if the address reaches stdout, a file, or
-        # gh's arguments or environment, and if the setup or the rotation never delivers the address.
         calls = documented_hook_calls()
         verbs = [m.group(1) if (m := re.search(r'--method (\w+)', c)) else 'GET' for c in calls]
         with self.subTest('documented commands'):
@@ -384,12 +338,11 @@ class SetupUnderTracing(unittest.TestCase):
                     self.assertTrue(names, 'gh ran')
                     self.assertFalse(names & set(TRACING), 'gh starts with the caller\'s trace settings')
                     for f in self.dir.rglob('*'):
-                        if f.is_file() and f.parent != self.bin:  # bin holds the synthetic fixtures themselves
+                        if f.is_file() and f.parent != self.bin:
                             self.assertNotIn(b'SYNTHETIC-ADDRESS', f.read_bytes(), 'the address reaches %s' % f)
                     seen = json.loads(server.stdout.readline())
                     self.assertEqual(seen['v'], version, 'the call ran over the protocol under test')
                     self.assertEqual(seen['got'], seen['m'] in ('POST', 'PATCH'), 'the webhook gets the address')
-            # Not vacuous: in this same environment, a plain gh call does trace the address.
             r = self.run_call("gh api 'repos/{owner}/{repo}/hooks'", env)
             self.assertIn('SYNTHETIC-ADDRESS', r.stderr, 'tracing is on in the caller (%s)' % mode)
             server.stdout.readline()

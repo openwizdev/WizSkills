@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""Write one public fleet record on GitHub and read it back (WS8, #1181).
-
-  post.py comment OWNER/NAME NUMBER BODY   a new comment on an issue or pull request
-  post.py edit OWNER/NAME COMMENT_ID BODY  an edit of a record author's comment
-
-Prints one line and exits 0 on `posted <id>` or `edited <id>`. Exits 1 with
-`refused: <why>` and no write when the body is not a fleet record (its first
-line starts `launch-fleet: ` or `**Needs you:**`), carries a private identity
-(a thread or loop id, a token), or the project's Record authors row is
-missing; with `unknown: <why>` when the write returned no receipt or
-read-back cannot confirm it. A record counts as posted only by its returned
-id, never by an identical new comment, which another wake may have written
-(#1555). An unknown write may have happened: reconcile the thread before any
-retry.
-"""
 import importlib.util
 import json
 from pathlib import Path
@@ -33,7 +18,7 @@ FIRST = ('launch-fleet: ', '**Needs you:**')
 
 
 class Stop(Exception):
-    """A short outcome line: `refused: ...` or `unknown: ...`."""
+    pass
 
 
 def gh(*args):
@@ -53,7 +38,6 @@ def read_json(*args):
 
 
 def authors(repo):
-    """The Record authors row, read whole from the default branch; refused when missing or malformed."""
     text = gh('api', f'repos/{repo}/contents/docs/agents/fleet.md', '-H', 'Accept: application/vnd.github.raw+json')
     try:
         return grants.record_authors(text or '')
@@ -89,8 +73,6 @@ def comment(repo, number, body):
     seen = {c.get('id') for c in before}
     made = read_json('api', '--method', 'POST', f'repos/{repo}/issues/{number}/comments', '-f', f'body={body}')
     if not isinstance(made, dict) or type(made.get('id')) is not int:
-        # Without a receipt nothing ties a new identical record to this write:
-        # another wake may have posted it under the same login (#1555).
         raise Stop(f'unknown: the write on #{number} returned no receipt, so no record is adopted; '
                    f'reconcile #{number} before any retry')
     after = thread(repo, number) or []
@@ -117,10 +99,16 @@ def edit(repo, comment_id, body):
     return f'edited {comment_id}'
 
 
+USAGE = (
+    '  post.py comment OWNER/NAME NUMBER BODY   a new comment on an issue or pull request\n'
+    "  post.py edit OWNER/NAME COMMENT_ID BODY  an edit of a record author's comment"
+)
+
+
 def main(argv):
     if len(argv) != 4 or argv[0] not in ('comment', 'edit') or not REPO.fullmatch(argv[1]) \
             or not re.fullmatch(r'[1-9][0-9]{0,11}', argv[2]):
-        print(__doc__.split('\n\n')[1], file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     try:
         print((comment if argv[0] == 'comment' else edit)(argv[1], int(argv[2]), argv[3]))

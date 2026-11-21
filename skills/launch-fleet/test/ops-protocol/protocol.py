@@ -1,8 +1,3 @@
-"""Offline OB1 conformance handlers, not production dispatch or endpoint support.
-
-Only admit_claim has an injected record-storage callback. resume never calls its
-effect callback. Consumers must implement their own authorized source reads.
-"""
 import copy
 import hashlib
 import json
@@ -25,7 +20,6 @@ def _node(reference):
 
 
 def lint_schema():
-    """Reject unimplemented schema keywords, including in unused definitions."""
     def walk(node):
         if set(node) - KEYWORDS:
             raise ValueError("unsupported schema keyword")
@@ -163,7 +157,6 @@ def _binding(record, snapshot):
 
 
 def admit_claim(claim, snapshot, record_commit, create_if_absent):
-    """One storage attempt, never update/delete, dispatch, or mutation retry."""
     _checked(claim)
     _checked(snapshot)
     if claim["kind"] != "claim" or snapshot["kind"] != "snapshot" or re.fullmatch("[0-9a-f]{40}", record_commit) is None:
@@ -196,7 +189,6 @@ def admit_claim(claim, snapshot, record_commit, create_if_absent):
 
 
 def resume(intent, claim, history, snapshot, effect_boundary):
-    """Finite refusal stub. effect_boundary is never called, even if supplied."""
     for item in [intent, claim, snapshot, *history]:
         _checked(item)
     if (intent["kind"] != "intent" or claim["kind"] != "claim" or claim["scope"] != "operation"
@@ -213,8 +205,6 @@ def resume(intent, claim, history, snapshot, effect_boundary):
     relevant = [item for item in history if item.get("operation_key") == intent["operation_key"]]
     def belongs_to_intent(item):
         return item.get("intent_id", intent["id"]) == intent["id"] and _binding(item, intent)
-    # Accepted transport without endpoint completion is uncertain too. A later
-    # refusal, acknowledgement, new generation or lease expiry cannot erase it.
     if snapshot["uncertain_keys"] or any(
         belongs_to_intent(item) and (
             (item["kind"] == "transport" and item["state"] in ("accepted", "uncertain"))
@@ -242,7 +232,6 @@ def resume(intent, claim, history, snapshot, effect_boundary):
 
 
 def grant_current(grant, snapshot):
-    """Material equality only; not agent approval of the diff or edit authority."""
     _checked(grant)
     _checked(snapshot)
     return (grant["kind"] == "grant" and snapshot["complete"] and grant["status"] == "granted"
@@ -253,7 +242,6 @@ def grant_current(grant, snapshot):
 
 
 def on1_current(record, snapshot):
-    """Current evidence-record check only; never release or approval authority."""
     _checked(record)
     _checked(snapshot)
     return (record["kind"] == "on1" and snapshot["complete"] and _binding(record, snapshot)
@@ -270,7 +258,6 @@ def on1_current(record, snapshot):
 
 
 def audit_cursor(report):
-    """Proposed cursor, to save only after the complete report is read back."""
     _checked(report)
     if report["kind"] != "audit":
         raise ValueError("not an audit")

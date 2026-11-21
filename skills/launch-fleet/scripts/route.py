@@ -1,34 +1,4 @@
 #!/usr/bin/env python3
-"""The wake route (FF2, #1332): one webhook tick's lookups. GH_REPO is the project's repository, where its specs live.
-
-  route.py refs FROM N...    The project's tickets that messages from repository FROM name.
-                             FROM is the project: N... unchanged. Any other repository: the
-                             project's issues each named pull request closes (one GraphQL read).
-                             Prints the numbers once each, ascending, on one line, for
-                             `fleet.sh wake`; nothing when none.
-  route.py loop FILE S       The loop id under key S of the private loop map FILE
-                             ({"repo": GH_REPO, "loops": {"S": "<loop id>"}}), for `room-cli loop run`.
-                             No file, no key, another repository or an unusable id: prints
-                             nothing and exits 0, which leaves the spec to its own loop.
-  route.py tick FROM FILE N...
-                             One webhook tick's group of messages from repository FROM: refs,
-                             then `fleet.sh wake` (only when refs names a ticket), then each
-                             `wake fleet #S: room-cli loop run fleet-<S>` line with its handle
-                             resolved through FILE: `wake fleet #S: room-cli loop run <loop id>`,
-                             or `wake fleet #S: unresolved`. Every other line of the wake is
-                             printed unchanged. No ticket: prints nothing, exit 0. A refused
-                             lookup or wake: its exit status and reason.
-  route.py gh api ARGS...    `gh api ARGS...` for a call that sends or reads a webhook, started with a
-                             clean environment: only the names in KEEP pass (how gh finds itself,
-                             its login, host and repository, certificates and a proxy). Every other
-                             setting is dropped, so no trace setting reaches it: GH_DEBUG, DEBUG,
-                             GODEBUG or one a later release adds. Standard input, output and the
-                             exit status are gh's own. Needs no GH_REPO.
-
-Exit 2 with the reason on stderr for bad arguments or a read that fails or is
-partial. refs, loop and tick only read; gh writes only what its caller pipes in. None of
-them prints a webhook address or a thread id.
-"""
 import json
 import os
 import re
@@ -108,7 +78,6 @@ def tick(home, source, path, numbers):
         print(line)
     return 0
 
-# The environment a webhook's `gh api` call keeps; everything else, trace settings above all, is dropped.
 KEEP = ('PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'LC_ALL',
         'GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GH_HOST', 'GH_REPO',
         'GH_CONFIG_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR',

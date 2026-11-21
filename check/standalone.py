@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""WizSkills standalone check (openwiz.wizskills.v1, WZ2 #2630).
-
-Every relative Markdown link, script path, import and file read in a copied
-skill must resolve to an existing file inside the staged tree. A refusal is
-one JSON record per finding, with only rule, package-relative file and line.
-Standard library only; it reads the tree and never runs or writes anything.
-"""
 import argparse
 import ast
 import fnmatch
@@ -20,12 +13,6 @@ from urllib.parse import unquote
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
-# Two homes, chosen by where this file is, never by what happens to exist.
-# In ClosedWiz (tools/skills-copy/) it reads the contract and the privacy
-# check. Anywhere else, as the copy places it at WizSkills' check/standalone.py,
-# it reads only the two files the copy writes beside it (WZ14, #2891): the
-# contract's normative values and the privacy check's redaction. Never a
-# file outside that tree; a missing one refuses.
 CLOSEDWIZ = HERE.name == 'skills-copy' and HERE.parent.name == 'tools'
 CONTRACT = HERE.parents[1] / 'contracts/wizskills.v1.md' if CLOSEDWIZ else HERE / 'wizskills.v1.json'
 REDACTION = HERE.parent / 'privacy-check' / 'check.py' if CLOSEDWIZ else HERE / 'redact.py'
@@ -44,7 +31,6 @@ def unique_object(pairs):
 
 
 def normative_block(text):
-    """The text of the contract's one machine-readable block."""
     blocks = re.findall(r'^```wizskills-v1\n(.*?)^```', text, re.M | re.S)
     if len(blocks) != 1:
         raise ValueError('expected one wizskills-v1 block')
@@ -52,12 +38,10 @@ def normative_block(text):
 
 
 def contract_rules(text):
-    """The contract's one normative block: carried contracts and project settings."""
     return normative_rules(normative_block(text))
 
 
 def normative_rules(block):
-    """The normative values, checked, from the block's JSON text alone."""
     rules = json.loads(block, object_pairs_hook=unique_object)
     if not isinstance(rules, dict) or rules.get('schema') != 'openwiz.wizskills.v1':
         raise ValueError('wrong schema')
@@ -80,14 +64,12 @@ def setting(target, settings):
 
 
 def inside(tree, path):
-    # Containment by real path, so a link inside the tree cannot carry it out.
     root = os.path.realpath(tree)
     real = os.path.realpath(os.path.join(root, path))
     return (real == root or real.startswith(root + os.sep)) and os.path.exists(real)
 
 
 def judge(tree, ref, settings):
-    """One discovered reference: None when it stands alone, else its refusal."""
     kind = ref['kind']
     if kind in ('words', 'data'):
         return None
@@ -99,7 +81,6 @@ def judge(tree, ref, settings):
     if 'context' in ref:
         return None if operand(tree, ref, settings) else record
     if ref.get('project'):
-        # The consumer project's own settings, read from it at run time.
         return None if kind == 'read' and setting(target, settings) else record
     if kind == 'link':
         if target.startswith('#'):
@@ -119,17 +100,10 @@ def judge(tree, ref, settings):
     return None
 
 
-# A literal operand (a script an instruction runs, a file a script opens) has a
-# working context: 'project', the consumer project's root (also the package
-# root, where skills/<name>/ lives), or an anchored folder a script changed to.
 PLACEHOLDER = re.compile(r'^<([^<>/]+)>')
 
 
 def placeholder(target, skill, tree):
-    """A leading skill-folder placeholder, as instructions write it: its own
-    (<this skill's folder>, <skill-directory>) or a named skill's carried folder
-    (<build-ticket skill's folder>, <research-skill-folder>, <installed-huntr>,
-    <build-ticket>). Anything else stays unresolved."""
     m = PLACEHOLDER.match(target)
     if not m:
         return target
@@ -152,13 +126,12 @@ def operand(tree, ref, settings):
     skill = '/'.join(ref['file'].split('/')[:2])
     target = placeholder(ref['target'], skill, tree)
     if '<' in target or '>' in target or '\\' in target or '\0' in target:
-        return False  # An unresolved placeholder is an unresolved dependency.
+        return False
     if target.startswith('/'):
         return target.startswith(SYSTEM) and '..' not in target.split('/')
     context = ref['context']
     candidates = [join(context, target)]
     if context == '.' and ref.get('skill_relative'):
-        # Instructions may also be relative to their skill or their own file.
         candidates[:0] = [join(skill, target), join(posixpath.dirname(ref['file']), target)]
     if any(c != '..' and not c.startswith('../') and inside(tree, c) for c in candidates):
         return True
@@ -180,8 +153,6 @@ def in_skills(path):
 
 
 class Finder:
-    """References in one file. A value is ('p', path), or ('d', base) when
-    an anchored path continues with a part only known at run time."""
 
     def __init__(self, rel):
         self.rel, self.dir, self.refs = rel, posixpath.dirname(rel), []
@@ -189,26 +160,21 @@ class Finder:
     def emit(self, kind, value, line):
         tag, path = value
         if tag == 'd':
-            # Dynamic parts below skills/ stay in the package; above it they
-            # are unresolved dependencies, refused rather than skipped.
             target = path if in_skills(path) else ''
         else:
             target = path
         self.refs.append({'kind': kind, 'file': self.rel, 'line': line, 'base': '.', 'target': target})
 
     def literal(self, kind, target, line, context='.', skill_relative=False):
-        # Runtime values ($VAR, ~, tokens) are inputs, not package files.
         target = target.strip().strip('"\'')
         if not target or target.startswith(('-', '~')) or any(c in target for c in '$`\0*?'):
             return
         if context is None:
-            return  # The script changed to a folder this check cannot know.
+            return
         self.refs.append({'kind': kind, 'file': self.rel, 'line': line, 'target': target,
                           'context': context, 'skill_relative': skill_relative})
 
     def commands(self, line, n, context='.', skill_relative=False, cargo_requirement=True):
-        # This executable requirement names OpenWiz's absent Rust workspace.
-        # Treat it as an unresolved script, preserving the fixed report shape.
         if cargo_requirement and re.search(r'(?:^|[;&|`]|\b(?:then|do|exec)\s)\s*cargo\s+test\s+'
                      r'(?:[^;&|`]*?\s)?(?:-p\s+|--package(?:=|\s+))openwiz-tests(?:\s|$)', line):
             self.refs.append({'kind': 'script', 'file': self.rel, 'line': n, 'target': ''})
@@ -218,12 +184,9 @@ class Finder:
             flags, word = m[3].split(), m[4].strip('"\'')
             if any(f in ('-c', '-m', '-e', '--eval', '-p', '--print') for f in flags):
                 continue
-            # A path operand: a folder part or a file suffix (not `. as $x` in jq).
             if '/' in word or re.search(r'\.[A-Za-z0-9]+$', word):
                 self.literal('script', word, n, context, skill_relative)
 
-
-# Markdown ---------------------------------------------------------------
 
 FENCE = re.compile(r'^ {0,3}(`{3,}|~{3,})')
 CODE_SPAN = re.compile(r'(`+)(?:(?!\1).)+?\1')
@@ -232,8 +195,6 @@ INLINE = re.compile(r'\]\(\s*(<[^>\n]*>|[^\s()<>]*(?:\([^\s()]*\)[^\s()<>]*)*)'
 DEFINITION = re.compile(r'^ {0,3}\[[^\]]+\]:\s*(<[^>\n]*>|\S+)')
 
 
-# A local file run directly, in command position: `./x`, or a relative path
-# ending in a script suffix (`tools/setup.py --flag`), after any VAR=value.
 SH_DIRECT = re.compile(r'(?:^|[;&|(]|\$\(|\b(?:then|do|exec|else)\b)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*'
                        r'(\./[^\s;&|()<>`\'"]+|[A-Za-z0-9_.<>\'-]+(?:/[A-Za-z0-9_.<>\' -]*?[A-Za-z0-9_.>-])+'
                        r'\.(?:py|sh|mjs|js|cjs))(?=\s|$|[;&|)`])')
@@ -244,8 +205,6 @@ SH_COMMAND = re.compile(r'(?:(?:^|[;&|(]|\$\(|`|\b(?:then|do|exec|else)\b)\s*(py
 
 
 def markdown(finder, text):
-    # Links outside code; commands an instruction runs inside shell fences and
-    # code spans, from the consumer project (or, failing that, the skill folder).
     fence = info = None
     for n, line in enumerate(text.splitlines(), 1):
         mark = FENCE.match(line)
@@ -261,14 +220,11 @@ def markdown(finder, text):
                 command = line.strip()
                 if info == 'console' or info.endswith('session'):
                     if not command.startswith('$ '):
-                        continue  # Output, not a command.
+                        continue
                     command = command[2:]
                 finder.commands(command, n, skill_relative=True)
             continue
         for span in CODE_SPAN.finditer(line):
-            # Cargo isn't a file path. In prose, refuse it as a workspace
-            # requirement, while retaining archived results as data. Shell
-            # fences and executable scripts always remain requirements.
             prefix = line[:span.start()].strip(' -*')
             result = re.match(r'\s*:\s*(?:[0-9]+\s+(?:passed|failed)|pass\b|fail\b)',
                               line[span.end():])
@@ -287,8 +243,6 @@ def markdown(finder, text):
             finder.refs.append({'kind': 'link', 'file': finder.rel, 'line': n,
                                 'base': finder.dir, 'target': target})
 
-
-# Python -----------------------------------------------------------------
 
 PATH_CALLS = {'Path', 'PurePath', 'PosixPath', 'pathlib.Path', 'pathlib.PurePath', 'os.path.abspath',
               'os.path.realpath', 'os.path.normpath', 'str', 'os.fspath', 'os.path.join'}
@@ -399,7 +353,6 @@ class Python(Finder):
         return found
 
     def sinks(self, node):
-        # Literal operands: files opened or run with a literal path.
         name = dotted(node.func)
         last = name.rsplit('.', 1)[-1]
         text = [a.value if isinstance(a, ast.Constant) and isinstance(a.value, str) else None for a in node.args]
@@ -466,8 +419,6 @@ class Python(Finder):
             for f in folders)
 
 
-# Shell and JavaScript (lexical) -----------------------------------------
-
 TOKEN = re.compile('\0([0-9]+)\0')
 SH_ANCHOR = re.compile(r'\$\(\s*dirname\s+(?:--\s+)?"?\$(?:0|\{0\}|\{BASH_SOURCE(?:\[0\])?\})"?\s*\)|\$\{0%/\*\}')
 SH_CD = re.compile(r'\$\(\s*cd\s+(?:-[LP]\s+)?(?:--\s+)?("?\0[0-9]+\0[^"\s]*"?)\s*&&\s*pwd(?:\s+-[LP])?\s*\)')
@@ -501,8 +452,6 @@ class Lexical(Finder):
 
     def names(self, line, shell):
         if not shell:
-            # A JavaScript name is a use only in code: never inside a string or
-            # regular expression literal, and in a template only as ${name}.
             parts = JS_LITERAL.split(line)
             return ''.join(self.names_in(part, 'template' if part.startswith('`') else None)
                            if i % 2 else self.names_in(part, 'code') for i, part in enumerate(parts))
@@ -551,8 +500,6 @@ class Lexical(Finder):
                     self.cwd = join(path, use[2].lstrip('/')) if use[2].strip('/') else path
                 else:
                     self.cwd = None
-            # A quoted multi-word string (usage text, a jq program) runs
-            # nothing here; a quoted single word stays an operand.
             self.commands(re.sub(r"'([^']*)'", lambda m: m[0] if not re.search(r'\s', m[1]) else "''", line),
                           self.line, self.cwd)
             assign = SH_ASSIGN.match(line)
@@ -614,8 +561,6 @@ class Lexical(Finder):
         return self.token((tag, path))
 
 
-# The tree ---------------------------------------------------------------
-
 def language(name, text, executable=False):
     suffix = posixpath.splitext(name)[1]
     if suffix in ('.md', '.markdown'):
@@ -634,7 +579,7 @@ def language(name, text, executable=False):
             return 'js'
         if re.search(r'\b(?:sh|bash|dash|zsh)\b', first):
             return 'sh'
-        return 'unsupported'  # A script this check cannot read for dependencies.
+        return 'unsupported'
     return None
 
 
@@ -643,8 +588,6 @@ def references(tree, rel):
     try:
         text = data.decode('utf-8')
     except UnicodeDecodeError:
-        # Binary resources (images) carry no file references; code or Markdown
-        # that cannot be read cannot be checked, so it is refused.
         if posixpath.splitext(rel)[1] in ('.md', '.markdown', '.py', '.sh', '.bash', '.mjs', '.js', '.cjs'):
             return [{'kind': 'read', 'file': rel, 'line': 1, 'target': ''}]
         return []
@@ -661,21 +604,20 @@ def references(tree, rel):
         finder = Lexical(rel)
         finder.shell(text) if kind == 'sh' else finder.javascript(text)
     else:
-        return []  # Data files: any synthetic path in them is data.
+        return []
     return finder.refs
 
 
 def check(tree, settings):
-    """All refusals for the skills under tree/skills, sorted, one per finding."""
     tree = Path(tree)
     skills = tree / 'skills'
     if skills.is_symlink() or not skills.is_dir():
         raise ValueError('no skills folder')
     found = set()
-    def unreadable(error):
-        raise error  # An unreadable folder is unchecked, never a pass.
+    def refuse_unreadable_folder(error):
+        raise error
 
-    for folder, dirs, files in os.walk(skills, onerror=unreadable):
+    for folder, dirs, files in os.walk(skills, onerror=refuse_unreadable_folder):
         base = Path(folder)
         for name in sorted(dirs + files):
             path = base / name
@@ -696,8 +638,6 @@ def check(tree, settings):
 
 
 def redacted(refusals, literals=()):
-    """Records safe to print: each file location passed through the privacy
-    check's own redaction, so a refused file's name cannot leak a private form."""
     spec = importlib.util.spec_from_file_location('privacy_check_redact', REDACTION)
     if spec is None or not REDACTION.is_file() or REDACTION.is_symlink():
         raise OSError('redaction helper missing')
@@ -713,8 +653,11 @@ def by_skill(refusals):
     return result
 
 
+DESCRIPTION = 'WizSkills standalone check (openwiz.wizskills.v1, WZ2 #2630).'
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
+    parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument('--tree', type=Path, required=True, help='staged WizSkills tree')
     parser.add_argument('--contract', type=Path, default=CONTRACT,
                         help='wizskills.v1 contract, or its normative values as .json')
@@ -725,7 +668,7 @@ def main(argv=None):
         settings = rules['project_settings']
         refusals = redacted(check(args.tree, settings))
     except (OSError, ValueError, UnicodeError, RecursionError):
-        # Paths and contents can be private: name no input.
+        # PRIVACY: paths and contents can be private: name no input.
         print('standalone: refused; unreadable tree or contract', file=sys.stderr)
         return 1
     for record in refusals:

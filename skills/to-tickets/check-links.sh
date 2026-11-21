@@ -1,23 +1,4 @@
 #!/bin/sh
-# The link checker of the plan links contract (contracts/plan-links.v1.md,
-# #1318): every native blocker of an open ticket needs one reason line in
-# its ticket's `## Links` section, real (with its behaviour) or file (with
-# its files). Refuses a graph with any link that gives no reason, and
-# reports its file links. Same style as check-relies.sh: sh and jq, writes
-# nothing.
-#
-#   sh check-links.sh [--json] <spec>      reads spec <spec>'s tickets through gh
-#   sh check-links.sh [--json] --graph -   reads one graph read on standard input
-#   sh check-links.sh --read <spec>        prints the spec's graph read, unchecked,
-#                                          for approve.py (#1339)
-#
-# Exit 0: pass, the report on stdout. 1: refused, the report on stdout and one
-# line per refusal on stderr. 2: bad arguments, or a failed, partial or
-# invalid read: nothing on stdout, why in one line on stderr. The spec form
-# reads the Record authors setting (docs/agents/fleet.md on the default
-# branch, #717), then makes only `gh api graphql` reads (its sub-issues, then
-# the open pull requests), each checked and every page counted; --graph makes
-# no call.
 set -f
 LC_ALL=C
 export LC_ALL
@@ -50,10 +31,6 @@ done
 [ "$read_only" = false ] || { [ "$graph" = false ] && [ "$json" = false ]; } || usage
 command -v jq > /dev/null 2>&1 || die 'jq is required'
 
-# The checker: one graph read, as a stream of jq events (so a repeated key,
-# which jq's parser would silently drop, is seen), in; the JSON report, or a
-# JSON string saying why the read is refused, out. Messages are fixed text:
-# no ticket text reaches stderr.
 CHECK='
 def fail($why): error("read: " + $why);
 def need(c; $why): if c then . else fail($why) end;
@@ -178,7 +155,6 @@ try (
 ) catch (if type == "string" and startswith("read: ") then .[6:] else "the graph read cannot be checked" end)
 '
 
-# Runs the checker on the graph read on stdin and prints the report.
 run_check() {
   out=$(jq -cn --stream "$CHECK" 2> /dev/null) || die 'the graph read is not JSON'
   case "$out" in
@@ -203,24 +179,12 @@ if [ "$graph" = true ]; then
   run_check
 fi
 
-# The spec form: the spec's sub-issues, then the open pull requests, through
-# `gh api graphql`, page by page. Each page is checked as it arrives and
-# reduced to two lines: its next cursor (or -), its record count and the
-# count GitHub gives, then its records.
 command -v gh > /dev/null 2>&1 || die 'gh is required'
 command -v date > /dev/null 2>&1 || die 'date is required'
 read_at=$(date -u +%Y-%m-%dT%H:%M:%SZ) || die 'cannot read the time'
-# #717: a start record counts only when the factory wrote it. Its identity is
-# the one "| Record authors | <cell> |" row of fleet.md's "## GitHub identity"
-# table, read as launch-fleet reads it: the whole cell backticked logins
-# separated by commas. No row, an empty one, any malformed or extra entry, or
-# anything after the value cell refuses the read, never keeping only the
-# logins that did parse.
 fleet=$(gh api -H 'Accept: application/vnd.github.raw+json' \
   'repos/{owner}/{repo}/contents/docs/agents/fleet.md' 2> /dev/null) ||
   die 'cannot read the record authors from docs/agents/fleet.md'
-# The row is picked as launch-fleet's awk picks it, in jq: this checker uses
-# sh and jq only.
 authors=$(printf '%s\n' "$fleet" \
   | jq -cRse 'split("\n")
     | reduce .[] as $line ({on: false, rows: []};
@@ -267,10 +231,6 @@ try (
 ) catch error("bad")
 '
 
-# read_pages <issues|prs> <query> [gh args...]: appends each page's records
-# line to $pages, following cursors until the last page. A page with more to
-# come holds at least one record, and the pages may hold no more than the
-# first page counts, so a repeated cursor ends the read instead of looping.
 pages=''
 read_pages() {
   kind=$1 query=$2
@@ -301,8 +261,6 @@ read_pages() {
 read_pages issues "$ISSUES" -F spec="$spec" || die "cannot read spec #$spec's tickets"
 read_pages prs "$PULLS" || die 'cannot read the open pull requests'
 
-# The graph read: every page of each kind agrees on its count, and the pages
-# hold exactly that many records; each ticket gets its open pull requests.
 read=$(printf '%s\n' "$pages" | jq -cs --arg read_at "$read_at" --argjson spec "$spec" '
   def need(c; $why): if c then . else error($why) end;
   def all_of($kind): [.[] | select(.kind == $kind)];

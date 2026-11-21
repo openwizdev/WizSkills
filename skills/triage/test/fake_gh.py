@@ -1,35 +1,3 @@
-"""A fake `gh` for find-work.sh's test: `gh api graphql` over a synthetic
-repository, as GitHub and gh 2.100 answer it.
-
-It honours what a broken fetch would get wrong:
-  - pages: `issues(first: N)` serves N issues a page; N over 100 is GitHub's
-    EXCESSIVE_PAGINATION error. Without --paginate, only the first page.
-    --slurp wraps the pages in one array, and needs --paginate, as in gh.
-  - `states: OPEN` (without it, closed issues come too) and
-    `orderBy: {field: CREATED_AT, direction: ASC|DESC}` (default: ASC).
-  - `comments(last: K)` or `comments(first: K)`, and `labels(first: K)`
-    with its totalCount: only the comments and labels asked for.
-  - `{owner}` and `{repo}` in -F values, as gh fills them in.
-  - each comment's `author { __typename login }`, as GraphQL names it: an
-    App's login without the "[bot]" REST gives it, a deleted account null.
-  - the one raw read of docs/agents/fleet.md from the default branch (#717):
-    the scenario's "fleet" text, or the faults "fleet-fail" (gh fails) and
-    "fleet-doc" (its "doc" served instead).
-Anything else it does not know (a flag, a query shape) exits 3 on stderr.
-
-The repository is a JSON file named by FAKE_GH_SCENARIO:
-  {"issues": [{"number", "title", "state", "created", "milestone", "parent",
-               "sub_issues", "labels": [...], "comments": [...]}],
-   "fleet": "<docs/agents/fleet.md>",
-   "fault": {"kind": "http" | "graphql" | "errors-exit-0" | "no-pages-exit-0"
-                     | "open" | "close" | "short" | "repeat", "page": k}}
-A fault hits page k (1-based): an HTTP error or a GraphQL error there; an
-error page, or no pages at all, with exit 0 (no real gh does either); an
-issue opened, or the
-oldest closed, just after page k is served; page k served one issue short;
-or page k serving the previous page's last issue in place of its first.
-"""
-
 import json
 import os
 import re
@@ -38,8 +6,6 @@ import sys
 OWNER, REPO = "synthetic", "project"
 FLEET_READ = ["api", "-H", "Accept: application/vnd.github.raw+json",
               "repos/{owner}/{repo}/contents/docs/agents/fleet.md"]
-# A comment written as plain text is the factory App's, as GraphQL names it;
-# a comment as {"body", "author"} names its own author.
 FACTORY = {"__typename": "Bot", "login": "openwiz"}
 
 

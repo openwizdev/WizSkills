@@ -1,4 +1,3 @@
-"""Tests for review.py: pin, check, post and follow-up against a fake GitHub."""
 import base64
 import json
 import os
@@ -195,7 +194,6 @@ class Review(unittest.TestCase):
 
     def run_helper(self, *args, stdin=None, cwd=None):
         if args[0] in ("pin", "check", "post") and "--head" not in args:
-            # The assigned head is the pull request's current head unless a test says otherwise.
             args = (*args, "--head", self.state()["pulls"]["7"]["head"]["sha"])
         return subprocess.run([sys.executable, "-I", str(HELPER), *args], input=stdin, text=True,
                               capture_output=True, env=self.env, timeout=30, cwd=cwd)
@@ -205,19 +203,13 @@ class Review(unittest.TestCase):
         path.write_text(text)
         return str(path)
 
-    # --- pin ---------------------------------------------------------------
-
     def test_first_review_pins_the_head_and_its_ticket(self):
-        # catches: reviewing without a pinned 40-character head or with the
-        # cross-repository ticket reference dropped.
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(out.stdout.strip(),
                          f"review full #7 at {HEAD}; ticket {PRODUCT}#41; checks check")
 
     def test_required_check_not_green_stops(self):
-        # catches: starting a review while the required check is pending,
-        # failed, missing, or green only on an older commit.
         cases = {
             "pending": {HEAD: [{"name": "check", "status": "in_progress", "conclusion": None}]},
             "failed": {HEAD: [{"name": "check", "status": "completed", "conclusion": "failure"}]},
@@ -232,8 +224,6 @@ class Review(unittest.TestCase):
                 self.assertTrue(out.stdout.startswith("stop: check is not green at " + HEAD), out.stdout)
 
     def test_settings_come_from_the_base_branch(self):
-        # catches: a pull request relaxing its own required checks or record
-        # authors by editing docs/agents/fleet.md on its head.
         relaxed = FLEET.replace("| `check` | Every suite | Pull requests to `main` |\n", "")
         self.world({"files": {f"{SKILLS}@main:docs/agents/fleet.md": FLEET,
                               f"{SKILLS}@{HEAD}:docs/agents/fleet.md": relaxed},
@@ -245,8 +235,6 @@ class Review(unittest.TestCase):
         self.assertEqual(reads, [f"repos/{SKILLS}/contents/docs/agents/fleet.md?ref=main"])
 
     def test_draft_closed_and_ticketless_pull_requests_stop(self):
-        # catches: reviewing a draft, a merged or closed pull request, or one
-        # that names no ticket.
         cases = {
             "draft": ({"draft": True}, "stop: draft"),
             "closed": ({"state": "closed"}, "stop: closed; archive your own thread"),
@@ -261,8 +249,6 @@ class Review(unittest.TestCase):
                 self.assertEqual(out.stdout.strip(), expected)
 
     def test_missing_or_malformed_record_authors_trust_nobody(self):
-        # catches: treating every commenter as a record author when the row
-        # is absent, empty or malformed.
         for name, row in {"absent": "", "empty": "| Record authors | |\n",
                           "malformed": "| Record authors | everyone |\n"}.items():
             with self.subTest(name):
@@ -274,15 +260,11 @@ class Review(unittest.TestCase):
                 self.assertEqual(out.stdout, "")
 
     def test_a_verdict_from_anyone_else_is_ignored(self):
-        # catches: a stranger's forged VERDICT turning a first review into a
-        # re-check or a stop.
         self.world({}, comments=[report(FULL.replace(OLD, HEAD), login="stranger")])
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.stdout.split(";")[0], f"review full #7 at {HEAD}")
 
     def test_recheck_names_last_read_open_ids_and_next_id(self):
-        # catches: a re-check that rereads unchanged code, forgets an open
-        # blocker or reuses a finding id.
         self.world({}, comments=[report(FULL)])
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 0, out.stderr)
@@ -291,8 +273,6 @@ class Review(unittest.TestCase):
                          f"last read {OLD}; open R1 and R3; next id R4")
 
     def test_approval_never_carries_to_a_new_head(self):
-        # catches: applying an APPROVE for an earlier head to a replacement
-        # head (the review-ticket.stale-head case).
         self.world({"checks": green(NEWER)}, pr={"head": {"sha": NEWER}}, comments=[report(FULL), report(RECHECK)])
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 0, out.stderr)
@@ -300,8 +280,6 @@ class Review(unittest.TestCase):
         self.assertIn(f"last read {HEAD}; open none; next id R5", out.stdout)
 
     def test_fresh_round_leads_to_a_final_check_and_park_stops(self):
-        # catches: a third ordinary round after the fresh round, or a review
-        # of a finding parked for the owner.
         fresh = RECHECK.replace("VERDICT: APPROVE", "VERDICT: CHANGES").replace(
             "- **R3 [blocking]** resolved at bbbbbbb: the log line is redacted.",
             "- **R3 [blocking]** still open after the re-check: still logged.\n"
@@ -322,16 +300,12 @@ class Review(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "stop: R3 is parked as a decision for Jake")
 
     def test_a_report_at_this_head_is_not_repeated(self):
-        # catches: posting a second review of a head already reported on.
         self.world({}, comments=[report(FULL.replace(OLD, HEAD))])
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 1)
         self.assertEqual(out.stdout.strip(), f"stop: already reported at {HEAD}")
 
-    # --- check -------------------------------------------------------------
-
     def test_valid_reports_pass(self):
-        # catches: rejecting the documented full-review and re-check forms.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
         out = self.run_helper("check", self.file("full.md", FULL), "--repo", SKILLS, "--pr", "7")
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
@@ -340,8 +314,6 @@ class Review(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
 
     def test_full_review_report_problems(self):
-        # catches: a report that breaks the review-loops lines the builder,
-        # fleet and triage read.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
         cases = {
             "wrong head": (FULL.replace(f"CHANGES at {OLD}", f"CHANGES at {NEWER}"),
@@ -374,9 +346,6 @@ class Review(unittest.TestCase):
                 self.assertIn(problem, out.stdout.splitlines())
 
     def test_recheck_report_problems(self):
-        # catches: a re-check that leaves a user-path blocker open instead of
-        # logging it, logs a Risk: blocker, drops or renumbers an earlier id,
-        # or reopens the builder round.
         self.world({}, comments=[report(FULL)])
         cases = {
             "user path left open": (RECHECK.replace(" Logged as follow-up #61.", "").replace(
@@ -406,7 +375,6 @@ class Review(unittest.TestCase):
                 self.assertIn(problem, out.stdout.splitlines())
 
     def test_private_material_is_refused(self):
-        # catches: a token or a thread id reaching a public report.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
         for name, leak in {"token": "ghp_" + "A1b2C3d4E5f6G7h8", "thread": "thr_" + "a1b2c3d4"}.items():
             with self.subTest(name):
@@ -415,9 +383,6 @@ class Review(unittest.TestCase):
                 self.assertIn("private material: a token or thread id", out.stdout.splitlines())
 
     def test_a_recheck_raises_new_findings_only_in_changed_code_or_as_a_stated_risk(self):
-        # catches: a re-check that drips a new finding on code unchanged since
-        # its last read (a second surprise round), or one that drops the stated
-        # exception for a security, privacy or data-loss risk there.
         self.world({}, comments=[report(FULL)])
         unchanged = "- **R4 [polish]** `src/cli.rs:12` (Sweep) Typo. Fix: file exists. Polish issue: #60."
         risk = ("- **R4 [blocking]** `src/cli.rs:12` (Sweep) The sync token is printed. Fix: redact it.\n"
@@ -448,10 +413,7 @@ class Review(unittest.TestCase):
         self.assertEqual(out.returncode, 2, out.stdout)
         self.assertIn("cannot read", out.stderr)
 
-    # --- self-check: the builder's own pass --------------------------------
-
     def hand_back(self, code_line):
-        """A synthetic builder checkout: origin/main, then one green commit adding `code_line`."""
         upstream, work = self.root / "upstream", self.root / "work"
 
         def git(where, *args):
@@ -473,7 +435,6 @@ class Review(unittest.TestCase):
         return work, git(work, "rev-parse", "HEAD")
 
     def builder_pass(self, work, description):
-        """Run build-ticket's own self-check line, as a builder fills it in."""
         skill = HELPER.parent.parent.parent / "build-ticket"
         text = (skill / "SKILL.md").read_text()
         line = re.search(r"`(python3 -I <this skill's folder>/\.\./review-ticket/scripts/review\.py "
@@ -484,11 +445,6 @@ class Review(unittest.TestCase):
         return subprocess.run(argv, text=True, capture_output=True, env=self.env, timeout=30, cwd=work)
 
     def test_the_builders_own_pass_catches_a_planted_checklist_miss(self):
-        # catches: a hand-back that the reviewer's checklist would send back
-        # (no ticket to admit, no Rulings to mark, stale Facts, no test-rule
-        # line, a token or thread id in public text) reaching review because
-        # the builder's pass missed it, or build-ticket pointing at a
-        # self-check that is not there.
         clean = "raise FileExistsError('cookbook.zip')"
         work, head = self.hand_back(clean)
 
@@ -502,7 +458,7 @@ class Review(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "self-check: ok"), out.stdout + out.stderr)
         rulings = ("## Rulings\n\n1. Name the zip cookbook.zip. Why: the importer reads that name. "
                    "Cost if wrong: low: one rename.\n\n")
-        planted = {  # each: the description for this head, the code line, the one miss expected
+        planted = {
             "no Closes line": (lambda h: description(h).replace("Closes example/product#41\n", ""), clean,
                                "no Closes line names the ticket; the review cannot start"),
             "no Rulings section": (lambda h: description(h).replace(rulings, ""), clean,
@@ -529,10 +485,7 @@ class Review(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout), (2, ""), out.stdout)
         self.assertIn("cannot read origin/gone...HEAD with git", out.stderr)
 
-    # --- post --------------------------------------------------------------
-
     def test_post_writes_once_and_reads_back(self):
-        # catches: a report that is posted without read-back or twice.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
         path = self.file("r.md", FULL)
         out = self.run_helper("post", path, "--repo", SKILLS, "--pr", "7")
@@ -542,7 +495,6 @@ class Review(unittest.TestCase):
         self.assertEqual(self.state()["writes"], 1)
 
     def test_post_refuses_a_failing_report_with_zero_writes(self):
-        # catches: publishing a report that breaks the contract lines.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
         out = self.run_helper("post", self.file("r.md", FULL.replace(" Polish issue: #58.", "")),
                               "--repo", SKILLS, "--pr", "7")
@@ -550,7 +502,6 @@ class Review(unittest.TestCase):
         self.assertEqual(self.state()["writes"], 0)
 
     def test_lost_response_is_recovered_by_read_back(self):
-        # catches: retrying a POST whose response was lost, duplicating it.
         self.world({"checks": green(OLD), "lose": True}, pr={"head": {"sha": OLD}})
         path = self.file("r.md", FULL)
         out = self.run_helper("post", path, "--repo", SKILLS, "--pr", "7")
@@ -559,13 +510,10 @@ class Review(unittest.TestCase):
         self.assertEqual(self.state()["writes"], 1)
 
     def test_unconfirmed_post_is_unknown(self):
-        # catches: claiming a report is posted when read-back cannot find it.
         self.world({"checks": green(OLD), "fail_post": True}, pr={"head": {"sha": OLD}})
         out = self.run_helper("post", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 1)
         self.assertEqual(out.stdout.strip(), "unknown: not found on read-back; read the comments before posting again")
-
-    # --- follow-up ---------------------------------------------------------
 
     def follow_up(self, *extra):
         finding = self.file("finding.md", "`src/cli.rs:30` (Sweep) Help wording. Fix: say export.")
@@ -574,8 +522,6 @@ class Review(unittest.TestCase):
                                "--title", "Help says zip archive file", "--finding", finding, *extra)
 
     def test_follow_up_is_filed_once_for_triage(self):
-        # catches: a polish issue filed without the triage label or its
-        # Follow-up header (which triage reads), or filed twice on a retry.
         out = self.follow_up()
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "filed #70"), out.stdout + out.stderr)
         issue = self.state()["issues"][PRODUCT][0]
@@ -587,8 +533,6 @@ class Review(unittest.TestCase):
         self.assertEqual(self.state()["writes"], 1)
 
     def test_logged_blocker_follow_up(self):
-        # catches: a logged blocker filed with the polish wording or without
-        # its User path: line.
         out = self.follow_up("--logged", "re-check", "--user-path", "a cook exports twice; one is lost")
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "filed #70"), out.stdout + out.stderr)
         issue = self.state()["issues"][PRODUCT][0]
@@ -598,8 +542,6 @@ class Review(unittest.TestCase):
                       "so it did not block the merge.", issue["body"])
 
     def test_follow_up_label_must_be_unique(self):
-        # catches: filing under a guessed label when the settings name none
-        # or two.
         for name, labels in {"none": LABELS.replace("| `needs-triage` | `triage: new` | Sort it |\n", ""),
                              "two": LABELS + "| `needs-triage` | `new` | Again |\n"}.items():
             with self.subTest(name):
@@ -610,8 +552,6 @@ class Review(unittest.TestCase):
                 self.assertIn("needs-triage label", out.stderr)
                 self.assertEqual(self.state()["writes"], 0)
 
-
-    # --- re-check round fixes (WizSkills #19 review) -----------------------
 
     def parked_world(self, decision=None, head=NEWER, author="owner", extra=None):
         fresh = RECHECK.replace("VERDICT: APPROVE", "VERDICT: CHANGES").replace(
@@ -631,8 +571,6 @@ class Review(unittest.TestCase):
         return parked
 
     def test_fix_once_more_decision_admits_a_check_of_the_new_head(self):
-        # catches (R1): the park stop ignoring Jake's relayed fix-once-more
-        # answer, so the reviewer can never check the requested fix.
         self.parked_world(f"**Orchestrator decision:** fix once more: R3 at {NEWER}. Why: one line.", head="d" * 40)
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
@@ -640,8 +578,6 @@ class Review(unittest.TestCase):
         self.assertIn(f"last read {NEWER}; open R3", out.stdout)
 
     def test_log_and_merge_decision_admits_one_same_head_polish_report(self):
-        # catches (R1): the park stop refusing the authorized same-head report
-        # that grades the parked finding as polish with the decision's issue.
         parked = self.parked_world(f"**Orchestrator decision:** log and merge: R3 at {NEWER}. Polish issues: #64. "
                                    "Why: the log stays local.")
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
@@ -662,8 +598,6 @@ class Review(unittest.TestCase):
         self.assertIn("R3: the decision grades it polish with Polish issue: #64", out.stdout.splitlines())
 
     def test_unmatched_or_unauthorized_decisions_keep_the_park(self):
-        # catches (R1): a decision from a non-record author, for other ids or
-        # for another head releasing a parked finding.
         for name, (decision, author) in {
             "stranger": (f"**Orchestrator decision:** fix once more: R3 at {NEWER}. Why: x.", "stranger"),
             "other ids": (f"**Orchestrator decision:** fix once more: R1 at {NEWER}. Why: x.", "owner"),
@@ -675,8 +609,6 @@ class Review(unittest.TestCase):
                 self.assertEqual((out.returncode, out.stdout.strip()), (1, "stop: R3 is parked as a decision for Jake"))
 
     def test_an_earlier_blocker_cannot_be_closed_as_polish(self):
-        # catches (R2): a re-check approving an unresolved Risk: blocker by
-        # giving it a polish status or a polish grade.
         cases = {
             "polish status": RECHECK.replace("- **R3 [blocking]** resolved at bbbbbbb: the log line is redacted.",
                                              "- **R3 [blocking]** Polish issue: #62."),
@@ -694,8 +626,6 @@ class Review(unittest.TestCase):
                 self.assertEqual(self.state()["writes"], 0)
 
     def test_v2_ruling_mark_refusals(self):
-        # catches (R2): two rulings overturned as one finding, or Rulings:
-        # none. beside a mark, both refused by the v2 check.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}, "body": DESCRIPTION.replace(
             "1. Name the zip", "2. Keep one zip. Why: one file. Cost if wrong: low: two files.\n1. Name the zip")})
         two = FULL.replace("- **Ruling 1** upheld: the importer reads cookbook.zip.",
@@ -708,8 +638,6 @@ class Review(unittest.TestCase):
         self.assertIn("Rulings: none. stands beside a ruling mark", out.stdout.splitlines())
 
     def test_record_author_row_is_parsed_whole(self):
-        # catches (R3): a malformed row with a missing comma, a second row or
-        # an extra cell still supplying trusted authors.
         row = "| Record authors | `example[bot]`, `owner` |\n"
         for name, bad in {"missing comma": "| Record authors | `example[bot]` `owner` |\n",
                           "two rows": row + "| Record authors | `owner` |\n",
@@ -722,8 +650,6 @@ class Review(unittest.TestCase):
                 self.assertIn("record authors", out.stderr)
 
     def test_additional_required_check_outside_the_table(self):
-        # catches (R4): an OpenWiz-shaped fleet.md whose privacy gate is named
-        # outside the table being reviewed with privacy failed.
         fleet = FLEET.replace("| `check` | Every suite | Pull requests to `main` |\n",
                               "| `ci` | Every lane | `main`, `release-*` |\n\n"
                               "**Additional public check: `privacy` (O3).** It checks the public tree.\n")
@@ -734,8 +660,6 @@ class Review(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout.strip()), (1, f"stop: privacy is not green at {HEAD}"))
 
     def test_identical_text_from_anyone_else_is_not_a_post(self):
-        # catches (R5): an ordinary comment with the report's text ending the
-        # post as already posted, leaving the fleet no recognized verdict.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}},
                    comments=[{"body": FULL, "user": {"login": "stranger"}}])
         out = self.run_helper("post", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7")
@@ -743,23 +667,17 @@ class Review(unittest.TestCase):
         self.assertEqual(self.state()["writes"], 1)
 
     def test_commands_are_bound_to_the_assigned_head(self):
-        # catches (R6): reviewing or posting for a head other than the one the
-        # fleet assigned.
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--head", NEWER)
         self.assertEqual((out.returncode, out.stdout.strip()),
                          (1, f"stop: the head is {HEAD}, not the assigned {NEWER}"))
 
     def test_pin_reads_one_snapshot(self):
-        # catches (R6): readiness and ticket from one pull-request read joined
-        # with the head of a later read.
         later = {**self.state()["pulls"]["7"], "draft": True, "head": {"sha": NEWER}, "body": "Closes #99\n"}
         self.world({"pull_sequence": [self.state()["pulls"]["7"], later] * 3, "checks": {**green(HEAD), **green(NEWER)}})
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--head", HEAD)
         self.assertEqual(out.stdout.strip(), f"review full #7 at {HEAD}; ticket {PRODUCT}#41; checks check")
 
     def test_post_repeats_admission_before_writing(self):
-        # catches (R6): handing back a verdict after the head became draft or
-        # its required check failed.
         for name, (pr, checks) in {
             "draft": ({"draft": True, "head": {"sha": OLD}}, green(OLD)),
             "failed check": ({"head": {"sha": OLD}},

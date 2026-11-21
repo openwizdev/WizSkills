@@ -1,21 +1,4 @@
 #!/bin/sh
-# Lists a project's triage work, oldest first, one line per issue:
-#   #<number> <what>: <title>
-# where <what> is "new", "to sort", "reply" or "builder question". Prints
-# nothing, and exits 0, when there is no work.
-#
-# Exits 2, with the reason on stderr and nothing on stdout, when it can't
-# read every open issue, the labels file or the record authors. Never read
-# that as "nothing to do".
-#
-# It reads every open issue, 100 at a time, and only each issue's newest
-# comment. The state labels come from docs/agents/triage-labels.md (written
-# by the setup skill), so a project's own label names work. A marker or an
-# approval quiets an issue only when the factory wrote it (#717): its logins
-# are the Record authors row of docs/agents/fleet.md on the default branch.
-#
-# Usage, from the project's root: sh <this folder>/find-work.sh [<triage-labels.md>]
-# Needs gh (signed in) and jq.
 set -u
 
 labels_file=${1:-docs/agents/triage-labels.md}
@@ -29,8 +12,6 @@ command -v gh > /dev/null 2>&1 || die "gh is not installed"
 command -v jq > /dev/null 2>&1 || die "jq is not installed"
 [ -r "$labels_file" ] || die "cannot read $labels_file (run the setup skill)"
 
-# The label for one role: its row "| `role` | `label` | meaning |" must
-# appear exactly once, with the label in backticks.
 label() {
   awk -F'|' -v role="$1" '
     { r = $2; l = $3; gsub(/^ +| +$/, "", r); gsub(/^ +| +$/, "", l) }
@@ -46,11 +27,6 @@ jq -en --arg a "$needs_triage" --arg b "$needs_info" --arg c "$ready_for_agent" 
   --arg e "$wontfix" '[$a, $b, $c, $d, $e] | unique | length == 5' > /dev/null ||
   die "$labels_file gives two roles one label"
 
-# #717: the factory's identity, read as launch-fleet reads it: the one
-# "| Record authors | <cell> |" row of fleet.md's "## GitHub identity" table,
-# its whole cell backticked logins separated by commas. No row, an empty one,
-# any malformed or extra entry, or anything after the value cell stops the
-# check, never keeping only the logins that did parse.
 fleet=$(gh api -H 'Accept: application/vnd.github.raw+json' 'repos/{owner}/{repo}/contents/docs/agents/fleet.md' 2> /dev/null) ||
   die "cannot read the record authors from docs/agents/fleet.md"
 authors=$(printf '%s\n' "$fleet" \
@@ -62,7 +38,6 @@ authors=$(printf '%s\n' "$fleet" \
     | [scan("`([^`]*)`") | .[0] | ascii_downcase]' 2> /dev/null) ||
   die 'docs/agents/fleet.md names no record authors (its "## GitHub identity" table'"'"'s "Record authors" row)'
 
-# Every open issue, oldest first. comments(last: 1) is the newest comment.
 query='query($owner: String!, $repo: String!, $endCursor: String) {
   repository(owner: $owner, name: $repo) {
     issues(states: OPEN, first: 100, after: $endCursor, orderBy: {field: CREATED_AT, direction: ASC}) {
@@ -83,7 +58,6 @@ query='query($owner: String!, $repo: String!, $endCursor: String) {
 pages=$(gh api graphql --paginate --slurp -F owner='{owner}' -F repo='{repo}' -f query="$query") ||
   die "gh failed, so the open issues were not all read"
 
-# Check the read is whole before listing anything, then sort it.
 work=$(printf '%s\n' "$pages" | jq -r \
   --arg nt "$needs_triage" --arg ni "$needs_info" --arg ra "$ready_for_agent" \
   --arg rh "$ready_for_human" --arg wf "$wontfix" --argjson authors "$authors" '

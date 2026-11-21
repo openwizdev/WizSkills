@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""Synthetic gh timing harness: a locked trace and a bounded reader barrier.
-
-The deadline only detects a stalled barrier. Concurrency is proven by the
-readers entering it together, never by an elapsed-time threshold. It is 60 s
-(10 s before ClosedWiz#1254): on a busy runner, with other cases running at
-once, filling the barrier took longer than 10 s (CI run 42156991869), and a
-pool that never fills it still fails, only later.
-"""
 import fcntl
 import importlib.util
 import json
@@ -17,15 +9,14 @@ import sys
 import time
 
 def fake_gh(args):
-    """The fake gh (fixtures/gh.py) on ARGS, in this process: its exit status."""
-    sys.dont_write_bytecode = True  # no __pycache__ beside the fixtures
+    sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location('fake_gh', os.environ['FAKE_GH_SCRIPT'])
     gh = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gh)
     return gh.run(args)
 
 
-DEADLINE = 60  # seconds: a stalled barrier, never a slow one
+DEADLINE = 60
 root = Path(os.environ['FAKE_GH_TIMING'])
 args = sys.argv[1:]
 endpoint = args[-1]
@@ -40,8 +31,6 @@ pattern = (r'/issues/70(/|$)' if group == 'one' else
            r'/issues/9[0-1][0-9]/comments\?' if group == 'specs' else
            r'/issues/(8[0-9]{2}|9[01][0-9]|92[0-7])/comments\?')
 gated = spec_query if group == 'graphs' else False if group == 'all' else re.search(pattern, endpoint) is not None
-# All sixteen small-spec comment reads must overlap; releasing after only
-# eight arrivals lets early readers finish before a late worker starts.
 barrier = (3 if group == 'one' else 16 if group == 'specs' else
            8 if group == 'graphs' else 64)
 
@@ -83,8 +72,6 @@ try:
                 sys.stderr.write('fake gh: independent reader barrier never filled\n')
                 sys.exit(1)
             time.sleep(0.01)
-    # One slow first-wave read must not hold up every free reader. The
-    # second lane's next item releases it; a batch-at-a-time pool deadlocks.
     if group == 'pipeline' and '/issues/800/comments?' in endpoint:
         while True:
             with (root / 'state').open() as state:

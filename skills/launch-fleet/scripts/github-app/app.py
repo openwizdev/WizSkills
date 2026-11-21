@@ -1,4 +1,3 @@
-"""Shared guards for the App tools. No credentials are logged."""
 import argparse
 import base64
 import hashlib
@@ -13,23 +12,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-# mint-token.py's downscoped read-only token for the live read check.
 PERMISSIONS = dict.fromkeys(
     ("metadata", "contents", "issues", "pull_requests", "checks", "actions"), "read")
-# The service App's established profile (crates/adapters/github/src/app.rs):
-# what the App is registered and installed with (#1105).
 SERVICE = dict(PERMISSIONS, contents="write", issues="write", pull_requests="write")
-# J48 (#606): the explicit setting for the factory's public multi-account App.
-# Unset (or "user") is each user's own private App, bound to its owner's account.
 MODE = "OPENWIZ_GITHUB_APP_MODE"
-# contracts/github-identity.v1.md's pinned installations, carried with the tool
-# so the installed runtime needs no contracts/ folder (review R1): each account
-# and the repository names it selects. test.py holds this to the pin exactly.
 FACTORY = {"jparker2006": ("ClosedWiz",), "openwizdev": ("OpenWiz", "WizPlugins", "WizSkills")}
 
 
 def factory_installations():
-    """The only installations factory mode accepts: {account: {owner/name, ...}}, lower case."""
     return {account: {f"{account}/{name}".lower() for name in names} for account, names in FACTORY.items()}
 
 
@@ -66,7 +56,6 @@ ORIGIN = re.compile(r"(?:https://github\.com/|git@github\.com:|ssh://git@github\
 
 
 def repository(explicit):
-    """OWNER/NAME: --repo, or else the GitHub origin of the clone holding this tool."""
     if explicit is None:
         proc = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent),
                                "remote", "get-url", "origin"],
@@ -80,15 +69,12 @@ def repository(explicit):
 
 
 def mode():
-    """The App setting from the environment: "user" (unset) or exactly "factory"."""
     value = os.environ.get(MODE, "user")
     require(value in ("user", "factory"))
     return value
 
 
 def user_app_name(account):
-    """A user's own App's name: GitHub names are unique and at most 34 characters,
-    and the factory's "OpenWiz" is taken, so Create needs no edit."""
     name = "OpenWiz " + account
     if len(name) <= 34:
         return name
@@ -96,9 +82,6 @@ def user_app_name(account):
 
 
 def bound(setting, app_owner, account, repositories):
-    """C-G1/J48: may this App mint for ACCOUNT's installation and these repositories?
-    A user App only on its owner's account, for repositories that account owns;
-    the factory App only on the identity contract's named installations."""
     account = account.lower() if isinstance(account, str) else None
     if account is None or not repositories:
         return False
@@ -110,9 +93,6 @@ def bound(setting, app_owner, account, repositories):
 
 
 def manifest(repo=None, factory=False, account=None):
-    """The checked template, private by default (J48). With ACCOUNT, a user App's
-    own name; FACTORY is the explicit setting for the factory's public App. With
-    REPO, its homepage and disabled webhook name that repository."""
     value = parse_json(Path(__file__).with_name("manifest.json").read_bytes())
     service_permissions(value.get("default_permissions"))
     require(value.get("default_events") == [])
@@ -123,7 +103,6 @@ def manifest(repo=None, factory=False, account=None):
     elif account is not None:
         value = dict(value, name=user_app_name(account))
     if repo is not None:
-        # GitHub's manifest schema requires url whenever hook_attributes is present.
         url = "https://github.com/" + repository(repo)
         value = dict(value, url=url, hook_attributes={"url": url, "active": False})
     return value
@@ -146,7 +125,6 @@ def state_path(explicit):
         xdg = Path(os.environ.get("XDG_STATE_HOME", ""))
         path = (xdg if xdg.is_absolute() else Path.home() / ".local/state") / "openwiz"
     require(path.is_absolute())
-    # State must never be placed in a repository, including a worktree.
     for parent in (path, *path.parents):
         require(not parent.is_symlink())
         require(not (parent / ".git").exists())
@@ -246,7 +224,6 @@ def post(base, path, body=None, jwt=None):
     request = urllib.request.Request(api_base(base) + path,
                                      data=json.dumps(body or {}).encode(),
                                      headers=headers, method="POST")
-    # Never follow redirects or echo a response body, URL, JWT or exception.
     with urllib.request.build_opener(NoRedirect()).open(request, timeout=15) as response:
         require(response.status == 201)
         data = response.read(1024 * 1024 + 1)
@@ -255,7 +232,6 @@ def post(base, path, body=None, jwt=None):
 
 
 def get(base, path, jwt):
-    """One App read with a JWT: (status, JSON or None). Never echoes a body."""
     request = urllib.request.Request(api_base(base) + path, headers={
         "Accept": "application/vnd.github+json", "User-Agent": "OpenWiz-App-setup",
         "X-GitHub-Api-Version": "2022-11-28", "Authorization": "Bearer " + jwt}, method="GET")

@@ -1,4 +1,3 @@
-"""OB2 synthetic boundary proofs; no endpoint effects or private fixture reads."""
 import copy
 import hashlib
 import importlib.util
@@ -49,7 +48,6 @@ def fixture():
     return grant, envelope, intent, snap, sources, assessment, changes, []
 
 
-# #641: the factory's record authors; a comment by anyone else confers nothing.
 FACTORY, OUTSIDER = 'synthetic-factory[bot]', 'synthetic-outsider'
 AUTHORS = frozenset({FACTORY, 'synthetic-owner'})
 
@@ -151,7 +149,6 @@ class GrantProof(unittest.TestCase):
         for path, patch, finding in cases:
             args = fixture()
             args[6][0].update(path=path, resolved_path=path, patch=patch)
-            # Even an exact path cannot erase the agent's adverse scope finding.
             args[0]['paths'][0]['path'] = path
             args[4]['purposes'][0]['path'] = path
             args[4]['ownership'][0]['path'] = path
@@ -250,7 +247,6 @@ class AuditProof(unittest.TestCase):
 
     def test_audit_covers_refusal_uncertainty_and_invalid_grant(self):
         rows = self.records()
-        # One assessment per decision source, not just per operation: preserve events.
         assessments = {9012: dict(valid=False, final_diff_digest='d'*64),
                        9014: dict(valid=True, final_diff_digest=None)}
         report = audit(self.template(), rows, assessments)
@@ -260,17 +256,16 @@ class AuditProof(unittest.TestCase):
             dict(operation_key='cd4ba0c9b58020e3f6a500699c9ba85b3a36ef480addc4e01c74bce04e998cff',
                  decision='refused', grant_id='refusal-2', final_diff_digest=None, remediation='none')])
         self.assertTrue(report['complete'])
-        rows.pop()  # Intent with no outcome must remain visible as uncertain.
+        rows.pop()
         report = audit(self.template(), rows, {9012: dict(valid=True, final_diff_digest=None)})
         self.assertEqual(report['entries'][-1]['decision'], 'uncertain')
         self.assertEqual(report['entries'][-1]['remediation'], 'escalate')
 
     def test_only_the_factory_records_confer_anything(self):
-        """#641: a grant by an outsider, or by no one, is an ordinary comment."""
         decided = {9012: dict(valid=True, final_diff_digest=None), 9014: dict(valid=True, final_diff_digest=None)}
         for who in (OUTSIDER, None):
             rows = self.records()
-            rows[1]['author'] = who  # the grant
+            rows[1]['author'] = who
             with self.subTest(author=who):
                 entries = audit(self.template(), rows, decided)['entries']
                 self.assertEqual([e['decision'] for e in entries], ['refused', 'uncertain'])
@@ -284,11 +279,9 @@ class AuditProof(unittest.TestCase):
         self.assertEqual(g.record_authors(fleet), AUTHORS)
         for broken in (fleet.replace('| Record authors |', '| Record writers |'),
                        fleet.replace('`Synthetic-Owner`', '`synthetic owner`'),
-                       # R1: a partly malformed cell refuses whole; its valid entries are not kept.
                        fleet.replace('`Synthetic-Owner`', 'Synthetic-Owner'),
                        fleet.replace('`synthetic-factory[bot]`, `Synthetic-Owner`', '`synthetic-factory[bot]` `Synthetic-Owner`'),
                        fleet.replace('`Synthetic-Owner`', '`Synthetic-Owner`; extra'),
-                       # R3: anything after the value cell refuses the row, closing pipe or not.
                        fleet.replace(', `Synthetic-Owner` |', ' | `Synthetic-Owner`'),
                        fleet.replace('`synthetic-factory[bot]`, `Synthetic-Owner`', 'none'),
                        fleet.replace('## GitHub identity', '## Elsewhere')):

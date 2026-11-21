@@ -1,46 +1,4 @@
 #!/usr/bin/env python3
-"""Write and check agent status notes: contracts/agent-status.v1.md (#1254, revision 4).
-
-  status.py write --repo OWNER/NAME --ticket N --agent KIND --state STATE [--why TEXT]
-                  --harness TEXT --model TEXT --skills 'SKILL@X.Y.Z[, ...]' --step TEXT [--pr URL] [--preview URL]
-                  [--time TIME] [--note ID]
-  status.py run --repo OWNER/NAME --ticket N --agent KIND --note ID [--every SECONDS] -- COMMAND...
-  status.py check --repo OWNER/NAME
-  status.py repair --repo OWNER/NAME --harness TEXT --model TEXT --skills 'launch-fleet@X.Y.Z'
-
-write: exit 0 written and read back, 2 refused or failed (a refusal comes before any
-call; a failure after a write is repaired by running the same write again), 3 stop:
-the claim is another note's or the fence stopped it (nothing more written). An edit
-reads back too (#1441): it steps down when another live note of its kind appeared, and
-puts back a release a sibling wake wrote between its read and its edit.
-run (#1447): a heartbeat before COMMAND starts and every --every seconds (default 600)
-while it runs: an edit of note ID as it reads now, only its time set to now, so GitHub's
-updated_at, which alone counts toward the 30-minute lease, is new (a note written this same
-second waits for the next). A beat whose read shows the note done or stopped writes nothing.
-A beat adds needs-info for an asking note as a write does, but never takes it off (#1720): a
-hold a person set, or one the repair put back, stays; the agent's own write leaving asking
-settles the label. A write takes needs-info off only when this machine's private record shows
-a write's own POST applied it, under a GitHub App's own login, and that application is still
-the last one (#1737). Any other needs-info stays, and the write prints
-`#<n>: needs-info left on: ...` after its own line.
-A failed beat is reported and tried again after 60 seconds (or --every, if shorter). When no
-beat can start 120 seconds before the lease of the last good one ends, or on the fence exit,
-it stops COMMAND's whole process group (SIGTERM, then SIGKILL to any of it left after 10
-seconds) and exits 3. Otherwise it exits as COMMAND does. A refusal or failure before COMMAND
-starts exits 2.
-check: exit 0 no mismatch, 1 mismatches printed, 2 could not read. It never writes.
-repair (#1592): the wake's check and fix. For each asking note with no needs-info it reads
-the ticket's notes again and, while a live note still asks, records the repair in its own
-fleet note (working), adds the label and reads again. Once no live note asks, it takes off
-only the application its own POST made in this wake, puts back a person's application its
-DELETE took, and edits its note to done. A wake that stops part way leaves the note working;
-the next wake settles that ticket from it. It deletes only under a GitHub App's own login
-(#1702): a needs-info it didn't apply in this wake, or any needs-info while it acts as a
-person's own account, stays and is reported. It prints each change and every other
-mismatch, one report line each: exit 0 nothing to report, 1 lines printed, 2
-`status check failed: <why>`.
-Every GitHub call goes through `gh api`.
-"""
 import argparse
 import contextlib
 from datetime import datetime, timedelta, timezone
@@ -59,17 +17,15 @@ sys.dont_write_bytecode = True
 
 MARKER = '<!-- openwiz:status v1 -->'
 LEASE = timedelta(minutes=30)
-EVERY = 600         # run's default seconds between beats: three beats in each lease
-EVERY_MOST = 900    # at most half the lease, leaving room to retry a failed beat
-RETRY = 60          # seconds before a failed beat is tried again (#62 R3)
-MARGIN = 120        # seconds a beat's GitHub calls may take: no beat starts later than this
-                    # before the lease ends, counted from the start of the last good beat
-GRACE = 10          # seconds between SIGTERM and SIGKILL when run stops the command
+EVERY = 600
+EVERY_MOST = 900
+RETRY = 60
+MARGIN = 120
+GRACE = 10
 KINDS = ('builder', 'reviewer', 'fleet')
 STATES = ('working', 'asking', 'done', 'stopped')
 CLAIMING = ('working', 'asking')
 ASKING_LABEL = 'needs-info'
-# Key, longest value, required. The order is the note's line order.
 KEYS = (('agent', 300, True), ('state', 300, True), ('harness', 60, True), ('model', 60, True),
         ('skills', 300, True), ('step', 300, True), ('time', 300, True), ('pr', 300, False), ('preview', 300, False))
 REPO = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
@@ -78,20 +34,15 @@ STATE = re.compile(r'(working|asking|done|stopped)( \(([^()]{1,100})\))?')
 SKILL = r'[a-z0-9]+(?:-[a-z0-9]+)*@[0-9]+\.[0-9]+\.[0-9]+'
 SKILLS = re.compile(rf'{SKILL}(?:, {SKILL})*')
 PR = re.compile(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*')
-# A public https page: a domain-name host, no user, password, query or fragment (R3).
 PREVIEW = re.compile(r'https://(?![^/:]*\.(?:local|internal|lan|localhost)(?:[:/]|$))'
                      r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?::[0-9]{1,5})?(?:/[^\s"<>?#@\\]*)?')
 CONTROL = re.compile(r'[\x00-\x1f\x7f]')
 QUOTE = re.compile('["“”]')
-# A web link's host, optional numeric port and path, up to a space, a quote mark or the start
-# of its query or fragment: the query and fragment stay visible to every rule (review R4).
 LINK = re.compile(r'\bhttps?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[^\s"\'<>?#]*)?', re.I)
-# One part of a path: no slash; an escaped character, or a space inside the part, is part of it.
 PART = r'(?:[\w.~+-]|\\.)(?:[\w.~+-]|\\.| (?=[\w.~+-]))*'
 
 
 class OffLinks:
-    """A rule read with each web link's path taken out, so that path never trips it (#1384)."""
 
     def __init__(self, pattern, flags=0):
         self.pattern = re.compile(pattern, flags)
@@ -100,16 +51,13 @@ class OffLinks:
         return self.pattern.search(LINK.sub('link', text))
 
 
-# What a note never holds. A guard fails closed: every thr_ token, synthetic or not.
 PRIVATE = (
     ('a thread id', re.compile(r'(?<![A-Za-z0-9])thr_', re.I)),
     ('a CloudRoom id', re.compile(r'(?<![A-Za-z0-9])(?:proj|prj|mch|usr|acct|auto|cr)_[A-Za-z0-9]', re.I)),
     ('a machine path', re.compile(
         r'(?<![\w.:/~-])(?:~/|/(?:Users|home|root|tmp|var|private|mnt|Volumes|opt|srv|code)(?:/|\b))', re.I)),
     ('a machine path', re.compile(r'(?<![A-Za-z0-9])[A-Za-z]:\\')),
-    # #1384: a C:/ drive or an scp-style host:/, host:'/ or host:~/ path, outside a web link's path.
     ('a machine path', OffLinks(r'[\w.-]:[\'"]?~?/(?!/)')),
-    # R3: any absolute path of two or more parts; a URL's own path is preceded by its host.
     ('a machine path', re.compile(rf'(?<![\w.:/~@%$}}\\-])/{PART}/[\w.~+-]')),
     ('a machine path', re.compile(r'\$\{?HOME\b|%(?:USERPROFILE|HOMEPATH|HOMEDRIVE|APPDATA|LOCALAPPDATA)%', re.I)),
     ('a machine path', re.compile(r'\\\\[\w.$-]+\\')),
@@ -117,7 +65,6 @@ PRIVATE = (
     ('a credential', re.compile(
         r'\b(?:[a-z0-9_]*token|[a-z0-9_]*key|secret|password|passwd|pwd|sig|signature|auth|credentials?)\s*=', re.I)),
     ('a credential', re.compile(r'\b(?:password|passwd|secret|token)\s*:\s*\S|\bbearer\s+\S', re.I)),
-    # #1384: a colon-form key, token or auth value, versioned names included, outside a web link's path.
     ('a credential', OffLinks(r'\b(?:[a-z0-9_]*token|[a-z0-9_]*key|auth)\s*:\s*\S', re.I)),
     ('a credential', re.compile(r'\bgh[pousr]_[A-Za-z0-9]{8,}|\bgithub_pat_|\bAKIA[0-9A-Z]{16}\b'
                                 r'|\bxox[abprs]-|\bsk-[A-Za-z0-9_-]{16,}')),
@@ -156,7 +103,6 @@ def plain(field, value, longest):
 
 
 def shaped(fields):
-    """Refused naming the field (never echoing the value), or None: the contract's shape."""
     for key, longest, required in KEYS:
         if key in fields:
             plain(key, fields[key], longest)
@@ -178,14 +124,6 @@ def shaped(fields):
 
 
 def bound(skills):
-    """R5 (#1663): every reported skill is one the installed package lists, at that skill's
-    own installed version: the `version:` line of its SKILL.md front matter (J205).
-
-    The package is the one supplying this script; its manifest and the listed skills'
-    SKILL.md files are the evidence. Only a write binds: a note already posted reads by its
-    shape alone, whichever version it names. Which skills an agent actually ran is its
-    caller's record (AP2).
-    """
     try:
         listed = json.loads(MANIFEST.read_text())['skills']
         if not (isinstance(listed, list) and all(isinstance(x, str) for x in listed)):
@@ -200,9 +138,6 @@ def bound(skills):
 
 
 def installed(name):
-    """NAME's installed version, or None: the one `version:` declaration of the first front-matter
-    block of its SKILL.md (the `---` lines opening the file and the next `---` line), plain or
-    YAML-quoted, as `<major>.<minor>.<patch>` in digits. None when it is missing or declared twice."""
     try:
         lines = (MANIFEST.parents[1] / 'skills' / name / 'SKILL.md').read_text().split('\n')
     except (OSError, UnicodeDecodeError):
@@ -224,7 +159,6 @@ def body(fields):
 
 
 def parse(text):
-    """A note's fields, or None when it doesn't read exactly as the contract says."""
     lines = (text or '').replace('\r\n', '\n').split('\n')
     if lines[0] != MARKER:
         return None
@@ -263,7 +197,6 @@ def gh(method, path, payload=None, accept=None, raw=False):
 
 
 def pages(path):
-    """Every item of a paged REST list."""
     items, page = [], 1
     while True:
         chunk = gh('GET', f'{path}?per_page=100&page={page}')
@@ -292,7 +225,6 @@ def when(stamp):
 
 
 def notes(comments, authors):
-    """The record authors' readable notes, oldest first: (id, fields, updated, author)."""
     found = []
     for item in comments:
         login = item['user']['login'] if isinstance(item.get('user'), dict) else None
@@ -307,12 +239,10 @@ def live(note, now):
 
 
 def holder(found, kind, now):
-    """The oldest live note of KIND, which holds its claim, or None."""
     return next((n for n in found if n[1]['agent'] == kind and live(n, now)), None)
 
 
 def viewer():
-    """The acting login, as GitHub's viewer names it, or None when the token can't name itself."""
     try:
         login = gh('POST', 'graphql', {'query': 'query { viewer { login } }'})['data']['viewer']['login']
     except (Failed, KeyError, TypeError):
@@ -327,14 +257,6 @@ HISTORY = 20
 
 
 def replaced(made, fields, floor=None):
-    """The note under this writer's edits, from GitHub's edit history (newest first, each the
-    full body), or None when there is none. It skips this edit's own earlier tries, which a retry
-    after exit 2 leaves (the same write: the same fields but the time), so a release under the
-    first try is still found, but only a release that landed once the oldest try had started
-    (its editedAt at or after that try's time, which the writer stamps before it reads). A release
-    this agent read and then resumed stays under its resume (#57 R1). Later edits by others may
-    sit above this edit. A heartbeat passes FLOOR, the time of the note it last saw written
-    and read back: earlier beats at or under it are acknowledged, never retries (#62 R2)."""
     try:
         found = gh('POST', 'graphql', {'query': EDITS, 'variables': {'id': made['node_id'], 'n': HISTORY}})
         nodes = found['data']['node']['userContentEdits']['nodes']
@@ -368,7 +290,6 @@ def replaced(made, fields, floor=None):
 
 
 def step_down(found, note_id, kind, fields, repo):
-    """After a claim edit: when another live note of its kind exists, stop this one and Stop."""
     other = next((x for x in found if x[0] != note_id and x[1]['agent'] == kind
                   and live(x, datetime.now(timezone.utc))), None)
     if other:
@@ -378,10 +299,6 @@ def step_down(found, note_id, kind, fields, repo):
 
 
 def next_beat(now, ok_at, every, failed):
-    """#62 R3: seconds until the next beat, or None when no beat can still land inside the lease.
-    OK_AT is when the last good beat started (its edit landed after), FAILED whether the last beat
-    failed. A failed beat is tried again after RETRY seconds, never later than MARGIN seconds
-    before the lease ends."""
     deadline = ok_at + LEASE.total_seconds() - MARGIN
     if now >= deadline:
         return None
@@ -390,8 +307,6 @@ def next_beat(now, ok_at, every, failed):
 
 
 def stop_group(proc):
-    """#62 R1: stop the command's whole process group: SIGTERM, then SIGKILL to whatever of the
-    group is left after GRACE seconds, even once the command itself has exited."""
     def alive():
         proc.poll()
         try:
@@ -419,8 +334,6 @@ def stop_group(proc):
 
 
 def proof(repo, n):
-    """#1737: this machine's private record of the needs-info application a write's own POST made
-    on one ticket, outside the checkout and never posted."""
     home = Path(os.environ.get('XDG_STATE_HOME') or '.')
     home = home if home.is_absolute() else Path.home() / '.local' / 'state'
     return home / 'openwiz' / 'needs-info' / f'{quote(repo.lower(), safe="")}-{n}.json'
@@ -428,10 +341,6 @@ def proof(repo, n):
 
 @contextlib.contextmanager
 def settling(repo, n):
-    """#119 R1: one needs-info settlement per ticket at a time on this machine, under a lock beside
-    the record, so an older write's settle never forgets the record of a newer write's application.
-    It yields whether the lock is held. Without it (no fcntl, or a lock file that can't be opened)
-    the settle runs unlocked and keeps no new record, so a later write leaves the label on."""
     lock = None
     try:
         import fcntl
@@ -457,10 +366,6 @@ def forget(repo, n):
 
 
 def add_own(repo, n, login, locked):
-    """#1737: add needs-info, and record the application as this writer's only when it is the one
-    new event its POST left, under a GitHub App's own login, as the repair proves its own (#1702).
-    The events are read just before the POST, so a hold landing earlier is never taken for it. Any
-    other outcome, or a failed read, records nothing: a later write leaves the label on."""
     forget(repo, n)
     try:
         before = len(label_events(repo, n))
@@ -484,11 +389,6 @@ def add_own(repo, n, login, locked):
 
 
 def take_own(repo, n, login, labels):
-    """#1737: no live note asks. Take off only the needs-info application this machine's record
-    shows a write's own POST made, while it is still the last one (the repair's cleanup, which puts
-    back a person's application that lands as it deletes; the record stays until that is settled,
-    so a retry still puts it back). Any other needs-info, such as triage's hold or a put-back under
-    the same login, stays and is reported. LABELS: the issue's labels as just read. The report lines."""
     def labelled():
         return ASKING_LABEL in [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
     def once(pairs):
@@ -499,7 +399,6 @@ def take_own(repo, n, login, labels):
         own = json.loads(proof(repo, n).read_text(), object_pairs_hook=once)
     except (OSError, ValueError):
         own = None
-    # Only the exact shape add_own writes, for this login; anything else proves nothing.
     exact = isinstance(own, dict) and set(own) == {'login', 'event'} and own['login'] == login.lower()
     mine = own['event'] if exact and type(own['event']) is int and own['event'] >= 0 else None
     left = [f'#{n}: {ASKING_LABEL} left on: no note asks, and this writer can\'t show its own write '
@@ -514,8 +413,6 @@ def take_own(repo, n, login, labels):
 
 
 def write(args, now, beat=False, out=sys.stdout, retried=False):
-    """One write. A BEAT (#1447) takes the note's own fields as its re-read shows them, with
-    only time set to now, and stops on a note that is done or stopped: it never reopens one."""
     if not beat:
         state = args.state if args.why is None else f'{args.state} ({args.why})'
         if args.why is not None and args.state != 'stopped':
@@ -531,7 +428,6 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
         refuse('note', 'not a comment id')
     repo, n, kind = args.repo, args.ticket, args.agent
     authors = record_authors(repo)
-    # R4: a writer whose login isn't a record author writes nothing: its note would never count.
     login = viewer()
     if login is not None and login.lower() not in authors:
         raise Failed(f'the acting login {login} is not a record author in docs/agents/fleet.md')
@@ -550,8 +446,6 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
                 raise Stop(f'note {args.note} is {own[1]["state"]}: a heartbeat never reopens it')
             fields = dict(own[1], time=now.strftime('%Y-%m-%dT%H:%M:%SZ'))
             if fields == own[1]:
-                # #62 R4: written this very second. An unchanged body is no edit on GitHub, so
-                # wait for the next second and read again.
                 if retried:
                     raise Failed(f'note {args.note} already holds this second; nothing to beat')
                 time.sleep(1)
@@ -559,7 +453,6 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
             if args.floor is None:
                 args.floor = own[1]['time']
             state = args.state = fields['state']
-        # R2: whoever holds the claim now, older or newer, fences out every other note of its kind.
         first = holder(found, kind, now)
         if first and first[0] != own[0]:
             raise Stop(f'note {first[0]} holds the {kind} claim')
@@ -573,24 +466,16 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
         note_id, verb = int(made['id']), 'posted'
     author = made['user']['login'] if isinstance(made.get('user'), dict) else None
     if not (isinstance(author, str) and author.lower() in authors):
-        # R4: a token that can't name itself is judged by the note GitHub stored.
         if verb == 'posted':
             gh('DELETE', f'repos/{repo}/issues/comments/{note_id}')
         raise Failed(f'note {note_id} was written by {author}, not a record author; it was deleted')
     login = login or author
-    # R4: success, and any label, only once a trusted read-back shows the note as written.
     found = notes(pages(comments), authors)
     mine = next((x for x in found if x[0] == note_id), None)
     if verb == 'edited' and args.state in CLAIMING:
-        # #1441: the edit landed after its read, so read back as a post does. A release this
-        # writer never read, landed under its edit (a sibling wake's), is put back: a release is
-        # never lost (P3), even when a later edit has changed the note since (#1463 R1). A
-        # release it read, it may resume, as a builder answering a review does.
         try:
             prior = parse(replaced(made, fields, args.floor if beat else None))
         except Failed:
-            # #62 R2: an edit history that can't settle the release still leaves the claim to
-            # a newer live holder: step down first, then report the failure.
             step_down(found, note_id, kind, fields, repo)
             raise
         if prior and prior['state'] not in CLAIMING and prior != own[1]:
@@ -609,10 +494,7 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
                {'body': body(dict(fields, state='stopped (lost claim)'))})
             raise Stop(f'note {first[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
     if verb == 'edited' and args.state in CLAIMING:
-        # #1441: a newer note that claimed while this one had lapsed keeps the claim (P1, P2, P4).
         step_down(found, note_id, kind, fields, repo)
-    # R1: settle needs-info from what GitHub shows now, so a retry repairs a failed label write.
-    # #119 R1: the notes and labels are read again inside this machine's lock for the ticket.
     report = []
     with settling(repo, n) as locked:
         found = notes(pages(comments), authors)
@@ -621,8 +503,6 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
         if asking and ASKING_LABEL not in labels:
             add_own(repo, n, login, locked)
         elif not beat and not asking:
-            # #1720: a heartbeat never takes needs-info off. The agent's own write leaving asking
-            # takes off only the application its record proves its own (#1737).
             report = take_own(repo, n, login, labels)
     print(f'#{n}: {kind} {state}, status note {note_id} {verb}', file=out)
     for line in report:
@@ -631,7 +511,6 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
 
 
 def run(args):
-    """#1447: keep the claim live while COMMAND runs; stop COMMAND when the claim is lost."""
     command = args.cmd[1:] if args.cmd[:1] == ['--'] else args.cmd
     if not command:
         refuse('command', 'missing: run --note ID -- COMMAND...')
@@ -646,12 +525,10 @@ def run(args):
         args.floor = write(args, datetime.now(timezone.utc), beat=True, out=sys.stderr)['time']
     except Stop as error:
         raise Stop(f'{error}; the command was not started')
-    # Its own process group, so a stop reaches everything COMMAND started.
     try:
         proc = subprocess.Popen(command, start_new_session=True)
     except OSError as error:
         raise Failed(f'command: could not start: {error.strerror}')
-    # A run that is itself stopped stops COMMAND too, through the cleanup below.
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda number, _: sys.exit(128 + number))
     failed, finished = False, False
@@ -673,8 +550,6 @@ def run(args):
             except Stop as error:
                 raise Stop(f'{error}; the command is stopped')
             except (Failed, KeyError, TypeError, IndexError, ValueError) as error:
-                # The note stays live until the lease ends; the beat is tried again well before
-                # that, and its fence still stops the command if another note claimed meanwhile.
                 failed = True
                 print(f'status.py: heartbeat failed, trying again in {min(RETRY, every)}s: {error}',
                       file=sys.stderr)
@@ -719,7 +594,6 @@ def mismatches(number, labels, found, prs, now):
 
 
 def scan(repo, authors, now):
-    """Every open issue: (number, its readable notes, its mismatch lines)."""
     owner, name = repo.split('/')
     cursor, found = None, []
     while True:
@@ -749,9 +623,6 @@ def check(args, now):
     return 1 if found else 0
 
 
-# #1592 (#68 R1): the repair's record is its own fleet note on the ticket, working from just
-# before its label write until the label is settled, then done. A wake that stops in between
-# leaves it working, and the next wake settles the ticket from it.
 REPAIRING = 'adding needs-info for an asking note'
 REPAIRED = 'settled needs-info'
 
@@ -761,7 +632,6 @@ def stamp():
 
 
 def record(repo, n, base, state, step, note_id=None):
-    """Post or edit the repair's fleet note: (its id, GitHub's time for this write)."""
     fields = dict(base, state=state, step=step, time=stamp())
     if note_id is None:
         made = gh('POST', f'repos/{repo}/issues/{n}/comments', {'body': body(fields)})
@@ -783,10 +653,6 @@ def by(event, login):
 
 
 def cleanup(repo, n, login, mine, labelled, taker='the repair'):
-    """Take off the needs-info this wake's own POST applied (#68 R2): only when that application,
-    event MINE of the label timeline, is still the last one. GitHub's DELETE takes whatever label is
-    there when it lands, so the timeline is read again after it: a person's application that landed
-    between the read and the DELETE is put back, and reported. The report lines."""
     events = label_events(repo, n)
     if labelled():
         last = max((k for k, e in enumerate(events) if e['event'] == 'labeled'), default=None)
@@ -807,19 +673,12 @@ def cleanup(repo, n, login, mine, labelled, taker='the repair'):
 
 
 def app(login):
-    """#82 R1: only a GitHub App's own login (`<name>[bot]`, which no person can sign in as)
-    tells the repair's label events from a person's. Under any other login, such as a person's
-    own account shared with the agents, the repair never deletes: it reports instead."""
     return login.endswith('[bot]')
 
 
 def left(repo, n, login, labelled):
-    """#1702: a needs-info this wake can't prove it applied stays. While agents post as a person's
-    own account, an application under the repair's login may be that person's hold, or a put-back
-    of one, so it is reported, never taken off. The report lines."""
     if not labelled():
         return []
-    # Silent only when the last listed application is provably someone else's.
     applied = [e for e in label_events(repo, n) if e['event'] == 'labeled']
     if applied and not by(applied[-1], login):
         return []
@@ -828,9 +687,6 @@ def left(repo, n, login, labelled):
 
 
 def settle(repo, n, authors, login, base, pending):
-    """#1592: needs-info on one ticket from its notes as they are now, read again after the
-    label write, so an agent that resumed meanwhile is never marked as asking. PENDING is the
-    repair's own working fleet note from a wake that stopped part way, or None. The report lines."""
     comments = f'repos/{repo}/issues/{n}/comments'
 
     def asking():
@@ -850,8 +706,6 @@ def settle(repo, n, authors, login, base, pending):
         note_id = pending[0]
     report, mine = [], None
     if still is not None and not labelled():
-        # #1702: the label's own application is the one new event its POST leaves, under its login.
-        # One from an earlier wake can't be told from a person's under the same login.
         before = len(label_events(repo, n))
         gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
         new = label_events(repo, n)[before:]
@@ -867,7 +721,6 @@ def settle(repo, n, authors, login, base, pending):
 
 
 def guarded(what, act):
-    """ACT's result, or Failed naming WHAT: a GitHub answer of the wrong shape fails too."""
     try:
         return act()
     except Failed as error:
@@ -892,7 +745,6 @@ def repair(args, now):
     login = viewer()
     reported = 0
     for n, own, lines in found:
-        # Without its own login the repair can't tell its label from a person's: it reports.
         pending = None if login is None else next(
             (x for x in reversed(own) if x[1]['agent'] == 'fleet' and x[3] == login.lower()
              and x[1]['state'] == 'working' and x[1]['step'] == REPAIRING), None)
@@ -902,7 +754,6 @@ def repair(args, now):
             lines = [line for line in lines if not line.endswith(f': no {ASKING_LABEL} label')
                      and not (pending and line.startswith(f'#{n} note {pending[0]} '))] + settled
         for line in lines:
-            # Each line as it is settled: a later failure never hides an earlier change.
             print(line, flush=True)
             reported += 1
     return 1 if reported else 0
@@ -914,7 +765,6 @@ def main(argv):
     w = sub.add_parser('write')
     for flag in ('--repo', '--ticket', '--agent', '--state', '--harness', '--model', '--step'):
         w.add_argument(flag, required=True)
-    # --skills has no default: a missing one is refused as the contract's missing field.
     for flag in ('--skills', '--why', '--pr', '--preview', '--time', '--note'):
         w.add_argument(flag)
     r = sub.add_parser('run')
@@ -940,7 +790,6 @@ def main(argv):
             except (KeyError, TypeError, IndexError, ValueError) as error:
                 raise Failed(f'could not read: unexpected GitHub answer: {error!r}')
         if args.command == 'repair':
-            # R2: a failed check is a report line of its own, never a clean pass.
             try:
                 return repair(args, now)
             except Failed as error:

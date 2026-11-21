@@ -1,4 +1,3 @@
-"""Build one decision request from verified public wording and source inputs."""
 import argparse
 import hashlib
 import json
@@ -75,8 +74,11 @@ def request(metadata, revision):
     return {**record, 'status': 'open', 'fingerprint': hashlib.sha256(source).hexdigest()}
 
 
+DESCRIPTION = 'Build one decision request from verified public wording and source inputs.'
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument('--revision', type=Path)
     args = parser.parse_args()
     try:

@@ -1,26 +1,4 @@
 #!/bin/sh
-# Tests ../revision.sh, version 2, on this folder's fake gh, with a synthetic
-# spec #8 and tickets #9 to #12 built here, beside another spec's #4 to #7.
-# Moved beside the skill from the evidence of ClosedWiz#155 (#191), with the
-# same cases; it reads nothing outside this skill's folder.
-# 1. The revision text is exactly the documented v2 format: each body hashed
-#    with its ticked task boxes read as unticked. The expected text is built
-#    here from literal bodies written unticked, never by the script's method.
-# 2. Ticking or unticking a task box (in a ticket or in the spec; `-`, `*` or
-#    `+`; `x` or `X`; nested; at a line's end; in a CRLF body) leaves the
-#    fingerprint as it was. So do labels (`held` too), comments, closing and
-#    the milestone.
-# 3. Every other edit still changes it: the spec's body, a box's words, a box
-#    added, dropped, turned to plain text, its bullet or indent changed, an
-#    `[x]` that is not a task box, a title, a blocker, a ticket added or dropped.
-# 4. A read that fails gives a non-zero exit and no text at all.
-# 5. An approval recorded under v1 is stale under v2: v1's script
-#    (revision-v1.sh here: ClosedWiz's main at 9f5b557, byte for byte) gives a
-#    different fingerprint for the same plan.
-# Usage, from anywhere: sh skills/to-tickets/test/test-revision.sh
-#   (REVISION_SH=<script> tests another script in its place)
-# Needs python3, jq and sha256sum (or shasum). Exits 0 only when every case
-# ran and matches; 1 on any mismatch, a missing case or a setup failure.
 set -u
 here=$(cd "$(dirname "$0")" && pwd) || exit 1
 script=${REVISION_SH:-$here/../revision.sh}
@@ -37,7 +15,7 @@ mkdir -p "$work/bin" || exit 1
 printf '#!/bin/sh\nexec python3 -I "%s" "$@"\n' "$fake" > "$work/bin/gh" && chmod +x "$work/bin/gh" || exit 1
 PATH="$work/bin:$PATH"
 export PATH
-CASES=42 # every case below; fewer run means one was skipped
+CASES=42
 cases=0
 bad=0
 args=8
@@ -48,7 +26,6 @@ else
 fi
 cr=$(printf '\r')
 
-# ---- The base: another spec #4 and its tickets, then spec #8 and its #9 to #12 ----
 spec_body='## Problem Statement
 
 Synthetic.
@@ -71,7 +48,6 @@ Synthetic nine. Marks are written `- [ ]` in its notes.
   - [ ] nine nests
 - [ ]
 '
-# #10 arrives with its box already ticked; the revision reads it as unticked.
 t10_body='## What to build
 
 Synthetic ten.
@@ -113,7 +89,6 @@ Synthetic eleven.
 - [ ] eleven works
 - [ ] eleven is quiet
 '
-# #12's body has CRLF line ends, as a body saved from GitHub's web editor can.
 t12_body=$(printf '## What to build\r\n\r\nSynthetic twelve.\r\n\r\n- [ ] twelve works\r\nx')
 t12_body=${t12_body%x}
 mkdir -p "$work/base" || exit 1
@@ -139,8 +114,6 @@ json.dump({"create": [
 EOF
 FAKE_GH_STATE=$work/base python3 -I "$fake" --world "$work/base.json" || { echo "SETUP: base world event failed"; exit 1; }
 
-# The text the documented v2 format gives for the base, built here from the
-# literal bodies (each already unticked), not by the script.
 h() { printf '%s\n' "$1" | sha; }
 expected="plan-graph revision v2
 spec #8 body sha256 $(h "$spec_body")
@@ -150,16 +123,13 @@ ticket #11 blocked-by #6 #9 #10 body sha256 $(h "$t11_body") title 0.3.0 T3: ele
 ticket #12 blocked-by none body sha256 $(h "$t12_body") title 0.3.0 T4: twelve"
 case $t12_body in *"$cr"*) ;; *) echo "SETUP: #12's body has no CR"; exit 1 ;; esac
 
-# run_ <name> [event.json] [script]: a fresh copy of the base, the event
-# applied, then the script (the one under test unless given) with the
-# arguments in $args. Sets got_exit, got_out (stdout) and got_fp.
 run_() {
   rm -rf "$work/$1" && cp -R "$work/base" "$work/$1" || exit 1
   if [ -n "${2:-}" ]; then
     printf '%s\n' "$2" > "$work/$1.json" || exit 1
     FAKE_GH_STATE=$work/$1 python3 -I "$fake" --world "$work/$1.json" || { echo "SETUP: event for $1 failed"; exit 1; }
   fi
-  # shellcheck disable=SC2086
+  # shellcheck disable=SC2086 -- $args splits into separate arguments on purpose
   FAKE_GH_STATE=$work/$1 sh "${3:-$script}" $args > "$work/$1.out" 2> "$work/$1.err"
   got_exit=$?
   got_out=$(cat "$work/$1.out") || exit 1
@@ -168,7 +138,6 @@ run_() {
 ok() { echo "ok   $*"; }
 no() { bad=$((bad + 1)); echo "MISMATCH $*"; }
 
-# 1. The format, exactly, and the same twice.
 cases=$((cases + 1))
 run_ baseline
 base_fp=$got_fp
@@ -183,7 +152,6 @@ cases=$((cases + 1))
 run_ again
 if [ "$got_exit" = 0 ] && [ "$got_fp" = "$base_fp" ]; then ok "again: the same fingerprint"; else no "again: exit $got_exit, fingerprint $got_fp"; fi
 
-# 2 and 3. changes <name> <yes|no> <event>: does the fingerprint move?
 changes() {
   cases=$((cases + 1))
   run_ "$1" "$3"
@@ -197,7 +165,6 @@ changes() {
     no "$1: want a change: $2; got fingerprint $got_fp (base $base_fp)"
   fi
 }
-# Progress: a box ticked or unticked.
 changes tick-ticket-box no '{"edit": [{"issue": 11, "replace": ["- [ ] eleven works", "- [x] eleven works"]}]}'
 changes tick-capital-x no '{"edit": [{"issue": 11, "replace": ["- [ ] eleven works", "- [X] eleven works"]}]}'
 changes tick-two-boxes no '{"edit": [{"issue": 11, "replace": ["- [ ] eleven works\n- [ ] eleven is quiet", "- [x] eleven works\n- [x] eleven is quiet"]}]}'
@@ -208,7 +175,6 @@ changes tick-nested-box no '{"edit": [{"issue": 9, "replace": ["  - [ ] nine nes
 changes tick-box-at-line-end no '{"edit": [{"issue": 9, "replace": ["- [ ]\n", "- [x]\n"]}]}'
 changes tick-spec-box no '{"edit": [{"issue": 8, "replace": ["- [ ] the spec has a box too", "- [x] the spec has a box too"]}]}'
 changes tick-crlf-box no '{"edit": [{"issue": 12, "replace": ["- [ ] twelve works\r", "- [x] twelve works\r"]}]}'
-# Not plan changes (as in v1).
 changes add-label no '{"labels": [{"issue": 10, "add": ["ready-for-agent"]}]}'
 changes remove-label no '{"labels": [{"issue": 9, "remove": ["ready-for-agent"]}]}'
 changes held-label-on no '{"labels": [{"issue": 9, "add": ["held"], "remove": ["ready-for-agent"]}]}'
@@ -217,7 +183,6 @@ changes public-approval-on-spec no '{"comment": [{"issue": 8, "body": "**Plan gr
 changes comment-on-ticket no '{"comment": [{"issue": 11, "body": "Progress: eleven works.\n"}]}'
 changes close-ticket no '{"close": [9]}'
 changes milestone no '{"edit": [{"issue": 9, "milestone": "0.2.0"}]}'
-# Plan changes (as in v1), and the edits next to a box that are still plan changes.
 changes spec-body yes '{"edit": [{"issue": 8, "replace": ["Synthetic.", "Synthetic, and one more promise."]}]}'
 changes box-words yes '{"edit": [{"issue": 11, "replace": ["- [ ] eleven works", "- [ ] eleven works offline"]}]}'
 changes tick-and-reword yes '{"edit": [{"issue": 11, "replace": ["- [ ] eleven works", "- [x] eleven works offline"]}]}'
@@ -235,7 +200,6 @@ changes add-blocker yes '{"add_blocked_by": [{"issue": 10, "blocker": 9}]}'
 changes drop-ticket yes '{"remove_sub_issue": [10]}'
 changes new-ticket yes '{"create": [{"title": "0.3.0 T5: thirteen", "body": "## What to build\n\nThirteen.\n", "milestone": "0.3.0", "parent": 8}]}'
 
-# 4. Failed reads: non-zero, and no text that could pass for a revision.
 fails() {
   cases=$((cases + 1))
   if [ "$got_exit" = "$2" ] && [ -z "$got_out" ]; then
@@ -260,7 +224,6 @@ run_ not-a-number
 fails not-a-number 2
 args=8
 
-# 5. A v1 approval of this same plan: v1's own script.
 cases=$((cases + 1))
 run_ v1 '' "$v1"
 v1_head=$(head -n 1 "$work/v1.out")

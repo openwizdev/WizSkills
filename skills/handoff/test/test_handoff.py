@@ -1,4 +1,3 @@
-"""handoff.py's command seam, with a synthetic, recording gh only (#1186)."""
 import base64
 import json
 import os
@@ -26,7 +25,6 @@ if answer == 'FAIL':
     sys.exit(1)
 print(answer if isinstance(answer, str) else json.dumps(answer))
 '''
-# Synthetic page: invented fleets, tickets and decisions, no live values.
 GOOD = '''# Orchestrator handoff
 
 **Snapshot: 2026-01-02 03:04 UTC, plan graph approved on #10.** Rules in AGENTS.md; status in STATUS.md. A new orchestrator reads this first and checks each line before acting on it.
@@ -84,8 +82,6 @@ class Handoff(unittest.TestCase):
                      if (root / 'calls').exists() else [])
             return result, calls
 
-    # ---- private: the write target must be a verified private repository ----
-
     def test_private_target_is_confirmed_by_one_get(self):
         result, calls = self.run_helper('private', REPO, answers={f'repos/{REPO}': repo()})
         self.assertEqual((result.returncode, result.stdout), (0, f'private ok: {REPO}\n'))
@@ -110,8 +106,6 @@ class Handoff(unittest.TestCase):
         result, calls = self.run_helper('private', '../elsewhere')
         self.assertEqual(result.returncode, 2)
         self.assertEqual(calls, [])
-
-    # ---- check: one page, five sections, nothing secret ----
 
     def test_the_documented_page_passes(self):
         result, calls = self.run_helper('check', 'page.md', files={'page.md': GOOD})
@@ -149,8 +143,6 @@ class Handoff(unittest.TestCase):
         result, _ = self.run_helper('check', 'missing.md')
         self.assertEqual(result.returncode, 2)
         self.assertNotIn('page ok', result.stdout)
-
-    # ---- landed: the private default branch holds exactly this page ----
 
     def answers(self, text=GOOD, private=True, branch='main'):
         return {f'repos/{REPO}': repo(private, branch),

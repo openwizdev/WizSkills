@@ -1,29 +1,4 @@
 #!/usr/bin/env node
-// huntr's controller lease on the switch issue (#1685): one controller at a time, by posting,
-// reading back and expiring a comment, never by listing threads. Every lease time is GitHub's
-// comment time (server time); only the precheck before a post reads the local clock.
-//   lease.mjs id                              (local time + random suffix; generate once per run)
-//   lease.mjs status
-//   lease.mjs claim <run>
-//   lease.mjs renew <run> <result-file>   (a checkpoint result, posted under the lease line)
-//   lease.mjs release <run> <result-file>          (the final result, posted under the release line)
-//   lease.mjs due <run> scheduled|hunter  (read-only: must this wake post a checkpoint? exit 3 when the
-//                                                   switch issue is unreadable, so the lease is unknown)
-//   lease.mjs record <run> <index-file>            (a record without a lease of its own: an off switch,
-//                                                   a lost lease; posted as it is, lease unchanged; refused
-//                                                   while <run> holds the live lease, which must release)
-//   lease.mjs finish <run> <index-file>            (the final result on every terminal path: reads the lease
-//                                                   up to 4 times, then releases while <run> holds it, records
-//                                                   after a confirmed loss, or, still unreadable, posts under a
-//                                                   release line, which frees only <run>'s own lease. Exit 3:
-//                                                   nothing confirmed posted; rerun it, it reuses a posted index)
-//   lease.mjs switch                      (read-only: on or off, and every `huntr kind approved:` line)
-//   lease.mjs pace <timezone> <streak> <last-empty-at>   (no GitHub: may a hunt start today? <last-empty-at>
-//                                                   is an ISO instant with Z or an offset, such as 2026-11-19T23:55:00Z)
-//   lease.mjs publish <run> <record.json> <index-file>   (post the record's numbered parts, read them
-//                                                   back, verify them and write the index that links them)
-// Exit 0 prints {"holder": ...} as JSON; exit 2 is a refusal, a lost lease or an unconfirmed
-// write, with its reason on stderr. Claims and refusals before a post write nothing.
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,7 +9,6 @@ import { fileURLToPath } from 'node:url';
 const MINUTES = 45;
 const RUN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 const THREAD = /^thr_[A-Za-z0-9]{1,64}$/;
-// Replay old thread-bearing comments too, so an upgrade cannot steal a live lease.
 const LINE = /^huntr lease: (?:(claim|renew) (\S+)(?: thread (\S+))? for 45m|release (\S+))$/;
 const LIMIT = 65536;
 
@@ -47,7 +21,6 @@ function gh(args, what) {
   catch { fail(what); }
 }
 function switchIssue() {
-  // The project's huntr settings name the switch issue in their machine-readable policy.
   let policy;
   try {
     const text = readFileSync('docs/agents/huntr.md', 'utf8');
@@ -74,9 +47,6 @@ function comments(repo, issue) {
   }
   return all.sort((a, b) => a.id - b.id);
 }
-// Replay every lease line in comment order. A claim takes a free or expired lease, or renews the
-// holder's own; a renewal counts only from the live holder; a release frees the holder's lease.
-// Everyone reading the same comments agrees on one holder.
 function holderOf(list) {
   let holder = null;
   for (const c of list) {
@@ -96,7 +66,6 @@ function holderOf(list) {
 const current = (holder, now) => holder && Date.parse(holder.expires) > now ? holder : null;
 const held = h => `held by ${h.run} until ${h.expires}`;
 
-// Post one comment; its id comes from the URL gh prints (NaN when gh printed none).
 function postOnly(issue, body) {
   if (body.length > LIMIT) fail(`comment over ${LIMIT} characters`);
   const dir = mkdtempSync(join(tmpdir(), 'huntr-lease-'));
@@ -108,7 +77,6 @@ function postOnly(issue, body) {
 }
 function post(repo, issue, body, before) {
   const id = postOnly(issue, body);
-  // Read back: the posted comment must be there exactly, and is identified by its id.
   const after = comments(repo, issue);
   const same = c => c.body.trimEnd() === body.trimEnd();
   const mine = after.find(c => c.id === id && same(c)) ?? (() => {
@@ -118,15 +86,12 @@ function post(repo, issue, body, before) {
   if (!mine) fail('lease write unconfirmed on read-back; run status before retrying');
   return {after, mine};
 }
-// The switch: the newest comment whose first line starts `huntr:` decides; only `huntr: on`, optionally
-// followed by a spaced dash and reason, is on. Kind approvals are listed by their first line.
 function switchState(list) {
   const firsts = list.map(c => ({comment: c.id, line: c.body.split(/\r?\n/, 1)[0]}));
   const line = firsts.filter(f => f.line.startsWith('huntr:')).at(-1)?.line ?? null;
   return {switch: line?.match(/^huntr: (on|off)(?:\s+[—–-]\s.*)?$/)?.[1] === 'on' ? 'on' : 'off', line,
     kinds: firsts.filter(f => f.line.startsWith('huntr kind approved:'))};
 }
-// Two consecutive empty hunts pause hunting until the next calendar day in the project's timezone.
 function pace(timezone, streak, lastEmpty) {
   const ask = what => fail(`unknown ${what}: ask on the tracking issue`);
   let day;
@@ -134,7 +99,6 @@ function pace(timezone, streak, lastEmpty) {
   catch { ask('timezone'); }
   if (!timezone) ask('timezone');
   if (!/^(0|[1-9][0-9]*)$/.test(streak)) ask('empty-hunt streak');
-  // An offset-free time would be read in the host's timezone, so the host could decide the pause.
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?$/.test(lastEmpty))
     fail('last empty hunt time needs Z or an offset (such as 2026-11-19T23:55:00Z): ask on the tracking issue');
   const last = Date.parse(lastEmpty);
@@ -145,9 +109,6 @@ function pace(timezone, streak, lastEmpty) {
   const [y, m, d] = lastDay.split('-').map(Number);
   return {hunt: false, until: new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10)};
 }
-// The final write of a hunt: it must work on a wake after which none may come. A release line frees
-// only its own run's lease (holderOf), so when the lease stays unreadable posting under one is safe
-// whoever holds the lease. An exact index already on the issue is reused, never posted twice.
 function finish(repo, issue, run, text) {
   const wait = process.env.HUNTR_LEASE_RETRY_MS ?? '15000';
   if (!/^(0|[1-9][0-9]{0,5})$/.test(wait)) fail('unreadable HUNTR_LEASE_RETRY_MS');
@@ -156,7 +117,7 @@ function finish(repo, issue, run, text) {
   let list = null;
   for (let i = 0; i < ATTEMPTS && !list; i++) {
     if (i) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(wait) * 2 ** (i - 1));
-    try { list = comments(repo, issue); } catch { /* bounded: at most ATTEMPTS reads */ }
+    try { list = comments(repo, issue); } catch { }
   }
   const stuck = 'finalization pending: nothing was confirmed posted; keep the index and rerun finish on the next wake';
   if (!list) {
@@ -174,9 +135,6 @@ function finish(repo, issue, run, text) {
   if (holding && holder?.run === run) fail(`release not effective: ${held(holder)}`);
   return {finished: holding ? 'release' : 'record', verified: true, comment: mine.id, holder};
 }
-// Post the durable record as numbered parts (manifest.mjs pack), each read back by id. An exact part
-// already on the issue is reused, so a rerun after a lost response never duplicates one. The parts
-// read back must unpack to the same record before the index linking them is written.
 function publish(repo, issue, run, recordFile, indexFile) {
   const manifest = fileURLToPath(new URL('./manifest.mjs', import.meta.url));
   const node = (args, what) => {
@@ -213,7 +171,6 @@ function main() {
   const [command, ...args] = process.argv.slice(2);
   const shapes = {id: 0, status: 0, claim: 1, renew: 2, release: 2, due: 2, record: 2, finish: 2, switch: 0, pace: 3, publish: 3};
   if (!Object.hasOwn(shapes, command) || args.length !== shapes[command]) fail('usage: lease.mjs id | status | claim <run> | renew <run> <result-file> | release <run> <result-file> | due <run> scheduled|hunter | record <run> <index-file> | finish <run> <index-file> | switch | pace <timezone> <streak> <last-empty-at> | publish <run> <record.json> <index-file>');
-  // No GitHub or Cloudroom identity is needed, even when the switch is off.
   if (command === 'id') return `huntr-${new Date().toISOString().slice(0, 19).replace(/[-:]/g, '')}Z-${randomBytes(12).toString('hex')}`;
   if (command === 'pace') return pace(...args);
   if (command === 'switch') return switchState(comments(repository(), switchIssue()));
@@ -226,7 +183,6 @@ function main() {
     try { text = readFileSync(result, 'utf8'); } catch { fail('unreadable result file'); }
     if (!text.trim()) fail('empty result file');
   }
-  // A plain record must never read as a switch, lease or kind-approval line.
   if ((command === 'record' || command === 'finish') && /^huntr[ :]/.test(text.split(/\r?\n/, 1)[0])) fail('a record\'s first line may not start with huntr');
   let issue, repo, before;
   try {
@@ -235,14 +191,12 @@ function main() {
     if (command === 'finish') return finish(repo, issue, run, text);
     before = comments(repo, issue);
   } catch (e) {
-    // A wake that cannot read the lease must not take the lost-lease route (exit 2): it files nothing.
     if (command === 'due') Object.assign(e, {exit: 3, message: `${e.message}: the lease is unknown, so file nothing this wake`});
     throw e;
   }
   const now = current(holderOf(before), Date.now());
   if (command === 'status') return {holder: now};
   if (command === 'record') {
-    // A run that still holds its lease finishes with release, or the next controller waits out 45 minutes.
     if (now && now.run === run) fail(`${run} holds the live lease: post its final index with release`);
     const {after, mine} = post(repo, issue, text, before.at(-1)?.id ?? 0);
     return {holder: current(holderOf(after), Date.parse(mine.created_at)), comment: mine.id};
@@ -250,7 +204,6 @@ function main() {
   if (command === 'due') {
     if (!now) fail('no live lease');
     if (now.run !== run) fail(held(now));
-    // Every scheduled wake posts a result; a hunter's wake posts only once one is 30 minutes overdue.
     const last = Date.parse(now.expires) - MINUTES * 60000;
     return {holder: now, checkpoint: args[1] === 'scheduled' || Date.now() - last >= 30 * 60000};
   }

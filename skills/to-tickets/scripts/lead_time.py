@@ -1,22 +1,3 @@
-"""Spec lead time for the war room (#1353, F6): from the spec's creation to
-its last ticket's merge, read from the war-room collector's `flow` fact.
-
-    python3 -I lead_time.py <collector JSON> [--spec N ...]
-
-The input is a collector snapshot (`openwiz.war-room.collector.v1`) or an
-on-demand read (`openwiz.war-room.collector.read.v1`) holding `factory.flow`.
-The start is the spec's `created_at`: to-spec writes the spec from the
-confirmed grill with no step between (J202), so it is the first public point
-after confirmation. The end is the spec's `last_merge_at`.
-
-Prints one JSON object: `flow` (the fact's state, `unavailable` when it is
-missing) and `specs`, one row per spec asked for (default: every spec row),
-`{spec, lead_time_seconds, from, until, unknown}`. Unknown stays unknown: a
-null lead time with the reason (an open or unread member, unknown membership
-or start), never zero and never a span to an earlier merge. Exit 0, or 2 with
-one `lead_time: <why>` line when the document isn't the collector's or its
-times contradict its own span.
-"""
 import argparse
 import datetime
 import json
@@ -76,8 +57,11 @@ def report(document, asked):
     return {'flow': fact['state'], 'specs': rows}
 
 
+DESCRIPTION = "Spec lead time for the war room (#1353, F6): from the spec's creation to"
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument('collector')
     parser.add_argument('--spec', type=int, action='append', default=[])
     args = parser.parse_args()

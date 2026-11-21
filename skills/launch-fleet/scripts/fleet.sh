@@ -1314,7 +1314,7 @@ def approval: (.body | lines) as $ls | ($ls | map(select(test("\\S"))) | first /
        revision: ([$head | capture(", revision (?<n>[0-9]+):\\*\\*") | .n | tonumber] | first),
        fingerprint: ([$ls[] | capture("^\\s*Fingerprint:\\s*`?(?<f>[0-9a-f]{64})`?\\s*$") | .f] | first),
        rows: [$ls[] | short | select(test("^\\|\\s*#[0-9]+\\s*\\|")) | split("|") | map(sub("^\\s+"; "") | sub("\\s+$"; "")) | .[1:-1]
-              | select(length >= 4) | {number: (.[0] | ltrimstr("#") | tonumber), label: .[-1]}]}
+              | select(length >= 4 and (.[-2] | foreign | length) == 0) | {number: (.[0] | ltrimstr("#") | tonumber), label: .[-1]}]}
     else (.databaseId as $id | .createdAt as $at | [machine_record($ls)] | first // empty | {id: $id, at: $at, machine: true} + .) end;
 def latest($s): [$s.comments.nodes[] | approval] | max_by(.id);
 def subs($s): [$s.subIssues.nodes[].number];
@@ -1445,8 +1445,9 @@ def pending_wait: waiting as $w | records as $rs
 # naming its line, never skipped silently.
 # Only the reference in the shape'"'"'s own place counts, never prose after it.
 def ref_line: "^(?:launch-fleet:\\s*(?:waiting for|resume (?:starting|sent|failed|withdrawn) [0-9]+ for|held for ordering: (?:issue|PR)|held for|noted) |Orchestrator(?: \\([^\\r\\n]*\\))?: \\*\\*(?:(?:yes|confirmed)[,:] )?wait for )(?<r>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*)";
+def legacy_ordering_refs: "^Orchestrator: \\*\\*held for ordering only; the plan and its approval are unchanged\\.\\*\\* (?<r>(?:[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,8}) .+ Released \\(`ready-for-agent` back, `held` off\\) as soon as (?<release>(?:[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,8}) merges\\.$";
 def ref_looks: records as $rs | .number as $n | .comments.nodes[] | . as $c | (.body | first_text | sub("^\\s+"; "") | sub("\\s+$"; "")) as $l
-  | ([$l | capture(ref_line) | .r | foreign[]]) as $f | select(($f | length) > 0)
+  | ([($l | capture(ref_line) | .r), ($l | capture(legacy_ordering_refs) | .r, .release) | foreign[]] | unique) as $f | select(($f | length) > 0)
   | look($n; $rs; "comment \($c.databaseId)'"'"'s line `\($l | short)` names \($f | join(", ")), not this repository");
 def resume_claim($w): [records[] | select(.r | test("^resume starting \($w.id) for #\($w.number)(, thread thr_[A-Za-z0-9_-]+)?$"))] | min_by(.id);
 

@@ -228,6 +228,19 @@ class Copy(Base):
                 self.assertIn('key variable', p.stdout)
                 self.assertFalse((self.tmp / name).exists())
 
+    def test_a_key_variable_shaped_like_a_credential_is_refused_and_never_echoed(self):
+        # catches (R10): a credential-shaped value the kit flags, accepted as a variable name and written verbatim
+        # into a README meant for a pull request, or echoed back when refused
+        self.begin()
+        for name in ('AKIA' + 'SYNTHETIC0000000', 'GHP_' + 'SYNTHETIC0123456789', 'SYNTHETICVALUE0123456789ABCDEF'):
+            with self.subTest(name[:4]):
+                repo = self.tmp / ('repo-' + name[:4])
+                p = self.wd('copy', '--state', self.state, '--openwiz', OPENWIZ, '--into', repo, '--login', 'host',
+                            '--key-variable', name, check=1)
+                self.assertIn('key variable', p.stdout)
+                self.assertNotIn(name, p.stdout + p.stderr)
+                self.assertFalse(repo.exists())
+
     def test_copy_never_overwrites(self):
         # catches: a rerun replacing the user's fixed driver with the template again
         self.begin()
@@ -643,11 +656,16 @@ class ExpiredLogin(Base):
             'the parent process environment': 'open("/proc/%d/environ" % os.getppid(), "rb").read()',
             'the network': '__import__("socket").create_connection(("127.0.0.1", %d), 2)' % tcp.getsockname()[1],
             'a host socket': 's = __import__("socket").socket(1); s.connect(%r)' % str(self.tmp / 'host.sock'),
-            'a client outside its fixtures': 'subprocess.run([%r], check=True)' % str(client)}
+            'a client outside its fixtures': 'subprocess.run([%r], check=True)' % str(client),
+            'a file beside the driver': 'open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '
+                                        '"host-login.json")).read()',
+            'system configuration': 'open("/etc/passwd").read()'}
         for n, (name, probe) in enumerate(probes.items()):
             with self.subTest(name):
-                p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver',
-                            self.probing_driver('probe-%d' % n, probe), '--harness', 'exampleagent', check=0)
+                driver = self.probing_driver('probe-%d' % n, probe)
+                (driver.parent / 'host-login.json').write_text('{"synthetic": "beside the driver"}')
+                p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', driver, '--harness',
+                            'exampleagent', check=0)
                 self.assertIn('expired-login pass', p.stdout)
         for sock in (tcp, unix):
             with self.assertRaises(BlockingIOError):

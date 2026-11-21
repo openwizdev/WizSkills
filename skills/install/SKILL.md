@@ -240,12 +240,12 @@ To remove OpenWiz, on the user's yes: there is no remove command and no server t
 1. `ls -A <root>`. A fresh install puts exactly `current`, `channel.json`, `install.lock`, `skills/` and, without a separate `--state-root`, `state/` (the `<state>`) there. Delete only `current`, `channel.json`, `install.lock` and `skills/`, and keep any of those names that was there before the install.
 2. `ls -A <state>`. OpenWiz's builds are the folders in `<state>/service/builds/`, each named by a 40-character source commit and holding an `install-manifest.json` whose `"source"` is that same name. Delete those folders. `<state>/service/` is never deleted as a whole.
 3. Only if the user wants their settings gone too: delete exactly these, when present: `<state>/setup/`, `<state>/cloudroom/`, and in `<state>/service/`: `config.json`, `app/` (the App's saved settings and key), `state.json`, `loops/` and `clone/`. Then `rmdir <state>/service/builds <state>/service <state>`, and last `rmdir <root>`. `rmdir` removes only an empty folder: leave any folder it refuses.
-4. The skill copies stay unless the user asks. Then delete only OpenWiz's own copies of these 18, by exact name: `ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`. A folder is OpenWiz's only when it holds the `.openwiz-skill` marker; one without it is the user's own skill with the same name: never delete it.
+4. The skill copies stay: you never delete a skill folder yourself, and leftover copies are harmless. If the user wants them gone, list the folders with OpenWiz's 18 skill names (`ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`) in each agent folder, show the list, and tell the user to look and remove only the ones they recognise as OpenWiz's, themselves, or keep them. A folder with one of these names may be the user's own skill.
 
    ```sh
    for d in "$HOME/.claude/skills" "${CODEX_HOME:-$HOME/.codex}/skills" "$HOME/.cursor/skills" "$HOME/.config/opencode/skills" "$HOME/.grok/skills"; do
      for s in ask-wiz build-ticket diagnose grill handoff hill-climb huntr image install launch-fleet research review-ticket setup to-spec to-tickets triage wayfind where-are-we; do
-       if [ -f "$d/$s/.openwiz-skill" ] && [ ! -L "$d/$s" ]; then rm -r -- "$d/$s" && echo "removed: $d/$s"; elif [ -e "$d/$s" ]; then echo "kept, not OpenWiz's: $d/$s"; fi
+       [ -e "$d/$s" ] && echo "$d/$s"
      done
    done
    ```

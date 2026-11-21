@@ -35,7 +35,7 @@ A new session, whatever the user said ("continue", or the one line again), start
 build=$(readlink <root>/current); state=${build%/service/builds/*}
 OPENWIZ_STATE_DIR="$state" python3 -I -B "$build"/runtime/setup/setup.py check --state-dir "$state"
 OPENWIZ_STATE_DIR="$state" python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir "$state"
-grep -m1 '^version:' ~/.claude/skills/install/SKILL.md ~/.codex/skills/install/SKILL.md
+grep -m1 '^version:' ~/.claude/skills/install/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/install/SKILL.md"
 ```
 
 `<root>` is `$HOME/.local/lib/openwiz` unless the user chose another. Take the first that holds:
@@ -53,7 +53,7 @@ git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$open
 python3 -I "$openwiz"/tools/install/install preflight
 ```
 
-`git clone` may warn that `refs/tags/v0.1.0` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) is unsupported for 0.1.0: the `openwiz` binary runs there, but CloudRoom offers no Intel Mac build today, so say so plainly and stop before installing. Exit 5 names each missing item and its `next` step: tell the user plainly (CloudRoom: install the app, open it once and sign in; `gh`: install it and `gh auth login`). Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`).
+`git clone` may warn that `refs/tags/v0.1.0` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) is unsupported for 0.1.0: the `openwiz` binary runs there, but CloudRoom offers no Intel Mac build today, so say so plainly and stop before installing. Exit 5 names each missing item and its `next` step: tell the user plainly (CloudRoom: install the app, open it once and sign in; `gh`: install it and `gh auth login`). Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`). Read its `checks` even on exit 0: `gh` reading `missing` does not stop preflight, but setup needs it. Then the user installs GitHub CLI first, from https://cli.github.com, and `gh --version` shows it is there; then continue.
 
 Done when preflight passes, or the user has each next step.
 
@@ -103,14 +103,14 @@ It reads each connection and records only its own results in `<state>`. It print
 | `cloudroom_unsupported` | CloudRoom offers no build for this computer (an Intel Mac, or Linux on ARM). OpenWiz 0.1.0 needs CloudRoom, so the install cannot be completed here yet: say so plainly and stop. |
 | `cloudroom_source_unchecked` | `cloudroom.py install` could not read or check CloudRoom's published installer and its checksum (a network failure, or CloudRoom changed its download guide or release): nothing was proposed or downloaded. Run `install` again shortly. If it stays, `cloudroom.py install --yes --state-dir <state>` opens CloudRoom's download page once instead; the user installs CloudRoom from there, opens it once and signs in. Then `status`. |
 | `cloudroom_installing` | An install is running: `status` again shortly. |
-| `cloudroom_install_uncertain` | `cloudroom.py install --state-dir <state>` again: it reconciles first. |
+| `cloudroom_install_uncertain` | A plain `install` only shows the pending operation again. Read its `operation_id` from `cloudroom.py install --state-dir <state>` (inside `operation`), then reconcile that same operation: `cloudroom.py install --yes --operation <operation_id> --state-dir <state>`. Never preview a new install over it. |
 | `cloudroom_install_failed` | Preview `install` again and ask again. |
 | `cloudroom_install_declined` | The user said no: stop, or preview again only if they ask. |
 | `cloudroom_checksum_mismatch` | Nothing was installed: report it and stop. |
 | `cloudroom_destination_blocked` | Another file is at `~/Applications/Cloudroom.AppImage`: the user moves it, never you. |
 | `cloudroom_unreadable` | `check` again; if it stays, `status`. |
 
-**GitHub:** `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state>` reuses a verified login. Signed out, it previews (`login_needed`): GitHub's own browser page and a one-time code, with no token pasted. On the yes, run it with `--yes`. `identity_unreadable` (from `status`, `sign-in` or `check`) means GitHub gave no clear answer: wait a minute and run it again; it clears. If it stays, `gh auth status` shows whether the user is signed in.
+**GitHub:** `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state>` reuses a verified login. Signed out, it previews (`login_needed`): GitHub's own browser page and a one-time code, with no token pasted. On the yes, run it with `--yes`. `identity_unreadable` (from `status`, `sign-in` or `check`) means GitHub gave no clear answer: wait a minute and run it again; it clears. If it stays, `gh auth status` shows whether the user is signed in. `login_gh_missing` means GitHub CLI is not installed: the user installs it from https://cli.github.com, then `gh --version` shows it is there; run the sign-in preview again.
 
 **The rest** (`harness_unselected`, `identity_unselected`, `project_unprepared`, `app_missing`) is expected now: each waits for the repository the user picks under First fleet, and Connect sets it. Phone access is optional: `python3 -I -B "$build"/runtime/access/access.py configure --plan <private file> --state-dir <state>` previews it; `access.py --help` gives the plan's shape.
 
@@ -125,7 +125,7 @@ Only now, with setup checked and the logins done, copy OpenWiz's skills into the
 python3 -I "$openwiz"/tools/install/install skills --root <root>
 ```
 
-It copies the 18 skills into `<root>/skills` and into each agent folder present here: `~/.claude/skills` (Claude Code), `~/.codex/skills` (Codex; 0.1.0 reads `~/.codex` only, never `$CODEX_HOME`), `~/.cursor/skills`, `~/.config/opencode/skills` and `~/.grok/skills`. It prints `"outcome": "installed"` even when it copied nothing, so check two things: its `harnesses` entry for the agent you are running in reads `installed`, and that agent's folder (`ls ~/.claude/skills` or `ls ~/.codex/skills`) now holds all 18 by name: `ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`. If the entry reads `absent`, that agent's folder (`~/.claude` or `~/.codex`) is missing on this computer: tell the user which folder, that their agent has no OpenWiz skills, and its `next` step; never create the folder yourself. A skill of the user's own with the same name refuses the whole step: report it.
+It copies the 18 skills into `<root>/skills` and into each agent folder present here: `~/.claude/skills` (Claude Code), `${CODEX_HOME:-$HOME/.codex}/skills` (Codex: `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise `~/.codex/skills`), `~/.cursor/skills`, `~/.config/opencode/skills` and `~/.grok/skills`. It prints `"outcome": "installed"` even when it copied nothing, so check two things: its `harnesses` entry for the agent you are running in reads `installed`, and that agent's folder, the entry's `path` (`ls ~/.claude/skills`, or for Codex `ls "${CODEX_HOME:-$HOME/.codex}/skills"`), now holds all 18 by name: `ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`. If the entry reads `absent`, that agent's folder (`~/.claude`, or for Codex `$CODEX_HOME` when set, otherwise `~/.codex`) is missing on this computer: tell the user which folder, that their agent has no OpenWiz skills, and its `next` step; never create the folder yourself. A skill of the user's own with the same name refuses the whole step: report it.
 
 Then make every installed copy of this skill this one, the whole folder. The copy `install skills` just wrote comes from the 0.1.0 package: it is older (`version: 0.2.0`), its `SKILL.md` and scripts still name a setup page and a server 0.1.0 removed, and a new session loads it whatever the user says. Take this skill's own folder: the one you read it from when it is on this computer (a WizSkills clone or plugin: set `src` to it and skip the clone), otherwise a fresh clone of WizSkills (it installs nothing). Then overwrite each agent folder that holds OpenWiz's copy (marked by `.openwiz-skill`), and check every file by content:
 
@@ -240,6 +240,14 @@ To remove OpenWiz, on the user's yes: there is no remove command and no server t
 1. `ls -A <root>`. A fresh install puts exactly `current`, `channel.json`, `install.lock`, `skills/` and, without a separate `--state-root`, `state/` (the `<state>`) there. Delete only `current`, `channel.json`, `install.lock` and `skills/`, and keep any of those names that was there before the install.
 2. `ls -A <state>`. OpenWiz's builds are the folders in `<state>/service/builds/`, each named by a 40-character source commit and holding an `install-manifest.json` whose `"source"` is that same name. Delete those folders. `<state>/service/` is never deleted as a whole.
 3. Only if the user wants their settings gone too: delete exactly these, when present: `<state>/setup/`, `<state>/cloudroom/`, and in `<state>/service/`: `config.json`, `app/` (the App's saved settings and key), `state.json`, `loops/` and `clone/`. Then `rmdir <state>/service/builds <state>/service <state>`, and last `rmdir <root>`. `rmdir` removes only an empty folder: leave any folder it refuses.
-4. The skill copies stay unless the user asks. Then delete only these 18 folders from each agent folder step 4 named: `ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`. Other skills there are the user's.
+4. The skill copies stay unless the user asks. Then delete only OpenWiz's own copies of these 18, by exact name: `ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`. A folder is OpenWiz's only when it holds the `.openwiz-skill` marker; one without it is the user's own skill with the same name: never delete it.
+
+   ```sh
+   for d in "$HOME/.claude/skills" "${CODEX_HOME:-$HOME/.codex}/skills" "$HOME/.cursor/skills" "$HOME/.config/opencode/skills" "$HOME/.grok/skills"; do
+     for s in ask-wiz build-ticket diagnose grill handoff hill-climb huntr image install launch-fleet research review-ticket setup to-spec to-tickets triage wayfind where-are-we; do
+       if [ -f "$d/$s/.openwiz-skill" ] && [ ! -L "$d/$s" ]; then rm -r -- "$d/$s" && echo "removed: $d/$s"; elif [ -e "$d/$s" ]; then echo "kept, not OpenWiz's: $d/$s"; fi
+     done
+   done
+   ```
 
 Removal revokes nothing: show the user how to uninstall the App or remove repositories from it, delete any phone-access tunnel or rule, and delete the fleet loops in CloudRoom. Never remove or revoke anything without their yes.

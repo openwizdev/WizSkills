@@ -1,13 +1,3 @@
-"""write-driver's end-to-end eval (WD3): a scripted agent follows SKILL.md's steps, in order, through the skill's
-script, and a scripted user answers each ask, against the synthetic template host and fake `gh` that the skill's
-own tests use. No model, no network, no real host: it proves the scripts end to end, not that a model follows
-SKILL.md.
-
-    python3 -I skills/write-driver/tests/test_eval.py
-
-Linux only, as test_write_driver.py: the expired-login probe needs Landlock and the stop checks read /proc.
-WRITE_DRIVER_EVAL_SCRIPT runs the eval against another copy of write_driver.py (a planted mutant, for red runs).
-"""
 import importlib.util
 import json
 import os
@@ -32,8 +22,6 @@ REPORTED_TIME = '23 minutes'
 
 
 class Eval(t.Base):
-    """One scripted session per test: paste to share, on a host whose steps cost money."""
-
     def setUp(self):
         super().setUp()
         (self.bin / HARNESS).write_text(HARNESS_TURN_UNTIL_STOPPED_OR_EVAL_TURN_SECONDS)
@@ -53,7 +41,6 @@ class Eval(t.Base):
         return p
 
     def ask(self, operation, user, *step):
-        """Say the ask, end the turn, take the scripted user's next message; the ask's id, or None if refused."""
         p = self.wd('ask', '--state', self.state, '--operation', operation, *step, '--effect',
                     'cost money and start a machine')
         self.asks.append(p.stdout.strip())
@@ -78,7 +65,6 @@ class Eval(t.Base):
                 'harness': HARNESS, 'model': 'example-model'}
 
     def session(self, skip=(), user=None):
-        """SKILL.md's steps 1 to 5, as an agent that follows it; `skip` names the steps a faulty agent leaves out."""
         user = dict(YES, **(user or {}))
         self.paste_and_grill(skip)
         self.write(skip, user)
@@ -157,7 +143,6 @@ class Eval(t.Base):
                 pass
 
     def fresh(self):
-        """A new session in the same test, for each subtest."""
         self.doCleanups()
         self.setUp()
 
@@ -185,8 +170,6 @@ class EndToEnd(Eval):
 
 
 class Red(Eval):
-    """Each faulty session must not read as passing, and must leave the user's world as the skill promises."""
-
     def test_a_skipped_safety_ask_runs_no_costly_step(self):
         report, offer = self.session(skip={'safety-ask'})
         self.assertIn('not passing yet', report.split('\n')[0])

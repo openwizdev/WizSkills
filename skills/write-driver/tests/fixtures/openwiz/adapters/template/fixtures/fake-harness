@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+"""A synthetic harness: its turn runs until stopped."""
+import time
+time.sleep(300)

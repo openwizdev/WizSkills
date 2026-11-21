@@ -1,0 +1,17 @@
+{
+  "lesson": "live-shape",
+  "live": {
+    "sandbox": {
+      "id": "sb-synthetic-1",
+      "state": "idle",
+      "cpus": 2
+    }
+  },
+  "fixture": {
+    "sandbox": {
+      "id": "sb-synthetic-9",
+      "state": "running",
+      "cpus": 4
+    }
+  }
+}

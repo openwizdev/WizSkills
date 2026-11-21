@@ -413,7 +413,10 @@ def origin_tips(env, git):
             raise Unreadable(f'cannot read {what}')
         return r.stdout
 
-    url = reach('remote', 'get-url', '--push', 'origin').strip()
+    urls = reach('remote', 'get-url', '--push', '--all', 'origin').splitlines()
+    if len(urls) != 1:
+        raise Unreadable('origin has more than one push URL: nothing pushed')
+    url = urls[0]
     tips = {}
     for line in reach('ls-remote', '--heads', '--tags', '--end-of-options', url).splitlines():
         sha, _, ref = line.partition('\t')

@@ -27,7 +27,7 @@
     {
      "step": "teach",
      "say": "install-done",
-     "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is on this machine. Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
+     "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is at /home/synthetic/.local/lib/openwiz/current/openwiz (not on `PATH`). Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
     },
     {
      "step": "run",
@@ -472,7 +472,7 @@
     {
      "step": "teach",
      "say": "install-done",
-     "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is on this machine. Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
+     "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is at /home/synthetic/.local/lib/openwiz/current/openwiz (not on `PATH`). Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
     },
     {
      "step": "run",
@@ -860,7 +860,7 @@
     {
      "step": "teach",
      "say": "install-done",
-     "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is on this machine. Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
+     "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is at /home/synthetic/.local/lib/openwiz/current/openwiz (not on `PATH`). Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
     },
     {
      "step": "run",

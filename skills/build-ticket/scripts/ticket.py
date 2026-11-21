@@ -448,13 +448,13 @@ def first_identity_violation(env, git):
     for line in r.stdout.splitlines():
         sha, *fields = line.split('\0')
         if len(fields) != 4:
-            return sha, 'author or committer'
+            return sha, 'author or committer is not a GitHub noreply address'
         for who, name, email in (('author', *fields[:2]), ('committer', *fields[2:])):
             got = NOREPLY.fullmatch(email)
             if not got:
-                return sha, who
+                return sha, f'{who} is not a GitHub noreply address'
             if name != got[1]:
-                return sha, f'{who} name'
+                return sha, f"{who} name is not its noreply address's login"
     return None
 
 
@@ -495,7 +495,7 @@ def cmd_push(receipt, command):
         return 1
     bad = first_identity_violation(*reach)
     if bad:
-        print(f'push refused: commit {bad[0][:12]} {bad[1]} is not a GitHub noreply address; nothing pushed')
+        print(f'push refused: commit {bad[0][:12]} {bad[1]}; nothing pushed')
         return 1
     earlier = None if target.exists() else earlier_push(branch)
     if subprocess.run(command).returncode:

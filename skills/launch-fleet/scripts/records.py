@@ -51,6 +51,9 @@ def discover():
     try:
         r = subprocess.run(['room-cli', 'thread', 'list', '--include-archived', '--include-hidden', '--json'],
                            capture_output=True, text=True, timeout=10)
+        if r.returncode == 2:  # the Cloud CLI refuses --include-hidden; it lists only the caller's own subagents
+            r = subprocess.run(['room-cli', 'thread', 'list', '--include-archived', '--json'],
+                               capture_output=True, text=True, timeout=10)
         if r.returncode:
             return None
         rows = json.loads(r.stdout, object_pairs_hook=unique)

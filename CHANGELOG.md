@@ -1,9 +1,5 @@
 # Changelog
 
-## 0.2.2 - 2026-11-21
-
-- `install` 0.2.2: The install skill matches OpenWiz 0.1.0: setup by `setup.py check` with each code's next step, no setup page; skills installed into your agents; a pinned-tag download while 0.1.0 is not GitHub's Latest; the binary at `<root>/current/openwiz`; and CloudRoom required.
-
 ## 0.2.1 - 2026-11-20
 
 - `handoff` 0.2.1: Handoff's and launch-fleet's shipped tests and evidence now use only the synthetic thread ids, email domains and paths OpenWiz's release privacy scan allows, so the packaged skills pass that scan; every test checks what it did before.

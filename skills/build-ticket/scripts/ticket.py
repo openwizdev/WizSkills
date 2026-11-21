@@ -8,8 +8,11 @@
                                             trusted verdict, bound decision and fleet record on pull
                                             request N, or with --ticket the fleet record on ticket N;
                                             --comment checks that one named comment on N is trusted
-  ticket.py author                          set git's author to the GitHub user's noreply
-  ticket.py push RECEIPT -- PUSH-COMMAND... run the push; keep the first success's receipt
+  ticket.py author                          set this clone's git identity to the GitHub user's
+                                            noreply address; refuse if anything still overrides it
+  ticket.py push RECEIPT -- PUSH-COMMAND... refuse unless every commit HEAD would add to the remote
+                                            has a noreply author and committer; then run the push
+                                            and keep the first success's receipt
   ticket.py post-receipt REPO PR RECEIPT    post the receipt once as a record author, read back
 
 Exit 0 done, 1 refused (the last line says why), 2 an input it cannot read.
@@ -33,6 +36,7 @@ DECISION = re.compile(r'\*\*Orchestrator decision:\*\* (?:(fix once more)|(log a
                       r'(?(2)Polish issues: #\d+(?:, #\d+)*\. )Why: \S.*')
 PARK = re.compile(rf'Next: park ({FINDINGS}) as a decision for Jake\.')
 START = re.compile(r'launch-fleet: (?:started|start checked)\b')
+NOREPLY = re.compile(r'(?:\d+\+)?' + LOGIN.pattern + r'@users\.noreply\.github\.com')
 POST_TIMEOUT = 30
 
 
@@ -367,8 +371,27 @@ def cmd_author():
     email = f'{uid}+{login}@users.noreply.github.com'
     run(['git', 'config', 'user.name', login], 'git config')
     run(['git', 'config', 'user.email', email], 'git config')
+    for who in ('author', 'committer'):
+        ident = run(['git', 'var', f'GIT_{who.upper()}_IDENT'], f'the {who} git would use')
+        got = re.match(r'[^<>]*<([^<>]*)>', ident)
+        if got is None or got[1] != email:
+            print(f'author refused: the {who} git would use is not {email}; unset what overrides it')
+            return 1
     print(f'author: {login} <{email}>')
     return 0
+
+
+def outgoing_identity():
+    """The first commit HEAD would add to the remote whose author or committer is not noreply."""
+    out = run(['git', 'log', '--format=%H %ae %ce', 'HEAD', '--not', '--remotes'], 'the outgoing commits')
+    for line in out.splitlines():
+        sha, *emails = line.split(' ')
+        if len(emails) != 2:
+            return sha, 'author or committer'
+        for who, email in zip(('author', 'committer'), emails):
+            if not NOREPLY.fullmatch(email):
+                return sha, who
+    return None
 
 
 def outside_checkout(path):
@@ -403,6 +426,10 @@ def cmd_push(receipt, command):
     if not command:
         raise Unreadable('no push command after --')
     branch = run(['git', 'symbolic-ref', '--short', 'HEAD'], 'the current branch').strip()
+    bad = outgoing_identity()
+    if bad:
+        print(f'push refused: commit {bad[0][:12]} {bad[1]} is not a GitHub noreply address; nothing pushed')
+        return 1
     earlier = None if target.exists() else earlier_push(branch)
     if subprocess.run(command).returncode:
         print('push failed: no receipt')

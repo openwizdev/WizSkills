@@ -34,9 +34,9 @@ For each acceptance criterion write its claim and evidence: a test at the seam t
 
 ## 3. Build, red first
 
-1. Branch from the latest default branch; one ticket, one branch, one pull request. Install the hooks the project's instructions name, and run `$T author` before your first commit. Before your first push, choose one private receipt file outside the checkout and record its path in your private resumable state.
+1. Branch from the latest default branch; one ticket, one branch, one pull request. Install the hooks the project's instructions name, and run `$T author` before your first commit: it sets this clone's identity to the signed-in GitHub login's noreply address and refuses while anything overrides it. Never set `user.name` or `user.email` yourself, from your context, memory or the machine's config; when `author` refuses or can't read the login, stop and ask. Before your first push, choose one private receipt file outside the checkout and record its path in your private resumable state.
 2. Before each commit, `$T scope <repo> <N> --supporting <path>...` must end `scope: ok`. A path listed as `owned, check the bullet` keeps that bullet's conditions. Pass a path you resolved from an annotated bullet with `--owned <path>`. If you can't resolve it, ask.
-3. Push every checkpoint and hand-back with `$T push <receipt file> -- <push command>`. It saves the first successful push's receipt and never replaces it. `receipt unknown` stays unknown: never rebuild a lost receipt.
+3. Push every checkpoint and hand-back with `$T push <receipt file> -- <push command>`. It refuses, pushing nothing, while any commit HEAD would add to the remote has an author or committer that is not a GitHub noreply address; run `$T author`, then redo only those unpushed commits (`git commit --amend --no-edit --reset-author`, one by one). It saves the first successful push's receipt and never replaces it. `receipt unknown` stays unknown: never rebuild a lost receipt.
 4. **Red:** write one proof and run it; it must fail at its own assertion for the claim's reason, not in setup. Commit it and its synthetic log before the fix.
 5. **Green:** just enough code to pass, then the next slice. Every deleted test names its keeper.
 6. Log each choice inside the ticket's intent as a ruling: `<n>. <ruling> Why: <reason> Cost if wrong: high|low: <consequence>`.

@@ -672,6 +672,10 @@ class SkillCommandsMatchPackage(unittest.TestCase):
 # and names only the first such folder per agent. The skill finds them all, asks one question, and moves
 # them only on that yes; on no it says the skills were not installed and stops.
 CLASH = Path(__file__).resolve().parents[1] / 'scripts/skill_clash.py'
+def operation_of(clashes):
+    return __import__('hashlib').sha256(json.dumps(clashes, sort_keys=True).encode()).hexdigest()[:16]
+
+
 QUESTION = ('You already have your own skills named grill, handoff and research. handoff-mine is already taken, '
             'so yours becomes handoff-mine-2. Rename yours to grill-mine, handoff-mine-2 and research-mine '
             '(and their name lines) so OpenWiz can install? They keep working under the new names. (yes/no)')
@@ -745,6 +749,36 @@ class SkillNameClash(unittest.TestCase):
         self.assertEqual((self.home / '.codex/skills/install/SKILL.md').read_text(), '---\nname: install\n---\n')
         out = json.loads(self.run_clash('list').stdout)
         self.assertEqual((out['clashes'], out['question']), ([], None))
+
+    def blocked_and_unmoved(self, why):
+        before = self.tree()
+        out = json.loads(self.run_clash('list').stdout)
+        self.assertEqual((out['question'], out['operation']), (None, None))
+        self.assertTrue(any(why in b['why'] for b in out['blocked']), out['blocked'])
+        self.assertEqual(self.run_clash('rename', '--yes', '--operation', operation_of(out['clashes'])).returncode, 5)
+        self.assertEqual(self.tree(), before)
+        return out
+
+    # catches: review R1 at 7360d86: a linked ~/.config (a dotfiles repository) that 0.1.0 refuses to write
+    # through; renaming the user's skill there gets them nothing, so nothing moves and the refusal is shown.
+    def test_a_folder_the_installer_still_refuses_blocks_every_move(self):
+        dotfiles = self.home / 'dotfiles/config'
+        write(dotfiles / 'opencode/skills/handoff/SKILL.md', '---\nname: handoff\n---\n')
+        (self.home / '.config').symlink_to(dotfiles)
+        out = self.blocked_and_unmoved('%s is a link or not a folder' % (self.home / '.config'))
+        self.assertTrue((dotfiles / 'opencode/skills/handoff/SKILL.md').is_file())
+
+    # catches: review R2 at 7360d86: a SKILL.md linked from a dotfiles repository; the folder moves but its
+    # name line does not change, and the clash is reported fixed.
+    def test_a_linked_skill_md_is_refused_and_left_alone(self):
+        target = self.home / 'dotfiles/handoff.md'
+        write(target, '---\nname: handoff\n---\n')
+        skill = self.home / '.codex/skills/research/SKILL.md'
+        skill.unlink()
+        skill.symlink_to(target)
+        self.blocked_and_unmoved('SKILL.md is a link')
+        self.assertTrue(skill.is_symlink())
+        self.assertEqual(target.read_text(), '---\nname: handoff\n---\n')
 
     # catches: step 4 still saying only "report it", so a stranger has to invent the next instruction.
     def test_step_4_asks_once_and_says_what_no_means(self):

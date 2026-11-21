@@ -14,7 +14,9 @@ t = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(t)
 
 SCRIPT = Path(os.environ.get('WRITE_DRIVER_EVAL_SCRIPT') or t.SCRIPT)
-HOST, HARNESS, PR = 'examplehost', 'exampleagent', 'https://github.com/example-user/examplehost-driver/pull/1'
+HOST, HARNESS = 'examplehost', 'exampleagent'
+SUPPLIED_PR_URL = 'https://github.com/example-user/examplehost-driver/pull/1'
+SYNTHETIC_WAKE_NOTE_EVIDENCE = ('--note-edited', 'yes', '--second-note', 'no')
 YES = {'kit': 'yes', 'expired-login': 'yes', 'host': 'yes', 'share': 'yes'}
 HARNESS_TURN_UNTIL_STOPPED_OR_EVAL_TURN_SECONDS = '#!/bin/sh\nexec sleep "${EVAL_TURN_SECONDS:-300}"\n'
 GRILL_SECONDS = 22 * 60 + 1
@@ -64,7 +66,7 @@ class Eval(t.Base):
         return {'repository': 'example-user/%s-driver-kit' % HOST, 'ticket': 7, 'skill': 'build-ticket',
                 'harness': HARNESS, 'model': 'example-model'}
 
-    def session(self, skip=(), user=None):
+    def run_paste_to_share(self, skip=(), user=None):
         user = dict(YES, **(user or {}))
         self.paste_and_grill(skip)
         self.write(skip, user)
@@ -107,7 +109,7 @@ class Eval(t.Base):
             ended = self.turn_ended(run)
             woke = self.driver_call('wake', {'run': run}).get('woke') is True
             self.wd('lesson', 'wake-after-turn', '--state', self.state, '--turn-ended', 'yes' if ended else 'no',
-                    '--wake', 'answered' if woke else 'error', '--note-edited', 'yes', '--second-note', 'no')
+                    '--wake', 'answered' if woke else 'error', *SYNTHETIC_WAKE_NOTE_EVIDENCE)
         if 'expired-login' not in skip:
             login = [] if 'safety-ask' in skip else self.asked('expired-login', user)
             self.wd('lesson', 'expired-login', '--state', self.state, '--driver', self.driver, '--harness', HARNESS,
@@ -115,7 +117,7 @@ class Eval(t.Base):
 
     def ship_and_share(self, user):
         self.wd('stop-all', '--state', self.state)
-        report = self.wd('report', '--state', self.state, '--pr', PR).stdout
+        report = self.wd('report', '--state', self.state, '--pr', SUPPLIED_PR_URL).stdout
         offer = self.wd('share', 'offer', '--state', self.state)
         if offer.returncode == 0:
             self.reply(user['share'], 'share', 'reply', '--state', self.state)
@@ -142,20 +144,20 @@ class Eval(t.Base):
             except OSError:
                 pass
 
-    def fresh(self):
+    def reset_to_a_new_session(self):
         self.doCleanups()
         self.setUp()
 
 
 class EndToEnd(Eval):
     def test_paste_to_five_of_five_asks_stops_and_shares_on_yes(self):
-        report, offer = self.session()
+        report, offer = self.run_paste_to_share()
         lines = report.split('\n')
         self.assertEqual(lines[0], 'Your examplehost driver passed 5 of 5 in %s.' % REPORTED_TIME)
         self.assertEqual(lines[1], 'Kit: version pass, start pass, wake pass, stop pass, token pass')
         self.assertEqual(lines[2], 'Live lessons: live-shape pass, wake-after-turn pass, expired-login pass')
         self.assertEqual(lines[3], 'Stopped: everything it started (3)')
-        self.assertEqual(lines[4], 'Pull request: ' + PR)
+        self.assertEqual(lines[4], 'Pull request: ' + SUPPLIED_PR_URL)
         self.assertEqual([a.split(':')[0] for a in self.asks],
                          ['Before I start one run of exampleagent on examplehost',
                           'Before I run the driver kit on examplehost',
@@ -171,7 +173,7 @@ class EndToEnd(Eval):
 
 class Red(Eval):
     def test_a_skipped_safety_ask_runs_no_costly_step(self):
-        report, offer = self.session(skip={'safety-ask'})
+        report, offer = self.run_paste_to_share(skip={'safety-ask'})
         self.assertIn('not passing yet', report.split('\n')[0])
         self.assertFalse((self.tmp / 'kit.argv').exists(), 'the kit ran without an ask')
         self.assertIn('expired-login not run', report)
@@ -179,7 +181,7 @@ class Red(Eval):
         self.assertEqual(self.posts(), [])
 
     def test_a_no_to_the_ask_skips_the_step(self):
-        report, _ = self.session(user={'kit': 'hmm, maybe later'})
+        report, _ = self.run_paste_to_share(user={'kit': 'hmm, maybe later'})
         self.assertIn('Kit: version not run, start not run', report)
         self.assertFalse((self.tmp / 'kit.argv').exists())
         self.assertIn('not passing yet', report)
@@ -187,15 +189,15 @@ class Red(Eval):
     def test_each_skipped_live_lesson_keeps_it_from_passing(self):
         for lesson in ('live-shape', 'wake-after-turn', 'expired-login'):
             with self.subTest(lesson):
-                self.fresh()
-                report, offer = self.session(skip={lesson})
+                self.reset_to_a_new_session()
+                report, offer = self.run_paste_to_share(skip={lesson})
                 self.assertIn('not passing yet', report.split('\n')[0])
                 self.assertIn('%s not run' % lesson, report)
                 self.assertNotEqual(offer.returncode, 0)
                 self.assertEqual(self.posts(), [])
 
     def test_no_clock_at_paste_gives_no_report(self):
-        report, offer = self.session(skip={'timer'})
+        report, offer = self.run_paste_to_share(skip={'timer'})
         self.assertNotIn('Your examplehost driver', report)
         self.assertIn('run `begin` at paste first', report)
         self.assertFalse((self.tmp / 'kit.argv').exists())
@@ -204,8 +206,8 @@ class Red(Eval):
     def test_a_declined_share_posts_nothing(self):
         for answer in ('no', 'no thanks, keep it private', 'maybe'):
             with self.subTest(answer):
-                self.fresh()
-                report, offer = self.session(user={'share': answer})
+                self.reset_to_a_new_session()
+                report, offer = self.run_paste_to_share(user={'share': answer})
                 self.assertIn('passed 5 of 5', report)
                 self.assertEqual(offer.returncode, 0)
                 self.assertEqual(self.posts(), [])

@@ -23,7 +23,6 @@ ROOT = Path(__file__).resolve().parent.parent
 # Each carried skill's own suites, run from the tree's root. The inventory
 # guard below refuses any newly added suite until this list includes it.
 SUITES = {
-    'check': [['python3', '-I', 'check/test_notice.py']],
     'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py']],
     'triage': [['python3', '-I', 'skills/triage/test/test_find_work.py'],
                ['python3', '-I', 'skills/triage/test/test_public_records.py']],
@@ -73,8 +72,10 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-host.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py']],
     # Not a skill: the check's own version rule and changesets (WS18).
-    'check': [['python3', '-I', 'check/test_versions.py'],
-              ['python3', '-I', 'check/test_changesets.py']],
+    'check': [['python3', '-I', 'check/test_notice.py'],
+              ['python3', '-I', 'check/test_versions.py'],
+              ['python3', '-I', 'check/test_changesets.py'],
+              ['python3', '-I', 'check/test_suites.py']],
 }
 
 # The skills not adapted from Matt Pocock's, each with the source line its
@@ -608,6 +609,7 @@ def suites(root):
                   if p.is_file() and 'fixtures' not in p.parts and
                   ((p.name.startswith('test') and p.suffix in ('.py', '.sh'))
                    or p.name.endswith('.test.mjs'))}
+    discovered.update(p.relative_to(root).as_posix() for p in (root / 'check').glob('test*.py'))
     unlisted = discovered - covered
     for rel in sorted(unlisted):
         print(f'suite inventory: {rel}: unlisted', flush=True)

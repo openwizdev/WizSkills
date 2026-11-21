@@ -345,7 +345,11 @@ def changed_since(repo, last, head):
 def report_problems(path, repo, number, assigned):
     text = Path(path).read_text(encoding="utf-8").replace("\r\n", "\n")
     s = admit(repo, number, assigned, skip=text)
-    changed = changed_since(repo, s["last"]["head"], s["head"]) if s["mode"] in ("re-check", "final") else None
+    changed = None
+    if s["mode"] in ("re-check", "final"):
+        changed = changed_since(repo, s["last"]["head"], s["head"])
+    elif s["mode"] == "log-and-merge":
+        changed = set()
     return text, s, check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"], s["decision"], changed)
 
 

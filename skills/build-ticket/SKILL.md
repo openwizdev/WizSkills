@@ -30,7 +30,7 @@ Done when you can name the title, owned paths, every acceptance criterion and wh
 
 ## 2. Plan the proof
 
-For each acceptance criterion write its claim and evidence: a test at the seam the spec names, a check, a live observation or a review. A test never proves live behaviour. For a mandatory proof you can't produce now, push your checkpoint, ask for it with `needs-info` and claim no complete hand-back. Before each test, state the behaviour, the plausible bug and why existing tests miss it; reject self-comparisons, copied inventories, mock-supplied behaviour and expectations computed like the code. Keep every contract, security and proof-case test, even when slow.
+For each acceptance criterion write its claim and evidence: a test at the seam the spec names, a check, a live observation or a review. A test never proves live behaviour. For a mandatory proof you can't produce now, push your checkpoint, ask for it on the ticket, write your status `asking` (it adds `needs-info`) and claim no complete hand-back. Before each test, state the behaviour, the plausible bug and why existing tests miss it; reject self-comparisons, copied inventories, mock-supplied behaviour and expectations computed like the code. Keep every contract, security and proof-case test, even when slow.
 
 ## 3. Build, red first
 

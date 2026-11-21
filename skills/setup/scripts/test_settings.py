@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -67,6 +68,18 @@ LABELS = ('# Triage labels\n\n## Labels\n\n| Role | Label here | Meaning |\n| --
           + ''.join('| `%s` | `%s` | Synthetic |\n' % (r, r) for r in ROLES))
 FILES = {'fleet.md': FLEET, 'triage-labels.md': LABELS,
          'issue-tracker.md': '# Issue tracker: GitHub\n\nSynthetic.\n', 'domain.md': '# Domain docs\n\nSynthetic.\n'}
+# The roster contract (openwiz.roster.v1): its starting Roster row and its
+# refusal lines, copied as the contract and its fixtures write them.
+STARTING = "| Claude Code | harness | local | orchestrator, builder, reviewer, helper | syn-owner's App |"
+ROSTER_HEADER = '| Name | Kind | Driver | Roles | Writes as |\n| --- | --- | --- | --- | --- |\n'
+
+
+def roster(*rows, heading='## Roster'):
+    return '%s\n\nWho may take which role.\n\n%s%s\n' % (heading, ROSTER_HEADER, ''.join(r + '\n' for r in rows))
+
+
+def with_roster(section):
+    return NEW.replace('## Test commands', section + '\n## Test commands')
 
 
 class Check(unittest.TestCase):
@@ -341,6 +354,93 @@ class Check(unittest.TestCase):
             if code == 0:
                 rules = launch.settings_rules(text)
                 self.assertTrue(rules['reviewer_claude'] and rules['orchestrator'], text)
+
+    def test_a_fresh_setup_writes_the_starting_roster_and_its_check_passes_it(self):
+        # catches: setup writing no Roster, or one its own check (and so the
+        # fleet's Roster readers) refuses, or a row not the contract's starting form.
+        template = TEMPLATE.read_text()
+        self.assertEqual(template.count('\n## Roster\n'), 1, 'the template writes one Roster')
+        section = '## Roster\n' + template.split('\n## Roster\n', 1)[1].split('\n## ', 1)[0]
+        rows = [line for line in section.splitlines() if line.startswith('|')]
+        self.assertEqual(rows[:2], ROSTER_HEADER.splitlines())
+        self.assertEqual(len(rows), 3, 'one starting row')
+        # Unfilled, the row is refused by name, never verified.
+        code, out = self.check(self.project(**{'fleet.md': with_roster(section)}))
+        self.assertEqual(code, 5, out)
+        self.assertTrue(any(line.startswith('fleet.md: Roster refused: row 1') for line in out.splitlines()), out)
+        # Every user the same: setup fills the person's own harness, driver and login.
+        for harness, driver, person in (('Claude Code', 'local', 'syn-owner'), ('Codex', 'cloudroom', 'syn-maker')):
+            values = iter((harness, driver, person))
+            filled = section.replace(rows[2], re.sub(r'<[^>]*>', lambda _: next(values), rows[2]))
+            self.assertEqual(next(values, None), None, 'the row has three blanks: harness, driver, person')
+            if person == 'syn-owner':
+                self.assertIn('\n' + STARTING + '\n', filled)
+            code, out = self.check(self.project(**{'fleet.md': with_roster(filled)}))
+            self.assertEqual(code, 0, out)
+        # Valid Rosters of every kind of entry read back the same way, and no Roster is today's.
+        for text in (with_roster(roster("| Demo Bot | bot | demo-bot | orchestrator | syn-owner's App |",
+                                        "| Claude Code | harness | cloudroom | builder, reviewer | syn-owner's App |",
+                                        "| Own computer | host | local | helper,builder | syn-owner's App |")),
+                     with_roster(roster("| Codex | harness | local | builder | syn-maker's App |",
+                                        "| Helper Bot | bot | helper-bot | orchestrator, builder, reviewer, helper "
+                                        "| syn-maker's App |")),
+                     NEW):
+            code, out = self.check(self.project(**{'fleet.md': text}))
+            self.assertEqual(code, 0, out)
+
+    def test_a_malformed_roster_or_unknown_role_is_refused_by_name(self):
+        # catches: a broken Roster verified, so the fleet's reader refuses it at
+        # the first start (or a reader that skips it starts the wrong entry).
+        good = "| Claude Code | harness | local | builder | syn-owner's App |"
+        cases = {
+            'role': (roster(good, "| Demo Bot | bot | demo-bot | orchestrator, deployer | syn-owner's App |"),
+                     'Roster refused: row 2 (Demo Bot): unknown role: deployer'),
+            'repeated-role': (roster("| Demo Bot | bot | demo-bot | builder, reviewer, builder | syn-owner's App |"),
+                              'Roster refused: row 1 (Demo Bot): role listed twice: builder'),
+            'no-role': (roster("| Demo Bot | bot | demo-bot |  | syn-owner's App |"),
+                        'Roster refused: row 1 (Demo Bot): no roles'),
+            'cells': (roster(good, '| Codex | harness | local | reviewer |'),
+                      'Roster refused: row 2 has 4 cells, not 5'),
+            'name': (roster("| Demo/Bot | bot | demo-bot | orchestrator | syn-owner's App |"),
+                     'Roster refused: row 1: bad name: Demo/Bot'),
+            'duplicate-name': (roster("| Codex | harness | local | builder | syn-owner's App |",
+                                      "| codex | harness | cloudroom | reviewer | syn-owner's App |"),
+                               'Roster refused: row 2: codex is already an entry'),
+            'kind': (roster("| Demo Bot | agent | demo-bot | orchestrator | syn-owner's App |"),
+                     'Roster refused: row 1 (Demo Bot): unknown kind: agent'),
+            'driver': (roster("| Demo Bot | bot | Demo_Bot | orchestrator | syn-owner's App |"),
+                       'Roster refused: row 1 (Demo Bot): bad driver: Demo_Bot'),
+            'writes-as': (roster(good, '| Demo Bot | bot | demo-bot | builder | its own account |'),
+                          "Roster refused: row 2 (Demo Bot): writes as its own account, not <person>'s App"),
+            'person': (roster(good, "| Demo Bot | bot | demo-bot | builder | syn-other's App |"),
+                       "Roster refused: row 2 (Demo Bot): writes as syn-other's App, not syn-owner's App like row 1"),
+            'label': (roster("| A long synthetic entry name | host | local | builder "
+                             "| syn-owner-with-a-longer-login's App |"),
+                      'Roster refused: row 1 (A long synthetic entry name): A long synthetic entry name via '
+                      'syn-owner-with-a-longer-login is longer than 60 characters'),
+            'header': (roster().replace('| Kind | Driver | Roles |', '| Kind | Roles | Driver |')
+                       + "| Claude Code | harness | builder | local | syn-owner's App |\n",
+                       'Roster refused: the header is not Name, Kind, Driver, Roles, Writes as'),
+            'empty': (roster(), 'Roster refused: the table has no entries'),
+            'no-table': ("## Roster\n\nEvery entry writes as syn-owner's App, but there is no table.\n\n## Loop\n\n"
+                         + ROSTER_HEADER + good + '\n',
+                         'Roster refused: the Roster section has no table'),
+            'headings': (roster(good) + '\n' + roster(good), 'Roster refused: more than one ## Roster heading'),
+            'heading-form': (roster(good, heading='## Roster ##'),
+                             'Roster refused: the Roster heading must be exactly ## Roster: ## Roster ##'),
+            'heading-form-underlined': (roster(good, heading='Roster\n------'),
+                                        'Roster refused: the Roster heading must be exactly ## Roster: Roster'),
+            'heading-form-level': (roster(good, heading='### roster'),
+                                   'Roster refused: the Roster heading must be exactly ## Roster: ### roster'),
+            'heading-form-indented': (roster(good, heading='  ## Roster'),
+                                      'Roster refused: the Roster heading must be exactly ## Roster:   ## Roster'),
+        }
+        for name, (section, line) in cases.items():
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': with_roster(section)}))
+                self.assertEqual(code, 5, out)
+                self.assertIn('fleet.md: ' + line, out.splitlines())
+                self.assertEqual(sum('Roster' in got for got in out.splitlines()), 1, 'the first broken rule only')
 
     def test_usage_errors_exit_2(self):
         # catches: a mistyped command read as a verified project.

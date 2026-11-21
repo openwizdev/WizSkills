@@ -17,7 +17,7 @@ Take them from that line to setup, then down the onboarding road to their first 
 ## Guards
 
 - **Install permission is not work approval.** Installing or finishing setup approves nothing. The first fleet needs the user's answer to where agents run, their yes in this chat to the grill's summary, and, right before it starts, their yes to starting it on that host, which can cost money. The plan approves itself by to-tickets' checks (J203): no spec or plan approval is asked. Never write, fake or infer a yes, or ask for blanket consent.
-- **Show every effect, then wait for a yes to exactly it.** Where agents run, the fleet's start, the App or its skip, project settings, the host setting, the brain, phone access and a new repository each preview first; confirm with that preview's own `--yes` or `--yes --operation <id>`. Creating a repository, any write, spend, secrets and publishing always ask; a teacher's line never stands in for that ask.
+- **Show every effect, then wait for a yes to exactly it.** Where agents run, the fleet's start, the App or its skip, project settings, the host setting, the brain, phone access and a new repository each preview first; confirm with that preview's own `--yes` or `--yes --operation <id>`, where `<id>` is the preview's `operation_id` (for `cloudroom.py install`, the `operation_id` inside its `operation`). Creating a repository, any write, spend, secrets and publishing always ask; a teacher's line never stands in for that ask.
 - **Never touch a login.** A missing sign-in gets its walk-through and a link; the user signs in themselves, in their own terminal or browser. Never run a sign-in for them (no `github_login.py sign-in --yes`, no `gh auth login`), and never read, pass or store a credential. Continue only on the installed setup's read-only check.
 - **Credentials stay out of the conversation.** Never ask for a key or token in chat or put one in a prompt, argument, URL, log, issue or file. Keys go only through the tools' protected setup, into owner-only state on this computer or CloudRoom's secret store. Save the user's exact words only under [open-development](https://github.com/openwizdev/WizSkills/blob/main/contracts/open-development.v1.md).
 - **Uncertain is never retried blindly.** Run the same command again: it reads its record first and never repeats an effect.
@@ -34,16 +34,16 @@ A new session, whatever the user said ("continue", or the one line again), start
 ```sh
 <root>/current/openwiz --build-identity
 build=$(readlink <root>/current); state=${build%/service/builds/*}
-python3 -I -B "$build"/runtime/setup/setup.py check --state-dir "$state"
-python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir "$state"
+OPENWIZ_STATE_DIR="$state" python3 -I -B "$build"/runtime/setup/setup.py check --state-dir "$state"
+OPENWIZ_STATE_DIR="$state" python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir "$state"
 grep -m1 '^version:' ~/.claude/skills/install/SKILL.md ~/.codex/skills/install/SKILL.md
 ```
 
 `<root>` is `$HOME/.local/lib/openwiz` unless the user chose another. Take the first that holds:
 
 - No `<root>/current`, or `--build-identity` does not read 0.1.0: resume at step 1.
-- `check` does not read `cloudroom_login_verified`, or `status` does not read the GitHub account: resume at step 3.
-- The running agent's `install/SKILL.md` is missing, or does not read `version: 0.3.1`: resume at step 4.
+- `check` does not read `cloudroom_login_verified`, or `status` does not read the GitHub account: resume at step 3. `identity_unreadable` means GitHub gave no clear answer: wait a minute and run `status` again; it clears.
+- The running agent's `install/SKILL.md` is missing, or does not read `version: 0.3.1`: resume at step 4. When that agent's folder holds OpenWiz's 18 skills, run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4.
 - Otherwise resume at step 5; for a first fleet already under way, at step 6 with `first_fleet.py next`.
 
 ## 1. Preflight
@@ -111,7 +111,7 @@ It reads each connection and records only its own results in `<state>`. It print
 | `cloudroom_destination_blocked` | Another file is at `~/Applications/Cloudroom.AppImage`: the user moves it, never you. |
 | `cloudroom_unreadable` | `check` again; if it stays, `status`. |
 
-**GitHub:** the read-only `python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir <state>` reads the account. Signed out, `github_login.py sign-in --state-dir <state>` without `--yes` only previews (`login_needed`): GitHub's own browser page and a one-time code, with no token pasted. The person signs in themselves: they run it with `--yes` in their own terminal; then run `status` again.
+**GitHub:** the read-only `python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir <state>` reads the account. Signed out, `github_login.py sign-in --state-dir <state>` without `--yes` only previews (`login_needed`): GitHub's own browser page and a one-time code, with no token pasted. The person signs in themselves: they run it with `--yes` in their own terminal; then run `status` again. `identity_unreadable` (from `status`, `sign-in` or `check`) means GitHub gave no clear answer: wait a minute and run it again; it clears. If it stays, `gh auth status` shows whether the user is signed in.
 
 **The rest** (`harness_unselected`, `identity_unselected`, `project_unprepared`, `app_missing`) is expected now: each waits for the repository the user picks on the onboarding road, and Connect sets it. Phone access is optional: `python3 -I -B "$build"/runtime/access/access.py configure --plan <private file> --state-dir <state>` previews it; `access.py --help` gives the plan's shape.
 
@@ -128,22 +128,25 @@ python3 -I "$openwiz"/tools/install/install skills --root <root>
 
 It copies the 18 skills into `<root>/skills` and into each agent folder present here: `~/.claude/skills` (Claude Code), `~/.codex/skills` (Codex; 0.1.0 reads `~/.codex` only, never `$CODEX_HOME`), `~/.cursor/skills`, `~/.config/opencode/skills` and `~/.grok/skills`. It prints `"outcome": "installed"` even when it copied nothing, so check two things: its `harnesses` entry for the agent you are running in reads `installed`, and that agent's folder (`ls ~/.claude/skills` or `ls ~/.codex/skills`) now holds all 18 by name: `ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`. If the entry reads `absent`, that agent's folder (`~/.claude` or `~/.codex`) is missing on this computer: tell the user which folder, that their agent has no OpenWiz skills, and its `next` step; never create the folder yourself. A skill of the user's own with the same name refuses the whole step: report it.
 
-Then make every installed copy of this skill this one. The copy `install skills` just wrote comes from the 0.1.0 package: it is older (`version: 0.2.0`), still names a setup page 0.1.0 removed, and a new session loads it whatever the user says. Overwrite it now in each agent folder that holds OpenWiz's copy (marked by `.openwiz-skill`), and check each copy by content:
+Then make every installed copy of this skill this one, the whole folder. The copy `install skills` just wrote comes from the 0.1.0 package: it is older (`version: 0.2.0`), its `SKILL.md` and scripts still name a setup page and a server 0.1.0 removed, and a new session loads it whatever the user says. Take this skill's own folder: the one you read it from when it is on this computer (a WizSkills clone or plugin: set `src` to it and skip the clone), otherwise a fresh clone of WizSkills (it installs nothing). Then overwrite each agent folder that holds OpenWiz's copy (marked by `.openwiz-skill`), and check every file by content:
 
 ```sh
-fixed=<private temporary folder>/install-SKILL.md
-curl -fsSL --proto '=https' -o "$fixed" https://raw.githubusercontent.com/openwizdev/WizSkills/main/skills/install/SKILL.md
-if grep -q '^version: 0.3.1$' "$fixed" && ! grep -q 'install ope[n] ' "$fixed"; then echo "fixed copy ok"; else echo "NOT THIS SKILL: $fixed"; fi
-grep -q '^version: 0.3.1$' "$fixed" && for d in "$HOME/.claude/skills" "$HOME/.codex/skills" ${CODEX_HOME:+"$CODEX_HOME/skills"} "$HOME/.cursor/skills" "$HOME/.config/opencode/skills" "$HOME/.grok/skills"; do
+wizskills=<private temporary folder>/WizSkills
+git clone --depth 1 --branch main https://github.com/openwizdev/WizSkills "$wizskills"
+src="$wizskills"/skills/install
+fixed() { grep -q '^version: 0.3.1$' "$1/SKILL.md" && ! grep -q -e 'install ope[n] ' -e 'from the setup pag[e]' -e 'Restart the OpenWiz serve[r]' "$1/SKILL.md" "$1"/scripts/*.py; }
+if fixed "$src"; then echo "source ok"; else echo "NOT THIS SKILL: $src"; fi
+fixed "$src" && for d in "$HOME/.claude/skills" "$HOME/.codex/skills" ${CODEX_HOME:+"$CODEX_HOME/skills"} "$HOME/.cursor/skills" "$HOME/.config/opencode/skills" "$HOME/.grok/skills"; do
   [ -f "$d/install/.openwiz-skill" ] || continue
-  cp "$fixed" "$d/install/SKILL.md"
-  if grep -q '^version: 0.3.1$' "$d/install/SKILL.md" && ! grep -q 'install ope[n] ' "$d/install/SKILL.md"; then echo "ok: $d/install/SKILL.md"; else echo "STILL OLD: $d/install/SKILL.md"; fi
+  cp -R "$src"/. "$d/install/"
+  same=yes; for f in $(cd "$src" && find . -type f); do cmp -s "$src/$f" "$d/install/$f" || same=no; done
+  if [ "$same" = yes ] && fixed "$d/install"; then echo "ok: $d/install"; else echo "STILL OLD: $d/install"; fi
 done
 ```
 
-If you read this skill from a file on this computer (a WizSkills clone or plugin), `cp` that file to `"$fixed"` instead of the `curl`. If it prints `NOT THIS SKILL` (the download failed, or the link still serves an older copy), nothing was copied: stop before the restart: say so, and try again shortly. A `STILL OLD` line means that folder's copy did not take (it may not be writable): report it and fix it before the restart; never restart onto an old copy. A later `install skills` run, such as a repair, writes the old copy again: repeat this block after it.
+If it prints `NOT THIS SKILL` (the clone failed, or the branch still serves an older copy), nothing was copied: stop before the restart, say so, and try again shortly. A `STILL OLD` line means that folder's copy did not take (it may not be writable): report it and fix it before the restart; never restart onto an old copy. A later `install skills` run, such as a repair, writes the old copy again: repeat this block after it.
 
-An agent finds new skills only when it starts, so the user restarts it now: a new session of their agent, then "continue the OpenWiz install" (any words do). The new session loads this skill from the folder above and starts at Resume. Any installed copy that does not read `version: 0.3.1` is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md) and resume at the first unfinished step, as Resume says.
+An agent finds new skills only when it starts, so the user restarts it now: a new session of their agent, then exactly "continue the OpenWiz install". Ask them to type those words: a bare "continue" can load no skill at all. The new session loads this skill from the folder above and starts at Resume. Any installed copy that does not read `version: 0.3.1` is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md) and resume at the first unfinished step, as Resume says.
 
 Done when the running agent's folder holds the 18 skills by name and every `ok:` line printed with no `STILL OLD`, or the user knows which folder is missing, and the user knows to restart.
 

@@ -1,6 +1,4 @@
 #!/bin/sh
-# Read-only ticket-body check on stdin. Uses the fleet's existing sh/jq tools.
-# Exit 0: valid; 1: refused body/path; 2: bad arguments. No writes or API calls.
 set -f
 LC_ALL=C
 export LC_ALL
@@ -30,8 +28,6 @@ done
 case "$root" in /*) ;; *) root="$(pwd -P)/$root" ;; esac
 root=$(CDPATH='' cd -P -- "$root" 2>/dev/null && pwd -P) || fail 'repository root must be a directory'
 
-# Output is an internal, whitespace-delimited protocol: ok plus ASCII paths,
-# or error plus a reason. No arbitrary input is emitted before validation.
 parsed=$(jq -rRs '
   def refuse($why): error($why);
   try (
@@ -106,9 +102,6 @@ $1
     esac
   fi
 }
-# Planned values were lexically checked before storing them; paths contain no
-# whitespace. Check metadata after consuming stdin so early refusal cannot race
-# the callers writing their ticket body into the pipe.
 for file in $planned; do check_file "$file" planned; done
 set -- $parsed
 [ "$#" -gt 0 ] || fail 'the parser returned no verdict'

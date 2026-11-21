@@ -1,36 +1,3 @@
-"""The machine plan approval (#1339, J202): check a plan graph and print its record.
-
-    python3 -I approve.py --graph graph.json --revision revision.txt --grill <url>
-        --number <N> [--changed <what changed>] [--date YYYY-MM-DD] [--root DIR]
-
-graph.json is check-links.sh's graph read (`--read <spec>`); revision.txt is
-revision.sh's text for the same spec. The checks, all of them every time:
-
-  links        check-links.sh passes on the graph read
-  relies       check-relies.sh passes on each open agent ticket's body, a path
-               counting as planned when a direct blocker owns that file, or a
-               folder or pattern containing it, in the ticket's own repository
-               (the one all its owned paths name); --root is the checkout of
-               the graph's repository, so a ticket in any other repository
-               must have each Relies on file planned
-  sizes        each open ticket says exactly one `Size: S`, `M` or `L`
-  width        no cycle, and no arrow another chain of arrows already implies;
-               the record reports the critical chain (the longest run of
-               open work along hard edges, open blockers outside the spec
-               included) and the widest start wave; a context-only file
-               link is no hard edge (soft_link)
-  owned paths  each open agent ticket owns exact repository paths, and no two
-               tickets that can run at once own the same path, unless both
-               bullets say `(shared`
-
-Before any check, the revision text must name exactly the graph's tickets,
-titles, blockers and bodies, so the fingerprint binds the plan checked.
-
-Exit 0: every check passed; the record (decisions.v1, "Machine plan approval")
-on stdout. 1: refused; nothing on stdout, one `approve: <check>: <why>` line per
-failure on stderr. 2: bad arguments or an unreadable input. Writes nothing and
-calls no network; it runs the two sibling checkers.
-"""
 import argparse
 import datetime
 import fnmatch
@@ -44,6 +11,7 @@ import sys
 HERE = Path(__file__).resolve().parent
 LINKS = HERE.parent / 'check-links.sh'
 RELIES = HERE.parent / 'check-relies.sh'
+CHECK_APPROVAL = HERE / 'check-approval.sh'
 GRILL = re.compile(r'https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/(issues|pull)/[1-9][0-9]*'
                    r'#issuecomment-[1-9][0-9]*')
 REPO = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
@@ -53,12 +21,10 @@ TICKED = (re.compile(rb'^([ \t]*[-*+][ \t]+)\[[xX]\]$'), re.compile(rb'^([ \t]*[
 
 
 class Unreadable(Exception):
-    """Exit 2: the input can't be read as asked."""
+    pass
 
 
 def unticked_sha256(text):
-    """revision.sh's body hash: the body as `gh --jq .body` prints it (with one
-    newline added), each ticked task box read as unticked."""
     lines = (text + '\n').encode().split(b'\n')
     out = []
     for line in lines:
@@ -69,7 +35,6 @@ def unticked_sha256(text):
 
 
 def section(body, heading):
-    """The lines under `## <heading>` up to the next `## `, or None."""
     lines = body.split('\n')
     for i, line in enumerate(lines):
         if line.rstrip() == '## ' + heading:
@@ -87,7 +52,6 @@ def human(ticket):
 
 
 def owned(ticket, default_repo):
-    """[(repo, path, shared)] for each bullet's paths; raises ValueError."""
     lines = section(ticket['body'], 'Owned paths')
     if lines is None:
         raise ValueError('no `## Owned paths` section')
@@ -114,16 +78,11 @@ def owned(ticket, default_repo):
 
 
 def overlap(a, b):
-    """Two owned paths cover a common file: one is a folder holding the other,
-    or a pattern segment matches the other's segment."""
     x, y = a.rstrip('/').split('/'), b.rstrip('/').split('/')
     return all(fnmatch.fnmatchcase(p, q) or fnmatch.fnmatchcase(q, p) for p, q in zip(x, y))
 
 
 def contains(own, path):
-    """An owned path holds a file: it is that file, or a folder or pattern
-    whose every segment matches the file's leading segments. A path ending in
-    `/` is a folder: it holds only what lies strictly below it."""
     x, y = own.rstrip('/').split('/'), path.split('/')
     longest = len(y) - 1 if own.endswith('/') else len(y)
     return len(x) <= longest and all(fnmatch.fnmatchcase(q, p) for p, q in zip(x, y))
@@ -135,7 +94,6 @@ def relies_paths(body):
 
 
 def read_revision(text, graph):
-    """Refusals where the revision text doesn't name exactly the graph read."""
     lines = text.split('\n')
     if lines[-1:] != [''] or len(lines) < 3 or lines[0] != 'plan-graph revision v2':
         return ['not revision.sh version 2 text']
@@ -174,6 +132,21 @@ def check_links(graph_text):
     return []
 
 
+def check_checkpoints(spec_text, graph, revision):
+    spec = graph['source']['spec']
+    body = json.loads(spec_text)
+    if not isinstance(body, dict) or not isinstance(body.get('body'), str):
+        raise Unreadable(f'spec #{spec} has no body')
+    if revision.split('\n')[1] != f'spec #{spec} body sha256 {unticked_sha256(body["body"])}':
+        return [f"spec #{spec}'s body differs from the revision's"]
+    out = subprocess.run(['sh', str(CHECK_APPROVAL), '--checkpoints', str(spec)], input=json.dumps(body),
+                         capture_output=True, text=True)
+    why = [line.strip().removeprefix('check-approval.sh: ') for line in out.stderr.splitlines() if line.strip()]
+    if out.returncode == 2:
+        raise Unreadable('; '.join(why)[:200] or 'check-approval.sh could not read the spec')
+    return (why or ['check-approval.sh refused']) if out.returncode != 0 else []
+
+
 def check_relies(tickets, owners, root, root_repo):
     why = []
     for t in tickets:
@@ -186,8 +159,6 @@ def check_relies(tickets, owners, root, root_repo):
                 planned += ['--planned', path]
             else:
                 unplanned.append(path)
-        # Only the graph repository has a checkout here: any other ticket's
-        # files are form-checked only, and each must be planned.
         in_root = repos == {root_repo}
         checked = planned if in_root else planned + [a for p in unplanned for a in ('--planned', p)]
         out = subprocess.run(['sh', str(RELIES), '--root', str(root), *checked], input=t['body'],
@@ -213,11 +184,6 @@ def check_sizes(tickets):
 
 
 def chain_width(after, planned, done):
-    """The critical chain, the widest start wave (both in tickets) and the
-    tickets a cycle leaves unreached. `after` maps every ticket (planned and
-    outside blockers) to the tickets it blocks. The chain is the longest run
-    of arrows through work not yet done, outside blockers included; the waves
-    count planned work only."""
     level, indegree = {}, {n: 0 for n in after}
     for n in after:
         for m in after[n]:
@@ -244,7 +210,6 @@ FILE_PATH = re.compile(r'(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+/?')
 
 
 def file_link_files(body, blocker):
-    """The files of the ticket's one `file` line for this blocker, or None."""
     lines = [line.rstrip(' \t') for line in section(body, 'Links') or []]
     found = [line for line in lines if re.match(rf'- #{blocker} (real|file):', line)]
     if len(found) != 1 or not found[0].startswith(f'- #{blocker} file:'):
@@ -255,11 +220,6 @@ def file_link_files(body, blocker):
 
 
 def soft_link(ticket, blocker, default_repo):
-    """F6 (#1353): a link adds no serial work only when it is a file link
-    naming a file, into an open agent ticket, from a planned blocker whose
-    owned paths are read, and neither the blocker's owned paths nor the
-    link's files hold an input the ticket relies on, nor do the two
-    tickets' owned paths collide. Anything else is a hard edge."""
     if ticket['state'] != 'OPEN' or human(ticket) or blocker is None or human(blocker):
         return False
     files = file_link_files(ticket['body'], blocker['number'])
@@ -277,12 +237,9 @@ def soft_link(ticket, blocker, default_repo):
 
 
 def check_width(graph):
-    """Refusals, the critical chain and the widest start wave, in tickets.
-    The cycle and implied-arrow checks read every native arrow; the chain
-    and the waves read only hard edges (soft_link)."""
     numbers = {t['number'] for t in graph['tickets']}
     tickets = {t['number']: t for t in graph['tickets']}
-    after = {n: set() for n in numbers}  # n -> tickets it blocks
+    after = {n: set() for n in numbers}
     hard = {n: set() for n in numbers}
     done = {t['number'] for t in graph['tickets'] if t['state'] != 'OPEN'}
     for t in graph['tickets']:
@@ -318,7 +275,6 @@ def check_width(graph):
 
 
 def check_owned(graph, agents):
-    """Refusals and every open agent ticket's paths."""
     why, owners = [], {}
     for t in agents:
         try:
@@ -377,10 +333,14 @@ def record(args, graph, revision, counts):
     return '\n'.join(parts) + '\n' + revision + '```\n\n</details>\n'
 
 
+DESCRIPTION = 'The machine plan approval (#1339, J202): check a plan graph and print its record.'
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument('--graph', type=Path, required=True)
     parser.add_argument('--revision', type=Path, required=True)
+    parser.add_argument('--spec', type=Path, required=True)
     parser.add_argument('--grill', required=True)
     parser.add_argument('--number', type=int, required=True)
     parser.add_argument('--changed')
@@ -396,6 +356,7 @@ def main():
     try:
         graph_text = args.graph.read_text(encoding='utf-8')
         revision = args.revision.read_text(encoding='utf-8')
+        spec_text = args.spec.read_text(encoding='utf-8')
         graph = json.loads(graph_text)
         if (not isinstance(graph, dict) or graph.get('kind') != 'graph' or not isinstance(graph.get('tickets'), list)
                 or not graph['tickets'] or not isinstance(graph.get('source'), dict)):
@@ -415,6 +376,7 @@ def main():
         width_why, chain, widest = check_width(graph)
         failures += [('width', why) for why in width_why]
         failures += [('owned paths', why) for why in owned_why]
+        failures += [('checkpoints', why) for why in check_checkpoints(spec_text, graph, revision)]
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, Unreadable) as e:
         print(f'approve: unreadable input: {e}', file=sys.stderr)
         return 2

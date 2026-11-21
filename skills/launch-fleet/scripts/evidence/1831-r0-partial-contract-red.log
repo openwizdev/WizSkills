@@ -1,0 +1,4 @@
+FAIL: test_an_unreadable_spec_or_contract_merges_nothing (__main__.LateLook.test_an_unreadable_spec_or_contract_merges_nothing) [partial.md]
+AssertionError: Tuples differ: (1, 'held: ask-due: post the evidence ask on s[47 chars]ask') != (1, 'unknown: the checkpoints contract could n[27 chars]ged')
+Ran 1 test in 0.983s
+FAILED (failures=1)

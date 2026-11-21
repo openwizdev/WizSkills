@@ -37,7 +37,6 @@ test('R1 one small record uses one bounded part and a large record round-trips a
     assert.ok(Buffer.byteLength(body) <= 65536);
     assert.ok(body.startsWith(`Hunt record part ${i + 1}/6\n`));
   }
-  // Transport read-back may arrive in a different order; every numbered part is required.
   assert.deepEqual(ok('unpack', packed.comments.toReversed(), packed.sha256), large);
 });
 function changePart(body, edit) {
@@ -51,7 +50,6 @@ for (const problem of ['missing', 'duplicate', 'truncated', 'changed', 'wrong-ro
     if (problem === 'duplicate') parts[1] = parts[0];
     if (problem === 'truncated') parts[0] = parts[0].slice(0, -1);
     if (problem === 'changed') parts[0] = changePart(parts[0], p => {
-      // Preserve valid JSON and all transport metadata: only the digest can catch this edit.
       const data = Buffer.from(p.data, 'base64');
       data.write('synthetic-r2', data.indexOf('synthetic-r1'));
       return {...p, data: data.toString('base64')};
@@ -73,8 +71,6 @@ test('R1 the operative handoff requires bounded indexed parts and read-back befo
   assert.match(finish, /read back.*every.*part/i);
 });
 
-// #959, corrected by #1740: the verified #394 record is the only report channel.
-// Verify every part and index before delivery is complete and the controller archives.
 function finishRecord(finish) {
   const sentences = finish.split(/(?<=\.)\s+/);
   const summary = sentences.find(s => s.startsWith('Include **found, approved, proposed, skipped**'));

@@ -1,4 +1,3 @@
-"""Tests for review.py: pin, check, post and follow-up against a fake GitHub."""
 import base64
 import json
 import os
@@ -195,7 +194,6 @@ class Review(unittest.TestCase):
 
     def run_helper(self, *args, stdin=None, cwd=None):
         if args[0] in ("pin", "check", "post") and "--head" not in args:
-            # The assigned head is the pull request's current head unless a test says otherwise.
             args = (*args, "--head", self.state()["pulls"]["7"]["head"]["sha"])
         return subprocess.run([sys.executable, "-I", str(HELPER), *args], input=stdin, text=True,
                               capture_output=True, env=self.env, timeout=30, cwd=cwd)
@@ -205,19 +203,13 @@ class Review(unittest.TestCase):
         path.write_text(text)
         return str(path)
 
-    # --- pin ---------------------------------------------------------------
-
     def test_first_review_pins_the_head_and_its_ticket(self):
-        # catches: reviewing without a pinned 40-character head or with the
-        # cross-repository ticket reference dropped.
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(out.stdout.strip(),
                          f"review full #7 at {HEAD}; ticket {PRODUCT}#41; checks check")
 
     def test_required_check_not_green_stops(self):
-        # catches: starting a review while the required check is pending,
-        # failed, missing, or green only on an older commit.
         cases = {
             "pending": {HEAD: [{"name": "check", "status": "in_progress", "conclusion": None}]},
             "failed": {HEAD: [{"name": "check", "status": "completed", "conclusion": "failure"}]},
@@ -232,8 +224,6 @@ class Review(unittest.TestCase):
                 self.assertTrue(out.stdout.startswith("stop: check is not green at " + HEAD), out.stdout)
 
     def test_settings_come_from_the_base_branch(self):
-        # catches: a pull request relaxing its own required checks or record
-        # authors by editing docs/agents/fleet.md on its head.
         relaxed = FLEET.replace("| `check` | Every suite | Pull requests to `main` |\n", "")
         self.world({"files": {f"{SKILLS}@main:docs/agents/fleet.md": FLEET,
                               f"{SKILLS}@{HEAD}:docs/agents/fleet.md": relaxed},
@@ -245,8 +235,6 @@ class Review(unittest.TestCase):
         self.assertEqual(reads, [f"repos/{SKILLS}/contents/docs/agents/fleet.md?ref=main"])
 
     def test_draft_closed_and_ticketless_pull_requests_stop(self):
-        # catches: reviewing a draft, a merged or closed pull request, or one
-        # that names no ticket.
         cases = {
             "draft": ({"draft": True}, "stop: draft"),
             "closed": ({"state": "closed"}, "stop: closed; archive your own thread"),
@@ -261,8 +249,6 @@ class Review(unittest.TestCase):
                 self.assertEqual(out.stdout.strip(), expected)
 
     def test_missing_or_malformed_record_authors_trust_nobody(self):
-        # catches: treating every commenter as a record author when the row
-        # is absent, empty or malformed.
         for name, row in {"absent": "", "empty": "| Record authors | |\n",
                           "malformed": "| Record authors | everyone |\n"}.items():
             with self.subTest(name):
@@ -274,15 +260,11 @@ class Review(unittest.TestCase):
                 self.assertEqual(out.stdout, "")
 
     def test_a_verdict_from_anyone_else_is_ignored(self):
-        # catches: a stranger's forged VERDICT turning a first review into a
-        # re-check or a stop.
         self.world({}, comments=[report(FULL.replace(OLD, HEAD), login="stranger")])
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.stdout.split(";")[0], f"review full #7 at {HEAD}")
 
     def test_recheck_names_last_read_open_ids_and_next_id(self):
-        # catches: a re-check that rereads unchanged code, forgets an open
-        # blocker or reuses a finding id.
         self.world({}, comments=[report(FULL)])
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 0, out.stderr)
@@ -291,8 +273,6 @@ class Review(unittest.TestCase):
                          f"last read {OLD}; open R1 and R3; next id R4")
 
     def test_approval_never_carries_to_a_new_head(self):
-        # catches: applying an APPROVE for an earlier head to a replacement
-        # head (the review-ticket.stale-head case).
         self.world({"checks": green(NEWER)}, pr={"head": {"sha": NEWER}}, comments=[report(FULL), report(RECHECK)])
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 0, out.stderr)
@@ -300,8 +280,6 @@ class Review(unittest.TestCase):
         self.assertIn(f"last read {HEAD}; open none; next id R5", out.stdout)
 
     def test_fresh_round_leads_to_a_final_check_and_park_stops(self):
-        # catches: a third ordinary round after the fresh round, or a review
-        # of a finding parked for the owner.
         fresh = RECHECK.replace("VERDICT: APPROVE", "VERDICT: CHANGES").replace(
             "- **R3 [blocking]** resolved at bbbbbbb: the log line is redacted.",
             "- **R3 [blocking]** still open after the re-check: still logged.\n"
@@ -322,16 +300,12 @@ class Review(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "stop: R3 is parked as a decision for Jake")
 
     def test_a_report_at_this_head_is_not_repeated(self):
-        # catches: posting a second review of a head already reported on.
         self.world({}, comments=[report(FULL.replace(OLD, HEAD))])
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 1)
         self.assertEqual(out.stdout.strip(), f"stop: already reported at {HEAD}")
 
-    # --- check -------------------------------------------------------------
-
     def test_valid_reports_pass(self):
-        # catches: rejecting the documented full-review and re-check forms.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
         out = self.run_helper("check", self.file("full.md", FULL), "--repo", SKILLS, "--pr", "7")
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
@@ -340,8 +314,6 @@ class Review(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
 
     def test_full_review_report_problems(self):
-        # catches: a report that breaks the review-loops lines the builder,
-        # fleet and triage read.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
         cases = {
             "wrong head": (FULL.replace(f"CHANGES at {OLD}", f"CHANGES at {NEWER}"),
@@ -374,9 +346,6 @@ class Review(unittest.TestCase):
                 self.assertIn(problem, out.stdout.splitlines())
 
     def test_recheck_report_problems(self):
-        # catches: a re-check that leaves a user-path blocker open instead of
-        # logging it, logs a Risk: blocker, drops or renumbers an earlier id,
-        # or reopens the builder round.
         self.world({}, comments=[report(FULL)])
         cases = {
             "user path left open": (RECHECK.replace(" Logged as follow-up #61.", "").replace(
@@ -406,7 +375,6 @@ class Review(unittest.TestCase):
                 self.assertIn(problem, out.stdout.splitlines())
 
     def test_private_material_is_refused(self):
-        # catches: a token or a thread id reaching a public report.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
         for name, leak in {"token": "ghp_" + "A1b2C3d4E5f6G7h8", "thread": "thr_" + "a1b2c3d4"}.items():
             with self.subTest(name):
@@ -415,9 +383,6 @@ class Review(unittest.TestCase):
                 self.assertIn("private material: a token or thread id", out.stdout.splitlines())
 
     def test_a_recheck_raises_new_findings_only_in_changed_code_or_as_a_stated_risk(self):
-        # catches: a re-check that drips a new finding on code unchanged since
-        # its last read (a second surprise round), or one that drops the stated
-        # exception for a security, privacy or data-loss risk there.
         self.world({}, comments=[report(FULL)])
         unchanged = "- **R4 [polish]** `src/cli.rs:12` (Sweep) Typo. Fix: file exists. Polish issue: #60."
         risk = ("- **R4 [blocking]** `src/cli.rs:12` (Sweep) The sync token is printed. Fix: redact it.\n"
@@ -448,10 +413,7 @@ class Review(unittest.TestCase):
         self.assertEqual(out.returncode, 2, out.stdout)
         self.assertIn("cannot read", out.stderr)
 
-    # --- self-check: the builder's own pass --------------------------------
-
     def hand_back(self, code_line):
-        """A synthetic builder checkout: origin/main, then one green commit adding `code_line`."""
         upstream, work = self.root / "upstream", self.root / "work"
 
         def git(where, *args):
@@ -473,7 +435,6 @@ class Review(unittest.TestCase):
         return work, git(work, "rev-parse", "HEAD")
 
     def builder_pass(self, work, description):
-        """Run build-ticket's own self-check line, as a builder fills it in."""
         skill = HELPER.parent.parent.parent / "build-ticket"
         text = (skill / "SKILL.md").read_text()
         line = re.search(r"`(python3 -I <this skill's folder>/\.\./review-ticket/scripts/review\.py "
@@ -484,11 +445,6 @@ class Review(unittest.TestCase):
         return subprocess.run(argv, text=True, capture_output=True, env=self.env, timeout=30, cwd=work)
 
     def test_the_builders_own_pass_catches_a_planted_checklist_miss(self):
-        # catches: a hand-back that the reviewer's checklist would send back
-        # (no ticket to admit, no Rulings to mark, stale Facts, no test-rule
-        # line, a token or thread id in public text) reaching review because
-        # the builder's pass missed it, or build-ticket pointing at a
-        # self-check that is not there.
         clean = "raise FileExistsError('cookbook.zip')"
         work, head = self.hand_back(clean)
 
@@ -502,7 +458,7 @@ class Review(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "self-check: ok"), out.stdout + out.stderr)
         rulings = ("## Rulings\n\n1. Name the zip cookbook.zip. Why: the importer reads that name. "
                    "Cost if wrong: low: one rename.\n\n")
-        planted = {  # each: the description for this head, the code line, the one miss expected
+        planted = {
             "no Closes line": (lambda h: description(h).replace("Closes example/product#41\n", ""), clean,
                                "no Closes line names the ticket; the review cannot start"),
             "no Rulings section": (lambda h: description(h).replace(rulings, ""), clean,
@@ -529,10 +485,7 @@ class Review(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout), (2, ""), out.stdout)
         self.assertIn("cannot read origin/gone...HEAD with git", out.stderr)
 
-    # --- post --------------------------------------------------------------
-
     def test_post_writes_once_and_reads_back(self):
-        # catches: a report that is posted without read-back or twice.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
         path = self.file("r.md", FULL)
         out = self.run_helper("post", path, "--repo", SKILLS, "--pr", "7")
@@ -542,7 +495,6 @@ class Review(unittest.TestCase):
         self.assertEqual(self.state()["writes"], 1)
 
     def test_post_refuses_a_failing_report_with_zero_writes(self):
-        # catches: publishing a report that breaks the contract lines.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
         out = self.run_helper("post", self.file("r.md", FULL.replace(" Polish issue: #58.", "")),
                               "--repo", SKILLS, "--pr", "7")
@@ -550,7 +502,6 @@ class Review(unittest.TestCase):
         self.assertEqual(self.state()["writes"], 0)
 
     def test_lost_response_is_recovered_by_read_back(self):
-        # catches: retrying a POST whose response was lost, duplicating it.
         self.world({"checks": green(OLD), "lose": True}, pr={"head": {"sha": OLD}})
         path = self.file("r.md", FULL)
         out = self.run_helper("post", path, "--repo", SKILLS, "--pr", "7")
@@ -559,13 +510,10 @@ class Review(unittest.TestCase):
         self.assertEqual(self.state()["writes"], 1)
 
     def test_unconfirmed_post_is_unknown(self):
-        # catches: claiming a report is posted when read-back cannot find it.
         self.world({"checks": green(OLD), "fail_post": True}, pr={"head": {"sha": OLD}})
         out = self.run_helper("post", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 1)
         self.assertEqual(out.stdout.strip(), "unknown: not found on read-back; read the comments before posting again")
-
-    # --- follow-up ---------------------------------------------------------
 
     def follow_up(self, *extra):
         finding = self.file("finding.md", "`src/cli.rs:30` (Sweep) Help wording. Fix: say export.")
@@ -574,8 +522,6 @@ class Review(unittest.TestCase):
                                "--title", "Help says zip archive file", "--finding", finding, *extra)
 
     def test_follow_up_is_filed_once_for_triage(self):
-        # catches: a polish issue filed without the triage label or its
-        # Follow-up header (which triage reads), or filed twice on a retry.
         out = self.follow_up()
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "filed #70"), out.stdout + out.stderr)
         issue = self.state()["issues"][PRODUCT][0]
@@ -587,8 +533,6 @@ class Review(unittest.TestCase):
         self.assertEqual(self.state()["writes"], 1)
 
     def test_logged_blocker_follow_up(self):
-        # catches: a logged blocker filed with the polish wording or without
-        # its User path: line.
         out = self.follow_up("--logged", "re-check", "--user-path", "a cook exports twice; one is lost")
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "filed #70"), out.stdout + out.stderr)
         issue = self.state()["issues"][PRODUCT][0]
@@ -598,8 +542,6 @@ class Review(unittest.TestCase):
                       "so it did not block the merge.", issue["body"])
 
     def test_follow_up_label_must_be_unique(self):
-        # catches: filing under a guessed label when the settings name none
-        # or two.
         for name, labels in {"none": LABELS.replace("| `needs-triage` | `triage: new` | Sort it |\n", ""),
                              "two": LABELS + "| `needs-triage` | `new` | Again |\n"}.items():
             with self.subTest(name):
@@ -610,8 +552,6 @@ class Review(unittest.TestCase):
                 self.assertIn("needs-triage label", out.stderr)
                 self.assertEqual(self.state()["writes"], 0)
 
-
-    # --- re-check round fixes (WizSkills #19 review) -----------------------
 
     def parked_world(self, decision=None, head=NEWER, author="owner", extra=None):
         fresh = RECHECK.replace("VERDICT: APPROVE", "VERDICT: CHANGES").replace(
@@ -631,8 +571,6 @@ class Review(unittest.TestCase):
         return parked
 
     def test_fix_once_more_decision_admits_a_check_of_the_new_head(self):
-        # catches (R1): the park stop ignoring Jake's relayed fix-once-more
-        # answer, so the reviewer can never check the requested fix.
         self.parked_world(f"**Orchestrator decision:** fix once more: R3 at {NEWER}. Why: one line.", head="d" * 40)
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
@@ -640,8 +578,6 @@ class Review(unittest.TestCase):
         self.assertIn(f"last read {NEWER}; open R3", out.stdout)
 
     def test_log_and_merge_decision_admits_one_same_head_polish_report(self):
-        # catches (R1): the park stop refusing the authorized same-head report
-        # that grades the parked finding as polish with the decision's issue.
         parked = self.parked_world(f"**Orchestrator decision:** log and merge: R3 at {NEWER}. Polish issues: #64. "
                                    "Why: the log stays local.")
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
@@ -662,8 +598,6 @@ class Review(unittest.TestCase):
         self.assertIn("R3: the decision grades it polish with Polish issue: #64", out.stdout.splitlines())
 
     def test_unmatched_or_unauthorized_decisions_keep_the_park(self):
-        # catches (R1): a decision from a non-record author, for other ids or
-        # for another head releasing a parked finding.
         for name, (decision, author) in {
             "stranger": (f"**Orchestrator decision:** fix once more: R3 at {NEWER}. Why: x.", "stranger"),
             "other ids": (f"**Orchestrator decision:** fix once more: R1 at {NEWER}. Why: x.", "owner"),
@@ -675,8 +609,6 @@ class Review(unittest.TestCase):
                 self.assertEqual((out.returncode, out.stdout.strip()), (1, "stop: R3 is parked as a decision for Jake"))
 
     def test_an_earlier_blocker_cannot_be_closed_as_polish(self):
-        # catches (R2): a re-check approving an unresolved Risk: blocker by
-        # giving it a polish status or a polish grade.
         cases = {
             "polish status": RECHECK.replace("- **R3 [blocking]** resolved at bbbbbbb: the log line is redacted.",
                                              "- **R3 [blocking]** Polish issue: #62."),
@@ -694,8 +626,6 @@ class Review(unittest.TestCase):
                 self.assertEqual(self.state()["writes"], 0)
 
     def test_v2_ruling_mark_refusals(self):
-        # catches (R2): two rulings overturned as one finding, or Rulings:
-        # none. beside a mark, both refused by the v2 check.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}, "body": DESCRIPTION.replace(
             "1. Name the zip", "2. Keep one zip. Why: one file. Cost if wrong: low: two files.\n1. Name the zip")})
         two = FULL.replace("- **Ruling 1** upheld: the importer reads cookbook.zip.",
@@ -708,8 +638,6 @@ class Review(unittest.TestCase):
         self.assertIn("Rulings: none. stands beside a ruling mark", out.stdout.splitlines())
 
     def test_record_author_row_is_parsed_whole(self):
-        # catches (R3): a malformed row with a missing comma, a second row or
-        # an extra cell still supplying trusted authors.
         row = "| Record authors | `example[bot]`, `owner` |\n"
         for name, bad in {"missing comma": "| Record authors | `example[bot]` `owner` |\n",
                           "two rows": row + "| Record authors | `owner` |\n",
@@ -722,8 +650,6 @@ class Review(unittest.TestCase):
                 self.assertIn("record authors", out.stderr)
 
     def test_additional_required_check_outside_the_table(self):
-        # catches (R4): an OpenWiz-shaped fleet.md whose privacy gate is named
-        # outside the table being reviewed with privacy failed.
         fleet = FLEET.replace("| `check` | Every suite | Pull requests to `main` |\n",
                               "| `ci` | Every lane | `main`, `release-*` |\n\n"
                               "**Additional public check: `privacy` (O3).** It checks the public tree.\n")
@@ -734,8 +660,6 @@ class Review(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout.strip()), (1, f"stop: privacy is not green at {HEAD}"))
 
     def test_identical_text_from_anyone_else_is_not_a_post(self):
-        # catches (R5): an ordinary comment with the report's text ending the
-        # post as already posted, leaving the fleet no recognized verdict.
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}},
                    comments=[{"body": FULL, "user": {"login": "stranger"}}])
         out = self.run_helper("post", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7")
@@ -743,23 +667,17 @@ class Review(unittest.TestCase):
         self.assertEqual(self.state()["writes"], 1)
 
     def test_commands_are_bound_to_the_assigned_head(self):
-        # catches (R6): reviewing or posting for a head other than the one the
-        # fleet assigned.
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--head", NEWER)
         self.assertEqual((out.returncode, out.stdout.strip()),
                          (1, f"stop: the head is {HEAD}, not the assigned {NEWER}"))
 
     def test_pin_reads_one_snapshot(self):
-        # catches (R6): readiness and ticket from one pull-request read joined
-        # with the head of a later read.
         later = {**self.state()["pulls"]["7"], "draft": True, "head": {"sha": NEWER}, "body": "Closes #99\n"}
         self.world({"pull_sequence": [self.state()["pulls"]["7"], later] * 3, "checks": {**green(HEAD), **green(NEWER)}})
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--head", HEAD)
         self.assertEqual(out.stdout.strip(), f"review full #7 at {HEAD}; ticket {PRODUCT}#41; checks check")
 
     def test_post_repeats_admission_before_writing(self):
-        # catches (R6): handing back a verdict after the head became draft or
-        # its required check failed.
         for name, (pr, checks) in {
             "draft": ({"draft": True, "head": {"sha": OLD}}, green(OLD)),
             "failed check": ({"head": {"sha": OLD}},
@@ -772,6 +690,163 @@ class Review(unittest.TestCase):
                 self.assertTrue(out.stdout.startswith("stop: "), out.stdout)
                 self.assertEqual(self.state()["writes"], 0)
 
+
+COMMENTS = Path(__file__).with_name("comments.py")
+CHECKER = Path(__file__).with_name("fixtures") / "comment-check" / "check.py"
+SHA = "1234567890" * 4
+
+
+class CommentPass(unittest.TestCase):
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.repo)])
+        self.git("init", "-q")
+        self.write({"tools/comment-check/check.py": CHECKER.read_text(encoding="utf-8"),
+                    "old.py": "x = 1  # workaround kept from before\n"})
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "base")
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Builder", "-c", "user.email=b@example.com",
+                        *args], check=True, capture_output=True)
+
+    def write(self, files):
+        for name, text in files.items():
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+
+    def comment_pass(self, files, *args):
+        self.write(files)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "head")
+        out = subprocess.run([sys.executable, "-I", str(COMMENTS), "--base", "HEAD^", "--repo", str(self.repo),
+                              *args], text=True, capture_output=True, timeout=60)
+        findings = [line for line in out.stdout.splitlines() if not line.startswith("check ")]
+        return out.returncode, findings, out.stdout + out.stderr
+
+    def kinds(self, files, *args):
+        code, findings, out = self.comment_pass(files, *args)
+        return code, [f.split(": ", 2)[:2] for f in findings], out
+
+    def assert_code_fix(self, finding):
+        fix = finding.split(" Fix: ", 1)[1]
+        self.assertRegex(fix, r"\b(name|extract|type|test|check|delete|remove|fix the cause)")
+        self.assertNotRegex(fix.lower(), r"reword|rephrase|clarify|shorten|rewrite the comment")
+
+    def test_a_justification_comment_is_a_finding_that_names_the_code_fix(self):
+        code, findings, out = self.comment_pass({"src/prices.py": (
+            "_cache = {}\n\n# We check the cache first on purpose: the suite timed out without it.\n"
+            "def lookup(sku):\n    return _cache.get(sku)\n")})
+        self.assertEqual(code, 1, out)
+        self.assertEqual(len(findings), 1, out)
+        self.assertTrue(findings[0].startswith("src/prices.py:3: justification: "), out)
+        self.assert_code_fix(findings[0])
+
+    def test_only_allowed_kinds_give_no_finding_and_each_gets_a_check_line(self):
+        code, findings, out = self.comment_pass({"tools/sync.py": (
+            "#!/usr/bin/env python3\n# SPDX-License-Identifier: MIT\nimport subprocess\n\n"
+            "# External: the vendor API rejects a batch over 100 items, https://example.com/vendor/limits\n"
+            "LIMIT = 100\n\n# SECURITY: the token never reaches the log; send() redacts it first.\nA = 1\n\n"
+            "# comment-ok: the synthetic runner reads this line as its job name\nB = 2\n"
+            "import os  # noqa: E402 -- the path is set up above\nURL = 'https://example.com/#anchor'\n")})
+        self.assertEqual((code, findings), (0, []), out)
+        for kind in ("2: licence", "5: external", "8: warning", "11: escape", "13: suppression"):
+            self.assertIn(f"check tools/sync.py:{kind}: ", out)
+
+    def test_a_workaround_comment_and_a_bare_suppression_are_findings(self):
+        code, kinds, out = self.kinds({"src/app.py": (
+            "import os\n# TODO: hack for now, the writer races the reader\nx = os.getcwd()\n"
+            "y = x.upper()  # type: ignore\n")})
+        self.assertEqual(kinds, [["src/app.py:2", "workaround"], ["src/app.py:4", "suppression"]], out)
+        for finding in out.splitlines():
+            self.assert_code_fix(finding)
+
+    def test_an_unearned_escape_tag_and_external_link_are_findings(self):
+        code, kinds, out = self.kinds({"src/app.py": (
+            "# comment-ok:\nA = 1\n# External: our runner, https://github.com/openwizdev/OpenWiz/issues/12\nB = 2\n")})
+        self.assertEqual(kinds, [["src/app.py:1", "escape-tag-reason"], ["src/app.py:3", "external-link"]], out)
+
+    def test_old_comments_never_count(self):
+        self.assertEqual(self.kinds({"old.py": "x = 2  # workaround kept from before\n"})[:2], (1, [
+            ["old.py:1", "workaround"]]))
+        self.assertEqual(self.kinds({"new.py": "y = 1\n"})[:2], (0, []))
+
+    def test_r1_spaced_and_accented_paths_are_read(self):
+        text = "# Workaround for the old runner\nprint(1)\n"
+        code, kinds, out = self.kinds({"task runner.py": text, "café.py": text})
+        self.assertEqual(sorted(kinds), [["café.py:1", "workaround"], ["task runner.py:1", "workaround"]], out)
+
+    def test_r2_script_yaml_docstring_and_pinned_action(self):
+        code, kinds, out = self.kinds({
+            "index.html": "<p>hi</p>\n<script>\n// Workaround for the old runner\n</script>\n"
+                          '<script type="application/json">\n{"a": "// not script"}\n</script>\n',
+            "config.yml": "text: |\n  # Shown to the user as text\n",
+            "tool.py": '# SPDX-License-Identifier: MIT\n"""Workaround for the old runner."""\nprint(1)\n',
+            ".github/workflows/check.yml": f"steps:\n  - uses: owner/action@{SHA} # v7.0.1\n"})
+        self.assertEqual(sorted(kinds), [["index.html:3", "workaround"], ["tool.py:2", "workaround"]], out)
+
+    def test_r3_two_block_comments_on_one_line_are_two_findings(self):
+        code, kinds, out = self.kinds({"app.js": (
+            "let a = /* first workaround */ 1, b = /* second workaround */ 2;\n"
+            "let c = /* SAFETY: synthetic invariant */ 1, d = /* third workaround */ 2;\n")})
+        self.assertEqual(kinds, [["app.js:1", "workaround"], ["app.js:1", "workaround"], ["app.js:2", "workaround"]],
+                         out)
+
+    def test_r4_licence_and_generated_files_are_excluded(self):
+        code, kinds, out = self.kinds({
+            "generated.py": "# @generated\n# Workaround for the old runner\nx = 1\n",
+            "LICENSE.py": "# Distribution terms\nx = 1\n",
+            "late.py": "x = 1\n" * 5 + "# DO NOT EDIT: workaround for the old runner\n"})
+        self.assertEqual(kinds, [["late.py:6", "workaround"]], out)
+
+    def test_a_repository_with_no_checker_gets_one_line(self):
+        self.git("rm", "-q", "tools/comment-check/check.py")
+        self.git("commit", "-q", "-m", "no checker")
+        code, findings, out = self.comment_pass({"src/app.py": "# workaround for the old runner\nx = 1\n"})
+        self.assertEqual((code, out.splitlines()), (3, [
+            "no checker: the base revision has no tools/comment-check/check.py and no --checker was given; "
+            "read the diff's comments yourself"]))
+
+    def test_another_checker_location_is_used_with_checker(self):
+        self.git("rm", "-q", "tools/comment-check/check.py")
+        self.git("commit", "-q", "-m", "no checker")
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(outside)])
+        (outside / "comments.py").write_text(CHECKER.read_text(encoding="utf-8"), encoding="utf-8")
+        code, kinds, out = self.kinds({"src/app.py": "# workaround for the old runner\nx = 1\n"},
+                                      "--checker", str(outside / "comments.py"))
+        self.assertEqual(kinds, [["src/app.py:1", "workaround"]], out)
+
+    def planted(self):
+        mark = Path(tempfile.mkdtemp()) / "ran"
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(mark.parent)])
+        return mark, f"import pathlib\npathlib.Path({str(mark)!r}).write_text('ran')\n"
+
+    def test_a_checker_the_pull_request_changes_never_runs(self):
+        mark, planted = self.planted()
+        code, kinds, out = self.kinds({"tools/comment-check/check.py": planted,
+                                       "src/app.py": "# workaround for the old runner\nx = 1\n"})
+        self.assertFalse(mark.exists(), "the pull request's checker ran")
+        self.assertEqual(kinds, [["src/app.py:1", "workaround"]], out)
+
+    def test_a_checker_the_pull_request_adds_never_runs(self):
+        self.git("rm", "-q", "tools/comment-check/check.py")
+        self.git("commit", "-q", "-m", "no checker")
+        mark, planted = self.planted()
+        code, findings, out = self.comment_pass({"tools/comment-check/check.py": planted,
+                                                 "src/app.py": "# workaround for the old runner\nx = 1\n"})
+        self.assertFalse(mark.exists(), "the pull request's checker ran")
+        self.assertEqual((code, len(out.splitlines())), (3, 1), out)
+        self.assertTrue(out.startswith("no checker: "), out)
+
+    def test_a_checker_inside_the_reviewed_checkout_is_refused(self):
+        mark, planted = self.planted()
+        code, findings, out = self.comment_pass({"lint/comments.py": planted},
+                                                "--checker", str(self.repo / "lint" / "comments.py"))
+        self.assertFalse(mark.exists(), "a checker from the reviewed checkout ran")
+        self.assertEqual((code, len(out.splitlines())), (2, 1), out)
+        self.assertTrue(out.startswith("refused: "), out)
 
 if __name__ == "__main__":
     unittest.main()

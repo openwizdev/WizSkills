@@ -79,7 +79,6 @@ class Brief(unittest.TestCase):
 
 
 class Token(unittest.TestCase):
-    """GA4 (OpenWiz #1846): with a token service configured, every brief gets its GitHub token from the helper."""
     KINDS = [(('builder', 12), 'builder-12', 'OWNER/NAME'),
              (('fresh', 12, 31, 'room/12-synthetic', HEAD), 'builder-12', 'OWNER/NAME'),
              (('reviewer', 31, HEAD), 'reviewer-31', 'OWNER/NAME'),
@@ -92,7 +91,6 @@ class Token(unittest.TestCase):
               'synthetic-owner/synthetic-repo')]
 
     def test_with_a_service_every_brief_starts_and_runs_through_the_helper(self):
-        # catches: an agent or fleet wake started without the helper, so it writes as the owner's personal login
         for args, requester, repo in self.KINDS:
             with self.subTest(kind=args[0]):
                 code, text = brief(*args, OPENWIZ_TOKEN_SERVICE=SERVICE)
@@ -102,12 +100,11 @@ class Token(unittest.TestCase):
                               % (requester, repo), text)
                 self.assertIn('`env -u OPENWIZ_GITHUB_APP_KEY python3 -I <helper> run --requester %s --repository %s '
                               '-- <command>`' % (requester, repo), text)
-                self.assertIn(EXCLUSIVE, text)  # R2: the service is the only App-token route
+                self.assertIn(EXCLUSIVE, text)
                 self.assertIn(OWNER_LOGIN, text)
-                self.assertNotIn(SERVICE, text)  # the brief names no machine path
+                self.assertNotIn(SERVICE, text)
 
     def test_with_no_service_every_brief_is_exactly_as_today(self):
-        # catches: the token step leaking into briefs when no service is configured (the contract: exactly as today)
         expected = ('You are the builder for #12. Use the build-ticket skill. ' + LOOKUP_BUILD + '.')
         for env in ({}, {'OPENWIZ_TOKEN_SERVICE': ''}):
             with self.subTest(env=env):

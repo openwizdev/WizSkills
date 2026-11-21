@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""One bounded CS5 observation/admission decision. Never sends notifications."""
 import argparse
 import fcntl
 import hashlib
@@ -42,8 +41,6 @@ def read(path):
         return json.loads(raw, object_pairs_hook=pairs,
                           parse_constant=lambda _: (_ for _ in ()).throw(ValueError('not JSON'))), raw
     except RecursionError:
-        # Decoder nesting limits vary by Python version. All read boundaries
-        # treat excess nesting as invalid data and preserve essential actions.
         raise ValueError('excessive JSON nesting') from None
 
 
@@ -183,8 +180,6 @@ def save(path, value, staging=None):
 def journal(path, trigger):
     path.mkdir(mode=0o700, exist_ok=True)
     sync_directory(path.parent)
-    # Stage outside the journal so a concurrent admission sees only complete,
-    # atomically published records. Each writer has its own immutable entry.
     save(path / (uuid.uuid4().hex + '.json'), trigger, staging=path.parent)
 
 
@@ -243,11 +238,8 @@ def decision(args):
             if changed:
                 save(args.state, state)
             elif records:
-                # A prior rename can be visible even when its directory sync
-                # failed. Retry that barrier before consuming its journal.
                 sync_directory(args.state.parent)
-            # A crash before the pause is fsynced leaves the journal intact.
-            # Delete only this snapshot: concurrent publishers stay pending.
+            # DATA LOSS: delete only this snapshot: concurrent publishers stay pending.
             for path, _ in records:
                 path.unlink()
             if records:
@@ -265,8 +257,11 @@ def decision(args):
                 pause=state)
 
 
+DESCRIPTION = 'One bounded CS5 observation/admission decision. Never sends notifications.'
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument('--repository', required=True)
     parser.add_argument('--input', required=True, type=Path)
     parser.add_argument('--state', required=True, type=Path)

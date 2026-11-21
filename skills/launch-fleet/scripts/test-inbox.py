@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""#1481 (OB6) inbox and recheck-routing proofs. Synthetic records, virtual time, no live I/O.
-
-python3 -I skills/launch-fleet/scripts/test-inbox.py
-"""
 import copy
 import importlib.util
 import json
@@ -14,7 +10,6 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 FIX = HERE.parent / 'test/ops-inbox'
 OLD, NEW, NEWER = 'a' * 40, 'b' * 40, 'c' * 40
-# #641: the factory's record authors, and an outsider who can comment too.
 FACTORY, OUTSIDER = 'synthetic-factory[bot]', 'synthetic-outsider'
 AUTHORS = frozenset({FACTORY, 'synthetic-owner'})
 
@@ -40,7 +35,6 @@ def evidence(source):
 
 
 def pr_view(**changes):
-    """A PR whose reviewer span started at OLD, said CHANGES at OLD; the builder pushed NEW, CI green."""
     view = {
         'repository': 'synthetic/ops', 'spec': 9000, 'ticket': 9001, 'pull_request': 9101,
         'approval': copy.deepcopy(APPROVAL), 'rule': copy.deepcopy(RULE), 'complete': True,
@@ -54,13 +48,11 @@ def pr_view(**changes):
 
 
 class Recheck(unittest.TestCase):
-    """AC1: one correctly owned recheck per new green head after a verdict."""
 
     def decide(self, view):
         return inbox.recheck(view)
 
     def test_only_the_factory_records_and_verdicts_count(self):
-        """#641: an outsider's or authorless record or verdict routes nothing."""
         for who in (OUTSIDER, None):
             with self.subTest(author=who):
                 verdict = [{'comment': 502, 'author': who, 'verdict': 'CHANGES', 'head': OLD}]
@@ -68,7 +60,6 @@ class Recheck(unittest.TestCase):
                 self.assertEqual(inbox.findings(pr_view(head=OLD, verdicts=verdict)), ('none', 'no verdict'))
                 start = [{'comment': 501, 'author': who, 'line': 'launch-fleet: review started ' + OLD}]
                 self.assertEqual(self.decide(pr_view(records=start)), ('refused', 'ambiguous reviewer'))
-        # The owner's account is a record author too, in any case; a view with no authors trusts nobody.
         owner = [{'comment': 502, 'author': 'Synthetic-Owner', 'verdict': 'CHANGES', 'head': OLD}]
         self.assertEqual(self.decide(pr_view(verdicts=owner))[0], 'record')
         self.assertEqual(self.decide(pr_view(authors=frozenset())), ('refused', 'ambiguous reviewer'))
@@ -78,7 +69,7 @@ class Recheck(unittest.TestCase):
             with self.subTest(verdict=verdict):
                 state, intent = self.decide(pr_view(verdicts=[{'comment': 502, 'author': FACTORY, 'verdict': verdict, 'head': OLD}]))
                 self.assertEqual(state, 'record')
-                effects.read_record(json.dumps(intent))  # strict schema and key identity
+                effects.read_record(json.dumps(intent))
                 self.assertEqual(
                     {k: intent[k] for k in ('action', 'destination', 'assignment', 'prior_verdict', 'head', 'sequence')},
                     dict(action='delivery', destination='reviewer', assignment='review-span-501',
@@ -105,11 +96,9 @@ class Recheck(unittest.TestCase):
         self.assertEqual(self.decide(pr_view(verdicts=[])), ('none', 'no verdict'))
 
     def test_superseded_verdicts_cannot_redirect_or_add_a_recheck(self):
-        # The older verdict at OLD is superseded by the newer one at NEW: nothing is due at NEW.
         verdicts = [{'comment': 502, 'author': FACTORY, 'verdict': 'CHANGES', 'head': OLD},
                     {'comment': 504, 'author': FACTORY, 'verdict': 'APPROVE', 'head': NEW}]
         self.assertEqual(self.decide(pr_view(verdicts=verdicts)), ('none', 'head unchanged since the verdict'))
-        # A verdict from before a fresh reviewer's start is not that reviewer's to recheck.
         records = [{'comment': 501, 'author': FACTORY, 'line': 'launch-fleet: review started ' + OLD},
                    {'comment': 503, 'author': FACTORY, 'line': 'launch-fleet: review given up ' + OLD + ': quiet'},
                    {'comment': 505, 'author': FACTORY, 'line': 'launch-fleet: review started ' + NEW}]
@@ -174,7 +163,6 @@ def event(kind, intent, ident, **changes):
 
 
 class Inbox(unittest.TestCase):
-    """AC2-AC4: GitHub-first pending items, pulled and acknowledged by the intended recipient."""
 
     def setUp(self):
         base = pr_view()
@@ -215,7 +203,6 @@ class Inbox(unittest.TestCase):
         effects.read_record(json.dumps(ack))
         self.assertEqual((ack['operation_key'], ack['recipient'], ack['assignment'], ack['sequence'], ack['checked_head']),
                          (self.one['operation_key'], 'reviewer', 'review-span-501', 1, NEW))
-        # Accepted transport alone, or the same ack posted by another agent on the shared account, settles nothing.
         self.assertEqual(self.states(self.pull([self.one, accepted]))[0][1], 'recorded')
         self.assertEqual(self.states(self.pull([self.one, accepted, ack]))[0][1], 'recorded')
         result = self.pull([self.one, self.two, accepted, ack], own={'ack-9'})
@@ -292,7 +279,6 @@ class Inbox(unittest.TestCase):
     def test_r3_an_unresolved_earlier_item_for_another_recipient_defers_this_one(self):
         first = ops(self.one, destination='orchestrator', assignment='ops-owner')
         self.assertEqual(self.states(self.pull([first, self.two])), [(self.two['id'], 'deferred', 'out_of_order')])
-        # Its settlement counts only when that recipient's own ack was verified independently.
         theirs = event('ack', first, 'ack-7', recipient='orchestrator', assignment='ops-owner', sequence=1,
                        checked_head=NEW)
         self.assertEqual(self.states(self.pull([first, self.two, theirs])), [(self.two['id'], 'deferred', 'out_of_order')])
@@ -301,7 +287,6 @@ class Inbox(unittest.TestCase):
 
 
 class Measures(unittest.TestCase):
-    """AC6: eligible recheck delay and oldest pending age, with denominators and held time excluded."""
 
     def test_delays_and_ages_exclude_held_time_and_keep_denominators(self):
         _, one = inbox.recheck(pr_view(now=1000 * 60))
@@ -346,7 +331,6 @@ class Measures(unittest.TestCase):
 
 
 class Limits(unittest.TestCase):
-    """AC7: missed fix/answer goals route through the existing durable items; delivery is not completion."""
 
     def setUp(self):
         self.bench = json.loads((HERE.parent / 'test/ops-inbox/stage-waits-bench.json').read_text())

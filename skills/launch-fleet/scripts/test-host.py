@@ -247,17 +247,15 @@ class Host(unittest.TestCase):
 STOPPED = 'stopped (driver start failed)'
 
 
-TOKEN = 'synthetic-ga4-token-0123456789'   # fixtures/token_service.py's synthetic token
+TOKEN = 'synthetic-ga4-token-0123456789'
 WRITE = {'metadata': 'read', 'contents': 'write', 'issues': 'write', 'pull_requests': 'write', 'checks': 'read',
          'actions': 'read'}
 NOTE = "openwiz: no openwiz[bot] token (unavailable); using the owner's GitHub account"
 
 
 class Token(unittest.TestCase):
-    """GA4 (OpenWiz #1846): a driver start and a wake each get the builder's token from the agent helper."""
 
     def service(self, p):
-        """The synthetic token service on the local route, and an empty private token folder."""
         private = p.dir / 'token-private'
         private.mkdir(mode=0o700)
         p.service_log = p.dir / 'service.log'
@@ -268,13 +266,11 @@ class Token(unittest.TestCase):
         return [json.loads(line) for line in p.service_log.read_text().splitlines()] if p.service_log.exists() else []
 
     def exposed(self, p, *outputs):
-        """Every place a token must never be: output, the driver's log and input, the runs file, GitHub."""
         texts = [*outputs, p.log.read_text() if p.log.exists() else '', p.runs.read_text() if p.runs.exists() else '',
                  p.world.read_text(), *(json.dumps(r['argv']) for r in self.requests(p))]
         return [t for t in texts if TOKEN in t]
 
     def test_a_driver_start_and_a_wake_each_get_the_builders_token_from_the_helper(self):
-        # catches: a builder started or woken through a driver without asking the helper, so it acts as the owner
         p = Project(self)
         env = self.service(p)
         started = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env)
@@ -285,18 +281,16 @@ class Token(unittest.TestCase):
         held = [f for f in (p.dir / 'token-private').iterdir()]
         self.assertEqual(len(held), 1)
         self.assertEqual(held[0].stat().st_mode & 0o777, 0o600)
-        self.assertEqual(json.loads(held[0].read_text())['token'], TOKEN)  # the builder's private place only
+        self.assertEqual(json.loads(held[0].read_text())['token'], TOKEN)
         self.assertEqual(p.calls()[0]['input'], {'repository': REPO, 'ticket': 7, 'skill': 'build-ticket',
                                                  'harness': 'claude', 'model': 'claude-opus-5-5'})
-        held[0].unlink()  # the wake must ask again, not lean on the start's token
+        held[0].unlink()
         woke = p.host('wake', REPO, 7, **env)
         self.assertEqual(woke, (0, 'woke #7 on local', ''))
         self.assertEqual([r['request']['requester'] for r in self.requests(p)], ['builder-7', 'builder-7'])
         self.assertEqual(self.exposed(p, *started[1:], *woke[1:]), [])
 
     def builder(self, p):
-        """A `gh` that, for the builder's own calls (FAKE_GH_PROBE), records `app` when it got the App's token,
-        else `owner`, and whether the legacy key variable reached it (never a value); then fake GitHub."""
         (p.dir / 'bin/gh').write_text(
             '#!/bin/sh\nif [ -n "${FAKE_GH_PROBE:-}" ]; then\n'
             '  { [ "${GH_TOKEN:-}" = %s ] && printf app || printf owner\n'
@@ -306,14 +300,11 @@ class Token(unittest.TestCase):
         return dict(FAKE_DRIVER_BUILDER=str(p.first), OPENWIZ_GITHUB_APP_KEY='synthetic-legacy-sentinel')
 
     def seen(self, p):
-        """What the builder's first GitHub operations used: its git helper and key presence, and gh's identity."""
         first = [json.loads(line) for line in p.first.read_text().splitlines()] if p.first.exists() else []
         gh = p.first.with_name(p.first.name + '.gh')
         return first, gh.read_text().splitlines() if gh.exists() else []
 
     def test_the_drivers_builder_does_its_first_github_operation_as_the_app_without_the_legacy_key(self):
-        # catches: a mint in the fleet process while the builder the driver starts still acts as the owner (R1),
-        # or the legacy key secret reaching the helper, the driver or the builder once a service is configured (R2)
         p = Project(self)
         env = dict(self.service(p), **self.builder(p))
         started = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env)
@@ -329,8 +320,6 @@ class Token(unittest.TestCase):
         self.assertEqual(self.exposed(p, *started[1:], *woke[1:]), [])
 
     def git_probe(self, p):
-        """A `git` first on PATH that logs, for every call, whether the legacy key variable and the App token
-        reached it (presence only, never a value), then runs the real git."""
         p.git_log = p.dir / 'git-probe.log'
         real = subprocess.run(['sh', '-c', 'command -v git'], capture_output=True, text=True).stdout.strip()
         (p.dir / 'bin/git').write_text(
@@ -343,22 +332,18 @@ class Token(unittest.TestCase):
         return set(p.git_log.read_text().splitlines()) if p.git_log.exists() else set()
 
     def test_with_a_service_no_git_child_gets_the_legacy_key_or_the_app_token(self):
-        # catches: host.py's setting and readiness Git reads spawned with the legacy key still in the environment
-        # (R2), or the builder's git shim handing git the App token as GH_TOKEN past the helper's guard (R3)
         p = Project(self)
         env = dict(self.service(p), **self.builder(p))
         self.git_probe(p)
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env), (0, 'started #7 on local', ''))
         self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', ''))
         self.assertEqual(self.probed(p), {'no-key no-token'})
-        # The credential helper still works: git's github.com helper is the App's, and gh acts as the App.
         self.assertEqual(self.seen(p), (
             [{'command': 'start', 'git_helper_is_the_apps': True, 'legacy_key': False},
              {'command': 'wake', 'git_helper_is_the_apps': True, 'legacy_key': False}],
             ['app no-key', 'app no-key']))
 
     def test_with_no_service_git_children_keep_the_environment_as_today(self):
-        # catches: the key removal reaching the unconfigured path, which must stay exactly as today
         p = Project(self)
         env = dict(self.service(p), **self.builder(p))
         env['OPENWIZ_TOKEN_SERVICE'] = ''
@@ -367,7 +352,6 @@ class Token(unittest.TestCase):
         self.assertEqual(self.probed(p), {'key no-token'})
 
     def test_a_refused_token_falls_back_with_one_note_and_the_start_goes_on(self):
-        # catches: a failed mint stopping the start, or falling back silently or with more than the one note
         p = Project(self)
         env = dict(self.service(p), FAKE_SERVICE_REFUSE='1')
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env), (0, 'started #7 on local', NOTE))
@@ -376,14 +360,12 @@ class Token(unittest.TestCase):
         self.assertEqual(list((p.dir / 'token-private').iterdir()), [])
 
     def test_with_no_service_no_helper_runs_and_starts_are_as_today(self):
-        # catches: the token step running, or making its private folder, when no service is configured
         p = Project(self)
         env = self.service(p)
         (p.dir / 'token-private').rmdir()
-        env.update(self.builder(p), OPENWIZ_TOKEN_SERVICE='')  # set but empty is not configured, as the helper reads it
+        env.update(self.builder(p), OPENWIZ_TOKEN_SERVICE='')
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env), (0, 'started #7 on local', ''))
         self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', ''))
-        # Exactly as today: the builder works as the owner, with whatever the environment held (the legacy key too).
         self.assertEqual(self.seen(p), (
             [{'command': 'start', 'git_helper_is_the_apps': False, 'legacy_key': True},
              {'command': 'wake', 'git_helper_is_the_apps': False, 'legacy_key': True}],
@@ -415,7 +397,7 @@ class Failures(unittest.TestCase):
     def test_the_drivers_own_words_stay_in_the_owners_log_never_on_the_ticket(self):
         # The orchestrator's decision on R3 at 90aed73: no free text of the driver's ever reaches the ticket.
         p = Project(self)
-        words = 'reach svc:made-up-pass-44@driver.example.invalid, then ask the synthetic operator'
+        words = 'reach svc:made-up-pass-44@example.invalid, then ask the synthetic operator'
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse', FAKE_DRIVER_NEXT=words)[0], 1)
         world = json.dumps(p.github())
         for part in ('made-up-pass-44', 'synthetic operator', 'not signed in'):
@@ -478,10 +460,10 @@ class Failures(unittest.TestCase):
                  'a thread id': 'resume %s by hand' % thread, 'a machine path': 'edit /srv/synthetic/driver.conf',
                  'a secret value': 'use %s to sign in' % secret,
                  # R3 of the re-check at 004afb6: a URL's user info, password or not, from the driver's own config.
-                 'a URL password': 'sign in at https://svc-account:made-up-pass-42@driver.example.invalid/login',
-                 'a URL user': 'open ssh://made-up-user@driver.example.invalid to sign in',
+                 'a URL password': 'sign in at https://svc-account:made-up-pass-42@example.invalid/login',
+                 'a URL user': 'open ssh://made-up-user@example.invalid to sign in',
                  # The decision on R3: a schemeless endpoint, as libcurl guesses its protocol.
-                 'a schemeless URL password': 'set the endpoint to svc:made-up-pass-43@driver.example.invalid/api'}
+                 'a schemeless URL password': 'set the endpoint to svc:made-up-pass-43@example.invalid/api'}
         for name, text in leaks.items():
             with self.subTest(name):
                 p = Project(self)

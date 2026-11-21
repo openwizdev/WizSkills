@@ -9,8 +9,6 @@
 # the spec's number after --bundle OWNER/REPO): then it runs that spec's check
 # alone (`fleet.sh spec <FLEET_SPEC>`).
 # Exit as the check exits; 2 when the clone can't be made or updated.
-# GA4 (OpenWiz #1846), R2: with a token service configured, the superseded key
-# secret is removed before anything runs, so no child ever gets it.
 [ -z "${OPENWIZ_TOKEN_SERVICE:-}" ] || unset OPENWIZ_GITHUB_APP_KEY
 die() { printf 'loop.sh: %s\n' "$*" >&2; exit 2; }
 repository() {
@@ -65,17 +63,6 @@ repository "$GH_REPO" || die "GH_REPO must be owner/name"
 FLEET_SPEC=${FLEET_SPEC:-}
 [ -z "$FLEET_SPEC" ] || spec_number "$FLEET_SPEC" || die "FLEET_SPEC must be a spec's number"
 export GH_REPO
-# The token step (GA4, OpenWiz #1846; contracts/token-service.v1.md): with a
-# token service configured, this wake runs again inside the agent helper's
-# `run`, as the read-only requester fleet-check. The helper hands gh its token
-# as GH_TOKEN and git its own credential helper, or, when it gets none, prints
-# the contract's one note and runs the wake as today's account. The old key
-# secret below is then never used: it was removed at entry (above, and first in
-# a bundle's bootstrap), so it never reaches the helper or any child. With no
-# service configured, nothing changes.
-# The marker is this shell's process id: the helper keeps it (exec), so the wake
-# it runs sees it as its parent's id, or as its own after a fallback (the
-# helper execs the wake). An inherited marker matches neither and is ignored.
 inside=
 case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
 unset LAUNCH_FLEET_TOKEN_STEP
@@ -97,7 +84,6 @@ fi
 app=
 unset LAUNCH_FLEET_GITHUB_AUTH
 if [ -n "$inside" ]; then
-  # Inside the helper's run: its token is in use only when it marked the run.
   if [ -n "${OPENWIZ_AGENT_TOKEN_RUN:-}" ]; then
     LAUNCH_FLEET_GITHUB_AUTH=installation
     export LAUNCH_FLEET_GITHUB_AUTH

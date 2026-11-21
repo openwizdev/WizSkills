@@ -1,0 +1,5 @@
+Your examplehost driver passed 5 of 5 in 41 minutes.
+Kit: version pass, start pass, wake pass, stop pass, token pass
+Live lessons: live-shape pass, wake-after-turn pass, expired-login pass
+Not stopped: one examplehost sandbox did not answer its stop; run examplehost stop sb-synthetic-2 yourself
+Pull request: https://github.com/example-user/examplehost-driver/pull/3

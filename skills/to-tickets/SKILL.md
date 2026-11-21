@@ -1,7 +1,7 @@
 ---
 name: to-tickets
 description: Turn a spec into sized tickets and approve the plan by its own checks (links, relies, sizes, width, owned paths), recording a machine plan approval. Use when to-spec hands over a spec, or to re-cut a changed plan. Send unconfirmed grills to grill.
-version: 0.2.0
+version: 0.2.1
 ---
 
 # To tickets
@@ -51,7 +51,8 @@ and post it on the spec: the graph is the agents' document, never the owner's.
 ```sh
 sh "<this skill's folder>/check-links.sh" --read <spec> > graph.json
 sh "<this skill's folder>/revision.sh" <spec> > revision.txt
-python3 -I "<this skill's folder>/scripts/approve.py" --graph graph.json --revision revision.txt \
+gh issue view <spec> --json body,createdAt > spec.json
+python3 -I "<this skill's folder>/scripts/approve.py" --graph graph.json --revision revision.txt --spec spec.json \
   --grill <confirmation URL> --number <N> [--changed "<what changed>"] --root . > record.md
 ```
 

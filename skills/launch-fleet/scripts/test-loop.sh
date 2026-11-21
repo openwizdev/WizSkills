@@ -16,7 +16,6 @@ cp "$HERE/github-app/agent-token.py" "$work/plugin cache/skills/launch-fleet/scr
 mkdir "$work/linked skills"
 ln -s "$work/plugin cache/skills/launch-fleet" "$work/linked skills/launch-fleet"
 # GI7 (#2549): the fake gh also records the token each call gets (synthetic).
-# GA4 (#1846): and whether the legacy key variable reached it (presence only, never a value).
 printf '#!/bin/sh\nprintf "%%s %%s\\n" "${GH_TOKEN:-none}" "${LAUNCH_FLEET_GITHUB_AUTH:-account}" >> "%s"\n[ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && echo key >> "%s" || echo no-key >> "%s"\nexec "%s" -I -S "%s" "$@"\n' \
   "$work/gh-token.log" "$work/gh-key.log" "$work/gh-key.log" "$(command -v python3)" "$FIX/gh.py" > "$work/bin/gh"
 chmod +x "$work/bin/gh"
@@ -149,9 +148,6 @@ rm "$work/bin/openwiz"
   "loop.sh: no openwiz to mint the App token; GitHub as today's account")
 echo "ok   without the secret, openwiz or a token, the check runs as today's account and says so (#2549)"
 
-# GA4 (OpenWiz #1846): with a token service configured, the wake reads GitHub with
-# a read-only openwiz[bot] token from the agent helper, never the old key secret;
-# a refused mint falls back to today's account with the contract's one note.
 ga4=synthetic-ga4-token-0123456789
 mkdir -m 700 "$work/token-private"
 service() { # the synthetic service on the local route, and the old key secret that it must replace
@@ -162,14 +158,12 @@ service() { # the synthetic service on the local route, and the old key secret t
   rm -f "$work/token-private/"*  # each case asks afresh, not from the last case's cached token
 }
 (service; : > "$work/gh-key.log"; identity "$ga4 installation" '')
-# R2: the legacy key secret, still provisioned beside the service, reaches neither the helper nor gh.
 [ -s "$work/gh-key.log" ] && [ -z "$(grep -vx no-key "$work/gh-key.log")" ]
 [ "$(jq -c .legacy_key "$work/service.log")" = false ]
 [ "$(jq -c .request "$work/service.log")" = '{"schema":"openwiz.token-service.v1","kind":"request","requester":"fleet-check","repositories":["synthetic-owner/synthetic-repo"],"permissions":{"metadata":"read","contents":"read","issues":"read","pull_requests":"read","checks":"read","actions":"read"}}' ]
 [ "$(jq -c .argv "$work/service.log")" = '["mint"]' ]
 ! grep -q "$ga4" "$work/out" "$work/err" "$work/gh.log"
 echo 'ok   with a token service the wake reads GitHub with the helper'"'"'s read-only token and prints none (#1846)'
-# R2 (re-check): the bundle's own bootstrap (mktemp, mkdir, cat) runs before the wake, so the key goes first.
 mkdir "$work/probe"
 for tool in mktemp mkdir cat; do
   printf '#!/bin/sh\n[ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && echo key >> "%s" || echo no-key >> "%s"\nexec %s "$@"\n' \
@@ -191,7 +185,6 @@ echo "ok   a refused mint runs the wake as today's account with the contract's o
 (service; export OPENWIZ_TOKEN_SERVICE= PATH="$work/probe:$work/bin:/usr/bin:/bin"; : > "$work/probe.log"
   identity 'none account' "loop.sh: no openwiz to mint the App token; GitHub as today's account")
 [ ! -s "$work/service.log" ]
-# Unconfigured, the environment is as today's: the old key secret still reaches the bootstrap and the wake.
 [ -s "$work/probe.log" ] && [ -z "$(grep -vx key "$work/probe.log")" ]
 echo 'ok   with no service configured the wake is exactly as today (#1846)'
 

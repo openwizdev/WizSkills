@@ -16,13 +16,6 @@ never goes into a public record.
 
 Exit 2 and print nothing for an unknown kind or a malformed target. The
 skill-file lookup belongs to the recipient, so it is printed unexpanded.
-
-With a token service configured (OPENWIZ_TOKEN_SERVICE set and non-empty, as
-the agent helper reads it), each brief ends with the token step (GA4, OpenWiz
-#1846; contracts/token-service.v1.md): the agent runs its GitHub commands
-through the agent helper as a requester named for its role, and keeps
-approvals, settings and workflow pushes on the owner's login. With none, every
-brief is exactly as before.
 """
 import os
 import re
@@ -62,7 +55,6 @@ FORMS = {
               "Each wake section for the messages below. The orchestrator's thread is {1}."),
 }
 
-# Who asks, and for which repository, per brief (the contract's synthetic `requester` label).
 REQUESTERS = {'builder': ('builder-{0}', None), 'fresh': ('builder-{0}', None), 'reviewer': ('reviewer-{0}', None),
               're-check': ('reviewer-{0}', None), 'diagnose': ('diagnose', None), 'fleet': ('fleet-{0}', '{1}'),
               'wake': ('fleet-{0}', '{1}'), 'tick': ('fleet-tick', '{0}'), 'wakes': ('fleet-tick', '{0}')}
@@ -80,7 +72,6 @@ TOKEN = (" GitHub token: run every gh or git command that reaches GitHub through
 
 
 def token_step(kind, args):
-    """The brief's token sentence when a token service is configured, else nothing (exactly as today)."""
     if not os.environ.get('OPENWIZ_TOKEN_SERVICE'):
         return ''
     who, repo = REQUESTERS[kind]

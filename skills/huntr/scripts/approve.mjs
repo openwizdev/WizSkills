@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// huntr's only approval writer. GitHub reads are untrusted; never execute proof text.
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +8,6 @@ const fail = reason => { throw new Error(reason); };
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const integer = x => Number.isSafeInteger(x) && x >= 0;
 function json(text) {
-  // JSON.parse checks grammar; scan its valid tokens to reject repeated object keys.
   const value = JSON.parse(text);
   const stack = [];
   for (const token of text.match(/"(?:[^"\\]|\\.)*"|[{}\[\],:]|[^\s{}\[\],:]+/g) ?? []) {
@@ -64,8 +62,6 @@ function issue(value) {
   }
   return value;
 }
-// Each connection owns its cursor. gh's automatic pagination cannot advance
-// the outer issue list and several independent nested connections together.
 const PAGE_FIELDS = 'totalCount pageInfo { hasNextPage endCursor }';
 const COMMENT_FIELDS = `${PAGE_FIELDS} nodes { databaseId body }`;
 const LABEL_FIELDS = `${PAGE_FIELDS} nodes { name }`;
@@ -218,7 +214,6 @@ function allowed(path,tier,p) {
   });
 }
 function exactFile(path) {
-  // Check the consuming checkout where available, including symlink ancestors.
   let current='';
   for (const [i,part] of path.split('/').entries()) {
     current += (i ? '/' : '')+part;
@@ -226,7 +221,7 @@ function exactFile(path) {
       const st=lstatSync(current);
       if (st.isSymbolicLink() || (current === path && !st.isFile())) fail('owned paths must be exact files, not directories or links');
     } catch (e) {
-      if (e.code === 'ENOENT') return; // A declared new file is allowed.
+      if (e.code === 'ENOENT') return;
       throw e;
     }
   }
@@ -309,18 +304,13 @@ function protectedPaths(text,legacyBody=false) {
     if (chunk.strict && /^none(?:\s*\(a person's ticket\))?\.?$/i.test(chunk.text.trim())) continue;
     const quoted=[...chunk.text.matchAll(/`([^`]+)`/g)].map(x=>x[1]);
     const bare=chunk.text.replace(/`[^`]+`/g,'');
-    // Formal declarations and legacy bodies also protect obvious unformatted paths.
     const unquoted=chunk.bare ? [...bare.matchAll(/(?:[A-Za-z0-9_.*-]+\/)+[A-Za-z0-9_.*\/-]*|\b[A-Za-z0-9_-]+\.[A-Za-z0-9_.*-]+\b/g)].map(x=>x[0]) : [];
     const tokens=[...quoted,...unquoted].filter(x=>validPath(x.replaceAll('*','x'),true));
     const first=chunk.text.split('\n',1)[0].replaceAll('**','');
-    // Recognize an ownership assertion after explicit attribution/approval,
-    // while keeping conditional prose about a possible widening as a hint.
     const assertion=first.replace(/^#{1,6}\s+/, '')
       .replace(/^(?:orchestrator|builder|reviewer):\s*/i, '')
       .replace(/^(?:yes,?\s+)?approved\b[.!:]?\s*/i, '');
     const widening=!chunk.legacy && !/\?\s*$/.test(first) && assertion.match(/^(?:Q[0-9]+:\s*)?(?:(?:the|your|its)\s+)?(?:owned paths|scope)\s+(?:(is|are|has been|have been)\s+)?(?:added|widened|expanded|now (?:also )?include[sd]?)\b(.*)$/i);
-    // Only generic is/are policy wording gets this exception; completed
-    // declarations still need paths. Named paths always add protection.
     const conditionalPolicy=widening && /^(?:is|are)$/i.test(widening[1] ?? '') && /^\s+only\s+(?:if|after)\b/i.test(widening[2]);
     if (!tokens.length && (chunk.strict || (widening && !conditionalPolicy))) fail('approved ticket has unreadable owned paths declaration');
     paths.push(...tokens);
@@ -347,9 +337,6 @@ function proofCommand(text,what) {
   if (!proof || !proof[1].split('\n').some(line=>line.trim() && !line.trim().startsWith('#'))) fail(`${what} needs a named evidence command`);
 }
 function beingBuilt(ticket) {
-  // Match the fleet's first-nonblank-line records. Approval or a branch alone
-  // is not evidence that a builder started. An unresolved starting claim may
-  // already have spawned one, so it reserves files until reconciled.
   return comments(ticket.comments).some(c=> {
     const line=c.body.split(/\r?\n/).find(x=>x.trim())?.trim() ?? '';
     return /^launch-fleet:\s*(starting|started|start checked)\b/.test(line);

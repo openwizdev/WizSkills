@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""A synthetic token service (token-service v1) for launch-fleet's token-step tests (GA4, OpenWiz #1846).
-
-The agent helper runs it as `python3 -I <this file> mint` (the local route). It
-reads one request on stdin, appends the request and its own argument list to
-$FAKE_SERVICE_LOG as one JSON line (with whether the legacy key variable reached it,
-never its value), and answers as the contract says: a
-synthetic token for exactly the requested scope, or with $FAKE_SERVICE_REFUSE
-set, the `unavailable` refusal (exit 1). It holds no key and reaches nothing.
-"""
 import json
 import os
 import sys

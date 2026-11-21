@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""Synthetic posted-approval and machine-approval fixtures; no network or live
-session data.
-
-Run: python3 skills/to-tickets/scripts/test_check_approval.py
-CHECK_APPROVAL_SH can name another checker (including an always-pass mutant).
-The two six-ticket shapes reproduce #172/#330's bad and corrected records;
-people, titles, comment IDs and fingerprints below are synthetic.
-"""
 import copy
 import json
 import os
@@ -19,6 +11,7 @@ import unittest
 
 HERE = Path(__file__).resolve().parent
 CHECKER = Path(os.environ.get("CHECK_APPROVAL_SH", HERE / "check-approval.sh"))
+CONTRACT = HERE.parents[2] / "contracts" / "checkpoints.v1.md"
 LABELS = """# Triage labels
 
 ## Labels
@@ -28,7 +21,6 @@ LABELS = """# Triage labels
 | `ready-for-agent` | `ready-for-agent` | Agent ticket |
 | `ready-for-human` | `ready-for-human` | Human ticket |
 """
-# #717: the factory's identity, the Record authors row launch-fleet reads.
 FLEET = """# Fleet settings
 
 ## GitHub identity
@@ -41,6 +33,9 @@ FLEET = """# Fleet settings
 ## Standing merge rules
 """
 FACTORY = {"login": "openwiz[bot]"}
+OLD_SPEC = "## Problem Statement\n\nSynthetic problem.\n\n## Proof\n\nSynthetic proof.\n"
+CUTOFF = "2026-11-21T00:00:00Z"
+ANSWERS = "## Checkpoints\n\n- One-way door: yes\n- User-visible: no\n"
 OUTSIDER = {"login": "synthetic-outsider"}
 
 
@@ -57,7 +52,8 @@ def fixture(spec, label="ready-for-agent"):
         'plan-graph revision v2\n```\n\n</details>\n'
     )
     return {
-        "graph": {"subIssues": {"totalCount": 6, "nodes": [{"number": n} for n in numbers]}},
+        "graph": {"subIssues": {"totalCount": 6, "nodes": [{"number": n} for n in numbers]},
+                  "createdAt": "2026-11-01T00:00:00Z", "body": OLD_SPEC},
         "comments": [[{"id": 100, "user": dict(FACTORY), "body": body}]],
         "labels_doc": LABELS,
         "fleet_doc": FLEET,
@@ -76,7 +72,6 @@ def state_table(world):
             line = "| --- | --- | --- |"
         elif line.startswith("| #"):
             cols = line.split("|")
-            # #172's shape has five closed and one open ticket; #330 is all open.
             state = "closed" if "#17" in cols[1] or "#180" in cols[1] else "open"
             line = f"| {cols[1].strip()} | {cols[2].strip()} | {state} |"
         lines.append(line)
@@ -92,7 +87,7 @@ with open(os.environ["FAKE_LOG"], "a") as log:
     log.write(json.dumps(args) + "\\n")
 w = json.loads(Path(os.environ["FAKE_WORLD"]).read_text())
 n = os.environ["FAKE_SPEC"]
-if args == ["repo", "view", "--json", "isPrivate"]:
+if args == ["repo", "view", "--json", "isPrivate,nameWithOwner"]:
     key = "repo"
 elif args == ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/triage-labels.md"]:
     key = "labels_doc"
@@ -100,7 +95,8 @@ elif args == ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{ow
     key = "tracker_doc"
 elif args == ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/fleet.md"]:
     key = "fleet_doc"
-elif args == ["issue", "view", n, "--json", "subIssues"]:
+elif args in (["issue", "view", n, "--json", "body,createdAt,subIssues"],
+              ["issue", "view", n, "--json", "subIssues"]):
     key = "graph"
 elif args == ["api", "--paginate", "repos/{owner}/{repo}/issues/" + n + "/comments?per_page=100"]:
     key = "comments"
@@ -126,8 +122,10 @@ class ApprovalTest(unittest.TestCase):
     def test_documented_handoff_from_plugin_consumer(self):
         with tempfile.TemporaryDirectory(prefix="approval-consumer-") as folder:
             tmp = Path(folder)
-            installed = tmp / "plugin cache" / "to-tickets"
+            installed = tmp / "plugin cache" / "skills" / "to-tickets"
             (installed / "scripts").mkdir(parents=True)
+            (tmp / "plugin cache" / "contracts").mkdir()
+            shutil.copy2(CONTRACT, tmp / "plugin cache" / "contracts" / "checkpoints.v1.md")
             shutil.copy2(HERE.parent / "SKILL.md", installed / "SKILL.md")
             shutil.copy2(CHECKER, installed / "scripts" / "check-approval.sh")
             commands = re.findall(r'`(sh [^`]*scripts/check-approval\.sh"? <spec>)`',
@@ -161,12 +159,12 @@ class ApprovalTest(unittest.TestCase):
                 ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/triage-labels.md"],
                 ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/issue-tracker.md"],
                 ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/fleet.md"],
-                ["issue", "view", "172", "--json", "subIssues"],
+                ["issue", "view", "172", "--json", "body,createdAt,subIssues"],
                 ["api", "--paginate", "repos/{owner}/{repo}/issues/172/comments?per_page=100"],
-                ["repo", "view", "--json", "isPrivate"],
+                ["repo", "view", "--json", "isPrivate,nameWithOwner"],
             ])
 
-    def run_check(self, world, spec=172, status=0, reason=None, argument=None):
+    def run_check(self, world, spec=172, status=0, reason=None, argument=None, checker=CHECKER):
         with tempfile.TemporaryDirectory(prefix="approval-fixture-") as folder:
             tmp = Path(folder)
             (tmp / "gh").write_text(FAKE_GH)
@@ -175,7 +173,7 @@ class ApprovalTest(unittest.TestCase):
             env = dict(os.environ, PATH=str(tmp) + os.pathsep + os.environ["PATH"],
                        FAKE_WORLD=str(tmp / "world.json"), FAKE_LOG=str(tmp / "calls"),
                        FAKE_SPEC=str(spec))
-            result = subprocess.run(["sh", str(CHECKER), str(spec) if argument is None else argument],
+            result = subprocess.run(["sh", str(checker), str(spec) if argument is None else argument],
                                     env=env, text=True, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, status, result.stdout + result.stderr)
             if status == 0:
@@ -190,9 +188,9 @@ class ApprovalTest(unittest.TestCase):
                     ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/triage-labels.md"],
                     ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/issue-tracker.md"],
                 ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/fleet.md"],
-                    ["issue", "view", str(spec), "--json", "subIssues"],
+                    ["issue", "view", str(spec), "--json", "body,createdAt,subIssues"],
                     ["api", "--paginate", f"repos/{{owner}}/{{repo}}/issues/{spec}/comments?per_page=100"],
-                    ["repo", "view", "--json", "isPrivate"],
+                    ["repo", "view", "--json", "isPrivate,nameWithOwner"],
                 ])
             return calls
 
@@ -263,8 +261,6 @@ class ApprovalTest(unittest.TestCase):
         self.run_check(w)
 
     def test_attributed_quote_forms_throughout_comment(self):
-        # R1: these are private records even after a valid public opening.
-        # Check all T2 double-quote spellings, including escaped wire-like text.
         for lead in ("Robin:", "**Robin:**",
                      "**Plan graph approved by Robin, 2026-11-01, revision 1:**"):
             for quote in ('"', '“', '”', '\\"', '\\“', '\\”'):
@@ -326,12 +322,127 @@ class ApprovalTest(unittest.TestCase):
                             self.assertTrue(lines[i + 1].startswith("Private record: "))
         self.assertEqual(len(found), 5)
 
+    def spec_world(self, body, created=CUTOFF):
+        w = fixture(172)
+        w["graph"]["body"] = body
+        w["graph"]["createdAt"] = created
+        return w
+
+    def test_new_spec_without_both_answers_is_refused(self):
+        for created in (CUTOFF, "2027-01-01T00:00:00Z"):
+            for body in (OLD_SPEC, OLD_SPEC + "\n```text\n" + ANSWERS + "```\n"):
+                with self.subTest(created=created, body=body):
+                    self.run_check(self.spec_world(body, created), status=1,
+                                   reason="no ## Checkpoints section")
+        self.run_check(self.spec_world(OLD_SPEC + "\n## Checkpoints\n\n- One-way door: no\n"),
+                       status=1, reason="checkpoints are invalid (answer-missing)")
+
+    def test_new_spec_with_both_answers_passes(self):
+        for door in ("yes", "no"):
+            for visible in ("yes", "yes, a release", "no"):
+                section = f"## Checkpoints\n\n- One-way door: {door}\n- User-visible: {visible}\n\n"
+                for body in (section + OLD_SPEC, OLD_SPEC + "\n" + section,
+                             "```synthetic status```\n\n" + section,
+                             "~~~\n## Checkpoints\n~~~\n" + section,
+                             (section + OLD_SPEC).replace("\n", "\r\n")):
+                    with self.subTest(body=body):
+                        self.run_check(self.spec_world(body))
+
+    def test_invalid_answers_are_refused_for_every_spec(self):
+        cases = [
+            (" ## Checkpoints\n\n- One-way door: yes\n- User-visible: no\n", "section-heading"),
+            ("## Checkpoint answers\n\n- One-way door: yes\n- User-visible: no\n", "section-heading"),
+            ("### checkpoints\n", "section-heading"),
+            ("##Checkpoints\n", "section-heading"),
+            ("Checkpoints\n-----------\n", "section-heading"),
+            (ANSWERS + "\n" + ANSWERS, "section-repeated"),
+            ("## Checkpoints\n\n- One-way door: yes\n", "answer-missing"),
+            ("## Checkpoints\n\n", "answer-missing"),
+            ("## Checkpoints\n\n- User-visible: no\n- One-way door: yes\n", "answer-line"),
+            ("## Checkpoints\n\n- One-way door: maybe\n- User-visible: no\n", "answer-line"),
+            ("## Checkpoints\n\n- One-way door: yes\n- User-visible: no, a release\n", "answer-line"),
+            ("## Checkpoints\n\n- One-way door: yes \n- User-visible: no\n", "answer-line"),
+            (ANSWERS + "Because synthetic.\n", "answer-line"),
+            (ANSWERS + "### Why\n", "answer-line"),
+        ]
+        for created in (CUTOFF, "2026-11-01T00:00:00Z"):
+            for section, code in cases:
+                with self.subTest(created=created, section=section):
+                    self.run_check(self.spec_world(OLD_SPEC + "\n" + section, created),
+                                   status=1, reason=f"checkpoints are invalid ({code})")
+
+    def test_spec_planned_before_the_change_reads_early_only(self):
+        for created in ("2026-11-20T23:59:59Z", "2026-01-01T00:00:00Z"):
+            with self.subTest(created=created):
+                self.run_check(self.spec_world(OLD_SPEC, created))
+
+    def test_cutoff_boundary(self):
+        script = CHECKER.read_text()
+        self.assertEqual(re.findall(r"^CHECKPOINTS_SINCE=(\S+)$", script, re.M), [CUTOFF])
+        self.assertEqual(script.count("2026-11-21"), 1)
+        for created, status in (("2026-11-20T23:59:59Z", 0), (CUTOFF, 1), ("2026-11-21T00:00:01Z", 1)):
+            with self.subTest(created=created):
+                self.run_check(self.spec_world(OLD_SPEC, created), status=status,
+                               reason="no ## Checkpoints section")
+        for created in ("2026-11-21T00:00:00+01:00", "2026-11-20T23:59:59-01:00"):
+            with self.subTest(created=created):
+                self.run_check(self.spec_world(OLD_SPEC, created), status=1,
+                               reason="cannot read spec #172's body")
+
+    def test_unreadable_spec_or_contract_refuses(self):
+        for key, value in (("body", None), ("createdAt", None), ("createdAt", "yesterday"),
+                           ("createdAt", "2026-11-21")):
+            with self.subTest(key=key, value=value):
+                w = fixture(172)
+                w["graph"][key] = value
+                self.run_check(w, status=1, reason="cannot read spec #172's body")
+        with tempfile.TemporaryDirectory(prefix="approval-contract-") as folder:
+            copy_ = Path(folder) / "skills" / "to-tickets" / "scripts" / "check-approval.sh"
+            copy_.parent.mkdir(parents=True)
+            shutil.copy2(CHECKER, copy_)
+            for text in (None, "# no forms block\n",
+                         CONTRACT.read_text().replace('"## Checkpoints"', '"## Checkpoints",,')):
+                with self.subTest(contract=text and text[:20]):
+                    contracts = Path(folder) / "contracts"
+                    shutil.rmtree(contracts, ignore_errors=True)
+                    if text is not None:
+                        contracts.mkdir()
+                        (contracts / "checkpoints.v1.md").write_text(text)
+                    self.run_check(fixture(172), status=1, reason="cannot read the checkpoint forms",
+                                   checker=copy_)
+
     def test_historical_shapes(self):
         for spec in (172, 330):
             with self.subTest(spec=spec, shape="State"):
                 self.run_check(state_table(fixture(spec)), spec, 1, "columns")
             with self.subTest(spec=spec, shape="corrected"):
                 self.run_check(fixture(spec), spec)
+
+    def test_long_form_rows_for_this_repository_read_as_short(self):
+        for name in ("synthetic-owner/synthetic-repo", "Synthetic-Owner/Synthetic-Repo"):
+            with self.subTest(name=name):
+                w = fixture(172)
+                w["repo"] = {"isPrivate": False, "nameWithOwner": "synthetic-owner/synthetic-repo"}
+                w["comments"][0][0]["body"] = w["comments"][0][0]["body"].replace("| #", f"| {name}#")
+                self.run_check(w)
+
+    def test_long_form_row_for_another_repository_is_refused_naming_its_line(self):
+        w = fixture(172)
+        w["repo"] = {"isPrivate": False, "nameWithOwner": "synthetic-owner/synthetic-repo"}
+        w["comments"][0][0]["body"] = w["comments"][0][0]["body"].replace("| #173 |", "| other-owner/other-repo#173 |")
+        self.run_check(w, status=1, reason="approval table line `| other-owner/other-repo#173 | Synthetic ticket 173 | none | ready-for-agent |` names other-owner/other-repo#173, not this repository")
+
+    def test_a_title_naming_another_repository_refuses_nothing(self):
+        w = fixture(172)
+        w["repo"] = {"isPrivate": False, "nameWithOwner": "synthetic-owner/synthetic-repo"}
+        w["comments"][0][0]["body"] = w["comments"][0][0]["body"].replace(
+            "Synthetic ticket 173", "Synthetic ticket 173, after other-owner/other-repo#5")
+        self.run_check(w)
+
+    def test_long_form_row_is_refused_when_this_repository_is_unknown(self):
+        w = fixture(172)
+        w["comments"][0][0]["body"] = w["comments"][0][0]["body"].replace("| #173 |", "| synthetic-owner/synthetic-repo#173 |")
+        self.run_check(w, status=1, reason="names synthetic-owner/synthetic-repo#173, not this repository")
 
     def test_trailing_table_whitespace(self):
         for suffix in (" ", "\t", " \t\r"):
@@ -471,7 +582,6 @@ class ApprovalTest(unittest.TestCase):
         w = fixture(172)
         old = copy.deepcopy(w["comments"][0][0])
         state_table(w)
-        # A later revision number in an older approval must not hide the bad newest record.
         old["id"] = 99
         old["body"] = old["body"].replace("revision 2", "revision 9")
         w["comments"] = [[w["comments"][0][0]], [old, {"id": 101, "user": dict(FACTORY), "body": "Progress only"}]]
@@ -518,13 +628,8 @@ class ApprovalTest(unittest.TestCase):
                 self.run_check(w, status=1, reason="cannot read")
 
     def test_only_record_authors_approve(self):
-        # #717 catches: a plan approval posted by anyone who can comment on a
-        # public spec counted, so an outsider could approve a plan graph, or
-        # hide the factory's refusal behind a newer valid-looking approval.
         good = fixture(172)["comments"][0][0]["body"]
         bad = state_table(fixture(172))["comments"][0][0]["body"]
-        # REST names the App `openwiz[bot]`: a bare `openwiz`, even typed Bot,
-        # is never the App on this REST read (orchestrator ruling on #717).
         for user in (OUTSIDER, {"login": "openwiz"}, {"login": "openwiz", "type": "Bot"},
                      {"login": "openwiz[bot]x"}, {"login": None},
                      {}, None, "openwiz[bot]", "missing"):
@@ -542,7 +647,6 @@ class ApprovalTest(unittest.TestCase):
                 if user == "missing":
                     del w["comments"][1][0]["user"]
                 self.run_check(w, status=1, reason="columns")
-        # The factory's own records still count, its logins in any case.
         for login in ("openwiz[bot]", "OpenWiz[bot]", "synthetic-owner", "SYNTHETIC-OWNER"):
             with self.subTest(login=login):
                 w = fixture(172)
@@ -551,8 +655,6 @@ class ApprovalTest(unittest.TestCase):
                 self.run_check(w)
 
     def test_record_authors_setting_must_be_whole(self):
-        # #717 catches: a reader that trusts everyone, or keeps the logins
-        # that did parse, when the Record authors row is missing or malformed.
         row = "| Record authors | `openwiz[bot]`, `synthetic-owner` |"
         for doc in ("", FLEET.replace(row + "\n", ""),
                     FLEET.replace("## GitHub identity", "## Example"),
@@ -576,10 +678,6 @@ class ApprovalTest(unittest.TestCase):
             self.assertEqual(self.run_check(fixture(172), status=2, reason="usage:", argument=argument), [])
 
 
-# The machine plan approval (#1339, J202): a plan cut from a synthetic grill
-# by to-spec and to-tickets, approved by approve.py's own checks with no human
-# step. Its revision text comes from the real revision.sh over the folder's
-# fake gh, so the fingerprint is never computed the way approve.py computes it.
 APPROVE = HERE / "approve.py"
 REVISION = HERE.parent / "revision.sh"
 FAKE_REVISION_GH = HERE.parent / "test" / "fake_gh.py"
@@ -589,8 +687,13 @@ SPEC_BODY = ("## Problem Statement\n\nFrom the synthetic grill `docs/grills/2026
              "a user can't take their widgets out.\n\n## Solution\n\nAn export button and an export command.\n")
 
 
+SPEC_GH = """#!/bin/sh
+echo "$*" >> "$SPEC_LOG"
+exit 1
+"""
+
+
 def body(n, size, owned, relies="nothing", links=(), done_by=None):
-    """One ticket body as tickets.md asks for it."""
     parts = [f"## Parent\n\nTicket of spec #{SPEC}. Size: {size}.\n",
              f"## What to build\n\nSynthetic work for #{n}.\n"]
     if done_by:
@@ -604,9 +707,6 @@ def body(n, size, owned, relies="nothing", links=(), done_by=None):
 
 
 def plan():
-    """The synthetic plan: a contract first, two builders on it, a chained
-    builder inside a blocker's folder, two parallel tickets on separate lines
-    of one shared file, and a person's live check last."""
     tickets = [
         (9101, "Write the export contract", [], body(9101, "S", ["`contracts/export.v1.md`"])),
         (9102, "Show the export button", [9101],
@@ -641,9 +741,6 @@ def find(tickets, n):
 
 
 class MachineApproval(unittest.TestCase):
-    """approve.py: a plan that passes every check gets one machine approval
-    record bound to its revision fingerprint; a plan that fails any check gets
-    none."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -651,12 +748,18 @@ class MachineApproval(unittest.TestCase):
         self.root = self.tmp / "root"
         (self.root / "docs").mkdir(parents=True)
         (self.root / "docs/existing.md").write_text("Synthetic interface.\n")
+        self.spec = {"body": SPEC_BODY, "createdAt": "2026-11-01T00:00:00Z"}
+        spec_bin = self.tmp / "spec-bin"
+        spec_bin.mkdir()
+        (spec_bin / "gh").write_text(SPEC_GH)
+        (spec_bin / "gh").chmod(0o755)
+        self.env = dict(os.environ, PATH=f"{spec_bin}:{os.environ['PATH']}", SPEC_LOG=str(self.tmp / "gh-calls"))
+        self.addCleanup(lambda: self.assertFalse((self.tmp / "gh-calls").exists(), "approve.py called gh"))
 
     def revision(self, tickets):
-        """The revision text revision.sh prints for this plan on a fake GitHub."""
         state = self.tmp / "gh"
         (state / "bin").mkdir(parents=True, exist_ok=True)
-        issues = [{"number": SPEC, "title": "Synthetic spec", "body": SPEC_BODY, "state": "OPEN",
+        issues = [{"number": SPEC, "title": "Synthetic spec", "body": self.spec["body"], "state": "OPEN",
                    "parent": None, "milestone": "Synthetic", "blockedBy": [], "labels": [], "comments": []}]
         issues += [{"number": t["number"], "title": t["title"], "body": t["body"], "state": t["state"],
                     "parent": SPEC, "milestone": "Synthetic", "blockedBy": [b["number"] for b in t["blocked_by"]],
@@ -676,17 +779,18 @@ class MachineApproval(unittest.TestCase):
         return out.stdout
 
     def approve(self, tickets, revision=None, *extra):
+        (self.tmp / "spec.json").unlink(missing_ok=True)
+        if self.spec is not None:
+            (self.tmp / "spec.json").write_text(json.dumps(self.spec))
         (self.tmp / "graph.json").write_text(json.dumps(graph_read(tickets)))
         (self.tmp / "revision.txt").write_text(self.revision(tickets) if revision is None else revision)
         return subprocess.run(
             ["python3", "-I", str(APPROVE), "--graph", str(self.tmp / "graph.json"),
-             "--revision", str(self.tmp / "revision.txt"), "--grill", GRILL, "--number", "1",
-             "--date", "2026-11-19", "--root", str(self.root), *extra],
-            capture_output=True, text=True)
+             "--revision", str(self.tmp / "revision.txt"), "--spec", str(self.tmp / "spec.json"),
+             "--grill", GRILL, "--number", "1", "--date", "2026-11-19", "--root", str(self.root), *extra],
+            capture_output=True, text=True, env=self.env)
 
     def test_a_plan_that_passes_every_check_gets_a_record_bound_to_its_fingerprint(self):
-        # catches: an approval that isn't bound to the exact revision checked,
-        # or one that needs a human reply first.
         tickets = plan()
         revision = self.revision(tickets)
         out = self.approve(tickets, revision)
@@ -712,28 +816,68 @@ class MachineApproval(unittest.TestCase):
         ])
         self.assertIn(f"Fingerprint: `{fingerprint}`", lines)
         self.assertIn("```text\n" + revision + "```\n", out.stdout)
-        # Not a human record: launch-fleet's and check-approval.sh's readers
-        # never take it for one.
         self.assertFalse(out.stdout.startswith("**Plan graph approved by"))
         self.assertNotIn("Private record:", out.stdout)
 
+    def test_machine_approval_needs_a_new_specs_checkpoint_answers(self):
+        answered = SPEC_BODY + "\n## Checkpoints\n\n- One-way door: yes\n- User-visible: no\n"
+        for created, text, refusal in (
+                (CUTOFF, SPEC_BODY, "spec #9100 has no ## Checkpoints section"),
+                ("2026-11-21T00:00:01Z", SPEC_BODY, "spec #9100 has no ## Checkpoints section"),
+                ("2026-11-01T00:00:00Z", SPEC_BODY + "\n## Checkpoint answers\n",
+                 "spec #9100's checkpoints are invalid (section-heading)"),
+                (CUTOFF, SPEC_BODY + "\n## Checkpoints\n\n- One-way door: yes\n",
+                 "spec #9100's checkpoints are invalid (answer-missing)"),
+                (CUTOFF, answered, None),
+                ("2026-11-20T23:59:59Z", SPEC_BODY, None)):
+            with self.subTest(created=created, text=text[-40:]):
+                self.spec = {"body": text, "createdAt": created}
+                out = self.approve(plan())
+                if refusal:
+                    self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+                    self.assertIn(f"approve: checkpoints: {refusal}", out.stderr)
+                else:
+                    self.assertEqual(out.returncode, 0, out.stderr)
+                    self.assertTrue(out.stdout.startswith("**Machine plan approval, 2026-11-19, revision 1:**"))
+
+    def test_machine_approval_checks_the_spec_its_revision_names(self):
+        tickets = plan()
+        revision = self.revision(tickets)
+        self.spec = {"body": SPEC_BODY + "\n## Checkpoints\n\n- One-way door: yes\n- User-visible: no\n",
+                     "createdAt": CUTOFF}
+        out = self.approve(tickets, revision)
+        self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+        self.assertIn("approve: checkpoints: spec #9100's body differs from the revision's", out.stderr)
+        for spec in (None, {"body": SPEC_BODY}, {"body": SPEC_BODY, "createdAt": "2026-11-01"}, [], "text"):
+            with self.subTest(spec=spec):
+                self.spec = spec
+                out = self.approve(tickets, revision)
+                self.assertEqual((out.returncode, out.stdout), (2, ""), out.stderr)
+                self.assertIn("approve: unreadable input:", out.stderr)
+
+    def test_step_four_passes_the_spec_to_machine_approval(self):
+        text = (HERE.parent / "SKILL.md").read_text()
+        step = text.split("## 4. Approve by the checks", 1)[1].split("\n## 5.", 1)[0]
+        block = step.split("```sh\n", 1)[1].split("```", 1)[0]
+        self.assertIn('gh issue view <spec> --json body,createdAt > spec.json\n', block)
+        self.assertIn(" --spec spec.json ", " ".join(block.split()) + " ")
+
     def test_revision_two_needs_what_changed(self):
-        # catches: a re-cut recorded without saying what changed since the last one.
         tickets = plan()
         (self.tmp / "graph.json").write_text(json.dumps(graph_read(tickets)))
         (self.tmp / "revision.txt").write_text(self.revision(tickets))
+        (self.tmp / "spec.json").write_text(json.dumps(self.spec))
         base = ["python3", "-I", str(APPROVE), "--graph", str(self.tmp / "graph.json"),
-                "--revision", str(self.tmp / "revision.txt"), "--grill", GRILL,
+                "--revision", str(self.tmp / "revision.txt"), "--spec", str(self.tmp / "spec.json"), "--grill", GRILL,
                 "--date", "2026-11-19", "--root", str(self.root), "--number", "2"]
-        missing = subprocess.run(base, capture_output=True, text=True)
+        missing = subprocess.run(base, capture_output=True, text=True, env=self.env)
         self.assertEqual((missing.returncode, missing.stdout), (2, ""))
-        given = subprocess.run(base + ["--changed", "the export page split off"], capture_output=True, text=True)
+        given = subprocess.run(base + ["--changed", "the export page split off"], capture_output=True, text=True,
+                               env=self.env)
         self.assertEqual(given.returncode, 0, given.stderr)
         self.assertIn("\nChanged since revision 1: the export page split off.\n", given.stdout)
 
     def test_a_plan_that_fails_any_check_gets_no_record(self):
-        # catches: a check that lets a bad plan through, so the fleet would
-        # start on it with nobody watching.
         def edit(n, old, new):
             def change(tickets):
                 t = find(tickets, n)
@@ -775,8 +919,6 @@ class MachineApproval(unittest.TestCase):
                     self.assertIn(f"approve: {check}:", out.stderr)
 
     def test_a_fingerprint_of_another_plan_gets_no_record(self):
-        # catches: an approval whose fingerprint names a revision other than
-        # the graph that was checked (a ticket edited between the two reads).
         tickets = plan()
         revision = self.revision(tickets)
         find(tickets, 9103)["body"] += "\nA late edit.\n"
@@ -792,9 +934,6 @@ class MachineApproval(unittest.TestCase):
                 self.assertIn("approve: revision:", out.stderr)
 
     def test_the_critical_chain_counts_open_outside_blockers_and_never_merged_work(self):
-        # catches: a chain length that leaves out an open blocker in another
-        # spec, or counts tickets already merged, so the record reports a
-        # critical chain shorter or longer than the work still ahead.
         def chain(tickets):
             out = self.approve(tickets)
             self.assertEqual(out.returncode, 0, out.stderr)
@@ -815,9 +954,6 @@ class MachineApproval(unittest.TestCase):
         self.assertEqual(chain(tickets), "width: chain 3, widest 4")
 
     def test_a_context_file_link_adds_no_serial_work_but_a_needed_input_does(self):
-        # catches (review R5 of #1353): a file link that F6 starts past
-        # counted in the critical chain, or one whose blocker owns an input
-        # the ticket relies on left out of it.
         def chain(tickets):
             out = self.approve(tickets)
             self.assertEqual(out.returncode, 0, out.stderr)
@@ -839,15 +975,12 @@ PREFER = HERE / "prefer.py"
 
 
 def cut(tickets, links):
-    """One proposed cut in tickets.md's picture data: (id, state, role) and (blocker, ticket)."""
     return {"tickets": [{"id": i, "title": f"Synthetic {i}", "size": "S", "state": state, "role": role}
                         for i, state, role in tickets],
             "links": [{"blocker": b, "ticket": t, "kind": "real", "reason": "Synthetic behaviour"} for b, t in links]}
 
 
 class PreferCut(unittest.TestCase):
-    """prefer.py: of two cuts of one spec, keep the shorter critical chain,
-    and the wider graph when the chains are equal."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -860,8 +993,6 @@ class PreferCut(unittest.TestCase):
                               capture_output=True, text=True, cwd=self.tmp)
 
     def test_the_shorter_chain_wins_then_the_wider_graph(self):
-        # catches: a planner that keeps the first or the narrower cut when
-        # another cut finishes the spec sooner or starts more tickets at once.
         w = "waiting", "builder"
         line = cut([("A", *w), ("B", *w), ("C", *w), ("D", *w)], [("A", "B"), ("B", "C"), ("C", "D")])
         fan = cut([("A", *w), ("B", *w), ("C", *w), ("D", *w)], [("A", "B"), ("A", "C"), ("A", "D")])
@@ -879,8 +1010,6 @@ class PreferCut(unittest.TestCase):
         self.assertEqual(out.stdout.splitlines()[-1], "prefer a.json: the same chain and width; keep the first")
 
     def test_the_chain_counts_open_outside_blockers_and_never_merged_work(self):
-        # catches: a comparison that ignores an outside blocker still open,
-        # or counts merged tickets, and so keeps the cut that finishes later.
         w = "waiting", "builder"
         outside = cut([("#10", "waiting", "external"), ("A", *w), ("B", *w), ("C", *w)],
                       [("#10", "A"), ("A", "B"), ("C", "B")])
@@ -891,8 +1020,6 @@ class PreferCut(unittest.TestCase):
                                      "prefer b.json: the shorter critical chain\n")
 
     def test_a_file_link_is_context_except_into_a_persons_ticket(self):
-        # catches (review R5 of #1353): a cut whose tickets only share files
-        # rated as a serial chain, so the slower cut with a real dependency wins.
         w = "waiting", "builder"
         shared = {"tickets": cut([("A", *w), ("B", *w), ("C", *w)], [])["tickets"],
                   "links": [{"blocker": "A", "ticket": "B", "kind": "file", "reason": "shared.md"},
@@ -907,8 +1034,6 @@ class PreferCut(unittest.TestCase):
         self.assertEqual(out.stdout.splitlines()[0], "cut a.json: chain 2, widest 1")
 
     def test_an_unusable_cut_is_refused(self):
-        # catches: a cycle or a link to an unknown ticket read as a short
-        # chain, so a cut that can never finish wins.
         w = "waiting", "builder"
         fine = cut([("A", *w)], [])
         for bad in (cut([("A", *w), ("B", *w)], [("A", "B"), ("B", "A")]), cut([("A", *w)], [("Z", "A")]),

@@ -1,0 +1,98 @@
+{
+  "schema": "openwiz.write-driver.v1.fixtures",
+  "about": "Every fixture in this folder and its reading under contracts/write-driver.v1.md. Every value is synthetic.",
+  "fixtures": {
+    "copy-line": {
+      "copy-line/valid.txt": {"result": "valid"},
+      "copy-line/invalid-extra-words.txt": {"result": "invalid", "code": "copy-line"},
+      "copy-line/invalid-two-lines.txt": {"result": "invalid", "code": "copy-line"}
+    },
+    "fleet": {
+      "ticket/fleet.md": {"result": "valid", "account": "example-user"},
+      "ticket/fleet-no-backticks.md": {"result": "invalid", "code": "fleet-file"}
+    },
+    "ticket": {
+      "ticket/ticket.json": {"result": "valid", "host": "examplehost"},
+      "ticket/ticket-other-host.json": {"result": "invalid", "code": "ticket-text"},
+      "ticket/ticket-no-label.json": {"result": "invalid", "code": "ticket-labels"},
+      "ticket/ticket-asks-for-work.json": {"result": "invalid", "code": "ticket-text"}
+    },
+    "start": {
+      "ticket/start-record.md": {"result": "valid", "host": "examplehost"},
+      "ticket/start-record-wrong-opening.md": {"result": "invalid", "code": "start-record"}
+    },
+    "lesson": {
+      "lessons/live-shape-same.json": {"result": "pass"},
+      "lessons/live-shape-list.json": {"result": "pass"},
+      "lessons/live-shape-text.json": {"result": "pass"},
+      "lessons/live-shape-nested.json": {"result": "fail", "code": "shape-differs"},
+      "lessons/live-shape-type.json": {"result": "fail", "code": "shape-differs"},
+      "lessons/live-shape-text-differs.json": {"result": "fail", "code": "shape-differs"},
+      "lessons/live-shape-dotted-key.json": {"result": "fail", "code": "shape-differs"},
+      "lessons/live-shape-empty-object.json": {"result": "fail", "code": "shape-differs"},
+      "lessons/live-shape-empty-member.json": {"result": "fail", "code": "shape-differs"},
+      "lessons/wake-after-turn-pass.json": {"result": "pass"},
+      "lessons/wake-after-turn-still-running.json": {"result": "fail", "code": "turn-still-running"},
+      "lessons/wake-after-turn-refused.json": {"result": "fail", "code": "not-woken"},
+      "lessons/wake-after-turn-second-note.json": {"result": "fail", "code": "second-note"},
+      "lessons/expired-login-pass.json": {"result": "pass"},
+      "lessons/expired-login-silent-start.json": {"result": "fail", "code": "silent-start"},
+      "lessons/expired-login-vague-next.json": {"result": "fail", "code": "no-sign-in-next"},
+      "lessons/expired-login-says-do-not-sign-in.json": {"result": "fail", "code": "no-sign-in-next"},
+      "lessons/expired-login-left-running.json": {"result": "fail", "code": "left-running"},
+      "lessons/invalid-unknown-lesson.json": {"result": "invalid", "code": "lesson-fields"},
+      "lessons/invalid-repeated-key.json": {"result": "invalid", "code": "lesson-fields"},
+      "lessons/expired-login-exit-true.json": {"result": "invalid", "code": "lesson-fields"},
+      "lessons/expired-login-next-not-text.json": {"result": "invalid", "code": "lesson-fields"},
+      "lessons/wake-after-turn-not-bool.json": {"result": "invalid", "code": "lesson-fields"}
+    },
+    "ask": {
+      "asks/cost.txt": {"result": "valid", "kind": "cost-or-machine", "effect": "cost money"},
+      "asks/machine.txt": {"result": "valid", "kind": "cost-or-machine", "effect": "start a machine"},
+      "asks/both.txt": {"result": "valid", "kind": "cost-or-machine", "effect": "cost money and start a machine"},
+      "asks/sign-in.txt": {"result": "valid", "kind": "sign-in"},
+      "asks/sign-in-key-host.txt": {"result": "valid", "kind": "sign-in"},
+      "asks/machine-key-host.txt": {"result": "valid", "kind": "cost-or-machine", "effect": "start a machine"},
+      "asks/invalid-no-effect.txt": {"result": "invalid", "code": "ask-form"},
+      "asks/invalid-asks-for-key.txt": {"result": "invalid", "code": "credential"},
+      "asks/invalid-tells-not-asks.txt": {"result": "invalid", "code": "ask-form"},
+      "asks/invalid-env-token.txt": {"result": "invalid", "code": "credential"},
+      "asks/invalid-pat.txt": {"result": "invalid", "code": "credential"},
+      "asks/invalid-login.txt": {"result": "invalid", "code": "credential"}
+    },
+    "report": {
+      "report/passed.txt": {"result": "passed", "host": "examplehost", "minutes": 23, "stopped": true, "share_offer": true},
+      "report/passed-one-minute.txt": {"result": "passed", "host": "examplehost", "minutes": 1, "stopped": true, "share_offer": true},
+      "report/passed-not-stopped.txt": {"result": "passed", "host": "examplehost", "minutes": 41, "stopped": false, "share_offer": false},
+      "report/not-passing.txt": {"result": "not-passing", "host": "examplehost", "minutes": 58, "stopped": true, "share_offer": false},
+      "report/not-passing-lesson.txt": {"result": "not-passing", "host": "examplehost", "minutes": 34, "stopped": true, "share_offer": false},
+      "report/invalid-passed-with-fail.txt": {"result": "invalid", "code": "report-not-passing"},
+      "report/invalid-wrong-count.txt": {"result": "invalid", "code": "report-count"},
+      "report/invalid-no-time.txt": {"result": "invalid", "code": "report-form"},
+      "report/invalid-check-order.txt": {"result": "invalid", "code": "report-form"},
+      "report/invalid-no-stopped-line.txt": {"result": "invalid", "code": "report-form"}
+    },
+    "share": {
+      "share/line.txt": {"result": "valid", "host": "examplehost", "minutes": 23},
+      "share/line-one-minute.txt": {"result": "valid", "host": "examplehost", "minutes": 1},
+      "share/refused-account.txt": {"result": "refused", "code": "share-line"},
+      "share/refused-harness.txt": {"result": "refused", "code": "share-line"},
+      "share/refused-link.txt": {"result": "refused", "code": "share-line"},
+      "share/refused-date.txt": {"result": "refused", "code": "share-line"},
+      "share/refused-not-passing.txt": {"result": "refused", "code": "share-line"},
+      "share/refused-extra-line.txt": {"result": "refused", "code": "share-line"},
+      "share/refused-plural.txt": {"result": "refused", "code": "share-line"}
+    },
+    "preview": {
+      "share/preview.txt": {"result": "valid", "issue": 9001, "account": "example-user", "host": "examplehost", "minutes": 23},
+      "share/preview-extra-field.txt": {"result": "refused", "code": "share-preview"},
+      "share/preview-other-repository.txt": {"result": "refused", "code": "share-preview"}
+    },
+    "admission": {
+      "admission/ready.json": {"exit": 0, "read": "ready: yes", "environ": ["PATH"]},
+      "admission/no-start-record.json": {"exit": 1, "read": "ready: no: no launch-fleet start record from a record author", "environ": ["PATH"]},
+      "admission/start-by-other-account.json": {"exit": 1, "read": "ready: no: no launch-fleet start record from a record author", "environ": ["PATH"]},
+      "admission/caller-signs-and-hooks.json": {"exit": 0, "read": "ready: yes", "signer": false, "hook": false, "environ": ["PATH"]}
+    }
+  }
+}

@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""The handoff page's exact checks: target privacy, page shape and read-back.
-
-  handoff.py private <owner/repo>              exit 0 private ok, 1 refused, 2 unknown
-  handoff.py check <page-file>                 exit 0 page ok, 1 each problem, 2 unreadable
-  handoff.py landed <owner/repo> <path> <file> exit 0 landed, 1 refused or not landed, 2 unknown
-
-Reads GitHub only through `gh api --method GET`; never writes. Prints one short
-line per result and never echoes a matched secret or a raw response.
-"""
 import base64
 import binascii
 import json
@@ -20,7 +11,6 @@ from urllib.parse import quote
 PAGE = Path(__file__).resolve().parents[1] / 'page.md'
 REPOSITORY = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
 PAGE_PATH = re.compile(r'[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*')
-# Mechanical subset only; the skill's privacy guard covers what a pattern can't.
 SECRETS = [
     ('a GitHub token', re.compile(r'\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,})')),
     ('an API key', re.compile(r'\b(?:sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})')),
@@ -62,7 +52,6 @@ def gh_get(endpoint):
 
 
 def target(repo):
-    """(default branch, None) for a verified private repository, else (None, (exit, line))."""
     if not REPOSITORY.fullmatch(repo):
         return None, (2, f'unknown: {repo!r} is not owner/name')
     data, reason = gh_get(f'repos/{repo}')
@@ -82,7 +71,6 @@ def private(repo):
 
 
 def sections():
-    """The page's title and `##` headings, in order, from the template."""
     lines = PAGE.read_text(encoding='utf-8').splitlines()
     title = next(line for line in lines if line.startswith('# '))
     heads = [line for line in lines if line.startswith('## ')]
@@ -143,10 +131,17 @@ def landed(repo, path, file):
     return 0, f'landed: {path} on {branch} at {data["sha"]}'
 
 
+USAGE = (
+    '  handoff.py private <owner/repo>              exit 0 private ok, 1 refused, 2 unknown\n'
+    '  handoff.py check <page-file>                 exit 0 page ok, 1 each problem, 2 unreadable\n'
+    '  handoff.py landed <owner/repo> <path> <file> exit 0 landed, 1 refused or not landed, 2 unknown'
+)
+
+
 def main(argv):
     commands = {'private': (private, 1), 'check': (check, 1), 'landed': (landed, 3)}
     if not argv or argv[0] not in commands or len(argv) - 1 != commands[argv[0]][1]:
-        print('\n'.join(__doc__.splitlines()[2:5]), file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     code, line = commands[argv[0]][0](*argv[1:])
     print(line)

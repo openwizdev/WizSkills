@@ -50,24 +50,6 @@ may exist: reconcile before any retry).
 Exit 2, `host.py: <why>` on stderr: an unreadable setting, driver or runs file,
 or unwritable run state; nothing was started.
 The driver gets the caller's environment unchanged; this script reads no login.
-
-The token step (GA4, OpenWiz #1846; contracts/token-service.v1.md): with a
-token service configured (OPENWIZ_TOKEN_SERVICE set and non-empty), a start
-and a wake first run the agent helper beside this script
-(`github-app/agent-token.py start --requester builder-N --repository OWNER/NAME`),
-which gets #N's builder its token into the builder's private token file. Only
-the helper's own stderr (its one fallback note) is passed on; its stdout is
-dropped. A fallback never stops the start. The driver's input is unchanged, but
-its environment (for a start, a wake and a stop) gains #N's own `gh` and `git`
-first on PATH: two shims, kept in `agent-token-bin/` beside LAUNCH_FLEET_RUNS,
-that run each call through the helper's `run` with that same request, so the
-builder the driver starts does its GitHub work as the App in its own
-environment, one helper run per call. Each shim drops its own folder from PATH
-and passes the helper the command's name, never a resolved path, so the
-helper's own git guard runs first and git never holds the token (R3). The
-legacy OPENWIZ_GITHUB_APP_KEY is removed from this script's environment before
-it spawns anything (its own Git reads included), and from each shimmed call.
-With no service configured, it runs nothing and changes nothing.
 """
 import fcntl
 import importlib.util
@@ -204,7 +186,6 @@ def strict(text):
 
 
 def token_step(repo, n):
-    """Get #N's builder its token through the agent helper; pass on only its stderr (the one fallback note)."""
     if not configured():
         return
     try:
@@ -219,9 +200,8 @@ def token_step(repo, n):
         sys.stderr.write(r.stderr)
 
 
-LEGACY_KEY = 'OPENWIZ_GITHUB_APP_KEY'          # the superseded key secret: never in a configured child (R2)
+LEGACY_KEY = 'OPENWIZ_GITHUB_APP_KEY'
 SHIM = """#!/bin/sh
-# launch-fleet's token step (GA4, OpenWiz #1846): #{n}'s builder runs {name} through the agent helper.
 set -f
 rest=
 IFS=:
@@ -233,7 +213,7 @@ command -v {name} > /dev/null || {{ echo "openwiz: no {name} on PATH" >&2; exit 
 unset {key}
 exec {python} -I {helper} run --requester builder-{n} --repository {repo} -- {name} "$@"
 """
-DRIVER_ENV = None                               # the driver's environment; None is the caller's, unchanged
+DRIVER_ENV = None
 
 
 def configured():
@@ -241,7 +221,6 @@ def configured():
 
 
 def builder_env(repo, n):
-    """The driver's environment with a service configured: no legacy key, and #N's gh and git shims first."""
     folder = runs_path().parent / 'agent-token-bin' / ('%s-%s' % (repo.replace('/', '--'), n))
     try:
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -484,7 +463,7 @@ def record(repo, change):
 
 def main(argv):
     global DRIVER_ENV
-    if configured():  # R2: before any child, the Git reads included, never after
+    if configured():
         os.environ.pop(LEGACY_KEY, None)
     kind = argv[0] if argv else ''
     if kind == 'which' and len(argv) == 1:

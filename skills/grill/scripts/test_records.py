@@ -230,8 +230,6 @@ class Records(unittest.TestCase):
         self.assertEqual(self.state()["writes"], 2)
 
     def test_same_id_refuses_a_changed_or_superseded_request(self):
-        # catches #1252: a reused request id reporting `verified request` for
-        # a saved proposal whose wording changed, or one already superseded.
         changed = ROUND.replace("Use text.", "Use CSV.")
         for name in ("changed wording", "superseded"):
             with self.subTest(name):

@@ -328,6 +328,44 @@ class Token(unittest.TestCase):
         self.assertEqual([r['legacy_key'] for r in self.requests(p)], [False] * len(self.requests(p)))
         self.assertEqual(self.exposed(p, *started[1:], *woke[1:]), [])
 
+    def git_probe(self, p):
+        """A `git` first on PATH that logs, for every call, whether the legacy key variable and the App token
+        reached it (presence only, never a value), then runs the real git."""
+        p.git_log = p.dir / 'git-probe.log'
+        real = subprocess.run(['sh', '-c', 'command -v git'], capture_output=True, text=True).stdout.strip()
+        (p.dir / 'bin/git').write_text(
+            '#!/bin/sh\n{ [ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && printf key || printf no-key\n'
+            '  [ "${GH_TOKEN:-}" = %s ] && printf " token\\n" || printf " no-token\\n"; } >> "%s"\n'
+            'exec "%s" "$@"\n' % (TOKEN, p.git_log, real))
+        (p.dir / 'bin/git').chmod(0o755)
+
+    def probed(self, p):
+        return set(p.git_log.read_text().splitlines()) if p.git_log.exists() else set()
+
+    def test_with_a_service_no_git_child_gets_the_legacy_key_or_the_app_token(self):
+        # catches: host.py's setting and readiness Git reads spawned with the legacy key still in the environment
+        # (R2), or the builder's git shim handing git the App token as GH_TOKEN past the helper's guard (R3)
+        p = Project(self)
+        env = dict(self.service(p), **self.builder(p))
+        self.git_probe(p)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env), (0, 'started #7 on local', ''))
+        self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', ''))
+        self.assertEqual(self.probed(p), {'no-key no-token'})
+        # The credential helper still works: git's github.com helper is the App's, and gh acts as the App.
+        self.assertEqual(self.seen(p), (
+            [{'command': 'start', 'git_helper_is_the_apps': True, 'legacy_key': False},
+             {'command': 'wake', 'git_helper_is_the_apps': True, 'legacy_key': False}],
+            ['app no-key', 'app no-key']))
+
+    def test_with_no_service_git_children_keep_the_environment_as_today(self):
+        # catches: the key removal reaching the unconfigured path, which must stay exactly as today
+        p = Project(self)
+        env = dict(self.service(p), **self.builder(p))
+        env['OPENWIZ_TOKEN_SERVICE'] = ''
+        self.git_probe(p)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env), (0, 'started #7 on local', ''))
+        self.assertEqual(self.probed(p), {'key no-token'})
+
     def test_a_refused_token_falls_back_with_one_note_and_the_start_goes_on(self):
         # catches: a failed mint stopping the start, or falling back silently or with more than the one note
         p = Project(self)

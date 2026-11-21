@@ -169,6 +169,16 @@ service() { # the synthetic service on the local route, and the old key secret t
 [ "$(jq -c .argv "$work/service.log")" = '["mint"]' ]
 ! grep -q "$ga4" "$work/out" "$work/err" "$work/gh.log"
 echo 'ok   with a token service the wake reads GitHub with the helper'"'"'s read-only token and prints none (#1846)'
+# R2 (re-check): the bundle's own bootstrap (mktemp, mkdir, cat) runs before the wake, so the key goes first.
+mkdir "$work/probe"
+for tool in mktemp mkdir cat; do
+  printf '#!/bin/sh\n[ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && echo key >> "%s" || echo no-key >> "%s"\nexec %s "$@"\n' \
+    "$work/probe.log" "$work/probe.log" "$(command -v "$tool")" > "$work/probe/$tool"
+  chmod +x "$work/probe/$tool"
+done
+(service; export PATH="$work/probe:$PATH"; : > "$work/probe.log"; identity "$ga4 installation" '')
+[ -s "$work/probe.log" ] && [ -z "$(grep -vx no-key "$work/probe.log")" ]
+echo 'ok   with a token service no bundled bootstrap command gets the legacy key (#1846)'
 (service; export LAUNCH_FLEET_TOKEN_STEP=1; identity "$ga4 installation" '')
 [ "$(wc -l < "$work/service.log" | tr -d ' ')" = 1 ]
 echo 'ok   an inherited step marker never skips the helper (#1846)'
@@ -178,9 +188,11 @@ echo 'ok   an inherited step marker never skips the helper (#1846)'
 [ "$(wc -l < "$work/service.log" | tr -d ' ')" = 1 ]
 [ -z "$(ls -A "$work/token-private")" ]
 echo "ok   a refused mint runs the wake as today's account with the contract's one note (#1846)"
-(service; export OPENWIZ_TOKEN_SERVICE= PATH="$work/bin:/usr/bin:/bin"
+(service; export OPENWIZ_TOKEN_SERVICE= PATH="$work/probe:$work/bin:/usr/bin:/bin"; : > "$work/probe.log"
   identity 'none account' "loop.sh: no openwiz to mint the App token; GitHub as today's account")
 [ ! -s "$work/service.log" ]
+# Unconfigured, the environment is as today's: the old key secret still reaches the bootstrap and the wake.
+[ -s "$work/probe.log" ] && [ -z "$(grep -vx key "$work/probe.log")" ]
 echo 'ok   with no service configured the wake is exactly as today (#1846)'
 
 # Failed refreshes and first clones must not emit work or leave runtime files.

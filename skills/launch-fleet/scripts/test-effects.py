@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""OB3 owning boundary proofs. Synthetic fixtures, virtual transitions, no live I/O."""
 import copy
 import importlib.util
 import json
@@ -33,8 +32,6 @@ class EffectsProof(unittest.TestCase):
 
     def clean_snapshot(self):
         snapshot = copy.deepcopy(self.examples["snapshot"])
-        # The shared example carries an ON1 hold. Ordinary dispatch controls
-        # have none; the hold negative below explicitly puts one back.
         snapshot["holds"] = []
         return snapshot
 
@@ -43,8 +40,6 @@ class EffectsProof(unittest.TestCase):
                                lambda *args: self.effects.append(args))
 
     def test_stale_executor_after_takeover(self):
-        # Pause after the earlier generation check, advance virtual ownership,
-        # then enter the actual OB3 handler. No sleep or callback-based fence.
         self.assertEqual(self.resume()["state"], "disabled")
         self.snapshot.update(generation=2, owner="standby")
         result = self.resume()
@@ -115,9 +110,6 @@ class EffectsProof(unittest.TestCase):
         self.assertEqual(self.effects, [])
 
     def test_uncertain_history_survives_new_approval_head_owner_ack_and_later_refusal(self):
-        # These records model interruption after dispatch and before a reply or
-        # outcome save. They are observations supplied to the real handler,
-        # never an endpoint mock that manufactures a successful recovery.
         for kind, states in (("transport", ("accepted", "uncertain")),
                              ("completion", ("uncertain", "completed", "reconciled_not_executed")),
                              ("admission", ("uncertain", "reconcile"))):
@@ -186,9 +178,6 @@ class EffectsProof(unittest.TestCase):
                     self.resume()
                 finally:
                     setattr(self, field, original)
-        # R1: immutable identity includes the separately supplied records too.
-        # Normal-looking ACK, supersession and uncertain outcomes must not
-        # classify a conflicting reuse of either supplied identity.
         for supplied in (self.intent, self.claim):
             for kind in ("ack", "completion", "transport"):
                 event = copy.deepcopy(self.examples[kind])
@@ -208,8 +197,6 @@ class EffectsProof(unittest.TestCase):
                 self.resume()
         finally:
             self.claim["id"] = original_id
-        # One identical durable copy is valid; duplicate source IDs in history
-        # still refuse, even when those copies are identical.
         self.assertEqual(self.resume([copy.deepcopy(self.intent)])["state"], "disabled")
         with self.assertRaises(ValueError):
             self.resume([self.intent, copy.deepcopy(self.intent)])
@@ -286,8 +273,6 @@ class EffectsProof(unittest.TestCase):
             raise TimeoutError("synthetic lost reply after record create")
 
         self.assertEqual(self.api.admit_claim(self.claim, self.snapshot, "a" * 40, lost), "uncertain")
-        # The consumer saves the unresolved key before ending. A fresh pass
-        # reconstructs it, rather than taking lease expiry as non-execution.
         self.snapshot["uncertain_keys"] = [self.intent["operation_key"]]
         self.snapshot.update(generation=2, owner="standby")
         self.claim.update(generation=2, previous_generation=1, owner="standby")

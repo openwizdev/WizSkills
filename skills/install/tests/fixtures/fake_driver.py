@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""A recording fake of OpenWiz's local driver (driver v1, adapters/local/driver, #1368, merged
-as OpenWiz 583f2ae; its `version` answer here is that driver's VERSION, byte for byte).
-
-It answers only `version`, as the local driver does: its name, the records it
-speaks and what it can do. The name is $FAKE_DRIVER_NAME (default `local`), so
-one fake stands in for each driver a build carries (DW9, #2006); with
-$FAKE_DRIVER_FAIL set, `version` refuses in driver v1's error shape, and
-$FAKE_DRIVER_ANSWER, when set, is printed instead of its answer. With
-$FAKE_DRIVER_SEEN set, each call also logs its name, the names of the
-variables in its environment and whether its stdin is the null device. Every call is logged to $FAKE_DRIVER_LOG as one
-JSON line. Any other command exits 99, so a test sees the onboarding start,
-wake or stop a run itself (only launch-fleet does that). All values are synthetic.
-"""
 import json
 import os
 import stat

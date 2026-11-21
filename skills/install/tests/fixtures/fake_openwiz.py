@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""A recording fake of the installed `openwiz` for the onboarding journey (#1108).
-
-It answers only the agent-CLI forms the onboarding helper uses, as
-contracts/cli.v1.md names them, from a scripted queue in $FAKE_OPENWIZ_SCRIPT
-(JSON: {"<form>": [{"exit": N, "stdout": <text or JSON value>}, ...]}), one
-answer per call, in order. It logs every call to $FAKE_OPENWIZ_LOG as one JSON
-line. It never delegates to a real openwiz, room-cli or gh. Any other form, or
-a form with no answer left, exits 99 so the test sees the unexpected call.
-
-Forms: `fleet` (fleet <spec> --json), the progress read. Since #636 the
-onboarding never calls the engine or its tick; such a call is logged with no
-form and exits 99. All values are synthetic.
-"""
 import json
 import os
 import sys

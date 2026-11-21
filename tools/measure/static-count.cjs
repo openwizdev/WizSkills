@@ -31,7 +31,6 @@ function filesAt(commit) {
       if (match) files.set(match[2], match[1]);
     }
   } catch {
-    // An unreadable commit leaves all listed fragments unknown.
   }
   return files;
 }

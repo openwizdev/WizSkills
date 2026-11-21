@@ -1,10 +1,3 @@
-"""Finite OB2 evidence checks. No grant issuer, network client or effect executor.
-
-The agent supplies independently read sources and its authenticated assessment;
-matching JSON is never authentication. These private helper inputs are not a new
-wire contract. Durable outputs use ops-dispatch v1. The pinned reference decoder
-is reused so schema/local semantics have one implementation.
-"""
 import fcntl
 import hashlib
 import importlib.util
@@ -46,7 +39,6 @@ def digest(value):
 
 
 def material(sources):
-    """Recompute from actual source values, never the record's asserted digests."""
     require(type(sources) is dict and set(sources) == {'intent', 'evidence', 'ownership', 'purposes', 'rule'},
             'incomplete material sources')
     return {f'{"purpose" if k == "purposes" else k}_digest': digest(v) for k, v in sources.items()}
@@ -104,11 +96,6 @@ def current_diff(paths, snapshot, assessment, changes):
 
 
 def check_envelope(envelope, snapshot, sources, assessment, changes):
-    """Check expressly approved support without creating or requesting a grant.
-
-    The builder may record use; independent review still assesses actual code.
-    Source approval/authentication is the caller's responsibility, as for grants.
-    """
     result = dict(purpose_current=False, diff_current=False, next='end', effects=[])
     try:
         checked(envelope, 'envelope')
@@ -138,13 +125,6 @@ def check_envelope(envelope, snapshot, sources, assessment, changes):
 
 
 def check_grant(grant, envelope, intent, snapshot, sources, assessment, changes, history):
-    """Check purpose authority separately from review of the implementation head.
-
-    Sources/assessment must be gathered and authenticated by the deciding ops
-    agent, then independently checked by the reviewer. This function cannot
-    decide whether arbitrary code is same-intent or authenticate a shared account.
-    No result authorizes an external effect, implementation approval or merge.
-    """
     result = dict(purpose_current=False, diff_current=False, next='end', effects=[])
     try:
         for record, kind in [(grant, 'grant'), (envelope, 'envelope'), (intent, 'intent'), (snapshot, 'snapshot')]:
@@ -181,7 +161,6 @@ def check_grant(grant, envelope, intent, snapshot, sources, assessment, changes,
             ids.add(event['id'])
             if event['grant_id'] == grant['grant_id']:
                 require(bound(event, grant) and event['operation_key'] == grant['operation_key'], 'conflicting grant identity')
-                # No terminal event can be undone by selecting an older record.
                 require(event['status'] not in TERMINAL and event['supersedes'] is None, 'ended or replaced grant')
                 require(event == grant, 'contradictory grant decision')
         result['purpose_current'] = True
@@ -193,19 +172,10 @@ def check_grant(grant, envelope, intent, snapshot, sources, assessment, changes,
 
 
 LOGIN = r'`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`'
-# The whole cell, as fleet.sh reads it: backticked logins separated by commas.
 CELL = re.compile(rf'\s*{LOGIN}(?:\s*,\s*{LOGIN})*\s*')
 
 
 def record_authors(fleet_md):
-    """#641: the factory's record authors, from the project's docs/agents/fleet.md.
-
-    The one place that names them is the "Record authors" row of its
-    "## GitHub identity" table, as fleet.sh reads it. Returns lowercase logins;
-    no row, an empty row, any malformed or extra entry, or anything after the
-    value cell refuses the whole row (ValueError): it never keeps only the
-    logins that did parse.
-    """
     section, rows = None, []
     for line in fleet_md.splitlines():
         if line.startswith('## '):
@@ -213,7 +183,6 @@ def record_authors(fleet_md):
         elif section == '## GitHub identity' and re.match(r'\| *Record authors *\|', line):
             rows.append(line)
     cells = rows[0].split('|') if len(rows) == 1 else []
-    # Nothing may follow the value cell but its closing pipe (R3).
     require(len(cells) == 4 and not cells[3].strip() and CELL.fullmatch(cells[2]),
             'docs/agents/fleet.md names no record authors')
     logins = re.findall(r'`([^`]*)`', cells[2])
@@ -221,19 +190,10 @@ def record_authors(fleet_md):
 
 
 def authored(author, authors):
-    """True only for a login among the record authors; a missing author is nobody's."""
     return type(author) is str and author.lower() in authors
 
 
 def read_sources(rows, repository, subject=None, authors=frozenset()):
-    """Read normalized GitHub metadata from the existing authenticated collector.
-
-    Times are source milliseconds. Container metadata is supplied independently
-    of the JSON body. An edited record, failed page or duplicate identity is a
-    gap. Ordinary comments confer no authority and need no grant assessment.
-    A comment whose author (its GitHub login, or None) is not one of
-    `authors` (record_authors) is an ordinary comment, whatever it says (#641).
-    """
     require(type(rows) is list, 'partial comment page')
     result, comments, ids, sequences = [], set(), set(), set()
     for row in rows:
@@ -261,11 +221,6 @@ def read_sources(rows, repository, subject=None, authors=frozenset()):
 
 
 def collect(fetch_page, repository, subject, page_budget=100, authors=frozenset()):
-    """Finite adapter over the existing collector: (normalized rows, has_next).
-
-    has_next comes from verified pagination metadata, not a record's claim of
-    completeness. A failure returns no partial inventory; no cursor is touched.
-    """
     require(type(page_budget) is int and page_budget > 0, 'invalid page budget')
     rows = []
     for page in range(1, page_budget + 1):
@@ -285,11 +240,6 @@ def position(cursor):
 
 
 def audit(template, records, assessments, authors=frozenset()):
-    """Retrospective replay. Assessments are the auditor's independently read
-    evidence, per source decision: {valid: bool|null, final_diff_digest: str|null}.
-    Missing assessment prevents advancement; null validity escalates. The helper
-    records remediation but performs no revoke, hold, delivery or other effect.
-    """
     checked(template, 'audit')
     start, end = position(template['start']), position(template['end'])
     require(start <= end and template['rule']['name'] == 'audit', 'backwards cursor or wrong audit rule')
@@ -312,7 +262,7 @@ def audit(template, records, assessments, authors=frozenset()):
         key = record['operation_key']
         intent = intents.get(key)
         if record['kind'] != 'grant' and intent is None:
-            continue  # Another operation kind; not a path-grant decision.
+            continue
         require(intent is not None and bound(record, intent) and record['subject'] == intent['subject']
                 and intent['destination'] == 'ops' and intent['created_at'] <= record['created_at'], 'unbound grant decision')
         require(record.get('intent_id', intent['id']) == intent['id'], 'wrong event intent')
@@ -326,8 +276,6 @@ def audit(template, records, assessments, authors=frozenset()):
         status = record.get('status')
         if record['kind'] != 'grant':
             state = record['state']
-            # Endpoint outcomes require independent evidence. Accepted transport
-            # remains uncertain even beside an ACK or a later refusal.
             status = ('uncertain' if key in uncertain else
                       'refused' if state in {'refused', 'disabled', 'not_attempted'} else
                       'replaced' if state == 'superseded' else 'uncertain')
@@ -352,7 +300,6 @@ def fsync_directory(directory):
 
 
 def durable_file(path, value, immutable=False):
-    """Use the repository's fsync + atomic link/replace persistence pattern."""
     fd, name = tempfile.mkstemp(prefix='.audit-', dir=path.parent)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as stream:
@@ -373,11 +320,6 @@ def durable_file(path, value, immutable=False):
 
 
 def save_audit(directory, report):
-    """Persist/read back a report before a locked monotone cursor update.
-
-    Private local durability only; callers still post/read back the contracted
-    GitHub audit and reconcile remediation before invoking this checkpoint.
-    """
     checked(report, 'audit')
     require(report['complete'], 'incomplete audit retains old cursor')
     protocol.audit_cursor(report)

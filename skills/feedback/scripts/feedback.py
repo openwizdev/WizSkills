@@ -1,31 +1,4 @@
 #!/usr/bin/env python3
-"""One consented feedback operation, under contracts/feedback.v1.md (#2292).
-
-The issue it files is a report under contracts/feedback-loop.v1.md (#1840):
-the marker makes it one, and triage, never this helper, adds its label.
-
-python3 -I feedback.py draft --title-file F --body-file F
-python3 -I feedback.py edit OP --title-file F --body-file F
-python3 -I feedback.py preview OP
-python3 -I feedback.py refuse OP --reason TEXT
-python3 -I feedback.py send OP --preview-id ID
-python3 -I feedback.py reconcile OP [--issue N]
-python3 -I feedback.py status OP
-python3 -I feedback.py share --text-file F --url URL
-
-Every answer is one JSON object on stdout; exit 0 when the step happened,
-1 when it was refused or stopped, 2 for a usage error. GitHub is reached only
-through the user's own `gh` login (the first `gh` on PATH), REST only, and
-only at the destination. The one create call is made by `send`, only from a
-`previewed` operation whose preview id the user said yes to, after the
-destination and the account are read again and match. The record is written
-as `sending` before that call. Nothing here retries a create.
-
-The operation record is private and owner-only, outside every repository,
-under OpenWiz's state directory (`$OPENWIZ_STATE_DIR`, else on macOS
-`~/Library/Application Support/openwiz`, else `$XDG_STATE_HOME/openwiz` or
-`~/.local/state/openwiz`), in its own area, `feedback/`.
-"""
 
 import argparse
 import datetime
@@ -48,45 +21,38 @@ WEB_REPO = 'https://github.com/' + DESTINATION
 SCHEMA = 'openwiz.feedback-operation.v1'
 MARKER = 'OpenWiz feedback operation '
 OP_ID = re.compile(r'[0-9a-f]{32}')
-PREVIEW_ID = re.compile(r'[0-9]{6}')  # the code the user's yes repeats (C-F1)
+PREVIEW_ID = re.compile(r'[0-9]{6}')
 FAILED_STATUSES = {401, 403, 404, 410, 422, 429}
 PHASES = {'draft', 'previewed', 'refused', 'sending', 'sent', 'failed', 'uncertain'}
 EDITABLE = {'draft', 'previewed', 'refused', 'failed'}
 TITLE_MAX = 256
 BODY_MAX = 65536
 TIMEOUT_S = 60
-# Reconciliation lists from a day before the preview: a superset, so a clock
-# ahead of GitHub's cannot hide the issue. Candidates are kept by marker only.
 SINCE_MARGIN = datetime.timedelta(days=1)
 
 
 def same_name(value, name):
-    """GitHub matches owner and repository names in any capitals (RN6); anything not ASCII is refused."""
     return isinstance(value, str) and value.isascii() and value.lower() == name.lower()
 
 
 SHARE_ISSUE = re.compile(r'https://github\.com/openwizdev/OpenWiz/issues/([1-9][0-9]{0,9})')
 URLISH = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://|\bwww\.|\blocalhost\b|\b\d{1,3}(\.\d{1,3}){3}\b'
                     r'|\b(?:[a-z0-9-]+\.)+[a-z]{2,}\.?(?::[\w.~-]*)?/|\b[a-z0-9-]+:\d+/'
-                    r'|@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.?:~?[\w.-]*/', re.I)  # and a bare host/path (C-F2)
+                    r'|@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.?:~?[\w.-]*/', re.I)
 KEYS = ['schema', 'operation_id', 'destination', 'phase', 'title', 'chosen_body', 'body',
         'account', 'preview', 'attempts', 'issue', 'reason', 'evidence']
 
 
 class Stop(Exception):
-    """A refusal or stop, with its plain words; nothing more happens."""
+    pass
 
 
 class SaveError(Stop):
-    """A record that could not be saved; the previous record is kept. Its caller
-    says what that means: before a create request, nothing was sent."""
 
     replaced = False
 
 
 class UnsyncedError(SaveError):
-    """The new record is in place, but its folder could not be synced: whether
-    it survives a crash is unconfirmed."""
 
     replaced = True
 
@@ -104,8 +70,6 @@ def iso(t):
     return t.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
-# ---- the private store ---------------------------------------------------
-
 def state_dir():
     env = os.environ.get('OPENWIZ_STATE_DIR', '')
     if env:
@@ -122,8 +86,6 @@ def state_dir():
 
 
 def inside_repository(path):
-    """Refuses a path inside any repository, by its written ancestors and by
-    where its symlinks really lead; a path that can't be resolved is refused."""
     try:
         resolved = path.resolve(strict=False)
     except (OSError, RuntimeError):
@@ -134,7 +96,6 @@ def inside_repository(path):
 
 
 def area():
-    """The owner-only `feedback/` area, created if missing; refused if unsafe."""
     root = state_dir()
     inside_repository(root)
     old = os.umask(0o077)
@@ -161,7 +122,6 @@ def record_path(place, op):
 
 
 def read_record(path):
-    """The record, read exactly; any other shape is unreadable, never a fresh start."""
     try:
         text = path.read_text(encoding='utf-8')
     except FileNotFoundError:
@@ -186,7 +146,6 @@ def read_record(path):
 
 
 def write_record(place, rec):
-    """Atomic and durable: written, synced and renamed into place, then the folder synced."""
     path = place / f"{rec['operation_id']}.json"
     tmp = place / f".{rec['operation_id']}.{secrets.token_hex(4)}.tmp"
     data = (json.dumps({k: rec[k] for k in KEYS}, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
@@ -225,7 +184,6 @@ TWIN = ('Operation {} with this exact text may already have been created. '
 
 
 class StoreLock:
-    """Serializes every twin check with the write that follows it, across operations."""
 
     def __init__(self, place):
         self.path = place / '.store.lock'
@@ -240,8 +198,6 @@ class StoreLock:
 
 
 def twin(place, op, title, chosen_body):
-    """Another operation with this chosen text that is sending or uncertain, if any.
-    An unreadable record stops: it could be that twin."""
     for path in sorted(place.glob('*.json')):
         if path.name == f'{op}.json':
             continue
@@ -253,7 +209,6 @@ def twin(place, op, title, chosen_body):
 
 
 class Lock:
-    """One operation acted on by one process at a time; a second gets `busy`."""
 
     def __init__(self, place, op):
         self.path = place / f'{op}.lock'
@@ -271,7 +226,6 @@ class Lock:
         os.close(self.fd)
 
     def held(self):
-        """Whether another process holds it (for a read-only status)."""
         try:
             fd = os.open(self.path, os.O_RDONLY)
         except FileNotFoundError:
@@ -285,8 +239,6 @@ class Lock:
             os.close(fd)
 
 
-# ---- the chosen content --------------------------------------------------
-
 def read_text(path, what):
     try:
         return Path(path).read_bytes().decode('utf-8')
@@ -295,7 +247,6 @@ def read_text(path, what):
 
 
 def chosen(title_file, body_file):
-    """The chosen title and body, and the body to send; refused before preview, never trimmed to fit."""
     title = read_text(title_file, 'title').strip()
     body = read_text(body_file, 'body').replace('\r\n', '\n').rstrip()
     if not title or '\n' in title or '\r' in title:
@@ -311,9 +262,6 @@ def chosen(title_file, body_file):
 
 
 def visible(title, body):
-    """Invisible format characters (bidi controls, zero-width, tags) make the
-    preview read unlike what GitHub stores; all of them are refused (C-F3), in
-    new text and in a draft or preview saved before this check."""
     for what, text in (('title', title), ('body', body)):
         hidden = next((c for c in text if unicodedata.category(c) == 'Cf'), None)
         if hidden:
@@ -327,8 +275,6 @@ def full_body(chosen_body, op):
     return body
 
 
-# ---- GitHub, through the user's own gh login ----------------------------
-
 TOKEN_VARS = ('GH_TOKEN', 'GITHUB_TOKEN')
 
 
@@ -336,8 +282,6 @@ def gh_env():
     host = os.environ.get('GH_HOST', '')
     if host not in ('', 'github.com'):
         raise Stop('GH_HOST names another GitHub host; feedback goes only to github.com.')
-    # gh lets an environment token override the stored login, so one set here
-    # could silently choose the account: refused, never used or removed.
     for name in TOKEN_VARS:
         if name in os.environ:
             raise Stop(f'{name} is set, so gh would use that token instead of your own login. Nothing was sent; '
@@ -348,7 +292,6 @@ def gh_env():
 
 
 def gh(args, payload=None):
-    """One `gh api --include` call: (status, json) for a complete response, else None."""
     try:
         run = subprocess.run(['gh', 'api', '--include', *args], input=payload, capture_output=True,
                              env=gh_env(), timeout=TIMEOUT_S)
@@ -386,7 +329,6 @@ NO_LOGIN = 'Your GitHub login could not be read through gh. Nothing was sent; Op
 
 
 def stored_login():
-    """The one account gh holds for github.com; more than one candidate is refused."""
     try:
         run = subprocess.run(['gh', 'auth', 'status', '--json', 'hosts', '--hostname', 'github.com'],
                              capture_output=True, env=gh_env(), timeout=TIMEOUT_S)
@@ -416,7 +358,6 @@ def read_account():
 
 
 def matches(issue, rec, number=None):
-    """Whether a read issue is exactly this operation's, on the destination, by the bound account."""
     return (isinstance(issue, dict) and same_name(issue.get('repository_url'), API_REPO)
             and 'pull_request' not in issue
             and (number is None or issue.get('number') == number)
@@ -428,8 +369,6 @@ def read_issue(number):
     got = gh(['--method', 'GET', f'repos/{DESTINATION}/issues/{number}'])
     return got[1] if got and got[0] == 200 else None
 
-
-# ---- answers ---------------------------------------------------------------
 
 SAY = {
     'draft': 'Draft kept; nothing previewed or sent.',
@@ -474,14 +413,11 @@ def preview_text(rec):
 
 
 def recorded(rec, lock_held=False):
-    """The phase to act on: a `sending` left by an ended process is uncertain."""
     if rec['phase'] == 'sending' and not lock_held:
         rec = dict(rec, phase='uncertain', reason='a restart found the create request without its result',
                    evidence=rec['evidence'] + ['restart in sending'])
     return rec
 
-
-# ---- the commands ----------------------------------------------------------
 
 def cmd_draft(a):
     place = area()
@@ -577,8 +513,6 @@ def cmd_send(a):
             return refuse_send(place, rec, 'the GitHub account changed since the preview')
         if rec['body'] != full_body(rec['chosen_body'], rec['operation_id']):
             return refuse_send(place, rec, 'the body changed since the preview')
-        # The twin check and the durable `sending` are one step under the store lock,
-        # so two twins never both reach the create call.
         with StoreLock(place):
             other = twin(place, rec['operation_id'], rec['title'], rec['chosen_body'])
             if other:
@@ -612,9 +546,6 @@ def cmd_send(a):
         try:
             write_record(place, rec)
         except SaveError as e:
-            # After the create request: tell the known outcome, never "nothing was sent".
-            # The durable record still says `sending`, which reads as uncertain, so no
-            # later step sends again; reconcile finds the issue by its marker.
             if e.replaced:
                 note = (f'{e} The outcome above is stored but not confirmed durable; after a crash the record '
                         'may read as sending, which is uncertain. Do not send again; run status first, and '
@@ -704,8 +635,11 @@ def cmd_share(a):
                 'say': 'This is exactly what you can copy. OpenWiz copies, posts and sends nothing.'}, 0)
 
 
+DESCRIPTION = 'One consented feedback operation, under contracts/feedback.v1.md (#2292).'
+
+
 def main(argv):
-    p = argparse.ArgumentParser(prog='feedback.py', description=__doc__.split('\n\n')[0])
+    p = argparse.ArgumentParser(prog='feedback.py', description=DESCRIPTION)
     sub = p.add_subparsers(dest='cmd', required=True)
     for name in ('draft', 'edit'):
         s = sub.add_parser(name)

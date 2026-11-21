@@ -1,7 +1,3 @@
-"""lead_time.py: spec lead time, from the spec's creation (to-spec writes it
-from the confirmed grill with no step between, J202) to its last ticket's
-merge, read from the war-room collector's `flow` fact. Unknown stays unknown:
-never zero, never a partial span."""
 import json
 from pathlib import Path
 import shutil
@@ -22,7 +18,6 @@ def spec(n, members, created, last, span):
 
 
 def snapshot(specs, tickets, state="partial", schema="openwiz.war-room.collector.v1"):
-    """A collector document (synthetic) with only the facts lead time reads."""
     flow = {"fact": "flow", "state": state, "read": None, "point": None, "window": None, "fresh_until": None,
             "freshness": "unknown", "source": None, "evidence": [],
             "prerequisites": [] if state == "known" else ["synthetic gap"],
@@ -58,9 +53,6 @@ class LeadTime(unittest.TestCase):
         return json.loads(out.stdout)
 
     def test_each_spec_gets_its_lead_time_or_why_it_is_unknown(self):
-        # catches: a lead time measured to an earlier merge while a member is
-        # still open, an unknown read as zero, or a spec with unknown
-        # membership or start given a number.
         report = self.rows(snapshot(SPECS, TICKETS))
         self.assertEqual(report.get("flow"), "partial")
         self.assertEqual(report["specs"], [
@@ -77,8 +69,6 @@ class LeadTime(unittest.TestCase):
         ])
 
     def test_asked_specs_the_collector_could_not_read_stay_unknown(self):
-        # catches: an unavailable flow fact or an unread spec reported as no
-        # lead time at all, or as zero, instead of unknown.
         unknown = lambda n, why: {"spec": n, "lead_time_seconds": None, "from": None, "until": None, "unknown": why}
         report = self.rows(snapshot(SPECS, TICKETS, schema="openwiz.war-room.collector.read.v1"),
                            "--spec", "4001", "--spec", "4999")
@@ -91,8 +81,6 @@ class LeadTime(unittest.TestCase):
         self.assertEqual(self.rows(older), {"flow": "unavailable", "specs": []})
 
     def test_facts_that_disagree_or_cannot_be_read_are_refused(self):
-        # catches: a lead time printed from a span the collector's own times
-        # contradict, or from a document that isn't the collector's.
         wrong = [dict(SPECS[0], span_seconds=600)]
         early = [dict(SPECS[0], last_merge_at="2026-11-19T11:00:00Z", span_seconds=7200)]
         for bad in (snapshot(wrong, TICKETS[:2]), snapshot(early, TICKETS[:2]),

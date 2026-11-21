@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""TL4 (#2339) proofs: retire and replace a stuck owner after two ticket misses.
-
-Synthetic stage-bench output, ops records and source reads only, in virtual
-time: no GitHub, CloudRoom or process call, no sleep. Every case also checks
-that the effect callback never runs: retirement and start stay disabled under
-OB-A1 even when every check passes.
-"""
 import copy
 import hashlib
 import importlib.util
@@ -30,7 +23,6 @@ def load(path, name):
 lr = load(HERE / 'limit-replacement.py', 'limit_replacement')
 reference = load(HERE.parent / 'test/ops-protocol/protocol.py', 'ops_protocol_reference')
 EXAMPLES = json.loads((HERE.parent / 'test/ops-protocol/examples.json').read_text())
-# The literal defaults of tools/collector/limits.conf (limits-contract.md).
 SETTINGS = {'schema': 'closedwiz.factory-limits.v1',
             'minutes': {'builder_start': 10, 'reviewer_start': 5, 'merge': 5,
                         'fix_after_changes': 30, 'builder_question_answer': 15}}
@@ -65,7 +57,6 @@ def bench(*waits, settings=SETTINGS):
 
 
 def sources():
-    """Complete reads for synthetic ticket 9001: a stopped builder, clean worktree."""
     return {'complete': True, 'ticket': 9001, 'overload': 'clear', 'recorded_misses': [],
             'incumbent': {'assignment': 'builder-span-1', 'family': 'claude', 'branch': BRANCH,
                           'head': HEAD, 'activity': 'stopped', 'worktree': 'clean'},
@@ -74,7 +65,6 @@ def sources():
 
 
 def material(src=None):
-    """The replacement binding, computed independently of the module (test's own digest)."""
     src = src or sources()
     inc = src['incumbent']
     return sha({'ticket': src['ticket'], 'branch': inc['branch'], 'head': inc['head'],
@@ -85,7 +75,7 @@ class Proof(unittest.TestCase):
     def setUp(self):
         self.calls = []
         self.snapshot = copy.deepcopy(EXAMPLES['snapshot'])
-        self.snapshot['holds'] = []  # the shared example carries an ON1 hold
+        self.snapshot['holds'] = []
         self.src = sources()
         self.bench = bench(wait(FIX1), wait(FIX2))
         self.intent, self.claim = self.replacement_intent('intent-replace-1', 1)
@@ -110,7 +100,6 @@ class Proof(unittest.TestCase):
                     history=self.history, effect_boundary=lambda *a: self.calls.append(a))
         args.update(overrides)
         if not recorded and 'snapshot' not in overrides:
-            # Before its intent is recorded, the snapshot holds no replacement intent.
             args['snapshot'] = dict(self.snapshot, intents=[i for i in self.snapshot['intents']
                                                             if i['id'] != self.intent['id']])
         report = lr.check(**args)
@@ -125,13 +114,10 @@ class Proof(unittest.TestCase):
         result = report['result']
         return report['decision'], result and result['state'], result and result['reason']
 
-    # AC1: zero/one miss never retires; two select one replacement on the same branch.
-
     def test_zero_and_one_owner_miss_never_select(self):
         cases = {
             'no misses': bench(wait(FIX1, 'not missed'), wait(FIX2, 'pending')),
             'one miss': bench(wait(FIX1), wait(FIX2, 'unknown')),
-            # Q2: only the builder's own stage counts against it.
             'other stages': bench(wait(FIX1), wait('reviewer_start:p9101:' + HEAD + ':-'),
                                   wait('merge:p9101:' + HEAD + ':c7003:-'),
                                   wait('builder_question_answer:t9001:c7004'),
@@ -144,7 +130,6 @@ class Proof(unittest.TestCase):
                     self.calls = []
                     report = self.run_check(recorded=intent, bench=value)
                     if intent:
-                        # An intent with under two misses is not evidenced.
                         self.assertEqual(self.outcome(report), ('refused', 'refused', 'stale_binding'))
                     else:
                         self.assertEqual((report['decision'], report['result'], report['plan']),
@@ -152,7 +137,6 @@ class Proof(unittest.TestCase):
                     self.assertLess(len(report['misses']), 2)
 
     def test_tl2_demonstration_bench_is_read_as_published(self):
-        # TL2's sanitized output: ticket 4301 has three misses, one of them its builder's own.
         published = json.loads((HERE.parent / 'test/ops-inbox/stage-waits-bench.json').read_text())
         self.src['ticket'] = self.snapshot['ticket'] = 4301
         report = self.run_check(recorded=False, bench=published)
@@ -177,8 +161,6 @@ class Proof(unittest.TestCase):
                          (BRANCH, HEAD, 'builder-span-1', 'builder-span-2'))
         self.assertEqual([gap.split(':')[0] for gap in report['gaps']], GAPS)
 
-    # AC2: repeated wakes, duplicates, simultaneous claimants and changing heads.
-
     def test_repeated_observations_of_one_interval_are_one_miss(self):
         self.bench = bench(wait(FIX1))
         self.src['recorded_misses'] = [FIX1, FIX1]
@@ -186,7 +168,6 @@ class Proof(unittest.TestCase):
         self.assertEqual((report['decision'], report['misses']), ('none', [FIX1]))
 
     def test_earlier_recorded_misses_survive_a_fresh_tick(self):
-        # The fresh bench no longer lists the first miss; its earlier record still counts.
         self.bench = bench(wait(FIX2))
         self.src['recorded_misses'] = [FIX1]
         report = self.run_check()
@@ -213,7 +194,6 @@ class Proof(unittest.TestCase):
         self.assertEqual(self.outcome(report), ('disabled', 'disabled', 'unfenced_effect'))
 
     def test_a_changed_head_never_acts_on_the_old_selection(self):
-        # The branch moved after the intent: the stale intent is refused.
         for change in ('snapshot', 'incumbent', 'both'):
             with self.subTest(change):
                 self.setUp()
@@ -225,7 +205,6 @@ class Proof(unittest.TestCase):
                 self.assertEqual(self.outcome(report), ('refused', 'refused', 'stale_binding'))
                 self.assertIsNone(report['plan'])
                 if change != 'both':
-                    # The incumbent's read and the branch tip disagree: nothing to propose.
                     report = self.run_check(recorded=False)
                     self.assertEqual((report['decision'], report['proposal']), ('refused', None))
         self.setUp()
@@ -235,7 +214,6 @@ class Proof(unittest.TestCase):
         self.assertEqual(report['proposal']['evidence_digest'], material(self.src))
 
     def test_an_earlier_unsettled_replacement_blocks_a_new_head_selection(self):
-        # An intent for the old head without a settled completion: it may have run.
         old, _ = self.replacement_intent('intent-replace-0', 1, head='a' * 40, digest='f' * 64)
         new, new_claim = self.replacement_intent('intent-replace-1', 2)
         self.snapshot.update(intents=[copy.deepcopy(new)], next_sequence=2)
@@ -252,7 +230,6 @@ class Proof(unittest.TestCase):
                 done.update(id='completion-0', intent_id=old['id'], operation_key=old['operation_key'], state=state)
                 self.history = [old, done]
                 self.assertEqual(self.run_check(intent=new, claim=new_claim)['decision'], expected)
-        # R1: a disabled completion bound to another spec, approval or subject settles nothing.
         other_approval = dict(old['approval'], revision=old['approval']['revision'] + 1)
         for field, value in (('spec', 9999), ('approval', other_approval),
                              ('subject', {'kind': 'pull_request', 'number': 9101})):
@@ -268,8 +245,6 @@ class Proof(unittest.TestCase):
     def test_a_stale_dispatcher_generation_is_refused(self):
         self.snapshot.update(generation=2, owner='standby')
         self.assertEqual(self.outcome(self.run_check()), ('refused', 'refused', 'stale_claim'))
-
-    # AC3: handoff, live owner, uncertain effects and missing evidence before effects.
 
     def test_the_incumbent_must_be_stopped_with_its_work_handed_off(self):
         cases = [('activity', 'running', 'stale_binding'), ('activity', 'unknown', 'incomplete_read'),
@@ -301,7 +276,7 @@ class Proof(unittest.TestCase):
             for intent in (False, True):
                 with self.subTest(name, intent=intent):
                     self.setUp()
-                    self.src['incumbent']['activity'] = 'running'  # uncertainty outranks it
+                    self.src['incumbent']['activity'] = 'running'
                     if name == 'snapshot key':
                         self.snapshot['uncertain_keys'] = ['9' * 64]
                     else:
@@ -325,8 +300,6 @@ class Proof(unittest.TestCase):
         self.assertIn('#2244', report['gaps'][2])
         self.assertIn('P5', report['gaps'][3])
 
-    # AC4: holds, scope, reviewer/family, correction rounds, CI/live/spending gates survive.
-
     def test_holds_gates_and_overload_refuse_with_no_proposal(self):
         cases = [('snapshot', 'holds', [9009]), ('snapshot', 'gates', ['live check pending']),
                  ('snapshot', 'paused', True), ('snapshot', 'revoked', True),
@@ -347,12 +320,10 @@ class Proof(unittest.TestCase):
         plan = self.run_check()['plan']
         self.assertEqual(plan['reviewer'], 'review-span-1')
         self.assertEqual(plan['correction_rounds'], {'R1': 2, 'R3': 1})
-        # The incumbent's code stays on the branch, so its family stays conflicting.
         self.assertEqual(plan['family_conflicts'], ['claude', 'gpt'])
         self.setUp()
         self.src['incumbent']['family'] = 'unknown'
         self.assertIn('unknown', self.run_check()['plan']['family_conflicts'])
-        # The replacement can be neither the incumbent's nor the reviewer's span.
         for span in ('builder-span-1', 'review-span-1'):
             with self.subTest(span=span):
                 self.setUp()
@@ -391,7 +362,6 @@ class Proof(unittest.TestCase):
             w['limit_minutes'] = 20
         self.assertEqual(self.outcome(self.run_check()), ('refused', 'refused', 'stale_binding'))
         self.assertEqual(self.run_check(recorded=False)['decision'], 'refused')
-        # An edited settings file is read on the next pass; an invalid one refuses the read.
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'limits.conf'
             path.write_text(''.join(f'{k}={v}\n' for k, v in changed['minutes'].items()))

@@ -1,7 +1,3 @@
-"""Public CLI proofs on synthetic HTTP pages using the installed browser-harness.
-
-Without an installed harness, CI uses the test-only Chromium/Playwright bridge.
-"""
 import http.server
 import json
 import os
@@ -30,10 +26,6 @@ footer{position:fixed;bottom:0;left:0;width:100%;height:64px;background:#cc79a7}
 
 
 def png_column(path):
-    """The rightmost column's RGB values, top to bottom, from the rendered
-    pixels, not DOM coordinates (which miss captureBeyondViewport's fixed-bar
-    bug). A small reader of its own: 8-bit, non-interlaced RGB or RGBA, which
-    is what Chromium's screenshots are."""
     data = Path(path).read_bytes()
     if data[:8] != b'\x89PNG\r\n\x1a\n':
         raise ValueError('not a PNG')
@@ -92,8 +84,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif self.path == '/wide':
             self.wfile.write(PAGE + b'<style>@media(max-width:500px){body{width:600px}}</style>')
         elif self.path == '/short-wide':
-            # Wider than the phone only while the viewport is short, so the
-            # first screen overflows and the page-height capture does not.
             self.wfile.write(PAGE + b'<style>@media(max-width:500px) and (max-height:900px)'
                              b'{body{width:600px}}</style>')
         elif self.path == '/empty':
@@ -154,8 +144,6 @@ class Screenshots(unittest.TestCase):
             self.assertEqual(json.loads((out / 'capture.json').read_text()), manifest)
 
     def test_short_result_names_horizontal_overflow(self):
-        # catches: a phone shot wider than its viewport handed back without
-        # anyone reading contentWidth in the manifest.
         with tempfile.TemporaryDirectory() as temp:
             wide = self.run_capture(Path(temp) / 'wide', url=self.url + 'wide')
             self.assertEqual(wide.returncode, 0, wide.stderr + wide.stdout)
@@ -165,8 +153,6 @@ class Screenshots(unittest.TestCase):
             self.assertEqual(plain.stdout.splitlines()[1:], ['overflow: none'])
 
     def test_overflow_summary_includes_the_first_screen(self):
-        # catches (R1): --fixed-at-bottom reporting `overflow: none` because
-        # only the tall capture fits, while the first-screen PNG overflows.
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp) / 'short-wide'
             result = self.run_capture(out, '--fixed-at-bottom', url=self.url + 'short-wide')

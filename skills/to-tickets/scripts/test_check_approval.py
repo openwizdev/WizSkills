@@ -87,7 +87,7 @@ with open(os.environ["FAKE_LOG"], "a") as log:
     log.write(json.dumps(args) + "\\n")
 w = json.loads(Path(os.environ["FAKE_WORLD"]).read_text())
 n = os.environ["FAKE_SPEC"]
-if args == ["repo", "view", "--json", "isPrivate"]:
+if args == ["repo", "view", "--json", "isPrivate,nameWithOwner"]:
     key = "repo"
 elif args == ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/triage-labels.md"]:
     key = "labels_doc"
@@ -161,7 +161,7 @@ class ApprovalTest(unittest.TestCase):
                 ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/fleet.md"],
                 ["issue", "view", "172", "--json", "body,createdAt,subIssues"],
                 ["api", "--paginate", "repos/{owner}/{repo}/issues/172/comments?per_page=100"],
-                ["repo", "view", "--json", "isPrivate"],
+                ["repo", "view", "--json", "isPrivate,nameWithOwner"],
             ])
 
     def run_check(self, world, spec=172, status=0, reason=None, argument=None, checker=CHECKER):
@@ -190,7 +190,7 @@ class ApprovalTest(unittest.TestCase):
                 ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/fleet.md"],
                     ["issue", "view", str(spec), "--json", "body,createdAt,subIssues"],
                     ["api", "--paginate", f"repos/{{owner}}/{{repo}}/issues/{spec}/comments?per_page=100"],
-                    ["repo", "view", "--json", "isPrivate"],
+                    ["repo", "view", "--json", "isPrivate,nameWithOwner"],
                 ])
             return calls
 
@@ -417,6 +417,32 @@ class ApprovalTest(unittest.TestCase):
                 self.run_check(state_table(fixture(spec)), spec, 1, "columns")
             with self.subTest(spec=spec, shape="corrected"):
                 self.run_check(fixture(spec), spec)
+
+    def test_long_form_rows_for_this_repository_read_as_short(self):
+        for name in ("synthetic-owner/synthetic-repo", "Synthetic-Owner/Synthetic-Repo"):
+            with self.subTest(name=name):
+                w = fixture(172)
+                w["repo"] = {"isPrivate": False, "nameWithOwner": "synthetic-owner/synthetic-repo"}
+                w["comments"][0][0]["body"] = w["comments"][0][0]["body"].replace("| #", f"| {name}#")
+                self.run_check(w)
+
+    def test_long_form_row_for_another_repository_is_refused_naming_its_line(self):
+        w = fixture(172)
+        w["repo"] = {"isPrivate": False, "nameWithOwner": "synthetic-owner/synthetic-repo"}
+        w["comments"][0][0]["body"] = w["comments"][0][0]["body"].replace("| #173 |", "| other-owner/other-repo#173 |")
+        self.run_check(w, status=1, reason="approval table line `| other-owner/other-repo#173 | Synthetic ticket 173 | none | ready-for-agent |` names other-owner/other-repo#173, not this repository")
+
+    def test_a_title_naming_another_repository_refuses_nothing(self):
+        w = fixture(172)
+        w["repo"] = {"isPrivate": False, "nameWithOwner": "synthetic-owner/synthetic-repo"}
+        w["comments"][0][0]["body"] = w["comments"][0][0]["body"].replace(
+            "Synthetic ticket 173", "Synthetic ticket 173, after other-owner/other-repo#5")
+        self.run_check(w)
+
+    def test_long_form_row_is_refused_when_this_repository_is_unknown(self):
+        w = fixture(172)
+        w["comments"][0][0]["body"] = w["comments"][0][0]["body"].replace("| #173 |", "| synthetic-owner/synthetic-repo#173 |")
+        self.run_check(w, status=1, reason="names synthetic-owner/synthetic-repo#173, not this repository")
 
     def test_trailing_table_whitespace(self):
         for suffix in (" ", "\t", " \t\r"):

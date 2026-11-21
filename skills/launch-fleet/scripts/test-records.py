@@ -92,6 +92,22 @@ class Fleet(unittest.TestCase):
         self.pr['checks'][0]['conclusion'] = 'FAILURE'
         self.assertEqual(self.run_fleet('wake', '12'), f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')
 
+    def test_builder_found_through_a_local_bare_list_or_a_cloud_children_answer_without_include_hidden(self):
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        for cli in ('local', 'cloud'):
+            with self.subTest(cli=cli):
+                self.env['FAKE_ROOM_CLI'] = cli
+                self.assertEqual(self.run_fleet('wake', '12'),
+                                 f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')
+
+    def test_a_cloud_answer_without_a_thread_list_is_out_of_reach(self):
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        self.env['FAKE_ROOM_CLI'] = 'cloud'
+        for threads in ({'id': 'thr_synbuilder'}, 'thr_synbuilder', [{'title': '#12: Synthetic'}]):
+            with self.subTest(threads=threads):
+                self.threads = threads
+                self.assertEqual(self.run_fleet('wake', '12'), 'look #12: thread discovery is out of reach\n')
+
     def test_recheck_finds_original_reviewer(self):
         for private, suffix in [(False, ''), (True, ''),
                                 (True, '\nSynthetic note'), (True, ' (synthetic note)')]:
@@ -247,6 +263,20 @@ class Fleet(unittest.TestCase):
             dict(id=1203, at='2026-11-01T11:59:00Z', body='launch-fleet: resume starting 1202 for #11')]
         self.assertEqual(self.run_fleet('claim', '12', '1203'), 'go #12\n')
 
+
+    def test_long_form_resume_claim_keeps_its_private_thread(self):
+        outs = []
+        for ref in ('#11', 'Example/Public#11'):
+            with self.subTest(ref=ref):
+                self.issue(12)['comments'] = self.issue(12)['comments'][:1] + [
+                    dict(id=1202, at='2026-11-01T11:00:00Z', body='launch-fleet: waiting for #11'),
+                    dict(id=1203, at='2026-11-01T11:40:00Z', body=f'launch-fleet: resume starting 1202 for {ref}')]
+                path = self.dir / 'private.json'
+                path.write_text(json.dumps({'repo': self.world['repo'], 'threads': {'comment:1203': THREAD}}))
+                self.env['LAUNCH_FLEET_STATE'] = str(path)
+                outs.append(self.run_fleet('wake', '12'))
+        self.assertIn('reconcile resume #12: wait comment 1202 for #11; reconcile comment 1203', outs[0])
+        self.assertEqual(outs[1], outs[0])
 
 def load(path, name):
     import importlib.util

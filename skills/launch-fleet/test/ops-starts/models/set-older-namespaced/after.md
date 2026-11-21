@@ -12,6 +12,8 @@ Synthetic fixture for the models contract (`openwiz.models.v1`).
 | Small builder | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |
 | Fixer | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |
 
+Source: `openwiz models set`, from the owner's choice of harness, model and effort for the Reviewer; the other rows are from the older tables, the Orchestrator's from the older Builder table.
+
 ## Builder
 
 One per ticket, on its own branch.

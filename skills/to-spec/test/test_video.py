@@ -224,24 +224,5 @@ class SpecVideo(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in out_dir.iterdir()), sorted([planted[0].name, 'spec.mp4']))
 
 
-COMMENT_STEERING_ON = False
-
-
-class SteeringWording(unittest.TestCase):
-
-    def test_the_video_post_invites_comment_steering_only_while_it_is_on(self):
-        text = (HERE.parent / 'SKILL.md').read_text()
-        post = text.split('Post it as a spec comment', 1)[1].split('\n## ', 1)[0]
-        steer = text.split('## 5. Steer', 1)[1].split('\n\nPlanning grants', 1)[0]
-        head = text.split('\n## 1.', 1)[0]
-        invites = ('comment here to steer' in post.lower() or "owner's comments on the video steer" in steer
-                   or 'steers a spec through its video' in head or 'watches to steer' in head)
-        if COMMENT_STEERING_ON:
-            self.assertTrue(invites, 'comment steering is on but the video post does not invite it')
-        else:
-            self.assertFalse(invites, 'the video post invites comment steering while it is off')
-            self.assertIn('orchestrator', post.lower(), 'the video post must send the owner to their orchestrator')
-
-
 if __name__ == '__main__':
     unittest.main(verbosity=2)

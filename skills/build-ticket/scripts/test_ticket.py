@@ -436,7 +436,11 @@ class Receipt(Case):
 
     def test_push_receipt_records_only_the_first_success(self):
         receipt = self.dir / 'private' / 'receipt.txt'
-        code, out, _ = self.run_ticket('push', str(receipt), '--', 'false')
+        hook = self.origin / 'hooks' / 'pre-receive'
+        hook.write_text('#!/bin/sh\nexit 1\n')
+        hook.chmod(0o755)
+        code, out, _ = self.run_ticket('push', str(receipt), '--', 'git', 'push', '-q', 'origin', 'HEAD')
+        hook.unlink()
         self.assertEqual((code, receipt.exists()), (1, False))
         self.assertIn('push failed: no receipt', out)
         code, out, err = self.run_ticket('push', str(receipt), '--', 'git', 'push', '-q', 'origin', 'HEAD')
@@ -453,7 +457,7 @@ class Receipt(Case):
     def test_push_after_an_unrecorded_earlier_push_stays_unknown(self):
         receipt = self.dir / 'receipt.txt'
         self.git('push', '-q', 'origin', 'main:refs/heads/work')     # branch made at the base
-        code, out, err = self.run_ticket('push', str(receipt), '--', 'true')
+        code, out, err = self.run_ticket('push', str(receipt), '--', 'git', 'push', '-q', 'origin', 'HEAD')
         self.assertEqual(code, 0, err)
         self.assertTrue(receipt.exists(), out)
         receipt.unlink()
@@ -553,8 +557,17 @@ class Author(Case):
                 code, out, err = self.run_ticket('author', **{key: PERSONAL})
                 who = 'author' if 'AUTHOR' in key else 'committer'
                 self.assertEqual((code, last(out)), (1, f'author refused: the {who} git would use '
-                                                        f'is not {NOREPLY}; unset what overrides it'))
+                                                        f'is not jparker <{NOREPLY}>; unset what overrides it'))
                 self.assertNotIn(PERSONAL, out + err)
+
+    def test_author_refuses_a_name_that_still_overrides_it(self):
+        for key in ('GIT_AUTHOR_NAME', 'GIT_COMMITTER_NAME'):
+            with self.subTest(key=key):
+                code, out, err = self.run_ticket('author', **{key: 'Pat Person'})
+                who = 'author' if 'AUTHOR' in key else 'committer'
+                self.assertEqual((code, last(out)), (1, f'author refused: the {who} git would use '
+                                                        f'is not jparker <{NOREPLY}>; unset what overrides it'))
+                self.assertNotIn('Pat', out + err)
 
     def test_author_refuses_a_login_it_cannot_read(self):
         self.update(user={'login': 'bad login!', 'id': 7})
@@ -575,7 +588,10 @@ class Identity(Case):
         cases = [('author', {'GIT_AUTHOR_EMAIL': PERSONAL}),
                  ('committer', {'GIT_COMMITTER_EMAIL': PERSONAL}),
                  ('author', {'GIT_AUTHOR_EMAIL': NOREPLY + '.example.invalid'}),
-                 ('committer', {'GIT_COMMITTER_EMAIL': 'noreply@example.invalid'})]
+                 ('committer', {'GIT_COMMITTER_EMAIL': 'noreply@example.invalid'}),
+                 ('author name', {'GIT_AUTHOR_NAME': 'Pat Person'}),
+                 ('committer name', {'GIT_COMMITTER_NAME': 'Pat Person'}),
+                 ('author name', {'GIT_AUTHOR_NAME': 'jparker2'})]
         for i, (who, extra) in enumerate(cases):
             with self.subTest(who=who, extra=extra):
                 self.git('checkout', '-q', '-b', f'work-{i}', 'main')
@@ -588,6 +604,7 @@ class Identity(Case):
                                                         'a GitHub noreply address; nothing pushed'), err)
                 self.assertEqual((self.remote_work(f'work-{i}'), receipt.exists()), ('', False))
                 self.assertNotIn(PERSONAL, out + err)
+                self.assertNotIn('Pat', out + err)
 
     def test_push_refuses_an_earlier_unpushed_commit_too(self):
         # catches: checking only HEAD while an earlier outgoing commit carries the personal address
@@ -616,6 +633,88 @@ class Identity(Case):
         code, out, err = self.run_ticket('push', str(self.dir / 'r.txt'), '--', 'git', 'push', '-q', 'origin', 'HEAD')
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.remote_work().split()[0], self.git('rev-parse', 'HEAD').strip())
+
+    def personal_commit_elsewhere(self, gitdir):
+        """A personal commit in a bare repository other than origin's current branches."""
+        self.git('checkout', '-q', '-b', 'side', 'main')
+        self.write('src/other.py', 'y = 9\n')
+        self.commit('personal', GIT_AUTHOR_EMAIL=PERSONAL, GIT_COMMITTER_EMAIL=PERSONAL)
+        self.git('push', '-q', str(gitdir), 'side')
+        sha = self.git('rev-parse', 'HEAD').strip()
+        self.git('checkout', '-q', 'work')
+        self.git('branch', '-q', '-D', 'side')
+        return sha
+
+    def test_push_judges_against_what_origin_holds_now(self):
+        # R1: a stale tracking ref (origin's branch since deleted) or another remote's ref hides nothing
+        other = self.dir / 'other.git'
+        subprocess.run(['git', 'init', '-q', '--bare', str(other)], check=True, env=self.env())
+        self.git('remote', 'add', 'other', str(other))
+        for i, where in enumerate(('stale', 'other')):
+            with self.subTest(where=where):
+                self.git('checkout', '-q', '-b', f'work-{i}', 'main')
+                if where == 'stale':
+                    sha = self.personal_commit_elsewhere(self.origin)
+                    self.git('fetch', '-q', 'origin')                          # origin/side now tracked
+                    subprocess.run(['git', '--git-dir', str(self.origin), 'branch', '-q', '-D', 'side'],
+                                   check=True, env=self.env())                 # gone from origin, still tracked
+                else:
+                    sha = self.personal_commit_elsewhere(other)
+                    self.git('fetch', '-q', 'other')
+                self.git('checkout', '-q', f'work-{i}')
+                self.git('merge', '-q', '--no-edit', sha)
+                code, out, err = self.run_ticket('push', str(self.dir / f'r{i}.txt'), '--',
+                                                 'git', 'push', '-q', 'origin', 'HEAD')
+                self.assertEqual((code, last(out)), (1, f'push refused: commit {sha[:12]} author is not '
+                                                        'a GitHub noreply address; nothing pushed'), err)
+                self.assertEqual(self.remote_work(f'work-{i}'), '')
+
+    def test_push_fetches_a_tip_origin_holds_that_this_clone_lacks(self):
+        # R1: main moved on origin since the last fetch; its commits are origin's, not outgoing
+        upstream = self.dir / 'upstream'
+        subprocess.run(['git', 'clone', '-q', '-b', 'main', str(self.origin), str(upstream)], check=True, env=self.env())
+        (upstream / 'src' / 'other.py').write_text('y = 7\n')
+        for args in (['commit', '-q', '-am', 'theirs'], ['push', '-q', 'origin', 'main']):
+            subprocess.run(['git', *args], cwd=upstream, check=True, capture_output=True,
+                           env=self.env(GIT_AUTHOR_EMAIL=PERSONAL, GIT_COMMITTER_EMAIL=PERSONAL))
+        theirs = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=upstream, check=True, capture_output=True,
+                                text=True).stdout.strip()
+        self.git('fetch', '-q', str(upstream), 'main')                         # the commit, no tracking ref
+        self.git('merge', '-q', '--no-edit', theirs)
+        self.write('src/export/run.py', 'x = 2\n')
+        self.commit('mine')
+        self.git('update-ref', '-d', 'refs/remotes/origin/main')
+        code, out, err = self.run_ticket('push', str(self.dir / 'r.txt'), '--', 'git', 'push', '-q', 'origin', 'HEAD')
+        self.assertEqual(code, 0, out + err)
+
+    def test_push_refuses_when_origin_cannot_be_read(self):
+        self.git('remote', 'set-url', 'origin', str(self.dir / 'missing.git'))
+        code, out, err = self.run_ticket('push', str(self.dir / 'r.txt'), '--', 'git', 'push', '-q', 'origin', 'HEAD')
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn("cannot read origin's branches and tags: nothing pushed", err)
+
+    def test_push_refuses_a_command_that_sends_anything_but_head_to_origin(self):
+        # R1: the check binds to the refs the command sends
+        self.git('branch', '-q', 'extra', 'main')
+        commands = [['true'], ['sh', '-c', 'git push origin HEAD'], ['git', 'push'], ['git', 'push', 'origin'],
+                    ['git', 'push', 'other', 'HEAD'], ['git', 'push', '--all', 'origin'],
+                    ['git', 'push', '--mirror', 'origin'], ['git', 'push', '--tags', 'origin', 'HEAD'],
+                    ['git', 'push', '--follow-tags', 'origin', 'HEAD'], ['git', 'push', '--repo=other', 'HEAD'],
+                    ['git', 'push', 'origin', 'HEAD', 'extra'], ['git', 'push', 'origin', ':work'],
+                    ['git', 'push', 'origin', 'extra:refs/heads/work'], ['git', 'push', '--delete', 'origin', 'work']]
+        for command in commands:
+            with self.subTest(command=command):
+                code, out, _ = self.run_ticket('push', str(self.dir / 'r.txt'), '--', *command)
+                self.assertEqual((code, last(out)), (1, 'push refused: the command must push HEAD to origin '
+                                                        '(git push [options] origin HEAD); nothing pushed'))
+        self.assertEqual(self.remote_work(), '')
+        subprocess.run(['git', '--git-dir', str(self.origin), 'config', 'receive.advertisePushOptions', 'true'],
+                       check=True, env=self.env())
+        for command in (['git', 'push', '-q', '-u', 'origin', 'HEAD'], ['git', '-c', 'x.y=1', 'push', 'origin', 'work'],
+                        ['git', 'push', '-o', 'ci.skip', 'origin', '+HEAD:refs/heads/work']):
+            with self.subTest(command=command):
+                code, out, err = self.run_ticket('push', str(self.dir / 'ok.txt'), '--', *command)
+                self.assertEqual(code, 0, out + err)
 
 
 if __name__ == '__main__':

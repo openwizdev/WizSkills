@@ -1616,6 +1616,7 @@ start #13: W3: widget page (spec #10)
 EOF
 expect 'long form: an approval row naming another repository is refused with its line' 0 check.json 'merge12 | issue(10; .comments[0].body |= sub("\n\\| #13 "; "\n| other-owner/other-repo#13 "))' -- check <<EOF
 look #10: its latest plan graph approval's line \`| other-owner/other-repo#13 | W3: widget page | #12 | ready-for-agent |\` names other-owner/other-repo#13, not this repository
+look #10: open sub-issue #13 is not in the approved plan
 EOF
 expect 'long form: a machine row naming another repository is refused with its line' 0 check.json 'merge12 | machine_only @@then@@ issue(10; .comments[0].body |= sub("\n\\| #13 "; "\n| other-owner/other-repo#13 "))' -- check <<EOF
 look #10: its latest plan graph approval's line \`| other-owner/other-repo#13 | W3: widget page | #12 | ready-for-agent |\` names other-owner/other-repo#13, not this repository

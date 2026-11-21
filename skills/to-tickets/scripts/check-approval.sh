@@ -137,14 +137,24 @@ jq -es '
 ' "$work/comments" > "$work/all-comments" 2> /dev/null || fail "cannot read spec #$spec's complete comments"
 
 private=false
-if gh repo view --json isPrivate > "$work/repo" 2> /dev/null &&
-   jq -es 'length == 1 and (.[0] | type == "object" and .isPrivate == true)' \
-     "$work/repo" > /dev/null 2>&1; then
-  private=true
+repo=''
+if gh repo view --json isPrivate,nameWithOwner > "$work/repo" 2> /dev/null; then
+  if jq -es 'length == 1 and (.[0] | type == "object" and .isPrivate == true)' \
+       "$work/repo" > /dev/null 2>&1; then
+    private=true
+  fi
+  # #2096: this repository's name, so a long-form row naming it reads as #N.
+  repo=$(jq -esr 'if length == 1 and (.[0].nameWithOwner | type == "string" and test("^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$"))
+    then .[0].nameWithOwner | ascii_downcase else error("unknown") end' "$work/repo" 2> /dev/null) || repo=''
 fi
 
-jq -er --arg records "$private_records" --argjson private "$private" --slurpfile tickets "$work/tickets" --slurpfile labels "$work/labels.json" --slurpfile authors "$work/authors.json" '
+jq -er --arg records "$private_records" --arg repo "$repo" --argjson private "$private" --slurpfile tickets "$work/tickets" --slurpfile labels "$work/labels.json" --slurpfile authors "$work/authors.json" '
   def trim: sub("^\\s+"; "") | sub("\\s+$"; "");
+  # #2096: OWNER/NAME#N naming this repository ($repo, case-insensitively)
+  # reads as #N; another repository'"'"'s long form refuses its line.
+  def long_ref: "(?<![A-Za-z0-9_./-])(?<o>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#(?<n>[1-9][0-9]*)";
+  def short: gsub(long_ref; if $repo != "" and (.o | ascii_downcase) == $repo then "#\(.n)" else "\(.o)#\(.n)" end);
+  def foreign: [scan(long_ref) | select($repo == "" or (.[0] | ascii_downcase) != $repo) | "\(.[0])#\(.[1])"] | unique;
   def public_form:
     . as $lines
     | ($lines[0] | capture("^\\*\\*Plan graph approved by (?<decider>[^,\\r\\n]+), [0-9]{4}-[0-9]{2}-[0-9]{2}, revision [1-9][0-9]*:\\*\\* (?<decision>[^\"“”]+)$") // null) as $header
@@ -191,8 +201,11 @@ jq -er --arg records "$private_records" --argjson private "$private" --slurpfile
   | if $private or public_form then . else error("public approval form requires a decision, date and private pointer, without quotes or thread ids") end
   | table
   | if length < 3 then error("approval table is missing") else . end
-  | if (map(.key) | . == [range(.[0]; .[0] + length)]) then map(.value | cells)
+  | if (map(.key) | . == [range(.[0]; .[0] + length)]) then .
     else error("approval table rows are not contiguous") end
+  | (map(.value | select(foreign | length > 0)) | first) as $bad
+  | if $bad != null then error("approval table line `\($bad | sub("\\s+$"; "") | short)` names \($bad | foreign | join(", ")), not this repository")
+    else map(.value | cells | map(short)) end
   | if .[0] == ["Ticket", "Title", "Blocked by", "Label"] then .
     else error("approval table columns must be Ticket | Title | Blocked by | Label") end
   | if (.[1] | length) == 4 and all(.[1][]; test("^:?-{3,}:?$")) then .[2:]

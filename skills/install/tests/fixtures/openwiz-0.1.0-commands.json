@@ -1,0 +1,163 @@
+{
+ "about": "Every command and flag OpenWiz 0.1.0 ships for the install skill, read from each tool's --help in the published package (releases/download/v0.1.0/openwiz-0.1.0-x86_64-unknown-linux-gnu.tar.gz, sha256 47bd514066b409783dc8ecb56f0f1f9f9afc5715fa293c2be536e53c624a7228, source 2abcd5f532c5c2a080a1b876e27dec2b9e7d29ab) and the v0.1.0 tag's tools/install/install. Keys are tool paths, then subcommands ('' for none), then their long flags, --help left out. openwiz's flags come from `openwiz help`; --build-identity from running it. Update only by reading a new release's --help.",
+ "version": "0.1.0",
+ "tools": {
+  "tools/install/install": {
+   "preflight": [],
+   "download": [
+    "--dir",
+    "--target"
+   ],
+   "install": [
+    "--assets",
+    "--root",
+    "--state-root",
+    "--target"
+   ],
+   "status": [
+    "--root",
+    "--state-root"
+   ],
+   "skills": [
+    "--root",
+    "--state-root"
+   ]
+  },
+  "runtime/setup/setup.py": {
+   "prepare": [
+    "--answer-thread",
+    "--effort",
+    "--harness",
+    "--model",
+    "--operation",
+    "--operator",
+    "--project",
+    "--repository",
+    "--runtime",
+    "--service-issue",
+    "--state-dir",
+    "--yes"
+   ],
+   "check": [
+    "--api-base",
+    "--openwiz",
+    "--runtime",
+    "--state-dir"
+   ]
+  },
+  "runtime/setup/github_login.py": {
+   "status": [
+    "--repository",
+    "--state-dir"
+   ],
+   "sign-in": [
+    "--repository",
+    "--state-dir",
+    "--yes"
+   ],
+   "skip-app": [
+    "--operation",
+    "--state-dir",
+    "--yes"
+   ]
+  },
+  "runtime/cloudroom/cloudroom.py": {
+   "status": [
+    "--state-dir"
+   ],
+   "install": [
+    "--no",
+    "--operation",
+    "--state-dir",
+    "--yes"
+   ],
+   "sign-in": [
+    "--state-dir"
+   ]
+  },
+  "runtime/access/access.py": {
+   "configure": [
+    "--operation",
+    "--plan",
+    "--secrets",
+    "--state-dir",
+    "--yes"
+   ],
+   "reconcile": [
+    "--operation",
+    "--plan",
+    "--revision",
+    "--secrets",
+    "--state-dir",
+    "--yes"
+   ],
+   "status": [
+    "--operation",
+    "--state-dir"
+   ]
+  },
+  "runtime/github-app/setup.py": {
+   "": [
+    "--after-uncertain",
+    "--agent-for",
+    "--api-base",
+    "--capability",
+    "--factory",
+    "--operation",
+    "--organization",
+    "--port",
+    "--repo",
+    "--secret-store",
+    "--state-dir",
+    "--yes"
+   ]
+  },
+  "openwiz": {
+   "": [
+    "--build-identity"
+   ],
+   "ls": [
+    "--hidden",
+    "--json",
+    "--limit",
+    "--offset"
+   ],
+   "show": [
+    "--json"
+   ],
+   "models": [
+    "--json"
+   ],
+   "fleets": [
+    "--json"
+   ],
+   "fleet": [
+    "--dry-run",
+    "--github-only",
+    "--json"
+   ],
+   "loop": [
+    "--adopt",
+    "--catalog",
+    "--from",
+    "--json",
+    "--out",
+    "--project"
+   ],
+   "init": [
+    "--json",
+    "--operation",
+    "--repository",
+    "--state-dir",
+    "--yes"
+   ],
+   "github": [
+    "--read",
+    "--repository"
+   ],
+   "help": [
+    "--agent"
+   ]
+  }
+ }
+}

@@ -1,0 +1,41 @@
+# #2139 red run: python3 -I skills/install/tests/test_doctor.py on maint/0.2 (f6857cf) with only the new and changed tests; paths made repository-relative.
+...F...........................FF.
+======================================================================
+FAIL: test_app_not_installed (__main__.Doctor.test_app_not_installed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 235, in test_app_not_installed
+    self.assertEqual(self.only(self.s.run()),
+AssertionError: "2. G[39 chars]Fix: install OpenWiz's GitHub App on synthetic[144 chars]tate" != "2. G[39 chars]Fix: set up OpenWiz's GitHub App for synthetic[306 chars]tate"
+Diff is 643 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_every_named_command_is_in_the_package (__main__.SkillCommandsMatchPackage.test_every_named_command_is_in_the_package)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 531, in test_every_named_command_is_in_the_package
+    self.assertEqual(wrong, [])
+AssertionError: Lists differ: ['python3 -I "$openwiz"/tools/install/inst[204 chars]lp)'] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+'python3 -I "$openwiz"/tools/install/install open --root <root> --browser: no `open` in 0.1.0 (preflight, download, install, status, skills)'
+
++ []
+- ['python3 -I "$openwiz"/tools/install/install open --root <root> --browser: no '
+-  '`open` in 0.1.0 (preflight, download, install, status, skills)',
+-  'openwiz engine: no `engine` in 0.1.0 ((none), ls, show, models, fleets, '
+-  'fleet, loop, init, github, help)']
+
+======================================================================
+FAIL: test_the_install_path_names_its_steps (__main__.SkillCommandsMatchPackage.test_the_install_path_names_its_steps)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 543, in test_the_install_path_names_its_steps
+    self.assertIn(step, named)
+AssertionError: ('tools/install/install', 'skills') not found in {('runtime/setup/setup.py', 'check'), ('tools/install/install', 'preflight'), ('openwiz', 'fleet'), ('tools/install/install', 'open'), ('runtime/setup/github_login.py', 'sign-in'), ('tools/install/install', 'install'), ('openwiz', 'engine'), ('runtime/setup/setup.py', 'prepare'), ('runtime/setup/github_login.py', 'skip-app'), ('tools/install/install', 'status'), ('openwiz', 'models'), ('openwiz', 'init'), ('tools/install/install', 'download')}
+
+----------------------------------------------------------------------
+Ran 34 tests in 3.675s
+
+FAILED (failures=3)

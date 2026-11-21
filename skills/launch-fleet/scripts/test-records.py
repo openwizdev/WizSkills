@@ -258,7 +258,7 @@ class Fleet(unittest.TestCase):
                     dict(id=1202, at='2026-11-01T11:00:00Z', body='launch-fleet: waiting for #11'),
                     dict(id=1203, at='2026-11-01T11:40:00Z', body=f'launch-fleet: resume starting 1202 for {ref}')]
                 path = self.dir / 'private.json'
-                path.write_text(json.dumps({'repo': self.world['repo'], 'threads': {'comment:1203': 'thr_synsender'}}))
+                path.write_text(json.dumps({'repo': self.world['repo'], 'threads': {'comment:1203': THREAD}}))
                 self.env['LAUNCH_FLEET_STATE'] = str(path)
                 outs.append(self.run_fleet('wake', '12'))
         self.assertIn('reconcile resume #12: wait comment 1202 for #11; reconcile comment 1203', outs[0])

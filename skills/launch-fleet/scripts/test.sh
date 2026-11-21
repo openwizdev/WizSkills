@@ -1180,6 +1180,8 @@ EOF
 expect 'R1: a plain bold wait without a period resumes' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator: **wait for #71** Once it merges, continue.") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check <<EOF
 resume #12: #71 merged; tell its builder, thread thr_syn12 (wait comment 1202)
 EOF
+again 'long form: an orchestrator wait for this repository resumes as #N does (#2096)' 'issue(12; .comments[-1].body |= sub("#71"; "SYNTHETIC-OWNER/synthetic-repo#71"))' -- check < "${last:-/dev/null}/out"
+again 'long form: prose after a wait naming another repository refuses nothing (#2096)' 'issue(12; .comments[-1].body = "Orchestrator: **wait for #71.** It ports other-owner/other-repo#5.")' -- check < "${last:-/dev/null}/out"
 expect 'R1: an unknown lead-in is not a wait instruction' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator (PC, ops): **do not wait for #71.**") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check < /dev/null
 expect 'R1: free-form prose alone is not a wait instruction' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator (PC, ops): **yes (Q6).** Once #71 has a verified merge, continue.") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check < /dev/null
 expect 'R1: a structured record covers a free-form orchestrator answer' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator (PC, ops): **yes (Q6).** Once #71 has a verified merge, continue.") | say(12; 1203; "11:00"; "launch-fleet: waiting for #71") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- wake 12 <<EOF
@@ -1192,6 +1194,7 @@ EOF
 expect 'stall: a structured wait resumes a standalone builder' 0 check.json 'own_approval(70; 7002; "10:00") | say(70; 7003; "10:01"; "launch-fleet: start checked, thread thr_syn70, branch room/70-link") | say(70; 7004; "11:00"; "launch-fleet: waiting for #11")' -- wake 70 <<EOF
 resume #70: #11 merged; tell its builder, thread thr_syn70 (wait comment 7004)
 EOF
+again 'long form: a waiting record for this repository resumes as #N does (#2096)' 'issue(70; .comments[-1].body = "launch-fleet: waiting for synthetic-owner/Synthetic-Repo#11")' -- wake 70 < "${last:-/dev/null}/out"
 expect 'stall: an open blocker keeps its builder waiting' 0 check.json "$WAIT12 | $MERGE71 | issue(71; .state = \"OPEN\")" -- check < /dev/null
 expect 'stall: a closed blocker without a merge keeps its builder waiting' 0 check.json "$WAIT12 | closed_single(71; \"11:30\")" -- check < /dev/null
 expect 'stall: a blocker merged to another base keeps its builder waiting' 0 check.json "$WAIT12 | $MERGE71 | pull(72; .base = \"release-1\")" -- check < /dev/null
@@ -1226,6 +1229,7 @@ CLAIM12="$WAIT12 | $MERGE71 | say(12; 1203; \"11:59\"; \"launch-fleet: resume st
 expect 'stall: oldest resume claim may deliver' 0 check.json "$CLAIM12" -- claim 12 1203 <<EOF
 go #12
 EOF
+again 'long form: a resume claim for this repository delivers as #N does (#2096)' 'issue(12; .comments[-1].body |= sub("for #71"; "for synthetic-owner/synthetic-repo#71"))' -- claim 12 1203 < "${last:-/dev/null}/out"
 expect 'stall: incomplete spec facts withdraw a resume claim' 0 check.json "$CLAIM12 | reduce range(100; 201) as \$n (.; ticket(\$n; \"Synthetic ticket\"; [\"ready-for-agent\"]; []))" -- claim 12 1203 <<EOF
 withdraw #12: that resume is not due or an older claim holds it
 EOF
@@ -1621,15 +1625,6 @@ EOF
 expect 'long form: a machine row naming another repository is refused with its line' 0 check.json 'merge12 | machine_only @@then@@ issue(10; .comments[0].body |= sub("\n\\| #13 "; "\n| other-owner/other-repo#13 "))' -- check <<EOF
 look #10: its latest plan graph approval's line \`| other-owner/other-repo#13 | W3: widget page | #12 | ready-for-agent |\` names other-owner/other-repo#13, not this repository
 EOF
-expect 'long form: a waiting record for this repository resumes its builder' 0 check.json 'own_approval(70; 7002; "10:00") | say(70; 7003; "10:01"; "launch-fleet: start checked, thread thr_syn70, branch room/70-link") | say(70; 7004; "11:00"; "launch-fleet: waiting for synthetic-owner/Synthetic-Repo#11")' -- wake 70 <<EOF
-resume #70: #11 merged; tell its builder, thread thr_syn70 (wait comment 7004)
-EOF
-expect 'long form: an orchestrator wait for this repository resumes its builder' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator (PC, ops): **wait for SYNTHETIC-OWNER/synthetic-repo#71.** Once it merges, continue.") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check <<EOF
-resume #12: #71 merged; tell its builder, thread thr_syn12 (wait comment 1202)
-EOF
-expect 'long form: a resume claim for this repository may deliver' 0 check.json "$WAIT12 | $MERGE71 | say(12; 1203; \"11:59\"; \"launch-fleet: resume starting 1202 for synthetic-owner/synthetic-repo#71, thread thr_syntick1\")" -- claim 12 1203 <<EOF
-go #12
-EOF
 expect 'long form: a resume sent for this repository suppresses a repeat' 0 check.json "$WAIT12 | $MERGE71 | say(12; 1203; \"11:45\"; \"launch-fleet: resume sent 1202 for Synthetic-Owner/Synthetic-Repo#71\")" -- check < /dev/null
 expect 'long form: an ordering hold for this repository is released' 0 check.json 'own_approval(70; 7002; "10:00") | issue(70; .labels = ["held"]) | held_at(70; "11:09") | say(70; 7003; "11:10"; "launch-fleet: held for ordering: issue synthetic-owner/synthetic-repo#11 merges to main")' -- check <<EOF
 release #70: ordering hold 7003; issue #11 merged to main; restore ready-for-agent and remove held
@@ -1639,9 +1634,6 @@ look #12: comment 1202's line \`launch-fleet: waiting for other-owner/other-repo
 EOF
 expect 'long form: a title naming another repository refuses nothing' 0 check.json 'merge12 | issue(10; .comments[0].body |= sub("\\| W3: widget page \\|"; "| W3: widget page, after other-owner/other-repo#5 |"))' -- check <<EOF
 start #13: W3: widget page (spec #10)
-EOF
-expect 'long form: prose after a wait naming another repository refuses nothing' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator: **wait for #71.** It ports other-owner/other-repo#5.") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check <<EOF
-resume #12: #71 merged; tell its builder, thread thr_syn12 (wait comment 1202)
 EOF
 expect 'long form: a raised refusal is not raised again' 0 check.json 'say(12; 1202; "11:00"; "launch-fleet: waiting for other-owner/other-repo#71") | say(12; 1203; "11:05"; "launch-fleet: look: comment 1202'"'"'s line `launch-fleet: waiting for other-owner/other-repo#71` names other-owner/other-repo#71, not this repository")' -- check < /dev/null
 

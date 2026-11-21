@@ -71,7 +71,7 @@ class Eval(t.Base):
         self.asks = []
         if 'timer' not in skip:
             self.wd('begin', '--state', self.state, check=0)
-            self.shift_paste(22 * 60 + 30)  # the user reads and answers the grill: 22.5 minutes from paste
+            self.shift_paste(22 * 60 + 1)  # the grill took 22 minutes; the reported time is then 23 minutes
         self.wd('host', '--state', self.state, '--host', HOST, '--costly', 'yes')
         # 2. Write: the template copy, then the adaptation SKILL.md's step 2.3 makes (its host, its first-turn check).
         self.wd('copy', '--state', self.state, '--openwiz', t.OPENWIZ, '--into', self.repo, '--login', 'machine')

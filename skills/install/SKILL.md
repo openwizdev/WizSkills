@@ -1,7 +1,7 @@
 ---
 name: install
 description: Install OpenWiz from its one line, "Install OpenWiz from github.com/openwizdev/OpenWiz", then optionally walk the resumable onboarding road to a first merged pull request. Checks the machine, installs the verified prebuilt release (no Rust or Node), checks setup's connections, asks where agents run, offers three ways to start, runs a short grill, and starts the fleet through launch-fleet once the plan passes its checks. Use to install, repair, update or remove OpenWiz, or to start or resume a first fleet. For a project's docs/agents/ settings alone, use setup.
-version: 0.3.0
+version: 0.3.1
 ---
 
 # Install OpenWiz
@@ -10,7 +10,7 @@ The user pasted one line into their agent:
 
 > Install OpenWiz from github.com/openwizdev/OpenWiz
 
-Take them from that line to setup, then down the onboarding road to their first merged pull request if they want one. Every step reads before it writes and reuses what an earlier one recorded, so a repeat or a fresh session resumes at the first unfinished step. Tools: OpenWiz's installer (`tools/install/install`, over its `contracts/install.v1.md`) and installed runtime (`contracts/setup.v1.md`), the agent CLI ([cli.v1](../../contracts/cli.v1.md)), and for the road `grill`, `to-spec`, `to-tickets` and `launch-fleet`, and this skill's [teach.md](teach.md) and [ideas.md](ideas.md). This skill adds no installer, engine, approval or planner, and never runs a fleet tick itself.
+Take them from that line to setup, then down the onboarding road to their first merged pull request if they want one. Every step reads before it writes and reuses what an earlier one recorded, so a repeat or a fresh session resumes at the first unfinished step. Tools: OpenWiz's installer (`tools/install/install`, over its `contracts/install.v1.md`) and installed runtime (`contracts/setup.v1.md`), the agent CLI ([cli.v1](https://github.com/openwizdev/WizSkills/blob/main/contracts/cli.v1.md)), and for the road `grill`, `to-spec`, `to-tickets` and `launch-fleet`, and this skill's [teach.md](teach.md) and [ideas.md](ideas.md). This skill adds no installer, engine, approval or planner, and never runs a fleet tick itself.
 
 **Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills.
 
@@ -19,13 +19,32 @@ Take them from that line to setup, then down the onboarding road to their first 
 - **Install permission is not work approval.** Installing or finishing setup approves nothing. The first fleet needs the user's answer to where agents run, their yes in this chat to the grill's summary, and, right before it starts, their yes to starting it on that host, which can cost money. The plan approves itself by to-tickets' checks (J203): no spec or plan approval is asked. Never write, fake or infer a yes, or ask for blanket consent.
 - **Show every effect, then wait for a yes to exactly it.** Where agents run, the fleet's start, the App or its skip, project settings, the host setting, the brain, phone access and a new repository each preview first; confirm with that preview's own `--yes` or `--yes --operation <id>`. Creating a repository, any write, spend, secrets and publishing always ask; a teacher's line never stands in for that ask.
 - **Never touch a login.** A missing sign-in gets its walk-through and a link; the user signs in themselves, in their own terminal or browser. Never run a sign-in for them (no `github_login.py sign-in --yes`, no `gh auth login`), and never read, pass or store a credential. Continue only on the installed setup's read-only check.
-- **Credentials stay out of the conversation.** Never ask for a key or token in chat or put one in a prompt, argument, URL, log, issue or file. Keys go only through the tools' protected setup, into owner-only state on this computer or CloudRoom's secret store. Save the user's exact words only under [open-development](../../contracts/open-development.v1.md).
+- **Credentials stay out of the conversation.** Never ask for a key or token in chat or put one in a prompt, argument, URL, log, issue or file. Keys go only through the tools' protected setup, into owner-only state on this computer or CloudRoom's secret store. Save the user's exact words only under [open-development](https://github.com/openwizdev/WizSkills/blob/main/contracts/open-development.v1.md).
 - **Uncertain is never retried blindly.** Run the same command again: it reads its record first and never repeats an effect.
 - **Read JSON and exit codes, never a screen.** Run installed programs by absolute path: there is no `openwiz` on `PATH`; it is `<root>/current/openwiz`. Python 3.9+ only: no Rust, Cargo, Node, npm or source build; if a step seems to need one, stop and say so.
 - **OpenWiz 0.1.0 needs CloudRoom.** Its setup reads a signed-in CloudRoom wherever the agents run, and `continue` refuses without it. Say so before the install. There is no setup page or local server in 0.1.0: setup is the commands below.
 - **Free now; other charges are separate.** OpenWiz is free now. Paid plans come later. CloudRoom and model charges are separate and not included. More Cloud Credits are CloudRoom's own plan, from `https://cloudroom.dev/pricing`. Referral verification is unavailable. No referral is applied. Never add a code or parameter to that link.
 
-Keep `<root>` (default `$HOME/.local/lib/openwiz`), and the `build` and `state_root` paths `install` prints as `<build>` (also `build=<build>` in the shell) and `<state>`, all absolute and owner-only. Run runtime tools with `python3 -I -B` and `OPENWIZ_STATE_DIR=<state>`, and pass `--state-dir <state>`. After a restart, `install status --root <root>` prints `build` and `state_root` again.
+Keep `<root>` (default `$HOME/.local/lib/openwiz`), and the `build` and `state_root` paths `install` prints as `<build>` (also `build=<build>` in the shell) and `<state>`, all absolute and owner-only. Run runtime tools with `python3 -I -B` and `OPENWIZ_STATE_DIR=<state>`, and pass `--state-dir <state>`. After a restart, read them from the installed files, as Resume says.
+
+## Resume
+
+A new session, whatever the user said ("continue", or the one line again), starts here: find the first unfinished step and resume there. Use only the installed files, never a temporary clone: a restart loses it.
+
+```sh
+<root>/current/openwiz --build-identity
+build=$(readlink <root>/current); state=${build%/service/builds/*}
+python3 -I -B "$build"/runtime/setup/setup.py check --state-dir "$state"
+python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir "$state"
+grep -m1 '^version:' ~/.claude/skills/install/SKILL.md ~/.codex/skills/install/SKILL.md
+```
+
+`<root>` is `$HOME/.local/lib/openwiz` unless the user chose another. Take the first that holds:
+
+- No `<root>/current`, or `--build-identity` does not read 0.1.0: resume at step 1.
+- `check` does not read `cloudroom_login_verified`, or `status` does not read the GitHub account: resume at step 3.
+- The running agent's `install/SKILL.md` is missing, or does not read `version: 0.3.1`: resume at step 4.
+- Otherwise resume at step 5; for a first fleet already under way, at step 6 with `first_fleet.py next`.
 
 ## 1. Preflight
 
@@ -73,7 +92,7 @@ Done when `install` printed `"activated": true` with the version, target, `build
 python3 -I -B "$build"/runtime/setup/setup.py check --state-dir <state>
 ```
 
-It prints one bare code per component and no next step, so read each code below. Run `check` again after each change.
+It reads each connection and records only its own results in `<state>`. It prints one bare code per component and no next step, so read each code below. Run `check` again after each change.
 
 **CloudRoom** (`cloudroom`), with `python3 -I -B "$build"/runtime/cloudroom/cloudroom.py status | install | sign-in --state-dir <state>`:
 
@@ -109,9 +128,24 @@ python3 -I "$openwiz"/tools/install/install skills --root <root>
 
 It copies the 18 skills into `<root>/skills` and into each agent folder present here: `~/.claude/skills` (Claude Code), `~/.codex/skills` (Codex; 0.1.0 reads `~/.codex` only, never `$CODEX_HOME`), `~/.cursor/skills`, `~/.config/opencode/skills` and `~/.grok/skills`. It prints `"outcome": "installed"` even when it copied nothing, so check two things: its `harnesses` entry for the agent you are running in reads `installed`, and that agent's folder (`ls ~/.claude/skills` or `ls ~/.codex/skills`) now holds all 18 by name: `ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`. If the entry reads `absent`, that agent's folder (`~/.claude` or `~/.codex`) is missing on this computer: tell the user which folder, that their agent has no OpenWiz skills, and its `next` step; never create the folder yourself. A skill of the user's own with the same name refuses the whole step: report it.
 
-An agent finds new skills only when it starts, so the user restarts it now. **The installed copy of this skill is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md) and resume at step 5.** The installed copy comes from the 0.1.0 package and still names a setup page 0.1.0 removed. Tell the user to start a new session of their agent and say exactly: "continue the OpenWiz install with https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md". There, run `install status --root <root>` for `build` and `state_root`, and resume at step 5.
+Then make every installed copy of this skill this one. The copy `install skills` just wrote comes from the 0.1.0 package: it is older (`version: 0.2.0`), still names a setup page 0.1.0 removed, and a new session loads it whatever the user says. Overwrite it now in each agent folder that holds OpenWiz's copy (marked by `.openwiz-skill`), and check each copy by content:
 
-Done when the running agent's folder holds the 18 skills by name, or the user knows which folder is missing, and the user has the exact phrase for the new session.
+```sh
+fixed=<private temporary folder>/install-SKILL.md
+curl -fsSL --proto '=https' -o "$fixed" https://raw.githubusercontent.com/openwizdev/WizSkills/main/skills/install/SKILL.md
+if grep -q '^version: 0.3.1$' "$fixed" && ! grep -q 'install ope[n] ' "$fixed"; then echo "fixed copy ok"; else echo "NOT THIS SKILL: $fixed"; fi
+grep -q '^version: 0.3.1$' "$fixed" && for d in "$HOME/.claude/skills" "$HOME/.codex/skills" ${CODEX_HOME:+"$CODEX_HOME/skills"} "$HOME/.cursor/skills" "$HOME/.config/opencode/skills" "$HOME/.grok/skills"; do
+  [ -f "$d/install/.openwiz-skill" ] || continue
+  cp "$fixed" "$d/install/SKILL.md"
+  if grep -q '^version: 0.3.1$' "$d/install/SKILL.md" && ! grep -q 'install ope[n] ' "$d/install/SKILL.md"; then echo "ok: $d/install/SKILL.md"; else echo "STILL OLD: $d/install/SKILL.md"; fi
+done
+```
+
+If you read this skill from a file on this computer (a WizSkills clone or plugin), `cp` that file to `"$fixed"` instead of the `curl`. If it prints `NOT THIS SKILL` (the download failed, or the link still serves an older copy), nothing was copied: stop before the restart: say so, and try again shortly. A `STILL OLD` line means that folder's copy did not take (it may not be writable): report it and fix it before the restart; never restart onto an old copy. A later `install skills` run, such as a repair, writes the old copy again: repeat this block after it.
+
+An agent finds new skills only when it starts, so the user restarts it now: a new session of their agent, then "continue the OpenWiz install" (any words do). The new session loads this skill from the folder above and starts at Resume. Any installed copy that does not read `version: 0.3.1` is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md) and resume at the first unfinished step, as Resume says.
+
+Done when the running agent's folder holds the 18 skills by name and every `ok:` line printed with no `STILL OLD`, or the user knows which folder is missing, and the user knows to restart.
 
 ## 5. Teach
 
@@ -200,7 +234,7 @@ Done when the user has heard the closing offer.
 When setup or a fleet seems stuck, or the user asks whether setup is right, run the doctor from the project's clone:
 
 ```sh
-python3 -I <this skill's folder>/scripts/doctor.py --repo <owner>/<name> --state-dir <state> --build <build> --openwiz "$openwiz" [--driver <the driver this machine runs>]
+python3 -I <this skill's folder>/scripts/doctor.py --repo <owner>/<name> --state-dir <state> --build <build> --openwiz "$build"/runtime [--driver <the driver this machine runs>]
 ```
 
 In order, it checks the labels, the App, that the acting login is a record author, the harness, the driver's `version` and the skills, through the checks that already exist. It only reads. Show each problem line as it is; its `Fix:` is the command that fixes it. A sign-in fix is the user's to run: show it, never run it. Exit 0 prints one all-clear line; 5 prints the problems.
@@ -209,7 +243,7 @@ Done when it prints all clear, or the user has each fix.
 
 ## Recovery and removal
 
-If something seems wrong, run `install status --root <root>`: it verifies the selected build and changes nothing. A changed file reads `installed asset mismatch`, and `install` refuses the same way. To repair it and keep the settings, delete only the `<root>/current` link and the one build folder it points to (`<build>`, inside `<state>/service/builds/`), nothing else in `<state>/service/`, then run step 2's `install install` again.
+If something seems wrong, verify the build with a fresh clone (it installs nothing): `openwiz=<new temporary folder>/openwiz`, step 1's `git clone`, then `python3 -I "$openwiz"/tools/install/install status --root <root>`. It verifies the selected build and changes nothing. A changed file reads `installed asset mismatch`, and `install` refuses the same way. To repair it and keep the settings, delete only the `<root>/current` link and the one build folder it points to (`<build>`, inside `<state>/service/builds/`), nothing else in `<state>/service/`, then run step 2's `install install` again.
 
 To remove OpenWiz, on the user's yes: there is no remove command and no server to stop. Never remove `<root>` or `<state>` as a whole: the installer accepts folders that already hold other files, so either may hold the user's own.
 

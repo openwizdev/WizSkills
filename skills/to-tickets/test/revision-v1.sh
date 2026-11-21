@@ -1,13 +1,4 @@
 #!/bin/sh
-# Prints the revision text of a spec's plan graph, as the plan-graph skill
-# defines it ("Is an approval current?" in SKILL.md): the spec's body, and
-# each of its tickets' number, blockers, body and title. Its SHA-256 is the
-# fingerprint an approval records.
-#
-# Usage: sh revision.sh <spec issue number>
-#   then: sha256sum on the output (on macOS: shasum -a 256)
-# Runs only `gh issue view` reads. Exits 0 and prints the text; exits 1, and
-# prints nothing on stdout, if any read fails; exits 2 on a bad argument.
 set -u
 spec=${1:-}
 case $spec in
@@ -32,7 +23,6 @@ work=$(mktemp -d) || fail "cannot make a temporary folder"
 trap 'rm -rf "$work"' EXIT
 tab=$(printf '\t')
 
-# The spec's tickets: its sub-issues, as many as GitHub counts.
 gh issue view "$spec" --json subIssues --jq '.subIssues.totalCount, (.subIssues.nodes[].number)' > "$work/members" ||
   fail "cannot read spec #$spec's tickets"
 total=$(head -n 1 "$work/members")

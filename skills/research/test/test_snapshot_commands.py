@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""TV12: run the documented commands in fresh shells with awkward paths.
-
-Catches lost snapshot paths and unquoted spaces/apostrophes at the shell boundary.
-The fake checker records arguments only; it does not supply the quoting tested.
-"""
 from pathlib import Path
 import re
 import subprocess

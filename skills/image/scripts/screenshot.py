@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-"""Capture phone + desktop evidence through Cloudroom's browser-harness.
-
-Only Python's standard library and the existing browser-harness CLI are needed.
-For each width it opens and activates a fresh tab, sets a 1x CSS pixel scale and
-reduced motion, and loads the URL at 390 x 844 and 1440 x 900 (viewport sizes,
-not phone emulation). It waits for load, a success HTTP status, the visible
-ready selector, fonts, image decoding (lazy images too; empty placeholders are
-skipped) and two animation frames, then saves full-page phone.png and
-desktop.png and closes its tab, on success or failure. --timeout is per step,
-not a sleep. Any failure exits nonzero; partial files are not a completed pair.
-The manifest is written last: its presence marks a completed pair, not approval.
-It prints the manifest path, then `overflow: none` or each capture, first
-screens included, whose content is wider than its viewport.
-Use --fixed-at-bottom for a tall viewport plus a separate first-screen PNG.
-The taller viewport changes vh units and other viewport-relative layouts;
-compare the first-screen image before judging the full-page layout.
-"""
 import argparse
 import json
 import math
@@ -32,8 +15,28 @@ def positive_seconds(value):
     return number
 
 
+DESCRIPTION = (
+    "Capture phone + desktop evidence through Cloudroom's browser-harness.\n"
+    '\n'
+    "Only Python's standard library and the existing browser-harness CLI are needed.\n"
+    'For each width it opens and activates a fresh tab, sets a 1x CSS pixel scale and\n'
+    'reduced motion, and loads the URL at 390 x 844 and 1440 x 900 (viewport sizes,\n'
+    'not phone emulation). It waits for load, a success HTTP status, the visible\n'
+    'ready selector, fonts, image decoding (lazy images too; empty placeholders are\n'
+    'skipped) and two animation frames, then saves full-page phone.png and\n'
+    'desktop.png and closes its tab, on success or failure. --timeout is per step,\n'
+    'not a sleep. Any failure exits nonzero; partial files are not a completed pair.\n'
+    'The manifest is written last: its presence marks a completed pair, not approval.\n'
+    'It prints the manifest path, then `overflow: none` or each capture, first\n'
+    'screens included, whose content is wider than its viewport.\n'
+    'Use --fixed-at-bottom for a tall viewport plus a separate first-screen PNG.\n'
+    'The taller viewport changes vh units and other viewport-relative layouts;\n'
+    'compare the first-screen image before judging the full-page layout.\n'
+)
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument('url', help='HTTP(S) page you are authorised to view')
     parser.add_argument('--out', type=Path, required=True, help='new evidence directory')
     parser.add_argument('--ready-selector', required=True,
@@ -50,7 +53,6 @@ def main():
     if not args.ready_selector.strip():
         parser.error('ready selector must not be empty')
     out = args.out.resolve()
-    # Never mix a failed round or an old picture into new evidence.
     out.mkdir(parents=True, exist_ok=False)
     config = repr({'url': args.url, 'out': str(out), 'ready': args.ready_selector,
                    'timeout': args.timeout, 'fixed_at_bottom': args.fixed_at_bottom})
@@ -153,8 +155,6 @@ Path(config['out'], 'capture.json').write_text(json.dumps(manifest, indent=2) + 
     print(out / 'capture.json')
     wide = []
     for capture in json.loads((out / 'capture.json').read_text())['captures']:
-        # Every measured view, including the first screen kept by
-        # --fixed-at-bottom, whose layout can differ from the tall capture.
         views = [(capture['name'], capture)]
         if 'firstScreen' in capture:
             views.append((capture['name'] + ' first screen', capture['firstScreen']))

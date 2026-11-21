@@ -1,35 +1,3 @@
-"""A recording `gh` for the feedback helper's proofs: `gh api` over one
-synthetic GitHub, answering as gh 2.100 does with `--include` (a status line,
-headers, a blank line and the JSON body; exit 1 on HTTP 400 and above).
-
-Every call is appended to FAKE_GH_LOG as one JSON line: its arguments and
-stdin. The world is the JSON file FAKE_GH_SCENARIO, read on every call and
-written back after a create, so a test can change it between steps:
-
-  {"user": {"login", "id"} | null,          # null: GET /user is HTTP 401
-   "repo": {...} | "fail",                   # GET repos/openwizdev/OpenWiz
-   "create": {"status": 201 | 4xx | 5xx}     # POST .../issues
-           | {"drop": true}                  # no response at all, exit 1
-           | {"kill_parent": true},          # the caller dies mid-request
-   "readback": "ok" | "fail" | "differs",    # GET of a just-created issue
-   "list": "ok" | "fail",                    # GET .../issues?creator=...
-   "issues": [{"number", "title", "body", "user": {"id", "login"},
-               "pull_request"?: {}}],
-   "next_number": N,
-   "name": "owner/repo",                     # the name GitHub writes in its replies
-                                             # (default REPO; any capitals)
-   "accounts": ["login", ...],               # gh's stored github.com logins,
-                                             # the first active (default: user's)
-   "token_user": {"login", "id"}}            # whom GH_TOKEN/GITHUB_TOKEN logs in
-
-`gh auth status --json hosts --hostname github.com` answers as gh 2.100 does
-(observed offline): one entry per candidate account, an environment token's
-first and active. With a token in the environment and `token_user` set,
-`GET /user` answers as that token's account, as gh lets it override the login.
-
-Anything else it does not know exits 3 on stderr.
-"""
-
 import json
 import os
 import signal
@@ -90,7 +58,7 @@ def main(argv):
         sys.exit(3)
     url = urlsplit(rest[0])
     name = world.get('name', REPO)
-    route = url.path.lower()  # GitHub matches owner and name case-insensitively
+    route = url.path.lower()
     repo = f'repos/{REPO}'.lower()
     if method == 'GET' and url.path == 'user':
         if token:

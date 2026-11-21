@@ -25,7 +25,6 @@ if (a[0] === 'api' && /^repos\/jparker2006\/ClosedWiz\/issues\/comments\/[1-9][0
   else {
     const pages=w.sequence ? w.sequence[Math.min(readIndex,w.sequence.length-1)] : w.pages;
     if(a.includes('--slurp')) {
-      // Project the old query's nested selections for its failing-first run.
       for(const p of pages) {
         const r=p.data?.repository;
         if(r?.switch?.comments) delete r.switch.comments.pageInfo;

@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""Run only #1273's failed CI groups, using their original test.sh assertions.
-
-No copied expectations or production overrides. This selects 20 existing cases
-(the 15 CI failures plus the setup/neighbor cases their groups need).
-"""
 import argparse
 import os
 from pathlib import Path
@@ -14,7 +9,13 @@ import tempfile
 
 HERE = Path(__file__).resolve().parents[1]
 ROOT = HERE.parents[2]
-parser = argparse.ArgumentParser(description=__doc__)
+DESCRIPTION = (
+    "Run only #1273's failed CI groups, using their original test.sh assertions.\n"
+    '\n'
+    'No copied expectations or production overrides. This selects 20 existing cases\n'
+    '(the 15 CI failures plus the setup/neighbor cases their groups need).\n'
+)
+parser = argparse.ArgumentParser(description=DESCRIPTION)
 parser.add_argument('--revision', help='read test.sh at this Git revision')
 args = parser.parse_args()
 source = subprocess.check_output(
@@ -27,8 +28,6 @@ def section(start, end):
     return source[begin:source.index(end, begin)]
 
 
-# Retain the existing setup and assertion functions, leaving out its full-run
-# worker launch. Every selected block below is unchanged source text.
 prefix = source[:source.index('# A full run: the workers')]
 prefix = re.sub(r'^HERE=.*$', 'HERE=' + shlex.quote(str(HERE)), prefix, count=1, flags=re.M)
 parts = [prefix]
@@ -37,7 +36,6 @@ parts.append(section("expect 'K9: two approved pull requests change the same fil
 parts.append(section("expect 'a closed ticket gets its builder and reviewer archived'", "expect 'needs-info: the question goes"))
 parts.append(section("### The loop's script: a clone", "expect 'claim: the only claim goes'"))
 parts.append(section('# The literal costs below', '# A quiet back-off:'))
-# Select the quarter-allowance block by its distinct remaining allowance.
 quarter = source.index("expect 'budget: a quarter of the allowance left still checks'")
 quarter_start = source.rfind('ERR=', 0, quarter)
 parts.append(source[quarter_start:source.index('ERR=', quarter)])

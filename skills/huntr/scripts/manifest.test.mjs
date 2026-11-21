@@ -51,7 +51,6 @@ function fixture(fn) {
 test('unchanged completed clean PASS skips, including after an unrelated commit', () => fixture(f => {
   const snapshot = f.ok('snapshot', f.plan);
   assert.equal(snapshot.base, f.git('rev-parse', 'HEAD'));
-  // Worked independently from the three literal Git blob payloads and canonical JSON.
   assert.equal(snapshot.files_sha256, '683b15dfd02fcb8a0ba6708d2e7ebfb6d71fef5b15459d6086e3f5f4813f511d');
   const previous = f.ok('complete', snapshot, f.pass);
   assert.deepEqual(previous.result, f.pass);
@@ -64,7 +63,6 @@ test('unchanged completed clean PASS skips, including after an unrelated commit'
 test('a different checker version runs again', () => fixture(f => {
   const previous = f.ok('complete', f.ok('snapshot', f.plan), f.pass);
   assert.equal(f.ok('check', f.plan, previous).decision, 'skip');
-  // Flip only the first hex digit: still a valid 64-hex digest, never the stored one.
   const other = (previous.checker[0] === 'a' ? 'b' : 'a') + previous.checker.slice(1);
   assert.match(other, /^[a-f0-9]{64}$/); assert.notEqual(other, previous.checker);
   assert.equal(f.ok('check', f.plan, {...previous, checker: other}).decision, 'run');
@@ -213,7 +211,6 @@ test('invalid plans and non-files never become reusable coverage', () => fixture
   }
   f.git('update-index', '--add', '--cacheinfo', '120000', f.git('hash-object', 'AGENTS.md'), 'src/link');
   f.git('commit', '-qm', 'synthetic link');
-  // A selected symlink is refused even on a clean checkout.
   f.git('checkout-index', '-f', '--', 'src/link');
   assert.equal(f.run('snapshot', f.plan).status, 2);
   assert.equal(existsSync(join(f.repo, 'manifest.json')), false);

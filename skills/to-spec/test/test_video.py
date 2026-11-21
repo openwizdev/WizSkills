@@ -1,11 +1,3 @@
-"""to-spec's steering video (#1339, J204): an animatic built from a storyboard,
-showing what changes for a user and in the codebase, in build order, with no
-bench and no ticket graph. Synthetic only; no network.
-
-The render proof needs ffmpeg, ffprobe, a Chromium and playwright-core (from
-the working directory's node_modules or $ANIMATIC_HOME); without them it is
-skipped, and the pull request names that gap.
-"""
 import copy
 import json
 import os
@@ -34,16 +26,12 @@ def can_render():
 
 
 def other_filesystem(than):
-    """A writable folder on a different filesystem from `than`, or None."""
     for root in ['/dev/shm', os.environ.get('XDG_RUNTIME_DIR')]:
         if root and os.path.isdir(root) and os.access(root, os.W_OK) and os.stat(root).st_dev != os.stat(than).st_dev:
             return Path(root)
     return None
 
 
-# A synthetic voice: a 0.5 s tone per line, except the line in $VOICE_LINE,
-# which gets what $VOICE_MODE says: `silent-exit-3` writes a 0.5 s silent WAV
-# and exits 3, `silent` writes it and exits 0, `nothing` writes no file.
 VOICE = '''
 import math, os, sys, wave
 text = sys.stdin.read()
@@ -71,14 +59,12 @@ class SpecVideo(unittest.TestCase):
         return path
 
     def test_link_is_ready_to_insert_in_spec(self):
-        # catches: a link line the spec issue can't use as written.
         result = run('link', 'https://example.com/videos/synthetic.mp4?lang=en')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout,
                          '[Watch the narrated spec](https://example.com/videos/synthetic.mp4?lang=en)\n')
 
     def test_link_refuses_unsafe_or_ambiguous_destinations(self):
-        # catches: a local file, a credential or injected Markdown reaching a public issue.
         for url in ['file:///tmp/video.mp4', 'https://user:secret@example.com/video.mp4',
                     'https://example.com/clip)\n[extra](https://example.org',
                     'https://example.com:bad/video.mp4', 'https:///video.mp4']:
@@ -88,15 +74,12 @@ class SpecVideo(unittest.TestCase):
                 self.assertEqual(result.stdout, '')
 
     def test_the_synthetic_grill_storyboard_passes_in_build_order(self):
-        # catches: a checker that refuses the storyboard to-spec is told to write.
         result = run('check', STORYBOARD)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines()[0],
                          'storyboard ok: 5 moments; steps 1-3; user 2, codebase 2')
 
     def test_a_graph_a_bench_or_build_order_broken_is_refused_before_rendering(self):
-        # catches: a video that shows the ticket graph or a bench, or tells the
-        # changes out of build order, reaching the owner.
         def change(fn):
             moments = copy.deepcopy(self.moments)
             fn(moments)
@@ -134,10 +117,7 @@ class SpecVideo(unittest.TestCase):
 
     @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
     def test_build_renders_each_frame_with_its_voice_in_order(self):
-        # catches: frames shown out of order or under the wrong line, a silent
-        # or missing track, or an MP4 that isn't what the storyboard says.
         shutil.copy(STORYBOARD, self.tmp / 'storyboard.json')
-        # A voice of known length per line: 0.6 s plus 0.1 s per word.
         tone = ('python3 -I -c "import sys, wave, math; n = len(sys.stdin.read().split()); '
                 'w = wave.open(sys.argv[1] + \'.wav\', \'wb\'); w.setparams((1, 2, 16000, 0, \'NONE\', \'\')); '
                 'w.writeframes(b\'\'.join(int(8000 * math.sin(i / 8)).to_bytes(2, \'little\', signed=True) '
@@ -147,7 +127,7 @@ class SpecVideo(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('no warnings', result.stdout)
         words = [len(m['say'].split()) for m in self.moments]
-        lengths = [0.6 + 0.1 * n + 0.4 for n in words]  # each line, then its 0.4 s hold
+        lengths = [0.6 + 0.1 * n + 0.4 for n in words]
         meta = json.loads(subprocess.check_output([
             'ffprobe', '-v', 'error', '-show_entries', 'format=duration:stream=codec_type,codec_name,r_frame_rate',
             '-of', 'json', str(out)]))
@@ -172,9 +152,6 @@ class SpecVideo(unittest.TestCase):
 
     @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
     def test_a_failed_or_silent_voice_for_one_moment_fails_the_build_and_names_it(self):
-        # catches (#1545): a voice command's failure, a silent take for one
-        # moment hidden by the other moments' sound, or a stale take left from
-        # an earlier run, reaching the owner as a complete video.
         helper = self.tmp / 'voice.py'
         helper.write_text(VOICE)
         cases = {
@@ -207,8 +184,6 @@ class SpecVideo(unittest.TestCase):
 
     @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
     def test_build_exports_to_an_output_on_another_filesystem(self):
-        # catches (#1601): an MP4 requested on a mounted volume failing at the
-        # last step with a cross-device link, or leaving a partial file.
         far = other_filesystem(self.tmp)
         if far is None:
             self.skipTest('no second writable filesystem (such as /dev/shm) here')
@@ -231,10 +206,6 @@ class SpecVideo(unittest.TestCase):
 
     @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
     def test_build_never_touches_an_existing_file_beside_the_output(self):
-        # catches (#1691 R1): a file already at the renderer's staging name
-        # beside the output (left by an interrupted run, PID reused) deleted
-        # by the export's cleanup. `exec` keeps the shell's PID, so $$ is the
-        # renderer's PID and the old staging name is known before it starts.
         shutil.copy(STORYBOARD, self.tmp / 'storyboard.json')
         helper = self.tmp / 'voice.py'
         helper.write_text(VOICE)

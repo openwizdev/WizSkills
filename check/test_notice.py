@@ -1,12 +1,10 @@
-"""The adapted-skill notice rule: Matt Pocock's notice lives word for word in
-the skill's sibling NOTICE.md, and SKILL.md links it without carrying it."""
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import run  # noqa: E402
+import run  # noqa: E402 -- it follows the sys.path line that finds it
 
 FRONT = '---\nname: demo\ndescription: A synthetic skill.\n---\n\n# Demo\n\nDo one thing.\n'
 CREDIT = "Credit: adapted from Matt Pocock's skills; the notice is in [NOTICE.md](NOTICE.md).\n"

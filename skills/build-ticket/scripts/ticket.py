@@ -10,9 +10,10 @@
                                             --comment checks that one named comment on N is trusted
   ticket.py author                          set this clone's git identity to the GitHub user's
                                             noreply address; refuse if anything still overrides it
-  ticket.py push RECEIPT -- PUSH-COMMAND... refuse unless every commit HEAD would add to the remote
-                                            has a noreply author and committer; then run the push
-                                            and keep the first success's receipt
+  ticket.py push RECEIPT -- PUSH-COMMAND... refuse unless the command pushes only HEAD to origin and
+                                            every commit origin does not hold yet has a noreply
+                                            author and committer named as its login; then run the
+                                            push and keep the first success's receipt
   ticket.py post-receipt REPO PR RECEIPT    post the receipt once as a record author, read back
 
 Exit 0 done, 1 refused (the last line says why), 2 an input it cannot read.
@@ -22,6 +23,7 @@ at the fleet ref (default origin/main); without one valid row it trusts nobody.
 """
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -36,7 +38,11 @@ DECISION = re.compile(r'\*\*Orchestrator decision:\*\* (?:(fix once more)|(log a
                       r'(?(2)Polish issues: #\d+(?:, #\d+)*\. )Why: \S.*')
 PARK = re.compile(rf'Next: park ({FINDINGS}) as a decision for Jake\.')
 START = re.compile(r'launch-fleet: (?:started|start checked)\b')
-NOREPLY = re.compile(r'(?:\d+\+)?' + LOGIN.pattern + r'@users\.noreply\.github\.com')
+NOREPLY = re.compile(r'(?:\d+\+)?(' + LOGIN.pattern + r')@users\.noreply\.github\.com')
+PUSH_OPTIONS = {'-q', '--quiet', '-v', '--verbose', '-u', '--set-upstream', '--porcelain', '--progress',
+                '--no-progress', '--atomic', '--no-verify', '--verify', '-f', '--force', '--force-with-lease',
+                '--force-if-includes'}
+PUSH_REFUSED = 'push refused: the command must push HEAD to origin (git push [options] origin HEAD); nothing pushed'
 POST_TIMEOUT = 30
 
 
@@ -373,24 +379,118 @@ def cmd_author():
     run(['git', 'config', 'user.email', email], 'git config')
     for who in ('author', 'committer'):
         ident = run(['git', 'var', f'GIT_{who.upper()}_IDENT'], f'the {who} git would use')
-        got = re.match(r'[^<>]*<([^<>]*)>', ident)
-        if got is None or got[1] != email:
-            print(f'author refused: the {who} git would use is not {email}; unset what overrides it')
+        if not ident.startswith(f'{login} <{email}> '):
+            print(f'author refused: the {who} git would use is not {login} <{email}>; unset what overrides it')
             return 1
     print(f'author: {login} <{email}>')
     return 0
 
 
-def outgoing_identity():
-    """The first commit HEAD would add to the remote whose author or committer is not noreply."""
-    out = run(['git', 'log', '--format=%H %ae %ce', 'HEAD', '--not', '--remotes'], 'the outgoing commits')
-    for line in out.splitlines():
-        sha, *emails = line.split(' ')
-        if len(emails) != 2:
+def sends_only_head(command):
+    """For `[env NAME=VALUE...] git [-c K=V...] push [options] origin REFSPEC...` whose every refspec
+    sends HEAD's commit, the git to reach origin the same way: (environment, git argv). Otherwise
+    None: the command may send other commits, or elsewhere."""
+    args, env = list(command), dict(os.environ)
+    if args[:1] == ['env']:
+        args.pop(0)
+        while args and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*=.*', args[0], re.S):
+            name, _, value = args.pop(0).partition('=')
+            env[name] = value
+    if args[:1] != ['git']:
+        return None
+    git = [args.pop(0)]
+    while args[:1] == ['-c'] and len(args) > 1:
+        git += args[:2]
+        del args[:2]
+    if args[:1] != ['push']:
+        return None
+    args.pop(0)
+    positional = []
+    while args:
+        item = args.pop(0)
+        if item == '--':
+            positional += args
+            break
+        if positional or not item.startswith('-'):
+            positional.append(item)
+        elif item in ('-o', '--push-option') and args:
+            args.pop(0)
+        elif not item.startswith(('--push-option=', '--force-with-lease=')) and item not in PUSH_OPTIONS:
+            return None
+    if len(positional) < 2 or positional[0] != 'origin':
+        return None
+
+    def same(*argv):
+        r = subprocess.run([*git, *argv], capture_output=True, text=True, env=env)
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    if (same('config', '--type=bool', 'push.followTags') == 'true'
+            or same('config', '--type=bool', 'remote.origin.mirror') == 'true'):
+        return None
+    head = same('rev-parse', '--verify', '-q', 'HEAD^{commit}')
+    for spec in positional[1:]:
+        src, _, dst = spec.removeprefix('+').partition(':')
+        if not src or '*' in spec or (':' in spec and not dst):
+            return None
+        if not head or same('rev-parse', '--verify', '-q', '--end-of-options', src + '^{commit}') != head:
+            return None
+    return env, git
+
+
+def origin_tips(env, git):
+    """Every commit origin advertises now, fetching any this clone lacks; Unreadable if it can't."""
+    what = "origin's branches and tags: nothing pushed"
+
+    def reach(*argv):
+        try:
+            r = subprocess.run([*git, *argv], capture_output=True, text=True, env=env, timeout=120)
+        except (OSError, subprocess.TimeoutExpired):
+            raise Unreadable(f'cannot read {what}')
+        if r.returncode:
+            raise Unreadable(f'cannot read {what}')
+        return r.stdout
+
+    url = reach('remote', 'get-url', '--push', 'origin').strip()
+    tips = {}
+    for line in reach('ls-remote', '--heads', '--tags', '--end-of-options', url).splitlines():
+        sha, _, ref = line.partition('\t')
+        if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', sha) or not ref:
+            raise Unreadable(f'cannot read {what}')
+        if not ref.endswith('^{}'):
+            tips[ref] = sha
+
+    def lacking():
+        return [ref for ref, sha in tips.items()
+                if subprocess.run([*git, 'cat-file', '-e', sha], capture_output=True, env=env).returncode]
+
+    if lacking():
+        reach('fetch', '-q', '--no-tags', '--no-write-fetch-head', '--end-of-options', url, *lacking())
+        if lacking():
+            raise Unreadable(f'cannot read {what}')
+    return sorted(set(tips.values()))
+
+
+def outgoing_identity(env, git):
+    """The first commit HEAD holds and origin doesn't whose author or committer is not noreply,
+    or whose name is not that address's login."""
+    try:
+        r = subprocess.run([*git, 'log', '--format=%H%x00%an%x00%ae%x00%cn%x00%ce', '--stdin', 'HEAD'],
+                           input=''.join(f'^{sha}\n' for sha in origin_tips(env, git)),
+                           capture_output=True, text=True, env=env, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        raise Unreadable('cannot read the outgoing commits: nothing pushed')
+    if r.returncode:
+        raise Unreadable('cannot read the outgoing commits: nothing pushed')
+    for line in r.stdout.splitlines():
+        sha, *fields = line.split('\0')
+        if len(fields) != 4:
             return sha, 'author or committer'
-        for who, email in zip(('author', 'committer'), emails):
-            if not NOREPLY.fullmatch(email):
+        for who, name, email in (('author', *fields[:2]), ('committer', *fields[2:])):
+            got = NOREPLY.fullmatch(email)
+            if not got:
                 return sha, who
+            if name != got[1]:
+                return sha, f'{who} name'
     return None
 
 
@@ -426,7 +526,11 @@ def cmd_push(receipt, command):
     if not command:
         raise Unreadable('no push command after --')
     branch = run(['git', 'symbolic-ref', '--short', 'HEAD'], 'the current branch').strip()
-    bad = outgoing_identity()
+    reach = sends_only_head(command)
+    if reach is None:
+        print(PUSH_REFUSED)
+        return 1
+    bad = outgoing_identity(*reach)
     if bad:
         print(f'push refused: commit {bad[0][:12]} {bad[1]} is not a GitHub noreply address; nothing pushed')
         return 1

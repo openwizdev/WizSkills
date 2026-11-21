@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""WCAG 2 contrast of two sRGB colours, as `ratio:1`.
-
-python3 contrast.py '#edf2f7' '#1b222b' [--min 4.5]
-
-Colours are six-digit hex. Prints the ratio rounded to two places; with --min
-it adds pass or fail and exits 1 on a fail. Exit 2 refuses bad input with
-nothing on stdout. It measures one flat pair, not a gradient, an image or a
-whole page.
-"""
 import argparse
 import math
 import re
@@ -35,8 +26,20 @@ def threshold(value):
     return number
 
 
+DESCRIPTION = (
+    'WCAG 2 contrast of two sRGB colours, as `ratio:1`.\n'
+    '\n'
+    "python3 contrast.py '#edf2f7' '#1b222b' [--min 4.5]\n"
+    '\n'
+    'Colours are six-digit hex. Prints the ratio rounded to two places; with --min\n'
+    'it adds pass or fail and exits 1 on a fail. Exit 2 refuses bad input with\n'
+    'nothing on stdout. It measures one flat pair, not a gradient, an image or a\n'
+    'whole page.\n'
+)
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__,
+    parser = argparse.ArgumentParser(description=DESCRIPTION,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('foreground', type=colour)
     parser.add_argument('background', type=colour)
@@ -48,7 +51,7 @@ def main():
     if args.min is None:
         print(shown)
         return 0
-    ok = ratio >= args.min  # WCAG thresholds are never rounded
+    ok = ratio >= args.min
     print(f"{shown} {'pass' if ok else 'fail'} (needs {args.min:g}:1)")
     return 0 if ok else 1
 

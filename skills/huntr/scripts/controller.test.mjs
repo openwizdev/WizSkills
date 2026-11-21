@@ -1,6 +1,3 @@
-// #1685: one controller by a lease on #394, hunters that provision themselves or say why
-// in one line, and a dry run of a whole hunt on a fake GitHub and a fake hunter set.
-// Synthetic only: the fake gh in fixtures/gh-switch.mjs, local Git repositories, no network.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync, existsSync, accessSync, constants } from 'node:fs';
@@ -23,10 +20,8 @@ function world(comments = [], extra = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'huntr-controller-'));
   mkdirSync(join(dir, 'bin'));
   mkdirSync(join(dir, 'docs/agents'), {recursive: true});
-  // A fake gh that cannot run would let the real one answer: refuse before any call.
   accessSync(join(here, 'fixtures/gh-switch.mjs'), constants.X_OK);
   symlinkSync(join(here, 'fixtures/gh-switch.mjs'), join(dir, 'bin/gh'));
-  // The lease reads the switch issue from the project's huntr settings, as the gate does.
   writeFileSync(join(dir, 'docs/agents/huntr.md'), readFileSync(settings, 'utf8'));
   const env = {...process.env, GH_REPO: 'synthetic/project', PATH: join(dir, 'bin') + ':' + process.env.PATH,
     HUNTR_FAKE_STATE: join(dir, 'state.json'), HUNTR_FAKE_LOG: join(dir, 'log'), HUNTR_FAKE_ORIGIN: join(dir, 'origin.git')};
@@ -45,7 +40,6 @@ function world(comments = [], extra = {}) {
     posts: () => w.calls().filter(c => c[0] === 'issue'),
     file(name, text) { writeFileSync(join(dir, name), text); return join(dir, name); },
     close: () => rmSync(dir, {recursive: true, force: true}),
-    // Let `minutes` pass: every recorded comment time moves into the past, the local clock stays real.
     advance(minutes) {
       for (const c of w.state.comments) c.created_at = new Date(Date.parse(c.created_at) - minutes * MIN).toISOString().replace(/\.\d{3}Z$/, 'Z');
     },
@@ -55,7 +49,6 @@ function world(comments = [], extra = {}) {
 const scenario = (name, fn) => test(name, () => { const w = world(); try { fn(w); } finally { w.close(); } });
 const on = {created_at: at(-120), body: 'huntr: on'};
 
-// The controller lease (item 1): post, read back, expire; never a thread listing.
 scenario('L1 a claim posts one lease comment, reads it back and holds the lease for 45 minutes', w => {
   w.state.comments = [{id: 100, ...on}];
   const r = w.run(lease, ['claim', 'night-r1']);
@@ -98,7 +91,6 @@ scenario('L5 a renewal posts the lease line first, then the result, and extends 
   w.state.clock = renewAt;
   const result = w.file('checkpoint.md', 'partial result: found 0, approved 0, proposed 0, skipped 0\n');
   const r = w.run(lease, ['renew', 'night-r1', result]);
-  // The precheck runs on the local clock: the claim at -50 expired at -5 and nothing may post.
   assert.equal(r.status, 2);
   assert.deepEqual(w.posts(), []);
   w.state.comments[1].created_at = at(-40);
@@ -106,7 +98,6 @@ scenario('L5 a renewal posts the lease line first, then the result, and extends 
   assert.equal(ok.status, 0, ok.stderr);
   assert.equal(w.state.comments.at(-1).body,
     'huntr lease: renew night-r1 for 45m\n\npartial result: found 0, approved 0, proposed 0, skipped 0\n');
-  // Derived from the renewal's own time, never a second clock read.
   assert.equal(JSON.parse(ok.stdout).holder.expires, new Date(Date.parse(renewAt) + 45 * MIN).toISOString().replace(/\.\d{3}Z$/, 'Z'));
   delete w.state.clock;
   assert.equal(w.run(lease, ['claim', 'night-r2']).status, 2);
@@ -150,7 +141,6 @@ scenario('L9 malformed lease lines and arguments are refused, never read as a le
   assert.deepEqual(w.posts(), []);
 });
 
-// Hunter provisioning (item 2): the pin in the brief, fetched by the hunter, one-line failures.
 function origin(w) {
   const git = (cwd, ...args) => execFileSync('git', args, {cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: {...w.env, GIT_AUTHOR_NAME: 's', GIT_AUTHOR_EMAIL: 's@example.invalid', GIT_COMMITTER_NAME: 's', GIT_COMMITTER_EMAIL: 's@example.invalid'}}).trim();
   git(w.dir, 'init', '-q', '--bare', '-b', 'main', 'origin.git');
@@ -201,7 +191,6 @@ scenario('P5 malformed provisioning arguments exit 2 and run nothing', w => {
   assert.deepEqual(w.calls(), []);
 });
 
-// R2 of #1693: a project copy with changes is never reported ready at the pin, and its edits are kept.
 for (const [name, change, line] of [
   ['P6 an edited tracked file', dir => writeFileSync(join(dir, 'source.txt'), 'dirty copied source\n'), ' M source.txt'],
   ['P7 an untracked file', dir => writeFileSync(join(dir, 'extra.txt'), 'untracked copied source\n'), '?? extra.txt'],
@@ -223,7 +212,6 @@ for (const [name, change, line] of [
     assert.equal(r.status, 3, r.stdout);
     assert.equal(r.stdout, `huntr hunter: BLOCKED core/correctness at source: ${copy} has uncommitted changes\n`);
     assert.equal(r.stderr, '');
-    // Untrimmed: a porcelain line's leading space is part of its status.
     assert.equal(execFileSync('git', ['-C', copy, 'status', '--porcelain', '--untracked-files=all'], {encoding: 'utf8'}), line + '\n');
     assert.equal(readFileSync(join(copy, line.slice(3)), 'utf8'), before);
   });
@@ -262,7 +250,6 @@ scenario('H2 collect counts only reports at the pin; blocked, stale and empty sl
   ]});
 });
 
-// Item 4: a whole hunt, dry: lease, provisioning failure reporting, a partial result, a final result.
 scenario('D1 dry run: one controller, three fake hunters, a partial result at 30 minutes and a final result', w => {
   const o = origin(w);
   const generated = w.run(lease, ['id']);
@@ -275,21 +262,18 @@ scenario('D1 dry run: one controller, three fake hunters, a partial result at 30
   w.state.comments = [{id: 100, ...on}];
   const slices = ['core/correctness', 'core/speed', 'core/tests'];
   const log = [];
-  // 1. Claim the lease (and a rival wake is refused).
   w.state.clock = at(-40);
   assert.equal(w.run(lease, ['claim', run]).status, 0);
   delete w.state.clock;
   const rival = w.run(lease, ['claim', rivalRun]);
   assert.equal(rival.status, 2);
   log.push(`lease: ${run} holds; rival wake refused: ${rival.stderr.trim()}`);
-  // 2. Dispatch: each fake hunter gets its brief and runs the provisioning it carries.
   const reports = {};
   for (const slice of slices) {
     const brief = w.run(hunters, ['brief', w.file('plan.json', JSON.stringify({...plan, slice})), 'synthetic/project', o.pin]);
     assert.equal(brief.status, 0, brief.stderr);
     const script = brief.stdout.match(/```sh\n([\s\S]*?)```/)[1];
     const sandbox = join(w.dir, slice.replace('/', '-'));
-    // Each sandbox starts from a stale project copy, one commit behind the pin.
     execFileSync('git', ['clone', '-q', join(w.dir, 'origin.git'), sandbox], {stdio: 'ignore'});
     execFileSync('git', ['-C', sandbox, 'reset', '-q', '--hard', 'HEAD~1'], {stdio: 'ignore'});
     w.state.auth = slice === 'core/speed' ? 'fail' : 'ok';
@@ -300,21 +284,18 @@ scenario('D1 dry run: one controller, three fake hunters, a partial result at 30
     log.push(`hunter ${slice}: ${first}`);
   }
   const collect = names => JSON.parse(w.run(hunters, ['collect', o.pin, ...names.map(s => `${s}=${w.file(s.replace('/', '-') + '.txt', reports[s])}`)]).stdout);
-  // 3. Wake 1, 30 minutes in: two reports are back; post the partial result with the renewal.
   const partial = collect(['core/correctness', 'core/speed']);
   assert.deepEqual(partial.blocked, [{slice: 'core/speed', step: 'auth', reason: 'gh is not signed in in this sandbox'}]);
   w.state.clock = at(-10);
   const checkpoint = w.file('checkpoint.md', `partial result ${run}: found 0, approved 0, proposed 0, skipped 0; reported ${partial.reported.join(', ')}; blocked ${partial.blocked.map(b => `${b.slice} at ${b.step}: ${b.reason}`).join('; ')}; running core/tests\n`);
   assert.equal(w.run(lease, ['renew', run, checkpoint]).status, 0);
   log.push(`wake 1: ${w.state.comments.at(-1).body.replace(/\n+/g, ' | ').trim()}`);
-  // 4. Wake 2: the last hunter reports; post the final result and release the lease.
   const final = collect(slices);
   w.state.clock = at(0);
   const result = w.file('final.md', `final result ${run}: found 0, approved 0, proposed 0, skipped 0; reported ${final.reported.join(', ')}; blocked ${final.blocked.map(b => `${b.slice} at ${b.step}: ${b.reason}`).join('; ')}\n`);
   assert.equal(w.run(lease, ['release', run, result]).status, 0);
   log.push(`wake 2: ${w.state.comments.at(-1).body.replace(/\n+/g, ' | ').trim()}`);
   delete w.state.clock;
-  // 5. The next scheduled wake can take the lease at once.
   assert.equal(w.run(lease, ['claim', 'night-next']).status, 0);
   log.push('next wake: night-next holds');
   w.advance(46);
@@ -330,12 +311,10 @@ scenario('D1 dry run: one controller, three fake hunters, a partial result at 30
     `huntr lease: release ${run}`, claimLine('night-next')]);
   assert.match(w.state.comments[2].body, /partial result .*: .*blocked core\/speed at auth: gh is not signed in in this sandbox; running core\/tests/);
   assert.match(w.state.comments[3].body, /final result .*: .*reported core\/correctness, core\/tests; blocked core\/speed at auth/);
-  // No live writes: every call went to the fake gh for the synthetic repository, and nothing listed threads.
   for (const c of w.calls()) assert.ok(['api', 'issue', 'auth', 'repo'].includes(c[0]), JSON.stringify(c));
   for (const line of log) console.log(line);
 });
 
-// R1 of #1693: every scheduled `huntr wake:` posts a result; a hunter's wake posts only when one is overdue.
 scenario('L10 due: a scheduled wake always checkpoints, a hunter wake only after 30 minutes, a non-holder never', w => {
   w.state.comments = [{id: 100, ...on}, {id: 101, created_at: at(-26), body: claimLine('night-r1')}];
   const due = kind => w.run(lease, ['due', 'night-r1', kind]);
@@ -362,19 +341,16 @@ scenario('D2 dry run: a hunter wake at 26 minutes cannot push the 30-minute resu
     assert.equal(r.status, 0, r.stderr);
     results.push(w.state.comments.at(-1).id);
   };
-  // The reviewer's interleaving: hunters finish at 26 and 56, the scheduled wakes come at 30 and 60.
   wake(26, 'hunter'); wake(4, 'scheduled'); wake(26, 'hunter'); wake(4, 'scheduled');
   const minutes = id => (Date.now() - Date.parse(w.state.comments.find(c => c.id === id).created_at)) / MIN;
   const claim = w.state.comments[1].id;
   const times = [claim, ...results].map(minutes).map(Math.round);
   assert.deepEqual(times, [60, 30, 0], 'claim at t0, results at t30 and t60: no gap over 30 minutes');
-  // A lost scheduled wake: the next hunter wake past 30 minutes posts the overdue result.
   wake(31, 'hunter');
   assert.equal(results.length, 3);
   for (const line of w.state.comments.slice(1).map(c => c.body.split('\n')[0])) console.log(`D2: ${line}`);
 });
 
-// R3 of #1693: an outcome without its own live lease still finalizes its record.
 scenario('D3 dry run: an off switch posts its final record without a lease, and release stays refused', w => {
   w.state.comments = [{id: 100, created_at: at(-60), body: 'huntr: off'}];
   const index = w.file('index.md', 'final result night-off: off; found 0, approved 0, proposed 0, skipped 0\n');
@@ -386,7 +362,6 @@ scenario('D3 dry run: an off switch posts its final record without a lease, and 
   assert.equal(w.posts().length, 1);
   assert.equal(w.state.comments.at(-1).body, readFileSync(index, 'utf8'));
   assert.deepEqual(JSON.parse(r.stdout), {holder: null, comment: w.state.comments.at(-1).id});
-  // A record body can never forge a lease line or flip the switch.
   for (const first of ['huntr: on', 'huntr lease: claim night-off thread thr_synx for 45m']) {
     assert.equal(w.run(lease, ['record', 'night-off', w.file('bad.md', `${first}\nbody\n`)]).status, 2, first);
   }
@@ -411,7 +386,6 @@ scenario('L11 legacy thread-bearing lease remains held by its run until release 
   assert.equal(w.run(lease, ['claim', 'new-run']).status, 0);
 });
 
-// WS12: whether to hunt (switch, kind approvals and pace) and the durable record's posting.
 scenario('S1 switch: the newest huntr: first line decides, unknown commands are off, kind approvals are listed', w => {
   const filler = Array.from({length: 120}, (_, i) => ({created_at: at(-200 + i), body: `note ${i}`}));
   w.state.comments = [{created_at: at(-300), body: 'huntr: off'}, ...filler,
@@ -436,7 +410,6 @@ scenario('S2 switch: an unreadable switch issue is a refusal, never on', w => {
   assert.match(r.stderr, /switch issue read failed/);
 });
 
-// A fixed-offset zone whose local hour now satisfies `want`: Etc/GMT-14 to Etc/GMT+12 cover every hour.
 function zone(want) {
   const now = Date.now();
   for (let offset = -12; offset <= 14; offset++) {
@@ -454,7 +427,6 @@ scenario('PC1 pace: two empty hunts pause until the next calendar day in the pro
   assert.deepEqual(JSON.parse(pace(midday.tz, '1', hourAgo).stdout), {hunt: true});
   assert.deepEqual(JSON.parse(pace(midday.tz, '2', hourAgo).stdout), {hunt: false, until: nextDay(midday.local)});
   assert.deepEqual(JSON.parse(pace(midday.tz, '3', hourAgo).stdout), {hunt: false, until: nextDay(midday.local)});
-  // The same instant was yesterday in another zone, so its pause is over.
   assert.deepEqual(JSON.parse(pace(earlyMorning.tz, '2', threeHoursAgo).stdout), {hunt: true});
   assert.deepEqual(w.calls(), [], 'pace reads no GitHub');
 });
@@ -494,7 +466,6 @@ scenario('PB1 publish posts every numbered part, reads them back and writes the 
   assert.equal(index.split('\n')[0], `Hunt record index for night-big: 6 parts, sha256 ${out.sha256}`);
   for (const [i, c] of parts.entries())
     assert.ok(index.includes(`- part ${i + 1}/6: https://github.com/synthetic/project/issues/394#issuecomment-${c.id}`), `part ${i + 1}`);
-  // The index posts as a plain record: its first line never reads as a switch or lease line.
   assert.equal(w.run(lease, ['record', 'night-big', join(w.dir, 'index.md')]).status, 0);
 });
 scenario('PB2 publish after a lost response reuses the part already posted, never a duplicate', w => {
@@ -519,8 +490,6 @@ scenario('PB3 publish refuses another run\'s record and an unconfirmed post leav
   assert.equal(lost.index, null);
 });
 
-// WS23 (#1608): the recorded last-empty time is an instant with Z or an offset, so the host's
-// timezone can never decide whether a hunt starts. Each case runs under two host zones.
 scenario('PC3 pace: an offset-free time is refused and an offset-bearing instant decides the same in every host zone', w => {
   const today = new Date().toISOString().slice(0, 10);
   const yesterday = new Date(Date.parse(today) - 86400000).toISOString().slice(0, 10);
@@ -537,18 +506,14 @@ scenario('PC3 pace: an offset-free time is refused and an offset-bearing instant
       assert.equal(r.stdout, '');
       assert.match(r.stderr, /last empty hunt time needs Z or an offset .*: ask on the tracking issue/);
     }
-    // One instant written three ways: yesterday in the project's zone, so the pause is over.
     for (const when of [`${yesterday}T23:00:00Z`, `${yesterday}T15:00:00-08:00`, `${today}T07:00:00.000+08:00`])
       assert.deepEqual(JSON.parse(pace(host, when).stdout), {hunt: true}, `${host} ${when}`);
-    // An hour ago, at midday in the project's zone: paused until its next day, whatever the host zone.
     const midday = zone(h => h >= 6 && h < 18), hourAgo = new Date(Date.now() - 3600000).toISOString();
     assert.deepEqual(JSON.parse(pace(host, hourAgo, midday.tz).stdout), {hunt: false, until: nextDay(midday.local)}, host);
   }
   assert.deepEqual(w.calls(), [], 'pace reads no GitHub');
 });
 
-// WS23 (#1569): a run that still holds its lease finishes with release, never the lease-less record,
-// so the next scheduled controller is never refused by a finished hunt's live lease.
 scenario('D5 a controller paused after claiming cannot record past its live lease; release frees it for the next controller', w => {
   w.state.comments = [{id: 100, ...on}];
   assert.equal(w.run(lease, ['claim', 'synthetic-final']).status, 0);
@@ -565,8 +530,6 @@ scenario('D5 a controller paused after claiming cannot record past its live leas
   assert.equal(next.status, 0, next.stderr);
 });
 
-// WS23 (#1569): the controller's own steps. The last hunter wake (all slices reported or blocked)
-// and a pause after claiming end through step 5's publish and release; record is for no lease.
 test('W1 the last wake and a pause after claiming finish with release; record only without a live lease', () => {
   const skill = readFileSync(join(here, '../SKILL.md'), 'utf8');
   const section = heading => skill.split(`\n${heading}\n`)[1].split('\n## ')[0].replace(/\s+/g, ' ');
@@ -576,8 +539,6 @@ test('W1 the last wake and a pause after claiming finish with release; record on
   assert.doesNotMatch(section('## 5. Record the result and finish this hunt'), /`record` \(off, paused, blocked/);
 });
 
-// WS23 review R1 (#1656): a wake that cannot read the switch issue does not know whether its lease
-// is lost, so `due` keeps that apart (exit 3) from a lease that is really gone or taken (exit 2).
 scenario('D6 due: an unreadable switch issue exits 3, never the lost-lease exit 2; after it recovers the holder releases', w => {
   w.state.comments = [{id: 100, ...on}];
   assert.equal(w.run(lease, ['claim', 'synthetic-final']).status, 0);
@@ -592,7 +553,6 @@ scenario('D6 due: an unreadable switch issue exits 3, never the lost-lease exit 
   assert.equal(published.status, 0, published.stderr);
   assert.equal(w.run(lease, ['release', 'synthetic-final', join(w.dir, 'index.md')]).status, 0);
   assert.equal(w.run(lease, ['claim', 'synthetic-next']).status, 0);
-  // A lease that is really gone or taken is still exit 2: the wake's lost-lease route.
   const taken = w.run(lease, ['due', 'synthetic-final', 'scheduled']);
   assert.equal(taken.status, 2); assert.match(taken.stderr, /held by synthetic-next/);
   w.advance(46);
@@ -600,8 +560,6 @@ scenario('D6 due: an unreadable switch issue exits 3, never the lost-lease exit 
   assert.equal(expired.status, 2); assert.match(expired.stderr, /no live lease/);
 });
 
-// WS23 review R1 and R2 (#1656): the steps a controller follows on an unknown lease and when
-// dispatch leaves no hunter running or queued.
 test('W2 an unreadable wake retries instead of recording, and a dispatch with nothing running finishes at once', () => {
   const skill = readFileSync(join(here, '../SKILL.md'), 'utf8');
   const section = heading => skill.split(`\n${heading}\n`)[1].split('\n## ')[0].replace(/\s+/g, ' ');
@@ -615,10 +573,6 @@ test('W2 an unreadable wake retries instead of recording, and a dispatch with no
   assert.match(finish, /If no wake comes, the lease expires 45 minutes after its last renewal and the next scheduled controller resumes from the latest verified record\./);
 });
 
-// WS23 planner's call on review R1 (#1656): the terminal write needs no wake after it. `finish` reads
-// the lease a bounded number of times, releases while this run holds it, records after a confirmed
-// loss, and when the lease stays unreadable still posts the index under a release line: a release
-// line frees only its own run's lease, so it is safe whoever holds the lease.
 const readsOf = w => w.calls().filter(c => c[0] === 'api').length;
 function finalWorld(w, comments = [{id: 100, ...on}]) {
   w.env.HUNTR_LEASE_RETRY_MS = '0';
@@ -686,8 +640,6 @@ scenario('F4 finish with GitHub down keeps finalization pending, and a rerun reu
   assert.equal(w.run(lease, ['claim', 'synthetic-next']).status, 0);
 });
 
-// WS23 review R4 (#1656, planner's call): an old controller whose wake cannot read the lease may
-// collect and finish, but never dispatch: a new controller may already hold the hunt.
 scenario('W3 two controllers: after a new claim, the old controller\'s unreadable wake dispatches no queued slice', w => {
   w.state.comments = [{id: 100, ...on}];
   assert.equal(w.run(lease, ['claim', 'synthetic-old']).status, 0);
@@ -698,7 +650,6 @@ scenario('W3 two controllers: after a new claim, the old controller\'s unreadabl
   assert.equal(late.status, 3, late.stderr);
   w.state.readFailure = false;
   assert.equal(JSON.parse(w.run(lease, ['status']).stdout).holder.run, 'synthetic-new');
-  // So the exit-3 route the old controller follows must start no hunter.
   const skill = readFileSync(join(here, '../SKILL.md'), 'utf8');
   const wake = skill.split('\n## On every wake\n')[1].split('\n## ')[0].replace(/\s+/g, ' ');
   assert.match(wake, /Exit 3 \(unreadable\): file nothing and dispatch no queued slice this wake;/);

@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""Fixture discovery only; any mutation is refused.
-
-FAKE_ROOM_CLI picks which room-cli answers (#2063): `local` (the default), as on
-the user's own machine, prints a table unless --json is passed and a bare list
-with it; `cloud`, as in a Cloud thread, refuses --include-hidden with exit 2
-and otherwise prints {"children": [...]} (only the caller's own subagents).
-"""
 import json
 import os
 from pathlib import Path

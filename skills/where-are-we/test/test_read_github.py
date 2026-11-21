@@ -1,4 +1,3 @@
-"""The collector's public command seam, with synthetic, recording gh only."""
 import copy
 import json
 import os
@@ -14,8 +13,6 @@ ENDPOINTS = {
     'issues': 'repos/{owner}/{repo}/issues?state=open&per_page=100',
     'pulls': 'repos/{owner}/{repo}/pulls?state=open&per_page=100',
 }
-# synthetic_assumptions: minimal REST-shaped records with invented values and
-# oversized bodies; this fixture was not captured from a live account.
 SOURCES = {
     'milestones': [
         {'number': 1, 'title': 'Version one', 'state': 'open', 'open_issues': 2, 'closed_issues': 3, 'body': 'PRIVATE_BODY_SENTINEL'},
@@ -82,8 +79,6 @@ class ReadGithub(unittest.TestCase):
                 answers.update(replacements)
             (root / 'answers.json').write_text(json.dumps(answers))
             before = {p.name: p.read_bytes() for p in root.iterdir()}
-            # No configured installation (#2317, Assumption A1): these cases
-            # are the gh route, whatever the machine's own state holds.
             env = dict(os.environ, PATH=tmp + os.pathsep + os.environ['PATH'],
                        ANSWERS=str(root / 'answers.json'), CALLS=str(root / 'calls'),
                        OPENWIZ_STATE_DIR=str(root / 'no-installation'))
@@ -94,7 +89,6 @@ class ReadGithub(unittest.TestCase):
                 env['INVALID_STREAM'] = invalid
             if missing:
                 binary.unlink()
-                # Prevent falling through to a real authenticated gh.
                 env['PATH'] = tmp
             result = subprocess.run([sys.executable, '-B', str(SCRIPT)], cwd=root,
                                     env=env, capture_output=True, text=True)
@@ -131,9 +125,6 @@ class ReadGithub(unittest.TestCase):
             name: {'state': 'read', 'items': EXPECTED[name]} for name in ENDPOINTS})
 
     def test_broad_fixture_fits_without_dropping_status_records(self):
-        # Invented collection sizes (not counts from any real project), large
-        # enough to need a second issues page, with about 1 MiB of bodies. This
-        # proves a representative fixture, not a universal cap.
         milestones = [dict(copy.deepcopy(SOURCES['milestones'][0]), number=n)
                       for n in range(1, 8)]
         issues = [dict(copy.deepcopy(SOURCES['issues'][0]), number=n,
@@ -231,7 +222,6 @@ RUNS = {
 
 
 def run_record(n, status):
-    # Synthetic REST-shaped run with invented values and fields the view drops.
     return {'id': n, 'name': f'check {n}', 'status': status, 'head_sha': f'synthetic-head-{n}',
             'head_branch': f'branch-{n}', 'html_url': 'NESTED_SENTINEL', 'head_commit': {'message': 'PRIVATE_BODY_SENTINEL'}}
 
@@ -247,7 +237,6 @@ def compact_run(n, status):
 
 
 class ReadRuns(unittest.TestCase):
-    """`read-github.py runs`: queued and in-progress CI runs, every page (#1186)."""
 
     def run_runs(self, answers, fail=None):
         with tempfile.TemporaryDirectory() as tmp:
@@ -294,7 +283,6 @@ class ReadRuns(unittest.TestCase):
 
 
 class NoInstallationRoute(unittest.TestCase):
-    """The installation read route is removed (#1238); gh is the only route (#1186)."""
 
     def test_a_configured_installation_still_reads_through_gh(self):
         with tempfile.TemporaryDirectory() as tmp:

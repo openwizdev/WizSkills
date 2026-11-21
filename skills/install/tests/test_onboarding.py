@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""The onboarding road (#1358): three choices, a short grill, a teacher, the first merge.
-
-Replays three recorded synthetic onboardings (fixtures/onboarding.json), one
-per first choice, against the packaged helper and recording fakes, and checks
-the road's own steps one at a time: where agents run, the host setting, the
-grill confirmed in chat, the launch from the plan's machine approval, and the
-closing offer after a merge read back from GitHub. All values are synthetic.
-"""
 import fcntl
 import json
 import os
@@ -22,7 +14,7 @@ import unittest
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_first_fleet import (CLAUDE, FIXTURES, GRILL, Journey, SKILL_DIR,  # noqa: E402
+from test_first_fleet import (CLAUDE, FIXTURES, GRILL, Journey, SKILL_DIR,  # noqa: E402 -- it follows the sys.path line that finds it
                               demo_repository, fleet_md, github, setup_state, skill_steps)
 
 ROAD = json.loads((FIXTURES / 'onboarding.json').read_text())
@@ -39,7 +31,6 @@ ORDER = ['up-front', 'up-front', 'up-front', 'install-done', 'where', 'grill-sta
 
 
 def fake_driver(path, folder, **values):
-    """A fake driver at path whose log paths and values are its own: the road gives a probe no caller variable."""
     values = dict(FAKE_DRIVER_LOG=str(folder / 'driver.log'), FAKE_DRIVER_SEEN=str(folder / 'driver-seen.log'),
                   **values)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -50,7 +41,6 @@ def fake_driver(path, folder, **values):
 
 
 def teach_lines():
-    """teach.md's quoted lines under each heading."""
     found = {}
     for section in TEACH.split('\n## ')[1:]:
         found[section.split('\n')[0]] = [line[2:] for line in section.split('\n') if line.startswith('> ')]
@@ -58,7 +48,6 @@ def teach_lines():
 
 
 def pattern(template):
-    """A filled teach line: every word kept, each <...> filled (one of its options when it lists them)."""
     out, at = '', 0
     for match in re.finditer(r'`?<([^>]+)>`?', template):
         out += re.escape(template[at:match.start()])
@@ -84,7 +73,6 @@ def idea_group(choice):
 
 
 class Road(Journey):
-    """One recorded onboarding road, replayed in its own private folder."""
 
     def __init__(self, case, journey):
         super().__init__(case)
@@ -93,7 +81,7 @@ class Road(Journey):
         self.world['repo'] = self.repo
         self.world['files'] = {**self.world['files'], 'docs/agents/fleet.md': fleet_md(builder=CLAUDE, small=CLAUDE)}
         self.save_world()
-        self.origin_write({'docs/agents/fleet.md': self.world['files']['docs/agents/fleet.md']})  # setup's, merged
+        self.origin_write({'docs/agents/fleet.md': self.world['files']['docs/agents/fleet.md']})
         self.settings = {'harness': 'claude-code', 'model': 'syn-claude-model-01', 'effort': 'high'}
         repos = [demo_repository(self.repo)] if journey['existing'] else []
         self.repos.write_text(github(repos))
@@ -101,14 +89,12 @@ class Road(Journey):
         harness = self.dir / 'bin/claude'
         harness.write_text('#!/bin/sh\necho "$0 $*" >> "%s"\nexit 97\n' % (self.dir / 'harness.log'))
         harness.chmod(0o755)
-        # KN3's host-side state on the owner's machine, outside the repository checkout (KN3 security R6)
         self.host_state = Path(tempfile.mkdtemp(prefix='host-state-'))
         case.addCleanup(shutil.rmtree, self.host_state, True)
         self.extra_env.update(OPENWIZ_ADAPTERS=str(self.dir / 'adapters'), OPENWIZ_LOCAL_STATE=str(self.host_state),
                               FAKE_DRIVER_LOG=str(self.dir / 'driver.log'), FAKE_GH_ARGV_LOG=str(self.dir / 'gh-argv.log'))
 
     def approvals(self):
-        """This machine's host-side permission approvals, in the merged local driver's form (OpenWiz 583f2ae)."""
         path = self.host_state / 'approvals.json'
         return json.loads(path.read_text()) if path.exists() else None
 
@@ -116,13 +102,13 @@ class Road(Journey):
         self.approve(comment=comment, grill=grill)
 
     def change(self, turn):
-        self.world = json.loads(self.world_path.read_text())  # the fake gh writes it too
+        self.world = json.loads(self.world_path.read_text())
         what = turn['world']
         if what in ('signed_out', 'signed_in'):
             repos = json.loads(self.repos.read_text())
             repos['signed_out'] = what == 'signed_out'
             self.repos.write_text(json.dumps(repos))
-        elif what == 'merge_setting':  # the owner merges the host setting pull request
+        elif what == 'merge_setting':
             merged = {path: self.world['branches']['openwiz/host-setting'][path]
                       for path in ('docs/agents/host.md', 'docs/agents/fleet.md')}
             self.origin_write(merged)
@@ -176,7 +162,6 @@ class Road(Journey):
 
 
 def closing(repo, number):
-    """One closing issue as `gh pr view --json closingIssuesReferences` gives it: repository-qualified."""
     owner, name = repo.split('/')
     return {'number': number, 'repository': {'name': name, 'owner': {'login': owner}}}
 
@@ -186,10 +171,8 @@ def until(step):
 
 
 class Conversation(unittest.TestCase):
-    """The packaged skill and the recorded roads, read as conversations."""
 
     def test_the_skill_says_each_moment_in_order_and_asks_no_plan_approval(self):
-        # catches: the skill dropping a moment's line, the three choices or the grill's yes, or keeping a plan approval
         text = (SKILL_DIR / 'SKILL.md').read_text()
         headings = ['Up front', 'Install done', 'Where agents run', 'The grill', 'The spec and its video',
                     'The fleet starting', 'A pull request opened', 'Reviewed', 'Merged', 'The closing offer']
@@ -201,8 +184,6 @@ class Conversation(unittest.TestCase):
         self.assertNotRegex(text, r'(?i)exact-plan approval|approve the plan|demo repository \(recommended\)')
 
     def test_the_owner_steers_through_the_orchestrator_never_by_video_comment(self):
-        # catches: the road teaching the owner to steer by commenting on the spec's video, which steers nothing
-        # until #1402 (decision 7030919773, #1358 comment 7031096002), or leaving the owner no way to steer
         text = (SKILL_DIR / 'SKILL.md').read_text()
         plan = text.split('### 7. Plan\n', 1)[1].split('\n### ', 1)[0]
         self.assertIn('steers through the orchestrator', plan)
@@ -214,7 +195,6 @@ class Conversation(unittest.TestCase):
             self.assertNotRegex(said, r'(?i)comment[^.]*\bsteer|\bsteer[^.]*comment', journey['name'])
 
     def test_each_road_follows_the_skills_steps_in_order(self):
-        # catches: a road whose recorded steps skip, repeat or reorder the packaged skill's steps
         steps = skill_steps()
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):
@@ -223,7 +203,6 @@ class Conversation(unittest.TestCase):
                 self.assertEqual(seen, sorted(seen, key=steps.index))
 
     def test_every_moment_says_its_teach_line_in_order(self):
-        # catches: a road that skips a moment's line, rewords it, leaves a <placeholder> unfilled or says it out of order
         lines = teach_lines()
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):
@@ -237,8 +216,6 @@ class Conversation(unittest.TestCase):
         self.assertTrue(any(t.get('say') == 'missing' for j in ROAD['journeys'] for t in j['turns']))
 
     def test_after_the_grills_yes_only_the_gates_and_the_mode_ask_until_the_closing_offer(self):
-        # catches: a plan or spec approval coming back after the grill's yes, the fleet's start asked for
-        # without naming its host and that it can cost money (ruling 7029073685), or Cloudroom asked a local mode
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):
                 turns = journey['turns']
@@ -255,10 +232,9 @@ class Conversation(unittest.TestCase):
                 launch = [t['tool'] for t in turns if t.get('tool', [''])[0] == 'launch']
                 self.assertEqual(launch, [['launch', '--spec', '900'],
                                           ['launch', '--spec', '900', '--yes', '--confirm', '@preview'],
-                                          ['launch', '--spec', '900']])  # the preview, the yes, the read-back (R7)
+                                          ['launch', '--spec', '900']])
 
     def test_every_gate_is_asked_before_its_effect(self):
-        # catches: a repository created, a file written or setup run without its own yes first
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):
                 turns, granted = journey['turns'], set()
@@ -278,7 +254,6 @@ class Conversation(unittest.TestCase):
                         self.assertEqual(turns[i + 1].get('permits'), [turn['gate']])
 
     def test_ideas_come_from_the_chosen_group_and_the_user_picks(self):
-        # catches: ideas invented on the spot, or offered from another choice's group
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):
                 offer = next(t for t in journey['turns'] if 'ideas' in t)
@@ -287,11 +262,8 @@ class Conversation(unittest.TestCase):
 
 
 class Replay(unittest.TestCase):
-    """Each choice, replayed to its first merge against the fakes."""
 
     def test_each_choice_reaches_its_first_merge_and_the_closing_offer(self):
-        # catches: a road that cannot start its fleet from the machine approval, asks for a launch yes, runs agents
-        # somewhere other than the user's answer, or offers to close before a merge reads back
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):
                 road = Road(self, journey)
@@ -323,7 +295,6 @@ class Where(unittest.TestCase):
         return Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
 
     def test_a_missing_github_sign_in_is_walked_through_and_no_login_is_touched(self):
-        # catches: a signed-out user recorded as ready, or the helper running a sign-in itself
         road = self.road()
         road.change({'world': 'signed_out'})
         result = road.helper(['where', '--agents', 'local', '--yes'])
@@ -335,7 +306,6 @@ class Where(unittest.TestCase):
         self.assertFalse([c for c in road.gh_calls() if c[:1] == ['auth']])
 
     def test_this_machine_needs_the_local_driver_and_a_harness_here(self):
-        # catches: "this machine" recorded where no local driver or no harness could run a builder
         road = self.road()
         (road.dir / 'bin/claude').unlink()
         result = road.helper(['where', '--agents', 'local', '--yes'])
@@ -350,7 +320,6 @@ class Where(unittest.TestCase):
         self.assertNotIn('host', road.saved())
 
     def test_the_answer_is_recorded_only_on_yes_with_its_cost(self):
-        # catches: a host recorded before the user answered, or a choice that hides what it spends
         road = self.road()
         preview = road.helper(['where', '--agents', 'cloud'])
         self.assertEqual(preview.returncode, 12, preview.stdout)
@@ -370,7 +339,6 @@ class Setting(unittest.TestCase):
         return road
 
     def test_this_machine_opens_one_host_setting_pull_request_only_on_yes(self):
-        # catches: the setting written without its yes, written twice, or naming anything beyond the host
         road = self.connected()
         preview = road.helper(['setting'])
         self.assertEqual(preview.returncode, 12, preview.stdout)
@@ -385,7 +353,6 @@ class Setting(unittest.TestCase):
         self.assertEqual(road.saved()['setting']['state'], 'opened')
 
     def test_cloudroom_writes_no_host_file_and_a_conflicting_one_is_never_overwritten(self):
-        # catches: cloud agents silently sent to a host the project names, or a user's setting replaced
         road = self.connected('fresh-project')
         result = road.helper(['setting'])
         self.assertEqual(result.returncode, 0, result.stdout)
@@ -407,19 +374,17 @@ class Launch(unittest.TestCase):
         return road
 
     def test_only_the_machine_approval_of_this_grill_starts_the_fleet(self):
-        # catches: a fleet started from another grill's plan, or from an approval nobody's checks made
         road = self.planned(grill=OTHER_GRILL)
         road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
         result = road.helper(['launch', '--spec', '900'])
         self.assertEqual(result.returncode, 5, result.stdout)
         self.assertIn('grill', result.stdout)
-        road.approve(comment=90003, human=True)  # a human plan graph approval, newest
+        road.approve(comment=90003, human=True)
         result = road.helper(['launch', '--spec', '900'])
         self.assertEqual(result.returncode, 5, result.stdout)
         self.assertEqual(road.spawns(), [])
 
     def test_no_launch_without_the_grills_yes_or_the_hosts_answer(self):
-        # catches: a fleet started before the user confirmed the grill in chat or said where agents run
         road = self.planned()
         saved = road.saved()
         self.assertEqual(saved.pop('grill', None), GRILL)
@@ -434,7 +399,6 @@ class Launch(unittest.TestCase):
         self.assertEqual(road.spawns(), [])
 
     def test_this_machine_waits_for_the_merged_host_setting(self):
-        # catches: builders started on this machine while launch-fleet would still read no host, or another one
         road = Road(self, next(j for j in ROAD['journeys'] if j['name'] == 'always-wanted'))
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch', skip=lambda t: t.get('world') == 'merge_setting')
         road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
@@ -449,11 +413,8 @@ class Launch(unittest.TestCase):
 
 
 class SteeringOff(unittest.TestCase):
-    """WS17 R2 (#1340, decision 7030919773): video comments steer nothing; fleet.sh says so once, and that is normal."""
 
     def test_a_spec_with_its_video_and_the_one_time_notice_still_launches(self):
-        # catches: the road reading launch-fleet's one-time "steering is off" look, or a comment on the video, as a
-        # hold or an error, so a first fleet never starts
         road = Road(self, next(j for j in ROAD['journeys'] if j['name'] == 'fresh-project'))
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
         road.world = json.loads(road.world_path.read_text())
@@ -473,7 +434,7 @@ class SteeringOff(unittest.TestCase):
         yes = road.helper(['launch', '--spec', '900', '--yes', '--confirm',
                            re.findall(r'(?m)^Confirmation: ([0-9a-f]{64})$', preview.stdout)[0]])
         self.assertEqual(yes.returncode, 0, yes.stdout)
-        road.change({'world': 'fleet_record'})  # launch-fleet's own start path, read back (R7)
+        road.change({'world': 'fleet_record'})
         started = road.helper(['launch', '--spec', '900'])
         self.assertEqual(started.returncode, 0, started.stdout)
         self.assertEqual(road.saved()['launch']['state'], 'started')
@@ -481,11 +442,8 @@ class SteeringOff(unittest.TestCase):
 
 
 class LaunchYes(unittest.TestCase):
-    """Orchestrator ruling on #1358 (comment 7029073685): starting a fleet that can spend money is a gate."""
 
     def test_no_fleet_starts_without_the_yes_that_names_the_host_and_its_cost(self):
-        # catches: a fleet started with no yes, with a yes to no preview or another preview, or asked for
-        # without naming where it runs and that it can cost money
         for name, where in (('fresh-project', 'in Cloudroom'), ('always-wanted', 'on this machine')):
             with self.subTest(name):
                 road = Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
@@ -512,7 +470,6 @@ class LaunchYes(unittest.TestCase):
 
 
 class Drivers(unittest.TestCase):
-    """DW9 (#2006): the road offers every driver the installed build carries that answers `version`."""
 
     def road(self, name='fresh-project', boat=None):
         road = Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
@@ -524,7 +481,6 @@ class Drivers(unittest.TestCase):
         return road
 
     def test_a_build_with_the_local_cloudroom_and_boat_drivers_offers_all_three(self):
-        # catches: the road offering its fixed two (this machine, Cloudroom) while the build carries boat.dev
         road = self.road()
         offer = road.helper(['where'])
         self.assertEqual(offer.returncode, 12, offer.stdout)
@@ -536,7 +492,6 @@ class Drivers(unittest.TestCase):
         self.assertFalse((road.dir / 'boat.log').exists(), 'only version is called: nothing starts on boat.dev')
 
     def test_a_driver_whose_version_fails_is_not_offered_and_the_road_says_why(self):
-        # catches: a broken driver offered (its start would fail later), or dropped without a word
         for boat, why in (({'FAKE_DRIVER_NAME': 'boat', 'FAKE_DRIVER_FAIL': '1'}, 'failed (exit 1)'),
                           ({'FAKE_DRIVER_NAME': 'local'}, 'names another driver')):
             with self.subTest(why):
@@ -554,8 +509,6 @@ class Drivers(unittest.TestCase):
                 self.assertNotIn('host', road.saved())
 
     def test_picking_boat_writes_the_host_line_launch_fleet_reads_after_the_same_preview_and_yes(self):
-        # catches: boat.dev recorded without its preview and yes, written as anything but `Host: boat`, carrying
-        # this machine's permission mode row, or launched without a yes naming boat.dev and its cost
         road = self.road()
         preview = road.helper(['where', '--agents', 'boat'])
         self.assertEqual(preview.returncode, 12, preview.stdout)
@@ -608,7 +561,6 @@ class Drivers(unittest.TestCase):
 
 
     def test_r1_a_version_probe_gets_no_caller_variable_and_no_stdin(self):
-        # catches: a credential exported for onboarding handed to every discovered driver before the owner picks one
         road = self.road()
         road.extra_env.update(SYNTHETIC_ONBOARD_TOKEN='synthetic-marker-not-a-credential',
                               SYNTHETIC_CALLER_MARKER='synthetic-marker')
@@ -626,7 +578,6 @@ class Drivers(unittest.TestCase):
             self.assertTrue(call['stdin_null'], call)
 
     def test_r2_a_version_answer_outside_driver_v1s_schema_is_not_offered(self):
-        # catches: a driver with an incompatible version answer listed as a working host
         good = {'driver': 'boat', 'records': ['openwiz:records v1'], 'can': ['start', 'wake', 'stop', 'own-sandbox']}
         bad = [dict(good, records=[1]), dict(good, records=[]), dict(good, records=['openwiz:records v2']),
                dict(good, records=['openwiz:records v1', 'openwiz:records v1']),
@@ -645,7 +596,6 @@ class Drivers(unittest.TestCase):
                 self.assertEqual(re.findall(r'(?m)^Not offered: (\S+): ', offer.stdout), ['boat'], offer.stdout)
 
     def test_r3_each_driver_host_says_where_its_login_lives_even_with_its_cli_installed(self):
-        # catches: a signed-out boat.dev account taken as ready because its CLI is installed
         road = self.road()
         fake_driver(road.dir / 'adapters/acme/driver', road.dir, FAKE_DRIVER_NAME='acme')
         boat = road.helper(['where', '--agents', 'boat'])
@@ -662,7 +612,6 @@ class Drivers(unittest.TestCase):
         self.assertIn('Login:', acme.stdout)
 
     def test_r4_resuming_before_the_host_lists_from_the_build_and_previews_before_the_yes(self):
-        # catches: a resumed road listing only Cloudroom, or saving a host before its cost preview
         road = self.road()
         out = road.helper(['next']).stdout
         self.assertIn('where --build <build>', out)
@@ -673,14 +622,11 @@ class Drivers(unittest.TestCase):
 
 
 class PermissionMode(unittest.TestCase):
-    """J254 A (#1358, comment 7030207384): on this machine the owner picks the harness permission mode once."""
 
     def road(self, name):
         return Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
 
     def test_the_question_explains_each_mode_and_picks_none_for_the_owner(self):
-        # catches: a mode picked, defaulted or widened for the owner, a mode outside the harness's own list
-        # recorded, or the question touching a login
         road = self.road('small-change')
         road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
         asked = road.helper(['mode'])
@@ -702,8 +648,6 @@ class PermissionMode(unittest.TestCase):
         self.assertEqual(road.helper(['mode']).returncode, 5, 'Cloudroom asks no local permission mode')
 
     def test_no_fleet_starts_on_this_machine_before_the_mode_is_saved(self):
-        # catches: a fleet started on this machine whose saved setting names no permission mode (KN3's start
-        # would refuse every builder), or a host setting opened before the owner picked one
         road = self.road('always-wanted')
         road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
         unpicked = road.helper(['setting', '--yes'])
@@ -711,7 +655,6 @@ class PermissionMode(unittest.TestCase):
         self.assertNotIn('host_pulls', json.loads(road.world_path.read_text()))
         road = self.road('always-wanted')
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
-        # The mode anywhere but KN3's one fleet.md row is no saved mode: the driver reads only that row.
         road.origin_write({'docs/agents/host.md': '# Where agents run\n\nHost: local\n\nPermission mode: acceptEdits\n',
                            'docs/agents/fleet.md': fleet_md(builder=CLAUDE, small=CLAUDE)})
         road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
@@ -723,8 +666,6 @@ class PermissionMode(unittest.TestCase):
         self.assertEqual(road.spawns(), [])
 
     def test_the_mode_is_one_fleet_md_row_and_an_owners_row_is_never_overwritten(self):
-        # catches: the mode saved where KN3's driver doesn't read it, a second row, the rest of fleet.md lost,
-        # or an owner's saved row replaced without asking
         road = self.road('small-change')
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting')
         before = road.world['files']['docs/agents/fleet.md']
@@ -750,14 +691,11 @@ class PermissionMode(unittest.TestCase):
 
 
 class HostApproval(unittest.TestCase):
-    """KN3 security R6, option A (#1358, comment 7031005254): one pick, a host-side approval and the fleet.md row."""
 
     def road(self, name='always-wanted'):
         return Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
 
     def test_the_pick_writes_this_machines_approval_once_and_never_widens_it(self):
-        # catches: the approval never written, written inside the repository or readable by others, or replaced by a
-        # wider mode on a second answer
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
         self.assertIsNone(road.approvals())
@@ -772,9 +710,6 @@ class HostApproval(unittest.TestCase):
         self.assertFalse([c for c in road.gh_calls() if c[:1] == ['auth']])
 
     def test_the_approval_adds_only_this_entry_keeps_every_other_byte_and_is_owner_only_600(self):
-        # catches: other repositories' or harnesses' approvals rewritten or reformatted (KN3, OpenWiz 583f2ae: keep them
-        # byte for byte), a file left with another owner or a mode other than exactly 600, or an existing file's
-        # mode loosened
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
         others = ('{\n  "synthetic-owner/other": {\n    "codex": "read-only"\n  },\n  "%s": {\n    "codex": '
@@ -796,8 +731,6 @@ class HostApproval(unittest.TestCase):
                          'no temporary file left; the lock every onboarding session shares stays')
 
     def test_an_approvals_file_others_can_change_is_refused_never_fixed(self):
-        # catches: a group- or world-writable approvals file used or silently chmod-ed and written (KN3's start
-        # refuses it), or a refusal that doesn't say what to do
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
         path = road.host_state / 'approvals.json'
@@ -811,8 +744,6 @@ class HostApproval(unittest.TestCase):
         self.assertNotIn('mode', road.saved())
 
     def test_neither_a_row_nor_an_approval_alone_launches_on_this_machine(self):
-        # catches: a fleet started on this machine when the fleet.md row has no matching host-side approval, or the
-        # approval no matching row (KN3's start would refuse every builder), or a refusal that doesn't say what to do
         cases = {'a row, no approval': None, 'a row, another approval': 'bypassPermissions'}
         for name, approval in cases.items():
             with self.subTest(name):
@@ -831,7 +762,7 @@ class HostApproval(unittest.TestCase):
                 self.assertEqual(road.spawns(), [])
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
-        road.origin_write({'docs/agents/fleet.md': fleet_md(builder=CLAUDE, small=CLAUDE)})  # the approval, no row
+        road.origin_write({'docs/agents/fleet.md': fleet_md(builder=CLAUDE, small=CLAUDE)})
         road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
         result = road.helper(['launch', '--spec', '900'])
         self.assertEqual(result.returncode, 5, result.stdout)
@@ -841,14 +772,11 @@ class HostApproval(unittest.TestCase):
 
 
 class ReviewRound(unittest.TestCase):
-    """Review 7038665551 at 70d1bc2: R1, R2, R4, R5 and R6, each red first."""
 
     def road(self, name='always-wanted'):
         return Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
 
     def test_r1_the_road_never_runs_a_sign_in_itself(self):
-        # catches: the onboarding agent told to run a sign-in (`sign-in --yes`, `gh auth login`) instead of showing the
-        # person the command and waiting, then continuing on the installed setup's read-only check
         text = (SKILL_DIR / 'SKILL.md').read_text()
         lines = [line for line in text.splitlines() if 'github_login.py sign-in' in line or 'auth login' in line]
         self.assertTrue(lines)
@@ -862,8 +790,6 @@ class ReviewRound(unittest.TestCase):
         self.assertFalse([c for c in road.gh_calls() if c[:2] == ['auth', 'login']])
 
     def test_r2_this_machine_finds_the_driver_in_the_verified_build(self):
-        # catches: a fresh install's local driver missed because only OPENWIZ_ADAPTERS was read, so "this machine"
-        # says there is no driver and sends the user to Cloudroom
         road = self.road()
         del road.extra_env['OPENWIZ_ADAPTERS']
         build = road.dir / 'build'
@@ -875,8 +801,6 @@ class ReviewRound(unittest.TestCase):
         self.assertEqual(road.driver_calls(), [['version']])
 
     def test_r4_an_existing_branch_or_a_failed_write_never_opens_the_host_setting(self):
-        # catches: a second mode row or another host written onto an existing openwiz/host-setting branch, or a pull
-        # request reported ready after its file write failed
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting')
         world = json.loads(road.world_path.read_text())
@@ -900,12 +824,10 @@ class ReviewRound(unittest.TestCase):
         self.assertNotEqual((road.saved().get('setting') or {}).get('state'), 'opened')
 
     def test_r4_an_edit_after_the_check_is_never_overwritten(self):
-        # catches: the branch file checked at one blob and the write sent with a later blob's SHA, so another
-        # writer's edit made in between is overwritten and the pull request reported ready (re-check 7043050251)
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting')
         world = json.loads(road.world_path.read_text())
-        world.setdefault('branches', {})['openwiz/host-setting'] = dict(world['files'])  # as the default branch
+        world.setdefault('branches', {})['openwiz/host-setting'] = dict(world['files'])
         theirs = world['files']['docs/agents/fleet.md'] + '\n| Harness permission mode | `default` |\n'
         world['edit_after_read'] = {'openwiz/host-setting': {'docs/agents/fleet.md': theirs}}
         road.world_path.write_text(json.dumps(world))
@@ -918,8 +840,6 @@ class ReviewRound(unittest.TestCase):
         self.assertNotEqual((road.saved().get('setting') or {}).get('state'), 'opened')
 
     def test_r4_a_branch_deleting_another_file_opens_nothing(self):
-        # catches: the host-setting pull request opened and reported ready while its branch also deletes an
-        # unrelated file, so merging the settings-only change loses it (final check 7044504045)
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting')
         world = json.loads(road.world_path.read_text())
@@ -934,8 +854,6 @@ class ReviewRound(unittest.TestCase):
         self.assertNotEqual((road.saved().get('setting') or {}).get('state'), 'opened')
 
     def test_r4_a_resumed_pull_request_with_an_extra_change_is_not_ready(self):
-        # catches: an already open host-setting pull request reported open and ready after its branch gained a
-        # change beyond the approved files (final check 7044504045)
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'setting')
         self.assertEqual(road.helper(['setting', '--yes']).returncode, 0)
@@ -948,8 +866,6 @@ class ReviewRound(unittest.TestCase):
         self.assertNotIn('is open', resumed.stdout)
 
     def test_r5_line_endings_and_another_sessions_approval_survive(self):
-        # catches: CRLF rewritten to LF, and two onboarding sessions' read-modify-writes of the shared approvals file
-        # losing one approval
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
         path = road.host_state / 'approvals.json'
@@ -961,10 +877,10 @@ class ReviewRound(unittest.TestCase):
         self.assertTrue(data.endswith(b'}\r\n'))
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
-        path = road.host_state / 'approvals.json'  # this road's own host folder
+        path = road.host_state / 'approvals.json'
         lock = open(road.host_state / 'approvals.json.lock', 'a+')
         self.addCleanup(lock.close)
-        fcntl.flock(lock, fcntl.LOCK_EX)  # another onboarding session is mid-update
+        fcntl.flock(lock, fcntl.LOCK_EX)
         snapshot = {}
         proc = subprocess.Popen([sys.executable, '-I', str(SKILL_DIR / 'scripts/first_fleet.py'), 'mode', '--mode',
                                  'acceptEdits', '--state', str(road.state)], env=road.env(), cwd=road.dir,
@@ -972,8 +888,8 @@ class ReviewRound(unittest.TestCase):
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            pass  # waiting for the other session, as it should
-        snapshot['synthetic-owner/other'] = {'codex': 'read-only'}  # that session writes what it read, plus its own
+            pass
+        snapshot['synthetic-owner/other'] = {'codex': 'read-only'}
         path.write_text(json.dumps(snapshot))
         path.chmod(0o600)
         fcntl.flock(lock, fcntl.LOCK_UN)
@@ -983,17 +899,13 @@ class ReviewRound(unittest.TestCase):
                                             road.repo: {'claude': 'acceptEdits'}})
 
     def test_r3_without_node_the_video_is_skipped_in_one_line_and_the_fleet_still_starts(self):
-        # catches: a Python-only install stopped at to-spec's Node-rendered video before the fleet can start, against
-        # the install guard that stops at anything needing Node (pre-ruling 7038682338)
         text = (SKILL_DIR / 'SKILL.md').read_text()
         plan = text.split('### 7. Plan\n', 1)[1].split('\n### ', 1)[0]
         self.assertRegex(plan, r'Without Node[^.]*skip[^.]*video')
         self.assertIn('the fleet still starts', plan)
-        self.assertRegex(text, r'(?m)^- \*\*Read JSON and exit codes.*\bNode\b')  # the guard it follows stays
+        self.assertRegex(text, r'(?m)^- \*\*Read JSON and exit codes.*\bNode\b')
 
     def test_r7_the_fleet_starts_through_launch_fleets_start_path_not_a_one_off_thread(self):
-        # catches: a one-off thread spawned and its spawn counted as the fleet's start, or "started" said before
-        # launch-fleet's own activation record reads back (its loop, loop-map entry and record: references/launch.md)
         road = self.road('fresh-project')
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
         road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
@@ -1009,7 +921,7 @@ class ReviewRound(unittest.TestCase):
         pending = road.helper(['launch', '--spec', '900'])
         self.assertEqual(pending.returncode, 6, pending.stdout)
         self.assertNotIn(fleet, pending.stdout)
-        road.change({'world': 'fleet_record'})  # launch-fleet's activation record, by a record author
+        road.change({'world': 'fleet_record'})
         started = road.helper(['launch', '--spec', '900'])
         self.assertEqual(started.returncode, 0, started.stdout)
         self.assertIn(fleet, started.stdout)
@@ -1017,8 +929,6 @@ class ReviewRound(unittest.TestCase):
         self.assertEqual(road.spawns(), [])
 
     def test_r6_a_merge_closing_another_repositorys_issue_is_not_the_first_merge(self):
-        # catches: a merged pull request closing an issue with an onboarding ticket's number in another repository
-        # taken as this fleet's first merge
         road = self.road('fresh-project')
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
         saved = road.saved()
@@ -1036,7 +946,6 @@ class ReviewRound(unittest.TestCase):
 
 class FirstMerge(unittest.TestCase):
     def test_the_closing_offer_follows_only_a_merge_read_back_for_this_spec(self):
-        # catches: the closing offer made on a count, an open pull request, or a merge from another spec
         road = Road(self, next(j for j in ROAD['journeys'] if j['name'] == 'fresh-project'))
         road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
         saved = road.saved()

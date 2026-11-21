@@ -1,24 +1,3 @@
-"""TL3 (#2338): recover an evidenced missed stage limit with one recorded fix helper.
-
-One finite pass. The ops agent supplies, for each open miss in TL2's stage
-bench (`closedwiz.journey.stage-bench.v1` waits), the pull request facts it read
-completely from GitHub and the operation records it read back. This module:
-
-1. selects at most one fix helper for the miss (`select`), or a refusal;
-2. proposes the ops-dispatch v1 intent to record **before** any dispatch, or
-   reuses the one already recorded for the same miss;
-3. sends a recorded, claimed intent through #1456's `records.ops_pass`, which
-   sends it through OB3's `resume`: the effect boundary is never called, so
-   under OB-A1 an eligible helper start ends `disabled`;
-4. reports the outcome; only a `complete` result, which needs a verified
-   endpoint completion, ever counts as a recovery (`counted`).
-
-Builder and reviewer starts (#1480), question routing (#1481) and merging
-(#2189) stay with their owners: a miss of those stages selects no helper. A CI
-or conflict helper recovers an already missed named stage; red CI or a
-conflict alone is no sixth limit. There is no network or process client here,
-no timer, collector or dispatcher. See ../test/limit-recovery/README.md.
-"""
 import copy
 import hashlib
 import importlib.util
@@ -27,7 +6,7 @@ from pathlib import Path
 import re
 import sys
 
-sys.dont_write_bytecode = True  # never leave caches in an installed skill
+sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 
 
@@ -42,17 +21,14 @@ effects = _load('ops_effects', 'effects.py')
 records = _load('ops_records', 'records.py')
 
 SHA = '[0-9a-f]{40}'
-# TL2's key forms (journey-contract.md section 10) for the PR stages TL3 reads.
 KEYS = {
     'fix_after_changes': re.compile(rf'fix_after_changes:p([1-9][0-9]*):({SHA}):c([1-9][0-9]*)'),
     'merge': re.compile(rf'merge:p([1-9][0-9]*):({SHA}):c([1-9][0-9]*):(?:[0-9TZ:-]+|-)'),
 }
-# Stages whose recovery already has an owner: TL3 never duplicates it.
 OWNERS = {'builder_start': '#1480', 'reviewer_start': '#1480', 'builder_question_answer': '#1481',
           'merge': '#2189'}
 STAGES = set(KEYS) | set(OWNERS)
 ROLES = ('ci-fix', 'findings-fix', 'conflict-fix')
-# The fleet's start gates (fleet-tick frontier rule): any of these holds the work.
 HOLDING = {'held', 'needs-info', 'needs-triage', 'ready-for-human', 'wontfix'}
 MISS = dict(key=str, stage=str, tickets=list, pull_request=(int, type(None)), wait_minutes=(int, float, type(None)),
             wait_range_minutes=(list, type(None)), limit_minutes=int, result=str, start=(str, type(None)),
@@ -64,12 +40,8 @@ ENUMS = dict(pr_state={'open', 'closed', 'merged'}, ci={'success', 'failure', 'p
              owner={'idle', 'active', 'unknown'})
 CASE = dict(miss=dict, facts=dict, rule=dict, source=str, created_at=int, intent_id=str, snapshot=dict,
             claim=(dict, type(None)), history=list)
-# The helper starts on the builder's branch as builder-role work. ops-dispatch v1
-# has no dedicated helper action; this is the closest existing one, and its
-# effect stays disabled (OB-A1). A dedicated kind would be Jake's decision.
 ACTION, DESTINATION = 'builder_start', 'builder'
 HISTORY = {'intent', 'admission', 'transport', 'ack', 'completion'}
-# The states OB3's resume keeps unresolved: nothing later lowers them.
 UNSETTLED = {'transport': {'accepted', 'uncertain'}, 'completion': {'uncertain', 'completed', 'reconciled_not_executed'},
              'admission': {'uncertain', 'reconcile'}}
 
@@ -105,7 +77,6 @@ def _read(miss, facts):
 
 
 def select(miss, facts):
-    """The one helper an open, evidenced miss calls for, or why none. Pure."""
     parsed = _read(miss, facts)
 
     def no(reason, detail):
@@ -155,7 +126,6 @@ def select(miss, facts):
 
 
 def propose(selection, case):
-    """The intent to record before any dispatch. The same miss always names the same work."""
     miss, facts, snapshot = case['miss'], case['facts'], case['snapshot']
     parsed = KEYS[miss['stage']].fullmatch(miss['key'])
     intent = dict(
@@ -179,26 +149,17 @@ def _helper(intent):
 
 
 def _identities(intent, history):
-    """OB3's identity rule: each (repository, id) once, and never reused by another record."""
     ids = [(r['repository'], r['id']) for r in history]
     return len(ids) == len(set(ids)) and all(
         r == intent for r in history if (r['repository'], r['id']) == (intent['repository'], intent['id']))
 
 
 def _belongs(record, intent):
-    """OB3's binding rule for a same-key record: this plan, this subject and this intent."""
     return (all(record[k] == intent[k] for k in ('repository', 'spec', 'ticket', 'approval', 'subject'))
             and (record == intent if record['kind'] == 'intent' else record.get('intent_id', intent['id']) == intent['id']))
 
 
 def recover(view, cases, effect_boundary):
-    """One finite pass over open misses. Returns one record per case, in order; never executes.
-
-    view: {"pass": {generation, owner}, "generations": [admitted generation claims]}.
-    Each case: {miss, facts, rule, source, created_at, intent_id, snapshot, claim, history}.
-    `record_intent` asks the caller to record and read back the proposed intent;
-    `admit_claim` to admit its operation claim through OB3. Neither dispatches.
-    """
     out, reserved, operations = [], {}, []
     for case in cases:
         _shape(case, CASE, 'case')
@@ -216,7 +177,6 @@ def recover(view, cases, effect_boundary):
         if selection['role'] is None:
             out.append(end('refused', selection['reason']))
             continue
-        # R1: the snapshot's ticket, and so its approval, must be the miss's own.
         if snapshot['ticket'] != case['facts']['ticket']:
             out.append(end('refused', 'stale_binding', 'the snapshot is for another ticket'))
             continue
@@ -229,7 +189,6 @@ def recover(view, cases, effect_boundary):
         if len(recorded) > 1:
             raise ValueError('two recorded intents for one miss')
         intent = recorded[0] if recorded else fresh
-        # R2: one helper per pull request head across this pass, recorded or only proposed.
         slot = (fresh['repository'], fresh['subject']['number'], fresh['head'])
         if others or reserved.get(slot, intent['operation_key']) != intent['operation_key']:
             out.append(end('refused', 'another_helper', 'another recovery helper is recorded or proposed at this head'))
@@ -239,14 +198,10 @@ def recover(view, cases, effect_boundary):
         if not recorded:
             out.append(end('duplicate' if again else 'record_intent', 'eligible', intent=fresh))
             continue
-        # R4: reuse only under the current dispatch rule; older authority goes back for reassessment.
         if intent['rule'] != rule:
             out.append(end('refused', 'stale_binding', 'the intent was recorded under another dispatch rule'))
             continue
         if case['claim'] is None:
-            # R3: OB3's resume order: unique immutable identities, then uncertainty
-            # first, then every same-key record must belong to this intent. A lost
-            # claim read-back is never a second admission.
             mine = [r for r in history if r['operation_key'] == intent['operation_key']]
             if not _identities(intent, history):
                 out.append(end('refused', 'incomplete_read', 'the history has an ambiguous record identity', intent))
@@ -272,7 +227,6 @@ def recover(view, cases, effect_boundary):
 
 
 def counted(record):
-    """A recovery counts only on a complete result; refusals, disabled and uncertain never do."""
     result = record.get('result')
     return record.get('state') == 'complete' and type(result) is dict and result.get('state') == 'complete'
 

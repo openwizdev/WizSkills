@@ -3,14 +3,18 @@
 
 python3 -I skills/launch-fleet/scripts/test-merge.py
 """
+import contextlib
 import importlib.util
+import io
 import json
+import os
 from pathlib import Path
 import re
 import shlex
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -27,7 +31,8 @@ TICKETS = 'synthetic-owner/synthetic-tickets'
 # its next read of issue N's comments; its `issues` answers one issue's read (the landed
 # comment's brief and report), and a DELETE removes one comment. Calls take a lock on the
 # world, so runs side by side never lose a write; FAKE_RACE=N holds each run's first read of
-# issue N's comments until two runs have made it (#1848 R2).
+# issue N's comments until two runs have made it (#1848 R2). A ticket's spec query
+# (RC3, #1831) is answered from the world's `tickets`, by number; a world without them has no spec.
 ROUTER = r'''import fcntl, json, os, subprocess, sys, time
 args = sys.argv[1:]
 named = dict(a.split('=', 1) for a in args if a.split('=', 1)[0] in ('owner', 'name'))
@@ -83,6 +88,14 @@ if args[0] == 'api' and '--method' not in args and any(a.split('?')[0].endswith(
         with open(path, 'w') as f:
             json.dump(world, f)
         sys.exit('HTTP 502')
+if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'parent {' in a for a in args):
+    with open(path) as f:
+        world = json.load(f)
+    number = next(a.split('=', 1)[1] for a in args if a.startswith('number='))
+    tickets = world.get('tickets')
+    issue = {'number': int(number), 'parent': None} if tickets is None else tickets.get(number)
+    print(json.dumps({'data': {'repository': {'issue': issue}}}))
+    sys.exit(0)
 r = subprocess.run([sys.executable, '-I', %r, *args], env=dict(os.environ, FAKE_WORLD=path),
                    capture_output=True, text=True)
 out = r.stdout
@@ -560,6 +573,300 @@ class Queue(unittest.TestCase):
         self.assertEqual(sum('merge' in x for x in w.writes()), 1)
 
 
+# RC3 (#1831): the late look, read with the checkpoints contract's own forms
+# (contracts/checkpoints.v1.md); the contract's synthetic decider `Robin` joins the decider list.
+_merge = importlib.util.spec_from_file_location('launch_fleet_merge', HERE / 'merge.py')
+M = importlib.util.module_from_spec(_merge)
+_merge.loader.exec_module(M)
+CONTRACT = M.CONTRACT
+SPEC = '## Problem Statement\n\nA synthetic settings page.\n\n## Checkpoints\n\n- One-way door: %s\n- User-visible: %s\n'
+VISIBLE, RELEASE, NEITHER = SPEC % ('no', 'yes'), SPEC % ('no', 'yes, a release'), SPEC % ('no', 'no')
+ASKED = ('launch-fleet: late look asked #7 at %s\n\nEvidence: preview https://preview.example.test/settings\n'
+         'Look for: the settings page saves a synthetic name.')
+EVIDENCE = ('Evidence: preview https://preview.example.test/settings\n'
+            'Look for: the settings page saves a synthetic name.\n')
+LOOKED = ('**Late look by %s, 2030-01-05, #7 at %s:** %s: the settings page works as the evidence shows.\n'
+          'Private record: https://github.com/jparker2006/ClosedWiz/issues/9001#issuecomment-9000000011')
+MERGED = 'merged %s; cost posted ' % ('f' * 40)
+
+
+def ticket(spec, siblings=(('CLOSED', 11),), repo=REPO, more=False):
+    """Ticket #12 of spec #40: `spec` is the spec's body, `siblings` its other planned tickets, each
+    (state, number) or (state, number, its closing pull requests as (number, state, in the merge queue))."""
+    def node(state, n, prs=()):
+        refs = [{'number': p, 'state': st, 'isInMergeQueue': q, 'repository': {'nameWithOwner': repo}}
+                for p, st, q in prs]
+        return {'number': n, 'state': state, 'repository': {'nameWithOwner': repo},
+                'closedByPullRequestsReferences': {'pageInfo': {'hasNextPage': False}, 'nodes': refs}}
+    nodes = [node(*x) for x in siblings]
+    nodes.append(node('OPEN', 12, [(7, 'OPEN', False)]))
+    return {'12': {'number': 12, 'parent': {'number': 40, 'body': spec, 'repository': {'nameWithOwner': repo},
+                                            'subIssues': {'pageInfo': {'hasNextPage': more}, 'nodes': nodes}}}}
+
+
+def said(login, body):
+    return {'id': 0, 'body': body, 'user': {'login': login}, 'created_at': '2026-01-01T00:00:00Z'}
+
+
+class LateLook(unittest.TestCase):
+    """merge.py run in process, so the contract's path and its test decider can be set."""
+
+    def run_merge(self, w, *argv):
+        out = io.StringIO()
+        cwd = os.getcwd()
+        os.chdir(w.dir / 'project')
+        try:
+            with mock.patch.dict(os.environ, w.env), mock.patch.object(M, 'DECIDERS', M.DECIDERS + ('Robin',)), \
+                    contextlib.redirect_stdout(out):
+                code = M.main([str(a) for a in argv])
+        finally:
+            os.chdir(cwd)
+        return code, out.getvalue().strip()
+
+    def world(self, spec, comments=(), **extra):
+        w = World(self, pr=pr(), tickets=ticket(spec, **extra))
+        project(w, PRINTS)
+        w.update(comments={'40': [dict(c, id=4000 + i) for i, c in enumerate(comments)]})
+        return w
+
+    def merge(self, w):
+        return self.run_merge(w, 'merge', REPO, 7, HEAD, 'check', 'APPROVE 1 and plan approval 2', '--ticket', 12,
+                              '--base-rule-checked')
+
+    def ask(self, w, text=EVIDENCE):
+        (w.dir / 'evidence.txt').write_text(text)
+        return self.run_merge(w, 'ask', REPO, 7, HEAD, 'check', '--ticket', 12, w.dir / 'evidence.txt')
+
+    def add(self, w, *comments):
+        value = w.load()
+        items = value['comments'].setdefault('40', [])
+        for c in comments:
+            value['next_id'] += 1
+            items.append(dict(c, id=value['next_id']))
+        w.save(value)
+
+    def merges(self, w):
+        return [x for x in w.writes() if 'merge' in x]
+
+    def test_a_user_visible_specs_final_merge_waits_for_one_ask_and_the_late_look(self):
+        # catches: the final merge of a user-visible spec landing before the owner looked at its
+        # evidence, the ask posted twice for one head, or a "changes asked" look releasing it (P3).
+        w = self.world(VISIBLE)
+        self.assertEqual(self.merge(w), (1, 'held: ask-due: post the evidence ask on %s#40 with merge.py ask' % REPO))
+        self.assertEqual(w.writes(), [])
+        code, out = self.ask(w)
+        self.assertEqual((code, out), (0, 'ask posted 5001'))
+        self.assertEqual(w.bodies(40), [ASKED % HEAD])
+        self.assertEqual(self.ask(w), (0, 'ask already posted 5001'))
+        self.assertEqual(self.merge(w), (1, 'held: look-due: the late look asked on %s#40 is not recorded' % REPO))
+        self.add(w, said('synthetic-owner', LOOKED % ('Robin', HEAD, 'changes asked')))
+        self.assertEqual(self.merge(w), (1, 'held: changes-asked: the late look on %s#40 asked for changes' % REPO))
+        self.assertEqual(self.merges(w), [])
+        self.add(w, said('openwiz[bot]', LOOKED % ('Robin', HEAD, 'approved')))
+        code, out = self.merge(w)
+        self.assertEqual(code, 0, out)
+        self.assertTrue(out.startswith(MERGED), out)
+        self.assertEqual(len(self.merges(w)), 1)
+        self.assertEqual(len([b for b in w.bodies(40) if b.startswith('launch-fleet: late look asked')]), 1)
+
+    def test_a_release_spec_is_held_the_same_way(self):
+        # catches: `User-visible: yes, a release` read as anything but user-visible, so a release
+        # merges without the owner's late look.
+        w = self.world(RELEASE)
+        self.assertEqual(self.merge(w)[0], 1)
+        self.assertEqual(self.ask(w), (0, 'ask posted 5001'))
+        self.assertEqual(self.merge(w)[1], 'held: look-due: the late look asked on %s#40 is not recorded' % REPO)
+        self.add(w, said('openwiz[bot]', LOOKED % ('Robin', HEAD, 'approved')))
+        self.assertTrue(self.merge(w)[1].startswith(MERGED))
+
+    def test_every_other_merge_flows_as_today(self):
+        # catches: the hold reaching a merge the contract lets flow: a ticket that is not its spec's
+        # last open one, a spec answered no, one-way door only, a spec planned before the contract (P4),
+        # a template quoted in a fenced block, or a ticket with no spec.
+        fenced = '## Problem\n\nThe template:\n\n```text\n## Checkpoints\n\n- One-way door: no\n- User-visible: yes\n```\n'
+        cases = [('not final', dict(spec=VISIBLE, siblings=[('OPEN', 11)])),
+                 ('both no', dict(spec=NEITHER)),
+                 ('one-way door only', dict(spec=SPEC % ('yes', 'no'))),
+                 ('absent', dict(spec='## Problem Statement\n\nPlanned before the contract.\n')),
+                 ('fenced example', dict(spec=fenced))]
+        for name, case in cases:
+            with self.subTest(name):
+                w = self.world(case.pop('spec'), **case)
+                code, out = self.merge(w)
+                self.assertEqual(code, 0, out)
+                self.assertTrue(out.startswith(MERGED), out)
+                self.assertEqual(w.bodies(40), [])
+        with self.subTest('no spec'):
+            w = self.world(VISIBLE)
+            w.update(tickets={'12': {'number': 12, 'parent': None}})
+            self.assertTrue(self.merge(w)[1].startswith(MERGED))
+
+    def test_an_unreadable_answer_holds_like_a_yes(self):
+        # catches: a near-miss heading, a bad answer line or a Checkpoints section behind an inline
+        # code span (#1922) read as absent, so the final merge skips the late look.
+        span = 'Status: ```synthetic status```\n\n' + VISIBLE
+        for name, spec in [('near-miss heading', VISIBLE.replace('## Checkpoints', '## Checkpoint answers')),
+                           ('bad answer', SPEC % ('no', 'maybe')), ('inline code span', span)]:
+            with self.subTest(name):
+                w = self.world(spec)
+                self.assertEqual(self.merge(w)[1],
+                                 'held: ask-due: post the evidence ask on %s#40 with merge.py ask' % REPO)
+                self.assertEqual(self.merges(w), [])
+
+    def test_only_the_owners_recorded_look_at_this_head_after_its_ask_releases_it(self):
+        # catches: a merge released by a look at another head, a look before the ask, a look or ask
+        # by someone who is not a record author, another decider's look, or an invalid record.
+        ask = said('openwiz[bot]', ASKED % HEAD)
+        good = LOOKED % ('Robin', HEAD, 'approved')
+        quoted = good.replace('the settings page works', '"it works"')
+        cases = [('another head', [said('openwiz[bot]', ASKED % OTHER), said('openwiz[bot]', LOOKED % ('Robin', OTHER, 'approved'))], 'ask-due'),
+                 ('ask by a stranger', [said('synthetic-stranger', ASKED % HEAD)], 'ask-due'),
+                 ('record before the ask', [said('openwiz[bot]', good), ask], 'look-due'),
+                 ('record by a stranger', [ask, said('synthetic-stranger', good)], 'look-due'),
+                 ('another decider', [ask, said('openwiz[bot]', LOOKED % ('Casey', HEAD, 'approved'))], 'look-due'),
+                 ('quoted words', [ask, said('openwiz[bot]', quoted)], 'look-due'),
+                 ('changes after approved', [ask, said('openwiz[bot]', good),
+                                             said('openwiz[bot]', LOOKED % ('Robin', HEAD, 'changes asked'))],
+                  'changes-asked')]
+        for name, comments, why in cases:
+            with self.subTest(name):
+                w = self.world(VISIBLE, comments)
+                code, out = self.merge(w)
+                self.assertEqual((code, out.split(':')[:2]), (1, ['held', ' ' + why]), out)
+                self.assertEqual(self.merges(w), [])
+
+    def test_an_ask_that_shows_code_or_breaks_the_form_is_refused_before_any_write(self):
+        # catches: an evidence ask that points the owner at code (a pull request, a file) or carries
+        # extra lines, against the contract's "never code".
+        w = self.world(VISIBLE)
+        for text, code in [('Evidence: preview https://github.com/synthetic-owner/synthetic-repo/pull/7\n'
+                            'Look for: the page.\n', 'evidence-code'),
+                           ('Look for: the page.\n', 'evidence-missing'),
+                           (EVIDENCE + '```diff\n```\n', 'ask-line')]:
+            with self.subTest(code):
+                self.assertEqual(self.ask(w, text), (1, 'refused: the evidence ask is invalid: ' + code))
+        self.assertEqual(w.writes(), [])
+
+    def test_no_ask_while_nothing_is_held(self):
+        # catches: an ask posted for a merge that flows, which would ask the owner about a refactor.
+        w = self.world(NEITHER)
+        self.assertEqual(self.ask(w), (1, 'refused: no late look is due: the merge flows'))
+        self.assertEqual(w.writes(), [])
+
+    def test_the_ask_goes_to_the_specs_own_repository(self):
+        # catches: the ask and the records read on the pull request's repository when the ticket and
+        # its spec live in another, so the hold could never be released (or the ask lands nowhere).
+        w = World(self, pr=pr(closes=closes((TICKETS, 12))), others={TICKETS: {'tickets': ticket(VISIBLE, repo=TICKETS)}})
+        project(w, PRINTS)
+        (w.dir / 'evidence.txt').write_text(EVIDENCE)
+        self.assertEqual(self.run_merge(w, 'ask', REPO, 7, HEAD, 'check', '--ticket', '%s#12' % TICKETS, w.dir / 'evidence.txt'),
+                         (0, 'ask posted 5001'))
+        self.assertEqual(w.others[TICKETS].bodies(40), [ASKED % HEAD])
+        self.assertEqual(w.bodies(40), [])
+
+    def test_an_unreadable_spec_or_contract_merges_nothing(self):
+        # catches: a spec whose planned tickets or comments can't be read whole, or a missing
+        # contract, treated as "no late look", so a held merge slips through.
+        w = self.world(VISIBLE, more=True)
+        self.assertEqual(self.merge(w), (1, "unknown: spec %s#40's planned tickets could not be read whole; "
+                                            'nothing was merged' % REPO))
+        for name, change in [('a state it does not know', lambda t: t['parent']['subIssues']['nodes'][0].update(state='MERGED')),
+                             ('no page info', lambda t: t['parent']['subIssues'].update(pageInfo=None)),
+                             ('a body that is not text', lambda t: t['parent'].update(body=None)),
+                             ('no such ticket', lambda t: t.clear())]:
+            with self.subTest(name):
+                w = self.world(VISIBLE)
+                value = w.load()
+                change(value['tickets']['12'])
+                value['tickets'] = {k: v for k, v in value['tickets'].items() if v} or {'12': None}
+                w.save(value)
+                self.assertEqual(self.merge(w), (1, 'unknown: the spec of %s#12 could not be read; nothing was merged'
+                                                 % REPO))
+                self.assertEqual(self.merges(w), [])
+        w = self.world(VISIBLE)
+        w.update(faults={'read': 'fail'})
+        self.assertEqual(self.merge(w), (1, 'unknown: the comments on %s#40 could not be read; nothing was merged'
+                                         % REPO))
+        partial = w.dir / 'partial.md'
+        partial.write_text(CONTRACT.read_text().replace('  "record_pointer"', '  "record_pointer_gone"'))
+        for contract in (w.dir / 'missing.md', partial):
+            with self.subTest(contract.name):
+                w = self.world(VISIBLE)
+                with mock.patch.object(M, 'CONTRACT', contract):
+                    out = io.StringIO()
+                    with mock.patch.dict(os.environ, w.env), contextlib.redirect_stdout(out):
+                        code = M.main(['merge', REPO, '7', HEAD, 'check', 'APPROVE 1', '--ticket', '12',
+                                       '--base-rule-checked'])
+                self.assertEqual((code, out.getvalue().strip()),
+                                 (1, 'unknown: the checkpoints contract could not be read; nothing was merged'))
+                self.assertEqual(self.merges(w), [])
+
+    def test_a_sibling_already_queued_or_merged_makes_this_the_final_merge(self):
+        # catches (review R1): two tickets of a user-visible spec both entering the merge queue while
+        # each still sees the other open, so the final merge lands without the owner's late look.
+        queued = [('OPEN', 11, [(6, 'OPEN', True)])]
+        for name, siblings in [('queued', queued), ('merged, not yet closed', [('OPEN', 11, [(6, 'MERGED', False)])]),
+                               ('queued, beside a closed one', [('CLOSED', 10)] + queued)]:
+            with self.subTest(name):
+                w = World(self, pr=pr(isMergeQueueEnabled=True), tickets=ticket(VISIBLE, siblings=siblings))
+                project(w, PRINTS)
+                code, out = self.run_merge(w, 'merge', REPO, 7, HEAD, 'check', 'APPROVE 1', '--ticket', 12)
+                self.assertEqual((code, out), (1, 'held: ask-due: post the evidence ask on %s#40 with merge.py ask'
+                                               % REPO))
+                self.assertEqual(w.writes(), [])
+        with self.subTest('a sibling still in review'):
+            w = World(self, pr=pr(isMergeQueueEnabled=True),
+                      tickets=ticket(VISIBLE, siblings=[('OPEN', 11, [(6, 'OPEN', False)])]))
+            project(w, PRINTS)
+            self.assertEqual(self.run_merge(w, 'merge', REPO, 7, HEAD, 'check', 'APPROVE 1', '--ticket', 12),
+                             (0, 'queued; recorded 5001'))
+
+    def test_an_ask_waits_for_a_green_mergeable_head(self):
+        # catches (review R2): the owner asked to look at evidence for a head the fleet can't merge,
+        # because a required check turned red or the head conflicts after the hold was read.
+        w = self.world(VISIBLE)
+        self.assertEqual(self.merge(w)[1], 'held: ask-due: post the evidence ask on %s#40 with merge.py ask' % REPO)
+        value = w.load()
+        value['pr']['checks'] = [{'__typename': 'CheckRun', 'name': 'check', 'conclusion': 'FAILURE'}]
+        w.save(value)
+        self.assertEqual(self.ask(w), (1, 'refused: no ask for a head that cannot merge: not every required check '
+                                          'is green on it: check'))
+        for state in ('CONFLICTING', 'UNKNOWN'):
+            with self.subTest(state):
+                w = self.world(VISIBLE)
+                w.update(pr=pr(mergeable=state))
+                self.assertEqual(self.ask(w), (1, 'refused: no ask for a head that cannot merge: mergeable: ' + state))
+                self.assertEqual(w.writes(), [])
+        with self.subTest('merge offers no ask for a conflicting head'):
+            w = self.world(VISIBLE)
+            w.update(pr=pr(mergeable='CONFLICTING'))
+            self.assertEqual(self.merge(w), (1, 'blocked: not mergeable: CONFLICTING; recorded 5001'))
+            self.assertEqual(w.bodies(40), [])
+            self.assertEqual(self.merges(w), [])
+
+    def test_the_documented_late_look_commands_run_as_written(self):
+        # catches: reviews.md's `look` or `ask` command naming a verb, argument order or path
+        # merge.py doesn't take, so a held merge's ask is never posted and it waits forever.
+        text = (HERE.parent / 'references/reviews.md').read_text()
+        found = dict((m.group(2), m.group(1)) for m in
+                     re.finditer(r'`(python3 -I [^`]*merge\.py"? (look|ask) [^`]*)`', text))
+        self.assertEqual(sorted(found), ['ask', 'look'])
+        w = self.world(VISIBLE)
+        (w.dir / 'evidence.txt').write_text(EVIDENCE)
+        values = {"<this skill's folder>": str(HERE.parent), '<owner>/<repo>': REPO, '<P>': '7', '<commit>': HEAD,
+                  '<checks>': 'check', '<N>': '12', '<file>': str(w.dir / 'evidence.txt')}
+        for verb, want in [('look', 'held: ask-due: post the evidence ask on %s#40 with merge.py ask' % REPO),
+                           ('ask', 'ask posted 5001'),
+                           ('look', 'held: look-due: the late look asked on %s#40 is not recorded' % REPO)]:
+            command = found[verb]
+            for name, value in values.items():
+                command = command.replace(name, value)
+            argv = shlex.split(command)
+            self.assertEqual(argv[:2], ['python3', '-I'])
+            self.assertNotRegex(' '.join(argv), r'<[^>]+>', 'a placeholder left unfilled')
+            self.assertEqual(self.run_merge(w, *argv[3:]), (0, want))
+
+
 # The feedback-loop contract (v1, contracts/feedback-loop.v1.md in OpenWiz, FL1 #1840): its
 # landed fixtures, as GitHub answers them. Every account, number and text is synthetic.
 DEST = 'openwizdev/OpenWiz'
@@ -618,6 +925,22 @@ class Landed(unittest.TestCase):
                          (0, 'no queued merge; landed already posted 5001'))
         self.assertEqual(self.posts(w), [(9101, LANDED)])
         self.assertEqual(w.bodies(9106), ['launch-fleet: cost unknown (PR #9201): no cost command'])
+
+    def test_a_held_final_merge_tells_no_report_it_landed(self):
+        # catches (RC3 #1831 with FL4 #1848): a user-visible spec's final merge posting its landed
+        # comment, or merging, before the owner's late look releases it.
+        w = self.world(self.issues)
+        value = w.load()
+        value['pr'].update(state='OPEN', mergeCommit=None)
+        spec = ticket(VISIBLE, repo=DEST)['12']
+        spec['parent']['subIssues']['nodes'][-1]['number'] = 9106
+        value['tickets'] = {'9106': dict(spec, number=9106)}
+        w.save(value)
+        project(w, None)
+        code, out = w.run('merge.py', 'merge', DEST, 9201, HEAD, 'check', 'APPROVE 1 and plan approval 2',
+                          '--ticket', 9106, '--base-rule-checked', cwd=w.dir / 'project')
+        self.assertEqual((code, out), (1, 'held: ask-due: post the evidence ask on %s#40 with merge.py ask' % DEST))
+        self.assertEqual(w.writes(), [])
 
     def test_a_report_landed_by_an_earlier_fix_gets_nothing(self):
         # catches: the once-per-report rule read per pull request, so a second fix posts again.

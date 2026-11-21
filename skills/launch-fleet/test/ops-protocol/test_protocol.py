@@ -1,4 +1,3 @@
-"""OB1's owning offline record/claim/refusal contract proofs. No live endpoint."""
 import copy
 import importlib.util
 import json
@@ -13,7 +12,6 @@ ROOT = HERE.parents[3]
 
 
 class AtomicRefs:
-    """Recording endpoint with only the observed create-if-absent primitive."""
     def __init__(self):
         self.refs = {}
         self.calls = []
@@ -136,8 +134,6 @@ class ProtocolProof(unittest.TestCase):
         self.assertEqual(self.api.admit_claim(self.example("operation"), self.example("snapshot"), "3" * 40, lost_reply), "uncertain")
         self.assertEqual(len(calls), 1)
 
-    # A new approval/head can give a replacement a different operation key.
-    # Existing tests used the same key and missed cross-revision uncertainty.
     def test_other_unresolved_ticket_key_cannot_admit_a_replacement(self):
         snapshot, refs = self.example("snapshot"), AtomicRefs()
         snapshot["uncertain_keys"] = ["f" * 64]
@@ -293,8 +289,6 @@ class ProtocolProof(unittest.TestCase):
         audit["complete"] = False
         self.assertEqual(self.api.audit_cursor(audit), {"created_at": 10, "comment": 9010})
 
-    # Audit finding: existing ON1 cases changed cutoff/holds but never the rule.
-    # A wrong rule must not be reported as current, despite disabled effects.
     def test_on1_wrong_or_revised_rule_is_not_current(self):
         record, snapshot = self.example("on1"), self.example("snapshot")
         record["rule"]["name"] = "dispatch"
@@ -311,8 +305,6 @@ class ProtocolProof(unittest.TestCase):
         snapshot["rule"] = copy.deepcopy(grant["rule"])
         self.assertFalse(self.api.grant_current(grant, snapshot))
 
-    # Audit finding: JSON Schema pattern is a search, not Python fullmatch.
-    # Shared structural cases need an independent literal oracle for both doors.
     def test_schema_pattern_does_not_accept_trailing_line_terminators(self):
         pattern = self.api.SCHEMA["$defs"]["approval"]["properties"]["fingerprint"]["pattern"]
         for value, expected in [("a" * 64, True), ("a" * 63, False),
@@ -328,8 +320,6 @@ class ProtocolProof(unittest.TestCase):
                 accepted = False
             self.assertEqual(accepted, expected)
 
-    # Self-sweep: structurally valid records used in the wrong handler slot
-    # must be refused as invalid input, not lose the finite pass to a KeyError.
     def test_wrong_handler_record_kinds_are_refused(self):
         with self.assertRaises(ValueError):
             self.api.resume(self.example("intent"), self.example("operation"), [], self.example("intent"), self.fail)

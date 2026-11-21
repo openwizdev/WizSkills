@@ -1,22 +1,4 @@
 #!/usr/bin/env python3
-"""Offline pair plans, Bradley-Terry fits, chart odds, council scores and stall decisions.
-
-No model calls. Reads one UTF-8 JSON file, prints one result, writes nothing.
-Exit 2 is a refusal with nothing on stdout. Exact keys only: duplicate keys,
-wrong types, unknown enums and non-JSON constants are refused.
-
-rank: smoothed Bradley-Terry over every comparison, with half a prior win per
-side of each observed pair, so unanimous records stay finite. Damped Newton
-steps in log space solve the pinned graph Laplacian until the largest gradient
-entry is below 1e-9; a singular, nonfinite or stalled solve is refused. Strengths
-are relative and sum to one; order and ties use log strengths, and a gap within
-1e-8 is a tie. The pair graph must be connected and every pair needs equally
-many orders. position_splits is the minimum count of verdicts that disagree
-across the two orders.
-
-odds: each candidate's probability of beating --baseline, from the same fit's
-log-strength gap, for the climb chart.
-"""
 import argparse
 from collections import Counter, defaultdict
 import json
@@ -92,7 +74,6 @@ def pairs(data):
 
 
 def solve(matrix, rhs):
-    """Gaussian elimination with partial pivoting, on the pinned Laplacian."""
     size = len(rhs)
     for column in range(size):
         pivot = max(range(column, size), key=lambda row: abs(matrix[row][column]))
@@ -118,7 +99,6 @@ def solve(matrix, rhs):
 
 
 def fit(ids, edges):
-    """Fit log strengths; pin one coordinate to remove additive ambiguity."""
     index = {name: i for i, name in enumerate(ids)}
     games = [(index[a], index[b], wins, total) for (a, b), (wins, total) in edges.items()]
     size = len(ids)
@@ -129,7 +109,6 @@ def fit(ids, edges):
         terms = []
         for a, b, wins, total in games:
             difference = values[a] - values[b]
-            # Stable log-sigmoids, without exponentiating an absolute strength.
             tail = math.log1p(math.exp(-abs(difference)))
             terms.append(-wins * (max(-difference, 0) + tail)
                          - (total - wins) * (max(difference, 0) + tail))
@@ -165,7 +144,6 @@ def fit(ids, edges):
             require(all(math.isfinite(value) for value in trial), "nonfinite fit")
             require(trial != theta and trial != previous,
                     "Bradley-Terry fit stalled numerically; no ranking published")
-            # Damping protects the likelihood; allow only floating-point roundoff.
             if likelihood(trial) >= current + 1e-4 * scale * gain - 1e-12 * (1 + abs(current)):
                 break
             scale /= 2
@@ -183,7 +161,6 @@ def rank(data):
     ids = candidates(data)
     rows = data["comparisons"]
     require(type(rows) is list and rows, "comparisons must be a nonempty list")
-    # Aggregate counts, never update ratings in observation order.
     counts = defaultdict(Counter)
     for row in rows:
         object_keys(row, ("left", "right", "winner", "reason"))
@@ -204,14 +181,12 @@ def rank(data):
             require(n == sum(reverse.values()), "every pair needs equally many orders")
             if not n:
                 continue
-            # Minimum number of verdicts that disagree across presentation orders.
             same = (min(forward["left"], reverse["right"]) +
                     min(forward["right"], reverse["left"]) +
                     min(forward["tie"], reverse["tie"]))
             splits += n - same
             a_wins = forward["left"] + reverse["right"]
             ties = forward["tie"] + reverse["tie"]
-            # Half-win symmetric smoothing keeps unanimous records finite.
             edges[(a, b)] = (a_wins + ties / 2 + 0.5, 2 * n + 1)
 
     seen = {ids[0]}
@@ -240,7 +215,6 @@ def category(value):
 
 
 def panel(data):
-    """The council's categories, candidates, references and judges."""
     categories = data["categories"]
     require(type(categories) is list and categories, "categories must be a nonempty list")
     require(len(set(map(category, categories))) == len(categories), "duplicate category")
@@ -252,7 +226,7 @@ def panel(data):
         require(name not in kinds, "duplicate artifact")
         if "family" in entry:
             token(entry["family"])
-            kinds[name] = None  # a candidate; a reference keeps its product name
+            kinds[name] = None
         else:
             object_keys(entry, ("id", "reference"))
             require(type(entry["reference"]) is str and entry["reference"].strip(),
@@ -345,7 +319,6 @@ def council_rounds(data):
         seat = cheap if phase == "cheap" else sorted(judges)
         result, marks = score_round(row, categories, kinds, judges, seat)
         results.append(({"phase": phase, **result}, marks))
-        # The cheapest judge alone until it is satisfied, then the whole council.
         if result["leaders"]:
             phase = "full"
     return categories, kinds, judges, cheap, phase, results
@@ -357,7 +330,6 @@ def council(data, window):
     for result, _ in results:
         if result["phase"] != "full":
             continue
-        # Count a round only when the kept candidate is its one leader (#1354 R1).
         only = result["best"] if result["leaders"] == [result["best"]] else None
         streak = streak + 1 if only is not None and only == leader else int(only is not None)
         leader = only
@@ -419,8 +391,6 @@ def odds(data, baseline):
     require(baseline in logs, "baseline must be a known candidate")
 
     def beats(gap):
-        # Logistic of the log-strength gap, stable at either extreme, so
-        # strengths that underflow to zero never divide 0 by 0.
         return 1 / (1 + math.exp(-gap)) if gap >= 0 else math.exp(gap) / (1 + math.exp(gap))
     return {"baseline": baseline,
             "odds": [{"id": row["id"], "beats_baseline": beats(logs[row["id"]] - logs[baseline])}
@@ -432,8 +402,29 @@ def positive(value):
     return int(value)
 
 
+DESCRIPTION = (
+    'Offline pair plans, Bradley-Terry fits, chart odds, council scores and stall decisions.\n'
+    '\n'
+    'No model calls. Reads one UTF-8 JSON file, prints one result, writes nothing.\n'
+    'Exit 2 is a refusal with nothing on stdout. Exact keys only: duplicate keys,\n'
+    'wrong types, unknown enums and non-JSON constants are refused.\n'
+    '\n'
+    'rank: smoothed Bradley-Terry over every comparison, with half a prior win per\n'
+    'side of each observed pair, so unanimous records stay finite. Damped Newton\n'
+    'steps in log space solve the pinned graph Laplacian until the largest gradient\n'
+    'entry is below 1e-9; a singular, nonfinite or stalled solve is refused. Strengths\n'
+    'are relative and sum to one; order and ties use log strengths, and a gap within\n'
+    '1e-8 is a tie. The pair graph must be connected and every pair needs equally\n'
+    'many orders. position_splits is the minimum count of verdicts that disagree\n'
+    'across the two orders.\n'
+    '\n'
+    "odds: each candidate's probability of beating --baseline, from the same fit's\n"
+    'log-strength gap, for the climb chart.\n'
+)
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=DESCRIPTION)
     commands = parser.add_subparsers(dest="command", required=True)
     windows = {"stall": "unchanged completed rounds after the winner was selected",
                "council": "consecutive full-council rounds the same leader must lead"}

@@ -569,7 +569,7 @@ class SkillCommandsMatchPackage(unittest.TestCase):
         removal = text[text.index('## Recovery and removal'):]
         for name in json.loads(PACKAGE.read_text())['skills']:
             self.assertIn('`%s`' % name, removal)
-        for entry in ('`current`', '`channel.json`', '`install.lock`', '`skills/`', '`setup/`', '`cloudroom/`',
+        for entry in ('`current`', '`channel.json`', '`install.lock`', '`skills/`', '/setup/`', '/cloudroom/`',
                       '`config.json`', '`app/`', '`state.json`', '`loops/`', '`clone/`', 'ls -A', 'rmdir'):
             self.assertIn(entry, removal)
         self.assertNotRegex(removal, r'(?i)\bdelete `<root>`|rm -rf')

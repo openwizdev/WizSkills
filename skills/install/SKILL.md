@@ -34,7 +34,7 @@ git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$open
 python3 -I "$openwiz"/tools/install/install preflight
 ```
 
-It reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) is unsupported for 0.1.0: the `openwiz` binary runs there, but CloudRoom offers no Intel Mac build today, so say so plainly and stop before installing. Exit 5 names each missing item and its `next` step: tell the user plainly (CloudRoom: install the app, open it once and sign in; `gh`: install it and `gh auth login`). Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`).
+`git clone` may warn that `refs/tags/v0.1.0` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) is unsupported for 0.1.0: the `openwiz` binary runs there, but CloudRoom offers no Intel Mac build today, so say so plainly and stop before installing. Exit 5 names each missing item and its `next` step: tell the user plainly (CloudRoom: install the app, open it once and sign in; `gh`: install it and `gh auth login`). Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`).
 
 Done when preflight passes, or the user has each next step.
 
@@ -56,16 +56,15 @@ done
 
 `install` checks the manifest against its checksum and every file against the manifest, as `download` would. Any other refusal leaves the previous build selected: report it, never work around it. A checksum proves the files are the release's, not who published them.
 
-Then put OpenWiz's skills in the user's agents, and prove the build:
+Then prove the build:
 
 ```sh
-python3 -I "$openwiz"/tools/install/install skills --root <root>
 <root>/current/openwiz --build-identity
 ```
 
-`skills` copies the 18 skills into `<root>/skills` and into each agent present here (Claude Code, Codex, Cursor, OpenCode, Grok); each absent one reads `absent` with its `next` step. `--build-identity` prints `"version":"0.1.0"` and the release's `source` commit. On Linux, a `weak version 'GLIBC_2.39' not found` line on stderr is harmless. An agent finds new skills only when it starts: tell the user to start a new session of their agent and say "continue the OpenWiz install"; there, run `install status --root <root>` and resume at step 3.
+It prints `"version":"0.1.0"` and the release's `source` commit. On Linux, a `weak version 'GLIBC_2.39' not found` line on stderr is harmless. OpenWiz's skills go into the user's agents at step 4, after setup.
 
-Done when `install` printed `"activated": true` with the version, target, `build` and `state_root`, `skills` printed `"outcome": "installed"`, `--build-identity` read 0.1.0, and the user knows to restart.
+Done when `install` printed `"activated": true` with the version, target, `build` and `state_root`, and `--build-identity` read 0.1.0.
 
 ## 3. Setup and connections
 
@@ -81,8 +80,9 @@ It prints one bare code per component and no next step, so read each code below.
 | --- | --- |
 | `cloudroom_login_verified` | Done: signed in now. |
 | `cloudroom_not_installed` | `cloudroom.py install --state-dir <state>` previews CloudRoom's checksum-checked installer; on the yes, `cloudroom.py install --yes --operation <id> --state-dir <state>`. Then sign in. |
-| `cloudroom_installed`, `cloudroom_reused`, `cloudroom_login_missing`, `cloudroom_login_unknown` | `cloudroom.py sign-in --state-dir <state>` opens CloudRoom's own sign-in once (or the app, the first time); the user signs in there, never in chat. Then `status`. |
+| `cloudroom_installed`, `cloudroom_reused`, `cloudroom_login_missing`, `cloudroom_login_unknown` | `cloudroom.py sign-in --state-dir <state>` opens CloudRoom's own sign-in once (or the app, the first time); the user signs in there, never in chat. Then `status`. On Linux, sign-in needs a desktop session and FUSE (the AppImage needs `fusermount`, from `fuse3` or `libfuse2`): a headless VPS cannot sign in. If nothing opens within a minute, the user opens `~/Applications/Cloudroom.AppImage` themselves. |
 | `cloudroom_unsupported` | CloudRoom offers no build for this computer (an Intel Mac, or Linux on ARM). OpenWiz 0.1.0 needs CloudRoom, so the install cannot be completed here yet: say so plainly and stop. |
+| `cloudroom_source_unchecked` | `cloudroom.py install` could not read or check CloudRoom's published installer and its checksum (a network failure, or CloudRoom changed its download guide or release): nothing was proposed or downloaded. Run `install` again shortly. If it stays, `cloudroom.py install --yes --state-dir <state>` opens CloudRoom's download page once instead; the user installs CloudRoom from there, opens it once and signs in. Then `status`. |
 | `cloudroom_installing` | An install is running: `status` again shortly. |
 | `cloudroom_install_uncertain` | `cloudroom.py install --state-dir <state>` again: it reconciles first. |
 | `cloudroom_install_failed` | Preview `install` again and ask again. |
@@ -97,7 +97,22 @@ It prints one bare code per component and no next step, so read each code below.
 
 Done when CloudRoom reads `cloudroom_login_verified` and GitHub's sign-in is verified, or the user chose to stop with the remaining next steps.
 
-## 4. Explain
+
+## 4. Skills into your agents, then a restart
+
+Only now, with setup checked and the logins done, copy OpenWiz's skills into the user's agents:
+
+```sh
+python3 -I "$openwiz"/tools/install/install skills --root <root>
+```
+
+It copies the 18 skills into `<root>/skills` and into each agent folder present here: `~/.claude/skills` (Claude Code), `~/.codex/skills` (Codex; 0.1.0 reads `~/.codex` only, never `$CODEX_HOME`), `~/.cursor/skills`, `~/.config/opencode/skills` and `~/.grok/skills`. It prints `"outcome": "installed"` even when it copied nothing, so check two things: its `harnesses` entry for the agent you are running in reads `installed`, and that agent's folder (`ls ~/.claude/skills` or `ls ~/.codex/skills`) now holds all 18 by name: `ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`. If the entry reads `absent`, that agent's folder (`~/.claude` or `~/.codex`) is missing on this computer: tell the user which folder, that their agent has no OpenWiz skills, and its `next` step; never create the folder yourself. A skill of the user's own with the same name refuses the whole step: report it.
+
+An agent finds new skills only when it starts, so the user restarts it now. **The installed copy of this skill is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/maint/0.2/skills/install/SKILL.md) and resume at step 5.** The installed copy comes from the 0.1.0 package and still names a setup page 0.1.0 removed. Tell the user to start a new session of their agent and say exactly: "continue the OpenWiz install with https://github.com/openwizdev/WizSkills/blob/maint/0.2/skills/install/SKILL.md". There, run `install status --root <root>` for `build` and `state_root`, and resume at step 5.
+
+Done when the running agent's folder holds the 18 skills by name, or the user knows which folder is missing, and the user has the exact phrase for the new session.
+
+## 5. Explain
 
 Say this before asking about a project, once:
 
@@ -105,7 +120,7 @@ Say this before asking about a project, once:
 
 Done when the user has seen it.
 
-## 5. First fleet
+## 6. First fleet
 
 Continue only if the user wants a first fleet; otherwise finish with the install and any outstanding setup steps. Pass one owner-only `--state <file>` outside the project to every `first_fleet.py` command (`python3 <this skill's folder>/scripts/first_fleet.py`), from the project's clone. To resume, run `first_fleet.py next --state <file> --setup-state <state>`: it reads only that file and the repository setup prepared, and prints the first unfinished step and its command. Exits: 0 done, 1 read failure, 2 usage, 5 refused, 6 uncertain, 7 busy, 10 state unavailable, 12 preview awaiting `--yes`.
 
@@ -181,6 +196,13 @@ Done when it prints all clear, or the user has each fix.
 
 ## Recovery and removal
 
-If something seems wrong, run `install status --root <root>`: it verifies the selected build and changes nothing. A changed file reads `installed asset mismatch`, and `install` refuses the same way; then, on the user's yes, remove OpenWiz as below and install again from step 2.
+If something seems wrong, run `install status --root <root>`: it verifies the selected build and changes nothing. A changed file reads `installed asset mismatch`, and `install` refuses the same way. To repair it and keep the settings, delete only the `<root>/current` link and the one build folder it points to (`<build>`, inside `<state>/service/builds/`), nothing else in `<state>/service/`, then run step 2's `install install` again.
 
-To remove OpenWiz, delete `<root>`; there is no server to stop. That deletes the build and, with the default `<state>` (`<root>/state`), the settings too: setup, sign-in and project records. A custom `<state>` outside `<root>` stays unless the user asks. It leaves the skill copies `install skills` made, each marked by an `.openwiz-skill` file, in `~/.claude/skills`, `~/.codex/skills` (or `$CODEX_HOME/skills`), `~/.cursor/skills`, `~/.config/opencode/skills` and `~/.grok/skills`: delete only folders with that mark, on the yes. Removal revokes nothing: show the user how to uninstall the App or remove repositories from it, delete any phone-access tunnel or rule, and delete the fleet loops in CloudRoom. Never remove or revoke anything without their yes.
+To remove OpenWiz, on the user's yes: there is no remove command and no server to stop. Never remove `<root>` or `<state>` as a whole: the installer accepts folders that already hold other files, so either may hold the user's own.
+
+1. `ls -A <root>`. A fresh install puts exactly `current`, `channel.json`, `install.lock`, `skills/` and, without a separate `--state-root`, `state/` (the `<state>`) there. Delete only `current`, `channel.json`, `install.lock` and `skills/`, and keep any of those names that was there before the install.
+2. `ls -A <state>`. OpenWiz's builds are the folders in `<state>/service/builds/`, each named by a 40-character source commit and holding an `install-manifest.json` whose `"source"` is that same name. Delete those folders. `<state>/service/` is never deleted as a whole.
+3. Only if the user wants their settings gone too: delete exactly these, when present: `<state>/setup/`, `<state>/cloudroom/`, and in `<state>/service/`: `config.json`, `app/` (the App's saved settings and key), `state.json`, `loops/` and `clone/`. Then `rmdir <state>/service/builds <state>/service <state>`, and last `rmdir <root>`. `rmdir` removes only an empty folder: leave any folder it refuses.
+4. The skill copies stay unless the user asks. Then delete only these 18 folders from each agent folder step 4 named: `ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`. Other skills there are the user's.
+
+Removal revokes nothing: show the user how to uninstall the App or remove repositories from it, delete any phone-access tunnel or rule, and delete the fleet loops in CloudRoom. Never remove or revoke anything without their yes.

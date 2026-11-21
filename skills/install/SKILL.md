@@ -202,9 +202,9 @@ Done when `grill` recorded the confirmation.
 
 ### 5. Agents
 
-Harness, model and effort were answered at Connect. Save `<root>/current/openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup` (without a carried setup, ask the three and pass `--harness --model --effort`). Then run `setup` so both builder tables name exactly these settings, sourced to the user's decision; setup keeps reviewers in the other family. Then run the same `choose` again: it reads the tables back.
+Harness, model and effort were answered at Connect. Save `<root>/current/openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup` (without a carried setup, ask the three and pass `--harness --model --effort`). `choose` writes the choice into `docs/agents/fleet.md`'s Models table, keeping the Reviewer in the other family. Commit that file and merge it, then run the same `choose` again: it reads the table back.
 
-Done when the choice is recorded and the builder tables match it.
+Done when the choice is recorded and the default branch's Models table names it.
 
 ### 6. Host setting
 

@@ -40,6 +40,7 @@ import re
 import shlex
 import signal
 import shutil
+import stat
 import struct
 import subprocess
 import sys
@@ -378,7 +379,9 @@ def cmd_host(a):
 LOGIN = {'machine': 'Login: stays on your machine', 'host': 'Login: held by {host}'}
 
 
-KEY_VARIABLE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
+# A key variable's name, as SKILL.md documents it: 2 to 6 words of 1 to 16 capitals or digits joined by `_`, the
+# first starting with a letter (`EXAMPLEHOST_API_KEY`). A long run like a key's own characters never fits.
+KEY_VARIABLE = re.compile(r'[A-Z][A-Z0-9]{0,15}(?:_[A-Z0-9]{1,16}){1,5}')
 
 
 def login_line(readme, line, key_variable=None):
@@ -394,12 +397,23 @@ def login_line(readme, line, key_variable=None):
     readme.write_text('\n'.join([lines[0], '', line, ''] + key + rest), encoding='utf-8')
 
 
+def credential_shaped(openwiz, text):
+    """True when the kit's own credential check flags text, or when the kit can't be read to check it."""
+    try:
+        return bool(kit_checks(openwiz).holds_credential(text))
+    except Exception:
+        return True
+
+
 def cmd_copy(a):
     state = load(a.state)
     host = state['host']
-    if a.key_variable is not None and (a.login != 'host' or not KEY_VARIABLE.fullmatch(a.key_variable)):
-        raise Refused('the key variable is a name only (capital letters, digits and _), for a login the host '
-                      'holds: never a value')
+    if a.key_variable is not None and (a.login != 'host' or not KEY_VARIABLE.fullmatch(a.key_variable)
+                                       or credential_shaped(a.openwiz, a.key_variable)):
+        # never says what it was given: it may be the key itself
+        raise Refused('the key variable is a name only (2 to 6 words of capitals or digits joined by _, as '
+                      'EXAMPLEHOST_API_KEY), for a login the host holds, and nothing the kit reads as a credential: '
+                      'never a value')
     src = Path(a.openwiz) / 'adapters' / 'template'
     dest = Path(a.into) / 'adapters' / host
     if dest.exists():
@@ -644,15 +658,19 @@ def descendants():
 
 
 # --- the expired-login probe's isolation ----------------------------------------------------------------
-# The driver under test runs under Landlock (it reads and runs only the system's programs and its own folder,
-# writes only its box, and traces no process outside it) and a seccomp filter (no socket of any kind, no
+# The driver under test runs from its box, as a staged copy of only its executable and its fixtures, under Landlock
+# (it reads and runs only the system's programs and libraries and its box, writes only its box, and traces no
+# process outside it) and a seccomp filter (no socket of any kind, no
 # io_uring): no network, no host socket, no user file, no other process's environment. Where the kernel can't
 # apply both, the probe refuses and runs nothing.
 # Per architecture: its seccomp audit value and the numbers of socket, socketpair and io_uring_setup.
 SYSCALLS = {'x86_64': (0xC000003E, (41, 53, 425)), 'aarch64': (0xC00000B7, (198, 199, 425))}
 LANDLOCK_CREATE, LANDLOCK_ADD, LANDLOCK_RESTRICT = 444, 445, 446
 READ = 1 | 4 | 8  # execute, read a file, read a folder
-SYSTEM = ('/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/etc')
+# Only what running a program needs: the programs and their libraries, never the system's configuration.
+SYSTEM = ('/usr/bin', '/bin', '/usr/local/bin', '/usr/lib', '/usr/lib32', '/usr/lib64', '/lib', '/lib32', '/lib64',
+          '/usr/local/lib', '/usr/libexec')
+SYSTEM_FILES = (('/etc/ld.so.cache', 4), ('/dev/urandom', 4))  # the loader's library index; randomness
 
 
 def syscall(*args):
@@ -673,7 +691,40 @@ def landlock_abi():
         return 0
 
 
-def isolation(box, driver):
+def stage(driver, into):
+    """Copy only the driver's executable and the files of its `fixtures/` folder into the probe's box, so nothing
+    else beside it is in reach; a link or any other kind of file there is refused, never followed."""
+    def copy(src, dest):
+        try:
+            fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError:
+            raise Refused('the probe copies only plain files: %s is a link or unreadable' % src)
+        with os.fdopen(fd, 'rb') as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise Refused('the probe copies only plain files: %s is not one' % src)
+            mode = os.fstat(f.fileno()).st_mode & 0o700
+            out = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode or 0o600)
+            with os.fdopen(out, 'wb') as g:
+                shutil.copyfileobj(f, g)
+    into.mkdir(mode=0o700)
+    staged = into / os.path.basename(driver)
+    copy(driver, staged)
+    fixtures = Path(os.path.dirname(driver)) / 'fixtures'
+    if fixtures.is_symlink():
+        raise Refused('the probe copies only plain files: %s is a link' % fixtures)
+    if fixtures.is_dir():
+        for root, dirs, files in os.walk(fixtures):
+            here = into / 'fixtures' / os.path.relpath(root, fixtures)
+            here.mkdir(mode=0o700, parents=True, exist_ok=True)
+            for name in dirs:
+                if os.path.islink(os.path.join(root, name)):
+                    raise Refused('the probe copies only plain files: %s is a link' % os.path.join(root, name))
+            for name in files:
+                copy(os.path.join(root, name), here / name)
+    return str(staged)
+
+
+def isolation(box):
     """What runs in the probe's child before it becomes the driver, or Refused when this system can't isolate it."""
     abi, arch = landlock_abi(), SYSCALLS.get(os.uname().machine)
     if abi < 1 or arch is None:
@@ -684,10 +735,11 @@ def isolation(box, driver):
     fs = (1 << 13) - 1 | (1 << 13 if abi >= 2 else 0) | (1 << 14 if abi >= 3 else 0) | (1 << 15 if abi >= 5 else 0)
     attr = struct.pack('=QQQ', fs, 3 if abi >= 4 else 0, 3 if abi >= 6 else 0)
     attr = attr[:8 if abi < 4 else 16 if abi < 6 else 24]
-    reads = sorted({str(Path(x).resolve()) for x in SYSTEM + (sys.base_prefix, os.path.dirname(driver), '/proc',
-                                                              '/dev') if os.path.isdir(x)})
-    rules = [(x, READ if x != '/dev' else 4 | 8) for x in reads]
-    rules += [('/dev/null', (2 | 4 | 1 << 14) & fs), (str(box), fs)]
+    python = [os.path.join(sys.base_prefix, x) for x in ('bin', 'lib', 'lib64')]
+    python.append(os.path.dirname(os.path.realpath(sys.executable)))
+    reads = sorted({str(Path(x).resolve()) for x in SYSTEM + tuple(python) + ('/proc',) if os.path.isdir(x)})
+    rules = [(x, READ) for x in reads] + [(x, access) for x, access in SYSTEM_FILES if os.path.isfile(x)]
+    rules += [('/dev/null', (2 | 4 | 1 << 14) & fs), (str(box), fs)]  # box holds the staged driver too
     audit, (socket, pair, uring) = arch
     ld, jeq, jge, ret = 0x20, 0x15, 0x35, 0x06
     allow, refuse, kill = 0x7fff0000, 0x00050000 | 1, 0x80000000  # 1: EPERM
@@ -761,11 +813,12 @@ def cmd_lesson(a):
         fd = os.open(box / 'bin' / a.harness, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
         with os.fdopen(fd, 'w') as f:
             f.write(STAND_IN % shlex.quote(str(ran)))
+        driver = stage(driver, box / 'driver')  # it runs from here: nothing else beside it is in reach
         env = {'PATH': os.pathsep.join([str(box / 'bin'), os.path.join(os.path.dirname(driver), 'fixtures'),
                                         '/usr/local/bin', '/usr/bin', '/bin']),
                'HOME': str(box / 'home'), 'LANG': 'C.UTF-8',
                'OPENWIZ_%s_STATE' % state['host'].upper().replace('-', '_'): str(box / 'state')}
-        enter = isolation(box, driver)
+        enter = isolation(box)
         ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER: keep what it starts
         request = {'repository': 'example-user/%s-driver-kit' % state['host'], 'ticket': 1,
                    'skill': 'build-ticket', 'harness': a.harness, 'model': 'stand-in'}

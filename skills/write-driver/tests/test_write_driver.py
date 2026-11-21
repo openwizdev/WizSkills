@@ -232,9 +232,10 @@ class Copy(Base):
         # catches (R10): a credential-shaped value the kit flags, accepted as a variable name and written verbatim
         # into a README meant for a pull request, or echoed back when refused
         self.begin()
-        for name in ('AKIA' + 'SYNTHETIC0000000', 'GHP_' + 'SYNTHETIC0123456789', 'SYNTHETICVALUE0123456789ABCDEF'):
-            with self.subTest(name[:4]):
-                repo = self.tmp / ('repo-' + name[:4])
+        for n, name in enumerate(('AKIA' + 'SYNTHETIC0000000', 'GHP_' + 'SYNTHETIC0123456789',
+                                  'SYNTHETICVALUE0123456789ABCDEF', 'GHP_' + 'SYNTH0123456')):
+            with self.subTest(n):
+                repo = self.tmp / ('repo-%d' % n)
                 p = self.wd('copy', '--state', self.state, '--openwiz', OPENWIZ, '--into', repo, '--login', 'host',
                             '--key-variable', name, check=1)
                 self.assertIn('key variable', p.stdout)
@@ -672,6 +673,18 @@ class ExpiredLogin(Base):
                 sock.accept()
         self.assertFalse((self.tmp / 'written').exists())
         self.assertFalse((self.tmp / 'client-ran').exists())
+
+    def test_a_link_in_the_drivers_fixtures_is_refused_never_followed(self):
+        # catches (R9): staging following a link in fixtures/ and copying a host file into the probe's reach
+        self.begin()
+        host_file = self.tmp / 'host-login.json'
+        host_file.write_text('{"synthetic": "host file"}')
+        driver = self.fixed_driver('linked')
+        (driver.parent / 'fixtures' / 'login.json').symlink_to(host_file)
+        p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', driver, '--harness', 'exampleagent',
+                    check=1)
+        self.assertIn('copies only plain files', p.stdout)
+        self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_without_isolation_the_probe_never_runs_the_driver(self):
         # catches (R9): a system that can't isolate the probe running the driver unisolated anyway

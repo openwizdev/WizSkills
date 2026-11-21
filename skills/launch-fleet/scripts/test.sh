@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=900
+CASES=903
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1629,6 +1629,10 @@ release #70: ordering hold 7003; issue #11 merged to main; restore ready-for-age
 EOF
 expect 'long form: a wait naming another repository is refused with its line' 0 check.json 'say(12; 1202; "11:00"; "launch-fleet: waiting for other-owner/other-repo#71") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check <<EOF
 look #12: comment 1202's line \`launch-fleet: waiting for other-owner/other-repo#71\` names other-owner/other-repo#71, not this repository
+EOF
+expect 'long form: a human row whose blocker names another repository starts nothing (#2096 R1)' 0 check.json 'merge12 | issue(10; .comments[0].body |= sub("\n\\| #13 \\| W3: widget page \\| #12 \\|"; "\n| #13 | W3: widget page | other-owner/other-repo#12 |"))' -- check <<'EOF'
+look #10: its latest plan graph approval's line `| #13 | W3: widget page | other-owner/other-repo#12 | ready-for-agent |` names other-owner/other-repo#12, not this repository
+look #10: open sub-issue #13 is not in the approved plan
 EOF
 expect 'long form: a title naming another repository refuses nothing' 0 check.json 'merge12 | issue(10; .comments[0].body |= sub("\\| W3: widget page \\|"; "| W3: widget page, after other-owner/other-repo#5 |"))' -- check <<EOF
 start #13: W3: widget page (spec #10)
@@ -3592,6 +3596,12 @@ expect 'ordering: missing label timeline cannot prove ownership' 0 check.json "$
 expect 'ordering: needs info prevents release' 0 check.json "$ORDER13 | $ORDER71 | issue(13; .labels += [\"needs-answer\"]) | say(13; 1302; \"11:20\"; \"launch-fleet: asked the orchestrator\")" -- check < /dev/null
 expect 'ordering: malformed extra release condition stays held' 0 check.json "$ORDER13 | $ORDER71 | edit(13; 1301; \"11:10\"; \"launch-fleet: held for ordering: issue #71 merges to main and live passes\")" -- check < /dev/null
 expect 'ordering: legacy explicit ordering-only record is reconciled' 0 check.json "$ORDERLEGACY | $ORDER71" -- check <<EOF_ORDER
+release #13: ordering hold 1301; issue #71 merged to main; restore ready-for-agent and remove held
+EOF_ORDER
+expect 'ordering: a legacy hold naming another repository is refused with its line (#2096 R2)' 0 check.json "$ORDERLEGACY | $ORDER71 | issue(13; .comments[-1].body |= (sub(\"\\\\*\\\\* #71 \"; \"** other-owner/other-repo#71 \") | sub(\"as soon as #71\"; \"as soon as other-owner/other-repo#71\")))" -- check <<'EOF_ORDER'
+look #13: comment 1301's line `Orchestrator: **held for ordering only; the plan and its approval are unchanged.** other-owner/other-repo#71 (approved on its own tonight) edits `fleet.sh`, which this ticket owns too, so the two never run at once. Released (`ready-for-agent` back, `held` off) as soon as other-owner/other-repo#71 merges.` names other-owner/other-repo#71, not this repository
+EOF_ORDER
+expect 'ordering: a legacy hold naming this repository in mixed case is released (#2096 R2)' 0 check.json "$ORDERLEGACY | $ORDER71 | issue(13; .comments[-1].body |= (sub(\"\\\\*\\\\* #71 \"; \"** Synthetic-Owner/SYNTHETIC-repo#71 \") | sub(\"as soon as #71\"; \"as soon as synthetic-owner/Synthetic-Repo#71\")))" -- check <<'EOF_ORDER'
 release #13: ordering hold 1301; issue #71 merged to main; restore ready-for-agent and remove held
 EOF_ORDER
 expect 'ordering: legacy mismatched release issue stays held' 0 check.json "$ORDERLEGACY | $ORDER71 | issue(13; .comments[-1].body |= sub(\"as soon as #71\"; \"as soon as #11\"))" -- check < /dev/null

@@ -64,10 +64,7 @@ path (references/launch.md: the project's loops, then "Starting one": the
 spec's loop, its private loop-map entry and the `launch-fleet: fleet active,
 loop fleet-<S>` record), which the orchestrator follows. It says the fleet
 started only once that record reads back from a record author, and never
-starts a fleet a second way. Until then, running it again repeats that path
-only while the Models table's Orchestrator is still the one the user said yes
-to; if it changed, the yes is withdrawn and a fresh preview and yes are needed
-(#2204). It never calls the engine or the engine's tick.
+starts a fleet a second way. It never calls the engine or the engine's tick.
 Every command
 checks the checkout is the repository this onboarding recorded.
 
@@ -1452,7 +1449,6 @@ def write_in(folder, choice, offered):
             model_row('Orchestrator', choice), model_row('Builder', choice), kept or model_row('Reviewer', reviewer),
             '| Small builder | follows Builder | | | |', '| Fixer | follows Builder | | | |']
     if not table:
-        # #2203: Connect's settings check needs a Source line in the Models section, as in every section.
         rows = ['## Models', ''] + rows + ['', "Source: install's `choose`, from the owner's choice of harness, model "
                                            'and effort for the Orchestrator and Builder; the Reviewer is %s.' % source, '']
     written = '\n'.join(lines[:start] + rows + lines[end:])
@@ -1737,8 +1733,6 @@ def launch(got):
             print('Spec #%d already started once; not starting again.' % spec)
             print(record_line(spec, recorded))
             return 0
-        # #2204: launch-fleet's start reads the Orchestrator from the Models table, so the handoff repeats only
-        # while that is still the Orchestrator the user said yes to.
         orchestrator = fleet_rules(env, state.value['repo'])['orchestrator']
         if orchestrator != previous.get('orchestrator'):
             print(record_line(spec, recorded))

@@ -63,19 +63,13 @@ def models_md(orchestrator=CODEX, builder=CODEX, reviewer=CLAUDE, small=None, fi
 
 
 def connect_md():
-    """fleet_md() as Connect accepts it: the older tables plus test commands, CI checks and a merge rule, each with
-    its Source line, as setup fills them in."""
     text = fleet_md().replace('## CI checks', '## Test commands\n\n| Command | Runs |\n| --- | --- |\n'
                               '| `make test` | synthetic |\n\nSource: synthetic.\n\n## CI checks', 1)
     rule = '| `not-a-check` | none | synthetic |\n\n'
     return text.replace(rule, rule + 'Source: synthetic.\n\n', 1)
 
 
-# Connect's settings check, the OpenWiz runtime's `fleet_settings_usable`
-# (openwizdev/openwiz tools/install/setup/setup.py at 9039c57, rule stated in
-# its docs/github-app.md): copied, not reworded, because this standalone
-# repository does not carry the runtime. `setup.py check` reports
-# project_settings_missing for any file this refuses.
+CONNECT_CHECK = 'fleet_settings_usable of openwizdev/openwiz tools/install/setup/setup.py at 9039c57, copied as is'
 def connect_sections(text):
     found, name = {}, None
     for line in text.split('\n'):
@@ -1297,10 +1291,8 @@ class ModelsTable(unittest.TestCase):
                 self.assertNotIn('Confirmation:', result.stdout)
 
     def test_a_migrated_models_section_still_passes_connects_settings_check(self):
-        # catches: #2203, choose inserting a Models section with no Source line on a Local or driver host, so
-        # Connect's settings check refuses the file it writes (project_settings_missing) though the old file passed.
         old = connect_md()
-        self.assertTrue(connect_usable(old), 'the old file passes Connect')
+        self.assertTrue(connect_usable(old), 'the old file passes ' + CONNECT_CHECK)
         self.assertFalse(connect_usable(old.replace('## Test commands', '## Commands')), 'the check refuses a gap')
         hosts = (('local', {'agents': 'local', 'harnesses': ['codex']}, 'the older `Reviewer for GPT-built` table'),
                  ('driver', {'agents': 'synthetic-driver', 'harnesses': [], 'adapters': '/synthetic/adapters'},
@@ -1325,7 +1317,7 @@ class ModelsTable(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 written = j.checkout.read_text()
                 self.assertIn('## Models\n', written)
-                self.assertTrue(connect_usable(written), 'Connect accepts the file choose wrote:\n' + written)
+                self.assertTrue(connect_usable(written), CONNECT_CHECK + ' accepts the file choose wrote:\n' + written)
                 section = written[written.index('## Models\n'):written.index('## Builder\n')]
                 self.assertEqual([line for line in section.split('\n') if line.startswith('Source: ')], [
                     "Source: install's `choose`, from the owner's choice of harness, model and effort for the "
@@ -1334,8 +1326,6 @@ class ModelsTable(unittest.TestCase):
                                  local, 'nothing outside the inserted section changes')
 
     def test_a_models_change_before_activation_needs_a_fresh_preview_and_yes(self):
-        # catches: #2204, a retry after the yes repeating launch-fleet's handoff without reading the Orchestrator
-        # again, so a Models change merged before activation starts the fleet thread on a model the user never saw.
         j = Journey(self)
         j.replay(until='launch')
         j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CODEX)

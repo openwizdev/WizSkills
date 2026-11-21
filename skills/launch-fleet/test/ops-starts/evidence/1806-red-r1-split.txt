@@ -1,0 +1,93 @@
+$ python3 -I skills/launch-fleet/scripts/test-ops-starts.py ModelsTable.test_an_older_table_is_read_whole_or_refused   # red: the final test against ops-starts.py at fe0ba72 (adds the split-table case)
+FFFFFFFFFF
+======================================================================
+FAIL: test_an_older_table_is_read_whole_or_refused (__main__.ModelsTable.test_an_older_table_is_read_whole_or_refused) [surplus conflicting Builder Model row]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 775, in test_an_older_table_is_read_whole_or_refused
+    self.assertIsInstance(self.pass_settings(broken), str)
+AssertionError: {'builder_start': {'provider': 'claude-code', 'model': 'claude-opus-5-5', 'effort': 'medium'}, 'review_start': {'provider': 'codex', 'model': 'gpt-6.2-sol', 'effort': 'medium'}} is not an instance of <class 'str'>
+
+======================================================================
+FAIL: test_an_older_table_is_read_whole_or_refused (__main__.ModelsTable.test_an_older_table_is_read_whole_or_refused) [surplus row after Effort]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 775, in test_an_older_table_is_read_whole_or_refused
+    self.assertIsInstance(self.pass_settings(broken), str)
+AssertionError: {'builder_start': {'provider': 'claude-code', 'model': 'claude-opus-5-5', 'effort': 'medium'}, 'review_start': {'provider': 'codex', 'model': 'gpt-6.2-sol', 'effort': 'medium'}} is not an instance of <class 'str'>
+
+======================================================================
+FAIL: test_an_older_table_is_read_whole_or_refused (__main__.ModelsTable.test_an_older_table_is_read_whole_or_refused) [second table]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 775, in test_an_older_table_is_read_whole_or_refused
+    self.assertIsInstance(self.pass_settings(broken), str)
+AssertionError: {'builder_start': {'provider': 'claude-code', 'model': 'claude-opus-5-5', 'effort': 'medium'}, 'review_start': {'provider': 'codex', 'model': 'gpt-6.2-sol', 'effort': 'medium'}} is not an instance of <class 'str'>
+
+======================================================================
+FAIL: test_an_older_table_is_read_whole_or_refused (__main__.ModelsTable.test_an_older_table_is_read_whole_or_refused) [one table split by text]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 775, in test_an_older_table_is_read_whole_or_refused
+    self.assertIsInstance(self.pass_settings(broken), str)
+AssertionError: {'builder_start': {'provider': 'claude-code', 'model': 'claude-opus-5-5', 'effort': 'medium'}, 'review_start': {'provider': 'codex', 'model': 'gpt-6.2-sol', 'effort': 'medium'}} is not an instance of <class 'str'>
+
+======================================================================
+FAIL: test_an_older_table_is_read_whole_or_refused (__main__.ModelsTable.test_an_older_table_is_read_whole_or_refused) [wrong header]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 775, in test_an_older_table_is_read_whole_or_refused
+    self.assertIsInstance(self.pass_settings(broken), str)
+AssertionError: {'builder_start': {'provider': 'claude-code', 'model': 'claude-opus-5-5', 'effort': 'medium'}, 'review_start': {'provider': 'codex', 'model': 'gpt-6.2-sol', 'effort': 'medium'}} is not an instance of <class 'str'>
+
+======================================================================
+FAIL: test_an_older_table_is_read_whole_or_refused (__main__.ModelsTable.test_an_older_table_is_read_whole_or_refused) [wrong separator]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 775, in test_an_older_table_is_read_whole_or_refused
+    self.assertIsInstance(self.pass_settings(broken), str)
+AssertionError: {'builder_start': {'provider': 'claude-code', 'model': 'claude-opus-5-5', 'effort': 'medium'}, 'review_start': {'provider': 'codex', 'model': 'gpt-6.2-sol', 'effort': 'medium'}} is not an instance of <class 'str'>
+
+======================================================================
+FAIL: test_an_older_table_is_read_whole_or_refused (__main__.ModelsTable.test_an_older_table_is_read_whole_or_refused) [value cell with a second flag]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 777, in test_an_older_table_is_read_whole_or_refused
+    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+AssertionError: Tuples differ: (2, '', 'usage: ops-starts.py ') != (2, '', 'ops-starts: refused: ')
+
+First differing element 2:
+'usage: ops-starts.py '
+'ops-starts: refused: '
+
+- (2, '', 'usage: ops-starts.py ')
++ (2, '', 'ops-starts: refused: ')
+
+======================================================================
+FAIL: test_an_older_table_is_read_whole_or_refused (__main__.ModelsTable.test_an_older_table_is_read_whole_or_refused) [repeated Claude Fixer row]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 775, in test_an_older_table_is_read_whole_or_refused
+    self.assertIsInstance(self.pass_settings(broken), str)
+AssertionError: {'builder_start': {'provider': 'claude-code', 'model': 'claude-opus-5-5', 'effort': 'medium'}, 'review_start': {'provider': 'codex', 'model': 'gpt-6.2-sol', 'effort': 'medium'}} is not an instance of <class 'str'>
+
+======================================================================
+FAIL: test_an_older_table_is_read_whole_or_refused (__main__.ModelsTable.test_an_older_table_is_read_whole_or_refused) [surplus Fixer row]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 775, in test_an_older_table_is_read_whole_or_refused
+    self.assertIsInstance(self.pass_settings(broken), str)
+AssertionError: {'builder_start': {'provider': 'claude-code', 'model': 'claude-opus-5-5', 'effort': 'medium'}, 'review_start': {'provider': 'codex', 'model': 'gpt-6.2-sol', 'effort': 'medium'}} is not an instance of <class 'str'>
+
+======================================================================
+FAIL: test_an_older_table_is_read_whole_or_refused (__main__.ModelsTable.test_an_older_table_is_read_whole_or_refused) [wrong Fixer header]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 775, in test_an_older_table_is_read_whole_or_refused
+    self.assertIsInstance(self.pass_settings(broken), str)
+AssertionError: {'builder_start': {'provider': 'claude-code', 'model': 'claude-opus-5-5', 'effort': 'medium'}, 'review_start': {'provider': 'codex', 'model': 'gpt-6.2-sol', 'effort': 'medium'}} is not an instance of <class 'str'>
+
+----------------------------------------------------------------------
+Ran 1 test in 0.151s
+
+FAILED (failures=10)

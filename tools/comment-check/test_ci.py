@@ -103,7 +103,7 @@ class CommentCheckStep(unittest.TestCase):
 
     def test_the_step_runs_these_proofs_before_the_check(self):
         lines = the_step()['run'].split('\n')
-        self.assertEqual(lines[:2], ['python3 -I tools/comment-check/test_ci.py', 'python3 -I tools/comment-check/test_help.py'])
+        self.assertEqual(lines[:2], ['python3 -I tools/comment-check/test_ci.py', 'python3 -I tools/comment-check/test_commands.py'])
 
 
 if __name__ == '__main__':

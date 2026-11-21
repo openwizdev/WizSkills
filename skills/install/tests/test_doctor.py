@@ -510,19 +510,23 @@ class SkillCommandsMatchPackage(unittest.TestCase):
         mine = re.search(r'^version: (\S+)$', text, re.M)[1]
         self.assertNotEqual(mine, json.loads(PACKAGE.read_text())['installed_install_skill_version'])
         step4 = text[text.index('## 4. '):text.index('## 5. ')]
-        self.assertIn('https://raw.githubusercontent.com/openwizdev/WizSkills/%s/skills/install/SKILL.md' % LINE, step4)
+        self.assertIn('git clone --depth 1 --branch %s https://github.com/openwizdev/WizSkills' % LINE, step4)
         for home in ('.claude/skills', '.codex/skills', 'CODEX_HOME'):
             self.assertIn(home, step4)
-        self.assertIn("grep -q 'install ope[n] '", step4)
-        self.assertIn('version: %s' % mine, step4)
+        for words in ("'install ope[n] '", "'from the setup pag[e]'", "'Restart the OpenWiz serve[r]'",
+                      'cp -R "$src"/. "$d/install/"', 'cmp -s', 'version: %s' % mine):
+            self.assertIn(words, step4)
+        self.assertIn('"continue the OpenWiz install"', step4)
+        self.assertNotIn('any words do', text)
 
     def test_a_new_session_resumes_from_installed_files_at_the_first_unfinished_step(self):
         text = SKILL.read_text()
         self.assertIn('\n## Resume', text)
         resume = text[text.index('## Resume'):text.index('## 1. ')]
         for words in ('first unfinished step', 'readlink <root>/current', '--build-identity', 'setup.py check',
-                      'version: '):
+                      'version: ', 'OPENWIZ_STATE_DIR="$state"', 'identity_unreadable'):
             self.assertIn(words, resume)
+        self.assertIn('operation_id', text)
         after = text[text.index('## 5. '):text.index('## Recovery and removal')]
         self.assertNotIn('$openwiz', resume + after)
         self.assertNotRegex(text, r'\]\(\.\./\.\./contracts/')

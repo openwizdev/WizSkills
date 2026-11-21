@@ -143,3 +143,9 @@ AssertionError: 'login_gh_missing' not found in '---\nname: install\ndescription
 AssertionError: 'cloudroom.py install --yes --operation <operation_id> --state-dir <state>' not found in '| `cloudroom_install_uncertain` | `cloudroom.py instal
 AssertionError: '[ -f "$d/$s/.openwiz-skill" ]' not found in '## Recovery and removal\n\nIf something seems wrong, verify the build with a fresh clone (it insta
 AssertionError: '${CODEX_HOME:-$HOME/.codex}/skills' not found in '## 4. Skills into your agents, then a restart\n\nOnly now, with setup checked and the logins 
+
+# #2139 red run 7 (re-check R2 at c4bd867): python3 -I skills/install/tests/test_doctor.py with only the new test; failure lines only.
+FAIL: test_removal_lists_skill_folders_and_deletes_none (__main__.SkillCommandsMatchPackage.test_removal_lists_skill_folders_and_deletes_none)
+Ran 43 tests in 3.692s
+FAILED (failures=1)
+AssertionError: Lists differ: ['.cl[36 chars]ills/research', '.claude/skills/research/SKILL[104 chars].md'] != ['.cl[36 chars]ills/install', '.claude/skills/install/.openwi[317 chars].md']

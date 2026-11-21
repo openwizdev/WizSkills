@@ -25,6 +25,7 @@
     "./skills/to-tickets",
     "./skills/triage",
     "./skills/wayfind",
-    "./skills/where-are-we"
+    "./skills/where-are-we",
+    "./skills/write-driver"
   ]
 }

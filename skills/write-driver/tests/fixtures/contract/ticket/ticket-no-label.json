@@ -1,0 +1,5 @@
+{
+  "title": "Driver kit live run: examplehost",
+  "body": "## What to build\n\nNothing. This ticket exists only for the OpenWiz driver kit's live run of the examplehost driver. As its builder, post your status note, change no file, open no pull request and end your turn. When woken, edit that same note and end your turn again.\n\n## Owned paths\n\n- `kit-run.md` (nothing to change: the kit reads only the builder's status note)\n\n## Acceptance criteria\n\n- [ ] none: the kit reads only the builder's status note",
+  "labels": []
+}

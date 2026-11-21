@@ -668,5 +668,95 @@ class SkillCommandsMatchPackage(unittest.TestCase):
                           ('openwiz', '', ['--build-identity'])])
 
 
+# The user's own skill with one of OpenWiz's names (#2182): 0.1.0's `install skills` refuses the whole step
+# and names only the first such folder per agent. The skill finds them all, asks one question, and moves
+# them only on that yes; on no it says the skills were not installed and stops.
+CLASH = Path(__file__).resolve().parents[1] / 'scripts/skill_clash.py'
+QUESTION = ('You already have your own skills named grill, handoff and research. handoff-mine is already taken, '
+            'so yours becomes handoff-mine-2. Rename yours to grill-mine, handoff-mine-2 and research-mine '
+            '(and their name lines) so OpenWiz can install? They keep working under the new names. (yes/no)')
+
+
+class SkillNameClash(unittest.TestCase):
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        root = Path(self.dir.name)
+        self.home, self.build = root / 'home', root / 'build'
+        for name in ('grill', 'handoff', 'install', 'research'):
+            write(self.build / 'runtime/skills' / name / 'SKILL.md', '---\nname: %s\n---\n' % name)
+        for skills, name in (('.claude/skills', 'grill'), ('.codex/skills', 'handoff'),
+                             ('.codex/skills', 'research'), ('.codex/skills', 'handoff-mine')):
+            write(self.home / skills / name / 'SKILL.md',
+                  '---\nname: %s\ndescription: synthetic user skill\n---\n# Mine\n' % name)
+            write(self.home / skills / name / 'notes.txt', 'synthetic\n')
+        ours = self.home / '.codex/skills/install'  # OpenWiz's own copy, from an earlier run
+        write(ours / 'SKILL.md', '---\nname: install\n---\n')
+        write(ours / '.openwiz-skill', 'openwiz.skill-copy.v1\n%s\n' % ('a' * 40))
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def run_clash(self, *args):
+        env = {'HOME': str(self.home), 'PATH': '/usr/bin:/bin'}
+        return subprocess.run([sys.executable, '-I', str(CLASH), *args, '--build', str(self.build)],
+                              env=env, capture_output=True, text=True)
+
+    def tree(self):
+        return sorted((str(p.relative_to(self.home)), p.read_text() if p.is_file() else '')
+                      for p in self.home.rglob('*'))
+
+    # catches: the agent reporting only the installer's first clash, inventing a question, or moving
+    # anything before the yes.
+    def test_list_names_every_clash_asks_the_one_question_and_moves_nothing(self):
+        before = self.tree()
+        done = self.run_clash('list')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        out = json.loads(done.stdout)
+        self.assertEqual([(c['path'][len(str(self.home)) + 1:], c['rename_to']) for c in out['clashes']],
+                         [('.claude/skills/grill', 'grill-mine'), ('.codex/skills/handoff', 'handoff-mine-2'),
+                          ('.codex/skills/research', 'research-mine')])
+        self.assertEqual(out['question'], QUESTION)
+        self.assertEqual(self.tree(), before)
+
+    # catches: a move without the yes, or one the user never saw.
+    def test_no_yes_or_another_plan_moves_nothing(self):
+        before = self.tree()
+        self.assertEqual(self.run_clash('rename').returncode, 2)
+        self.assertEqual(self.run_clash('rename', '--yes', '--operation', '0' * 16).returncode, 5)
+        self.assertEqual(self.tree(), before)
+
+    # catches: a rename that leaves the old folder, loses the user's files, keeps the old name line
+    # (two skills named the same) or touches OpenWiz's own copy.
+    def test_yes_moves_each_folder_and_its_name_line_and_checks_it(self):
+        op = json.loads(self.run_clash('list').stdout)['operation']
+        done = self.run_clash('rename', '--yes', '--operation', op)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual([r['result'] for r in json.loads(done.stdout)['renamed']], ['moved'] * 3)
+        for skills, old, new in (('.claude/skills', 'grill', 'grill-mine'),
+                                 ('.codex/skills', 'handoff', 'handoff-mine-2'),
+                                 ('.codex/skills', 'research', 'research-mine')):
+            self.assertFalse((self.home / skills / old).exists())
+            self.assertEqual((self.home / skills / new / 'SKILL.md').read_text(),
+                             '---\nname: %s\ndescription: synthetic user skill\n---\n# Mine\n' % new)
+            self.assertEqual((self.home / skills / new / 'notes.txt').read_text(), 'synthetic\n')
+        self.assertEqual((self.home / '.codex/skills/handoff-mine/SKILL.md').read_text().split('\n')[1],
+                         'name: handoff-mine')
+        self.assertEqual((self.home / '.codex/skills/install/SKILL.md').read_text(), '---\nname: install\n---\n')
+        out = json.loads(self.run_clash('list').stdout)
+        self.assertEqual((out['clashes'], out['question']), ([], None))
+
+    # catches: step 4 still saying only "report it", so a stranger has to invent the next instruction.
+    def test_step_4_asks_once_and_says_what_no_means(self):
+        step4 = SKILL.read_text()[SKILL.read_text().index('## 4. '):SKILL.read_text().index('## 5. ')]
+        for words in ('scripts/skill_clash.py list --build "$build"',
+                      'scripts/skill_clash.py rename --build "$build" --yes --operation <operation>',
+                      'ask exactly its `question`, word for word', 'run `install skills` again',
+                      "OpenWiz's skills were not installed", 'and stop', '<name>-mine-2',
+                      'Never move, rename or delete a user\'s skill without that yes'):
+            self.assertIn(words, step4)
+        self.assertNotIn('refuses the whole step: report it.', step4)
+
+
 if __name__ == '__main__':
     unittest.main()

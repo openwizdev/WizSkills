@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=900      # #2096 added 13; includes the two CW-G fresh wake cases; WS8 moved the re-check case to test-brief.py; WS17 added 22; #1759 added 5
+CASES=900
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1607,8 +1607,6 @@ expect 'a low finding filed after the approval does not start, even labelled rea
 look #10: open sub-issue #15 is not in the approved plan
 EOF
 expect 'a low finding approved on its own still waits for its spec'"'"'s approval' 0 check.json 'ticket(15; "W5: a low finding"; ["ready-for-agent"]; []) | say(15; 1501; "11:00"; "**Approved on its own by Robin, 2026-11-01:** \"approve #15\"")' -- frontier < /dev/null
-
-### #2096: a long-form reference to this repository reads as #N; another repository's is refused, naming its line
 
 LONG='gsub("(?<p>[| ])#(?<n>[1-9])"; "\(.p)Synthetic-Owner/synthetic-REPO#\(.n)")'
 TABLE_LONG="split(\"\\n\") | map(if startswith(\"| #\") then $LONG else . end) | join(\"\\n\")"

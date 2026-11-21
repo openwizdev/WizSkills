@@ -419,7 +419,6 @@ class ApprovalTest(unittest.TestCase):
                 self.run_check(fixture(spec), spec)
 
     def test_long_form_rows_for_this_repository_read_as_short(self):
-        # #2096: `Synthetic-Owner/Synthetic-Repo#173` names this repository (any case) and reads as #173.
         for name in ("synthetic-owner/synthetic-repo", "Synthetic-Owner/Synthetic-Repo"):
             with self.subTest(name=name):
                 w = fixture(172)

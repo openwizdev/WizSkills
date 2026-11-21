@@ -143,7 +143,6 @@ if gh repo view --json isPrivate,nameWithOwner > "$work/repo" 2> /dev/null; then
        "$work/repo" > /dev/null 2>&1; then
     private=true
   fi
-  # #2096: this repository's name, so a long-form row naming it reads as #N.
   repo=$(jq -esr 'if length == 1 and (.[0].nameWithOwner | type == "string" and test("^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$"))
     then .[0].nameWithOwner | ascii_downcase else error("unknown") end' "$work/repo" 2> /dev/null) || repo=''
 fi

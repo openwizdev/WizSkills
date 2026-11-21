@@ -249,8 +249,6 @@ class Fleet(unittest.TestCase):
 
 
     def test_long_form_resume_claim_keeps_its_private_thread(self):
-        # #2096: a resume claim naming this repository in the long form (any case) is read as #11's,
-        # so its private thread is attached, exactly as for the short form.
         outs = []
         for ref in ('#11', 'Example/Public#11'):
             with self.subTest(ref=ref):

@@ -62,6 +62,107 @@ def models_md(orchestrator=CODEX, builder=CODEX, reviewer=CLAUDE, small=None, fi
     return text[:text.index('## Builder\n')] + table + text[text.index('## CI checks'):]
 
 
+def connect_md():
+    """fleet_md() as Connect accepts it: the older tables plus test commands, CI checks and a merge rule, each with
+    its Source line, as setup fills them in."""
+    text = fleet_md().replace('## CI checks', '## Test commands\n\n| Command | Runs |\n| --- | --- |\n'
+                              '| `make test` | synthetic |\n\nSource: synthetic.\n\n## CI checks', 1)
+    rule = '| `not-a-check` | none | synthetic |\n\n'
+    return text.replace(rule, rule + 'Source: synthetic.\n\n', 1)
+
+
+# Connect's settings check, the OpenWiz runtime's `fleet_settings_usable`
+# (openwizdev/openwiz tools/install/setup/setup.py at 9039c57, rule stated in
+# its docs/github-app.md): copied, not reworded, because this standalone
+# repository does not carry the runtime. `setup.py check` reports
+# project_settings_missing for any file this refuses.
+def connect_sections(text):
+    found, name = {}, None
+    for line in text.split('\n'):
+        if line.startswith('## '):
+            name = line[3:].strip()
+            found.setdefault(name, [])
+        elif name is not None:
+            found[name].append(line)
+    return found
+
+
+def connect_table(lines):
+    rows = [line.strip() for line in lines if line.strip().startswith('|')]
+    if len(rows) < 2 or not re.fullmatch(r'\|(\s*:?-{3,}:?\s*\|)+', rows[1]):
+        return []
+    split = lambda row: [cell.strip() for cell in row.strip('|').split('|')]
+    header = split(rows[0])
+    return [dict(zip(header, split(row))) for row in rows[2:] if len(split(row)) == len(header)]
+
+
+CONNECT_PLACEHOLDER = re.compile(r'<[A-Za-z][^<>\n]*>')
+CONNECT_HEADER = ['Role', 'Harness', 'Model', 'Effort', '`room-cli thread spawn` flags']
+CONNECT_ID = r'[A-Za-z0-9._-]+'
+CONNECT_FLAGS = re.compile(r'`--provider %s --model %s(?:/%s)* --reasoning-level %s`' % ((CONNECT_ID,) * 4))
+
+
+def connect_models_usable(text, body):
+    if sum(line.startswith('## ') and line[3:].strip() == 'Models' for line in text.split('\n')) != 1:
+        return False
+    rows = []
+    for line in body:
+        if line.startswith('|'):
+            rows.append([cell.strip() for cell in line.strip()[1:-1].split('|')] if line.strip().endswith('|') else None)
+        elif rows:
+            break
+    if len(rows) < 2 or rows[0] != CONNECT_HEADER or rows[1] != ['---'] * 5 or None in rows:
+        return False
+    names = [row[0] if len(row) == 5 else None for row in rows[2:]]
+    if names[:3] != ['Orchestrator', 'Builder', 'Reviewer'] or names[3:] not in (
+            [], ['Small builder'], ['Fixer'], ['Small builder', 'Fixer']):
+        return False
+    for role, harness, model, effort, flags in rows[2:]:
+        if harness == 'follows Builder':
+            if role not in ('Small builder', 'Fixer') or model or effort or flags:
+                return False
+            continue
+        if not (harness and model and effort) or not CONNECT_FLAGS.fullmatch(flags):
+            return False
+    return True
+
+
+def connect_usable(text):
+    found = connect_sections(text)
+    reviewers = [name for name in found if name.startswith('Reviewer')]
+    builders = [name for name in found if name.startswith('Builder')]
+    needed = ['Test commands', 'CI checks', 'Standing merge rules']
+    if 'Models' in found:
+        if not connect_models_usable(text, found['Models']):
+            return False
+        needed.insert(0, 'Models')
+        builders = reviewers = []
+    elif not reviewers:
+        return False
+    else:
+        needed.insert(0, 'Builder')
+    if not all(name in found for name in needed):
+        return False
+    for name in needed + builders + reviewers:
+        body = found[name]
+        if any(CONNECT_PLACEHOLDER.search(line) for line in body):
+            return False
+        if not any(line.startswith('Source: ') and len(line) > len('Source: ') for line in body):
+            return False
+    for name in builders + reviewers:
+        values = {row.get('Setting'): row.get('Value', '') for row in connect_table(found[name])}
+        if not all(values.get(key) for key in ('Harness', 'Model', 'Effort')):
+            return False
+    if not any(row.get('Command', '').strip('`') for row in connect_table(found['Test commands'])):
+        return False
+    if not any(row.get('Check', '').strip('`') for row in connect_table(found['CI checks'])):
+        return False
+    merge = connect_table(found['Standing merge rules'])
+    rows = [row for row in merge if all(cell.strip() for cell in row.values())]
+    waits = any(line.strip() == 'None yet: every merge waits for the user.' for line in found['Standing merge rules'])
+    return bool(rows) or waits
+
+
 SETTINGS = SKILL_DIR.parent / 'setup/scripts/settings.py'
 OPUS = ('claude-code', 'claude-opus-5-5', 'medium')
 SOL = ('codex', 'gpt-6.2-sol', 'medium')
@@ -1188,6 +1289,88 @@ class ModelsTable(unittest.TestCase):
                 result = j.tool(PREVIEW)
                 self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
                 self.assertNotIn('Confirmation:', result.stdout)
+
+    def test_a_migrated_models_section_still_passes_connects_settings_check(self):
+        # catches: #2203, choose inserting a Models section with no Source line on a Local or driver host, so
+        # Connect's settings check refuses the file it writes (project_settings_missing) though the old file passed.
+        old = connect_md()
+        self.assertTrue(connect_usable(old), 'the old file passes Connect')
+        self.assertFalse(connect_usable(old.replace('## Test commands', '## Commands')), 'the check refuses a gap')
+        hosts = (('local', {'agents': 'local', 'harnesses': ['codex']}, 'the older `Reviewer for GPT-built` table'),
+                 ('driver', {'agents': 'synthetic-driver', 'harnesses': [], 'adapters': '/synthetic/adapters'},
+                  'the older `Reviewer for GPT-built` table'),
+                 ('local, recommended reviewer', {'agents': 'local', 'harnesses': ['codex']},
+                  'the recommended other-family choice'))
+        for name, host, reviewer in hosts:
+            with self.subTest(name):
+                j = Journey(self)
+                j.replay(until='agents')
+                state = json.loads(j.state.read_text())
+                state['host'] = host
+                j.state.write_text(json.dumps(state))
+                local = old if 'recommended' not in name else old.replace(
+                    table('Reviewer for GPT-built', CLAUDE), table('Reviewer for GPT-built', SOL))
+                options = offering(OPUS) if 'recommended' in name else None
+                if options is not None:
+                    j.options.write_text(json.dumps(options))
+                j.checkout.write_text(local)
+                self.assertTrue(connect_usable(local), 'the old file passes Connect')
+                result = j.helper(['choose', '--from-setup'])
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                written = j.checkout.read_text()
+                self.assertIn('## Models\n', written)
+                self.assertTrue(connect_usable(written), 'Connect accepts the file choose wrote:\n' + written)
+                section = written[written.index('## Models\n'):written.index('## Builder\n')]
+                self.assertEqual([line for line in section.split('\n') if line.startswith('Source: ')], [
+                    "Source: install's `choose`, from the owner's choice of harness, model and effort for the "
+                    'Orchestrator and Builder; the Reviewer is %s.' % reviewer])
+                self.assertEqual(written[:written.index('## Models\n')] + written[written.index('## Builder\n'):],
+                                 local, 'nothing outside the inserted section changes')
+
+    def test_a_models_change_before_activation_needs_a_fresh_preview_and_yes(self):
+        # catches: #2204, a retry after the yes repeating launch-fleet's handoff without reading the Orchestrator
+        # again, so a Models change merged before activation starts the fleet thread on a model the user never saw.
+        j = Journey(self)
+        j.replay(until='launch')
+        j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CODEX)
+        j.save_world()
+        self.assertEqual(j.tool(PREVIEW).returncode, 12)
+        said_yes = j.tool(YES)
+        self.assertEqual(said_yes.returncode, 0, said_yes.stdout)
+        handoff = "follow launch-fleet's Launch section"
+        self.assertIn(handoff, said_yes.stdout)
+        same = j.tool(YES)
+        self.assertEqual(same.returncode, 6, 'an unchanged Orchestrator still repeats the handoff\n' + same.stdout)
+        self.assertIn(handoff, same.stdout)
+        j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CLAUDE)
+        j.save_world()
+        moved = j.tool(YES)
+        self.assertEqual(moved.returncode, 5, moved.stdout + moved.stderr)
+        self.assertNotIn(handoff, moved.stdout)
+        self.assertIn('claude-code syn-claude-model-01 high', moved.stdout)
+        self.assertIn('preview again and ask again', moved.stdout)
+        old = j.tool(YES)
+        self.assertEqual(old.returncode, 5, 'the old yes covers nothing now\n' + old.stdout)
+        self.assertNotIn(handoff, old.stdout)
+        self.assertEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: launch.')
+        fresh = j.tool(PREVIEW)
+        self.assertEqual(fresh.returncode, 12, fresh.stdout + fresh.stderr)
+        self.assertIn('1 fleet thread (claude-code syn-claude-model-01 high)', fresh.stdout)
+        again = j.tool(YES)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn(handoff, again.stdout)
+        j.fleet_record()
+        j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CODEX)
+        j.save_world()
+        started = j.tool(YES)
+        self.assertEqual(started.returncode, 0, 'after activation the read stays reconciliation\n' + started.stdout)
+        self.assertIn('so the fleet started', started.stdout)
+        saved = j.state.read_bytes()
+        repeat = j.tool(YES)
+        self.assertEqual(repeat.returncode, 0, repeat.stdout)
+        self.assertIn('already started', repeat.stdout)
+        self.assertEqual(j.state.read_bytes(), saved, 'read-only after activation')
+        self.assertEqual(j.spawns(), [], 'the launch starts nothing itself')
 
 
 class Resume(unittest.TestCase):

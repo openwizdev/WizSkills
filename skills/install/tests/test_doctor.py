@@ -606,6 +606,36 @@ class SkillCommandsMatchPackage(unittest.TestCase):
         self.assertNotIn('$openwiz', resume + after)
         self.assertNotRegex(text, r'\]\(\.\./\.\./contracts/')
 
+    def parts(self):
+        text = SKILL.read_text()
+        return (text, text[text.index('## 4. '):text.index('## 5. ')], text[text.index('## Resume'):text.index('## 1. ')],
+                text[text.index('## Recovery and removal'):])
+
+    # catches: review R1 at ac29982: with CODEX_HOME set, 0.1.0 copies Codex's skills to
+    # $CODEX_HOME/skills, so a check of ~/.codex/skills looks in an unused folder.
+    def test_the_codex_folder_follows_codex_home(self):
+        text, step4, resume, removal = self.parts()
+        for part in (step4, resume, removal):
+            self.assertIn('${CODEX_HOME:-$HOME/.codex}/skills', part)
+        self.assertNotIn('never `$CODEX_HOME`', text)
+
+    # catches: review R2 at ac29982: removal by name alone deletes a user's own same-named skill.
+    def test_removal_deletes_only_marked_copies(self):
+        removal = self.parts()[3]
+        self.assertIn('[ -f "$d/$s/.openwiz-skill" ]', removal)
+
+    # catches: review R3 at ac29982: a plain `install` never reconciles an uncertain CloudRoom install.
+    def test_an_uncertain_cloudroom_install_is_retried_with_its_operation(self):
+        row = next(l for l in self.parts()[0].split('\n') if l.startswith('| `cloudroom_install_uncertain`'))
+        self.assertIn('cloudroom.py install --yes --operation <operation_id> --state-dir <state>', row)
+
+    # catches: review R4 at ac29982: preflight passes with gh missing, then sign-in says login_gh_missing.
+    def test_a_missing_gh_gets_its_install_step(self):
+        text = self.parts()[0]
+        for words in ('login_gh_missing', 'https://cli.github.com', 'gh --version'):
+            self.assertIn(words, text)
+        self.assertIn('even on exit 0', text[text.index('## 1. '):text.index('## 2. ')])
+
     # catches: a parser that finds nothing passing the check above vacuously.
     def test_the_reader_finds_a_synthetic_skill_s_commands(self):
         text = ('Run `install open --root <root> --browser` and\n\n```sh\n'

@@ -131,3 +131,15 @@ Ran 39 tests in 3.682s
 FAILED (failures=2)
 AssertionError: 'OPENWIZ_STATE_DIR="$state"' not found in '## Resume\n\nA new session, whatever the user said ("continue", or the one line again), starts here: find the first unfinished step and resum
 AssertionError: 'git clone --depth 1 --branch maint/0.2 https://github.com/openwizdev/WizSkills' not found in '## 4. Skills into your agents, then a restart\n\nOnly now, with setup checked and the log
+
+# #2139 red run 6 (review R1 to R4 at ac29982): python3 -I skills/install/tests/test_doctor.py with only the new tests; failure lines only.
+FAIL: test_a_missing_gh_gets_its_install_step (__main__.SkillCommandsMatchPackage.test_a_missing_gh_gets_its_install_step)
+FAIL: test_an_uncertain_cloudroom_install_is_retried_with_its_operation (__main__.SkillCommandsMatchPackage.test_an_uncertain_cloudroom_install_is_retried_with_its_operation)
+FAIL: test_removal_deletes_only_marked_copies (__main__.SkillCommandsMatchPackage.test_removal_deletes_only_marked_copies)
+FAIL: test_the_codex_folder_follows_codex_home (__main__.SkillCommandsMatchPackage.test_the_codex_folder_follows_codex_home)
+Ran 43 tests in 3.572s
+FAILED (failures=4)
+AssertionError: 'login_gh_missing' not found in '---\nname: install\ndescription: Install OpenWiz from its one line, "Install OpenWiz from github.com/openwizdev
+AssertionError: 'cloudroom.py install --yes --operation <operation_id> --state-dir <state>' not found in '| `cloudroom_install_uncertain` | `cloudroom.py instal
+AssertionError: '[ -f "$d/$s/.openwiz-skill" ]' not found in '## Recovery and removal\n\nIf something seems wrong, verify the build with a fresh clone (it insta
+AssertionError: '${CODEX_HOME:-$HOME/.codex}/skills' not found in '## 4. Skills into your agents, then a restart\n\nOnly now, with setup checked and the logins 

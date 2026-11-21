@@ -416,20 +416,14 @@ class Doctor(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (self.s.state / 'setup').iterdir()), ['state.json'])
 
 
-# The install skill's commands (#2139): every packaged tool the skill names, with its subcommand and long
-# flags, against what OpenWiz 0.1.0's own --help prints (fixtures/openwiz-0.1.0-commands.json, read from
-# the published package). A step naming a command the package lacks stops a stranger's install there.
 SKILL = Path(__file__).resolve().parents[1] / 'SKILL.md'
 PACKAGE = Path(__file__).resolve().parent / 'fixtures/openwiz-0.1.0-commands.json'
-# The bare names the skill's prose uses, by the tool each one means.
 BARE = {'install': 'tools/install/install', 'setup.py': 'runtime/setup/setup.py',
         'github_login.py': 'runtime/setup/github_login.py', 'cloudroom.py': 'runtime/cloudroom/cloudroom.py',
         'access.py': 'runtime/access/access.py', 'openwiz': 'openwiz'}
 
 
 def skill_commands(text):
-    """(tool, subcommand, long flags, the command's text) for each command in the skill's code: each
-    fenced line and inline span whose first word, after `python3` and its options, names a packaged tool."""
     import re
     spans = []
     for block in re.findall(r'```[a-z]*\n(.*?)```', text, re.S):
@@ -451,13 +445,12 @@ def skill_commands(text):
         rest = words[1:]
         sub = rest[0] if rest and not rest[0].startswith('-') and not rest[0].startswith('<') else ''
         flags = sorted({w.split('=')[0].rstrip('.,;:)') for w in rest if w.startswith('--')} - {'--help'})
-        if sub or flags:  # a bare tool name is a mention, not a command
+        if sub or flags:
             found.append((tool, sub, flags, span))
     return found
 
 
 class SkillCommandsMatchPackage(unittest.TestCase):
-    """Each command the install skill names exists in OpenWiz 0.1.0, with flags its --help lists."""
 
     @classmethod
     def setUpClass(cls):
@@ -474,7 +467,6 @@ class SkillCommandsMatchPackage(unittest.TestCase):
             wrong += ['%s: 0.1.0 has no %s' % (span, f) for f in flags if f not in subs[sub]]
         self.assertEqual(wrong, [])
 
-    # never reads setup and CloudRoom: the steps a stranger's install stalled without.
     def test_the_install_path_names_its_steps(self):
         named = {(tool, sub) for tool, sub, _, _ in self.commands}
         for step in [('tools/install/install', 'preflight'), ('tools/install/install', 'download'),

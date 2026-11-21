@@ -61,8 +61,8 @@ FILES = {
 
 def skill_steps():
     """The journey's step names, in order, from the packaged skill's numbered sections."""
-    explain, _, branch = SKILL.read_text().partition('## 5. The onboarding road\n')
-    names = re.findall(r'^## 4\. (Teach)$', explain, re.M)
+    explain, _, branch = SKILL.read_text().partition('## 6. The onboarding road\n')
+    names = re.findall(r'^## 5\. (Teach)$', explain, re.M)
     names.extend(re.findall(r'^### [0-9]+\. (.+)$', branch.partition('\n## ')[0], re.M))
     return [name.split()[-1].lower() for name in names]
 
@@ -529,6 +529,9 @@ class Continuation(unittest.TestCase):
                 self.assertEqual(path.read_bytes() if path.exists() else None, before, 'a preview writes nothing')
                 done = j.helper(['decisions', '--yes'])
                 self.assertEqual(done.returncode, 0, done.stdout)
+                for said in (shown.stdout, done.stdout):
+                    self.assertNotIn('server', said.lower())
+                self.assertIn('then run continue', done.stdout)
                 written = json.loads(path.read_text())
                 kept = {k: v for k, v in (existing or {}).items() if k != 'decision_repositories'}
                 self.assertEqual(written, dict(kept, decision_repositories=pair), 'only that key changes')

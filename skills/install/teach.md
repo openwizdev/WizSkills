@@ -16,7 +16,7 @@ Say all three before the first choice:
 
 ## Install done
 
-> OpenWiz is installed: its skills are in `<your agent>` and the `openwiz` command is on this machine. Next, where your agents run; your project shows up at openwiz.dev/app once it's connected.
+> OpenWiz is installed: its skills are in `<your agent>` and the `openwiz` command is at `<its path, root/current/openwiz>` (not on `PATH`). Next, where your agents run; your project shows up at openwiz.dev/app once it's connected.
 
 ## Where agents run
 

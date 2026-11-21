@@ -182,3 +182,5 @@ if __name__ == '__main__':
     except Refuse as error:
         print(f'frontier: {error}', file=sys.stderr)
         sys.exit(2)
+
+# a planted comment: this throwaway draft shows CI failing

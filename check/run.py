@@ -27,8 +27,10 @@ SUITES = {
     'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py']],
     'triage': [['python3', '-I', 'skills/triage/test/test_find_work.py'],
                ['python3', '-I', 'skills/triage/test/test_public_records.py']],
+    'feedback': [['python3', '-I', 'skills/feedback/test/test_feedback.py']],
     'install': [['python3', '-I', 'skills/install/tests/test_first_fleet.py'],
-                ['python3', '-I', 'skills/install/tests/test_doctor.py']],
+                ['python3', '-I', 'skills/install/tests/test_doctor.py'],
+                ['python3', '-I', 'skills/install/tests/test_onboarding.py']],
     'huntr': [['sh', 'skills/huntr/scripts/test.sh']],
     'grill': [['sh', 'skills/grill/scripts/test.sh'],
               ['python3', 'skills/grill/scripts/test_records.py']],
@@ -46,11 +48,13 @@ SUITES = {
                    ['sh', 'skills/to-tickets/test/test-revision.sh'],
                    ['python3', '-I', 'skills/to-tickets/test/test_relies.py'],
                    ['python3', '-I', 'skills/to-tickets/test/test_picture.py'],
-                   ['python3', '-I', 'skills/to-tickets/test/test_request.py']],
+                   ['python3', '-I', 'skills/to-tickets/test/test_request.py'],
+                   ['python3', '-I', 'skills/to-tickets/test/test_lead_time.py']],
     'review-ticket': [['python3', '-I', 'skills/review-ticket/scripts/test_review.py']],
     'wayfind': [['python3', '-I', 'skills/wayfind/test/test_frontier.py']],
     'research': [['python3', '-I', 'skills/research/test/test_workers.py'],
                  ['python3', '-I', 'skills/research/test/test_snapshot_commands.py']],
+    'write-driver': [['python3', '-I', 'skills/write-driver/tests/test_write_driver.py']],
     'launch-fleet': [['sh', 'skills/launch-fleet/scripts/test.sh'],
                      ['python3', '-I', 'skills/launch-fleet/test/ops-protocol/test_protocol.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-effects.py'],
@@ -66,7 +70,8 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-post.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-merge.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-brief.py'],
-                     ['python3', '-I', 'skills/launch-fleet/scripts/test-host.py']],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-host.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py']],
     # Not a skill: the check's own version rule and changesets (WS18).
     'check': [['python3', '-I', 'check/test_versions.py'],
               ['python3', '-I', 'check/test_changesets.py']],
@@ -76,10 +81,12 @@ SUITES = {
 # SKILL.md carries exactly, on a line of its own, instead of his notice.
 ORIGINAL = "**Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills."
 SOURCE_LINES = {
+    'feedback': ORIGINAL,
     'hill-climb': ORIGINAL,
     'huntr': ORIGINAL,
     'image': ORIGINAL,
     'install': ORIGINAL,
+    'write-driver': ORIGINAL,
     'where-are-we': "**Source:** dot-context's written plan. Not adapted from Matt Pocock's skills.",
 }
 

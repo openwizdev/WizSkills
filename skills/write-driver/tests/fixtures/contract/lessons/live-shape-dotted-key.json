@@ -1,0 +1,11 @@
+{
+  "lesson": "live-shape",
+  "live": {
+    "sandbox": {
+      "state": "idle"
+    }
+  },
+  "fixture": {
+    "sandbox.state": "idle"
+  }
+}

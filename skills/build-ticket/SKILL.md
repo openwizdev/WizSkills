@@ -1,7 +1,7 @@
 ---
 name: build-ticket
 description: Build one ticket as its builder, proof first and inside its owned paths, hand back one green pull request, and stay with it through review and CI until it merges. Use when you are told you are the builder for a ticket, or when your ticket's pull request gets a review, fails CI or conflicts with main. Reviewing someone else's pull request is review-ticket.
-version: 0.2.0
+version: 0.2.1
 ---
 
 # Build a ticket
@@ -10,7 +10,7 @@ You are the **builder** for one ticket: you take it to one merged pull request, 
 
 `T="python3 -I <this skill's folder>/scripts/ticket.py"`. Each command prints a short result; exit 1 is a refusal whose last line says why, exit 2 an unreadable input (stop and ask on the ticket).
 
-**Status note** ([agent status contract](../../contracts/agent-status.v1.md)): at each step run `python3 -I <this skill's folder>/../launch-fleet/scripts/status.py write --repo <repo> --ticket <N> --agent builder --harness <harness> --model <model> --skills <skills> --state <state> --step <step>` with each value quoted. `<skills>` lists each skill you ran as `<skill>@<version>`, at the package's `.claude-plugin/plugin.json` version; `<step>` is one public sentence. `<state>` is `working` at your claim (keep the note id it prints and add `--note <id>` to every later write), `asking` when you ask, `working` when you resume, `done --pr <url>` at each hand-back and at merge. Exit 3: another builder holds the ticket; stop.
+**Status note** ([agent status contract](../../contracts/agent-status.v1.md)): at each step run `python3 -I <this skill's folder>/../launch-fleet/scripts/status.py write --repo <repo> --ticket <N> --agent builder --harness <harness> --model <model> --skills <skills> --state <state> --step <step>` with each value quoted. `<skills>` lists each skill you ran as `<skill>@<version>`, at the `version:` of that skill's `SKILL.md` front matter; `<step>` is one public sentence. `<state>` is `working` at your claim (keep the note id it prints and add `--note <id>` to every later write), `asking` when you ask, `working` when you resume, `done --pr <url>` at each hand-back and at merge. Exit 3: another builder holds the ticket; stop.
 
 ## Guards
 

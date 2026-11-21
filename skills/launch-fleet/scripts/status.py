@@ -17,6 +17,12 @@ run (#1447): a heartbeat before COMMAND starts and every --every seconds (defaul
 while it runs: an edit of note ID as it reads now, only its time set to now, so GitHub's
 updated_at, which alone counts toward the 30-minute lease, is new (a note written this same
 second waits for the next). A beat whose read shows the note done or stopped writes nothing.
+A beat adds needs-info for an asking note as a write does, but never takes it off (#1720): a
+hold a person set, or one the repair put back, stays; the agent's own write leaving asking
+settles the label. A write takes needs-info off only when this machine's private record shows
+a write's own POST applied it, under a GitHub App's own login, and that application is still
+the last one (#1737). Any other needs-info stays, and the write prints
+`#<n>: needs-info left on: ...` after its own line.
 A failed beat is reported and tried again after 60 seconds (or --every, if shorter). When no
 beat can start 120 seconds before the lease of the last good one ends, or on the fence exit,
 it stops COMMAND's whole process group (SIGTERM, then SIGKILL to any of it left after 10
@@ -36,6 +42,7 @@ mismatch, one report line each: exit 0 nothing to report, 1 lines printed, 2
 Every GitHub call goes through `gh api`.
 """
 import argparse
+import contextlib
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
@@ -46,6 +53,7 @@ import signal
 import subprocess
 import sys
 import time
+from urllib.parse import quote
 
 sys.dont_write_bytecode = True
 
@@ -75,6 +83,23 @@ PREVIEW = re.compile(r'https://(?![^/:]*\.(?:local|internal|lan|localhost)(?:[:/
                      r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?::[0-9]{1,5})?(?:/[^\s"<>?#@\\]*)?')
 CONTROL = re.compile(r'[\x00-\x1f\x7f]')
 QUOTE = re.compile('["“”]')
+# A web link's host, optional numeric port and path, up to a space, a quote mark or the start
+# of its query or fragment: the query and fragment stay visible to every rule (review R4).
+LINK = re.compile(r'\bhttps?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[^\s"\'<>?#]*)?', re.I)
+# One part of a path: no slash; an escaped character, or a space inside the part, is part of it.
+PART = r'(?:[\w.~+-]|\\.)(?:[\w.~+-]|\\.| (?=[\w.~+-]))*'
+
+
+class OffLinks:
+    """A rule read with each web link's path taken out, so that path never trips it (#1384)."""
+
+    def __init__(self, pattern, flags=0):
+        self.pattern = re.compile(pattern, flags)
+
+    def search(self, text):
+        return self.pattern.search(LINK.sub('link', text))
+
+
 # What a note never holds. A guard fails closed: every thr_ token, synthetic or not.
 PRIVATE = (
     ('a thread id', re.compile(r'(?<![A-Za-z0-9])thr_', re.I)),
@@ -82,14 +107,18 @@ PRIVATE = (
     ('a machine path', re.compile(
         r'(?<![\w.:/~-])(?:~/|/(?:Users|home|root|tmp|var|private|mnt|Volumes|opt|srv|code)(?:/|\b))', re.I)),
     ('a machine path', re.compile(r'(?<![A-Za-z0-9])[A-Za-z]:\\')),
+    # #1384: a C:/ drive or an scp-style host:/, host:'/ or host:~/ path, outside a web link's path.
+    ('a machine path', OffLinks(r'[\w.-]:[\'"]?~?/(?!/)')),
     # R3: any absolute path of two or more parts; a URL's own path is preceded by its host.
-    ('a machine path', re.compile(r'(?<![\w.:/~@%$}\\-])/[\w.~+-]+/[\w.~+-]')),
+    ('a machine path', re.compile(rf'(?<![\w.:/~@%$}}\\-])/{PART}/[\w.~+-]')),
     ('a machine path', re.compile(r'\$\{?HOME\b|%(?:USERPROFILE|HOMEPATH|HOMEDRIVE|APPDATA|LOCALAPPDATA)%', re.I)),
     ('a machine path', re.compile(r'\\\\[\w.$-]+\\')),
     ('a machine path', re.compile(r'\bfile:', re.I)),
     ('a credential', re.compile(
-        r'\b(?:[a-z_]*token|[a-z_]*key|secret|password|passwd|pwd|sig|signature|auth|credentials?)\s*=', re.I)),
+        r'\b(?:[a-z0-9_]*token|[a-z0-9_]*key|secret|password|passwd|pwd|sig|signature|auth|credentials?)\s*=', re.I)),
     ('a credential', re.compile(r'\b(?:password|passwd|secret|token)\s*:\s*\S|\bbearer\s+\S', re.I)),
+    # #1384: a colon-form key, token or auth value, versioned names included, outside a web link's path.
+    ('a credential', OffLinks(r'\b(?:[a-z0-9_]*token|[a-z0-9_]*key|auth)\s*:\s*\S', re.I)),
     ('a credential', re.compile(r'\bgh[pousr]_[A-Za-z0-9]{8,}|\bgithub_pat_|\bAKIA[0-9A-Z]{16}\b'
                                 r'|\bxox[abprs]-|\bsk-[A-Za-z0-9_-]{16,}')),
 )
@@ -149,24 +178,45 @@ def shaped(fields):
 
 
 def bound(skills):
-    """R5: every reported skill is one the installed package lists, at its version.
+    """R5 (#1663): every reported skill is one the installed package lists, at that skill's
+    own installed version: the `version:` line of its SKILL.md front matter (J205).
 
-    The package is the one supplying this script; its manifest is the evidence.
-    Which skills an agent actually ran is its caller's record (AP2).
+    The package is the one supplying this script; its manifest and the listed skills'
+    SKILL.md files are the evidence. Only a write binds: a note already posted reads by its
+    shape alone, whichever version it names. Which skills an agent actually ran is its
+    caller's record (AP2).
     """
     try:
-        manifest = json.loads(MANIFEST.read_text())
-        version, listed = manifest['version'], manifest['skills']
-        if not (isinstance(version, str) and re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version)
-                and isinstance(listed, list) and all(isinstance(x, str) for x in listed)):
+        listed = json.loads(MANIFEST.read_text())['skills']
+        if not (isinstance(listed, list) and all(isinstance(x, str) for x in listed)):
             raise ValueError('malformed')
     except (OSError, ValueError, KeyError, TypeError):
         refuse('skills', 'the installed package has no readable manifest')
     names = {x[len('./skills/'):] for x in listed if x.startswith('./skills/')}
     for item in skills.split(', '):
         name, _, at = item.partition('@')
-        if name not in names or at != version:
-            refuse('skills', f'a skill or version the installed package (openwiz {version}) does not have')
+        if name not in names or at != installed(name):
+            refuse('skills', 'a skill or version the installed package does not have')
+
+
+def installed(name):
+    """NAME's installed version, or None: the one `version:` declaration of the first front-matter
+    block of its SKILL.md (the `---` lines opening the file and the next `---` line), plain or
+    YAML-quoted, as `<major>.<minor>.<patch>` in digits. None when it is missing or declared twice."""
+    try:
+        lines = (MANIFEST.parents[1] / 'skills' / name / 'SKILL.md').read_text().split('\n')
+    except (OSError, UnicodeDecodeError):
+        return None
+    if lines[0] != '---' or '---' not in lines[1:]:
+        return None
+    front = lines[1:lines.index('---', 1)]
+    found = [line[len('version:'):].strip() for line in front if line.startswith('version:')]
+    if len(found) != 1:
+        return None
+    value = found[0]
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
+        value = value[1:-1]
+    return value if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', value) else None
 
 
 def body(fields):
@@ -368,12 +418,99 @@ def stop_group(proc):
     proc.wait()
 
 
-def asked_last_by(repo, n, login):
-    """True when the issue's events show LOGIN added needs-info last (R1: the writer's own label)."""
-    added = [e for e in pages(f'repos/{repo}/issues/{n}/events')
-             if e.get('event') == 'labeled' and (e.get('label') or {}).get('name') == ASKING_LABEL]
-    actor = (added[-1].get('actor') or {}).get('login') if added else None
-    return isinstance(actor, str) and actor.lower() == login.lower()
+def proof(repo, n):
+    """#1737: this machine's private record of the needs-info application a write's own POST made
+    on one ticket, outside the checkout and never posted."""
+    home = Path(os.environ.get('XDG_STATE_HOME') or '.')
+    home = home if home.is_absolute() else Path.home() / '.local' / 'state'
+    return home / 'openwiz' / 'needs-info' / f'{quote(repo.lower(), safe="")}-{n}.json'
+
+
+@contextlib.contextmanager
+def settling(repo, n):
+    """#119 R1: one needs-info settlement per ticket at a time on this machine, under a lock beside
+    the record, so an older write's settle never forgets the record of a newer write's application.
+    It yields whether the lock is held. Without it (no fcntl, or a lock file that can't be opened)
+    the settle runs unlocked and keeps no new record, so a later write leaves the label on."""
+    lock = None
+    try:
+        import fcntl
+        proof(repo, n).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lock = open(proof(repo, n).with_suffix('.lock'), 'a')
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    except (ImportError, OSError):
+        if lock is not None:
+            lock.close()
+            lock = None
+    try:
+        yield lock is not None
+    finally:
+        if lock is not None:
+            lock.close()
+
+
+def forget(repo, n):
+    try:
+        proof(repo, n).unlink()
+    except OSError:
+        pass
+
+
+def add_own(repo, n, login, locked):
+    """#1737: add needs-info, and record the application as this writer's only when it is the one
+    new event its POST left, under a GitHub App's own login, as the repair proves its own (#1702).
+    The events are read just before the POST, so a hold landing earlier is never taken for it. Any
+    other outcome, or a failed read, records nothing: a later write leaves the label on."""
+    forget(repo, n)
+    try:
+        before = len(label_events(repo, n))
+    except Failed:
+        before = None
+    gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+    if before is None or not app(login) or not locked:
+        return
+    try:
+        new = label_events(repo, n)[before:]
+    except Failed:
+        return
+    if len(new) == 1 and new[0]['event'] == 'labeled' and by(new[0], login):
+        path = proof(repo, n)
+        try:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path.with_suffix('.tmp').write_text(json.dumps({'login': login.lower(), 'event': before}))
+            os.replace(path.with_suffix('.tmp'), path)
+        except OSError:
+            pass
+
+
+def take_own(repo, n, login, labels):
+    """#1737: no live note asks. Take off only the needs-info application this machine's record
+    shows a write's own POST made, while it is still the last one (the repair's cleanup, which puts
+    back a person's application that lands as it deletes; the record stays until that is settled,
+    so a retry still puts it back). Any other needs-info, such as triage's hold or a put-back under
+    the same login, stays and is reported. LABELS: the issue's labels as just read. The report lines."""
+    def labelled():
+        return ASKING_LABEL in [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+    def once(pairs):
+        if len({k for k, _ in pairs}) != len(pairs):
+            raise ValueError('a repeated key')
+        return dict(pairs)
+    try:
+        own = json.loads(proof(repo, n).read_text(), object_pairs_hook=once)
+    except (OSError, ValueError):
+        own = None
+    # Only the exact shape add_own writes, for this login; anything else proves nothing.
+    exact = isinstance(own, dict) and set(own) == {'login', 'event'} and own['login'] == login.lower()
+    mine = own['event'] if exact and type(own['event']) is int and own['event'] >= 0 else None
+    left = [f'#{n}: {ASKING_LABEL} left on: no note asks, and this writer can\'t show its own write '
+            'added it; a person takes it off']
+    if mine is None:
+        forget(repo, n)
+        return left if ASKING_LABEL in labels else []
+    report = cleanup(repo, n, login, mine, labelled, 'this write')
+    report = report or (left if labelled() else [])
+    forget(repo, n)
+    return report
 
 
 def write(args, now, beat=False, out=sys.stdout, retried=False):
@@ -475,13 +612,21 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
         # #1441: a newer note that claimed while this one had lapsed keeps the claim (P1, P2, P4).
         step_down(found, note_id, kind, fields, repo)
     # R1: settle needs-info from what GitHub shows now, so a retry repairs a failed label write.
-    labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
-    asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)
-    if asking and ASKING_LABEL not in labels:
-        gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
-    elif not asking and ASKING_LABEL in labels and asked_last_by(repo, n, login):
-        gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
+    # #119 R1: the notes and labels are read again inside this machine's lock for the ticket.
+    report = []
+    with settling(repo, n) as locked:
+        found = notes(pages(comments), authors)
+        labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+        asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)
+        if asking and ASKING_LABEL not in labels:
+            add_own(repo, n, login, locked)
+        elif not beat and not asking:
+            # #1720: a heartbeat never takes needs-info off. The agent's own write leaving asking
+            # takes off only the application its record proves its own (#1737).
+            report = take_own(repo, n, login, labels)
     print(f'#{n}: {kind} {state}, status note {note_id} {verb}', file=out)
+    for line in report:
+        print(line, file=out)
     return fields
 
 
@@ -637,14 +782,14 @@ def by(event, login):
     return isinstance(actor, str) and actor.lower() == login.lower()
 
 
-def cleanup(repo, n, login, mine, labelled):
+def cleanup(repo, n, login, mine, labelled, taker='the repair'):
     """Take off the needs-info this wake's own POST applied (#68 R2): only when that application,
     event MINE of the label timeline, is still the last one. GitHub's DELETE takes whatever label is
     there when it lands, so the timeline is read again after it: a person's application that landed
     between the read and the DELETE is put back, and reported. The report lines."""
     events = label_events(repo, n)
     if labelled():
-        last = max(k for k, e in enumerate(events) if e['event'] == 'labeled')
+        last = max((k for k, e in enumerate(events) if e['event'] == 'labeled'), default=None)
         if last != mine:
             return []
         gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
@@ -658,7 +803,7 @@ def cleanup(repo, n, login, mine, labelled):
         return []
     gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
     who = people[-1]['actor']['login']
-    return [f'#{n}: {ASKING_LABEL} put back: {who} applied it as the repair took it off; check whose it is']
+    return [f'#{n}: {ASKING_LABEL} put back: {who} applied it as {taker} took it off; check whose it is']
 
 
 def app(login):

@@ -9,7 +9,7 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/plugin cache/skills/launch-fleet/scripts/carried" \
   "$work/plugin cache/skills/to-tickets" "$work/remote" "$work/runtime"
 cp "$HERE/loop.sh" "$HERE/fleet.sh" "$HERE/records.py" "$work/plugin cache/skills/launch-fleet/scripts/"
-cp "$HERE/../../to-tickets/revision.sh" "$work/plugin cache/skills/to-tickets/"
+cp "$HERE/../../to-tickets/revision.sh" "$HERE/../../to-tickets/check-links.sh" "$work/plugin cache/skills/to-tickets/"
 cp "$HERE/carried/alarm.py" "$work/plugin cache/skills/launch-fleet/scripts/carried/"
 mkdir "$work/linked skills"
 ln -s "$work/plugin cache/skills/launch-fleet" "$work/linked skills/launch-fleet"
@@ -97,7 +97,7 @@ echo 'ok   later runs refresh the consumer while keeping the packaged helpers'
 # fleet and revision helpers, never the consumer clone's hostile skills/.
 mkdir -p "$work/installed/skills/launch-fleet/scripts/carried" "$work/installed/skills/to-tickets"
 cp "$HERE/loop.sh" "$HERE/fleet.sh" "$HERE/records.py" "$work/installed/skills/launch-fleet/scripts/"
-cp "$HERE/../../to-tickets/revision.sh" "$work/installed/skills/to-tickets/"
+cp "$HERE/../../to-tickets/revision.sh" "$HERE/../../to-tickets/check-links.sh" "$work/installed/skills/to-tickets/"
 cp "$HERE/carried/alarm.py" "$work/installed/skills/launch-fleet/scripts/carried/"
 rm -rf "$work/cache"
 status=0

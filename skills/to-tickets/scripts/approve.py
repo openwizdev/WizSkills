@@ -1,10 +1,11 @@
 """The machine plan approval (#1339, J202): check a plan graph and print its record.
 
-    python3 -I approve.py --graph graph.json --revision revision.txt --grill <url>
+    python3 -I approve.py --graph graph.json --revision revision.txt --spec spec.json --grill <url>
         --number <N> [--changed <what changed>] [--date YYYY-MM-DD] [--root DIR]
 
 graph.json is check-links.sh's graph read (`--read <spec>`); revision.txt is
-revision.sh's text for the same spec. The checks, all of them every time:
+revision.sh's text for the same spec; spec.json is `gh issue view <spec> --json
+body,createdAt`. The checks, all of them every time:
 
   links        check-links.sh passes on the graph read
   relies       check-relies.sh passes on each open agent ticket's body, a path
@@ -14,10 +15,17 @@ revision.sh's text for the same spec. The checks, all of them every time:
                the graph's repository, so a ticket in any other repository
                must have each Relies on file planned
   sizes        each open ticket says exactly one `Size: S`, `M` or `L`
-  width        no cycle, and no arrow another chain of arrows already implies
+  width        no cycle, and no arrow another chain of arrows already implies;
+               the record reports the critical chain (the longest run of
+               open work along hard edges, open blockers outside the spec
+               included) and the widest start wave; a context-only file
+               link is no hard edge (soft_link)
   owned paths  each open agent ticket owns exact repository paths, and no two
                tickets that can run at once own the same path, unless both
                bullets say `(shared`
+  checkpoints  the spec's two checkpoint answers (contracts/checkpoints.v1.md),
+               read by check-approval.sh --checkpoints from spec.json, whose
+               body must be the one the revision's fingerprint binds (#1830)
 
 Before any check, the revision text must name exactly the graph's tickets,
 titles, blockers and bodies, so the fingerprint binds the plan checked.
@@ -25,7 +33,7 @@ titles, blockers and bodies, so the fingerprint binds the plan checked.
 Exit 0: every check passed; the record (decisions.v1, "Machine plan approval")
 on stdout. 1: refused; nothing on stdout, one `approve: <check>: <why>` line per
 failure on stderr. 2: bad arguments or an unreadable input. Writes nothing and
-calls no network; it runs the two sibling checkers.
+calls no network; it runs the three sibling checkers.
 """
 import argparse
 import datetime
@@ -40,6 +48,7 @@ import sys
 HERE = Path(__file__).resolve().parent
 LINKS = HERE.parent / 'check-links.sh'
 RELIES = HERE.parent / 'check-relies.sh'
+CHECK_APPROVAL = HERE / 'check-approval.sh'
 GRILL = re.compile(r'https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/(issues|pull)/[1-9][0-9]*'
                    r'#issuecomment-[1-9][0-9]*')
 REPO = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
@@ -170,6 +179,21 @@ def check_links(graph_text):
     return []
 
 
+def check_checkpoints(spec_text, graph, revision):
+    spec = graph['source']['spec']
+    body = json.loads(spec_text)
+    if not isinstance(body, dict) or not isinstance(body.get('body'), str):
+        raise Unreadable(f'spec #{spec} has no body')
+    if revision.split('\n')[1] != f'spec #{spec} body sha256 {unticked_sha256(body["body"])}':
+        return [f"spec #{spec}'s body differs from the revision's"]
+    out = subprocess.run(['sh', str(CHECK_APPROVAL), '--checkpoints', str(spec)], input=json.dumps(body),
+                         capture_output=True, text=True)
+    why = [line.strip().removeprefix('check-approval.sh: ') for line in out.stderr.splitlines() if line.strip()]
+    if out.returncode == 2:
+        raise Unreadable('; '.join(why)[:200] or 'check-approval.sh could not read the spec')
+    return (why or ['check-approval.sh refused']) if out.returncode != 0 else []
+
+
 def check_relies(tickets, owners, root, root_repo):
     why = []
     for t in tickets:
@@ -208,32 +232,91 @@ def check_sizes(tickets):
     return why, counts
 
 
-def check_width(graph):
-    """Refusals, the longest chain and the widest start wave, in tickets."""
-    numbers = {t['number'] for t in graph['tickets']}
-    after = {n: set() for n in numbers}  # n -> tickets it blocks
-    for t in graph['tickets']:
-        for b in t['blocked_by']:
-            if b['number'] in numbers:
-                after[b['number']].add(t['number'])
-    level, order, indegree = {}, [], {n: 0 for n in numbers}
-    for n in numbers:
+def chain_width(after, planned, done):
+    """The critical chain, the widest start wave (both in tickets) and the
+    tickets a cycle leaves unreached. `after` maps every ticket (planned and
+    outside blockers) to the tickets it blocks. The chain is the longest run
+    of arrows through work not yet done, outside blockers included; the waves
+    count planned work only."""
+    level, indegree = {}, {n: 0 for n in after}
+    for n in after:
         for m in after[n]:
             indegree[m] += 1
-    ready = sorted(n for n in numbers if indegree[n] == 0)
+    ready = sorted(n for n in after if indegree[n] == 0)
     for n in ready:
-        level[n] = 1
+        level[n] = 0 if n in done else 1
     while ready:
         n = ready.pop(0)
-        order.append(n)
         for m in sorted(after[n]):
-            level[m] = max(level.get(m, 1), level[n] + 1)
+            level[m] = max(level.get(m, 0), level[n] + (0 if m in done else 1))
             indegree[m] -= 1
             if indegree[m] == 0:
                 ready.append(m)
-    if len(order) != len(numbers):
-        cycle = sorted(n for n in numbers if n not in order)
-        return [f'a cycle: {" ".join(f"#{n}" for n in cycle)} can never start'], 0, 0
+    unreached = sorted(n for n in after if indegree[n] > 0)
+    waves = {}
+    for n in planned:
+        if n not in done and n in level:
+            waves[level[n]] = waves.get(level[n], 0) + 1
+    return max(level.values(), default=0), max(waves.values(), default=0), unreached
+
+
+FILE_PATH = re.compile(r'(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+/?')
+
+
+def file_link_files(body, blocker):
+    """The files of the ticket's one `file` line for this blocker, or None."""
+    lines = [line.rstrip(' \t') for line in section(body, 'Links') or []]
+    found = [line for line in lines if re.match(rf'- #{blocker} (real|file):', line)]
+    if len(found) != 1 or not found[0].startswith(f'- #{blocker} file:'):
+        return None
+    files = [p for p in re.findall(r'`([^`]*)`', found[0])
+             if FILE_PATH.fullmatch(p) and not any(part in ('.', '..') for part in p.rstrip('/').split('/'))]
+    return files or None
+
+
+def soft_link(ticket, blocker, default_repo):
+    """F6 (#1353): a link adds no serial work only when it is a file link
+    naming a file, into an open agent ticket, from a planned blocker whose
+    owned paths are read, and neither the blocker's owned paths nor the
+    link's files hold an input the ticket relies on, nor do the two
+    tickets' owned paths collide. Anything else is a hard edge."""
+    if ticket['state'] != 'OPEN' or human(ticket) or blocker is None or human(blocker):
+        return False
+    files = file_link_files(ticket['body'], blocker['number'])
+    try:
+        mine, theirs = owned(ticket, default_repo), owned(blocker, default_repo)
+    except ValueError:
+        return False
+    if files is None:
+        return False
+    inputs = relies_paths(ticket['body'])
+    if any(overlap(i, p) for i in inputs for p in files + [path for _, path, _ in theirs]):
+        return False
+    return not any(ra == rb and overlap(pa, pb) and not (sa and sb)
+                   for ra, pa, sa in mine for rb, pb, sb in theirs)
+
+
+def check_width(graph):
+    """Refusals, the critical chain and the widest start wave, in tickets.
+    The cycle and implied-arrow checks read every native arrow; the chain
+    and the waves read only hard edges (soft_link)."""
+    numbers = {t['number'] for t in graph['tickets']}
+    tickets = {t['number']: t for t in graph['tickets']}
+    after = {n: set() for n in numbers}  # n -> tickets it blocks
+    hard = {n: set() for n in numbers}
+    done = {t['number'] for t in graph['tickets'] if t['state'] != 'OPEN'}
+    for t in graph['tickets']:
+        for b in t['blocked_by']:
+            after.setdefault(b['number'], set()).add(t['number'])
+            hard.setdefault(b['number'], set())
+            if not soft_link(t, tickets.get(b['number']), graph['repo']):
+                hard[b['number']].add(t['number'])
+            if b['number'] not in numbers and b['state'] != 'OPEN':
+                done.add(b['number'])
+    _, _, unreached = chain_width(after, numbers, done)
+    chain, widest, _ = chain_width(hard, numbers, done)
+    if unreached:
+        return [f'a cycle: {" ".join(f"#{n}" for n in unreached)} can never start'], 0, 0
     why = []
 
     def reaches(start, goal, skip):
@@ -251,10 +334,7 @@ def check_width(graph):
         for t in sorted(after[b]):
             if reaches(b, t, skip=t):
                 why.append(f'the arrow #{b} -> #{t} is implied by another chain; drop it')
-    waves = {}
-    for n, depth in level.items():
-        waves[depth] = waves.get(depth, 0) + 1
-    return why, max(level.values(), default=0), max(waves.values(), default=0)
+    return why, chain, widest
 
 
 def check_owned(graph, agents):
@@ -321,6 +401,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--graph', type=Path, required=True)
     parser.add_argument('--revision', type=Path, required=True)
+    parser.add_argument('--spec', type=Path, required=True)
     parser.add_argument('--grill', required=True)
     parser.add_argument('--number', type=int, required=True)
     parser.add_argument('--changed')
@@ -336,6 +417,7 @@ def main():
     try:
         graph_text = args.graph.read_text(encoding='utf-8')
         revision = args.revision.read_text(encoding='utf-8')
+        spec_text = args.spec.read_text(encoding='utf-8')
         graph = json.loads(graph_text)
         if (not isinstance(graph, dict) or graph.get('kind') != 'graph' or not isinstance(graph.get('tickets'), list)
                 or not graph['tickets'] or not isinstance(graph.get('source'), dict)):
@@ -355,6 +437,7 @@ def main():
         width_why, chain, widest = check_width(graph)
         failures += [('width', why) for why in width_why]
         failures += [('owned paths', why) for why in owned_why]
+        failures += [('checkpoints', why) for why in check_checkpoints(spec_text, graph, revision)]
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, Unreadable) as e:
         print(f'approve: unreadable input: {e}', file=sys.stderr)
         return 2

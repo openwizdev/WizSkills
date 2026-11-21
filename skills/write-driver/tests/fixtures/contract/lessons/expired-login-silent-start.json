@@ -1,0 +1,8 @@
+{
+  "lesson": "expired-login",
+  "exit": 0,
+  "answer": {
+    "run": "run-synthetic01"
+  },
+  "left_running": true
+}

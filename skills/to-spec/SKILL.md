@@ -1,7 +1,7 @@
 ---
 name: to-spec
-description: Turn a confirmed grill into a spec issue, run to-tickets on it, and make the spec's narrated steering video. Use when a grill is confirmed or the owner steers a spec through its video. No human step between grill and fleet.
-version: 0.2.0
+description: Turn a confirmed grill into a spec issue, run to-tickets on it, and make the spec's narrated steering video. Use when a grill is confirmed or the owner steers a spec through the orchestrator. No human step between grill and fleet.
+version: 0.2.1
 ---
 
 # To spec
@@ -9,7 +9,8 @@ version: 0.2.0
 The owner's one active step is answering and confirming the grill (J202). From
 there the orchestrator writes the spec, has [to-tickets](../to-tickets/SKILL.md)
 cut and approve the plan by its own checks, and makes one video the owner
-watches to steer. Nothing is asked between them. In OpenWiz,
+watches, then steers through the orchestrator. Nothing is asked between them.
+In OpenWiz,
 [the roads page](https://github.com/openwizdev/OpenWiz/blob/main/docs/agents/roads.md)
 describes when this road applies.
 
@@ -35,6 +36,24 @@ read it back, and on a resume confirm any uncertain write before retrying. For
 an already approved plan, use [the hold-first procedure](../to-tickets/changes.md)
 before changing the spec.
 
+Every spec carries its two checkpoint answers
+([checkpoints.v1](../../contracts/checkpoints.v1.md)), filled from the grill and
+confirmed with the spec, in this section:
+
+```text
+## Checkpoints
+
+- One-way door: yes
+- User-visible: no
+```
+
+Early only (`yes`, `no`) is the default. Write `User-visible: yes` when users
+will see the change, `yes, a release` when the spec publishes a release, and
+`One-way door: no` only when the grill settled that it can be undone. Reasons
+go in other sections, never on these lines. to-tickets' approval check refuses
+a spec created on or after its `CHECKPOINTS_SINCE` date without both answers;
+an older spec without the section reads as early only.
+
 ## 3. Cut the plan
 
 Run [to-tickets](../to-tickets/SKILL.md) on the spec now, with the grill
@@ -57,12 +76,12 @@ Write `storyboard.json` in a work folder outside any repo, as
   sharing needs publication authority. Confirm playback there, then
   `node "<this skill's folder>/scripts/animatic.mjs" link "$url"` gives the line.
 - Post it as a spec comment, never in the body (that would change the plan's
-  fingerprint): the link, then `Comment here to steer: stop, reset, or anything else.`
+  fingerprint): the link, then `Steering by comment is off for now: tell your orchestrator what to change (stop, reset, or anything else).`
 
 ## 5. Steer
 
-The owner's comments on the video steer the fleet (launch-fleet reads them):
-stop holds it, reset re-cuts the plan through
+Steering by comment is off for now (until OpenWiz #1402), so the owner steers
+through their orchestrator: stop holds the fleet, reset re-cuts the plan through
 [the hold-first procedure](../to-tickets/changes.md) and makes a new video, and
 anything else is a steer to act on. A changed spec or plan always gets a new
 machine approval and a new video.

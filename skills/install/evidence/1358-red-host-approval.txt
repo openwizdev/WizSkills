@@ -1,0 +1,30 @@
+$ python3 -I skills/install/tests/test_onboarding.py HostApproval   # red: branch ee8bfdf plus these tests (no host-side approval yet, KN3 security R6 option A)
+FFF
+======================================================================
+FAIL: test_neither_a_row_nor_an_approval_alone_launches_on_this_machine (__main__.HostApproval.test_neither_a_row_nor_an_approval_alone_launches_on_this_machine) [a row, no approval]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 561, in test_neither_a_row_nor_an_approval_alone_launches_on_this_machine
+    self.assertIn('host-side approval', result.stdout)
+AssertionError: 'host-side approval' not found in 'No approved ticket of spec #900 is ready to start: the plan changed since its checks passed, or is still blocked; nothing started.\n'
+
+======================================================================
+FAIL: test_neither_a_row_nor_an_approval_alone_launches_on_this_machine (__main__.HostApproval.test_neither_a_row_nor_an_approval_alone_launches_on_this_machine) [a row, another approval]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 561, in test_neither_a_row_nor_an_approval_alone_launches_on_this_machine
+    self.assertIn('host-side approval', result.stdout)
+AssertionError: 'host-side approval' not found in 'No approved ticket of spec #900 is ready to start: the plan changed since its checks passed, or is still blocked; nothing started.\n'
+
+======================================================================
+FAIL: test_the_pick_writes_this_machines_approval_once_and_never_widens_it (__main__.HostApproval.test_the_pick_writes_this_machines_approval_once_and_never_widens_it)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_onboarding.py", line 536, in test_the_pick_writes_this_machines_approval_once_and_never_widens_it
+    self.assertEqual(road.approvals(), {road.repo: {'claude': 'acceptEdits'}})
+AssertionError: None != {'synthetic-owner/synthetic-quiz': {'claude': 'acceptEdits'}}
+
+----------------------------------------------------------------------
+Ran 2 tests in 14.141s
+
+FAILED (failures=3)

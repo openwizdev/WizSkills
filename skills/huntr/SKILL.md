@@ -1,7 +1,7 @@
 ---
 name: huntr
 description: Run one hunt for small, unplanned, proven fixes under the project's approved risk tiers. One controller holds the lease, sends a hunter per area and category, proves each finding, files it and asks the approval gate. Use when a huntr loop or the orchestrator starts a hunt; not for planned tickets (triage, build-ticket) or one known bug (diagnose).
-version: 0.2.0
+version: 0.2.1
 ---
 
 # huntr
@@ -16,7 +16,8 @@ labels, then its huntr settings, `docs/agents/huntr.md`: tiers and their
 proofs, never-list, pace, open cap, model rows, switch issue, lease,
 checklist, slice manifests, issue form and gate. Run every script from the
 consuming repository root as `node <installed-huntr>/scripts/<script>`.
-Each exits 2 with its reason on stderr; a refused write posted nothing.
+Each refusal exits 2 (an unreadable `due` or a pending `finish` exits 3)
+with its reason on stderr; a refused write posted nothing.
 
 ## Guards
 
@@ -52,9 +53,11 @@ Each exits 2 with its reason on stderr; a refused write posted nothing.
    Never contact the holder; its lease expires 45 minutes after renewal.
 4. Resume the latest verified record from the switch issue: its root index,
    then every part through `manifest.mjs unpack` with the index's digest.
-5. `lease.mjs pace <timezone> <streak> <last-empty-at>` from that record.
-   `hunt: false` ends the hunt as paused; exit 2 means ask on the tracking
-   issue and do only independent reconciliation.
+5. `lease.mjs pace <timezone> <streak> <last-empty-at>` from that record;
+   `<last-empty-at>` is an ISO instant with Z or an offset, never a bare
+   local time. `hunt: false` ends the hunt as paused: finish it (step 5).
+   Exit 2 means ask on the tracking issue, do only independent
+   reconciliation, then finish the same way.
 6. Do any one-time reconciliation the settings name. Check the open cap.
    Leave approved fleets' files and resources to their started or claimed
    builders; reconcile an uncertain start before treating files as free.
@@ -78,18 +81,25 @@ Each exits 2 with its reason on stderr; a refused write posted nothing.
    Cloudroom in separate sandboxes, with the settings' hunter model row. A
    missing model is a blocked slice, never a substitute. Queue slices beyond
    real capacity.
-5. End the turn. Never poll or sleep.
+5. If no slice is running or queued (every slice blocked), finish the hunt
+   now (step 5). Otherwise end the turn. Never poll or sleep.
 
 ## On every wake
 
-1. `lease.mjs due <run> scheduled|hunter`. Exit 2: file nothing more, post
-   unfiled candidates as a step 5 record, and archive.
+1. `lease.mjs due <run> scheduled|hunter`. Exit 2 (the lease is lost or
+   taken): file nothing more, put unfiled candidates in the record and finish
+   the hunt (step 5). Exit 3 (unreadable): file nothing and dispatch no queued
+   slice this wake; collect reports (step 3), then end the turn while hunters
+   are still running, or else finish the hunt (step 5) with any queued slice
+   recorded as a gap.
 2. File every proven finding first (step 3).
 3. `hunters.mjs collect <pin> <slice>=<report>...`; only a report at the pin
-   is coverage. Archive those hunters; dispatch queued slices.
-4. On `"checkpoint": true`, publish the partial record (step 5) and post its
-   index with `lease.mjs renew <run> <index>`.
-5. End the turn.
+   is coverage. Archive those hunters; dispatch queued slices only after
+   `due` exited 0.
+4. When every slice is reported or blocked and none is queued, finish the
+   hunt (step 5); this wake ends there.
+5. Otherwise, on `"checkpoint": true`, publish the partial record (step 5)
+   and post its index with `lease.mjs renew <run> <index>`. End the turn.
 
 ## 3. Prove and file one problem at a time
 
@@ -121,8 +131,19 @@ Write the hunt's resumable record as JSON with `run` set to `<run>`: identity,
 date and timezone, base, switch, coverage, compact slice results, ledger,
 owners, gaps, empty-hunt streak and next action. Then run
 `lease.mjs publish <run> <record.json> <index>` and post the index with
-`renew` (checkpoint), `release` (final) or `record` (off, paused, blocked or a
-lost lease). A failed publish says which part to reconcile; rerun it.
+`renew` (a checkpoint while a wake is pending) or, to finish the hunt,
+`lease.mjs finish <run> <index>` on every final path: done, paused, blocked,
+off or a lost lease. `finish` reads the lease up to four times over about two
+minutes, releases while this run holds it and records otherwise; if the
+lease stays unreadable it posts the index under a release line, which frees
+only this run's own lease (`"verified": false`: publish already verified the
+parts). Exit 3 means nothing was confirmed posted: finalization is pending.
+Keep the record and index in resumable state, stay open and rerun `finish` on
+the next wake; it reuses an index already posted. If no wake comes, the lease
+expires 45 minutes after its last renewal and the next scheduled controller
+resumes from the latest verified record. A failed publish says which part to
+reconcile; rerun it. Write the last empty hunt's time as an instant
+with Z.
 Include **found, approved, proposed, skipped**, each with counts and tracker links. An empty hunt with every
 required source read adds one to the streak; a nonempty hunt resets it.
 

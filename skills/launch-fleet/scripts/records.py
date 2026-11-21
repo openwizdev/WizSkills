@@ -184,7 +184,7 @@ def annotate(world, repo, private, threads, state):
                 if any(record.get('givenUp') for record in span):
                     c['reviewClosed'] = True
                     c['recordError'] = None
-            if re.fullmatch(r'(?:resume starting [0-9]+ for #[0-9]+|release starting [0-9]+)', line):
+            if re.fullmatch(rf'(?:resume starting [0-9]+ for (?:(?i:{re.escape(repo)}))?#[0-9]+|release starting [0-9]+)', line):
                 c['resolvedThread'] = state.get('comment:' + str(c['databaseId']))
         for child in obj.get('subIssues', {}).get('nodes', []):
             item(child)

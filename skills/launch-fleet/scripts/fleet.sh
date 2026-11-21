@@ -1443,9 +1443,10 @@ def pending_wait: waiting as $w | records as $rs
 # #2096: a record or orchestrator line in a shape that names one of this
 # repository'"'"'s issues, naming another repository'"'"'s instead: refused once,
 # naming its line, never skipped silently.
-def ref_line: "^(?:launch-fleet:\\s*(?:waiting for|resume (?:starting|sent|failed|withdrawn) [0-9]+ for|held for ordering: (?:issue|PR)|held for|noted) |Orchestrator(?: \\([^\\r\\n]*\\))?: \\*\\*(?:(?:yes|confirmed)[,:] )?(?:wait for|held for ordering only))";
+# Only the reference in the shape'"'"'s own place counts, never prose after it.
+def ref_line: "^(?:launch-fleet:\\s*(?:waiting for|resume (?:starting|sent|failed|withdrawn) [0-9]+ for|held for ordering: (?:issue|PR)|held for|noted) |Orchestrator(?: \\([^\\r\\n]*\\))?: \\*\\*(?:(?:yes|confirmed)[,:] )?wait for )(?<r>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*)";
 def ref_looks: records as $rs | .number as $n | .comments.nodes[] | . as $c | (.body | first_text | sub("^\\s+"; "") | sub("\\s+$"; "")) as $l
-  | select($l | test(ref_line)) | ($l | foreign) as $f | select(($f | length) > 0)
+  | ([$l | capture(ref_line) | .r | foreign[]]) as $f | select(($f | length) > 0)
   | look($n; $rs; "comment \($c.databaseId)'"'"'s line `\($l | short)` names \($f | join(", ")), not this repository");
 def resume_claim($w): [records[] | select(.r | test("^resume starting \($w.id) for #\($w.number)(, thread thr_[A-Za-z0-9_-]+)?$"))] | min_by(.id);
 
@@ -1972,11 +1973,13 @@ def ticket_lines($s):
 
 # A spec'"'"'s approval: a look when it lists no tickets, a re-approve when the
 # plan changed since.
-# #2096: a table line of the latest approval naming another repository'"'"'s
-# issue: refused, naming its line (that row approves nothing).
+# #2096: a table line of the latest approval whose Ticket or Blocked by cell
+# names another repository'"'"'s issue: refused, naming its line (that row
+# approves nothing). A title may name anything.
 def approval_refs($s): ([$s.comments.nodes[] | select(.body | first_text | sub("^\\s+"; "") | test("^\\*\\*(?:Plan graph approved by|Machine plan approval, )"))] | max_by(.databaseId)) as $c
   | if $c == null then empty else
-      $c.body | lines[] | sub("\\s+$"; "") | select(startswith("|")) | . as $l | foreign as $f | select(($f | length) > 0)
+      $c.body | lines[] | sub("\\s+$"; "") | select(startswith("|")) | . as $l
+      | (split("|")[1:-1] | select(length >= 4) | [(.[0], .[-2]) | foreign[]] | unique) as $f | select(($f | length) > 0)
       | "its latest plan graph approval'"'"'s line `\($l | short)` names \($f | join(", ")), not this repository" end;
 def approval_lines: . as $s | records as $srs | (approval_refs($s) | look($s.number; $srs; .)), (latest($s) as $a
   | if $a == null then empty

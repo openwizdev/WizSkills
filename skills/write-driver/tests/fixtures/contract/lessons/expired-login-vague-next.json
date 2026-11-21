@@ -1,0 +1,9 @@
+{
+  "lesson": "expired-login",
+  "exit": 1,
+  "answer": {
+    "error": "run run-synthetic01: the first turn failed",
+    "next": "try again later"
+  },
+  "left_running": false
+}

@@ -1,0 +1,123 @@
+.F.F.FFF.FF
+======================================================================
+FAIL: test_a_fix_merged_in_another_openwizdev_repository_names_it_in_full (__main__.Landed.test_a_fix_merged_in_another_openwizdev_repository_names_it_in_full)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-merge.py", line 659, in test_a_fix_merged_in_another_openwizdev_repository_names_it_in_full
+    self.assertEqual(self.posts(dest), [(9101, LANDED.replace(DEST, SKILLS))])
+AssertionError: Lists differ: [] != [(9101, 'Landed: the fix for this report m[64 chars]2.')]
+
+Second list contains 1 additional elements.
+First extra element 0:
+(9101, 'Landed: the fix for this report merged in openwizdev/WizSkills#9201 and will ship in OpenWiz 9.4.2.')
+
+- []
++ [(9101,
++   'Landed: the fix for this report merged in openwizdev/WizSkills#9201 and '
++   'will ship in OpenWiz 9.4.2.')]
+
+======================================================================
+FAIL: test_a_lost_landed_response_is_reconciled_never_posted_twice (__main__.Landed.test_a_lost_landed_response_is_reconciled_never_posted_twice)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-merge.py", line 691, in test_a_lost_landed_response_is_reconciled_never_posted_twice
+    self.assertEqual(self.posts(w), [(9101, LANDED)])
+AssertionError: Lists differ: [(910[41 chars]d in #9201 and will ship in OpenWiz 9.4.2.')] != [(910[41 chars]d in openwizdev/OpenWiz#9201 and will ship in OpenWiz 9.4.2.')]
+
+First differing element 0:
+(9101[39 chars]ed in #9201 and will ship in OpenWiz 9.4.2.')
+(9101[39 chars]ed in openwizdev/OpenWiz#9201 and will ship in OpenWiz 9.4.2.')
+
+  [(9101,
+-   'Landed: the fix for this report merged in #9201 and will ship in OpenWiz '
+-   '9.4.2.')]
++   'Landed: the fix for this report merged in openwizdev/OpenWiz#9201 and will '
++   'ship in OpenWiz 9.4.2.')]
+
+======================================================================
+FAIL: test_a_merged_fix_posts_one_landed_comment_and_a_second_run_posts_nothing (__main__.Landed.test_a_merged_fix_posts_one_landed_comment_and_a_second_run_posts_nothing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-merge.py", line 578, in test_a_merged_fix_posts_one_landed_comment_and_a_second_run_posts_nothing
+    self.assertEqual(self.posts(w), [(9101, LANDED)])
+AssertionError: Lists differ: [(910[41 chars]d in #9201 and will ship in OpenWiz 9.4.2.')] != [(910[41 chars]d in openwizdev/OpenWiz#9201 and will ship in OpenWiz 9.4.2.')]
+
+First differing element 0:
+(9101[39 chars]ed in #9201 and will ship in OpenWiz 9.4.2.')
+(9101[39 chars]ed in openwizdev/OpenWiz#9201 and will ship in OpenWiz 9.4.2.')
+
+  [(9101,
+-   'Landed: the fix for this report merged in #9201 and will ship in OpenWiz '
+-   '9.4.2.')]
++   'Landed: the fix for this report merged in openwizdev/OpenWiz#9201 and will '
++   'ship in OpenWiz 9.4.2.')]
+
+======================================================================
+FAIL: test_a_report_found_by_its_marker_alone_gets_it (__main__.Landed.test_a_report_found_by_its_marker_alone_gets_it)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-merge.py", line 632, in test_a_report_found_by_its_marker_alone_gets_it
+    self.assertEqual(self.posts(w), [(9101, LANDED)])
+AssertionError: Lists differ: [(910[41 chars]d in #9201 and will ship in OpenWiz 9.4.2.')] != [(910[41 chars]d in openwizdev/OpenWiz#9201 and will ship in OpenWiz 9.4.2.')]
+
+First differing element 0:
+(9101[39 chars]ed in #9201 and will ship in OpenWiz 9.4.2.')
+(9101[39 chars]ed in openwizdev/OpenWiz#9201 and will ship in OpenWiz 9.4.2.')
+
+  [(9101,
+-   'Landed: the fix for this report merged in #9201 and will ship in OpenWiz '
+-   '9.4.2.')]
++   'Landed: the fix for this report merged in openwizdev/OpenWiz#9201 and will '
++   'ship in OpenWiz 9.4.2.')]
+
+======================================================================
+FAIL: test_a_report_landed_by_an_earlier_fix_gets_nothing (__main__.Landed.test_a_report_landed_by_an_earlier_fix_gets_nothing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-merge.py", line 591, in test_a_report_landed_by_an_earlier_fix_gets_nothing
+    self.assertEqual(self.merge(w, 9108)[1].split('; ')[-1], 'landed already posted 4000')
+AssertionError: 'landed posted 5001 on #9101' != 'landed already posted 4000'
+- landed posted 5001 on #9101
++ landed already posted 4000
+
+
+======================================================================
+FAIL: test_only_a_record_authors_landed_comment_counts (__main__.Landed.test_only_a_record_authors_landed_comment_counts)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-merge.py", line 600, in test_only_a_record_authors_landed_comment_counts
+    self.assertEqual(self.posts(w), [(9101, LANDED)])
+AssertionError: Lists differ: [(910[41 chars]d in #9201 and will ship in OpenWiz 9.4.2.')] != [(910[41 chars]d in openwizdev/OpenWiz#9201 and will ship in OpenWiz 9.4.2.')]
+
+First differing element 0:
+(9101[39 chars]ed in #9201 and will ship in OpenWiz 9.4.2.')
+(9101[39 chars]ed in openwizdev/OpenWiz#9201 and will ship in OpenWiz 9.4.2.')
+
+  [(9101,
+-   'Landed: the fix for this report merged in #9201 and will ship in OpenWiz '
+-   '9.4.2.')]
++   'Landed: the fix for this report merged in openwizdev/OpenWiz#9201 and will '
++   'ship in OpenWiz 9.4.2.')]
+
+======================================================================
+FAIL: test_two_briefs_linking_one_report_lead_to_one_comment (__main__.Landed.test_two_briefs_linking_one_report_lead_to_one_comment)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-merge.py", line 639, in test_two_briefs_linking_one_report_lead_to_one_comment
+    self.assertEqual(self.posts(w), [(9101, LANDED)])
+AssertionError: Lists differ: [(910[41 chars]d in #9201 and will ship in OpenWiz 9.4.2.')] != [(910[41 chars]d in openwizdev/OpenWiz#9201 and will ship in OpenWiz 9.4.2.')]
+
+First differing element 0:
+(9101[39 chars]ed in #9201 and will ship in OpenWiz 9.4.2.')
+(9101[39 chars]ed in openwizdev/OpenWiz#9201 and will ship in OpenWiz 9.4.2.')
+
+  [(9101,
+-   'Landed: the fix for this report merged in #9201 and will ship in OpenWiz '
+-   '9.4.2.')]
++   'Landed: the fix for this report merged in openwizdev/OpenWiz#9201 and will '
++   'ship in OpenWiz 9.4.2.')]
+
+----------------------------------------------------------------------
+Ran 11 tests in 8.537s
+
+FAILED (failures=7)

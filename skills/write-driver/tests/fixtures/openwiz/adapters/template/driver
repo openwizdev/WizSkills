@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""A synthetic stand-in for OpenWiz's adapters/template/driver, for write-driver's own tests only.
+
+It keeps the real template's names (its VERSION, its state variable and folder) and its four words: `start`
+runs the harness as `<harness> --model <m> -p <prompt>` in its own session and answers a run id at once,
+`wake` answers for a known run, `stop` ends the run's processes. Like the real template it answers `start`
+even when the harness's first turn ends at once on a sign-in error. Every value is synthetic.
+"""
+import json, os, re, secrets, shutil, signal, subprocess, sys, time
+
+STATE = os.environ.get('OPENWIZ_TEMPLATE_STATE') or os.path.expanduser('~/.local/state/openwiz-template')
+VERSION = {'driver': 'template', 'records': ['openwiz:records v1'], 'can': ['start', 'wake', 'stop']}
+HOST = 'template'
+FIRST_TURN_CHECK = False  # write-driver's tests flip this in a copy: the expired-login fix
+
+
+def refuse(error, next_):
+    print(json.dumps({'error': error, 'next': next_}))
+    sys.exit(1)
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) == 2 else ''
+    if cmd == 'version':
+        return VERSION
+    if cmd == 'schema':
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.json')) as f:
+            return json.load(f)
+    req = json.loads(sys.stdin.read() or '{}')
+    if cmd == 'start':
+        if 'token' in req:
+            refuse('start takes no token', 'send only the five fields; never a login')
+        if not shutil.which(req['harness']):
+            refuse('harness %s is not installed here' % req['harness'], 'install it and sign in yourself')
+        run = 'run-' + secrets.token_hex(6)
+        p = subprocess.Popen([req['harness'], '--model', req['model'], '-p', 'Build the ticket'],
+                             start_new_session=True, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE if FIRST_TURN_CHECK else subprocess.DEVNULL,
+                             stderr=subprocess.STDOUT if FIRST_TURN_CHECK else subprocess.DEVNULL)
+        os.makedirs(STATE, exist_ok=True)
+        with open(os.path.join(STATE, run), 'w') as f:
+            f.write(str(p.pid))
+        if FIRST_TURN_CHECK:
+            try:
+                code = p.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                code = None
+            if code not in (None, 0):
+                said = p.stdout.read().decode('utf-8', 'replace')
+                if re.search(r'(?i)sign in|log in|login', said):
+                    refuse('run %s: the first turn ended at once: the harness is not signed in (exit %d)' % (run, code),
+                           'sign in to %s on %s yourself, then start again' % (req['harness'], HOST))
+                refuse('run %s: the first turn ended at once (exit %d)' % (run, code), 'read the harness output')
+        return {'run': run}
+    path = os.path.join(STATE, str(req.get('run')))
+    if cmd in ('wake', 'stop') and not os.path.exists(path):
+        refuse('no run %s' % req.get('run'), 'check the run id that start printed')
+    if cmd == 'wake':
+        return {'run': req['run'], 'woke': True}
+    if cmd == 'stop':
+        with open(path) as f:
+            pid = int(f.read())
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        return {'run': req['run'], 'stopped': True}
+    refuse('unknown command', 'run one of: version, schema, start, wake, stop')
+
+
+if __name__ == '__main__':
+    print(json.dumps(main()))

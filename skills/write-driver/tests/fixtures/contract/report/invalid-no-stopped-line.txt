@@ -1,0 +1,4 @@
+Your examplehost driver passed 5 of 5 in 23 minutes.
+Kit: version pass, start pass, wake pass, stop pass, token pass
+Live lessons: live-shape pass, wake-after-turn pass, expired-login pass
+Pull request: https://github.com/example-user/examplehost-driver/pull/1

@@ -54,6 +54,7 @@ SUITES = {
     'wayfind': [['python3', '-I', 'skills/wayfind/test/test_frontier.py']],
     'research': [['python3', '-I', 'skills/research/test/test_workers.py'],
                  ['python3', '-I', 'skills/research/test/test_snapshot_commands.py']],
+    'write-driver': [['python3', '-I', 'skills/write-driver/tests/test_write_driver.py']],
     'launch-fleet': [['sh', 'skills/launch-fleet/scripts/test.sh'],
                      ['python3', '-I', 'skills/launch-fleet/test/ops-protocol/test_protocol.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-effects.py'],
@@ -85,6 +86,7 @@ SOURCE_LINES = {
     'huntr': ORIGINAL,
     'image': ORIGINAL,
     'install': ORIGINAL,
+    'write-driver': ORIGINAL,
     'where-are-we': "**Source:** dot-context's written plan. Not adapted from Matt Pocock's skills.",
 }
 

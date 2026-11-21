@@ -1,0 +1,46 @@
+........FFF...F
+======================================================================
+FAIL: test_a_transient_report_read_keeps_the_work_open_until_a_later_wake_lands_it (__main__.Landed.test_a_transient_report_read_keeps_the_work_open_until_a_later_wake_lands_it) [direct]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-merge.py", line 773, in test_a_transient_report_read_keeps_the_work_open_until_a_later_wake_lands_it
+    self.assertFalse(archives, out)
+AssertionError: True is not false : no queued merge
+
+======================================================================
+FAIL: test_a_transient_report_read_keeps_the_work_open_until_a_later_wake_lands_it (__main__.Landed.test_a_transient_report_read_keeps_the_work_open_until_a_later_wake_lands_it) [queued]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-merge.py", line 773, in test_a_transient_report_read_keeps_the_work_open_until_a_later_wake_lands_it
+    self.assertFalse(archives, out)
+AssertionError: True is not false : cost posted 5001; landed unknown: openwizdev/OpenWiz#9101 could not be read, so nothing was posted
+
+======================================================================
+FAIL: test_a_transient_report_read_keeps_the_work_open_until_a_later_wake_lands_it (__main__.Landed.test_a_transient_report_read_keeps_the_work_open_until_a_later_wake_lands_it)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-merge.py", line 782, in test_a_transient_report_read_keeps_the_work_open_until_a_later_wake_lands_it
+    self.assertNotIn('through the merge queue', row)
+AssertionError: 'through the merge queue' unexpectedly found in '| `archive #N` | First, for a ticket its pull request `P` closed through the merge queue, run `python3 -I "<this skill\'s folder>/scripts/merge.py" settle <owner>/<repo> <P> <N>` from the project checkout, passing the project\'s private flow files after `--` as `merge` does, which posts the cost line that queued merge still owes; it archives only after `cost posted <id>`, `cost already posted <id>` or `no queued merge`; any other result (`unknown:`, `refused:` or none) archives nothing and leaves the `archive` line for a later wake, which settles again (a `refused:` also goes to the orchestrator as a `look`). Archive the agents it names (one already archived is done; a builder with a driver run is stopped with `host.py stop`), then record `launch-fleet: archived` as the ticket\'s last comment |'
+
+======================================================================
+FAIL: test_two_runs_racing_on_one_report_leave_the_earliest_comment_only (__main__.Landed.test_two_runs_racing_on_one_report_leave_the_earliest_comment_only)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-merge.py", line 795, in test_two_runs_racing_on_one_report_leave_the_earliest_comment_only
+    self.assertEqual([c['body'] for c in kept], [LANDED], outs)
+AssertionError: Lists differ: ['Lan[90 chars]4.2.', 'Landed: the fix for this report merged[56 chars].2.'] != ['Lan[90 chars]4.2.']
+
+First list contains 1 additional elements.
+First extra element 1:
+'Landed: the fix for this report merged in openwizdev/OpenWiz#9201 and will ship in OpenWiz 9.4.2.'
+
+  ['Landed: the fix for this report merged in openwizdev/OpenWiz#9201 and will '
+-  'ship in OpenWiz 9.4.2.',
+-  'Landed: the fix for this report merged in openwizdev/OpenWiz#9201 and will '
+   'ship in OpenWiz 9.4.2.'] : ['landed posted 5001 on openwizdev/OpenWiz#9101', 'landed posted 5002 on openwizdev/OpenWiz#9101']
+
+----------------------------------------------------------------------
+Ran 13 tests in 10.757s
+
+FAILED (failures=4)

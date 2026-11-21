@@ -1,0 +1,19 @@
+{
+  "lesson": "live-shape",
+  "live": [
+    {
+      "id": "sb-synthetic-1",
+      "state": "idle"
+    },
+    {
+      "id": "sb-synthetic-2",
+      "state": "running"
+    }
+  ],
+  "fixture": [
+    {
+      "id": "sb-synthetic-3",
+      "state": "stopped"
+    }
+  ]
+}

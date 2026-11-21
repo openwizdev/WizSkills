@@ -1,0 +1,48 @@
+# #2182 red run: python3 -I skills/install/tests/test_doctor.py SkillNameClash on maint/0.2 (4581615) with only the new tests; paths made repository-relative, long lines cut at 300 characters.
+FFFE
+======================================================================
+ERROR: test_yes_moves_each_folder_and_its_name_line_and_checks_it (__main__.SkillNameClash.test_yes_moves_each_folder_and_its_name_line_and_checks_it)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 732, in test_yes_moves_each_folder_and_its_name_line_and_checks_it
+    op = json.loads(self.run_clash('list').stdout)['operation']
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+======================================================================
+FAIL: test_list_names_every_clash_asks_the_one_question_and_moves_nothing (__main__.SkillNameClash.test_list_names_every_clash_asks_the_one_question_and_moves_nothing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 714, in test_list_names_every_clash_asks_the_one_question_and_moves_nothing
+    self.assertEqual(done.returncode, 0, done.stderr)
+AssertionError: 2 != 0 : /usr/bin/python3: can't open file 'skills/install/scripts/skill_clash.py': [Errno 2] No such file or directory
+
+
+======================================================================
+FAIL: test_no_yes_or_another_plan_moves_nothing (__main__.SkillNameClash.test_no_yes_or_another_plan_moves_nothing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 726, in test_no_yes_or_another_plan_moves_nothing
+    self.assertEqual(self.run_clash('rename', '--yes', '--operation', '0' * 16).returncode, 5)
+AssertionError: 2 != 5
+
+======================================================================
+FAIL: test_step_4_asks_once_and_says_what_no_means (__main__.SkillNameClash.test_step_4_asks_once_and_says_what_no_means)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 757, in test_step_4_asks_once_and_says_what_no_means
+    self.assertIn(words, step4)
+AssertionError: 'scripts/skill_clash.py list --build "$build"' not found in '## 4. Skills into your agents, then a restart\n\nOnly now, with setup checked and the logins done, copy OpenWiz\'s skills into the user\'s agents:\n\n```sh\npython3 -I "$openwiz"/tools/install/install skills --root <root>\n
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.047s
+
+FAILED (failures=3, errors=1)

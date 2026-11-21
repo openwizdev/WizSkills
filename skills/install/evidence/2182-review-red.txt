@@ -1,0 +1,50 @@
+# #2182 R1/R2 red run: python3 -I skills/install/tests/test_doctor.py SkillNameClash at 7360d86 with only the two new review tests; paths made repository-relative, long lines cut at 300 characters.
+FF....
+======================================================================
+FAIL: test_a_folder_the_installer_still_refuses_blocks_every_move (__main__.SkillNameClash.test_a_folder_the_installer_still_refuses_blocks_every_move)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 768, in test_a_folder_the_installer_still_refuses_blocks_every_move
+    out = self.blocked_and_unmoved('%s is a link or not a folder' % (self.home / '.config'))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/install/tests/test_doctor.py", line 756, in blocked_and_unmoved
+    self.assertEqual((out['question'], out['operation']), (None, None))
+AssertionError: Tuples differ: ('You already have your own skills named g[278 chars]753') != (None, None)
+
+First differing element 0:
+'You already have your own skills named g[257 chars]/no)'
+None
+
++ (None, None)
+- ('You already have your own skills named grill, handoff and research. '
+-  'handoff-mine is already taken, so yours becomes handoff-mine-2. Rename yours '
+-  'to grill-mine, handoff-mine-2, research-mine and handoff-mine (and their '
+-  'name lines) so OpenWiz can install? They keep working under the new names. '
+-  '(yes/no)',
+-  '4f826d7465193753')
+
+======================================================================
+FAIL: test_a_linked_skill_md_is_refused_and_left_alone (__main__.SkillNameClash.test_a_linked_skill_md_is_refused_and_left_alone)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 779, in test_a_linked_skill_md_is_refused_and_left_alone
+    self.blocked_and_unmoved('SKILL.md is a link')
+  File "skills/install/tests/test_doctor.py", line 756, in blocked_and_unmoved
+    self.assertEqual((out['question'], out['operation']), (None, None))
+AssertionError: Tuples differ: ('You already have your own skills named g[264 chars]480') != (None, None)
+
+First differing element 0:
+'You already have your own skills named g[243 chars]/no)'
+None
+
++ (None, None)
+- ('You already have your own skills named grill, handoff and research. '
+-  'handoff-mine is already taken, so yours becomes handoff-mine-2. Rename yours '
+-  'to grill-mine, handoff-mine-2 and research-mine (and their name lines) so '
+-  'OpenWiz can install? They keep working under the new names. (yes/no)',
+-  'ed188ab983820480')
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.239s
+
+FAILED (failures=2)

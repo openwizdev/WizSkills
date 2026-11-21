@@ -531,6 +531,31 @@ class SkillCommandsMatchPackage(unittest.TestCase):
         self.assertNotIn('$openwiz', resume + after)
         self.assertNotRegex(text, r'\]\(\.\./\.\./contracts/')
 
+    def parts(self):
+        text = SKILL.read_text()
+        return (text, text[text.index('## 4. '):text.index('## 5. ')], text[text.index('## Resume'):text.index('## 1. ')],
+                text[text.index('## Recovery and removal'):])
+
+    def test_the_codex_folder_follows_codex_home(self):
+        text, step4, resume, removal = self.parts()
+        for part in (step4, resume, removal):
+            self.assertIn('${CODEX_HOME:-$HOME/.codex}/skills', part)
+        self.assertNotIn('never `$CODEX_HOME`', text)
+
+    def test_removal_deletes_only_marked_copies(self):
+        removal = self.parts()[3]
+        self.assertIn('[ -f "$d/$s/.openwiz-skill" ]', removal)
+
+    def test_an_uncertain_cloudroom_install_is_retried_with_its_operation(self):
+        row = next(l for l in self.parts()[0].split('\n') if l.startswith('| `cloudroom_install_uncertain`'))
+        self.assertIn('cloudroom.py install --yes --operation <operation_id> --state-dir <state>', row)
+
+    def test_a_missing_gh_gets_its_install_step(self):
+        text = self.parts()[0]
+        for words in ('login_gh_missing', 'https://cli.github.com', 'gh --version'):
+            self.assertIn(words, text)
+        self.assertIn('even on exit 0', text[text.index('## 1. '):text.index('## 2. ')])
+
     def test_the_reader_finds_a_synthetic_skill_s_commands(self):
         text = ('Run `install open --root <root> --browser` and\n\n```sh\n'
                 'python3 -I "$openwiz"/tools/install/install skills --root <root>\n```\n'

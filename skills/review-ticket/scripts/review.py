@@ -349,7 +349,7 @@ def report_problems(path, repo, number, assigned):
     if s["mode"] in ("re-check", "final"):
         changed = changed_since(repo, s["last"]["head"], s["head"])
     elif s["mode"] == "log-and-merge":
-        changed = set()  # at the parked head itself: every file is unchanged, so no compare
+        changed = set()
     return text, s, check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"], s["decision"], changed)
 
 

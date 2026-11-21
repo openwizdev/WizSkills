@@ -598,9 +598,6 @@ class Review(unittest.TestCase):
         self.assertIn("R3: the decision grades it polish with Polish issue: #64", out.stdout.splitlines())
 
     def test_a_log_and_merge_check_raises_no_new_finding_on_unchanged_code(self):
-        # catches (#1450): the log-and-merge check skipping the unchanged-code
-        # guard, so its report at the parked head (every file unchanged) slips
-        # in a new polish finding, with a compare call it never needs.
         parked = self.parked_world(f"**Orchestrator decision:** log and merge: R3 at {NEWER}. Polish issues: #64. "
                                    "Why: the log stays local.")
         approve = parked.replace("VERDICT: CHANGES", "VERDICT: APPROVE").replace(

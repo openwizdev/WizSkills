@@ -92,6 +92,22 @@ class Fleet(unittest.TestCase):
         self.pr['checks'][0]['conclusion'] = 'FAILURE'
         self.assertEqual(self.run_fleet('wake', '12'), f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')
 
+    def test_builder_found_through_a_local_bare_list_or_a_cloud_children_answer_without_include_hidden(self):
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        for cli in ('local', 'cloud'):
+            with self.subTest(cli=cli):
+                self.env['FAKE_ROOM_CLI'] = cli
+                self.assertEqual(self.run_fleet('wake', '12'),
+                                 f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')
+
+    def test_a_cloud_answer_without_a_thread_list_is_out_of_reach(self):
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        self.env['FAKE_ROOM_CLI'] = 'cloud'
+        for threads in ({'id': 'thr_synbuilder'}, 'thr_synbuilder', [{'title': '#12: Synthetic'}]):
+            with self.subTest(threads=threads):
+                self.threads = threads
+                self.assertEqual(self.run_fleet('wake', '12'), 'look #12: thread discovery is out of reach\n')
+
     def test_recheck_finds_original_reviewer(self):
         for private, suffix in [(False, ''), (True, ''),
                                 (True, '\nSynthetic note'), (True, ' (synthetic note)')]:

@@ -200,10 +200,12 @@ and effort, each joined by a space. Fixtures: `set-older-namespaced/` (a
 rows, and its report and the `show` of the written file both name them),
 `both/` (a hand-edited stale row). A `set` on a file with
 only the older tables first inserts a `## Models` section, immediately
-before the first older table's heading and followed by one blank line, with
-all five rows written as choices from the older reading (Small builder and
-Fixer as their own rows, not following), then makes the change and keeps the
-older rows in step; its report says `models_table_added: true`. Fixture:
+before the first older table's heading, with all five rows written as
+choices from the older reading (Small builder and Fixer as their own rows,
+not following), then one blank line, a `Source:` line naming
+`openwiz models set`, the owner's choice and the older tables (so Connect's
+settings check accepts the section), and one blank line. It then makes the
+change and keeps the older rows in step; its report says `models_table_added: true`. Fixture:
 `set-older/`.
 
 ## The offered-models snapshot

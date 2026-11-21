@@ -150,12 +150,12 @@ echo "ok   without the secret, openwiz or a token, the check runs as today's acc
 
 ga4=synthetic-ga4-token-0123456789
 mkdir -m 700 "$work/token-private"
-service() { # the synthetic service on the local route, and the old key secret that it must replace
+service() {
   export OPENWIZ_TOKEN_SERVICE="$FIX/token_service.py" OPENWIZ_TOKEN_SERVICE_ROUTE=local \
     OPENWIZ_AGENT_TOKEN_DIR="$work/token-private" FAKE_SERVICE_LOG="$work/service.log" \
     OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj
   : > "$work/service.log"
-  rm -f "$work/token-private/"*  # each case asks afresh, not from the last case's cached token
+  rm -f "$work/token-private/"*
 }
 (service; : > "$work/gh-key.log"; identity "$ga4 installation" '')
 [ -s "$work/gh-key.log" ] && [ -z "$(grep -vx no-key "$work/gh-key.log")" ]

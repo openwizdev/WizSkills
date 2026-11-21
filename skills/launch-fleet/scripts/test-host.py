@@ -247,6 +247,133 @@ class Host(unittest.TestCase):
 STOPPED = 'stopped (driver start failed)'
 
 
+TOKEN = 'synthetic-ga4-token-0123456789'
+WRITE = {'metadata': 'read', 'contents': 'write', 'issues': 'write', 'pull_requests': 'write', 'checks': 'read',
+         'actions': 'read'}
+NOTE = "openwiz: no openwiz[bot] token (unavailable); using the owner's GitHub account"
+
+
+class Token(unittest.TestCase):
+
+    def service(self, p):
+        private = p.dir / 'token-private'
+        private.mkdir(mode=0o700)
+        p.service_log = p.dir / 'service.log'
+        return dict(OPENWIZ_TOKEN_SERVICE=str(HERE / 'fixtures/token_service.py'), OPENWIZ_TOKEN_SERVICE_ROUTE='local',
+                    OPENWIZ_AGENT_TOKEN_DIR=str(private), FAKE_SERVICE_LOG=str(p.service_log))
+
+    def requests(self, p):
+        return [json.loads(line) for line in p.service_log.read_text().splitlines()] if p.service_log.exists() else []
+
+    def exposed(self, p, *outputs):
+        texts = [*outputs, p.log.read_text() if p.log.exists() else '', p.runs.read_text() if p.runs.exists() else '',
+                 p.world.read_text(), *(json.dumps(r['argv']) for r in self.requests(p))]
+        return [t for t in texts if TOKEN in t]
+
+    def test_a_driver_start_and_a_wake_each_get_the_builders_token_from_the_helper(self):
+        p = Project(self)
+        env = self.service(p)
+        started = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env)
+        self.assertEqual(started, (0, 'started #7 on local', ''))
+        self.assertEqual([r['request'] for r in self.requests(p)], [{
+            'schema': 'openwiz.token-service.v1', 'kind': 'request', 'requester': 'builder-7',
+            'repositories': [REPO], 'permissions': WRITE}])
+        held = [f for f in (p.dir / 'token-private').iterdir()]
+        self.assertEqual(len(held), 1)
+        self.assertEqual(held[0].stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(held[0].read_text())['token'], TOKEN)
+        self.assertEqual(p.calls()[0]['input'], {'repository': REPO, 'ticket': 7, 'skill': 'build-ticket',
+                                                 'harness': 'claude', 'model': 'claude-opus-5-5'})
+        held[0].unlink()
+        woke = p.host('wake', REPO, 7, **env)
+        self.assertEqual(woke, (0, 'woke #7 on local', ''))
+        self.assertEqual([r['request']['requester'] for r in self.requests(p)], ['builder-7', 'builder-7'])
+        self.assertEqual(self.exposed(p, *started[1:], *woke[1:]), [])
+
+    def builder(self, p):
+        (p.dir / 'bin/gh').write_text(
+            '#!/bin/sh\nif [ -n "${FAKE_GH_PROBE:-}" ]; then\n'
+            '  { [ "${GH_TOKEN:-}" = %s ] && printf app || printf owner\n'
+            '    [ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && printf " key\\n" || printf " no-key\\n"; } >> "$FAKE_GH_PROBE"\n'
+            'fi\nexec "%s" -I "%s" "$@"\n' % (TOKEN, sys.executable, HERE / 'fixtures/fake_github.py'))
+        p.first = p.dir / 'builder.log'
+        return dict(FAKE_DRIVER_BUILDER=str(p.first), OPENWIZ_GITHUB_APP_KEY='synthetic-legacy-sentinel')
+
+    def seen(self, p):
+        first = [json.loads(line) for line in p.first.read_text().splitlines()] if p.first.exists() else []
+        gh = p.first.with_name(p.first.name + '.gh')
+        return first, gh.read_text().splitlines() if gh.exists() else []
+
+    def test_the_drivers_builder_does_its_first_github_operation_as_the_app_without_the_legacy_key(self):
+        p = Project(self)
+        env = dict(self.service(p), **self.builder(p))
+        started = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env)
+        self.assertEqual(started, (0, 'started #7 on local', ''))
+        woke = p.host('wake', REPO, 7, **env)
+        self.assertEqual(woke, (0, 'woke #7 on local', ''))
+        self.assertEqual(self.seen(p), (
+            [{'command': 'start', 'git_helper_is_the_apps': True, 'legacy_key': False},
+             {'command': 'wake', 'git_helper_is_the_apps': True, 'legacy_key': False}],
+            ['app no-key', 'app no-key']))
+        self.assertEqual({r['request']['requester'] for r in self.requests(p)}, {'builder-7'})
+        self.assertEqual([r['legacy_key'] for r in self.requests(p)], [False] * len(self.requests(p)))
+        self.assertEqual(self.exposed(p, *started[1:], *woke[1:]), [])
+
+    def git_probe(self, p):
+        p.git_log = p.dir / 'git-probe.log'
+        real = subprocess.run(['sh', '-c', 'command -v git'], capture_output=True, text=True).stdout.strip()
+        (p.dir / 'bin/git').write_text(
+            '#!/bin/sh\n{ [ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && printf key || printf no-key\n'
+            '  [ "${GH_TOKEN:-}" = %s ] && printf " token\\n" || printf " no-token\\n"; } >> "%s"\n'
+            'exec "%s" "$@"\n' % (TOKEN, p.git_log, real))
+        (p.dir / 'bin/git').chmod(0o755)
+
+    def probed(self, p):
+        return set(p.git_log.read_text().splitlines()) if p.git_log.exists() else set()
+
+    def test_with_a_service_no_git_child_gets_the_legacy_key_or_the_app_token(self):
+        p = Project(self)
+        env = dict(self.service(p), **self.builder(p))
+        self.git_probe(p)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env), (0, 'started #7 on local', ''))
+        self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', ''))
+        self.assertEqual(self.probed(p), {'no-key no-token'})
+        self.assertEqual(self.seen(p), (
+            [{'command': 'start', 'git_helper_is_the_apps': True, 'legacy_key': False},
+             {'command': 'wake', 'git_helper_is_the_apps': True, 'legacy_key': False}],
+            ['app no-key', 'app no-key']))
+
+    def test_with_no_service_git_children_keep_the_environment_as_today(self):
+        p = Project(self)
+        env = dict(self.service(p), **self.builder(p))
+        env['OPENWIZ_TOKEN_SERVICE'] = ''
+        self.git_probe(p)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env), (0, 'started #7 on local', ''))
+        self.assertEqual(self.probed(p), {'key no-token'})
+
+    def test_a_refused_token_falls_back_with_one_note_and_the_start_goes_on(self):
+        p = Project(self)
+        env = dict(self.service(p), FAKE_SERVICE_REFUSE='1')
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env), (0, 'started #7 on local', NOTE))
+        self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', NOTE))
+        self.assertEqual(len(self.requests(p)), 2)
+        self.assertEqual(list((p.dir / 'token-private').iterdir()), [])
+
+    def test_with_no_service_no_helper_runs_and_starts_are_as_today(self):
+        p = Project(self)
+        env = self.service(p)
+        (p.dir / 'token-private').rmdir()
+        env.update(self.builder(p), OPENWIZ_TOKEN_SERVICE='')
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env), (0, 'started #7 on local', ''))
+        self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', ''))
+        self.assertEqual(self.seen(p), (
+            [{'command': 'start', 'git_helper_is_the_apps': False, 'legacy_key': True},
+             {'command': 'wake', 'git_helper_is_the_apps': False, 'legacy_key': True}],
+            ['owner key', 'owner key']))
+        self.assertEqual(self.requests(p), [])
+        self.assertFalse((p.dir / 'token-private').exists())
+
+
 class Failures(unittest.TestCase):
     """#1446: a refused start or wake is tried three times in all, then reported on the ticket once."""
 

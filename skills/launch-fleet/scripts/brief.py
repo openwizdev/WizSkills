@@ -17,6 +17,7 @@ never goes into a public record.
 Exit 2 and print nothing for an unknown kind or a malformed target. The
 skill-file lookup belongs to the recipient, so it is printed unexpanded.
 """
+import os
 import re
 import sys
 
@@ -54,6 +55,28 @@ FORMS = {
               "Each wake section for the messages below. The orchestrator's thread is {1}."),
 }
 
+REQUESTERS = {'builder': ('builder-{0}', None), 'fresh': ('builder-{0}', None), 'reviewer': ('reviewer-{0}', None),
+              're-check': ('reviewer-{0}', None), 'diagnose': ('diagnose', None), 'fleet': ('fleet-{0}', '{1}'),
+              'wake': ('fleet-{0}', '{1}'), 'tick': ('fleet-tick', '{0}'), 'wakes': ('fleet-tick', '{0}')}
+TOKEN = (" GitHub token: run every gh or git command that reaches GitHub through the agent helper, the launch-fleet "
+         "skill's `scripts/github-app/agent-token.py` (find launch-fleet's SKILL.md as above): first "
+         "`env -u OPENWIZ_GITHUB_APP_KEY python3 -I <helper> start --requester {who} --repository {repo}`, then "
+         "`env -u OPENWIZ_GITHUB_APP_KEY python3 -I <helper> run --requester {who} --repository {repo} -- <command>` "
+         "for each command, with the same "
+         "request every time and `--repository` once for each repository you read or write (all of one owner). Inside a run git "
+         "reaches GitHub over HTTPS only, never SSH. The helper is your only App-token route: never run "
+         "`openwiz github token`, the App-token block in launch-fleet's `references/identity.md`, or any command with "
+         "`OPENWIZ_GITHUB_APP_KEY` in its environment. If it gets no token it says so once on stderr and runs the command as the owner's login: go on. Approvals, "
+         "repository settings and pushes that change `.github/workflows/` stay on the owner's login: run those "
+         "without the helper.")
+
+
+def token_step(kind, args):
+    if not os.environ.get('OPENWIZ_TOKEN_SERVICE'):
+        return ''
+    who, repo = REQUESTERS[kind]
+    return TOKEN.format(who=who.format(*args), repo=repo.format(*args) if repo else 'OWNER/NAME')
+
 
 def main(argv):
     form = FORMS.get(argv[0]) if argv else None
@@ -62,7 +85,7 @@ def main(argv):
         return 2
     print(form[1].format(*argv[1:], **{k: LOOKUP.format(s=s) for k, s in
                                        (('b', 'build-ticket'), ('r', 'review-ticket'), ('d', 'diagnose'),
-                                        ('f', 'launch-fleet'))}))
+                                        ('f', 'launch-fleet'))}) + token_step(argv[0], argv[1:]))
     return 0
 
 

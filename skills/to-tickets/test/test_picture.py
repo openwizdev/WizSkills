@@ -74,9 +74,6 @@ class TicketPicture(unittest.TestCase):
         self.assertIn('|real: Use #124; and #60;tags#62;|', result.stdout)
 
     def test_a_file_link_neither_lengthens_the_chain_nor_holds_a_start(self):
-        # catches (review R5 of #1353): a context-only file link counted as
-        # serial work, so the picture says fewer tickets can start than F6
-        # starts. A person's ticket still waits for every blocker.
         result = render([card(name, name, 'S', 'waiting') for name in 'ABC'] + [card('J', 'J', 'S', 'waiting', 'jake')],
                         [link('A', 'B', 'file', 'shared.md'), link('B', 'C'), link('C', 'J', 'file', 'notes.md')])
         self.assertEqual(result.returncode, 0, result.stderr)

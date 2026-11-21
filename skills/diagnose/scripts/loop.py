@@ -1,23 +1,4 @@
 #!/usr/bin/env python3
-"""diagnose's loop helper. Python 3.10+ standard library; prints one short line.
-
-  loop.py rate --runs N [--timeout SECONDS] -- COMMAND...
-      Run COMMAND N times (no shell, output discarded, never echoed) and print
-      `rate: F/N failed; exits <code>x<count>...; timeouts T`. Every run counts:
-      a failure never stops the count and no run is retried. Exit 1 if any run
-      failed or timed out, 0 if none did, 2 if COMMAND cannot start (an
-      environment failure, never the symptom) or the arguments are wrong.
-  loop.py tag
-      Print a fresh debug prefix such as `[DEBUG-a4f2]`.
-  loop.py clean PREFIX
-      From the root of the Git work tree around the current directory, from
-      any subdirectory, search tracked and untracked, not ignored, files for
-      PREFIX, and the staged (index) copy of each tracked file too. Exit 0
-      `clean: ...` when none is left, 1 `left: ...` naming each root-relative
-      file:line, marked ` (staged)` when only the staged copy holds it, 2
-      outside a Git tree, on a Git read error, or for a PREFIX that is not
-      `[DEBUG-xxxx]`-shaped.
-"""
 import os
 import re
 import secrets
@@ -35,10 +16,7 @@ def refuse(message):
 
 
 def attempt(command, timeout):
-    """One run's exit code, or None on a timeout. On POSIX the run gets its own
-    process group, and a timeout or interruption kills that whole group, the
-    workers it started included, before this returns."""
-    posix = os.name == 'posix'  # start_new_session: Python 3.10's way to a new group
+    posix = os.name == 'posix'
     proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, start_new_session=posix)
     try:
@@ -100,7 +78,6 @@ def git(root, *args, input=None):
 
 
 def read_blobs(root, ids):
-    """Each index blob's bytes, read in one `git cat-file --batch`."""
     ids = sorted(ids)
     out = subprocess.run(['git', 'cat-file', '--batch'], cwd=root, capture_output=True,
                          input=''.join(f'{i}\n' for i in ids).encode())
@@ -118,7 +95,6 @@ def read_blobs(root, ids):
 
 
 def lines(content, prefix):
-    """The 1-based numbers of the lines holding PREFIX, split as text mode reads them."""
     text = content.decode('utf-8', 'replace').replace('\r\n', '\n').replace('\r', '\n')
     return [n for n, line in enumerate(text.split('\n'), 1) if prefix in line]
 
@@ -132,16 +108,13 @@ def clean(args):
         refuse('not inside a Git work tree')
     root = os.fsdecode(top.stdout.rstrip(b'\n'))
     listed = git(root, 'ls-files', '-z', '--others', '--exclude-standard')
-    staged = {}  # path -> index blob, for regular files only
+    staged = {}
     for entry in filter(None, git(root, 'ls-files', '-z', '--stage').split(b'\0')):
         info, _, path = entry.partition(b'\t')
         mode, blob, _stage = info.split()
         if mode in (b'100644', b'100755'):
             staged[os.fsdecode(path)] = blob.decode()
     paths = set(staged) | {os.fsdecode(p) for p in filter(None, listed.split(b'\0'))}
-    # Only a staged copy that differs from its file can hold another tag. Hash
-    # the files themselves: diff-files trusts index flags (sparse checkout,
-    # assume-unchanged) and would skip those entries.
     present = sorted(p for p in staged if os.path.isfile(os.path.join(root, p)))
     hashed = git(root, 'hash-object', '--no-filters', '--stdin-paths',
                  input=''.join(f'{p}\n' for p in present).encode()).split()
@@ -155,7 +128,7 @@ def clean(args):
             with open(os.path.join(root, path), 'rb') as file:
                 working = file.read()
         except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
-            working = None  # deleted from the work tree, or a submodule
+            working = None
         found = lines(working, prefix) if working is not None else []
         left += [f'{path}:{n}' for n in found]
         index = blobs.get(staged.get(path))

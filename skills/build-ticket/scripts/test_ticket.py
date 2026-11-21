@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for build-ticket's ticket.py, run through its CLI on synthetic state.
-
-python3 -I skills/build-ticket/scripts/test_ticket.py -v
-"""
 import json
 import os
 from pathlib import Path
@@ -233,9 +229,9 @@ class Scope(Case):
     def test_scope_flags_every_unowned_side(self):
         self.git('mv', 'src/export/run.py', 'src/moved.py')
         self.git('commit', '-q', '-m', 'rename out')
-        self.write('src/other.py', 'y = 2\n')            # unstaged
-        self.write('src/export-extra/x.py', 'z\n')       # untracked, prefix look-alike
-        self.write('docs/export.md.bak', 'z\n')          # untracked, exact look-alike
+        self.write('src/other.py', 'y = 2\n')
+        self.write('src/export-extra/x.py', 'z\n')
+        self.write('docs/export.md.bak', 'z\n')
         code, out, _ = self.run_ticket('scope', REPO, '41')
         lines = out.splitlines()
         self.assertEqual(code, 1)
@@ -329,7 +325,6 @@ class Records(Case):
             self.assertTrue(line.endswith(expected), (decision, line))
 
     def test_records_binds_only_a_later_decision_naming_exactly_the_terminal_park(self):
-        # catches: a partial, early, incomplete or quoted-park decision resuming parked work
         report = (f'VERDICT: CHANGES at {HEAD}\n\n- **R1 [blocking]** x\n  Risk: security: y\n'
                   f'- **R2 [blocking]** x\n  Risk: security: y\n\nNext: park R1 and R2 as a decision for Jake.')
         exact = f'**Orchestrator decision:** fix once more: R1 and R2 at {HEAD}. Why: x'
@@ -364,7 +359,6 @@ class Records(Case):
         self.assertTrue(line.startswith('decision: comment 3 by owner-1: fix once more R1 and R2'), line)
 
     def test_records_reads_one_named_trusted_comment_on_a_ticket_or_pull_request(self):
-        # catches: an ordinary trusted comment read as the answer, or a fleet record left unread
         self.comments(41, ('owner-1', START),
                           ('example[bot]', 'Answer: yes, own tools/x.py too.'),
                           ('example[bot]', 'Evidence: a synthetic run, not an answer.'),
@@ -441,14 +435,14 @@ class Receipt(Case):
 
     def test_push_after_an_unrecorded_earlier_push_stays_unknown(self):
         receipt = self.dir / 'receipt.txt'
-        self.git('push', '-q', 'origin', 'main:refs/heads/work')     # branch made at the base
+        self.git('push', '-q', 'origin', 'main:refs/heads/work')
         code, out, err = self.run_ticket('push', str(receipt), '--', 'true')
         self.assertEqual(code, 0, err)
         self.assertTrue(receipt.exists(), out)
         receipt.unlink()
         self.write('src/export/run.py', 'x = 4\n')
         self.commit('checkpoint')
-        self.git('push', '-q', 'origin', 'HEAD')                      # a push with no receipt
+        self.git('push', '-q', 'origin', 'HEAD')
         self.write('src/export/run.py', 'x = 5\n')
         self.commit('hand-back')
         code, out, err = self.run_ticket('push', str(receipt), '--', 'git', 'push', '-q', 'origin', 'HEAD')

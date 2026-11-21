@@ -1,15 +1,4 @@
 #!/bin/sh
-# Prints the revision text of a spec's plan graph, version 2, as the
-# to-tickets defines it (records.md): the
-# spec's body, and each of its tickets' number, blockers, body and title. A
-# body is hashed with its ticked task boxes read as unticked, so ticking one
-# is never a change to the plan. Its SHA-256 is the fingerprint an approval
-# records.
-#
-# Usage: sh revision.sh <spec issue number>
-#   then: sha256sum on the output (on macOS: shasum -a 256)
-# Runs only `gh issue view` reads. Exits 0 and prints the text; exits 1, and
-# prints nothing on stdout, if any read fails; exits 2 on a bad argument.
 set -u
 spec=${1:-}
 case $spec in
@@ -34,17 +23,12 @@ work=$(mktemp -d) || fail "cannot make a temporary folder"
 trap 'rm -rf "$work"' EXIT
 tab=$(printf '\t')
 cr=$(printf '\r')
-# A body's hash: of the body with each ticked task box read as unticked. On a
-# line that starts with spaces or tabs, a -, * or + and then spaces or tabs,
-# an [x] or [X] followed by a space, a tab, a CR or the line's end becomes
-# [ ]. Bytes, not characters (LC_ALL=C), so every machine reads the same.
 unticked_hash() {
   LC_ALL=C sed -E -e "s/^([ $tab]*[-*+][ $tab]+)\[[xX]\]$/\1[ ]/" \
     -e "s/^([ $tab]*[-*+][ $tab]+)\[[xX]\]([ $tab$cr])/\1[ ]\2/" "$1" > "$1.unticked" || return 1
   hash "$1.unticked"
 }
 
-# The spec's tickets: its sub-issues, as many as GitHub counts.
 gh issue view "$spec" --json subIssues --jq '.subIssues.totalCount, (.subIssues.nodes[].number)' > "$work/members" ||
   fail "cannot read spec #$spec's tickets"
 total=$(head -n 1 "$work/members")

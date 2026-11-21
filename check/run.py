@@ -21,8 +21,7 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parent.parent
 
 # Each carried skill's own suites, run from the tree's root. The inventory
-# guard below refuses any newly added suite, under skills/ or check/, until
-# this list includes it.
+# guard below refuses any newly added suite until this list includes it.
 SUITES = {
     'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py']],
     'triage': [['python3', '-I', 'skills/triage/test/test_find_work.py'],
@@ -72,8 +71,7 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-brief.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-host.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py']],
-    # Not a skill: the check's own notice rule, version rule, changesets
-    # (WS18) and this suite list. One key: a second `check` would replace it.
+    # Not a skill: the check's own version rule and changesets (WS18).
     'check': [['python3', '-I', 'check/test_notice.py'],
               ['python3', '-I', 'check/test_versions.py'],
               ['python3', '-I', 'check/test_changesets.py'],

@@ -1,8 +1,3 @@
-"""The suite list run.py hands CI: every check test runs, and the inventory
-guard sees check/ as well as skills/ (#1937).
-
-python3 -I check/test_suites.py
-"""
 import contextlib
 import importlib.util
 import io
@@ -22,15 +17,11 @@ def listed(name):
 
 class CheckSuites(unittest.TestCase):
     def test_every_check_test_runs_in_the_check_suite(self):
-        # catches: a second `check` key in SUITES silently replacing the first,
-        # so CI never runs check/test_notice.py (the #1869 R1 finding).
         tests = sorted(p.relative_to(HERE.parent).as_posix() for p in HERE.glob('test*.py'))
         self.assertIn('check/test_notice.py', tests)
         self.assertEqual(sorted(listed('check')), tests)
 
     def test_an_unlisted_check_test_fails_the_inventory(self):
-        # catches: the inventory scanning only skills/, so a check test dropped
-        # from SUITES passes CI unseen.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / 'check').mkdir()

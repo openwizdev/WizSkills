@@ -1,7 +1,3 @@
-// The consuming project's huntr settings for the tests: `docs/agents/huntr.md`
-// in the nearest folder at or above the working directory that has one, so a
-// test run from the project's root or any folder in it reads the project's own
-// file. With none, the path below the working directory, which does not exist.
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 

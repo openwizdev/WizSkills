@@ -1,29 +1,4 @@
 #!/usr/bin/env python3
-"""A recording fake `gh` for the onboarding journey (#1108).
-
-The demo repository's creation and default-branch read-back share one
-synthetic GitHub world at $FAKE_GH_REPOS. Its onboarding switches: "create":
-"ok" | "lost" | "fail", "fail_after_create": N (the N `repo view` reads after a
-create fail as a network error would), "view_fails". A plain create makes an
-empty repository with no branch, as GitHub does; `--add-readme` is GitHub's
-initial commit: its default branch `main` holding one README.md. "lost" creates
-the repository but exits 1 with no answer, as a timed-out create. Creation and
-`repo view` calls are logged to $FAKE_GH_CREATE_LOG.
-
-It also answers the launch's read of a spec's comments (#636: `api --paginate
-repos/R/issues/N/comments?per_page=100 --jq EXPR`) from launch-fleet's synthetic
-world, through jq as gh does, or fails it when $FAKE_GH_COMMENTS_FAIL is set.
-The onboarding road (#1358) adds the host setting pull request and the first
-merge's read-back, from the same launch-fleet world: its `default` branch's
-`files`, `branches` (name to files), `host_pulls` and `onboard_pulls`; `put_fails` makes every
-contents write fail; `edit_after_read` (branch to path to text) is another writer's edit landing
-once, right after that file is next read on that branch. Blob SHAs are git's, and a contents write
-naming another blob than the file's current one is refused, as GitHub does. `compare/BASE...HEAD`
-lists each file a branch adds, changes or deletes against the default branch. When
-$FAKE_GH_ARGV_LOG is set, every call is logged there as one JSON line.
-Every other call goes to launch-fleet's fake gh unchanged, which refuses writes.
-All values are synthetic.
-"""
 import base64
 import hashlib
 import json
@@ -38,7 +13,6 @@ FIELDS = {'nameWithOwner', 'isPrivate', 'defaultBranchRef'}
 
 
 def repository(owner, name, branches):
-    """A repository as init's fake models it, created by this login."""
     return {'full_name': '%s/%s' % (owner, name), 'private': True, 'visibility': 'private',
             'default_branch': 'main', 'permissions': {'push': True}, 'owner': {'login': owner, 'type': 'User'},
             'description': None, 'homepage': None, 'labels': [], 'pulls': [], 'branches': branches}
@@ -114,7 +88,6 @@ def blob_sha(text):
 
 
 def road(argv):
-    """The host setting pull request and the first merge's read-back, or None when not one of their calls."""
     path = Path(os.environ['FAKE_GH_WORLD'])
     world = json.loads(path.read_text())
     r = 'repos/%s' % world['repo']
@@ -127,7 +100,7 @@ def road(argv):
         sys.stdout.write('HTTP/2.0 %d Fixture\r\nContent-Type: text/plain\r\n\r\n%s' % (status, body))
         return 0 if status == 200 else 1
 
-    def edited(ref, name):  # another writer's edit, landing right after this read
+    def edited(ref, name):
         edit = world.get('edit_after_read', {}).get(ref, {})
         if name in edit:
             branches[ref][name] = edit.pop(name)
@@ -170,7 +143,7 @@ def road(argv):
         if name in branches:
             sys.stderr.write('gh: Reference already exists (HTTP 422)\n')
             return 1
-        branches[name] = dict(world['files'])  # a new branch holds its base's files
+        branches[name] = dict(world['files'])
         save()
         return 0
     match = re.fullmatch(re.escape(r + '/contents/') + r'(docs/agents/[^?]+)', argv[3]) if len(argv) > 3 else None
@@ -180,7 +153,7 @@ def road(argv):
             sys.stderr.write('gh: synthetic server error (HTTP 502)\n')
             return 1
         files = branches.get(fields['branch'])
-        if files is None or (match[1] in files) != ('sha' in fields) or (  # GitHub needs the sha to replace a file
+        if files is None or (match[1] in files) != ('sha' in fields) or (
                 match[1] in files and fields['sha'] != blob_sha(files[match[1]])):
             sys.stderr.write('gh: sha mismatch (HTTP 409)\n')
             return 1

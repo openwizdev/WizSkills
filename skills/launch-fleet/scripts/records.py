@@ -40,13 +40,21 @@ def private_state(repo):
     return value['threads']
 
 
+LOCAL_THREAD_LIST = ['room-cli', 'thread', 'list', '--include-archived', '--include-hidden', '--json']
+CLOUD_OWN_SUBAGENT_LIST = ['room-cli', 'thread', 'list', '--include-archived', '--json']
+CLOUD_REFUSES_INCLUDE_HIDDEN = 2
+
+
 def discover():
     try:
-        r = subprocess.run(['room-cli', 'thread', 'list', '--include-archived', '--include-hidden', '--json'],
-                           capture_output=True, text=True, timeout=10)
+        r = subprocess.run(LOCAL_THREAD_LIST, capture_output=True, text=True, timeout=10)
+        if r.returncode == CLOUD_REFUSES_INCLUDE_HIDDEN:
+            r = subprocess.run(CLOUD_OWN_SUBAGENT_LIST, capture_output=True, text=True, timeout=10)
         if r.returncode:
             return None
         rows = json.loads(r.stdout, object_pairs_hook=unique)
+        if isinstance(rows, dict):
+            rows = rows.get('children')
         if not isinstance(rows, list) or any(not isinstance(t, dict) or not isinstance(t.get('id'), str)
                                             or not ID.fullmatch(t['id']) for t in rows):
             return None

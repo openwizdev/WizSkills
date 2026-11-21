@@ -1272,6 +1272,12 @@ class ModelsTable(unittest.TestCase):
             self.assertIn(line, preview.stdout)
         j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CODEX)
         j.save_world()
+        j.extra_env = {'FAKE_GH_COMMENTS_FAIL': '1'}
+        unread = j.tool(YES)
+        self.assertEqual(unread.returncode, 6, 'an unread record keeps the yes uncertain\n' + unread.stdout)
+        self.assertNotIn(handoff, unread.stdout)
+        self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'authorized', 'never withdrawn unread')
+        j.extra_env = {}
         moved = j.tool(YES)
         self.assertEqual(moved.returncode, 5, 'a yes to one Orchestrator never covers another\n' + moved.stdout)
         self.assertEqual(j.spawns(), [], 'the launch starts nothing itself')
@@ -1352,7 +1358,8 @@ class ModelsTable(unittest.TestCase):
         old = j.tool(YES)
         self.assertEqual(old.returncode, 5, 'the old yes covers nothing now\n' + old.stdout)
         self.assertNotIn(handoff, old.stdout)
-        self.assertEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: launch.')
+        self.assertNotIn('launch', json.loads(j.state.read_text()), 'the yes is withdrawn')
+        self.assertNotIn('The user said yes', j.helper(['next']).stdout, 'a resumed session never finishes the old yes')
         fresh = j.tool(PREVIEW)
         self.assertEqual(fresh.returncode, 12, fresh.stdout + fresh.stderr)
         self.assertIn('1 fleet thread (claude-code syn-claude-model-01 high)', fresh.stdout)

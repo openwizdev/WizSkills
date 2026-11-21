@@ -64,13 +64,12 @@ path (references/launch.md: the project's loops, then "Starting one": the
 spec's loop, its private loop-map entry and the `launch-fleet: fleet active,
 loop fleet-<S>` record), which the orchestrator follows. It says the fleet
 started only once that record reads back from a record author, and never
-starts a fleet a second way. It never calls the engine or the engine's tick.
+starts a fleet a second way. Until then, running it again repeats that path
+only while the Models table's Orchestrator is still the one the user said yes
+to; if it changed, the yes is withdrawn and a fresh preview and yes are needed
+(#2204). It never calls the engine or the engine's tick.
 Every command
 checks the checkout is the repository this onboarding recorded.
-
-`choose` records the choice for where the agents run, then reads the fleet's
-builder tables back: the agents step is done only once both name exactly that
-choice (#1615).
 
 `next` reads only the state file and prints the first unfinished step and
 what to run there, so a fresh session resumes without repeating an effect.
@@ -1441,10 +1440,11 @@ def write_in(folder, choice, offered):
         start = end = older[0]
         found = older_rules(text)['reviewer_' + FAMILY[choice[0]]]
         reviewer, kept = (found and (found['harness'], found['model'], found['effort'])), None
+        source = 'the older `%s` table' % REVIEWER[FAMILY[choice[0]]]
     family = FAMILY[choice[0]]
     if not reviewer or FAMILY.get(reviewer[0]) in (None, family):
         reviewer = RECOMMENDED['gpt' if family == 'claude' else 'claude']
-        kept = None
+        kept, source = None, 'the recommended other-family choice'
         if not offers(offered, reviewer):
             raise Exit(5, 'The Reviewer must be from the other model family; its recommended choice, %s, is not '
                           'offered now; nothing recorded.' % ' '.join(reviewer))
@@ -1452,7 +1452,9 @@ def write_in(folder, choice, offered):
             model_row('Orchestrator', choice), model_row('Builder', choice), kept or model_row('Reviewer', reviewer),
             '| Small builder | follows Builder | | | |', '| Fixer | follows Builder | | | |']
     if not table:
-        rows = ['## Models', ''] + rows + ['']
+        # #2203: Connect's settings check needs a Source line in the Models section, as in every section.
+        rows = ['## Models', ''] + rows + ['', "Source: install's `choose`, from the owner's choice of harness, model "
+                                           'and effort for the Orchestrator and Builder; the Reviewer is %s.' % source, '']
     written = '\n'.join(lines[:start] + rows + lines[end:])
     try:
         assert models_table(written) == {'Orchestrator': choice, 'Builder': choice, 'Reviewer': reviewer,
@@ -1735,6 +1737,21 @@ def launch(got):
             print('Spec #%d already started once; not starting again.' % spec)
             print(record_line(spec, recorded))
             return 0
+        # #2204: launch-fleet's start reads the Orchestrator from the Models table, so the handoff repeats only
+        # while that is still the Orchestrator the user said yes to.
+        orchestrator = fleet_rules(env, state.value['repo'])['orchestrator']
+        if orchestrator != previous.get('orchestrator'):
+            print(record_line(spec, recorded))
+            now = ' '.join(orchestrator[k] for k in ('harness', 'model', 'effort'))
+            if recorded is None:
+                raise Exit(6, "The fleet settings' Orchestrator is now %s, not the one the user said yes to, and "
+                              "the fleet record could not be read; run this again; %s" % (now, NOTHING))
+            del state.value['launch']
+            state.value.pop('preview', None)
+            if not state.save():
+                raise Exit(10, 'Could not withdraw the yes; run this again; ' + NOTHING)
+            raise Exit(5, "The fleet settings' Orchestrator is now %s, not the one the user said yes to: preview "
+                          'again and ask again; %s' % (now, NOTHING))
         print(record_line(spec, recorded))
         print(handoff(spec, state.value['repo'], host))
         return 6
@@ -1810,7 +1827,8 @@ def launch(got):
         print('Confirmation: %s' % digest)
         print("Nothing started. Ask exactly that; on the user's yes, run again with --yes --confirm %s." % digest)
         return 12
-    state.value['launch'] = {'spec': spec, 'state': 'authorized', 'effects': digest, 'tickets': starts}
+    state.value['launch'] = {'spec': spec, 'state': 'authorized', 'effects': digest, 'tickets': starts,
+                             'orchestrator': orchestrator}
     if not state.save():
         raise Exit(10, 'Could not save the start the user said yes to; ' + NOTHING)
     print("The user said yes to starting spec #%d's fleet %s. Nothing is started by this command: the fleet starts "

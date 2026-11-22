@@ -513,8 +513,6 @@ class CostFromAgents(unittest.TestCase):
         self.assertEqual(len(self.reads(w)), 3)
 
     def test_a_same_numbered_pull_request_elsewhere_adds_no_reviewer(self):
-        # catches: reviewer threads picked by the bare `review:7:` prefix, so the ticket's fleet
-        # adds the 99 credits of its own #7's reviewer to openwizdev/OpenWiz#2375's merged PR.
         same = {'builder:12': BUILDER, 'review:7:' + HEAD: REVIEWER, 'review:7:claim:9001': REVIEWER,
                 'review:7:' + THIRD: ELSEWHERE, 'review:7:claim:8001': ELSEWHERE}
         w = self.world(home=TICKETS, threads=same, records=RECORDS[:1])
@@ -523,8 +521,6 @@ class CostFromAgents(unittest.TestCase):
         self.assertEqual(self.reads(w), sorted([BUILDER, REVIEWER]))
 
     def test_a_reviewer_the_pull_requests_records_cannot_vouch_for_is_unknown(self):
-        # catches: a legacy or unreadable record counted on trust, or a driver review on the
-        # pull request itself (with no run map to say so) costed from a CloudRoom thread.
         driver = comment(9001, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
         recheck = comment(9002, 'launch-fleet: re-check sent %s\nDriver re-check: other-family' % OTHER)
         cases = {
@@ -549,8 +545,6 @@ class CostFromAgents(unittest.TestCase):
                     self.no_id(w, '')
 
     def test_the_tickets_run_map_names_no_driver_for_a_pull_request_elsewhere(self):
-        # catches: the ticket's fleet's run for its own #7 read as a driver reviewer of the
-        # other repository's PR #7, so a fully known cost is posted unknown.
         runs = {'repo': TICKETS, 'runs': {'7': {'host': 'synthetic', 'run': 'run-2'}}}
         w = self.world(home=TICKETS, runs=runs)
         self.assertEqual(self.cost(w), (0, 'cost posted 5001'))

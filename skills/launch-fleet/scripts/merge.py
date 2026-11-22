@@ -380,7 +380,7 @@ def _cost(repo, number, home, ticket, extra):
             return f"cost already posted {c['id']}"
     body = f'launch-fleet: cost unknown {ref}: '
     if not Path(COST).is_file():
-        body = 'launch-fleet: cost: ' + _agents_line(home, ref, number, ticket)
+        body = 'launch-fleet: cost: ' + _agents_line(repo, home, ref, number, ticket)
     elif not same:
         body += "the cost command costs only tickets in the pull request's repository"
     else:
@@ -441,12 +441,45 @@ def _usage(thread):
         return None
 
 
-def _driven(number, threads, runs):
+def _driven(number, threads, runs, here=True):
     return (f'run:{number}' in threads or runs in (records.UNREADABLE, records.MISSING, None)
-            or (isinstance(runs, dict) and str(number) in runs))
+            or (here and isinstance(runs, dict) and str(number) in runs))
 
 
-def _agents_line(home, ref, number, ticket):
+REVIEW_RECORD = re.compile(rf'launch-fleet: (?:review started|re-check sent|review told again|review given up'
+                           rf'|review failed) ({records.SHA})\b')
+
+
+def _reviewers(repo, number, threads):
+    try:
+        auth, items = post.authors(repo), post.thread(repo, number)
+    except Stop:
+        return None
+    if items is None:
+        return None
+    shas, claims = set(), set()
+    for c in items:
+        lines = (c.get('body') or '').splitlines() if post.ours(c, auth) else []
+        found = REVIEW_RECORD.match(lines[0]) if lines else None
+        if not found:
+            continue
+        if lines[1:2] and lines[1].startswith(('Driver review:', 'Driver re-check:')):
+            return None
+        shas.add(found[1])
+        claims.add(f"claim:{c.get('id')}")
+    prefix, mine = f'review:{number}:', set()
+    for key, thread in threads.items():
+        if not key.startswith(prefix):
+            continue
+        rest = key[len(prefix):]
+        if not (re.fullmatch(records.SHA, rest) or re.fullmatch(r'claim:[0-9]+', rest)):
+            return None
+        if rest in shas or rest in claims:
+            mine.add(thread)
+    return mine
+
+
+def _agents_line(repo, home, ref, number, ticket):
     try:
         threads = records.private_state(home) if os.environ.get('LAUNCH_FLEET_STATE') else None
         runs = records.driver_runs(home)
@@ -455,9 +488,9 @@ def _agents_line(home, ref, number, ticket):
     if not threads:
         return _cost_line(ref, ticket, None, None)
     builder = None if _driven(ticket, threads, runs) else threads.get(f'builder:{ticket}')
-    reviewers = (set() if _driven(number, threads, runs)
-                 else {v for k, v in threads.items() if k.startswith(f'review:{number}:')})
-    read = {t: _usage(t) for t in sorted(reviewers | ({builder} if builder else set()))}
+    here = home.casefold() == repo.casefold()
+    reviewers = None if _driven(number, threads, runs, here) else _reviewers(repo, number, threads)
+    read = {t: _usage(t) for t in sorted((reviewers or set()) | ({builder} if builder else set()))}
     builder_credits = read[builder] if builder else None
     reviewer_credits = (None if not reviewers or threads.get(f'builder:{ticket}') in reviewers
                         or None in (read[t] for t in reviewers) else sum(read[t] for t in sorted(reviewers)))

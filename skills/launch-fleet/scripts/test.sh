@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=905
+CASES=909
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1105,6 +1105,20 @@ EOF
 expect 'K9: the pull request changes tests, main changed only docs: merge' 0 check.json 'store31 | pull(31; .files = [changed("tests/store.rs"; "modified")]) | main24("11:15"; [changed("docs/guide.md"; "modified"), changed("README.md"; "modified")])' -- check <<EOF
 merge #31 for #12 at $S31: APPROVE and CI green
 EOF
+expect 'WQ5: with the merge queue on, main changing the same file is no reason to re-test: merge' 0 check.json 'store31 | main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pull(31; .queue = true)' -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+log_has 'WQ5: with the merge queue on, main changing the same file is no reason to re-test: merge' 0 '^files 31$'
+expect 'WQ5: with the merge queue on, a re-test that ran on an old main is no reason to merge main in: merge' 0 check.json 'store31 | merged_pr(23; 99; "11:10"; [changed("README.md"; "modified")]) | main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pr_say(31; 3103; "11:20"; "launch-fleet: re-test sent \(sha(31)) on \(sha("23ec")) in run 901: src/store/store.rs in #24") | pull(31; .checks += [run_in("build"; "11:21"; "SUCCESS"; 901), run_in("test"; "11:21"; "SUCCESS"; 901)] | .queue = true)' -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect 'WQ5: with the merge queue off, main changing the same file still re-tests it' 0 check.json 'store31 | main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pull(31; .queue = false)' -- check <<EOF
+re-test #31 for #12 at $S31: main changed src/store/store.rs in #24 after 2026-11-01T10:30:00Z, which its CI may not have tested; run its CI again on the latest main
+EOF
+expect 'WQ5: with the merge queue on, a red required check and main changing the same file: only the CI failure goes to its builder' 0 check.json 'store31 | main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pull(31; .queue = true | .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE")' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+log_has 'WQ5: with the merge queue on, a red required check and main changing the same file: only the CI failure goes to its builder' 0 '^files 31$'
 expect 'K9: main changed tests, the pull request changes only docs: merge' 0 check.json 'store31 | pull(31; .files = [changed("docs/store.md"; "modified")]) | main24("11:15"; [changed("tests/store.rs"; "modified")])' -- check <<EOF
 merge #31 for #12 at $S31: APPROVE and CI green
 EOF

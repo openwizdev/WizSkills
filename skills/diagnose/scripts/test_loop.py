@@ -240,6 +240,29 @@ class Clean(unittest.TestCase):
                 self.assertEqual((r.returncode, r.stdout),
                                  (1, 'left: 1 [DEBUG-a4f2] in src/app.py:2 (staged)\n'))
 
+    def test_a_quoted_name_is_hashed_as_itself_not_its_unquoted_sibling(self):
+        # catches: a path sent to `git hash-object --stdin-paths`, which reads `"app.py"` as `app.py`
+        with tempfile.TemporaryDirectory() as tmp:
+            git_tree(tmp)
+            Path(tmp, '.gitignore').write_text('build/\n/app.py\n')
+            tagged = 'print("ready")\n# [DEBUG-a4f2]\n'
+            Path(tmp, '"app.py"').write_text(tagged)
+            subprocess.run(['git', 'add', '.'], cwd=tmp, check=True)
+            Path(tmp, 'app.py').write_text(tagged)
+            Path(tmp, '"app.py"').write_text('print("ready")\n')
+            r = run('clean', '[DEBUG-a4f2]', cwd=tmp)
+            self.assertEqual((r.returncode, r.stdout), (1, 'left: 1 [DEBUG-a4f2] in "app.py":2 (staged)\n'))
+
+    def test_a_tracked_name_with_a_newline_never_stops_the_cleanup(self):
+        # catches: a newline in a tracked name splitting the hash list, so `clean` refuses
+        with tempfile.TemporaryDirectory() as tmp:
+            git_tree(tmp)
+            Path(tmp, 'two\nlines.txt').write_text('notes\n')
+            subprocess.run(['git', 'add', '.'], cwd=tmp, check=True)
+            Path(tmp, 'src/app.py').write_text('print("ready")\n# [DEBUG-a4f2]\n')
+            r = run('clean', '[DEBUG-a4f2]', cwd=tmp)
+            self.assertEqual((r.returncode, r.stdout), (1, 'left: 1 [DEBUG-a4f2] in src/app.py:2\n'))
+
     def test_a_leftover_outside_the_current_directory_is_named(self):
         with tempfile.TemporaryDirectory() as tmp:
             git_tree(tmp)

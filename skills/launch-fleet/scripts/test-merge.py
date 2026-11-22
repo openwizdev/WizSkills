@@ -269,7 +269,6 @@ class Merge(unittest.TestCase):
     def test_the_head_moving_after_admission_never_merges_another_commit(self):
         w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'enqueue': 'moved'})
         project(w, PRINTS)
-        # Admission reads HEAD; GitHub then sees another head at enqueue time.
         code, out = self.merge(w, '--ticket', 12)
         self.assertEqual(code, 1)
         self.assertTrue(out.startswith('blocked: '), out)
@@ -605,8 +604,6 @@ class Queue(unittest.TestCase):
         self.assertEqual(w.writes(), [])
 
     def test_an_unconfirmed_queue_receipt_is_repaired_on_the_next_wake(self):
-        # catches: an enqueue whose receipt failed staying without the receipt settle and the
-        # removal guard read (#1631, R1), once the receipt follows the read-back (#2154).
         w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'post': 'fail'})
         project(w, PRINTS)
         code, out = self.merge(w)
@@ -636,7 +633,6 @@ class Queue(unittest.TestCase):
         self.assertEqual(w.bodies(7), [self.receipt()])
 
     def test_a_receipt_written_but_not_read_back_is_not_posted_twice(self):
-        # catches: a retry duplicating a receipt whose write happened but could not be confirmed.
         w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'post': 'lost'}, me='someone-else')
         project(w, PRINTS)
         code, out = self.merge(w)

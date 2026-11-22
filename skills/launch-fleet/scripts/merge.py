@@ -16,21 +16,17 @@
 mergeable: <state>` or `wait: <why>`; CHECKS are fleet.md's required checks,
 comma-separated. Both only read.
 
-`merge` reads, admits and merges HEAD, reads it back and records the outcome:
+`merge` reads, admits and merges HEAD with `gh pr merge --merge
+--match-head-commit` (never `--admin`), reads it back and records the outcome:
 `merged <commit>; cost ...` (exit 0), `queued; recorded <id>` (exit 0),
 `pending: ...` (exit 0, nothing recorded: read again next wake),
-`blocked: <why>; recorded <id>` (exit 1). With a merge queue it enqueues
-through GraphQL `enqueuePullRequest` pinned to HEAD (`expectedHeadOid`), and
-while any of CHECKS is still running on HEAD it prints `refused: its required
-checks are running: ...` (exit 1) and enqueues and records nothing; a refused
-enqueue prints `not queued: <GitHub's reason>; ...` (exit 1) and records
-nothing. The queue receipt (`launch-fleet: merge queued <commit>`) is what
-tells a later removal from a fresh enqueue and what `settle` reads, and it is
-written only after reading back a queue entry for HEAD (#2154): a pull request
-read as queued without its receipt gets one (`queued; recorded <id>`, or
-`queued; receipt unconfirmed ...`, exit 1, repaired on the next run). Without
-a merge queue it merges with `gh pr merge --merge --match-head-commit` (never
-`--admin`), only
+`blocked: <why>; recorded <id>` (exit 1). The queue receipt (`launch-fleet:
+merge queued <commit>`) is what tells a later removal from a fresh enqueue and
+what `settle` reads, so it is recorded before the enqueue: a receipt it can't
+confirm prints `not queued: ...` (exit 1) and nothing is enqueued; the next run
+reuses a receipt that did land. A pull request read as queued without its
+receipt gets one then (`queued; recorded <id>`, or `queued; receipt
+unconfirmed ...`, exit 1). Without a merge queue it merges only
 with `--base-rule-checked`, after you applied fleet.md's base rule and
 `fleet.sh every` still prints this merge line. BODY names the APPROVE and the
 plan approval that allowed it.
@@ -202,7 +198,6 @@ def admission(main, p, head, checks):
 
 
 def running(p, checks):
-    """The required checks still running on the pull request's head, by name."""
     commit = ((p.get('commits') or {}).get('nodes') or [{}])[0].get('commit') or {}
     nodes = ((commit.get('statusCheckRollup') or {}).get('contexts') or {}).get('nodes') or []
     busy = {n.get('name') or n.get('context') for n in nodes
@@ -212,7 +207,6 @@ def running(p, checks):
 
 
 def enqueue(p, head):
-    """Ask the merge queue to take the pull request at HEAD only; None, or GitHub's refusal."""
     if not isinstance(p.get('id'), str):
         return "the pull request's id could not be read"
     try:

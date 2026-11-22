@@ -375,7 +375,8 @@ def configured():
 
 
 def builder_env(repo, n, requester):
-    folder = runs_path().parent / 'agent-token-bin' / ('%s-%s' % (repo.replace('/', '--'), n))
+    own = n if requester == 'builder-%s' % n else requester
+    folder = runs_path().parent / 'agent-token-bin' / ('%s-%s' % (repo.replace('/', '--'), own))
     try:
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(folder.parent, 0o700)
@@ -624,14 +625,17 @@ def main(argv):
         os.environ.pop(LEGACY_KEY, None)
     kind = argv[0] if argv else ''
     if kind == 'which' and len(argv) == 1:
+        print('host: %s' % (chosen() or 'none'))
+        return 0
+    if kind == 'roster' and len(argv) == 1:
         text = setting_text(FLEET_SETTINGS)
-        print(WHICH_ROSTER if text is not None and roster(text) is not None else 'host: %s' % (chosen() or 'none'))
+        print(WHICH_ROSTER if text is not None and roster(text) is not None else 'roster: none')
         return 0
     shapes = {'start': (5, 6), 'wake': (3,), 'stop': (3,)}
     skill = argv[5] if kind == 'start' and len(argv) == 6 else 'build-ticket'
     if (len(argv) not in shapes.get(kind, ()) or not REPO.fullmatch(argv[1]) or not TICKET.fullmatch(argv[2])
             or not NAME.fullmatch(skill) or len(skill) > 60):
-        raise Unreadable('usage: which | start OWNER/NAME N HARNESS MODEL [SKILL] | wake OWNER/NAME N | '
+        raise Unreadable('usage: which | roster | start OWNER/NAME N HARNESS MODEL [SKILL] | wake OWNER/NAME N | '
                          'stop OWNER/NAME N')
     repo, n = argv[1], argv[2]
     run = load(repo)['runs'].get(n)
@@ -644,7 +648,7 @@ def main(argv):
     elif run:
         role = run.get('role')
     requester = '%s-%s' % (role or 'builder', n)
-    if configured():
+    if configured() and kind != 'start':
         DRIVER_ENV = builder_env(repo, n, requester)
     live = 'refused: #%s already has a run on %s; wake or stop it instead'
     if kind == 'start':
@@ -655,6 +659,8 @@ def main(argv):
         ready(repo)
         if run and not run.get('stopped'):
             raise Outcome(live % (n, run['host']))
+        if configured():
+            DRIVER_ENV = builder_env(repo, n, requester)
         token_step(repo, n, requester)
         new = attempt(repo, n, host, 'start', {'repository': repo, 'ticket': int(n), 'skill': skill,
                                                 'harness': argv[3], 'model': argv[4]})

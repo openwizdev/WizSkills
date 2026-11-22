@@ -624,19 +624,18 @@ class NoCloudRoomRequired(unittest.TestCase):
         self.assertIn('/runtime/setup/setup.py check --state-dir <state>', setup)
 
     def test_overwrite_requires_a_ported_install_on_this_maintenance_line(self):
-        import re
-
         step = self.between('## 4. ', '## 5. ')
         self.assertIn('git clone --depth 1 --branch maint/0.3 ', step)
-        fixed = re.search(r'^fixed\(\) .*$', step, re.MULTILINE)
-        self.assertIsNotNone(fixed, 'missing overwrite validator')
+        self.assertIn('fixed() ', step)
+        self.assertIn('\nif fixed ', step)
+        fixed = step[step.index('fixed() '):step.index('\nif fixed ')]
         with tempfile.TemporaryDirectory() as directory:
             stale = Path(directory) / 'install'
             write(stale / 'SKILL.md', '---\nversion: 0.3.0\n---\n')
             write(stale / 'scripts/doctor.py', '')
             for folder, expected in ((stale, 1), (SKILL.parent, 0)):
                 with self.subTest(folder=folder):
-                    done = subprocess.run(['sh', '-c', fixed[0] + '\nfixed "$1"', 'sh', str(folder)],
+                    done = subprocess.run(['sh', '-c', fixed + '\nfixed "$1"', 'sh', str(folder)],
                                           capture_output=True, text=True)
                     self.assertEqual(done.returncode, expected, done.stderr)
 

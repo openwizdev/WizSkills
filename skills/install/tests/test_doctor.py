@@ -709,6 +709,48 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
         self.assertNotIn('version: 0.2.0', text)
 
 
+class RestartReadsTheSkillsOwnVersion(unittest.TestCase):
+    """Step 4's restart guard and Resume use the skill's own `version:` line, so a release that bumps it passes."""
+
+    def synthetic_release(self, version):
+        import re, shutil
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        copy = tmp / 'release/skills/install'
+        shutil.copytree(SKILL.parent, copy, ignore=shutil.ignore_patterns('tests', '__pycache__'))
+        text = re.sub(r'^version: \S+$', 'version: ' + version, SKILL.read_text(), count=1, flags=re.M)
+        (copy / 'SKILL.md').write_text(text)
+        return tmp, copy, text
+
+    def test_a_release_at_0_4_0_passes_its_own_restart_check(self):
+        import re
+        tmp, copy, text = self.synthetic_release('0.4.0')
+        old = tmp / 'home/.claude/skills/install'
+        (old / 'scripts').mkdir(parents=True)
+        (old / '.openwiz-skill').write_text('synthetic receipt\n')
+        (old / 'SKILL.md').write_text('---\nname: install\nversion: 0.2.0\n---\n')
+        bin_dir = tmp / 'bin'
+        bin_dir.mkdir()
+        write(bin_dir / 'git', '#!/bin/sh\nmkdir -p "$7" && cp -R %s/. "$7/"\n'
+              % shlex.quote(str(tmp / 'release')), 0o755)
+        step4 = text[text.index('## 4. '):text.index('## 5. ')]
+        block = re.findall(r'```sh\n(.*?)```', step4, re.S)[1]
+        mine = re.search(r'^version: (\S+)$', text, re.M)[1]
+        block = (block.replace('<private temporary folder>', str(tmp / 'work'))
+                      .replace('<version of this skill>', mine))
+        (tmp / 'work').mkdir()
+        env = {'HOME': str(tmp / 'home'), 'PATH': '%s:/usr/bin:/bin' % bin_dir}
+        out = subprocess.run(['sh', '-c', block], env=env, capture_output=True, text=True).stdout
+        self.assertEqual(out.split('\n'), ['source ok', 'ok: %s' % old, ''])
+        self.assertIn('version: 0.4.0\n', (old / 'SKILL.md').read_text())
+
+    def test_resume_and_the_restart_name_no_fixed_skill_version(self):
+        import re
+        text = SKILL.read_text()
+        body = text[text.index('\n---\n') + 5:]
+        self.assertEqual(re.findall(r'version: \d+\.\d+\.\d+', body), [])
+
+
 HOST_QUESTION = ("Where should your agents run? This computer (Claude Code or Codex you're signed in to), "
                  "boat.dev, or CloudRoom.")
 

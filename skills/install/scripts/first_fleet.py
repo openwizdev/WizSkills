@@ -693,7 +693,7 @@ def where(got):
 
 # --- The continuation from install and setup (#636) ----------------------
 
-def setup_facts(folder):
+def setup_facts(folder, chosen_host):
     """What the installed setup recorded and currently verifies, or Exit naming
     each prerequisite that is not verified now. Reads the setup store only."""
     path = Path(folder) / 'setup/state.json'
@@ -707,8 +707,14 @@ def setup_facts(folder):
         assert isinstance(observations, dict) and (project is None or isinstance(project, dict))
         if project is not None:
             assert all(isinstance(project[k], str) and project[k]
-                       for k in ('repository', 'project', 'harness', 'model', 'effort'))
+                       for k in ('repository', 'harness', 'model', 'effort'))
             assert re.fullmatch(REPOSITORY, project['repository'])
+            host = project.get('host', 'cloud')
+            assert isinstance(host, str) and len(host) <= 40 and re.fullmatch(DRIVER_NAME, host) and host != 'cloudroom'
+            if host == 'cloud':
+                assert isinstance(project['project'], str) and project['project']
+            else:
+                assert project['project'] is None and project['answer_thread'] is None
         identity, brain = value.get('identity'), value.get('brain')
         assert identity is None or (isinstance(identity, dict) and isinstance(identity['selected'], str)
                                     and (identity['acting_login'] is None or isinstance(identity['acting_login'], str)))
@@ -721,6 +727,9 @@ def setup_facts(folder):
         raise Exit(10, "OpenWiz's setup state is unreadable; " + NOTHING)
     if project is None:
         raise Exit(5, 'Setup has no prepared project: prepare it (setup.py prepare) and check again; ' + NOTHING)
+    if host != chosen_host:
+        raise Exit(5, 'Setup prepared host %s, but this fleet chose %s; run setup.py prepare --host %s and check '
+                   'again; %s' % (host, chosen_host, chosen_host, NOTHING))
     repository = project['repository']
     if not (identity and identity.get('repository') == repository):
         identity = None
@@ -740,7 +749,9 @@ def setup_facts(folder):
             return 'verified', None
         return ('unknown' if seen['code'].endswith('_unreadable') else 'not verified'), seen['code']
 
-    needed = ['cloudroom', 'personal_github', 'project'] + ([] if skipped else ['github_app'])
+    needed = (['cloudroom'] if host == 'cloud' else []) + ['personal_github', 'project']
+    if not skipped:
+        needed.append('github_app')
     problems = []
     for component in needed:
         found, why = state(component)
@@ -748,7 +759,8 @@ def setup_facts(folder):
             problems.append('%s: %s (%s)' % (NAMES[component], found, why))
     harness, why = state('harness')
     if harness == 'verified' or why == 'harness_listed':
-        harness_line = 'listed by CloudRoom; its login is not proven by setup'
+        harness_line = ('listed by CloudRoom' if host == 'cloud' else 'installed on this computer')
+        harness_line += '; its login is not proven by setup'
     else:
         problems.append('%s: %s (%s)' % (NAMES['harness'], harness, why))
     if brain is None or brain['code_repository'].lower() != repository.lower():
@@ -761,11 +773,14 @@ def setup_facts(folder):
         raise Exit(5, 'Setup is not ready for the first fleet: %s; %s' % ('; '.join(problems), NOTHING))
     acting = ('%s, your personal GitHub login (the App is skipped)' % identity['acting_login'] if skipped
               else 'your OpenWiz GitHub App')
-    return {'setup_state': str(folder), 'repository': repository, 'project': project['project'],
+    facts = {'setup_state': str(folder), 'repository': repository, 'project': project['project'],
             'settings': {k: project[k] for k in ('harness', 'model', 'effort')},
             'identity': {'selected': 'personal_login' if skipped else 'app', 'acting': acting},
             'brain': {'location': brain['location'], 'repository': brain['brain_repository']},
             'harness': harness_line}
+    if host != 'cloud':
+        facts['host'] = host
+    return facts
 
 
 def decisions_pair(folder, pair):
@@ -845,7 +860,7 @@ def withdraw(state):
 def refreshed(state, folder):
     """Setup's current facts, or Exit after withdrawing the carried setup."""
     try:
-        return setup_facts(folder)
+        return setup_facts(folder, (state.value.get('host') or {}).get('agents', 'cloud'))
     except Exit:
         withdraw(state)
         raise
@@ -867,7 +882,8 @@ def carry_on(got):
     state.value['repo'] = facts['repository']
     if not state.save():
         raise Exit(10, 'Could not save the carried setup; ' + NOTHING)
-    print('Carried from setup: repository %s, CloudRoom project %s.' % (facts['repository'], facts['project']))
+    connection = 'agents on ' + facts['host'] if 'host' in facts else 'CloudRoom project ' + facts['project']
+    print('Carried from setup: repository %s, %s.' % (facts['repository'], connection))
     print('Acting identity: %s.' % facts['identity']['acting'])
     print('Private brain: %s (%s).' % (facts['brain']['repository'], facts['brain']['location'].replace('_', ' ')))
     print('Prepared agents: %s %s %s; harness %s.' % (

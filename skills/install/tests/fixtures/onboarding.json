@@ -64,7 +64,7 @@
     {
      "step": "run",
      "say": "where",
-     "agent": "Your agents need a place to run: this machine, with Claude Code you're already signed into, or Cloudroom or another cloud host to run many at once. Which would you like?"
+     "agent": "Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom."
     },
     {
      "step": "run",
@@ -344,7 +344,7 @@
     },
     {
      "step": "launch",
-     "world": "fleet_record"
+     "world": "heartbeat_active"
     },
     {
      "step": "launch",
@@ -358,7 +358,7 @@
     {
      "step": "launch",
      "say": "fleet-start",
-     "agent": "The plan passed its checks, so the fleet started: 2 builders, each on one small ticket. Watch them work at openwiz.dev/app; nothing for you to do until the first merge."
+     "agent": "Spec #900's local heartbeat is active. It checks GitHub every 10 minutes."
     },
     {
      "step": "watch",
@@ -486,7 +486,7 @@
     {
      "step": "run",
      "say": "where",
-     "agent": "Your agents need a place to run: this machine, with Claude Code you're already signed into, or Cloudroom or another cloud host to run many at once. Which would you like?"
+     "agent": "Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom."
     },
     {
      "step": "run",
@@ -874,7 +874,7 @@
     {
      "step": "run",
      "say": "where",
-     "agent": "Your agents need a place to run: this machine, with Claude Code you're already signed into, or Cloudroom or another cloud host to run many at once. Which would you like?"
+     "agent": "Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom."
     },
     {
      "step": "run",
@@ -1170,7 +1170,7 @@
     },
     {
      "step": "launch",
-     "world": "fleet_record"
+     "world": "heartbeat_active"
     },
     {
      "step": "launch",
@@ -1184,7 +1184,7 @@
     {
      "step": "launch",
      "say": "fleet-start",
-     "agent": "The plan passed its checks, so the fleet started: 3 builders, each on one small ticket. Watch them work at openwiz.dev/app; nothing for you to do until the first merge."
+     "agent": "Spec #900's local heartbeat is active. It checks GitHub every 10 minutes."
     },
     {
      "step": "watch",

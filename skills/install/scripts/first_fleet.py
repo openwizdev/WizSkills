@@ -35,7 +35,6 @@ from GitHub and prints the teacher's merged line and closing offer.
 
 It adds no approval, planner or engine. `continue` carries what install and
 setup already recorded in the installed OpenWiz state (DIR is its `<state>`):
-the one selected repository and CloudRoom project, the acting GitHub identity,
 the private brain `openwiz init` made, the prepared harness, model and effort,
 and whether install already gave the explanation. It reads current setup
 evidence only and refuses, naming each one, when a prerequisite is missing,
@@ -48,25 +47,6 @@ any retry of a create whose answer was lost. It never pushes into a repository.
 
 `select` records the existing repository the owner confirmed, before Connect,
 as this onboarding's one repository; it reads and changes nothing else.
-
-`launch` starts the first fleet the way launch-fleet starts every fleet, only
-on the user's yes right before it (a preview names the host and that it can
-cost money, with a digest of its exact effects; `--yes --confirm DIGEST`
-starts only if a fresh read still has exactly those effects), and only from the spec's latest approval when it is the machine plan
-approval of this onboarding's confirmed grill, on the host the user chose (a
-driver host only once its setting is on the default branch). It
-reads launch-fleet's own frontier (../../launch-fleet/scripts/fleet.sh
-frontier, which checks that to-tickets's approval is current), keeps this
-spec's tickets, reads the fleet settings setup wrote (every builder table the
-user's choice, each reviewer from the other model family). On the yes it
-starts nothing itself: it saves the yes and names launch-fleet's own start
-path (references/launch.md: the project's loops, then "Starting one": the
-spec's loop, its private loop-map entry and the `launch-fleet: fleet active,
-loop fleet-<S>` record), which the orchestrator follows. It says the fleet
-started only once that record reads back from a record author, and never
-starts a fleet a second way. It never calls the engine or the engine's tick.
-Every command
-checks the checkout is the repository this onboarding recorded.
 
 `next` reads only the state file and prints the first unfinished step and
 what to run there, so a fresh session resumes without repeating an effect.
@@ -90,6 +70,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -101,9 +82,10 @@ import urllib.parse
 LAUNCH_FLEET = Path(__file__).resolve().parents[2] / 'launch-fleet'
 FLEET_SH = LAUNCH_FLEET / 'scripts/fleet.sh'
 HOST_PY = LAUNCH_FLEET / 'scripts/host.py'
+HEARTBEAT = LAUNCH_FLEET / 'scripts/heartbeat.py'
 OPTIONS = {
     'where': ({'--state'}, {'--yes'}, {'--build', '--agents'}),
-    'mode': ({'--state'}, set(), {'--mode'}),
+    'mode': ({'--state'}, set(), {'--mode', '--claude-mode', '--codex-mode'}),
     'setting': ({'--state'}, {'--yes'}, set()),
     'grill': ({'--state', '--confirmed'}, set(), set()),
     'first-merge': ({'--state', '--pr'}, set(), set()),
@@ -431,23 +413,44 @@ def mode_rows(text):
     return [v[0] if len(v) == 1 and re.fullmatch(MODE_VALUE, v[0]) else None for v in values]
 
 
-def saved_mode(env):
-    """The permission mode the default branch's docs/agents/fleet.md saves, or None for no row; read as
-    launch-fleet's host.py reads the host setting, from this checkout's origin, and as KN3's driver reads it."""
-    sys.dont_write_bytecode = True  # never write bytecode into launch-fleet's folder
+def saved_rows(env):
+    sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location('launch_fleet_host', HOST_PY)
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
-        module.SETTING = Path(MODE_FILE)  # the same default-branch read, for KN3's file
+        module.SETTING = Path(MODE_FILE)
         text = module.setting_text()
-    except Exception as error:  # host.py's Unreadable, or a missing git
+    except Exception as error:
         raise Exit(1, 'Could not read %s from the default branch: %s; %s' % (MODE_FILE, error, NOTHING))
-    values = mode_rows(text)
-    if len(values) > 1 or None in values:
-        raise Exit(5, '%s needs exactly one `%s `<mode>` |` row; ask the owner to fix it; %s' % (
-            MODE_FILE, MODE_ROW, NOTHING))
-    return values[0] if values else None
+    return [line.rstrip() for line in (text or '').splitlines() if line.startswith(MODE_ROWS)]
+
+
+MODE_ROWS = '| Harness permission mode'
+MODE_FLAGS = {'claude': '--claude-mode', 'codex': '--codex-mode'}
+HARNESS_OF = {program: harness for harness, program in PROGRAMS.items()}
+
+
+def routed(host, harness):
+    both = host.get('agents') == 'local' and {'claude-code', 'codex'} <= set(host.get('harnesses') or ())
+    return ['claude-code', 'codex'] if both else [harness]
+
+
+def picked_modes(state):
+    saved = state.value.get('mode') or {}
+    if isinstance(saved.get('modes'), dict):
+        return dict(saved['modes'])
+    return {PROGRAMS[saved['harness']]: saved['mode']} if saved.get('mode') else {}
+
+
+def kept(modes):
+    return {'modes': modes} if len(modes) > 1 else {}
+
+
+def mode_lines(modes):
+    if len(modes) == 1:
+        return ['%s `%s` |' % (MODE_ROW, mode) for mode in modes.values()]
+    return ['%s (%s) | `%s` |' % (MODE_ROWS, program, modes[program]) for program in sorted(modes)]
 
 
 # KN3's host-side approval (security R6, option A): the same pick saved on the owner's machine, per
@@ -601,10 +604,11 @@ def approve_locked(env, path, repo, program, picked):
                       'again.')
 
 
-def mode_section(picked):
-    return ('\n## Harness permission mode\n\nThe mode the owner picked for builders on this machine; the local '
-            'driver passes it to the harness unchanged. To change it, ask your agent to edit this one row.\n\n'
-            '| Setting | Value |\n| --- | --- |\n%s `%s` |\n' % (MODE_ROW, picked))
+def mode_section(modes):
+    return ('\n## Harness permission mode\n\nThe mode the owner picked for agents on this machine; the local '
+            'driver passes it to the harness unchanged. To change it, ask your agent to edit %s.\n\n'
+            '| Setting | Value |\n| --- | --- |\n%s\n' % (
+                'this one row' if len(modes) == 1 else 'that harness\'s row', '\n'.join(mode_lines(modes))))
 
 
 # --- Where agents run (#1358) ---------------------------------------------------
@@ -629,8 +633,8 @@ def where(got):
         if why:
             print('Not offered: %s: %s.' % (name, why))
     if agents is None:
-        print("Nothing recorded. Ask where agents run, offering only these; on the user's answer, run again with "
-              '--agents <its name>.')
+        print("Nothing recorded. Reuse the user's host choice if known and offered here. With no choice, offer "
+              'the listed hosts. Then run again with --agents <its name>.')
         return 12
     missing = []
     login = run(['gh', 'api', 'user', '--jq', '.login'], env)
@@ -676,8 +680,11 @@ def where(got):
         print(known.get('ask', 'Have you signed in to %s as that Login line says?' % agents))
     print('OpenWiz is free now.')
     if not got.get('--yes'):
-        print("Nothing recorded. Ask where agents run%s; on the user's yes, run again with that --agents and --yes."
-              % ('' if agents in ('local', 'cloud') else ', and the sign-in question above'))
+        if agents == 'cloud':
+            print("Nothing recorded. Ask where agents run; on the user's yes, run again with that --agents and --yes.")
+        else:
+            print("Nothing recorded. On the user's yes to the effects and cost above, run again with the same "
+                  '--agents and --yes.')
         return 12
     if state.value.get('launch'):
         raise Exit(5, 'This onboarding already launched its fleet; ask to change the host setting instead.')
@@ -693,7 +700,7 @@ def where(got):
 
 # --- The continuation from install and setup (#636) ----------------------
 
-def setup_facts(folder):
+def setup_facts(folder, chosen_host):
     """What the installed setup recorded and currently verifies, or Exit naming
     each prerequisite that is not verified now. Reads the setup store only."""
     path = Path(folder) / 'setup/state.json'
@@ -707,8 +714,14 @@ def setup_facts(folder):
         assert isinstance(observations, dict) and (project is None or isinstance(project, dict))
         if project is not None:
             assert all(isinstance(project[k], str) and project[k]
-                       for k in ('repository', 'project', 'harness', 'model', 'effort'))
+                       for k in ('repository', 'harness', 'model', 'effort'))
             assert re.fullmatch(REPOSITORY, project['repository'])
+            host = project.get('host', 'cloud')
+            assert isinstance(host, str) and len(host) <= 40 and re.fullmatch(DRIVER_NAME, host) and host != 'cloudroom'
+            if host == 'cloud':
+                assert isinstance(project['project'], str) and project['project']
+            else:
+                assert project['project'] is None and project['answer_thread'] is None
         identity, brain = value.get('identity'), value.get('brain')
         assert identity is None or (isinstance(identity, dict) and isinstance(identity['selected'], str)
                                     and (identity['acting_login'] is None or isinstance(identity['acting_login'], str)))
@@ -721,6 +734,9 @@ def setup_facts(folder):
         raise Exit(10, "OpenWiz's setup state is unreadable; " + NOTHING)
     if project is None:
         raise Exit(5, 'Setup has no prepared project: prepare it (setup.py prepare) and check again; ' + NOTHING)
+    if host != chosen_host:
+        raise Exit(5, 'Setup prepared host %s, but this fleet chose %s; run setup.py prepare --host %s and check '
+                   'again; %s' % (host, chosen_host, chosen_host, NOTHING))
     repository = project['repository']
     if not (identity and identity.get('repository') == repository):
         identity = None
@@ -740,7 +756,9 @@ def setup_facts(folder):
             return 'verified', None
         return ('unknown' if seen['code'].endswith('_unreadable') else 'not verified'), seen['code']
 
-    needed = ['cloudroom', 'personal_github', 'project'] + ([] if skipped else ['github_app'])
+    needed = (['cloudroom'] if host == 'cloud' else []) + ['personal_github', 'project']
+    if not skipped:
+        needed.append('github_app')
     problems = []
     for component in needed:
         found, why = state(component)
@@ -748,7 +766,8 @@ def setup_facts(folder):
             problems.append('%s: %s (%s)' % (NAMES[component], found, why))
     harness, why = state('harness')
     if harness == 'verified' or why == 'harness_listed':
-        harness_line = 'listed by CloudRoom; its login is not proven by setup'
+        harness_line = ('listed by CloudRoom' if host == 'cloud' else 'installed on this computer')
+        harness_line += '; its login is not proven by setup'
     else:
         problems.append('%s: %s (%s)' % (NAMES['harness'], harness, why))
     if brain is None or brain['code_repository'].lower() != repository.lower():
@@ -761,11 +780,14 @@ def setup_facts(folder):
         raise Exit(5, 'Setup is not ready for the first fleet: %s; %s' % ('; '.join(problems), NOTHING))
     acting = ('%s, your personal GitHub login (the App is skipped)' % identity['acting_login'] if skipped
               else 'your OpenWiz GitHub App')
-    return {'setup_state': str(folder), 'repository': repository, 'project': project['project'],
+    facts = {'setup_state': str(folder), 'repository': repository, 'project': project['project'],
             'settings': {k: project[k] for k in ('harness', 'model', 'effort')},
             'identity': {'selected': 'personal_login' if skipped else 'app', 'acting': acting},
             'brain': {'location': brain['location'], 'repository': brain['brain_repository']},
             'harness': harness_line}
+    if host != 'cloud':
+        facts['host'] = host
+    return facts
 
 
 def decisions_pair(folder, pair):
@@ -845,7 +867,7 @@ def withdraw(state):
 def refreshed(state, folder):
     """Setup's current facts, or Exit after withdrawing the carried setup."""
     try:
-        return setup_facts(folder)
+        return setup_facts(folder, (state.value.get('host') or {}).get('agents', 'cloud'))
     except Exit:
         withdraw(state)
         raise
@@ -867,7 +889,8 @@ def carry_on(got):
     state.value['repo'] = facts['repository']
     if not state.save():
         raise Exit(10, 'Could not save the carried setup; ' + NOTHING)
-    print('Carried from setup: repository %s, CloudRoom project %s.' % (facts['repository'], facts['project']))
+    connection = 'agents on ' + facts['host'] if 'host' in facts else 'CloudRoom project ' + facts['project']
+    print('Carried from setup: repository %s, %s.' % (facts['repository'], connection))
     print('Acting identity: %s.' % facts['identity']['acting'])
     print('Private brain: %s (%s).' % (facts['brain']['repository'], facts['brain']['location'].replace('_', ' ')))
     print('Prepared agents: %s %s %s; harness %s.' % (
@@ -1088,31 +1111,49 @@ def mode(got):
         raise Exit(5, 'Connect the repository first (continue): the mode is for the harness it prepares; '
                       'nothing recorded.')
     harness = carried['settings']['harness']
-    modes = MODES.get(harness)
-    if not modes:
+    harnesses = routed(host, harness)
+    if any(not MODES.get(h) for h in harnesses):
         raise Exit(5, 'No permission modes are known for %s; nothing recorded.' % harness)
-    if '--mode' not in got:
-        print('%s on this machine runs with the permission mode the owner picks, once. The driver passes it '
-              'unchanged and never chooses or widens it:' % harness)
-        for name, why in modes:
-            print('- %s: %s' % (name, why))
-        print("Nothing recorded. Ask the owner which one, in those words, and pick none for them; on their answer, "
-              'run again with --mode <their pick>.')
+    flags = [MODE_FLAGS[PROGRAMS[h]] for h in harnesses] if len(harnesses) > 1 else ['--mode']
+    given = [f for f in ('--mode',) + tuple(MODE_FLAGS.values()) if f in got]
+    if not given:
+        for h in harnesses:
+            print('%s on this machine runs with the permission mode the owner picks, once. The driver passes it '
+                  'unchanged and never chooses or widens it:' % h)
+            for name, why in MODES[h]:
+                print('- %s: %s' % (name, why))
+        if len(harnesses) > 1:
+            print('Both harnesses run here: builders use %s and each review uses the other one, so each needs its '
+                  'own mode.' % harness)
+        print("Nothing recorded. Ask the owner which one%s, in those words, and pick none for them; on their answer, "
+              'run again with %s.' % (' for each harness' if len(harnesses) > 1 else '',
+                                      ' '.join('%s <their pick>' % f for f in flags)))
         return 12
-    if got['--mode'] not in [name for name, _ in modes]:
-        raise Exit(5, '%s is not one of %s\'s permission modes (%s); nothing recorded.' % (
-            got['--mode'], harness, ', '.join(name for name, _ in modes)))
+    if sorted(given) != sorted(flags):
+        raise Exit(5, 'Pick with exactly %s here%s; nothing recorded.' % (' and '.join(flags), (
+            ': builders and reviewers use both harnesses on this machine' if len(harnesses) > 1 else '')))
+    picks = {h: got[f] for h, f in zip(harnesses, flags)}
+    for h, pick in picks.items():
+        if pick not in [name for name, _ in MODES[h]]:
+            raise Exit(5, '%s is not one of %s\'s permission modes (%s); nothing recorded.' % (
+                pick, h, ', '.join(name for name, _ in MODES[h])))
+    wanted = {PROGRAMS[h]: pick for h, pick in picks.items()}
     recorded = state.value.get('setting') or {}
-    if recorded.get('state') in ('pending', 'opened', 'merged') and recorded.get('mode') != got['--mode']:
+    had = recorded.get('modes') or ({PROGRAMS[harness]: recorded['mode']} if recorded.get('mode') else {})
+    if recorded.get('state') in ('pending', 'opened', 'merged') and had != wanted:
         raise Exit(5, 'The host setting already carries %s; ask the owner to change that line instead; '
-                      'nothing recorded.' % (recorded.get('mode') or 'no permission mode'))
-    approve_host(os.environ, carried['repository'], PROGRAMS[harness], got['--mode'])
-    state.value['mode'] = {'harness': harness, 'mode': got['--mode']}
+                      'nothing recorded.' % (', '.join(sorted(had.values())) or 'no permission mode'))
+    for h, pick in picks.items():
+        approve_host(os.environ, carried['repository'], PROGRAMS[h], pick)
+    state.value['mode'] = {'harness': harness, 'mode': picks[harness]}
+    if len(picks) > 1:
+        state.value['mode']['modes'] = wanted
     if not state.save():
         raise Exit(10, 'Could not save the permission mode; nothing recorded.')
-    print('Recorded: agents on this machine run %s with the %s permission mode the owner picked, saved as this '
-          "machine's host-side approval for %s (outside the repository); the host setting adds the matching %s "
-          'row.' % (harness, got['--mode'], carried['repository'], MODE_FILE))
+    print('Recorded: agents on this machine run %s, the mode%s the owner picked, saved as this machine\'s host-side '
+          'approval for %s (outside the repository); the host setting adds the matching %s row%s.' % (
+              ' and '.join('%s with the %s permission mode' % (h, pick) for h, pick in picks.items()),
+              's' if len(picks) > 1 else '', carried['repository'], MODE_FILE, 's' if len(picks) > 1 else ''))
     return 0
 
 
@@ -1125,6 +1166,7 @@ def setting(got):
     if not host or not repo:
         raise Exit(5, 'Ask where agents run (where) and connect the repository (continue) first; nothing written.')
     picked = (state.value.get('mode') or {}).get('mode')
+    modes = picked_modes(state)
     name = None if host['agents'] == 'cloud' else host['agents']
     local = name == 'local'
     if local and not picked:
@@ -1140,16 +1182,17 @@ def setting(got):
         if fleet is None:
             raise Exit(5, '%s is not on the default branch yet: run setup and merge its settings (Agents) first; '
                           'nothing written.' % MODE_FILE)
-        values = mode_rows(fleet)
-        if values and values != [picked]:
+        values = [line.rstrip() for line in fleet.splitlines() if line.startswith(MODE_ROWS)]
+        if values and values != mode_lines(modes):
             raise Exit(5, '%s already saves %s; OpenWiz never adds a second row or replaces the owner\'s. Ask the '
                           'owner whether to change that row; nothing written.' % (
-                              MODE_FILE, ', '.join('`%s`' % v if v else 'an unreadable row' for v in values)))
+                              MODE_FILE, ', '.join('`%s`' % v for v in mode_rows(fleet) if v) or
+                              ', '.join(values)))
         writes = ([HOST_FILE] if now is None else []) + ([MODE_FILE] if not values else [])
     elif name and now is None:
         writes = [HOST_FILE]
     if not writes:
-        state.value['setting'] = {'host': name, 'state': 'merged', 'mode': picked}
+        state.value['setting'] = dict({'host': name, 'state': 'merged', 'mode': picked}, **kept(modes))
         if not state.save():
             raise Exit(10, 'Could not save the host setting; nothing written.')
         print('The host setting already matches: %s.' % (
@@ -1161,7 +1204,7 @@ def setting(got):
     if HOST_FILE in writes:
         want[HOST_FILE] = host_text(name)
     if MODE_FILE in writes:
-        want[MODE_FILE] = fleet.rstrip('\n') + '\n' + mode_section(picked)
+        want[MODE_FILE] = fleet.rstrip('\n') + '\n' + mode_section(modes)
     recorded = state.value.get('setting') or {}
     if recorded.get('state') in ('pending', 'opened'):
         found = host_pull(repo, env)
@@ -1170,19 +1213,21 @@ def setting(got):
                           'it, or answers where agents run again; nothing written.' % found[0])
         if found:
             pull_diff(repo, env, want)
-            state.value['setting'] = {'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked}
+            state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked},
+                                          **kept(modes))
             state.save()
             print('The host setting pull request is open: %s. The user merges it; launch waits for it.' % found[0])
             return 0
     said = {HOST_FILE: 'add %s holding `Host: %s`' % (HOST_FILE, name),
-            MODE_FILE: 'add one row, %s `%s` |, to %s, changing no other line' % (MODE_ROW, picked, MODE_FILE)}
+            MODE_FILE: 'add %s, %s, to %s, changing no other line' % (
+                'one row' if len(modes) == 1 else '%d rows' % len(modes), ' and '.join(mode_lines(modes)), MODE_FILE)}
     print('Effect: on a new branch %s of %s, %s, and open one pull request for you to merge. Nothing else is '
           'written.' % (HOST_BRANCH, repo, ' and '.join(said[w] for w in writes)))
     if not got.get('--yes'):
         print("Nothing written. On the user's yes to exactly this, run again with --yes.")
         return 12
     based = {HOST_FILE: None, MODE_FILE: fleet if local else None}
-    state.value['setting'] = {'host': name, 'state': 'pending', 'mode': picked}
+    state.value['setting'] = dict({'host': name, 'state': 'pending', 'mode': picked}, **kept(modes))
     if not state.save():
         raise Exit(10, 'Could not save the host setting first; nothing written.')
     base = run(['gh', 'api', 'repos/%s' % repo, '--jq', '.default_branch'], env)
@@ -1237,9 +1282,10 @@ def setting(got):
                        % (path, HOST_BRANCH))
     pull_diff(repo, env, want)
     if host_pull(repo, env) is None:
-        body = ('Adds `Host: local` to %s and the owner\'s harness permission mode as one row of %s: OpenWiz '
+        body = ('Adds `Host: local` to %s and the owner\'s harness permission mode as %s of %s: OpenWiz '
                 'starts this project\'s agents through its local driver, which passes that mode to the harness '
-                'unchanged (records v1, section 6). Merge it to start the first fleet there.' % (HOST_FILE, MODE_FILE)
+                'unchanged (records v1, section 6). Merge it to start the first fleet there.' % (
+                    HOST_FILE, 'one row' if len(modes) == 1 else 'one row per harness', MODE_FILE)
                 if local else 'Adds `Host: %s` to %s: OpenWiz starts this project\'s agents through its %s driver '
                 '(records v1, section 6). Merge it to start the first fleet there.' % (name, HOST_FILE, name))
         run(['gh', 'pr', 'create', '--repo', repo, '--head', HOST_BRANCH, '--base', branch, '--title',
@@ -1248,7 +1294,7 @@ def setting(got):
     if found is None:
         raise Exit(6, 'Whether the host setting pull request was opened is uncertain; run this again to read it '
                       'before anything else.')
-    state.value['setting'] = {'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked}
+    state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked}, **kept(modes))
     if not state.save():
         raise Exit(6, 'The host setting pull request is open (%s), but that could not be saved.' % found[0])
     print('Opened %s. The user merges it; launch waits for it on the default branch.' % found[0])
@@ -1295,8 +1341,8 @@ def choose(got):
     if got.get('--agents', host['agents']) != host['agents']:
         raise Exit(5, 'The user said agents run %s; answer where again to change it; nothing recorded.' % (
             where_of(host['agents'])))
+    carried = state.value.get('setup')
     if got.get('--from-setup'):
-        carried = state.value.get('setup')
         if not carried:
             raise Exit(5, 'No setup was carried into this onboarding (run continue first); nothing recorded.')
         settings = carried['settings']
@@ -1308,6 +1354,10 @@ def choose(got):
         harnesses = [h for h in offered['harnesses'] if h['provider'] == settings['harness']]
     except (OSError, ValueError, KeyError, TypeError, AssertionError):
         raise Exit(1, 'The saved `openwiz models --json` output is unreadable; nothing recorded.')
+    local_source = host['agents'] != 'cloud' and (not carried or 'host' in carried)
+    if local_source and offered.get('source') != 'local':
+        raise Exit(5, 'Read the local options with `openwiz models --json --host %s`; nothing recorded.'
+                   % host['agents'])
     efforts = [e for h in harnesses for m in h['models'] if m['model'] == settings['model'] for e in m['efforts']]
     if len(harnesses) != 1 or settings['effort'] not in efforts:
         raise Exit(5, 'That harness, model and effort are not among the offered options; nothing recorded.')
@@ -1321,7 +1371,7 @@ def choose(got):
         env = repository(state.value.get('repo'))
     except Exit:
         env = None
-    wrote, intended = (None, None) if env is None else write_models(settings, offered)
+    wrote, intended = (None, None) if env is None else write_models(settings, offered, host['agents'] != 'cloud')
     try:
         remote = None if env is None else fleet_text(env, state.value['repo'])
     except Exit:
@@ -1379,7 +1429,7 @@ def model_row(role, agent):
         provider, model, effort)
 
 
-def write_models(settings, offered):
+def write_models(settings, offered, driver=False):
     choice = (settings['harness'], settings['model'], settings['effort'])
     try:
         folder = settings_folder()
@@ -1387,7 +1437,7 @@ def write_models(settings, offered):
         raise Exit(5, 'This checkout has no docs/agents/ folder of its own (a missing or linked folder); run setup '
                       'first; nothing recorded.')
     try:
-        return write_in(folder, choice, offered)
+        return write_in(folder, choice, offered, driver)
     finally:
         os.close(folder)
 
@@ -1405,7 +1455,7 @@ def settings_folder():
     return folder
 
 
-def write_in(folder, choice, offered):
+def write_in(folder, choice, offered, driver=False):
     name = FLEET_MD.name
     try:
         handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=folder)
@@ -1439,10 +1489,13 @@ def write_in(folder, choice, offered):
         reviewer, kept = (found and (found['harness'], found['model'], found['effort'])), None
         source = 'the older `%s` table' % REVIEWER[FAMILY[choice[0]]]
     family = FAMILY[choice[0]]
+    alone = None
     if not reviewer or FAMILY.get(reviewer[0]) in (None, family):
         reviewer = RECOMMENDED['gpt' if family == 'claude' else 'claude']
         kept, source = None, 'the recommended other-family choice'
-        if not offers(offered, reviewer):
+        if driver and not any(h['provider'] == reviewer[0] for h in offered['harnesses']):
+            alone = reviewer[0]
+        elif not offers(offered, reviewer):
             raise Exit(5, 'The Reviewer must be from the other model family; its recommended choice, %s, is not '
                           'offered now; nothing recorded.' % ' '.join(reviewer))
     rows = ['| Role | Harness | Model | Effort | `room-cli thread spawn` flags |', '| --- | --- | --- | --- | --- |',
@@ -1460,6 +1513,9 @@ def write_in(folder, choice, offered):
     intended = {'Orchestrator': choice, 'Builder': choice, 'Reviewer': reviewer, 'Small builder': None, 'Fixer': None}
     said = ('docs/agents/fleet.md: the Models table names %s for the Orchestrator and Builder, with %s as the '
             'Reviewer' % (' '.join(choice), ' '.join(reviewer)))
+    if alone:
+        said += ('. %s is not installed here, so each review runs with the builder\'s harness, marked '
+                 'same-family review' % alone)
     if written == text:
         return said + '; already written.', intended
     temporary = '.fleet-%s' % os.urandom(8).hex()
@@ -1635,6 +1691,20 @@ def fleet_recorded(spec, env):
     return any(body.split('\n')[0].strip() == FLEET_RECORD + str(spec) for body in bodies)
 
 
+def activation(spec, host, env):
+    if host == 'cloud':
+        return fleet_recorded(spec, env)
+    result = run([sys.executable, '-I', str(HEARTBEAT), 'status', env['GH_REPO'], str(spec)], env, timeout=30)
+    if result is None or result.returncode:
+        return None
+    status = result.stdout.strip()
+    if status == b'heartbeat: not installed':
+        return False
+    if re.fullmatch(rb'heartbeat: active [(](launchd|systemd|cron)[)]', status):
+        return True
+    return None
+
+
 def plan_approved(spec, env, confirmed):
     """Exit unless the spec's latest plan approval is to-tickets' machine plan approval of this grill.
 
@@ -1717,23 +1787,24 @@ def launch(got):
     if not choices or choices.get('agents') != host['agents']:
         raise Exit(5, 'The harness, model and effort are not chosen for where agents run yet (choose); ' + NOTHING)
     env = repository(state.value.get('repo'))
+    agents_host = host['agents']
+    driver = agents_host != 'cloud'
     previous = state.value.get('launch')
     if previous and previous['spec'] == spec and previous['state'] != 'refused':
-        # R7: the start is launch-fleet's own (references/launch.md, "Starting one"): it counts only once launch-fleet's
-        # activation record, `launch-fleet: fleet active, loop fleet-<S>`, reads back from a record author.
-        recorded = fleet_recorded(spec, env)
+        recorded = activation(spec, agents_host, env)
         if previous['state'] != 'started' and recorded:
             previous['state'] = 'started'
             if not state.save():
                 raise Exit(10, "Could not save the fleet's start; run this again to read it.")
-            print(record_line(spec, recorded))
-            print(teach('The fleet starting', (str(len(previous.get('tickets') or [])),)))
+            print(record_line(spec, recorded, agents_host))
+            if not driver:
+                print(teach('The fleet starting', (str(len(previous.get('tickets') or [])),)))
             return 0
         if previous['state'] == 'started':
             print('Spec #%d already started once; not starting again.' % spec)
-            print(record_line(spec, recorded))
+            print(record_line(spec, recorded, agents_host))
             return 0
-        print(record_line(spec, recorded))
+        print(record_line(spec, recorded, agents_host))
         if recorded is None:
             raise Exit(6, "Whether launch-fleet's start already ran is unknown, so its start path is not named "
                           'again; run this again; ' + NOTHING)
@@ -1751,7 +1822,14 @@ def launch(got):
                 raise Exit(10, 'Could not withdraw the yes; run this again; ' + NOTHING)
             raise Exit(5, "The fleet settings' Orchestrator is now %s, not the one the user said yes to: preview "
                           'again and ask again; %s' % (agent_words(orchestrator), NOTHING))
-        print(handoff(spec, state.value['repo'], host, orchestrator))
+        adapters = previous.get('adapters') if driver else None
+        if driver and not adapters:
+            del state.value['launch']
+            state.value.pop('preview', None)
+            if not state.save():
+                raise Exit(10, 'Could not withdraw the yes; run this again; ' + NOTHING)
+            raise Exit(5, 'The saved yes predates the heartbeat handoff. Run continue, then preview again; ' + NOTHING)
+        print(handoff(spec, state.value['repo'], adapters, orchestrator))
         return 6
     # Review R4: the carried setup must still be what setup verifies now.
     if not isinstance(carried.get('setup_state'), str):
@@ -1770,21 +1848,32 @@ def launch(got):
             'merge the host setting pull request first (setting)' if name and named is None else
             'answer where agents run again, or ask to change that line', NOTHING))
     picked = (state.value.get('mode') or {}).get('mode')
-    if local and (not picked or saved_mode(env) != picked):
-        raise Exit(5, 'No `%s `%s` |` row, the Harness permission mode the owner picked, is in %s on the default '
+    modes = picked_modes(state)
+    if local and modes and set(modes) != {PROGRAMS[h] for h in routed(host, choices['harness'])}:
+        raise Exit(5, 'The permission modes saved here are not for every harness this fleet starts on this machine: '
+                      'run mode again, then setting, and merge it; ' + NOTHING)
+    if local and (not picked or saved_rows(env) != mode_lines(modes)):
+        raise Exit(5, 'No %s row, the Harness permission mode the owner picked, is in %s on the default '
                       "branch, and the local driver starts no agent without it: run mode, then setting, and merge "
-                      'it; %s' % (MODE_ROW, picked or '<mode>', MODE_FILE, NOTHING))
+                      'it; %s' % (' and '.join('`%s`' % line for line in mode_lines(modes or {'': '<mode>'})),
+                                  MODE_FILE, NOTHING))
     if local:
-        program = PROGRAMS[choices['harness']]
-        approved = host_approval(env, state.value['repo'], program)
-        if approved != picked:
-            raise Exit(5, "This machine's host-side approval for %s with %s is %s, not the `%s` row %s saves, and "
-                          "KN3's start refuses unless they match: run mode --mode %s to save the owner's pick here, "
-                          'or ask the owner which mode they mean; %s' % (
-                              state.value['repo'], program, approved or 'missing', picked, MODE_FILE, picked, NOTHING))
-    if name and driver_answer(env, host.get('adapters') or env.get('OPENWIZ_ADAPTERS'), name)[0] is None:
-        raise Exit(5, "This OpenWiz's %s driver no longer answers, so no agent can run %s; %s" % (
-            name, where_of(name), NOTHING))
+        again = ' '.join('%s %s' % (MODE_FLAGS[p] if len(modes) > 1 else '--mode', modes[p]) for p in sorted(modes))
+        for program in sorted(modes):
+            approved = host_approval(env, state.value['repo'], program)
+            if approved != modes[program]:
+                raise Exit(5, "This machine's host-side approval for %s with %s is %s, not the `%s` row %s saves, "
+                              "and KN3's start refuses unless they match: run mode %s to save the owner's pick here, "
+                              'or ask the owner which mode they mean; %s' % (
+                                  state.value['repo'], program, approved or 'missing', modes[program], MODE_FILE,
+                                  again, NOTHING))
+    adapters = None
+    if driver:
+        adapters = host.get('adapters') or env.get('OPENWIZ_ADAPTERS')
+        if driver_answer(env, adapters, name)[0] is None:
+            raise Exit(5, "This OpenWiz's %s driver no longer answers, so no agent can run %s; %s" % (
+                name, where_of(name), NOTHING))
+        env.update(OPENWIZ_ADAPTERS=adapters, LAUNCH_FLEET_GITHUB_ONLY='1')
     plan_approved(spec, env, confirmed)
     ready = frontier(env)
     title, members = spec_facts(spec, env)
@@ -1795,10 +1884,18 @@ def launch(got):
     rules = fleet_rules(env, state.value['repo'])
     builder, reviewer = review(choices, rules)
     orchestrator = rules['orchestrator']
-    where = where_of(host['agents'])
+    where = where_of(agents_host)
+    if driver and (orchestrator is None or orchestrator['harness'] not in PROGRAMS or
+                   not shutil.which(PROGRAMS[orchestrator['harness']], path=env.get('PATH'))):
+        raise Exit(5, 'The orchestrator needs an installed Claude Code or Codex harness for the heartbeat; ' + NOTHING)
+    same_family = driver and not shutil.which(PROGRAMS[reviewer['harness']], path=env.get('PATH'))
+    if same_family:
+        reviewer = builder
     effects = {'fleet_thread': orchestrator, 'repo': state.value['repo'], 'spec': spec, 'project': carried['project'], 'title': title,
-               'host': host['agents'], 'mode': picked if local else None, 'builder': builder, 'reviewer': reviewer, 'grill': confirmed,
+               'host': host['agents'], 'mode': (picked if len(modes) == 1 else modes) if local else None, 'builder': builder, 'reviewer': reviewer, 'grill': confirmed,
                'tickets': [[n, ready[n]] for n in starts]}
+    if driver:
+        effects['heartbeat'] = adapters
     digest = hashlib.sha256(json.dumps(effects, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     if got.get('--yes'):
         shown = state.value.get('preview') or {}
@@ -1808,16 +1905,23 @@ def launch(got):
     agents = '%s %s %s' % (builder['harness'], builder['model'], builder['effort'])
     fleet_thread = '%s %s %s' % (orchestrator['harness'], orchestrator['model'], orchestrator['effort'])
     if not got.get('--yes'):
-        print('Ready to start the fleet for spec #%d %s, through launch-fleet: 1 fleet thread (%s), whose loop checks '
-              'the spec every 10 minutes and starts a builder (%s) for each of:' % (spec, where, fleet_thread, agents))
+        if driver:
+            print('Ready to start the fleet for spec #%d %s through launch-fleet. A local heartbeat checks GitHub '
+                  'every 10 minutes and starts an orchestrator wake (%s) when work is due. '
+                  'Ready for a builder (%s):' % (spec, where, fleet_thread, agents))
+        else:
+            print('Ready to start the fleet for spec #%d %s, through launch-fleet: 1 fleet thread (%s), whose loop '
+                  'checks the spec every 10 minutes and starts a builder (%s) for each of:' %
+                  (spec, where, fleet_thread, agents))
         for ticket in starts:
             print('#%d %s' % (ticket, ready[ticket]))
-        print('Each pull request is reviewed by %s %s %s, from the other model family.' % (
-            reviewer['harness'], reviewer['model'], reviewer['effort']))
+        family = 'marked same-family review' if same_family else 'from the other model family'
+        print('Each pull request is reviewed by %s, %s.' % (agent_words(reviewer), family))
         cost = (host_cost(host['agents']) if not local else 'every agent uses %s on this machine, whose model '
                 'use is billed to you as it is today' % builder['harness'])
         if local:
-            print('Its agents run %s with the %s permission mode you picked.' % (builder['harness'], picked))
+            print('Its agents run %s you picked.' % ' and '.join(
+                '%s with the %s permission mode' % (HARNESS_OF[p], modes[p]) for p in sorted(modes)))
         print('Start the fleet %s now? It can cost money: %s.' % (where, cost))
         state.value['preview'] = {'spec': spec, 'effects': digest}
         if not state.save():
@@ -1827,12 +1931,18 @@ def launch(got):
         return 12
     state.value['launch'] = {'spec': spec, 'state': 'authorized', 'effects': digest, 'tickets': starts,
                              'orchestrator': orchestrator}
+    if driver:
+        state.value['launch']['adapters'] = adapters
     if not state.save():
         raise Exit(10, 'Could not save the start the user said yes to; ' + NOTHING)
-    print("The user said yes to starting spec #%d's fleet %s. Nothing is started by this command: the fleet starts "
-          "through launch-fleet's own start path, and is said started only once its activation record reads back."
-          % (spec, where))
-    print(handoff(spec, state.value['repo'], host, orchestrator))
+    if driver:
+        print("The user said yes to starting spec #%d's fleet %s. Follow the heartbeat handoff for the scheduled job."
+              % (spec, where))
+    else:
+        print("The user said yes to starting spec #%d's fleet %s. Nothing is started by this command: the fleet starts "
+              "through launch-fleet's own start path, and is said started only once its activation record reads back."
+              % (spec, where))
+    print(handoff(spec, state.value['repo'], adapters, orchestrator))
     return 0
 
 
@@ -1840,27 +1950,35 @@ def agent_words(agent):
     return ' '.join(agent[k] for k in ('harness', 'model', 'effort'))
 
 
-def handoff(spec, repo, host, orchestrator):
+def handoff(spec, repo, adapters, orchestrator):
     """launch-fleet's own start path, named for the orchestrator to follow; never a second copy of it (R7)."""
-    adapters = host.get('adapters') if host.get('agents') != 'cloud' else None
+    if adapters:
+        return ("Next, as this project's orchestrator, follow launch-fleet's Launch section "
+                "(references/launch.md#hosts-without-cloudroom) for the local heartbeat for spec #%d of %s. "
+                "Use OPENWIZ_ADAPTERS=%s, driver harness `%s` and model `%s`. Show the scheduled job preview "
+                "and apply it on the user's yes. Then run launch --spec %d again to read back its status." % (
+                    spec, repo, shlex.quote(adapters), PROGRAMS[orchestrator['harness']], orchestrator['model'], spec))
     approved = '--provider %s --model %s --reasoning-level %s' % (
         orchestrator['harness'], orchestrator['model'], orchestrator['effort'])
     return ("Next, as this project's orchestrator, follow launch-fleet's Launch section (references/launch.md) for "
             'spec #%d of %s: its two project loops and the GitHub messages question, then "Starting one": the spec\'s '
-            "loop, its entry in the private loop map, read back, and the record `%s%d`, read back.%s The user said "
+            "loop, its entry in the private loop map, read back, and the record `%s%d`, read back. The user said "
             'yes to the fleet thread `%s`: right before creating that loop, run launch-fleet\'s `ops-starts.py flags '
             '--repo %s fleet_thread`, and only if it prints exactly that, create the loop with `--provider %s --model '
             '%s --reasoning %s`. If it prints anything else, create nothing and run launch --spec %d again: it asks '
             'for a fresh preview and yes. Then run launch --spec %d again: it says the fleet started only once that '
             'record reads back. Never start it a second way.' % (
-                spec, repo, FLEET_RECORD, spec,
-                ' Its loop runs builders %s, so give it OPENWIZ_ADAPTERS=%s, where launch-fleet\'s '
-                'host.py finds the %s driver.' % (where_of(host['agents']), adapters, host['agents'])
-                if adapters else '', approved, repo, orchestrator['harness'], orchestrator['model'],
+                spec, repo, FLEET_RECORD, spec, approved, repo, orchestrator['harness'], orchestrator['model'],
                 orchestrator['effort'], spec, spec))
 
 
-def record_line(spec, recorded):
+def record_line(spec, recorded, host):
+    if host != 'cloud':
+        if recorded is None:
+            return "Spec #%d's active local heartbeat could not be confirmed." % spec
+        if recorded:
+            return "Spec #%d's local heartbeat is active. It checks GitHub every 10 minutes." % spec
+        return "Spec #%d has no local heartbeat installed yet." % spec
     if recorded is None:
         return "The spec's fleet record could not be read right now."
     if recorded:
@@ -1874,8 +1992,50 @@ def watch(got):
     if state.value.get('spec') != spec:
         raise Exit(5, 'This onboarding planned no spec #%d.' % spec)
     env = repository(state.value.get('repo'))
-    print(record_line(spec, fleet_recorded(spec, env)))
+    host = (state.value.get('host') or {}).get('agents', 'cloud')
+    print(record_line(spec, activation(spec, host, env), host))
+    if host != 'cloud':
+        return github_progress(spec, env)
     return progress(spec, got['--openwiz'], env)
+
+
+TICKET_FIELDS = 'number,state,stateReason,closedByPullRequestsReferences,blockedBy,comments'
+
+
+def ticket_state(view):
+    pulls = view['closedByPullRequestsReferences']
+    if view['state'] == 'CLOSED':
+        return 'merged' if view['stateReason'] == 'COMPLETED' and pulls else 'unknown'
+    if pulls:
+        return 'in_review'
+    if any(b['state'] == 'OPEN' for b in view['blockedBy']['nodes']):
+        return 'blocked'
+    for comment in view['comments']:
+        lines = comment['body'].splitlines()
+        if lines[:1] == ['<!-- openwiz:status v1 -->'] and 'agent: builder' in lines and (
+                'state: working' in lines or 'state: asking' in lines):
+            return 'building'
+    return 'ready'
+
+
+def github_progress(spec, env):
+    try:
+        _, members = spec_facts(spec, env)
+        states = []
+        for number in sorted(members):
+            view = gh_json(['issue', 'view', str(number), '--json', TICKET_FIELDS], env, 'ticket #%d' % number)
+            assert view['number'] == number
+            states.append((number, ticket_state(view)))
+    except (Exit, AssertionError, KeyError, TypeError, AttributeError):
+        print('Progress for spec #%d is unreadable right now.' % spec)
+        return 1
+    for number, known in states:
+        print('#%d %s' % (number, known))
+    found = [known for _, known in states]
+    parts = ['%d %s' % (found.count(s), s.replace('_', ' ')) for s in STATES + ('unknown',) if found.count(s)]
+    print('%d tickets: %s' % (len(found), ', '.join(parts) or 'none yet'))
+    print('Counts are progress, not a first merge: a merge counts only when GitHub reads it back.')
+    return 0
 
 
 def progress(spec, program, env):
@@ -1969,7 +2129,8 @@ def resume(got):
     choices = value.get('choices') or {}
     if not host:
         step = ('where', "Say the teacher's opening lines, then run where --build <build> to list the hosts this "
-                'OpenWiz offers, and ask where agents run. On the answer, run where --agents <the pick> --build '
+                'OpenWiz offers. Reuse the choice from this chat or the install continuation. Ask where agents run '
+                'when no offered host is known. Then run where --agents <the pick> --build '
                 "<build> and say what it prints: the cost and, for a driver host, where its login lives. Only on the "
                 "user's yes to that, run it again with --yes.")
     elif created.get('state') in ('pending', 'uncertain'):
@@ -1982,9 +2143,16 @@ def resume(got):
     elif not repo:
         step = ('project', 'Offer the three choices, with ideas.md for anyone without an idea, then choose or '
                 'create its one repository.')
+    elif not value.get('setup') and host['agents'] != 'cloud':
+        step = ('connect', 'Prepare %s with setup.py prepare --host %s and omit CloudRoom IDs. '
+                'Run setup.py check, then continue.' % (repo, host['agents']))
     elif not value.get('setup'):
         step = ('connect', '%sConnect %s with the installed tools, then run continue.' % (
             'Setup already prepared it; ' if candidate == repo else '', repo))
+    elif spec and launched.get('spec') == spec and launched.get('state') in ('authorized', 'pending', 'uncertain') \
+            and host['agents'] != 'cloud':
+        step = ('launch', 'Run launch --spec %d to read back the heartbeat status and follow the handoff it prints.'
+                % spec)
     elif spec and launched.get('spec') == spec and launched.get('state') in ('authorized', 'pending', 'uncertain'):
         step = ('launch', "The user said yes to starting spec #%d: run launch --spec %d first, which checks the "
                 "Orchestrator is still the one the user said yes to and names the start path; finish launch-fleet's "
@@ -1998,7 +2166,11 @@ def resume(got):
     elif not value.get('grill'):
         step = ('grill', "Run the short grill; on the user's yes in chat, run grill --confirmed <its comment URL>.")
     elif not choices:
-        step = ('agents', 'Run choose --from-setup.')
+        if host['agents'] == 'cloud':
+            step = ('agents', 'Run choose --from-setup.')
+        else:
+            step = ('agents', 'Save openwiz models --json --host %s, then run choose --options <saved file> '
+                    '--from-setup.' % host['agents'])
     elif choices.get('builder_tables') != 'read':
         step = ('agents', '%s %s' % (chosen_line(choices),
                                      tables_line(choices, 'have not been read back with this choice yet')))

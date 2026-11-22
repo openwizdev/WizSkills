@@ -156,9 +156,9 @@ class Fleet(unittest.TestCase):
     def test_stopped_driver_review_cannot_borrow_a_replacements_run(self):
         runs = self.dir / 'runs.json'
         self.env['LAUNCH_FLEET_RUNS'] = str(runs)
-        self.threads = []
-        self.say(f'review given up {SHA}: no verdict\nDriver review: other-family')
-        self.say(f'review told again {SHA}', 3102, '11:20')
+        self.threads = [dict(id=THREAD, title='Review #31 at ' + NEW[:8], branch=None, archivedAt=None)]
+        self.say(f'review given up {NEW}: no verdict\nDriver review: other-family')
+        self.say(f'review told again {NEW}', 3102, '11:20')
         self.say(f'review started {NEW}\nDriver review: same-family', 3103, '11:30')
         runs.write_text(json.dumps({'repo': 'example/public', 'runs': {
             '12': {'host': 'local', 'run': 'builder-run'},
@@ -168,6 +168,9 @@ class Fleet(unittest.TestCase):
         self.assertEqual(self.run_fleet('wake', '12'),
                          f'check review #31 for #12 at {NEW}: no verdict 30 minutes after '
                          f'"review started {NEW}"; read thread run:31 and tell it again (its record: comment 3103)\n')
+        self.issue(12)['state'] = 'CLOSED'
+        self.pr.update(state='MERGED', mergedAt='2026-11-01T11:58:00Z')
+        self.assertEqual(self.run_fleet('wake', '12'), 'archive #12: closed; archive run:12, run:31\n')
 
     def test_recheck_finds_original_reviewer(self):
         for private, suffix in [(False, ''), (True, ''),

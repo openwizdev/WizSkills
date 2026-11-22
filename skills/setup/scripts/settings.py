@@ -275,6 +275,7 @@ def fleet(text, problems):
                 problems.append('fleet.md: %s: %s is not from another model family' % (title, provider))
     if 'Fixer' in found:
         fixer(found['Fixer'], problems)
+    approval(text, problems)
     identity = exact.get('GitHub identity')
     if identity is not None:
         rows = re.findall(r'^\| *Record authors *\|.*$', identity, re.M)
@@ -287,6 +288,49 @@ def fleet(text, problems):
                                 % (number, len(rows), row.strip()))
         elif len(cells) != 4 or cells[3].strip() or not CELL.fullmatch(cells[2]):
             problems.append('fleet.md: GitHub identity: Record authors needs one or more exact logins')
+
+
+def approval(text, problems):
+    lines = text.split('\n')
+    at = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Approval rules']
+    here = 'fleet.md: Approval rules: '
+    for n, line in enumerate(lines):
+        atx = re.fullmatch(r'\s*#{1,6}(?:\s+(.*?))?(?:\s+#+)?\s*', line)
+        below = lines[n + 1].strip() if n + 1 < len(lines) else ''
+        title = (atx.group(1) or '') if atx else (line if below and set(below) in ({'='}, {'-'}) else '')
+        if line != '## Approval rules' and ' '.join(title.split()).lower() == 'approval rules':
+            problems.append(here + 'the heading must be exactly ## Approval rules: ' + line)
+    if len(at) > 1:
+        problems.append(here + 'more than one ## Approval rules heading')
+    if len(at) != 1:
+        return
+    table = []
+    for line in lines[at[0] + 1:]:
+        if line.startswith(('# ', '## ')) or (table and not line.lstrip().startswith('|')):
+            break
+        if line.lstrip().startswith('|'):
+            table.append(cells(line))
+    if len(table) < 3 or table[0] != ['Rule', 'Approver'] or table[1] != ['---', '---']:
+        problems.append(here + 'the table is not | Rule | Approver |')
+        return
+    seen = []
+    for n, row in enumerate(table[2:], 1):
+        if not row or len(row) != 2:
+            problems.append(here + 'row %d: not two cells' % n)
+            continue
+        rule, approver = row[0], ' '.join(row[1].strip('`*_ .').split())
+        name, key = 'row %d (%s): ' % (n, rule), ' '.join(rule.lower().split())
+        if not rule.startswith('Ask before '):
+            problems.append(here + name + 'the rule does not start "Ask before"')
+        elif key in seen:
+            problems.append(here + name + 'repeats row %d' % (seen.index(key) + 1))
+        elif not approver:
+            problems.append(here + name + 'no approver')
+        elif re.search(r'<[^>]*>', approver):
+            problems.append(here + name + 'unfilled approver ' + row[1])
+        elif approver.lower() == 'the user':
+            problems.append(here + name + 'the approver is "the user", not a person')
+        seen.append(key)
 
 
 def triage(text, labels, problems):

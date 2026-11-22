@@ -1478,5 +1478,47 @@ class Landed(unittest.TestCase):
         self.assertGreater(deleted[0], kept[0]['id'])
 
 
+class WizSkillsRoute(unittest.TestCase):
+    def route(self):
+        text = (HERE.parents[2] / 'docs/agents/fleet.md').read_text()
+        section = lambda name: text.split('\n## %s\n' % name, 1)[1].split('\n## ', 1)[0]
+        checks = re.findall(r'^\| `([^`]+)` \|', section('CI checks'), re.M)
+        found = re.findall(r'`(python3 -I [^`]*merge\.py"? merge [^`]*)`', section('Standing merge rules'))
+        self.assertEqual(len(found), 1, "WizSkills' merge rule names no merge.py merge command: %r" % found)
+        values = {"<launch-fleet's folder>": str(HERE.parent), '<P>': '7', '<commit>': HEAD,
+                  '<checks>': ','.join(checks), '<the APPROVE and the plan approval it relies on>':
+                  'APPROVE 1 and plan approval 2', '<N>': '12'}
+        command = found[0]
+        for name, value in values.items():
+            command = command.replace(name, value)
+        argv = shlex.split(command)
+        self.assertNotRegex(' '.join(argv), r'<[^>]+>', 'a placeholder left unfilled')
+        self.assertEqual(argv[3:6], ['merge', SKILLS, '7'])
+        return [sys.executable] + argv[1:], text
+
+    def test_an_approved_head_is_enqueued_pinned_and_recorded_only_after_the_read_back(self):
+        argv, text = self.route()
+        w = World(self, repo=SKILLS, fleet_md=text, comments={'7': []},
+                  pr=pr(isMergeQueueEnabled=True, closes=closes((DEST, 12))), others={DEST: {'comments': {'12': []}}})
+        root = project(w, PRINTS)
+        r = subprocess.run(argv, capture_output=True, text=True, env=w.env, cwd=root, timeout=60)
+        receipt = 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, 'queued; recorded 5001'), r.stderr)
+        self.assertEqual(w.writes(), [{'enqueue': 'PR_synthetic7', 'head': HEAD}, {'post': 7, 'body': receipt}])
+        self.assertEqual((w.bodies(7), w.others[DEST].writes()), ([receipt], []))
+
+    def test_before_the_queue_is_on_it_prints_the_fallback_line_and_writes_nothing(self):
+        argv, text = self.route()
+        fallback = re.search(r'While `merge\.py` prints `([^`]+)`', text)
+        self.assertIsNotNone(fallback, "WizSkills' merge rule names no fallback for a repository without the queue")
+        w = World(self, repo=SKILLS, fleet_md=text, comments={'7': []},
+                  pr=pr(closes=closes((DEST, 12))), others={DEST: {'comments': {'12': []}}})
+        root = project(w, PRINTS)
+        r = subprocess.run(argv, capture_output=True, text=True, env=w.env, cwd=root, timeout=60)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertTrue(r.stdout.startswith(fallback.group(1) + ';'), r.stdout)
+        self.assertEqual((w.writes(), w.others[DEST].writes()), ([], []))
+
+
 if __name__ == '__main__':
     unittest.main()

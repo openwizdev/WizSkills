@@ -66,11 +66,6 @@ export GH_REPO
 inside=
 case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
 unset LAUNCH_FLEET_TOKEN_STEP
-# OpenWiz #2394: the App identity is the operator's choice. Mint nothing, by
-# the key or a token service, unless the default branch's docs/agents/fleet.md
-# has exactly one `| App identity | on |` row in its "## GitHub identity"
-# table, read on today's account. A missing row, any other value or an
-# unreadable file leaves it off. Asked only when a mint could follow.
 app_identity() {
   gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GH_REPO/contents/docs/agents/fleet.md" 2> /dev/null < /dev/null \
     | awk '/^## /{on = ($0 == "## GitHub identity")} on && /^[|] *App identity *[|]/{n++; ok = ($0 ~ /^[|] *App identity *[|] *`?on`? *[|] *$/)}
@@ -86,9 +81,8 @@ if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ] && [ -z "$identity_of
   export LAUNCH_FLEET_TOKEN_STEP
   exec python3 -I "$helper" run --requester fleet-check --repository "$GH_REPO" --read -- sh "$0"
 fi
-# With the App identity on (above), the check reads GitHub as the OpenWiz App
-# (GI7, #2549; the identity contract `openwiz.github-identity.v1`): with the
-# loop's OPENWIZ_GITHUB_APP_KEY secret,
+# The check reads GitHub as the OpenWiz App (GI7, #2549; the identity contract
+# `openwiz.github-identity.v1`): with the loop's OPENWIZ_GITHUB_APP_KEY secret,
 # `openwiz github token --read` mints a read-only installation token for gh
 # (GH_TOKEN) and git (its credential helper reads GH_TOKEN from the
 # environment). No token is stored, printed or passed as an argument. Without

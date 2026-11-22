@@ -191,9 +191,6 @@ class Check(unittest.TestCase):
         self.assertIn('Record authors row 2 of 2', out)
 
     def test_the_app_identity_row_is_off_unless_it_says_on(self):
-        # catches: a typo such as `yes` or a second row verified, so an operator
-        # believes the App identity is on (or off) while loop.sh reads the
-        # opposite; a missing row stays valid, since it means off (#2394).
         row = '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |\n'
         for value in ('on', 'off', '`on`'):
             fleet = FLEET.replace(row, row + '| App identity | %s |\n' % value)

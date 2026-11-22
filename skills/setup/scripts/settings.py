@@ -7,7 +7,7 @@ Reads the four files in DIR/docs/agents/ (default: the current folder) and
 names each missing or unsafe setting: a missing file or section, a builder or
 reviewer table or Fixer family row without each of its three flags exactly
 once as one token, a template placeholder, a reviewer from the builder's model family, not exactly
-one valid Record authors row, an App identity row other than one `on` or `off`, or a triage role without exactly one label. FILE is the saved output of
+one valid Record authors row, or a triage role without exactly one label. FILE is the saved output of
 `gh label list --limit 500 --json name`; with it, each mapped label must exist
 in the tracker exactly once. It writes nothing and runs nothing.
 
@@ -288,7 +288,6 @@ def fleet(text, problems):
                                 % (number, len(rows), row.strip()))
         elif len(cells) != 4 or cells[3].strip() or not CELL.fullmatch(cells[2]):
             problems.append('fleet.md: GitHub identity: Record authors needs one or more exact logins')
-        # #2394: the App identity is opt-in. No row means off; a row says on or off.
         rows = re.findall(r'^\| *App identity *\|.*$', identity, re.M)
         for number, row in enumerate(rows[1:], 2):
             problems.append('fleet.md: GitHub identity: App identity row %d of %d: %s'

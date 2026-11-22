@@ -129,7 +129,6 @@ identity() { # "token identity" every gh call gets; the stderr line expected, or
   sh "$work/loop.sh" > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; return 1; }
   cmp "$work/want" "$work/out"
   [ -s "$work/gh-token.log" ]
-  # #2394: with a key or service, the first call reads the App identity row on today's account.
   first=0
   if [ -n "${OPENWIZ_GITHUB_APP_KEY:-}${OPENWIZ_TOKEN_SERVICE:-}" ]; then
     [ "$(head -n 1 "$work/gh-token.log")" = 'none account' ]; first=1

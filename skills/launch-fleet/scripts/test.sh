@@ -1490,13 +1490,6 @@ if { [ -z "${TEST_ONLY:-}" ] || [ "$TEST_ONLY" = loop ]; } && take; then
   fi
 fi
 
-### App identity is opt-in (OpenWiz #2394): no mint unless fleet.md turns it on
-
-# The loop's script and the identity page's block read the default branch's
-# `| App identity | on |` row first, on today's account. A missing row, `off`
-# or an unreadable fleet.md mints nothing, even with the key or a token
-# service present. A fake openwiz and a fake agent helper record any call;
-# every key and token is synthetic.
 A=$tmp/app-identity
 if { [ -n "${TEST_ONLY:-}" ] && [ "$TEST_ONLY" != 'app identity' ]; } || ! take; then
   :
@@ -1512,10 +1505,10 @@ elif mkdir -p "$A/remote" "$A/bin" "$A/install/github-app" \
     "$HERE/carried/healthy.json" > "$A/observation.json"; then
   printf 'start #13: W3: widget page (spec #10)\n' > "$A/want"
   off="loop.sh: App identity is not on in docs/agents/fleet.md; GitHub as today's account"
-  app_world() { # FILTER: the loop's world, merge12 then FILTER
+  app_world() {
     rm -rf "$A/w" && mkdir "$A/w" && world check.json "merge12 | $1" "$A/w" > "$A/world.json"
   }
-  app_loop() { # VAR=VALUE...: run the copied loop.sh once with a synthetic key
+  app_loop() {
     rm -rf "$A/home" "$A/cache" && : > "$A/gh-token.log" && : > "$A/openwiz.log" && : > "$A/helper.log"
     (cd "$A" && env -u OPENWIZ_GITHUB_APP_KEY -u OPENWIZ_TOKEN_SERVICE -u GH_TOKEN -u GITHUB_TOKEN \
       PATH="$A/bin:$tmp/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo FAKE_GH_WORLD="$A/world.json" FAKE_GH_LOG="$A/gh.log" \
@@ -1523,16 +1516,16 @@ elif mkdir -p "$A/remote" "$A/bin" "$A/install/github-app" \
       LAUNCH_FLEET_OVERLOAD_INPUT="$A/observation.json" LAUNCH_FLEET_OVERLOAD_STATE="$A/pause.json" \
       LAUNCH_FLEET_RUNTIME="$(cd "$HERE/../.." && pwd)" "$@" /bin/sh "$A/install/loop.sh" > "$A/out" 2> "$A/err")
   }
-  as_account() { # the check ran, every gh call on today's account, nothing minted, and the off line said so
+  as_account() {
     cmp -s "$A/want" "$A/out" && [ ! -s "$A/openwiz.log" ] && [ ! -s "$A/helper.log" ] \
       && [ -s "$A/gh-token.log" ] && [ -z "$(grep -vx none "$A/gh-token.log")" ] && grep -qxF "$off" "$A/err"
   }
-  app_case() { # NAME, then a command that passes
+  app_case() {
     name=$1; shift
     cases=$((cases + 1))
     if "$@"; then echo "ok   $name"; else bad "$name" "$(cat "$A/out" "$A/err" "$A/openwiz.log" "$A/helper.log" | head -c 400)"; fi
   }
-  app_off() { # FILTER VAR=VALUE...
+  app_off() {
     filter=$1; shift
     app_world "$filter" && app_loop "$@" && as_account
   }
@@ -1540,7 +1533,7 @@ elif mkdir -p "$A/remote" "$A/bin" "$A/install/github-app" \
     app_off . OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj
   app_case 'app identity: with the row off, loop.sh mints nothing' \
     app_off '.files["docs/agents/fleet.md"] += "| App identity | off |\n"' OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj
-  app_unreadable() { # fleet.sh stops on it too; the loop still minted nothing
+  app_unreadable() {
     app_world 'del(.files["docs/agents/fleet.md"])' && ! app_loop OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
       && [ ! -s "$A/openwiz.log" ] && [ -s "$A/gh-token.log" ] && [ -z "$(grep -vx none "$A/gh-token.log")" ] \
       && grep -qxF "$off" "$A/err"
@@ -1556,7 +1549,6 @@ elif mkdir -p "$A/remote" "$A/bin" "$A/install/github-app" \
       && [ -n "$(sed 1d "$A/gh-token.log")" ] && [ -z "$(sed 1d "$A/gh-token.log" | grep -vx synthetic-app-token-2394)" ]
   }
   app_case 'app identity: with the row on, loop.sh reads it as the account, then mints and reads as the App (GI7)' app_on
-  # The identity page's own block, as an agent copies it.
   python3 -I - "$HERE/../references/identity.md" > "$A/block.sh" <<'PY' || bad 'app identity: the block' "can't extract it"
 import sys
 text = open(sys.argv[1]).read()
@@ -1565,7 +1557,7 @@ sys.stdout.write(''.join(line[4:] if line.startswith('    ') else line.lstrip() 
                          for line in block.splitlines(True)).replace('<owner>/<repo>', 'synthetic-owner/synthetic-repo'))
 PY
   printf '%s\nprintf "token=%%s\\n" "$app_token"\n' "$(cat "$A/block.sh")" > "$A/block-run.sh"
-  app_block() { # FILTER: run the block on that world, with a synthetic key
+  app_block() {
     app_world "$1" && : > "$A/openwiz.log" \
       && (cd "$A" && env -u GH_TOKEN -u GITHUB_TOKEN PATH="$A/bin:$tmp/bin:$PATH" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
         FAKE_GH_WORLD="$A/world.json" FAKE_GH_LOG="$A/gh.log" /bin/sh "$A/block-run.sh" > "$A/out" 2> "$A/err")

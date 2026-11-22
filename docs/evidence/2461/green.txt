@@ -1,14 +1,15 @@
 agent CLI stubs first on PATH: claude codex cursor-agent agent pi opencode copilot goose gemini kimi qwen cline kilo crush vibe auggie kiro-cli junie amp agy oz sculpt hermes acpx droid (each refuses, exit 1)
+after merging origin/main
 == skills/install/tests/test_doctor.py
-Ran 59 tests in 4.306s
+Ran 59 tests in 4.463s
 
 OK
 == skills/install/tests/test_onboarding.py
-Ran 48 tests in 175.810s
+Ran 49 tests in 211.016s
 
 OK
 == skills/install/tests/test_first_fleet.py
-Ran 56 tests in 287.052s
+Ran 56 tests in 273.393s
 
 OK
 == new proofs, verbose
@@ -17,6 +18,6 @@ test_refused_means_nothing_was_installed (__main__.StepFourReadsTheInstallerOutp
 test_a_nested_second_install_is_listed_like_any_job_and_nothing_is_touched (__main__.UninstallListsEveryHeartbeatJob.test_a_nested_second_install_is_listed_like_any_job_and_nothing_is_touched) ... ok
 
 ----------------------------------------------------------------------
-Ran 3 tests in 0.092s
+Ran 3 tests in 0.091s
 
 OK

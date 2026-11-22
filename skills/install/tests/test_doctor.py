@@ -585,5 +585,73 @@ class SkillCommandsMatchPackage(unittest.TestCase):
                           ('openwiz', '', ['--build-identity'])])
 
 
+HOST_QUESTION = ("Where should your agents run? This computer (Claude Code or Codex you're signed in to), "
+                 "boat.dev, or CloudRoom.")
+
+
+class NoCloudRoomRequired(unittest.TestCase):
+
+    def setUp(self):
+        self.text = SKILL.read_text()
+
+    def between(self, start, end):
+        return self.text[self.text.index(start):self.text.index(end)]
+
+    def test_cloudroom_is_no_requirement_done_condition_or_resume_gate(self):
+        self.assertFalse('needs CloudRoom.' in self.text, 'needs CloudRoom.')
+        self.assertFalse('install cannot be completed here' in self.text, 'install cannot be completed here')
+        step3 = self.between('## 3. ', '## 4. ')
+        done = [l for l in step3.split('\n') if l.startswith('Done when')]
+        self.assertEqual(len(done), 1)
+        self.assertNotRegex(done[0], r'^Done when CloudRoom')
+        for line in self.between('## Resume', '## 1. ').split('\n') + done:
+            if 'cloudroom_' in line:
+                self.assertTrue('chose CloudRoom' in line, line)
+        intel = next(s for s in self.between('## 1. ', '## 2. ').split('. ') if 'Intel Mac' in s and 'stop' in s)
+        self.assertTrue('chose CloudRoom' in intel, intel)
+
+    def test_the_host_question_comes_first_and_cloudroom_runs_only_when_chosen(self):
+        self.assertTrue(HOST_QUESTION in self.text, 'missing: ' + HOST_QUESTION)
+        at = self.text.index(HOST_QUESTION)
+        self.assertLess(at, self.text.index('cloudroom.py', self.text.index('## Resume')))
+        self.assertLess(at, self.text.index('## 1. Preflight'))
+        paragraph = self.text[self.text.rindex('\n\n', 0, at):self.text.index('\n\n', at)]
+        self.assertFalse('recommend' in paragraph.lower(), 'the host question recommends one host')
+        step3 = self.between('## 3. ', '## 4. ')
+        self.assertTrue('ignore every `cloudroom_*` code' in step3, 'cloudroom_* codes are not ignored')
+        self.assertLess(step3.index('ignore every `cloudroom_*` code'), step3.index('| Code | Next |'))
+
+    def test_restart_passes_the_host_to_where_before_confirmation(self):
+        step4 = self.between('## 4. ', '## 5. ')
+        for host in ('local', 'boat', 'cloud'):
+            self.assertIn(f'continue the OpenWiz install with host {host}', step4,
+                          f'the restart message loses the {host} choice')
+        resume = self.between('## Resume', '## 1. ')
+        self.assertIn('Read the host from the continuation message', resume)
+        self.assertLess(resume.index('Read the host from the continuation message'), resume.index('setup.py check'))
+        where = self.between('### 1. Where agents run', '### 2. Choose a start')
+        self.assertIn('use the host from Resume', where)
+        self.assertIn('run `where --agents <its name> --build "$build"` without asking again', where)
+        self.assertIn("the user’s yes to the previewed effects and cost", where)
+        self.assertIn('run it again with `--yes`', where)
+
+    def test_this_computer_leads_into_the_first_fleet_with_no_cloudroom_ids(self):
+        road = self.between('## 6. ', '## Doctor')
+        opening = road[:road.index('### 1. ')]
+        self.assertFalse('CloudRoom' in opening or 'Cloudroom' in opening, opening)
+        where = road[road.index('### 1. '):road.index('### 2. ')]
+        self.assertTrue('where --agents' in where, 'where --agents')
+        self.assertFalse('suggesting this machine' in where, 'step 6.1 suggests one host')
+        self.assertTrue('the host question' in where, 'step 6.1 does not take the host question answer')
+        connect = road[road.index('### 3. '):road.index('### 4. ')]
+        for flag in ('`--project`', '`--answer-thread`'):
+            line = next(l for l in connect.split('\n') if l.strip().startswith('- ' + flag))
+            self.assertTrue('only with CloudRoom' in line, line)
+        self.assertTrue('no `--project` or `--answer-thread`' in connect, 'prepare still asks CloudRoom ids')
+        self.assertFalse('every flag required' in connect, 'every flag required')
+        for words in ('`--host local`', '`--host boat`', '`--host <its name>`', 'refuses them'):
+            self.assertTrue(words in connect, words)
+
+
 if __name__ == '__main__':
     unittest.main()

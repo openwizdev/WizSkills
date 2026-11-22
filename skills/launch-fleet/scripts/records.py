@@ -127,6 +127,13 @@ def reviewer_thread(n, commit, threads, state, claim=None, retired=()):
     return choose(f'review:{n}:{commit}', matches, state, threads)
 
 
+def reviewer_run(n, runs):
+    run = runs.get(str(n)) if isinstance(runs, dict) else None
+    if run and not run.get('stopped'):
+        return f'run:{n}', None
+    return None, f'no live private driver run for reviewer #{n}'
+
+
 def annotate(world, repo, private, threads, state):
     runs = driver_runs(repo)
 
@@ -135,6 +142,7 @@ def annotate(world, repo, private, threads, state):
         retired = set()
         start = None
         start_claim = None
+        driver_review = False
         routes = dict(state)
         comments = sorted(obj.get('comments', {}).get('nodes', []), key=lambda c: (c['createdAt'], c['databaseId']))
         for c in comments:
@@ -162,8 +170,11 @@ def annotate(world, repo, private, threads, state):
                 if kind == 'review given up' and start is None and legacy:
                     start = commit
                 edited_start = kind == 'review given up' and f'review:{obj["number"]}:claim:{c["databaseId"]}' in state
-                if kind == 'review started' or edited_start:
+                marked_driver_start = not legacy and c['body'].splitlines()[1:2] in (
+                    ['Driver review: other-family'], ['Driver review: same-family'])
+                if kind == 'review started' or edited_start or (kind == 'review given up' and marked_driver_start):
                     span, start, start_claim = [], commit, c['databaseId']
+                    driver_review = marked_driver_start
                     if legacy and c.get('resolvedThread'):
                         routes[f'review:{obj["number"]}:{commit}'] = c['resolvedThread']
                 span.append(c)
@@ -172,20 +183,26 @@ def annotate(world, repo, private, threads, state):
                     identity = identity or state.get(f'review:{obj["number"]}:claim:{start_claim}')
                     identity = identity or next((r.get('archiveThread') or r.get('resolvedThread')
                                                  for r in span if r.get('archiveThread') or r.get('resolvedThread')), None)
-                    if identity is None:
+                    if driver_review:
+                        identity = None
+                    elif identity is None:
                         identity, _ = reviewer_thread(obj['number'], start or commit, threads, routes, start_claim, retired)
                     c['archiveThread'] = identity
                     if identity:
                         retired.add(identity)
                     for record in span:
                         record['reviewClosed'] = True
-                        if record.get('resolvedThread'):
+                        if driver_review:
+                            record['resolvedThread'] = None
+                        elif record.get('resolvedThread'):
                             retired.add(record['resolvedThread'])
                         record['recordError'] = None
                     c['givenUp'] = True
                 elif start is None:
                     c['recordError'] = 'review record has no readable start on this pull request'
-                elif not legacy:
+                elif driver_review and not legacy and not any(record.get('givenUp') for record in span):
+                    c['resolvedThread'], c['recordError'] = reviewer_run(obj['number'], runs)
+                elif not legacy and not driver_review:
                     c['resolvedThread'], c['recordError'] = reviewer_thread(obj['number'], start, threads, routes, start_claim, retired)
                 if c.get('resolvedThread') in retired:
                     c['recordError'] = 'reviewer was already given up on this pull request'

@@ -35,6 +35,10 @@ BUILT = ('launch-fleet: starting', 'launch-fleet: started', 'launch-fleet: start
 QUEUED = 'launch-fleet: merge queued '
 DRIVERS = {'Claude Code': 'claude', 'Codex': 'codex'}
 OTHER = {'claude': 'codex', 'codex': 'claude'}
+PROVIDERS = {'claude-code': 'claude', 'codex': 'codex'}
+REVIEWS = {'claude': 'review_of_claude_built', 'codex': 'review_of_gpt_built'}
+FLAGS = re.compile(r'--provider (\S+) --model (\S+) --reasoning-level \S+')
+WAITING = ('queued', 'waiting', 'requested', 'pending')
 PR = re.compile(r'https://github\.com/[^/]+/[^/]+/pull/([1-9][0-9]*)')
 STATE = Path.home() / '.local/state/openwiz-heartbeat'
 TIMEOUT = 1000
@@ -66,9 +70,9 @@ class Done(Exception):
     pass
 
 
-def run(argv, check=True):
+def run(argv, env=None):
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT, stdin=subprocess.DEVNULL)
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT, stdin=subprocess.DEVNULL, env=env)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise Unreadable('%s did not run (%s)' % (Path(argv[2] if argv[0] == sys.executable else argv[0]).name,
                                                   type(e).__name__))
@@ -139,6 +143,7 @@ class Session:
     def __init__(self, args, command):
         self.a, self.command = args, command
         self.repo, self.spec = args.repo, args.spec
+        self.key = hashlib.sha256(args.repo.lower().encode()).hexdigest()[:20]
         self.live = {}
         self.prs = {}
         self.queued = {}
@@ -146,7 +151,8 @@ class Session:
         self.pending = []
         self.tick_no = 0
         self.authors = None
-        self.models = {args.reviewer_harness: args.reviewer_model, args.harness: args.model}
+        self.landings = []
+        self.queue_read = 0
 
 
     def thread(self, number):
@@ -218,8 +224,10 @@ class Session:
                 if not notes or notes[-1]['state'] == 'working':
                     self.live[('reviewer', p)] = (since, n)
             receipts = [c for c in comments if first(c).startswith(QUEUED)]
-            if receipts and self.state(p) == 'OPEN':
-                self.queued[p] = first(max(receipts, key=lambda c: c['id']))[len(QUEUED):][:40]
+            if receipts:
+                head = first(max(receipts, key=lambda c: c['id']))[len(QUEUED):][:40]
+                if script('merge.py', 'read', self.repo, p, head).stdout.strip() == 'queued':
+                    self.queued[p] = head
 
     def state(self, p):
         text = post.gh('pr', 'view', p, '--repo', self.repo, '--json', 'state,statusCheckRollup')
@@ -320,26 +328,50 @@ class Session:
             raise NeedsYou('#%s has a branch but no started record to check' % n)
         self.edit(max(records, key=lambda c: c['id'])['id'], 'launch-fleet: start checked, branch %s' % branch)
 
-    def reviewer(self, n):
+    def built(self, n):
         harnesses = {f['harness'] for f in (status.parse(c['body']) for c in self.thread(n))
                      if f and f['agent'] == 'builder'}
         if len(harnesses) != 1 or next(iter(harnesses)) not in DRIVERS:
             raise NeedsYou("#%s's builder family is unknown or conflicting (%s), so its review waits"
                            % (n, ', '.join(sorted(harnesses)) or 'no builder status note'))
-        built = DRIVERS[next(iter(harnesses))]
+        return DRIVERS[next(iter(harnesses))]
+
+    def rule(self):
+        r = script('ops-starts.py', 'flags', '--repo', self.repo)
+        try:
+            flags = json.loads(r.stdout) if r.returncode == 0 else None
+        except ValueError:
+            flags = None
+        if not isinstance(flags, dict):
+            raise NeedsYou('the models rule could not be read: %s'
+                           % ((r.stderr.strip().split('\n') or [''])[-1] or 'ops-starts.py exit %d' % r.returncode))
+        rows = {}
+        for start, cell in flags.items():
+            found = FLAGS.fullmatch(cell) if isinstance(cell, str) else None
+            rows[start] = (PROVIDERS.get(found[1]), found[2]) if found else None
+        return rows
+
+    def reviewer(self, p, n):
+        built, rows = self.built(n), self.rule()
         if shutil.which('claude') and shutil.which('codex'):
-            harness, family = OTHER[built], 'other-family'
-        elif shutil.which(built):
-            harness, family = built, 'same-family'
-        else:
+            row = rows.get(REVIEWS[built])
+            if row is None:
+                raise NeedsYou('the review of #%s waits: ops-starts: %s waits: no other-family choice'
+                               % (p, REVIEWS[built]))
+            if row[0] != OTHER[built]:
+                raise NeedsYou('the review of #%s waits: the models rule names no %s reviewer' % (p, OTHER[built]))
+            return row[0], row[1], 'other-family'
+        if not shutil.which(built):
             raise NeedsYou("#%s's builder harness %s is not installed, so its review waits" % (n, built))
-        if harness not in self.models:
-            raise NeedsYou('no %s reviewer model was given (--harness or --reviewer-harness %s), so the review of '
-                           '#%s waits' % (harness, harness, n))
-        return harness, self.models[harness], family
+        models = {row[1] for start, row in rows.items() if start in ('builder', 'small_builder') and row
+                  and row[0] == built}
+        if len(models) != 1:
+            raise NeedsYou("the review of #%s waits: the models rule names %s %s builder model"
+                           % (p, 'no' if not models else 'more than one', built))
+        return built, models.pop(), 'same-family'
 
     def review(self, p, n, head):
-        harness, model, family = self.reviewer(n)
+        harness, model, family = self.reviewer(p, n)
         claim = self.claim(p, 'launch-fleet: review starting %s' % head, 'launch-fleet: review withdrawn %s' % head)
         if not claim:
             return False
@@ -359,7 +391,7 @@ class Session:
         self.edit(claim, 'launch-fleet: review started %s%s' % (head, rest))
         return True
 
-    def verdict(self, p, head):
+    def verdict(self, p, n, head):
         comments = self.thread(p)
         verdicts = [c for c in comments if c['body'].startswith('VERDICT:')]
         assigned = [c for c in comments if first(c).startswith(ASSIGNED)]
@@ -367,25 +399,95 @@ class Session:
             raise NeedsYou('#%s was not merged: its newest VERDICT is not an APPROVE at %s' % (p, head))
         if not assigned:
             raise NeedsYou('#%s was not merged: it has no review assignment for its VERDICT to belong to' % p)
-        if max(c['id'] for c in verdicts) < max(c['id'] for c in assigned):
+        current = max(assigned, key=lambda c: c['id'])
+        if not first(current).endswith(' ' + head):
+            raise NeedsYou('#%s was not merged: its current review assignment is not for %s' % (p, head))
+        if max(c['id'] for c in verdicts) < current['id']:
             raise NeedsYou('#%s was not merged: its newest VERDICT is older than its current review assignment' % p)
+        family = re.search(r'^Driver (?:review|re-check): (other-family|same-family)$', current['body'], re.M)
+        if not family:
+            raise NeedsYou("#%s was not merged: its review assignment names no reviewer family" % p)
+        built = self.built(n)
+        selected = OTHER[built] if family[1] == 'other-family' else built
+        notes = self.notes('reviewer', n, stamp(current.get('created_at')))
+        if not notes or notes[-1]['state'] != 'done' or DRIVERS.get(notes[-1]['harness']) != selected:
+            raise NeedsYou('#%s was not merged: no done note from its selected %s reviewer since its review '
+                           'assignment' % (p, selected))
+
+    def observe(self):
+        names = set(self.checks().split(','))
+        complete, jobs = True, []
+        for wanted in ('queued', 'in_progress', 'waiting', 'requested', 'pending'):
+            pages = post.read_json('api', '--paginate', '--slurp',
+                                   'repos/%s/actions/runs?status=%s&per_page=100' % (self.repo, wanted))
+            runs = [r for page in pages for r in page.get('workflow_runs', [])] if isinstance(pages, list) else None
+            if runs is None or len(runs) != (pages[0].get('total_count') if pages else 0):
+                complete = False
+                continue
+            for item in runs:
+                pages = post.read_json('api', '--paginate', '--slurp',
+                                       'repos/%s/actions/runs/%s/jobs?per_page=100' % (self.repo, item.get('id')))
+                found = [j for page in pages for j in page.get('jobs', [])] if isinstance(pages, list) else None
+                if found is None or len(found) != (pages[0].get('total_count') if pages else 0):
+                    complete = False
+                    continue
+                jobs.extend(found)
+        seen, observed = [], []
+        for job in jobs:
+            try:
+                queued = job['status'] in WAITING
+                observed.append({'id': str(job['id']), 'required': job['name'] in names,
+                                 'status': 'queued' if queued else job['status'],
+                                 'queued_at': int(stamp(job['created_at'])),
+                                 'started_at': None if queued or not job.get('started_at')
+                                 else int(stamp(job['started_at']))})
+                seen.append(str(job['id']))
+            except (KeyError, TypeError, Unreadable):
+                complete = False
+        limits = post.read_json('api', 'rate_limit')
+        budgets = {}
+        for pool, name in (('rest', 'core'), ('graphql', 'graphql')):
+            try:
+                one = limits['resources'][name]
+                budgets[pool] = {'remaining': one['remaining'], 'limit': one['limit'], 'reset_at': one['reset'],
+                                 'retry_after': 0}
+            except (KeyError, TypeError):
+                complete = False
+        observed = list({job['id']: job for job in observed}.values())
+        return {'repository': self.repo, 'observed_at': int(time.time()), 'complete': complete,
+                'queue': {'complete': complete and len(observed) <= 10000, 'jobs': observed[:10000]},
+                'budgets': budgets}
 
     def batch(self):
-        r = run(['sh', str(HERE / 'fleet.sh'), 'overload', 'merge-batch'])
+        env = dict(os.environ)
+        if not (env.get('LAUNCH_FLEET_OVERLOAD_SUPPLY') or env.get('LAUNCH_FLEET_OVERLOAD_INPUT')):
+            path = STATE / ('overload-input-%s.json' % self.key)
+            try:
+                STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+                fd = os.open(path.with_suffix('.tmp'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, 'w') as out:
+                    json.dump(self.observe(), out)
+                os.replace(path.with_suffix('.tmp'), path)
+            except OSError as e:
+                raise Unreadable("can't write the overload observation (%s)" % type(e).__name__)
+            env['LAUNCH_FLEET_OVERLOAD_INPUT'] = str(path)
+        r = run(['sh', str(HERE / 'fleet.sh'), 'overload', 'merge-batch'], env)
         try:
             answer = json.loads(r.stdout)
         except ValueError:
             answer = None
         if r.returncode == 0 and isinstance(answer, dict) and answer.get('allowed') is True:
             return
-        if isinstance(answer, dict):
+        pause = answer.get('pause') if isinstance(answer, dict) else None
+        if isinstance(pause, dict):
+            why = 'paused: %s (%s)' % (pause.get('level'), ', '.join(map(str, pause.get('causes') or [])))
+        elif isinstance(answer, dict):
             why = '%s (%s)' % (answer.get('level'), ', '.join(map(str, answer.get('causes') or [])))
         else:
             why = (r.stderr.strip().split('\n') or [''])[-1] or 'exit %d' % r.returncode
         raise NeedsYou('fleet.sh overload merge-batch did not admit a merge batch: %s' % why)
 
     def merge(self, line, p, n, head):
-        self.verdict(p, head)
         checks = self.checks()
         admit = script('merge.py', 'admit', self.repo, p, head, checks).stdout.strip()
         if admit.startswith('wait:'):
@@ -416,7 +518,8 @@ class Session:
         raise NeedsYou('#%s did not merge: %s' % (p, out or 'merge.py exit %d' % r.returncode))
 
     def landed(self):
-        did = []
+        did, self.landings = self.landings, []
+        self.queue_read = time.monotonic()
         for p, head in sorted(self.queued.items()):
             out = script('merge.py', 'read', self.repo, p, head).stdout.strip()
             if out.startswith('merged '):
@@ -453,7 +556,8 @@ class Session:
                            % (self.spec, lines[0]))
         finished = [line for line in lines if FINISHED.match(line) and FINISHED.match(line)[1] == self.spec]
         todo = [line for line in lines if not LEFT.match(line) and line not in finished
-                and not (MERGE.fullmatch(line) and MERGE.fullmatch(line)[1] in self.queued)]
+                and not (MERGE.fullmatch(line) and (MERGE.fullmatch(line)[1] in self.queued
+                                                    or ('reviewer', MERGE.fullmatch(line)[1]) in self.live))]
         if finished and not todo:
             did += self.landed()
             if did:
@@ -483,7 +587,10 @@ class Session:
         if ready[room:]:
             did.append('%s wait%s for the cap (%d)' % (', '.join('#' + n for n in ready[room:]),
                                                        's' if len(ready) - room == 1 else '', self.a.max))
-        if any(MERGE.fullmatch(line) for line in todo):
+        merges = [MERGE.fullmatch(line) for line in todo if MERGE.fullmatch(line)]
+        for found in merges:
+            self.verdict(found[1], found[2], found[3])
+        if merges:
             self.batch()
         for line in todo:
             review, merge = REVIEW.fullmatch(line), MERGE.fullmatch(line)
@@ -503,6 +610,11 @@ class Session:
                 for key, (since, number) in sorted(self.live.items()):
                     if self.ended(*key, since, number):
                         del self.live[key]
+                        self.moved = time.monotonic()
+                        return
+                if self.queued and time.monotonic() - self.queue_read >= self.a.ci_poll:
+                    self.landings = self.landed()
+                    if self.landings:
                         self.moved = time.monotonic()
                         return
                 time.sleep(self.a.poll)
@@ -529,7 +641,7 @@ def arguments(argv):
     entry = sub.add_parser('run')
     entry.add_argument('repo', metavar='OWNER/NAME')
     entry.add_argument('--spec', required=True)
-    for name in ('--harness', '--model', '--reviewer-harness', '--reviewer-model'):
+    for name in ('--harness', '--model'):
         entry.add_argument(name, required=True)
     entry.add_argument('--max', type=int, default=3)
     entry.add_argument('--poll', type=float, default=10)
@@ -538,8 +650,8 @@ def arguments(argv):
     args = parser.parse_args(argv)
     if not REPO.fullmatch(args.repo) or args.repo.split('/')[1] in ('.', '..') or not NUMBER.fullmatch(args.spec):
         parser.error('expected OWNER/NAME and a positive spec number')
-    if not all(WORD.fullmatch(v) for v in (args.harness, args.model, args.reviewer_harness, args.reviewer_model)):
-        parser.error('harnesses and models must be driver identifiers')
+    if not all(WORD.fullmatch(v) for v in (args.harness, args.model)):
+        parser.error('the harness and model must be driver identifiers')
     if args.max < 1 or min(args.poll, args.ci_poll, args.idle) <= 0:
         parser.error('--max must be at least 1, and --poll, --ci-poll and --idle above 0')
     return args
@@ -551,6 +663,7 @@ def main(argv):
     os.environ.setdefault('GH_REPO', args.repo)
     key = hashlib.sha256(args.repo.lower().encode()).hexdigest()[:20]
     os.environ.setdefault('LAUNCH_FLEET_RUNS', str(STATE / ('runs-%s.json' % key)))
+    os.environ.setdefault('LAUNCH_FLEET_OVERLOAD_STATE', str(STATE / ('overload-%s.json' % key)))
     signal.signal(signal.SIGINT, signal.default_int_handler)
     signal.signal(signal.SIGTERM, signal.default_int_handler)
     session = Session(args, command)

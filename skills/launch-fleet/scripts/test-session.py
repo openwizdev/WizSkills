@@ -304,8 +304,7 @@ class Session(unittest.TestCase):
 
     def command(self, *extra):
         return [sys.executable, '-I', str(self.scripts / 'session.py'), 'run', REPO, '--spec', SPEC,
-                '--harness', 'claude', '--model', 'synthetic-builder', '--reviewer-harness', 'codex',
-                '--reviewer-model', 'synthetic-reviewer', '--poll', '0.05', '--ci-poll', '0.05', *extra]
+                '--harness', 'claude', '--model', 'synthetic-builder', '--poll', '0.05', '--ci-poll', '0.05', *extra]
 
     def carry_on(self):
         return 'carry on: ' + shlex.join(['python3', '-I', str((self.scripts / 'session.py').resolve()),

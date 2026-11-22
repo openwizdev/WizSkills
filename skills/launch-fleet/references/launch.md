@@ -104,16 +104,18 @@ After checking the spec's recorded approval, run the fleet in the open chat with
 
 ```sh
 python3 -I "<this skill's folder>/scripts/session.py" run "<owner>/<repo>" --spec "<S>" --harness "<builder harness>" \
-  --model "<builder model>" --reviewer-harness "<reviewer harness>" --reviewer-model "<reviewer model>"
+  --model "<builder model>"
 ```
 
 It runs in the foreground, one tick after another, with no timer. Each tick reads `fleet.sh spec <S>` and does the lines a script can do alone, by this skill's own claims and records:
 - a `start` line starts that ticket's builder through `host.py`, at most `--max` (default 3) at once;
 - a `check start` line records `start checked`;
-- a `review` line starts the reviewer: the other family of the builder recorded on the ticket (its status note's harness) when both `claude` and `codex` are installed, or the same family when only the builder's is, with that harness's model from `--harness`/`--model` or `--reviewer-harness`/`--reviewer-model`;
-- a `merge` line merges through `merge.py`, as "Merging" in this skill says: the newest `VERDICT:` must be an APPROVE at that head posted after the pull request's current review assignment, `fleet.sh overload merge-batch` must admit the batch, and without a merge queue a fresh `fleet.sh every` must still print that exact line. A queued merge counts as merged only once `merge.py read` reads it merged.
+- a `review` line starts the reviewer the models rule picks for the builder recorded on the ticket (its status note's harness). With both `claude` and `codex` installed, that is the other-family row `ops-starts.py flags` prints, and no row means the review waits. With only the builder's harness, it is the same family with the models rule's builder model for that harness;
+- a `merge` line merges through `merge.py`, as "Merging" in this skill says. The newest `VERDICT:` must be an APPROVE at that head, posted after the pull request's current review assignment for that same head, and the selected reviewer's done note on the ticket must follow that assignment. `fleet.sh overload merge-batch` must then admit the batch, and without a merge queue a fresh `fleet.sh every` must still print that exact line. A queued merge counts as merged only once `merge.py read` reads it merged.
 
-After a tick that did something, it ticks again at once. Otherwise it waits for a run to end (that agent's status note on the ticket leaves `working`; a reviewer's note is on its pull request's ticket), or, with no run going, for a queued merge or a known pull request's checks. On start, and so on `carry on`, it rebuilds the spec's running builders, reviewers and queued merges from their GitHub records, so `--max` counts builders still running from an earlier session.
+For the overload guard, the session keeps the pause state in `~/.local/state/openwiz-heartbeat/overload-<key>.json` unless `LAUNCH_FLEET_OVERLOAD_STATE` names another. Before each merge batch it writes a fresh observation of the repository's queued and running Actions jobs and its REST and GraphQL budgets, unless `LAUNCH_FLEET_OVERLOAD_SUPPLY` or `LAUNCH_FLEET_OVERLOAD_INPUT` supplies one. An unreadable read leaves the observation incomplete, so the guard refuses, and a pause stays until resolved as [overload.md](../overload.md) says.
+
+After a tick that did something, it ticks again at once. Otherwise it waits for a run to end (that agent's status note on the ticket leaves `working`; a reviewer's note is on its pull request's ticket), for a queued merge to land (read every `--ci-poll` seconds, even while runs are going), or, with no run going, for a known pull request's checks. On start, and so on `carry on`, it rebuilds the spec's running builders and reviewers from their GitHub records, so `--max` counts builders still running from an earlier session. It also rebuilds the queued merges `merge.py read` still reads as queued at their receipt's head; an older receipt holds nothing.
 
 It stops in three cases, and prints where it stopped and a `carry on:` command:
 - **Done (exit 0):** the check prints `spec done` or `close spec` for the spec, or the spec is no longer open and every ticket of it is closed. The spec summary, closing the spec and `archive` lines stay with this skill.

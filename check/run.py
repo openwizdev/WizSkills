@@ -78,7 +78,8 @@ SUITES = {
     'check': [['python3', '-I', 'check/test_notice.py'],
               ['python3', '-I', 'check/test_versions.py'],
               ['python3', '-I', 'check/test_changesets.py'],
-              ['python3', '-I', 'check/test_suites.py']],
+              ['python3', '-I', 'check/test_suites.py'],
+              ['python3', '-I', 'check/test_bench.py']],
 }
 
 # The skills not adapted from Matt Pocock's, each with the source line its

@@ -1365,6 +1365,7 @@ def setting(got):
 
 
 SETUP_TEMPLATES = Path(__file__).resolve().parents[2] / 'setup/templates'
+COMPARE_LIMIT = 300
 FRESH_SOURCE = "Source: install's `setting`, from the owner's yes to Connect's block of defaults."
 
 
@@ -1500,7 +1501,7 @@ def branch_check(repo, env, branch, head, proposed, want, based):
     try:
         assert result is not None and result.returncode == 0
         files = strict(result.stdout.decode('utf-8'))['files']
-        assert isinstance(files, list) and len(files) < 300  # GitHub lists at most 300 files
+        assert isinstance(files, list) and len(files) < COMPARE_LIMIT
         changed = {f['filename']: f['status'] for f in files}
         assert len(changed) == len(files) and all(isinstance(k, str) for k in changed)
     except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError):

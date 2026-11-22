@@ -308,7 +308,7 @@ def approval(text, problems):
     for line in lines[at[0] + 1:]:
         if line.startswith(('# ', '## ')) or (table and not line.lstrip().startswith('|')):
             break
-        if re.match(r' {0,3}\|', line) or (table and line.lstrip().startswith('|')):
+        if re.match(r' {0,3}\|', line) or (len(table) > 1 and line.lstrip().startswith('|')):
             table.append(cells(line))
     if len(table) < 3 or table[0] != ['Rule', 'Approver'] or table[1] != ['---', '---']:
         problems.append(here + 'the table is not | Rule | Approver |')

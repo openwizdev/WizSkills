@@ -483,7 +483,7 @@ class Write(Tracker):
                 self.world['history_fails'] = True
                 self.save()
                 moved = self.write(state, 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
-                self.assertIn(moved.returncode, (0, 2), moved.stderr)
+                self.assertEqual(moved.returncode, 2 if state == 'working' else 0, moved.stderr)
                 self.assertRegex(moved.stdout, r'(?m)^#12: needs-info left on: ')
                 self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
                 self.assertNotIn('DELETE', [method for method, _ in self.writes()])

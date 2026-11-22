@@ -1813,9 +1813,9 @@ class OneSetupPullRequest(unittest.TestCase):
         """The block's preview, then the yes to exactly that preview."""
         shown = j.helper(['defaults', '--options', str(j.options), *flags])
         self.assertEqual(shown.returncode, 12, shown.stdout + shown.stderr)
-        digest = re.search(r'--confirm ([0-9a-f]{16})\b', shown.stdout)
-        said = j.helper(['defaults', '--options', str(j.options), *flags, '--yes',
-                         *(['--confirm', digest[1]] if digest else [])])
+        digest = re.search(r'--confirm ([0-9a-f]{64})\b', shown.stdout)
+        self.assertIsNotNone(digest, shown.stdout)
+        said = j.helper(['defaults', '--options', str(j.options), *flags, '--yes', '--confirm', digest[1]])
         self.assertEqual(said.returncode, 0, said.stdout + said.stderr)
         return said
 
@@ -1925,7 +1925,7 @@ class OneSetupPullRequest(unittest.TestCase):
         j = self.road()
         shown = j.helper(['defaults', '--options', str(j.options)])
         self.assertIn('- Builder: claude-code claude-opus-5-5 medium', shown.stdout)
-        digest = re.search(r'--confirm ([0-9a-f]{16})\b', shown.stdout)
+        digest = re.search(r'--confirm ([0-9a-f]{64})\b', shown.stdout)
         options = offering(SOL)
         options['source'] = 'local'
         options['harnesses'] = [h for h in options['harnesses'] if h['provider'] == 'codex']

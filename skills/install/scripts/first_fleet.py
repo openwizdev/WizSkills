@@ -94,7 +94,8 @@ OPTIONS = {
     'create-repo': ({'--state', '--repo'}, {'--yes'}, set()),
     'select': ({'--state', '--repo'}, set(), set()),
     'defaults': ({'--state', '--options'}, {'--yes', '--app'},
-                 {'--operator', '--service-issue', '--harness', '--model', '--effort'}),
+                 {'--operator', '--service-issue', '--harness', '--model', '--effort', '--confirm',
+                  '--reviewer-harness', '--reviewer-model', '--reviewer-effort'}),
     'choose': ({'--state', '--options'}, {'--from-setup'}, {'--harness', '--model', '--effort', '--agents'}),
     'spec': ({'--state', '--spec', '--repo'}, set(), set()),
     'launch': ({'--state', '--spec'}, {'--yes'}, {'--confirm'}),
@@ -149,6 +150,7 @@ NOT_HOSTS = ('cloud', 'cloudroom', 'template')
 HOST_BRANCH = 'openwiz/host-setting'
 BRAIN_BRANCH = 'openwiz/brain'
 BRAIN_FOLDER = '.openwiz/brain/'
+ALONE = "%s is not installed here, so each review runs with the builder's harness, marked same-family review"
 
 
 class Exit(Exception):
@@ -190,6 +192,12 @@ def parse(argv):
         raise Exit(2, 'usage: missing %s' % ', '.join(missing))
     if argv[0] == 'defaults' and len({'--harness', '--model', '--effort'} & set(got)) not in (0, 3):
         raise Exit(2, 'usage: defaults changes the builder with all of --harness, --model and --effort')
+    if argv[0] == 'defaults' and len({'--reviewer-harness', '--reviewer-model', '--reviewer-effort'} & set(got)) \
+            not in (0, 3):
+        raise Exit(2, 'usage: defaults changes the reviewer with all of --reviewer-harness, --reviewer-model and '
+                      '--reviewer-effort')
+    if argv[0] == 'defaults' and ('--confirm' in got) != bool(got.get('--yes')):
+        raise Exit(2, 'usage: --yes takes --confirm with the digest of the block the user said yes to')
     if '--service-issue' in got and not re.fullmatch(r'[1-9][0-9]{0,9}', got['--service-issue']):
         raise Exit(2, 'usage: --service-issue takes an open issue number')
     if '--operator' in got and not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})', got['--operator']):
@@ -1423,43 +1431,75 @@ def defaults(got):
         raise Exit(5, 'That harness, model and effort are not among the offered options; nothing recorded.')
     if host['agents'] == 'local' and choice[0] not in host.get('harnesses', ()):
         raise Exit(5, '%s is not on this machine, so its agents cannot run here; nothing recorded.' % choice[0])
+    driver = host['agents'] != 'cloud'
+    override = (got['--reviewer-harness'], got['--reviewer-model'], got['--reviewer-effort']) \
+        if '--reviewer-harness' in got else None
+    if override and (FAMILY.get(override[0]) in (None, FAMILY[choice[0]]) or not offers(offered, override)):
+        raise Exit(5, 'The Reviewer must be from the other model family than the Builder and among the offered '
+                      'options; nothing recorded.')
+    if override and host['agents'] == 'local' and override[0] not in host.get('harnesses', ()):
+        raise Exit(5, '%s is not on this machine, so its reviews cannot run here; nothing recorded.' % override[0])
     env = repository(repo)
     fleet = raw(repo, MODE_FILE, env)
     if fleet is None:
-        raise Exit(5, '%s is not on the default branch yet: run the setup skill there first; nothing recorded.'
-                   % MODE_FILE)
-    _, intended, said = models_change(fleet, choice, offered, host['agents'] != 'cloud')
+        reviewer, alone = (override, None) if override else reviewer_of(None, choice, offered, driver)
+        alone = alone and ALONE % alone
+    else:
+        _, intended, said = models_change(fleet, choice, offered, driver, reviewer=override)
+        reviewer, alone = intended['Reviewer'], said.split('. ', 1)[1] if '. ' in said else None
     issue = int(got['--service-issue']) if '--service-issue' in got else 'new'
     record = {'operator': got.get('--operator', login), 'service_issue': issue, 'harness': choice[0],
-              'model': choice[1], 'effort': choice[2], 'reviewer': list(intended['Reviewer']),
+              'model': choice[1], 'effort': choice[2], 'reviewer': list(reviewer),
               'identity': 'app' if got.get('--app') else 'personal_login'}
-    alone = said.split('. ', 1)[1] if '. ' in said else None
     recorded = state.value.get('defaults')
     if (state.value.get('setting') or {}).get('state') in ('pending', 'opened', 'merged') and recorded != record:
         raise Exit(5, 'The setup pull request already carries the recorded setup; ask the owner to change that '
                       'line there instead; nothing recorded.')
+    block = ['- Operator: %s%s' % (record['operator'], ', your GitHub login' if record['operator'] == login else ''),
+             '- Service issue: %s' % ('a new issue in %s, "OpenWiz service records"' % repo if issue == 'new'
+                                      else 'issue #%d in %s' % (issue, repo)),
+             '- Builder: %s' % ' '.join(choice),
+             '- Reviewer: %s%s' % (' '.join(reviewer), ' (%s)' % alone if alone else ''),
+             '- Acting identity: %s' % ('the OpenWiz GitHub App' if got.get('--app') else
+                                        'your own GitHub login, %s, instead of the OpenWiz GitHub App, for the first '
+                                        'fleet' % login)]
+    name = None if host['agents'] == 'cloud' else host['agents']
+    files = ('the setup files a new project needs (docs/agents/fleet.md, issue-tracker.md, triage-labels.md and '
+             'domain.md) with the Models table above' if fleet is None else
+             'the Models table above in docs/agents/fleet.md')
+    effects = [
+        '1. %s' % ('Open a new issue titled "OpenWiz service records" in %s.' % repo if issue == 'new'
+                   else 'Use issue #%d in %s for the service records; nothing is opened.' % (issue, repo)),
+        "2. setup.py prepare: save these values as %s's project in this computer's private OpenWiz setup state."
+        % repo,
+        '3. %s' % ('The OpenWiz GitHub App setup, as its own steps show.' if got.get('--app') else
+                   'github_login.py skip-app: your own GitHub login acts and the App stays unset.'),
+        "4. openwiz init: create the OpenWiz labels %s is missing and open the brain's pull request (for a public "
+        'repository, in the private companion it creates).' % repo,
+        "5. setting: add to the brain's pull request %s%s. For a companion brain these go in one settings pull "
+        'request of %s instead.' % (files, '' if not name else ', and docs/agents/host.md with `Host: %s`%s' % (
+            name, ' and the rows for the mode question that follows this block' if name == 'local' else ''), repo)]
+    digest = hashlib.sha256(json.dumps({'repo': repo, 'login': login, 'host': host['agents'], 'record': record,
+                                        'block': block, 'effects': effects}, sort_keys=True).encode()).hexdigest()
     print('Recommended setup for %s; one yes accepts all of it:' % repo)
-    print('- Operator: %s%s' % (record['operator'], ', your GitHub login' if record['operator'] == login else ''))
-    print('- Service issue: %s' % ('a new issue in %s, "OpenWiz service records"' % repo if issue == 'new'
-                                   else 'issue #%d in %s' % (issue, repo)))
-    print('- Builder: %s' % ' '.join(choice))
-    print('- Reviewer: %s%s' % (' '.join(intended['Reviewer']), ' (%s)' % alone if alone else ''))
-    print('- Acting identity: %s' % ('the OpenWiz GitHub App' if got.get('--app') else
-                                     'your own GitHub login, %s, instead of the OpenWiz GitHub App, for the first '
-                                     'fleet' % login))
+    print('\n'.join(block))
+    print('That yes covers these steps, each run from its own preview; anything a preview shows beyond its step is '
+          'asked first:')
+    print('\n'.join(effects))
     if not got.get('--yes'):
         print('Use this setup, or change any line?')
-        print("Nothing recorded. On the user's yes, run again with --yes; for a changed line add its flag: "
-              '--operator, --service-issue, --harness with --model and --effort, or --app.')
+        print("Nothing recorded. On the user's yes, run again with --yes --confirm %s; for a changed line add its "
+              'flag: --operator, --service-issue, --harness with --model and --effort, --reviewer-harness with '
+              '--reviewer-model and --reviewer-effort, or --app, and show the new block.' % digest)
         return 12
+    if got['--confirm'] != digest:
+        raise Exit(5, 'This setup is not the one the user said yes to: show this block and ask again; nothing '
+                      'recorded.')
     state.value['defaults'] = record
     if not state.save():
         raise Exit(10, 'Could not save the setup; nothing recorded.')
-    print('Recorded this setup, as the user said yes to it. Next, on that same yes: %s, setup.py prepare with '
-          'these values, %s and openwiz init; then the permission mode (mode, this machine only) and setting, '
-          'which adds the Models table and the host setting to the brain\'s pull request.' % (
-              'open the service issue' if issue == 'new' else 'use issue #%d' % issue,
-              'the App setup' if got.get('--app') else 'github_login.py skip-app'))
+    print('Recorded this setup, as the user said yes to it. Next, on that same yes, run steps 1 to 4 in order; then '
+          'the permission mode (mode, this machine only) and step 5, setting.')
     return 0
 
 
@@ -1511,7 +1551,8 @@ def choose(got):
     if remote is not None and state.value.get('defaults'):
         try:
             choice = (settings['harness'], settings['model'], settings['effort'])
-            _, intended, said = models_change(remote, choice, offered, host['agents'] != 'cloud')
+            _, intended, said = models_change(remote, choice, offered, host['agents'] != 'cloud',
+                                              reviewer=tuple(state.value['defaults']['reviewer']))
             wrote = said + '; already on the default branch, from the setup pull request.'
             if models_table(remote) != intended:
                 wrote = intended = None
@@ -1672,8 +1713,7 @@ def models_change(text, choice, offered, driver=False, reviewer=None):
     said = ('docs/agents/fleet.md: the Models table names %s for the Orchestrator and Builder, with %s as the '
             'Reviewer' % (' '.join(choice), ' '.join(reviewer)))
     if alone:
-        said += ('. %s is not installed here, so each review runs with the builder\'s harness, marked '
-                 'same-family review' % alone)
+        said += '. ' + ALONE % alone
     return written, intended, said
 
 

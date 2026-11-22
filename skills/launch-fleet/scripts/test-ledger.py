@@ -262,13 +262,20 @@ class Ledger(unittest.TestCase):
                   'a gh command that writes': ['issue', 'comment', '10', '--body', 'x'],
                   'a flag it does not know': ['api', '--synthetic-flag', 'POST', path + '/comments'],
                   'a second endpoint': ['api', f'repos/{REPO}/issues', 'POST', path + '/comments'],
-                  'a query it cannot read': ['api', 'graphql', '-F', 'query=@synthetic.graphql']}
+                  'a query it cannot read': ['api', 'graphql', '-F', 'query=@synthetic.graphql'],
+                  'an inline read beside an opaque --input body': ['api', 'graphql', '--input', '-', '-f',
+                                                                    'query=query { viewer { login } }'],
+                  'no endpoint': ['api', '--method', 'GET'],
+                  'a mutation field then a read field': ['api', 'graphql', '-f', 'query=mutation { a { b } }',
+                                                         '-f', 'query=query { viewer { login } }']}
         reads = {'a GraphQL query sent with an explicit POST': ['api', 'graphql', '--method', 'POST', '-f',
                                                                 'query=query { viewer { login } }'],
                  'a shorthand GraphQL query': ['api', 'graphql', '-f', 'query={ viewer { login } }'],
                  'a REST GET with query fields': ['api', '-X', 'GET', f'repos/{REPO}/issues', '-f', 'state=closed'],
                  'a plain REST read': ['api', f'repos/{REPO}/contents/docs/agents/fleet.md', '-H', 'Accept: x'],
-                 'a paginated REST read': ['api', '--paginate', '--slurp', f'repos/{REPO}/issues']}
+                 'a paginated REST read': ['api', '--paginate', '--slurp', f'repos/{REPO}/issues'],
+                 'a short -X=GET': ['api', '-X=GET', f'repos/{REPO}/issues'],
+                 'a short -f= query': ['api', 'graphql', '-f=query=query { viewer { login } }']}
         for name, args in {**writes, **reads}.items():
             with self.subTest(name):
                 w = World(self, MIXED)

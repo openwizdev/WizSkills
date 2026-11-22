@@ -178,18 +178,31 @@ class StopAll(unittest.TestCase):
         self.assertEqual(len(home.calls()), 2)
         home.no_agent_cli()
 
-    def test_an_unreadable_runs_file_stops_nothing(self):
+    def test_an_unreadable_runs_file_still_pauses_the_heartbeat_and_stops_nothing(self):
         for text in ('{"repo": "someone/else", "runs": {}}', 'not json',
                      '{"repo": "%s", "runs": {"11": {"host": "local"}}}' % REPO):
             with self.subTest(text=text):
                 home = Home(self, {})
                 home.install_heartbeat()
                 home.runs.write_text(text)
-                r = home.run('stop-all.py', REPO, SPEC)
-                self.assertEqual((r.returncode, r.stdout), (2, ''))
-                self.assertIn('is not a runs file for %s' % REPO, r.stderr)
-                self.assertEqual(home.heartbeat(), 'heartbeat: active (cron)')
+                out = home.stop_all(expected=2)
+                self.assertEqual(out[:1], ['heartbeat: paused'])
+                self.assertRegex(out[1], r'^stop-all: the runs could not be read \(.*is not a runs file for %s\); '
+                                         r'nothing stopped$' % REPO)
+                self.assertEqual(len(out), 2)
+                self.assertEqual(home.heartbeat(), 'heartbeat: paused (cron)')
                 self.assertEqual(home.calls(), [])
+                home.no_agent_cli()
+
+    def test_an_unreadable_runs_file_on_a_dry_run_pauses_nothing(self):
+        home = Home(self, {})
+        home.install_heartbeat()
+        home.runs.write_text('not json')
+        out = home.stop_all('--dry-run', expected=2)
+        self.assertEqual(out[:1], ['heartbeat: would pause'])
+        self.assertRegex(out[1], r'^stop-all: the runs could not be read \(.*\); nothing stopped$')
+        self.assertEqual(home.heartbeat(), 'heartbeat: active (cron)')
+        self.assertEqual(home.calls(), [])
 
     def test_usage(self):
         home = Home(self, {})

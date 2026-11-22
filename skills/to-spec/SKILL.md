@@ -86,8 +86,10 @@ through their orchestrator: stop holds the fleet, reset re-cuts the plan through
 anything else is a steer to act on. A changed spec or plan always gets a new
 machine approval and a new video.
 
-Planning grants only what the machine approval records: every action gate
-(publish, spend, secrets, deleting user data, cut-overs) still asks the owner.
+Planning grants only what the machine approval records, and no approval rule:
+every rule in `fleet.md`'s Approval rules asks its named approver first; with no
+such section, publishing, spending, secrets, deleting user data, cut-overs and
+the repository webhook ask the user.
 Builders and other-family reviewers stay independent; starting, reviewing and
 merging stay with their roles.
 

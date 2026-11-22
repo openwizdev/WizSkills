@@ -46,12 +46,6 @@ is unknown. It posts once: `cost already posted <id>` names an earlier record
 author's record, matching the pull request's repository in any letter case;
 when the ticket's records can't be read it prints `unknown: ...` and posts
 nothing. It refuses before a verified merge at HEAD.
-Without that command it reads the ticket's builder and the pull request's
-reviewers from LAUNCH_FLEET_STATE with `room-cli usage <thread> --json` and
-posts their `history.credits` in the same line form, the reviewers summed and
-only amounts shown (CL1, #2282). No state, a missing agent, a driver-started
-builder, a failed or malformed read, or a read that may not cover the agent's
-whole life makes that role unknown, and any unknown role makes the total unknown.
 
 After a verified merge `cost` also tells a feedback report it landed (FL4, #1848; the feedback-loop
 contract v1 in OpenWiz): for a pull request in any openwizdev repository, each openwizdev/OpenWiz issue

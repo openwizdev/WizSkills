@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Where WizSkills' `check` spends its time (spec #2134, WQ0).
+import argparse
+import json
+import statistics
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+HELP = """Where WizSkills' `check` spends its time (spec #2134, WQ0).
 
 python3 check/bench.py --from 2026-11-20 --to 2026-11-22 [--save DIR]
 python3 check/bench.py --runs 45007415699 45007321482 [--save DIR]
@@ -18,14 +26,6 @@ created to last job completed). A phase a run never finished is `unknown`,
 never zero, and stays out of the median. A run with several jobs takes each
 phase's longest job.
 """
-import argparse
-import json
-import statistics
-import subprocess
-import sys
-from datetime import datetime
-from pathlib import Path
-
 REPO = 'openwizdev/WizSkills'
 WORKFLOW = 'ci.yml'
 SETUP_STEPS = ('Set up job', 'Run actions/checkout', 'Install the pinned Changesets')
@@ -60,7 +60,6 @@ def log_lines(text):
 
 
 def job_phases(job, log):
-    """{phase: seconds or None} for one job, and its suites in log order."""
     steps = job.get('steps') or []
     out = {'queue wait': seconds(when(job.get('created_at')), when(job.get('started_at')))}
     setup = [step_seconds(steps, prefix) for prefix in SETUP_STEPS]
@@ -98,7 +97,6 @@ def run_phases(run, jobs, logs):
 
 
 def report(window, runs):
-    """runs: [(run id, {phase: seconds or None})] -> the Markdown table."""
     suites = []
     for _, phases in runs:
         suites += [p for p in phases if p.startswith('suite ') and p not in suites]
@@ -160,7 +158,8 @@ def saved(folder):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog='check/bench.py', description='Where check spends its time.')
+    parser = argparse.ArgumentParser(prog='check/bench.py', description=HELP,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--from', dest='start', metavar='DATE')
     parser.add_argument('--to', dest='end', metavar='DATE')
     parser.add_argument('--runs', nargs='+', type=int, metavar='ID')

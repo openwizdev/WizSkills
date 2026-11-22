@@ -28,7 +28,7 @@ QUERY = '''query($owner: String!, $name: String!, $number: Int!, $removed: Strin
       pageInfo { hasNextPage endCursor } nodes { ... on RemovedFromMergeQueueEvent { createdAt reason actor { login } } } }
     commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 100, after: $checks) {
       pageInfo { hasNextPage endCursor }
-      nodes { __typename ... on CheckRun { name status conclusion startedAt } ... on StatusContext { context state createdAt } } } } } } } } }'''
+      nodes { __typename ... on CheckRun { name status conclusion startedAt } ... on StatusContext { context state createdAt } } } } } } } } } }'''
 PAGES = 50
 SHA = re.compile(r'[0-9a-f]{40}')
 TIME = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z')

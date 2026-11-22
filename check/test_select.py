@@ -147,6 +147,16 @@ class CrossSkillReads(unittest.TestCase):
                               'skills/gamma/run.sh': 'cat "$(dirname "$0")/../beta/x"\n'})
             self.assertEqual(picked(root, ['skills/beta/x.py']), [*ALWAYS, 'alpha', 'beta', 'gamma'])
 
+    def test_a_skill_joined_by_name_from_a_list_is_found(self):
+        forms = {
+            'loop': 'for name in ("gamma", "beta"):\n    for p in (root / "skills" / name).rglob("*.md"):\n',
+            'join': "for name in NAMES:\n    os.path.join(ROOT, 'skills', name)\nNAMES = ['beta']\n",
+            'shell': 'for s in beta gamma; do cat "$ROOT/skills/$s/SKILL.md"; done\nX="beta"\n',
+        }
+        for form, text in forms.items():
+            with self.subTest(form=form):
+                self.assertReads({'skills/alpha/test/test_a.py': text})
+
     def test_a_reader_in_the_check_reads_the_skills(self):
         self.assertReads({'check/test_check.py': "for p in (ROOT / 'skills').iterdir():\n"},
                          reader='check', changed='skills/beta/x.py')

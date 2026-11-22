@@ -132,6 +132,27 @@ class Fleet(unittest.TestCase):
         self.pr.update(state='MERGED', mergedAt='2026-11-01T11:58:00Z')
         self.assertEqual(self.run_fleet('wake', '12'), 'archive #12: closed; archive run:12, run:31\n')
 
+    def test_new_fleet_can_wake_a_driver_review_started_by_its_predecessor(self):
+        runs = self.dir / 'runs.json'
+        self.env['LAUNCH_FLEET_RUNS'] = str(runs)
+        runs.write_text(json.dumps({'repo': 'example/public', 'runs': {
+            '12': {'host': 'local', 'run': 'builder-run'},
+            '31': {'host': 'local', 'run': 'reviewer-run'},
+        }}))
+        self.threads = []
+        self.issue(10)['comments'].append(dict(id=1002, at='2026-11-01T11:15:00Z',
+                                               body='launch-fleet: fleet active, loop fleet-10'))
+        self.say(f'review started {SHA}\nDriver review: other-family')
+        for head, expected in (
+            (SHA, f'check review #31 for #12 at {SHA}: no verdict 30 minutes after "review started {SHA}"; '
+                  'read thread run:31 and tell it again (its record: comment 3101)'),
+            (NEW, f're-check #31 for #12 at {NEW}: tell its reviewer, thread run:31'),
+        ):
+            with self.subTest(head=head):
+                self.pr['head'] = head
+                lines = [line for line in self.run_fleet('spec', '10').splitlines() if '#31 for #12' in line]
+                self.assertEqual(lines, [expected])
+
     def test_stopped_driver_review_cannot_borrow_a_replacements_run(self):
         runs = self.dir / 'runs.json'
         self.env['LAUNCH_FLEET_RUNS'] = str(runs)

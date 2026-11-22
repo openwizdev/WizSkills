@@ -1,4 +1,3 @@
-"""check/select.py: a pull request runs only the shards its changes need (WQ4, #2274)."""
 import importlib.util
 import json
 import subprocess
@@ -17,8 +16,6 @@ def shard(name, skill):
     return {'name': name, 'skill': skill, 'commands': [], 'env': {}}
 
 
-# Synthetic: alpha, beta, gamma and delta stand for any skill; fleet for one
-# whose long suite is split into part shards (WQ2), named only by its skill.
 SHARDS = [shard('rules', None), shard('standalone', None), shard('alpha', 'alpha'),
           shard('beta', 'beta'), shard('fleet.1', 'fleet'), shard('fleet.2', 'fleet'),
           shard('fleet', 'fleet'), shard('gamma', 'gamma'), shard('delta', 'delta'),
@@ -101,7 +98,6 @@ class EveryShard(unittest.TestCase):
 
 
 class CrossSkillReads(unittest.TestCase):
-    """A suite that reads another skill's files runs when those files change."""
 
     def assertReads(self, files, reader='alpha', changed='skills/beta/scripts/b.py'):
         with tempfile.TemporaryDirectory() as tmp:
@@ -142,7 +138,6 @@ class CrossSkillReads(unittest.TestCase):
                 self.assertReads({'skills/alpha/test/test_a.py': text}, changed='skills/beta/x.py')
 
     def test_reads_are_transitive(self):
-        # alpha runs gamma's script, which reads beta: a beta change runs alpha too.
         with tempfile.TemporaryDirectory() as tmp:
             root = tree(tmp, {'skills/alpha/test/test_a.py': "RUN = ROOT / 'skills/gamma/run.sh'\n",
                               'skills/gamma/run.sh': 'cat "$(dirname "$0")/../beta/x"\n'})
@@ -163,7 +158,6 @@ class CrossSkillReads(unittest.TestCase):
                          reader='check', changed='skills/beta/x.py')
 
     def test_prose_and_unrelated_strings_are_not_reads(self):
-        # Markdown never runs, and a bare skill name is a word, not a path.
         self.assertReads({'skills/alpha/SKILL.md': 'Run `../beta/scripts/b.py` and skills/beta.\n',
                           'skills/alpha/scripts/a.py': "ACTIONS = ('beta', 'install')\nlabel = 'beta'\n",
                           'skills/alpha/scripts/b.py': "skills/betamax and ../beta-two/x and 'beta-x'\n"},
@@ -180,13 +174,8 @@ class CrossSkillReads(unittest.TestCase):
 
 
 class TheRealTree(unittest.TestCase):
-    """Reads a traced run of every suite saw (strace on 2026-11-22, the PR's Evidence).
-
-    Each is a suite opening another skill's files: if the scan misses one, a
-    change there would skip a suite that reads it."""
 
     TRACED = {
-        # reader: skills whose files its suites opened
         'triage': {'launch-fleet', 'to-tickets', 'wayfind'},
     }
 
@@ -200,7 +189,6 @@ class TheRealTree(unittest.TestCase):
 
 
 class Command(unittest.TestCase):
-    """The workflow's seam: `run.py --list` JSON in, the selected shards out."""
 
     def run_select(self, root, *argv, shards=SHARDS):
         return subprocess.run([sys.executable, '-I', str(root / 'check' / 'select.py'), *argv],

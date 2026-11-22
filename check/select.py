@@ -1,22 +1,4 @@
 #!/usr/bin/env python3
-"""Pick the shards a pull request's changes need (WQ4, openwizdev/OpenWiz#2274).
-
-python3 -I check/select.py --event <event> --base <rev> < shards.json > selected.json
-
-Reads `check/run.py --list`'s JSON (contracts/check-shards.v1.md) on stdin and
-prints the shards to run, in the same shape and list order. Only a
-`pull_request` narrows the list; any other event runs every shard. A pull
-request runs `rules`, `standalone` and the shards of each skill whose folder it
-changes, plus every shard whose suites read that skill's files (found by
-scanning, transitively). A new `.changeset/<name>.md` needs no shard: the gates
-job reads it. Any other path (the check, the workflow, contracts, docs, a
-folder without its own shards) runs every shard, and so does an empty diff.
-
-The changed paths are `git diff --name-only --no-renames <rev> HEAD`, so a rename
-counts both sides. stderr names each changed path and each shard as
-`select: <shard>: run` or `select: <shard>: skipped`. Exits 0 with a list, 1
-when git cannot diff (printing no list), 2 on bad arguments or input.
-"""
 import json
 import re
 import subprocess
@@ -27,28 +9,17 @@ ROOT = Path(__file__).resolve().parent.parent
 ALWAYS = ('rules', 'standalone')
 KEYS = {'name', 'skill', 'commands', 'env'}
 NAME = re.compile(r'[a-z0-9]+(?:-[a-z0-9]+)*')
-# Another skill's path in a suite's code: `skills/<name>`, a sibling
-# `../<name>`, or a quoted `<name>` joined onto a path (`/ 'name'`,
-# `join(..., 'name'`). The lookaheads stop `beta` matching `beta-two`,
-# `betamax` or `beta.x`, while `../beta/x.py` still matches.
-PATH = r'(?:skills/|\.\./)({names})(?![\w-])(?!\.[\w])'
-JOIN = r'''(?:/\s*|join(?:path)?\([^)\n]*?)['"]({names})['"]'''
-# A file that joins the skills folder with a variable (`'skills' / name`,
-# `skills/$name`) reads every skill it names in quotes, such as a loop's tuple.
-BY_NAME = re.compile(r'''['"]skills['"]\s*(?:/|,)\s*[A-Za-z_]|skills/\$\{?[A-Za-z_]''')
-QUOTED = r'''['"]({names})['"]'''
-# A file that lists the skills folder reads every skill: an iterdir, glob or
-# rglob of it, or a shell glob of it from the root, from two levels up or
-# above a variable (never a `case` pattern of dot-dot components).
-EVERY = re.compile(r'''['"]skills['"]\s*\)\s*\.\s*(?:iterdir|r?glob)\(|skills/\*|(?:\.\.|\$\{?\w+\}?"?)/\.\./\*''')
-# Only code reads: Markdown and data (JSON fixtures, logs) never open a file.
-CODE = {'.py', '.sh', '.mjs', '.js', '.cjs', '.ts'}
-CHANGESET = re.compile(r'\.changeset/[^/]+\.md')
-NOT_CHANGESETS = {'readme.md'}
+SKILL_PATH = r'(?:skills/|\.\./)({names})(?![\w-])(?!\.[\w])'
+SKILL_JOINED = r'''(?:/\s*|join(?:path)?\([^)\n]*?)['"]({names})(?:['"]|/)'''
+JOINS_SKILLS_BY_VARIABLE = re.compile(r'''['"]skills['"]\s*(?:/|,)\s*[A-Za-z_]|skills/\$\{?[A-Za-z_]''')
+QUOTED_SKILL = r'''['"]({names})['"]'''
+LISTS_EVERY_SKILL = re.compile(r'''['"]skills['"]\s*\)\s*\.\s*(?:iterdir|r?glob)\(|skills/\*|(?:\.\.|\$\{?\w+\}?"?)/\.\./\*''')
+CODE_SUFFIXES = {'.py', '.sh', '.mjs', '.js', '.cjs', '.ts'}
+NEW_CHANGESET = re.compile(r'\.changeset/[^/]+\.md')
+CHANGESET_FOLDER_FILES = {'readme.md'}
 
 
-def homes(shards):
-    """Each SUITES row (a shard's skill) and the folder its suites live in."""
+def suite_folders(shards):
     rows = {}
     for shard in shards:
         skill = shard['skill']
@@ -57,30 +28,29 @@ def homes(shards):
     return rows
 
 
-def scanned(folder):
+def code_in(folder):
     for path in sorted(folder.rglob('*')):
         if path.is_file() and not path.is_symlink():
             text = path.read_text(encoding='utf-8', errors='replace')
-            if path.suffix.lower() in CODE or text.startswith('#!'):
+            if path.suffix.lower() in CODE_SUFFIXES or text.startswith('#!'):
                 yield text
 
 
 def reads(root, shards):
-    """{row: the skills whose files that row's suites read}, closed transitively."""
-    rows = homes(shards)
+    rows = suite_folders(shards)
     skills = sorted(name for name in rows if (root / 'skills' / name).is_dir())
     names = '|'.join(map(re.escape, sorted(skills, key=len, reverse=True)))
     found = {}
     for row, home in rows.items():
         hits = set()
         if names:
-            forms = re.compile(PATH.format(names=names) + '|' + JOIN.format(names=names))
-            for text in scanned(root / home):
-                if EVERY.search(text):
+            forms = re.compile(SKILL_PATH.format(names=names) + '|' + SKILL_JOINED.format(names=names))
+            for text in code_in(root / home):
+                if LISTS_EVERY_SKILL.search(text):
                     hits.update(skills)
                 hits.update(a or b for a, b in forms.findall(text))
-                if BY_NAME.search(text):
-                    hits.update(re.findall(QUOTED.format(names=names), text))
+                if JOINS_SKILLS_BY_VARIABLE.search(text):
+                    hits.update(re.findall(QUOTED_SKILL.format(names=names), text))
         hits.discard(row)
         found[row] = hits
     changed = True
@@ -94,9 +64,8 @@ def reads(root, shards):
     return found
 
 
-def skill_of(path, rows):
-    """The skill a changed path belongs to, '' for a gate-only path, None if unplaceable."""
-    if CHANGESET.fullmatch(path) and path.split('/')[1].lower() not in NOT_CHANGESETS:
+def owning_skill(path, rows):
+    if NEW_CHANGESET.fullmatch(path) and path.split('/')[1].lower() not in CHANGESET_FOLDER_FILES:
         return ''
     parts = path.split('/')
     if len(parts) >= 3 and parts[0] == 'skills' and parts[1] in rows and parts[1] != 'check' \
@@ -106,15 +75,14 @@ def skill_of(path, rows):
 
 
 def select(root, shards, changed, event):
-    """(the shards to run, the reason every shard runs or None)."""
     if event != 'pull_request':
         return list(shards), f'event {event}'
     if not changed:
         return list(shards), 'no changed file'
-    rows = homes(shards)
+    rows = suite_folders(shards)
     picked = set()
     for path in changed:
-        skill = skill_of(path, rows)
+        skill = owning_skill(path, rows)
         if skill is None:
             return list(shards), f'{path or "(empty path)"} needs every shard'
         if skill:
@@ -134,7 +102,8 @@ def parse(text):
         if not isinstance(shard, dict) or set(shard) != KEYS:
             raise ValueError(f'a shard is not an object with exactly {sorted(KEYS)}')
         name, skill = shard['name'], shard['skill']
-        if not isinstance(name, str) or name in seen or not (skill is None or isinstance(skill, str)):
+        if not isinstance(name, str) or name in seen or not (skill is None or isinstance(skill, str)) \
+                or not isinstance(shard['commands'], list) or not isinstance(shard['env'], dict):
             raise ValueError(f'bad or repeated shard {name!r}')
         if skill is not None and not NAME.fullmatch(skill):
             raise ValueError(f'bad skill {skill!r}')

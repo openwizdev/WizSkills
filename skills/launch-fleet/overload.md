@@ -123,9 +123,14 @@ python3 -I skills/launch-fleet/scripts/budget.py admit 12 headers-1.txt headers-
 python3 -I skills/launch-fleet/scripts/budget.py admit 3 --resource graphql --floor 2000
 ```
 
-Each file is an earlier answer as `gh api -i` writes it. It reads the
+Each file holds one earlier response as `gh api -i` writes it: the status line
+first, then the headers up to the first blank line. Only that header block is
+read; the body after it never counts. A file that doesn't start with its status
+line, or whose headers don't end, is unknown. For a paginated read, save each
+page's response in its own file (`gh api -i --paginate` puts every page in one
+stream, and only the first page's headers would count). It reads the
 `x-ratelimit-limit`, `-remaining`, `-reset` and `-resource` headers of every
-answer and takes the newest: the latest reset window (resets within ten
+file and takes the newest: the latest reset window (resets within ten
 minutes of the latest are one window), and in it the lowest remaining,
 whatever the files' order. The files must all count one allowance, `core`
 (REST) or `graphql`, and `--resource` must match it when given. With no file,

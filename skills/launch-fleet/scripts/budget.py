@@ -31,8 +31,7 @@ def checked(values, where, text):
     if missing:
         raise Unknown('%s has no %s' % (where, ', '.join(missing)))
     if values['resource'] not in POOLS:
-        resource = values['resource'] if re.fullmatch(r'[a-z_]{1,40}', str(values['resource'])) else 'another'
-        raise Unknown("%s counts GitHub's %s allowance, neither core nor graphql" % (where, resource))
+        raise Unknown('%s counts an allowance that is neither core nor graphql' % where)
     pool = {'resource': values['resource']}
     for field in ('limit', 'remaining', 'reset'):
         value = values[field]
@@ -53,17 +52,13 @@ def from_file(path, n):
             lines = f.read().split(b'\n')
     except OSError:
         raise Unknown("%s can't be read" % where)
-    pools, block = [], None
-    for line in lines:
+    if not STATUS.match(lines[0].rstrip(b'\r')):
+        raise Unknown('%s does not start with its status line' % where)
+    block = {}
+    for line in lines[1:]:
         line = line.rstrip(b'\r')
-        if block is None:
-            if STATUS.match(line):
-                block = {}
-            continue
         if not line:
-            pools.append(checked(block, where, text=True))
-            block = None
-            continue
+            return checked(block, where, text=True)
         name, colon, value = line.partition(b':')
         name = name.strip().lower().decode('latin-1')
         if not colon or not name.startswith('x-ratelimit-'):
@@ -75,11 +70,7 @@ def from_file(path, n):
         if block.get(field, value) != value:
             raise Unknown('%s gives two %s headers' % (where, field))
         block[field] = value
-    if block is not None:
-        raise Unknown("%s's headers don't end" % where)
-    if not pools:
-        raise Unknown('%s has no response headers' % where)
-    return pools
+    raise Unknown("%s's headers don't end" % where)
 
 
 def rate_limit(resource):
@@ -95,9 +86,9 @@ def rate_limit(resource):
         values = json.loads(result.stdout)['resources'][resource]
     except (ValueError, TypeError, KeyError):
         raise Unknown('%s has no %s allowance' % (where, resource))
-    if not isinstance(values, dict) or values.get('resource') != resource:
+    if not isinstance(values, dict) or values.get('resource', resource) != resource:
         raise Unknown('%s has no %s allowance' % (where, resource))
-    return checked(values, where, text=False)
+    return checked({**values, 'resource': resource}, where, text=False)
 
 
 def newest(pools):
@@ -115,7 +106,7 @@ def stamp(unix):
 def admit(n, paths, resource, floor, now):
     pool = None
     if paths:
-        pools = [p for i, path in enumerate(paths, 1) for p in from_file(path, i)]
+        pools = [from_file(path, i) for i, path in enumerate(paths, 1)]
         if len({p['resource'] for p in pools} | ({resource} if resource else set())) != 1:
             raise Unknown('the answers count more than one allowance')
         pool = newest(pools)

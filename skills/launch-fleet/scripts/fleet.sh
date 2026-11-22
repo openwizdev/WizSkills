@@ -1548,9 +1548,10 @@ def owned_read: ((.body // "") | split("\n")) as $l
        | map(select(startswith("- ")) | .[2:])) as $bullets
       | if ($bullets | length) == 0 then [{bad: true}] else
           [$bullets[] | . as $b | [scan("\\bin `([^`]+)`") | .[0]] as $ins
-           | ($ins | last) as $repo
-           | if $repo != null and ($repo | test("^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$") | not) then {bad: $b}
-             elif any($ins[]; test("^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$") and ascii_downcase != ($repo | ascii_downcase)) then {bad: $b}
+           | ([$ins[] | select(test("^[A-Za-z0-9-]+/[A-Za-z0-9_-]+$"))] | unique_by(ascii_downcase)) as $named
+           | (if ($ins | length) > 0 and ($ins | last | test("^[A-Za-z0-9-]+/[A-Za-z0-9_-]+$")) then $ins | last
+              elif ($named | length) == 1 then $named[0] else null end) as $repo
+           | if $repo == null and ($named | length) > 1 then {bad: $b}
              else ([scan("`([^`]+)`") | .[0] | select(. != $repo)]) as $ps
                | if ($ps | length) == 0 then {bad: $b}
                  else $ps[] | (rtrimstr("/") | split("/")) as $parts
@@ -2129,6 +2130,7 @@ def claim: $W.claim.n as $n | $W.claim.id as $id
                 elif $u != null then "withdraw #\($n): its owned paths collide with #\($u), whose start history can'"'"'t be read"
                 elif $m != null then ([$near[] | select(.number == $m) | owned_unread] | first) as $b
                   | if $b == null then "withdraw #\($n): its owned paths collide with #\($m), which is running or claimed first"
+                    elif $b == true then "withdraw #\($n): #\($m)'"'"'s Owned paths section has no bullet, and #\($m) is running or claimed first"
                     else "withdraw #\($n): #\($m)'"'"'s owned-path bullet \"\($b)\" can'"'"'t be read, and #\($m) is running or claimed first" end
                 else "go #\($n)" end
             else "withdraw #\($n): it is not on the frontier now" end end

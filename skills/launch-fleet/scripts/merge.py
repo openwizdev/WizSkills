@@ -446,36 +446,50 @@ def _driven(number, threads, runs, here=True):
             or (here and isinstance(runs, dict) and str(number) in runs))
 
 
-REVIEW_RECORD = re.compile(rf'launch-fleet: (?:review started|re-check sent|review told again|review given up'
-                           rf'|review failed) ({records.SHA})\b')
+REVIEW_RECORD = re.compile(rf'launch-fleet: (?:review [a-z]+(?: [a-z]+)?|re-check sent) ({records.SHA})\b')
+DRIVER_LINE = ('Driver review:', 'Driver re-check:')
 
 
-def _reviewers(repo, number, threads):
+def _elsewhere(claim, places, repo, number):
+    for place in places:
+        found = post.read_json('api', f'repos/{place}/issues/comments/{claim}')
+        url = found.get('issue_url') if isinstance(found, dict) else None
+        if isinstance(url, str) and not url.casefold().endswith(f'/repos/{repo}/issues/{number}'.casefold()):
+            return True
+    return False
+
+
+def _reviewers(repo, home, number, threads):
     try:
         auth, items = post.authors(repo), post.thread(repo, number)
     except Stop:
         return None
     if items is None:
         return None
-    shas, claims = set(), set()
+    claims = set()
     for c in items:
         lines = (c.get('body') or '').splitlines() if post.ours(c, auth) else []
-        found = REVIEW_RECORD.match(lines[0]) if lines else None
-        if not found:
+        if not lines or not REVIEW_RECORD.match(lines[0]):
             continue
-        if lines[1:2] and lines[1].startswith(('Driver review:', 'Driver re-check:')):
+        if lines[1:2] and lines[1].startswith(DRIVER_LINE):
             return None
-        shas.add(found[1])
-        claims.add(f"claim:{c.get('id')}")
-    prefix, mine = f'review:{number}:', set()
+        claims.add(str(c.get('id')))
+    prefix, held = f'review:{number}:', {}
     for key, thread in threads.items():
         if not key.startswith(prefix):
             continue
         rest = key[len(prefix):]
-        if not (re.fullmatch(records.SHA, rest) or re.fullmatch(r'claim:[0-9]+', rest)):
+        claim = re.fullmatch(r'claim:([0-9]+)', rest)
+        if not (claim or re.fullmatch(records.SHA, rest)):
             return None
-        if rest in shas or rest in claims:
+        held.setdefault(thread, set()).update([claim[1]] if claim else [])
+    places = list(dict.fromkeys([repo, home]))
+    mine = set()
+    for thread, ids in held.items():
+        if ids and ids <= claims:
             mine.add(thread)
+        elif not ids or ids & claims or not all(_elsewhere(i, places, repo, number) for i in ids):
+            return None
     return mine
 
 
@@ -489,7 +503,7 @@ def _agents_line(repo, home, ref, number, ticket):
         return _cost_line(ref, ticket, None, None)
     builder = None if _driven(ticket, threads, runs) else threads.get(f'builder:{ticket}')
     here = home.casefold() == repo.casefold()
-    reviewers = None if _driven(number, threads, runs, here) else _reviewers(repo, number, threads)
+    reviewers = None if _driven(number, threads, runs, here) else _reviewers(repo, home, number, threads)
     read = {t: _usage(t) for t in sorted((reviewers or set()) | ({builder} if builder else set()))}
     builder_credits = read[builder] if builder else None
     reviewer_credits = (None if not reviewers or threads.get(f'builder:{ticket}') in reviewers

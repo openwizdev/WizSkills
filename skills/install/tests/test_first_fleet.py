@@ -1919,6 +1919,29 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual(self.world(j)['host_pulls'], world['host_pulls'], 'nothing reopened')
         self.assertEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: plan.')
 
+    def test_resume_after_the_blocks_yes_runs_its_unapplied_operations_first(self):
+        # catches (R5): saved defaults taken as proof that prepare, the App skip and init ran, so a resumed
+        # session asks the mode and opens a settings pull request before init proposed the brain.
+        j = self.road(setup=False)
+        self.yes(j)
+        first = j.helper(['next', '--setup-state', str(j.setup_dir)])
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(first.stdout.splitlines()[0], 'Next: connect.', first.stdout)
+        self.assertIn('setup.py prepare', first.stdout)
+        refused = self.setting(j, '--yes')
+        self.assertEqual(refused.returncode, 5, refused.stdout + refused.stderr)
+        state = self.applied(j, brain=None)
+        resumed = j.helper(['next', '--setup-state', str(j.setup_dir)]).stdout
+        self.assertEqual(resumed.splitlines()[0], 'Next: connect.', resumed)
+        self.assertIn('openwiz init', resumed)
+        self.assertEqual(self.setting(j, '--yes').returncode, 5)
+        self.assertEqual(self.world(j)['host_pulls'], [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}],
+                         'no pull request before init ran')
+        self.assertEqual(self.world(j)['branches'][BRAIN_BRANCH], dict(FILES, **BRAIN_FILES), 'nothing written')
+        self.applied(j)
+        self.assertEqual(j.helper(['next', '--setup-state', str(j.setup_dir)]).stdout.splitlines()[0], 'Next: mode.')
+        self.assertTrue(state)
+
     def test_the_yes_binds_the_block_the_user_saw(self):
         # catches (R6): a yes recorded with values read again at apply time, so a changed models list turns
         # the builder the user saw into another one.

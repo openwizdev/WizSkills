@@ -13,7 +13,7 @@ Write a project's settings as four short files in `docs/agents/`, which every fl
 | `issue-tracker.md` | Where issues, versions, specs and tickets live, and the private records repository | [template](templates/issue-tracker.md) |
 | `triage-labels.md` | The five triage roles and each one's label | [template](templates/triage-labels.md) |
 | `domain.md` | Where the glossary, ADRs, grills and private state live | [template](templates/domain.md) |
-| `fleet.md` | Builders, reviewers, test commands, CI checks, merge rules and record authors | [template](templates/fleet.md) |
+| `fleet.md` | Builders, reviewers, test commands, CI checks, approval rules, merge rules and record authors | [template](templates/fleet.md) |
 
 **Guards.** Public settings hold decisions, dates and private-record pointers, never exact replies or thread ids ([open-development](../../contracts/open-development.v1.md)): save an exact reply first in a verified private issue/PR comment, read it back, then point to its full comment URL. Unknown visibility never permits a private write. The reviewer is always from another model family than the builder. Record authors are read, never guessed. With no recorded merge rule, every merge waits for the user.
 
@@ -40,6 +40,7 @@ Tell the user in a few lines what you found and what is missing. Then ask one se
 4. **Builder and reviewer:** the recorded choice; with none, Claude Code, Opus 5.5, XHigh builders and Codex, Sol 6.1, Medium reviewers.
 5. **Test commands and CI checks:** copied exactly; with none, say so.
 6. **Merge rules:** the recorded rules; with none, recommend that an approved plan lets each ticket merge on its reviewer's approval of that exact commit with CI green, the base unchanged and the merge read back, while specs, plans, live runs, releases and publishing stay the user's. Save the answer as the guards say.
+7. **Approval rules:** who approves the template's default rules (publishing, spending, secrets, deleting user data, cut-overs, the repository webhook)? Recommend the person themselves, by name or GitHub login. Keep an existing table.
 
 Done when every missing setting has the user's answer.
 
@@ -55,7 +56,7 @@ Done when the four files are written.
 python3 -I <this skill's folder>/scripts/settings.py check --root <project> --labels <saved label list>
 ```
 
-It reads the files back and prints `Settings: verified (4 files).`, or exits 5 naming each missing section, unfilled value, same-family reviewer, missing Record authors row and triage label that is absent or repeated. Fix each and run it again; refresh the label list after creating labels. Then commit the four files on a branch and open one pull request for the user to read.
+It reads the files back and prints `Settings: verified (4 files).`, or exits 5 naming each missing section, unfilled value, same-family reviewer, missing Record authors row, Approval rules heading, header or row out of form (each rule starts `Ask before`, names a person other than "the user" and appears once), and triage label that is absent or repeated. Fix each and run it again; refresh the label list after creating labels. Then commit the four files on a branch and open one pull request for the user to read.
 
 Done when it prints verified and the pull request is open.
 

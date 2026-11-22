@@ -1194,5 +1194,44 @@ class UninstallListsEveryHeartbeatJob(unittest.TestCase):
         self.assertIn('Never decide which jobs are this install\'s', removal)
 
 
+class ExpressFirstFleet(unittest.TestCase):
+
+    def section(self, text, heading):
+        return text.split(heading + '\n', 1)[1].split('\n#', 1)[0]
+
+    def test_the_first_fleet_is_one_grill_round_of_about_three_parallel_tickets_and_no_video(self):
+        skill = (SKILL_DIR / 'SKILL.md').read_text()
+        with self.subTest('6.4 Grill'):
+            grill = self.section(skill, '### 4. Grill')
+            self.assertRegex(grill, r'\bone short round\b')
+            self.assertRegex(grill, r'about three small tickets[^.]*no blockers between them[^.]*no shared owned paths'
+                                    r'[^.]*all three build in parallel')
+            self.assertNotRegex(grill, r'(?i)\btwo rounds\b|\b4 to 7\b')
+            start = teach_lines()['The grill'][0]
+            self.assertRegex(start, r'\bone round\b')
+            self.assertRegex(start, r'\babout three\b')
+        with self.subTest('6.7 Plan'):
+            plan = self.section(skill, '### 7. Plan')
+            self.assertRegex(plan, r"install's first fleet[^.]*straight to the launch with no video")
+            self.assertRegex(plan, r'for this fleet only; a later spec[^.]*gets its video')
+            self.assertRegex(plan, r'reset or change of this spec or plan[^.]*no video')
+            self.assertNotIn('video link', plan)
+        with self.subTest('The spec and its video'):
+            spec = teach_lines()['The spec and its video']
+            self.assertEqual(len(spec), 1)
+            self.assertNotIn('<video link>', spec[0])
+            self.assertRegex(spec[0], r'first fleet has no video')
+            self.assertNotRegex(spec[0], r'(?i)starts as soon as|nothing for you to do')
+            self.assertRegex(spec[0], r'ask for your yes')
+        with self.subTest('to-spec step 4'):
+            step = self.section((SKILL_DIR.parent / 'to-spec' / 'SKILL.md').read_text(),
+                                '## 4. Make the steering video')
+            first = step.strip().split('\n\n', 1)[0].replace('\n', ' ')
+            self.assertRegex(first, r"^Skip this step for the install's first fleet, and only for it:")
+            self.assertRegex(first, r'reset or change of that spec or plan[^.]*new machine approval[^.]*no video'
+                                    r"[^.]*step 5's new video")
+            self.assertRegex(first, r'Every other spec gets its video\.$')
+
+
 if __name__ == '__main__':
     unittest.main()

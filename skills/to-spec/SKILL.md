@@ -62,6 +62,12 @@ refusal it fixes and re-checks. It never comes back to the owner.
 
 ## 4. Make the steering video
 
+Skip this step for the install's first fleet, and only for it: when the install
+skill's plan step runs you for that fleet, the spec gets no video and the launch
+follows the machine plan approval straight away. A reset or change of that spec or
+plan gets a new machine approval and still no video: for this fleet that
+replaces step 5's new video. Every other spec gets its video.
+
 One animatic: what changes for a user and in the codebase, in the grill's
 words, in build order (step 1 is what starts first in the approved plan). No
 bench and no ticket graph: the graph stays on the spec as the agents' document.
@@ -86,8 +92,10 @@ through their orchestrator: stop holds the fleet, reset re-cuts the plan through
 anything else is a steer to act on. A changed spec or plan always gets a new
 machine approval and a new video.
 
-Planning grants only what the machine approval records: every action gate
-(publish, spend, secrets, deleting user data, cut-overs) still asks the owner.
+Planning grants only what the machine approval records, and no approval rule:
+every rule in `fleet.md`'s Approval rules asks its named approver first; with no
+such section, publishing, spending, secrets, deleting user data, cut-overs and
+the repository webhook ask the user.
 Builders and other-family reviewers stay independent; starting, reviewing and
 merging stay with their roles.
 

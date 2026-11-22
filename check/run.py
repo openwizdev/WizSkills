@@ -71,13 +71,15 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-merge.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-brief.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-heartbeat.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-ledger.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-host.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py']],
     # Not a skill: the check's own version rule and changesets (WS18).
     'check': [['python3', '-I', 'check/test_notice.py'],
               ['python3', '-I', 'check/test_versions.py'],
               ['python3', '-I', 'check/test_changesets.py'],
-              ['python3', '-I', 'check/test_suites.py']],
+              ['python3', '-I', 'check/test_suites.py'],
+              ['python3', '-I', 'check/test_bench.py']],
 }
 
 # The skills not adapted from Matt Pocock's, each with the source line its

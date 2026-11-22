@@ -22,10 +22,39 @@ FLEET = '''# Fleet settings
 '''
 
 FAKE_GH = r'''
-import json, os, sys
+import json, os, re, sys
 args = sys.argv[1:]
+
+def operation(args):
+    """What GitHub would be asked to do: 'GET <path>', 'POST <path>'..., 'query', 'mutation', or 'gh <command>'."""
+    if args[:1] != ['api']:
+        return 'gh ' + ' '.join(args[:2])
+    method, endpoint, body, query, rest = None, None, False, None, list(args[1:])
+    while rest:
+        a = rest.pop(0)
+        name, eq, value = a.partition('=') if a.startswith('--') else (a, '', '')
+        if a[:2] in ('-X', '-f', '-F') and len(a) > 2:
+            name, eq, value = a[:2], '=', a[2:]
+        if name in ('-X', '--method', '-f', '-F', '--field', '--raw-field', '--input', '-H', '--header', '-q',
+                    '--jq', '-t', '--template', '--hostname', '--cache', '-p', '--preview'):
+            value = value if eq else (rest.pop(0) if rest else '')
+            if name in ('-X', '--method'):
+                method = value.upper()
+            elif name in ('-f', '-F', '--field', '--raw-field', '--input'):
+                body = True
+                if value.startswith('query='):
+                    query = value[len('query='):]
+        elif not a.startswith('-') and endpoint is None:
+            endpoint = a
+    if endpoint == 'graphql':
+        if query is None or re.search(r'\b(mutation|subscription)\b', query):
+            return 'mutation'
+        return 'query' if re.match(r'\s*(query\b|\{)', query) else 'mutation'
+    return '%s %s' % (method or ('POST' if body else 'GET'), endpoint)
+
+op = operation(args)
 with open(os.environ['FAKE_LOG'], 'a') as log:
-    log.write(json.dumps(args) + '\n')
+    log.write(json.dumps({'args': args, 'op': op}) + '\n')
 world = json.load(open(os.environ['FAKE_WORLD']))
 if args[:1] == ['api'] and args[1].endswith('/contents/docs/agents/fleet.md'):
     if world.get('fleet') is None:
@@ -48,7 +77,7 @@ errors = [{'type': 'SYNTHETIC', 'message': 'synthetic error'}] if world.get('err
 
 def answer(data):
     print(json.dumps({'data': data, **({'errors': errors} if errors else {})}))
-if 'mutation' in query:
+if op != 'query':
     sys.exit('fake gh: a write')
 
 def page(items, size, after):
@@ -203,8 +232,7 @@ class Ledger(unittest.TestCase):
         calls = w.calls()
         self.assertTrue(calls)
         for call in calls:
-            self.assertNotIn('--method', call)
-            self.assertFalse(any('mutation' in a for a in call), call)
+            self.assertTrue(call['op'] == 'query' or call['op'].startswith('GET '), call)
 
     def test_it_writes_nothing(self):
         w = World(self, MIXED)

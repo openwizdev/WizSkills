@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 - 2026-11-22
+
+- `install` 0.3.1: Install OpenWiz 0.1.0 without CloudRoom and resolve all clashing skill names with one confirmation.
+
 ## 0.3.0 - 2026-11-20
 
 - `ask-wiz` 0.2.1: The installed grill, ask-wiz, build-ticket and review-ticket skills no longer ship their recorded evidence logs; their instructions, references, scripts and tests are unchanged.

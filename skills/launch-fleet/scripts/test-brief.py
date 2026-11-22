@@ -60,6 +60,57 @@ class Brief(unittest.TestCase):
         code, text = brief('re-check', 31, HEAD, OLD, 'R1,R2', 'none')
         self.assertIn('Open findings: R1,R2. Changed since %s: git diff %s %s' % (OLD, OLD, HEAD), text)
 
+    def test_same_family_brief_keeps_the_machine_header_first(self):
+        code, text = brief('reviewer', 31, HEAD, 'same-family')
+        self.assertEqual(code, 0)
+        self.assertIn('Put "same-family review" on the line immediately below the VERDICT header.', text)
+        self.assertNotIn('same-family review', brief('reviewer', 31, HEAD)[1])
+
+    def test_non_cloudroom_review_start_uses_the_installed_harnesses(self):
+        import runpy
+        import shutil
+
+        fixture = runpy.run_path(str(HERE / 'test-host.py'))
+        section = (HERE.parent / 'references/reviews.md').read_text().partition(
+            '### Starting a review through a host driver\n')[2]
+        script = section.partition('```sh\n')[2].partition('\n```')[0]
+        self.assertTrue(script, 'the non-CloudRoom review has no runnable driver start')
+        for builder, installed, reviewer, model, marking in (
+            ('claude', ('claude', 'codex'), 'codex', 'reviewer-model', 'other-family'),
+            ('codex', ('claude', 'codex'), 'claude', 'reviewer-model', 'other-family'),
+            ('claude', ('claude',), 'claude', 'builder-model', 'same-family'),
+            ('codex', ('codex',), 'codex', 'builder-model', 'same-family'),
+        ):
+            with self.subTest(builder=builder, installed=installed):
+                project = fixture['Project'](self, hosts=('local',))
+                bin_dir = project.dir / 'bin'
+                for program in ('git', 'python3'):
+                    (bin_dir / program).symlink_to(shutil.which(program))
+                for harness in installed:
+                    executable = bin_dir / harness
+                    executable.write_text('#!/bin/sh\nexit 0\n')
+                    executable.chmod(0o755)
+                repo = fixture['REPO']
+                env = dict(project.env, PATH=str(bin_dir))
+                env.pop('CDPATH', None)
+                claim = subprocess.run([sys.executable, '-I', str(HERE / 'post.py'), 'comment',
+                                        repo, '31', 'launch-fleet: review starting ' + HEAD],
+                                       env=env, capture_output=True, text=True, check=True, timeout=30)
+                claim_id = claim.stdout.split()[1]
+                start = subprocess.run(['/bin/sh', '-c', script, 'review-start', str(HERE), repo, '31', HEAD,
+                                        claim_id, builder, 'builder-model', 'reviewer-model'],
+                                       cwd=project.dir / 'repo', env=env, capture_output=True, text=True,
+                                       timeout=30)
+                self.assertEqual((start.returncode, start.stdout.strip(), start.stderr),
+                                 (0, 'started #31 on local', ''))
+                self.assertEqual(project.calls(), [{'host': 'local', 'command': 'start', 'input': {
+                    'repository': repo, 'ticket': 31, 'skill': 'review-ticket', 'harness': reviewer, 'model': model}}])
+                [(record, body)] = project.ticket(31)
+                self.assertEqual(record, 'launch-fleet: review starting ' + HEAD)
+                self.assertTrue(body.startswith('Driver review: ' + marking + '\n\n'), body)
+                self.assertIn('pull request #31 at ' + HEAD, body)
+                self.assertEqual('same-family review' in body, marking == 'same-family')
+
     def test_malformed_targets_print_no_brief(self):
         for args in (('builder', '12; rm -rf /'), ('reviewer', 31, 'abc123'), ('fresh', 12, 31, 'main branch', HEAD),
                      ('re-check', 31, HEAD, OLD, 'R1', 'thr_synthetic'), ('fleet', 1, 'not a repo'), ('tick', 'synthetic-owner/synthetic-repo', 'me'), ('nope',)):

@@ -100,7 +100,29 @@ Legacy records keep their existing takeover semantics during rollout.
 
 ## Hosts without CloudRoom
 
-After checking the spec's recorded approval, install one local heartbeat for that spec. Run the commands from a checkout of the project with `origin` set. Use the installed launch-fleet skill's absolute folder, the approved orchestrator harness and model IDs, and the absolute `OPENWIZ_ADAPTERS` folder from host setup. GitHub CLI, Git, jq, Python 3 and the harness must be available to the signed-in user. The scheduled command uses the tool paths from installation.
+After checking the spec's recorded approval, run the fleet in the open chat with the session runner. This is the default local launch. Run the commands from a checkout of the project with `origin` set. Use the installed launch-fleet skill's absolute folder, the approved harness and model IDs, and the absolute `OPENWIZ_ADAPTERS` folder from host setup. GitHub CLI, Git, jq, Python 3 and the harness must be available to the signed-in user.
+
+```sh
+python3 -I "<this skill's folder>/scripts/session.py" run "<owner>/<repo>" --spec "<S>" --harness "<builder harness>" \
+  --model "<builder model>" --reviewer-harness "<reviewer harness>" --reviewer-model "<reviewer model>"
+```
+
+It runs in the foreground, one tick after another, with no timer. Each tick reads `fleet.sh spec <S>` and does the lines a script can do alone, by this skill's own claims and records:
+- a `start` line starts that ticket's builder through `host.py`, at most `--max` (default 3) at once;
+- a `check start` line records `start checked`;
+- a `review` line starts the reviewer;
+- a `merge` line merges through `merge.py`.
+
+After a tick that did something, it ticks again at once. Otherwise it waits for a run it started to end (that agent's status note leaves `working`), or, with no run going, for a known pull request's checks to finish.
+
+It stops in three cases, and prints where it stopped and a `carry on:` command:
+- **Done (exit 0):** every ticket of the spec is closed. `archive` lines stay with this skill.
+- **Needs you (exit 3):** a line it doesn't do (a question, findings, a red check, a look), a refused start or merge, or nothing moving for `--idle` seconds. Handle that line with this skill, then run the `carry on:` command.
+- **Interrupt (exit 130).**
+
+Builders and reviewers it started keep running after it stops. It holds the spec's heartbeat lock, so a session and a heartbeat tick never run together: a second session, or a heartbeat tick during one, is refused (exit 1).
+
+**The heartbeat is the opt-in,** for keeping the fleet going after the chat closes. Install one local heartbeat for the spec only when the user asks for that. Its scheduled command uses the tool paths from installation.
 
 ```sh
 python3 -I "<this skill's folder>/scripts/heartbeat.py" install "<owner>/<repo>" "<S>" "<harness>" "<model>"

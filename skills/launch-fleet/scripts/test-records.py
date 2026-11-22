@@ -97,6 +97,8 @@ class Fleet(unittest.TestCase):
         for cli in ('local', 'cloud'):
             with self.subTest(cli=cli):
                 self.env['FAKE_ROOM_CLI'] = cli
+                # Local lists this hidden builder only with --include-hidden (#2104).
+                self.threads[0]['hidden'] = cli == 'local'
                 self.assertEqual(self.run_fleet('wake', '12'),
                                  f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')
 
@@ -569,6 +571,49 @@ def step_with(text):
     found = [i for i, step in enumerate(wake_steps()) if text in step]
     assert len(found) == 1, (text, found)
     return found[0]
+
+
+class CrossRepositoryReviews(unittest.TestCase):
+    """#1977: another repository's pull request #31 must not route through this repository's #31 keys."""
+    TOOLS, LOCAL = 'thr_syntools31', 'thr_synlocal31'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.records = load(HERE / 'records.py', 'fleet_records_cross')
+
+    def pull(self, repository, records):
+        return dict(number=31, repository=dict(nameWithOwner=repository), commits={'nodes': []},
+                    comments={'nodes': [dict(databaseId=i, createdAt=f'2026-11-01T11:{i % 100:02d}:00Z', body=b)
+                                        for i, b in records]})
+
+    def routes(self, state, *pulls, threads=None):
+        ticket = dict(number=12, comments={'nodes': []}, closedByPullRequestsReferences={'nodes': list(pulls)})
+        world = self.records.annotate({'specs': [], 'singles': [ticket]}, 'example/public', False, threads, state)
+        return [[(c['resolvedThread'], c['recordError']) for c in p['comments']['nodes'][1:]]
+                for p in world['singles'][0]['closedByPullRequestsReferences']['nodes']]
+
+    def test_another_repositorys_pull_request_reads_its_own_qualified_key(self):
+        started = [(3101, 'launch-fleet: review started ' + SHA), (3102, 'launch-fleet: re-check sent ' + NEW)]
+        state = {f'review:31:{SHA}': self.LOCAL, f'review:Example/Tools#31:{SHA}': self.TOOLS}
+        self.assertEqual(self.routes(state, self.pull('example/public', started), self.pull('example/tools', started)),
+                         [[(self.LOCAL, None)], [(self.TOOLS, None)]])
+
+    def test_this_repositorys_bare_key_never_routes_a_same_numbered_pull_request_elsewhere(self):
+        started = [(3101, 'launch-fleet: review started ' + SHA), (3102, 'launch-fleet: re-check sent ' + NEW)]
+        self.assertEqual(self.routes({f'review:31:{SHA}': self.LOCAL}, self.pull('example/tools', started)),
+                         [[(None, 'thread discovery is out of reach')]])
+        self.assertEqual(self.routes({f'review:31:{SHA}': self.LOCAL}, self.pull('Example/Public', started)),
+                         [[(self.LOCAL, None)]])
+
+    def test_another_repositorys_edited_give_up_archives_from_its_own_claim_key(self):
+        gave_up = [(3101, f'launch-fleet: review given up {SHA}: no verdict'),
+                   (3102, f'launch-fleet: review told again {SHA}')]
+        state = {'review:31:claim:3101': self.LOCAL, 'review:example/tools#31:claim:3101': self.TOOLS}
+        ticket = dict(number=12, comments={'nodes': []},
+                      closedByPullRequestsReferences={'nodes': [self.pull('example/tools', gave_up)]})
+        world = self.records.annotate({'specs': [], 'singles': [ticket]}, 'example/public', False, [], state)
+        first = world['singles'][0]['closedByPullRequestsReferences']['nodes'][0]['comments']['nodes'][0]
+        self.assertEqual(first.get('archiveThread'), self.TOOLS)
 
 
 class Dispatcher(unittest.TestCase):

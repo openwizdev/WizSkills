@@ -1919,6 +1919,75 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual(self.world(j)['host_pulls'], world['host_pulls'], 'nothing reopened')
         self.assertEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: plan.')
 
+    def test_a_readme_only_repository_gets_its_setup_files_in_the_one_setup_pull_request(self):
+        # catches (R1): a fresh repository, as create-repo makes it, sent to the setup skill for a second
+        # pull request because docs/agents/fleet.md is not on its default branch yet.
+        j = self.road(files={'README.md': '# synthetic\n'})
+        self.yes(j)
+        self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                         .returncode, 0)
+        opened = self.setting(j, '--yes')
+        self.assertEqual(opened.returncode, 0, opened.stdout + opened.stderr)
+        world = self.world(j)
+        self.assertEqual(world['host_pulls'], [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}])
+        branch = world['branches'][BRAIN_BRANCH]
+        self.assertEqual(sorted(set(branch) - {'README.md'} - set(BRAIN_FILES)),
+                         sorted(SETUP_FILES + ('docs/agents/host.md',)))
+        project = j.dir / 'merged'
+        for name in SETUP_FILES:
+            (project / name).parent.mkdir(parents=True, exist_ok=True)
+            (project / name).write_text(branch[name])
+        check = subprocess.run([sys.executable, '-I', str(SETTINGS), 'check', '--root', str(project)],
+                               capture_output=True, text=True, timeout=60)
+        self.assertEqual(check.returncode, 0, check.stdout)
+        fleet = branch['docs/agents/fleet.md']
+        self.assertEqual(ModelsTable.models(self, fleet), {'Orchestrator': OPUS, 'Builder': OPUS, 'Reviewer': SOL,
+                                                           'Small builder': None, 'Fixer': None})
+        self.assertIn('| Harness permission mode (claude) | `acceptEdits` |', fleet)
+        self.assertIn('| Record authors | `synthetic-owner` |', fleet)
+        self.assertNotRegex(''.join(branch[n] for n in SETUP_FILES), r'<[^>\n]*>', 'no template placeholder left')
+        self.assertIn('\nHost: local\n', branch['docs/agents/host.md'])
+
+    def test_a_companion_brain_merged_by_init_leaves_one_setup_pull_request(self):
+        # catches (R3, with init merging a companion it created): a merged companion brain pull request
+        # still asked for, or an open one left unsaid.
+        for pull, said in (('merged', 'already merged'), ('open', 'https://github.com/%s-brain/pull/3' % REPO)):
+            j = self.road(brain='companion', pull=pull)
+            self.yes(j)
+            self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                             .returncode, 0)
+            opened = self.setting(j, '--yes')
+            self.assertEqual(opened.returncode, 0, opened.stdout + opened.stderr)
+            self.assertEqual([p['head'] for p in self.world(j)['host_pulls']], ['openwiz/host-setting'])
+            self.assertIn(said, opened.stdout)
+            if pull == 'merged':
+                self.assertNotIn('pull/3', opened.stdout, 'a merged brain pull request is done, never asked for')
+
+    def test_a_write_cut_short_on_the_brains_branch_is_completed_on_the_retry(self):
+        # catches (R4): GitHub keeps the host file but loses the fleet file write, and the retry calls the
+        # still-completable pull request foreign and asks to delete the brain's branch.
+        j = self.road()
+        self.yes(j)
+        self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                         .returncode, 0)
+        mark = j.dir / 'fail-fleet-put'
+        mark.write_text('')
+        (j.dir / 'bin/gh').write_text(
+            '#!/bin/sh\ncase "$*" in *"-X PUT repos/%s/contents/docs/agents/fleet.md"*)\n'
+            '  if [ -e "%s" ]; then rm "%s"; echo "gh: synthetic server error (HTTP 502)" >&2; exit 1; fi;;\n'
+            'esac\nexec "%s" -I -S "%s" "$@"\n' % (REPO, mark, mark, sys.executable, FAKE_GH))
+        cut = self.setting(j, '--yes')
+        self.assertEqual(cut.returncode, 6, cut.stdout + cut.stderr)
+        branch = self.world(j)['branches'][BRAIN_BRANCH]
+        self.assertIn('docs/agents/host.md', branch)
+        self.assertEqual(branch['docs/agents/fleet.md'], FILES['docs/agents/fleet.md'])
+        again = self.setting(j, '--yes')
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn(BRAIN_PULL, again.stdout)
+        fleet = self.world(j)['branches'][BRAIN_BRANCH]['docs/agents/fleet.md']
+        self.assertIn('| Harness permission mode (codex) | `workspace-write` |', fleet)
+        self.assertEqual(self.world(j)['host_pulls'], [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}])
+
     def test_resume_after_the_blocks_yes_runs_its_unapplied_operations_first(self):
         # catches (R5): saved defaults taken as proof that prepare, the App skip and init ran, so a resumed
         # session asks the mode and opens a settings pull request before init proposed the brain.
@@ -1982,6 +2051,31 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual(self.setting(j, '--yes').returncode, 0)
         fleet = self.world(j)['branches'][BRAIN_BRANCH]['docs/agents/fleet.md']
         self.assertEqual(ModelsTable.models(self, fleet)['Reviewer'], SOL)
+
+    def test_a_brain_proposal_holding_anything_else_is_never_written_to(self):
+        # catches (R8): any added file under .openwiz/brain/ accepted as init's, and the settings written
+        # before the proposal was checked.
+        for extra in ({'.openwiz/brain/decisions/note.md': 'An unrelated note.\n'},
+                      {'.openwiz/brain/README.md': '# Brain\n\nChanged by hand.\n'}):
+            j = self.road()
+            j.world['branches'][BRAIN_BRANCH].update(extra)
+            j.save_world()
+            before = self.world(j)['branches'][BRAIN_BRANCH]
+            self.yes(j)
+            self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                             .returncode, 0)
+            refused = self.setting(j, '--yes')
+            self.assertEqual(refused.returncode, 5, refused.stdout + refused.stderr)
+            self.assertIn(next(iter(extra)), refused.stdout + refused.stderr)
+            self.assertEqual(self.world(j)['branches'][BRAIN_BRANCH], before, 'nothing written to the proposal')
+        j = self.road()
+        j.world['onboard_pulls'][0]['baseRefName'] = 'elsewhere'
+        j.save_world()
+        self.yes(j)
+        self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                         .returncode, 0)
+        self.assertEqual(self.setting(j, '--yes').returncode, 5, 'a brain pull request onto another base')
+        self.assertNotIn('docs/agents/host.md', self.world(j)['branches'][BRAIN_BRANCH])
 
     def test_a_driver_host_puts_its_models_table_and_host_in_the_brains_pull_request(self):
         j = self.road()

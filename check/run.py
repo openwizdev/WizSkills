@@ -79,6 +79,7 @@ SUITES = {
               ['python3', '-I', 'check/test_versions.py'],
               ['python3', '-I', 'check/test_changesets.py'],
               ['python3', '-I', 'check/test_suites.py'],
+              ['python3', '-I', 'check/test_bench.py'],
               ['python3', '-I', 'check/test_select.py']],
 }
 

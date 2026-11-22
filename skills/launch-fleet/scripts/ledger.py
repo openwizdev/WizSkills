@@ -101,7 +101,9 @@ def rest_login(author):
 def newest_cost_row(repo, where, issue, authors):
     newest = None
     for c in comments(where, issue):
-        first = c['body'].split('\n', 1)[0] if isinstance(c['body'], str) else ''
+        if not isinstance(c['body'], str):
+            raise TypeError(c)
+        first = c['body'].split('\n', 1)[0]
         if post.grants.authored(rest_login(c['author']), authors) and first.startswith('launch-fleet: cost'):
             newest = first
     if newest is None:
@@ -131,7 +133,8 @@ def ledger(repo, spec, authors):
     try:
         for issue in issues:
             where = issue['repository']['nameWithOwner']
-            if type(issue['number']) is not int or not isinstance(where, str) or not post.REPO.fullmatch(where):
+            if (type(issue['number']) is not int or issue['state'] not in ('OPEN', 'CLOSED')
+                    or not isinstance(where, str) or not post.REPO.fullmatch(where)):
                 raise TypeError(issue)
             if issue['state'] == 'CLOSED':
                 found = newest_cost_row(repo, where, issue, authors)

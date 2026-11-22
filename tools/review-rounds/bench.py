@@ -55,9 +55,12 @@ def gh_graphql(document, variables, runner=subprocess.run):
     done = runner(args, capture_output=True, text=True)
     if done.returncode != 0:
         raise BenchError('gh api graphql failed: ' + (done.stderr.strip() or 'exit %d' % done.returncode))
-    reply = json.loads(done.stdout)
-    if reply.get('errors') or 'data' not in reply:
-        raise BenchError('GraphQL errors: ' + json.dumps(reply.get('errors')))
+    try:
+        reply = json.loads(done.stdout)
+    except ValueError:
+        raise BenchError('gh api graphql printed no JSON') from None
+    if not isinstance(reply, dict) or reply.get('errors') or not isinstance(reply.get('data'), dict):
+        raise BenchError('GraphQL errors: ' + json.dumps(reply.get('errors') if isinstance(reply, dict) else reply))
     return reply['data']
 
 
@@ -67,7 +70,7 @@ def parse_time(text):
         value = value[:-1] + '+00:00'
     moment = datetime.fromisoformat(value)
     if moment.tzinfo is None:
-        raise BenchError('time needs a zone: ' + text)
+        raise ValueError('time needs a zone: ' + text)
     return moment.astimezone(timezone.utc)
 
 
@@ -76,14 +79,23 @@ def stamp(moment):
 
 
 def complete(owner, name, node, graphql):
-    for field in CONNECTIONS:
-        node[field] = list(node[field]['nodes'])
+    for field, shape in CONNECTIONS.items():
+        connection = node[field]
+        nodes = list(connection['nodes'])
+        info = connection['pageInfo']
+        while info['hasNextPage']:
+            data = graphql(MORE % (field, PAGE, shape),
+                           {'owner': owner, 'name': name, 'number': node['number'], 'after': info['endCursor']})
+            page = data['repository']['pullRequest'][field]
+            nodes += page['nodes']
+            info = page['pageInfo']
+        node[field] = nodes
     return node
 
 
 def fetch(repo, start, end, graphql):
     owner, name = repo.split('/')
-    query = 'repo:%s is:pr is:merged merged:%s..%s' % (repo, stamp(start), stamp(end))
+    query = 'repo:%s is:pr is:merged merged:%s..%s sort:created-asc' % (repo, stamp(start), stamp(end))
     found, after, count = {}, None, None
     while True:
         search = graphql(SEARCH, {'q': query, 'after': after})['search']
@@ -244,7 +256,7 @@ def markdown(result):
         '%s %s (n %d)' % (k, cell(v['median_diff']), v['count']) for k, v in sizes.items()) + '.')
     a = result['all']['All']
     out += ['', 'Distribution (all reviewed PRs): ' + ', '.join(
-        '%s rounds %d' % (k, v) for k, v in a['distribution'].items()) + '. Verdicts %d, `CHANGES` %d, re-approvals %d.'
+        '%s %d' % ({'1': '1 round', '5+': '5 or more'}.get(k, k + ' rounds'), v) for k, v in a['distribution'].items()) + '. Verdicts %d, `CHANGES` %d, re-approvals %d.'
         % (a['verdicts'], a['changes']['total'], a['reapprovals']), '', '**Worst PRs**', '',
         '| PR | Rounds (`CHANGES`) | Size | Diff lines | Files |', '| --- | --- | --- | --- | --- |']
     for r in result['worst']:

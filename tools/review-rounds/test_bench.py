@@ -56,7 +56,7 @@ def alpha():
     return [
         pr(1, big, ['Ticket of spec. Size: M.\n'], diff=(500, 200), files=7, created='2026-01-10T06:00:00Z'),
         pr(2, [], [], diff=(1, 1), created='2026-01-10T06:00:00Z'),
-        pr(3, [comment('VERDICT: APPROVE at eeee', minute=1), comment('VERDICT: APPROVE at ffff', minute=2)], many,
+        pr(3, [comment('VERDICT: APPROVE at e%d' % i, minute=i) for i in range(5)], many,
            diff=(100, 20), files=2, created='2026-01-10T06:00:00Z'),
         pr(4, [comment('VERDICT: CHANGES at 1111')], ['Size: L.'], merged=AFTER_END, created='2026-01-10T06:00:00Z'),
         pr(5, [comment('VERDICT: CHANGES at 2222\n- **R1 [blocking]** `z.py:1` (Spec) Impostor.', IMPOSTOR, 1),
@@ -93,7 +93,7 @@ class FakeGitHub:
         bench.read_only(document)
         self.documents.append(document)
         if 'search(' in document:
-            repo = re.match(r'repo:(\S+) is:pr is:merged merged:\S+\.\.\S+$', variables['q']).group(1)
+            repo = re.match(r'repo:(\S+) is:pr is:merged merged:\S+\.\.\S+ sort:created-asc$', variables['q']).group(1)
             first = int(re.search(r'search\(type: ISSUE, query: \$q, first: (\d+)', document).group(1))
             page = self.page(self.repos[repo], first, variables.get('after'))
             nodes = []
@@ -142,35 +142,35 @@ class FixtureCounts(unittest.TestCase):
 
     def test_alpha_reads_past_the_first_100_comments(self):
         a = self.result['all']['synthetic/alpha']
-        self.assertEqual((a['merged'], a['reviewed'], a['verdicts']), (4, 3, 6))
-        self.assertEqual(a['rounds'], {'mean': 2.0, 'median': 2, 'p90': 3, 'max': 3})
+        self.assertEqual((a['merged'], a['reviewed'], a['verdicts']), (4, 3, 9))
+        self.assertEqual(a['rounds'], {'mean': 3.0, 'median': 3, 'p90': 5, 'max': 5})
         self.assertEqual(a['changes'], {'total': 2, 'mean': 0.67})
         self.assertEqual(a['approve_first'], {'count': 2, 'pct': 67})
-        self.assertEqual(a['three_plus'], {'count': 1, 'pct': 33})
-        self.assertEqual(a['distribution'], {'1': 1, '2': 1, '3': 1, '4': 0, '5+': 0})
-        self.assertEqual(a['reapprovals'], 1)
+        self.assertEqual(a['three_plus'], {'count': 2, 'pct': 67})
+        self.assertEqual(a['distribution'], {'1': 1, '2': 0, '3': 1, '4': 0, '5+': 1})
+        self.assertEqual(a['reapprovals'], 4)
         self.assertEqual(a['findings'], {
             'first': {'Spec': 1, 'Sweep': 1, 'Standards': 0, 'total': 2},
-            'rechecks': {'Spec': 0, 'Sweep': 0, 'Standards': 1, 'total': 1, 'count': 3, 'with_new_blocker': 1}})
+            'rechecks': {'Spec': 0, 'Sweep': 0, 'Standards': 1, 'total': 1, 'count': 6, 'with_new_blocker': 1}})
 
     def test_overall_counts(self):
         a = self.result['all']['All']
-        self.assertEqual((a['merged'], a['reviewed'], a['verdicts']), (50, 49, 55))
-        self.assertEqual(a['rounds'], {'mean': 1.12, 'median': 1, 'p90': 1, 'max': 4})
+        self.assertEqual((a['merged'], a['reviewed'], a['verdicts']), (50, 49, 58))
+        self.assertEqual(a['rounds'], {'mean': 1.18, 'median': 1, 'p90': 1, 'max': 5})
         self.assertEqual(a['changes'], {'total': 5, 'mean': 0.1})
         self.assertEqual(a['approve_first'], {'count': 47, 'pct': 96})
-        self.assertEqual(a['three_plus'], {'count': 2, 'pct': 4})
-        self.assertEqual(a['distribution'], {'1': 46, '2': 1, '3': 1, '4': 1, '5+': 0})
+        self.assertEqual(a['three_plus'], {'count': 3, 'pct': 6})
+        self.assertEqual(a['distribution'], {'1': 46, '2': 0, '3': 1, '4': 1, '5+': 1})
         self.assertEqual(a['findings'], {
             'first': {'Spec': 2, 'Sweep': 1, 'Standards': 0, 'total': 3},
-            'rechecks': {'Spec': 0, 'Sweep': 1, 'Standards': 1, 'total': 2, 'count': 6, 'with_new_blocker': 2}})
+            'rechecks': {'Spec': 0, 'Sweep': 1, 'Standards': 1, 'total': 2, 'count': 9, 'with_new_blocker': 2}})
         self.assertEqual(self.result['all']['synthetic/gamma']['merged'], 45)
 
     def test_ticket_prs_by_size_and_band(self):
         t = self.result['tickets']
         self.assertEqual([t[k]['merged'] for k in ('synthetic/alpha', 'synthetic/beta', 'synthetic/gamma', 'All')],
                          [2, 0, 0, 2])
-        self.assertEqual(t['All']['rounds'], {'mean': 2.5, 'median': 2.5, 'p90': 3, 'max': 3})
+        self.assertEqual(t['All']['rounds'], {'mean': 4.0, 'median': 4.0, 'p90': 5, 'max': 5})
         bands = self.result['ticket_bands']
         self.assertEqual({k: v['merged'] for k, v in bands.items()},
                          {'under 300': 1, '300-599': 0, '600+': 1, '600-999': 1, '1000+': 0})
@@ -183,7 +183,7 @@ class FixtureCounts(unittest.TestCase):
     def test_worst_ranks_by_changes_then_rounds(self):
         worst = [(w['repo'], w['number'], w['rounds'], w['changes']) for w in self.result['worst']]
         self.assertEqual(worst[:5], [('synthetic/beta', 7, 4, 3), ('synthetic/alpha', 1, 3, 2),
-                                     ('synthetic/alpha', 3, 2, 0), ('synthetic/alpha', 5, 1, 0),
+                                     ('synthetic/alpha', 3, 5, 0), ('synthetic/alpha', 5, 1, 0),
                                      ('synthetic/gamma', 100, 1, 0)])
         self.assertEqual(len(worst), 10)
 
@@ -191,8 +191,8 @@ class FixtureCounts(unittest.TestCase):
         self.assertTrue(row in self.text.splitlines(), 'missing row: ' + row)
 
     def test_markdown_rows(self):
-        self.assertRowIn('| All | 50 | 49 | 1.12 | 1 | 1 | 4 | 0.10 | 47 (96%) | 2 (4%) | 3 (2/1/0) | 2 of 6 | 2 (0/1/1) |')
-        self.assertRowIn('| synthetic/alpha | 4 | 3 | 2 | 2 | 3 | 3 | 0.67 | 2 (67%) | 1 (33%) | 2 (1/1/0) | 1 of 3 | 1 (0/0/1) |')
+        self.assertRowIn('| All | 50 | 49 | 1.18 | 1 | 1 | 5 | 0.10 | 47 (96%) | 3 (6%) | 3 (2/1/0) | 2 of 9 | 2 (0/1/1) |')
+        self.assertRowIn('| synthetic/alpha | 4 | 3 | 3 | 3 | 5 | 5 | 0.67 | 2 (67%) | 2 (67%) | 2 (1/1/0) | 1 of 6 | 1 (0/0/1) |')
         self.assertRowIn('| beta#7 | 4 (3) | none | 1500 | 30 |')
         self.assertRowIn('| alpha#1 | 3 (2) | M | 700 | 7 |')
 
@@ -216,6 +216,39 @@ class Cohorts(unittest.TestCase):
                                                 'synthetic/gamma': gamma()}, issue_count=46))
         self.assertEqual((code, text), (1, ''))
         self.assertIn('synthetic/alpha: search reported 46 PRs but returned 5', err)
+
+
+    def test_a_repeated_search_result_fails_closed(self):
+        code, text, err = run(ARGS, FakeGitHub({'synthetic/alpha': alpha() + alpha()[:1], 'synthetic/beta': beta(),
+                                                'synthetic/gamma': gamma()}))
+        self.assertEqual((code, text), (1, ''))
+        self.assertIn('synthetic/alpha: search returned PR 1 twice', err)
+
+    def test_bad_arguments_exit_2(self):
+        for argv in (ARGS[:-1] + ['2026-01-17T00:00:00'], ARGS[:-1] + ['soon'], ['--repo', 'no-slash'] + ARGS[6:],
+                     ARGS + ['--repo', 'synthetic/alpha'], ARGS[:-3] + [END, '--merged-to', START]):
+            stderr, sys.stderr = sys.stderr, io.StringIO()
+            try:
+                with self.assertRaises(SystemExit) as raised:
+                    bench.main(argv, graphql=fixture().graphql, out=io.StringIO())
+            finally:
+                sys.stderr = stderr
+            self.assertEqual(raised.exception.code, 2, argv)
+
+
+class Transport(unittest.TestCase):
+    def reply(self, stdout, code=0):
+        class Done:
+            returncode, stderr = code, 'synthetic failure'
+        Done.stdout = stdout
+        return bench.gh_graphql(bench.SEARCH, {'q': 'x', 'after': None}, lambda args, **kw: Done())
+
+    def test_unreadable_or_failed_replies_fail_closed(self):
+        for stdout, code in (('not json', 0), ('[1]', 0), ('{"errors": [{"message": "x"}], "data": null}', 0),
+                             ('{"data": null}', 0), ('{"data": {}}', 1)):
+            with self.assertRaises(bench.BenchError, msg=stdout):
+                self.reply(stdout, code)
+        self.assertEqual(self.reply('{"data": {"search": 1}}'), {'search': 1})
 
 
 class ReadOnly(unittest.TestCase):

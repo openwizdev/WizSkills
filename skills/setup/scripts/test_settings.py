@@ -450,14 +450,17 @@ class Check(unittest.TestCase):
 
     def test_approval_rules_are_optional_and_a_broken_row_is_refused_by_row(self):
         valid = [(rule, 'syn-owner') for rule in DEFAULT_RULES]
-        for text in (NEW, FLEET, with_rules(rules(*valid))):
-            code, out = self.check(self.project(**{'fleet.md': text}))
-            self.assertEqual(code, 0, out)
+        for n, text in enumerate((NEW, FLEET, with_rules(rules(*valid)), NEW.replace('Intro.\n', 'Intro.\n\nApproval rules\n'))):
+            with self.subTest(passes=n):
+                code, out = self.check(self.project(**{'fleet.md': text}))
+                self.assertEqual(code, 0, out)
         here = 'fleet.md: Approval rules: '
         cases = {
             'blank': ((DEFAULT_RULES[3], ' '), 'row 2 (%s): no approver' % DEFAULT_RULES[3]),
             'the user': ((DEFAULT_RULES[3], '`The User`'), 'row 2 (%s): the approver is "the user", not a person'
                          % DEFAULT_RULES[3]),
+            'the user spaced': ((DEFAULT_RULES[3], '**The  User**'), 'row 2 (%s): the approver is "the user", not a person'
+                                % DEFAULT_RULES[3]),
             'placeholder': ((DEFAULT_RULES[3], '<a name>'), 'row 2 (%s): unfilled approver <a name>' % DEFAULT_RULES[3]),
             'wording': (('Publish only with a yes', 'syn-owner'),
                         'row 2 (Publish only with a yes): the rule does not start "Ask before"'),
@@ -473,10 +476,17 @@ class Check(unittest.TestCase):
                            (with_rules(rules(*valid).replace('| Approver |', '| Who |')),
                             'the table is not | Rule | Approver |'),
                            (with_rules(rules(valid[0], (DEFAULT_RULES[3], 'the user'), heading='### Approval Rules')),
-                            'the heading must be exactly ## Approval rules: ### Approval Rules')):
-            code, out = self.check(self.project(**{'fleet.md': text}))
-            self.assertEqual(code, 5, out)
-            self.assertIn(here + line, out.splitlines())
+                            'the heading must be exactly ## Approval rules: ### Approval Rules'),
+                           (with_rules(rules(valid[0], (DEFAULT_RULES[3], 'the user'), heading='## Approval rules ##')),
+                            'the heading must be exactly ## Approval rules: ## Approval rules ##'),
+                           (with_rules(rules(valid[0], (DEFAULT_RULES[3], 'the user'), heading='Approval rules\n---')),
+                            'the heading must be exactly ## Approval rules: Approval rules'),
+                           (with_rules(rules(valid[0], (DEFAULT_RULES[3], 'the user')).replace('\n| Ask before d', '\n  | Ask before d')),
+                            'row 2 (%s): the approver is "the user", not a person' % DEFAULT_RULES[3])):
+            with self.subTest(line):
+                code, out = self.check(self.project(**{'fleet.md': text}))
+                self.assertEqual(code, 5, out)
+                self.assertIn(here + line, out.splitlines())
 
     def test_the_template_writes_the_six_default_rules_and_a_filled_copy_passes(self):
         template = TEMPLATE.read_text()

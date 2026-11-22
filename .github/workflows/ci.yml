@@ -9,9 +9,9 @@
 # `npm ci --ignore-scripts`. Used only by check/changesets.py; never shipped.
 
 # comment-ok: dependency record, the same kind as the two records above.
-# CI cache dependency record (WQ3/#2272): actions/cache v6.1.0 (MIT), pinned
-# by commit 55cc8345863c7cc4c66a329aec7e433d2d1c52a9. Caches ~/.npm and the pinned
-# Playwright browser between CI runs only. No skill or npm dependency is added.
+# CI cache dependency record (J187, WQ3/#2272): actions/cache 6.1.0 (MIT), pinned
+# by commit 55cc8345863c7cc4c66a329aec7e433d2d1c52a9. Used only by CI to cache
+# ~/.npm and the pinned Playwright browser; never shipped. No skill gains a dependency.
 name: WizSkills check
 on:
   pull_request:
@@ -20,6 +20,8 @@ on:
     branches: [main]
 permissions:
   contents: read
+env:
+  PLAYWRIGHT_CORE_VERSION: 1.64.1
 jobs:
   list:
     name: list shards
@@ -93,18 +95,18 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-browser-${{ matrix.browser }}
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-browser-${{ matrix.browser }}-playwright-core-${{ env.PLAYWRIGHT_CORE_VERSION }}
       - name: Install the pinned Changesets
         run: npm ci --ignore-scripts
       - if: matrix.browser
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-1.64.1-chromium
+          key: playwright-${{ runner.os }}-${{ env.PLAYWRIGHT_CORE_VERSION }}-chromium-${{ hashFiles('.github/workflows/ci.yml') }}
       - name: Install pinned test-only browser tools
         if: matrix.browser
         run: |
-          npm install --no-save --ignore-scripts playwright-core@1.64.1
+          npm install --no-save --ignore-scripts "playwright-core@$PLAYWRIGHT_CORE_VERSION"
           node node_modules/playwright-core/cli.js install --with-deps chromium
           node --input-type=module -e "import { chromium } from 'playwright-core'; console.log('OPENWIZ_CHROMIUM=' + chromium.executablePath())" >> "$GITHUB_ENV"
       - name: Run shard ${{ matrix.shard }}

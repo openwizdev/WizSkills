@@ -1887,7 +1887,7 @@ def ticket_lines_now($s): . as $t
                   | (if $block != null and (($block.r | test("^merge blocked \($head): base moved, reopened for fresh CI(?:[.;](?:\\s|$)|$)")) | not) then empty
                      else guard($p; $at; $rs; $head; $c) end)
                 else
-                  ([$p.comments.nodes[] | select(.body | first_line | startswith("**Orchestrator decision:**"))] | max_by(.databaseId)) as $d
+                  ([$p.comments.nodes[] | select(.body | first_line | startswith("**Orchestrator decision:**") and contains(" at \($head)."))] | max_by(.databaseId)) as $d
                   | (if $d != null and $d.databaseId > $v.databaseId and all($rs[]; .id < $d.databaseId)
                         and ($v.body | test("(^|\n)Next: park [^\n]* as a decision for Jake\\.\\s*$")) then
                        "decision \($at): Jake'"'"'s answer in comment \($d.databaseId); act on it as references/reviews.md says"

@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_first_fleet import (CLAUDE, FIXTURES, GRILL, Journey, SKILL_DIR,  # noqa: E402 -- it follows the sys.path line that finds it
+from test_first_fleet import (CLAUDE, FAKE_GH, FIXTURES, GRILL, TICKET_FIELDS, Journey, SKILL_DIR,  # noqa: E402 -- it follows the sys.path line that finds it
                               demo_repository, fleet_md, github, setup_state, skill_steps)
 
 ROAD = json.loads((FIXTURES / 'onboarding.json').read_text())
@@ -94,6 +94,33 @@ class Road(Journey):
         case.addCleanup(shutil.rmtree, self.host_state, True)
         self.extra_env.update(OPENWIZ_ADAPTERS=str(self.dir / 'adapters'), OPENWIZ_LOCAL_STATE=str(self.host_state),
                               FAKE_DRIVER_LOG=str(self.dir / 'driver.log'), FAKE_GH_ARGV_LOG=str(self.dir / 'gh-argv.log'))
+        self.ticket_views = self.dir / 'tickets.json'
+        gh = self.dir / 'bin/gh'
+        gh.write_text(
+            '#!%s -I\nimport json, os, sys\nfrom pathlib import Path\na = sys.argv[1:]\n'
+            "if a[:2] == ['issue', 'view'] and a[3:] == ['--json', '%s'] and Path(%r).exists():\n"
+            "    print(json.dumps(json.loads(Path(%r).read_text())[a[2]]))\n    sys.exit(0)\n"
+            "os.execv(%r, [%r, '-I', '-S', %r, *a])\n" % (
+                sys.executable, TICKET_FIELDS, str(self.ticket_views), str(self.ticket_views), sys.executable,
+                sys.executable, str(FAKE_GH)))
+        gh.chmod(0o755)
+
+    def tool(self, turn):
+        if 'progress' in turn:
+            note = '<!-- openwiz:status v1 -->\nagent: builder\nstate: working\n'
+            shapes = {'merged': ('CLOSED', 'COMPLETED', [1], [], []), 'in_review': ('OPEN', None, [1], [], []),
+                      'building': ('OPEN', None, [], [], [note]), 'blocked': ('OPEN', None, [], [1], []),
+                      'ready': ('OPEN', None, [], [], [])}
+            views = {}
+            for ticket, known in zip(self.tickets, turn['progress']):
+                state, why, pulls, blockers, notes = shapes[known]
+                views[str(ticket['number'])] = {
+                    'number': ticket['number'], 'state': state, 'stateReason': why,
+                    'closedByPullRequestsReferences': [{'number': 1900 + ticket['number'] % 100} for _ in pulls],
+                    'blockedBy': {'nodes': [{'number': 1, 'state': 'OPEN'} for _ in blockers]},
+                    'comments': [{'body': body, 'author': {'login': 'synthetic-factory[bot]'}} for body in notes]}
+            self.ticket_views.write_text(json.dumps(views))
+        return super().tool(turn)
 
     def helper(self, args):
         host = self.saved().get('host', {}).get('agents', 'cloud')
@@ -323,6 +350,10 @@ class Replay(unittest.TestCase):
                     self.assertEqual(sum(args == ['mode'] for args, _ in road.calls), 1)
                     self.assertEqual(road.saved()['mode']['mode'], 'acceptEdits')
                     self.assertIn('Host: local', road.world['files']['docs/agents/host.md'])
+                    self.assertEqual([c for c in road.logged() if c['form'] == 'fleet'], [],
+                                     'a local fleet reads progress from GitHub, never through CloudRoom')
+                    watched = [r.stdout for args, r in road.calls if args[:1] == ['progress']]
+                    self.assertIn('#%d merged' % road.tickets[0]['number'], watched[-1].splitlines())
                 adapters = 'OPENWIZ_ADAPTERS=%s' % (road.dir / 'adapters')
                 self.assertEqual(adapters in yes, journey['host'] == 'local', 'the loop finds the local driver (R2)')
                 merged = outputs[('first-merge', '--pr', '911')].splitlines()

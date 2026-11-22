@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -264,6 +265,65 @@ class Command(unittest.TestCase):
                     p = self.run_select(root, '--event', 'push', '--base', 'HEAD', shards=bad)
                     self.assertEqual((p.returncode, p.stdout), (2, ''), p.stderr)
 
+
+
+ci_spec = importlib.util.spec_from_file_location('wizskills_test_ci', HERE.parent / 'tools/comment-check/test_ci.py')
+ci = importlib.util.module_from_spec(ci_spec)
+ci_spec.loader.exec_module(ci)
+
+
+def list_step_outputs(workflow, event, tree):
+    steps = [ci.step_fields(s) for s in ci.job_steps(workflow, 'list')]
+    [step] = [s for s in steps if s.get('id') == 'list']
+    with tempfile.TemporaryDirectory() as tmp:
+        output = Path(tmp) / 'output'
+        env = {k: v for k, v in os.environ.items() if k not in ('GH_TOKEN', 'GITHUB_TOKEN')}
+        p = subprocess.run(['bash', '-euo', 'pipefail', '-c', step['run']], cwd=tree, capture_output=True,
+                           text=True, env={**env, 'EVENT': event, 'RUNNER_TEMP': tmp, 'GITHUB_OUTPUT': str(output)})
+        if p.returncode != 0:
+            raise AssertionError(p.stderr)
+        return dict(line.split('=', 1) for line in output.read_text().splitlines())
+
+
+def one_skill_pull_request(tmp):
+    tree = Path(tmp) / 'tree'
+    files = subprocess.run(['git', '-C', str(HERE.parent), 'ls-files', '-z'], capture_output=True,
+                           check=True).stdout.decode().split('\0')
+    for rel in filter(None, files):
+        source = HERE.parent / rel
+        if source.is_file() and not source.is_symlink():
+            (tree / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tree / rel).write_bytes(source.read_bytes())
+    git = ['git', '-C', str(tree), '-c', 'user.name=synthetic', '-c', 'user.email=synthetic@example.com']
+    subprocess.run(['git', 'init', '-q', str(tree)], check=True)
+    subprocess.run([*git, 'add', '-A'], check=True)
+    subprocess.run([*git, 'commit', '-qm', 'base'], check=True)
+    with open(tree / 'skills/wayfind/SKILL.md', 'a', encoding='utf-8') as f:
+        f.write('\nA synthetic line.\n')
+    subprocess.run([*git, 'commit', '-qam', 'one skill'], check=True)
+    return tree
+
+
+class TheWorkflow(unittest.TestCase):
+    def test_merge_group_and_push_run_every_shard_where_a_pull_request_narrows(self):
+        listed = [s['name'] for s in json.loads(subprocess.run(
+            [sys.executable, '-I', str(HERE / 'run.py'), '--list'], capture_output=True, text=True,
+            check=True).stdout)]
+        workflow = (HERE.parent / '.github/workflows/ci.yml').read_text()
+        [step] = [s for s in ci.job_steps(workflow, 'list') if '        id: list' in s]
+        self.assertIn('          EVENT: ${{ github.event_name }}', step)
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = one_skill_pull_request(tmp)
+            pr = list_step_outputs(workflow, 'pull_request', tree)
+            kept = [row['shard'] for row in json.loads(pr['shards'])]
+            self.assertIn('wayfind', kept)
+            self.assertIn('hill-climb', json.loads(pr['skipped']))
+            self.assertEqual(sorted(kept + json.loads(pr['skipped'])), sorted(listed))
+            for event in ('merge_group', 'push'):
+                with self.subTest(event=event):
+                    outputs = list_step_outputs(workflow, event, tree)
+                    self.assertEqual([row['shard'] for row in json.loads(outputs['shards'])], listed)
+                    self.assertEqual(json.loads(outputs['skipped']), [])
 
 if __name__ == '__main__':
     unittest.main()

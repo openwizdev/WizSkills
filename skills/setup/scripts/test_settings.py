@@ -458,7 +458,7 @@ class Check(unittest.TestCase):
         here = 'fleet.md: Approval rules: '
         cases = {
             'blank': ((DEFAULT_RULES[3], ' '), 'row 2 (%s): no approver' % DEFAULT_RULES[3]),
-            'the user': ((DEFAULT_RULES[3], 'The User'), 'row 2 (%s): the approver is "the user", not a person'
+            'the user': ((DEFAULT_RULES[3], '`The User`'), 'row 2 (%s): the approver is "the user", not a person'
                          % DEFAULT_RULES[3]),
             'placeholder': ((DEFAULT_RULES[3], '<a name>'), 'row 2 (%s): unfilled approver <a name>' % DEFAULT_RULES[3]),
             'wording': (('Publish only with a yes', 'syn-owner'),
@@ -473,7 +473,9 @@ class Check(unittest.TestCase):
                 self.assertIn(here + line, out.splitlines())
         for text, line in ((with_rules(rules(*valid) * 2), 'more than one ## Approval rules heading'),
                            (with_rules(rules(*valid).replace('| Approver |', '| Who |')),
-                            'the table is not | Rule | Approver |')):
+                            'the table is not | Rule | Approver |'),
+                           (with_rules(rules(valid[0], (DEFAULT_RULES[3], 'the user'), heading='### Approval Rules')),
+                            'the heading must be exactly ## Approval rules: ### Approval Rules')):
             code, out = self.check(self.project(**{'fleet.md': text}))
             self.assertEqual(code, 5, out)
             self.assertIn(here + line, out.splitlines())

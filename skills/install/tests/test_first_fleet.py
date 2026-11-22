@@ -158,6 +158,7 @@ def connect_usable(text):
 
 
 SETTINGS = SKILL_DIR.parent / 'setup/scripts/settings.py'
+TICKET_FIELDS = 'number,state,stateReason,closedByPullRequestsReferences,blockedBy,comments'
 OPUS = ('claude-code', 'claude-opus-5-5', 'medium')
 SOL = ('codex', 'gpt-6.2-sol', 'medium')
 
@@ -528,6 +529,87 @@ class RecordedJourney(unittest.TestCase):
         self.assertNotIn('| Ticket |', packaged)
 
 
+class HostAwareSetup(unittest.TestCase):
+    def test_driver_setup_carries_without_cloudroom_and_keeps_github_and_harness_gates(self):
+        cases = (
+            ('local', 'local', 'harness_listed', 'project_verified', 0, 'agents on local'),
+            ('boat', 'boat', 'harness_listed', 'project_verified', 0, 'agents on boat'),
+            ('syn-driver-2', 'syn-driver-2', 'harness_listed', 'project_verified', 0, 'agents on syn-driver-2'),
+            ('local', 'local', 'harness_not_installed', 'project_verified', 5, 'harness_not_installed'),
+            ('local', 'local', 'harness_listed', 'project_no_write', 5, 'project_no_write'),
+            ('local', 'boat', 'harness_listed', 'project_verified', 5, 'host boat'),
+        )
+        for picked, prepared, harness, project, code, message in cases:
+            with self.subTest(picked=picked, prepared=prepared, harness=harness, project=project):
+                j = Journey(self)
+                (j.dir / 'bin/room-cli').unlink()
+                repo = 'synthetic-owner/synthetic-repo'
+                choice = SOL if prepared == 'boat' else OPUS
+                state = setup_state(repository=repo, settings=choice, overrides={
+                    'cloudroom': 'cloudroom_not_needed', 'harness': harness, 'project': project})
+                state['project'].update(host=prepared, project=None, answer_thread=None, operator='Synthetic Operator')
+                j.write_setup(state)
+                j.state.write_text(json.dumps({
+                    'repo': repo, 'host': {'agents': picked, 'harnesses': []}}))
+                j.state.chmod(0o600)
+                self.assertIsNone(shutil.which('room-cli', path=j.env()['PATH']))
+                result = j.helper(['continue', '--explained'])
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                self.assertIn(message, result.stdout)
+                self.assertNotIn('CloudRoom project', result.stdout)
+                self.assertEqual('setup' in json.loads(j.state.read_text()), code == 0)
+
+    def test_choose_reads_nc1_local_options_and_refuses_cloudroom_fallback(self):
+        j = Journey(self)
+        (j.dir / 'bin/room-cli').unlink()
+        state = setup_state(settings=OPUS, overrides={'cloudroom': 'cloudroom_not_needed'})
+        state['project'].update(host='local', project=None, answer_thread=None)
+        j.write_setup(state)
+        j.state.write_text(json.dumps({
+            'repo': REPO, 'host': {'agents': 'local', 'harnesses': ['claude-code']},
+            'setup': {'host': 'local', 'settings': dict(zip(('harness', 'model', 'effort'), OPUS))}}))
+        j.state.chmod(0o600)
+        options = offering(OPUS, SOL)
+        j.options.write_text(json.dumps(options))
+        refused = j.helper(['choose', '--from-setup'])
+        self.assertEqual(refused.returncode, 5, refused.stdout + refused.stderr)
+        self.assertIn('models --json --host local', refused.stdout)
+        self.assertNotIn('choices', json.loads(j.state.read_text()))
+        options['source'] = 'local'
+        j.options.write_text(json.dumps(options))
+        picked = j.helper(['choose', '--from-setup'])
+        self.assertEqual(picked.returncode, 0, picked.stdout + picked.stderr)
+        self.assertEqual(json.loads(j.state.read_text())['choices']['model'], OPUS[1])
+
+    def test_a_codex_only_machine_records_its_choice_and_leaves_the_review_same_family(self):
+        j = Journey(self)
+        j.replay(until='agents')
+        state = json.loads(j.state.read_text())
+        state['host'] = {'agents': 'local', 'harnesses': ['codex']}
+        state['setup']['settings'] = dict(zip(('harness', 'model', 'effort'), SOL))
+        j.state.write_text(json.dumps(state))
+        options = offering(SOL)
+        options['harnesses'] = [h for h in options['harnesses'] if h['provider'] == 'codex']
+        options['source'] = 'local'
+        j.options.write_text(json.dumps(options))
+        j.checkout.write_text(models_md(orchestrator=OPUS, builder=OPUS, reviewer=SOL))
+        result = j.helper(['choose', '--from-setup'])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(j.state.read_text())['choices']['model'], SOL[1])
+        self.assertEqual(ModelsTable.models(self, j.checkout.read_text())['Reviewer'], OPUS,
+                         'the table keeps a valid other-family Reviewer')
+        self.assertIn('same-family review', result.stdout)
+
+    def test_install_passes_the_chosen_host_to_models_and_follows_the_driver_handoff(self):
+        text = SKILL.read_text()
+        for step in ('### 3. Connect', '### 5. Agents'):
+            section = text.split(step, 1)[1].split('\n### ', 1)[0]
+            self.assertIn('models --json --host <its name>', section)
+        launch = text.split('### 8. Launch', 1)[1].split('\n### ', 1)[0]
+        self.assertIn('heartbeat', launch)
+        self.assertIn('Starting one', launch)
+
+
 class Continuation(unittest.TestCase):
     """#636: onboarding continues from install's verified setup and init, never
     from a guess. Catches a fabricated, stale or unselected identity or brain
@@ -749,6 +831,42 @@ class Launch(unittest.TestCase):
                      '5 tickets: 3 building, 2 blocked', 'Counts are progress, not a first merge'):
             self.assertIn(line, watch)
         self.assertEqual(stat.S_IMODE(j.state.stat().st_mode), 0o600, 'owner-only state')
+
+    def test_local_progress_reads_github_only_and_never_cloudroom(self):
+        j = Journey(self)
+        j.replay(until='watch')
+        state = json.loads(j.state.read_text())
+        state['host'] = {'agents': 'local', 'harnesses': ['claude-code', 'codex']}
+        j.state.write_text(json.dumps(state))
+        (j.dir / 'bin/room-cli').unlink()
+        note = '<!-- openwiz:status v1 -->\nagent: builder\nstate: working\n'
+        views = {901: ('CLOSED', 'COMPLETED', [1901], [], []), 902: ('OPEN', None, [1902], [], []),
+                 903: ('OPEN', None, [], [], [note]), 904: ('OPEN', None, [], [(901, 'CLOSED'), (903, 'OPEN')], []),
+                 905: ('OPEN', None, [], [(901, 'CLOSED')], [])}
+        answers = {str(n): {'number': n, 'state': s, 'stateReason': why,
+                            'closedByPullRequestsReferences': [{'number': p} for p in pulls],
+                            'blockedBy': {'nodes': [{'number': b, 'state': bs} for b, bs in blockers]},
+                            'comments': [{'body': body, 'author': {'login': 'synthetic-factory[bot]'}}
+                                         for body in bodies]}
+                   for n, (s, why, pulls, blockers, bodies) in views.items()}
+        (j.dir / 'tickets.json').write_text(json.dumps(answers))
+        gh = j.dir / 'bin/gh'
+        gh.write_text(
+            '#!%s -I\nimport json, os, sys\nfrom pathlib import Path\na = sys.argv[1:]\n'
+            "if a[:2] == ['issue', 'view'] and a[3:] == ['--json', '%s']:\n"
+            "    print(json.dumps(json.loads(Path(%r).read_text())[a[2]]))\n    sys.exit(0)\n"
+            "os.execv(%r, [%r, '-I', '-S', %r, *a])\n" % (
+                sys.executable, TICKET_FIELDS, str(j.dir / 'tickets.json'), sys.executable, sys.executable,
+                str(FAKE_GH)))
+        gh.chmod(0o755)
+        before = len(j.logged())
+        result = j.helper(['progress', '--spec', '900'])
+        self.assertEqual(j.logged()[before:], [], 'a local fleet never runs the CloudRoom-backed openwiz fleet')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for line in ('#901 merged', '#902 in_review', '#903 building', '#904 blocked', '#905 ready',
+                     '5 tickets: 1 ready, 1 building, 1 in review, 1 merged, 1 blocked',
+                     'Counts are progress, not a first merge'):
+            self.assertIn(line, result.stdout)
 
     def test_repeat_and_reload_never_start_again(self):
         j = Journey(self)

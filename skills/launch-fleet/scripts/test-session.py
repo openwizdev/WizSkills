@@ -444,6 +444,10 @@ class Session(unittest.TestCase):
         while not (runs.exists() and 'local-run-3' in runs.read_text()):
             self.assertLess(time.monotonic(), end, 'the interrupted start never finished')
             time.sleep(0.05)
+        while str(self.scripts / 'host.py') in subprocess.run(['ps', '-eo', 'args'], capture_output=True,
+                                                              text=True).stdout:
+            self.assertLess(time.monotonic(), end, 'the interrupted start never exited')
+            time.sleep(0.05)
         self.assertEqual(self.records(3), ['launch-fleet: starting'])
 
     def test_a_run_that_ends_before_its_start_answers_still_counts_as_ended(self):

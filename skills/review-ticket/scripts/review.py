@@ -357,7 +357,8 @@ def changed_since(base, last, head):
                               "checkout and origin does not give it")
 
     def names(*spec):
-        return set(filter(None, git("diff", "--name-only", "--no-renames", "-z", *spec, "--").split("\0")))
+        out = git("diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", *spec, "--")
+        return set(filter(None, out.split("\0")))
     return names(last, head) & (names(f"{base}...{last}") | names(f"{base}...{head}"))
 
 

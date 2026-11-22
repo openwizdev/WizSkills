@@ -296,6 +296,9 @@ def approval(text, problems):
     lines = text.split('\n')
     at = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Approval rules']
     here = 'fleet.md: Approval rules: '
+    for line in lines:
+        if line != '## Approval rules' and line.strip().lstrip('#').strip().lower() == 'approval rules':
+            problems.append(here + 'the heading must be exactly ## Approval rules: ' + line)
     if len(at) > 1:
         problems.append(here + 'more than one ## Approval rules heading')
     if len(at) != 1:
@@ -324,7 +327,7 @@ def approval(text, problems):
             problems.append(here + name + 'no approver')
         elif re.search(r'<[^>]*>', approver):
             problems.append(here + name + 'unfilled approver ' + approver)
-        elif approver.lower() == 'the user':
+        elif approver.strip('`*_ .').lower() == 'the user':
             problems.append(here + name + 'the approver is "the user", not a person')
         seen.append(key)
 

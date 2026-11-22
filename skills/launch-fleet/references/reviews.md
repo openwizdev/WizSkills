@@ -10,6 +10,48 @@ A pull request is the loop's when it closes an approved ticket (its description 
 
 **Starting a review** (a `review` line, printed only once CI is green on that exact commit): start the other-family reviewer `ops-starts.py flags --repo <owner>/<repo> review_of_claude_built` or `review_of_gpt_built` prints (the models contract's cross-family rule; exit 1 means the review waits), using the branch-matching checked builder record and that exact thread's provider (unknown/conflicting family waits), as in [builders.md](builders.md), titled `Review #<P> at <short commit>`, with the brief `python3 -I "<this skill's folder>/scripts/brief.py" reviewer <P> <commit>` prints With a token service configured, that brief carries the reviewer's token step ([builders.md](builders.md), "The token step"). Then edit the claim to `launch-fleet: review started <commit>`. If CloudRoom can't start that reviewer, edit it to `launch-fleet: review refused <commit>: <reason>`: the review waits 10 minutes, as a refused start does, and is never given to another model.
 
+### Starting a review through a host driver
+
+Use the driver for new reviews when `host.py which` reports a chosen host other than CloudRoom. For `host: none` or `host: cloudroom`, use the CloudRoom start above. An unreadable host setting leaves the review pending. A reviewer already running keeps its original route.
+
+After the review claim returns `go`, run the following shell block from the fleet project checkout. Supply the launch-fleet scripts directory, the pull request's repository and number, the full head, the claim comment id, the checked builder's driver harness and model id, and the other family's configured reviewer model id, in that order. For a driver builder, use its checked private run and record-author builder status on the ticket to verify the family and match the recorded model to its configured CLI id. Use `claude` for Claude Code and `codex` for Codex. With both programs on PATH, get the reviewer model from the corresponding `ops-starts.py flags` reviewer row described above and check its provider. An unreadable or conflicting builder assignment or required reviewer row leaves the review pending. With just the builder's harness installed, pass an empty last argument. Use the pull request number for the reviewer run and the issue number for the builder run.
+
+```sh
+set -eu
+scripts=$1 repo=$2 pr=$3 head=$4 claim=$5 builder=$6 builder_model=$7 reviewer_model=$8
+case "$builder" in
+  claude) other=codex ;;
+  codex) other=claude ;;
+  *) printf '%s\n' 'refused: unknown builder harness'; exit 1 ;;
+esac
+set -- reviewer "$pr" "$head"
+if command -v claude >/dev/null 2>&1 && command -v codex >/dev/null 2>&1; then
+  harness=$other
+  model=$reviewer_model
+  family=other-family
+elif command -v "$builder" >/dev/null 2>&1; then
+  harness=$builder
+  model=$builder_model
+  family=same-family
+  set -- "$@" same-family
+else
+  printf '%s\n' 'refused: the builder harness is unavailable'
+  exit 1
+fi
+if [ -z "$model" ]; then
+  printf '%s\n' 'refused: the review model is unavailable'
+  exit 1
+fi
+brief=$(python3 -I "$scripts/brief.py" "$@")
+assignment=$(printf 'launch-fleet: review starting %s\nDriver review: %s\n\n%s' "$head" "$family" "$brief")
+python3 -I "$scripts/post.py" edit "$repo" "$claim" "$assignment"
+python3 -I "$scripts/host.py" start "$repo" "$pr" "$harness" "$model" review-ticket
+```
+
+The trusted claim supplies the brief to the reviewer. After `started`, save and read back the private run map as in [builders.md](builders.md), then change only the claim's first line to `launch-fleet: review started <commit>`. For a definite refusal, record `review refused` as above. For an unknown start, keep the claim pending and reconcile from the private run map and the reviewer's GitHub status or verdict before retrying. Fresh driver reviews follow the same start steps.
+
+For an existing reviewer named `run:<P>`, deliver a re-check with `host.py wake <owner>/<repo> <P>`. Before waking, add `Driver re-check: <family>` to the re-check claim's second line (the family recorded at start) and put the re-check brief after a blank line. After `woke`, change only the first line to `launch-fleet: re-check sent <commit>`. For a quiet driver reviewer, read its GitHub status and verdict, wake the same run once, and record `review told again` as below. If still quiet, use `host.py stop <owner>/<repo> <P>` and save and read back the run map before marking it `review given up`. Preserve the body of the edited claim. For a driver `reconcile review` line or an uncertain wake or stop, verify the saved run and trusted GitHub records before retrying, changing the claim, or starting a replacement.
+
 **A re-check** (a `re-check` line) goes to the same reviewer: `room-cli thread tell <its thread> --mode queue --message-file <file>`, with the file holding what `python3 -I "<this skill's folder>/scripts/brief.py" re-check <P> <commit> <old head> <the ids> <the answer>` prints, then edit the claim to `launch-fleet: re-check sent <commit>`. `<old head>` is the commit the reviewer's latest `VERDICT` names; `<the ids>` are the open high and medium ids its `Next:` line leaves to the builder (`none` when `main` was merged into approved work); the builder's answer is its comment since that report, one line per id (`none` if there is none). They only point the reviewer at the delta: the same reviewer, the exact new head and its full re-check still apply. When the builder merges `main` into approved work, its new head is re-checked the same way. A `reconcile review` line means a claim never recorded how it went: ask the reviewer's thread whether it was started or told, and edit the claim to match, or to `launch-fleet: review failed <commit>: <why>`.
 
 **A quiet reviewer** (a `check review` line): no `VERDICT` names the head 30 minutes after its reviewer was started or asked to re-check it. The line names the reviewer's thread and the comment that records it. The reviewer gets one more try, then a fresh reviewer takes over:

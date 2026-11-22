@@ -69,3 +69,19 @@ AssertionError: '`jq --version`' not found in "- **Plan:** in the project's clon
 Ran 1 test in 0.001s
 
 FAILED (failures=1)
+
+# Review red: R3 an open dependency can still start a builder (synthetic)
+$ python3 -I skills/install/tests/test_doctor.py NoCloudRoomRequired.test_manual_start_checks_builder_readiness_on_both_sides_of_the_record
+F
+======================================================================
+FAIL: test_manual_start_checks_builder_readiness_on_both_sides_of_the_record (__main__.NoCloudRoomRequired.test_manual_start_checks_builder_readiness_on_both_sides_of_the_record)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 910, in test_manual_start_checks_builder_readiness_on_both_sides_of_the_record
+    self.assertIn('/build-ticket/scripts/ticket.py read', before,
+AssertionError: '/build-ticket/scripts/ticket.py read' not found in "- **Start one ticket's builder by hand,** only on the user's yes to that exact start. A builder claims a ticket only when it carries `ready-for-agent`, has owned paths, and has a `launch-fleet: started` comment from a record author. On the yes, post it from the user's own login: `" : a start record can be posted for an ineligible ticket
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (failures=1)

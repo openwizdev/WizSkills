@@ -904,6 +904,21 @@ class NoCloudRoomRequired(unittest.TestCase):
         self.assertIn('install or upgrade GitHub CLI', preflight)
         self.assertIn('Recheck both before continuing', preflight)
 
+    def test_manual_start_checks_builder_readiness_on_both_sides_of_the_record(self):
+        hand = self.between('- **Start one ticket', '- **Review and merge**')
+        before, command, after = hand.partition('gh issue comment')
+        self.assertIn('/build-ticket/scripts/ticket.py read', before,
+                      'a start record can be posted for an ineligible ticket')
+        self.assertIn('proceed only on exit 1 with', before)
+        self.assertIn('ready: no: no launch-fleet start record from a record author', before)
+        self.assertLess(before.index('gh api user --jq .login'), before.index('post'))
+        self.assertIn('`Record authors`', before)
+        self.assertTrue(command)
+        gate, start, _ = after.partition('driver start')
+        self.assertIn('run the same ticket read again', gate)
+        self.assertIn('Only exit 0 with `ready: yes`', gate)
+        self.assertTrue(start)
+
 
 if __name__ == '__main__':
     unittest.main()

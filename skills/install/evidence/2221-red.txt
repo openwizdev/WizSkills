@@ -1,0 +1,39 @@
+# #2221 red: NoCloudRoomRequired against maint/0.2's install skill at 01bf251, before the fix (synthetic)
+$ python3 -I skills/install/tests/test_doctor.py NoCloudRoomRequired
+FFFF
+======================================================================
+FAIL: test_cloudroom_is_no_requirement_done_condition_or_resume_gate (__main__.NoCloudRoomRequired.test_cloudroom_is_no_requirement_done_condition_or_resume_gate)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 831, in test_cloudroom_is_no_requirement_done_condition_or_resume_gate
+    self.assertFalse('needs CloudRoom.' in self.text, 'needs CloudRoom.')
+AssertionError: True is not false : needs CloudRoom.
+
+======================================================================
+FAIL: test_the_automatic_first_fleet_on_0_1_0_says_it_runs_in_cloudroom (__main__.NoCloudRoomRequired.test_the_automatic_first_fleet_on_0_1_0_says_it_runs_in_cloudroom)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 886, in test_the_automatic_first_fleet_on_0_1_0_says_it_runs_in_cloudroom
+    self.assertTrue('even with builders on boat.dev' in step6, 'even with builders on boat.dev')
+AssertionError: False is not true : even with builders on boat.dev
+
+======================================================================
+FAIL: test_the_host_question_comes_first_and_cloudroom_runs_only_when_chosen (__main__.NoCloudRoomRequired.test_the_host_question_comes_first_and_cloudroom_runs_only_when_chosen)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 847, in test_the_host_question_comes_first_and_cloudroom_runs_only_when_chosen
+    self.assertTrue(HOST_QUESTION in self.text, 'missing: ' + HOST_QUESTION)
+AssertionError: False is not true : missing: Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom.
+
+======================================================================
+FAIL: test_without_cloudroom_the_finish_says_what_works_and_gives_real_hand_starts (__main__.NoCloudRoomRequired.test_without_cloudroom_the_finish_says_what_works_and_gives_real_hand_starts)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 863, in test_without_cloudroom_the_finish_says_what_works_and_gives_real_hand_starts
+    self.assertTrue(FINISH in self.text, 'missing: ' + FINISH)
+AssertionError: False is not true : missing: Installed. Without CloudRoom today you can plan (grill, spec, tickets) and start a builder on this computer or on boat.dev by hand. The automatic fleet without CloudRoom arrives in 0.1.1. Want CloudRoom now instead? It's optional.
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.001s
+
+FAILED (failures=4)

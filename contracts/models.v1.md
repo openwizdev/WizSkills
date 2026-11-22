@@ -6,8 +6,8 @@ model config builds against: the one `## Models` table in
 `docs/agents/fleet.md`, the follow, fixer and cross-family rules, the
 fallback to the older five tables, the offered-models snapshot, the reports
 of `openwiz models show`, `list` and `set`, and the exact line the app hands
-to the user's agent. [`models.v1.schema.json`](models.v1.schema.json) pins
-the JSON shapes; [`fixtures/models/`](fixtures/models/) holds one case per
+to the user's agent. [`models.v1.schema.json`](https://github.com/openwizdev/OpenWiz/blob/main/contracts/models.v1.schema.json) pins
+the JSON shapes; [`fixtures/models/`](https://github.com/openwizdev/OpenWiz/tree/main/contracts/fixtures/models/) holds one case per
 rule, and every reader runs them and must agree on each role's harness,
 model and effort.
 
@@ -98,7 +98,7 @@ Fixtures: `one-table/` (both follow by row), `same-family/` (both absent),
 ## The fixer rule
 
 The fixer runs the review-loops contract's one fresh fix round
-([review-loops.v2](review-loops.v2.md#the-outcomes)) and must be of the
+([review-loops.v2](https://github.com/openwizdev/OpenWiz/blob/main/contracts/review-loops.v2.md#the-outcomes)) and must be of the
 original builder's family. For a pull request whose builder's family is F:
 
 1. the Fixer role (its own choice, or the Builder's it follows), when its
@@ -218,7 +218,7 @@ label identifies the list's provenance.
 
 - `read_at` (milliseconds since the epoch), `label`, `state`, `harnesses`
   and `unavailable` mean what `openwiz models --json`
-  ([`new-thread.v1`'s `options`](new-thread.v1.schema.json)) says, without
+  ([`new-thread.v1`'s `options`](https://github.com/openwizdev/OpenWiz/blob/main/contracts/new-thread.v1.schema.json)) says, without
   its attachment and steer facts. The offered list is copied as that read
   lists it, every provider, model and effort included, with no other
   pattern on the ids.
@@ -254,14 +254,14 @@ Each command reads `docs/agents/fleet.md` under the current directory (run
 it from the repository root) and prints one JSON document and a newline
 with `--json`, or text lines without it. A handled error with `--json` is
 the CLI's existing `openwiz.cli-error.v1` document. Exit numbers keep the
-[CLI contract](cli.v1.md#fixed-exits-and-existing-results)'s meanings.
+[CLI contract](https://github.com/openwizdev/OpenWiz/blob/main/contracts/cli.v1.md#fixed-exits-and-existing-results)'s meanings.
 
 **The CLI rows.** These are the CLI contract's forms `models.show`,
 `models.list` and `models.set`, with results `models.v1.schema.json#/$defs/show_report`,
 `list_report` and `set_report`; they ship with MD2 (#1804) and are listed
 in `help --agent`'s catalogue (`crates/cli/src/agent-catalogue.json`) and
 human help. The forms below describe the CloudRoom behaviour. For 0.1.1,
-see [host selection and local models](setup.v1.md#the-local-offered-list)
+see [host selection and local models](https://github.com/openwizdev/OpenWiz/blob/main/contracts/setup.v1.md#the-local-offered-list)
 for the `--host` selector on plain `models`, `models set` and `models show`,
 and for the local `set` eligibility and report rules. `cli.v1.md` is a
 contract WizSkills carries byte for byte, so these rows live here until a
@@ -404,7 +404,7 @@ their model. Nothing restarts.
 
 - The fixtures prove that the contract's cases agree with its rules and its
   schema, read by the reference reader in
-  [`fixtures/models/models_contract.rs`](fixtures/models/models_contract.rs);
+  [`fixtures/models/models_contract.rs`](https://github.com/openwizdev/OpenWiz/blob/main/contracts/fixtures/models/models_contract.rs);
   they prove no reader. Each reader's own tests must run them.
 - The text forms are pinned by the lines above; only the JSON reports have
   fixtures.

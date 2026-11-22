@@ -85,3 +85,19 @@ AssertionError: '/build-ticket/scripts/ticket.py read' not found in "- **Start o
 Ran 1 test in 0.001s
 
 FAILED (failures=1)
+
+# Review red: R4 a new local approval can erase existing approvals (synthetic)
+$ python3 -I skills/install/tests/test_doctor.py NoCloudRoomRequired.test_local_approval_updates_only_the_selected_entry
+F
+======================================================================
+FAIL: test_local_approval_updates_only_the_selected_entry (__main__.NoCloudRoomRequired.test_local_approval_updates_only_the_selected_entry)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 925, in test_local_approval_updates_only_the_selected_entry
+    self.assertIn('Read the existing owner-only JSON object', approval,
+AssertionError: 'Read the existing owner-only JSON object' not found in '  - **This computer** (the installed local driver; the user\'s own signed-in `claude` or `codex` and `gh`). A builder needs a permission mode, or its harness refuses every tool: the user chooses it (a `claude --permission-mode` value, or a `codex --sandbox` value) and you never pick or widen it. Save it twice, each on its own yes. First, as one row in `docs/agents/fleet.md` on the default branch: `` | Harness permission mode | `<mode>` | ``. Second, on this computer: `umask 077; mkdir -p ~/.local/state/openwiz-local`, then write `{"<owner>/<name>": {"<harness>": "<mode>"}}` to `~/.local/state/openwiz-local/approvals.json` and `chmod 600` it. Then, with `build` as Resume sets it:\n    `echo \'{"repository":"<owner>/<name>","ticket":<N>,"skill":"build-ticket","harness":"<claude or codex>","model":"<model>"}\' | "$build"/runtime/adapters/local/' : writing a second approval can erase the first
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (failures=1)

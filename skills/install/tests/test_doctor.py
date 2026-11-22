@@ -919,6 +919,17 @@ class NoCloudRoomRequired(unittest.TestCase):
         self.assertIn('Only exit 0 with `ready: yes`', gate)
         self.assertTrue(start)
 
+    def test_local_approval_updates_only_the_selected_entry(self):
+        local = self.between('  - **This computer**', '  - **boat.dev**')
+        approval, _, _ = local.partition('driver start')
+        self.assertIn('Read the existing owner-only JSON object', approval,
+                      'writing a second approval can erase the first')
+        self.assertIn('Preserve every other repository and harness entry', approval)
+        self.assertIn('Preview the selected repository, harness and old and new modes', approval)
+        self.assertIn('If the file changed since the preview', approval)
+        self.assertIn('read the saved JSON back', approval)
+        self.assertNotIn('then write `{"<owner>/<name>":', approval)
+
 
 if __name__ == '__main__':
     unittest.main()

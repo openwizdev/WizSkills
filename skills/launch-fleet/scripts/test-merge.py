@@ -480,6 +480,9 @@ class CostFromAgents(unittest.TestCase):
             'another thread answered': (dict(usage=bad({'json': {'history': {
                 'credits': 4, 'id': TH + 'synelse', 'hours': [{'credits': 4, 'hour': '2099-01-01T00:00:00.000Z'}]}}})),
                 'unknown', '3.25'),
+            'an hour without a zone': (dict(usage=bad({'json': {'history': {
+                'credits': 4, 'id': BUILDER, 'hours': [{'credits': 4, 'hour': '2099-01-01T00:00:00'}]}}})),
+                'unknown', '3.25'),
             'no hours in the window': (dict(usage=bad({'credits': 0, 'first': 'none'})), 'unknown', '3.25'),
             'short window': (dict(usage=bad({'credits': 3.5, 'first': 'window'})), 'unknown', '3.25'),
             'one reviewer unread': (dict(usage=bad_reviewer({'fail': 1})), '3.5', 'unknown'),
@@ -1179,7 +1182,7 @@ class Landed(unittest.TestCase):
         self.assertEqual(w.run('merge.py', 'settle', DEST, 9201, 9106, cwd=w.dir / 'project'),
                          (0, 'no queued merge; landed already posted 5001'))
         self.assertEqual(self.posts(w), [(9101, LANDED)])
-        self.assertEqual(w.bodies(9106), ['launch-fleet: cost unknown (PR #9201): no cost command'])
+        self.assertEqual(w.bodies(9106), ['launch-fleet: cost: Ticket #9106 cost (PR #9201): builder unknown; reviewer unknown; CI unknown; total unknown'])
 
     def test_a_held_final_merge_tells_no_report_it_landed(self):
         # catches (RC3 #1831 with FL4 #1848): a user-visible spec's final merge posting its landed

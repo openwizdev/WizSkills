@@ -39,7 +39,13 @@ repository; anything else is `refused: ...` before any write.
 command `tools/collector/cost_line.py --repo OWNER/NAME --pr PR [COST ARGS]`
 from the current directory and posts `launch-fleet: cost: <its line>` on the
 ticket, in the ticket's own repository, or `launch-fleet: cost unknown (PR
-<ref>): <why>`; never a zero for an unknown part. <ref> is `#PR`, or
+<ref>): <why>`; never a zero for an unknown part. Without that command it reads
+the ticket's builder and the pull request's reviewers from LAUNCH_FLEET_STATE
+with `room-cli usage <thread> --json` and posts their `history.credits` in the
+same line form, the reviewers summed and only amounts shown (CL1, #2282). No
+state, a missing agent, a driver-started builder, a failed or malformed read,
+or a read that may not cover the agent's whole life makes that role unknown,
+and any unknown role makes the total unknown. <ref> is `#PR`, or
 `OWNER/NAME#PR` when the ticket lives in another repository; FM4's command
 costs only tickets in the pull request's repository, so such a ticket's cost
 is unknown. It posts once: `cost already posted <id>` names an earlier record
@@ -87,6 +93,7 @@ deleted.
 import datetime
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -99,6 +106,9 @@ _spec = importlib.util.spec_from_file_location('launch_fleet_post', HERE / 'post
 post = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(post)
 Stop = post.Stop
+_spec = importlib.util.spec_from_file_location('launch_fleet_records', HERE / 'records.py')
+records = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(records)
 
 QUERY = '''query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { defaultBranchRef { name } pullRequest(number: $number) {
@@ -378,7 +388,7 @@ def _cost(repo, number, home, ticket, extra):
     if not same:
         body += "the cost command costs only tickets in the pull request's repository"
     elif not Path(COST).is_file():
-        body += 'no cost command'
+        body = 'launch-fleet: cost: ' + _agents_line(repo, number, ticket)
     else:
         try:
             r = subprocess.run([sys.executable, '-I', COST, '--repo', repo, '--pr', str(number), *extra],
@@ -394,6 +404,71 @@ def _cost(repo, number, home, ticket, extra):
         else:
             body += reason.group(1) if reason else 'the cost command failed'
     return 'cost posted ' + post.comment(home, ticket, body).split()[-1]
+
+
+
+# CL1 (#2282): without the project's command, the ticket's agents' credits from `room-cli usage`.
+USAGE_WINDOW_DAYS = 7  # `room-cli usage THREAD --json` covers the last 7 UTC days, today included
+
+
+def _amount(value, unit, places):
+    if value is None:
+        return 'unknown ' + unit
+    text = f'{round(value, places):,.{places}f}'
+    return (text.rstrip('0').rstrip('.') if places else text) + ' ' + unit
+
+
+def _role(credits):
+    return 'unknown' if credits is None else _amount(credits, 'credits', 2) + ', ' + _amount(None, 'tokens', 0)
+
+
+def _cost_line(number, ticket, builder, reviewer):
+    total = None if builder is None or reviewer is None else builder + reviewer
+    return (f'Ticket #{ticket} cost (PR #{number}): builder {_role(builder)}; reviewer {_role(reviewer)}; '
+            'CI unknown; total ' + ('unknown' if total is None else
+                                    ', '.join((_amount(total, 'credits', 2), _amount(None, 'tokens', 0),
+                                               _amount(None, 'runner minutes', 1)))))
+
+
+def _usage(thread):
+    """One thread's credits with its subagents, or None when the read fails, is malformed or may not
+    cover the thread's whole life (its first hour is the window's first hour or earlier)."""
+    try:
+        r = subprocess.run(['room-cli', 'usage', thread, '--json'], capture_output=True, text=True, timeout=60,
+                           stdin=subprocess.DEVNULL)
+        if r.returncode:
+            return None
+        history = json.loads(r.stdout, object_pairs_hook=records.unique).get('history')
+        credits, hours = history.get('credits'), history.get('hours')
+        if (history.get('id') != thread or type(credits) not in (int, float) or not 0 <= credits < float('inf')
+                or not isinstance(hours, list) or not hours):
+            return None
+        first = min(datetime.datetime.fromisoformat(h['hour'].replace('Z', '+00:00')) for h in hours)
+        today = datetime.datetime.now(datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        return None if first <= today - datetime.timedelta(days=USAGE_WINDOW_DAYS - 1) else credits
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError, TypeError, KeyError):
+        return None
+
+
+def _agents_line(repo, number, ticket):
+    """The cost line from LAUNCH_FLEET_STATE's builder:<N> and review:<P>:... threads; an unknown role,
+    and then the total, is unknown, never zero."""
+    try:
+        threads = records.private_state(repo) if os.environ.get('LAUNCH_FLEET_STATE') else None
+        runs = records.driver_runs(repo)
+    except (OSError, ValueError):
+        threads = runs = None
+    if not threads:
+        return _cost_line(number, ticket, None, None)
+    builder = threads.get(f'builder:{ticket}')
+    reviewers = {v for k, v in threads.items() if k.startswith(f'review:{number}:')}
+    driver = (f'run:{ticket}' in threads or runs in (records.UNREADABLE, records.MISSING, None)
+              or (isinstance(runs, dict) and str(ticket) in runs))
+    read = {t: _usage(t) for t in sorted(reviewers | ({builder} if builder and not driver else set()))}
+    builder_credits = None if driver or not builder else read[builder]
+    reviewer_credits = (None if not reviewers or builder in reviewers or None in (read[t] for t in reviewers)
+                        else sum(read[t] for t in sorted(reviewers)))
+    return _cost_line(number, ticket, builder_credits, reviewer_credits)
 
 
 def enqueued_by_us(repo, p):

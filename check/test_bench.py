@@ -10,6 +10,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 BENCH = HERE / 'bench.py'
 SAVED = HERE / 'fixtures' / 'bench'
+RERUN = SAVED / 'rerun'
+READ_ONLY_FLAGS = {'-X', '--method', '-f', '-F', '--field', '--raw-field', '--input'}
 ALPHA = 'suite alpha: python3 -I skills/alpha/test_alpha.py'
 BETA = 'suite beta: sh skills/beta/test.sh'
 
@@ -20,14 +22,22 @@ saved, calls = Path(sys.argv[0]).resolve().parent / 'saved', Path(sys.argv[0]).r
 with calls.open('a') as f:
     f.write(json.dumps(sys.argv[1:]) + '\n')
 path = sys.argv[-1]
+attempts = {}
+for run_json in saved.rglob('run.json'):
+    run = json.loads(run_json.read_text())
+    attempts[(str(run['id']), str(run['run_attempt']))] = (run, run_json.parent)
+parts = path.split('?')[0].split('/')
 if '/workflows/' in path:
     runs = [json.loads(p.read_text()) for p in sorted(saved.glob('*/run.json'))] if 'page=1&' in path + '&' else []
     print(json.dumps({'total_count': len(runs), 'workflow_runs': runs}))
-elif path.endswith('/jobs?per_page=100'):
-    print((saved / path.split('/')[-2] / 'jobs.json').read_text())
-elif path.endswith('/logs'):
-    job = path.split('/')[-2]
-    sys.stdout.write(next(saved.glob(f'*/{job}.log')).read_text())
+elif parts[-1] == 'logs':
+    sys.stdout.write(next(saved.rglob(f'{parts[-2]}.log')).read_text())
+elif parts[-1] == 'jobs' and parts[-3] == 'attempts':
+    print((attempts[(parts[-4], parts[-2])][1] / 'jobs.json').read_text())
+elif parts[-2] == 'attempts':
+    print(json.dumps(attempts[(parts[-3], parts[-1])][0]))
+elif parts[-2] == 'runs':
+    print(json.dumps(max((r for (i, _), (r, _) in attempts.items() if i == parts[-1]), key=lambda r: r['run_attempt'])))
 else:
     sys.exit('fake gh: unexpected ' + path)
 '''
@@ -50,7 +60,7 @@ class SavedLogs(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn('Window: synthetic 2026-01-05', out)
         header, rows = table(out)
-        self.assertEqual(header, ['Phase', 'Median (s)', 'Known', '101', '102', '103'])
+        self.assertEqual(header, ['Phase', 'Median (s)', 'Known', '101/1', '102/1', '103/1'])
         self.assertEqual(rows, {
             'queue wait': ['4.0', '3/3', '4.0', '6.0', '2.0'],
             'setup': ['6.0', '3/3', '5.0', '6.0', '7.0'],
@@ -75,28 +85,66 @@ class SavedLogs(unittest.TestCase):
         self.assertEqual(rows['rules'], ['1.5', '1/1', '1.5'])
 
 
+def with_fake_gh(*args):
+    with tempfile.TemporaryDirectory() as tmp:
+        bin_dir = Path(tmp)
+        shutil.copytree(SAVED, bin_dir / 'saved')
+        (bin_dir / 'gh').write_text(FAKE_GH.replace('#!/usr/bin/env python3', '#!' + sys.executable, 1))
+        (bin_dir / 'gh').chmod(0o755)
+        env = {**os.environ, 'PATH': f'{bin_dir}{os.pathsep}{os.environ.get("PATH", "")}'}
+        code, out, err = bench(*args, env=env)
+        calls = [json.loads(line) for line in (bin_dir / 'calls.jsonl').read_text().splitlines()]
+    return code, out, err, calls
+
+
+class Reruns(unittest.TestCase):
+    def test_each_attempt_is_timed_from_its_own_start(self):
+        code, out, err = bench('--saved', str(RERUN), '--window', 'one run, two attempts')
+        self.assertEqual(code, 0, err)
+        header, rows = table(out)
+        self.assertEqual(rows['total'], ['165.0', '2/2', '180.0', '150.0'])
+        self.assertEqual(header, ['Phase', 'Median (s)', 'Known', '104/1', '104/2'])
+        self.assertEqual(rows['queue wait'], ['4.0', '2/2', '5.0', '3.0'])
+        self.assertEqual(rows[ALPHA], ['55.0', '2/2', '60.0', '50.0'])
+
+
 class LiveWindow(unittest.TestCase):
     def test_reads_the_window_through_gh_get_only_and_keeps_successful_runs(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            bin_dir = Path(tmp)
-            shutil.copytree(SAVED, bin_dir / 'saved')
-            (bin_dir / 'gh').write_text(FAKE_GH.replace('#!/usr/bin/env python3', '#!' + sys.executable, 1))
-            (bin_dir / 'gh').chmod(0o755)
-            env = {**os.environ, 'PATH': f'{bin_dir}{os.pathsep}{os.environ.get("PATH", "")}'}
-            code, out, err = bench('--from', '2026-01-05', '--to', '2026-01-05', env=env)
-            calls = [json.loads(line) for line in (bin_dir / 'calls.jsonl').read_text().splitlines()]
+        code, out, err, calls = with_fake_gh('--from', '2026-01-05', '--to', '2026-01-05')
         self.assertEqual(code, 0, err)
         self.assertIn('Window: pull_request runs of openwizdev/WizSkills check created 2026-01-05..2026-01-05', out)
         header, rows = table(out)
-        self.assertEqual(header, ['Phase', 'Median (s)', 'Known', '101'])
+        self.assertEqual(header, ['Phase', 'Median (s)', 'Known', '101/1'])
         self.assertEqual(rows[ALPHA], ['60.0', '1/1', '60.0'])
         for call in calls:
             self.assertEqual(call[0], 'api')
-            self.assertFalse({'-X', '--method', '-f', '-F', '--field', '--raw-field', '--input'} & set(call), call)
+            self.assertFalse(READ_ONLY_FLAGS & set(call), call)
         self.assertIn('repos/openwizdev/WizSkills/actions/workflows/ci.yml/runs?event=pull_request'
                       '&status=completed&created=2026-01-05..2026-01-05&per_page=100&page=1', calls[0])
-        self.assertEqual([c[-1] for c in calls[2:]], ['repos/openwizdev/WizSkills/actions/runs/101/jobs?per_page=100',
+        self.assertEqual([c[-1] for c in calls[2:]], ['repos/openwizdev/WizSkills/actions/runs/101/attempts/1/jobs?per_page=100',
                                                       'repos/openwizdev/WizSkills/actions/jobs/1010/logs'])
+
+    def test_a_pinned_attempt_replays_that_attempt_not_the_latest(self):
+        code, out, err, calls = with_fake_gh('--runs', '104/1')
+        self.assertEqual(code, 0, err)
+        header, rows = table(out)
+        self.assertEqual(header, ['Phase', 'Median (s)', 'Known', '104/1'])
+        self.assertEqual(rows['queue wait'], ['5.0', '1/1', '5.0'])
+        self.assertEqual(rows['total'], ['180.0', '1/1', '180.0'])
+        self.assertEqual(rows[ALPHA], ['60.0', '1/1', '60.0'])
+        self.assertEqual([c[-1] for c in calls], ['repos/openwizdev/WizSkills/actions/runs/104/attempts/1',
+                                                  'repos/openwizdev/WizSkills/actions/runs/104/attempts/1/jobs?per_page=100',
+                                                  'repos/openwizdev/WizSkills/actions/jobs/1041/logs'])
+        for call in calls:
+            self.assertFalse(READ_ONLY_FLAGS & set(call), call)
+
+    def test_a_bare_run_id_is_pinned_to_its_latest_attempt_in_the_column(self):
+        code, out, err, calls = with_fake_gh('--runs', '104')
+        self.assertEqual(code, 0, err)
+        header, rows = table(out)
+        self.assertEqual(header, ['Phase', 'Median (s)', 'Known', '104/2'])
+        self.assertEqual(rows['total'], ['150.0', '1/1', '150.0'])
+        self.assertEqual(calls[1][-1], 'repos/openwizdev/WizSkills/actions/runs/104/attempts/2/jobs?per_page=100')
 
     def test_needs_a_window(self):
         code, _, err = bench()

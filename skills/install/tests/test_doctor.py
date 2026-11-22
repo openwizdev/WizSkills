@@ -827,6 +827,53 @@ class RestartReadsTheSkillsOwnVersion(unittest.TestCase):
         self.assertEqual(re.findall(r'version: \d+\.\d+\.\d+', body), [])
 
 
+class StepFourTakesTheReleaseTag(unittest.TestCase):
+
+    def run_block(self, mine):
+        import re, shutil
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        for ref, version in (('v' + mine, mine), ('main', '0.0.0')):
+            copy = tmp / 'refs' / ref / 'skills/install'
+            shutil.copytree(SKILL.parent, copy, ignore=shutil.ignore_patterns('tests', '__pycache__'))
+            (copy / 'SKILL.md').write_text(
+                re.sub(r'^version: \S+$', 'version: ' + version, SKILL.read_text(), count=1, flags=re.M))
+        bin_dir = tmp / 'bin'
+        bin_dir.mkdir()
+        write(bin_dir / 'git', '#!/bin/sh\n[ -d %s/"$5" ] || exit 128\nmkdir -p "$7" && cp -R %s/"$5"/. "$7/"\n'
+              % (shlex.quote(str(tmp / 'refs')), shlex.quote(str(tmp / 'refs'))), 0o755)
+        agent = tmp / 'home/.claude/skills/install'
+        (agent / 'scripts').mkdir(parents=True)
+        (agent / '.openwiz-skill').write_text(RECEIPT)
+        (agent / 'SKILL.md').write_text('---\nname: install\nversion: 0.2.0\n---\n')
+        text = SKILL.read_text()
+        block = re.findall(r'```sh\n(.*?)```', text[text.index('## 4. '):text.index('## 5. ')], re.S)[1]
+        block = (block.replace('<private temporary folder>', str(tmp / 'work')).replace('<version of this skill>', mine)
+                      .replace('<installed agent folders>', '"$HOME/.claude/skills"'))
+        (tmp / 'work').mkdir()
+        env = {'HOME': str(tmp / 'home'), 'PATH': '%s:/usr/bin:/bin' % bin_dir}
+        return agent, subprocess.run(['sh', '-c', block], env=env, capture_output=True, text=True).stdout
+
+    def test_the_fallback_clone_takes_this_skills_release_tag_never_main(self):
+        import re
+        mine = re.search(r'^version: (\S+)$', SKILL.read_text(), re.M)[1]
+        agent, out = self.run_block(mine)
+        self.assertEqual(out.split('\n'), ['source ok', 'ok: %s' % agent, ''])
+        self.assertIn('version: %s\n' % mine, (agent / 'SKILL.md').read_text())
+
+    def test_step_4_prefers_the_matching_bundled_copy_and_links_its_own_tag(self):
+        text = SKILL.read_text()
+        step4 = text[text.index('## 4. '):text.index('## 5. ')]
+        self.assertIn('git clone --depth 1 --branch v<version of this skill> https://github.com/openwizdev/WizSkills',
+                      step4)
+        self.assertIn('`"$build"/runtime/skills/install` when it already reads `version: <version of this skill>`',
+                      step4)
+        self.assertIn('https://github.com/openwizdev/WizSkills/blob/v<version of this skill>/skills/install/SKILL.md',
+                      step4)
+        self.assertNotIn('--branch main', text)
+        self.assertNotIn('WizSkills/blob/main/skills/install', text)
+
+
 class RemovalStopsTheHeartbeatThenUsesTheInstaller(unittest.TestCase):
 
     def test_removal_removes_the_heartbeat_then_previews_and_confirms_install_remove(self):

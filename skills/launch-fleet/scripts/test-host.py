@@ -9,6 +9,7 @@ adapters folder of synthetic drivers (fixtures/driver.py, one per host) that
 log every call, a private runs file and a synthetic GitHub (fixtures/fake_github.py on PATH as `gh`).
 Nothing reaches GitHub or a host.
 """
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -34,7 +35,7 @@ class Project:
     """A synthetic project: a bare origin whose default branch is `trunk`, a fleet checkout cloned from it,
     an adapters folder and a private runs file. set() changes the setting on the default branch only."""
 
-    def __init__(self, test, setting='Host: local\n', hosts=('local', 'cloudroom')):
+    def __init__(self, test, setting='Host: local\n', hosts=('local', 'cloudroom'), repo=REPO):
         self.dir = Path(tempfile.mkdtemp())
         test.addCleanup(subprocess.run, ['rm', '-rf', str(self.dir)])
         test.addCleanup(subprocess.run, ['chmod', '-R', 'u+w', str(self.dir)])
@@ -65,7 +66,7 @@ class Project:
         (bin_dir / 'gh').write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, HERE / 'fixtures/fake_github.py'))
         (bin_dir / 'gh').chmod(0o755)
         self.world = self.dir / 'world.json'
-        self.world.write_text(json.dumps({'repo': REPO, 'me': 'openwiz[bot]', 'fleet_md': FLEET_MD, 'next_id': 5000,
+        self.world.write_text(json.dumps({'repo': repo, 'me': 'openwiz[bot]', 'fleet_md': FLEET_MD, 'next_id': 5000,
                                           'comments': {}, 'writes': [], 'faults': {}}))
         self.env = dict(self.git_env, OPENWIZ_ADAPTERS=str(self.dir / 'adapters'), LAUNCH_FLEET_RUNS=str(self.runs),
                         FAKE_DRIVER_LOG=str(self.log), PATH='%s:%s' % (bin_dir, os.environ['PATH']),
@@ -80,6 +81,12 @@ class Project:
         (self.dir / 'writer/docs/agents/host.md').write_text('# Host\n\nWhere this project\'s agents run.\n\n' + setting)
         self.git('-C', str(self.dir / 'writer'), 'add', '-A')
         self.git('-C', str(self.dir / 'writer'), 'commit', '-q', '-m', 'host')
+        self.git('-C', str(self.dir / 'writer'), 'push', '-q', 'origin', 'trunk')
+
+    def fleet(self, text):
+        (self.dir / 'writer/docs/agents/fleet.md').write_text(text)
+        self.git('-C', str(self.dir / 'writer'), 'add', '-A')
+        self.git('-C', str(self.dir / 'writer'), 'commit', '-q', '-m', 'fleet')
         self.git('-C', str(self.dir / 'writer'), 'push', '-q', 'origin', 'trunk')
 
     def host(self, *args, **env):
@@ -571,6 +578,141 @@ class Failures(unittest.TestCase):
         self.assertEqual([first for first, _ in p.failures()], [MARK + ', cleared'])
         self.assertEqual(p.fleet_notes(), [])
         self.assertEqual(p.host('wake', REPO, 7, LAUNCH_FLEET_MODEL=''), (0, 'woke #7 on local', ''))
+
+ROSTER = HERE / 'fixtures/roster'
+
+
+def host_module():
+    spec = importlib.util.spec_from_file_location('launch_fleet_host_roster', HERE / 'host.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class Roster(unittest.TestCase):
+
+    def project(self, case, hosts, setting='Host: local\n'):
+        repo = json.loads((ROSTER / case / 'case.json').read_text()).get('repository', REPO)
+        p = Project(self, setting=setting, hosts=hosts, repo=repo)
+        p.fleet((ROSTER / case / 'fleet.md').read_text())
+        return p, repo
+
+    def test_every_fixture_reads_picks_and_refuses_as_the_roster_contract_says(self):
+        api = host_module()
+        cases = sorted(path.parent.name for path in ROSTER.glob('*/case.json'))
+        self.assertEqual(cases, ['long-model', 'mixed', 'namespaced', 'no-roster', 'other-user', 'role-not-allowed',
+                                 'starting'])
+        for case in cases:
+            with self.subTest(case):
+                want = json.loads((ROSTER / case / 'case.json').read_text())
+                entries = api.roster((ROSTER / case / 'fleet.md').read_text())
+                self.assertEqual(entries, want['roster'])
+                for p in want.get('picks', []):
+                    self.assertEqual(api.pick(entries, want['repository'], p['ticket'], p['role'], p['choice']),
+                                     {key: p[key] for key in ('pick', 'waits', 'look')}, p['ticket'])
+        refusals = json.loads((ROSTER / 'invalid/refusals.json').read_text())
+        self.assertEqual(sorted(refusals), sorted(path.name for path in (ROSTER / 'invalid').glob('*.md')))
+        for name, line in refusals.items():
+            with self.subTest(name):
+                with self.assertRaises(api.Outcome) as refused:
+                    api.roster((ROSTER / 'invalid' / name).read_text())
+                self.assertEqual(str(refused.exception), line)
+
+    def test_each_role_starts_on_its_first_allowed_entry_and_never_on_one_without_that_role(self):
+        p, repo = self.project('mixed', ('local', 'cloudroom', 'demo-bot'))
+        self.assertEqual(p.host('which'), (0, "roster: each start goes to its picked entry's driver", ''))
+        self.assertEqual(p.host('start', repo, 7, 'claude', 'claude-opus-5-5'),
+                         (0, 'started #7 on cloudroom as Claude Code via syn-owner, Opus 5.5 default effort', ''))
+        self.assertEqual(p.host('start', repo, 8, 'codex', 'gpt-6.2-sol'),
+                         (0, 'started #8 on local as Own computer via syn-owner, Sol 6.2 default effort', ''))
+        self.assertEqual(p.host('start', repo, 9, 'codex', 'gpt-6.2-sol', 'review-ticket'),
+                         (0, 'started #9 on cloudroom as Codex via syn-owner, Sol 6.2 default effort', ''))
+        self.assertEqual(p.host('start', repo, 10, 'claude', 'claude-opus-5-5', 'launch-fleet'),
+                         (0, 'started #10 on demo-bot as Demo Bot via syn-owner, Opus 5.5 default effort', ''))
+        self.assertEqual([(c['host'], c['input']['ticket'], c['input']['skill'], c['input']['harness'],
+                           c['input']['model']) for c in p.calls()],
+                         [('cloudroom', 7, 'build-ticket', 'claude', 'claude-opus-5-5'),
+                          ('local', 8, 'build-ticket', 'codex', 'gpt-6.2-sol'),
+                          ('cloudroom', 9, 'review-ticket', 'codex', 'gpt-6.2-sol'),
+                          ('demo-bot', 10, 'launch-fleet', 'claude', 'claude-opus-5-5')])
+        self.assertEqual(p.saved(), {'repo': repo, 'runs': {
+            '7': {'host': 'cloudroom', 'role': 'builder', 'run': 'cloudroom-run-7'},
+            '8': {'host': 'local', 'role': 'builder', 'run': 'local-run-8'},
+            '9': {'host': 'cloudroom', 'role': 'reviewer', 'run': 'cloudroom-run-9'},
+            '10': {'host': 'demo-bot', 'role': 'orchestrator', 'run': 'demo-bot-run-10'}}})
+        self.assertEqual(p.host('wake', repo, 10), (0, 'woke #10 on demo-bot', ''))
+        self.assertEqual(p.host('stop', repo, 9), (0, 'stopped #9 on cloudroom', ''))
+        self.assertEqual(p.saved()['runs']['9'], {'host': 'cloudroom', 'role': 'reviewer', 'run': 'cloudroom-run-9',
+                                                  'stopped': True})
+
+    def test_a_role_no_entry_may_take_waits_and_starts_nothing(self):
+        p, repo = self.project('role-not-allowed', ('local', 'demo-bot'))
+        self.assertEqual(p.host('start', repo, 2002, 'claude', 'claude-opus-5-5', 'review-ticket'),
+                         (1, 'roster: no entry may take the reviewer role with Claude Code', ''))
+        self.assertEqual(p.host('start', repo, 2001, 'codex', 'gpt-6.2-sol'),
+                         (1, 'roster: no entry may take the builder role with Codex', ''))
+        self.assertEqual(p.host('start', repo, 2005, 'claude', 'claude-opus-5-5', 'grill'),
+                         (1, 'refused: the Roster gives no role to the grill skill', ''))
+        self.assertEqual((p.calls(), p.saved()), ([], None))
+        self.assertEqual(p.host('start', repo, 2004, 'claude', 'claude-opus-5-5', 'launch-fleet'),
+                         (0, 'started #2004 on demo-bot as Demo Bot via syn-owner, Opus 5.5 default effort', ''))
+        p, repo = self.project('namespaced', ('local', 'cloudroom'))
+        self.assertEqual(p.host('start', repo, 4002, 'codex', 'vendor/demo', 'review-ticket'),
+                         (1, "roster: driver v1 can't start codex vendor/demo; choose another model in the Models "
+                             "table", ''))
+        self.assertEqual((p.calls(), p.saved()), ([], None))
+
+    def test_a_broken_roster_starts_nothing_and_never_falls_back_to_the_host_setting(self):
+        refusals = json.loads((ROSTER / 'invalid/refusals.json').read_text())
+        for name in ('role.md', 'heading-form.md'):
+            with self.subTest(name):
+                p = Project(self)
+                p.fleet((ROSTER / 'invalid' / name).read_text())
+                self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5'), (1, refusals[name], ''))
+                self.assertEqual(p.host('which'), (1, refusals[name], ''))
+                self.assertEqual((p.calls(), p.saved()), ([], None))
+
+    def test_a_bot_entrys_start_carries_its_owners_app_token_and_its_label_on_a_project_that_isnt_ours(self):
+        p, repo = self.project('other-user', ('local', 'helper-bot'))
+        env = dict(Token.service(self, p), **Token.builder(self, p))
+        started = p.host('start', repo, 10, 'codex', 'gpt-6.2-sol', 'launch-fleet', **env)
+        self.assertEqual(started, (0, 'started #10 on helper-bot as Helper Bot via syn-maker, Sol 6.2 default effort',
+                                   ''))
+        self.assertEqual(p.calls()[0], {'host': 'helper-bot', 'command': 'start', 'input': {
+            'repository': 'syn-maker/garden', 'ticket': 10, 'skill': 'launch-fleet', 'harness': 'codex',
+            'model': 'gpt-6.2-sol'}})
+        self.assertEqual(Token.requests(self, p)[0]['request'], {
+            'schema': 'openwiz.token-service.v1', 'kind': 'request', 'requester': 'orchestrator-10',
+            'repositories': ['syn-maker/garden'], 'permissions': WRITE})
+        woke = p.host('wake', repo, 10, **env)
+        self.assertEqual(woke, (0, 'woke #10 on helper-bot', ''))
+        self.assertEqual(Token.seen(self, p), (
+            [{'command': 'start', 'git_helper_is_the_apps': True, 'legacy_key': False},
+             {'command': 'wake', 'git_helper_is_the_apps': True, 'legacy_key': False}],
+            ['app no-key', 'app no-key']))
+        requests = Token.requests(self, p)
+        self.assertEqual({(r['request']['requester'], tuple(r['request']['repositories'])) for r in requests},
+                         {('orchestrator-10', ('syn-maker/garden',))})
+        self.assertEqual([r['legacy_key'] for r in requests], [False] * len(requests))
+        self.assertNotIn('synthetic-owner', json.dumps([requests, p.calls()]))
+        self.assertEqual(Token.exposed(self, p, *started[1:], *woke[1:]), [])
+
+    def test_with_no_roster_starts_are_exactly_as_today(self):
+        p = Project(self)
+        p.fleet((ROSTER / 'no-roster/fleet.md').read_text())
+        env = Token.service(self, p)
+        self.assertEqual(p.host('which'), (0, 'host: local', ''))
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', 'review-ticket', **env),
+                         (0, 'started #7 on local', ''))
+        self.assertEqual(p.host('start', REPO, 8, 'codex', 'vendor/demo', 'grill', **env), (0, 'started #8 on local', ''))
+        self.assertEqual(p.saved(), {'repo': REPO, 'runs': {'7': {'host': 'local', 'run': 'local-run-7'},
+                                                            '8': {'host': 'local', 'run': 'local-run-8'}}})
+        self.assertEqual([r['request']['requester'] for r in Token.requests(self, p)], ['builder-7', 'builder-8'])
+        for held in (p.dir / 'token-private').iterdir():
+            held.unlink()
+        self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', ''))
+        self.assertEqual([r['request']['requester'] for r in Token.requests(self, p)][-1], 'builder-7')
+
 
 if __name__ == '__main__':
     unittest.main()

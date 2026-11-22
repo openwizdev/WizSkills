@@ -952,7 +952,7 @@ def key_host_lines():
     skill = (SCRIPT.parents[1] / 'SKILL.md').read_text()
     start = skill.find('**A key host.**')
     if start < 0:
-        return ''  # no key-host lines: each test then fails at its own assertion
+        return ''
     end = skill.find('\n3. ', start)
     return ' '.join(skill[start:end if end > 0 else None].split())
 
@@ -968,6 +968,12 @@ class KeyHost(unittest.TestCase):
                       'exactly `host`, `method` (`GET`, `POST` or `DELETE`), `path` and an optional `body`',
                       'exactly `status` and `body`', 'never a key, a header or an address'):
             self.assertIn(words, text)
+
+    def test_a_key_hosts_readme_line_comes_from_copy_key_host(self):
+        # catches: a skill that keeps `--key-variable` for a key host, whose README line KY1's kit fails, or has
+        # the agent write the key line by hand
+        self.assertIn("Run `copy` with `--key-host <the host's registered name>` instead of `--key-variable`",
+                      key_host_lines())
 
     def test_adding_a_key_host_is_one_reviewed_row_in_the_registry(self):
         # catches: a skill that tells the user to point the helper at their host themselves, or to edit the
@@ -1024,7 +1030,6 @@ class KeyHost(unittest.TestCase):
         shutil.copytree(openwiz / 'kernel', tree / 'kernel')
         shutil.copytree(openwiz / 'adapters' / 'template', tree / 'adapters' / 'template')
         shutil.copytree(FIXTURES / 'key-host', tree / 'adapters' / 'devin')
-        # stored as data, never run from here: it reaches the helper only from inside an OpenWiz tree
         os.replace(tree / 'adapters' / 'devin' / 'driver.txt', tree / 'adapters' / 'devin' / 'driver')
         (tree / 'adapters' / 'devin' / 'driver').chmod(0o755)
         shutil.copy(tree / 'adapters' / 'template' / 'schema.json', tree / 'adapters' / 'devin' / 'schema.json')

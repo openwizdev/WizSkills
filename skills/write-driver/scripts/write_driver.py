@@ -4,7 +4,7 @@
     write_driver.py begin --state <dir>
     write_driver.py host --state <dir> --host <host> --costly yes|no
     write_driver.py copy --state <dir> --openwiz <checkout> --into <repository folder> --login machine|host
-                        [--key-variable <NAME>]
+                        [--key-variable <NAME> | --key-host <registered host>]
     write_driver.py ticket --host <host> --account <login> --out <folder>
     write_driver.py ask --state <dir> --operation kit|expired-login|host [--step <host step>] --effect <effect>
     write_driver.py reply --state <dir> --file <the user's next message>
@@ -384,9 +384,35 @@ LOGIN = {'machine': 'Login: stays on your machine', 'host': 'Login: held by {hos
 KEY_VARIABLE = re.compile(r'[A-Z][A-Z0-9]{0,15}(?:_[A-Z0-9]{1,16}){1,5}')
 
 
-def login_line(readme, line, key_variable=None):
+REGISTRY = ('kernel', 'driver-kit', 'hosts.json')
+REGISTRY_NAME = re.compile(r'[a-z0-9]+(?:-[a-z0-9]+)*')
+REGISTRY_VARIABLE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
+REGISTRY_KEYCHAIN = re.compile(r'[a-z0-9]+(?:[.-][a-z0-9]+)*')
+
+
+def key_host_line(openwiz, name):
+    """The README's key line for a host the key helper reaches: that host's variable and keychain entry, names
+    only, read from OpenWiz's reviewed registry, on one line, as KY1's kit accepts it."""
+    # SECURITY: the refusal never says what it was given or read: either may be a key
+    bad = Refused('the key host is not registered in kernel/driver-kit/hosts.json of the OpenWiz checkout, for a '
+                  'login the host holds: add it there through OpenWiz first')
+    try:
+        hosts = json.loads((Path(openwiz).joinpath(*REGISTRY)).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        raise bad
+    entry = hosts.get(name) if isinstance(hosts, dict) and isinstance(name, str) else None
+    if not (REGISTRY_NAME.fullmatch(name) and isinstance(entry, dict) and isinstance(entry.get('variable'), str)
+            and isinstance(entry.get('keychain'), str) and REGISTRY_VARIABLE.fullmatch(entry['variable'])
+            and REGISTRY_KEYCHAIN.fullmatch(entry['keychain'])):
+        raise bad
+    return ('API key: through the key helper for `%s`: set `%s` yourself, or keep it in your keychain as `%s`; '
+            'the driver never sees it.' % (name, entry['variable'], entry['keychain']))
+
+
+def login_line(readme, line, key_variable=None, key_line=None):
     """Open the README, right under its title, with exactly this login line, and no other; for a cloud host that
-    takes an API key, the name of the variable the user sets for it under that line, never a value."""
+    takes an API key, the name of the variable the user sets for it under that line, never a value; for a key
+    host, key_line instead."""
     lines = readme.read_text(encoding='utf-8').split('\n') if readme.exists() else []
     if not lines or not lines[0].startswith('# '):
         raise Refused('the template README.md has no title to put the login line under: write it by hand')
@@ -394,6 +420,7 @@ def login_line(readme, line, key_variable=None):
     while rest and not rest[0].strip():
         rest.pop(0)
     key = ['API key: set `%s` yourself; the driver never asks for it.' % key_variable, ''] if key_variable else []
+    key = [key_line, ''] if key_line else key
     readme.write_text('\n'.join([lines[0], '', line, ''] + key + rest), encoding='utf-8')
 
 
@@ -414,6 +441,11 @@ def cmd_copy(a):
         raise Refused('the key variable is a name only (2 to 6 words of capitals or digits joined by _, as '
                       'EXAMPLEHOST_API_KEY), for a login the host holds, and nothing the kit reads as a credential: '
                       'never a value')
+    key_line = None
+    if a.key_host is not None:
+        if a.login != 'host' or a.key_variable is not None:
+            raise Refused('the key host is for a login the host holds, without --key-variable')
+        key_line = key_host_line(a.openwiz, a.key_host)
     src = Path(a.openwiz) / 'adapters' / 'template'
     dest = Path(a.into) / 'adapters' / host
     if dest.exists():
@@ -439,7 +471,7 @@ def cmd_copy(a):
                 new = new.replace(old, to.format(**values))
             if new != text:
                 path.write_text(new, encoding='utf-8')
-        login_line(tmp / host / 'README.md', LOGIN[a.login].format(host=host), a.key_variable)
+        login_line(tmp / host / 'README.md', LOGIN[a.login].format(host=host), a.key_variable, key_line)
         os.replace(tmp / host, dest)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -1046,6 +1078,7 @@ def parser():
     p = cmd('copy')
     p.add_argument('--login', choices=tuple(LOGIN), required=True)
     p.add_argument('--key-variable')
+    p.add_argument('--key-host')
     p.add_argument('--openwiz', required=True)
     p.add_argument('--into', required=True)
     p = cmd('ticket')

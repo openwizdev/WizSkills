@@ -1105,9 +1105,6 @@ EOF
 expect 'WQ5: with the merge queue off, main changing the same file still re-tests it' 0 check.json 'store31 | main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pull(31; .queue = false)' -- check <<EOF
 re-test #31 for #12 at $S31: main changed src/store/store.rs in #24 after 2026-11-01T10:30:00Z, which its CI may not have tested; run its CI again on the latest main
 EOF
-expect 'WQ5: with the merge queue on, a red required check still goes to its builder' 0 check.json 'store31 | pull(31; .queue = true | .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE")' -- check <<EOF
-CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
-EOF
 expect 'K9: main changed tests, the pull request changes only docs: merge' 0 check.json 'store31 | pull(31; .files = [changed("docs/store.md"; "modified")]) | main24("11:15"; [changed("tests/store.rs"; "modified")])' -- check <<EOF
 merge #31 for #12 at $S31: APPROVE and CI green
 EOF

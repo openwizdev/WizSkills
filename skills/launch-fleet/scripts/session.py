@@ -1,36 +1,4 @@
 #!/usr/bin/env python3
-"""The session runner (#2324): the open Claude Code or Codex chat is the fleet.
-
-  session.py run OWNER/NAME --spec S --harness H --model M --reviewer-harness H --reviewer-model M
-             [--max 3] [--poll 10] [--ci-poll 30] [--idle 1800]
-
-Run it in the foreground from the project checkout, with the environment host.py needs
-(OPENWIZ_ADAPTERS, and LAUNCH_FLEET_RUNS or the heartbeat's own project run map by default).
-Each tick reads `fleet.sh spec S` and does the lines a script can do alone, by the skill's own rules:
-
-- `start #N`: claim it (`launch-fleet: starting`, then `fleet.sh claim`), start its builder with
-  `host.py start` and record `launch-fleet: started`; at most --max builders this session started run at
-  once, and the rest wait. The first start of a tick goes alone, as the batch's probe; the rest go together.
-- `check start #N: thread run:N, branch B`: record `launch-fleet: start checked, branch B`.
-- `review #P for #N at C`: claim it, start the reviewer with `host.py start ... review-ticket` and the
-  reviewer brief, and record `launch-fleet: review started C`.
-- `merge #P for #N at C`: `merge.py admit`, then `merge.py merge` (with `--base-rule-checked` only after a
-  fresh `fleet.sh spec S` still prints the same line).
-- `archive #N` is left for launch-fleet; any other line needs you.
-
-No timer: after a tick that did something it ticks again at once. Otherwise it waits only for a run it
-started to end (that agent's status note on its ticket or pull request leaves `working`), checking every
---poll seconds, or, with no run going, for a known pull request's checks to finish, every --ci-poll seconds.
-Nothing moving for --idle seconds needs you.
-
-It holds the spec's heartbeat lock (the folder heartbeat.py locks), so a session and a heartbeat tick never
-run together. The runs it started keep going after it stops.
-
-Exit 0 `session: done: every ticket of spec #S is closed`. Exit 1 `session: refused: ...` (the lock is held).
-Exit 2 `session.py: <why>` on stderr: bad arguments or an unreadable read. Exit 3 `session: stopped at tick
-<n>: needs you: <what>`. Exit 130 on interrupt. Each stop but done and refused ends with `carry on: <the
-command>`.
-"""
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -75,19 +43,19 @@ post, status = sibling('post'), sibling('status')
 
 
 class Refused(Exception):
-    """Exit 1."""
+    pass
 
 
 class Unreadable(Exception):
-    """Exit 2."""
+    pass
 
 
 class NeedsYou(Exception):
-    """Exit 3."""
+    pass
 
 
 class Done(Exception):
-    """Exit 0."""
+    pass
 
 
 def run(argv, check=True):
@@ -105,7 +73,6 @@ def script(name, *args):
 
 @contextmanager
 def lock(repo, spec):
-    """The heartbeat's own per-spec lock: an exclusive flock on its job folder, made here when absent."""
     key = hashlib.sha256(('%s#%s' % (repo.lower(), spec)).encode()).hexdigest()[:20]
     folder = STATE / ('openwiz-heartbeat-' + key)
     made = False
@@ -128,7 +95,7 @@ def lock(repo, spec):
         finally:
             if made:
                 try:
-                    folder.rmdir()  # only while empty: a heartbeat installed meanwhile keeps its folder
+                    folder.rmdir()
                 except OSError:
                     pass
     finally:
@@ -139,13 +106,12 @@ class Session:
     def __init__(self, args, command):
         self.a, self.command = args, command
         self.repo, self.spec = args.repo, args.spec
-        self.live = {}       # (agent, number) -> the second its run started
-        self.prs = set()     # pull requests its builders handed back
-        self.acted = set()   # every line this session acted on: one seen again needs you
+        self.live = {}
+        self.prs = set()
+        self.acted = set()
         self.tick_no = 0
         self.authors = None
 
-    # GitHub reads
 
     def thread(self, number):
         if self.authors is None:
@@ -173,7 +139,6 @@ class Session:
         return bool(items) and all(isinstance(i, dict) and i.get('state') == 'closed' for i in items)
 
     def ended(self, agent, number, since):
-        """The run's agent wrote a status note since its start that is no longer `working`."""
         notes = [f for f in (status.parse(c['body']) for c in self.thread(number)) if f and f['agent'] == agent]
         notes = [f for f in notes if datetime.strptime(f['time'], '%Y-%m-%dT%H:%M:%SZ').replace(
             tzinfo=timezone.utc).timestamp() >= since]
@@ -199,7 +164,6 @@ class Session:
                 return True
         return False
 
-    # Records
 
     def claim(self, number, body, withdrawn):
         try:
@@ -220,7 +184,6 @@ class Session:
             raise NeedsYou('comment %s was not edited to "%s": %s' % (claim, body.split('\n')[0], e))
 
     def refusal(self, claim, kind, number, r):
-        """A start host.py didn't confirm: record a definite refusal; an unknown one stays claimed. Its stop line."""
         line = r.stdout.strip().split('\n')[0] or r.stderr.strip() or 'host.py exit %d' % r.returncode
         if r.returncode == 1 and line.startswith('stopped (driver start failed)'):
             self.edit(claim, kind % 'driver start failed')
@@ -228,16 +191,14 @@ class Session:
             self.edit(claim, kind % 'the host refused it')
         return line if line.startswith('stopped') else '#%s did not start: %s' % (number, line)
 
-    # Lines
 
     def builders(self):
         return sum(agent == 'builder' for agent, _ in self.live)
 
     def start(self, numbers):
-        """Claim and start each builder: the first alone, as the batch's probe, then the rest together."""
         started, stops = [], []
         for batch in (numbers[:1], numbers[1:]):
-            since = int(time.time())  # before the driver runs: a quick run's note may land before it answers
+            since = int(time.time())
             claims = [(n, c) for n in batch for c in [self.claim(n, 'launch-fleet: starting',
                                                                  'launch-fleet: start withdrawn')] if c]
             with ThreadPoolExecutor(max_workers=max(1, len(claims))) as pool:
@@ -317,10 +278,8 @@ class Session:
             raise NeedsYou('docs/agents/fleet.md lists no CI checks, so nothing can merge')
         return ','.join(names)
 
-    # The loop
 
     def tick(self):
-        """One tick: True when it did something, so the next tick runs at once."""
         self.tick_no += 1
         lines = self.due()
         if lines and lines[0].startswith('fleet done #%s:' % self.spec):
@@ -344,7 +303,7 @@ class Session:
         if ready[:room]:
             started = self.start(ready[:room])
             self.acted.update(starts[n] for n in started)
-            if started:  # every claim withdrawn: another tick holds them
+            if started:
                 did.append('started ' + ', '.join('#' + n for n in started))
         acted = bool(did)
         if ready[room:]:
@@ -361,7 +320,6 @@ class Session:
         return acted
 
     def wait(self):
-        """Back once a run it started has ended, or a known pull request's checks may have moved."""
         while time.monotonic() - self.moved < self.a.idle:
             if self.live:
                 for key, since in sorted(self.live.items()):
@@ -380,7 +338,7 @@ class Session:
         raise NeedsYou('nothing moved on spec #%s for %g seconds' % (self.spec, self.a.idle))
 
     def loop(self):
-        self.moved = time.monotonic()   # the last tick that did something, or the last run that ended
+        self.moved = time.monotonic()
         while True:
             if self.tick():
                 self.moved = time.monotonic()
@@ -415,7 +373,7 @@ def main(argv):
     command = shlex.join(['python3', '-I', str(Path(__file__).resolve()), *argv])
     os.environ.setdefault('GH_REPO', args.repo)
     key = hashlib.sha256(args.repo.lower().encode()).hexdigest()[:20]
-    os.environ.setdefault('LAUNCH_FLEET_RUNS', str(STATE / ('runs-%s.json' % key)))  # the heartbeat's map
+    os.environ.setdefault('LAUNCH_FLEET_RUNS', str(STATE / ('runs-%s.json' % key)))
     signal.signal(signal.SIGTERM, signal.default_int_handler)
     session = Session(args, command)
     try:

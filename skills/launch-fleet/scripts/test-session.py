@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""session.py (#2324): the open chat is the fleet. Ticks run back to back in the foreground.
-
-python3 -I skills/launch-fleet/scripts/test-session.py
-
-Each case is a synthetic project: a bare origin whose default branch says `Host: local`, the existing fake
-driver (fixtures/driver.py) as that host, and a synthetic GitHub this file keeps under a lock (FAKE_GH below,
-on PATH as `gh`). `fleet.sh` and `merge.py` are stand-ins that read the same synthetic GitHub, so a test can
-play each builder and reviewer by writing its status note. `host.py`, `post.py`, `status.py` and `brief.py`
-are the real ones. Nothing reaches GitHub or a host.
-"""
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -35,7 +25,6 @@ _spec = importlib.util.spec_from_file_location('session_test_status', HERE / 'st
 status = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(status)
 
-# The world, read and written only under its lock, so the session, its helpers and the test never race.
 WORLD = r'''
 import fcntl, json, os, sys
 from contextlib import contextmanager
@@ -48,7 +37,7 @@ def world():
             w = json.load(f)
         try:
             yield w
-        finally:  # an answer ends the program inside the block, by sys.exit
+        finally:
             with open(PATH + '.tmp', 'w') as f:
                 json.dump(w, f)
             os.replace(PATH + '.tmp', PATH)
@@ -96,7 +85,6 @@ print('unexpected gh call: %s' % ' '.join(args), file=sys.stderr)
 sys.exit(1)
 '''
 
-# fleet.sh's spec check and claim, read from the world as the real one reads GitHub.
 FAKE_FLEET = WORLD + r'''
 cmd, number = sys.argv[1], sys.argv[2]
 if cmd == 'claim':
@@ -166,7 +154,7 @@ class Session(unittest.TestCase):
         for name in ('host.py', 'post.py', 'status.py', 'brief.py', 'heartbeat.py'):
             (self.scripts / name).symlink_to(HERE / name)
         self.program(self.scripts / 'fleet.sh', FAKE_FLEET)
-        (self.scripts / 'merge.py').write_text(FAKE_MERGE)  # session.py runs it with python3 -I
+        (self.scripts / 'merge.py').write_text(FAKE_MERGE)
         self.program(self.home / 'bin/gh', FAKE_GH)
         driver.chmod(0o755)
         self.world = self.home / 'world.json'
@@ -198,7 +186,6 @@ class Session(unittest.TestCase):
                                                    for n in numbers}))
 
     def note(self, n, agent, pr=None):
-        """The agent's run ends: its status note says done, as build-ticket and review-ticket write it."""
         fields = {'agent': agent, 'state': 'done', 'harness': 'Claude Code', 'model': 'Opus 5.5',
                   'skills': 'build-ticket@0.2.1', 'step': 'handed back', 'time': stamp()}
         if pr:
@@ -296,8 +283,8 @@ class Session(unittest.TestCase):
         hold.touch()
         process = self.session('--idle', '20', FAKE_DRIVER_HOLD=str(hold))
         self.until(lambda: len(self.starts()) == 1, 'the start', process)
-        self.note(3, 'builder')   # the local driver answers only once the first turn settles
-        time.sleep(1.1)           # so the note's second is before the answer's
+        self.note(3, 'builder')
+        time.sleep(1.1)
         hold.unlink()
         out = self.ended(process, 3)
         self.assertIn('needs you: nothing is due on spec #7 and no run or check is going\n', out)
@@ -342,7 +329,7 @@ class Session(unittest.TestCase):
         self.assertEqual((tick.returncode, tick.stdout), (1, 'heartbeat: a heartbeat operation is already running\n'))
         process.send_signal(signal.SIGINT)
         self.ended(process, 130)
-        fd = os.open(self.lock_dir, os.O_RDONLY | os.O_DIRECTORY)  # a heartbeat tick holds it now
+        fd = os.open(self.lock_dir, os.O_RDONLY | os.O_DIRECTORY)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             third = subprocess.run(self.command(), cwd=self.home / 'checkout', env=self.env, capture_output=True,

@@ -611,8 +611,6 @@ if sys.argv[1] == 'clone':
     os.makedirs(os.path.dirname(tool))
     open(tool, 'w').write(open(os.environ['FAKE_INSTALLER']).read())
 """
-# A synthetic 0.1.1 package's installer: it answers only the subcommands and flags its --help lists, and
-# its installed binary reports the package's own build identity.
 FAKE_INSTALLER = r"""import json, os, sys
 package = json.load(open(os.environ['FAKE_PACKAGE']))
 sub, args = sys.argv[1], sys.argv[2:]
@@ -639,7 +637,6 @@ elif sub == 'install':
 
 
 class InstallsTheReleaseItFetches(unittest.TestCase):
-    """Run steps 1 and 2 as written against a synthetic 0.1.1 release that is GitHub's Latest."""
 
     def run_steps(self):
         import re
@@ -710,7 +707,6 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
 
 
 class RestartReadsTheSkillsOwnVersion(unittest.TestCase):
-    """Step 4's restart guard and Resume use the skill's own `version:` line, so a release that bumps it passes."""
 
     def synthetic_release(self, version):
         import re, shutil

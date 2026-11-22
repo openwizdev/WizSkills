@@ -190,7 +190,7 @@ TICKET='number
         closedByPullRequestsReferences(first: 5, includeClosedPrs: true) {
           pageInfo { hasNextPage }
           nodes {
-            id number state isDraft merged mergedAt closedAt baseRefName headRefOid
+            id number state isDraft merged mergedAt closedAt baseRefName headRefOid isMergeQueueEnabled
             repository { databaseId nameWithOwner }
             commits(last: 1) {
               nodes {
@@ -1764,6 +1764,7 @@ def guard($p; $at; $rs; $head; $c):
   # Each required check'"'"'s latest run, as required_ci picks it (latest_check).
   [$W.checks[] as $n | [$c.statusCheckRollup.contexts.nodes[]? | select((.name // .context) == $n)] | latest_check] as $latest
   | if any($latest[]; . == null or (.conclusion // .state) != "SUCCESS") then empty
+    elif $p.isMergeQueueEnabled == true then "merge \($at): APPROVE and CI green"
     elif any($latest[]; (.checkSuite.workflowRun.createdAt | type) != "string") then
       look($p.number; $rs; "a required check on its head names no workflow run, so main'"'"'s moves since its CI can'"'"'t be checked")
     elif ($c.committedDate | type) != "string" then

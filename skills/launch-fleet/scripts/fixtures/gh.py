@@ -565,7 +565,8 @@ def graphql(w, repo, o, ids, page, answer):
                                                      if re.search(r'\bmessage\b', query) else {}),
                                                   'committedDate': get(p, 'committed'),  # K9 (#337)
                                                   'statusCheckRollup': rollup}}]},
-                'comments': comments(p)}
+                'comments': comments(p),
+                **({'isMergeQueueEnabled': p['queue']} if 'queue' in p and 'isMergeQueueEnabled' in query else {})}
 
     def ticket(t):
         blockers = []

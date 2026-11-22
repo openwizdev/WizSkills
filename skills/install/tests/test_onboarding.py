@@ -1101,7 +1101,6 @@ class FirstMerge(unittest.TestCase):
 
 
 class ExpressFirstFleet(unittest.TestCase):
-    """The install's first fleet: one grill round, about three parallel tickets and no spec video (#2326)."""
 
     def section(self, text, heading):
         return text.split(heading + '\n', 1)[1].split('\n#', 1)[0]

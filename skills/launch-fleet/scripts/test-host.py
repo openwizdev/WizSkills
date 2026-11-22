@@ -22,13 +22,15 @@ import unittest
 
 HERE = Path(__file__).resolve().parent
 REPO = 'synthetic-owner/synthetic-repo'
-# launch-fleet's own installed version, its SKILL.md front matter, which the status writer
-# binds (#1663); the bundle's version can differ from it.
+
+
 def front_version(text):
     found = re.search(r'''(?m)^version: (["']?)([0-9]+\.[0-9]+\.[0-9]+)\1$''', text)
     return found and found.group(2)
 
 
+# launch-fleet's own installed version, its SKILL.md front matter, which the status writer
+# binds (#1663); the bundle's version can differ from it.
 VERSION = front_version((HERE.parent / 'SKILL.md').read_text())
 FLEET_MD = ('# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n'
             '| Record authors | `openwiz[bot]`, `synthetic-owner` |\n')

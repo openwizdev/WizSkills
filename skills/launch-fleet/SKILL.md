@@ -1,7 +1,7 @@
 ---
 name: launch-fleet
 description: Launch a project's fleets and move each approved plan graph's tickets through build, review and merge. Use when a plan graph is approved, when a loop wakes you with due lines or GitHub's messages, when moving a spec to fresh wakes, or to see what a fleet has due. Not for planning (to-tickets), building (build-ticket) or reviewing (review-ticket).
-version: 0.3.0
+version: 0.4.0
 ---
 
 # Launch fleet
@@ -23,6 +23,10 @@ These hold on every line, before every effect.
 ## Launch
 
 The orchestrator launches a fleet when a plan graph is approved, by its machine approval (J203, no human reply) or by the user: check the approval is recorded, make sure the project's two loops exist, ask about GitHub's messages, and start the spec's fleet loop. Follow [references/launch.md](references/launch.md). Done when both loops exist, the user said yes or no to GitHub's messages, and the spec has a read-back `launch-fleet: fleet active, loop fleet-<S>` record (or a `look` saying why not).
+
+### Hosts without CloudRoom
+
+Use the [local heartbeat](references/launch.md#hosts-without-cloudroom) to launch a fleet and to handle each driver-started `launch-fleet` wake. It polls GitHub every ten minutes, and “run the fleet now” runs the same check immediately. Follow the same claim and merge gates. Use the driver's `wake` for delivery. Loop reporting and thread archiving are no-ops on this path.
 
 ## Each wake
 

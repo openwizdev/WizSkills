@@ -1,0 +1,9 @@
+$ TEST_EXPECTED=2 TEST_ONLY="contexts #1958:*" sh skills/launch-fleet/scripts/test.sh
+# fleet.sh at main 6f58505, before the fix; temporary folders shown as <tmp>
+FAIL contexts #1958: same number in two repositories is two PRs: exit 2, not 0; stdout: ; stderr: jq: error (at <tmp>/specs.json:1): conflicting PR check snapshots
+fleet.sh: can't read REST issue facts for the GitHub query Spec
+FAIL contexts #1958: same number in two repositories keeps each its own checks: exit 2, not 0; stdout: ; stderr: jq: error (at <tmp>/specs.json:1): conflicting PR check snapshots
+fleet.sh: can't read REST issue facts for the GitHub query Spec
+ok   every gh call was one of fleet.sh's reads
+2 cases, 2 failed
+exit 1

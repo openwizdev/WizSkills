@@ -32,11 +32,11 @@ Read this when a plan graph is approved, when a spec moves to fresh wakes, or wh
 
    ```sh
    room-cli loop hook <wake loop id> \
-     | jq '{name: "web", active: true, events: ["issues", "issue_comment", "pull_request", "pull_request_review", "check_suite", "workflow_run"], config: {url: .url, content_type: "json", insecure_ssl: "0"}}' \
+     | jq '{name: "web", active: true, events: ["issues", "issue_comment", "pull_request", "pull_request_review", "workflow_run"], config: {url: .url, content_type: "json", insecure_ssl: "0"}}' \
      | python3 -I "<this skill's folder>/scripts/route.py" gh api --method POST 'repos/{owner}/{repo}/hooks' --input - --jq '{id, events, active}'
    ```
 
-   `route.py gh api` runs `gh api` with a clean environment: only what gh needs to find itself, its login, host and repository, certificates and a proxy passes through, and every other setting is dropped. A trace setting in the caller's shell (`GH_DEBUG=api`, the older `DEBUG=api`, Go's `GODEBUG=http2debug=2`, or any a later release adds) would otherwise write the request or response, address included, to the terminal before `--jq` filters anything. Every `gh api` call that sends or reads a webhook, here and below, runs this way. That is the repository's webhook with content type `application/json`, no secret (the address is the secret), and the individual events issues, issue comments, pull requests, pull request reviews, check suites and workflow runs. The user may instead add it in the repository's settings (Webhooks, Add webhook, the same choices), taking a fresh address straight to their clipboard (`room-cli loop hook <wake loop id> | jq -j .url | pbcopy`) and pasting it into the form, never into a file or a message.
+   `route.py gh api` runs `gh api` with a clean environment: only what gh needs to find itself, its login, host and repository, certificates and a proxy passes through, and every other setting is dropped. A trace setting in the caller's shell (`GH_DEBUG=api`, the older `DEBUG=api`, Go's `GODEBUG=http2debug=2`, or any a later release adds) would otherwise write the request or response, address included, to the terminal before `--jq` filters anything. Every `gh api` call that sends or reads a webhook, here and below, runs this way. That is the repository's webhook with content type `application/json`, no secret (the address is the secret), and the individual events issues, issue comments, pull requests, pull request reviews and workflow runs. The user may instead add it in the repository's settings (Webhooks, Add webhook, the same choices), taking a fresh address straight to their clipboard (`room-cli loop hook <wake loop id> | jq -j .url | pbcopy`) and pasting it into the form, never into a file or a message.
 
    If an address ever leaks, rotate it: a fresh address from `room-cli loop hook` (which retires the old one) goes into the existing webhook the same way:
 
@@ -97,3 +97,25 @@ routes the spec without using its activation timestamp as a takeover cutoff.
 Legacy records keep their existing takeover semantics during rollout.
 
 **A message for a spec with its own loop** prints `wake fleet #<S>: room-cli loop run fleet-<S>`. Resolve the handle through the private loop file (`LAUNCH_FLEET_LOOPS`, key `S`) with `scripts/route.py loop`, run `room-cli loop run <that id>` once and do nothing else for that spec; never post the real id. If the file or key is missing (`route.py tick` prints `wake fleet #<S>: unresolved`), write nothing on GitHub, as any record there comes back through the same webhook and wakes the same missing handle again: name it in the loop report (`--action "fleet #<S> loop handle unresolved"`) and leave the spec to its own loop. If CloudRoom refuses the run, record nothing: the spec's loop still runs on its own. A spec whose record names no loop, or a loop another spec in the same wake names, gets no line and waits for its loop.
+
+## Hosts without CloudRoom
+
+After checking the spec's recorded approval, install one local heartbeat for that spec. Run the commands from a checkout of the project with `origin` set. Use the installed launch-fleet skill's absolute folder, the approved orchestrator harness and model IDs, and the absolute `OPENWIZ_ADAPTERS` folder from host setup. GitHub CLI, Git, jq, Python 3 and the harness must be available to the signed-in user. The scheduled command uses the tool paths from installation.
+
+```sh
+python3 -I "<this skill's folder>/scripts/heartbeat.py" install "<owner>/<repo>" "<S>" "<harness>" "<model>"
+```
+
+Show the job to the user. On their yes, repeat with `--yes`. The script installs a per-user LaunchAgent on macOS, or a systemd user timer on Linux with crontab as the fallback when the user manager is unavailable. Each runs the installed GitHub-only `fleet.sh spec <S>` check every ten minutes. When a check finds due lines, the heartbeat wakes the saved orchestrator through the driver. The heartbeat starts an orchestrator for the spec when there is no saved run or after retiring a run the driver reports stopped or missing. The job lock covers the check and the driver calls.
+
+Use the same script with `status|pause|resume|remove|run "<owner>/<repo>" "<S>"`. Run `run` for “run the fleet now”. Pause removes the schedule and skips manual ticks until resume restores it. Remove takes down the schedule, stops the saved orchestrator and removes the scheduler state. The private job folder under `~/.local/state/openwiz-heartbeat/` holds `ticks.log`, one short line per tick, and `last-wake/runs.json`, the active orchestrator map. For a manual stop, use that map as `LAUNCH_FLEET_RUNS` with `host.py stop <owner>/<repo> <S>`. Retired run IDs stay in private maps under `retired-runs/`. If a start is unresolved, reconcile it with the driver before moving aside the job's `starting` folder. `status` names that folder while it exists, and once the spec is done (its tick logs `done`) it tells you to run `remove`. Remove also retires a saved run the driver no longer knows.
+
+### Running a local wake
+
+`host.py start OWNER/NAME N HARNESS MODEL [SKILL]` sends the named skill to the selected host driver. Leaving off `SKILL` starts `build-ticket`. The heartbeat uses `host.py start <owner>/<repo> <S> <harness> <model> launch-fleet` so the wake starts on the spec.
+
+A driver-started `launch-fleet` wake on a non-CloudRoom host takes up that spec. Set `LAUNCH_FLEET_RUNS` to the absolute path in `LAUNCH_FLEET_HEARTBEAT_RUNS` before reading or changing project runs. The heartbeat keeps that shared project map separate from the spec's private orchestrator map. Read the project's current settings and recheck the spec with `fleet.sh spec <S>` from the wake's project checkout. Handle the due lines with the skill's claim, verification and merge gates, then record the outcomes on GitHub.
+
+- Poll through the heartbeat. Skip CloudRoom loops, webhooks and loop records.
+- Deliver to a driver-run agent with `host.py wake <owner>/<repo> <N>`. Use its recorded route and read the outcome before recording delivery.
+- For an archive line, settle and record the GitHub outcome. Skip the thread archive and loop report, including at the end of this wake. End the turn.

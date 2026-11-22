@@ -57,6 +57,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -92,6 +93,7 @@ SECRET_NAME = re.compile(r'TOKEN|SECRET|PASSWORD|CREDENTIAL|_KEY$|^KEY')  # the 
 # stdout only, as the ticket never carries the driver's words (the decision on R3 at 90aed73).
 USERINFO = re.compile(r'(?:[a-z][a-z0-9+.-]*:)?//[^\s/?#@]*@|(?<![\w.%+-])[^\s/?#@:]+:[^\s/?#@]*@[a-z0-9]', re.I)
 LOG = 'driver-failures.log'                       # owner-only, beside LAUNCH_FLEET_RUNS: the driver's own words
+ROLES = {'review-ticket': ('reviewer', 'pull request', "pull request's reviewer")}
 
 
 class Unreadable(Exception):
@@ -184,11 +186,67 @@ def strict(text):
         return None
 
 
+def token_step(repo, n):
+    if not configured():
+        return
+    try:
+        r = subprocess.run([sys.executable, '-I', str(HERE / 'github-app/agent-token.py'), 'start', '--requester',
+                            'builder-%s' % n, '--repository', repo], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print('host.py: the agent helper did not run (%s); #%s starts as the owner\'s login' % (type(e).__name__, n),
+              file=sys.stderr)
+        return
+    if r.stderr:
+        sys.stderr.write(r.stderr)
+
+
+LEGACY_KEY = 'OPENWIZ_GITHUB_APP_KEY'
+SHIM = """#!/bin/sh
+set -f
+rest=
+IFS=:
+for part in $PATH; do [ "$part" = {folder} ] || rest=${{rest:+$rest:}}$part; done
+unset IFS
+PATH=$rest
+export PATH
+command -v {name} > /dev/null || {{ echo "openwiz: no {name} on PATH" >&2; exit 127; }}
+unset {key}
+exec {python} -I {helper} run --requester builder-{n} --repository {repo} -- {name} "$@"
+"""
+DRIVER_ENV = None
+
+
+def configured():
+    return bool(os.environ.get('OPENWIZ_TOKEN_SERVICE'))
+
+
+def builder_env(repo, n):
+    folder = runs_path().parent / 'agent-token-bin' / ('%s-%s' % (repo.replace('/', '--'), n))
+    try:
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(folder.parent, 0o700)
+        os.chmod(folder, 0o700)
+        for name in ('gh', 'git'):
+            fd, tmp = tempfile.mkstemp(dir=folder, prefix='.shim-')
+            with os.fdopen(fd, 'w') as f:
+                f.write(SHIM.format(n=n, name=name, folder=shlex.quote(str(folder)), key=LEGACY_KEY, repo=repo,
+                                    python=shlex.quote(sys.executable),
+                                    helper=shlex.quote(str(HERE / 'github-app/agent-token.py'))))
+            os.chmod(tmp, 0o700)
+            os.replace(tmp, folder / name)
+    except OSError as e:
+        raise Unreadable("can't write #%s's gh and git shims in %s (%s)" % (n, folder, type(e).__name__))
+    env = dict(os.environ)
+    env['PATH'] = '%s%s%s' % (folder, os.pathsep, env.get('PATH', os.defpath))
+    return env
+
+
 def call(host, command, given):
     """The driver's run id, or Outcome on a refusal or any answer that isn't exactly v1's."""
     try:
         r = subprocess.run([str(driver(host)), command], input=json.dumps(given), capture_output=True, text=True,
-                           timeout=TIMEOUT)
+                           timeout=TIMEOUT, env=DRIVER_ENV)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise Outcome('unknown: the %s driver did not answer %s (%s); a run may exist, so reconcile before any '
                       'retry' % (host, command, type(e).__name__))
@@ -269,18 +327,23 @@ def logged(repo, n, host, command, refusal):
     return stamp
 
 
-def report(repo, n, host, command, entry):
+def role(skill):
+    return ROLES.get(skill, ('builder', 'ticket', 'builder'))
+
+
+def report(repo, n, host, command, entry, skill='build-ticket'):
     """After the third refusal: the fleet note and one comment on #N, each only when #N lacks it.
 
     The comment never carries the driver's words (the orchestrator's decision on R3 at 90aed73): a fixed
     reason, the exit category and a pointer to the owner-only log's entry. Each write is tried even when the
     other failed (R1 of the review at 1f9c7f6); post.Stop names every failure."""
+    agent, item, named = role(skill)
     stopped, comments = reports(repo, n)
     failed = [] if entry else ['the driver log %s could not be written' % LOG]
     if not stopped:
         try:
-            note(repo, n, 'stopped', "the %s driver refused this builder's %s 3 times; the reason is in a comment "
-                                     "here" % (host, command))
+            note(repo, n, 'stopped', "the %s driver refused this %s's %s 3 times; the reason is in a comment "
+                                     "here" % (host, named, command))
         except Exception as e:
             failed.append(why(e))
     if not comments:
@@ -288,16 +351,16 @@ def report(repo, n, host, command, entry):
                  "%s for #%s." % (LOG, entry, n)) if entry else \
             "they could not be saved to the fleet owner's private driver log, so run the driver by hand to read them."
         try:
-            post.comment(repo, int(n), "%s\n\nThe %s driver refused to %s this ticket's builder 3 times (exit 1: "
-                                       "refused). Its own words are kept off this public ticket: %s"
-                                       % (MARK, host, command, where))
+            post.comment(repo, int(n), "%s\n\nThe %s driver refused to %s this %s's %s 3 times (exit 1: "
+                                       "refused). Its own words are kept off this public %s: %s"
+                                       % (MARK, host, command, item, agent, item, where))
         except Exception as e:
             failed.append(why(e))
     if failed:
         raise post.Stop('; '.join(failed))
 
 
-def clear(repo, n, host, done):
+def clear(repo, n, host, done, skill='build-ticket'):
     """After a success: mark #N's failure comments cleared and follow a stopped fleet note with a done one.
 
     Each write is tried even when another failed, as report()'s are; post.Stop names every failure."""
@@ -311,7 +374,7 @@ def clear(repo, n, host, done):
             failed.append(why(e))
     if stopped:
         try:
-            note(repo, n, 'done', 'the %s driver %s this builder on a later try' % (host, done))
+            note(repo, n, 'done', 'the %s driver %s this %s on a later try' % (host, done, role(skill)[2]))
         except Exception as e:
             failed.append(why(e))
     if failed:
@@ -326,16 +389,16 @@ def attempt(repo, n, host, command, given):
         line = "stopped (%s): the %s driver refused #%s's %s 3 times; next: %s" % (FAILED, host, n, command,
                                                                                 public(refusal.next))
         try:
-            report(repo, n, host, command, logged(repo, n, host, command, refusal))
+            report(repo, n, host, command, logged(repo, n, host, command, refusal), given.get('skill', 'build-ticket'))
         except Exception as e:  # nothing started: the next refusal writes what is missing
             line += "; unknown: the ticket's report is incomplete (%s)" % why(e)
         raise Outcome(line)
 
 
-def cleared(repo, n, host, done):
+def cleared(repo, n, host, done, skill='build-ticket'):
     """clear() after a success is saved: an `unknown: ...` line when it could not, or None."""
     try:
-        clear(repo, n, host, done)
+        clear(repo, n, host, done, skill)
     except Exception as e:  # the run is saved: any failure here only delays the clearing
         return 'unknown: the failure report on #%s was not cleared (%s); the next success clears it' % (n, why(e))
     return None
@@ -405,6 +468,9 @@ def record(repo, change):
 
 
 def main(argv):
+    global DRIVER_ENV
+    if configured():
+        os.environ.pop(LEGACY_KEY, None)
     kind = argv[0] if argv else ''
     if kind == 'which' and len(argv) == 1:
         print('host: %s' % (chosen() or 'none'))
@@ -417,6 +483,8 @@ def main(argv):
                          'stop OWNER/NAME N')
     repo, n = argv[1], argv[2]
     run = load(repo)['runs'].get(n)
+    if configured():
+        DRIVER_ENV = builder_env(repo, n)
     live = 'refused: #%s already has a run on %s; wake or stop it instead'
     if kind == 'start':
         host = chosen()
@@ -426,6 +494,7 @@ def main(argv):
         ready(repo)
         if run and not run.get('stopped'):
             raise Outcome(live % (n, run['host']))
+        token_step(repo, n)
         new = attempt(repo, n, host, 'start', {'repository': repo, 'ticket': int(n), 'skill': skill,
                                                 'harness': argv[3], 'model': argv[4]})
 
@@ -437,7 +506,7 @@ def main(argv):
             raise Outcome('unknown: #%s started on %s but its run was not saved; save run %s on host %s for #%s '
                           'privately before anything else' % (n, host, new, host, n))
         print('started #%s on %s' % (n, host))
-        unclear = cleared(repo, n, host, 'started')
+        unclear = cleared(repo, n, host, 'started', skill)
         if unclear:
             print(unclear)
         return 0
@@ -445,6 +514,7 @@ def main(argv):
         raise Outcome('no run: #%s was not started through a driver' % n)
     unclear = None
     if kind == 'wake':
+        token_step(repo, n)
         attempt(repo, n, run['host'], kind, {'run': run['run']})
         unclear = cleared(repo, n, run['host'], 'woke')
     else:

@@ -465,7 +465,7 @@ if [ -z "$WORKER" ] && [ -z "${TEST_ONLY:-}" ]; then
     # The ci job adds up the shards' counts; each shard records its own.
     { printf 'cases %s\ntotal %s\ngroups %s\n' "$cases" "$CASES" "${groups:-0}"
       sort -n "$tmp/times" 2> /dev/null | sed 's/^/group /'; } > "$tmp/ran" \
-      && { [ -z "${TEST_SHARD_RAN:-}" ] || cp "$tmp/ran" "$TEST_SHARD_RAN"; } \
+      && { [ -z "${TEST_SHARD_RAN:-}" ] || cat "$tmp/ran" > "$TEST_SHARD_RAN"; } \
       || bad 'the shard record' "can't write ${TEST_SHARD_RAN:-its record}"
     echo "shard $SHARD_K of $SHARD_N: $cases of $CASES cases, $(grep -c '^group ' "$tmp/ran") of ${groups:-0} groups"
   else

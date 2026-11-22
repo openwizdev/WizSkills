@@ -105,10 +105,10 @@ class CheckShards(unittest.TestCase):
         expected = sorted((name, tuple(command)) for name, commands in run.SUITES.items()
                           for command in commands if (name, tuple(command)) not in split)
         self.assertEqual(listed_commands, expected)
-        for row, (suite, count) in run.PARTS.items():
-            self.assertEqual([(s['name'], s['skill'], [c['suite'] for c in s['commands']])
-                              for s in shards if s['name'].startswith(row + '.')],
-                             [(f'{row}.{n}', row, [suite]) for n in range(1, count + 1)])
+        self.assertEqual([(s['name'], s['skill'], [c['suite'] for c in s['commands']])
+                          for s in shards if '.' in s['name']],
+                         [(f'{row}.{n}', row, [suite]) for row, (suite, count) in run.PARTS.items()
+                          for n in range(1, count + 1)])
         for shard in shards:
             self.assertEqual(set(shard), {'name', 'skill', 'commands', 'env'})
             if '.' not in shard['name']:

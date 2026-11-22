@@ -620,6 +620,52 @@ class Review(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout), (2, ""), out.stdout)
         self.assertIn("cannot read origin/gone...HEAD with git", out.stderr)
 
+    def test_the_builders_own_pass_needs_a_self_check_line_for_each_probe(self):
+        work, head = self.hand_back("raise FileExistsError('cookbook.zip')")
+        probes = ("## Self-check\n\n"
+                  "- Undo and rerun: `git revert --no-commit HEAD && python3 -m unittest test_export` printed "
+                  "`FAILED (failures=1)` at its assertion.\n"
+                  "- Error paths: `python3 export.py --to cookbook.zip; echo $?` printed `3`.\n"
+                  "- Consumers: n/a: nothing else reads export.py.\n\n")
+        base = (f"Closes example/product#41\n\n## Summary\n\nExport refuses an existing zip.\n\n"
+                f"## Rulings\n\nnone\n\n{probes}## Facts\n\n- **Head:** `{head}`\n"
+                f"- **Tests:** `test_export_refuses`. catches: a second export overwriting the first.\n")
+        out = self.builder_pass(work, base)
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "self-check: ok"), out.stdout + out.stderr)
+        at_end = base.replace(probes, "") + "\n" + probes.rstrip("\n")
+        out = self.builder_pass(work, at_end)
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "self-check: ok"), out.stdout + out.stderr)
+        missing = "no ## Self-check section with one line per probe"
+        empty = "the ## Self-check section has no probe lines"
+        planted = {
+            "no section": (base.replace(probes, ""), [missing]),
+            "a deeper heading only": (base.replace("## Self-check", "### Self-check"), [missing]),
+            "an empty section": (base.replace(probes, "## Self-check\n\n"), [empty]),
+            "a blank section at the end": (base.replace(probes, "") + "\n## Self-check\n  \n", [empty]),
+            "a line with no command": (
+                base.replace("- Consumers: n/a: nothing else reads export.py.", "- Consumers: checked, all fine."),
+                ['the ## Self-check line "- Consumers: checked, all fine." has neither a `command` with what it '
+                 "printed nor n/a: <why>"]),
+            "a command with no output": (
+                base.replace(" printed `3`.", "."),
+                ['the ## Self-check line "- Error paths: `python3 export.py --to cookbook.zip; echo $?`." has '
+                 "neither a `command` with what it printed nor n/a: <why>"]),
+            "n/a with no reason": (
+                base.replace("n/a: nothing else reads export.py.", "n/a:"),
+                ['the ## Self-check line "- Consumers: n/a:" has neither a `command` with what it printed nor '
+                 "n/a: <why>"]),
+            "no section and no Closes line": (
+                base.replace(probes, "").replace("Closes example/product#41\n", ""),
+                ["no Closes line names the ticket; the review cannot start", missing]),
+        }
+        for name, (text, expected) in planted.items():
+            with self.subTest(name):
+                out = self.builder_pass(work, text)
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                n = len(expected)
+                self.assertEqual(out.stdout.splitlines(),
+                                 [f"miss: {m}" for m in expected] + [f"self-check: {n} miss{'es' if n > 1 else ''}"])
+
     def test_post_writes_once_and_reads_back(self):
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
         path = self.file("r.md", FULL)

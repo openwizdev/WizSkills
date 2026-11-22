@@ -51,20 +51,28 @@ grep -m1 '^version:' ~/.claude/skills/install/SKILL.md "${CODEX_HOME:-$HOME/.cod
 
 `<root>` is `$HOME/.local/lib/openwiz` unless the user chose another. Take the first that holds:
 
-- No `<root>/current`, or `--build-identity` does not read 0.1.0: resume at step 1.
+- No `<root>/current`, or `--build-identity` does not read the `<version>` of the release you install (step 1 reads it): resume at step 1.
 - `status` does not read the GitHub account, or the user chose CloudRoom and `check` does not read `cloudroom_login_verified`: resume at step 3. `identity_unreadable` means GitHub gave no clear answer: wait a minute and run `status` again; it clears.
 - The running agent's `install/SKILL.md` is missing, or does not read `version: 0.3.1`: resume at step 4. When that agent's folder holds OpenWiz's 18 skills, run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4.
 - Otherwise resume at step 5; for a first fleet already under way, at step 6 with `first_fleet.py next`. If it prints `Next: where.`, follow step 6.1 with the recovered choice.
 
 ## 1. Preflight
 
+First read the release you install, GitHub's Latest:
+
+```sh
+curl -sS --proto '=https' -o /dev/null -w '%{redirect_url}\n' https://github.com/openwizdev/OpenWiz/releases/latest
+```
+
+It prints `https://github.com/openwizdev/OpenWiz/releases/tag/<tag>`. Use that `<tag>` (such as `v0.1.1`) below, and `<version>` for it without the `v` (`0.1.1`). To install 0.1.0, use `v0.1.0` as `<tag>` and `0.1.0` as `<version>`. With no `/tag/` in it, GitHub has no Latest release yet: use the tag the user names, never a guess.
+
 ```sh
 openwiz=<private temporary folder>/openwiz
-git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$openwiz"
+git clone --depth 1 --branch <tag> https://github.com/openwizdev/OpenWiz "$openwiz"
 python3 -I "$openwiz"/tools/install/install preflight
 ```
 
-`git clone` may warn that `refs/tags/v0.1.0` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) has a build, but CloudRoom offers no Intel Mac build today: if the user chose CloudRoom, say so plainly, offer this computer or boat.dev instead, and stop before installing if they keep CloudRoom. Exit 5 names each missing item and its `next` step: tell the user plainly what they do themselves (`gh`: install it and run `gh auth login` in their own terminal). `room-cli` reading `missing` never stops preflight; it matters only if the user chose CloudRoom, and step 3 installs CloudRoom then. Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`). Read its `checks` even on exit 0: `gh` reading `missing` does not stop preflight, but setup needs it. Then the user installs GitHub CLI first, from https://cli.github.com, and `gh --version` shows it is there; then continue.
+`git clone` may warn that `refs/tags/<tag>` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. Today supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) has a build, but CloudRoom offers no Intel Mac build today: if the user chose CloudRoom, say so plainly, offer this computer or boat.dev instead, and stop before installing if they keep CloudRoom. Exit 5 names each missing item and its `next` step: tell the user plainly what they do themselves (`gh`: install it and run `gh auth login` in their own terminal). `room-cli` reading `missing` never stops preflight; it matters only if the user chose CloudRoom, and step 3 installs CloudRoom then. Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`). Read its `checks` even on exit 0: `gh` reading `missing` does not stop preflight, but setup needs it. Then the user installs GitHub CLI first, from https://cli.github.com, and `gh --version` shows it is there; then continue.
 
 Done when preflight passes, or the user has each next step.
 
@@ -75,12 +83,12 @@ python3 -I "$openwiz"/tools/install/install download --target <target> --dir <pr
 python3 -I "$openwiz"/tools/install/install install --assets <private download folder> --target <target> --root <root>
 ```
 
-**While 0.1.0 is not yet GitHub's Latest release,** `download` refuses ("the step could not be completed safely") because `releases/latest/download/...` answers 404. Check that with `curl -sI https://github.com/openwizdev/OpenWiz/releases/latest/download/openwiz-<target>.sha256`. On a 404, and only then, fetch the same three files from the pinned tag into a new owner-only folder, then run the same `install` above:
+**When `<tag>` is not GitHub's Latest release** (it has none yet, or you named an older tag), skip `download`: it fetches only Latest. With no Latest, `download` refuses ("the step could not be completed safely") because `releases/latest/download/...` answers 404. Check that with `curl -sI https://github.com/openwizdev/OpenWiz/releases/latest/download/openwiz-<target>.sha256`. On a 404, or for a named tag, and only then, fetch the same three files from the pinned tag into a new owner-only folder, then run the same `install` above:
 
 ```sh
 umask 077; mkdir <private download folder>
-for f in openwiz-<target>.sha256 openwiz-<target>.manifest.json openwiz-0.1.0-<target>.tar.gz; do
-  curl -fsSL --proto '=https' -o <private download folder>/"$f" https://github.com/openwizdev/OpenWiz/releases/download/v0.1.0/"$f"
+for f in openwiz-<target>.sha256 openwiz-<target>.manifest.json openwiz-<version>-<target>.tar.gz; do
+  curl -fsSL --proto '=https' -o <private download folder>/"$f" https://github.com/openwizdev/OpenWiz/releases/download/<tag>/"$f"
 done
 ```
 
@@ -92,9 +100,9 @@ Then prove the build:
 <root>/current/openwiz --build-identity
 ```
 
-It prints `"version":"0.1.0"` and the release's `source` commit. On Linux, a `weak version 'GLIBC_2.39' not found` line on stderr is harmless. OpenWiz's skills go into the user's agents at step 4, after setup.
+It prints `"version":"<version>"` and the release's `source` commit. On Linux, a `weak version 'GLIBC_2.39' not found` line on stderr is harmless. OpenWiz's skills go into the user's agents at step 4, after setup.
 
-Done when `install` printed `"activated": true` with the version, target, `build` and `state_root`, and `--build-identity` read 0.1.0.
+Done when `install` printed `"activated": true` with the version, target, `build` and `state_root`, and `--build-identity` read `<version>`.
 
 ## 3. Setup and connections
 
@@ -138,7 +146,7 @@ python3 -I "$openwiz"/tools/install/install skills --root <root>
 
 It copies the 18 skills into `<root>/skills` and into each agent folder present here: `~/.claude/skills` (Claude Code), `${CODEX_HOME:-$HOME/.codex}/skills` (Codex: `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise `~/.codex/skills`), `~/.cursor/skills`, `~/.config/opencode/skills` and `~/.grok/skills`. It prints `"outcome": "installed"` even when it copied nothing, so check two things: its `harnesses` entry for the agent you are running in reads `installed`, and that agent's folder, the entry's `path` (`ls ~/.claude/skills`, or for Codex `ls "${CODEX_HOME:-$HOME/.codex}/skills"`), now holds all 18 by name: `ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`. If the entry reads `absent`, that agent's folder (`~/.claude`, or for Codex `$CODEX_HOME` when set, otherwise `~/.codex`) is missing on this computer: tell the user which folder, that their agent has no OpenWiz skills, and its `next` step; never create the folder yourself. A skill of the user's own with the same name refuses the whole step: report it.
 
-Then make every installed copy of this skill this one, the whole folder. The copy `install skills` just wrote comes from the 0.1.0 package: it is older (`version: 0.2.0`), its `SKILL.md` and scripts still name a setup page and a server 0.1.0 removed, and a new session loads it whatever the user says. Take this skill's own folder: the one you read it from when it is on this computer (a WizSkills clone or plugin: set `src` to it and skip the clone), otherwise a fresh clone of WizSkills (it installs nothing). Then overwrite each agent folder that holds OpenWiz's copy (marked by `.openwiz-skill`), and check every file by content:
+Then make every installed copy of this skill this one, the whole folder. The copy `install skills` just wrote comes from the release's package and can be older: `grep -m1 '^version:' <root>/skills/install/SKILL.md` prints its real version, an older copy's `SKILL.md` and scripts can still name a setup page and a server OpenWiz removed, and a new session loads it whatever the user says. Take this skill's own folder: the one you read it from when it is on this computer (a WizSkills clone or plugin: set `src` to it and skip the clone), otherwise a fresh clone of WizSkills (it installs nothing). Then overwrite each agent folder that holds OpenWiz's copy (marked by `.openwiz-skill`), and check every file by content:
 
 ```sh
 wizskills=<private temporary folder>/WizSkills

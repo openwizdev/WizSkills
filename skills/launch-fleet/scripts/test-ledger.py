@@ -25,8 +25,12 @@ FAKE_GH = r'''
 import json, os, re, sys
 args = sys.argv[1:]
 
+VALUED = ('-X', '--method', '-f', '-F', '--field', '--raw-field', '--input', '-H', '--header', '-q', '--jq', '-t',
+          '--template', '--hostname', '--cache', '-p', '--preview')
+BODY = ('-f', '-F', '--field', '--raw-field', '--input')
+SWITCHES = ('--paginate', '--slurp', '-i', '--include', '--silent', '--verbose')
+
 def operation(args):
-    """What GitHub would be asked to do: 'GET <path>', 'POST <path>'..., 'query', 'mutation', or 'gh <command>'."""
     if args[:1] != ['api']:
         return 'gh ' + ' '.join(args[:2])
     method, endpoint, body, query, rest = None, None, False, None, list(args[1:])
@@ -35,21 +39,26 @@ def operation(args):
         name, eq, value = a.partition('=') if a.startswith('--') else (a, '', '')
         if a[:2] in ('-X', '-f', '-F') and len(a) > 2:
             name, eq, value = a[:2], '=', a[2:]
-        if name in ('-X', '--method', '-f', '-F', '--field', '--raw-field', '--input', '-H', '--header', '-q',
-                    '--jq', '-t', '--template', '--hostname', '--cache', '-p', '--preview'):
+        if name in VALUED:
             value = value if eq else (rest.pop(0) if rest else '')
             if name in ('-X', '--method'):
                 method = value.upper()
-            elif name in ('-f', '-F', '--field', '--raw-field', '--input'):
+            elif name in BODY:
                 body = True
                 if value.startswith('query='):
                     query = value[len('query='):]
-        elif not a.startswith('-') and endpoint is None:
+        elif a in SWITCHES:
+            pass
+        elif a.startswith('-') or endpoint is not None:
+            return 'unknown'
+        else:
             endpoint = a
     if endpoint == 'graphql':
-        if query is None or re.search(r'\b(mutation|subscription)\b', query):
+        if query is None or query.startswith('@'):
+            return 'unknown'
+        if re.search(r'\b(mutation|subscription)\b', query):
             return 'mutation'
-        return 'query' if re.match(r'\s*(query\b|\{)', query) else 'mutation'
+        return 'query' if re.match(r'\s*(query\b|\{)', query) else 'unknown'
     return '%s %s' % (method or ('POST' if body else 'GET'), endpoint)
 
 op = operation(args)

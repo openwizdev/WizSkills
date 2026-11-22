@@ -902,6 +902,51 @@ class NoCredential(Base):
         self.assertEqual(oct((self.state / 'run.json').stat().st_mode & 0o777), '0o600')
 
 
+class KeyHostCopy(Base):
+    """`copy --key-host`: the README's key line, from OpenWiz's registry, names only (driver v1 N4)."""
+
+    def copy(self, *args, openwiz=OPENWIZ, into=None, check=None):
+        into = into or self.tmp / 'repo'
+        return self.wd('copy', '--state', self.state, '--openwiz', openwiz, '--into', into, *args, check=check)
+
+    def test_a_key_host_copy_names_the_host_its_variable_and_its_keychain_entry_on_one_line(self):
+        # catches: a key line naming the variable without the keychain entry, which KY1's kit fails ("names
+        # EXAMPLEHOST_API_KEY, the key's variable"), or one that drops N4's "the driver never sees it"
+        self.begin()
+        self.copy('--login', 'host', '--key-host', 'examplehost', check=0)
+        lines = (self.tmp / 'repo' / 'adapters' / 'examplehost' / 'README.md').read_text().split('\n')
+        self.assertEqual(lines[1:5], ['', 'Login: held by examplehost', '',
+                                      'API key: through the key helper for `examplehost`: set `EXAMPLEHOST_API_KEY` '
+                                      'yourself, or keep it in your keychain as `openwiz-examplehost`; the driver '
+                                      'never sees it.'])
+        self.assertEqual([x for x in lines if x.startswith('API key:')], [lines[4]])
+
+    def test_a_key_host_copy_refuses_what_the_registry_does_not_hold(self):
+        # catches: a key line written for a host OpenWiz never reviewed, for a login that stays on the machine,
+        # beside a second key line, or from a registry that isn't one, and a refusal that repeats its input
+        self.begin()
+        broken = self.tmp / 'broken-openwiz'
+        shutil.copytree(OPENWIZ, broken)
+        cases = {'an unregistered host': (['--login', 'host', '--key-host', 'otherhost'], OPENWIZ),
+                 'a machine login': (['--login', 'machine', '--key-host', 'examplehost'], OPENWIZ),
+                 'both key options': (['--login', 'host', '--key-host', 'examplehost', '--key-variable',
+                                       'EXAMPLEHOST_API_KEY'], OPENWIZ),
+                 'no registry': (['--login', 'host', '--key-host', 'examplehost'], self.tmp / 'no-openwiz'),
+                 'a broken registry': (['--login', 'host', '--key-host', 'examplehost'], broken)}
+        shutil.copytree(OPENWIZ, self.tmp / 'no-openwiz')
+        (self.tmp / 'no-openwiz' / 'kernel' / 'driver-kit' / 'hosts.json').unlink()
+        (broken / 'kernel' / 'driver-kit' / 'hosts.json').write_text(
+            '{"examplehost": {"origin": "https://api.examplehost.example", "variable": "EXAMPLEHOST_API_KEY=%s", '
+            '"keychain": "openwiz-examplehost", "header": "authorization-bearer"}}' % SECRET)
+        for name, (args, openwiz) in cases.items():
+            with self.subTest(name):
+                into = self.tmp / ('repo-' + name.replace(' ', '-'))
+                p = self.copy(*args, openwiz=openwiz, into=into, check=1)
+                self.assertIn('key host', p.stdout)
+                self.assertNotIn('otherhost', p.stdout + p.stderr)
+                self.assertFalse(into.exists())
+
+
 def key_host_lines():
     """SKILL.md's key-host lines: the paragraph that opens `**A key host.**`, to the next numbered step."""
     skill = (SCRIPT.parents[1] / 'SKILL.md').read_text()
@@ -969,7 +1014,7 @@ class KeyHost(unittest.TestCase):
                          'set WRITE_DRIVER_OPENWIZ to an OpenWiz checkout with the key helper to run the real kit')
     def test_the_sample_key_host_driver_passes_the_real_kit_on_a_fake_host(self):
         # catches: lines that teach a driver the real kit (openwizdev/OpenWiz#2379) fails: a helper it can't
-        # find, a call outside the helper, or a README naming the key's variable on its own line
+        # find, a call outside the helper, or a README key line from `copy --key-host` the kit refuses
         import importlib.machinery
         import importlib.util
         openwiz = Path(os.environ['WRITE_DRIVER_OPENWIZ']).resolve()
@@ -983,6 +1028,12 @@ class KeyHost(unittest.TestCase):
         os.replace(tree / 'adapters' / 'devin' / 'driver.txt', tree / 'adapters' / 'devin' / 'driver')
         (tree / 'adapters' / 'devin' / 'driver').chmod(0o755)
         shutil.copy(tree / 'adapters' / 'template' / 'schema.json', tree / 'adapters' / 'devin' / 'schema.json')
+        state, user = tmp / 'wd-state', tmp / 'user-repo'
+        for args in (('begin',), ('host', '--host', 'devin', '--costly', 'no'),
+                     ('copy', '--openwiz', tree, '--into', user, '--login', 'host', '--key-host', 'devin')):
+            subprocess.run([sys.executable, '-I', str(SCRIPT), args[0], '--state', state, *args[1:]], check=True,
+                           capture_output=True, timeout=60)
+        shutil.copy(user / 'adapters' / 'devin' / 'README.md', tree / 'adapters' / 'devin' / 'README.md')
         kits = tree / 'kernel' / 'driver-kit'
 
         def module(path):

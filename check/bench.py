@@ -10,19 +10,22 @@ from pathlib import Path
 HELP = """Where WizSkills' `check` spends its time (spec #2134, WQ0).
 
 python3 check/bench.py --from 2026-11-20 --to 2026-11-22 [--save DIR]
-python3 check/bench.py --runs 45007415699 45007321482 [--save DIR]
+python3 check/bench.py --runs 45007415699/1 45007321482/2 [--save DIR]
 python3 check/bench.py --saved DIR [--window LABEL]
 
 It reads finished `check` runs through `gh api` (GET only; it writes nothing
 on GitHub), or a folder saved by `--save`, and prints one Markdown table: each
 phase's seconds per run and the median over the window, with how many runs
-knew it. A date window keeps the successful pull_request runs created in it.
+knew it. A date window keeps the successful pull_request runs created in it,
+each at the attempt GitHub lists. Every sample is one attempt, `<run id>/<attempt>`;
+`--runs` takes that form to replay those exact attempts, and a bare run id means
+its latest attempt.
 
 Phases: queue wait (job created to started), setup (set up job, checkout,
 Changesets install), the changeset gate, the comment check, the browser-tools
 install, the rules and the standalone check (from the `check/run.py` log),
-each suite (its `running` line to its `pass`/`fail` line) and the total (run
-created to last job completed). A phase a run never finished is `unknown`,
+each suite (its `running` line to its `pass`/`fail` line) and the total (the
+attempt's start to its last job completed). A phase a run never finished is `unknown`,
 never zero, and stays out of the median. A run with several jobs takes each
 phase's longest job.
 """
@@ -92,7 +95,7 @@ def run_phases(run, jobs, logs):
             known = [v for v in (phases.get(phase), value) if v is not None]
             phases[phase] = max(known) if known else None
     ends = [when(job.get('completed_at')) for job in jobs]
-    phases['total'] = None if not ends or None in ends else seconds(when(run.get('created_at')), max(ends))
+    phases['total'] = None if not ends or None in ends else seconds(when(run.get('run_started_at')), max(ends))
     return phases
 
 
@@ -102,7 +105,7 @@ def report(window, runs):
         suites += [p for p in phases if p.startswith('suite ') and p not in suites]
     shown = lambda v: 'unknown' if v is None else f'{v:.1f}'
     lines = [f'Window: {window}', f'Runs: {len(runs)}', '',
-             '| Phase | Median (s) | Known | ' + ' | '.join(str(r) for r, _ in runs) + ' |',
+             '| Phase | Median (s) | Known | ' + ' | '.join(label for label, _ in runs) + ' |',
              '| --- | ---: | ---: |' + ' ---: |' * len(runs)]
     for phase in (*FIXED, *suites, 'total'):
         values = [phases.get(phase) for _, phases in runs]
@@ -133,11 +136,22 @@ def window_runs(start, end):
     return sorted(runs, key=lambda r: r['created_at'])
 
 
+def sample(run):
+    return f'{run["id"]}/{run["run_attempt"]}'
+
+
+def run_attempt(text):
+    run_id, _, attempt = text.partition('/')
+    if not run_id.isdigit() or (attempt and not attempt.isdigit()) or (_ and not attempt):
+        raise argparse.ArgumentTypeError(f'{text!r} is not <run id> or <run id>/<attempt>')
+    return run_id, attempt
+
+
 def fetch(run, save):
-    jobs = gh(f'repos/{REPO}/actions/runs/{run["id"]}/jobs?per_page=100')['jobs']
+    jobs = gh(f'repos/{REPO}/actions/runs/{run["id"]}/attempts/{run["run_attempt"]}/jobs?per_page=100')['jobs']
     logs = {job['id']: gh(f'repos/{REPO}/actions/jobs/{job["id"]}/logs', raw=True) for job in jobs}
     if save:
-        folder = Path(save) / str(run['id'])
+        folder = Path(save) / sample(run).replace('/', '-')
         folder.mkdir(parents=True, exist_ok=True)
         (folder / 'run.json').write_text(json.dumps(run, indent=1), encoding='utf-8')
         (folder / 'jobs.json').write_text(json.dumps({'jobs': jobs}, indent=1), encoding='utf-8')
@@ -153,7 +167,7 @@ def saved(folder):
         jobs = json.loads((path / 'jobs.json').read_text(encoding='utf-8'))['jobs']
         logs = {job['id']: (path / f'{job["id"]}.log').read_text(encoding='utf-8')
                 for job in jobs if (path / f'{job["id"]}.log').is_file()}
-        out.append((run['id'], run_phases(run, jobs, logs)))
+        out.append((sample(run), run_phases(run, jobs, logs)))
     return out
 
 
@@ -162,7 +176,7 @@ def main(argv):
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--from', dest='start', metavar='DATE')
     parser.add_argument('--to', dest='end', metavar='DATE')
-    parser.add_argument('--runs', nargs='+', type=int, metavar='ID')
+    parser.add_argument('--runs', nargs='+', type=run_attempt, metavar='ID[/ATTEMPT]')
     parser.add_argument('--saved', metavar='DIR')
     parser.add_argument('--save', metavar='DIR')
     parser.add_argument('--window', metavar='LABEL')
@@ -176,12 +190,12 @@ def main(argv):
         runs, window = saved(args.saved), args.window or f'saved runs in {args.saved}'
     else:
         if args.runs:
-            chosen = [gh(f'repos/{REPO}/actions/runs/{r}') for r in args.runs]
-            window = args.window or 'runs ' + ', '.join(map(str, args.runs))
+            chosen = [gh(f'repos/{REPO}/actions/runs/{r}' + (f'/attempts/{a}' if a else '')) for r, a in args.runs]
+            window = args.window or 'runs ' + ', '.join(sample(run) for run in chosen)
         else:
             chosen = window_runs(args.start, args.end)
             window = args.window or f'pull_request runs of {REPO} check created {args.start}..{args.end}'
-        runs = [(run['id'], fetch(run, args.save)) for run in chosen]
+        runs = [(sample(run), fetch(run, args.save)) for run in chosen]
     print(report(window, runs))
     return 0
 

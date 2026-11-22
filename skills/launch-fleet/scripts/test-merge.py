@@ -390,19 +390,24 @@ THREADS = {'builder:12': BUILDER, 'review:7:' + HEAD: REVIEWER, 'review:7:claim:
            'review:7:' + OTHER: SECOND, 'builder:13': ELSEWHERE, 'review:8:' + HEAD: ELSEWHERE,
            'comment:9001': TH + 'synsender', 'fleet:3': TH + 'synfleet'}
 USAGE = {BUILDER: {'credits': 3.5}, REVIEWER: {'credits': 2}, SECOND: {'credits': 1.25}, ELSEWHERE: {'credits': 99}}
-KNOWN = 'Ticket #12 cost (PR #7): builder %s; reviewer %s; CI unknown; total %s'
+KNOWN = 'Ticket #12 cost (PR %s): builder %s; reviewer %s; CI unknown; total %s'
 
 
-def known(builder, reviewer, total):
-    return 'launch-fleet: cost: ' + KNOWN % (
+def known(builder, reviewer, total, ref='#7'):
+    return 'launch-fleet: cost: ' + KNOWN % (ref,
         builder if builder == 'unknown' else builder + ' credits, unknown tokens',
         reviewer if reviewer == 'unknown' else reviewer + ' credits, unknown tokens',
         total if total == 'unknown' else total + ' credits, unknown tokens, unknown runner minutes')
 
 
 class CostFromAgents(unittest.TestCase):
-    def world(self, threads=THREADS, usage=USAGE, runs=None, state='file'):
-        w = World(self, pr=pr(state='MERGED', mergeCommit={'oid': 'c' * 40}))
+    def world(self, threads=THREADS, usage=USAGE, runs=None, state='file', home=REPO, owner=None):
+        merged = dict(state='MERGED', mergeCommit={'oid': 'c' * 40})
+        if home == REPO:
+            w = World(self, pr=pr(**merged))
+        else:
+            w = World(self, pr=pr(closes=closes((home, 12)), **merged), comments={'12': []},
+                      others={home: {'comments': {'12': []}}})
         project(w, None)
         (w.dir / 'room-cli.py').write_text(ROOM_CLI)
         cli = w.dir / 'bin/room-cli'
@@ -412,12 +417,12 @@ class CostFromAgents(unittest.TestCase):
         w.env.pop('LAUNCH_FLEET_RUNS', None)
         w.env.update(FAKE_USAGE=json.dumps(usage), FAKE_USAGE_LOG=str(w.dir / 'usage.log'))
         if state == 'file':
-            (w.dir / 'state.json').write_text(json.dumps({'repo': REPO, 'threads': threads}))
+            (w.dir / 'state.json').write_text(json.dumps({'repo': owner or home, 'threads': threads}))
             w.env['LAUNCH_FLEET_STATE'] = str(w.dir / 'state.json')
         elif state is not None:
             w.env['LAUNCH_FLEET_STATE'] = state
         if runs is not None:
-            (w.dir / 'runs.json').write_text(json.dumps(runs))
+            (w.dir / 'runs.json').write_text(json.dumps(runs) if isinstance(runs, dict) else runs)
             w.env['LAUNCH_FLEET_RUNS'] = str(w.dir / 'runs.json')
         return w
 
@@ -454,6 +459,7 @@ class CostFromAgents(unittest.TestCase):
         bad = lambda answer: dict(USAGE, **{BUILDER: answer})
         bad_reviewer = lambda answer: dict(USAGE, **{SECOND: answer})
         driver = {'repo': REPO, 'runs': {'12': {'host': 'synthetic', 'run': 'run-1'}}}
+        driver_review = {'repo': REPO, 'runs': {'7': {'host': 'synthetic', 'run': 'run-2'}}}
         cases = {
             'state file missing': (dict(state=str(Path('/nonexistent-synthetic/state.json'))), 'unknown', 'unknown'),
             'state path relative': (dict(state='state.json'), 'unknown', 'unknown'),
@@ -461,6 +467,11 @@ class CostFromAgents(unittest.TestCase):
             'no reviewer': (dict(threads=no_reviewer), '3.5', 'unknown'),
             'driver run in state': (dict(threads=dict(THREADS, **{'run:12': TH + 'synrun'})), 'unknown', '3.25'),
             'driver run in the run map': (dict(runs=driver), 'unknown', '3.25'),
+            'driver reviewer in the run map': (dict(runs=driver_review), '3.5', 'unknown'),
+            'driver reviewer in state': (dict(threads=dict(THREADS, **{'run:7': TH + 'synrun'})), '3.5', 'unknown'),
+            'driver reviewer and no CloudRoom reviewer': (dict(threads=no_reviewer, runs=driver_review),
+                                                          '3.5', 'unknown'),
+            'run map unreadable': (dict(runs='{"repo": "x"'), 'unknown', 'unknown'),
             'failed read': (dict(usage=bad({'fail': 1})), 'unknown', '3.25'),
             'not JSON': (dict(usage=bad({'raw': 'credits: 4'})), 'unknown', '3.25'),
             'credits missing': (dict(usage=bad({'json': {'history': {'hours': []}}})), 'unknown', '3.25'),
@@ -485,6 +496,33 @@ class CostFromAgents(unittest.TestCase):
                 self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
                 self.assertEqual(w.bodies(12), [known(builder, reviewer, 'unknown')])
                 self.no_id(w, '')
+
+    def test_a_cross_repository_ticket_gets_its_agents_line_once(self):
+        w = self.world(home=TICKETS)
+        self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+        line = known('3.5', '3.25', '6.75', ref='%s#7' % REPO)
+        self.assertEqual(w.others[TICKETS].bodies(12), [line])
+        self.assertEqual(w.bodies(12), [])
+        self.assertEqual(self.reads(w), sorted([BUILDER, REVIEWER, SECOND]))
+        self.no_id(w, '')
+        self.assertEqual(self.cost(w), (0, 'cost already posted 5001'))
+        self.assertEqual(w.others[TICKETS].bodies(12), [line])
+        self.assertEqual(len(self.reads(w)), 3)
+
+    def test_a_cross_repository_state_must_be_the_tickets_fleet(self):
+        w = self.world(home=TICKETS, owner=REPO)
+        self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+        self.assertEqual(w.others[TICKETS].bodies(12), [known('unknown', 'unknown', 'unknown', ref='%s#7' % REPO)])
+        self.assertEqual(self.reads(w), [])
+
+    def test_a_cross_repository_project_command_is_still_refused(self):
+        w = self.world(home=TICKETS)
+        (w.dir / 'project/tools/collector/cost_line.py').write_text(PRINTS)
+        self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+        self.assertEqual(w.others[TICKETS].bodies(12), [
+            'launch-fleet: cost unknown (PR %s#7): the cost command costs only tickets in the pull '
+            "request's repository" % REPO])
+        self.assertEqual(self.reads(w), [])
 
     def test_the_projects_own_command_still_wins(self):
         w = self.world()

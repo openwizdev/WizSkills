@@ -24,6 +24,10 @@ These hold on every line, before every effect.
 
 The orchestrator launches a fleet when a plan graph is approved, by its machine approval (J203, no human reply) or by the user: check the approval is recorded, make sure the project's two loops exist, ask about GitHub's messages, and start the spec's fleet loop. Follow [references/launch.md](references/launch.md). Done when both loops exist, the user said yes or no to GitHub's messages, and the spec has a read-back `launch-fleet: fleet active, loop fleet-<S>` record (or a `look` saying why not).
 
+### Hosts without CloudRoom
+
+Use the [local heartbeat](references/launch.md#hosts-without-cloudroom) to launch a fleet and to handle each driver-started `launch-fleet` wake. It polls GitHub every ten minutes, and “run the fleet now” runs the same check immediately. Follow the same claim and merge gates. Use the driver's `wake` for delivery. Loop reporting and thread archiving are no-ops on this path.
+
 ## Each wake
 
 1. **Read the state.** Read the project's settings and the spec's latest fleet record. Verify the private repository is private, then read the thread, loop and run maps from its latest default-branch revision into absolute paths for `LAUNCH_FLEET_STATE`, `LAUNCH_FLEET_LOOPS` and `LAUNCH_FLEET_RUNS` (an empty run map, `{"repo":"owner/name","runs":{}}`, when it has none yet). Unreadable state, ownership or a superseded record: post a thread-free `look` and stop.

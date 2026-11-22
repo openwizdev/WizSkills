@@ -57,6 +57,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -185,11 +186,67 @@ def strict(text):
         return None
 
 
+def token_step(repo, n):
+    if not configured():
+        return
+    try:
+        r = subprocess.run([sys.executable, '-I', str(HERE / 'github-app/agent-token.py'), 'start', '--requester',
+                            'builder-%s' % n, '--repository', repo], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print('host.py: the agent helper did not run (%s); #%s starts as the owner\'s login' % (type(e).__name__, n),
+              file=sys.stderr)
+        return
+    if r.stderr:
+        sys.stderr.write(r.stderr)
+
+
+LEGACY_KEY = 'OPENWIZ_GITHUB_APP_KEY'
+SHIM = """#!/bin/sh
+set -f
+rest=
+IFS=:
+for part in $PATH; do [ "$part" = {folder} ] || rest=${{rest:+$rest:}}$part; done
+unset IFS
+PATH=$rest
+export PATH
+command -v {name} > /dev/null || {{ echo "openwiz: no {name} on PATH" >&2; exit 127; }}
+unset {key}
+exec {python} -I {helper} run --requester builder-{n} --repository {repo} -- {name} "$@"
+"""
+DRIVER_ENV = None
+
+
+def configured():
+    return bool(os.environ.get('OPENWIZ_TOKEN_SERVICE'))
+
+
+def builder_env(repo, n):
+    folder = runs_path().parent / 'agent-token-bin' / ('%s-%s' % (repo.replace('/', '--'), n))
+    try:
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(folder.parent, 0o700)
+        os.chmod(folder, 0o700)
+        for name in ('gh', 'git'):
+            fd, tmp = tempfile.mkstemp(dir=folder, prefix='.shim-')
+            with os.fdopen(fd, 'w') as f:
+                f.write(SHIM.format(n=n, name=name, folder=shlex.quote(str(folder)), key=LEGACY_KEY, repo=repo,
+                                    python=shlex.quote(sys.executable),
+                                    helper=shlex.quote(str(HERE / 'github-app/agent-token.py'))))
+            os.chmod(tmp, 0o700)
+            os.replace(tmp, folder / name)
+    except OSError as e:
+        raise Unreadable("can't write #%s's gh and git shims in %s (%s)" % (n, folder, type(e).__name__))
+    env = dict(os.environ)
+    env['PATH'] = '%s%s%s' % (folder, os.pathsep, env.get('PATH', os.defpath))
+    return env
+
+
 def call(host, command, given):
     """The driver's run id, or Outcome on a refusal or any answer that isn't exactly v1's."""
     try:
         r = subprocess.run([str(driver(host)), command], input=json.dumps(given), capture_output=True, text=True,
-                           timeout=TIMEOUT)
+                           timeout=TIMEOUT, env=DRIVER_ENV)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise Outcome('unknown: the %s driver did not answer %s (%s); a run may exist, so reconcile before any '
                       'retry' % (host, command, type(e).__name__))
@@ -411,6 +468,9 @@ def record(repo, change):
 
 
 def main(argv):
+    global DRIVER_ENV
+    if configured():
+        os.environ.pop(LEGACY_KEY, None)
     kind = argv[0] if argv else ''
     if kind == 'which' and len(argv) == 1:
         print('host: %s' % (chosen() or 'none'))
@@ -423,6 +483,8 @@ def main(argv):
                          'stop OWNER/NAME N')
     repo, n = argv[1], argv[2]
     run = load(repo)['runs'].get(n)
+    if configured():
+        DRIVER_ENV = builder_env(repo, n)
     live = 'refused: #%s already has a run on %s; wake or stop it instead'
     if kind == 'start':
         host = chosen()
@@ -432,6 +494,7 @@ def main(argv):
         ready(repo)
         if run and not run.get('stopped'):
             raise Outcome(live % (n, run['host']))
+        token_step(repo, n)
         new = attempt(repo, n, host, 'start', {'repository': repo, 'ticket': int(n), 'skill': skill,
                                                 'harness': argv[3], 'model': argv[4]})
 
@@ -451,6 +514,7 @@ def main(argv):
         raise Outcome('no run: #%s was not started through a driver' % n)
     unclear = None
     if kind == 'wake':
+        token_step(repo, n)
         attempt(repo, n, run['host'], kind, {'run': run['run']})
         unclear = cleared(repo, n, run['host'], 'woke')
     else:

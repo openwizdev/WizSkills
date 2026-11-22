@@ -10,6 +10,15 @@ given = sys.stdin.read() if command in ('start', 'wake', 'stop') else ''
 with open(os.environ['FAKE_DRIVER_LOG'], 'a') as log:
     log.write(json.dumps({'host': host, 'command': command, 'input': json.loads(given) if given else None}) + '\n')
 mode = os.environ.get('FAKE_DRIVER_MODE', '')
+if os.environ.get('FAKE_DRIVER_BUILDER') and command in ('start', 'wake'):
+    import subprocess
+    subprocess.run(['gh', 'api', 'user'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, env=dict(os.environ, FAKE_GH_PROBE=os.environ['FAKE_DRIVER_BUILDER'] + '.gh'))
+    helpers = subprocess.run(['git', 'config', '--get-all', 'credential.https://github.com.helper'],
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True).stdout.splitlines()
+    with open(os.environ['FAKE_DRIVER_BUILDER'], 'a') as out:
+        out.write(json.dumps({'command': command, 'git_helper_is_the_apps': bool(helpers) and 'credential --snapshot'
+                              in helpers[-1], 'legacy_key': 'OPENWIZ_GITHUB_APP_KEY' in os.environ}) + '\n')
 if os.environ.get('FAKE_DRIVER_BREAK'):
     os.chmod(os.environ['FAKE_DRIVER_BREAK'], 0o500)
 while os.environ.get('FAKE_DRIVER_HOLD') and os.path.exists(os.environ['FAKE_DRIVER_HOLD']):

@@ -1100,5 +1100,102 @@ class FirstMerge(unittest.TestCase):
         self.assertTrue(says(result.stdout.splitlines()[-1], 'offer'), result.stdout)
 
 
+def step_block(heading, end, keep):
+    text = (SKILL_DIR / 'SKILL.md').read_text()
+    part = text[text.index(heading):text.index(end, text.index(heading))]
+    part = '\n'.join(l[3:] if l.startswith('   ') else l for l in part.split('\n'))
+    return part, next(b for b in re.findall(r'```sh\n(.*?)```', part, re.S) if keep in b)
+
+
+class StepFourReadsTheInstallerOutput(unittest.TestCase):
+    """#2191, #2398: step 4 reads each row of openwiz.skills-install.v1 and the release's own skill list."""
+
+    def run_step(self, output, code):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        home = tmp / 'home'
+        rows = json.loads(json.dumps(output).replace('HOME', str(home)))
+        for row in rows['harnesses']:
+            for name in row.pop('on_disk', []):
+                (Path(row['path']) / name).mkdir(parents=True)
+        fake = tmp / 'openwiz/tools/install/install'
+        fake.parent.mkdir(parents=True)
+        (tmp / 'output.json').write_text(json.dumps(rows))
+        fake.write_text('import sys\nsys.stdout.write(open(%r).read())\nsys.exit(%d)\n' % (str(tmp / 'output.json'), code))
+        step4, block = step_block('## 4. ', '## 5. ', 'install skills')
+        block = (block.replace('"$openwiz"', shlex.quote(str(tmp / 'openwiz'))).replace('<root>', str(tmp / 'root'))
+                 .replace('<private file>', str(tmp / 'skills.json')))
+        out = subprocess.run(['sh', '-c', block], env={'HOME': str(home), 'PATH': os.environ['PATH']},
+                             capture_output=True, text=True)
+        return step4, [l.replace(str(home), '~') for l in out.stdout.split('\n') if l]
+
+    def test_partial_counts_as_done_and_each_skip_and_missing_skill_is_named(self):
+        # catches: step 4 reading only "outcome", hiding a per-skill skip, and a fixed skill count going stale
+        skip = 'Move or rename your own grill, then run this again.'
+        step4, lines = self.run_step({
+            'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'partial',
+            'canonical': 'HOME/root/skills', 'skills': ['grill', 'install', 'write-driver'],
+            'harnesses': [
+                {'id': 'claude-code', 'path': 'HOME/.claude/skills', 'state': 'partial', 'next': 'see below',
+                 'skipped': [{'skill': 'grill', 'path': 'HOME/.claude/skills/grill', 'next': skip}],
+                 'on_disk': ['grill', 'install', 'write-driver']},
+                {'id': 'codex', 'path': 'HOME/.codex/skills', 'state': 'installed', 'next': 'ok',
+                 'on_disk': ['grill', 'install']},
+                {'id': 'cursor', 'path': 'HOME/.cursor/skills', 'state': 'absent', 'next': 'Install Cursor first.'}]}, 0)
+        self.assertEqual(lines, ['exit: 0',
+                                 'partial: claude-code ~/.claude/skills',
+                                 'skipped: grill in claude-code (next: %s)' % skip,
+                                 'installed: codex ~/.codex/skills',
+                                 'missing: write-driver in codex',
+                                 'absent: cursor ~/.cursor/skills (next: Install Cursor first.)',
+                                 'outcome: partial, 3 skills'])
+        self.assertNotIn('refuses the whole step', step4)
+        self.assertNotRegex(step4 + step_block('## Resume', '## 1. ', '')[0], r'\b1[0-9] skills|ask-wiz')
+        for words in ('`installed` or `partial`', 'each `skipped:` line', 'never delete or overwrite it',
+                      'a `missing:` line'):
+            self.assertIn(words, step4)
+
+    def test_refused_means_nothing_was_installed(self):
+        # catches: exit 5 read as a success, or an absent folder left unnamed
+        step4, lines = self.run_step({
+            'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'refused',
+            'canonical': 'HOME/root/skills', 'skills': ['install'],
+            'harnesses': [{'id': 'claude-code', 'path': 'HOME/.claude/skills', 'state': 'absent', 'next': 'No ~/.claude.'},
+                          {'id': 'codex', 'path': 'HOME/.codex/skills', 'state': 'absent', 'next': 'No ~/.codex.'}]}, 5)
+        self.assertEqual(lines, ['exit: 5', 'absent: claude-code ~/.claude/skills (next: No ~/.claude.)',
+                                 'absent: codex ~/.codex/skills (next: No ~/.codex.)', 'outcome: refused, 1 skills'])
+        self.assertIn('`refused` (exit 5) means nothing was installed', step4)
+
+
+class UninstallListsEveryHeartbeatJob(unittest.TestCase):
+
+    def test_a_nested_second_install_is_listed_like_any_job_and_nothing_is_touched(self):
+        # catches: #2377, a second install whose state sits inside the first's read as "this install"
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        jobs = tmp / 'home/.local/state/openwiz-heartbeat'
+        first = tmp / ('first/state/service/builds/%s/runtime/adapters' % ('a' * 40))
+        nested = tmp / ('first/state/second/state/service/builds/%s/runtime/adapters' % ('b' * 40))
+        for name, repo, spec, adapters in (('openwiz-heartbeat-a', 'synthetic-owner/first', '7', first),
+                                           ('openwiz-heartbeat-b', 'synthetic-owner/second', '8', nested),
+                                           ('openwiz-heartbeat-c', 'synthetic-owner/third', '9', None)):
+            (jobs / name).mkdir(parents=True)
+            (jobs / name / 'config.json').write_text(json.dumps({
+                'backend': 'cron', 'argv': ['python3', '-I', '/shared/heartbeat.py', 'run', repo, spec],
+                'environment': {'OPENWIZ_ADAPTERS': str(adapters)} if adapters else {}}))
+        before = sorted(str(p) for p in tmp.rglob('*'))
+        removal, block = step_block('## Recovery and removal', '\nRemoval revokes', 'openwiz-heartbeat')
+        block = block.replace('<state>', str(tmp / 'first/state')).replace('<root>', str(tmp / 'first'))
+        out = subprocess.run(['sh', '-c', block], env={'HOME': str(tmp / 'home'), 'PATH': '/usr/bin:/bin'},
+                             capture_output=True, text=True).stdout.split('\n')
+        self.assertEqual(sorted(str(p) for p in tmp.rglob('*')), before)
+        self.assertEqual([l for l in out if l], ['job: synthetic-owner/first 7 (adapters: %s)' % first,
+                                                 'job: synthetic-owner/second 8 (adapters: %s)' % nested,
+                                                 'job: synthetic-owner/third 9 (adapters: none)'])
+        self.assertNotIn('this install:', removal)
+        self.assertIn('remove only the jobs the user names', removal)
+        self.assertIn('never decide which jobs are this install\'s', removal)
+
+
 if __name__ == '__main__':
     unittest.main()

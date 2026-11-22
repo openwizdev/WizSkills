@@ -293,6 +293,9 @@ class FeedbackPath(unittest.TestCase):
         self.assertEqual((rc, out), (0, {"verified": 9200, "report": 9101}), text)
         rc, out, text = plan(brief(last_edited_at=None), "verify")
         self.assertEqual((rc, out), (0, {"verified": 9200, "report": 9101}), text)
+        rc, out, text = plan(brief(ready_labelled=[{"at": "2026-11-01T09:00:01Z", "by": "synthetic-user"},
+                                                   {"at": "2026-11-01T09:00:01Z", "by": "synthetic-owner"}]), "verify")
+        self.assertEqual((rc, out), (0, {"verified": 9200, "report": 9101}), text)
         for change, why in [
             ({"comments": []}, "approval"),
             ({"comments": [{"author": "synthetic-user", "body": APPROVAL}]}, "approval"),
@@ -309,6 +312,8 @@ class FeedbackPath(unittest.TestCase):
             ({"ready_labelled": [{"at": "2026-11-01T09:00:01Z", "by": None}]}, "added by a record author"),
             ({"ready_labelled": [{"at": "2026-11-01T08:59:59Z", "by": "synthetic-owner"}]}, "after the brief's last edit"),
             ({"ready_labelled": [{"at": "2026-11-01T09:00:00Z", "by": "synthetic-owner"}]}, "after the brief's last edit"),
+            ({"ready_labelled": [{"at": "2026-11-01T09:00:01Z", "by": "synthetic-owner"},
+                                 {"at": "2026-11-01T09:00:01Z", "by": "synthetic-user"}]}, "added by a record author"),
         ]:
             with self.subTest(change=str(change)[:60]):
                 rc, _, text = plan(brief(**change), "verify")

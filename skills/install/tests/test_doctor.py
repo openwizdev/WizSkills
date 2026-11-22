@@ -589,5 +589,151 @@ class SkillNameClash(unittest.TestCase):
         self.assertNotIn('refuses the whole step: report it.', step4)
 
 
+HOST_QUESTION = ("Where should your agents run? This computer (Claude Code or Codex you're signed in to), "
+                 "boat.dev, or CloudRoom.")
+FINISH = ("Installed. Without CloudRoom today you can plan (grill, spec, tickets) and start a builder on this "
+          "computer or on boat.dev by hand. The automatic fleet without CloudRoom arrives in 0.1.1. "
+          "Want CloudRoom now instead? It's optional.")
+DRIVER_START = {'repository', 'ticket', 'skill', 'harness', 'model'}
+
+
+def ticket_start_record():
+    """build-ticket's own pattern for the start record a builder needs before it claims (ticket.py START)."""
+    import importlib.util
+    path = SKILL.parents[1] / 'build-ticket/scripts/ticket.py'
+    spec = importlib.util.spec_from_file_location('ticket_2221', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.START
+
+
+class NoCloudRoomRequired(unittest.TestCase):
+    """OpenWiz 0.1.0's install finishes with no CloudRoom; CloudRoom's steps run only when the user picks it."""
+
+    def setUp(self):
+        self.text = SKILL.read_text()
+
+    def between(self, start, end):
+        self.assertIn(start, self.text)
+        self.assertIn(end, self.text)
+        return self.text[self.text.index(start):self.text.index(end)]
+
+    def test_setup_uses_the_installed_check_without_the_removed_open_command(self):
+        setup = self.between('## 3. ', '## 4. ')
+        self.assertNotIn('/tools/install/install open ', self.text)
+        self.assertIn('/runtime/setup/setup.py check --state-dir <state>', setup)
+
+    def test_overwrite_requires_a_ported_install_on_this_maintenance_line(self):
+        import re
+
+        step = self.between('## 4. ', '## 5. ')
+        self.assertIn('git clone --depth 1 --branch maint/0.3 ', step)
+        fixed = re.search(r'^fixed\(\) .*$', step, re.MULTILINE)
+        self.assertIsNotNone(fixed, 'missing overwrite validator')
+        with tempfile.TemporaryDirectory() as directory:
+            stale = Path(directory) / 'install'
+            write(stale / 'SKILL.md', '---\nversion: 0.3.0\n---\n')
+            write(stale / 'scripts/doctor.py', '')
+            for folder, expected in ((stale, 1), (SKILL.parent, 0)):
+                with self.subTest(folder=folder):
+                    done = subprocess.run(['sh', '-c', fixed[0] + '\nfixed "$1"', 'sh', str(folder)],
+                                          capture_output=True, text=True)
+                    self.assertEqual(done.returncode, expected, done.stderr)
+
+    def test_cloudroom_is_no_requirement_done_condition_or_resume_gate(self):
+        self.assertFalse('needs CloudRoom.' in self.text, 'needs CloudRoom.')
+        self.assertFalse('install cannot be completed here' in self.text, 'install cannot be completed here')
+        step3 = self.between('## 3. ', '## 4. ')
+        done = [l for l in step3.split('\n') if l.startswith('Done when')]
+        self.assertEqual(len(done), 1)
+        self.assertNotRegex(done[0], r'^Done when CloudRoom')
+        for line in self.between('## Resume', '## 1. ').split('\n') + done:
+            if 'cloudroom_' in line:
+                self.assertTrue('chose CloudRoom' in line, line)
+        intel = next(s for s in self.between('## 1. ', '## 2. ').split('. ') if 'Intel Mac' in s and 'stop' in s)
+        self.assertTrue('chose CloudRoom' in intel, intel)
+
+    def test_the_host_question_comes_first_and_cloudroom_runs_only_when_chosen(self):
+        self.assertTrue(HOST_QUESTION in self.text, 'missing: ' + HOST_QUESTION)
+        at = self.text.index(HOST_QUESTION)
+        self.assertLess(at, self.text.index('cloudroom.py', self.text.index('## Resume')))
+        self.assertLess(at, self.text.index('## 1. Preflight'))
+        paragraph = self.text[self.text.rindex('\n\n', 0, at):self.text.index('\n\n', at)]
+        self.assertFalse('recommend' in paragraph.lower(), 'the host question recommends one host')
+        step3 = self.between('## 3. ', '## 4. ')
+        self.assertTrue('ignore every `cloudroom_*` code' in step3, 'ignore every `cloudroom_*` code')
+        self.assertLess(step3.index('ignore every `cloudroom_*` code'), step3.index('| Code | Next |'))
+
+    def test_without_cloudroom_the_finish_says_what_works_and_gives_real_hand_starts(self):
+        import re
+        self.assertTrue(FINISH in self.text, 'missing: ' + FINISH)
+        hand = self.between('## Without CloudRoom', '## 6. ')
+        starts = [l for l in hand.split('\n') if 'driver start' in l]
+        self.assertEqual(len(starts), 2, starts)
+        self.assertTrue(any('"$build"/runtime/adapters/local/driver start' in l for l in starts))
+        self.assertTrue(any('"$ow"/adapters/boat/driver start' in l for l in starts))
+        self.assertFalse('runtime/adapters/boat/driver' in self.text, 'runtime/adapters/boat/driver')
+        self.assertTrue('git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$ow"' in hand, 'git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$ow"')
+        for line in starts:
+            given = re.search(r"echo '(\{.*\})'", line)[1]
+            given = json.loads(re.sub(r'<N>', '7', re.sub(r'"<[^>]*>"', '"x"', given)))
+            self.assertEqual(set(given), DRIVER_START)
+            self.assertEqual(given['skill'], 'build-ticket')
+            self.assertIsInstance(given['ticket'], int)
+        for words in ('approvals.json', '| Harness permission mode | `<mode>` |', 'chmod 600', 'wake', 'stop'):
+            self.assertTrue(words in hand, words)
+        record = re.findall(r'--body "([^"]*)"', hand)
+        self.assertTrue(record and all(ticket_start_record().match(r) for r in record), record)
+
+    def test_the_automatic_first_fleet_on_0_1_0_says_it_runs_in_cloudroom(self):
+        step6 = self.between('## 6. ', '### 1. ')
+        self.assertTrue('even with builders on boat.dev' in step6, 'even with builders on boat.dev')
+        self.assertTrue('0.1.1' in step6, '0.1.1')
+        self.assertTrue('"Without CloudRoom" above' in step6, 'no pointer to "Without CloudRoom"')
+
+
+    def test_manual_plan_ends_at_the_ready_label_readback(self):
+        plan = self.between('- **Plan:**', '- **Start one ticket')
+        self.assertIn('read the ready labels back', plan, 'manual planning has no stopping point')
+        self.assertIn('Skip the `launch-fleet` handoff and the steering video', plan)
+        self.assertIn('return to the hand-start steps below', plan)
+
+    def test_manual_plan_checks_approval_tools_before_writing(self):
+        plan = self.between('- **Plan:**', '- **Start one ticket')
+        preflight, _, _ = plan.partition('run `setup`')
+        self.assertIn('`jq --version`', preflight, 'planning can write tickets before checking jq')
+        self.assertIn('`gh --version`', preflight)
+        self.assertIn('2.94 or newer', preflight)
+        self.assertIn('install jq', preflight)
+        self.assertIn('install or upgrade GitHub CLI', preflight)
+        self.assertIn('Recheck both before continuing', preflight)
+
+    def test_manual_start_checks_builder_readiness_on_both_sides_of_the_record(self):
+        hand = self.between('- **Start one ticket', '- **Review and merge**')
+        before, command, after = hand.partition('gh issue comment')
+        self.assertIn('/build-ticket/scripts/ticket.py read', before,
+                      'a start record can be posted for an ineligible ticket')
+        self.assertIn('proceed only on exit 1 with', before)
+        self.assertIn('ready: no: no launch-fleet start record from a record author', before)
+        self.assertLess(before.index('gh api user --jq .login'), before.index('Post from'))
+        self.assertIn('`Record authors`', before)
+        self.assertTrue(command)
+        gate, start, _ = after.partition('driver start')
+        self.assertIn('run the same ticket read again', gate)
+        self.assertIn('Only exit 0 with `ready: yes`', gate)
+        self.assertTrue(start)
+
+    def test_local_approval_updates_only_the_selected_entry(self):
+        local = self.between('  - **This computer**', '  - **boat.dev**')
+        approval, _, _ = local.partition('driver start')
+        self.assertIn('Read the existing owner-only JSON object', approval,
+                      'writing a second approval can erase the first')
+        self.assertIn('Preserve every other repository and harness entry', approval)
+        self.assertIn('Preview the selected repository, harness and old and new modes', approval)
+        self.assertIn('If the file changed since the preview', approval)
+        self.assertIn('read the saved JSON back', approval)
+        self.assertNotIn('then write `{"<owner>/<name>":', approval)
+
+
 if __name__ == '__main__':
     unittest.main()

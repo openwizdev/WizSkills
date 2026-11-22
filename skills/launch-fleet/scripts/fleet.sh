@@ -535,7 +535,6 @@ next_page() {
   host=${GH_HOST:-github.com}
   if [ "$host" = github.com ]; then prefix=https://api.github.com/; else prefix=https://$host/api/v3/; fi
   case $next in "$prefix"*) next=${next#"$prefix"} ;; *) return 1 ;; esac
-  # #2376: a closing PR's own repository (owner/name and id) keeps its pages there.
   case $next in "repos/${2:-$REPO}/"* | "repositories/${3:-$REPO_ID}/"*) printf '%s\n' "$next" ;;
     search/issues\?*) [ -z "${2:-}" ] && printf '%s\n' "$next" ;; *) return 1 ;; esac
 }
@@ -588,13 +587,10 @@ AUTHORED='def authored($a): map(select(((.user | if type == "object" then .login
 # and labelled-event selection also stay there: REST references/check lists
 # alone do not establish the same facts.
 # Per-check memoization avoids re-reading an issue reached through two specs.
-# #2376: a closing PR in another repository (REPO ID) is read, and kept, as
-# that repository's: never as this repository's same number.
 PR_REPO='def pr_repo($r): .repository.nameWithOwner
   | if type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") then
       (if ascii_downcase == ($r | ascii_downcase) then $r else . end)
     else error("a pull request names no repository") end;'
-# item_file KIND N [REPO]: the facts file of item N, keyed by its repository.
 item_file() {
   case ${3:-$REPO} in "$REPO") printf '%s/%s-%s.json\n' "$TMP" "$1" "$2" ;;
     *) printf '%s/%s-%s-%s.json\n' "$TMP" "$1" "$(printf '%s' "$3" | tr / @)" "$2" ;; esac
@@ -748,7 +744,6 @@ check_contexts() (
 hydrate() (
   source=$1 extra_comments=${2:-}
   check_contexts "$source" || exit 1
-  # A PR in another repository is wanted with that repository and its id.
   jq -r --arg repo "$REPO" "$PR_REPO"'[.. | objects | select(has("number"))
     | select(.closedByPullRequestsReferences.pageInfo != null or has("subIssues")
         or has("subIssuesSummary") or has("commits"))
@@ -2497,16 +2492,16 @@ guard() {
   while read -r _ n _; do
     n=${n#\#}
     is_number "$n" || die "can't read the re-test guard's line for #$n"
-    # #2376: the files of a closing PR are its own repository's; two PRs
-    # with this number in different repositories stop the check.
     home=$(jq -er --arg repo "$REPO" --argjson n "$n" "$PR_REPO"'[.. | objects
       | select(has("headRefOid") and .number == $n) | [pr_repo($repo), .repository.databaseId]] | unique
       | if length == 1 then .[0] | if .[0] == $repo then $repo else "\(.[0]) \(.[1])" end
         else error("not one pull request") end' "$TMP/world.json") \
       || die "can't tell which repository's #$n the re-test guard means"
-    # shellcheck disable=SC2086 # "owner/name id" for another repository
-    set -- $home
-    rest_pages "repos/$1/pulls/$n/files?per_page=100" "$TMP/prfiles-$n.raw" ${2:+"$1" "$2"} || die "can't read the files of #$n"
+    read -r home_repo home_id << EOF
+$home
+EOF
+    rest_pages "repos/$home_repo/pulls/$n/files?per_page=100" "$TMP/prfiles-$n.raw" ${home_id:+"$home_repo" "$home_id"} \
+      || die "can't read the files of #$n"
     files=$(jq -cs "$FILES" "$TMP/prfiles-$n.raw") || die "can't read the files of #$n"
     printf '%s"%s":%s' "$sep" "$n" "$files" >> "$TMP/prfiles.json" || die "can't write"
     sep=','
@@ -2656,7 +2651,6 @@ keep_read() {
       else error("two answers to one request") end) | from_entries' "$@" > "$keep_out/graphql.json" 2> /dev/null || return 0
   merged=false
   for f in "$@"; do jq -e '.data.repository.pullRequests' "$f" > /dev/null 2>&1 && merged=true && break; done
-  # #2376: a closing PR's probes ask its own repository.
   jq -r --arg r "$REPO" --arg d "$DEFAULT" --arg identity "$IDENTITY_PROBE" --argjson merged "$merged" "$PR_REPO"'
     def prs: .closedByPullRequestsReferences.nodes[]?;
     def pull: "repos/\(pr_repo($r))/pulls/\(.number)";

@@ -1639,10 +1639,6 @@ start #13: W3: widget page (spec #10)
 EOF
 expect 'long form: a raised refusal is not raised again' 0 check.json 'say(12; 1202; "11:00"; "launch-fleet: waiting for other-owner/other-repo#71") | say(12; 1203; "11:05"; "launch-fleet: look: comment 1202'"'"'s line `launch-fleet: waiting for other-owner/other-repo#71` names other-owner/other-repo#71, not this repository")' -- check < /dev/null
 
-### #2376: a closing pull request in another repository is read from its own
-
-# PR #31 lives in synthetic-owner/synthetic-tools and closes this repository's
-# #12. Its comments, every check page and its probes are that repository's.
 TOOLS='pull(31; .repo = "synthetic-owner/synthetic-tools")'
 UNRELATED31='.issues += [{number: 31, title: "Synthetic unrelated issue", state: "CLOSED", parent: null, labels: [], blockedBy: [], body: "", comments: [{id: 3199, at: at("11:40"), body: "Synthetic unrelated comment"}]}]'
 expect "cross-repository PR: its comments are its own repository's when this one has no #31 (#2376)" 0 check.json "store31 | $TOOLS" -- check <<EOF
@@ -4000,9 +3996,6 @@ gi1_case 'GI7: another installation gets a full read' installation
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
 gi1_case "GI7: a switch from the account to the App gets a full read" switch
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
-# #2376: the probes of a pull request in another repository read that
-# repository's: it is unchanged while nothing changes, and its new verdict or
-# head gets a full read.
 gi1_tools_case() {
   name=$1 change=$2
   selected "$name" || return 0

@@ -245,8 +245,6 @@ def keep(o, *keys):
     return {k: get(o, k) for k in keys}
 
 
-# #2376: a pull request's "repo" names the repository it lives in, when that is
-# not the world's; it closes the world's issue across repositories. Synthetic.
 def pull_repo(w, p):
     return p.get('repo') or w['repo'] if isinstance(p, dict) else w['repo']
 
@@ -260,7 +258,6 @@ def repo_id(w, r):
 
 
 def view(w, r):
-    """The world as repository R's own reads see it: only its own issues and pull requests."""
     return dict(w, repo=r, issues=each_opt(w.get('issues')) if r == w['repo'] else [],
                 pulls=[p for p in each_opt(w.get('pulls')) if pull_repo(w, p) == r])
 
@@ -603,7 +600,6 @@ def graphql(w, repo, o, ids, page, answer):
         ps = [p for p in pulls if get(p, 'head') == o['oid']]
         if not ps:
             fail('unknown commit: ' + o['oid'])
-        # A commit of another repository is no object in this one (GitHub: null).
         ps = [p for p in ps if pull_repo(w, p) == owner + '/' + name]
         p = ps[0] if ps else None
         start = int(cursor or '0')

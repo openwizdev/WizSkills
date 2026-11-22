@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=909
+CASES=918
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1338,6 +1338,36 @@ withdraw #13: its owned paths collide with #70, which is running or claimed firs
 EOF
 expect 'F6 claim: a newer colliding claim loses' 0 check.json "$OWN13"' claim13 | own(70; "src/page/a.md") | say(70; 1302; "11:56"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
 go #13
+EOF
+B1846='launch-fleet'"'"'s start script and its tests in `skills/launch-fleet/scripts/` in `openwizdev/WizSkills`'
+BTWO='`gadget/a.md` in `synthetic-owner/one`, `gadget/b.md` in `synthetic-owner/two`, all in `gadget/`'
+OWNB='def ownb($n; $b): issue($n; .body = "## Owned paths\n\n- \($b)\n\n**Relies on:** nothing\n");'
+expect 'F6 claim: a running bullet with two in phrases holds no other repository'"'"'s start (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(70; "'"$B1846"'") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+go #13
+EOF
+expect 'F6 claim: a bullet with two in phrases starts beside this repository'"'"'s same path (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(13; "'"$B1846"'") | own(70; "skills/launch-fleet/scripts/") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+go #13
+EOF
+expect 'F6 claim: a bullet with two in phrases collides in its last repository (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(13; "'"$B1846"'") | ownb(70; "`skills/launch-fleet/scripts/fleet.sh` in `openwizdev/wizskills`") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+withdraw #13: its owned paths collide with #70, which is running or claimed first
+EOF
+expect 'F6 claim: a bullet naming two repositories withdraws, naming that bullet (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(13; "- `src/page/` (shared: one line)\n- '"$BTWO"'" | sub("^- "; ""))' -- claim 13 1301 <<EOF
+withdraw #13: its owned-path bullet "$BTWO" can't be read
+EOF
+expect 'F6 claim: a running bullet naming two repositories withdraws, naming that bullet (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(70; "'"$BTWO"'") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+withdraw #13: #70's owned-path bullet "$BTWO" can't be read, and #70 is running or claimed first
+EOF
+expect 'F6 claim: an Owned paths section with no bullet withdraws, saying so (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | issue(13; .body = "## Owned paths\n\n`src/page/`\n")' -- claim 13 1301 <<EOF
+withdraw #13: its Owned paths section has no bullet
+EOF
+expect 'F6 claim: a running bullet whose earlier in phrase is a two-segment file holds no other repository'"'"'s start (#2197 R1)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(70; "the test runner file in `check/run.py` in `openwizdev/WizSkills`") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+go #13
+EOF
+expect 'F6 claim: a running bullet with one repository before a last path phrase holds no start here (#2197 R1)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(70; "`src/page/a.md` in `synthetic-owner/other-repo`, its notes in `src/`") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+go #13
+EOF
+expect 'F6 claim: a running ticket with no owned-path bullet withdraws, saying so (#2197 R2)' 0 check.json "$OWN13"' claim13 | issue(70; .body = "## Owned paths\n\n`src/page/`\n") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+withdraw #13: #70's Owned paths section has no bullet, and #70 is running or claimed first
 EOF
 expect 'needs-info: a new question after the last one was asked' 0 check.json 'issue(12; .labels += ["needs-answer"]) | say(12; 1202; "11:00"; "Which store?") | say(12; 1203; "11:05"; "launch-fleet: asked the orchestrator") | say(12; 1204; "11:30"; "And one more thing?")' -- check <<EOF
 needs-info #12: a question for the orchestrator

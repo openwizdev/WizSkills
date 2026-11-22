@@ -635,6 +635,8 @@ class NoCloudRoomRequired(unittest.TestCase):
             self.assertTrue('only with CloudRoom' in line, line)
         self.assertTrue('no `--project` or `--answer-thread`' in connect, 'prepare still asks CloudRoom ids')
         self.assertFalse('every flag required' in connect, 'every flag required')
+        for words in ('`--host local`', '`--host boat`', '`--host <its name>`', 'refuses them'):
+            self.assertTrue(words in connect, words)
 
 
 if __name__ == '__main__':

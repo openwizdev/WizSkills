@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""The cost per merged PR ledger (CL2, #2285; spec #2275). Read-only.
+import argparse
+from decimal import Decimal, ROUND_HALF_UP
+import importlib.util
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+sys.dont_write_bytecode = True
+USAGE = '''The cost per merged PR ledger (CL2, #2285; spec #2275). Read-only.
 
   python3 -I ledger.py OWNER/NAME [--spec S] [--json]
 
@@ -15,17 +25,7 @@ merged PR: <t/k> credits (<k> of <n> known)`, two decimals; with no known row
 the total and the cost per merged PR are `unknown`. `--json` prints the same
 fields. A failed or partial read, or a record it can't read, prints nothing
 and exits 1; bad arguments exit 2. It writes nothing.
-"""
-import argparse
-from decimal import Decimal, ROUND_HALF_UP
-import importlib.util
-import json
-from pathlib import Path
-import re
-import subprocess
-import sys
-
-sys.dont_write_bytecode = True
+'''
 _spec = importlib.util.spec_from_file_location('launch_fleet_post', Path(__file__).resolve().parent / 'post.py')
 post = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(post)
@@ -75,7 +75,6 @@ def page_of(conn):
 
 
 def every(read):
-    """Each node of a paged connection; read(after) returns the connection."""
     nodes, after = page_of(read(None))
     yield from nodes
     while after is not None:
@@ -93,19 +92,17 @@ def comments(where, issue):
     return nodes
 
 
-def login(author):
-    """A comment's REST login: GraphQL names a bot without its `[bot]`."""
+def rest_login(author):
     if not isinstance(author, dict) or not isinstance(author.get('login'), str):
         return None
     return author['login'] + '[bot]' if author.get('__typename') == 'Bot' else author['login']
 
 
-def row(repo, where, issue, authors):
-    """(ticket, pr, credits or None) from the newest record-author cost line, or None for no line."""
+def newest_cost_row(repo, where, issue, authors):
     newest = None
     for c in comments(where, issue):
         first = c['body'].split('\n', 1)[0] if isinstance(c['body'], str) else ''
-        if post.grants.authored(login(c['author']), authors) and first.startswith('launch-fleet: cost'):
+        if post.grants.authored(rest_login(c['author']), authors) and first.startswith('launch-fleet: cost'):
             newest = first
     if newest is None:
         return None
@@ -137,7 +134,7 @@ def ledger(repo, spec, authors):
             if type(issue['number']) is not int or not isinstance(where, str) or not post.REPO.fullmatch(where):
                 raise TypeError(issue)
             if issue['state'] == 'CLOSED':
-                found = row(repo, where, issue, authors)
+                found = newest_cost_row(repo, where, issue, authors)
                 if found:
                     rows.append((where.casefold() != repo.casefold(), where.casefold(), issue['number'], found))
     except (TypeError, KeyError, AttributeError):
@@ -167,8 +164,11 @@ def text(rows):
     return '\n'.join(lines) + '\n'
 
 
+def number(value):
+    return None if value is None else float(value)
+
+
 def as_json(rows):
-    number = lambda d: None if d is None else float(d)  # noqa: E731
     s = summary(rows)
     s.update(total=number(s['total']), cost_per_merged_pr=number(s['cost_per_merged_pr']))
     return json.dumps({'rows': [{'ticket': t, 'pr': p, 'credits': number(money(c))} for t, p, c in rows], **s},
@@ -176,7 +176,7 @@ def as_json(rows):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='The cost per merged PR ledger. Read-only.')
+    parser = argparse.ArgumentParser(description=USAGE, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('repo')
     parser.add_argument('--spec', type=int)
     parser.add_argument('--json', action='store_true')

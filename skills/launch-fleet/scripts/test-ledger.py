@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""ledger.py on a synthetic GitHub (CL2, #2285): the cost per merged PR ledger.
-
-python3 -I skills/launch-fleet/scripts/test-ledger.py
-
-A fake `gh` serves fleet.md's record authors and answers ledger.py's GraphQL
-reads from a world file, a few issues and comments per page so every read
-pages. Every value is synthetic.
-"""
 import json
 import os
 from pathlib import Path
@@ -155,7 +147,6 @@ MIXED = {
 
 class Ledger(unittest.TestCase):
     def test_rows_total_and_cost_per_merged_pr_count_unknown_rows(self):
-        # catches: an unknown row summed as zero, or the cost per merged PR divided by every merged PR
         w = World(self, MIXED)
         self.assertEqual(w.run(REPO), (0, '#10  PR #110  12.50\n'
                                           '#11  PR #111  unknown\n'
@@ -166,14 +157,12 @@ class Ledger(unittest.TestCase):
                                           'cost per merged PR: 9.88 credits (2 of 5 known)\n', ''))
 
     def test_no_known_row_gives_unknown_total_and_cost_per_merged_pr(self):
-        # catches: a ledger of only unknown rows printed as 0.00 credits
         w = World(self, {'11': MIXED['11'], '12': MIXED['12']})
         self.assertEqual(w.run(REPO), (0, '#11  PR #111  unknown\n#12  PR #112  unknown\n'
                                           'Merged: 2; known: 0; unknown: 2; total: unknown; '
                                           'cost per merged PR: unknown (0 of 2 known)\n', ''))
 
     def test_outsiders_are_ignored_and_the_newest_record_wins(self):
-        # catches: trusting anyone's cost comment, the first record winning, or GraphQL's bare bot login
         issues = {
             '20': closed(known(20, 120, '5'), by('synthetic-stranger', 'launch-fleet: cost unknown (PR #120): x')),
             '21': closed(known(21, 121, '3'), by('synthetic-bot', 'launch-fleet: cost unknown (PR #121): no cost '
@@ -190,7 +179,6 @@ class Ledger(unittest.TestCase):
                                                             'cost per merged PR: 4.75 credits (2 of 3 known)\n', ''))
 
     def test_spec_limits_rows_to_its_closed_sub_issues(self):
-        # catches: --spec ignored, an open sub-issue counted, or a sub-issue in another repository dropped
         others = {'7': closed(known(7, 70, '2'))}
         specs = {REPO + '#1': [REPO + '#10', REPO + '#11', REPO + '#16', OTHER + '#7']}
         w = World(self, MIXED, others=others, specs=specs)
@@ -201,7 +189,6 @@ class Ledger(unittest.TestCase):
                                                          'cost per merged PR: 7.25 credits (2 of 3 known)\n', ''))
 
     def test_json_prints_the_same_fields(self):
-        # catches: --json drifting from the text ledger, or an unknown printed as 0
         code, out, err = World(self, MIXED).run(REPO, '--json')
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(json.loads(out), {
@@ -213,7 +200,6 @@ class Ledger(unittest.TestCase):
             'merged': 5, 'known': 2, 'unknown': 3, 'total': 19.75, 'cost_per_merged_pr': 9.88})
 
     def test_it_writes_nothing(self):
-        # catches: a ledger that posts or edits while it reads
         w = World(self, MIXED)
         self.assertEqual(w.run(REPO)[0], 0)
         calls = w.calls()
@@ -223,7 +209,6 @@ class Ledger(unittest.TestCase):
             self.assertFalse(any('mutation' in a for a in call), call)
 
     def test_a_failed_or_partial_read_prints_nothing_and_exits_1(self):
-        # catches: a ledger printed from the pages that did arrive
         big = {str(n): closed(known(n, 100 + n, '1'), lead('launch-fleet: archived'), lead('launch-fleet: x'))
                for n in range(30, 36)}
         cases = {'no record authors': dict(fleet=None),
@@ -245,7 +230,6 @@ class Ledger(unittest.TestCase):
             self.assertEqual((code, out), (1, ''))
 
     def test_every_page_is_read(self):
-        # catches: a ledger read from the first page of issues or comments only
         big = {str(n): closed(lead('launch-fleet: x'), lead('launch-fleet: y'), known(n, 100 + n, '1'))
                for n in range(30, 37)}
         code, out, _ = World(self, big).run(REPO)

@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""stop-all.py (#2591): one command stops every live run a fleet started on this host and pauses its heartbeat.
-
-python3 -I skills/launch-fleet/scripts/test-stop-all.py
-
-Each case is a synthetic home: a private runs file in host.py's shape, an adapters folder of synthetic drivers
-that log every call, a heartbeat installed through heartbeat.py with a synthetic crontab, and agent-CLI stubs
-first on PATH that log any call and refuse it. Nothing reaches GitHub, a host or an agent CLI.
-"""
 import fcntl
 import json
 import os
@@ -176,9 +168,9 @@ class StopAll(unittest.TestCase):
         home = Home(self, LIVE)
         home.install_heartbeat()
         state = next((home.dir / '.local/state/openwiz-heartbeat').glob('openwiz-heartbeat-*'))
-        fd = os.open(state, os.O_RDONLY | os.O_DIRECTORY)
-        self.addCleanup(os.close, fd)
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)   # a tick is running
+        running_tick = os.open(state, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, running_tick)
+        fcntl.flock(running_tick, fcntl.LOCK_EX | fcntl.LOCK_NB)
         out = home.stop_all(expected=1)
         self.assertEqual(out, ['heartbeat: not paused (heartbeat: a heartbeat operation is already running)',
                                '#11 on local: stopped', '#12 on cloudroom: stopped',

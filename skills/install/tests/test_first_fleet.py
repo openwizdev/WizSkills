@@ -1744,5 +1744,131 @@ class Resume(unittest.TestCase):
         self.assertEqual([c[1] for c in j.gh_creates()].count('create'), creates, 'no second repository')
 
 
+BRAIN_BRANCH = 'openwiz/brain'
+BRAIN_PULL = 'https://github.com/%s/pull/940' % REPO
+BRAIN_FILES = {'.openwiz/brain/README.md': '# Brain\n\nSynthetic.\n',
+               '.openwiz/brain/settings.json': '{"brain_location": "in_repository"}\n'}
+
+
+class OneSetupPullRequest(unittest.TestCase):
+    """#2325 (spec #2322, P4): Connect shows the recommended setup as one block that one yes records, asks the
+    permission mode once with no recommendation, and setup opens one pull request the user merges once."""
+
+    def road(self):
+        """A machine with no room-cli, its repository chosen, and init's brain pull request open."""
+        j = Journey(self)
+        (j.dir / 'bin/room-cli').unlink()
+        j.extra_env['OPENWIZ_LOCAL_STATE'] = str(j.dir / 'host-state')
+        j.state.write_text(json.dumps({'repo': REPO, 'host': {'agents': 'local', 'harnesses': ['claude-code', 'codex']}}))
+        j.state.chmod(0o600)
+        options = offering(OPUS, SOL)
+        options['source'] = 'local'
+        j.options.write_text(json.dumps(options))
+        j.world['branches'] = {BRAIN_BRANCH: dict(FILES, **BRAIN_FILES)}
+        j.world['host_pulls'] = [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}]
+        j.save_world()
+        self.assertIsNone(shutil.which('room-cli', path=j.env()['PATH']))
+        return j
+
+    def saved(self, j):
+        return json.loads(j.state.read_text())
+
+    # catches: a Connect that asks operator, service issue, models and the App one question each, or a block whose
+    # yes records only part of it (the reviewer or the identity asked again later).
+    def test_the_defaults_are_one_block_and_one_yes_records_all_of_them(self):
+        j = self.road()
+        shown = j.helper(['defaults', '--options', str(j.options)])
+        self.assertEqual(shown.returncode, 12, shown.stdout + shown.stderr)
+        lines = shown.stdout.splitlines()
+        block = [line for line in lines if line.startswith('- ')]
+        self.assertEqual(block, [
+            '- Operator: synthetic-owner, your GitHub login',
+            '- Service issue: a new issue in %s, "OpenWiz service records"' % REPO,
+            '- Builder: claude-code claude-opus-5-5 medium',
+            '- Reviewer: codex gpt-6.2-sol medium',
+            '- Acting identity: your own GitHub login, synthetic-owner, instead of the OpenWiz GitHub App, for the '
+            'first fleet'], shown.stdout)
+        self.assertEqual(sum('?' in line for line in lines), 1, 'one question for the whole block')
+        self.assertNotIn('defaults', self.saved(j), 'the preview records nothing')
+        self.assertNotRegex(shown.stdout, r'(?i)permission mode', 'the mode is never in the block')
+        yes = j.helper(['defaults', '--options', str(j.options), '--yes'])
+        self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
+        self.assertEqual(self.saved(j)['defaults'], {
+            'operator': 'synthetic-owner', 'service_issue': 'new', 'harness': OPUS[0], 'model': OPUS[1],
+            'effort': OPUS[2], 'reviewer': list(SOL), 'identity': 'personal_login'})
+        changed = j.helper(['defaults', '--options', str(j.options), '--yes', '--operator', 'synthetic-other',
+                            '--service-issue', '7', '--app', '--harness', SOL[0], '--model', SOL[1], '--effort', SOL[2]])
+        self.assertEqual(changed.returncode, 0, changed.stdout + changed.stderr)
+        self.assertEqual(self.saved(j)['defaults'], {
+            'operator': 'synthetic-other', 'service_issue': 7, 'harness': SOL[0], 'model': SOL[1], 'effort': SOL[2],
+            'reviewer': list(OPUS), 'identity': 'app'}, 'any line the user changes, and the reviewer follows')
+
+    # catches: a mode ask that needs the merged setup first (so a second merge), recommends one, or asks twice.
+    def test_the_permission_mode_is_asked_once_before_the_merge_with_no_recommendation(self):
+        j = self.road()
+        self.assertEqual(j.helper(['defaults', '--options', str(j.options), '--yes']).returncode, 0)
+        asked = j.helper(['mode'])
+        self.assertEqual(asked.returncode, 12, asked.stdout + asked.stderr)
+        self.assertNotRegex(asked.stdout, r'(?i)recommend')
+        for name in ('default', 'acceptEdits', 'bypassPermissions', 'read-only', 'workspace-write'):
+            self.assertIn('- %s: ' % name, asked.stdout)
+        picked = j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+        self.assertEqual(picked.returncode, 0, picked.stdout + picked.stderr)
+        self.assertEqual(self.saved(j)['mode']['modes'], {'claude': 'acceptEdits', 'codex': 'workspace-write'})
+
+    # catches: the Models table, host file and mode row in their own pull requests beside the brain's, or any step
+    # before the grill asking for a second merge.
+    def test_setup_opens_exactly_one_pull_request_with_the_brain_models_host_and_mode(self):
+        j = self.road()
+        said = [j.helper(['defaults', '--options', str(j.options), '--yes']),
+                j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])]
+        preview = j.helper(['setting'])
+        self.assertEqual(preview.returncode, 12, preview.stdout + preview.stderr)
+        self.assertIn(BRAIN_BRANCH, preview.stdout)
+        opened = j.helper(['setting', '--yes'])
+        self.assertEqual(opened.returncode, 0, opened.stdout + opened.stderr)
+        self.assertIn(BRAIN_PULL, opened.stdout)
+        world = json.loads(j.world_path.read_text())
+        self.assertEqual(world['host_pulls'], [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}],
+                         'exactly one pull request: the brain\'s')
+        self.assertEqual(sorted(world['branches']), [BRAIN_BRANCH], 'no second setup branch')
+        branch = world['branches'][BRAIN_BRANCH]
+        self.assertEqual({k: branch[k] for k in BRAIN_FILES}, BRAIN_FILES, 'the brain stays as init proposed it')
+        self.assertIn('\nHost: local\n', branch['docs/agents/host.md'])
+        fleet = branch['docs/agents/fleet.md']
+        self.assertEqual(ModelsTable.models(self, fleet), {'Orchestrator': OPUS, 'Builder': OPUS, 'Reviewer': SOL,
+                                                           'Small builder': None, 'Fixer': None})
+        self.assertIn('| Harness permission mode (claude) | `acceptEdits` |', fleet)
+        self.assertIn('| Harness permission mode (codex) | `workspace-write` |', fleet)
+        self.assertEqual(sorted(set(branch) - set(FILES) - set(BRAIN_FILES)), ['docs/agents/host.md'])
+        self.assertEqual(sorted(k for k in FILES if branch[k] != FILES[k]), ['docs/agents/fleet.md'])
+        self.assertEqual(self.saved(j)['setting']['pull'], BRAIN_PULL)
+        for result in said + [preview]:
+            self.assertNotRegex(result.stdout, r'(?i)\bmerge', 'only the one setup pull request asks for a merge')
+        # The user merges it once; then setup checks, continue carries it, the grill runs, and the Agents step
+        # only reads the Models table back.
+        merged = {k: branch[k] for k in ('docs/agents/host.md', 'docs/agents/fleet.md')}
+        j.origin_write(merged)
+        world['files'].update(branch)
+        world['host_pulls'][0]['state'] = 'MERGED'
+        j.world = world
+        j.save_world()
+        state = setup_state(settings=OPUS, overrides={'cloudroom': 'cloudroom_not_needed'})
+        state['project'].update(host='local', project=None, answer_thread=None)
+        j.write_setup(state)
+        carried = j.helper(['continue', '--explained'])
+        self.assertEqual(carried.returncode, 0, carried.stdout + carried.stderr)
+        self.assertEqual(j.helper(['grill', '--confirmed', GRILL]).returncode, 0)
+        read = j.helper(['choose', '--from-setup'])
+        self.assertEqual(read.returncode, 0, read.stdout + read.stderr)
+        self.assertIn('Read back', read.stdout)
+        self.assertNotRegex(read.stdout, r'(?i)\bcommit|\bmerge it')
+        self.assertEqual(self.saved(j)['choices']['builder_tables'], 'read')
+        again = j.helper(['setting'])
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(json.loads(j.world_path.read_text())['host_pulls'], world['host_pulls'], 'nothing reopened')
+        self.assertEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: plan.')
+
+
 if __name__ == '__main__':
     unittest.main()

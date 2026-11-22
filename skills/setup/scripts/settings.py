@@ -7,7 +7,9 @@ Reads the four files in DIR/docs/agents/ (default: the current folder) and
 names each missing or unsafe setting: a missing file or section, a builder or
 reviewer table or Fixer family row without each of its three flags exactly
 once as one token, a template placeholder, a reviewer from the builder's model family, not exactly
-one valid Record authors row, or a triage role without exactly one label. FILE is the saved output of
+one valid Record authors row, an Approval rules heading, header or row that is not
+the canonical form (an `Ask before` rule, a named approver, no repeated rule), or a
+triage role without exactly one label. FILE is the saved output of
 `gh label list --limit 500 --json name`; with it, each mapped label must exist
 in the tracker exactly once. It writes nothing and runs nothing.
 
@@ -294,8 +296,11 @@ def approval(text, problems):
     lines = text.split('\n')
     at = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Approval rules']
     here = 'fleet.md: Approval rules: '
-    for line in lines:
-        if line != '## Approval rules' and line.strip().lstrip('#').strip().lower() == 'approval rules':
+    for n, line in enumerate(lines):
+        atx = re.fullmatch(r'\s*#{1,6}(?:\s+(.*?))?(?:\s+#+)?\s*', line)
+        below = lines[n + 1].strip() if n + 1 < len(lines) else ''
+        title = (atx.group(1) or '') if atx else (line if below and set(below) in ({'='}, {'-'}) else '')
+        if line != '## Approval rules' and ' '.join(title.split()).lower() == 'approval rules':
             problems.append(here + 'the heading must be exactly ## Approval rules: ' + line)
     if len(at) > 1:
         problems.append(here + 'more than one ## Approval rules heading')
@@ -303,9 +308,9 @@ def approval(text, problems):
         return
     table = []
     for line in lines[at[0] + 1:]:
-        if line.startswith(('# ', '## ')) or (table and not line.startswith('|')):
+        if line.startswith(('# ', '## ')) or (table and not line.lstrip().startswith('|')):
             break
-        if line.startswith('|'):
+        if line.lstrip().startswith('|'):
             table.append(cells(line))
     if len(table) < 3 or table[0] != ['Rule', 'Approver'] or table[1] != ['---', '---']:
         problems.append(here + 'the table is not | Rule | Approver |')
@@ -315,7 +320,7 @@ def approval(text, problems):
         if not row or len(row) != 2:
             problems.append(here + 'row %d: not two cells' % n)
             continue
-        rule, approver = row
+        rule, approver = row[0], ' '.join(row[1].strip('`*_ .').split())
         name, key = 'row %d (%s): ' % (n, rule), ' '.join(rule.lower().split())
         if not rule.startswith('Ask before '):
             problems.append(here + name + 'the rule does not start "Ask before"')
@@ -324,8 +329,8 @@ def approval(text, problems):
         elif not approver:
             problems.append(here + name + 'no approver')
         elif re.search(r'<[^>]*>', approver):
-            problems.append(here + name + 'unfilled approver ' + approver)
-        elif approver.strip('`*_ .').lower() == 'the user':
+            problems.append(here + name + 'unfilled approver ' + row[1])
+        elif approver.lower() == 'the user':
             problems.append(here + name + 'the approver is "the user", not a person')
         seen.append(key)
 

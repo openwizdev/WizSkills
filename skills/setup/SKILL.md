@@ -56,7 +56,7 @@ Done when the four files are written.
 python3 -I <this skill's folder>/scripts/settings.py check --root <project> --labels <saved label list>
 ```
 
-It reads the files back and prints `Settings: verified (4 files).`, or exits 5 naming each missing section, unfilled value, same-family reviewer, missing Record authors row and triage label that is absent or repeated. Fix each and run it again; refresh the label list after creating labels. Then commit the four files on a branch and open one pull request for the user to read.
+It reads the files back and prints `Settings: verified (4 files).`, or exits 5 naming each missing section, unfilled value, same-family reviewer, missing Record authors row, Approval rules heading, header or row out of form (each rule starts `Ask before`, names a person other than "the user" and appears once), and triage label that is absent or repeated. Fix each and run it again; refresh the label list after creating labels. Then commit the four files on a branch and open one pull request for the user to read.
 
 Done when it prints verified and the pull request is open.
 

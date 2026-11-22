@@ -22,7 +22,7 @@ These hold on every line, before every effect.
 
 ## Launch
 
-The orchestrator launches a fleet when a plan graph is approved, by its machine approval (J203, no human reply) or by the user: check the approval is recorded, make sure the project's two loops exist, ask about GitHub's messages, and start the spec's fleet loop. Follow [references/launch.md](references/launch.md). Done when both loops exist, the user said yes or no to GitHub's messages, and the spec has a read-back `launch-fleet: fleet active, loop fleet-<S>` record (or a `look` saying why not).
+The orchestrator launches a fleet when a plan graph is approved, by its machine approval (J203, no human reply) or by the user: check the approval is recorded, make sure the project's two loops exist, ask about GitHub's messages, and start the spec's fleet loop. Follow [references/launch.md](references/launch.md). Done when both loops exist, the approver of `fleet.md`'s Approval rules row for installing the repository webhook (the user when that section is absent) said yes or no to GitHub's messages, and the spec has a read-back `launch-fleet: fleet active, loop fleet-<S>` record (or a `look` saying why not).
 
 ### Hosts without CloudRoom
 

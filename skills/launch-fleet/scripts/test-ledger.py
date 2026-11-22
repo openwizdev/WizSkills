@@ -22,10 +22,48 @@ FLEET = '''# Fleet settings
 '''
 
 FAKE_GH = r'''
-import json, os, sys
+import json, os, re, sys
 args = sys.argv[1:]
+
+VALUED = ('-X', '--method', '-f', '-F', '--field', '--raw-field', '--input', '-H', '--header', '-q', '--jq', '-t',
+          '--template', '--hostname', '--cache', '-p', '--preview')
+BODY = ('-f', '-F', '--field', '--raw-field', '--input')
+SWITCHES = ('--paginate', '--slurp', '-i', '--include', '--silent', '--verbose')
+
+def operation(args):
+    if args[:1] != ['api']:
+        return 'gh ' + ' '.join(args[:2])
+    method, endpoint, body, query, rest = None, None, False, None, list(args[1:])
+    while rest:
+        a = rest.pop(0)
+        name, eq, value = a.partition('=') if a.startswith('--') else (a, '', '')
+        if a[:2] in ('-X', '-f', '-F') and len(a) > 2:
+            name, eq, value = a[:2], '=', a[2:]
+        if name in VALUED:
+            value = value if eq else (rest.pop(0) if rest else '')
+            if name in ('-X', '--method'):
+                method = value.upper()
+            elif name in BODY:
+                body = True
+                if value.startswith('query='):
+                    query = value[len('query='):]
+        elif a in SWITCHES:
+            pass
+        elif a.startswith('-') or endpoint is not None:
+            return 'unknown'
+        else:
+            endpoint = a
+    if endpoint == 'graphql':
+        if query is None or query.startswith('@'):
+            return 'unknown'
+        if re.search(r'\b(mutation|subscription)\b', query):
+            return 'mutation'
+        return 'query' if re.match(r'\s*(query\b|\{)', query) else 'unknown'
+    return '%s %s' % (method or ('POST' if body else 'GET'), endpoint)
+
+op = operation(args)
 with open(os.environ['FAKE_LOG'], 'a') as log:
-    log.write(json.dumps(args) + '\n')
+    log.write(json.dumps({'args': args, 'op': op}) + '\n')
 world = json.load(open(os.environ['FAKE_WORLD']))
 if args[:1] == ['api'] and args[1].endswith('/contents/docs/agents/fleet.md'):
     if world.get('fleet') is None:
@@ -48,7 +86,7 @@ errors = [{'type': 'SYNTHETIC', 'message': 'synthetic error'}] if world.get('err
 
 def answer(data):
     print(json.dumps({'data': data, **({'errors': errors} if errors else {})}))
-if 'mutation' in query:
+if op != 'query':
     sys.exit('fake gh: a write')
 
 def page(items, size, after):
@@ -199,14 +237,47 @@ class Ledger(unittest.TestCase):
                      {'ticket': '#14', 'pr': 'synthetic-owner/synthetic-skills#9', 'credits': None}],
             'merged': 5, 'known': 2, 'unknown': 3, 'total': 19.75, 'cost_per_merged_pr': 9.88})
 
-    def test_it_writes_nothing(self):
-        w = World(self, MIXED)
-        self.assertEqual(w.run(REPO)[0], 0)
+    def assert_read_only(self, w):
         calls = w.calls()
         self.assertTrue(calls)
         for call in calls:
-            self.assertNotIn('--method', call)
-            self.assertFalse(any('mutation' in a for a in call), call)
+            self.assertTrue(call['op'] == 'query' or call['op'].startswith('GET '), call)
+
+    def test_it_writes_nothing(self):
+        w = World(self, MIXED)
+        self.assertEqual(w.run(REPO)[0], 0)
+        self.assert_read_only(w)
+
+    def test_the_read_only_check_sees_every_write_spelling_and_passes_every_read(self):
+        path = f'repos/{REPO}/issues/10'
+        writes = {'a short -X POST': ['api', '-X', 'POST', path + '/comments', '-f', 'body=x'],
+                  'a joined -XPATCH': ['api', '-XPATCH', path, '-f', 'state=closed'],
+                  'a long --method=DELETE': ['api', '--method=DELETE', path + '/labels/x'],
+                  'a lower-case method': ['api', '--method', 'put', path + '/lock'],
+                  'fields that make gh POST': ['api', path + '/comments', '-f', 'body=x'],
+                  'a long --raw-field=': ['api', path + '/comments', '--raw-field=body=x'],
+                  'a body from --input': ['api', path + '/comments', '--input', '-'],
+                  'a GraphQL mutation': ['api', 'graphql', '-f', 'query=mutation { a: b(input: {}) { c } }'],
+                  'a named mutation in a joined field': ['api', 'graphql', '-Fquery=mutation M { a { b } }'],
+                  'a gh command that writes': ['issue', 'comment', '10', '--body', 'x'],
+                  'a flag it does not know': ['api', '--synthetic-flag', 'POST', path + '/comments'],
+                  'a second endpoint': ['api', f'repos/{REPO}/issues', 'POST', path + '/comments'],
+                  'a query it cannot read': ['api', 'graphql', '-F', 'query=@synthetic.graphql']}
+        reads = {'a GraphQL query sent with an explicit POST': ['api', 'graphql', '--method', 'POST', '-f',
+                                                                'query=query { viewer { login } }'],
+                 'a shorthand GraphQL query': ['api', 'graphql', '-f', 'query={ viewer { login } }'],
+                 'a REST GET with query fields': ['api', '-X', 'GET', f'repos/{REPO}/issues', '-f', 'state=closed'],
+                 'a plain REST read': ['api', f'repos/{REPO}/contents/docs/agents/fleet.md', '-H', 'Accept: x'],
+                 'a paginated REST read': ['api', '--paginate', '--slurp', f'repos/{REPO}/issues']}
+        for name, args in {**writes, **reads}.items():
+            with self.subTest(name):
+                w = World(self, MIXED)
+                subprocess.run(['gh', *args], capture_output=True, env=w.env, cwd=w.dir, timeout=60)
+                if name in writes:
+                    with self.assertRaises(AssertionError, msg='a write passed the read-only check'):
+                        self.assert_read_only(w)
+                else:
+                    self.assert_read_only(w)
 
     def test_a_failed_or_partial_read_prints_nothing_and_exits_1(self):
         big = {str(n): closed(known(n, 100 + n, '1'), lead('launch-fleet: archived'), lead('launch-fleet: x'))

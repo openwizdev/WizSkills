@@ -180,7 +180,8 @@ class CheckShards(unittest.TestCase):
                          ['--shard', 'beta,'], ['--shard'], ['--list', 'beta'],
                          ['--list', '--shard', 'beta'], ['--bogus']):
                 with self.subTest(argv=argv):
-                    code, lines = self.check(*argv, root=root, suites=SYNTHETIC)
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        code, lines = self.check(*argv, root=root, suites=SYNTHETIC)
                     self.assertEqual((code, lines, self.ran(root)), (2, [], []))
 
 

@@ -594,7 +594,7 @@ sys.exit(0 if result.wasSuccessful() and not empty else 1)
 """
 
 
-def suites(root, names=None):
+def unlisted_tests(root):
     covered = set()
     for commands in SUITES.values():
         for command in commands:
@@ -612,8 +612,12 @@ def suites(root, names=None):
                   ((p.name.startswith('test') and p.suffix in ('.py', '.sh'))
                    or p.name.endswith('.test.mjs'))}
     discovered.update(p.relative_to(root).as_posix() for p in (root / 'check').glob('test*.py'))
-    unlisted = discovered - covered
-    for rel in sorted(unlisted):
+    return sorted(discovered - covered)
+
+
+def suites(root, names=None):
+    unlisted = unlisted_tests(root)
+    for rel in unlisted:
         print(f'suite inventory: {rel}: unlisted', flush=True)
     failed = bool(unlisted)
     for name, commands in SUITES.items():
@@ -700,6 +704,11 @@ def main(argv):
         print(selected, file=sys.stderr)
         return 2
     if selected is None:
+        unlisted = unlisted_tests(ROOT)
+        for rel in unlisted:
+            print(f'suite inventory: {rel}: unlisted', file=sys.stderr, flush=True)
+        if unlisted:
+            return 1
         print(json.dumps(shards(), indent=2))
         return 0
     findings = []

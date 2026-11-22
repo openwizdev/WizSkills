@@ -27,7 +27,7 @@ A **part shard** (WQ2) replaces one suite in its row's shard: it is named `<row>
 
 ## `--list`
 
-`python3 check/run.py --list` prints the shards as one JSON array on stdout and exits 0. It runs nothing. Each element is an object with exactly these keys:
+`python3 check/run.py --list` prints the shards as one JSON array on stdout and exits 0. It runs no suite, but it runs the inventory guard first: while a test file is unlisted, it prints each `suite inventory: <path>: unlisted` line on stderr, prints no JSON and exits 1, so a job matrix never builds from a list that misses a test. Each element is an object with exactly these keys:
 
 | Key | Value |
 | --- | --- |
@@ -51,7 +51,7 @@ A **part shard** (WQ2) replaces one suite in its row's shard: it is named `<row>
 `python3 check/run.py --shard <name>[,<name>...]` runs only the named shards, in list order whatever order they are given in, each once.
 
 - Its output lines are a plain run's lines for those shards: `rules:` lines only with `rules`, the `standalone:` line only with `standalone`, and each selected suite's `running` and result lines.
-- The inventory guard runs in every mode, whichever shards are named: an unlisted test file fails the run.
+- The inventory guard runs in every mode, `--list` included, whichever shards are named: an unlisted test file fails the run.
 - The last line is `check: pass` or `check: fail`; it exits 0 when everything it ran passed and the guard found nothing, else 1.
 - Running every shard by name runs the same commands, in the same order, with the same lines, as a plain run.
 
@@ -72,7 +72,7 @@ The `rules:`, `standalone:`, inventory, `missing`, `cannot start` and `check:` l
 | Exit | When |
 | --- | --- |
 | 0 | `--list`, or a run where everything selected passed |
-| 1 | A run where something failed or is missing, or the inventory guard found an unlisted test |
+| 1 | A run where something failed or is missing, or the inventory guard found an unlisted test (in `--list` too) |
 | 2 | Bad arguments: an unknown shard name, an empty name (`--shard ''`, `--shard a,`), `--shard` with no value, `--list` with anything else, or any other argument. It prints the reason on stderr and runs nothing. |
 
 ## Versioning

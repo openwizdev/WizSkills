@@ -53,3 +53,19 @@ AssertionError: 'read the ready labels back' not found in "- **Plan:** in the pr
 Ran 1 test in 0.001s
 
 FAILED (failures=1)
+
+# Review red: R2 planning writes before checking the approval tools (synthetic)
+$ python3 -I skills/install/tests/test_doctor.py NoCloudRoomRequired.test_manual_plan_checks_approval_tools_before_writing
+F
+======================================================================
+FAIL: test_manual_plan_checks_approval_tools_before_writing (__main__.NoCloudRoomRequired.test_manual_plan_checks_approval_tools_before_writing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 900, in test_manual_plan_checks_approval_tools_before_writing
+    self.assertIn('`jq --version`', preflight, 'planning can write tickets before checking jq')
+AssertionError: '`jq --version`' not found in "- **Plan:** in the project's clone, " : planning can write tickets before checking jq
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (failures=1)

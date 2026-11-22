@@ -894,6 +894,16 @@ class NoCloudRoomRequired(unittest.TestCase):
         self.assertIn('Skip the `launch-fleet` handoff and the steering video', plan)
         self.assertIn('return to the hand-start steps below', plan)
 
+    def test_manual_plan_checks_approval_tools_before_writing(self):
+        plan = self.between('- **Plan:**', '- **Start one ticket')
+        preflight, _, _ = plan.partition('run `setup`')
+        self.assertIn('`jq --version`', preflight, 'planning can write tickets before checking jq')
+        self.assertIn('`gh --version`', preflight)
+        self.assertIn('2.94 or newer', preflight)
+        self.assertIn('install jq', preflight)
+        self.assertIn('install or upgrade GitHub CLI', preflight)
+        self.assertIn('Recheck both before continuing', preflight)
+
 
 if __name__ == '__main__':
     unittest.main()

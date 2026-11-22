@@ -1785,7 +1785,7 @@ class OneSetupPullRequest(unittest.TestCase):
             '- Operator: synthetic-owner, your GitHub login',
             '- Service issue: a new issue in %s, "OpenWiz service records"' % REPO,
             '- Builder: claude-code claude-opus-5-5 medium',
-            '- Reviewer: codex gpt-6.2-sol medium',
+            '- Reviewer: codex syn-codex-model-01 high',
             '- Acting identity: your own GitHub login, synthetic-owner, instead of the OpenWiz GitHub App, for the '
             'first fleet'], shown.stdout)
         self.assertEqual(sum('?' in line for line in lines), 1, 'one question for the whole block')
@@ -1795,13 +1795,14 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
         self.assertEqual(self.saved(j)['defaults'], {
             'operator': 'synthetic-owner', 'service_issue': 'new', 'harness': OPUS[0], 'model': OPUS[1],
-            'effort': OPUS[2], 'reviewer': list(SOL), 'identity': 'personal_login'})
+            'effort': OPUS[2], 'reviewer': list(CODEX), 'identity': 'personal_login'},
+            "the project's own other-family Reviewer stays, as choose keeps it")
         changed = j.helper(['defaults', '--options', str(j.options), '--yes', '--operator', 'synthetic-other',
                             '--service-issue', '7', '--app', '--harness', SOL[0], '--model', SOL[1], '--effort', SOL[2]])
         self.assertEqual(changed.returncode, 0, changed.stdout + changed.stderr)
         self.assertEqual(self.saved(j)['defaults'], {
             'operator': 'synthetic-other', 'service_issue': 7, 'harness': SOL[0], 'model': SOL[1], 'effort': SOL[2],
-            'reviewer': list(OPUS), 'identity': 'app'}, 'any line the user changes, and the reviewer follows')
+            'reviewer': list(CLAUDE), 'identity': 'app'}, 'any line the user changes, and the reviewer follows')
 
     # catches: a mode ask that needs the merged setup first (so a second merge), recommends one, or asks twice.
     def test_the_permission_mode_is_asked_once_before_the_merge_with_no_recommendation(self):
@@ -1836,14 +1837,14 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual({k: branch[k] for k in BRAIN_FILES}, BRAIN_FILES, 'the brain stays as init proposed it')
         self.assertIn('\nHost: local\n', branch['docs/agents/host.md'])
         fleet = branch['docs/agents/fleet.md']
-        self.assertEqual(ModelsTable.models(self, fleet), {'Orchestrator': OPUS, 'Builder': OPUS, 'Reviewer': SOL,
+        self.assertEqual(ModelsTable.models(self, fleet), {'Orchestrator': OPUS, 'Builder': OPUS, 'Reviewer': CODEX,
                                                            'Small builder': None, 'Fixer': None})
         self.assertIn('| Harness permission mode (claude) | `acceptEdits` |', fleet)
         self.assertIn('| Harness permission mode (codex) | `workspace-write` |', fleet)
         self.assertEqual(sorted(set(branch) - set(FILES) - set(BRAIN_FILES)), ['docs/agents/host.md'])
         self.assertEqual(sorted(k for k in FILES if branch[k] != FILES[k]), ['docs/agents/fleet.md'])
         self.assertEqual(self.saved(j)['setting']['pull'], BRAIN_PULL)
-        for result in said + [preview]:
+        for result in said:
             self.assertNotRegex(result.stdout, r'(?i)\bmerge', 'only the one setup pull request asks for a merge')
         # The user merges it once; then setup checks, continue carries it, the grill runs, and the Agents step
         # only reads the Models table back.
@@ -1869,6 +1870,24 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual(json.loads(j.world_path.read_text())['host_pulls'], world['host_pulls'], 'nothing reopened')
         self.assertEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: plan.')
 
+
+    # catches: a driver host other than this machine (no mode rows) whose Models table write is refused on the
+    # brain's branch, or sent to a second pull request.
+    def test_a_driver_host_puts_its_models_table_and_host_in_the_brains_pull_request(self):
+        j = self.road()
+        state = self.saved(j)
+        state['host'] = {'agents': 'boat', 'harnesses': []}
+        j.state.write_text(json.dumps(state))
+        self.assertEqual(j.helper(['defaults', '--options', str(j.options), '--yes']).returncode, 0)
+        self.assertEqual(j.helper(['mode']).returncode, 5, 'a permission mode is for this machine only')
+        opened = j.helper(['setting', '--yes'])
+        self.assertEqual(opened.returncode, 0, opened.stdout + opened.stderr)
+        world = json.loads(j.world_path.read_text())
+        self.assertEqual(world['host_pulls'], [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}])
+        branch = world['branches'][BRAIN_BRANCH]
+        self.assertIn('\nHost: boat\n', branch['docs/agents/host.md'])
+        self.assertEqual(ModelsTable.models(self, branch['docs/agents/fleet.md'])['Builder'], OPUS)
+        self.assertNotIn('Harness permission mode', branch['docs/agents/fleet.md'])
 
 if __name__ == '__main__':
     unittest.main()

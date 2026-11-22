@@ -26,9 +26,13 @@ handoff it would authorize.
 
 ## 2. Cut the tickets
 
-Cut end-to-end tickets as large as one builder can finish near-certainly in one
-fresh context, sized S, M or L from first-pass review results on comparable
-work. Cut for the shortest critical chain, then the widest graph (F6): disjoint
+Cut end-to-end builder tickets to an expected diff of about 400 changed lines
+and 10 files or fewer, judged from first-pass review results on comparable work:
+that range is `Size: S.`. Size M is allowed only with a
+`Why M: <reason it can't split>` line in Parent. A ticket of size L is split,
+never cut. For a spec created on or after approve.py's `SIZES_SINCE`, step 4
+refuses an L, and an M without that line. Cut for the shortest critical chain,
+then the widest graph (F6): disjoint
 owned paths and only the arrows a ticket truly needs. To choose between two
 cuts, write each as picture data and run
 `python3 -I "<this skill's folder>/scripts/prefer.py" <cut A> <cut B>`: it keeps

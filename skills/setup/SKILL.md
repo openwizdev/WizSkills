@@ -27,6 +27,7 @@ If `docs/agents/` already holds the files, read them first and see "Running it a
 - Builders, reviewers and merge rules the user already chose: the instructions file (`AGENTS.md` or `CLAUDE.md`), ADRs and spec comments.
 - Test commands: the instructions file and every `run:` step in `.github/workflows/*.yml` and `*.yaml`. CI checks: those job names, the rulesets (`gh api 'repos/{owner}/{repo}/rulesets'`, then each `rulesets/<id>`) and the default branch's protection.
 - Record authors: the project's App bot login (`<app-slug>[bot]`) and `gh api user --jq .login`.
+- App identity: `off`, unless the user explicitly turns it `on`. Never run or probe `openwiz github token` to decide it.
 
 Done when every value in the four files has a named source, or is known to be missing.
 

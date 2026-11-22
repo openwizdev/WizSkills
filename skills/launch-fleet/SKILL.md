@@ -134,7 +134,7 @@ Then do "Each wake" above for `fleet.sh spec <S>`. Before any merge, require the
 
 ## GitHub identity
 
-Builders push and open pull requests, reviewers comment, and managers comment, label and merge as the project's OpenWiz App, with every commit authored and committed as the user. Mint the App token into its own variable only, never `GH_TOKEN` itself, and never store it. Without the App, act as today's account. Push workflow changes as today's account. A rule that refuses the App's merge stops for the user. The token block and fallback are in [references/identity.md](references/identity.md).
+The App identity is opt-in: only while `fleet.md`'s `App identity` row says `on` do builders push and open pull requests, reviewers comment, and managers comment, label and merge as the project's OpenWiz App, with every commit authored and committed as the user. With no row, any other value or an unreadable `fleet.md`, every agent acts as today's account, never runs, tries or probes the App's token mint, and `loop.sh` mints nothing. With it on, mint the App token into its own variable only, never `GH_TOKEN` itself, and never store it. Without the App, act as today's account. Push workflow changes as today's account. A rule that refuses the App's merge stops for the user. The token block and fallback are in [references/identity.md](references/identity.md).
 
 ### Record authors
 

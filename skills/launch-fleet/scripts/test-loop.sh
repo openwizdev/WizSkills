@@ -38,7 +38,8 @@ git -C "$work/remote" -c user.name=synthetic -c user.email=synthetic@example.inv
 jq '(.issues[] | select(.number == 12)) |= (.state = "CLOSED" | .comments += [
   {id: 1202, at: "2026-11-01T11:05:00Z", body: "launch-fleet: archived"}])
   | .pulls += [(.pulls[0] | .number = 22 | .closes = [12] | .mergedAt = "2026-11-01T11:00:00Z"
-    | .files = [{filename: "src/store/store.rs", status: "modified"}])]' "$FIX/check.json" > "$work/world.json"
+    | .files = [{filename: "src/store/store.rs", status: "modified"}])]
+  | .files["docs/agents/fleet.md"] += "| App identity | on |\n"' "$FIX/check.json" > "$work/world.json"
 sh "$FIX/revision.sh" 10 > "$work/revision"
 fingerprint=$(sha256sum < "$work/revision" | cut -d' ' -f1)
 jq --arg fp "$fingerprint" '(.issues[].comments[]?.body) |= gsub("@@FP@@"; $fp)' \
@@ -128,7 +129,12 @@ identity() { # "token identity" every gh call gets; the stderr line expected, or
   sh "$work/loop.sh" > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; return 1; }
   cmp "$work/want" "$work/out"
   [ -s "$work/gh-token.log" ]
-  [ -z "$(grep -vx "$1" "$work/gh-token.log")" ]
+  # #2394: with a key or service, the first call reads the App identity row on today's account.
+  first=0
+  if [ -n "${OPENWIZ_GITHUB_APP_KEY:-}${OPENWIZ_TOKEN_SERVICE:-}" ]; then
+    [ "$(head -n 1 "$work/gh-token.log")" = 'none account' ]; first=1
+  fi
+  [ -z "$(sed "1,${first}d" "$work/gh-token.log" | grep -vx "$1")" ]
   [ "$(grep -c '^fleet.sh: used ' "$work/err")" = 1 ]
   lines=1
   [ -z "$2" ] || { grep -qxF "$2" "$work/err"; lines=2; }

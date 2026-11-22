@@ -271,4 +271,4 @@ To remove OpenWiz, on the user's yes: there is no remove command and no server t
    done
    ```
 
-Removal revokes nothing: show the user how to uninstall the App or remove repositories from it, delete any phone-access tunnel or rule, and and, with CloudRoom, delete the fleet loops there. Never remove or revoke anything without their yes.
+Removal revokes nothing: show the user how to uninstall the App or remove repositories from it, delete any phone-access tunnel or rule, and, with CloudRoom, delete the fleet loops there. Never remove or revoke anything without their yes.

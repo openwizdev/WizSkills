@@ -580,6 +580,25 @@ class HostAwareSetup(unittest.TestCase):
         self.assertEqual(picked.returncode, 0, picked.stdout + picked.stderr)
         self.assertEqual(json.loads(j.state.read_text())['choices']['model'], OPUS[1])
 
+    def test_a_codex_only_machine_records_its_choice_and_leaves_the_review_same_family(self):
+        j = Journey(self)
+        j.replay(until='agents')
+        state = json.loads(j.state.read_text())
+        state['host'] = {'agents': 'local', 'harnesses': ['codex']}
+        state['setup']['settings'] = dict(zip(('harness', 'model', 'effort'), SOL))
+        j.state.write_text(json.dumps(state))
+        options = offering(SOL)
+        options['harnesses'] = [h for h in options['harnesses'] if h['provider'] == 'codex']
+        options['source'] = 'local'
+        j.options.write_text(json.dumps(options))
+        j.checkout.write_text(models_md(orchestrator=OPUS, builder=OPUS, reviewer=SOL))
+        result = j.helper(['choose', '--from-setup'])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(j.state.read_text())['choices']['model'], SOL[1])
+        self.assertEqual(ModelsTable.models(self, j.checkout.read_text())['Reviewer'], OPUS,
+                         'the table keeps a valid other-family Reviewer')
+        self.assertIn('same-family review', result.stdout)
+
     def test_install_passes_the_chosen_host_to_models_and_follows_the_driver_handoff(self):
         text = SKILL.read_text()
         for step in ('### 3. Connect', '### 5. Agents'):

@@ -34,7 +34,13 @@ PATH_MARK = "OPENWIZ_AGENT_TOKEN_PATH_WAS"
 ALLOWED_PROTOCOLS, SSH_STAND_IN = "file:https:ssh", "openwiz-ssh"
 GUARDED = (("GIT_EXEC_PATH", EXEC_MARK), ("PATH", PATH_MARK),
            ("GIT_SSH_COMMAND", "OPENWIZ_AGENT_TOKEN_SSH_WAS"),
-           ("GIT_ALLOW_PROTOCOL", "OPENWIZ_AGENT_TOKEN_PROTOCOLS_WAS"))
+           ("GIT_ALLOW_PROTOCOL", "OPENWIZ_AGENT_TOKEN_PROTOCOLS_WAS"),
+           ("GH_CONFIG_DIR", "OPENWIZ_AGENT_TOKEN_GH_CONFIG_WAS"))
+LEGACY_APP_KEY = "OPENWIZ_GITHUB_APP_KEY"
+GH_ALLOWED = frozenset({"api", "cache", "issue", "label", "pr", "release", "repo", "run", "search",
+                        "status", "workflow"})
+GH_REFUSE = "openwiz-gh-child"
+GH_WITHHELD = "openwiz: openwiz[bot] token withheld from gh ({}); gh stops rather than use another account\n"
 TRANSPORTS = ("git-remote-http", "git-remote-https")
 CURL_TRACES = ("GIT_TRACE_CURL", "GIT_TRACE_CURL_NO_DATA", "GIT_CURL_VERBOSE")
 USAGE = ("agent-token.py start REQUEST | run REQUEST -- COMMAND [ARG...]; "
@@ -111,13 +117,31 @@ def route(env):
 
 def mint(argv, wanted, env):
     request = json.dumps({"schema": SCHEMA, "kind": "request", **wanted}).encode() + b"\n"
-    call_env = {k: v for k, v in env.items() if k != "GH_TOKEN"}
-    now = int(time.time())
+    call_env = {k: v for k, v in env.items() if k not in ("GH_TOKEN", LEGACY_APP_KEY)}
     reason, message = ask(argv, request, call_env)
     if reason:
         return reason, None, None
-    got = check_answer(message, wanted, now)
+    got = check_answer(message, wanted, int(time.time()))
     return ("bad-answer", None, None) if got is None else (None, *got)
+
+
+def _clear(fd):
+    for entry in os.listdir(fd):
+        if not stat.S_ISDIR(os.stat(entry, dir_fd=fd, follow_symlinks=False).st_mode):
+            os.unlink(entry, dir_fd=fd)
+            continue
+        inner = os.open(entry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        try:
+            _clear(inner)
+        finally:
+            os.close(inner)
+        os.rmdir(entry, dir_fd=fd)
+
+
+def no_legacy_app_key(env):
+    if any(name == LEGACY_APP_KEY for name in env):
+        raise Refused(f"{LEGACY_APP_KEY} is set: remove the old App-key secret from this agent's "
+                      "environment, since the token service holds the key")
 
 
 def _outside_git(fd):
@@ -209,8 +233,7 @@ class Private:
         except FileNotFoundError:
             return
         try:
-            for entry in os.listdir(fd):
-                os.unlink(entry, dir_fd=fd)
+            _clear(fd)
         finally:
             os.close(fd)
         os.rmdir(name, dir_fd=self.fd)
@@ -286,6 +309,7 @@ def start(args, env):
     if rest is not None:
         raise Refused(f"usage: {USAGE}")
     if configured(env):
+        no_legacy_app_key(env)
         token_for(Private(env, create=True), wanted, env)
     return 0
 
@@ -325,6 +349,7 @@ def run(args, env):
         raise Refused(f"usage: {USAGE}")
     if not configured(env):
         return execute(command, env)
+    no_legacy_app_key(env)
     private = Private(env, create=True)
     token, expires_at = token_for(private, wanted, env)
     child = without_inherited(env)
@@ -335,7 +360,15 @@ def run(args, env):
     private.write(name, {"token": token, "expires_at": expires_at})
     farm = None
     try:
-        farm = exec_folder(private, child)
+        farm, real_gh = exec_folder(private, child)
+        folder = os.path.join(private.path, farm)
+        try:
+            identity = gh_identity(real_gh) if real_gh else None
+        except OSError:
+            identity = None
+        if identity:
+            private.write(gh_binding(name), {"gh": real_gh, "refuse": os.path.join(folder, GH_REFUSE),
+                                             "identity": identity})
         for key, mark in GUARDED:
             child[mark] = "1" + child[key] if key in child else "0"
         child.update(guarded_env(os.path.join(private.path, farm), child))
@@ -346,11 +379,12 @@ def run(args, env):
         for offset, value in enumerate(("", git_helper(snapshot))):
             child[f"GIT_CONFIG_KEY_{count + offset}"] = GIT_HELPER_KEY
             child[f"GIT_CONFIG_VALUE_{count + offset}"] = value
-        child.update({"GIT_CONFIG_COUNT": str(count + 2), "GH_TOKEN": token,
-                      RUN_MARK: snapshot, GIT_MARK: str(count)})
+        child.pop("GH_TOKEN", None)
+        child.update({"GIT_CONFIG_COUNT": str(count + 2), RUN_MARK: snapshot, GIT_MARK: str(count)})
         return execute(command, child, wait=True)
     finally:
         private.unlink(name)
+        private.unlink(gh_binding(name))
         if farm:
             private.remove_folder(farm)
 
@@ -358,11 +392,13 @@ def run(args, env):
 def guarded_env(folder, child):
     return {"GIT_EXEC_PATH": folder, "PATH": folder + os.pathsep + child.get("PATH", os.defpath),
             "GIT_SSH_COMMAND": shlex.quote(os.path.join(folder, SSH_STAND_IN)),
-            "GIT_ALLOW_PROTOCOL": ALLOWED_PROTOCOLS}
+            "GIT_ALLOW_PROTOCOL": ALLOWED_PROTOCOLS,
+            "GH_CONFIG_DIR": os.path.join(folder, "gh-config")}
 
 
 def exec_folder(private, child):
     real_git = shutil.which("git", path=child.get("PATH", os.defpath))
+    real_gh = shutil.which("gh", path=child.get("PATH", os.defpath))
     try:
         real = subprocess.run([real_git or "git", "--exec-path"], env=child, capture_output=True,
                               text=True, timeout=10).stdout.strip() if real_git else ""
@@ -381,6 +417,12 @@ def exec_folder(private, child):
     checks = "".join(
         f'if [ "${{{key}-}}" != {shlex.quote(expected[key])} ]; then\n  reason="{key} was changed"\nfi\n'
         for key in ("GIT_EXEC_PATH", "GIT_SSH_COMMAND", "GIT_ALLOW_PROTOCOL"))
+    if real_gh:
+        scripts["gh"] = (f"exec {shlex.quote(sys.executable)} -I {shlex.quote(os.path.abspath(__file__))} "
+                         f"gh {shlex.quote(os.path.abspath(real_gh))} "
+                         f"{shlex.quote(os.path.join(folder, GH_REFUSE))} \"$@\"\n")
+        gh_note = GH_WITHHELD.replace("{}", "%s").replace("\n", "\\n")
+        scripts[GH_REFUSE] = f'printf {shlex.quote(gh_note)} "gh tried to start another program" >&2\nexit 1\n'
     scripts[SSH_STAND_IN] = f'printf {shlex.quote(note)} "SSH has no openwiz[bot] identity" >&2\nexit 128\n'
     scripts["git"] = (
         f'reason=\n{checks}'
@@ -402,7 +444,15 @@ def exec_folder(private, child):
         private.remove_folder(name)
         raise
     os.close(fd)
-    return name
+    return name, real_gh and os.path.abspath(real_gh)
+
+
+def gh_identity(path):
+    info = os.stat(path)
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid not in (0, os.getuid())
+            or info.st_mode & 0o022):
+        return None
+    return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns]
 
 
 def execute(command, env, wait=False):
@@ -472,7 +522,7 @@ def transport(args, env):
         raise Refused("cannot run git's transport")
 
 
-def snapshot_token(snapshot, env):
+def snapshot_token(snapshot, env, check=only_git_transport):
     try:
         private = Private(env, create=False)
     except Refused:
@@ -481,7 +531,7 @@ def snapshot_token(snapshot, env):
     if (snapshot != env.get(RUN_MARK) or os.path.dirname(snapshot) != private.path
             or not re.fullmatch(r"run-[0-9a-f]{32}\.json", name)):
         return "not this run's helper", None
-    reason = only_git_transport(snapshot, env)
+    reason = check(snapshot, env)
     if reason:
         return reason, None
     held = private.read(name)
@@ -507,12 +557,67 @@ def credential(args, env):
     return 0
 
 
+def gh_binding(snapshot_name):
+    return "gh-" + snapshot_name[len("run-"):]
+
+
+def bound_gh(real, refuse, env):
+    snapshot = env.get(RUN_MARK, "")
+    name = os.path.basename(snapshot)
+    try:
+        private = Private(env, create=False)
+    except Refused:
+        return "no private directory"
+    if os.path.dirname(snapshot) != private.path or not re.fullmatch(r"run-[0-9a-f]{32}\.json", name):
+        return "not this run's gh"
+    bound = private.read(gh_binding(name))
+    if not (isinstance(bound, dict) and bound.get("gh") == real and bound.get("refuse") == refuse):
+        return "not the gh this run chose"
+    try:
+        same = gh_identity(bound["gh"]) == bound.get("identity")
+    except OSError:
+        same = False
+    return None if same else "the gh this run chose was changed"
+
+
+def gh(args, env):
+    if len(args) < 2:
+        raise Refused(f"usage: {USAGE}")
+    real, refuse, args = args[0], args[1], [args[0], *args[2:]]
+    reason = bound_gh(real, refuse, env)
+    if reason:
+        sys.stderr.write(GH_WITHHELD.format(reason))
+        return 128
+    if len(args) < 2 or args[1] not in GH_ALLOWED:
+        sys.stderr.write(GH_WITHHELD.format("that gh command is not on the App's list"))
+        return 128
+    reason, token = snapshot_token(env.get(RUN_MARK, ""), env, check=lambda snapshot, env: None)
+    if reason:
+        sys.stderr.write(GH_WITHHELD.format(reason))
+        return 128
+    was = env.get("OPENWIZ_AGENT_TOKEN_GH_CONFIG_WAS", "")
+    if was.startswith("1"):
+        env["GH_CONFIG_DIR"] = was[1:]
+    else:
+        env.pop("GH_CONFIG_DIR", None)
+    env.update({"GH_TOKEN": token, "GH_PAGER": "cat", "GH_EDITOR": shlex.quote(refuse),
+                "GH_BROWSER": shlex.quote(refuse)})
+    try:
+        os.execve(args[0], args, env)
+    except OSError:
+        raise Refused("cannot run gh")
+
+
 def main(argv):
-    commands = {"start": start, "run": run, "credential": credential, "transport": transport}
+    commands = {"start": start, "run": run, "credential": credential, "transport": transport, "gh": gh}
     try:
         if not argv or argv[0] not in commands:
             raise Refused(f"usage: {USAGE}")
-        return commands[argv[0]](list(argv[1:]), dict(os.environ))
+        environ = os.environ
+        names = set(environ)
+        if LEGACY_APP_KEY in names and "OPENWIZ_TOKEN_SERVICE" in names and environ["OPENWIZ_TOKEN_SERVICE"]:
+            no_legacy_app_key(names)
+        return commands[argv[0]](list(argv[1:]), dict(environ))
     except Refused as error:
         sys.stderr.write(f"openwiz: agent-token: {error}\n")
         return 2

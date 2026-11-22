@@ -620,7 +620,8 @@ class Roster(unittest.TestCase):
 
     def test_each_role_starts_on_its_first_allowed_entry_and_never_on_one_without_that_role(self):
         p, repo = self.project('mixed', ('local', 'cloudroom', 'demo-bot'))
-        self.assertEqual(p.host('which'), (0, "roster: each start goes to its picked entry's driver", ''))
+        self.assertEqual(p.host('which'), (0, 'host: local', ''))
+        self.assertEqual(p.host('roster'), (0, "roster: each start goes to its picked entry's driver", ''))
         self.assertEqual(p.host('start', repo, 7, 'claude', 'claude-opus-5-5'),
                          (0, 'started #7 on cloudroom as Claude Code via syn-owner, Opus 5.5 default effort', ''))
         self.assertEqual(p.host('start', repo, 8, 'codex', 'gpt-6.2-sol'),
@@ -669,7 +670,8 @@ class Roster(unittest.TestCase):
                 p = Project(self)
                 p.fleet((ROSTER / 'invalid' / name).read_text())
                 self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5'), (1, refusals[name], ''))
-                self.assertEqual(p.host('which'), (1, refusals[name], ''))
+                self.assertEqual(p.host('which'), (0, 'host: local', ''))
+                self.assertEqual(p.host('roster'), (1, refusals[name], ''))
                 self.assertEqual((p.calls(), p.saved()), ([], None))
 
     def test_a_bot_entrys_start_carries_its_owners_app_token_and_its_label_on_a_project_that_isnt_ours(self):
@@ -702,6 +704,7 @@ class Roster(unittest.TestCase):
         p.fleet((ROSTER / 'no-roster/fleet.md').read_text())
         env = Token().service(p)
         self.assertEqual(p.host('which'), (0, 'host: local', ''))
+        self.assertEqual(p.host('roster'), (0, 'roster: none', ''))
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', 'review-ticket', **env),
                          (0, 'started #7 on local', ''))
         self.assertEqual(p.host('start', REPO, 8, 'codex', 'vendor/demo', 'grill', **env),
@@ -713,6 +716,32 @@ class Roster(unittest.TestCase):
             held.unlink()
         self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', ''))
         self.assertEqual([r['request']['requester'] for r in Token().requests(p)][-1], 'builder-7')
+
+
+    def shims(self, p):
+        folder = p.runs.parent / 'agent-token-bin'
+        found = {}
+        for path in sorted(folder.glob('*/*')) if folder.exists() else []:
+            found[path.relative_to(folder).as_posix()] = re.findall(r'--requester (\S+)', path.read_text())
+        return found
+
+    def test_a_refused_start_never_changes_a_running_agents_shims_and_each_role_keeps_its_own(self):
+        p, repo = self.project('mixed', ('local', 'cloudroom', 'demo-bot'))
+        env = Token().service(p)
+        self.assertEqual(p.host('start', repo, 9, 'codex', 'gpt-6.2-sol', 'review-ticket', **env)[0], 0)
+        running = self.shims(p)
+        self.assertEqual(sorted(set(sum(running.values(), []))), ['reviewer-9'])
+        self.assertEqual(len(running), 2)
+        p.fleet((ROSTER / 'no-roster/fleet.md').read_text())
+        self.assertEqual(p.host('start', repo, 9, 'codex', 'gpt-6.2-sol', 'review-ticket', **env),
+                         (1, 'refused: #9 already has a run on cloudroom; wake or stop it instead', ''))
+        self.assertEqual(self.shims(p), running)
+        self.assertEqual(p.host('stop', repo, 9, **env), (0, 'stopped #9 on cloudroom', ''))
+        p.fleet((ROSTER / 'mixed/fleet.md').read_text())
+        self.assertEqual(p.host('start', repo, 9, 'claude', 'claude-opus-5-5', **env)[0], 0)
+        after = self.shims(p)
+        self.assertEqual({k: v for k, v in after.items() if k in running}, running)
+        self.assertEqual(sorted(set(sum((v for k, v in after.items() if k not in running), []))), ['builder-9'])
 
 
 if __name__ == '__main__':

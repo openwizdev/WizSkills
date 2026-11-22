@@ -31,7 +31,7 @@ post = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(post)
 
 COMMENTS = ('comments(first: 100%s) { pageInfo { hasNextPage endCursor } '
-            'nodes { author { __typename login } body } }')
+            'nodes { databaseId author { __typename login } body } }')
 ISSUE = 'number state repository { nameWithOwner } ' + COMMENTS % ''
 CLOSED = ('query($owner: String!, $name: String!, $after: String) { repository(owner: $owner, name: $name) { '
           'issues(states: CLOSED, first: 50, after: $after) { pageInfo { hasNextPage endCursor } '
@@ -41,8 +41,9 @@ SPEC = ('query($owner: String!, $name: String!, $number: Int!, $after: String) {
         'subIssues(first: 50, after: $after) { pageInfo { hasNextPage endCursor } nodes { ' + ISSUE + ' } } } } }')
 MORE = ('query($owner: String!, $name: String!, $number: Int!, $after: String) { '
         'repository(owner: $owner, name: $name) { issue(number: $number) { ' + COMMENTS % ', after: $after' + ' } } }')
-PR = r'\(PR ((?:[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]*)\)'
-KNOWN = re.compile(r'launch-fleet: cost: Ticket #[1-9][0-9]* cost ' + PR + r': .*; total (?:([0-9]+(?:\.[0-9]+)?) credits|unknown)\b')
+PR = r'\(PR (?:([A-Za-z0-9-]+/[A-Za-z0-9_.-]+))?#([1-9][0-9]*)\)'
+AMOUNT = r'[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?'
+KNOWN = re.compile(r'launch-fleet: cost: Ticket #[1-9][0-9]* cost ' + PR + r': .*; total (?:(' + AMOUNT + r') credits|unknown)\b')
 UNKNOWN = re.compile(r'launch-fleet: cost unknown ' + PR + r'(?::|$)')
 CENT = Decimal('0.01')
 
@@ -101,20 +102,22 @@ def rest_login(author):
 def newest_cost_row(repo, where, issue, authors):
     newest = None
     for c in comments(where, issue):
-        if not isinstance(c['body'], str):
+        if not isinstance(c['body'], str) or type(c['databaseId']) is not int:
             raise TypeError(c)
         first = c['body'].split('\n', 1)[0]
         if post.grants.authored(rest_login(c['author']), authors) and first.startswith('launch-fleet: cost'):
-            newest = first
+            newest = c['databaseId'], first
     if newest is None:
         return None
     ticket = ('' if where.casefold() == repo.casefold() else where) + f"#{issue['number']}"
-    known, unknown = KNOWN.match(newest), UNKNOWN.match(newest)
-    if known:
-        return ticket, known.group(1), None if known.group(2) is None else Decimal(known.group(2))
-    if unknown:
-        return ticket, unknown.group(1), None
-    raise Failed(f'the newest cost record on {ticket} could not be read, so no ledger is printed')
+    known, unknown = KNOWN.match(newest[1]), UNKNOWN.match(newest[1])
+    found = known or unknown
+    if not found:
+        raise Failed(f'the newest cost record on {ticket} could not be read, so no ledger is printed')
+    pr_repo, pr = found.group(1) or where, int(found.group(2))
+    shown = ('' if pr_repo.casefold() == repo.casefold() else pr_repo) + f'#{pr}'
+    credits = Decimal(known.group(3).replace(',', '')) if known and known.group(3) else None
+    return (pr_repo.casefold(), pr), newest[0], (ticket, shown, credits)
 
 
 def ledger(repo, spec, authors):
@@ -129,7 +132,7 @@ def ledger(repo, spec, authors):
                 raise Failed(f'spec #{spec} could not be read, so no ledger is printed')
             return found['subIssues']
         issues = every(subs)
-    rows = []
+    rows = {}
     try:
         for issue in issues:
             where = issue['repository']['nameWithOwner']
@@ -138,11 +141,12 @@ def ledger(repo, spec, authors):
                 raise TypeError(issue)
             if issue['state'] == 'CLOSED':
                 found = newest_cost_row(repo, where, issue, authors)
-                if found:
-                    rows.append((where.casefold() != repo.casefold(), where.casefold(), issue['number'], found))
+                if found and (found[0] not in rows or rows[found[0]][0] < found[1]):
+                    order = (where.casefold() != repo.casefold(), where.casefold(), issue['number'])
+                    rows[found[0]] = found[1], order, found[2]
     except (TypeError, KeyError, AttributeError):
         raise Failed('a GitHub answer was not the expected shape, so no ledger is printed')
-    return [r[-1] for r in sorted(rows)]
+    return [row for _, _, row in sorted(rows.values(), key=lambda r: r[1])]
 
 
 def money(value):

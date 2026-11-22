@@ -1,3 +1,4 @@
+import atexit
 import base64
 import json
 import os
@@ -12,9 +13,39 @@ import unittest
 HELPER = Path(__file__).with_name("review.py")
 SKILLS = "example/skills"
 PRODUCT = "example/product"
-OLD = "a" * 40
-HEAD = "b" * 40
-NEWER = "c" * 40
+
+
+def template():
+    root = Path(tempfile.mkdtemp())
+    atexit.register(subprocess.run, ["rm", "-rf", str(root)])
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(root), "-c", "user.name=Builder", "-c",
+                               "user.email=builder@example.com", *args],
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    def commit(message, files, branch):
+        for name, text in files.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(text)
+        git("add", "-A")
+        git("commit", "-qm", message)
+        git("branch", "-f", branch)
+        return git("rev-parse", "HEAD")
+    git("init", "-q", "-b", "main")
+    base = commit("base", {"README.md": "pantry\n"}, "base")
+    old = commit("export", {"src/export.rs": "fn export() {}\n", "src/cli.rs": "fn main() {}\n"}, "old")
+    head = commit("refuse overwrite", {"src/export.rs": "fn export() { refuse(); }\n"}, "head")
+    newer = commit("newer", {"src/export.rs": "fn export() { refuse(); redact(); }\n"}, "newer")
+    git("checkout", "-q", base)
+    main = commit("vendor", {f"vendor/v{n}.rs": f"// {n}\n" for n in range(320)}, "main")
+    git("checkout", "-q", head)
+    git("merge", "-q", "--no-edit", "main")
+    git("branch", "-f", "merged")
+    return root, base, old, head, newer, main, git("rev-parse", "HEAD")
+
+
+ORIGIN, BASE, OLD, HEAD, NEWER, MAIN, MERGED = template()
 FLEET = """# Fleet settings
 
 ## CI checks
@@ -167,6 +198,8 @@ class Review(unittest.TestCase):
         self.fixture = root / "world.json"
         self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FIXTURE": str(self.fixture)}
         self.root = root
+        self.repo = root / "repo"
+        subprocess.run(["git", "clone", "-q", "--no-local", str(ORIGIN), str(self.repo)], check=True)
         self.world({})
 
     def tearDown(self):
@@ -179,7 +212,7 @@ class Review(unittest.TestCase):
             "calls": [], "writes": 0, "issues": {},
             "pulls": {"7": {"number": 7, "state": "open", "draft": False, "merged": False,
                             "body": DESCRIPTION, "head": {"sha": HEAD},
-                            "base": {"ref": "main", "repo": {"full_name": SKILLS}}, **(pr or {})}},
+                            "base": {"ref": "main", "sha": BASE, "repo": {"full_name": SKILLS}}, **(pr or {})}},
             "files": {f"{SKILLS}@main:docs/agents/fleet.md": FLEET,
                       f"{PRODUCT}@main:docs/agents/triage-labels.md": LABELS},
             "checks": green(HEAD),
@@ -196,7 +229,7 @@ class Review(unittest.TestCase):
         if args[0] in ("pin", "check", "post") and "--head" not in args:
             args = (*args, "--head", self.state()["pulls"]["7"]["head"]["sha"])
         return subprocess.run([sys.executable, "-I", str(HELPER), *args], input=stdin, text=True,
-                              capture_output=True, env=self.env, timeout=30, cwd=cwd)
+                              capture_output=True, env=self.env, timeout=30, cwd=cwd or self.repo)
 
     def file(self, name, text):
         path = self.root / name
@@ -390,7 +423,7 @@ class Review(unittest.TestCase):
         fresh = ("VERDICT: CHANGES", "Next: a fresh, stronger builder fixes R4 once, then one final check.")
         old_r4 = "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60."
         merge = ("VERDICT: APPROVE", "Next: none open. It merges by the project's merge rules.")
-        refused = ("R4: `src/cli.rs` is unchanged since aaaaaaa; a re-check raises a new finding there "
+        refused = (f"R4: `src/cli.rs` is unchanged since {OLD[:7]}; a re-check raises a new finding there "
                    "only as a Risk: security, privacy or data-loss blocker")
         cases = {
             "polish on unchanged code": (unchanged, merge, 1, refused),
@@ -412,6 +445,46 @@ class Review(unittest.TestCase):
         out = self.run_helper("check", self.file("r.md", RECHECK), "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.returncode, 2, out.stdout)
         self.assertIn("cannot read", out.stderr)
+
+    def test_a_recheck_after_a_large_main_merge_reads_only_the_pull_requests_own_changes(self):
+        merged = RECHECK.replace(f"APPROVE at {HEAD}", f"APPROVE at {MERGED}")
+        self.world({"checks": green(MERGED), "compare": {f"{OLD}...{MERGED}": [
+            "src/export.rs", *(f"vendor/v{n}.rs" for n in range(320))]}},
+            pr={"head": {"sha": MERGED}, "base": {"ref": "main", "sha": MAIN}}, comments=[report(FULL)])
+        out = self.run_helper("check", self.file("r.md", merged), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+        for path in ("vendor/v7.rs", "src/cli.rs"):
+            with self.subTest(path):
+                line = f"- **R4 [polish]** `{path}:1` (Sweep) Typo. Fix: file exists. Polish issue: #60."
+                text = merged.replace(
+                    "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60.", line)
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertEqual(out.stdout.splitlines(), [
+                    f"R4: `{path}` is unchanged since {OLD[:7]}; a re-check raises a new finding there "
+                    "only as a Risk: security, privacy or data-loss blocker"])
+
+    def test_a_recheck_fetches_a_missing_commit_and_names_one_it_cannot_read(self):
+        subprocess.run(["rm", "-rf", str(self.repo)], check=True)
+        subprocess.run(["git", "clone", "-q", "--no-local", "--single-branch", "-b", "base", str(ORIGIN),
+                        str(self.repo)], check=True)
+        self.world({}, comments=[report(FULL)])
+        out = self.run_helper("check", self.file("r.md", RECHECK), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+        gone = "d" * 40
+        cases = {
+            "last read": ({}, FULL.replace(OLD, gone), gone),
+            "head": ({"head": {"sha": gone}}, FULL, gone),
+            "base": ({"base": {"ref": "main", "sha": gone}}, FULL, gone),
+        }
+        for name, (pr, earlier, missing) in cases.items():
+            with self.subTest(name):
+                self.world({"checks": green(pr.get("head", {}).get("sha", HEAD))}, pr=pr, comments=[report(earlier)])
+                text = RECHECK.replace(HEAD, pr.get("head", {}).get("sha", HEAD))
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual((out.returncode, out.stdout), (2, ""), out.stderr)
+                self.assertEqual(out.stderr.strip(), f"refused: cannot read the pull request's own changes: "
+                                 f"commit {missing} is not in this checkout and origin does not give it")
 
     def hand_back(self, code_line):
         upstream, work = self.root / "upstream", self.root / "work"

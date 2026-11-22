@@ -1,0 +1,59 @@
+# #2150 red: python3 -I skills/review-ticket/scripts/test_review.py <the two new tests>, before the fix (commit SHAs replaced)
+FFFF
+======================================================================
+FAIL: test_a_recheck_after_a_large_main_merge_reads_only_the_pull_requests_own_changes (__main__.Review.test_a_recheck_after_a_large_main_merge_reads_only_the_pull_requests_own_changes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/review-ticket/scripts/test_review.py", line 455, in test_a_recheck_after_a_large_main_merge_reads_only_the_pull_requests_own_changes
+    self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+AssertionError: Tuples differ: (2, '') != (0, 'report ok')
+
+First differing element 0:
+2
+0
+
+- (2, '')
++ (0, 'report ok') : refused: cannot read every file changed since <short>
+
+
+======================================================================
+FAIL: test_a_recheck_fetches_a_missing_commit_and_names_one_it_cannot_read (__main__.Review.test_a_recheck_fetches_a_missing_commit_and_names_one_it_cannot_read) [last read]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/review-ticket/scripts/test_review.py", line 486, in test_a_recheck_fetches_a_missing_commit_and_names_one_it_cannot_read
+    self.assertEqual(out.stderr.strip(), f"refused: cannot read the pull request's own changes: "
+AssertionError: 'refused: cannot read repos/example/skill[89 chars]251d' != "refused: cannot read the pull request's [108 chars]e it"
+- refused: cannot read repos/example/skills/compare/<sha>...<sha>
++ refused: cannot read the pull request's own changes: commit <sha> is not in this checkout and origin does not give it
+
+
+======================================================================
+FAIL: test_a_recheck_fetches_a_missing_commit_and_names_one_it_cannot_read (__main__.Review.test_a_recheck_fetches_a_missing_commit_and_names_one_it_cannot_read) [head]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/review-ticket/scripts/test_review.py", line 486, in test_a_recheck_fetches_a_missing_commit_and_names_one_it_cannot_read
+    self.assertEqual(out.stderr.strip(), f"refused: cannot read the pull request's own changes: "
+AssertionError: 'refused: cannot read repos/example/skill[89 chars]dddd' != "refused: cannot read the pull request's [108 chars]e it"
+- refused: cannot read repos/example/skills/compare/<sha>...<sha>
++ refused: cannot read the pull request's own changes: commit <sha> is not in this checkout and origin does not give it
+
+
+======================================================================
+FAIL: test_a_recheck_fetches_a_missing_commit_and_names_one_it_cannot_read (__main__.Review.test_a_recheck_fetches_a_missing_commit_and_names_one_it_cannot_read) [base]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/review-ticket/scripts/test_review.py", line 485, in test_a_recheck_fetches_a_missing_commit_and_names_one_it_cannot_read
+    self.assertEqual((out.returncode, out.stdout), (2, ""), out.stderr)
+AssertionError: Tuples differ: (0, 'report ok\n') != (2, '')
+
+First differing element 0:
+0
+2
+
+- (0, 'report ok\n')
++ (2, '') : 
+
+----------------------------------------------------------------------
+Ran 2 tests in <time>
+
+FAILED (failures=4)

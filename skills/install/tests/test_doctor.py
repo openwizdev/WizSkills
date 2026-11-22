@@ -454,7 +454,7 @@ class SkillCommandsMatchPackage(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.package = json.loads(PACKAGE.read_text())['tools']
+        cls.package = dict(json.loads(PACKAGE.read_text())['tools'], **{'tools/install/install': INSTALLER_0_1_1})
         cls.commands = skill_commands(SKILL.read_text())
 
     def test_every_named_command_is_in_the_package(self):
@@ -592,15 +592,22 @@ class SkillCommandsMatchPackage(unittest.TestCase):
 
 SYNTHETIC_TAG = 'v0.1.1'
 SYNTHETIC_SOURCE = 'b' * 40
+RECEIPT = 'openwiz.skill-copy.v1\n' + 'c' * 40 + '\n'
+INSTALLER_0_1_1 = {'preflight': [], 'download': ['--dir', '--target', '--version'],
+                   'install': ['--assets', '--root', '--state-root', '--target'],
+                   'link': ['--root', '--state-root', '--yes'], 'remove': ['--root', '--state-root', '--yes'],
+                   'status': ['--root', '--state-root'], 'skills': ['--root', '--state-root']}
 FAKE_CURL = r"""#!/usr/bin/env python3
-import os, sys
+import json, os, re, sys
 url = next(a for a in sys.argv[1:] if a.startswith('https://'))
 with open(os.environ['FAKE_LOG'], 'a') as log:
     log.write('curl %s\n' % url)
+out = sys.argv[sys.argv.index('-o') + 1] if '-o' in sys.argv else None
 if url.endswith('/releases/latest') and '-w' in sys.argv:
-    print('https://github.com/openwizdev/OpenWiz/releases/tag/' + os.environ['FAKE_TAG'])
-elif '-o' in sys.argv and sys.argv[sys.argv.index('-o') + 1] != '/dev/null':
-    open(sys.argv[sys.argv.index('-o') + 1], 'w').write('synthetic\n')
+    print('https://github.com/openwizdev/OpenWiz/releases/tag/' + open(os.environ['FAKE_LATEST']).read())
+elif out and out != '/dev/null':
+    tag = re.search(r'/releases/download/v([^/]+)/', url)
+    open(out, 'w').write(json.dumps({'version': tag[1]}) if tag and url.endswith('.manifest.json') else 'synthetic\n')
 """
 FAKE_GIT = r"""#!/usr/bin/env python3
 import os, sys
@@ -616,84 +623,105 @@ package = json.load(open(os.environ['FAKE_PACKAGE']))
 sub, args = sys.argv[1], sys.argv[2:]
 helps = package['tools']['tools/install/install']
 if sub not in helps or any(a.startswith('--') and a not in helps[sub] for a in args):
-    sys.exit('usage: install {%s}' % ','.join(helps))
+    print(json.dumps({'outcome': 'usage'}))
+    sys.exit(2)
 with open(os.environ['FAKE_LOG'], 'a') as log:
     log.write('install %s\n' % ' '.join(sys.argv[1:]))
 value = lambda flag: args[args.index(flag) + 1]
 if sub == 'preflight':
     print(json.dumps({'outcome': 'ready', 'target': 'x86_64-unknown-linux-gnu'}))
 elif sub == 'download':
-    os.makedirs(value('--dir'), exist_ok=True)
+    version = value('--version').lstrip('v') if '--version' in args else open(os.environ['FAKE_LATEST']).read()[1:]
+    os.makedirs(value('--dir'))
+    with open(os.path.join(value('--dir'), 'openwiz-%s.manifest.json' % value('--target')), 'w') as manifest:
+        manifest.write(json.dumps({'version': version}))
+    print(json.dumps({'outcome': 'downloaded', 'version': version}))
 elif sub == 'install':
+    version = json.load(open(os.path.join(value('--assets'), 'openwiz-%s.manifest.json' % value('--target'))))['version']
     build = os.path.join(value('--root'), 'service/builds/synthetic')
     os.makedirs(build)
     binary = os.path.join(build, 'openwiz')
-    identity = json.dumps({'version': package['version'], 'source': os.environ['FAKE_SOURCE']}, separators=(',', ':'))
+    identity = json.dumps({'version': version, 'source': os.environ['FAKE_SOURCE']}, separators=(',', ':'))
     open(binary, 'w').write('#!/bin/sh\necho %s\n' % repr(identity))
     os.chmod(binary, 0o755)
     os.symlink(build, os.path.join(value('--root'), 'current'))
-    print(json.dumps({'outcome': 'activated', 'activated': True, 'version': package['version']}))
+    print(json.dumps({'outcome': 'installed', 'activated': True, 'version': version}))
 """
 
 
 class InstallsTheReleaseItFetches(unittest.TestCase):
 
-    def run_steps(self):
+    def run_steps(self, installer=INSTALLER_0_1_1, latest_after_preflight=SYNTHETIC_TAG):
         import re
         text = SKILL.read_text()
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(__import__('shutil').rmtree, tmp)
         package = json.loads(PACKAGE.read_text())
         package['version'] = SYNTHETIC_TAG[1:]
+        package['tools']['tools/install/install'] = installer
         (tmp / 'package.json').write_text(json.dumps(package))
         (tmp / 'installer.py').write_text(FAKE_INSTALLER)
+        (tmp / 'latest').write_text(SYNTHETIC_TAG)
         bin_dir = tmp / 'bin'
         bin_dir.mkdir()
         for name, body in (('curl', FAKE_CURL), ('git', FAKE_GIT)):
             write(bin_dir / name, body, 0o755)
         env = {'HOME': str(tmp), 'PATH': '%s:/usr/bin:/bin' % bin_dir, 'FAKE_LOG': str(tmp / 'log'),
-               'FAKE_TAG': SYNTHETIC_TAG, 'FAKE_PACKAGE': str(tmp / 'package.json'),
+               'FAKE_LATEST': str(tmp / 'latest'), 'FAKE_PACKAGE': str(tmp / 'package.json'),
                'FAKE_INSTALLER': str(tmp / 'installer.py'), 'FAKE_SOURCE': SYNTHETIC_SOURCE}
         found = {'<private temporary folder>': str(tmp / 'work'), '<root>': str(tmp / 'root'),
-                 '"$openwiz"': str(tmp / 'work/openwiz')}
+                 '"$openwiz"': str(tmp / 'work/openwiz'), '<private download folder>': str(tmp / 'download')}
         (tmp / 'work').mkdir()
-        outputs = []
+        runs = []
         steps = text[text.index('## 1. '):text.index('## 3. ')]
-        for n, block in enumerate(re.findall(r'```sh\n(.*?)```', steps, re.S)):
-            found['<private download folder>'] = str(tmp / ('download-%d' % n))
+        for block in re.findall(r'```sh\n(.*?)```', steps, re.S):
+            fallback = '/releases/download/' in block
+            if fallback and runs and runs[-1][1] == 0 and ' download ' in runs[-1][0]:
+                continue
             for key, value in found.items():
                 block = block.replace(key, value)
-            out = subprocess.run(['sh', '-c', block], env=env, capture_output=True, text=True).stdout
-            outputs.append(out)
-            tag = re.search(r'/releases/tag/(\S+)', out)
+            done = subprocess.run(['sh', '-c', block], env=env, capture_output=True, text=True)
+            runs.append((block, done.returncode, done.stdout))
+            tag = re.search(r'/releases/tag/(\S+)', done.stdout)
             if tag:
                 found.update({'<tag>': tag[1], '<version>': tag[1].lstrip('v')})
-            target = re.search(r'"target": "([^"]+)"', out)
+            target = re.search(r'"target": "([^"]+)"', done.stdout)
             if target:
                 found['<target>'] = target[1]
+            if 'git clone' in block:
+                (tmp / 'latest').write_text(latest_after_preflight)
         log = (tmp / 'log').read_text() if (tmp / 'log').exists() else ''
         for key, value in found.items():
             steps = steps.replace(key, value)
-        return steps, log, outputs
+        return steps, log, runs
+
+    def identity(self, runs):
+        return [out for block, code, out in runs if '--build-identity' in block][-1]
 
     def test_preflight_clones_the_tag_of_the_release_it_installs(self):
-        steps, log, outputs = self.run_steps()
+        steps, log, runs = self.run_steps()
         clones = [l for l in log.split('\n') if l.startswith('git clone')]
         self.assertEqual(clones, ['git clone --depth 1 --branch %s https://github.com/openwizdev/OpenWiz %s'
                                   % (SYNTHETIC_TAG, clones[0].split()[-1])] if clones else ['a clone'])
 
-    def test_the_pinned_tag_fallback_fetches_that_release_s_files(self):
-        steps, log, outputs = self.run_steps()
+    def test_a_release_promoted_after_preflight_is_not_installed(self):
+        steps, log, runs = self.run_steps(latest_after_preflight='v0.1.2')
+        self.assertEqual(self.identity(runs), '{"version":"0.1.1","source":"%s"}\n' % SYNTHETIC_SOURCE)
+        self.assertEqual([code for block, code, out in runs], [0] * len(runs))
+
+    def test_an_installer_without_version_takes_the_pinned_tag_fallback(self):
+        older = dict(INSTALLER_0_1_1, download=['--dir', '--target'])
+        steps, log, runs = self.run_steps(installer=older, latest_after_preflight='v0.1.2')
         fetched = sorted(l.split()[1] for l in log.split('\n') if l.startswith('curl ') and '/releases/download/' in l)
         base = 'https://github.com/openwizdev/OpenWiz/releases/download/%s/' % SYNTHETIC_TAG
         self.assertEqual(fetched, [base + f for f in ('openwiz-0.1.1-x86_64-unknown-linux-gnu.tar.gz',
                                                       'openwiz-x86_64-unknown-linux-gnu.manifest.json',
                                                       'openwiz-x86_64-unknown-linux-gnu.sha256')])
+        self.assertEqual(self.identity(runs), '{"version":"0.1.1","source":"%s"}\n' % SYNTHETIC_SOURCE)
 
     def test_the_done_check_expects_the_installed_release_s_build_identity(self):
-        steps, log, outputs = self.run_steps()
-        identity = '{"version":"0.1.1","source":"%s"}' % SYNTHETIC_SOURCE
-        self.assertIn(identity, outputs[-1])
+        steps, log, runs = self.run_steps()
+        self.assertIn('{"version":"0.1.1","source":"%s"}' % SYNTHETIC_SOURCE, self.identity(runs))
         step2 = steps[steps.index('## 2. '):]
         self.assertIn('`"version":"0.1.1"`', step2)
         self.assertNotIn('0.1.0', step2)
@@ -702,8 +730,20 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
         text = SKILL.read_text()
         named = [l for l in text[text.index('## Resume'):text.index('## 5. ')].split('\n') if '0.1.0' in l]
         self.assertEqual(len(named), 1, named)
-        self.assertIn('To install 0.1.0, use `v0.1.0`', named[0])
+        self.assertIn('To install 0.1.0, stop this skill and follow the [0.1.0 install instructions]'
+                      '(https://github.com/openwizdev/WizSkills/blob/maint/0.2/skills/install/SKILL.md)', named[0])
+        self.assertIn('hand-started fleets', named[0])
+        self.assertIn('always take its pinned `v0.1.0` fetch, never its `download`', named[0])
         self.assertNotIn('version: 0.2.0', text)
+
+    def test_the_restart_message_carries_the_chosen_release(self):
+        text = SKILL.read_text()
+        resume = text[text.index('## Resume'):text.index('## 1. ')]
+        step4 = text[text.index('## 4. '):text.index('## 5. ')]
+        for host in ('local', 'boat', 'cloud'):
+            self.assertIn('`continue the OpenWiz install with host %s and release <tag>`' % host, step4)
+        self.assertIn('`release <tag>` names the release step 1 chose', resume)
+        self.assertIn("never GitHub's Latest again", resume)
 
 
 class RestartReadsTheSkillsOwnVersion(unittest.TestCase):
@@ -718,13 +758,15 @@ class RestartReadsTheSkillsOwnVersion(unittest.TestCase):
         (copy / 'SKILL.md').write_text(text)
         return tmp, copy, text
 
-    def test_a_release_at_0_4_0_passes_its_own_restart_check(self):
+    def agent_copy(self, folder, receipt, body):
+        (folder / 'scripts').mkdir(parents=True)
+        (folder / '.openwiz-skill').write_text(receipt)
+        (folder / 'SKILL.md').write_text(body)
+
+    def overwrite(self, version='0.4.0'):
         import re
-        tmp, copy, text = self.synthetic_release('0.4.0')
-        old = tmp / 'home/.claude/skills/install'
-        (old / 'scripts').mkdir(parents=True)
-        (old / '.openwiz-skill').write_text('synthetic receipt\n')
-        (old / 'SKILL.md').write_text('---\nname: install\nversion: 0.2.0\n---\n')
+        tmp, copy, text = self.synthetic_release(version)
+        home = tmp / 'home'
         bin_dir = tmp / 'bin'
         bin_dir.mkdir()
         write(bin_dir / 'git', '#!/bin/sh\nmkdir -p "$7" && cp -R %s/. "$7/"\n'
@@ -732,19 +774,51 @@ class RestartReadsTheSkillsOwnVersion(unittest.TestCase):
         step4 = text[text.index('## 4. '):text.index('## 5. ')]
         block = re.findall(r'```sh\n(.*?)```', step4, re.S)[1]
         mine = re.search(r'^version: (\S+)$', text, re.M)[1]
+        every = ('"$HOME/.claude/skills" "${CODEX_HOME:-$HOME/.codex}/skills" "$HOME/.cursor/skills" '
+                 '"$HOME/.config/opencode/skills" "$HOME/.grok/skills"')
         block = (block.replace('<private temporary folder>', str(tmp / 'work'))
-                      .replace('<version of this skill>', mine))
+                      .replace('<version of this skill>', mine).replace('<installed agent folders>', every))
         (tmp / 'work').mkdir()
-        env = {'HOME': str(tmp / 'home'), 'PATH': '%s:/usr/bin:/bin' % bin_dir}
-        out = subprocess.run(['sh', '-c', block], env=env, capture_output=True, text=True).stdout
-        self.assertEqual(out.split('\n'), ['source ok', 'ok: %s' % old, ''])
+        env = {'HOME': str(home), 'PATH': '%s:/usr/bin:/bin' % bin_dir}
+        return home, lambda: subprocess.run(['sh', '-c', block], env=env, capture_output=True, text=True).stdout
+
+    def test_a_release_at_0_4_0_passes_its_own_restart_check(self):
+        home, run = self.overwrite()
+        old = home / '.claude/skills/install'
+        self.agent_copy(old, RECEIPT, '---\nname: install\nversion: 0.2.0\n---\n')
+        self.assertEqual(run().split('\n'), ['source ok', 'ok: %s' % old, ''])
         self.assertIn('version: 0.4.0\n', (old / 'SKILL.md').read_text())
+
+    def test_a_user_owned_copy_with_an_invalid_receipt_is_never_overwritten(self):
+        home, run = self.overwrite()
+        ours, theirs = home / '.claude/skills/install', home / '.codex/skills/install'
+        self.agent_copy(ours, RECEIPT, '---\nname: install\nversion: 0.2.0\n---\n')
+        self.agent_copy(theirs, 'not a valid receipt\n', '# the user\'s own install skill\n')
+        out = run()
+        self.assertEqual((theirs / 'SKILL.md').read_text(), '# the user\'s own install skill\n')
+        self.assertEqual(sorted((theirs).iterdir()), [theirs / '.openwiz-skill', theirs / 'SKILL.md', theirs / 'scripts'])
+        self.assertIn('ok: %s' % ours, out.split('\n'))
+        self.assertNotIn(str(theirs), ' '.join(l for l in out.split('\n') if l.startswith(('ok:', 'STILL OLD'))))
 
     def test_resume_and_the_restart_name_no_fixed_skill_version(self):
         import re
         text = SKILL.read_text()
         body = text[text.index('\n---\n') + 5:]
         self.assertEqual(re.findall(r'version: \d+\.\d+\.\d+', body), [])
+
+
+class RemovalStopsTheHeartbeatThenUsesTheInstaller(unittest.TestCase):
+
+    def test_removal_removes_the_heartbeat_then_previews_and_confirms_install_remove(self):
+        text = SKILL.read_text()
+        removal = text[text.index('## Recovery and removal'):]
+        beat = removal.find('heartbeat.py remove "<owner>/<repo>" "<S>"')
+        preview = removal.find('tools/install/install remove --root <root>`')
+        confirm = removal.find('the same command with `--yes`')
+        self.assertTrue(0 < beat < preview < confirm, (beat, preview, confirm))
+        self.assertIn('~/.local/state/openwiz-heartbeat/', removal[:preview])
+        self.assertNotIn('there is no remove command', removal)
+        self.assertIn('Only for 0.1.0\'s installer, which has no `remove`', removal)
 
 
 HOST_QUESTION = ("Where should your agents run? This computer (Claude Code or Codex you're signed in to), "

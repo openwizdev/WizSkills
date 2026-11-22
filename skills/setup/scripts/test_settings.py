@@ -497,6 +497,10 @@ class Check(unittest.TestCase):
                 code, out = self.check(self.project(**{'fleet.md': with_rules(table.sub(indent, valid))}))
                 self.assertEqual(code, 5, out)
                 self.assertIn('fleet.md: Approval rules: the table is not | Rule | Approver |', out.splitlines())
+        with self.subTest('indented delimiter row'):
+            code, out = self.check(self.project(**{'fleet.md': with_rules(valid.replace('\n| --- |', '\n    | --- |'))}))
+            self.assertEqual(code, 5, out)
+            self.assertIn('fleet.md: Approval rules: the table is not | Rule | Approver |', out.splitlines())
         for name, indent in (('one space', ' '), ('three spaces', '   ')):
             with self.subTest(name):
                 code, out = self.check(self.project(**{'fleet.md': with_rules(table.sub(indent, valid))}))

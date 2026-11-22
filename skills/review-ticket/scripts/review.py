@@ -37,6 +37,8 @@ TICKET = re.compile(r"[\w.-]+/[\w.-]+#[1-9][0-9]*")
 LOGIN = r"`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`"
 AUTHORS_CELL = re.compile(rf"\s*{LOGIN}(?:\s*,\s*{LOGIN})*\s*")
 TEST_RULE = re.compile(r"\b(?:catches|no new test): \S")
+SELF_CHECK = re.compile(r"(?im)^##[ \t]+self-check[ \t]*\n((?:(?!##[ \t]).*(?:\n|\Z))*)")
+PROBE = re.compile(r"`[^`]+`.*\bprinted\b.*\S|\bn/a: *\S")
 PRIVATE = re.compile(r"\b(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_-]{8,}|\bthr_[A-Za-z0-9]{4,}|(?i:\bbearer\s+[A-Za-z0-9._-]{8,})")
 
 
@@ -392,6 +394,17 @@ def git(*args, what=None):
     return out.stdout
 
 
+def self_check_misses(description):
+    section = SELF_CHECK.search(description)
+    if not section:
+        return ["no ## Self-check section with one line per probe"]
+    lines = [x.strip() for x in section[1].splitlines() if x.strip()]
+    if not lines:
+        return ["the ## Self-check section has no probe lines"]
+    return [f'the ## Self-check line "{x}" has neither a `command` with what it printed nor n/a: <why>'
+            for x in lines if not PROBE.search(x)]
+
+
 def self_check(path, base):
     try:
         description = Path(path).read_text(encoding="utf-8").replace("\r\n", "\n")
@@ -408,6 +421,7 @@ def self_check(path, base):
         misses.append(f"the description does not name the head {head}")
     if not TEST_RULE.search(description):
         misses.append("no `catches: <the bug>` or `no new test: <why>` line")
+    misses += self_check_misses(description)
     leaks = ["the description"] if PRIVATE.search(description) else []
     name, header = None, False
     for line in diff.splitlines():
@@ -490,7 +504,9 @@ DESCRIPTION = (
     "  check REPORT --repo O/R --pr N --head SHA  admission, then the report's contract lines\n"
     '  post REPORT --repo O/R --pr N --head SHA   admission and check again, post once, read back\n'
     '  follow-up --repo TICKET_REPO ...   file one polish issue or logged blocker for triage, once\n'
-    "  self-check DESCRIPTION [--base REF]       the builder's own pass on its checkout, before any review\n"
+    "  self-check DESCRIPTION [--base REF]       the builder's own pass on its checkout, before any review:\n"
+    "                                            the description's form, one ## Self-check line per probe\n"
+    "                                            (a `command` with what it printed, or n/a: <why>), no leaks\n"
     '\n'
     'pin, check and post take --ticket OWNER/NAME#N for an explicitly assigned\n'
     "ticket, admitted only by an exact `Refs OWNER/NAME#N` line; without it a Closes line names it.\n"

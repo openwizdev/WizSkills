@@ -1907,11 +1907,13 @@ class WakeRepair(Tracker):
         host = self.host()
         with self.host_on_tracker(host):
             host.clear(REPO, '12', 'synthetic-host', 'started')
+        fleet = [c['body'] for c in self.ticket()['comments'] if c['body'].startswith(MARKER + '\nagent: fleet\n')]
+        self.assertEqual(fleet[-1].split('\n')[2], 'state: done')
         self.assertEqual(self.host_reads(), (False, []))
-        code, report = self.wake()
-        self.assertEqual((code, report), (1, ['#12 note 104 builder asking: needs-info added']))
+        self.assertEqual(self.wake(), (0, []))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
         self.assertEqual(self.host_reads(), (False, []))
+        self.assertEqual([c['id'] for c in self.ticket()['comments'] if 'needs-info-repair' in c['body']], [])
         self.assertEqual(self.wake(), (0, []))
 
     def test_the_repair_keeps_its_own_rule_for_a_same_app_reapplication_at_its_delete(self):

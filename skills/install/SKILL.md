@@ -1,7 +1,7 @@
 ---
 name: install
 description: Install OpenWiz from its one line, "Install OpenWiz from github.com/openwizdev/OpenWiz", then optionally run a resumable first fleet. Asks first where the user's agents run (this computer, boat.dev or CloudRoom; CloudRoom is optional), checks the machine, installs the verified prebuilt release (no Rust or Node), checks setup's connections (CloudRoom's only when chosen), and either connects one repository and starts its CloudRoom fleet through launch-fleet, or, without CloudRoom, says what works today and how to start a builder by hand. Use to install, repair, update or remove OpenWiz, or to start or resume a first fleet. For a project's docs/agents/ settings alone, use setup.
-version: 0.3.0
+version: 0.3.1
 ---
 
 # Install OpenWiz

@@ -704,7 +704,8 @@ class Roster(unittest.TestCase):
         self.assertEqual(p.host('which'), (0, 'host: local', ''))
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', 'review-ticket', **env),
                          (0, 'started #7 on local', ''))
-        self.assertEqual(p.host('start', REPO, 8, 'codex', 'vendor/demo', 'grill', **env), (0, 'started #8 on local', ''))
+        self.assertEqual(p.host('start', REPO, 8, 'codex', 'vendor/demo', 'grill', **env),
+                         (0, 'started #8 on local', ''))
         self.assertEqual(p.saved(), {'repo': REPO, 'runs': {'7': {'host': 'local', 'run': 'local-run-7'},
                                                             '8': {'host': 'local', 'run': 'local-run-8'}}})
         self.assertEqual([r['request']['requester'] for r in Token().requests(p)], ['builder-7', 'builder-8'])

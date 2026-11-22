@@ -280,12 +280,13 @@ def pick(entries, repo, ticket, role, choice):
     provider, model = choice['provider'], choice['model']
     harness = 'claude' if provider == 'claude-code' else provider
     if not (DRIVER_HARNESS.fullmatch(harness) and DRIVER_MODEL.fullmatch(model)):
-        return {'pick': None, 'waits': 'driver',
-                'look': "roster: driver v1 can't start %s %s; choose another model in the Models table" % (harness, model)}
+        return {'pick': None, 'waits': 'driver', 'look': "roster: driver v1 can't start %s %s; choose another model "
+                                                         "in the Models table" % (harness, model)}
     named = HARNESS_NAMES.get(provider, provider)
     entry = next((e for e in entries if role in e['roles'] and (e['kind'] != 'harness' or e['name'] == named)), None)
     if entry is None:
-        return {'pick': None, 'waits': 'roster', 'look': 'roster: no entry may take the %s role with %s' % (role, named)}
+        return {'pick': None, 'waits': 'roster',
+                'look': 'roster: no entry may take the %s role with %s' % (role, named)}
     person = entry['writes_as'][:-len("'s App")]
     return {'pick': {'name': entry['name'], 'kind': entry['kind'], 'driver': entry['driver'],
                      'start': {'harness': harness, 'model': model},
@@ -308,8 +309,7 @@ def model_name(text, provider, model):
     return None
 
 
-def roster_start(text, repo, n, harness, model, skill):
-    entries = roster(text)
+def roster_start(text, entries, repo, n, harness, model, skill):
     role = SKILL_ROLES.get(skill)
     if role is None:
         raise Outcome('refused: the Roster gives no role to the %s skill' % skill)
@@ -382,7 +382,8 @@ def builder_env(repo, n, requester):
         for name in ('gh', 'git'):
             fd, tmp = tempfile.mkstemp(dir=folder, prefix='.shim-')
             with os.fdopen(fd, 'w') as f:
-                f.write(SHIM.format(requester=requester, name=name, folder=shlex.quote(str(folder)), key=LEGACY_KEY, repo=repo,
+                f.write(SHIM.format(requester=requester, name=name, folder=shlex.quote(str(folder)), key=LEGACY_KEY,
+                                    repo=repo,
                                     python=shlex.quote(sys.executable),
                                     helper=shlex.quote(str(HERE / 'github-app/agent-token.py'))))
             os.chmod(tmp, 0o700)
@@ -574,7 +575,8 @@ def load(repo):
     if not (isinstance(value, dict) and set(value) == {'repo', 'runs'} and value['repo'] == repo
             and isinstance(value['runs'], dict)
             and all(TICKET.fullmatch(k) and isinstance(v, dict)
-                    and {'host', 'run'} <= set(v) <= {'host', 'role', 'run', 'stopped'} and v.get('stopped', True) is True
+                    and {'host', 'run'} <= set(v) <= {'host', 'role', 'run', 'stopped'}
+                    and v.get('stopped', True) is True
                     and v.get('role', 'builder') in ROLES
                     and isinstance(v['host'], str) and NAME.fullmatch(v['host'])
                     and isinstance(v['run'], str) and RUN.fullmatch(v['run']) for k, v in value['runs'].items())):
@@ -635,8 +637,9 @@ def main(argv):
     role = picked = None
     if kind == 'start':
         text = setting_text(FLEET_SETTINGS)
-        if text is not None and roster(text) is not None:
-            role, picked = roster_start(text, repo, n, argv[3], argv[4], skill)
+        entries = roster(text) if text is not None else None
+        if entries is not None:
+            role, picked = roster_start(text, entries, repo, n, argv[3], argv[4], skill)
     elif run:
         role = run.get('role')
     requester = '%s-%s' % (role or 'builder', n)

@@ -558,6 +558,37 @@ class HostAwareSetup(unittest.TestCase):
                 self.assertNotIn('CloudRoom project', result.stdout)
                 self.assertEqual('setup' in json.loads(j.state.read_text()), code == 0)
 
+    def test_choose_reads_nc1_local_options_and_refuses_cloudroom_fallback(self):
+        j = Journey(self)
+        (j.dir / 'bin/room-cli').unlink()
+        state = setup_state(settings=OPUS, overrides={'cloudroom': 'cloudroom_not_needed'})
+        state['project'].update(host='local', project=None, answer_thread=None)
+        j.write_setup(state)
+        j.state.write_text(json.dumps({
+            'repo': REPO, 'host': {'agents': 'local', 'harnesses': ['claude-code']},
+            'setup': {'host': 'local', 'settings': dict(zip(('harness', 'model', 'effort'), OPUS))}}))
+        j.state.chmod(0o600)
+        options = offering(OPUS, SOL)
+        j.options.write_text(json.dumps(options))
+        refused = j.helper(['choose', '--from-setup'])
+        self.assertEqual(refused.returncode, 5, refused.stdout + refused.stderr)
+        self.assertIn('models --json --host local', refused.stdout)
+        self.assertNotIn('choices', json.loads(j.state.read_text()))
+        options['source'] = 'local'
+        j.options.write_text(json.dumps(options))
+        picked = j.helper(['choose', '--from-setup'])
+        self.assertEqual(picked.returncode, 0, picked.stdout + picked.stderr)
+        self.assertEqual(json.loads(j.state.read_text())['choices']['model'], OPUS[1])
+
+    def test_install_passes_the_chosen_host_to_models_and_follows_the_driver_handoff(self):
+        text = SKILL.read_text()
+        for step in ('### 3. Connect', '### 5. Agents'):
+            section = text.split(step, 1)[1].split('\n### ', 1)[0]
+            self.assertIn('models --json --host <its name>', section)
+        launch = text.split('### 8. Launch', 1)[1].split('\n### ', 1)[0]
+        self.assertIn('heartbeat', launch)
+        self.assertIn('Starting one', launch)
+
 
 class Continuation(unittest.TestCase):
     """#636: onboarding continues from install's verified setup and init, never

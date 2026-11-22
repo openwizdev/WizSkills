@@ -83,8 +83,7 @@ else:
 """
 
 
-def cron_command(field):
-    """The command cron runs for a crontab command field: `\\%` is a literal %, and an unescaped % ends it."""
+def cron_command_of(field):
     command, i = [], 0
     while i < len(field) and field[i] != '%':
         escaped = field.startswith('\\%', i)
@@ -205,7 +204,7 @@ class Heartbeat(unittest.TestCase):
         self.assertTrue(current.startswith(original))
         line, = current[len(original):].splitlines()
         self.assertIn(line + '\n', preview)
-        command = cron_command(line.split(' ', 5)[5])
+        command = cron_command_of(line.split(' ', 5)[5])
         ran = subprocess.run(['/bin/sh', '-c', command], env=self.env, capture_output=True, text=True, timeout=15)
         self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
         self.assertEqual((self.home / 'check.log').read_text(), f'{REPO} spec {SPEC}\n')

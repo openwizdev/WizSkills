@@ -52,8 +52,7 @@ class World:
     def bodies(self, number):
         return [c['body'] for c in self.load()['comments'].get(str(number), [])]
 
-    def log_calls(self, hide_post_on=None):
-        """Log each gh call's method and route; optionally drop a posted comment from later reads."""
+    def log_gh_calls(self, hide_post_on=None):
         log, hide = self.dir / 'calls.log', self.dir / 'hide.py'
         hide.write_text('import json, os, sys\nw = json.load(open(os.environ["FAKE_WORLD"]))\n'
                         'w["comments"][sys.argv[1]] = []\njson.dump(w, open(os.environ["FAKE_WORLD"], "w"))\n')
@@ -64,8 +63,7 @@ class World:
             % (log, sys.executable, HERE / 'fixtures/fake_github.py', drop))
         self.calls_log = log
 
-    def calls(self):
-        """Each logged call to a comments route, as (method, issue number)."""
+    def comment_route_calls(self):
         out = []
         for line in self.calls_log.read_text().splitlines():
             words = line.split(' ')
@@ -194,18 +192,18 @@ class SelfGrant(unittest.TestCase):
 
     def test_the_spec_record_reads_back_before_the_ticket_grant_is_posted(self):
         w = World(self)
-        w.log_calls()
+        w.log_gh_calls()
         code, out = w.run('self-grant.py', REPO, 12, 'spec-change', 'the proof names the after bench', '--spec', 3)
         self.assertEqual(code, 0, out)
-        self.assertEqual(w.calls(), [('GET', 3), ('POST', 3), ('GET', 3), ('GET', 12), ('POST', 12), ('GET', 12)])
+        self.assertEqual(w.comment_route_calls(), [('GET', 3), ('POST', 3), ('GET', 3), ('GET', 12), ('POST', 12), ('GET', 12)])
 
     def test_a_posted_spec_change_missing_from_read_back_posts_no_grant(self):
         w = World(self)
-        w.log_calls(hide_post_on=3)
+        w.log_gh_calls(hide_post_on=3)
         code, out = w.run('self-grant.py', REPO, 12, 'spec-change', 'the proof names the after bench', '--spec', 3)
         self.assertEqual((code, out), (1, 'unknown: the record on #3 could not be read back; read #3 before any retry'))
         self.assertEqual(w.writes(), [{'post': 3, 'body': 'launch-fleet: spec changed for #12: the proof names the after bench'}])
-        self.assertEqual(w.calls(), [('GET', 3), ('POST', 3), ('GET', 3)])
+        self.assertEqual(w.comment_route_calls(), [('GET', 3), ('POST', 3), ('GET', 3)])
 
     def test_a_model_or_effort_change_or_any_other_ask_is_refused(self):
         w = World(self)

@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=903
+CASES=905
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -87,7 +87,7 @@ done
 
 # A 40-character commit made of TEXT repeated, as the jq `sha` below makes it.
 sha() { s=''; while [ ${#s} -lt 40 ]; do s=$s$1; done; printf '%.40s' "$s"; }
-S31=$(sha 31) S31F=$(sha 31f) S31E=$(sha 31e) S99=$(sha 99)
+S31=$(sha 31) S31F=$(sha 31f) S31E=$(sha 31e) S31B=$(sha 31b) S99=$(sha 99)
 
 # Small changes to a fixture, for the cases' filters.
 LIB='
@@ -863,6 +863,15 @@ can't read the issues outside specs
 EOF
 expect 'contexts: conflicting snapshots of one PR fail closed' 2 check.json "$MANY31 | .pulls += [(.pulls[] | select(.number == 31) | .head = sha(99))]" -- check <<EOF
 can't read the issues outside specs
+EOF
+OTHER31='pr31 | open_pr(31; 13; "#13: widget page, green") | .pulls[-1] |= (.id = "PR_synthetic_other_31" | .head = sha("31b"))'
+expect 'contexts #1958: same number in two repositories is two PRs' 0 check.json "$OTHER31" -- spec 10 <<EOF
+review #31 for #12 at $S31: first review
+review #31 for #13 at $S31B: first review
+EOF
+expect 'contexts #1958: same number in two repositories keeps each its own checks' 0 check.json "$OTHER31 | .pulls[-1] |= (.rollup = \"FAILURE\" | .checks[1].conclusion = \"FAILURE\")" -- spec 10 <<EOF
+review #31 for #12 at $S31: first review
+CI failed #31 for #13 at $S31B: tell its builder
 EOF
 # #2119 CI: the hour begins with no contexts before its workflow starts.
 expect 'contexts: hourly workflow start supplies valid pending checks' 0 check.json 'pr31 | pull(31; .checks = [] | running_ci)' -- check < /dev/null

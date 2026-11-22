@@ -7,7 +7,9 @@ import sys
 import time
 
 FIELDS = ('limit', 'remaining', 'reset', 'resource')
-POOL = 'core'
+POOLS = ('core', 'graphql')
+FLOOR = 1500
+COUNT = re.compile(r'0|[1-9][0-9]{0,8}')
 STATUS = re.compile(rb'HTTP/\d(\.\d)? \d{3}( .*)?$')
 NUMBER = re.compile(r'0|[1-9][0-9]{0,17}')
 SAME_WINDOW_SECONDS = 600
@@ -17,11 +19,10 @@ class Unknown(Exception):
     pass
 
 
-def answer(allowed, reason, pool=None, code=None):
-    pool = pool or {}
+def answer(allowed, reason, pool, code):
     print(json.dumps({'allowed': allowed, 'remaining': pool.get('remaining'),
                       'limit': pool.get('limit'), 'reset': pool.get('reset'),
-                      'reason': reason}))
+                      'resource': pool.get('resource'), 'reason': reason}))
     return code
 
 
@@ -29,10 +30,10 @@ def checked(values, where, text):
     missing = [f for f in FIELDS if f not in values]
     if missing:
         raise Unknown('%s has no %s' % (where, ', '.join(missing)))
-    if values['resource'] != POOL:
+    if values['resource'] not in POOLS:
         resource = values['resource'] if re.fullmatch(r'[a-z_]{1,40}', str(values['resource'])) else 'another'
-        raise Unknown("%s counts GitHub's %s allowance, not REST's %s" % (where, resource, POOL))
-    pool = {}
+        raise Unknown("%s counts GitHub's %s allowance, neither core nor graphql" % (where, resource))
+    pool = {'resource': values['resource']}
     for field in ('limit', 'remaining', 'reset'):
         value = values[field]
         if text and isinstance(value, str) and NUMBER.fullmatch(value):
@@ -81,7 +82,7 @@ def from_file(path, n):
     return pools
 
 
-def rate_limit():
+def rate_limit(resource):
     where = 'rate_limit'
     try:
         result = subprocess.run(['gh', 'api', 'rate_limit'], capture_output=True,
@@ -91,11 +92,11 @@ def rate_limit():
     if result.returncode != 0:
         raise Unknown("%s can't be read" % where)
     try:
-        values = json.loads(result.stdout)['resources'][POOL]
+        values = json.loads(result.stdout)['resources'][resource]
     except (ValueError, TypeError, KeyError):
-        raise Unknown('%s has no %s allowance' % (where, POOL))
-    if not isinstance(values, dict):
-        raise Unknown('%s has no %s allowance' % (where, POOL))
+        raise Unknown('%s has no %s allowance' % (where, resource))
+    if not isinstance(values, dict) or values.get('resource') != resource:
+        raise Unknown('%s has no %s allowance' % (where, resource))
     return checked(values, where, text=False)
 
 
@@ -111,34 +112,62 @@ def stamp(unix):
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(unix))
 
 
-def admit(n, paths, now):
+def admit(n, paths, resource, floor, now):
     pool = None
     if paths:
-        pool = newest([p for i, path in enumerate(paths, 1) for p in from_file(path, i)])
+        pools = [p for i, path in enumerate(paths, 1) for p in from_file(path, i)]
+        if len({p['resource'] for p in pools} | ({resource} if resource else set())) != 1:
+            raise Unknown('the answers count more than one allowance')
+        pool = newest(pools)
+        resource = pool['resource']
     if pool is None or pool['reset'] <= now:
-        pool = rate_limit()
+        pool = rate_limit(resource or 'core')
     after, limit = pool['remaining'] - n, pool['limit']
-    keep = -(-limit // 4)
-    if 4 * after >= limit:
-        return answer(True, '%d REST reads leave %d of %d, at or above the %d kept for builders and reviewers'
-                      % (n, after, limit, keep), pool, 0)
-    return answer(False, '%d REST reads would leave %d of %d, under the %d kept for builders and reviewers, until %s'
-                  % (n, after, limit, keep, stamp(pool['reset'])), pool, 1)
+    keep = max(-(-limit // 4), floor)
+    if after >= keep:
+        return answer(True, '%d %s reads leave %d of %d, at or above the %d kept for builders and reviewers'
+                      % (n, pool['resource'], after, limit, keep), pool, 0)
+    return answer(False, '%d %s reads would leave %d of %d, under the %d kept for builders and reviewers, until %s'
+                  % (n, pool['resource'], after, limit, keep, stamp(pool['reset'])), pool, 1)
+
+
+def options(argv):
+    if len(argv) < 2 or argv[0] != 'admit' or not COUNT.fullmatch(argv[1]) or argv[1] == '0':
+        return None
+    paths, resource, floor, rest = [], None, FLOOR, argv[2:]
+    while rest:
+        word = rest.pop(0)
+        if word in ('--floor', '--resource'):
+            if not rest:
+                return None
+            value = rest.pop(0)
+            if word == '--floor' and COUNT.fullmatch(value):
+                floor = int(value)
+            elif word == '--resource' and value in POOLS:
+                resource = value
+            else:
+                return None
+        else:
+            paths.append(word)
+    return int(argv[1]), paths, resource, floor
 
 
 def main(argv):
-    if len(argv) < 2 or argv[0] != 'admit' or not re.fullmatch(r'[1-9][0-9]{0,8}', argv[1]):
-        print('usage: budget.py admit N [HEADERS-FILE...], N a whole number of reads from 1', file=sys.stderr)
+    chosen = options(argv)
+    if chosen is None:
+        print('usage: budget.py admit N [--floor N] [--resource core|graphql] [HEADERS-FILE...],'
+              ' N a whole number of reads from 1', file=sys.stderr)
         return 2
+    n, paths, resource, floor = chosen
     try:
         now = int(os.environ.get('LAUNCH_FLEET_NOW') or time.time())
     except ValueError:
         print('budget.py: LAUNCH_FLEET_NOW is not a time', file=sys.stderr)
         return 2
     try:
-        return admit(int(argv[1]), argv[2:], now)
+        return admit(n, paths, resource, floor, now)
     except Unknown as e:
-        return answer(False, 'unknown REST allowance: %s' % e, code=2)
+        return answer(False, 'unknown allowance: %s' % e, {'resource': resource}, 2)
 
 
 if __name__ == '__main__':

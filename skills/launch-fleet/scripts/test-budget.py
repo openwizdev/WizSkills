@@ -121,7 +121,7 @@ class Budget(unittest.TestCase):
         path = self.file(headers(remaining=1300))
         self.decision(self.admit(10, path), 1)
         self.decision(self.admit(10, '--floor', 500, path), 0)
-        self.decision(self.admit(41, '--floor', 500, path), 1)
+        self.decision(self.admit(51, '--floor', 500, path), 1)
         self.decision(self.admit(1, '--floor', 2000, self.file(headers(remaining=1990), 'b.txt')), 1)
         self.decision(self.admit(1, '--floor', 0, path), 0)
         for bad in ('-1', 'ten', ''):

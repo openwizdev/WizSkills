@@ -53,17 +53,22 @@ def main(argv):
                     "($LAUNCH_FLEET_RUNS) through its own driver's stop, one at a time.",
         epilog='Each run prints `#N on <driver>: <result>`. Exit 0: all stopped and the heartbeat paused or not '
                'installed. Exit 1: a driver missing, refusing or failing stop, or a heartbeat that did not pause; '
-               'the other runs are still stopped. Exit 2: bad usage or an unreadable runs file; nothing done.')
+               'the other runs are still stopped. Exit 2: bad usage, nothing done; or an unreadable runs file: '
+               'the heartbeat is still paused and no run is stopped.')
     parser.add_argument('repo', metavar='OWNER/NAME')
     parser.add_argument('spec', metavar='SPEC')
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args(argv)
     if not host.REPO.fullmatch(args.repo) or not host.TICKET.fullmatch(args.spec):
         parser.error('expected OWNER/NAME and a positive spec number')
-    runs = host.load(args.repo)['runs']
-    live = sorted(((n, r) for n, r in runs.items() if not r.get('stopped')), key=lambda item: int(item[0]))
     line, ok = pause_heartbeat(args.repo, args.spec, args.dry_run)
     print(line, flush=True)
+    try:
+        runs = host.load(args.repo)['runs']
+    except host.Unreadable as e:
+        print('stop-all: the runs could not be read (%s); nothing stopped' % e)
+        return 2
+    live = sorted(((n, r) for n, r in runs.items() if not r.get('stopped')), key=lambda item: int(item[0]))
     stopped = failed = 0
     for n, run in live:
         if args.dry_run:

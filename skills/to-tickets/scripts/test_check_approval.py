@@ -1043,6 +1043,19 @@ class PreferCut(unittest.TestCase):
                 self.assertEqual((out.returncode, out.stdout), (2, ""))
                 self.assertIn("prefer: b.json:", out.stderr)
 
+    def test_a_cycle_through_file_links_is_refused_before_measuring(self):
+        # catches: a cycle checked only after file links are dropped, so a cyclic cut is preferred
+        w = "waiting", "builder"
+        valid = cut([("A", *w), ("B", *w)], [("A", "B")])
+        for kinds in (("file", "file"), ("real", "file")):
+            with self.subTest(kinds=kinds):
+                cyclic = {"tickets": valid["tickets"],
+                          "links": [{"blocker": b, "ticket": t, "kind": k, "reason": "shared.md"}
+                                    for (b, t), k in zip((("A", "B"), ("B", "A")), kinds)]}
+                out = self.prefer(valid, cyclic)
+                self.assertEqual((out.returncode, out.stdout), (2, ""))
+                self.assertEqual(out.stderr, "prefer: b.json: a cycle: A B can never start\n")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

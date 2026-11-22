@@ -31,13 +31,15 @@ Ask this first, before step 1, in these exact words, with the three as equal cho
 
 > Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom.
 
-Keep the answer for the whole install: it is the host the onboarding road's step 1 records. **This computer** and **boat.dev** skip every CloudRoom step: CloudRoom's install and sign-in, and its rows in step 3. **CloudRoom** runs them all, exactly as written. In a new session that has not heard the answer (after step 4's restart, too), ask it again before anything else, unless `first_fleet.py next` already reads a recorded host. Moving to CloudRoom later runs step 3's CloudRoom rows, then continues where the user was.
+Keep the answer for the whole install: it is the host the onboarding road's step 1 records. **This computer** and **boat.dev** skip every CloudRoom step: CloudRoom's install and sign-in, and its rows in step 3. **CloudRoom** runs them all, exactly as written. Carry that answer in step 4's restart message. In a resumed session, recover the choice as Resume says. Moving to CloudRoom later runs step 3's CloudRoom rows, then continues where the user was.
 
 Keep `<root>` (default `$HOME/.local/lib/openwiz`), and the `build` and `state_root` paths `install` prints as `<build>` (also `build=<build>` in the shell) and `<state>`, all absolute and owner-only. Run runtime tools with `python3 -I -B` and `OPENWIZ_STATE_DIR=<state>`, and pass `--state-dir <state>`. After a restart, read them from the installed files, as Resume says.
 
 ## Resume
 
 A new session, whatever the user said ("continue", or the one line again), starts here: find the first unfinished step and resume there. Use only the installed files, never a temporary clone: a restart loses it.
+
+Read the host from the continuation message: `local` means this computer, `boat` means boat.dev, and `cloud` means CloudRoom. Use that choice for the setup checks below and carry it to step 6.1. If the message has no host, reuse the answer from this chat or `host.agents` if it is already recorded in the owner-only first-fleet state. Ask the host question only if you have none of those.
 
 ```sh
 <root>/current/openwiz --build-identity
@@ -52,7 +54,7 @@ grep -m1 '^version:' ~/.claude/skills/install/SKILL.md "${CODEX_HOME:-$HOME/.cod
 - No `<root>/current`, or `--build-identity` does not read 0.1.0: resume at step 1.
 - `status` does not read the GitHub account, or the user chose CloudRoom and `check` does not read `cloudroom_login_verified`: resume at step 3. `identity_unreadable` means GitHub gave no clear answer: wait a minute and run `status` again; it clears.
 - The running agent's `install/SKILL.md` is missing, or does not read `version: 0.3.1`: resume at step 4. When that agent's folder holds OpenWiz's 18 skills, run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4.
-- Otherwise resume at step 5; for a first fleet already under way, at step 6 with `first_fleet.py next`.
+- Otherwise resume at step 5; for a first fleet already under way, at step 6 with `first_fleet.py next`. If it prints `Next: where.`, follow step 6.1 with the recovered choice.
 
 ## 1. Preflight
 
@@ -154,9 +156,15 @@ done
 
 If it prints `NOT THIS SKILL` (the clone failed, or the branch still serves an older copy), nothing was copied: stop before the restart, say so, and try again shortly. A `STILL OLD` line means that folder's copy did not take (it may not be writable): report it and fix it before the restart; never restart onto an old copy. A later `install skills` run, such as a repair, writes the old copy again: repeat this block after it.
 
-An agent finds new skills only when it starts, so the user restarts it now: a new session of their agent, then exactly "continue the OpenWiz install". Ask them to type those words: a bare "continue" can load no skill at all. The new session loads this skill from the folder above and starts at Resume. Any installed copy that does not read `version: 0.3.1` is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md) and resume at the first unfinished step, as Resume says.
+An agent finds new skills only when it starts, so the user restarts it now. Give them the one message for their chosen host to paste into the new session:
 
-Done when the running agent's folder holds the 18 skills by name and every `ok:` line printed with no `STILL OLD`, or the user knows which folder is missing, and the user knows to restart.
+- This computer: `continue the OpenWiz install with host local`
+- boat.dev: `continue the OpenWiz install with host boat`
+- CloudRoom: `continue the OpenWiz install with host cloud`
+
+Keep the full message. "continue the OpenWiz install" names the skill, and the host at the end carries the user's answer into Resume. Any installed copy that does not read `version: 0.3.1` is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md) and resume at the first unfinished step, as Resume says.
+
+Done when the running agent's folder holds the 18 skills by name and every `ok:` line printed with no `STILL OLD`, or the user knows which folder is missing, and the user has the restart message with their chosen host.
 
 ## 5. Teach
 
@@ -170,7 +178,9 @@ Continue only if the user wants their first build; otherwise finish with the ins
 
 ### 1. Where agents run
 
-Run `first_fleet.py where --build "$build"`. It lists every host this OpenWiz can run agents on: Cloudroom (`cloud`), and each driver the verified build's `runtime/adapters` carries that answers `version`, such as this machine (`local`) and boat.dev (`boat`). A driver whose `version` fails is not offered: say its `Not offered:` line as printed. The user already answered the host question ("Where your agents run", above): this computer is `local`, boat.dev `boat`, CloudRoom `cloud`. When that host is listed, run `where --agents <its name> --build "$build"` without asking again. When it is not, say its `Not offered:` line and ask the host question again, offering only the listed hosts, as equal choices. It checks what that host needs: a GitHub sign-in everywhere; on this machine Claude Code or Codex on `PATH`; for Cloudroom `room-cli`; for boat.dev the `boat` CLI. For anything missing it prints **Where agents run**'s walk-through line with a link; say it as printed. The user signs in themselves; run it again when they say done. Exit 12 prints what that host's agents cost; say it, and that Cloudroom uses Cloud Credits. For a driver host other than this machine it also prints where the login lives (boat.dev: `Login: held by boat.dev`, with its dashboard steps; any other: the driver's Login line) and one question asking whether the user has signed in there; ask it as printed. The user signs in themselves. On their yes, run it again with `--yes`: it records the pick, and for a driver host the build's `runtime/adapters`. A driver host's `Host: <name>` line, the one launch-fleet reads, is written at **Host setting**; Cloudroom needs none. With nothing usable listed, offer Cloudroom or stopping.
+Run `first_fleet.py where --build "$build"`. It lists every host this OpenWiz can run agents on: Cloudroom (`cloud`), and each driver the verified build's `runtime/adapters` carries that answers `version`, such as this machine (`local`) and boat.dev (`boat`). A driver whose `version` fails is not offered: say its `Not offered:` line as printed. Take the answer to the host question from this chat, or use the host from Resume in a new session. When that host is listed, run `where --agents <its name> --build "$build"` without asking again. When it is not, say its `Not offered:` line and ask the host question again, offering only the listed hosts, as equal choices. It checks what that host needs: a GitHub sign-in everywhere; on this machine Claude Code or Codex on `PATH`; for Cloudroom `room-cli`; for boat.dev the `boat` CLI. For anything missing it prints **Where agents run**'s walk-through line with a link; say it as printed. The user signs in themselves; run it again when they say done.
+
+With `--agents`, exit 12 previews where the agents run and what they cost. Explain those effects and costs, including Cloud Credits for CloudRoom. For a driver host other than this machine it also prints where the login lives (boat.dev: `Login: held by boat.dev`, with its dashboard steps; any other: the driver's Login line) and one question asking whether the user has signed in there; ask it as printed. The user signs in themselves. On the user’s yes to the previewed effects and cost, run it again with `--yes`: it records the pick, and for a driver host the build's `runtime/adapters`. A driver host's `Host: <name>` line, the one launch-fleet reads, is written at **Host setting**; Cloudroom needs none. With nothing usable listed, offer Cloudroom or stopping.
 
 Done when `where` recorded the answer.
 

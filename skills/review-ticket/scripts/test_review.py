@@ -586,7 +586,10 @@ class Review(unittest.TestCase):
         def description(head):
             return (f"Closes example/product#41\n\n## Summary\n\nExport refuses an existing zip.\n\n"
                     f"## Rulings\n\n1. Name the zip cookbook.zip. Why: the importer reads that name. "
-                    f"Cost if wrong: low: one rename.\n\n## Facts\n\n- **Head:** `{head}`\n"
+                    f"Cost if wrong: low: one rename.\n\n## Self-check\n\n"
+                    f"- Undo and rerun: `git revert --no-commit HEAD && python3 -m unittest test_export` "
+                    f"printed `FAILED (failures=1)`.\n- Consumers: n/a: nothing else reads export.py.\n\n"
+                    f"## Facts\n\n- **Head:** `{head}`\n"
                     f"- **Tests:** `test_export_refuses`. catches: a second export overwriting the first.\n")
         good = description(head)
         out = self.builder_pass(work, good)

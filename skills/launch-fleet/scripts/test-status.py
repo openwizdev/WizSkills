@@ -392,7 +392,6 @@ class Write(Tracker):
         self.assertRegex(retry.stdout, r'(?m)^#12: needs-info put back: synthetic-owner ')
 
     def test_a_same_app_hold_replaced_just_before_the_resume_s_delete_is_put_back(self):
-        # #1934: triage replaces the hold under the same App as the resume's DELETE lands.
         self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
         self.save()
         asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
@@ -409,7 +408,6 @@ class Write(Tracker):
                          [('labeled', BOT), ('unlabeled', BOT), ('labeled', BOT), ('unlabeled', BOT), ('labeled', BOT)])
 
     def test_a_write_that_cannot_take_the_lock_never_touches_the_proof_and_reports_the_hold(self):
-        # #1933: every read, delete and write of the proof stays behind the lock.
         self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
         self.save()
         asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
@@ -1823,7 +1821,6 @@ class WakeRepair(Tracker):
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
     def test_a_needs_info_whose_application_has_no_actor_stays_and_is_reported(self):
-        # #1716 R4: a missing actor is unknown, never another login.
         for actor in ('null', 'absent'):
             with self.subTest(actor):
                 self.setUp()
@@ -1844,8 +1841,7 @@ class WakeRepair(Tracker):
                 self.assertRegex(report[0], r'^#12: needs-info left on: ')
                 self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
-    def kn11(self):
-        # What host.py (KN11, #1446) reads on #12: is the newest fleet note stopped, and the failure comments.
+    def host_reads(self):
         spec = importlib.util.spec_from_file_location('test_status_host', HERE / 'host.py')
         host = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(host)
@@ -1857,23 +1853,26 @@ class WakeRepair(Tracker):
         return stopped, [c['id'] for c in failures]
 
     def test_a_repair_beside_a_driver_failure_keeps_the_stopped_fleet_note(self):
-        # #1797: the repair's bookkeeping never reuses or outranks a stopped fleet note.
         stopped = note(agent='fleet', state='stopped (driver start failed)', harness='Codex', model='Sol 6.1 High',
                        skills=at('launch-fleet'), step="the driver refused this ticket's start 3 times")
         failure = 'launch-fleet: driver start failed\n\nexit 1: refused; see the owner-only driver log.'
-        self.ticket(self.world)['comments'] += [comment(105, BOT, stopped), comment(106, BOT, failure)]
-        self.asking_on_12()
-        self.assertEqual(self.kn11(), (True, [106]))
-        before = {c['id']: c['body'] for c in self.ticket()['comments']}
-        code, report = self.wake()
-        self.assertEqual((code, report), (1, ['#12 note 104 builder asking: needs-info added']))
-        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
-        self.assertEqual({c['id']: c['body'] for c in self.ticket()['comments'] if c['id'] in before}, before)
-        self.assertEqual(self.kn11(), (True, [106]))
-        self.assertEqual(self.wake(), (0, []))
+        for interrupted in (False, True):
+            with self.subTest(interrupted=interrupted):
+                self.setUp()
+                self.ticket(self.world)['comments'] += [comment(105, BOT, stopped), comment(106, BOT, failure)]
+                self.asking_on_12(**({'fail_once': [f'POST repos/{REPO}/issues/12/labels']} if interrupted else {}))
+                self.assertEqual(self.host_reads(), (True, [106]))
+                before = {c['id']: c['body'] for c in self.ticket()['comments']}
+                if interrupted:
+                    self.assertEqual(self.wake()[0], 2)
+                code, report = self.wake()
+                self.assertEqual((code, report), (1, ['#12 note 104 builder asking: needs-info added']))
+                self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+                self.assertEqual({c['id']: c['body'] for c in self.ticket()['comments']}, before)
+                self.assertEqual(self.host_reads(), (True, [106]))
+                self.assertEqual(self.wake(), (0, []))
 
     def test_the_repair_keeps_its_own_rule_for_a_same_app_reapplication_at_its_delete(self):
-        # #1934 widens only a plain write's put-back; the repair's stays as it was.
         resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
         again = [{'issue': 12, 'unlabel': 'needs-info', 'by': BOT}, {'issue': 12, 'label': 'needs-info', 'by': BOT}]
         self.asking_on_12(race_label=[resume], race_delete=again)

@@ -116,6 +116,8 @@ A `merge` line means CI is green and the selected reviewer's `VERDICT: APPROVE a
 
 **The landed comment** (feedback-loop contract v1, #1848): on a verified merge in any `openwizdev` repository, `merge.py` (and `settle`, through its cost) follows each closed `openwizdev/OpenWiz` issue's report link to its feedback report and posts the contract's `Landed: ...` comment there once, naming the fix as `<owner>/<repo>#<n>`, read back; it adds `; landed ...` after the cost result, and a `landed unknown:` keeps the archive row's `settle` from archiving until a later wake reads the report again and lands it, never by posting by hand. A merge that closes no linked report adds nothing.
 
+**The ledger** (#2285): asked what a spec or the project cost, run `python3 -I "<this skill's folder>/scripts/ledger.py" <owner>/<repo> [--spec <S>] [--json]` and report what it prints: one row per merged pull request from its ticket's newest record-author cost line, then the total and the cost per merged PR over the known rows, with unknown rows counted, never as zero. Exit 1 is a failed read: report no ledger.
+
 A move of `main` alone is never a reason to close and reopen a pull request: only the re-test guard reopens one ([references/reviews.md](references/reviews.md)).
 
 ## Fleet threads

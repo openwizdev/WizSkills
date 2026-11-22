@@ -16,6 +16,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import signal
 import subprocess
@@ -45,10 +46,12 @@ def world():
         fcntl.flock(lock, fcntl.LOCK_EX)
         with open(PATH) as f:
             w = json.load(f)
-        yield w
-        with open(PATH + '.tmp', 'w') as f:
-            json.dump(w, f)
-        os.replace(PATH + '.tmp', PATH)
+        try:
+            yield w
+        finally:  # an answer ends the program inside the block, by sys.exit
+            with open(PATH + '.tmp', 'w') as f:
+                json.dump(w, f)
+            os.replace(PATH + '.tmp', PATH)
 def records(w, n):
     return [c['body'].split('\n')[0] for c in w['comments'].get(str(n), [])
             if c['user']['login'] == 'synthetic-owner' and c['body'].startswith('launch-fleet: ')]
@@ -163,7 +166,7 @@ class Session(unittest.TestCase):
         for name in ('host.py', 'post.py', 'status.py', 'brief.py', 'heartbeat.py'):
             (self.scripts / name).symlink_to(HERE / name)
         self.program(self.scripts / 'fleet.sh', FAKE_FLEET)
-        self.program(self.scripts / 'merge.py', FAKE_MERGE)
+        (self.scripts / 'merge.py').write_text(FAKE_MERGE)  # session.py runs it with python3 -I
         self.program(self.home / 'bin/gh', FAKE_GH)
         driver.chmod(0o755)
         self.world = self.home / 'world.json'
@@ -220,6 +223,10 @@ class Session(unittest.TestCase):
                 '--harness', 'claude', '--model', 'synthetic-builder', '--reviewer-harness', 'codex',
                 '--reviewer-model', 'synthetic-reviewer', '--poll', '0.05', '--ci-poll', '0.05', *extra]
 
+    def carry_on(self):
+        return 'carry on: ' + shlex.join(['python3', '-I', str((self.scripts / 'session.py').resolve()),
+                                          *self.command()[3:]])
+
     def session(self, *extra, **env):
         process = subprocess.Popen(self.command(*extra), cwd=self.home / 'checkout', env=dict(self.env, **env),
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -229,8 +236,8 @@ class Session(unittest.TestCase):
     def until(self, condition, what, process):
         end = time.monotonic() + 30
         while not condition():
-            self.assertIsNone(process.poll(), 'the session ended before %s: %s' % (what, process.stdout.read()
-                                                                                  + process.stderr.read()))
+            if process.poll() is not None:
+                self.fail('the session ended before %s: %s' % (what, process.stdout.read() + process.stderr.read()))
             self.assertLess(time.monotonic(), end, 'timed out waiting for ' + what)
             time.sleep(0.02)
 
@@ -256,7 +263,7 @@ class Session(unittest.TestCase):
         out = self.ended(process, 130)
         self.assertIn('session: tick 1: started #1, #2, #3; #4 waits for the cap (3)\n', out)
         self.assertIn('session: stopped on interrupt', out)
-        self.assertIn('carry on: ' + ' '.join(self.command()[2:]), out)
+        self.assertIn(self.carry_on() + '\n', out)
         self.assertFalse(self.lock_dir.exists())
 
     def test_a_finished_build_gets_its_reviewer_and_an_approved_green_pull_request_merges(self):
@@ -289,13 +296,14 @@ class Session(unittest.TestCase):
         out = self.ended(self.session(), 3)
         self.assertIn('session: stopped at tick 1: needs you: needs-info #8: a question for the orchestrator\n',
                       out)
-        self.assertIn('carry on: ' + ' '.join(self.command()[2:]), out)
+        self.assertIn(self.carry_on() + '\n', out)
         self.assertEqual(self.starts(), [])
 
     def test_a_refused_start_stops_the_session_and_records_the_refusal(self):
         self.tickets(9)
         out = self.ended(self.session(FAKE_DRIVER_MODE='refuse'), 3)
-        self.assertIn('session: stopped at tick 1: needs you: the local driver refused #9', out)
+        self.assertIn("session: stopped at tick 1: needs you: stopped (driver start failed): the local driver "
+                      "refused #9's start 3 times", out)
         self.assertEqual(self.records(9)[:1], ['launch-fleet: start refused: driver start failed'])
 
     def test_a_second_session_and_a_heartbeat_tick_refuse_through_the_shared_lock(self):

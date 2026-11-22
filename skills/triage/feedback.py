@@ -181,7 +181,7 @@ def verify(case):
         missing.append("both closing lines in full")
     if "ready-for-agent" not in brief["labels"]:
         missing.append("the ready-for-agent label")
-    newest = max(brief["ready_labelled"], key=lambda e: e["at"], default=None)
+    newest = max(reversed(brief["ready_labelled"]), key=lambda e: e["at"], default=None)
     if newest is None or (newest["by"] or "").lower() not in authors:
         missing.append("the ready-for-agent label last added by a record author")
     elif brief["last_edited_at"] is not None and newest["at"] <= brief["last_edited_at"]:

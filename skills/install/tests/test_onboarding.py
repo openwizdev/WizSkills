@@ -11,10 +11,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_first_fleet import (CLAUDE, FIXTURES, GRILL, Journey, SKILL_DIR,  # noqa: E402 -- it follows the sys.path line that finds it
+from test_first_fleet import (CLAUDE, FAKE_GH, FIXTURES, GRILL, TICKET_FIELDS, Journey, SKILL_DIR,  # noqa: E402 -- it follows the sys.path line that finds it
                               demo_repository, fleet_md, github, setup_state, skill_steps)
 
 ROAD = json.loads((FIXTURES / 'onboarding.json').read_text())
@@ -93,6 +94,55 @@ class Road(Journey):
         case.addCleanup(shutil.rmtree, self.host_state, True)
         self.extra_env.update(OPENWIZ_ADAPTERS=str(self.dir / 'adapters'), OPENWIZ_LOCAL_STATE=str(self.host_state),
                               FAKE_DRIVER_LOG=str(self.dir / 'driver.log'), FAKE_GH_ARGV_LOG=str(self.dir / 'gh-argv.log'))
+        self.ticket_views = self.dir / 'tickets.json'
+        gh = self.dir / 'bin/gh'
+        gh.write_text(
+            '#!%s -I\nimport json, os, sys\nfrom pathlib import Path\na = sys.argv[1:]\n'
+            "if a[:2] == ['issue', 'view'] and a[3:] == ['--json', '%s'] and Path(%r).exists():\n"
+            "    print(json.dumps(json.loads(Path(%r).read_text())[a[2]]))\n    sys.exit(0)\n"
+            "os.execv(%r, [%r, '-I', '-S', %r, *a])\n" % (
+                sys.executable, TICKET_FIELDS, str(self.ticket_views), str(self.ticket_views), sys.executable,
+                sys.executable, str(FAKE_GH)))
+        gh.chmod(0o755)
+
+    def tool(self, turn):
+        if 'progress' in turn:
+            note = '<!-- openwiz:status v1 -->\nagent: builder\nstate: working\n'
+            shapes = {'merged': ('CLOSED', 'COMPLETED', [1], [], []), 'in_review': ('OPEN', None, [1], [], []),
+                      'building': ('OPEN', None, [], [], [note]), 'blocked': ('OPEN', None, [], [1], []),
+                      'ready': ('OPEN', None, [], [], [])}
+            views = {}
+            for ticket, known in zip(self.tickets, turn['progress']):
+                state, why, pulls, blockers, notes = shapes[known]
+                views[str(ticket['number'])] = {
+                    'number': ticket['number'], 'state': state, 'stateReason': why,
+                    'closedByPullRequestsReferences': [{'number': 1900 + ticket['number'] % 100} for _ in pulls],
+                    'blockedBy': {'nodes': [{'number': 1, 'state': 'OPEN'} for _ in blockers]},
+                    'comments': [{'body': body, 'author': {'login': 'synthetic-factory[bot]'}} for body in notes]}
+            self.ticket_views.write_text(json.dumps(views))
+        return super().tool(turn)
+
+    def helper(self, args):
+        host = self.saved().get('host', {}).get('agents', 'cloud')
+        if host == 'cloud' or args[0] not in ('launch', 'progress'):
+            return super().helper(args)
+        home = self.dir / 'skills'
+        helper = home / 'install/scripts/first_fleet.py'
+        if not helper.exists():
+            helper.parent.mkdir(parents=True)
+            (self.dir / 'contracts').symlink_to(SKILL_DIR.parents[1] / 'contracts', target_is_directory=True)
+            shutil.copyfile(SKILL_DIR / 'scripts/first_fleet.py', helper)
+            (home / 'install/teach.md').symlink_to(SKILL_DIR / 'teach.md')
+            (home / 'setup').symlink_to(SKILL_DIR.parent / 'setup', target_is_directory=True)
+            (home / 'to-tickets').symlink_to(SKILL_DIR.parent / 'to-tickets', target_is_directory=True)
+            shutil.copytree(SKILL_DIR.parent / 'launch-fleet', home / 'launch-fleet')
+            (home / 'launch-fleet/scripts/heartbeat.py').write_text(
+                "from pathlib import Path\nimport sys\n"
+                f"assert sys.argv[1:] == ['status', {self.repo!r}, '900'], sys.argv[1:]\n"
+                "path = Path('heartbeat-status')\n"
+                "print(path.read_text() if path.exists() else 'heartbeat: not installed')\n")
+        with patch('test_first_fleet.HELPER', helper):
+            return super().helper(args)
 
     def approvals(self):
         path = self.host_state / 'approvals.json'
@@ -117,6 +167,8 @@ class Road(Journey):
             self.save_world()
         elif what == 'fleet_record':
             self.fleet_record()
+        elif what == 'heartbeat_active':
+            (self.dir / 'heartbeat-status').write_text('heartbeat: active (cron)')
         elif what == 'merged':
             pull = turn['pull']
             self.world.setdefault('onboard_pulls', []).append({
@@ -139,8 +191,14 @@ class Road(Journey):
             elif turn.get('approve') == 'machine':
                 self.machine_approve()
             elif 'setup' in turn:
-                self.write_setup(setup_state(turn['setup'], repository=self.repo,
-                                             settings=('claude-code', 'syn-claude-model-01', 'high')))
+                state = setup_state(turn['setup'], repository=self.repo,
+                                    settings=('claude-code', 'syn-claude-model-01', 'high'))
+                host = self.saved().get('host', {}).get('agents', 'cloud')
+                if host != 'cloud':
+                    state['project'].update(host=host, project=None, answer_thread=None)
+                    state['observations']['cloudroom']['code'] = 'cloudroom_not_needed'
+                    self.options.write_text(json.dumps(dict(json.loads(self.options.read_text()), source='local')))
+                self.write_setup(state)
             elif 'tool' in turn:
                 results.append((turn, self.tool(turn)))
         return results
@@ -210,7 +268,10 @@ class Conversation(unittest.TestCase):
                 spoken = [t['say'] for t in said if t['say'] != 'missing']
                 self.assertEqual(spoken, ORDER)
                 for turn in said:
-                    self.assertTrue(says(turn['agent'], turn['say'], lines), (turn['say'], turn['agent']))
+                    if journey['host'] == 'local' and turn['say'] == 'fleet-start':
+                        self.assertIn('local heartbeat is active', turn['agent'])
+                    else:
+                        self.assertTrue(says(turn['agent'], turn['say'], lines), (turn['say'], turn['agent']))
                     self.assertNotRegex(turn['agent'], r'<[^>]+>')
                 self.assertEqual([t['agent'] for t in said[:3]], lines['Up front'])
         self.assertTrue(any(t.get('say') == 'missing' for j in ROAD['journeys'] for t in j['turns']))
@@ -267,6 +328,9 @@ class Replay(unittest.TestCase):
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):
                 road = Road(self, journey)
+                if journey['host'] == 'local':
+                    (road.dir / 'bin/room-cli').unlink()
+                    self.assertIsNone(shutil.which('room-cli', path=road.env()['PATH']))
                 for turn, result in road.replay_road():
                     self.assertEqual(result.returncode, turn['exit'], (turn['tool'], result.stdout, result.stderr))
                 self.assertEqual(road.spawns(), [], "the start is launch-fleet's own path, never a one-off thread")
@@ -278,6 +342,18 @@ class Replay(unittest.TestCase):
                 fleet = next(t['agent'] for t in journey['turns'] if t.get('say') == 'fleet-start')
                 self.assertNotIn(fleet, yes.splitlines(), 'not before the activation record reads back')
                 self.assertIn(fleet, launches[-1].splitlines())
+                if journey['host'] == 'local':
+                    self.assertIn("launch-fleet's Launch section", yes)
+                    self.assertIn('local heartbeat', yes)
+                    self.assertIn('driver harness `claude`', yes)
+                    self.assertNotIn('Starting one', yes)
+                    self.assertEqual(sum(args == ['mode'] for args, _ in road.calls), 1)
+                    self.assertEqual(road.saved()['mode']['mode'], 'acceptEdits')
+                    self.assertIn('Host: local', road.world['files']['docs/agents/host.md'])
+                    self.assertEqual([c for c in road.logged() if c['form'] == 'fleet'], [],
+                                     'a local fleet reads progress from GitHub, never through CloudRoom')
+                    watched = [r.stdout for args, r in road.calls if args[:1] == ['progress']]
+                    self.assertIn('#%d merged' % road.tickets[0]['number'], watched[-1].splitlines())
                 adapters = 'OPENWIZ_ADAPTERS=%s' % (road.dir / 'adapters')
                 self.assertEqual(adapters in yes, journey['host'] == 'local', 'the loop finds the local driver (R2)')
                 merged = outputs[('first-merge', '--pr', '911')].splitlines()
@@ -556,6 +632,8 @@ class Drivers(unittest.TestCase):
         said_yes = road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest])
         self.assertEqual(said_yes.returncode, 0, said_yes.stdout)
         self.assertIn('OPENWIZ_ADAPTERS=%s' % (road.dir / 'adapters'), said_yes.stdout)
+        self.assertIn('local heartbeat', said_yes.stdout)
+        self.assertNotIn('Starting one', said_yes.stdout)
         self.assertEqual(road.spawns(), [])
         self.assertFalse((road.dir / 'boat.log').exists(), 'the road itself never runs boat')
 
@@ -709,6 +787,30 @@ class HostApproval(unittest.TestCase):
         self.assertEqual(road.approvals(), {road.repo: {'claude': 'acceptEdits'}}, 'never widened')
         self.assertFalse([c for c in road.gh_calls() if c[:1] == ['auth']])
 
+    def test_with_both_harnesses_one_ask_saves_each_harness_mode_and_its_own_row(self):
+        road = self.road('small-change')
+        road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
+        state = road.saved()
+        state['host']['harnesses'] = ['claude-code', 'codex']
+        road.state.write_text(json.dumps(state))
+        asked = road.helper(['mode'])
+        self.assertEqual(asked.returncode, 12, asked.stdout)
+        listed = [m for m, _ in re.findall(r'(?m)^- (\S+): (.+)$', asked.stdout)]
+        self.assertEqual(listed, ['default', 'acceptEdits', 'bypassPermissions', 'read-only', 'workspace-write',
+                                  'danger-full-access'], 'one ask covers the builder and the other-family reviewer')
+        half = road.helper(['mode', '--mode', 'acceptEdits'])
+        self.assertEqual(half.returncode, 5, half.stdout)
+        self.assertIsNone(road.approvals(), 'a pick for only one harness saves nothing')
+        picked = road.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+        self.assertEqual(picked.returncode, 0, picked.stdout)
+        self.assertEqual(road.approvals(), {road.repo: {'claude': 'acceptEdits', 'codex': 'workspace-write'}})
+        wrote = road.helper(['setting', '--yes'])
+        self.assertEqual(wrote.returncode, 0, wrote.stdout)
+        fleet = json.loads(road.world_path.read_text())['branches']['openwiz/host-setting']['docs/agents/fleet.md']
+        self.assertEqual(re.findall(r'(?m)^\| Harness permission mode.*$', fleet),
+                         ['| Harness permission mode (claude) | `acceptEdits` |',
+                          '| Harness permission mode (codex) | `workspace-write` |'])
+
     def test_the_approval_adds_only_this_entry_keeps_every_other_byte_and_is_owner_only_600(self):
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
@@ -769,6 +871,34 @@ class HostApproval(unittest.TestCase):
         self.assertIn('| Harness permission mode | `acceptEdits` |', result.stdout)
         self.assertIn('run mode, then setting, and merge it', result.stdout)
         self.assertEqual(road.spawns(), [])
+
+    def test_with_both_harnesses_the_reviewers_own_row_and_approval_gate_the_launch(self):
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
+        codex = road.dir / 'bin/codex'
+        codex.write_text('#!/bin/sh\nexit 97\n')
+        codex.chmod(0o755)
+        state = road.saved()
+        state['host']['harnesses'] = ['claude-code', 'codex']
+        state['mode'] = {'harness': 'claude-code', 'mode': 'acceptEdits',
+                         'modes': {'claude': 'acceptEdits', 'codex': 'workspace-write'}}
+        road.state.write_text(json.dumps(state))
+        rows = ('\n## Harness permission mode\n\n| Setting | Value |\n| --- | --- |\n'
+                '| Harness permission mode (claude) | `acceptEdits` |\n'
+                '| Harness permission mode (codex) | `workspace-write` |\n')
+        road.origin_write({'docs/agents/fleet.md': fleet_md(builder=CLAUDE, small=CLAUDE) + rows})
+        path = road.host_state / 'approvals.json'
+        path.write_text(json.dumps({road.repo: {'claude': 'acceptEdits'}}))
+        path.chmod(0o600)
+        refused = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(refused.returncode, 5, refused.stdout)
+        self.assertIn('codex', refused.stdout, 'names the reviewer harness with no approval')
+        self.assertNotIn('Confirmation:', refused.stdout)
+        path.write_text(json.dumps({road.repo: {'claude': 'acceptEdits', 'codex': 'workspace-write'}}))
+        preview = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(preview.returncode, 12, preview.stdout)
+        self.assertIn('claude-code with the acceptEdits permission mode and codex with the workspace-write '
+                      'permission mode', preview.stdout)
 
 
 class ReviewRound(unittest.TestCase):

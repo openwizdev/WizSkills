@@ -1841,36 +1841,78 @@ class WakeRepair(Tracker):
                 self.assertRegex(report[0], r'^#12: needs-info left on: ')
                 self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
-    def host_reads(self):
+    def host(self):
         spec = importlib.util.spec_from_file_location('test_status_host', HERE / 'host.py')
         host = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(host)
-        shown = [{'id': c['id'], 'user': {'login': c['author']} if c['author'] else None, 'body': c['body']}
-                 for c in self.ticket()['comments']]
+        return host
+
+    @contextlib.contextmanager
+    def host_on_tracker(self, host):
+        def thread(repo, n):
+            return [{'id': c['id'], 'user': {'login': c['author']} if c['author'] else None, 'body': c['body']}
+                    for c in self.ticket()['comments']]
+
+        def edit(repo, cid, text):
+            world = self.load()
+            next(c for c in self.ticket(world)['comments'] if c['id'] == cid).update(body=text, updated=ago(0))
+            (self.dir / 'world.json').write_text(json.dumps(world))
+
+        def note(repo, n, state, step):
+            why = ['--why', host.FAILED] if state == 'stopped' else []
+            wrote = self.run_status('write', '--repo', repo, '--ticket', n, '--agent', 'fleet', '--state', state,
+                                    *why, '--harness', 'Codex', '--model', 'Sol 6.1 High',
+                                    '--skills', at('launch-fleet'), '--step', step)
+            self.assertEqual(wrote.returncode, 0, wrote.stderr)
+
         with mock.patch.object(host.post, 'authors', lambda repo: host.post.grants.record_authors(FLEET_MD)), \
-                mock.patch.object(host.post, 'thread', lambda repo, n: shown):
+                mock.patch.object(host.post, 'thread', thread), mock.patch.object(host.post, 'edit', edit), \
+                mock.patch.object(host, 'note', note):
+            yield
+
+    def host_reads(self):
+        host = self.host()
+        with self.host_on_tracker(host):
             stopped, failures = host.reports(REPO, '12')
         return stopped, [c['id'] for c in failures]
 
-    def test_a_repair_beside_a_driver_failure_keeps_the_stopped_fleet_note(self):
+    def stopped_by_the_driver(self, **race):
         stopped = note(agent='fleet', state='stopped (driver start failed)', harness='Codex', model='Sol 6.1 High',
                        skills=at('launch-fleet'), step="the driver refused this ticket's start 3 times")
         failure = 'launch-fleet: driver start failed\n\nexit 1: refused; see the owner-only driver log.'
+        self.ticket(self.world)['comments'] += [comment(105, BOT, stopped), comment(106, BOT, failure)]
+        self.asking_on_12(**race)
+        self.assertEqual(self.host_reads(), (True, [106]))
+
+    def test_a_repair_beside_a_driver_failure_keeps_the_stopped_fleet_note(self):
         for interrupted in (False, True):
             with self.subTest(interrupted=interrupted):
                 self.setUp()
-                self.ticket(self.world)['comments'] += [comment(105, BOT, stopped), comment(106, BOT, failure)]
-                self.asking_on_12(**({'fail_once': [f'POST repos/{REPO}/issues/12/labels']} if interrupted else {}))
-                self.assertEqual(self.host_reads(), (True, [106]))
+                self.stopped_by_the_driver(**({'fail_once': [f'POST repos/{REPO}/issues/12/labels']}
+                                              if interrupted else {}))
                 before = {c['id']: c['body'] for c in self.ticket()['comments']}
                 if interrupted:
                     self.assertEqual(self.wake()[0], 2)
+                    self.assertEqual(self.host_reads(), (True, [106]))
                 code, report = self.wake()
                 self.assertEqual((code, report), (1, ['#12 note 104 builder asking: needs-info added']))
                 self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
                 self.assertEqual({c['id']: c['body'] for c in self.ticket()['comments']}, before)
                 self.assertEqual(self.host_reads(), (True, [106]))
                 self.assertEqual(self.wake(), (0, []))
+
+    def test_a_driver_success_during_an_interrupted_repair_beside_its_failure_stays_current(self):
+        self.stopped_by_the_driver(fail_once=[f'POST repos/{REPO}/issues/12/labels'])
+        self.assertEqual(self.wake()[0], 2)
+        host = self.host()
+        with self.host_on_tracker(host):
+            host.clear(REPO, '12', 'synthetic-host', 'started')
+        self.assertEqual(self.host_reads(), (False, []))
+        code, report = self.wake()
+        self.assertEqual((code, report), (1, ['#12 note 104 builder asking: needs-info added']))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual(self.host_reads(), (False, []))
+        self.assertEqual(self.wake(), (0, []))
 
     def test_the_repair_keeps_its_own_rule_for_a_same_app_reapplication_at_its_delete(self):
         resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}

@@ -11,7 +11,7 @@
   first_fleet.py grill --state FILE --confirmed URL
   first_fleet.py choose --state FILE --options FILE (--harness P --model M --effort E | --from-setup) [--agents HOST]
   first_fleet.py spec --state FILE --spec N --repo OWNER/NAME
-  first_fleet.py launch --state FILE --spec N [--yes --confirm DIGEST]
+  first_fleet.py launch --state FILE --spec N [--heartbeat] [--yes --confirm DIGEST]
   first_fleet.py progress --state FILE --spec N --openwiz PROGRAM
   first_fleet.py first-merge --state FILE --pr N
   first_fleet.py next --state FILE [--setup-state DIR]
@@ -72,6 +72,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -95,7 +96,7 @@ OPTIONS = {
     'select': ({'--state', '--repo'}, set(), set()),
     'choose': ({'--state', '--options'}, {'--from-setup'}, {'--harness', '--model', '--effort', '--agents'}),
     'spec': ({'--state', '--spec', '--repo'}, set(), set()),
-    'launch': ({'--state', '--spec'}, {'--yes'}, {'--confirm'}),
+    'launch': ({'--state', '--spec'}, {'--yes', '--heartbeat'}, {'--confirm'}),
     'progress': ({'--state', '--spec', '--openwiz'}, set(), set()),
     'next': ({'--state'}, set(), {'--setup-state'}),
 }
@@ -1691,6 +1692,13 @@ def fleet_recorded(spec, env):
     return any(body.split('\n')[0].strip() == FLEET_RECORD + str(spec) for body in bodies)
 
 
+# This machine's first fleet runs in the open chat through launch-fleet's session runner (#2329); the heartbeat
+# is the opt-in after it, for keeping the fleet going once the chat closes.
+SESSION = LAUNCH_FLEET / 'scripts/session.py'
+OPT_IN = ('To keep the fleet going after this chat closes, the opt-in is a local heartbeat: ask the user, and only '
+          'on their yes run launch --spec %d --heartbeat to preview it.')
+
+
 def activation(spec, host, env):
     if host == 'cloud':
         return fleet_recorded(spec, env)
@@ -1789,7 +1797,23 @@ def launch(got):
     env = repository(state.value.get('repo'))
     agents_host = host['agents']
     driver = agents_host != 'cloud'
+    local = agents_host == 'local'
     previous = state.value.get('launch')
+    if got.get('--heartbeat'):
+        return opt_in(state, spec, env, host, got)
+    if local and previous and previous['spec'] == spec and previous['state'] == 'started':
+        print('Spec #%d already started once; not starting again.' % spec)
+        if previous.get('session'):
+            print(session_line(spec, previous['session']))
+        print(record_line(spec, activation(spec, agents_host, env), agents_host))
+        return 0
+    if local and previous and previous['spec'] == spec and previous['state'] != 'refused':
+        del state.value['launch']
+        state.value.pop('preview', None)
+        if not state.save():
+            raise Exit(10, 'Could not withdraw the yes; run this again; ' + NOTHING)
+        raise Exit(5, 'The saved yes was for the heartbeat handoff; the fleet now runs in this chat: preview again '
+                      'and ask again; ' + NOTHING)
     if previous and previous['spec'] == spec and previous['state'] != 'refused':
         recorded = activation(spec, agents_host, env)
         if previous['state'] != 'started' and recorded:
@@ -1839,7 +1863,6 @@ def launch(got):
     if any(current[k] != carried.get(k) for k in current):
         withdraw(state)
         raise Exit(5, 'Setup changed since it was carried; run continue again; ' + NOTHING)
-    local = host['agents'] == 'local'
     name = None if host['agents'] == 'cloud' else host['agents']
     named = host_setting(env)
     if named != name:
@@ -1885,8 +1908,10 @@ def launch(got):
     builder, reviewer = review(choices, rules)
     orchestrator = rules['orchestrator']
     where = where_of(agents_host)
-    if driver and (orchestrator is None or orchestrator['harness'] not in PROGRAMS or
-                   not shutil.which(PROGRAMS[orchestrator['harness']], path=env.get('PATH'))):
+    if local and not shutil.which(PROGRAMS[builder['harness']], path=env.get('PATH')):
+        raise Exit(5, "The session starts builders with %s, which is not installed here; " % builder['harness'] + NOTHING)
+    if driver and not local and (orchestrator is None or orchestrator['harness'] not in PROGRAMS or
+                                 not shutil.which(PROGRAMS[orchestrator['harness']], path=env.get('PATH'))):
         raise Exit(5, 'The orchestrator needs an installed Claude Code or Codex harness for the heartbeat; ' + NOTHING)
     same_family = driver and not shutil.which(PROGRAMS[reviewer['harness']], path=env.get('PATH'))
     if same_family:
@@ -1895,7 +1920,7 @@ def launch(got):
                'host': host['agents'], 'mode': (picked if len(modes) == 1 else modes) if local else None, 'builder': builder, 'reviewer': reviewer, 'grill': confirmed,
                'tickets': [[n, ready[n]] for n in starts]}
     if driver:
-        effects['heartbeat'] = adapters
+        effects['session' if local else 'heartbeat'] = adapters
     digest = hashlib.sha256(json.dumps(effects, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     if got.get('--yes'):
         shown = state.value.get('preview') or {}
@@ -1905,7 +1930,11 @@ def launch(got):
     agents = '%s %s %s' % (builder['harness'], builder['model'], builder['effort'])
     fleet_thread = '%s %s %s' % (orchestrator['harness'], orchestrator['model'], orchestrator['effort'])
     if not got.get('--yes'):
-        if driver:
+        if local:
+            print("Ready to start the fleet for spec #%d %s through launch-fleet's session runner, in this chat: it "
+                  'starts a builder (%s) for each of these tickets, up to 3 at once, and starts each next step the '
+                  'moment a run ends, with no timer:' % (spec, where, agents))
+        elif driver:
             print('Ready to start the fleet for spec #%d %s through launch-fleet. A local heartbeat checks GitHub '
                   'every 10 minutes and starts an orchestrator wake (%s) when work is due. '
                   'Ready for a builder (%s):' % (spec, where, fleet_thread, agents))
@@ -1922,6 +1951,8 @@ def launch(got):
         if local:
             print('Its agents run %s you picked.' % ' and '.join(
                 '%s with the %s permission mode' % (HARNESS_OF[p], modes[p]) for p in sorted(modes)))
+            print('The fleet moves while the session runs here; keeping it going after the chat closes is the '
+                  'heartbeat, offered afterwards as its own opt-in.')
         print('Start the fleet %s now? It can cost money: %s.' % (where, cost))
         state.value['preview'] = {'spec': spec, 'effects': digest}
         if not state.save():
@@ -1929,12 +1960,18 @@ def launch(got):
         print('Confirmation: %s' % digest)
         print("Nothing started. Ask exactly that; on the user's yes, run again with --yes --confirm %s." % digest)
         return 12
-    state.value['launch'] = {'spec': spec, 'state': 'authorized', 'effects': digest, 'tickets': starts,
-                             'orchestrator': orchestrator}
+    starting = teach('The fleet starting', (str(len(starts)),), which=1) if local else None
+    state.value['launch'] = {'spec': spec, 'state': 'started' if local else 'authorized', 'effects': digest,
+                             'tickets': starts, 'orchestrator': orchestrator}
     if driver:
         state.value['launch']['adapters'] = adapters
     if not state.save():
         raise Exit(10, 'Could not save the start the user said yes to; ' + NOTHING)
+    if local:
+        print("The user said yes to starting spec #%d's fleet %s: launch-fleet's session runner runs it in this chat "
+              'now.' % (spec, where))
+        print(starting)
+        return hand_over(state, spec, env, builder)
     if driver:
         print("The user said yes to starting spec #%d's fleet %s. Follow the heartbeat handoff for the scheduled job."
               % (spec, where))
@@ -1948,6 +1985,106 @@ def launch(got):
 
 def agent_words(agent):
     return ' '.join(agent[k] for k in ('harness', 'model', 'effort'))
+
+
+def hand_over(state, spec, env, builder):
+    """Run launch-fleet's session runner in the foreground, its lines shown as they come, then save where it stopped."""
+    argv = [str(SESSION), 'run', state.value['repo'], '--spec', str(spec), '--harness', PROGRAMS[builder['harness']],
+            '--model', builder['model']]
+    sys.stdout.flush()
+    lines, quiet = [], {s: signal.signal(s, lambda *_: None) for s in (signal.SIGINT, signal.SIGTERM)}
+    try:  # an interrupt is the session's to answer (it stops cleanly and says so); this command waits for that
+        child = subprocess.Popen([sys.executable, '-I', *argv], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, env=env)
+        for raw in child.stdout:
+            sys.stdout.buffer.write(raw)
+            sys.stdout.flush()
+            lines.append(raw.decode('utf-8', 'replace').rstrip('\n'))
+        code = child.wait()
+    except OSError:
+        code = None
+    finally:
+        for s, handler in quiet.items():
+            signal.signal(s, handler)
+    stop = next((line for line in reversed(lines) if line.startswith(('session: ', 'session.py: '))), '')
+    if code is None or code == 1 and stop.startswith('session: refused: '):
+        del state.value['launch']
+        state.value.pop('preview', None)
+        saved = state.save()
+        raise Exit(5 if saved else 10, 'The session %s, so this launch started nothing; the yes is withdrawn: preview '
+                   'again and ask again; %s' % ('did not run' if code is None else 'was refused: '
+                                                + stop[len('session: refused: '):], NOTHING))
+    carry = next((line[len('carry on: '):] for line in reversed(lines) if line.startswith('carry on: ')),
+                 shlex.join(['python3', '-I', *argv]))
+    session = {'exit': code, 'stop': stop, 'carry_on': carry}
+    state.value['launch']['session'] = session
+    if not state.save():
+        raise Exit(10, "Could not save where the session stopped; run progress --spec %d to read the fleet." % spec)
+    print(session_line(spec, session))
+    if code:
+        print(OPT_IN % spec)
+    return 0 if code in (0, 3, 130) else 1
+
+
+def session_line(spec, session):
+    """Where this chat's session last stopped, by session.py's exit codes, and its own command to carry on."""
+    code, stop = session['exit'], session['stop']
+    if code == 0:
+        return "Spec #%d's session in this chat ended: the session finished spec #%d." % (spec, spec)
+    if code == 3 and 'needs you: ' in stop:
+        said = 'stopped: needs you: %s. Handle that with launch-fleet, then carry on' % stop.split('needs you: ', 1)[1]
+    elif code == 130:
+        said = 'stopped on interrupt; the runs it started keep going'
+    elif code == 2:
+        said = 'stopped: a read failed (%s)' % (stop.split(': ', 1)[-1] or 'no message')
+    else:
+        said = 'stopped (exit %d: %s)' % (code, stop or 'no message')
+    return "Spec #%d's session in this chat %s.\ncarry on: %s" % (spec, said, session['carry_on'])
+
+
+def opt_in(state, spec, env, host, got):
+    """The heartbeat, the opt-in after this chat's session: its own preview, then its own yes."""
+    launched = state.value.get('launch') or {}
+    if host['agents'] != 'local' or launched.get('spec') != spec or not launched.get('session'):
+        raise Exit(5, "The heartbeat is the opt-in after this machine's session: start the fleet in this chat first "
+                      '(launch --spec %d); nothing installed.' % spec)
+    orchestrator, adapters = launched.get('orchestrator') or {}, launched.get('adapters')
+    program = PROGRAMS.get(orchestrator.get('harness'))
+    if not program or not adapters or not shutil.which(program, path=env.get('PATH')):
+        raise Exit(5, 'The heartbeat wakes an orchestrator, and no installed Claude Code or Codex harness is saved for '
+                      'it; nothing installed.')
+    env.update(OPENWIZ_ADAPTERS=adapters, LAUNCH_FLEET_GITHUB_ONLY='1')
+    argv = [sys.executable, '-I', str(HEARTBEAT), 'install', state.value['repo'], str(spec), program,
+            orchestrator['model']]
+    digest = hashlib.sha256(json.dumps({'heartbeat': argv[3:], 'adapters': adapters, 'launch': launched['effects']},
+                                       sort_keys=True).encode()).hexdigest()
+    if not got.get('--yes'):
+        shown = run(argv, env, timeout=60)
+        if shown is None or shown.returncode:
+            raise Exit(1, 'The heartbeat preview did not read: %s; nothing installed.' % (
+                shown.stdout.decode('utf-8', 'replace').strip() if shown else 'it did not run'))
+        print(shown.stdout.decode('utf-8', 'replace').rstrip('\n'))
+        launched['heartbeat'] = digest
+        if not state.save():
+            raise Exit(10, 'Could not save the heartbeat preview; nothing installed.')
+        print('This is the opt-in to keep the fleet going after this chat closes: a local heartbeat checks GitHub '
+              'every 10 minutes and wakes an orchestrator (%s) when work is due. Install it?' % agent_words(orchestrator))
+        print('Confirmation: %s' % digest)
+        print("Nothing installed. Ask exactly that; on the user's yes, run again with --heartbeat --yes --confirm %s."
+              % digest)
+        return 12
+    if got['--confirm'] != digest or launched.get('heartbeat') != digest:
+        raise Exit(5, 'This is not the heartbeat preview the user said yes to: run launch --spec %d --heartbeat and '
+                      'ask again; nothing installed.' % spec)
+    done = run([*argv, '--yes'], env, timeout=120)
+    if done is None or done.returncode:
+        raise Exit(1, 'The heartbeat did not install: %s' % (
+            done.stdout.decode('utf-8', 'replace').strip() if done else 'it did not run'))
+    launched.pop('heartbeat')
+    if not state.save():
+        raise Exit(10, 'The heartbeat installed, but its yes could not be cleared; run progress --spec %d.' % spec)
+    print(record_line(spec, activation(spec, 'local', env), 'local'))
+    return 0
 
 
 def handoff(spec, repo, adapters, orchestrator):
@@ -1978,6 +2115,8 @@ def record_line(spec, recorded, host):
             return "Spec #%d's active local heartbeat could not be confirmed." % spec
         if recorded:
             return "Spec #%d's local heartbeat is active. It checks GitHub every 10 minutes." % spec
+        if host == 'local':
+            return 'No heartbeat is installed: the fleet moves only while a session runs in a chat.'
         return "Spec #%d has no local heartbeat installed yet." % spec
     if recorded is None:
         return "The spec's fleet record could not be read right now."
@@ -1993,6 +2132,10 @@ def watch(got):
         raise Exit(5, 'This onboarding planned no spec #%d.' % spec)
     env = repository(state.value.get('repo'))
     host = (state.value.get('host') or {}).get('agents', 'cloud')
+    if host == 'local':
+        launched = state.value.get('launch') or {}
+        print(session_line(spec, launched['session']) if launched.get('spec') == spec and launched.get('session')
+              else 'Spec #%d has no session in this chat yet: run launch --spec %d.' % (spec, spec))
     print(record_line(spec, activation(spec, host, env), host))
     if host != 'cloud':
         return github_progress(spec, env)

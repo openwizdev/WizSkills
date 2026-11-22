@@ -1243,8 +1243,9 @@ class LocalSession(unittest.TestCase):
         for line in NEEDS_YOU.splitlines():
             self.assertIn(line, lines, "the session's own ticks and stop are shown in the chat")
         self.assertLess(lines.index('The plan passed its checks, so the fleet started in this chat: 2 builders, '
-                                    'each on one small ticket, and each next step starts the moment a run ends. '
-                                    'Keep this chat open; nothing for you to do until the first merge.'),
+                                    'each on one small ticket, and each next step starts the moment a run ends. Watch '
+                                    'them here and at openwiz.dev/app; keep this chat open, nothing for you to do '
+                                    'until the first merge.'),
                         lines.index(NEEDS_YOU.splitlines()[0]))
         self.assertNotIn("launch-fleet's Launch section", yes.stdout, 'no handoff for the orchestrator to follow')
         self.assertIn('launch --spec 900 --heartbeat', yes.stdout, 'the opt-in is offered after the session')
@@ -1254,7 +1255,7 @@ class LocalSession(unittest.TestCase):
         self.assertIn('already started once', again.stdout)
         self.assertIn('carry on: python3 -I /synthetic/launch-fleet/scripts/session.py run', again.stdout)
         self.assertEqual(len(self.log(road, 'session.log')), 1, 'never a second session from launch')
-        watch = road.helper(['progress', '--spec', '900'])
+        watch = road.tool({'tool': ['progress', '--spec', '900'], 'progress': ['building', 'building', 'blocked']})
         self.assertEqual(watch.returncode, 0, watch.stdout)
         self.assertIn("Spec #900's session in this chat stopped: needs you: needs-info #902: a question for the "
                       'orchestrator', watch.stdout)
@@ -1277,7 +1278,7 @@ class LocalSession(unittest.TestCase):
                 self.assertIn(said, yes.stdout)
                 self.assertEqual('--heartbeat' in yes.stdout, offered)
                 self.assertEqual(road.saved()['launch']['state'], 'started')
-                watch = road.helper(['progress', '--spec', '900'])
+                watch = road.tool({'tool': ['progress', '--spec', '900'], 'progress': ['building', 'building', 'blocked']})
                 self.assertIn("Spec #900's session in this chat", watch.stdout)
         road = self.road(session=(1, 'session: refused: a session or heartbeat tick already runs spec #900\n'))
         _, yes = self.launched(road)
@@ -1315,7 +1316,7 @@ class LocalSession(unittest.TestCase):
         self.assertEqual(self.log(road, 'heartbeat.log')[-2]['adapters'], str(road.dir / 'adapters'))
         self.assertIn("Spec #900's local heartbeat is active", installed.stdout)
         self.assertEqual(len(self.log(road, 'session.log')), 1, 'the opt-in starts no session')
-        watch = road.helper(['progress', '--spec', '900'])
+        watch = road.tool({'tool': ['progress', '--spec', '900'], 'progress': ['building', 'building', 'blocked']})
         self.assertIn("Spec #900's local heartbeat is active", watch.stdout)
 
 

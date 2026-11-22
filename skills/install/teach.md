@@ -43,6 +43,8 @@ When its summary is ready:
 ## The fleet starting
 
 > The plan passed its checks, so the fleet started: `<n>` builders, each on one small ticket. Watch them work at openwiz.dev/app; nothing for you to do until the first merge.
+>
+> The plan passed its checks, so the fleet started in this chat: `<n>` builders, each on one small ticket, and each next step starts the moment a run ends. Watch them here and at openwiz.dev/app; keep this chat open, nothing for you to do until the first merge.
 
 ## A pull request opened
 

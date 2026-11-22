@@ -1100,5 +1100,36 @@ class FirstMerge(unittest.TestCase):
         self.assertTrue(says(result.stdout.splitlines()[-1], 'offer'), result.stdout)
 
 
+class ExpressFirstFleet(unittest.TestCase):
+    """The install's first fleet: one grill round, about three parallel tickets and no spec video (#2326)."""
+
+    def section(self, text, heading):
+        return text.split(heading + '\n', 1)[1].split('\n#', 1)[0]
+
+    def test_the_grill_is_one_round_steered_to_about_three_parallel_tickets(self):
+        grill = self.section((SKILL_DIR / 'SKILL.md').read_text(), '### 4. Grill')
+        self.assertRegex(grill, r'\bone short round\b')
+        self.assertRegex(grill, r'about three small tickets[^.]*no blockers between them[^.]*no shared owned paths'
+                                r'[^.]*all three build in parallel')
+        self.assertNotRegex(grill, r'(?i)\btwo rounds\b|\b4 to 7\b')
+        start = teach_lines()['The grill'][0]
+        self.assertRegex(start, r'\bone round\b')
+        self.assertRegex(start, r'\babout three\b')
+
+    def test_the_first_fleet_skips_the_video_and_only_the_first_fleet(self):
+        plan = self.section((SKILL_DIR / 'SKILL.md').read_text(), '### 7. Plan')
+        self.assertRegex(plan, r"install's first fleet[^.]*straight to the launch with no video")
+        self.assertRegex(plan, r'for this fleet only; a later spec[^.]*gets its video')
+        self.assertNotIn('video link', plan)
+        spec = teach_lines()['The spec and its video']
+        self.assertEqual(len(spec), 1)
+        self.assertNotIn('<video link>', spec[0])
+        self.assertRegex(spec[0], r'first fleet has no video')
+        step = self.section((SKILL_DIR.parent / 'to-spec' / 'SKILL.md').read_text(), '## 4. Make the steering video')
+        first = step.strip().split('\n\n', 1)[0].replace('\n', ' ')
+        self.assertRegex(first, r"^Skip this step for the install's first fleet, and only for it:")
+        self.assertRegex(first, r'Every other spec gets its video\.$')
+
+
 if __name__ == '__main__':
     unittest.main()

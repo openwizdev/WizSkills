@@ -2,9 +2,7 @@
 """Start, wake and stop builders through the project's chosen host driver (#1371).
 
   host.py which                              the host docs/agents/host.md chooses, or `host: none`
-  host.py start OWNER/NAME N HARNESS MODEL [SKILL]
-                                             start #N's agent through that host's driver, running SKILL
-                                             (default build-ticket), a name as driver v1's schema has it
+  host.py start OWNER/NAME N HARNESS MODEL   start #N's builder through that host's driver
   host.py wake OWNER/NAME N                  wake #N's run, on the host that started it
   host.py stop OWNER/NAME N                  stop #N's run, on the host that started it
 

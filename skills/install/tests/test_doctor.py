@@ -417,7 +417,7 @@ class Doctor(unittest.TestCase):
 
 
 SKILL = Path(__file__).resolve().parents[1] / 'SKILL.md'
-LINE = 'main'
+LINE = 'v<version of this skill>'
 PACKAGE = Path(__file__).resolve().parent / 'fixtures/openwiz-0.1.0-commands.json'
 BARE = {'install': 'tools/install/install', 'setup.py': 'runtime/setup/setup.py',
         'github_login.py': 'runtime/setup/github_login.py', 'cloudroom.py': 'runtime/cloudroom/cloudroom.py',

@@ -62,7 +62,7 @@ git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$open
 python3 -I "$openwiz"/tools/install/install preflight
 ```
 
-`git clone` may warn that `refs/tags/v0.1.0` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) has a 0.1.0 build, but CloudRoom offers no Intel Mac build today: if the user chose CloudRoom, say so plainly, offer this computer or boat.dev instead, and stop before installing if they keep CloudRoom. Exit 5 names each missing item and its `next` step: tell the user plainly (`gh`: install it and `gh auth login`). `room-cli` reading `missing` never stops preflight; it matters only if the user chose CloudRoom, and step 3 installs CloudRoom then. Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`). Read its `checks` even on exit 0: `gh` reading `missing` does not stop preflight, but setup needs it. Then the user installs GitHub CLI first, from https://cli.github.com, and `gh --version` shows it is there; then continue.
+`git clone` may warn that `refs/tags/v0.1.0` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) has a 0.1.0 build, but CloudRoom offers no Intel Mac build today: if the user chose CloudRoom, say so plainly, offer this computer or boat.dev instead, and stop before installing if they keep CloudRoom. Exit 5 names each missing item and its `next` step: tell the user plainly (`gh`: install it, then run `gh auth login` themselves). `room-cli` reading `missing` never stops preflight; it matters only if the user chose CloudRoom, and step 3 installs CloudRoom then. Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`). Read its `checks` even on exit 0: `gh` reading `missing` does not stop preflight, but setup needs it. Then the user installs GitHub CLI first, from https://cli.github.com, and `gh --version` shows it is there; then continue.
 
 Done when preflight passes, or the user has each next step.
 
@@ -119,7 +119,7 @@ It reads each connection and records only its own results in `<state>`. It print
 | `cloudroom_destination_blocked` | Another file is at `~/Applications/Cloudroom.AppImage`: the user moves it, never you. |
 | `cloudroom_unreadable` | `check` again; if it stays, `status`. |
 
-**GitHub:** `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state>` reuses a verified login. Signed out, it previews (`login_needed`): GitHub's own browser page and a one-time code, with no token pasted. On the yes, show the user the command with `--yes` to run in their own terminal, then run `status`. `identity_unreadable` (from `status`, `sign-in` or `check`) means GitHub gave no clear answer: wait a minute and run it again; it clears. If it stays, `gh auth status` shows whether the user is signed in. `login_gh_missing` means GitHub CLI is not installed: the user installs it from https://cli.github.com, then `gh --version` shows it is there; run the sign-in preview again.
+**GitHub:** `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state>` reuses a verified login. Signed out, it previews (`login_needed`): GitHub's own browser page and a one-time code, with no token pasted. On the yes, show the user the command with `--yes` to run themselves in their own terminal, then run `status`. `identity_unreadable` (from `status`, `sign-in` or `check`) means GitHub gave no clear answer: wait a minute and run it again; it clears. If it stays, `gh auth status` shows whether the user is signed in. `login_gh_missing` means GitHub CLI is not installed: the user installs it from https://cli.github.com, then `gh --version` shows it is there; run the sign-in preview again.
 
 **The rest** (`harness_unselected`, `identity_unselected`, `project_unprepared`, `app_missing`) is expected now: each waits for the repository the user picks under First fleet, and Connect sets it. Phone access is optional: `python3 -I -B "$build"/runtime/access/access.py configure --plan <private file> --state-dir <state>` previews it; `access.py --help` gives the plan's shape.
 
@@ -187,7 +187,7 @@ Done when the running agent's folder holds the 18 skills by name and every `ok:`
 
 Say this before asking about a project, once:
 
-> You bring an **idea**. I **grill** you with a few quick questions to settle it, then write it up as a **spec** for you to confirm. The spec becomes small **tickets**, a plan you approve as a whole. Each ticket gets its own **builder**, an agent that writes the code on its own branch. A **reviewer** from a different model family reviews each pull request independently, and approved, green work **merges** by the project's rules. Nothing starts until you approve the plan.
+> You bring an **idea**. I **grill** you with a few quick questions to settle it, then write it up as a **spec** for you to confirm. The spec becomes small **tickets** in a plan that checks itself. Each ticket gets its own **builder**, an agent that writes the code on its own branch. In the automatic fleet, a **reviewer** from a different model family reviews each pull request independently, and approved, green work **merges** by the project's rules. Nothing starts until you approve the start.
 
 Done when the user has seen it.
 
@@ -229,22 +229,26 @@ Done when the user has seen the text above and has what they chose: planning, a 
 
 Continue only if the user chose CloudRoom and wants a first fleet; otherwise finish with the install and any outstanding setup steps, or with "Without CloudRoom" above. On 0.1.0 this automatic fleet runs in CloudRoom, even with builders on boat.dev: the fleet's own thread and loops are CloudRoom's. The automatic fleet without CloudRoom arrives in 0.1.1. Pass one owner-only `--state <file>` outside the project to every `first_fleet.py` command (`python3 <this skill's folder>/scripts/first_fleet.py`), from the project's clone. To resume, run `first_fleet.py next --state <file> --setup-state <state>`: it reads only that file and the repository setup prepared, and prints the first unfinished step and its command. Exits: 0 done, 1 read failure, 2 usage, 5 refused, 6 uncertain, 7 busy, 10 state unavailable, 12 preview awaiting `--yes`.
 
-### 1. Choose a project
+### 1. Record where agents run
 
 Record the CloudRoom choice already given at the start: run `first_fleet.py where --agents cloud --build "$build" --yes`. If it reports a missing sign-in or CloudRoom CLI, finish step 3 and run it again. This records the host for `choose` and `next`.
 
-Offer three or four fun, one-line ideas made up for this user, plus "your own idea". Then ask where it goes:
+Done when `where` recorded the answer.
 
-1. **A new private demo repository** (recommended). Step 3's GitHub sign-in comes first. Then `first_fleet.py create-repo --repo <owner>/<name>` previews the repository and its one README commit; on the yes, add `--yes`. Exit 6: run it again. The user makes or picks its CloudRoom project.
-2. **An existing repository:** confirm it, and that the fleet opens branches and pull requests there, then run `first_fleet.py select --repo <owner>/<name>`.
+### 2. Choose a start
+
+Offer three ways to start: a small change in a repository they have, a fresh project from their idea, or something they've always wanted to build. Anyone without an idea gets two or three ideas from that choice's group in [ideas.md](ideas.md); their own idea always wins. Then its one repository:
+
+- **A repository they have:** confirm it, and that the fleet opens branches and pull requests there, then run `first_fleet.py select --repo <owner>/<name>`.
+- **A new repository:** use the GitHub sign-in already verified in step 3. Then `first_fleet.py create-repo --repo <owner>/<name>` previews it and its one README commit; on the yes, add `--yes`. Exit 6: run it again. The user makes or picks its CloudRoom project.
 
 Done when the idea and one repository are chosen and read back. There is no second repository.
 
-### 2. Connect
+### 3. Connect
 
 For that repository, each tool previews and applies only on the yes (`--yes`, or `--yes --operation <id>` from its preview):
 
-1. **Sign-in:** run the read-only `github_login.py status --repository <owner>/<name> --state-dir <state>`. If it does not verify the account and push access, have the user run `github_login.py sign-in --repository <owner>/<name> --state-dir <state> --yes` in their own terminal, then run `status` again.
+1. **Sign-in:** run the read-only `github_login.py status --repository <owner>/<name> --state-dir <state>`. If it does not verify the account and push access, have the user run `github_login.py sign-in --repository <owner>/<name> --state-dir <state> --yes` themselves in their own terminal, then run `status` again.
 2. **Prepare:** `setup.py prepare --state-dir <state> --repository <owner>/<name> --project <project id> --operator <login> --service-issue <N> --answer-thread <thread id> --harness <harness> --model <model> --effort <effort>`, every flag required, one question each, with a recommendation:
    - `--project`: the CloudRoom project the fleet runs in, by id (`<root>/current/openwiz ls --json` groups threads by project).
    - `--operator`: the name a loop's on or off switch records as who did it; recommend the user's GitHub login.
@@ -259,35 +263,35 @@ For that repository, each tool previews and applies only on the yes (`--yes`, or
 
 Done when `continue` prints the carried setup and the acting identity.
 
-### 3. Grill
+### 4. Grill
 
 Say [teach.md](teach.md)'s **The grill** first line, then run `grill` briefly: one or two rounds of at most three questions, each with a recommendation, steered to 4 to 7 small, mostly independent tickets, even for a small change. When its summary is ready, show it and say **The grill**'s second line. Only the user's yes here confirms it; anything else is a change to make. Save the yes as `grill` says, then run `first_fleet.py grill --confirmed <its private comment URL>`.
 
 Done when `grill` recorded the confirmation.
 
-### 4. Agents
+### 5. Agents
 
 Harness, model and effort were answered at Connect. Save `<root>/current/openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup` (without a carried setup, ask the three and pass `--harness --model --effort`). Then run `setup` so both builder tables name exactly these settings, sourced to the user's decision; setup keeps reviewers in the other family. Then run the same `choose` again: it reads the tables back.
 
 Done when the choice is recorded and the builder tables match it.
 
-### 5. Host setting
+### 6. Host setting
 
 Run `first_fleet.py setting`. With CloudRoom, no host setting file is needed. The command records that it checked the default host.
 
-### 6. Plan
+### 7. Plan
 
 The plan checks itself. Run `to-spec` with the confirmed grill. It writes the spec, runs `to-tickets`, whose checks record the machine plan approval, and makes the spec's video. Say **The spec and its video** with its video link. Without Node on `PATH`, skip to-spec's video step (it renders with `node`, which this install's guard never needs) and instead of that line say one line: `Your grill is now a spec at <spec link>; its video needs Node, which this install doesn't have, so there is none, and the fleet still starts.` The launch never waits for the video. Ask nothing here: no spec or plan approval. For now the owner steers through the orchestrator: what they want changed goes to this chat, never a comment on the video, which steers nothing until OpenWiz #1402. launch-fleet's one-time notice saying so is normal, not a hold. When a check refuses, re-cut the plan; never ask the user to approve it instead. Then run `first_fleet.py spec --spec <N> --repo <owner>/<name>`.
 
 Done when the machine plan approval is on the spec and `spec` saved it.
 
-### 7. Launch
+### 8. Launch
 
 Preview with `first_fleet.py launch --spec <N>`. It reads the spec's machine plan approval for this grill, the CloudRoom host recorded above and launch-fleet's own frontier, then prints the start's effects and one question that names the host and says it can cost money. Show the effects and ask that question as printed. This is the one yes before the fleet starts; never skip it. On the yes, run it with `--yes --confirm <the digest it printed>`. It refuses if anything changed since the preview: preview again and ask again. It starts nothing itself: it saves the yes and names launch-fleet's own start path. As this project's orchestrator, follow launch-fleet's Launch section ([references/launch.md](../launch-fleet/references/launch.md)): the project's two loops, the GitHub messages question (a gate, in its own words), then "Starting one": the spec's loop, its private loop-map entry, read back, and the `launch-fleet: fleet active, loop fleet-<S>` record, read back. Then run `first_fleet.py launch --spec <N>` again: it says **The fleet starting** only once that record reads back; until then it exits 6. Never start the fleet a second way.
 
 Done when `launch` read the activation record back and printed **The fleet starting**.
 
-### 8. Watch
+### 9. Watch
 
 Run `first_fleet.py progress --spec <N> --openwiz <absolute path to openwiz>` when the user asks or a moment may have happened, and say each moment's line once: **A pull request opened**, then **Reviewed**. A count is never a merge. When a pull request merges, run `first_fleet.py first-merge --pr <number>`: it reads the merge back from GitHub and prints **Merged** and **The closing offer**; say both. On the answer: stay as the project's orchestrator (launch-fleet), start a new project (this road again, with a new state file), or keep building (the grill again, for the next idea).
 

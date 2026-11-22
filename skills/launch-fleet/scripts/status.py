@@ -420,12 +420,12 @@ def asked_label(repo, n, made, fields, author):
             return None
         asked = when(start.replace('.000', '')[:19] + 'Z')
         events = label_events(repo, n)
-        applied = [j for j, e in enumerate(events) if e['event'] == 'labeled']
-        first = next((j for j in applied if TIME.fullmatch(events[j].get('created_at') or '')
-                      and when(events[j]['created_at']) >= asked), None)
-        if first is None or not by(events[first], author):
+        stamps = [when(e['created_at']) if TIME.fullmatch(e.get('created_at') or '') else None for e in events]
+        first = next((j for j, t in enumerate(stamps) if t is None or t >= asked), None)
+        if (first is None or stamps[first] is None or events[first]['event'] != 'labeled'
+                or not by(events[first], author)):
             return None
-        return first if when(events[first]['created_at']) <= asked + ASKED_WITHIN else None
+        return first if stamps[first] <= asked + ASKED_WITHIN else None
     except (Failed, StopIteration, KeyError, TypeError, AttributeError, ValueError):
         return None
 

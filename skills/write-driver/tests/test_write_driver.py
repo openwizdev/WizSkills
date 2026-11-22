@@ -1026,12 +1026,12 @@ class KeyHost(unittest.TestCase):
             spec.loader.exec_module(m)
             return m
         tests = module(kits / 'test_kit.py')
-        host = module(kits / 'kit.py').FakeHost()
+        host = module(kits / 'kit.py').FakeHost(test_key='synthetic-canary-0123456789abcdef')
         self.addCleanup(host.close)
         env = {k: v for k, v in os.environ.items() if k not in ('OPENWIZ_GITHUB_APP_KEY', 'DEVIN_API_KEY')}
         ticket = tests.tracker(str(tmp))
         env.update(KIT_TRACKER=ticket, OPENWIZ_TEMPLATE_STATE=str(tmp / 'state'), PATH=str(kits / 'fixtures') + os.pathsep + env['PATH'],
-                   OPENWIZ_HOSTKEY_TEST_KEY='synthetic-canary-0123456789abcdef', OPENWIZ_HOSTKEY_TEST_ORIGIN=host.origin)
+                   OPENWIZ_HOSTKEY_TEST_ORIGIN=host.origin)
         p = subprocess.run([sys.executable, '-I', str(kits / 'kit.py'), '--driver', str(tree / 'adapters' / 'devin' /
                             'driver'), '--repo', 'example/site', '--ticket', '7', '--harness', 'fake-harness', '--model',
                             'Synthetic 1', '--tracker', ticket, '--wait', '8'],

@@ -247,7 +247,7 @@ Done when `continue` prints the carried setup and the acting identity.
 
 ### 4. Grill
 
-Say **The grill**'s first line, then run `grill` briefly: one or two rounds of at most three questions, each with a recommendation, steered to 4 to 7 small, mostly independent tickets, even for a small change. When its summary is ready, show it and say **The grill**'s second line. Only the user's yes here confirms it; anything else is a change to make. Save the yes as `grill` says, then run `first_fleet.py grill --confirmed <its private comment URL>`.
+Say **The grill**'s first line, then run `grill` in one short round: at most three questions, each with a recommendation, steered to about three small tickets, each one a single builder finishes fast, with no blockers between them and no shared owned paths, so all three build in parallel. Anything bigger waits for the closing offer's keep building, after the first merge. When its summary is ready, show it and say **The grill**'s second line. Only the user's yes here confirms it; anything else is a change to make. Save the yes as `grill` says, then run `first_fleet.py grill --confirmed <its private comment URL>`.
 
 Done when `grill` recorded the confirmation.
 
@@ -267,7 +267,7 @@ Done when both settings match the answers, or their pull request is open.
 
 ### 7. Plan
 
-The plan checks itself. Run `to-spec` with the confirmed grill. It writes the spec, runs `to-tickets`, whose checks record the machine plan approval, and makes the spec's video. Say **The spec and its video** with its video link. Without Node on `PATH`, skip to-spec's video step (it renders with `node`, which this install's guard never needs) and instead of that line say one line: `Your grill is now a spec at <spec link>; its video needs Node, which this install doesn't have, so there is none, and the fleet still starts.` The launch never waits for the video. Ask nothing here: no spec or plan approval. For now the owner steers through the orchestrator: what they want changed goes to this chat, never a comment on the video, which steers nothing until OpenWiz #1402. launch-fleet's one-time notice saying so is normal, not a hold. When a check refuses, re-cut the plan; never ask the user to approve it instead. Then run `first_fleet.py spec --spec <N> --repo <owner>/<name>`.
+The plan checks itself. Run `to-spec` with the confirmed grill and say it is the install's first fleet: it writes the spec and runs `to-tickets`, whose checks record the machine plan approval, then goes straight to the launch with no video (to-spec skips its video step for this fleet only; a later spec, from keep building or anywhere else, gets its video as usual). A reset or change of this spec or plan, before or after the launch, gets a new machine approval and still no video. Say **The spec and its video** with the spec link. Without Node on `PATH` nothing changes: you skip the video step all the same, and the fleet still starts. Ask nothing here: no spec or plan approval. For now the owner steers through the orchestrator: what they want changed goes to this chat, never a comment on the spec, which steers nothing until OpenWiz #1402. launch-fleet's one-time notice saying so is normal, not a hold. When a check refuses, re-cut the plan; never ask the user to approve it instead. Then run `first_fleet.py spec --spec <N> --repo <owner>/<name>`.
 
 Done when the machine plan approval is on the spec and `spec` saved it.
 

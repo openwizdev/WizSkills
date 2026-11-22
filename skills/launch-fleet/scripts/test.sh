@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=909
+CASES=910
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -3825,6 +3825,27 @@ if [ -z "${TEST_ONLY:-}" ] || [ "$TEST_ONLY" = o10-release ]; then
     else
       bad o10-release 'the carried O10/triage fixture needs source Git history'
       cat "$tmp/o10-release.log"
+    fi
+  fi
+fi
+
+### A focused run of an `again` case runs the cases it follows (#2131)
+
+if [ -z "${TEST_ONLY:-}" ] || [ "$TEST_ONLY" = focused-again ]; then
+  if take; then
+    cases=$((cases + 1))
+    only='long form: prose after a wait naming another repository refuses nothing (#2096)'
+    (env -u TEST_WORKER -u TEST_SHARED -u TEST_PASS -u TEST_EXPECTED TEST_ONLY="$only" /bin/sh "$HERE/${0##*/}") \
+      > "$tmp/focused.out" 2> "$tmp/focused.err"
+    got=$?
+    printf '%s\n' 'ok   R1: a plain bold wait without a period resumes' \
+      'ok   long form: an orchestrator wait for this repository resumes as #N does (#2096)' "ok   $only" \
+      "ok   every gh call was one of fleet.sh's reads" '1 cases, 0 failed' > "$tmp/focused.want"
+    if [ "$got" = 0 ] && [ ! -s "$tmp/focused.err" ] && cmp -s "$tmp/focused.want" "$tmp/focused.out"; then
+      echo 'ok   focused-again'
+    else
+      bad focused-again "exit $got; stderr: $(head -c 400 "$tmp/focused.err")"
+      diff -u "$tmp/focused.want" "$tmp/focused.out" | sed 's/^/    /'
     fi
   fi
 fi

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -94,6 +95,27 @@ class Road(Journey):
         self.extra_env.update(OPENWIZ_ADAPTERS=str(self.dir / 'adapters'), OPENWIZ_LOCAL_STATE=str(self.host_state),
                               FAKE_DRIVER_LOG=str(self.dir / 'driver.log'), FAKE_GH_ARGV_LOG=str(self.dir / 'gh-argv.log'))
 
+    def helper(self, args):
+        host = self.saved().get('host', {}).get('agents', 'cloud')
+        if host == 'cloud' or args[0] not in ('launch', 'progress'):
+            return super().helper(args)
+        home = self.dir / 'skills'
+        helper = home / 'install/scripts/first_fleet.py'
+        if not helper.exists():
+            helper.parent.mkdir(parents=True)
+            shutil.copyfile(SKILL_DIR / 'scripts/first_fleet.py', helper)
+            (home / 'install/teach.md').symlink_to(SKILL_DIR / 'teach.md')
+            (home / 'setup').symlink_to(SKILL_DIR.parent / 'setup', target_is_directory=True)
+            (home / 'to-tickets').symlink_to(SKILL_DIR.parent / 'to-tickets', target_is_directory=True)
+            shutil.copytree(SKILL_DIR.parent / 'launch-fleet', home / 'launch-fleet')
+            (home / 'launch-fleet/scripts/heartbeat.py').write_text(
+                "from pathlib import Path\nimport sys\n"
+                f"assert sys.argv[1:] == ['status', {self.repo!r}, '900'], sys.argv[1:]\n"
+                "path = Path('heartbeat-status')\n"
+                "print(path.read_text() if path.exists() else 'heartbeat: not installed')\n")
+        with patch('test_first_fleet.HELPER', helper):
+            return super().helper(args)
+
     def approvals(self):
         path = self.host_state / 'approvals.json'
         return json.loads(path.read_text()) if path.exists() else None
@@ -117,6 +139,8 @@ class Road(Journey):
             self.save_world()
         elif what == 'fleet_record':
             self.fleet_record()
+        elif what == 'heartbeat_active':
+            (self.dir / 'heartbeat-status').write_text('heartbeat: active (cron)')
         elif what == 'merged':
             pull = turn['pull']
             self.world.setdefault('onboard_pulls', []).append({
@@ -139,8 +163,14 @@ class Road(Journey):
             elif turn.get('approve') == 'machine':
                 self.machine_approve()
             elif 'setup' in turn:
-                self.write_setup(setup_state(turn['setup'], repository=self.repo,
-                                             settings=('claude-code', 'syn-claude-model-01', 'high')))
+                state = setup_state(turn['setup'], repository=self.repo,
+                                    settings=('claude-code', 'syn-claude-model-01', 'high'))
+                host = self.saved().get('host', {}).get('agents', 'cloud')
+                if host != 'cloud':
+                    state['project'].update(host=host, project=None, answer_thread=None)
+                    state['observations']['cloudroom']['code'] = 'cloudroom_not_needed'
+                    self.options.write_text(json.dumps(dict(json.loads(self.options.read_text()), source='local')))
+                self.write_setup(state)
             elif 'tool' in turn:
                 results.append((turn, self.tool(turn)))
         return results
@@ -210,7 +240,10 @@ class Conversation(unittest.TestCase):
                 spoken = [t['say'] for t in said if t['say'] != 'missing']
                 self.assertEqual(spoken, ORDER)
                 for turn in said:
-                    self.assertTrue(says(turn['agent'], turn['say'], lines), (turn['say'], turn['agent']))
+                    if journey['host'] == 'local' and turn['say'] == 'fleet-start':
+                        self.assertIn('local heartbeat is active', turn['agent'])
+                    else:
+                        self.assertTrue(says(turn['agent'], turn['say'], lines), (turn['say'], turn['agent']))
                     self.assertNotRegex(turn['agent'], r'<[^>]+>')
                 self.assertEqual([t['agent'] for t in said[:3]], lines['Up front'])
         self.assertTrue(any(t.get('say') == 'missing' for j in ROAD['journeys'] for t in j['turns']))
@@ -267,6 +300,9 @@ class Replay(unittest.TestCase):
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):
                 road = Road(self, journey)
+                if journey['host'] == 'local':
+                    (road.dir / 'bin/room-cli').unlink()
+                    self.assertIsNone(shutil.which('room-cli', path=road.env()['PATH']))
                 for turn, result in road.replay_road():
                     self.assertEqual(result.returncode, turn['exit'], (turn['tool'], result.stdout, result.stderr))
                 self.assertEqual(road.spawns(), [], "the start is launch-fleet's own path, never a one-off thread")
@@ -278,6 +314,14 @@ class Replay(unittest.TestCase):
                 fleet = next(t['agent'] for t in journey['turns'] if t.get('say') == 'fleet-start')
                 self.assertNotIn(fleet, yes.splitlines(), 'not before the activation record reads back')
                 self.assertIn(fleet, launches[-1].splitlines())
+                if journey['host'] == 'local':
+                    self.assertIn("launch-fleet's Launch section", yes)
+                    self.assertIn('local heartbeat', yes)
+                    self.assertIn('driver harness `claude`', yes)
+                    self.assertNotIn('Starting one', yes)
+                    self.assertEqual(sum(args == ['mode'] for args, _ in road.calls), 1)
+                    self.assertEqual(road.saved()['mode']['mode'], 'acceptEdits')
+                    self.assertIn('Host: local', road.world['files']['docs/agents/host.md'])
                 adapters = 'OPENWIZ_ADAPTERS=%s' % (road.dir / 'adapters')
                 self.assertEqual(adapters in yes, journey['host'] == 'local', 'the loop finds the local driver (R2)')
                 merged = outputs[('first-merge', '--pr', '911')].splitlines()
@@ -556,6 +600,8 @@ class Drivers(unittest.TestCase):
         said_yes = road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest])
         self.assertEqual(said_yes.returncode, 0, said_yes.stdout)
         self.assertIn('OPENWIZ_ADAPTERS=%s' % (road.dir / 'adapters'), said_yes.stdout)
+        self.assertIn('local heartbeat', said_yes.stdout)
+        self.assertNotIn('Starting one', said_yes.stdout)
         self.assertEqual(road.spawns(), [])
         self.assertFalse((road.dir / 'boat.log').exists(), 'the road itself never runs boat')
 

@@ -41,6 +41,8 @@ if rest[:1] == ['graphql']:
             or not query[0].lstrip().startswith('query'):
         write()
     note('read')
+    if query[0].count('{') != query[0].count('}'):
+        sys.exit('GraphQL: Expected NAME, actual: (none)')
     with open(os.environ['FAKE_LOG']) as f:
         served = sum(1 for line in f if json.loads(line)[1][:2] == ['api', 'graphql']) - 1
     pages = fixture['graphql']

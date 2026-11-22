@@ -66,7 +66,6 @@ def valid_graph:
 # A body'"'"'s `## Links` section: null (none), {malformed: detail},
 # or {lines: [...]}, by the contract'"'"'s "Reading a section".
 def long_form: capture("^- (?<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(?<n>[1-9][0-9]*) (?<kind>real|file):(?<reason>.*)$");
-# Whether a comment is open after a line, its markers read left to right.
 def comment_after($open):
   ([capture(if $open then "^.*?-->(?<rest>.*)$" else "^.*?<!--(?<rest>.*)$" end)][0]) as $m
   | if $m == null then $open else $m.rest | comment_after($open | not) end;

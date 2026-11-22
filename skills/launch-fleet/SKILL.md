@@ -1,7 +1,7 @@
 ---
 name: launch-fleet
 description: Launch a project's fleets and move each approved plan graph's tickets through build, review and merge. Use when a plan graph is approved, when a loop wakes you with due lines or GitHub's messages, when moving a spec to fresh wakes, or to see what a fleet has due. Not for planning (to-tickets), building (build-ticket) or reviewing (review-ticket).
-version: 0.3.0
+version: 0.4.0
 ---
 
 # Launch fleet
@@ -18,11 +18,11 @@ These hold on every line, before every effect.
 - **Builder and reviewer apart.** The reviewer is always the other family, by the models contract's cross-family rule for the builder's recorded family (`ops-starts.py flags --repo <owner>/<repo> review_of_claude_built` or `review_of_gpt_built`); unknown or conflicting family, or a rule that waits, waits. Never swap a refused provider or model for another.
 - **Models.** Every start takes its `room-cli thread spawn` flags from `fleet.md`'s one `## Models` table, read from the default branch at that start: `python3 -I "<this skill's folder>/scripts/ops-starts.py" flags --repo <owner>/<repo> <start>` prints them, reading GitHub's default branch and never the checkout's copy, from the older five tables when the project has no Models table, and refuses a broken table. A merged change reaches the next agent started; running agents keep their model.
 - **Never wait awake.** No wake, builder or reviewer keeps a watcher, poll loop or `sleep`. End the turn; a later event or scheduled wake resumes from the records.
-- **Action gates stay the user's.** Publishing, spending, secrets, deleting user data, cut-overs and the repository webhook need the user's recorded yes. Shorter text grants no new authority.
+- **Approval rules ask their approver.** Every rule in `fleet.md`'s Approval rules needs its named approver's recorded yes first; with no such section, publishing, spending, secrets, deleting user data, cut-overs and the repository webhook need the user's. Planning and a machine approval grant no rule. Shorter text grants no new authority.
 
 ## Launch
 
-The orchestrator launches a fleet when a plan graph is approved, by its machine approval (J203, no human reply) or by the user: check the approval is recorded, make sure the project's two loops exist, ask about GitHub's messages, and start the spec's fleet loop. Follow [references/launch.md](references/launch.md). Done when both loops exist, the user said yes or no to GitHub's messages, and the spec has a read-back `launch-fleet: fleet active, loop fleet-<S>` record (or a `look` saying why not).
+The orchestrator launches a fleet when a plan graph is approved, by its machine approval (J203, no human reply) or by the user: check the approval is recorded, make sure the project's two loops exist, ask about GitHub's messages, and start the spec's fleet loop. Follow [references/launch.md](references/launch.md). Done when both loops exist, the approver of `fleet.md`'s Approval rules row for installing the repository webhook (the user when that section is absent) said yes or no to GitHub's messages, and the spec has a read-back `launch-fleet: fleet active, loop fleet-<S>` record (or a `look` saying why not).
 
 ### Hosts without CloudRoom
 
@@ -115,6 +115,8 @@ A `merge` line means CI is green and the selected reviewer's `VERDICT: APPROVE a
 5. **Close the ticket** if its `Closes #<N>` line didn't. A refused or blocked merge whose branch conflicts goes to the builder (merge `main` in, never rebase); anything else goes to the orchestrator. Never retry a refused merge as another account.
 
 **The landed comment** (feedback-loop contract v1, #1848): on a verified merge in any `openwizdev` repository, `merge.py` (and `settle`, through its cost) follows each closed `openwizdev/OpenWiz` issue's report link to its feedback report and posts the contract's `Landed: ...` comment there once, naming the fix as `<owner>/<repo>#<n>`, read back; it adds `; landed ...` after the cost result, and a `landed unknown:` keeps the archive row's `settle` from archiving until a later wake reads the report again and lands it, never by posting by hand. A merge that closes no linked report adds nothing.
+
+**The ledger** (#2285): asked what a spec or the project cost, run `python3 -I "<this skill's folder>/scripts/ledger.py" <owner>/<repo> [--spec <S>] [--json]` and report what it prints: one row per merged pull request from its ticket's newest record-author cost line, then the total and the cost per merged PR over the known rows, with unknown rows counted, never as zero. Exit 1 is a failed read: report no ledger.
 
 A move of `main` alone is never a reason to close and reopen a pull request: only the re-test guard reopens one ([references/reviews.md](references/reviews.md)).
 

@@ -87,6 +87,7 @@ deleted.
 import datetime
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -99,6 +100,9 @@ _spec = importlib.util.spec_from_file_location('launch_fleet_post', HERE / 'post
 post = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(post)
 Stop = post.Stop
+_spec = importlib.util.spec_from_file_location('launch_fleet_records', HERE / 'records.py')
+records = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(records)
 
 QUERY = '''query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { defaultBranchRef { name } pullRequest(number: $number) {
@@ -375,10 +379,10 @@ def _cost(repo, number, home, ticket, extra):
         if post.ours(c, auth) and first.startswith('launch-fleet: cost') and ref.casefold() in first.casefold():
             return f"cost already posted {c['id']}"
     body = f'launch-fleet: cost unknown {ref}: '
-    if not same:
+    if not Path(COST).is_file():
+        body = 'launch-fleet: cost: ' + _agents_line(home, ref, number, ticket)
+    elif not same:
         body += "the cost command costs only tickets in the pull request's repository"
-    elif not Path(COST).is_file():
-        body += 'no cost command'
     else:
         try:
             r = subprocess.run([sys.executable, '-I', COST, '--repo', repo, '--pr', str(number), *extra],
@@ -394,6 +398,70 @@ def _cost(repo, number, home, ticket, extra):
         else:
             body += reason.group(1) if reason else 'the cost command failed'
     return 'cost posted ' + post.comment(home, ticket, body).split()[-1]
+
+
+
+USAGE_WINDOW_DAYS = 7
+
+
+def _amount(value, unit, places):
+    if value is None:
+        return 'unknown ' + unit
+    text = f'{round(value, places):,.{places}f}'
+    return (text.rstrip('0').rstrip('.') if places else text) + ' ' + unit
+
+
+def _role(credits):
+    return 'unknown' if credits is None else _amount(credits, 'credits', 2) + ', ' + _amount(None, 'tokens', 0)
+
+
+def _cost_line(ref, ticket, builder, reviewer):
+    total = None if builder is None or reviewer is None else builder + reviewer
+    return (f'Ticket #{ticket} cost {ref}: builder {_role(builder)}; reviewer {_role(reviewer)}; '
+            'CI unknown; total ' + ('unknown' if total is None else
+                                    ', '.join((_amount(total, 'credits', 2), _amount(None, 'tokens', 0),
+                                               _amount(None, 'runner minutes', 1)))))
+
+
+def _usage(thread):
+    try:
+        r = subprocess.run(['room-cli', 'usage', thread, '--json'], capture_output=True, text=True, timeout=60,
+                           stdin=subprocess.DEVNULL)
+        if r.returncode:
+            return None
+        history = json.loads(r.stdout, object_pairs_hook=records.unique).get('history')
+        credits, hours = history.get('credits'), history.get('hours')
+        if (history.get('id') != thread or type(credits) not in (int, float) or not 0 <= credits < float('inf')
+                or not isinstance(hours, list) or not hours):
+            return None
+        first = min(datetime.datetime.fromisoformat(h['hour'].replace('Z', '+00:00')) for h in hours)
+        today = datetime.datetime.now(datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        return None if first <= today - datetime.timedelta(days=USAGE_WINDOW_DAYS - 1) else credits
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError, TypeError, KeyError):
+        return None
+
+
+def _driven(number, threads, runs):
+    return (f'run:{number}' in threads or runs in (records.UNREADABLE, records.MISSING, None)
+            or (isinstance(runs, dict) and str(number) in runs))
+
+
+def _agents_line(home, ref, number, ticket):
+    try:
+        threads = records.private_state(home) if os.environ.get('LAUNCH_FLEET_STATE') else None
+        runs = records.driver_runs(home)
+    except (OSError, ValueError):
+        threads = runs = None
+    if not threads:
+        return _cost_line(ref, ticket, None, None)
+    builder = None if _driven(ticket, threads, runs) else threads.get(f'builder:{ticket}')
+    reviewers = (set() if _driven(number, threads, runs)
+                 else {v for k, v in threads.items() if k.startswith(f'review:{number}:')})
+    read = {t: _usage(t) for t in sorted(reviewers | ({builder} if builder else set()))}
+    builder_credits = read[builder] if builder else None
+    reviewer_credits = (None if not reviewers or threads.get(f'builder:{ticket}') in reviewers
+                        or None in (read[t] for t in reviewers) else sum(read[t] for t in sorted(reviewers)))
+    return _cost_line(ref, ticket, builder_credits, reviewer_credits)
 
 
 def enqueued_by_us(repo, p):

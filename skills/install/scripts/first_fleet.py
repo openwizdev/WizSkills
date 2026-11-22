@@ -68,10 +68,6 @@ starts a fleet a second way. It never calls the engine or the engine's tick.
 Every command
 checks the checkout is the repository this onboarding recorded.
 
-`choose` records the choice for where the agents run, then reads the fleet's
-builder tables back: the agents step is done only once both name exactly that
-choice (#1615).
-
 `next` reads only the state file and prints the first unfinished step and
 what to run there, so a fresh session resumes without repeating an effect.
 With --setup-state it also reads, never writes, the repository setup
@@ -123,6 +119,12 @@ OPTIONS = {
 }
 FAMILY = {'claude-code': 'claude', 'codex': 'gpt'}
 REVIEWER = {'claude': 'Reviewer for Claude-built', 'gpt': 'Reviewer for GPT-built'}
+SETTINGS = Path(__file__).resolve().parents[2] / 'setup/scripts/settings.py'
+FLEET_MD = Path('docs/agents/fleet.md')
+OLDER = ('Builder', 'Builder for small tickets', REVIEWER['claude'], REVIEWER['gpt'], 'Fixer')
+RECOMMENDED = {'claude': ('claude-code', 'claude-opus-5-5', 'medium'), 'gpt': ('codex', 'gpt-6.2-sol', 'medium')}
+WRITTEN_NAMES = {'claude-code': 'Claude Code', 'codex': 'Codex', 'claude-opus-5-5': 'Opus 5.5',
+                 'claude-sonnet-5-5': 'Sonnet 5.5', 'gpt-6.2-sol': 'Sol 6.2'}
 STATES = ('ready', 'building', 'in_review', 'changes_requested', 'merged', 'held', 'blocked')
 NOTHING = 'nothing started.'
 # setup.v1's current-evidence window and its codes that establish `verified`.
@@ -804,8 +806,8 @@ def connect_decisions(got):
     except (OSError, ValueError, AssertionError):
         raise Exit(10, 'The private settings file is unreadable; nothing changed.')
     print('Effect: set Decisions\' repository pair in the private settings: public %s/%s, private %s/%s. '
-          'Restart the OpenWiz server afterwards.' % (pair['public']['owner'], pair['public']['name'],
-                                                    pair['private']['owner'], pair['private']['name']))
+          'Nothing else changes.' % (pair['public']['owner'], pair['public']['name'],
+                                     pair['private']['owner'], pair['private']['name']))
     if not got.get('--yes'):
         print("Nothing changed. On the user's yes to exactly this, run again with --yes.")
         return 12
@@ -829,7 +831,7 @@ def connect_decisions(got):
             except OSError:
                 pass
         raise Exit(10, 'Could not write the private settings; nothing changed.')
-    print('Decisions now reads the companion. Restart the OpenWiz server, then run continue.')
+    print('Decisions now reads the companion. Run the setup check, then run continue.')
     return 0
 
 
@@ -1314,16 +1316,20 @@ def choose(got):
     if host['agents'] == 'local' and settings['harness'] not in host['harnesses']:
         raise Exit(5, '%s is not on this machine, so its agents cannot run here; nothing recorded.' % settings['harness'])
     choices = dict(settings, agents=host['agents'])
-    read = None  # unread: the choice is recorded, its builder tables are not settled (#1615)
+    read = None
     try:
-        rules = fleet_rules(repository(state.value.get('repo')), state.value['repo'])
+        env = repository(state.value.get('repo'))
     except Exit:
-        rules = None
-    if rules is not None:
+        env = None
+    wrote, intended = (None, None) if env is None else write_models(settings, offered)
+    try:
+        remote = None if env is None else fleet_text(env, state.value['repo'])
+    except Exit:
+        remote = None
+    if remote is not None:
         try:
-            review(choices, rules)  # the launch's own check of the same tables
-            read = True
-        except Exit:
+            read = models_table(remote) == intended
+        except ValueError:
             read = False
     if read:
         choices['builder_tables'] = 'read'
@@ -1331,9 +1337,10 @@ def choose(got):
     if not state.save():
         raise Exit(10, 'Could not save the choices; nothing recorded.')
     print(chosen_line(choices) + (' (as prepared in setup)' if got.get('--from-setup') else ''))
+    if wrote is not None:
+        print(wrote)
     if read:
-        print("Read back: both of the fleet's builder tables name exactly this choice, with an other-family "
-              'reviewer.')
+        print("Read back: the default branch's Models table has exactly the rows choose wrote.")
     else:
         print(tables_line(choices, 'could not be read' if read is None else 'do not name this choice yet'))
         return 1 if read is None else 0
@@ -1346,9 +1353,131 @@ def chosen_line(choices):
 
 
 def tables_line(choices, why):
-    return ("The fleet's builder tables %s: run setup so both name exactly %s %s %s, with the reviewer from the "
-            'other family, then run choose again to read them back.' % (
+    return ("The fleet's settings on the default branch %s: commit docs/agents/fleet.md, which choose writes, "
+            'and merge it so its builders are exactly %s %s %s with the reviewer from the other family, then run '
+            'choose again to read it back.' % (
                 why, choices['harness'], choices['model'], choices['effort']))
+
+
+def models_table(text):
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location('openwiz_setup_settings', SETTINGS)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.models(text)
+
+
+def offers(offered, agent):
+    return any(h['provider'] == agent[0] and m['model'] == agent[1] and agent[2] in m['efforts']
+               for h in offered['harnesses'] for m in h['models'])
+
+
+def model_row(role, agent):
+    provider, model, effort = agent
+    return '| %s | %s | %s | %s | `--provider %s --model %s --reasoning-level %s` |' % (
+        role, WRITTEN_NAMES.get(provider, provider), WRITTEN_NAMES.get(model, model), effort[:1].upper() + effort[1:],
+        provider, model, effort)
+
+
+def write_models(settings, offered):
+    choice = (settings['harness'], settings['model'], settings['effort'])
+    try:
+        folder = settings_folder()
+    except OSError:
+        raise Exit(5, 'This checkout has no docs/agents/ folder of its own (a missing or linked folder); run setup '
+                      'first; nothing recorded.')
+    try:
+        return write_in(folder, choice, offered)
+    finally:
+        os.close(folder)
+
+
+def settings_folder():
+    folder = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in FLEET_MD.parent.parts:
+            inner = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=folder)
+            os.close(folder)
+            folder = inner
+    except OSError:
+        os.close(folder)
+        raise
+    return folder
+
+
+def write_in(folder, choice, offered):
+    name = FLEET_MD.name
+    try:
+        handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=folder)
+        try:
+            info = os.fstat(handle)
+            assert stat.S_ISREG(info.st_mode)
+            with os.fdopen(os.dup(handle), 'rb') as source:
+                text = source.read().decode('utf-8')
+        finally:
+            os.close(handle)
+    except (OSError, UnicodeError, AssertionError):
+        raise Exit(5, 'This checkout has no readable docs/agents/fleet.md; run setup first; nothing recorded.')
+    try:
+        table = models_table(text)
+    except ValueError as error:
+        raise Exit(5, "docs/agents/fleet.md's Models table breaks the models contract (%s); fix it or run setup "
+                      'again; nothing recorded.' % '; '.join(error.args[0]))
+    lines = text.split('\n')
+    if table:
+        heading = next(n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Models')
+        start = next(n for n in range(heading, len(lines)) if lines[n].startswith('|'))
+        end = next((n for n in range(start, len(lines)) if not lines[n].startswith('|')), len(lines))
+        reviewer, kept = table['Reviewer'], lines[start + 4]
+    else:
+        older = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() in OLDER]
+        if not older:
+            raise Exit(5, 'docs/agents/fleet.md has no Models table and no older model tables; run setup first; '
+                          'nothing recorded.')
+        start = end = older[0]
+        found = older_rules(text)['reviewer_' + FAMILY[choice[0]]]
+        reviewer, kept = (found and (found['harness'], found['model'], found['effort'])), None
+        source = 'the older `%s` table' % REVIEWER[FAMILY[choice[0]]]
+    family = FAMILY[choice[0]]
+    if not reviewer or FAMILY.get(reviewer[0]) in (None, family):
+        reviewer = RECOMMENDED['gpt' if family == 'claude' else 'claude']
+        kept, source = None, 'the recommended other-family choice'
+        if not offers(offered, reviewer):
+            raise Exit(5, 'The Reviewer must be from the other model family; its recommended choice, %s, is not '
+                          'offered now; nothing recorded.' % ' '.join(reviewer))
+    rows = ['| Role | Harness | Model | Effort | `room-cli thread spawn` flags |', '| --- | --- | --- | --- | --- |',
+            model_row('Orchestrator', choice), model_row('Builder', choice), kept or model_row('Reviewer', reviewer),
+            '| Small builder | follows Builder | | | |', '| Fixer | follows Builder | | | |']
+    if not table:
+        rows = ['## Models', ''] + rows + ['', "Source: install's `choose`, from the owner's choice of harness, model "
+                                           'and effort for the Orchestrator and Builder; the Reviewer is %s.' % source, '']
+    written = '\n'.join(lines[:start] + rows + lines[end:])
+    try:
+        assert models_table(written) == {'Orchestrator': choice, 'Builder': choice, 'Reviewer': reviewer,
+                                         'Small builder': None, 'Fixer': None}
+    except (ValueError, AssertionError):
+        raise Exit(5, 'cannot be written to the Models table: %s; nothing recorded.' % ' '.join(choice))
+    intended = {'Orchestrator': choice, 'Builder': choice, 'Reviewer': reviewer, 'Small builder': None, 'Fixer': None}
+    said = ('docs/agents/fleet.md: the Models table names %s for the Orchestrator and Builder, with %s as the '
+            'Reviewer' % (' '.join(choice), ' '.join(reviewer)))
+    if written == text:
+        return said + '; already written.', intended
+    temporary = '.fleet-%s' % os.urandom(8).hex()
+    try:
+        out = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                      stat.S_IMODE(info.st_mode), dir_fd=folder)
+        with os.fdopen(out, 'wb') as target:
+            target.write(written.encode('utf-8'))
+        os.replace(temporary, name, src_dir_fd=folder, dst_dir_fd=folder)
+    except OSError:
+        try:
+            os.unlink(temporary, dir_fd=folder)
+        except OSError:
+            pass
+        raise Exit(5, 'Could not write docs/agents/fleet.md; nothing recorded.')
+    return 'Wrote %s; commit it and merge it to the default branch.' % said, intended
+
+
 
 
 def repository(recorded):
@@ -1442,12 +1571,37 @@ def agent(lines):
 
 def fleet_rules(env, repo):
     """The builder and reviewer tables of docs/agents/fleet.md on the default branch."""
+    return settings_rules(fleet_text(env, repo))
+
+
+def fleet_text(env, repo):
     result = run(['gh', 'api', 'repos/%s/contents/docs/agents/fleet.md' % repo,
                   '-H', 'Accept: application/vnd.github.raw+json'], env)
     if result is None or result.returncode != 0:
         raise Exit(1, "Could not read the fleet settings (docs/agents/fleet.md); run setup; " + NOTHING)
+    return result.stdout.decode('utf-8', 'replace')
+
+
+def settings_rules(text):
+    try:
+        table = models_table(text)
+    except ValueError as error:
+        raise Exit(5, "The fleet settings' Models table breaks the models contract (%s); %s" % (
+            '; '.join(error.args[0]), NOTHING))
+    if table is None:
+        return older_rules(text)
+    def named(role):
+        return dict(zip(('harness', 'model', 'effort'), table.get(role) or table['Builder']))
+    rules = {'orchestrator': named('Orchestrator'), 'builder': named('Builder'), 'builder_small': named('Small builder')}
+    for family in REVIEWER:
+        rules['reviewer_' + family] = next((named(role) for role in ('Reviewer', 'Builder')
+                                            if FAMILY.get(table[role][0]) not in (None, family)), None)
+    return rules
+
+
+def older_rules(text):
     found, name = {}, None
-    for line in result.stdout.decode('utf-8', 'replace').split('\n'):
+    for line in text.split('\n'):
         if line.startswith('## '):
             name = line[3:].strip()
             found.setdefault(name, [])
@@ -1456,6 +1610,7 @@ def fleet_rules(env, repo):
     rules = {key: agent(found[title]) if title in found else None for key, title in (
         ('builder', 'Builder'), ('builder_small', 'Builder for small tickets'),
         ('reviewer_claude', REVIEWER['claude']), ('reviewer_gpt', REVIEWER['gpt']))}
+    rules['orchestrator'] = rules['builder']
     return rules
 
 
@@ -1579,7 +1734,24 @@ def launch(got):
             print(record_line(spec, recorded))
             return 0
         print(record_line(spec, recorded))
-        print(handoff(spec, state.value['repo'], host))
+        if recorded is None:
+            raise Exit(6, "Whether launch-fleet's start already ran is unknown, so its start path is not named "
+                          'again; run this again; ' + NOTHING)
+        try:
+            orchestrator = fleet_rules(env, state.value['repo'])['orchestrator']
+        except Exit:
+            orchestrator = None
+        if not orchestrator:
+            raise Exit(6, "The fleet settings name no readable Orchestrator, so the user's yes cannot be matched to "
+                          'it; fix the Models table, then run this again; ' + NOTHING)
+        if orchestrator != previous.get('orchestrator'):
+            del state.value['launch']
+            state.value.pop('preview', None)
+            if not state.save():
+                raise Exit(10, 'Could not withdraw the yes; run this again; ' + NOTHING)
+            raise Exit(5, "The fleet settings' Orchestrator is now %s, not the one the user said yes to: preview "
+                          'again and ask again; %s' % (agent_words(orchestrator), NOTHING))
+        print(handoff(spec, state.value['repo'], host, orchestrator))
         return 6
     # Review R4: the carried setup must still be what setup verifies now.
     if not isinstance(carried.get('setup_state'), str):
@@ -1620,9 +1792,11 @@ def launch(got):
     if not starts:
         raise Exit(5, 'No approved ticket of spec #%d is ready to start: the plan changed since its checks passed, '
                       'or is still blocked; %s' % (spec, NOTHING))
-    builder, reviewer = review(choices, fleet_rules(env, state.value['repo']))
+    rules = fleet_rules(env, state.value['repo'])
+    builder, reviewer = review(choices, rules)
+    orchestrator = rules['orchestrator']
     where = where_of(host['agents'])
-    effects = {'repo': state.value['repo'], 'spec': spec, 'project': carried['project'], 'title': title,
+    effects = {'fleet_thread': orchestrator, 'repo': state.value['repo'], 'spec': spec, 'project': carried['project'], 'title': title,
                'host': host['agents'], 'mode': picked if local else None, 'builder': builder, 'reviewer': reviewer, 'grill': confirmed,
                'tickets': [[n, ready[n]] for n in starts]}
     digest = hashlib.sha256(json.dumps(effects, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -1632,9 +1806,10 @@ def launch(got):
             raise Exit(5, 'The effects changed since the preview the user said yes to (or it was never shown); '
                           'preview again and ask again; ' + NOTHING)
     agents = '%s %s %s' % (builder['harness'], builder['model'], builder['effort'])
+    fleet_thread = '%s %s %s' % (orchestrator['harness'], orchestrator['model'], orchestrator['effort'])
     if not got.get('--yes'):
         print('Ready to start the fleet for spec #%d %s, through launch-fleet: 1 fleet thread (%s), whose loop checks '
-              'the spec every 10 minutes and starts a builder (%s) for each of:' % (spec, where, agents, agents))
+              'the spec every 10 minutes and starts a builder (%s) for each of:' % (spec, where, fleet_thread, agents))
         for ticket in starts:
             print('#%d %s' % (ticket, ready[ticket]))
         print('Each pull request is reviewed by %s %s %s, from the other model family.' % (
@@ -1650,27 +1825,39 @@ def launch(got):
         print('Confirmation: %s' % digest)
         print("Nothing started. Ask exactly that; on the user's yes, run again with --yes --confirm %s." % digest)
         return 12
-    state.value['launch'] = {'spec': spec, 'state': 'authorized', 'effects': digest, 'tickets': starts}
+    state.value['launch'] = {'spec': spec, 'state': 'authorized', 'effects': digest, 'tickets': starts,
+                             'orchestrator': orchestrator}
     if not state.save():
         raise Exit(10, 'Could not save the start the user said yes to; ' + NOTHING)
     print("The user said yes to starting spec #%d's fleet %s. Nothing is started by this command: the fleet starts "
           "through launch-fleet's own start path, and is said started only once its activation record reads back."
           % (spec, where))
-    print(handoff(spec, state.value['repo'], host))
+    print(handoff(spec, state.value['repo'], host, orchestrator))
     return 0
 
 
-def handoff(spec, repo, host):
+def agent_words(agent):
+    return ' '.join(agent[k] for k in ('harness', 'model', 'effort'))
+
+
+def handoff(spec, repo, host, orchestrator):
     """launch-fleet's own start path, named for the orchestrator to follow; never a second copy of it (R7)."""
     adapters = host.get('adapters') if host.get('agents') != 'cloud' else None
+    approved = '--provider %s --model %s --reasoning-level %s' % (
+        orchestrator['harness'], orchestrator['model'], orchestrator['effort'])
     return ("Next, as this project's orchestrator, follow launch-fleet's Launch section (references/launch.md) for "
             'spec #%d of %s: its two project loops and the GitHub messages question, then "Starting one": the spec\'s '
-            "loop, its entry in the private loop map, read back, and the record `%s%d`, read back.%s Then run "
-            'launch --spec %d again: it says the fleet started only once that record reads back. Never start it a '
-            'second way.' % (spec, repo, FLEET_RECORD, spec,
-                             ' Its loop runs builders %s, so give it OPENWIZ_ADAPTERS=%s, where launch-fleet\'s '
-                             'host.py finds the %s driver.' % (where_of(host['agents']), adapters, host['agents'])
-                             if adapters else '', spec))
+            "loop, its entry in the private loop map, read back, and the record `%s%d`, read back.%s The user said "
+            'yes to the fleet thread `%s`: right before creating that loop, run launch-fleet\'s `ops-starts.py flags '
+            '--repo %s fleet_thread`, and only if it prints exactly that, create the loop with `--provider %s --model '
+            '%s --reasoning %s`. If it prints anything else, create nothing and run launch --spec %d again: it asks '
+            'for a fresh preview and yes. Then run launch --spec %d again: it says the fleet started only once that '
+            'record reads back. Never start it a second way.' % (
+                spec, repo, FLEET_RECORD, spec,
+                ' Its loop runs builders %s, so give it OPENWIZ_ADAPTERS=%s, where launch-fleet\'s '
+                'host.py finds the %s driver.' % (where_of(host['agents']), adapters, host['agents'])
+                if adapters else '', approved, repo, orchestrator['harness'], orchestrator['model'],
+                orchestrator['effort'], spec, spec))
 
 
 def record_line(spec, recorded):
@@ -1799,9 +1986,10 @@ def resume(got):
         step = ('connect', '%sConnect %s with the installed tools, then run continue.' % (
             'Setup already prepared it; ' if candidate == repo else '', repo))
     elif spec and launched.get('spec') == spec and launched.get('state') in ('authorized', 'pending', 'uncertain'):
-        step = ('launch', "The user said yes to starting spec #%d: finish launch-fleet's start path (references/"
-                'launch.md, "Starting one"), then run launch --spec %d to read its fleet record back; never start it '
-                'a second way.' % (spec, spec))
+        step = ('launch', "The user said yes to starting spec #%d: run launch --spec %d first, which checks the "
+                "Orchestrator is still the one the user said yes to and names the start path; finish launch-fleet's "
+                'start path (references/launch.md, "Starting one") exactly as it says, then run launch --spec %d to '
+                'read its fleet record back; never start it a second way.' % (spec, spec, spec))
     elif spec and launched.get('spec') == spec and launched.get('state') == 'started' and value.get('merge'):
         step = ('offer', 'Say the closing offer, as first-merge printed it.')
     elif spec and launched.get('spec') == spec and launched.get('state') == 'started':
@@ -1813,7 +2001,7 @@ def resume(got):
         step = ('agents', 'Run choose --from-setup.')
     elif choices.get('builder_tables') != 'read':
         step = ('agents', '%s %s' % (chosen_line(choices),
-                                     tables_line(choices, 'have not read back this choice yet')))
+                                     tables_line(choices, 'have not been read back with this choice yet')))
     elif host['agents'] == 'local' and not value.get('mode'):
         step = ('mode', 'Run mode, explain each permission mode as it prints, pick none for the owner, then run '
                 'mode --mode <their pick>.')

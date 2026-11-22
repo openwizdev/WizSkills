@@ -15,6 +15,7 @@ import json
 import math
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 HERE = Path(__file__).resolve().parent
@@ -31,8 +32,6 @@ def _load(path, name):
 effects = _load(HERE / 'effects.py', 'ops_effects')
 records = _load(HERE / 'records.py', 'fleet_records')
 
-TABLES = {'builder': 'Builder', 'small': 'Builder for small tickets',
-          'claude-code': 'Reviewer for Claude-built', 'codex': 'Reviewer for GPT-built'}
 SMALL = {'polish', 'huntr', 'proposal'}
 NOT_READY = {'needs-info', 'needs-triage', 'ready-for-human', 'wontfix', 'held'}
 SETTLED = {'completed', 'superseded', 'reconciled_not_executed', 'disabled', 'refused'}
@@ -67,27 +66,212 @@ def digest(value):
                                      allow_nan=False).encode()).hexdigest()
 
 
-def read_settings(text):
-    """The four start tables of docs/agents/fleet.md, strictly; anything else refuses the pass."""
-    tables = {}
-    for key, name in TABLES.items():
-        parts = re.split(r'^## ' + re.escape(name) + r'\n', text, flags=re.M)
-        if len(parts) != 2:
+FAMILY = {'claude-code': 'claude', 'codex': 'gpt'}
+OLDER = ('Builder', 'Builder for small tickets', 'Reviewer for Claude-built', 'Reviewer for GPT-built', 'Fixer')
+MODELS_HEADER = ['Role', 'Harness', 'Model', 'Effort', '`room-cli thread spawn` flags']
+FIXER_HEADER = ['Builder family'] + MODELS_HEADER[1:]
+SETTING_HEADER = ['Setting', 'Value', '`room-cli thread spawn` flag']
+REPO = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
+LOOP = re.compile(r'[A-Za-z0-9_-]+')
+ROLES = (('Orchestrator', 'orchestrator'), ('Builder', 'builder'), ('Reviewer', 'reviewer'),
+         ('Small builder', 'small_builder'), ('Fixer', 'fixer'))
+ID = re.compile(r'[A-Za-z0-9._-]+')
+STARTS = {'fleet_thread': ('roles', 'orchestrator'), 'builder': ('roles', 'builder'),
+          'small_builder': ('roles', 'small_builder'), 'review_of_claude_built': ('reviews', 'claude'),
+          'review_of_gpt_built': ('reviews', 'gpt'), 'fix_round_for_claude_builder': ('fixers', 'claude'),
+          'fix_round_for_gpt_builder': ('fixers', 'gpt')}
+
+
+def _lines(text):
+    return [line[:-1] if line.endswith('\r') else line for line in text.split('\n')]
+
+
+def _cells(line):
+    if len(line) < 2 or not (line.startswith('|') and line.endswith('|')):
+        raise ValueError('fleet settings: not a table row')
+    return [c.strip() for c in line[1:-1].split('|')]
+
+
+def _section(text, name):
+    lines = _lines(text)
+    at = [i for i, line in enumerate(lines) if line == '## ' + name]
+    if len(at) > 1:
+        raise ValueError(f'fleet settings: more than one "## {name}"')
+    if not at:
+        return None
+    end = next((j for j in range(at[0] + 1, len(lines)) if lines[j].startswith('## ')), len(lines))
+    return lines[at[0] + 1:end]
+
+
+def _id(word, model=False):
+    if not all(ID.fullmatch(part) for part in (word.split('/') if model else [word])):
+        raise ValueError(f'fleet settings: bad {"model " if model else ""}id {word!r}')
+    return word
+
+
+def _choice(names, provider, model, effort):
+    if not all(names):
+        raise ValueError('fleet settings: an empty name cell')
+    return dict(provider=_id(provider), model=_id(model, True), effort=_id(effort))
+
+
+def _flags(cell):
+    words = cell[1:-1].split(' ') if len(cell) > 1 and cell[0] == cell[-1] == '`' else []
+    if len(words) != 6 or words[0::2] != ['--provider', '--model', '--reasoning-level']:
+        raise ValueError(f'fleet settings: bad flags {cell!r}')
+    return words[1::2]
+
+
+def _models_table(lines):
+    start = next((i for i, line in enumerate(lines) if line.startswith('|')), None)
+    if start is None:
+        raise ValueError('fleet settings: no Models table')
+    rows = []
+    for line in lines[start:]:
+        if not line.startswith('|'):
+            break
+        rows.append(_cells(line))
+    if len(rows) < 2 or rows[0] != MODELS_HEADER or rows[1] != ['---'] * 5:
+        raise ValueError('fleet settings: bad Models header')
+    roles, next_at = {}, 0
+    for row in rows[2:]:
+        if len(row) != 5:
+            raise ValueError('fleet settings: a Models row without five cells')
+        at = next((i for i in range(next_at, len(ROLES)) if ROLES[i][0] == row[0]), None)
+        if at is None:
+            raise ValueError(f'fleet settings: row {row[0]!r} out of place')
+        if at > next_at and next_at < 3:
+            raise ValueError('fleet settings: a required Models row is missing')
+        if row[1] == 'follows Builder' and row[2:] == ['', '', '']:
+            if at < 3:
+                raise ValueError(f'fleet settings: {row[0]} cannot follow')
+            roles[ROLES[at][1]] = dict(follows='builder', choice=None)
+        else:
+            roles[ROLES[at][1]] = dict(follows=None, choice=_choice(row[1:4], *_flags(row[4])))
+        next_at = at + 1
+    if next_at < 3:
+        raise ValueError('fleet settings: a required Models row is missing')
+    for _, key in ROLES[3:]:
+        role = roles.setdefault(key, dict(follows='builder', choice=None))
+        if role['follows']:
+            role['choice'] = roles['builder']['choice']
+    return roles
+
+
+def _one_table(lines, header, name):
+    at = [i for i, line in enumerate(lines) if line.startswith('|')]
+    if not at or at[-1] - at[0] + 1 != len(at):
+        raise ValueError(f'fleet settings: not exactly one "{name}" table')
+    rows = [_cells(lines[i]) for i in at]
+    if len(rows) < 2 or rows[0] != header or rows[1] != ['---'] * len(header) or any(
+            len(row) != len(header) for row in rows):
+        raise ValueError(f'fleet settings: bad "{name}" table header')
+    return rows[2:]
+
+
+def _setting_table(lines, name):
+    rows = _one_table(lines, SETTING_HEADER, name)
+    if len(rows) != 3:
+        raise ValueError(f'fleet settings: "{name}" needs exactly its Harness, Model and Effort rows')
+    names, ids = [], []
+    for row, (setting, flag) in zip(rows, (('Harness', '--provider'), ('Model', '--model'),
+                                           ('Effort', '--reasoning-level'))):
+        if (row[0] != setting or not row[2].startswith(f'`{flag} ') or not row[2].endswith('`')
+                or len(row[2]) <= len(flag) + 3):
+            raise ValueError(f'fleet settings: "{name}" needs its {setting} row')
+        names.append(row[1])
+        ids.append(row[2][len(flag) + 2:-1])
+    return _choice(names, *ids)
+
+
+def _older_tables(text):
+    tables = []
+    for name in OLDER[:4]:
+        lines = _section(text, name)
+        if lines is None:
             raise ValueError(f'fleet settings: one "## {name}" section required')
-        section = parts[1].split('\n## ', 1)[0]
-        flags = {}
-        for setting, flag in (('Harness', 'provider'), ('Model', 'model'), ('Effort', 'reasoning-level')):
-            rows = re.findall(r'^\| ' + setting + r' \| [^|\n]+ \| `--' + flag + r' ([A-Za-z0-9._-]+)` \|$',
-                              section, re.M)
-            if len(rows) != 1 or len(re.findall(r'^\| ' + setting + ' ', section, re.M)) != 1:
-                raise ValueError(f'fleet settings: "{name}" needs one {setting} row')
-            flags[flag] = rows[0]
-        tables[key] = dict(provider=flags['provider'], model=flags['model'], effort=flags['reasoning-level'])
-    # Fail closed on the family rule itself: each reviewer table names exactly the other family.
-    if (tables['claude-code']['provider'] != 'codex' or tables['codex']['provider'] != 'claude-code'
-            or {tables['builder']['provider'], tables['small']['provider']} - {'claude-code', 'codex'}):
+        tables.append(_setting_table(lines, name))
+    fixer = _section(text, 'Fixer')
+    if fixer is None:
+        raise ValueError('fleet settings: one "## Fixer" section required')
+    rows = _one_table(fixer, FIXER_HEADER, 'Fixer')
+    fixers = []
+    for family, own_family in (('Claude', 'claude'), ('GPT', 'gpt')):
+        mine = [row for row in rows if row[0] == family]
+        if len(mine) != 1:
+            raise ValueError(f'fleet settings: not exactly one Fixer row {family}')
+        choice = _choice(mine[0][1:4], *_flags(mine[0][4]))
+        fixers.append(choice if FAMILY.get(choice['provider']) == own_family else None)
+    if len(rows) != 2:
+        raise ValueError('fleet settings: a Fixer table without exactly its Claude and GPT rows')
+    builder, small, for_claude, for_gpt = tables
+    if (for_claude['provider'] != 'codex' or for_gpt['provider'] != 'claude-code'
+            or {builder['provider'], small['provider']} - set(FAMILY)):
         raise ValueError('fleet settings: builder/reviewer tables break the family rule')
-    return tables
+    own = 0 if FAMILY[builder['provider']] == 'claude' else 1
+    older = dict(follows=None, choice=None)
+    return dict(read='older_tables',
+                roles=dict(orchestrator=dict(older, follows='builder', choice=builder),
+                           builder=dict(older, choice=builder), reviewer=dict(older, choice=tables[2 + own]),
+                           small_builder=dict(older, choice=small), fixer=dict(older, choice=fixers[own])),
+                reviews=dict(claude=dict(choice=for_claude), gpt=dict(choice=for_gpt)),
+                fixers=dict(claude=dict(choice=fixers[0]), gpt=dict(choice=fixers[1])))
+
+
+def read_models(text):
+    section = _section(text, 'Models')
+    if section is None:
+        if not any(line == '## ' + name for name in OLDER for line in _lines(text)):
+            raise ValueError('fleet settings: no model settings')
+        return _older_tables(text)
+    roles = _models_table(section)
+    builder, reviewer, fixer = (roles[k]['choice'] for k in ('builder', 'reviewer', 'fixer'))
+    reviews, fixers = {}, {}
+    for family in ('claude', 'gpt'):
+        reviews[family] = next((dict(choice=c) for c in (reviewer, builder)
+                                if FAMILY.get(c['provider']) not in (None, family)), dict(choice=None))
+        fixers[family] = next((dict(choice=c) for c in (fixer, reviewer)
+                               if FAMILY.get(c['provider']) == family), dict(choice=None))
+    return dict(read='models_table', roles=roles, reviews=reviews, fixers=fixers)
+
+
+def read_fleet(repo):
+    if type(repo) is not str or not REPO.fullmatch(repo) or repo.split('/')[1] in ('.', '..'):
+        raise ValueError(f'not a repository: {repo!r}')
+    try:
+        run = subprocess.run(['gh', 'api', f'repos/{repo}/contents/docs/agents/fleet.md', '-H',
+                              'Accept: application/vnd.github.raw+json'], capture_output=True, text=True,
+                             timeout=60, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ValueError(f'could not read docs/agents/fleet.md from {repo}: {error}')
+    if run.returncode != 0:
+        raise ValueError(f'could not read docs/agents/fleet.md from the default branch of {repo}')
+    return run.stdout
+
+
+def loop_agent(models, listing, loop):
+    if not LOOP.fullmatch(loop):
+        raise ValueError(f'not a loop id: {loop!r}')
+    items = listing.get('automations') if type(listing) is dict else None
+    mine = [x for x in items if type(x) is dict and x.get('id') == loop] if type(items) is list else []
+    if len(mine) != 1:
+        raise ValueError(f'loop {loop}: not listed exactly once')
+    agent, want = mine[0].get('agent', 'absent'), models['roles']['orchestrator']['choice']
+    if agent is not None and (type(agent) is not dict or set(agent) != {'provider', 'model', 'reasoning'}):
+        raise ValueError(f'loop {loop}: unreadable agent')
+    if agent == dict(provider=want['provider'], model=want['model'], reasoning=want['effort']):
+        return None
+    return (f'room-cli loop update {loop} --provider {want["provider"]} --model {want["model"]} '
+            f'--reasoning {want["effort"]}')
+
+
+def spawn_flags(models):
+    out = {}
+    for start, (kind, key) in STARTS.items():
+        c = models[kind][key]['choice']
+        out[start] = None if c is None else (f'--provider {c["provider"]} --model {c["model"]} '
+                                             f'--reasoning-level {c["effort"]}')
+    return out
 
 
 def require(condition, reason):
@@ -101,7 +285,7 @@ def current_approval(c):
             'approval not current')
 
 
-def check_builder(c, tables):
+def check_builder(c, models):
     """Every frontier gate, in fleet-tick's order; returns the configured builder settings."""
     require(c['complete'], 'incomplete read')
     require(c['open'], 'ticket closed')
@@ -116,10 +300,10 @@ def check_builder(c, tables):
     require(type(c['live_builders']) is int and c['live_builders'] == 0, 'a builder exists or is unknown')
     require(c['start_claims'] == [] and c['open_prs'] == [], 'an unsettled start claim or open pull request')
     require(c['admission'] == 'ok', 'start not admitted: ' + str(c['admission']))
-    return tables['small' if SMALL & set(labels) else 'builder']
+    return dict(models['roles']['small_builder' if SMALL & set(labels) else 'builder']['choice'])
 
 
-def check_review(c, tables):
+def check_review(c, models):
     """Initial review of the exact current green head; returns the other-family reviewer settings."""
     require(c['complete'], 'incomplete read')
     require(c['open'] and c['draft'] is False, 'pull request closed or draft')
@@ -149,8 +333,11 @@ def check_review(c, tables):
     providers = builder['providers']
     require(type(providers) is list and len(providers) == 1 and providers[0] in ('claude-code', 'codex'),
             'builder family unknown or conflicting')
-    selected = tables[providers[0]]
-    require(selected['provider'] != providers[0], 'configured reviewer is the builder family')
+    selected = models['reviews'][FAMILY[providers[0]]]['choice']
+    require(selected is not None, 'no other-family reviewer: the review waits, never swapped')
+    require(FAMILY.get(selected['provider']) not in (None, FAMILY[providers[0]]),
+            'configured reviewer is the builder family')
+    selected = dict(selected)
     require(c['reviewer_available'], 'selected reviewer unavailable: waits, never swapped')
     require(c['admission'] == 'ok', 'start not admitted: ' + str(c['admission']))
     return selected
@@ -251,7 +438,7 @@ def _operation(c, review, action, subject, selected, world, history, planned, en
 
 def plan(world, fleet_text, effect_boundary, bench=None, limits=None):
     """One finite pass. Returns one entry per candidate, builders then reviews, in input order."""
-    tables = read_settings(fleet_text)
+    models = read_models(fleet_text)
     misses = _misses(bench, limits)
     generation, owner = world['pass']['generation'], world['pass']['owner']
     history = [effects.read_record(json.dumps(r, allow_nan=False)) for r in world['history']]
@@ -273,7 +460,7 @@ def plan(world, fleet_text, effect_boundary, bench=None, limits=None):
             try:
                 if not shaped:
                     raise Refusal('incomplete or malformed source')
-                selected = (check_review if review else check_builder)(c, tables)
+                selected = (check_review if review else check_builder)(c, models)
                 operation = _operation(c, review, action, subject, selected, world, history, planned, entry)
             except Refusal as refusal:
                 entry['reason'] = str(refusal)
@@ -332,11 +519,32 @@ def main():
 
             def refuse(*_):
                 raise RuntimeError('OB-A1: starts are disabled')
-            out = plan(world, Path('docs/agents/fleet.md').read_text(), refuse, bench, limits)  # the consumer project's settings
+            out = plan(world, read_fleet(world.get('repository') if type(world) is dict else None), refuse,
+                       bench, limits)
+        elif len(args) in (3, 4) and args[:2] == ['flags', '--repo'] and (len(args) == 3 or args[3] in STARTS):
+            flags = spawn_flags(read_models(read_fleet(args[2])))
+            if len(args) == 3:
+                out = [flags]
+            elif flags[args[3]] is None:
+                why = 'no other-family choice' if args[3].startswith('review') else "no choice of the builder's family"
+                print(f'ops-starts: {args[3]} waits: {why}', file=sys.stderr)
+                return 1
+            else:
+                print(flags[args[3]])
+                return 0
+        elif len(args) == 5 and args[:2] == ['loop-agent', '--repo']:
+            if not REPO.fullmatch(args[2]) or not LOOP.fullmatch(args[3]):
+                raise ValueError('a repository and a loop id are required')
+            text = sys.stdin.read() if args[4] == '-' else Path(args[4]).read_text()
+            update = loop_agent(read_models(read_fleet(args[2])), json.loads(text, object_pairs_hook=records.unique),
+                                args[3])
+            print('current' if update is None else 'stale: ' + update)
+            return 0 if update is None else 1
         elif len(args) == 2 and args[0] == 'report':
             out = [report(json.loads(Path(args[1]).read_text(), object_pairs_hook=records.unique))]
         else:
-            print('usage: ops-starts.py pass WORLD.json [--bench BENCH.json] | report BENCH.json', file=sys.stderr)
+            print('usage: ops-starts.py pass WORLD.json [--bench BENCH.json] | flags --repo OWNER/REPO [START] | '
+                  'loop-agent --repo OWNER/REPO LOOP_ID LIST.json|- | report BENCH.json', file=sys.stderr)
             return 2
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f'ops-starts: refused: {error}', file=sys.stderr)

@@ -116,6 +116,29 @@ class ReliesTest(unittest.TestCase):
                         self.assertTrue(result.stderr.startswith(b'Relies on: '), result.stderr)
 
 
+    def test_a_refused_planned_folder_still_reads_the_whole_ticket_first(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'contracts/future.v1.md').mkdir(parents=True)
+            tools = root / 'checker-tools'
+            tools.mkdir()
+            for name in ('sh', 'jq', 'cat'):
+                program = shutil.which(name)
+                self.assertIsNotNone(program, name)
+                (tools / name).symlink_to(program)
+            padding = 'Synthetic context line for a long ticket body.\n' * 40000
+            ticket = root / 'ticket.md'
+            ticket.write_text(f'# Synthetic ticket\n\n**Relies on:** `contracts/future.v1.md`\n\n{padding}')
+            self.assertGreater(ticket.stat().st_size, 1 << 20)
+            producer = subprocess.Popen([str(tools / 'cat'), str(ticket)], stdout=subprocess.PIPE)
+            checker = subprocess.run([str(tools / 'sh'), str(SCRIPT), '--root', str(root),
+                                      '--planned', 'contracts/future.v1.md'],
+                                     stdin=producer.stdout, capture_output=True, env={'PATH': str(tools)})
+            producer.stdout.close()
+            self.assertEqual((producer.wait(), checker.returncode), (0, 1), checker.stderr)
+            self.assertEqual(checker.stderr, b'Relies on: name individual contract files, not folders\n')
+
+
 def approval_fixtures():
     import importlib.util
     import sys

@@ -19,6 +19,42 @@ FIX = HERE.parent / 'test/ops-starts'
 PROJECT = FIX / 'project'
 
 
+FAKE_GH = """import os, sys
+with open(os.environ['FAKE_GH_LOG'], 'a') as log:
+    log.write(' '.join(sys.argv[1:]) + '\\n')
+path = os.environ.get('FAKE_FLEET', '')
+if sys.argv[1:3] != ['api', 'repos/' + os.environ['FAKE_REPO'] + '/contents/docs/agents/fleet.md'] or not os.path.isfile(path):
+    sys.stderr.write('gh: Not Found (HTTP 404)\\n')
+    sys.exit(1)
+sys.stdout.write(open(path).read())
+"""
+STALE = 'This checkout is stale: never read it.\n'
+
+
+def run_cli(tmp, default_branch, *args, repo='synthetic/ops', checkout=STALE, stdin=None):
+    import os
+    import subprocess
+    tmp = Path(tmp)
+    (tmp / 'bin').mkdir(exist_ok=True)
+    (tmp / 'gh.py').write_text(FAKE_GH)
+    gh = tmp / 'bin/gh'
+    gh.write_text(f'#!/bin/sh\nexec "{sys.executable}" -I "{tmp / "gh.py"}" "$@"\n')
+    gh.chmod(0o755)
+    (tmp / 'docs/agents').mkdir(parents=True, exist_ok=True)
+    (tmp / 'docs/agents/fleet.md').write_text(checkout)
+    served = tmp / 'default-branch-fleet.md'
+    served.unlink(missing_ok=True)
+    if default_branch is not None:
+        served.write_text(default_branch)
+    log = tmp / 'gh.log'
+    log.unlink(missing_ok=True)
+    env = dict(os.environ, PATH=f'{tmp / "bin"}:{os.environ["PATH"]}', FAKE_FLEET=str(served),
+               FAKE_GH_LOG=str(log), FAKE_REPO=repo)
+    run = subprocess.run([sys.executable, '-I', str(HERE / 'ops-starts.py'), *args], cwd=tmp, env=env,
+                         capture_output=True, text=True, timeout=60, input=stdin)
+    return run, (log.read_text().splitlines() if log.exists() else [])
+
+
 def load(path, name):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -472,16 +508,296 @@ class Starts(unittest.TestCase):
             import subprocess
             path = Path(tmp) / 'world.json'
             path.write_text(json.dumps(self.world))
-            run = subprocess.run([sys.executable, '-I', str(HERE / 'ops-starts.py'), 'pass', str(path)],
-                                 cwd=PROJECT, capture_output=True, text=True, timeout=60)
+            run, _ = run_cli(tmp, self.fleet, 'pass', str(path))
             self.assertEqual(run.returncode, 0, run.stderr)
             lines = [json.loads(line) for line in run.stdout.splitlines()]
             self.assertEqual([(e['action'], e['result']['state']) for e in lines],
                              [('builder_start', 'disabled'), ('review_start', 'disabled')])
             path.write_text('{"broken": ')
-            run = subprocess.run([sys.executable, '-I', str(HERE / 'ops-starts.py'), 'pass', str(path)],
-                                 cwd=PROJECT, capture_output=True, text=True, timeout=60)
+            run, _ = run_cli(tmp, self.fleet, 'pass', str(path))
             self.assertEqual((run.returncode, run.stdout), (2, ''))
+
+
+MODELS = FIX / 'models'
+STARTS = ('fleet_thread', 'builder', 'small_builder', 'review_of_claude_built', 'review_of_gpt_built',
+          'fix_round_for_claude_builder', 'fix_round_for_gpt_builder')
+
+
+def spawn(choice):
+    return None if choice is None else (f'--provider {choice["provider"]} --model {choice["model"]} '
+                                        f'--reasoning-level {choice["effort"]}')
+
+
+def contract_starts(show):
+    return dict(fleet_thread=spawn(show['roles']['orchestrator']['choice']),
+                builder=spawn(show['roles']['builder']['choice']),
+                small_builder=spawn(show['roles']['small_builder']['choice']),
+                review_of_claude_built=spawn(show['reviews']['claude']['choice']),
+                review_of_gpt_built=spawn(show['reviews']['gpt']['choice']),
+                fix_round_for_claude_builder=spawn(show['fixers']['claude']['choice']),
+                fix_round_for_gpt_builder=spawn(show['fixers']['gpt']['choice']))
+
+
+class ModelsTable(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.api = load(HERE / 'ops-starts.py', 'ops_starts_models')
+        cls.base = json.loads((FIX / 'world.json').read_text())
+        cls.one = (MODELS / 'one-table/fleet.md').read_text()
+
+    def flags(self, fleet, *start):
+        with tempfile.TemporaryDirectory() as tmp:
+            return run_cli(tmp, fleet, 'flags', '--repo', 'synthetic/ops', *start)[0]
+
+    def starts(self, fleet):
+        run = self.flags(fleet)
+        return (run.returncode, json.loads(run.stdout) if run.returncode == 0 else run.stderr.strip())
+
+    def pass_settings(self, fleet, small=False, built_by='claude-code'):
+        world = copy.deepcopy(self.base)
+        if small:
+            world['builders'][0]['labels'].append('polish')
+        world['reviews'][0]['builder']['providers'] = [built_by]
+        try:
+            entries = self.api.plan(world, fleet, lambda *_: self.fail('a start was attempted'))
+        except ValueError as error:
+            return 'refused: ' + str(error)
+        return {e['action']: e['settings'] if e['decision'] == 'dispatch' else 'refused: ' + e['reason']
+                for e in entries}
+
+    def test_every_start_spawns_what_the_contract_fixtures_say(self):
+        for case in sorted(p.name for p in MODELS.iterdir()):
+            with self.subTest(case):
+                fleet = MODELS / case / ('fleet.md' if (MODELS / case / 'fleet.md').exists() else 'after.md')
+                show = json.loads((MODELS / case / 'show.json').read_text())
+                self.assertEqual(self.starts(fleet.read_text()), (0, contract_starts(show)))
+
+    def test_one_table_and_five_tables_start_alike(self):
+        five = (MODELS / 'five-tables/fleet.md').read_text()
+        self.assertEqual(self.starts(self.one), self.starts(five))
+        opus = dict(provider='claude-code', model='claude-opus-5-5', effort='medium')
+        sol = dict(provider='codex', model='gpt-6.2-sol', effort='medium')
+        for small in (False, True):
+            for built_by, reviewer in (('claude-code', sol), ('codex', opus)):
+                with self.subTest(small=small, built_by=built_by):
+                    want = {'builder_start': opus, 'review_start': reviewer}
+                    self.assertEqual(self.pass_settings(self.one, small, built_by), want)
+                    self.assertEqual(self.pass_settings(five, small, built_by), want)
+
+    def test_a_changed_table_reaches_the_next_start_only(self):
+        changed = self.one.replace(
+            '| Builder | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 '
+            '--reasoning-level medium` |',
+            '| Builder | Claude Code | Sonnet 5.5 | Low | `--provider claude-code --model claude-sonnet-5-5 '
+            '--reasoning-level low` |', 1)
+        self.assertNotEqual(changed, self.one)
+        before, after = self.flags(self.one, 'builder'), self.flags(changed, 'builder')
+        self.assertEqual((before.returncode, before.stdout),
+                         (0, '--provider claude-code --model claude-opus-5-5 --reasoning-level medium\n'))
+        self.assertEqual((after.returncode, after.stdout),
+                         (0, '--provider claude-code --model claude-sonnet-5-5 --reasoning-level low\n'))
+        sonnet = dict(provider='claude-code', model='claude-sonnet-5-5', effort='low')
+        self.assertEqual(self.pass_settings(changed)['builder_start'], sonnet)
+        self.assertEqual(self.pass_settings(changed, small=True)['builder_start'], sonnet)
+        world = copy.deepcopy(self.base)
+        world['builders'][0]['live_builders'] = 1
+        entry = self.api.plan(world, changed, lambda *_: self.fail('a start was attempted'))[0]
+        self.assertEqual((entry['decision'], entry['settings']), ('refused', None))
+
+    def test_a_fleet_thread_starts_on_the_orchestrator_row(self):
+        orchestrator = self.one.replace(
+            '| Orchestrator | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 '
+            '--reasoning-level medium` |',
+            '| Orchestrator | Codex | Sol 6.2 | High | `--provider codex --model gpt-6.2-sol '
+            '--reasoning-level high` |', 1)
+        self.assertNotEqual(orchestrator, self.one)
+        for fleet, want in ((orchestrator, '--provider codex --model gpt-6.2-sol --reasoning-level high\n'),
+                            (self.one, '--provider claude-code --model claude-opus-5-5 --reasoning-level medium\n')):
+            run = self.flags(fleet, 'fleet_thread')
+            self.assertEqual((run.returncode, run.stdout), (0, want))
+        self.assertEqual(self.flags(orchestrator, 'builder').stdout,
+                         '--provider claude-code --model claude-opus-5-5 --reasoning-level medium\n')
+        older = self.flags((PROJECT / 'docs/agents/fleet.md').read_text(), 'fleet_thread')
+        self.assertEqual((older.returncode, older.stdout),
+                         (0, '--provider claude-code --model claude-opus-5-5 --reasoning-level high\n'))
+
+    def test_a_same_family_reviewer_falls_back_to_the_builder_then_waits(self):
+        sol = dict(provider='codex', model='gpt-6.2-sol', effort='medium')
+        opus_high = dict(provider='claude-code', model='claude-opus-5-5', effort='high')
+        fallback = (self.one.replace('| Builder | Claude Code | Opus 5.5 | Medium | `--provider claude-code '
+                                     '--model claude-opus-5-5 --reasoning-level medium` |',
+                                     '| Builder | Codex | Sol 6.2 | Medium | `--provider codex --model gpt-6.2-sol '
+                                     '--reasoning-level medium` |', 1)
+                    .replace('| Reviewer | Codex | Sol 6.2 | Medium | `--provider codex --model gpt-6.2-sol '
+                             '--reasoning-level medium` |',
+                             '| Reviewer | Claude Code | Opus 5.5 | High | `--provider claude-code '
+                             '--model claude-opus-5-5 --reasoning-level high` |', 1))
+        self.assertEqual(self.pass_settings(fallback, built_by='claude-code'),
+                         {'builder_start': sol, 'review_start': sol})
+        self.assertEqual(self.pass_settings(fallback, built_by='codex'),
+                         {'builder_start': sol, 'review_start': opus_high})
+        same = (MODELS / 'same-family/fleet.md').read_text()
+        self.assertEqual(self.pass_settings(same, built_by='claude-code'), {
+            'builder_start': dict(provider='claude-code', model='claude-opus-5-5', effort='medium'),
+            'review_start': 'refused: no other-family reviewer: the review waits, never swapped'})
+        self.assertEqual(self.pass_settings(same, built_by='codex')['review_start'], opus_high)
+        run = self.flags(same, 'review_of_claude_built')
+        self.assertEqual((run.returncode, run.stdout, run.stderr),
+                         (1, '', 'ops-starts: review_of_claude_built waits: no other-family choice\n'))
+
+    def test_a_broken_models_table_is_refused_never_guessed(self):
+        both = (MODELS / 'both/fleet.md').read_text()
+        breaks = (('| Reviewer | Codex', '| Reviewers | Codex'),
+                  ('| Builder | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 '
+                   '--reasoning-level medium` |', '| Builder | follows Builder | | | |'),
+                  ('--reasoning-level medium` |\n| Reviewer', '--effort medium` |\n| Reviewer'),
+                  ('| Small builder | follows Builder | | | |\n| Fixer',
+                   '| Fixer | follows Builder | | | |\n| Small builder'),
+                  ('`room-cli thread spawn` flags |', 'flags |'),
+                  ('--model claude-opus-5-5 --reasoning-level medium` |\n| Reviewer',
+                   '--model vendor//demo --reasoning-level medium` |\n| Reviewer'),
+                  ('## Loop', '## Models\n\n## Loop'),
+                  ('| Reviewer | Codex | Sol 6.2 | Medium | `--provider codex --model gpt-6.2-sol '
+                   '--reasoning-level medium` |\n', ''))
+        for old, new in breaks:
+            with self.subTest(new):
+                broken = both.replace(old, new, 1)
+                self.assertNotEqual(broken, both)
+                run = self.flags(broken)
+                self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+                refused = self.pass_settings(broken)
+                self.assertIsInstance(refused, str)
+                self.assertTrue(refused.startswith('refused: '), refused)
+        for name in ('Builder', 'Fixer'):
+            with self.subTest(older_without=name):
+                five = (MODELS / 'five-tables/fleet.md').read_text().replace(f'## {name}\n', f'## Not {name}\n', 1)
+                run = self.flags(five)
+                self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+
+    def test_starts_read_the_default_branch_never_the_checkout(self):
+        changed = self.one.replace('`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+                                   '| Reviewer', '`--provider claude-code --model claude-sonnet-5-5 '
+                                   '--reasoning-level low` |\n| Reviewer', 1)
+        self.assertNotEqual(changed, self.one)
+        read = ['api repos/synthetic/ops/contents/docs/agents/fleet.md -H Accept: application/vnd.github.raw+json']
+        with tempfile.TemporaryDirectory() as tmp:
+            run, calls = run_cli(tmp, changed, 'flags', '--repo', 'synthetic/ops', 'builder', checkout=self.one)
+            self.assertEqual((run.returncode, run.stdout, calls),
+                             (0, '--provider claude-code --model claude-sonnet-5-5 --reasoning-level low\n', read))
+            path = Path(tmp) / 'world.json'
+            path.write_text(json.dumps(self.base))
+            run, calls = run_cli(tmp, changed, 'pass', str(path), checkout=self.one)
+            self.assertEqual((run.returncode, calls), (0, read), run.stderr)
+            self.assertEqual(json.loads(run.stdout.splitlines()[0])['settings'],
+                             dict(provider='claude-code', model='claude-sonnet-5-5', effort='low'))
+            for args in (('flags', '--repo', 'synthetic/ops', 'builder'), ('pass', str(path))):
+                run, _ = run_cli(tmp, None, *args, checkout=self.one)
+                self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+            for args in (('flags', 'builder'), ('flags', '--repo', '../ops', 'builder'),
+                         ('flags', '--repo', 'synthetic/ops', '--repo', 'synthetic/ops')):
+                run, calls = run_cli(tmp, self.one, *args, checkout=self.one)
+                self.assertEqual((run.returncode, run.stdout, calls), (2, '', []))
+
+    def test_an_older_table_is_read_whole_or_refused(self):
+        five = (MODELS / 'five-tables/fleet.md').read_text()
+        model = '| Model | Opus 5.5 | `--model claude-opus-5-5` |\n'
+        claude = ('| Claude | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 '
+                  '--reasoning-level medium` |\n')
+        breaks = {
+            'surplus conflicting Builder Model row': (
+                '| Effort | Medium | `--reasoning-level medium` |\n\n## Builder for',
+                '| Effort | Medium | `--reasoning-level medium` |\n' + model.replace('Opus 5.5', 'Sonnet 5.5')
+                .replace('claude-opus-5-5', 'claude-sonnet-5-5') + '\n## Builder for'),
+            'surplus row after Effort': ('| Effort | Medium | `--reasoning-level medium` |\n\n## Builder for',
+                                         '| Effort | Medium | `--reasoning-level medium` |\n| Note | x | y |\n\n'
+                                         '## Builder for'),
+            'second table': ('| Effort | Medium | `--reasoning-level medium` |\n\n## Builder for',
+                             '| Effort | Medium | `--reasoning-level medium` |\n\nText.\n\n| A | B | C |\n\n'
+                             '## Builder for'),
+            'one table split by text': ('| Model | Opus 5.5 | `--model claude-opus-5-5` |\n| Effort',
+                                        '| Model | Opus 5.5 | `--model claude-opus-5-5` |\n\nText.\n\n| Effort'),
+            'wrong header': ('## Builder\n\nOne per ticket, on its own branch.\n\n| Setting | Value | '
+                             '`room-cli thread spawn` flag |', '## Builder\n\nOne per ticket, on its own branch.'
+                             '\n\n| Setting | Value | Flag |'),
+            'wrong separator': ('## Builder\n\nOne per ticket, on its own branch.\n\n| Setting | Value | '
+                                '`room-cli thread spawn` flag |\n| --- | --- | --- |',
+                                '## Builder\n\nOne per ticket, on its own branch.\n\n| Setting | Value | '
+                                '`room-cli thread spawn` flag |\n| :-- | --- | --- |'),
+            'value cell with a second flag': ('| Harness | Claude Code | `--provider claude-code` |',
+                                              '| Harness | Claude Code | `--provider claude-code --x` |'),
+            'repeated Claude Fixer row': (claude, claude + claude.replace('Opus 5.5 | Medium', 'Sonnet 5.5 | Low')
+                                          .replace('claude-opus-5-5 --reasoning-level medium',
+                                                   'claude-sonnet-5-5 --reasoning-level low')),
+            'surplus Fixer row': (claude, claude + '| Other | Codex | Sol 6.2 | Medium | `--provider codex '
+                                  '--model gpt-6.2-sol --reasoning-level medium` |\n'),
+            'wrong Fixer header': ('| Builder family | Harness |', '| Family | Harness |'),
+        }
+        for name, (old, new) in breaks.items():
+            with self.subTest(name):
+                broken = five.replace(old, new, 1)
+                self.assertNotEqual(broken, five)
+                self.assertIsInstance(self.pass_settings(broken), str)
+                run = self.flags(broken)
+                self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+        gpt = ('| GPT | Codex | Sol 6.2 | Medium | `--provider codex --model gpt-6.2-sol --reasoning-level medium` '
+               '|\n')
+        swapped = five.replace(claude + gpt, gpt + claude, 1)
+        self.assertNotEqual(swapped, five)
+        self.assertEqual(self.starts(swapped), self.starts(five))
+
+    def test_an_older_fixer_of_another_family_waits(self):
+        five = (MODELS / 'five-tables/fleet.md').read_text()
+        claude = ('| Claude | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 '
+                  '--reasoning-level medium` |')
+        for name, row in (('Codex as the Claude fixer', '| Claude | Codex | Sol 6.2 | Medium | `--provider codex '
+                                                         '--model gpt-6.2-sol --reasoning-level medium` |'),
+                          ('an unknown provider', '| Claude | Other | Demo | Medium | `--provider other '
+                                                  '--model demo --reasoning-level medium` |')):
+            with self.subTest(name):
+                wrong = five.replace(claude, row, 1)
+                self.assertNotEqual(wrong, five)
+                self.assertIsNone(self.api.spawn_flags(self.api.read_models(wrong))['fix_round_for_claude_builder'])
+                run = self.flags(wrong, 'fix_round_for_claude_builder')
+                self.assertEqual((run.returncode, run.stdout, run.stderr),
+                                 (1, '', "ops-starts: fix_round_for_claude_builder waits: no choice of the "
+                                         "builder's family\n"))
+                self.assertEqual(self.flags(wrong, 'fix_round_for_gpt_builder').stdout,
+                                 '--provider codex --model gpt-6.2-sol --reasoning-level medium\n')
+
+    def test_a_spec_loop_follows_the_orchestrator_row_at_its_next_start(self):
+        def loops(agent):
+            return json.dumps({'automations': [
+                {'id': 'loop-other', 'agent': None},
+                {'id': 'loop-spec', 'agent': agent}]})
+        opus = {'provider': 'claude-code', 'model': 'claude-opus-5-5', 'reasoning': 'medium'}
+        sol = {'provider': 'codex', 'model': 'gpt-6.2-sol', 'reasoning': 'high'}
+        changed = self.one.replace(
+            '| Orchestrator | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 '
+            '--reasoning-level medium` |',
+            '| Orchestrator | Codex | Sol 6.2 | High | `--provider codex --model gpt-6.2-sol '
+            '--reasoning-level high` |', 1)
+        update = ('stale: room-cli loop update loop-spec --provider codex --model gpt-6.2-sol '
+                  '--reasoning high\n')
+        cases = (('saved agent is the row', self.one, opus, (0, 'current\n')),
+                 ('the row changed on the default branch', changed, opus, (1, update)),
+                 ('after the update', changed, sol, (0, 'current\n')),
+                 ('no saved agent', changed, None, (1, update)),
+                 ('another effort', changed, dict(sol, reasoning='medium'), (1, update)))
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, fleet, agent, want in cases:
+                with self.subTest(name):
+                    run, _ = run_cli(tmp, fleet, 'loop-agent', '--repo', 'synthetic/ops', 'loop-spec', '-',
+                                     checkout=self.one, stdin=loops(agent))
+                    self.assertEqual((run.returncode, run.stdout), want, run.stderr)
+            for name, stdin in (('loop missing', json.dumps({'automations': [{'id': 'loop-other', 'agent': None}]})),
+                                ('loop twice', json.dumps({'automations': [{'id': 'loop-spec', 'agent': opus}] * 2})),
+                                ('agent extra key', loops(dict(opus, extra='x'))),
+                                ('unreadable', '{"automations": ')):
+                with self.subTest(name):
+                    run, _ = run_cli(tmp, self.one, 'loop-agent', '--repo', 'synthetic/ops', 'loop-spec', '-',
+                                     stdin=stdin)
+                    self.assertEqual((run.returncode, run.stdout), (2, ''))
 
 
 if __name__ == '__main__':

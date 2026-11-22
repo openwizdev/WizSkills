@@ -124,7 +124,8 @@ def recorded(args, value, why, component):
                 'GitHub Apps), then %s' % (args.repo.split('/')[0], args.repo, check))
     if component == 'github_app':
         return ('not verified (%s)' % code,
-                "install OpenWiz's GitHub App on %s from the setup page, then %s" % (args.repo, check))
+                "set up OpenWiz's GitHub App for %s with %s, as the setup skill's \"The App\" says, then %s" % (
+                    args.repo, shlex.quote(str(Path(args.build) / 'runtime/github-app/setup.py')), check))
     if code == 'harness_unavailable':
         chosen = '%s, %s, %s effort' % (project.get('harness'), project.get('model'), project.get('effort'))
         return ('%s is not offered (%s)' % ('the saved harness, model or effort' if unsafe(chosen) else chosen, code),

@@ -1,6 +1,6 @@
 # Fleet settings (synthetic)
 
-A consumer project's settings for the ops-starts proofs: the four start tables only, copied in form from a project's `docs/agents/fleet.md`.
+A consumer project's settings for the ops-starts proofs: the older five model tables only (the models contract's fallback form), copied in form from a project's `docs/agents/fleet.md`.
 
 ## Builder
 
@@ -33,3 +33,10 @@ A consumer project's settings for the ops-starts proofs: the four start tables o
 | Harness | Claude Code | `--provider claude-code` |
 | Model | Opus 5.5 | `--model claude-opus-5-5` |
 | Effort | High | `--reasoning-level high` |
+
+## Fixer
+
+| Builder family | Harness | Model | Effort | `room-cli thread spawn` flags |
+| --- | --- | --- | --- | --- |
+| Claude | Claude Code | Opus 5.5 | High | `--provider claude-code --model claude-opus-5-5 --reasoning-level high` |
+| GPT | Codex | Sol 6.1 | High | `--provider codex --model gpt-6.1-sol --reasoning-level high` |

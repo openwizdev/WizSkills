@@ -49,6 +49,127 @@ def fleet_md(builder=CODEX, small=CODEX, for_gpt=CLAUDE, for_claude=CODEX):
             '## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n| Record authors | `synthetic-factory[bot]` |\n')
 
 
+def models_md(orchestrator=CODEX, builder=CODEX, reviewer=CLAUDE, small=None, fixer=None):
+    def row(role, agent):
+        if agent is None:
+            return '| %s | follows Builder | | | |\n' % role
+        return '| %s | Synthetic | Synthetic | Synthetic | `--provider %s --model %s --reasoning-level %s` |\n' % (
+            role, *agent)
+    table = ('## Models\n\nSynthetic.\n\n| Role | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
+             '| --- | --- | --- | --- | --- |\n' + row('Orchestrator', orchestrator) + row('Builder', builder)
+             + row('Reviewer', reviewer) + row('Small builder', small) + row('Fixer', fixer) + '\nSource: synthetic.\n\n')
+    text = fleet_md()
+    return text[:text.index('## Builder\n')] + table + text[text.index('## CI checks'):]
+
+
+def connect_md():
+    text = fleet_md().replace('## CI checks', '## Test commands\n\n| Command | Runs |\n| --- | --- |\n'
+                              '| `make test` | synthetic |\n\nSource: synthetic.\n\n## CI checks', 1)
+    rule = '| `not-a-check` | none | synthetic |\n\n'
+    return text.replace(rule, rule + 'Source: synthetic.\n\n', 1)
+
+
+CONNECT_CHECK = 'fleet_settings_usable of openwizdev/openwiz tools/install/setup/setup.py at 9039c57, copied as is'
+def connect_sections(text):
+    found, name = {}, None
+    for line in text.split('\n'):
+        if line.startswith('## '):
+            name = line[3:].strip()
+            found.setdefault(name, [])
+        elif name is not None:
+            found[name].append(line)
+    return found
+
+
+def connect_table(lines):
+    rows = [line.strip() for line in lines if line.strip().startswith('|')]
+    if len(rows) < 2 or not re.fullmatch(r'\|(\s*:?-{3,}:?\s*\|)+', rows[1]):
+        return []
+    split = lambda row: [cell.strip() for cell in row.strip('|').split('|')]
+    header = split(rows[0])
+    return [dict(zip(header, split(row))) for row in rows[2:] if len(split(row)) == len(header)]
+
+
+CONNECT_PLACEHOLDER = re.compile(r'<[A-Za-z][^<>\n]*>')
+CONNECT_HEADER = ['Role', 'Harness', 'Model', 'Effort', '`room-cli thread spawn` flags']
+CONNECT_ID = r'[A-Za-z0-9._-]+'
+CONNECT_FLAGS = re.compile(r'`--provider %s --model %s(?:/%s)* --reasoning-level %s`' % ((CONNECT_ID,) * 4))
+
+
+def connect_models_usable(text, body):
+    if sum(line.startswith('## ') and line[3:].strip() == 'Models' for line in text.split('\n')) != 1:
+        return False
+    rows = []
+    for line in body:
+        if line.startswith('|'):
+            rows.append([cell.strip() for cell in line.strip()[1:-1].split('|')] if line.strip().endswith('|') else None)
+        elif rows:
+            break
+    if len(rows) < 2 or rows[0] != CONNECT_HEADER or rows[1] != ['---'] * 5 or None in rows:
+        return False
+    names = [row[0] if len(row) == 5 else None for row in rows[2:]]
+    if names[:3] != ['Orchestrator', 'Builder', 'Reviewer'] or names[3:] not in (
+            [], ['Small builder'], ['Fixer'], ['Small builder', 'Fixer']):
+        return False
+    for role, harness, model, effort, flags in rows[2:]:
+        if harness == 'follows Builder':
+            if role not in ('Small builder', 'Fixer') or model or effort or flags:
+                return False
+            continue
+        if not (harness and model and effort) or not CONNECT_FLAGS.fullmatch(flags):
+            return False
+    return True
+
+
+def connect_usable(text):
+    found = connect_sections(text)
+    reviewers = [name for name in found if name.startswith('Reviewer')]
+    builders = [name for name in found if name.startswith('Builder')]
+    needed = ['Test commands', 'CI checks', 'Standing merge rules']
+    if 'Models' in found:
+        if not connect_models_usable(text, found['Models']):
+            return False
+        needed.insert(0, 'Models')
+        builders = reviewers = []
+    elif not reviewers:
+        return False
+    else:
+        needed.insert(0, 'Builder')
+    if not all(name in found for name in needed):
+        return False
+    for name in needed + builders + reviewers:
+        body = found[name]
+        if any(CONNECT_PLACEHOLDER.search(line) for line in body):
+            return False
+        if not any(line.startswith('Source: ') and len(line) > len('Source: ') for line in body):
+            return False
+    for name in builders + reviewers:
+        values = {row.get('Setting'): row.get('Value', '') for row in connect_table(found[name])}
+        if not all(values.get(key) for key in ('Harness', 'Model', 'Effort')):
+            return False
+    if not any(row.get('Command', '').strip('`') for row in connect_table(found['Test commands'])):
+        return False
+    if not any(row.get('Check', '').strip('`') for row in connect_table(found['CI checks'])):
+        return False
+    merge = connect_table(found['Standing merge rules'])
+    rows = [row for row in merge if all(cell.strip() for cell in row.values())]
+    waits = any(line.strip() == 'None yet: every merge waits for the user.' for line in found['Standing merge rules'])
+    return bool(rows) or waits
+
+
+SETTINGS = SKILL_DIR.parent / 'setup/scripts/settings.py'
+OPUS = ('claude-code', 'claude-opus-5-5', 'medium')
+SOL = ('codex', 'gpt-6.2-sol', 'medium')
+
+
+def offering(*agents):
+    options = json.loads(json.dumps(JOURNEY['options']))
+    for provider, model, effort in agents:
+        harness = next(h for h in options['harnesses'] if h['provider'] == provider)
+        harness['models'].append({'model': model, 'efforts': [effort]})
+    return options
+
+
 FILES = {
     'docs/agents/fleet.md': fleet_md(),
     'docs/agents/triage-labels.md': (
@@ -61,8 +182,8 @@ FILES = {
 
 def skill_steps():
     """The journey's step names, in order, from the packaged skill's numbered sections."""
-    explain, _, branch = SKILL.read_text().partition('## 5. The onboarding road\n')
-    names = re.findall(r'^## 4\. (Teach)$', explain, re.M)
+    explain, _, branch = SKILL.read_text().partition('## 6. The onboarding road\n')
+    names = re.findall(r'^## 5\. (Teach)$', explain, re.M)
     names.extend(re.findall(r'^### [0-9]+\. (.+)$', branch.partition('\n## ')[0], re.M))
     return [name.split()[-1].lower() for name in names]
 
@@ -163,6 +284,9 @@ class Journey:
         self.git('init', '-q', '-b', 'main', str(self.dir))
         self.git('-C', str(self.dir), 'remote', 'add', 'origin', str(self.origin))
         self.origin_write({'README.md': '# synthetic\n'})
+        self.checkout = self.dir / 'docs/agents/fleet.md'
+        self.checkout.parent.mkdir(parents=True)
+        self.checkout.write_text(FILES['docs/agents/fleet.md'])
         self.save_world()
         self.room_script.write_text('{}')
         self.approval = None
@@ -529,6 +653,9 @@ class Continuation(unittest.TestCase):
                 self.assertEqual(path.read_bytes() if path.exists() else None, before, 'a preview writes nothing')
                 done = j.helper(['decisions', '--yes'])
                 self.assertEqual(done.returncode, 0, done.stdout)
+                for said in (shown.stdout, done.stdout):
+                    self.assertNotIn('server', said.lower())
+                self.assertIn('then run continue', done.stdout)
                 written = json.loads(path.read_text())
                 kept = {k: v for k, v in (existing or {}).items() if k != 'decision_repositories'}
                 self.assertEqual(written, dict(kept, decision_repositories=pair), 'only that key changes')
@@ -1007,6 +1134,302 @@ class DemoRepository(unittest.TestCase):
         self.assertEqual(self.writes(j), [['POST', 'user/repos']])
 
 
+class ModelsTable(unittest.TestCase):
+
+    def models(self, text):
+        sys.dont_write_bytecode = True
+        spec = __import__('importlib.util').util.spec_from_file_location('settings', SETTINGS)
+        module = __import__('importlib.util').util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.models(text)
+
+    def chosen(self, j, local, options=None):
+        j.replay(until='agents')
+        j.checkout.write_text(local)
+        if options is not None:
+            j.options.write_text(json.dumps(options))
+        return j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+
+    def test_a_cloud_choice_writes_the_models_table_before_the_older_tables(self):
+        j = Journey(self)
+        result = self.chosen(j, fleet_md())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        written = j.checkout.read_text()
+        self.assertEqual(self.models(written), {'Orchestrator': CODEX, 'Builder': CODEX, 'Reviewer': CLAUDE,
+                                                'Small builder': None, 'Fixer': None},
+                         'the choice, with the older GPT-built reviewer kept as the other-family Reviewer')
+        start, end = written.index('## Models\n'), written.index('## Builder\n')
+        self.assertEqual(written[:start] + written[end:], fleet_md(), 'nothing outside the inserted table changes')
+        self.assertIn('| Builder | Codex | syn-codex-model-01 | High |', written, 'the names set writes')
+        self.assertIn('docs/agents/fleet.md', result.stdout)
+        self.assertEqual(json.loads(j.state.read_text())['choices'], dict(j.settings, agents='cloud'),
+                         'older tables on the default branch never read back a Models table write')
+        again = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+        self.assertEqual((again.returncode, j.checkout.read_text()), (0, written), 'a repeat writes nothing new')
+
+    def test_a_models_table_gets_the_choice_and_keeps_an_other_family_reviewer(self):
+        j = Journey(self)
+        local = models_md(orchestrator=CLAUDE, builder=CLAUDE, reviewer=CLAUDE[:2] + ('xhigh',), small=CLAUDE,
+                          fixer=CODEX)
+        result = self.chosen(j, local)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        written = j.checkout.read_text()
+        self.assertEqual(self.models(written), {'Orchestrator': CODEX, 'Builder': CODEX, 'Reviewer': CLAUDE[:2] + ('xhigh',),
+                                                'Small builder': None, 'Fixer': None})
+        reviewer = next(line for line in local.splitlines() if line.startswith('| Reviewer |'))
+        self.assertIn(reviewer + '\n', written, 'the kept Reviewer row as written')
+        self.assertEqual(written.replace(written[written.index('| Role |'):written.index('\nSource')], ''),
+                         local.replace(local[local.index('| Role |'):local.index('\nSource')], ''))
+
+    def test_a_same_family_reviewer_becomes_the_offered_recommendation_or_nothing_is_recorded(self):
+        local = models_md(reviewer=SOL)
+        j = Journey(self)
+        refused = self.chosen(j, local)
+        self.assertEqual(refused.returncode, 5, refused.stdout)
+        self.assertIn('claude-code claude-opus-5-5 medium', refused.stdout)
+        self.assertEqual(j.checkout.read_text(), local)
+        self.assertNotIn('choices', json.loads(j.state.read_text()), 'nothing recorded')
+        k = Journey(self)
+        result = self.chosen(k, local, offering(OPUS))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        written = k.checkout.read_text()
+        self.assertEqual(self.models(written)['Reviewer'], OPUS)
+        self.assertIn('| Reviewer | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 '
+                      '--reasoning-level medium` |', written)
+
+    def test_a_broken_or_missing_settings_file_is_never_written(self):
+        broken = models_md().replace('| Effort |', '| Level |')
+        for name, local in (('broken', broken), ('missing', None)):
+            with self.subTest(name):
+                j = Journey(self)
+                j.replay(until='agents')
+                if local is None:
+                    j.checkout.unlink()
+                else:
+                    j.checkout.write_text(local)
+                result = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+                self.assertEqual(result.returncode, 5, result.stdout)
+                self.assertEqual(j.checkout.read_text() if j.checkout.exists() else None, local)
+                self.assertNotIn('choices', json.loads(j.state.read_text()))
+
+    def test_only_the_written_models_table_on_the_default_branch_reads_back(self):
+        j = Journey(self)
+        j.replay(until='agents')
+        for name, remote in (('older tables', fleet_md()), ('other orchestrator', models_md(orchestrator=CLAUDE)),
+                             ('other reviewer', models_md(reviewer=CLAUDE[:2] + ('xhigh',))),
+                             ('own small builder', models_md(small=CODEX))):
+            with self.subTest(name):
+                j.world['files']['docs/agents/fleet.md'] = remote
+                j.save_world()
+                result = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn('builder_tables', json.loads(j.state.read_text())['choices'], result.stdout)
+                said = j.helper(['next']).stdout
+                self.assertEqual(said.splitlines()[0], 'Next: agents.', said)
+        j.world['files']['docs/agents/fleet.md'] = models_md()
+        j.save_world()
+        result = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+        self.assertEqual(json.loads(j.state.read_text())['choices'].get('builder_tables'), 'read', result.stdout)
+        self.assertNotEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: agents.', 'the agents step is done')
+
+    def test_a_linked_settings_folder_is_never_written(self):
+        for link in ('docs', 'docs/agents'):
+            with self.subTest(link):
+                j = Journey(self)
+                j.replay(until='agents')
+                outside = Path(tempfile.mkdtemp(prefix='outside-'))
+                self.addCleanup(shutil.rmtree, outside, True)
+                target = outside / ('agents' if link == 'docs' else '') / 'fleet.md'
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(fleet_md())
+                shutil.rmtree(j.dir / 'docs')
+                if link == 'docs':
+                    os.symlink(outside, j.dir / 'docs')
+                else:
+                    (j.dir / 'docs').mkdir()
+                    os.symlink(outside, j.dir / 'docs/agents')
+                result = j.helper(['choose', '--from-setup', '--agents', 'cloud'])
+                self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
+                self.assertEqual(target.read_text(), fleet_md(), 'the file outside the checkout is unchanged')
+                self.assertEqual(sorted(p.name for p in target.parent.iterdir()), ['fleet.md'], 'nothing staged outside')
+                self.assertNotIn('choices', json.loads(j.state.read_text()))
+
+    def test_the_launch_reads_the_models_table(self):
+        j = Journey(self)
+        j.replay(until='launch')
+        j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CLAUDE)
+        j.save_world()
+        preview = j.tool(PREVIEW)
+        self.assertEqual(preview.returncode, 12, preview.stdout + preview.stderr)
+        for line in ('1 fleet thread (claude-code syn-claude-model-01 high)', 'builder (codex syn-codex-model-01 high)',
+                     'reviewed by claude-code syn-claude-model-01 high'):
+            self.assertIn(line, preview.stdout)
+        j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CODEX)
+        j.save_world()
+        moved = j.tool(YES)
+        self.assertEqual(moved.returncode, 5, 'a yes to one Orchestrator never covers another\n' + moved.stdout)
+        self.assertEqual(j.spawns(), [], 'the launch starts nothing itself')
+
+    def test_the_launch_refuses_a_models_table_its_choice_or_family_rule_breaks(self):
+        for name, text in (('broken', models_md().replace('| Effort |', '| Level |')),
+                           ('small builder differs', models_md(small=CLAUDE)),
+                           ('reviews wait', models_md(reviewer=SOL)),
+                           ('two headings', models_md() + '## Models\n')):
+            with self.subTest(name):
+                j = Journey(self)
+                j.replay(until='launch')
+                j.world['files']['docs/agents/fleet.md'] = text
+                j.save_world()
+                result = j.tool(PREVIEW)
+                self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
+                self.assertNotIn('Confirmation:', result.stdout)
+
+    def test_a_migrated_models_section_still_passes_connects_settings_check(self):
+        old = connect_md()
+        self.assertTrue(connect_usable(old), 'the old file passes ' + CONNECT_CHECK)
+        self.assertFalse(connect_usable(old.replace('## Test commands', '## Commands')), 'the check refuses a gap')
+        hosts = (('local', {'agents': 'local', 'harnesses': ['codex']}, 'the older `Reviewer for GPT-built` table'),
+                 ('driver', {'agents': 'synthetic-driver', 'harnesses': [], 'adapters': '/synthetic/adapters'},
+                  'the older `Reviewer for GPT-built` table'),
+                 ('local, recommended reviewer', {'agents': 'local', 'harnesses': ['codex']},
+                  'the recommended other-family choice'))
+        for name, host, reviewer in hosts:
+            with self.subTest(name):
+                j = Journey(self)
+                j.replay(until='agents')
+                state = json.loads(j.state.read_text())
+                state['host'] = host
+                j.state.write_text(json.dumps(state))
+                local = old if 'recommended' not in name else old.replace(
+                    table('Reviewer for GPT-built', CLAUDE), table('Reviewer for GPT-built', SOL))
+                options = offering(OPUS) if 'recommended' in name else None
+                if options is not None:
+                    j.options.write_text(json.dumps(options))
+                j.checkout.write_text(local)
+                self.assertTrue(connect_usable(local), 'the old file passes Connect')
+                result = j.helper(['choose', '--from-setup'])
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                written = j.checkout.read_text()
+                self.assertIn('## Models\n', written)
+                self.assertTrue(connect_usable(written), CONNECT_CHECK + ' accepts the file choose wrote:\n' + written)
+                section = written[written.index('## Models\n'):written.index('## Builder\n')]
+                self.assertEqual([line for line in section.split('\n') if line.startswith('Source: ')], [
+                    "Source: install's `choose`, from the owner's choice of harness, model and effort for the "
+                    'Orchestrator and Builder; the Reviewer is %s.' % reviewer])
+                self.assertEqual(written[:written.index('## Models\n')] + written[written.index('## Builder\n'):],
+                                 local, 'nothing outside the inserted section changes')
+
+    def test_a_models_change_before_activation_needs_a_fresh_preview_and_yes(self):
+        j = Journey(self)
+        j.replay(until='launch')
+        j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CODEX)
+        j.save_world()
+        self.assertEqual(j.tool(PREVIEW).returncode, 12)
+        said_yes = j.tool(YES)
+        self.assertEqual(said_yes.returncode, 0, said_yes.stdout)
+        handoff = "follow launch-fleet's Launch section"
+        self.assertIn(handoff, said_yes.stdout)
+        same = j.tool(YES)
+        self.assertEqual(same.returncode, 6, 'an unchanged Orchestrator still repeats the handoff\n' + same.stdout)
+        self.assertIn(handoff, same.stdout)
+        j.world['files'].pop('docs/agents/fleet.md')
+        j.save_world()
+        unknown = j.tool(YES)
+        self.assertEqual(unknown.returncode, 6, 'unread settings keep the yes uncertain\n' + unknown.stdout)
+        self.assertNotIn(handoff, unknown.stdout)
+        self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'authorized', 'never withdrawn unread')
+        j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CLAUDE)
+        j.save_world()
+        j.extra_env = {'FAKE_GH_COMMENTS_FAIL': '1'}
+        unread = j.tool(YES)
+        self.assertEqual(unread.returncode, 6, 'an unread record keeps the yes uncertain\n' + unread.stdout)
+        self.assertNotIn(handoff, unread.stdout)
+        self.assertEqual(json.loads(j.state.read_text())['launch']['state'], 'authorized', 'never withdrawn unread')
+        j.extra_env = {}
+        moved = j.tool(YES)
+        self.assertEqual(moved.returncode, 5, moved.stdout + moved.stderr)
+        self.assertNotIn(handoff, moved.stdout)
+        self.assertIn('claude-code syn-claude-model-01 high', moved.stdout)
+        self.assertIn('preview again and ask again', moved.stdout)
+        old = j.tool(YES)
+        self.assertEqual(old.returncode, 5, 'the old yes covers nothing now\n' + old.stdout)
+        self.assertNotIn(handoff, old.stdout)
+        self.assertNotIn('launch', json.loads(j.state.read_text()), 'the yes is withdrawn')
+        self.assertNotIn('The user said yes', j.helper(['next']).stdout, 'a resumed session never finishes the old yes')
+        fresh = j.tool(PREVIEW)
+        self.assertEqual(fresh.returncode, 12, fresh.stdout + fresh.stderr)
+        self.assertIn('1 fleet thread (claude-code syn-claude-model-01 high)', fresh.stdout)
+        again = j.tool(YES)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn(handoff, again.stdout)
+        j.fleet_record()
+        j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CODEX)
+        j.save_world()
+        started = j.tool(YES)
+        self.assertEqual(started.returncode, 0, 'after activation the read stays reconciliation\n' + started.stdout)
+        self.assertIn('so the fleet started', started.stdout)
+        saved = j.state.read_bytes()
+        repeat = j.tool(YES)
+        self.assertEqual(repeat.returncode, 0, repeat.stdout)
+        self.assertIn('already started', repeat.stdout)
+        self.assertEqual(j.state.read_bytes(), saved, 'read-only after activation')
+        self.assertEqual(j.spawns(), [], 'the launch starts nothing itself')
+
+    def authorized(self):
+        j = Journey(self)
+        j.replay(until='launch')
+        j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CODEX)
+        j.save_world()
+        self.assertEqual(j.tool(PREVIEW).returncode, 12)
+        said_yes = j.tool(YES)
+        self.assertEqual(said_yes.returncode, 0, said_yes.stdout)
+        return j, said_yes
+
+    def test_an_unknown_record_or_orchestrator_never_repeats_the_handoff(self):
+        handoff = "follow launch-fleet's Launch section"
+        for name in ('record unread, orchestrator unchanged', 'no orchestrator in the settings'):
+            with self.subTest(name):
+                j, _ = self.authorized()
+                if name.startswith('record'):
+                    j.extra_env = {'FAKE_GH_COMMENTS_FAIL': '1'}
+                else:
+                    text = models_md(orchestrator=CODEX)
+                    j.world['files']['docs/agents/fleet.md'] = (
+                        text[:text.index('## Models\n')] + text[text.index('## CI checks'):])
+                    j.save_world()
+                saved = j.state.read_bytes()
+                retry = j.tool(YES)
+                self.assertEqual(retry.returncode, 6, retry.stdout + retry.stderr)
+                self.assertNotIn(handoff, retry.stdout)
+                self.assertNotIn('Traceback', retry.stderr)
+                self.assertEqual(j.state.read_bytes(), saved, 'nothing withdrawn or saved while unknown')
+
+    def test_the_start_path_is_bound_to_the_orchestrator_the_user_said_yes_to(self):
+        j, said_yes = self.authorized()
+        approved = '--provider %s --model %s --reasoning-level %s' % CODEX
+        gate = 'ops-starts.py flags --repo %s fleet_thread' % REPO
+        retry = j.tool(YES)
+        self.assertEqual(retry.returncode, 6, retry.stdout)
+        for said in (said_yes.stdout, retry.stdout):
+            self.assertIn('`%s`' % approved, said, 'the handoff names the approved Orchestrator')
+            self.assertIn(gate, said, "the handoff checks launch-fleet's own start reader first")
+            self.assertIn('--provider codex --model syn-codex-model-01 --reasoning high', said)
+        resumed = j.helper(['next']).stdout
+        self.assertIn('run launch --spec 900 first', resumed, 'a resumed start goes through the same check')
+        reader = [sys.executable, '-I', str(SKILL_DIR.parent / 'launch-fleet/scripts/ops-starts.py'), 'flags', '--repo',
+                  REPO, 'fleet_thread']
+        now = subprocess.run(reader, env=j.env(), cwd=j.dir, capture_output=True, text=True, timeout=60)
+        self.assertEqual((now.returncode, now.stdout.strip()), (0, approved), 'the check passes while unchanged')
+        j.world['files']['docs/agents/fleet.md'] = models_md(orchestrator=CLAUDE)
+        j.save_world()
+        moved = subprocess.run(reader, env=j.env(), cwd=j.dir, capture_output=True, text=True, timeout=60)
+        self.assertEqual(moved.returncode, 0, moved.stderr)
+        self.assertNotEqual(moved.stdout.strip(), approved, 'the check the handoff names catches the change')
+        again = j.tool(YES)
+        self.assertEqual(again.returncode, 5, again.stdout)
+        self.assertIn('preview again and ask again', again.stdout)
+
+
 class Resume(unittest.TestCase):
     """#1183: a fresh session resumes the first fleet from the private state alone.
     `next` reads only that state and names the first unfinished step."""
@@ -1027,6 +1450,8 @@ class Resume(unittest.TestCase):
         # catches: a resumed journey that restarts from the top, or jumps past an
         # unfinished step (a grill before Connect is carried, a launch before the spec is recorded).
         j = Journey(self)
+        j.world['files']['docs/agents/fleet.md'] = models_md()
+        j.save_world()
         seen = []
         for turn in JOURNEY['turns']:
             if not seen or seen[-1] != turn['step']:
@@ -1124,10 +1549,10 @@ class Resume(unittest.TestCase):
         said = self.next(j)
         self.assertEqual(said.splitlines()[0], 'Next: agents.', said)
         self.assertIn('on this machine', said)
-        self.assertIn('builder tables', said)
+        self.assertIn("fleet's settings on the default branch", said)
         self.assertEqual(json.loads(j.state.read_text())['choices'], dict(j.settings, agents='local'),
                          'the recorded answer survives the restart')
-        j.world['files']['docs/agents/fleet.md'] = fleet_md()
+        j.world['files']['docs/agents/fleet.md'] = models_md()
         j.save_world()
         self.assertEqual(j.helper(['choose', '--from-setup']).returncode, 0)
         self.assertEqual(self.next(j).splitlines()[0], 'Next: setting.', 'the host setting follows the agents (#1358)')
@@ -1144,10 +1569,10 @@ class Resume(unittest.TestCase):
         self.assertEqual(chosen.returncode, 0, chosen.stdout)
         said = self.next(j)
         self.assertEqual(said.splitlines()[0], 'Next: agents.', said)
-        self.assertIn('builder tables', said)
+        self.assertIn("fleet's settings on the default branch", said)
         self.assertEqual(json.loads(j.state.read_text())['choices'], dict(j.settings, agents='cloud'),
                          'the recorded choice survives the restart')
-        j.world['files']['docs/agents/fleet.md'] = fleet_md()  # setup made both builder tables the choice
+        j.world['files']['docs/agents/fleet.md'] = models_md()
         j.save_world()
         self.assertEqual(self.next(j).splitlines()[0], 'Next: agents.', 'only a read-back settles the tables')
         again = j.helper(['choose', '--from-setup', '--agents', 'cloud'])

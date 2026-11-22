@@ -719,7 +719,6 @@ check_contexts() (
       '.contexts = $page[0] | .contexts.nodes = $nodes[0]' "$source.rollup" > "$source.complete" || exit 1
     jq --slurpfile rollup "$source.complete" '{id, number, rollup: $rollup[0]}' "$source.pr" >> "$source.checks" || exit 1
   done < "$source.prs"
-  # #1958: a pull request's node id with its number: two repositories may share a number.
   jq -s 'map({key: ([(.id // ""), .number] | tojson), value: .rollup}) | from_entries' "$source.checks" > "$source.rollups" || exit 1
   jq --slurpfile r "$source.rollups" 'walk(if type == "object" and has("headRefOid")
       and .state == "OPEN" and $r[0][([(.id // ""), .number] | tojson)] != null

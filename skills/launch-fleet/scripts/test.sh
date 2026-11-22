@@ -863,9 +863,6 @@ EOF
 expect 'contexts: conflicting snapshots of one PR fail closed' 2 check.json "$MANY31 | .pulls += [(.pulls[] | select(.number == 31) | .head = sha(99))]" -- check <<EOF
 can't read the issues outside specs
 EOF
-# #1958: two repositories' open pull requests share number 31 under one spec
-# (ids and heads synthetic). They are two pull requests, not one with two heads,
-# and neither borrows the other's checks.
 OTHER31='pr31 | open_pr(31; 13; "#13: widget page, green") | .pulls[-1] |= (.id = "PR_synthetic_other_31" | .head = sha("31b"))'
 expect 'contexts #1958: same number in two repositories is two PRs' 0 check.json "$OTHER31" -- spec 10 <<EOF
 review #31 for #12 at $S31: first review

@@ -1,35 +1,4 @@
 #!/usr/bin/env python3
-"""Tell whether one pull request was dropped from the merge queue, and whether it may go back in
-(FR1, OpenWiz #2432; spec #2428).
-
-  queue.py read OWNER/NAME PR HEAD CHECKS
-
-CHECKS are fleet.md's required checks, comma-separated, as for merge.py. It only
-reads: one GraphQL query (paged to the end) for the pull request's state, head,
-queue entry, latest enqueue, every removal from the queue and every check run on
-its head, and the record authors' comments on it, read as merge.py reads them:
-the queue receipt `launch-fleet: merge queued <commit>` and the drop record
-`launch-fleet: merge dropped <commit>: <reason> at <time>`. It prints one line:
-
-  merged <commit>                      merged (exit 0)
-  queued                               in the queue at HEAD (exit 0)
-  not queued                           no receipt at HEAD: nothing to judge (exit 0)
-  dropped HEAD: <reason> at <time>     a removal after the receipt that no record names yet:
-                                       record it (exit 0)
-  wait HEAD: <cause>                   a recorded drop whose cause still stands (exit 0)
-  requeue HEAD: <why>                  the first recorded drop at HEAD, its cause gone (exit 0)
-  blocked HEAD: <why>                  dropped twice at HEAD, or a reason never re-queued
-                                       automatically (exit 1)
-  unknown: <why>                       a fact unreadable, incomplete or inconsistent (exit 2)
-
-A drop's cause is gone only for GitHub's reasons `branch_protection_failure` and
-`failed_checks`, removed by `github-merge-queue`, when nothing on HEAD is running,
-every required check's latest run on HEAD is green, and either each of those runs
-started after the removal or every failed run on HEAD was a cancelled duplicate (a
-CANCELLED run followed by a green run of the same check, as on #2253). A merge
-conflict, a person's removal and any other reason are blocked. Bad arguments
-print this usage on stderr and exit 2, reading nothing.
-"""
 import importlib.util
 import json
 from pathlib import Path
@@ -64,7 +33,7 @@ PAGES = 50
 SHA = re.compile(r'[0-9a-f]{40}')
 TIME = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z')
 REASON = re.compile(r'[a-z][a-z0-9_]{0,63}')
-QUEUED = re.compile(r'launch-fleet: merge queued ([0-9a-f]{40})\b')  # merge.py's receipt
+QUEUED = re.compile(r'launch-fleet: merge queued ([0-9a-f]{40})\b')
 DROPPED = re.compile(rf'launch-fleet: merge dropped ([0-9a-f]{{40}}): ({REASON.pattern}) at ({TIME.pattern})')
 QUEUE_BOT = 'github-merge-queue'
 CHECK_CAUSES = ('branch_protection_failure', 'failed_checks')
@@ -72,8 +41,36 @@ STATES = ('OPEN', 'CLOSED', 'MERGED')
 RUN_STATUS = ('COMPLETED', 'IN_PROGRESS', 'QUEUED', 'WAITING', 'PENDING', 'REQUESTED')
 CONCLUSIONS = ('SUCCESS', 'FAILURE', 'CANCELLED', 'SKIPPED', 'NEUTRAL', 'TIMED_OUT', 'ACTION_REQUIRED',
                'STALE', 'STARTUP_FAILURE')
-PASSING = ('SUCCESS', 'SKIPPED', 'NEUTRAL')  # not a failed run; only SUCCESS is green for a required check
+NOT_FAILED = ('SUCCESS', 'SKIPPED', 'NEUTRAL')
 CONTEXT_STATES = ('SUCCESS', 'FAILURE', 'ERROR', 'PENDING', 'EXPECTED')
+USAGE = '''  queue.py read OWNER/NAME PR HEAD CHECKS
+
+CHECKS are fleet.md's required checks, comma-separated, as for merge.py. It only
+reads: one GraphQL query (paged to the end) for the pull request's state, head,
+queue entry, latest enqueue, every removal from the queue and every check run on
+its head, and the record authors' comments on it, read as merge.py reads them:
+the queue receipt `launch-fleet: merge queued <commit>` and the drop record
+`launch-fleet: merge dropped <commit>: <reason> at <time>`. It prints one line:
+
+  merged <commit>                      merged (exit 0)
+  queued                               in the queue at HEAD (exit 0)
+  not queued                           no receipt at HEAD: nothing to judge (exit 0)
+  dropped HEAD: <reason> at <time>     a removal after the receipt that no record names yet:
+                                       record it (exit 0)
+  wait HEAD: <cause>                   a recorded drop whose cause still stands (exit 0)
+  requeue HEAD: <why>                  the first recorded drop at HEAD, its cause gone (exit 0)
+  blocked HEAD: <why>                  dropped twice at HEAD, or a reason never re-queued
+                                       automatically (exit 1)
+  unknown: <why>                       a fact unreadable, incomplete or inconsistent (exit 2)
+
+A drop's cause is gone only for GitHub's reasons `branch_protection_failure` and
+`failed_checks`, removed by `github-merge-queue`, when nothing on HEAD is running,
+every required check's latest run on HEAD is green, and either each of those runs
+started after the removal or every failed run on HEAD was a cancelled duplicate (a
+CANCELLED run followed by a green run of the same check, as on #2253). A merge
+conflict, a person's removal and any other reason are blocked. Bad arguments
+print this usage on stderr and exit 2, reading nothing.
+'''
 
 
 class Unknown(Exception):
@@ -138,7 +135,7 @@ def page(owner, name, number, removed, checks):
     commit = exact(commit, ['oid', 'statusCheckRollup'], 'its head commit could not be read')
     need(commit['oid'] == p['headRefOid'], 'its head commit could not be read')
     rollup = commit['statusCheckRollup']
-    if rollup is None:  # no check has reported on it at all
+    if rollup is None:
         contexts = {'pageInfo': {'hasNextPage': False, 'endCursor': None}, 'nodes': []}
     else:
         contexts = exact(exact(rollup, ['contexts'], 'its checks could not be read')['contexts'],
@@ -154,7 +151,6 @@ def page(owner, name, number, removed, checks):
 
 
 def run(n):
-    """One check run as (name, status, conclusion, started); refuses any shape it doesn't know."""
     why = 'a check on its head could not be read'
     need(isinstance(n, dict), why)
     if n.get('__typename') == 'CheckRun':
@@ -174,7 +170,6 @@ def run(n):
 
 
 def facts(repo, number):
-    """Every page of the one query, as (pull request, removals, check runs); the pull request may not change."""
     owner, name = repo.split('/')
     removed_at = checks_at = None
     removals, runs, first = [], [], None
@@ -197,7 +192,6 @@ def facts(repo, number):
 
 
 def fleet_records(repo, number, head):
-    """The record authors' receipt times and drop records at HEAD, as (receipt times, {(time, reason)})."""
     try:
         auth = post.authors(repo)
     except post.Stop:
@@ -223,7 +217,6 @@ def fleet_records(repo, number, head):
 
 
 def cause(head, removal, runs, checks):
-    """`wait ...` or `requeue ...` for a recorded check-caused drop; Unknown when the runs can't be ordered."""
     at, reason = removal['createdAt'], removal['reason']
     busy = sorted({name for name, state, _, _ in runs if state == 'running'})
     if busy:
@@ -243,7 +236,7 @@ def cause(head, removal, runs, checks):
         return f"wait {head}: not green on it: {', '.join(red)}"
     if all(latest[c][3] > at for c in checks):
         return f'requeue {head}: every required check ran again after the removal and is green'
-    failed = [r for r in runs if r[2] not in PASSING]
+    failed = [r for r in runs if r[2] not in NOT_FAILED]
     duplicates = failed and all(r[2] == 'CANCELLED' and any(o[0] == r[0] and o[3] > r[3] and o[2] == 'SUCCESS'
                                                             for o in runs) for r in failed)
     if duplicates:
@@ -253,7 +246,6 @@ def cause(head, removal, runs, checks):
 
 
 def read(repo, number, head, checks):
-    """The one verdict line and its exit code."""
     p, removals, runs = facts(repo, number)
     need(p['headRefOid'] == head, f"its head is {p['headRefOid']}, not {head}")
     if p['state'] == 'MERGED':
@@ -294,12 +286,11 @@ def read(repo, number, head, checks):
 
 
 def main(argv):
-    usage = __doc__.split('\n\n')[1]
     checks = argv[4].split(',') if len(argv) == 5 else []
     if len(argv) != 5 or argv[0] != 'read' or not post.REPO.fullmatch(argv[1]) \
             or not re.fullmatch(r'[1-9][0-9]{0,11}', argv[2]) or not SHA.fullmatch(argv[3]) \
             or not all(checks) or len(set(checks)) != len(checks):
-        print(usage, file=sys.stderr)
+        print(USAGE, end='', file=sys.stderr)
         return 2
     try:
         line, code = read(argv[1], int(argv[2]), argv[3], checks)

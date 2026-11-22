@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""queue.py on replayed GitHub answers (FR1, OpenWiz #2432): tells a merge-queue drop and when it may go back in.
-
-python3 -I skills/launch-fleet/scripts/test-queue.py
-
-Each case runs queue.py as a command, under a fake `gh` that serves one fixture of
-fixtures/queue/ and fails (and logs) any write; every case then asserts the log
-holds no write. The 2253-* fixtures replay OpenWiz #2253's real answers.
-"""
 import copy
 import json
 import os
@@ -26,10 +18,6 @@ MERGE = '7892eaf91f54b1cac9278ee794a21cbba0b5bc60'
 FLEET = ('# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n'
          '| Record authors | `openwiz[bot]`, `jparker2006` |\n')
 
-# The fake gh: reads only. It serves the fixture's GraphQL answers in order (a string
-# is served raw), docs/agents/fleet.md and the pull request's comments, and logs every
-# call. Any other call, and anything that writes (a mutation, a non-GET method, a field
-# on a REST call, an input file, any command but `api`), is logged as a write and fails.
 FAKE = r'''import json, os, re, sys
 args = sys.argv[1:]
 fixture = json.load(open(os.environ['FAKE_QUEUE']))
@@ -133,53 +121,40 @@ class Queue(unittest.TestCase):
         self.assertEqual((code, out.count('\n')), (2, 1), (out, err))
         self.assertTrue(out.startswith('unknown: ') and why in out, (out, why))
 
-    # P1: #2253's replay, from the drop to the merge, and a second drop.
     def test_2253_drop_is_told_with_githubs_reason_and_time(self):
-        # catches: a removal after the receipt read as `merge blocked`, or as nothing, as today.
         self.verdict('2253-dropped', f'dropped {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z', 0)
 
     def test_2253_recorded_drop_goes_back_in_once_its_cancelled_duplicates_are_green(self):
-        # catches: #2253's cause (cancelled duplicate changelog runs, every check green) read as standing.
         self.verdict('2253-recorded', f'requeue {HEAD}: every required check is green on it, '
                      'and its failed runs were cancelled duplicates', 0)
 
     def test_2253_re_queued_reads_queued(self):
-        # catches: the re-queued head read as a drop again from its old removal.
         self.verdict('2253-requeued', 'queued', 0)
 
     def test_2253_merged_reads_its_merge_commit(self):
-        # catches: the `merged` removal event read as a drop.
         self.verdict('2253-merged', f'merged {MERGE}', 0)
 
     def test_2253_second_removal_is_told_as_a_new_drop(self):
-        # catches: a second removal hidden behind the first one's record.
         self.verdict('2253-second-drop', f'dropped {HEAD}: branch_protection_failure at 2026-11-22T12:02:25Z', 0)
 
     def test_2253_dropped_twice_at_one_head_is_blocked(self):
-        # catches: a loop of re-queues at one head.
         self.verdict('2253-dropped-twice', f'blocked {HEAD}: dropped twice at this head', 1)
 
-    # Cause gone or standing, by GitHub's reason.
     def test_checks_still_red_wait(self):
-        # catches: a cancelled duplicate excusing a real failure on the latest run.
         self.verdict('checks-red', f'wait {HEAD}: not green on it: ci (FAILURE)', 0)
 
     def test_checks_running_wait(self):
-        # catches: a rerun still going read as done.
         self.verdict('checks-running', f'wait {HEAD}: still running: ci', 0)
 
     def test_checks_green_again_after_the_removal_go_back_in(self):
-        # catches: a fixed failed_checks drop left waiting for good.
         self.verdict('checks-green-again', f'requeue {HEAD}: every required check ran again after the removal '
                      'and is green', 0)
 
     def test_checks_green_only_before_the_removal_wait(self):
-        # catches: green runs older than the failed merge group read as the cause gone.
         self.verdict('checks-stale', f'wait {HEAD}: failed_checks at 2026-11-22T10:00:03Z may still stand: '
                      'ci, privacy, web-test last ran before it', 0)
 
     def test_a_cancelled_run_with_no_green_run_after_it_is_no_duplicate(self):
-        # catches: any cancelled run counted as a duplicate.
         value = fixture('2253-recorded')
         runs = contexts(value)['nodes']
         runs[:] = [r for r in runs if not (r['name'] == 'changelog' and r['conclusion'] == 'SUCCESS')]
@@ -187,7 +162,6 @@ class Queue(unittest.TestCase):
                      'ci, privacy, web-test last ran before it', 0)
 
     def test_a_cancelled_run_after_the_last_green_one_is_no_duplicate(self):
-        # catches: a green run from before the cancelled one taken as its duplicate.
         value = fixture('2253-recorded')
         contexts(value)['nodes'].append({'__typename': 'CheckRun', 'name': 'changelog', 'status': 'COMPLETED',
                                          'conclusion': 'CANCELLED', 'startedAt': '2026-11-22T09:50:00Z'})
@@ -195,7 +169,6 @@ class Queue(unittest.TestCase):
                      'ci, privacy, web-test last ran before it', 0)
 
     def test_a_missing_required_check_waits(self):
-        # catches: a required check with no run on the head read as green.
         value = fixture('2253-recorded')
         contexts(value)['nodes'][:] = [r for r in contexts(value)['nodes'] if r['name'] != 'web-test']
         self.verdict(value, f'wait {HEAD}: not green on it: web-test (no run)', 0)
@@ -207,7 +180,6 @@ class Queue(unittest.TestCase):
         self.verdict('person', f'blocked {HEAD}: a person took it out of the queue (dequeued)', 1)
 
     def test_a_person_removing_it_for_any_reason_is_blocked(self):
-        # catches: the reason trusted over who removed it.
         self.verdict('person-actor', f'blocked {HEAD}: a person took it out of the queue (branch_protection_failure)', 1)
 
     def test_any_other_reason_is_blocked(self):
@@ -217,20 +189,17 @@ class Queue(unittest.TestCase):
         self.verdict('not-queued', 'not queued', 0)
 
     def test_every_page_of_checks_is_read(self):
-        # catches: the first page's green runs trusted while a later page shows ci red again.
         self.verdict('paged', f'wait {HEAD}: not green on it: ci (FAILURE)', 0)
         reads = [a for a in self.calls('read') if a[:2] == ['api', 'graphql']]
         self.assertEqual(len(reads), 2)
         self.assertIn('checks=c3ludGhldGljLXBhZ2UtMQ', reads[1])
 
     def test_an_outsiders_drop_record_counts_for_nothing(self):
-        # catches: a forged `merge dropped` line by anyone counted as the record.
         value = fixture('2253-recorded')
         value['comments'][-1]['user']['login'] = 'synthetic-outsider'
         self.verdict(value, f'dropped {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z', 0)
 
     def test_two_records_of_one_removal_are_one_drop(self):
-        # catches: a repeated record of one removal counted as a second drop.
         value = fixture('2253-recorded')
         value['comments'].append(dict(value['comments'][-1], id=7000000009, created_at='2026-11-22T10:06:00Z'))
         self.verdict(value, f'requeue {HEAD}: every required check is green on it, '
@@ -241,8 +210,6 @@ class Queue(unittest.TestCase):
         value['comments'][-1]['body'] = value['comments'][-1]['body'].replace(HEAD, 'a' * 40)
         self.verdict(value, f'dropped {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z', 0)
 
-    # Unreadable or partial facts: `unknown`, exit 2, never `requeue`. Each starts from
-    # 2253-recorded, which reads `requeue` whole, and breaks one fact.
     def broken(self, change, why):
         value = fixture('2253-recorded')
         change(value)
@@ -300,7 +267,6 @@ class Queue(unittest.TestCase):
                 self.broken(change, why)
 
     def test_a_later_page_may_not_change_the_pull_request(self):
-        # catches: pages read across a push mixed into one answer.
         value = fixture('paged')
         node(value, 1)['headRefOid'] = 'b' * 40
         node(value, 1)['commits']['nodes'][0]['commit']['oid'] = 'b' * 40
@@ -317,7 +283,6 @@ class Queue(unittest.TestCase):
                 self.assertIn('queue.py read', err)
         self.assertEqual(self.calls(), [])
 
-    # The fake gh is the read-only proof, so it must refuse every write queue.py's neighbours make.
     def test_the_fake_gh_refuses_every_write(self):
         (self.root / 'fixture.json').write_text((FIXTURES / '2253-recorded.json').read_text())
         env = dict(self.env, FAKE_QUEUE=str(self.root / 'fixture.json'))

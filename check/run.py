@@ -615,6 +615,30 @@ def unlisted_tests(root):
     return sorted(discovered - covered)
 
 
+HUNTR_CONSUMER = 'check/fixtures/huntr-project'
+
+
+def invocation(root, name, command):
+    rel, folder = command_path(command)
+    target = root / rel
+    present = target.is_dir() and any(target.glob('test*.py')) if folder else target.is_file()
+    if target.is_symlink() or not present:
+        return f'suite {name}: {" ".join(command)}: missing'
+    cwd = '.'
+    argv = list(command)
+    if folder:
+        argv = ['python3', '-I', '-c', UNIT_RUNNER, rel, 'test*.py']
+    elif command[0] == 'python3' and unittest_file(target):
+        argv = ['python3', '-I', '-c', UNIT_RUNNER, target.parent.relative_to(root).as_posix(), target.name]
+    if name == 'huntr':
+        cwd = HUNTR_CONSUMER
+        settings = root / cwd / 'docs/agents/huntr.md'
+        if not settings.is_file() or settings.is_symlink():
+            return f'suite {name}: synthetic consumer missing'
+        argv[-1] = os.path.relpath(target, root / cwd)
+    return {'suite': list(command), 'argv': argv, 'cwd': cwd}
+
+
 def suites(root, names=None):
     unlisted = unlisted_tests(root)
     for rel in unlisted:
@@ -625,31 +649,16 @@ def suites(root, names=None):
             continue
         for command in commands:
             shown = ' '.join(command)
-            rel, folder = command_path(command)
-            target = root / rel
-            present = target.is_dir() and any(target.glob('test*.py')) if folder else target.is_file()
-            if target.is_symlink() or not present:
-                print(f'suite {name}: {shown}: missing', flush=True)
+            run = invocation(root, name, command)
+            if isinstance(run, str):
+                print(run, flush=True)
                 failed = True
                 continue
-            cwd = root
-            argv = [sys.executable if command[0] == 'python3' else command[0], *command[1:]]
-            if folder:
-                argv = [sys.executable, '-I', '-c', UNIT_RUNNER, rel, 'test*.py']
-            elif command[0] == 'python3' and unittest_file(target):
-                argv = [sys.executable, '-I', '-c', UNIT_RUNNER, target.parent.relative_to(root).as_posix(), target.name]
-            if name == 'huntr':
-                cwd = root / 'check/fixtures/huntr-project'
-                settings = cwd / 'docs/agents/huntr.md'
-                if not settings.is_file() or settings.is_symlink():
-                    print(f'suite {name}: synthetic consumer missing', flush=True)
-                    failed = True
-                    continue
-                argv[-1] = str(target.resolve())
+            argv = [sys.executable if run['argv'][0] == 'python3' else run['argv'][0], *run['argv'][1:]]
             print(f'suite {name}: {shown}: running', flush=True)
             started = time.monotonic()
             try:
-                code = subprocess.run(argv, cwd=cwd, env=clean_env()).returncode
+                code = subprocess.run(argv, cwd=root / run['cwd'], env=clean_env()).returncode
             except OSError:
                 print(f'suite {name}: {shown}: cannot start', flush=True)
                 failed = True
@@ -676,21 +685,22 @@ STANDALONE = ['python3', '-I', 'check/standalone.py', '--tree', '.']
 USAGE = 'usage: python3 check/run.py [--list | --shard <name>[,<name>...]]'
 
 
-def shards():
+def shards(root):
     return [{'name': 'rules', 'skill': None, 'commands': [], 'env': {}},
-            {'name': 'standalone', 'skill': None, 'commands': [STANDALONE], 'env': {}},
-            *({'name': name, 'skill': name, 'commands': [list(c) for c in commands], 'env': {}}
+            {'name': 'standalone', 'skill': None,
+             'commands': [{'suite': STANDALONE, 'argv': STANDALONE, 'cwd': '.'}], 'env': {}},
+            *({'name': name, 'skill': name, 'commands': [invocation(root, name, c) for c in commands], 'env': {}}
               for name, commands in SUITES.items())]
 
 
 def selection(argv):
+    known = ['rules', 'standalone', *SUITES]
     if not argv:
-        return [shard['name'] for shard in shards()]
+        return known
     if argv == ['--list']:
         return None
     if len(argv) != 2 or argv[0] != '--shard':
         return USAGE
-    known = [shard['name'] for shard in shards()]
     wanted = argv[1].split(',')
     unknown = [name for name in wanted if name not in known]
     if unknown:
@@ -707,9 +717,13 @@ def main(argv):
         unlisted = unlisted_tests(ROOT)
         for rel in unlisted:
             print(f'suite inventory: {rel}: unlisted', file=sys.stderr, flush=True)
-        if unlisted:
+        listed = shards(ROOT)
+        problems = [c for shard in listed for c in shard['commands'] if isinstance(c, str)]
+        for problem in problems:
+            print(problem, file=sys.stderr, flush=True)
+        if unlisted or problems:
             return 1
-        print(json.dumps(shards(), indent=2))
+        print(json.dumps(listed, indent=2))
         return 0
     findings = []
     if 'rules' in selected:

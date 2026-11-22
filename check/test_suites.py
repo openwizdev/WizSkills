@@ -215,6 +215,17 @@ class CheckShards(unittest.TestCase):
         self.assertEqual(err.getvalue().splitlines(),
                          ['suite inventory: skills/gamma/test_unlisted.py: unlisted'])
 
+    def test_list_refuses_while_a_suite_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.synthetic(tmp)
+            (root / 'skills' / 'beta' / 'test_three.py').unlink()
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code, lines = self.check('--list', root=root, suites=SYNTHETIC)
+        self.assertEqual((code, lines), (1, []))
+        self.assertEqual(err.getvalue().splitlines(),
+                         ['suite beta: python3 -I skills/beta/test_three.py: missing'])
+
     def test_an_unknown_shard_or_argument_exits_2_and_runs_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self.synthetic(tmp)

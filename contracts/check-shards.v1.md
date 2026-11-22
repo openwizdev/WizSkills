@@ -23,28 +23,39 @@ In list order:
 
 A **part shard** (WQ2) replaces one suite in its row's shard: it is named `<row>.<n>`, `n` counting from 1, and carries the part in `env` (launch-fleet's `TEST_SHARD`, for example). A dot never appears in a skill name, so a part name never collides with a row name. Together the parts of a suite run exactly the cases the whole suite runs. No part shard exists in version 1's code.
 
-**Coverage.** Every suite is in exactly one shard, apart from a split suite, which is in each of its part shards, and only there. A test (`check/test_suites.py`) compares `--list` with `SUITES` and fails when a suite is in no shard or in two.
+**Coverage.** Every suite (a command's `suite`) is in exactly one shard, apart from a split suite, which is in each of its part shards, and only there. A test (`check/test_suites.py`) compares `--list` with `SUITES` and fails when a suite is in no shard or in two.
 
 ## `--list`
 
-`python3 check/run.py --list` prints the shards as one JSON array on stdout and exits 0. It runs no suite, but it runs the inventory guard first: while a test file is unlisted, it prints each `suite inventory: <path>: unlisted` line on stderr, prints no JSON and exits 1, so a job matrix never builds from a list that misses a test. Each element is an object with exactly these keys:
+`python3 check/run.py --list` prints the shards as one JSON array on stdout and exits 0. It runs no suite, but it runs the inventory guard first: while a test file is unlisted, or a listed suite's file or the huntr consumer is missing, it prints each guard line a run would print (`suite inventory: <path>: unlisted`, `suite <row>: <suite>: missing`, `suite huntr: synthetic consumer missing`) on stderr, prints no JSON and exits 1, so a job matrix never builds from a list that misses a test. Each element is an object with exactly these keys:
 
 | Key | Value |
 | --- | --- |
 | `name` | The shard's name: `rules`, `standalone`, a `SUITES` row, or `<row>.<n>` |
 | `skill` | The `SUITES` row the shard belongs to, or `null` for `rules` and `standalone` |
-| `commands` | The exact suite commands it runs, each an array of strings as written in `SUITES` (`python3` stands for the running interpreter) |
+| `commands` | The commands it runs, in order, each a command object (below) |
 | `env` | Extra environment for every command in the shard, a string-to-string object; `{}` unless it is a part shard |
 
 ```json
 [
   {"name": "rules", "skill": null, "commands": [], "env": {}},
-  {"name": "standalone", "skill": null, "commands": [["python3", "-I", "check/standalone.py", "--tree", "."]], "env": {}},
-  {"name": "alpha", "skill": "alpha", "commands": [["python3", "-I", "skills/alpha/test/test_alpha.py"]], "env": {}}
+  {"name": "standalone", "skill": null, "commands": [{"suite": ["python3", "-I", "check/standalone.py", "--tree", "."], "argv": ["python3", "-I", "check/standalone.py", "--tree", "."], "cwd": "."}], "env": {}},
+  {"name": "alpha", "skill": "alpha", "commands": [{"suite": ["python3", "-I", "skills/alpha/test/test_alpha.py"], "argv": ["python3", "-I", "-c", "<runner>", "skills/alpha/test", "test_alpha.py"], "cwd": "."}], "env": {}},
+  {"name": "huntr", "skill": "huntr", "commands": [{"suite": ["sh", "skills/huntr/scripts/test.sh"], "argv": ["sh", "../../../skills/huntr/scripts/test.sh"], "cwd": "check/fixtures/huntr-project"}], "env": {}}
 ]
 ```
 
-(Synthetic: `alpha` stands for any skill.)
+Each command object has exactly these keys:
+
+| Key | Value |
+| --- | --- |
+| `suite` | The suite as written in its `SUITES` row (for `standalone`, the same as `argv`) |
+| `argv` | The exact command `run.py` executes for it, an array of strings, runnable verbatim from `cwd`; `python3` stands for a Python 3.11+ interpreter (standalone's `--tree .` names the same tree as the absolute root `run.py` passes) |
+| `cwd` | The folder it runs in, relative to the tree's root: `.` for every suite but huntr's, which runs from its synthetic consumer `check/fixtures/huntr-project` with its script path relative to that folder |
+
+`argv` differs from `suite` where `run.py` adds context: a Python file holding `unittest` test cases, and a `-m unittest discover` folder, run through the check's collection runner (`python3 -I -c <runner> <folder> <pattern>`), which fails a file that collects no test; huntr's script runs from its consumer folder. Both a plain run and `--list` build `argv` and `cwd` with the same function, so what `--list` shows is what a run executes. `run.py` runs every command with `GH_TOKEN`, `GITHUB_TOKEN`, `TEST_ONLY`, `TEST_EXPECTED`, `TEST_PASS`, `TEST_WORKER` and `LIST_CASES` removed from the environment, plus the shard's `env`.
+
+(Synthetic: `alpha` stands for any skill; `<runner>` for the collection runner's code.)
 
 ## `--shard`
 

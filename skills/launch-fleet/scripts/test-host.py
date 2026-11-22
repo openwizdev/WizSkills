@@ -25,7 +25,6 @@ REPO = 'synthetic-owner/synthetic-repo'
 # launch-fleet's own installed version, its SKILL.md front matter, which the status writer
 # binds (#1663); the bundle's version can differ from it.
 def front_version(text):
-    """The `version:` of a SKILL.md's front matter, plain or quoted, or None (#1891)."""
     found = re.search(r'''(?m)^version: (["']?)([0-9]+\.[0-9]+\.[0-9]+)\1$''', text)
     return found and found.group(2)
 

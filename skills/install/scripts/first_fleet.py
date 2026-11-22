@@ -6,8 +6,6 @@
   first_fleet.py decisions --state FILE --setup-state DIR [--yes]
   first_fleet.py create-repo --state FILE --repo OWNER/NAME [--yes]
   first_fleet.py select --state FILE --repo OWNER/NAME
-  first_fleet.py defaults --state FILE --options FILE [--operator LOGIN] [--service-issue N]
-                          [--harness P --model M --effort E] [--app] [--yes]
   first_fleet.py mode --state FILE [--mode MODE]
   first_fleet.py setting --state FILE [--yes]
   first_fleet.py grill --state FILE --confirmed URL

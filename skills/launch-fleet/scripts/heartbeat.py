@@ -235,7 +235,8 @@ def tick(state, config, paused):
         inherited = ('HOME', 'USER', 'LOGNAME', 'TMPDIR', 'SSH_AUTH_SOCK', 'XDG_RUNTIME_DIR',
                      'DBUS_SESSION_BUS_ADDRESS')
         env = {key: os.environ[key] for key in inherited if key in os.environ}
-        env.update(config['environment'], GH_REPO=repo, GH_PROMPT_DISABLED='1', GIT_TERMINAL_PROMPT='0')
+        env.update(config['environment'], GH_REPO=repo, GH_PROMPT_DISABLED='1', GIT_TERMINAL_PROMPT='0',
+                   LAUNCH_FLEET_GITHUB_ONLY='1')
         repo_key = hashlib.sha256(repo.lower().encode()).hexdigest()[:20]
         env.setdefault('LAUNCH_FLEET_RUNS', str(state.parent / f'runs-{repo_key}.json'))
         result = subprocess.run(['sh', str(HERE / 'fleet.sh'), 'spec', spec], cwd=config['cwd'], env=env,

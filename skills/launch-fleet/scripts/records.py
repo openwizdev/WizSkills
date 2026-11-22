@@ -317,7 +317,7 @@ def main():
         return isinstance(x, list) and any(needed(v) for v in x)
     try:
         state = private_state(repo)
-        threads = discover() if needed(world) else None
+        threads = discover() if os.environ.get('LAUNCH_FLEET_GITHUB_ONLY') != '1' and needed(world) else None
         json.dump(annotate(world, repo, private == 'true', threads, state), sys.stdout)
     except (OSError, ValueError, KeyError, TypeError):
         print('records: private routing state could not be read', file=sys.stderr)

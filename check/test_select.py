@@ -118,6 +118,8 @@ class CrossSkillReads(unittest.TestCase):
             'path join, double quotes': 'skill = HELPER.parent.parent.parent / "beta"\n',
             'parents join': "B = Path(__file__).resolve().parents[2] / 'beta'\n",
             'join with a path': "SKILLS = HERE.parents[2]\nB = SKILLS / 'beta/scripts/b.py'\n",
+            'a helper given the path': 'def section(path):\n    return (SKILLS / path).read_text()\n'
+                                       'setup = section("beta/SKILL.md")\n',
             'os.path.join': "os.path.join(skills, 'beta', 'x.py')\n",
             'joinpath': "root.joinpath('skills', 'beta')\n",
         }

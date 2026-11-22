@@ -87,6 +87,7 @@ deleted.
 import datetime
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -99,16 +100,23 @@ _spec = importlib.util.spec_from_file_location('launch_fleet_post', HERE / 'post
 post = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(post)
 Stop = post.Stop
+_spec = importlib.util.spec_from_file_location('launch_fleet_records', HERE / 'records.py')
+records = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(records)
 
 QUERY = '''query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { defaultBranchRef { name } pullRequest(number: $number) {
-    state baseRefName headRefOid isMergeQueueEnabled isInMergeQueue mergeable mergeCommit { oid }
+    id state baseRefName headRefOid isMergeQueueEnabled isInMergeQueue mergeable mergeCommit { oid }
     mergeQueueEntry { headCommit { oid } } repository { nameWithOwner }
     closingIssuesReferences(first: 50) { pageInfo { hasNextPage } nodes { number body repository { nameWithOwner } } }
     timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 1) {
       nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } } }
+    enqueued: timelineItems(itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT], last: 1) {
+      nodes { ... on AddedToMergeQueueEvent { enqueuer { login } } } }
     commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 50) { pageInfo { hasNextPage }
-      nodes { __typename ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } }'''
+      nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } } } } } } } } } }'''
+ENQUEUE = '''mutation($id: ID!, $head: GitObjectID!) {
+  enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head}) { mergeQueueEntry { headCommit { oid } } } }'''
 COST = 'tools/collector/cost_line.py'
 SHA = re.compile(r'[0-9a-f]{40}')
 TICKET = re.compile(r'(?:([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#)?([1-9][0-9]{0,11})')
@@ -193,6 +201,28 @@ def admission(main, p, head, checks):
     if p['isMergeQueueEnabled'] is False:
         return f"base rule: no merge queue; mergeable: {p['mergeable']}"
     return 'wait: whether the merge queue is on is unknown'
+
+
+def running(p, checks):
+    commit = ((p.get('commits') or {}).get('nodes') or [{}])[0].get('commit') or {}
+    nodes = ((commit.get('statusCheckRollup') or {}).get('contexts') or {}).get('nodes') or []
+    busy = {n.get('name') or n.get('context') for n in nodes
+            if (n.get('__typename') == 'CheckRun' and n.get('status') != 'COMPLETED')
+            or (n.get('__typename') == 'StatusContext' and n.get('state') in ('PENDING', 'EXPECTED'))}
+    return [c for c in checks if c in busy]
+
+
+def enqueue(p, head):
+    if not isinstance(p.get('id'), str):
+        return "the pull request's id could not be read"
+    try:
+        r = subprocess.run(['gh', 'api', 'graphql', '-f', f"id={p['id']}", '-f', f'head={head}',
+                            '-f', f'query={ENQUEUE}'], capture_output=True, text=True, timeout=60,
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return 'the enqueue call did not finish'
+    why = ' '.join(r.stderr.split())[:200] or 'the enqueue call failed'
+    return None if r.returncode == 0 else why
 
 
 def ticket_of(repo, number, p, ticket):
@@ -349,10 +379,10 @@ def _cost(repo, number, home, ticket, extra):
         if post.ours(c, auth) and first.startswith('launch-fleet: cost') and ref.casefold() in first.casefold():
             return f"cost already posted {c['id']}"
     body = f'launch-fleet: cost unknown {ref}: '
-    if not same:
+    if not Path(COST).is_file():
+        body = 'launch-fleet: cost: ' + _agents_line(home, ref, number, ticket)
+    elif not same:
         body += "the cost command costs only tickets in the pull request's repository"
-    elif not Path(COST).is_file():
-        body += 'no cost command'
     else:
         try:
             r = subprocess.run([sys.executable, '-I', COST, '--repo', repo, '--pr', str(number), *extra],
@@ -370,14 +400,88 @@ def _cost(repo, number, home, ticket, extra):
     return 'cost posted ' + post.comment(home, ticket, body).split()[-1]
 
 
+
+USAGE_WINDOW_DAYS = 7
+
+
+def _amount(value, unit, places):
+    if value is None:
+        return 'unknown ' + unit
+    text = f'{round(value, places):,.{places}f}'
+    return (text.rstrip('0').rstrip('.') if places else text) + ' ' + unit
+
+
+def _role(credits):
+    return 'unknown' if credits is None else _amount(credits, 'credits', 2) + ', ' + _amount(None, 'tokens', 0)
+
+
+def _cost_line(ref, ticket, builder, reviewer):
+    total = None if builder is None or reviewer is None else builder + reviewer
+    return (f'Ticket #{ticket} cost {ref}: builder {_role(builder)}; reviewer {_role(reviewer)}; '
+            'CI unknown; total ' + ('unknown' if total is None else
+                                    ', '.join((_amount(total, 'credits', 2), _amount(None, 'tokens', 0),
+                                               _amount(None, 'runner minutes', 1)))))
+
+
+def _usage(thread):
+    try:
+        r = subprocess.run(['room-cli', 'usage', thread, '--json'], capture_output=True, text=True, timeout=60,
+                           stdin=subprocess.DEVNULL)
+        if r.returncode:
+            return None
+        history = json.loads(r.stdout, object_pairs_hook=records.unique).get('history')
+        credits, hours = history.get('credits'), history.get('hours')
+        if (history.get('id') != thread or type(credits) not in (int, float) or not 0 <= credits < float('inf')
+                or not isinstance(hours, list) or not hours):
+            return None
+        first = min(datetime.datetime.fromisoformat(h['hour'].replace('Z', '+00:00')) for h in hours)
+        today = datetime.datetime.now(datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        return None if first <= today - datetime.timedelta(days=USAGE_WINDOW_DAYS - 1) else credits
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError, TypeError, KeyError):
+        return None
+
+
+def _driven(number, threads, runs):
+    return (f'run:{number}' in threads or runs in (records.UNREADABLE, records.MISSING, None)
+            or (isinstance(runs, dict) and str(number) in runs))
+
+
+def _agents_line(home, ref, number, ticket):
+    try:
+        threads = records.private_state(home) if os.environ.get('LAUNCH_FLEET_STATE') else None
+        runs = records.driver_runs(home)
+    except (OSError, ValueError):
+        threads = runs = None
+    if not threads:
+        return _cost_line(ref, ticket, None, None)
+    builder = None if _driven(ticket, threads, runs) else threads.get(f'builder:{ticket}')
+    reviewers = (set() if _driven(number, threads, runs)
+                 else {v for k, v in threads.items() if k.startswith(f'review:{number}:')})
+    read = {t: _usage(t) for t in sorted(reviewers | ({builder} if builder else set()))}
+    builder_credits = read[builder] if builder else None
+    reviewer_credits = (None if not reviewers or threads.get(f'builder:{ticket}') in reviewers
+                        or None in (read[t] for t in reviewers) else sum(read[t] for t in sorted(reviewers)))
+    return _cost_line(ref, ticket, builder_credits, reviewer_credits)
+
+
+def enqueued_by_us(repo, p):
+    nodes = ((p or {}).get('enqueued') or {}).get('nodes') or []
+    login = ((nodes[-1] if isinstance(nodes[-1], dict) else {}).get('enqueuer') or {}).get('login') if nodes else None
+    return login is not None and post.ours({'user': {'login': login}}, post.authors(repo))
+
+
 def settle(repo, number, ticket, extra=()):
     found = receipts(repo, number)
     if found:
         told = cost(repo, number, found[-1][0], ticket, extra)
     else:  # a direct merge still owes its landed comment (#127 R1)
         main, p = snapshot(repo, number)
-        merged = where(main, p, (p or {}).get('headRefOid')).startswith('merged ')
-        told = 'no queued merge' + (landed(repo, number, p) if merged else '')
+        head = (p or {}).get('headRefOid')
+        merged = where(main, p, head).startswith('merged ')
+        if merged and enqueued_by_us(repo, p):
+            told = cost(repo, number, head, ticket, extra)
+        else:
+            told = 'no queued merge' + (landed(repo, number, p) if merged else '')
     if '; landed unknown: ' in told:
         raise Stop('unknown: ' + told)
     return told
@@ -622,6 +726,10 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
     ticket_of(repo, number, p, ticket)
     if '; it left the queue at ' in state and any(h == head for h, _ in receipts(repo, number)):
         blocked('left the merge queue: ' + state.split(': ', 1)[1])
+    busy = running(p, checks) if p['isMergeQueueEnabled'] is True else []
+    if busy:
+        raise Stop('refused: its required checks are running: ' + ', '.join(busy)
+                   + '; nothing was enqueued or recorded, so run it again once they finish')
     admit = admission(main, p, head, checks)
     if admit.startswith('wait: '):
         blocked(admit[6:])
@@ -632,19 +740,23 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
         raise Stop(held(why, ref))
     if admit.startswith('base rule: ') and not checked:
         raise Stop(admit + '; check the base rule and fleet.sh every, then pass --base-rule-checked')
-    # Save before you send: the queue may merge it or let it go before any later wake, and the
-    # receipt is what settle and the removal guard read then.
-    kept = receipt('not queued: the queue receipt is unconfirmed, so nothing was enqueued') \
-        if admit.startswith('admit: ') else None
-    done = post.gh('pr', 'merge', str(number), '--repo', repo, '--merge', '--match-head-commit', head,
-                   '--body', body) is not None
+    if admit.startswith('admit: '):
+        refused = enqueue(p, head)
+        done = refused is None
+    else:
+        refused, done = None, post.gh('pr', 'merge', str(number), '--repo', repo, '--merge',
+                                      '--match-head-commit', head, '--body', body) is not None
     state = where(*snapshot(repo, number), head)
     if state.startswith('merged '):
         return state + '; ' + cost(repo, number, head, ticket, extra)
     if state == 'queued':
-        return 'queued; recorded ' + str(kept or receipt('queued; receipt unconfirmed'))
+        return 'queued; recorded ' + str(receipt('queued; receipt unconfirmed'))
     if state.startswith('open') and done:
         return 'pending: the merge command succeeded but it still reads open; read it again next wake'
+    if admit.startswith('admit: '):
+        back = f'; it reads back as: {state[6:]}' if state.startswith('stop: ') else ''
+        raise Stop(f"not queued: {refused or 'the enqueue call succeeded'}{back}; "
+                   'nothing was recorded, so run it again next wake')
     blocked(state[6:] if state.startswith('stop: ') else state)
 
 

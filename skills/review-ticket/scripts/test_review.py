@@ -1,3 +1,4 @@
+import atexit
 import base64
 import json
 import os
@@ -12,9 +13,42 @@ import unittest
 HELPER = Path(__file__).with_name("review.py")
 SKILLS = "example/skills"
 PRODUCT = "example/product"
-OLD = "a" * 40
-HEAD = "b" * 40
-NEWER = "c" * 40
+
+
+def template():
+    root = Path(tempfile.mkdtemp())
+    atexit.register(subprocess.run, ["rm", "-rf", str(root)])
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(root), "-c", "user.name=Builder", "-c",
+                               "user.email=builder@example.com", *args],
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    def commit(message, files, branch):
+        for name, text in files.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(text)
+        git("add", "-A")
+        git("commit", "-qm", message)
+        git("branch", "-f", branch)
+        return git("rev-parse", "HEAD")
+    git("init", "-q", "-b", "main")
+    base = commit("base", {"README.md": "pantry\n"}, "base")
+    old = commit("export", {"src/export.rs": "fn export() {}\n", "src/cli.rs": "fn main() {}\n"}, "old")
+    head = commit("refuse overwrite", {"src/export.rs": "fn export() { refuse(); }\n"}, "head")
+    newer = commit("newer", {"src/export.rs": "fn export() { refuse(); redact(); }\n"}, "newer")
+    git("checkout", "-q", base)
+    main = commit("vendor", {f"vendor/v{n}.rs": f"// {n}\n" for n in range(320)}, "main")
+    git("checkout", "-q", head)
+    git("merge", "-q", "--no-edit", "main")
+    git("branch", "-f", "merged")
+    merged = git("rev-parse", "HEAD")
+    unrelated = git("commit-tree", git("rev-parse", "base^{tree}"), "-m", "replaced history")
+    git("branch", "-f", "unrelated", unrelated)
+    return root, base, old, head, newer, main, merged, unrelated
+
+
+ORIGIN, BASE, OLD, HEAD, NEWER, MAIN, MERGED, UNRELATED = template()
 FLEET = """# Fleet settings
 
 ## CI checks
@@ -167,6 +201,8 @@ class Review(unittest.TestCase):
         self.fixture = root / "world.json"
         self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FIXTURE": str(self.fixture)}
         self.root = root
+        self.repo = root / "repo"
+        subprocess.run(["git", "clone", "-q", "--no-local", str(ORIGIN), str(self.repo)], check=True)
         self.world({})
 
     def tearDown(self):
@@ -179,12 +215,11 @@ class Review(unittest.TestCase):
             "calls": [], "writes": 0, "issues": {},
             "pulls": {"7": {"number": 7, "state": "open", "draft": False, "merged": False,
                             "body": DESCRIPTION, "head": {"sha": HEAD},
-                            "base": {"ref": "main", "repo": {"full_name": SKILLS}}, **(pr or {})}},
+                            "base": {"ref": "main", "sha": BASE, "repo": {"full_name": SKILLS}}, **(pr or {})}},
             "files": {f"{SKILLS}@main:docs/agents/fleet.md": FLEET,
                       f"{PRODUCT}@main:docs/agents/triage-labels.md": LABELS},
             "checks": green(HEAD),
             "comments": {f"{SKILLS}#7": comments or []},
-            "compare": {f"{OLD}...{HEAD}": ["src/export.rs"]},
         }
         w.update(changes)
         self.fixture.write_text(json.dumps(w))
@@ -196,7 +231,7 @@ class Review(unittest.TestCase):
         if args[0] in ("pin", "check", "post") and "--head" not in args:
             args = (*args, "--head", self.state()["pulls"]["7"]["head"]["sha"])
         return subprocess.run([sys.executable, "-I", str(HELPER), *args], input=stdin, text=True,
-                              capture_output=True, env=self.env, timeout=30, cwd=cwd)
+                              capture_output=True, env=self.env, timeout=30, cwd=cwd or self.repo)
 
     def file(self, name, text):
         path = self.root / name
@@ -247,6 +282,38 @@ class Review(unittest.TestCase):
                 out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
                 self.assertEqual(out.returncode, 1)
                 self.assertEqual(out.stdout.strip(), expected)
+
+    def test_an_assigned_ticket_is_taken_only_from_its_exact_refs_line(self):
+        refs = DESCRIPTION.replace("Closes example/product#41", "Refs example/product#41")
+        self.world({}, pr={"body": refs})
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#41")
+        self.assertEqual((out.returncode, out.stdout.strip()),
+                         (0, f"review full #7 at {HEAD}; ticket {PRODUCT}#41; checks check"), out.stderr)
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (1, "stop: no Closes line names a ticket"))
+        self.world({}, pr={"body": refs.replace("\n", "\r\n")})
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#41")
+        self.assertEqual(out.stdout.strip(), f"review full #7 at {HEAD}; ticket {PRODUCT}#41; checks check")
+        both = "Closes example/skills#9\n" + refs
+        self.world({}, pr={"body": both})
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#41")
+        self.assertEqual(out.stdout.strip(), f"review full #7 at {HEAD}; ticket {PRODUCT}#41; checks check")
+        stop = f"stop: no Refs {PRODUCT}#41 line names the assigned ticket"
+        for name, body in {"other number": refs.replace("#41", "#42"), "unqualified": refs.replace(PRODUCT, ""),
+                           "other repository": refs.replace(PRODUCT, SKILLS), "more on the line":
+                           refs.replace("#41", "#41 and #42"), "inside a sentence": "See Refs example/product#41.\n",
+                           "only a Closes line": DESCRIPTION}.items():
+            with self.subTest(name):
+                self.world({}, pr={"body": body})
+                out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#41")
+                self.assertEqual((out.returncode, out.stdout.strip()), (1, stop))
+        for bad in ("#41", "example/product", "example/product#0", "example/product#41 "):
+            with self.subTest(bad):
+                self.world({}, pr={"body": refs})
+                out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", bad)
+                self.assertEqual((out.returncode, out.stdout), (2, ""))
+                self.assertIn("--ticket must be OWNER/NAME#N", out.stderr)
+                self.assertEqual(self.state()["calls"], [])
 
     def test_missing_or_malformed_record_authors_trust_nobody(self):
         for name, row in {"absent": "", "empty": "| Record authors | |\n",
@@ -390,7 +457,7 @@ class Review(unittest.TestCase):
         fresh = ("VERDICT: CHANGES", "Next: a fresh, stronger builder fixes R4 once, then one final check.")
         old_r4 = "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60."
         merge = ("VERDICT: APPROVE", "Next: none open. It merges by the project's merge rules.")
-        refused = ("R4: `src/cli.rs` is unchanged since aaaaaaa; a re-check raises a new finding there "
+        refused = (f"R4: `src/cli.rs` is unchanged since {OLD[:7]}; a re-check raises a new finding there "
                    "only as a Risk: security, privacy or data-loss blocker")
         cases = {
             "polish on unchanged code": (unchanged, merge, 1, refused),
@@ -407,11 +474,79 @@ class Review(unittest.TestCase):
                 out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
                 self.assertEqual(out.returncode, code, out.stdout + out.stderr)
                 self.assertIn(expected, out.stdout.splitlines())
-        self.assertIn(["api", f"repos/{SKILLS}/compare/{OLD}...{HEAD}"], self.state()["calls"])
-        self.world({"compare": {}}, comments=[report(FULL)])
+
+    def test_a_recheck_after_a_large_main_merge_reads_only_the_pull_requests_own_changes(self):
+        merged = RECHECK.replace(f"APPROVE at {HEAD}", f"APPROVE at {MERGED}")
+        self.world({"checks": green(MERGED), "compare": {f"{OLD}...{MERGED}": [
+            "src/export.rs", *(f"vendor/v{n}.rs" for n in range(320))]}},
+            pr={"head": {"sha": MERGED}, "base": {"ref": "main", "sha": MAIN}}, comments=[report(FULL)])
+        out = self.run_helper("check", self.file("r.md", merged), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+        for path in ("vendor/v7.rs", "src/cli.rs"):
+            with self.subTest(path):
+                line = f"- **R4 [polish]** `{path}:1` (Sweep) Typo. Fix: file exists. Polish issue: #60."
+                text = merged.replace(
+                    "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60.", line)
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertEqual(out.stdout.splitlines(), [
+                    f"R4: `{path}` is unchanged since {OLD[:7]}; a re-check raises a new finding there "
+                    "only as a Risk: security, privacy or data-loss blocker"])
+
+    def test_a_recheck_counts_a_moved_submodule_pointer_that_gitmodules_ignores(self):
+        def git(*args):
+            return subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Builder", "-c",
+                                   "user.email=builder@example.com", *args],
+                                  check=True, capture_output=True, text=True).stdout.strip()
+
+        def pointer(message, sha):
+            git("update-index", "--add", "--cacheinfo", f"160000,{sha},lib")
+            git("commit", "-qm", message)
+            return git("rev-parse", "HEAD")
+        (self.repo / ".gitmodules").write_text('[submodule "lib"]\n\tpath = lib\n\turl = ./lib\n\tignore = all\n')
+        git("add", ".gitmodules")
+        base = pointer("lib at one", "1" * 40)
+        last = pointer("lib at two", "2" * 40)
+        head = pointer("lib at three", "3" * 40)
+        self.world({"checks": green(head)}, pr={"head": {"sha": head}, "base": {"ref": "main", "sha": base}},
+                   comments=[report(FULL.replace(OLD, last))])
+        text = RECHECK.replace(HEAD, head).replace(
+            "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60.",
+            "- **R4 [polish]** `lib:1` (Sweep) The pointer moved past the fixed release. Polish issue: #60.")
+        for command in ("check", "post"):
+            with self.subTest(command):
+                out = self.run_helper(command, self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual((out.returncode, out.stdout.strip()),
+                                 (0, "report ok" if command == "check" else "posted 901"), out.stdout + out.stderr)
+
+    def test_a_recheck_fetches_a_missing_commit_and_names_one_it_cannot_read(self):
+        subprocess.run(["rm", "-rf", str(self.repo)], check=True)
+        subprocess.run(["git", "clone", "-q", "--no-local", "--single-branch", "-b", "base", str(ORIGIN),
+                        str(self.repo)], check=True)
+        self.world({}, comments=[report(FULL)])
         out = self.run_helper("check", self.file("r.md", RECHECK), "--repo", SKILLS, "--pr", "7")
-        self.assertEqual(out.returncode, 2, out.stdout)
-        self.assertIn("cannot read", out.stderr)
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+        gone = "d" * 40
+        cases = {
+            "last read": ({}, FULL.replace(OLD, gone), gone),
+            "head": ({"head": {"sha": gone}}, FULL, gone),
+            "base": ({"base": {"ref": "main", "sha": gone}}, FULL, gone),
+        }
+        for name, (pr, earlier, missing) in cases.items():
+            with self.subTest(name):
+                self.world({"checks": green(pr.get("head", {}).get("sha", HEAD))}, pr=pr, comments=[report(earlier)])
+                text = RECHECK.replace(HEAD, pr.get("head", {}).get("sha", HEAD))
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual((out.returncode, out.stdout), (2, ""), out.stderr)
+                self.assertEqual(out.stderr.strip(), f"refused: cannot read the pull request's own changes: "
+                                 f"commit {missing} is not in this checkout and origin does not give it")
+
+    def test_a_recheck_names_the_revisions_and_gits_failure_when_the_diff_fails(self):
+        self.world({}, pr={"base": {"ref": "main", "sha": UNRELATED}}, comments=[report(FULL)])
+        out = self.run_helper("check", self.file("r.md", RECHECK), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout), (2, ""), out.stderr)
+        self.assertEqual(out.stderr.strip(), f"refused: cannot read the pull request's own changes: git diff "
+                         f"{UNRELATED}...{OLD} failed: fatal: {UNRELATED}...{OLD}: no merge base")
 
     def hand_back(self, code_line):
         upstream, work = self.root / "upstream", self.root / "work"

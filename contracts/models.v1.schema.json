@@ -575,7 +575,10 @@
           "minimum": 0
         },
         "label": {
-          "const": "as reported by CloudRoom; it may answer from a saved copy"
+          "enum": [
+            "as reported by CloudRoom; it may answer from a saved copy",
+            "Installed local harnesses with OpenWiz's current choices"
+          ]
         },
         "state": {
           "$ref": "#/$defs/state"
@@ -702,6 +705,10 @@
                 "changed",
                 "unchanged"
               ]
+            },
+            "listed": {
+              "const": false,
+              "description": "Present on a successful local set of a model id outside the local offered list."
             },
             "after": {
               "$ref": "#/$defs/any_role"

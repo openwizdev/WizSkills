@@ -9,6 +9,7 @@
 # the spec's number after --bundle OWNER/REPO): then it runs that spec's check
 # alone (`fleet.sh spec <FLEET_SPEC>`).
 # Exit as the check exits; 2 when the clone can't be made or updated.
+[ -z "${OPENWIZ_TOKEN_SERVICE:-}" ] || unset OPENWIZ_GITHUB_APP_KEY
 die() { printf 'loop.sh: %s\n' "$*" >&2; exit 2; }
 repository() {
   case $1 in
@@ -25,7 +26,7 @@ if [ "${1:-}" = --bundle ]; then
   repository "$2" || die 'GH_REPO must be owner/name'
   [ $# = 2 ] || spec_number "$3" || die "FLEET_SPEC must be a spec's number"
   source=$(cd -P "$(dirname "$0")/../.." && pwd) || die "can't find the installed skills"
-  files='launch-fleet/scripts/loop.sh launch-fleet/scripts/fleet.sh launch-fleet/scripts/records.py to-tickets/revision.sh to-tickets/check-links.sh launch-fleet/scripts/carried/alarm.py'
+  files='launch-fleet/scripts/loop.sh launch-fleet/scripts/fleet.sh launch-fleet/scripts/records.py to-tickets/revision.sh to-tickets/check-links.sh launch-fleet/scripts/carried/alarm.py launch-fleet/scripts/github-app/agent-token.py'
   for file in $files; do
     [ -r "$source/$file" ] || die "can't read installed $file"
     # The quoted heredoc must preserve every byte, without interpreting shell
@@ -39,10 +40,12 @@ if [ "${1:-}" = --bundle ]; then
     printf '#!/bin/sh\nGH_REPO=%s\nexport GH_REPO\n' "$2"
     [ $# = 2 ] || printf 'FLEET_SPEC=%s\nexport FLEET_SPEC\n' "$3"
     cat <<'OPENWIZ_BUNDLE_BOOTSTRAP'
+[ -z "${OPENWIZ_TOKEN_SERVICE:-}" ] || unset OPENWIZ_GITHUB_APP_KEY
 runtime=$(mktemp -d) || { echo "loop.sh: can't unpack the bundled loop" >&2; exit 2; }
 trap 'rm -rf "$runtime"' EXIT
 trap 'exit 2' HUP INT TERM
-mkdir -p "$runtime/skills/launch-fleet/scripts/carried" "$runtime/skills/to-tickets" || exit 2
+mkdir -p "$runtime/skills/launch-fleet/scripts/carried" "$runtime/skills/launch-fleet/scripts/github-app" \
+  "$runtime/skills/to-tickets" || exit 2
 OPENWIZ_BUNDLE_BOOTSTRAP
     for file in $files; do
       printf 'cat > "$runtime/skills/%s" <<%s || exit 2\n' "$file" "'OPENWIZ_BUNDLED_HELPER_EOF'"
@@ -60,6 +63,15 @@ repository "$GH_REPO" || die "GH_REPO must be owner/name"
 FLEET_SPEC=${FLEET_SPEC:-}
 [ -z "$FLEET_SPEC" ] || spec_number "$FLEET_SPEC" || die "FLEET_SPEC must be a spec's number"
 export GH_REPO
+inside=
+case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
+unset LAUNCH_FLEET_TOKEN_STEP
+if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ]; then
+  helper=$(cd -P "$(dirname "$0")" && pwd)/github-app/agent-token.py
+  LAUNCH_FLEET_TOKEN_STEP=$$
+  export LAUNCH_FLEET_TOKEN_STEP
+  exec python3 -I "$helper" run --requester fleet-check --repository "$GH_REPO" --read -- sh "$0"
+fi
 # The check reads GitHub as the OpenWiz App (GI7, #2549; the identity contract
 # `openwiz.github-identity.v1`): with the loop's OPENWIZ_GITHUB_APP_KEY secret,
 # `openwiz github token --read` mints a read-only installation token for gh
@@ -71,7 +83,12 @@ export GH_REPO
 # unchanged probe asks what that identity can read; never an inherited value.
 app=
 unset LAUNCH_FLEET_GITHUB_AUTH
-if [ -z "${OPENWIZ_GITHUB_APP_KEY:-}" ]; then
+if [ -n "$inside" ]; then
+  if [ -n "${OPENWIZ_AGENT_TOKEN_RUN:-}" ]; then
+    LAUNCH_FLEET_GITHUB_AUTH=installation
+    export LAUNCH_FLEET_GITHUB_AUTH
+  fi
+elif [ -z "${OPENWIZ_GITHUB_APP_KEY:-}" ]; then
   echo "loop.sh: no OPENWIZ_GITHUB_APP_KEY secret; GitHub as today's account" >&2
 elif ! command -v openwiz > /dev/null; then
   echo "loop.sh: no openwiz to mint the App token; GitHub as today's account" >&2

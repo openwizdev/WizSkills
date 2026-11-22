@@ -53,14 +53,15 @@ problem" that applies the `feedback` label and asks only for public words:
 
 | Field id | Type | Required | Asks for |
 | --- | --- | --- | --- |
-| (none) | `markdown` | | Opens with the notice "Everything you write here is public: anyone can read it.", then says not to paste prompts, code, paths, tokens, logs or screenshots of private work |
+| (none) | `markdown` | | Exactly the block's `warning`: it opens with the notice "Everything you write here is public: anyone can read it.", then says not to paste prompts, transcripts, code, file paths, tokens, logs or screenshots of private work |
 | `what-happened` | `textarea` | yes | What went wrong |
 | `expected` | `textarea` | yes | What the user expected instead |
 | `steps` | `textarea` | no | How someone can see it happen |
-| `public-words` | `checkboxes` | yes | The user confirms everything above is public words they chose to share |
+| `public-words` | `checkboxes` | yes | One required option, exactly the block's `confirmation`: the user confirms everything above is public words they chose to share |
 
 No other field, no `render` (it turns a field into a log box), no assignee,
-project or title prefix. A new field is a change to this contract.
+project or title prefix. A new field, or any other wording of the warning or
+the confirmation, is a change to this contract.
 
 ### The label prerequisite
 
@@ -115,8 +116,16 @@ A report is **small and clear** only when every one of these holds:
 A brief copies no link, command or code from the report. The fix's pull
 request closes both the brief and the report with one line each, in full,
 `Closes openwizdev/OpenWiz#<brief>` and `Closes openwizdev/OpenWiz#<report>`,
-whichever `openwizdev` repository the pull request is in. A bare `Closes #<n>`
-closes an issue in the pull request's own repository, never on the destination.
+whichever `openwizdev` repository the pull request is in. Two rules hold
+apart:
+
+- **GitHub:** a bare `Closes #<n>` closes issue `<n>` of the pull request's own
+  repository. On a pull request in the destination itself, that is the
+  destination's issue `<n>`; anywhere else, it never reaches the destination.
+- **This loop:** only the qualified `Closes openwizdev/OpenWiz#<n>` line names
+  a brief or report, in every repository, the destination included. A bare
+  `Closes #<n>` is never read as a closing line here, so launch-fleet follows
+  no report link from it, even where GitHub closes the issue.
 
 ## The report link
 
@@ -182,6 +191,8 @@ These prove the rules on fixtures only, never a live report.
     "name": "Report a problem",
     "labels": ["feedback"],
     "notice": "Everything you write here is public: anyone can read it.",
+    "warning": "Everything you write here is public: anyone can read it. Use only public words you choose to share. Do not paste prompts, transcripts, code, file paths, tokens, logs or screenshots of private work.",
+    "confirmation": "Everything above is public words I chose to share.",
     "fields": [
       {"type": "markdown", "id": null, "required": false},
       {"type": "textarea", "id": "what-happened", "required": true},

@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=909
+CASES=915
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -87,7 +87,7 @@ done
 
 # A 40-character commit made of TEXT repeated, as the jq `sha` below makes it.
 sha() { s=''; while [ ${#s} -lt 40 ]; do s=$s$1; done; printf '%.40s' "$s"; }
-S31=$(sha 31) S31F=$(sha 31f) S31E=$(sha 31e) S99=$(sha 99)
+S31=$(sha 31) S31F=$(sha 31f) S31E=$(sha 31e) S31B=$(sha 31b) S99=$(sha 99)
 
 # Small changes to a fixture, for the cases' filters.
 LIB='
@@ -863,6 +863,15 @@ EOF
 expect 'contexts: conflicting snapshots of one PR fail closed' 2 check.json "$MANY31 | .pulls += [(.pulls[] | select(.number == 31) | .head = sha(99))]" -- check <<EOF
 can't read the issues outside specs
 EOF
+OTHER31='pr31 | open_pr(31; 13; "#13: widget page, green") | .pulls[-1] |= (.id = "PR_synthetic_other_31" | .head = sha("31b"))'
+expect 'contexts #1958: same number in two repositories is two PRs' 0 check.json "$OTHER31" -- spec 10 <<EOF
+review #31 for #12 at $S31: first review
+review #31 for #13 at $S31B: first review
+EOF
+expect 'contexts #1958: same number in two repositories keeps each its own checks' 0 check.json "$OTHER31 | .pulls[-1] |= (.rollup = \"FAILURE\" | .checks[1].conclusion = \"FAILURE\")" -- spec 10 <<EOF
+review #31 for #12 at $S31: first review
+CI failed #31 for #13 at $S31B: tell its builder
+EOF
 # #2119 CI: the hour begins with no contexts before its workflow starts.
 expect 'contexts: hourly workflow start supplies valid pending checks' 0 check.json 'pr31 | pull(31; .checks = [] | running_ci)' -- check < /dev/null
 # R1: the same PR is observed separately under two approved specs.
@@ -1112,6 +1121,20 @@ EOF
 expect 'K9: the pull request changes tests, main changed only docs: merge' 0 check.json 'store31 | pull(31; .files = [changed("tests/store.rs"; "modified")]) | main24("11:15"; [changed("docs/guide.md"; "modified"), changed("README.md"; "modified")])' -- check <<EOF
 merge #31 for #12 at $S31: APPROVE and CI green
 EOF
+expect 'WQ5: with the merge queue on, main changing the same file is no reason to re-test: merge' 0 check.json 'store31 | main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pull(31; .queue = true)' -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+log_has 'WQ5: with the merge queue on, main changing the same file is no reason to re-test: merge' 0 '^files 31$'
+expect 'WQ5: with the merge queue on, a re-test that ran on an old main is no reason to merge main in: merge' 0 check.json 'store31 | merged_pr(23; 99; "11:10"; [changed("README.md"; "modified")]) | main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pr_say(31; 3103; "11:20"; "launch-fleet: re-test sent \(sha(31)) on \(sha("23ec")) in run 901: src/store/store.rs in #24") | pull(31; .checks += [run_in("build"; "11:21"; "SUCCESS"; 901), run_in("test"; "11:21"; "SUCCESS"; 901)] | .queue = true)' -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect 'WQ5: with the merge queue off, main changing the same file still re-tests it' 0 check.json 'store31 | main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pull(31; .queue = false)' -- check <<EOF
+re-test #31 for #12 at $S31: main changed src/store/store.rs in #24 after 2026-11-01T10:30:00Z, which its CI may not have tested; run its CI again on the latest main
+EOF
+expect 'WQ5: with the merge queue on, a red required check and main changing the same file: only the CI failure goes to its builder' 0 check.json 'store31 | main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pull(31; .queue = true | .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE")' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+log_has 'WQ5: with the merge queue on, a red required check and main changing the same file: only the CI failure goes to its builder' 0 '^files 31$'
 expect 'K9: main changed tests, the pull request changes only docs: merge' 0 check.json 'store31 | pull(31; .files = [changed("docs/store.md"; "modified")]) | main24("11:15"; [changed("tests/store.rs"; "modified")])' -- check <<EOF
 merge #31 for #12 at $S31: APPROVE and CI green
 EOF

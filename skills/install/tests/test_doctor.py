@@ -232,9 +232,10 @@ class Doctor(unittest.TestCase):
         self.s.observations['github_app'] = 'app_missing'
         self.s.save()
         self.assertEqual(self.only(self.s.run()),
-                         '2. GitHub App: not verified (app_missing). Fix: install OpenWiz\'s GitHub App on %s '
-                         'from the setup page, then python3 -I -B %s/runtime/setup/setup.py check --state-dir %s'
-                         % (REPO, self.s.build, self.s.state))
+                         '2. GitHub App: not verified (app_missing). Fix: set up OpenWiz\'s GitHub App for %s with '
+                         '%s/runtime/github-app/setup.py, as the setup skill\'s "The App" says, then '
+                         'python3 -I -B %s/runtime/setup/setup.py check --state-dir %s'
+                         % (REPO, self.s.build, self.s.build, self.s.state))
 
     # catches: an old App check counted as current.
     def test_app_check_out_of_date(self):
@@ -467,6 +468,270 @@ class Doctor(unittest.TestCase):
         self.s.run()
         self.assertEqual((self.s.state / 'setup/state.json').read_bytes(), before)
         self.assertEqual(sorted(p.name for p in (self.s.state / 'setup').iterdir()), ['state.json'])
+
+
+SKILL = DOCTOR.parents[1] / 'SKILL.md'
+
+
+CLASH = SKILL.parent / 'scripts/skill_clash.py'
+
+
+def operation_of(clashes):
+    return __import__('hashlib').sha256(json.dumps(clashes, sort_keys=True).encode()).hexdigest()[:16]
+
+
+QUESTION = ('You already have your own skills named grill, handoff and research. handoff-mine is already taken, '
+            'so yours becomes handoff-mine-2. Rename yours to grill-mine, handoff-mine-2 and research-mine '
+            '(and their name lines) so OpenWiz can install? They keep working under the new names. (yes/no)')
+
+
+class SkillNameClash(unittest.TestCase):
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        root = Path(self.dir.name)
+        self.home, self.build = root / 'home', root / 'build'
+        for name in ('grill', 'handoff', 'install', 'research'):
+            write(self.build / 'runtime/skills' / name / 'SKILL.md', '---\nname: %s\n---\n' % name)
+        for skills, name in (('.claude/skills', 'grill'), ('.codex/skills', 'handoff'),
+                             ('.codex/skills', 'research'), ('.codex/skills', 'handoff-mine')):
+            write(self.home / skills / name / 'SKILL.md',
+                  '---\nname: %s\ndescription: synthetic user skill\n---\n# Mine\n' % name)
+            write(self.home / skills / name / 'notes.txt', 'synthetic\n')
+        ours = self.home / '.codex/skills/install'
+        write(ours / 'SKILL.md', '---\nname: install\n---\n')
+        write(ours / '.openwiz-skill', 'openwiz.skill-copy.v1\n%s\n' % ('a' * 40))
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def run_clash(self, *args):
+        env = {'HOME': str(self.home), 'PATH': '/usr/bin:/bin'}
+        self.assertTrue(CLASH.is_file(), 'missing skill_clash.py')
+        return subprocess.run([sys.executable, '-I', str(CLASH), *args, '--build', str(self.build),
+                               '--root', str(self.home / '.local/lib/openwiz')],
+                              env=env, capture_output=True, text=True)
+
+    def tree(self):
+        return sorted((str(p.relative_to(self.home)), p.read_text() if p.is_file() else '')
+                      for p in self.home.rglob('*'))
+
+    def test_list_names_every_clash_asks_the_one_question_and_moves_nothing(self):
+        before = self.tree()
+        done = self.run_clash('list')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        out = json.loads(done.stdout)
+        self.assertEqual([(c['path'][len(str(self.home)) + 1:], c['rename_to']) for c in out['clashes']],
+                         [('.claude/skills/grill', 'grill-mine'), ('.codex/skills/handoff', 'handoff-mine-2'),
+                          ('.codex/skills/research', 'research-mine')])
+        self.assertEqual(out['question'], QUESTION)
+        self.assertEqual(self.tree(), before)
+
+    def test_no_yes_or_another_plan_moves_nothing(self):
+        before = self.tree()
+        self.assertEqual(self.run_clash('rename').returncode, 2)
+        self.assertEqual(self.run_clash('rename', '--yes', '--operation', '0' * 16).returncode, 5)
+        self.assertEqual(self.tree(), before)
+
+    def test_yes_moves_each_folder_and_its_name_line_and_checks_it(self):
+        op = json.loads(self.run_clash('list').stdout)['operation']
+        done = self.run_clash('rename', '--yes', '--operation', op)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual([r['result'] for r in json.loads(done.stdout)['renamed']], ['moved'] * 3)
+        for skills, old, new in (('.claude/skills', 'grill', 'grill-mine'),
+                                 ('.codex/skills', 'handoff', 'handoff-mine-2'),
+                                 ('.codex/skills', 'research', 'research-mine')):
+            self.assertFalse((self.home / skills / old).exists())
+            self.assertEqual((self.home / skills / new / 'SKILL.md').read_text(),
+                             '---\nname: %s\ndescription: synthetic user skill\n---\n# Mine\n' % new)
+            self.assertEqual((self.home / skills / new / 'notes.txt').read_text(), 'synthetic\n')
+        self.assertEqual((self.home / '.codex/skills/handoff-mine/SKILL.md').read_text().split('\n')[1],
+                         'name: handoff-mine')
+        self.assertEqual((self.home / '.codex/skills/install/SKILL.md').read_text(), '---\nname: install\n---\n')
+        out = json.loads(self.run_clash('list').stdout)
+        self.assertEqual((out['clashes'], out['question']), ([], None))
+
+    def blocked_and_unmoved(self, why):
+        before = self.tree()
+        out = json.loads(self.run_clash('list').stdout)
+        self.assertEqual((out['question'], out['operation']), (None, None))
+        self.assertTrue(any(why in b['why'] for b in out['blocked']), out['blocked'])
+        self.assertEqual(self.run_clash('rename', '--yes', '--operation', operation_of(out['clashes'])).returncode, 5)
+        self.assertEqual(self.tree(), before)
+        return out
+
+    def test_a_folder_the_installer_still_refuses_blocks_every_move(self):
+        dotfiles = self.home / 'dotfiles/config'
+        write(dotfiles / 'opencode/skills/handoff/SKILL.md', '---\nname: handoff\n---\n')
+        (self.home / '.config').symlink_to(dotfiles)
+        self.blocked_and_unmoved('%s is a link or not a folder' % (self.home / '.config'))
+        self.assertTrue((dotfiles / 'opencode/skills/handoff/SKILL.md').is_file())
+
+    def test_a_linked_skill_md_is_refused_and_left_alone(self):
+        target = self.home / 'dotfiles/handoff.md'
+        write(target, '---\nname: handoff\n---\n')
+        skill = self.home / '.codex/skills/research/SKILL.md'
+        skill.unlink()
+        skill.symlink_to(target)
+        self.blocked_and_unmoved('SKILL.md is a link')
+        self.assertTrue(skill.is_symlink())
+        self.assertEqual(target.read_text(), '---\nname: handoff\n---\n')
+
+    def test_step_4_asks_once_and_says_what_no_means(self):
+        step4 = SKILL.read_text()[SKILL.read_text().index('## 4. '):SKILL.read_text().index('## 5. ')]
+        for words in ('scripts/skill_clash.py list --build "$build" --root <root>',
+                      'scripts/skill_clash.py rename --build "$build" --root <root> --yes --operation <operation>',
+                      'there is no `question` and nothing may move',
+                      'ask exactly its `question`, word for word', 'run `install skills` again',
+                      "OpenWiz's skills were not installed", 'and stop', '<name>-mine-2',
+                      'Never move, rename or delete a user\'s skill without that yes'):
+            self.assertIn(words, step4)
+        self.assertNotIn('refuses the whole step: report it.', step4)
+
+
+HOST_QUESTION = ("Where should your agents run? This computer (Claude Code or Codex you're signed in to), "
+                 "boat.dev, or CloudRoom.")
+FINISH = ("Installed. Without CloudRoom today you can plan (grill, spec, tickets) and start a builder on this "
+          "computer or on boat.dev by hand. The automatic fleet without CloudRoom arrives in 0.1.1. "
+          "Want CloudRoom now instead? It's optional.")
+DRIVER_START = {'repository', 'ticket', 'skill', 'harness', 'model'}
+
+
+def ticket_start_record():
+    """build-ticket's own pattern for the start record a builder needs before it claims (ticket.py START)."""
+    import importlib.util
+    path = SKILL.parents[1] / 'build-ticket/scripts/ticket.py'
+    spec = importlib.util.spec_from_file_location('ticket_2221', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.START
+
+
+class NoCloudRoomRequired(unittest.TestCase):
+    """OpenWiz 0.1.0's install finishes with no CloudRoom; CloudRoom's steps run only when the user picks it."""
+
+    def setUp(self):
+        self.text = SKILL.read_text()
+
+    def between(self, start, end):
+        self.assertIn(start, self.text)
+        self.assertIn(end, self.text)
+        return self.text[self.text.index(start):self.text.index(end)]
+
+    def test_setup_uses_the_installed_check_without_the_removed_open_command(self):
+        setup = self.between('## 3. ', '## 4. ')
+        self.assertNotIn('/tools/install/install open ', self.text)
+        self.assertIn('/runtime/setup/setup.py check --state-dir <state>', setup)
+
+    def test_overwrite_requires_a_ported_install_on_this_maintenance_line(self):
+        step = self.between('## 4. ', '## 5. ')
+        self.assertIn('git clone --depth 1 --branch maint/0.3 ', step)
+        self.assertIn('fixed() ', step)
+        self.assertIn('\nif fixed ', step)
+        fixed = step[step.index('fixed() '):step.index('\nif fixed ')]
+        with tempfile.TemporaryDirectory() as directory:
+            stale = Path(directory) / 'install'
+            write(stale / 'SKILL.md', '---\nversion: 0.3.0\n---\n')
+            write(stale / 'scripts/doctor.py', '')
+            for folder, expected in ((stale, 1), (SKILL.parent, 0)):
+                with self.subTest(folder=folder):
+                    done = subprocess.run(['sh', '-c', fixed + '\nfixed "$1"', 'sh', str(folder)],
+                                          capture_output=True, text=True)
+                    self.assertEqual(done.returncode, expected, done.stderr)
+
+    def test_cloudroom_is_no_requirement_done_condition_or_resume_gate(self):
+        self.assertFalse('needs CloudRoom.' in self.text, 'needs CloudRoom.')
+        self.assertFalse('install cannot be completed here' in self.text, 'install cannot be completed here')
+        step3 = self.between('## 3. ', '## 4. ')
+        done = [l for l in step3.split('\n') if l.startswith('Done when')]
+        self.assertEqual(len(done), 1)
+        self.assertNotRegex(done[0], r'^Done when CloudRoom')
+        for line in self.between('## Resume', '## 1. ').split('\n') + done:
+            if 'cloudroom_' in line:
+                self.assertTrue('chose CloudRoom' in line, line)
+        intel = next(s for s in self.between('## 1. ', '## 2. ').split('. ') if 'Intel Mac' in s and 'stop' in s)
+        self.assertTrue('chose CloudRoom' in intel, intel)
+
+    def test_the_host_question_comes_first_and_cloudroom_runs_only_when_chosen(self):
+        self.assertTrue(HOST_QUESTION in self.text, 'missing: ' + HOST_QUESTION)
+        at = self.text.index(HOST_QUESTION)
+        self.assertLess(at, self.text.index('cloudroom.py', self.text.index('## Resume')))
+        self.assertLess(at, self.text.index('## 1. Preflight'))
+        paragraph = self.text[self.text.rindex('\n\n', 0, at):self.text.index('\n\n', at)]
+        self.assertFalse('recommend' in paragraph.lower(), 'the host question recommends one host')
+        step3 = self.between('## 3. ', '## 4. ')
+        self.assertTrue('ignore every `cloudroom_*` code' in step3, 'ignore every `cloudroom_*` code')
+        self.assertLess(step3.index('ignore every `cloudroom_*` code'), step3.index('| Code | Next |'))
+
+    def test_without_cloudroom_the_finish_says_what_works_and_gives_real_hand_starts(self):
+        import re
+        self.assertTrue(FINISH in self.text, 'missing: ' + FINISH)
+        hand = self.between('## Without CloudRoom', '## 6. ')
+        starts = [l for l in hand.split('\n') if 'driver start' in l]
+        self.assertEqual(len(starts), 2, starts)
+        self.assertTrue(any('"$build"/runtime/adapters/local/driver start' in l for l in starts))
+        self.assertTrue(any('"$ow"/adapters/boat/driver start' in l for l in starts))
+        self.assertFalse('runtime/adapters/boat/driver' in self.text, 'runtime/adapters/boat/driver')
+        self.assertTrue('git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$ow"' in hand, 'git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$ow"')
+        for line in starts:
+            given = re.search(r"echo '(\{.*\})'", line)[1]
+            given = json.loads(re.sub(r'<N>', '7', re.sub(r'"<[^>]*>"', '"x"', given)))
+            self.assertEqual(set(given), DRIVER_START)
+            self.assertEqual(given['skill'], 'build-ticket')
+            self.assertIsInstance(given['ticket'], int)
+        for words in ('approvals.json', '| Harness permission mode | `<mode>` |', 'chmod 600', 'wake', 'stop'):
+            self.assertTrue(words in hand, words)
+        record = re.findall(r'--body "([^"]*)"', hand)
+        self.assertTrue(record and all(ticket_start_record().match(r) for r in record), record)
+
+    def test_the_automatic_first_fleet_on_0_1_0_says_it_runs_in_cloudroom(self):
+        step6 = self.between('## 6. ', '### 1. ')
+        self.assertTrue('even with builders on boat.dev' in step6, 'even with builders on boat.dev')
+        self.assertTrue('0.1.1' in step6, '0.1.1')
+        self.assertTrue('"Without CloudRoom" above' in step6, 'no pointer to "Without CloudRoom"')
+
+
+    def test_manual_plan_ends_at_the_ready_label_readback(self):
+        plan = self.between('- **Plan:**', '- **Start one ticket')
+        self.assertIn('read the ready labels back', plan, 'manual planning has no stopping point')
+        self.assertIn('Skip the `launch-fleet` handoff and the steering video', plan)
+        self.assertIn('return to the hand-start steps below', plan)
+
+    def test_manual_plan_checks_approval_tools_before_writing(self):
+        plan = self.between('- **Plan:**', '- **Start one ticket')
+        preflight, _, _ = plan.partition('run `setup`')
+        self.assertIn('`jq --version`', preflight, 'planning can write tickets before checking jq')
+        self.assertIn('`gh --version`', preflight)
+        self.assertIn('2.94 or newer', preflight)
+        self.assertIn('install jq', preflight)
+        self.assertIn('install or upgrade GitHub CLI', preflight)
+        self.assertIn('Recheck both before continuing', preflight)
+
+    def test_manual_start_checks_builder_readiness_on_both_sides_of_the_record(self):
+        hand = self.between('- **Start one ticket', '- **Review and merge**')
+        before, command, after = hand.partition('gh issue comment')
+        self.assertIn('/build-ticket/scripts/ticket.py read', before,
+                      'a start record can be posted for an ineligible ticket')
+        self.assertIn('proceed only on exit 1 with', before)
+        self.assertIn('ready: no: no launch-fleet start record from a record author', before)
+        self.assertLess(before.index('gh api user --jq .login'), before.index('Post from'))
+        self.assertIn('`Record authors`', before)
+        self.assertTrue(command)
+        gate, start, _ = after.partition('driver start')
+        self.assertIn('run the same ticket read again', gate)
+        self.assertIn('Only exit 0 with `ready: yes`', gate)
+        self.assertTrue(start)
+
+    def test_local_approval_updates_only_the_selected_entry(self):
+        local = self.between('  - **This computer**', '  - **boat.dev**')
+        approval, _, _ = local.partition('driver start')
+        self.assertIn('Read the existing owner-only JSON object', approval,
+                      'writing a second approval can erase the first')
+        self.assertIn('Preserve every other repository and harness entry', approval)
+        self.assertIn('Preview the selected repository, harness and old and new modes', approval)
+        self.assertIn('If the file changed since the preview', approval)
+        self.assertIn('read the saved JSON back', approval)
+        self.assertNotIn('then write `{"<owner>/<name>":', approval)
 
 
 if __name__ == '__main__':

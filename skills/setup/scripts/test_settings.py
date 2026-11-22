@@ -449,8 +449,6 @@ class Check(unittest.TestCase):
                 self.assertEqual(sum('Roster' in got for got in out.splitlines()), 1, 'the first broken rule only')
 
     def test_approval_rules_are_optional_and_a_broken_row_is_refused_by_row(self):
-        # catches: a rule with no real approver ("the user", a placeholder, blank), a rule
-        # agents cannot read as a gate, or a repeat, verified; or a project without the table refused.
         valid = [(rule, 'syn-owner') for rule in DEFAULT_RULES]
         for text in (NEW, FLEET, with_rules(rules(*valid))):
             code, out = self.check(self.project(**{'fleet.md': text}))
@@ -481,8 +479,6 @@ class Check(unittest.TestCase):
             self.assertIn(here + line, out.splitlines())
 
     def test_the_template_writes_the_six_default_rules_and_a_filled_copy_passes(self):
-        # catches: setup writing other rules than today's gates, no approver blank to fill,
-        # or a filled template the check refuses.
         template = TEMPLATE.read_text()
         self.assertEqual(template.count('\n## Approval rules\n'), 1)
         self.assertLess(template.index('\n## Approval rules\n'), template.index('\n## Standing merge rules\n'))

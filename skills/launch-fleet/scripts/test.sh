@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=916
+CASES=922
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1497,8 +1497,8 @@ elif mkdir -p "$A/remote" "$A/bin" "$A/install/github-app" \
   && printf 'one\n' > "$A/remote/version" && git -C "$A/remote" init -q && git -C "$A/remote" add -A \
   && git -C "$A/remote" -c user.name=synthetic -c user.email=synthetic@example.invalid commit -q -m one \
   && cp "$HERE/loop.sh" "$A/install/loop.sh" \
-  && printf '#!/bin/sh\nprintf "%%s\\n" "${GH_TOKEN:-none}" >> "%s"\nexec "%s" "$@"\n' "$A/gh-token.log" "$tmp/bin/gh" > "$A/bin/gh" \
-  && printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nprintf "%%s\\n" synthetic-app-token-2394\n' "$A/openwiz.log" > "$A/bin/openwiz" \
+  && printf '#!/bin/sh\nprintf "%%s\\n" "${GH_TOKEN:-none}" >> "%s"\nprintf "gh %%s\\n" "$*" >> "%s"\ncase "${FAKE_PARTIAL:-}$*" in 1*contents/docs/agents/fleet.md*) printf "## GitHub identity\\n\\n| App identity | on |\\n"; exit 18 ;; esac\nexec "%s" "$@"\n' "$A/gh-token.log" "$A/order.log" "$tmp/bin/gh" > "$A/bin/gh" \
+  && printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nprintf "openwiz %%s\\n" "$*" >> "%s"\nprintf "%%s\\n" synthetic-app-token-2394\n' "$A/openwiz.log" "$A/order.log" > "$A/bin/openwiz" \
   && printf 'import sys\nopen(%s, "a").write(" ".join(sys.argv[1:]) + "\\n")\nsys.exit(9)\n' "'$A/helper.log'" > "$A/install/github-app/agent-token.py" \
   && chmod +x "$A/bin/gh" "$A/bin/openwiz" \
   && jq --argjson now "$NOW" '.observed_at = $now | .budgets[] |= (.reset_at = ($now + 3600))' \
@@ -1539,6 +1539,17 @@ elif mkdir -p "$A/remote" "$A/bin" "$A/install/github-app" \
       && grep -qxF "$off" "$A/err"
   }
   app_case 'app identity: with fleet.md unreadable, loop.sh mints nothing' app_unreadable
+  BACKTICK='.files["docs/agents/fleet.md"] += "| App identity | `on |\n"'
+  FENCED='.files["docs/agents/fleet.md"] += "\n```md\n## GitHub identity\n\n| App identity | on |\n```\n"'
+  app_case 'app identity: an unmatched backtick around on reads as off, and loop.sh mints nothing' \
+    app_off "$BACKTICK" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj
+  app_case 'app identity: an on row inside a fenced example reads as off, and loop.sh mints nothing' \
+    app_off "$FENCED" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj
+  app_partial() {
+    app_world . && ! app_loop OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj FAKE_PARTIAL=1 \
+      && [ ! -s "$A/openwiz.log" ] && [ -z "$(grep -vx none "$A/gh-token.log")" ] && grep -qxF "$off" "$A/err"
+  }
+  app_case 'app identity: a read that prints an on row and then fails reads as off, and loop.sh mints nothing' app_partial
   app_case 'app identity: with a token service and no row, loop.sh never runs the agent helper' \
     app_off . OPENWIZ_TOKEN_SERVICE="$A/no-service"
   app_on() {
@@ -1558,23 +1569,29 @@ sys.stdout.write(''.join(line[4:] if line.startswith('    ') else line.lstrip() 
 PY
   printf '%s\nprintf "token=%%s\\n" "$app_token"\n' "$(cat "$A/block.sh")" > "$A/block-run.sh"
   app_block() {
-    app_world "$1" && : > "$A/openwiz.log" \
+    filter=$1; shift
+    app_world "$filter" && : > "$A/openwiz.log" && : > "$A/order.log" \
       && (cd "$A" && env -u GH_TOKEN -u GITHUB_TOKEN PATH="$A/bin:$tmp/bin:$PATH" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
-        FAKE_GH_WORLD="$A/world.json" FAKE_GH_LOG="$A/gh.log" /bin/sh "$A/block-run.sh" > "$A/out" 2> "$A/err")
+        FAKE_GH_WORLD="$A/world.json" FAKE_GH_LOG="$A/gh.log" "$@" /bin/sh "$A/block-run.sh" > "$A/out" 2> "$A/err")
   }
   block_off() {
-    app_block . && [ ! -s "$A/openwiz.log" ] && [ "$(cat "$A/out")" = token= ] \
+    app_block "$@" && [ ! -s "$A/openwiz.log" ] && [ "$(cat "$A/out")" = token= ] \
       && grep -qxF "GitHub as today's account: App identity is not on in docs/agents/fleet.md" "$A/err"
   }
-  app_case "app identity: the identity block with no row acts as today's account and never runs the mint" block_off
+  app_case "app identity: the identity block with no row acts as today's account and never runs the mint" block_off .
+  app_case 'app identity: the identity block reads an unmatched backtick around on as off' block_off "$BACKTICK"
+  app_case 'app identity: the identity block reads an on row inside a fenced example as off' block_off "$FENCED"
+  app_case 'app identity: the identity block reads a read that prints an on row and then fails as off' block_off . FAKE_PARTIAL=1
   block_on() {
     app_block '.files["docs/agents/fleet.md"] += "| App identity | on |\n"' \
       && [ "$(cat "$A/openwiz.log")" = 'github token --repository synthetic-owner/synthetic-repo' ] \
-      && [ "$(cat "$A/out")" = token=synthetic-app-token-2394 ] && [ ! -s "$A/err" ]
+      && [ "$(cat "$A/out")" = token=synthetic-app-token-2394 ] && [ ! -s "$A/err" ] \
+      && [ "$(cut -d' ' -f1-3 "$A/order.log" | tr '\n' ,)" = 'gh api -H,openwiz github token,' ] \
+      && grep -q '^gh api .*contents/docs/agents/fleet.md$' "$A/order.log"
   }
   app_case 'app identity: the identity block with the row on mints as today (GI7)' block_on
 else
-  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 7))
+  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 13))
 fi
 
 expect 'claim: the only claim goes' 0 check.json 'merge12 | say(13; 1301; "11:58"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
@@ -4148,7 +4165,7 @@ only_reads "$tmp"/case-*/gh*.log "$tmp"/cache-*/gh.log "$tmp"/loop/log[0-9] "$tm
 expected=${TEST_EXPECTED:-1}
 case ${TEST_ONLY:-} in
   loop) expected=4 ;;
-  'app identity') expected=7 ;;
+  'app identity') expected=13 ;;
   fleet-loop) expected=2 ;;
   'contexts:*') expected=31 ;;
   'contexts R1:*') expected=4 ;;

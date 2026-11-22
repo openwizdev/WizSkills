@@ -528,6 +528,37 @@ class RecordedJourney(unittest.TestCase):
         self.assertNotIn('| Ticket |', packaged)
 
 
+class HostAwareSetup(unittest.TestCase):
+    def test_driver_setup_carries_without_cloudroom_and_keeps_github_and_harness_gates(self):
+        cases = (
+            ('local', 'local', 'harness_listed', 'project_verified', 0, 'agents on local'),
+            ('boat', 'boat', 'harness_listed', 'project_verified', 0, 'agents on boat'),
+            ('syn-driver-2', 'syn-driver-2', 'harness_listed', 'project_verified', 0, 'agents on syn-driver-2'),
+            ('local', 'local', 'harness_not_installed', 'project_verified', 5, 'harness_not_installed'),
+            ('local', 'local', 'harness_listed', 'project_no_write', 5, 'project_no_write'),
+            ('local', 'boat', 'harness_listed', 'project_verified', 5, 'host boat'),
+        )
+        for picked, prepared, harness, project, code, message in cases:
+            with self.subTest(picked=picked, prepared=prepared, harness=harness, project=project):
+                j = Journey(self)
+                (j.dir / 'bin/room-cli').unlink()
+                repo = 'synthetic-owner/synthetic-repo'
+                choice = SOL if prepared == 'boat' else OPUS
+                state = setup_state(repository=repo, settings=choice, overrides={
+                    'cloudroom': 'cloudroom_not_needed', 'harness': harness, 'project': project})
+                state['project'].update(host=prepared, project=None, answer_thread=None, operator='Synthetic Operator')
+                j.write_setup(state)
+                j.state.write_text(json.dumps({
+                    'repo': repo, 'host': {'agents': picked, 'harnesses': []}}))
+                j.state.chmod(0o600)
+                self.assertIsNone(shutil.which('room-cli', path=j.env()['PATH']))
+                result = j.helper(['continue', '--explained'])
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                self.assertIn(message, result.stdout)
+                self.assertNotIn('CloudRoom project', result.stdout)
+                self.assertEqual('setup' in json.loads(j.state.read_text()), code == 0)
+
+
 class Continuation(unittest.TestCase):
     """#636: onboarding continues from install's verified setup and init, never
     from a guess. Catches a fabricated, stale or unselected identity or brain

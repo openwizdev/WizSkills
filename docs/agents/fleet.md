@@ -38,7 +38,7 @@ New assignments follow the current orchestrator ruling. Existing agents keep the
 
 ## Test commands
 
-Run `python3 check/run.py` at the repository root, or `python3 check/run.py --shard <name>[,<name>...]` for the shards `python3 check/run.py --list` names ([check shards contract](../../contracts/check-shards.v1.md)). The hosted workflow runs one job per listed shard with `TEST_JOBS=2`, installing the pinned test-only browser tools only in the shards whose skill names `playwright-core`, and the changeset and comment gates in their own job. Source: [WizSkills CI](../../.github/workflows/ci.yml).
+Run `python3 check/run.py` at the repository root, or `python3 check/run.py --shard <name>[,<name>...]` for the shards `python3 check/run.py --list` names ([check shards contract](../../contracts/check-shards.v1.md)). The hosted workflow runs one job per listed shard with `TEST_JOBS=2` (on a pull request, only the shards `check/select.py` picks for its changed files; merge groups and pushes to `main` run every shard), installing the pinned test-only browser tools only in the shards whose skill names `playwright-core`, and the changeset and comment gates in their own job. Source: [WizSkills CI](../../.github/workflows/ci.yml).
 
 Evidence (red and green runs, logs, screenshots, review captures) goes in the pull request's description or comments, never in the tree.
 

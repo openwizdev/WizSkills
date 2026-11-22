@@ -2,11 +2,13 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import re
 import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -236,6 +238,61 @@ class CheckShards(unittest.TestCase):
                     with contextlib.redirect_stderr(io.StringIO()):
                         code, lines = self.check(*argv, root=root, suites=SYNTHETIC)
                     self.assertEqual((code, lines, self.ran(root)), (2, [], []))
+
+
+# A fleet.sh that does nothing: each part still selects and counts its cases.
+FAKE_FLEET = '#!/bin/sh\nexit 0\n'
+
+
+def part_record(path):
+    """A launch-fleet test.sh part's TEST_SHARD_RAN record: its counts and groups."""
+    record = {'groups_ran': []}
+    for line in Path(path).read_text(encoding='utf-8').splitlines():
+        key, value = line.split()[:2]
+        if key == 'group':
+            record['groups_ran'].append(int(value))
+        else:
+            record[key] = int(value)
+    return record
+
+
+class SplitSuites(unittest.TestCase):
+    """The parts of each split suite together run exactly the whole suite's cases (WQ2)."""
+
+    def test_the_parts_of_launch_fleet_test_sh_run_every_case_once(self):
+        p = subprocess.run([sys.executable, '-I', str(HERE / 'run.py'), '--list'],
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        suite = ['sh', 'skills/launch-fleet/scripts/test.sh']
+        parts = [shard for shard in json.loads(p.stdout)
+                 if any(command['suite'] == suite for command in shard['commands'])]
+        self.assertTrue(parts and all(shard['name'].startswith('launch-fleet.') for shard in parts),
+                        f'launch-fleet test.sh is not split into parts: {[s["name"] for s in parts]}')
+        for shard in parts:
+            self.assertEqual(shard['skill'], 'launch-fleet')
+            self.assertEqual([command['suite'] for command in shard['commands']], [suite])
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp, 'fleet.sh')
+            fake.write_text(FAKE_FLEET, encoding='utf-8')
+            def one(shard):
+                record = Path(tmp, shard['name'] + '.ran')
+                command = shard['commands'][0]
+                env = {**run.clean_env(), **shard['env'], 'FLEET_SH': str(fake),
+                       'TEST_SHARD_RAN': str(record), 'TEST_JOBS': '1'}
+                subprocess.run(command['argv'], cwd=HERE.parent / command['cwd'], env=env,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.assertTrue(record.is_file(), f'{shard["name"]} wrote no record')
+                return shard['name'], part_record(record)
+            with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+                records = dict(pool.map(one, parts))
+        totals = {(r['total'], r['groups']) for r in records.values()}
+        self.assertEqual(len(totals), 1, totals)
+        (total, groups), = totals
+        ran = [g for r in records.values() for g in r['groups_ran']]
+        self.assertEqual(sorted(ran), list(range(1, groups + 1)),
+                         'every group of the whole suite runs in exactly one part')
+        self.assertEqual(sum(r['cases'] for r in records.values()), total,
+                         "the parts' cases add up to the whole suite's")
 
 
 if __name__ == '__main__':

@@ -191,6 +191,8 @@ class Budget(unittest.TestCase):
             'not json': {'out': 'synthetic\n'},
             'no core': {'out': rate_limit(core=False)},
             'a word': {'out': rate_limit(remaining='many')},
+            'a quoted number': {'out': rate_limit(remaining='4000')},
+            'a true': {'out': rate_limit(remaining=True)},
             'above the limit': {'out': rate_limit(remaining=6000)},
             'nothing': {'out': ''},
         }

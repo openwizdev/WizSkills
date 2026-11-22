@@ -1,6 +1,6 @@
 ---
 name: install
-description: Install OpenWiz from its one line, "Install OpenWiz from github.com/openwizdev/OpenWiz", then optionally run a resumable first fleet. Checks the machine, installs the verified prebuilt release (no Rust or Node), checks setup's connections, and on the first-fleet branch connects one repository and starts its fleet through launch-fleet. Use to install, repair, update or remove OpenWiz, or to start or resume a first fleet. For a project's docs/agents/ settings alone, use setup.
+description: Install OpenWiz from its one line, "Install OpenWiz from github.com/openwizdev/OpenWiz", then optionally run a resumable first fleet. Asks first where the user's agents run (this computer, boat.dev or CloudRoom; CloudRoom is optional), checks the machine, installs the verified prebuilt release (no Rust or Node), checks setup's connections (CloudRoom's only when chosen), and either connects one repository and starts its CloudRoom fleet through launch-fleet, or, without CloudRoom, says what works today and how to start a builder by hand. Use to install, repair, update or remove OpenWiz, or to start or resume a first fleet. For a project's docs/agents/ settings alone, use setup.
 version: 0.2.2
 ---
 
@@ -21,8 +21,16 @@ Take them from that line to setup, then to their first fleet if they want one. E
 - **Credentials stay out of the conversation.** Never ask for a key or token in chat or put one in a prompt, argument, URL, log, issue or file. Keys go only through the tools' protected setup, into owner-only state on this computer or CloudRoom's secret store. Save the user's exact words only under [open-development](https://github.com/openwizdev/WizSkills/blob/maint/0.2/contracts/open-development.v1.md).
 - **Uncertain is never retried blindly.** Run the same command again: it reads its record first and never repeats an effect.
 - **Read JSON and exit codes, never a screen.** Run installed programs by absolute path: there is no `openwiz` on `PATH`; it is `<root>/current/openwiz`. Python 3.9+ only: no Rust, Cargo, Node, npm or source build; if a step seems to need one, stop and say so.
-- **OpenWiz 0.1.0 needs CloudRoom.** Its agents run in CloudRoom, and setup reads CloudRoom's sign-in. Say so before the install. There is no setup page or local server in 0.1.0: setup is the commands below.
+- **CloudRoom is optional.** OpenWiz 0.1.0 installs, signs in to GitHub and plans without CloudRoom, and a builder can be started by hand on this computer or on boat.dev. Only its automatic fleet (step 6: the fleet's own thread and loops) runs in CloudRoom; the automatic fleet without CloudRoom arrives in 0.1.1. Never present CloudRoom as required. There is no setup page or local server in 0.1.0: setup is the commands below.
 - **Free now; other charges are separate.** OpenWiz is free now. Paid plans come later. CloudRoom and model charges are separate and not included. More Cloud Credits are CloudRoom's own plan, from `https://cloudroom.dev/pricing`. Referral verification is unavailable. No referral is applied. Never add a code or parameter to that link.
+
+## Where your agents run
+
+Ask this first, before step 1, in these exact words, with the three as equal choices and no recommendation:
+
+> Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom.
+
+Keep the answer for the whole install. **This computer** and **boat.dev** skip every CloudRoom step: CloudRoom's install and sign-in, and its rows in step 3. **CloudRoom** runs them all, exactly as written. In a new session that has not heard the answer (after step 4's restart, too), ask it again before anything else. The user can change their mind at any time: moving to CloudRoom runs step 3's CloudRoom rows, then continues where they were.
 
 Keep `<root>` (default `$HOME/.local/lib/openwiz`), and the `build` and `state_root` paths `install` prints as `<build>` (also `build=<build>` in the shell) and `<state>`, all absolute and owner-only. Run runtime tools with `python3 -I -B` and `OPENWIZ_STATE_DIR=<state>`, and pass `--state-dir <state>`. After a restart, read them from the installed files, as Resume says.
 
@@ -41,9 +49,9 @@ grep -m1 '^version:' ~/.claude/skills/install/SKILL.md "${CODEX_HOME:-$HOME/.cod
 `<root>` is `$HOME/.local/lib/openwiz` unless the user chose another. Take the first that holds:
 
 - No `<root>/current`, or `--build-identity` does not read 0.1.0: resume at step 1.
-- `check` does not read `cloudroom_login_verified`, or `status` does not read the GitHub account: resume at step 3. `identity_unreadable` means GitHub gave no clear answer: wait a minute and run `status` again; it clears.
+- `status` does not read the GitHub account, or the user chose CloudRoom and `check` does not read `cloudroom_login_verified`: resume at step 3. `identity_unreadable` means GitHub gave no clear answer: wait a minute and run `status` again; it clears.
 - The running agent's `install/SKILL.md` is missing, or does not read `version: 0.2.2`: resume at step 4. When that agent's folder holds OpenWiz's 18 skills, run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4.
-- Otherwise resume at step 5; for a first fleet already under way, at step 6 with `first_fleet.py next`.
+- Otherwise resume at step 5; with CloudRoom, for a first fleet already under way, at step 6 with `first_fleet.py next`.
 
 ## 1. Preflight
 
@@ -53,7 +61,7 @@ git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$open
 python3 -I "$openwiz"/tools/install/install preflight
 ```
 
-`git clone` may warn that `refs/tags/v0.1.0` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) is unsupported for 0.1.0: the `openwiz` binary runs there, but CloudRoom offers no Intel Mac build today, so say so plainly and stop before installing. Exit 5 names each missing item and its `next` step: tell the user plainly (CloudRoom: install the app, open it once and sign in; `gh`: install it and `gh auth login`). Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`). Read its `checks` even on exit 0: `gh` reading `missing` does not stop preflight, but setup needs it. Then the user installs GitHub CLI first, from https://cli.github.com, and `gh --version` shows it is there; then continue.
+`git clone` may warn that `refs/tags/v0.1.0` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) has a 0.1.0 build, but CloudRoom offers no Intel Mac build today: if the user chose CloudRoom, say so plainly, offer this computer or boat.dev instead, and stop before installing if they keep CloudRoom. Exit 5 names each missing item and its `next` step: tell the user plainly (`gh`: install it and `gh auth login`). `room-cli` reading `missing` never stops preflight; it matters only if the user chose CloudRoom, and step 3 installs CloudRoom then. Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`). Read its `checks` even on exit 0: `gh` reading `missing` does not stop preflight, but setup needs it. Then the user installs GitHub CLI first, from https://cli.github.com, and `gh --version` shows it is there; then continue.
 
 Done when preflight passes, or the user has each next step.
 
@@ -93,14 +101,14 @@ python3 -I -B "$build"/runtime/setup/setup.py check --state-dir <state>
 
 It reads each connection and records only its own results in `<state>`. It prints one bare code per component and no next step, so read each code below. Run `check` again after each change.
 
-**CloudRoom** (`cloudroom`), with `python3 -I -B "$build"/runtime/cloudroom/cloudroom.py status | install | sign-in --state-dir <state>`:
+**CloudRoom** (`cloudroom`), only if the user chose CloudRoom. Otherwise skip this table and ignore every `cloudroom_*` code `check` prints: it never blocks this install. With CloudRoom, use `python3 -I -B "$build"/runtime/cloudroom/cloudroom.py status | install | sign-in --state-dir <state>`:
 
 | Code | Next |
 | --- | --- |
 | `cloudroom_login_verified` | Done: signed in now. |
 | `cloudroom_not_installed` | `cloudroom.py install --state-dir <state>` previews CloudRoom's checksum-checked installer; on the yes, `cloudroom.py install --yes --operation <id> --state-dir <state>`. Then sign in. |
 | `cloudroom_installed`, `cloudroom_reused`, `cloudroom_login_missing`, `cloudroom_login_unknown` | `cloudroom.py sign-in --state-dir <state>` opens CloudRoom's own sign-in once (or the app, the first time); the user signs in there, never in chat. Then `status`. On Linux, sign-in needs a desktop session and FUSE (the AppImage needs `fusermount`, from `fuse3` or `libfuse2`): a headless VPS cannot sign in. If nothing opens within a minute, the user opens `~/Applications/Cloudroom.AppImage` themselves. |
-| `cloudroom_unsupported` | CloudRoom offers no build for this computer (an Intel Mac, or Linux on ARM). OpenWiz 0.1.0 needs CloudRoom, so the install cannot be completed here yet: say so plainly and stop. |
+| `cloudroom_unsupported` | CloudRoom offers no build for this computer (an Intel Mac, or Linux on ARM): say so plainly, and offer this computer or boat.dev instead. |
 | `cloudroom_source_unchecked` | `cloudroom.py install` could not read or check CloudRoom's published installer and its checksum (a network failure, or CloudRoom changed its download guide or release): nothing was proposed or downloaded. Run `install` again shortly. If it stays, `cloudroom.py install --yes --state-dir <state>` opens CloudRoom's download page once instead; the user installs CloudRoom from there, opens it once and signs in. Then `status`. |
 | `cloudroom_installing` | An install is running: `status` again shortly. |
 | `cloudroom_install_uncertain` | A plain `install` only shows the pending operation again. Read its `operation_id` from `cloudroom.py install --state-dir <state>` (inside `operation`), then reconcile that same operation: `cloudroom.py install --yes --operation <operation_id> --state-dir <state>`. Never preview a new install over it. |
@@ -114,12 +122,12 @@ It reads each connection and records only its own results in `<state>`. It print
 
 **The rest** (`harness_unselected`, `identity_unselected`, `project_unprepared`, `app_missing`) is expected now: each waits for the repository the user picks under First fleet, and Connect sets it. Phone access is optional: `python3 -I -B "$build"/runtime/access/access.py configure --plan <private file> --state-dir <state>` previews it; `access.py --help` gives the plan's shape.
 
-Done when CloudRoom reads `cloudroom_login_verified` and GitHub's sign-in is verified, or the user chose to stop with the remaining next steps.
+Done when GitHub's sign-in is verified and, only if the user chose CloudRoom, CloudRoom reads `cloudroom_login_verified`; or the user chose to stop with the remaining next steps.
 
 
 ## 4. Skills into your agents, then a restart
 
-Only now, with setup checked and the logins done, copy OpenWiz's skills into the user's agents:
+Only now, with setup checked and the logins done (GitHub's, and CloudRoom's if chosen), copy OpenWiz's skills into the user's agents:
 
 ```sh
 python3 -I "$openwiz"/tools/install/install skills --root <root>
@@ -176,9 +184,30 @@ Say this before asking about a project, once:
 
 Done when the user has seen it.
 
+## Without CloudRoom
+
+If the user chose this computer or boat.dev, say this, then help with what they pick:
+
+> Installed. Without CloudRoom today you can plan (grill, spec, tickets) and start a builder on this computer or on boat.dev by hand. The automatic fleet without CloudRoom arrives in 0.1.1. Want CloudRoom now instead? It's optional.
+
+On a yes to CloudRoom, run step 3's CloudRoom rows, then step 6. Otherwise:
+
+- **Plan:** in the project's clone, run `setup` (it writes `docs/agents/`, including the `Record authors` row; the App is optional, and skipping it is the user's answer), then `grill`, `to-spec` and `to-tickets`, each with the user's own confirmations. These read and write GitHub only.
+- **Start one ticket's builder by hand,** only on the user's yes to that exact start. A builder claims a ticket only when it carries `ready-for-agent`, has owned paths, and has a `launch-fleet: started` comment from a record author. On the yes, post it from the user's own login: `gh issue comment <N> --repo <owner>/<name> --body "launch-fleet: started by hand"`. Then pick one of:
+  - **This computer** (the installed local driver; the user's own signed-in `claude` or `codex` and `gh`). A builder needs a permission mode, or its harness refuses every tool: the user chooses it (a `claude --permission-mode` value, or a `codex --sandbox` value) and you never pick or widen it. Save it twice, each on its own yes. First, as one row in `docs/agents/fleet.md` on the default branch: `| Harness permission mode | `<mode>` |`. Second, on this computer: `umask 077; mkdir -p ~/.local/state/openwiz-local`, then write `{"<owner>/<name>": {"<harness>": "<mode>"}}` to `~/.local/state/openwiz-local/approvals.json` and `chmod 600` it. Then:
+    `echo '{"repository":"<owner>/<name>","ticket":<N>,"skill":"build-ticket","harness":"<claude or codex>","model":"<model>"}' | "$build"/runtime/adapters/local/driver start`
+    It works in its own clone under `~/.local/state/openwiz-local/work/`, and answers `{"run": "run-..."}` after watching the first turn for about 30 seconds; keep the run id. A refusal is `{"error", "next"}`: do its `next`. To wake the builder after review comments: `echo '{"run":"<run>"}' | "$build"/runtime/adapters/local/driver wake`; to stop it, the same with `stop`.
+  - **boat.dev** (bills per second while a sandbox runs, on the user's plan: say so first). The user installs the `boat` CLI, signs in to it themselves, and in boat's dashboard connects GitHub and their harness's key or subscription; you touch none of it. The installed package's boat driver refuses (0.1.0 ships no `wizskills.lock` beside it), so run it from a fresh 0.1.0 checkout, which installs nothing:
+    `ow=<new private temporary folder>/openwiz; git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$ow"`
+    `echo '{"repository":"<owner>/<name>","ticket":<N>,"skill":"build-ticket","harness":"<claude or codex>","model":"<model>"}' | "$ow"/adapters/boat/driver start`
+    Keep the run id it answers. Wake and stop as above, with `"$ow"/adapters/boat/driver` (run state is in `~/.local/state/openwiz-boat`, so any fresh checkout works). A sandbox boat stopped (an hour with no running turn) is never woken: start again.
+- **Review and merge** stay with the user on 0.1.0 without CloudRoom: no reviewer starts on its own. They review the pull request, comment, then wake the builder.
+
+Done when the user has seen the text above and has what they chose: planning, a hand start, or CloudRoom.
+
 ## 6. First fleet
 
-Continue only if the user wants a first fleet; otherwise finish with the install and any outstanding setup steps. Pass one owner-only `--state <file>` outside the project to every `first_fleet.py` command (`python3 <this skill's folder>/scripts/first_fleet.py`), from the project's clone. To resume, run `first_fleet.py next --state <file> --setup-state <state>`: it reads only that file and the repository setup prepared, and prints the first unfinished step and its command. Exits: 0 done, 1 read failure, 2 usage, 5 refused, 6 uncertain, 7 busy, 10 state unavailable, 12 preview awaiting `--yes`.
+Continue only if the user chose CloudRoom and wants a first fleet; otherwise finish with the install and any outstanding setup steps, or with "Without CloudRoom" above. On 0.1.0 this automatic fleet runs in CloudRoom, even with builders on boat.dev: the fleet's own thread and loops are CloudRoom's. The automatic fleet without CloudRoom arrives in 0.1.1. Pass one owner-only `--state <file>` outside the project to every `first_fleet.py` command (`python3 <this skill's folder>/scripts/first_fleet.py`), from the project's clone. To resume, run `first_fleet.py next --state <file> --setup-state <state>`: it reads only that file and the repository setup prepared, and prints the first unfinished step and its command. Exits: 0 done, 1 read failure, 2 usage, 5 refused, 6 uncertain, 7 busy, 10 state unavailable, 12 preview awaiting `--yes`.
 
 ### 1. Choose a project
 

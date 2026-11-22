@@ -458,6 +458,32 @@ class Review(unittest.TestCase):
                     f"R4: `{path}` is unchanged since {OLD[:7]}; a re-check raises a new finding there "
                     "only as a Risk: security, privacy or data-loss blocker"])
 
+    def test_a_recheck_counts_a_moved_submodule_pointer_that_gitmodules_ignores(self):
+        def git(*args):
+            return subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Builder", "-c",
+                                   "user.email=builder@example.com", *args],
+                                  check=True, capture_output=True, text=True).stdout.strip()
+
+        def pointer(message, sha):
+            git("update-index", "--add", "--cacheinfo", f"160000,{sha},lib")
+            git("commit", "-qm", message)
+            return git("rev-parse", "HEAD")
+        (self.repo / ".gitmodules").write_text('[submodule "lib"]\n\tpath = lib\n\turl = ./lib\n\tignore = all\n')
+        git("add", ".gitmodules")
+        base = pointer("lib at one", "1" * 40)
+        last = pointer("lib at two", "2" * 40)
+        head = pointer("lib at three", "3" * 40)
+        self.world({"checks": green(head)}, pr={"head": {"sha": head}, "base": {"ref": "main", "sha": base}},
+                   comments=[report(FULL.replace(OLD, last))])
+        text = RECHECK.replace(HEAD, head).replace(
+            "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60.",
+            "- **R4 [polish]** `lib:1` (Sweep) The pointer moved past the fixed release. Polish issue: #60.")
+        for command in ("check", "post"):
+            with self.subTest(command):
+                out = self.run_helper(command, self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual((out.returncode, out.stdout.strip()),
+                                 (0, "report ok" if command == "check" else "posted 901"), out.stdout + out.stderr)
+
     def test_a_recheck_fetches_a_missing_commit_and_names_one_it_cannot_read(self):
         subprocess.run(["rm", "-rf", str(self.repo)], check=True)
         subprocess.run(["git", "clone", "-q", "--no-local", "--single-branch", "-b", "base", str(ORIGIN),

@@ -166,6 +166,13 @@ class Budget(unittest.TestCase):
                 answer = self.decision(self.admit(10, *order), 1)
                 self.assertEqual(answer['remaining'], 1255)
 
+    # catches: a window told apart by its exact reset, when GitHub's reset
+    # for one window differs by a second between answers.
+    def test_resets_a_second_apart_are_one_window(self):
+        older = self.file(headers(remaining=3000, reset=RESET + 1), 'older.txt')
+        newer = self.file(headers(remaining=1255, reset=RESET), 'newer.txt')
+        self.assertEqual(self.decision(self.admit(10, older, newer), 1)['remaining'], 1255)
+
     # catches: only the first page of a `gh api -i --paginate` file read.
     def test_every_page_of_a_paginated_answer_counts(self):
         pages = headers(remaining=3000) + headers(remaining=1255)

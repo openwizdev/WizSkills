@@ -335,11 +335,31 @@ def pin(repo, number, assigned):
     return line
 
 
-def changed_since(repo, last, head):
-    files = get(f"repos/{repo}/compare/{last}...{head}").get("files")
-    if not isinstance(files, list) or len(files) >= 300:
-        raise Refusal(f"cannot read every file changed since {last[:7]}")
-    return {x["filename"] for x in files}
+def has_commit(sha):
+    try:
+        return subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True,
+                              timeout=60).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def changed_since(base, last, head):
+    for sha in (base, last, head):
+        if not isinstance(sha, str) or not SHA.fullmatch(sha):
+            raise Refusal(f"cannot read the pull request's own changes: {sha!r} is not a commit")
+        if not has_commit(sha):
+            try:
+                git("fetch", "--quiet", "--no-tags", "origin", sha)
+            except Refusal:
+                pass
+            if not has_commit(sha):
+                raise Refusal(f"cannot read the pull request's own changes: commit {sha} is not in this "
+                              "checkout and origin does not give it")
+
+    def names(*spec):
+        out = git("diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", *spec, "--")
+        return set(filter(None, out.split("\0")))
+    return names(last, head) & (names(f"{base}...{last}") | names(f"{base}...{head}"))
 
 
 def report_problems(path, repo, number, assigned):
@@ -347,7 +367,7 @@ def report_problems(path, repo, number, assigned):
     s = admit(repo, number, assigned, skip=text)
     changed = None
     if s["mode"] in ("re-check", "final"):
-        changed = changed_since(repo, s["last"]["head"], s["head"])
+        changed = changed_since(s["pr"]["base"].get("sha"), s["last"]["head"], s["head"])
     elif s["mode"] == "log-and-merge":
         changed = set()
     return text, s, check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"], s["decision"], changed)
@@ -467,6 +487,7 @@ DESCRIPTION = (
     'ticket, the assigned head, every required check green there) before anything\n'
     'else (self-check reads only the local checkout and description, before a pull\n'
     "request exists). Settings are read from the base branch, never the pull request's head.\n"
+    "A re-check's changed files come from git in this checkout, never GitHub's capped compare.\n"
     'Only comments by the `Record authors` row of docs/agents/fleet.md count. Exit 0\n'
     'done, 1 a stop, report problems or an unknown write, 2 a refusal (unreadable\n'
     'or invalid settings, arguments). Python 3.11+ standard library and `gh`.\n'

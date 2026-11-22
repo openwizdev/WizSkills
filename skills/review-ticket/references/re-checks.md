@@ -9,7 +9,7 @@ A re-check reads only:
 
 A re-check never opens new narrow cases. In the changed code a new real-user path or a new security, privacy or data-loss risk still blocks, as a new finding numbered from `next id`; anything else there is polish.
 
-**The one exception:** a security, privacy or data-loss risk you find in unchanged code is still raised, as a new blocking finding whose `Risk:` line states it. No other new finding goes on a file the change since `last read` leaves alone; `review.py check` refuses it.
+**The one exception:** a security, privacy or data-loss risk you find in unchanged code is still raised, as a new blocking finding whose `Risk:` line states it. No other new finding goes on a file the change since `last read` leaves alone; `review.py check` refuses it. It reads this pull request's own changes since `last read` with git in your checkout, fetching a missing commit from `origin`, so a large `main` merge never hits GitHub's file limit; it refuses, naming the commit, only when that commit can't be read.
 
 1. **Read the builder's answers** since your last report, from record authors only. Each open id was fixed, or disputed once with evidence.
 2. **Give every earlier id one status,** in id order, in place of its finding:

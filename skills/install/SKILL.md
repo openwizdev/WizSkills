@@ -230,7 +230,11 @@ For that repository, each tool previews and applies only on the yes (`--yes`, or
    - `--harness`, `--model`, `--effort`: what the user picks from `<root>/current/openwiz models --json --host cloud` with CloudRoom. With a driver host, use `<root>/current/openwiz models --json --host <its name>` and offer its local options; on this machine, only the harnesses `where` found.
 
    Without `--yes` it prints the effects and an operation id; on the yes, run it again with `--yes --operation <id>`.
-3. **The App, or an explicit skip:** recommend the App, set up with the installed `"$build"/runtime/github-app/setup.py` as the `setup` skill's "The App" says. Only the user's answer selects `github_login.py skip-app`; an App failure never becomes a skip.
+3. **The App, or an explicit skip:** the recommendation follows the host from step 1.
+   - **With CloudRoom (`cloud`):** recommend the App, set up with the installed `"$build"/runtime/github-app/setup.py` as the `setup` skill's "The App" says.
+   - **With any other host:** recommend the personal GitHub login, the verified path: the installed `github_login.py skip-app` (preview, then `--yes --operation <id>`), so the login `status` read back acts. Say in one line that the App needs CloudRoom today, and offer the App only if the user asks for it.
+
+   Only the user's answer selects `github_login.py skip-app`; an App failure never becomes a skip.
 4. **The brain:** `<root>/current/openwiz init --repository <owner>/<name> --state-dir <state> --json`, then `--yes --operation <id>`. Say in one line where it went; the user merges its pull request. For a public repository's private companion, run `first_fleet.py decisions --setup-state <state>`, then `--yes`.
 5. **Carry it:** `setup.py check --state-dir <state>`, then `first_fleet.py continue --setup-state <state> --explained`. It refuses, naming each component that is missing, refused, unknown or stale, and withdraws what it carried before; follow that `next` step and run both again.
 

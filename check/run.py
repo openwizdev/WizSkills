@@ -82,6 +82,16 @@ SUITES = {
               ['python3', '-I', 'check/test_bench.py']],
 }
 
+PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}
+
+
+def rows():
+    for name, commands in SUITES.items():
+        split, count = PARTS.get(name, (None, 0))
+        yield name, name, [c for c in commands if c != split], {}
+        for n in range(1, count + 1):
+            yield f'{name}.{n}', name, [split], {'TEST_SHARD': f'{n}/{count}'}
+
 # The skills not adapted from Matt Pocock's, each with the source line its
 # SKILL.md carries exactly, on a line of its own, instead of his notice.
 ORIGINAL = "**Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills."
@@ -646,12 +656,12 @@ def suites(root, names=None):
     for rel in unlisted:
         print(f'suite inventory: {rel}: unlisted', flush=True)
     failed = bool(unlisted)
-    for name, commands in SUITES.items():
+    for name, row, commands, env in rows():
         if names is not None and name not in names:
             continue
         for command in commands:
             shown = ' '.join(command)
-            run = invocation(root, name, command)
+            run = invocation(root, row, command)
             if isinstance(run, str):
                 print(run, flush=True)
                 failed = True
@@ -660,7 +670,7 @@ def suites(root, names=None):
             print(f'suite {name}: {shown}: running', flush=True)
             started = time.monotonic()
             try:
-                code = subprocess.run(argv, cwd=root / run['cwd'], env=clean_env()).returncode
+                code = subprocess.run(argv, cwd=root / run['cwd'], env={**clean_env(), **env}).returncode
             except OSError:
                 print(f'suite {name}: {shown}: cannot start', flush=True)
                 failed = True
@@ -691,12 +701,12 @@ def shards(root):
     return [{'name': 'rules', 'skill': None, 'commands': [], 'env': {}},
             {'name': 'standalone', 'skill': None,
              'commands': [{'suite': STANDALONE, 'argv': STANDALONE, 'cwd': '.'}], 'env': {}},
-            *({'name': name, 'skill': name, 'commands': [invocation(root, name, c) for c in commands], 'env': {}}
-              for name, commands in SUITES.items())]
+            *({'name': name, 'skill': row, 'commands': [invocation(root, row, c) for c in commands], 'env': env}
+              for name, row, commands, env in rows())]
 
 
 def selection(argv):
-    known = ['rules', 'standalone', *SUITES]
+    known = ['rules', 'standalone', *(name for name, *_ in rows())]
     if not argv:
         return known
     if argv == ['--list']:

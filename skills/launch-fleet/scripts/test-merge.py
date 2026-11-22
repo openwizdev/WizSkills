@@ -527,6 +527,15 @@ class Enqueue(unittest.TestCase):
         self.assertTrue(out.startswith('refused: its required checks are running: check;'), out)
         self.assertEqual((w.bodies(7), w.writes()), ([], []))
 
+    def test_a_check_run_with_no_status_reads_as_running(self):
+        checks = [{'__typename': 'CheckRun', 'name': 'check', 'conclusion': 'SUCCESS'}]
+        w = World(self, pr=pr(isMergeQueueEnabled=True, checks=checks))
+        project(w, PRINTS)
+        code, out = self.merge(w)
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith('refused: its required checks are running: check;'), out)
+        self.assertEqual((w.bodies(7), w.writes()), ([], []))
+
     def test_an_optional_running_check_does_not_hold_it(self):
         checks = pr()['checks'] + [{'__typename': 'CheckRun', 'name': 'extra', 'status': 'QUEUED', 'conclusion': None}]
         w = World(self, pr=pr(isMergeQueueEnabled=True, checks=checks))

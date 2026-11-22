@@ -1,7 +1,7 @@
 ---
 name: feedback
 description: Send the user's chosen public feedback about OpenWiz as one GitHub issue on openwizdev/OpenWiz, through the user's own GitHub login, only after an exact preview and the user's explicit yes; or prepare a public OpenWiz link for the user to copy and share. Use when the user wants to give OpenWiz feedback or report an OpenWiz bug, pastes the OpenWiz app's feedback handoff, or you notice an OpenWiz problem worth reporting.
-version: 0.2.0
+version: 0.3.0
 ---
 
 # Feedback

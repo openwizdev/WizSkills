@@ -96,6 +96,28 @@ if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'parent {' 
     issue = {'number': int(number), 'parent': None} if tickets is None else tickets.get(number)
     print(json.dumps({'data': {'repository': {'issue': issue}}}))
     sys.exit(0)
+if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'enqueuePullRequest' in a for a in args):
+    with open(path) as f:
+        world = json.load(f)
+    pr, got = world['pr'], dict(a.split('=', 1) for a in args if '=' in a and not a.startswith('query='))
+    kind = world.get('faults', {}).pop('enqueue', None)
+    if kind == 'moved':
+        pr['headRefOid'] = 'b' * 40
+    world['writes'].append({'enqueue': got.get('id'), 'head': got.get('head')})
+    running = [c for c in pr['checks'] if c.get('status', 'COMPLETED') != 'COMPLETED'
+               or c.get('state') in ('PENDING', 'EXPECTED')]
+    refused = (kind == 'fail' or got.get('id') != 'PR_synthetic' + str(pr['number'])
+               or got.get('head') != pr['headRefOid'] or running or not pr['isMergeQueueEnabled'])
+    if not refused and kind != 'pending':
+        pr.update(isInMergeQueue=True, mergeQueueEntry={'headCommit': {'oid': pr['headRefOid']}})
+    with open(path, 'w') as f:
+        json.dump(world, f)
+    if refused:
+        sys.exit('GraphQL: Pull request is not ready to be enqueued')
+    if kind == 'lost':
+        sys.exit('connection reset')
+    print(json.dumps({'data': {'enqueuePullRequest': {'mergeQueueEntry': {'headCommit': {'oid': got['head']}}}}}))
+    sys.exit(0)
 r = subprocess.run([sys.executable, '-I', %r, *args], env=dict(os.environ, FAKE_WORLD=path),
                    capture_output=True, text=True)
 out = r.stdout
@@ -107,6 +129,7 @@ if args[:2] == ['api', 'graphql'] and r.returncode == 0:
             world = json.load(f)
         node['closingIssuesReferences'] = {'pageInfo': {'hasNextPage': False}, 'nodes': world['pr'].get('closes', [])}
         node['repository'] = {'nameWithOwner': world['repo']}
+        node['id'] = 'PR_synthetic' + str(world['pr']['number'])
     out = json.dumps(value)
 sys.stdout.write(out)
 sys.stderr.write(r.stderr)
@@ -484,6 +507,68 @@ class CrossRepository(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertTrue(out.startswith('unknown: '), out)
         self.assertEqual(len(w.others[TICKETS].bodies(12)), 1)
+
+
+class Enqueue(unittest.TestCase):
+    def merge(self, w):
+        return Merge.merge(self, w, '--ticket', 12)
+
+    def running(self):
+        return [{'__typename': 'CheckRun', 'name': 'check', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'},
+                {'__typename': 'CheckRun', 'name': 'check', 'status': 'IN_PROGRESS', 'conclusion': None}]
+
+    def test_running_required_checks_are_refused_with_no_record(self):
+        w = World(self, pr=pr(isMergeQueueEnabled=True, checks=self.running()))
+        project(w, PRINTS)
+        self.assertEqual(self.merge(w), (1, 'refused: its required checks are running: check; nothing was enqueued '
+                                            'or recorded, so run it again once they finish'))
+        self.assertEqual((w.bodies(7), w.writes()), ([], []))
+
+    def test_a_pending_status_context_is_running_too(self):
+        checks = pr()['checks'] + [{'__typename': 'StatusContext', 'context': 'check', 'state': 'PENDING'}]
+        w = World(self, pr=pr(isMergeQueueEnabled=True, checks=checks))
+        project(w, PRINTS)
+        code, out = self.merge(w)
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith('refused: its required checks are running: check;'), out)
+        self.assertEqual((w.bodies(7), w.writes()), ([], []))
+
+    def test_an_optional_running_check_does_not_hold_it(self):
+        checks = pr()['checks'] + [{'__typename': 'CheckRun', 'name': 'extra', 'status': 'QUEUED', 'conclusion': None}]
+        w = World(self, pr=pr(isMergeQueueEnabled=True, checks=checks))
+        project(w, PRINTS)
+        self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
+        self.assertEqual(w.writes()[0], {'enqueue': 'PR_synthetic7', 'head': HEAD})
+
+    def test_green_checks_enqueue_pinned_and_the_receipt_follows_the_read_back(self):
+        w = World(self, pr=pr(isMergeQueueEnabled=True))
+        project(w, PRINTS)
+        self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
+        receipt = 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD
+        self.assertEqual(w.writes(), [{'enqueue': 'PR_synthetic7', 'head': HEAD}, {'post': 7, 'body': receipt}])
+        self.assertEqual(w.bodies(7), [receipt])
+
+    def test_a_refused_enqueue_writes_no_receipt(self):
+        w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'enqueue': 'fail'})
+        project(w, PRINTS)
+        self.assertEqual(self.merge(w), (1, 'not queued: GraphQL: Pull request is not ready to be enqueued; '
+                                            'nothing was recorded, so run it again next wake'))
+        self.assertEqual(w.bodies(7), [])
+        self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
+
+    def test_an_enqueue_that_reads_back_unqueued_writes_no_receipt(self):
+        w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'enqueue': 'pending'})
+        project(w, PRINTS)
+        code, out = self.merge(w)
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith('pending: '), out)
+        self.assertEqual(w.bodies(7), [])
+
+    def test_a_lost_enqueue_response_is_read_back_before_the_receipt(self):
+        w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'enqueue': 'lost'})
+        project(w, PRINTS)
+        self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
+        self.assertEqual(w.bodies(7), ['launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD])
 
 
 class Queue(unittest.TestCase):

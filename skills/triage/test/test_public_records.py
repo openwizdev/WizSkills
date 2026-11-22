@@ -355,15 +355,23 @@ class FeedbackPath(unittest.TestCase):
 
 
 GH = r"""
-import json, os, sys
+import json, os, subprocess, sys
 world = os.environ["FAKE_GH_WORLD"]
 args = sys.argv[1:]
 with open(os.environ["FAKE_GH_LOG"], "a") as log:
     log.write(json.dumps(args) + "\n")
+now = "2026-11-01T09:00:%02dZ" % len(open(os.environ["FAKE_GH_LOG"]).read().splitlines())
 state = json.load(open(world))
 def opt(name, many=False):
     found = [args[i + 1] for i, a in enumerate(args[:-1]) if a == name]
     return found if many else (found[-1] if found else None)
+if args[:2] == ["api", "graphql"] and 'repository(owner: "openwizdev", name: "OpenWiz")' in opt("-f"):
+    issue = state[opt("-F").split("=", 1)[1]]
+    raw = {"data": {"repository": {"issue": {"lastEditedAt": issue["lastEditedAt"],
+                                             "timelineItems": {"nodes": issue["events"]}}}}}
+    print(subprocess.run(["jq", "-c", opt("--jq")], input=json.dumps(raw), capture_output=True, text=True,
+                         check=True).stdout.strip())
+    sys.exit(0)
 if args[:1] != ["issue"] or opt("--repo") != "openwizdev/OpenWiz":
     sys.exit(3)
 verb = args[1]
@@ -371,7 +379,8 @@ if verb == "create":
     number = str(9200 + len(state) - 1)
     state[number] = {"number": int(number), "author": {"login": "synthetic-owner"}, "title": opt("--title"),
                      "body": open(opt("--body-file")).read(), "milestone": {"title": opt("--milestone")},
-                     "labels": [{"name": n} for n in opt("--label", True)], "comments": []}
+                     "labels": [{"name": n} for n in opt("--label", True)], "comments": [],
+                     "lastEditedAt": None, "events": []}
     print("https://github.com/openwizdev/OpenWiz/issues/" + number)
 else:
     issue = state.get(args[2])
@@ -382,6 +391,10 @@ else:
         issue["comments"].append({"author": {"login": "synthetic-owner"}, "body": body})
     elif verb == "edit":
         names = [l["name"] for l in issue["labels"] if l["name"] not in opt("--remove-label", True)]
+        issue["events"] += [{"createdAt": now, "label": {"name": n}, "actor": {"__typename": "User", "login": "synthetic-owner"}}
+                            for n in opt("--add-label", True) if n not in names]
+        if opt("--body-file") is not None:
+            issue["body"], issue["lastEditedAt"] = open(opt("--body-file")).read(), now
         issue["labels"] = [{"name": n} for n in names + [n for n in opt("--add-label", True) if n not in names]]
         if opt("--milestone") is not None:
             issue["milestone"] = {"title": opt("--milestone")}
@@ -414,7 +427,7 @@ def workflow(data, skill=None):
         world.write_text(json.dumps({str(rep["number"]): {
             "number": rep["number"], "author": {"login": rep["author"]}, "title": rep["title"],
             "body": rep["body"], "milestone": None, "labels": [{"name": n} for n in rep["labels"]],
-            "comments": []}}))
+            "comments": [], "lastEditedAt": None, "events": []}}))
         env = dict(os.environ, FAKE_GH_WORLD=str(world), FAKE_GH_LOG=str(log))
 
         def gh(*args):
@@ -431,10 +444,10 @@ def workflow(data, skill=None):
                            "<version>": out["brief"]["milestone"]})
         for line in documented(skill, out["outcome"]):
             argv = shlex.split(line)[1:]
-            unknown = [a for a in argv if re.fullmatch(r"<[^>]+>", a) and a not in values]
+            unknown = [p for a in argv for p in re.findall(r"<[a-z]+>", a) if p not in values]
             if unknown:
                 raise AssertionError(f"undocumented placeholder {unknown} in {line}")
-            stdout = gh(*[values.get(a, a) for a in argv])
+            stdout = gh(*[re.sub(r"<[a-z]+>", lambda m: values.get(m[0], m[0]), a) for a in argv])
             if argv[:2] == ["issue", "create"]:
                 values["<brief>"] = stdout.strip().rsplit("/", 1)[1]
                 (tmp / "approval.md").write_text(out["brief"]["approval"])
@@ -442,13 +455,14 @@ def workflow(data, skill=None):
                    "--body-file", str(tmp / "approval.md"))
             if argv[:2] == ["issue", "view"]:
                 read = json.loads(stdout)
+            if argv[:2] == ["api", "graphql"]:
                 rc, _, text = plan(json.dumps({
                     "report": rep["number"], "version": out["brief"]["milestone"],
                     "record_authors": ["synthetic-owner"], "brief": {
                         "number": read["number"], "author": read["author"]["login"], "body": read["body"],
                         "labels": [l["name"] for l in read["labels"]], "milestone": read["milestone"]["title"],
                         "comments": [{"author": c["author"]["login"], "body": c["body"]}
-                                     for c in read["comments"]]}}), "verify")
+                                     for c in read["comments"]], **json.loads(stdout)}}), "verify")
                 if rc != 0:
                     raise AssertionError(text)
         edit = ["issue", "edit", str(rep["number"]), "--repo", "openwizdev/OpenWiz"]
@@ -467,7 +481,7 @@ def workflow(data, skill=None):
 
 
 def writes(calls):
-    return [c for c in calls if c[:2] != ["issue", "view"]]
+    return [c for c in calls if c[:2] not in (["issue", "view"], ["api", "graphql"])]
 
 
 def report_comments(calls, number=9101):
@@ -510,6 +524,19 @@ class FeedbackWrites(unittest.TestCase):
                 self.assertEqual(out["report_comments"], [])
                 self.assertEqual(report_comments(calls), [])
                 self.assertEqual(issues["9101"]["comments"], [])
+
+    def test_the_label_read_names_an_apps_bot_as_record_authors_do(self):
+        read = next(c for c in documented((ROOT / "skills/triage/SKILL.md").read_text(), "fleet")
+                    if c.startswith("gh api graphql"))
+        argv = shlex.split(read)
+        raw = {"data": {"repository": {"issue": {"lastEditedAt": "2026-11-01T09:00:00Z", "timelineItems": {"nodes": [
+            {"createdAt": "2026-11-01T08:00:00Z", "label": {"name": "feedback"}, "actor": {"__typename": "User", "login": "a"}},
+            {"createdAt": "2026-11-01T09:00:01Z", "label": {"name": "ready-for-agent"}, "actor": {"__typename": "Bot", "login": "openwiz"}},
+            {"createdAt": "2026-11-01T09:00:02Z", "label": {"name": "ready-for-agent"}, "actor": None}]}}}}}
+        run = subprocess.run(["jq", "-c", argv[argv.index("--jq") + 1]], input=json.dumps(raw), capture_output=True,
+                             text=True, check=True)
+        self.assertEqual(json.loads(run.stdout), {"last_edited_at": "2026-11-01T09:00:00Z", "ready_labelled": [
+            {"at": "2026-11-01T09:00:01Z", "by": "openwiz[bot]"}, {"at": "2026-11-01T09:00:02Z", "by": None}]})
 
     def test_the_run_sees_a_documented_comment_on_the_report(self):
         skill = (ROOT / "skills/triage/SKILL.md").read_text()

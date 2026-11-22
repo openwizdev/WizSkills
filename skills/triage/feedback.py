@@ -10,6 +10,7 @@ LINK_LINE = re.compile(r"^Report: #", re.M)
 DESTINATION = "openwizdev/OpenWiz"
 CLOSING = re.compile(r"^Closes openwizdev/OpenWiz#", re.M)
 DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 POINTER = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/[1-9][0-9]*#issuecomment-[1-9][0-9]*$")
 REPO = re.compile(r"^openwizdev/[A-Za-z0-9_.-]+$")
 APPROVAL_LINE = re.compile(r"^\*\*Approved on its own by [^\n\"“”]+, [0-9]{4}-[0-9]{2}-[0-9]{2}:\*\* [^\n\"“”]+\n"
@@ -180,6 +181,12 @@ def verify(case):
         missing.append("both closing lines in full")
     if "ready-for-agent" not in brief["labels"]:
         missing.append("the ready-for-agent label")
+    newest = max(brief["ready_labelled"], key=lambda e: e["at"], default=None)
+    if newest is None or (newest["by"] or "").lower() not in authors:
+        missing.append("the ready-for-agent label last added by a record author")
+    elif brief["last_edited_at"] is not None and newest["at"] <= brief["last_edited_at"]:
+        missing.append(f"the ready-for-agent label added after the brief's last edit at {brief['last_edited_at']} "
+                       "(remove it and add it again; an edit in the label's own second can't be ordered)")
     if brief["milestone"] != case["version"]:
         missing.append(f"the milestone {case['version']}")
     if not any(c["author"].lower() in authors and APPROVAL_LINE.search(c["body"]) for c in brief["comments"]):
@@ -233,6 +240,13 @@ def read(path):
     return case
 
 
+BRIEF_KEYS = {"number", "author", "body", "labels", "milestone", "comments", "last_edited_at", "ready_labelled"}
+
+
+def is_time(value):
+    return isinstance(value, str) and TIME.fullmatch(value) is not None
+
+
 def read_brief(path):
     try:
         raw = sys.stdin.read() if path == "-" else open(path, encoding="utf-8").read()
@@ -245,14 +259,18 @@ def read_brief(path):
     if type(case["report"]) is not int or not isinstance(case["version"], str) or not isinstance(authors, list) \
             or not authors or not all(isinstance(a, str) and a for a in authors):
         raise Unreadable("verify needs a report number, a version and the record authors")
-    if not isinstance(brief, dict) or set(brief) != {"number", "author", "body", "labels", "milestone", "comments"}:
-        raise Unreadable("the brief holds exactly number, author, body, labels, milestone and comments")
+    if not isinstance(brief, dict) or set(brief) != BRIEF_KEYS:
+        raise Unreadable("the brief holds exactly " + ", ".join(sorted(BRIEF_KEYS)))
     if type(brief["number"]) is not int or not isinstance(brief["author"], str) or not isinstance(brief["body"], str) \
             or not isinstance(brief["labels"], list) or not all(isinstance(x, str) for x in brief["labels"]) \
             or not (brief["milestone"] is None or isinstance(brief["milestone"], str)) \
             or not isinstance(brief["comments"], list) or not all(
                 isinstance(c, dict) and set(c) == {"author", "body"} and all(isinstance(v, str) for v in c.values())
-                for c in brief["comments"]):
+                for c in brief["comments"]) \
+            or not (brief["last_edited_at"] is None or is_time(brief["last_edited_at"])) \
+            or not isinstance(brief["ready_labelled"], list) or not all(
+                isinstance(e, dict) and set(e) == {"at", "by"} and is_time(e["at"])
+                and (e["by"] is None or isinstance(e["by"], str)) for e in brief["ready_labelled"]):
         raise Unreadable("the brief's fields have the wrong types")
     return case
 

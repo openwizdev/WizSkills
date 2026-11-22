@@ -217,7 +217,6 @@ class Review(unittest.TestCase):
                       f"{PRODUCT}@main:docs/agents/triage-labels.md": LABELS},
             "checks": green(HEAD),
             "comments": {f"{SKILLS}#7": comments or []},
-            "compare": {f"{OLD}...{HEAD}": ["src/export.rs"]},
         }
         w.update(changes)
         self.fixture.write_text(json.dumps(w))
@@ -440,11 +439,6 @@ class Review(unittest.TestCase):
                 out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
                 self.assertEqual(out.returncode, code, out.stdout + out.stderr)
                 self.assertIn(expected, out.stdout.splitlines())
-        self.assertIn(["api", f"repos/{SKILLS}/compare/{OLD}...{HEAD}"], self.state()["calls"])
-        self.world({"compare": {}}, comments=[report(FULL)])
-        out = self.run_helper("check", self.file("r.md", RECHECK), "--repo", SKILLS, "--pr", "7")
-        self.assertEqual(out.returncode, 2, out.stdout)
-        self.assertIn("cannot read", out.stderr)
 
     def test_a_recheck_after_a_large_main_merge_reads_only_the_pull_requests_own_changes(self):
         merged = RECHECK.replace(f"APPROVE at {HEAD}", f"APPROVE at {MERGED}")

@@ -1100,10 +1100,11 @@ class FirstMerge(unittest.TestCase):
         self.assertTrue(says(result.stdout.splitlines()[-1], 'offer'), result.stdout)
 
 
-def step_block(heading, end, keep):
+def step_block(heading, end, keep, listed=False):
     text = (SKILL_DIR / 'SKILL.md').read_text()
     part = text[text.index(heading):text.index(end, text.index(heading))]
-    part = '\n'.join(l[3:] if l.startswith('   ') else l for l in part.split('\n'))
+    if listed:
+        part = '\n'.join(l[3:] if l.startswith('   ') else l for l in part.split('\n'))
     return part, next(b for b in re.findall(r'```sh\n(.*?)```', part, re.S) if keep in b)
 
 
@@ -1152,7 +1153,7 @@ class StepFourReadsTheInstallerOutput(unittest.TestCase):
         self.assertNotIn('refuses the whole step', step4)
         self.assertNotRegex(step4 + step_block('## Resume', '## 1. ', '')[0], r'\b1[0-9] skills|ask-wiz')
         for words in ('`installed` or `partial`', 'each `skipped:` line', 'never delete or overwrite it',
-                      'a `missing:` line'):
+                      'A `missing:` line'):
             self.assertIn(words, step4)
 
     def test_refused_means_nothing_was_installed(self):
@@ -1164,7 +1165,7 @@ class StepFourReadsTheInstallerOutput(unittest.TestCase):
                           {'id': 'codex', 'path': 'HOME/.codex/skills', 'state': 'absent', 'next': 'No ~/.codex.'}]}, 5)
         self.assertEqual(lines, ['exit: 5', 'absent: claude-code ~/.claude/skills (next: No ~/.claude.)',
                                  'absent: codex ~/.codex/skills (next: No ~/.codex.)', 'outcome: refused, 1 skills'])
-        self.assertIn('`refused` (exit 5) means nothing was installed', step4)
+        self.assertIn('`outcome: refused` (exit 5) means nothing was installed', step4)
 
 
 class UninstallListsEveryHeartbeatJob(unittest.TestCase):
@@ -1184,7 +1185,7 @@ class UninstallListsEveryHeartbeatJob(unittest.TestCase):
                 'backend': 'cron', 'argv': ['python3', '-I', '/shared/heartbeat.py', 'run', repo, spec],
                 'environment': {'OPENWIZ_ADAPTERS': str(adapters)} if adapters else {}}))
         before = sorted(str(p) for p in tmp.rglob('*'))
-        removal, block = step_block('## Recovery and removal', '\nRemoval revokes', 'openwiz-heartbeat')
+        removal, block = step_block('## Recovery and removal', '\nRemoval revokes', 'openwiz-heartbeat', listed=True)
         block = block.replace('<state>', str(tmp / 'first/state')).replace('<root>', str(tmp / 'first'))
         out = subprocess.run(['sh', '-c', block], env={'HOME': str(tmp / 'home'), 'PATH': '/usr/bin:/bin'},
                              capture_output=True, text=True).stdout.split('\n')
@@ -1194,7 +1195,7 @@ class UninstallListsEveryHeartbeatJob(unittest.TestCase):
                                                  'job: synthetic-owner/third 9 (adapters: none)'])
         self.assertNotIn('this install:', removal)
         self.assertIn('remove only the jobs the user names', removal)
-        self.assertIn('never decide which jobs are this install\'s', removal)
+        self.assertIn('Never decide which jobs are this install\'s', removal)
 
 
 if __name__ == '__main__':

@@ -573,7 +573,7 @@ def step_with(text):
 
 
 class CrossRepositoryReviews(unittest.TestCase):
-    TOOLS, LOCAL = 'thr_syntools31', 'thr_synlocal31'
+    TOOLS, LOCAL = 'thr_t-tools31', 'thr_l-local31'
 
     @classmethod
     def setUpClass(cls):

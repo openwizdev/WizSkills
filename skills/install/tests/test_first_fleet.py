@@ -611,10 +611,6 @@ class HostAwareSetup(unittest.TestCase):
 
 
 class ConnectIdentity(unittest.TestCase):
-    """openwizdev/openwiz#2405: Connect step 3 recommends the App only with CloudRoom.
-    Catches a non-CloudRoom user being recommended the App, whose setup recipe needs
-    CloudRoom's secret, instead of the verified personal login."""
-
     def step(self):
         connect = SKILL.read_text().split('### 3. Connect', 1)[1].split('\n### ', 1)[0]
         found = re.search(r'^3\. .*?(?=^[0-9]+\. )', connect, re.M | re.S)

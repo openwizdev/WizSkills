@@ -139,10 +139,11 @@ def git(*args):
     return r.returncode, r.stdout
 
 
-def setting_text(setting=SETTING):
+def setting_text(setting=None):
     """The setting file on origin's default branch at its current tip, or None when that tip has no file.
 
     Never the checkout's copy: a fleet's checkout can be older than the default branch (records v1, section 6)."""
+    setting = setting or SETTING
     code, out = git('ls-remote', '--symref', 'origin', 'HEAD')
     branch = re.search(r'(?m)^ref: refs/heads/(\S+)\tHEAD$', out) if code == 0 else None
     tip = re.search(r'(?m)^([0-9a-f]{40})\tHEAD$', out) if code == 0 else None

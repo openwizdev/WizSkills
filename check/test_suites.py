@@ -92,8 +92,9 @@ class CheckShards(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(names[:2], ['rules', 'standalone'])
         self.assertEqual([shard['skill'] for shard in shards[:2]], [None, None])
-        self.assertEqual(shards[1]['commands'], [['python3', '-I', 'check/standalone.py', '--tree', '.']])
-        listed_commands = sorted((shard['skill'], tuple(command))
+        standalone = ['python3', '-I', 'check/standalone.py', '--tree', '.']
+        self.assertEqual(shards[1]['commands'], [{'suite': standalone, 'argv': standalone, 'cwd': '.'}])
+        listed_commands = sorted((shard['skill'], tuple(command['suite']))
                                  for shard in shards[2:] for command in shard['commands'])
         expected = sorted((name, tuple(command))
                           for name, commands in run.SUITES.items() for command in commands)
@@ -101,6 +102,47 @@ class CheckShards(unittest.TestCase):
         for shard in shards:
             self.assertEqual(set(shard), {'name', 'skill', 'commands', 'env'})
             self.assertEqual(shard['env'], {})
+            for command in shard['commands']:
+                self.assertEqual(set(command), {'suite', 'argv', 'cwd'})
+
+    def test_every_listed_command_runs_as_listed(self):
+        special = {
+            'huntr': [['sh', 'skills/huntr/scripts/test.sh']],
+            'unit': [['python3', '-I', 'skills/unit/test_unit.py'],
+                     ['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/unit/empty']],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'check').mkdir()
+            consumer = root / 'check/fixtures/huntr-project/docs/agents'
+            consumer.mkdir(parents=True)
+            (consumer / 'huntr.md').write_text('synthetic consumer\n', encoding='utf-8')
+            huntr = root / 'skills/huntr/scripts/test.sh'
+            huntr.parent.mkdir(parents=True)
+            huntr.write_text('set -eu\ntest -f docs/agents/huntr.md\n'
+                             'echo huntr >> "$(dirname "$0")/../../../ran.log"\n', encoding='utf-8')
+            (root / 'skills/unit/empty').mkdir(parents=True)
+            (root / 'skills/unit/test_unit.py').write_text(
+                'import unittest\n\nclass Unit(unittest.TestCase):\n    def test_it(self):\n'
+                "        open('ran.log', 'a').write('unit\\n')\n", encoding='utf-8')
+            (root / 'skills/unit/empty/test_empty.py').write_text(
+                'import unittest\n\nclass Empty(unittest.TestCase):\n    pass\n', encoding='utf-8')
+            code, lines = self.check('--list', root=root, suites=special)
+            self.assertEqual(code, 0, lines)
+            listed = [command for shard in json.loads('\n'.join(lines))[2:] for command in shard['commands']]
+            for command in listed:
+                self.assertIsInstance(command, dict)
+            self.assertEqual([command['suite'] for command in listed], [*special['huntr'], *special['unit']])
+            self.assertEqual(listed[0]['cwd'], 'check/fixtures/huntr-project')
+            codes = []
+            for command in listed:
+                argv = [sys.executable if command['argv'][0] == 'python3' else command['argv'][0],
+                        *command['argv'][1:]]
+                codes.append(subprocess.run(argv, cwd=root / command['cwd'], capture_output=True).returncode)
+            self.assertEqual(self.ran(root), ['huntr', 'unit'])
+            self.assertEqual([code == 0 for code in codes], [True, True, False])
+            from_root = subprocess.run(special['huntr'][0], cwd=root, capture_output=True)
+            self.assertNotEqual(from_root.returncode, 0)
 
     def test_a_shard_runs_only_its_own_suites(self):
         with tempfile.TemporaryDirectory() as tmp:

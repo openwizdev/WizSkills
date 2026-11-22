@@ -72,9 +72,9 @@ class Brief(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertTrue(text.startswith(start), text)
                 self.assertIn(lookup(skill), text)
-        code, text = brief('tick', 'synthetic-owner/synthetic-repo', 'thr_synorch1')
+        code, text = brief('tick', 'synthetic-owner/synthetic-repo', 'thr_syn-orch')
         self.assertTrue(text.endswith("do its Each wake section for the due lines below. "
-                                      "The orchestrator's thread is thr_synorch1. " + PASS_REPO), text)
+                                      "The orchestrator's thread is thr_syn-orch. " + PASS_REPO), text)
         code, text = brief('re-check', PR, HEAD, OLD, 'R1,R2', 'none')
         self.assertIn('Open findings: R1,R2. Changed since %s: git diff %s %s' % (OLD, OLD, HEAD), text)
 
@@ -128,7 +128,7 @@ class Brief(unittest.TestCase):
 
     def test_malformed_targets_print_no_brief(self):
         for args in (('builder', '12; rm -rf /'), ('reviewer', PR, 'abc123'), ('fresh', TICKET, PR, 'main branch', HEAD),
-                     ('re-check', PR, HEAD, OLD, 'R1', 'thr_synthetic'), ('fleet', 1, 'not a repo'), ('tick', 'synthetic-owner/synthetic-repo', 'me'), ('nope',)):
+                     ('re-check', PR, HEAD, OLD, 'R1', 'thr_syn-x'), ('fleet', 1, 'not a repo'), ('tick', 'synthetic-owner/synthetic-repo', 'me'), ('nope',)):
             with self.subTest(args=args):
                 self.assertEqual(brief(*args), (2, ''))
 
@@ -137,8 +137,8 @@ class Repository(unittest.TestCase):
     ALL = [('builder', TICKET), ('reviewer', PR, HEAD), ('reviewer', PR, HEAD, 'same-family'),
            ('re-check', PR, HEAD, OLD, 'R1,R2', 'none'), ('fresh', TICKET, PR, 'room/12-synthetic', HEAD),
            ('diagnose',), ('fleet', 4001, 'synthetic-owner/synthetic-repo'),
-           ('wake', 4001, 'synthetic-owner/synthetic-repo'), ('tick', 'synthetic-owner/synthetic-repo', 'thr_synorch1'),
-           ('wakes', 'synthetic-owner/synthetic-repo', 'thr_synorch1')]
+           ('wake', 4001, 'synthetic-owner/synthetic-repo'), ('tick', 'synthetic-owner/synthetic-repo', 'thr_syn-orch'),
+           ('wakes', 'synthetic-owner/synthetic-repo', 'thr_syn-orch')]
 
     def test_no_brief_names_a_ticket_or_pull_request_without_its_repository(self):
         for env in ({}, {'OPENWIZ_TOKEN_SERVICE': SERVICE}):

@@ -85,7 +85,7 @@ HOST_PY = LAUNCH_FLEET / 'scripts/host.py'
 HEARTBEAT = LAUNCH_FLEET / 'scripts/heartbeat.py'
 OPTIONS = {
     'where': ({'--state'}, {'--yes'}, {'--build', '--agents'}),
-    'mode': ({'--state'}, set(), {'--mode'}),
+    'mode': ({'--state'}, set(), {'--mode', '--claude-mode', '--codex-mode'}),
     'setting': ({'--state'}, {'--yes'}, set()),
     'grill': ({'--state', '--confirmed'}, set(), set()),
     'first-merge': ({'--state', '--pr'}, set(), set()),
@@ -413,23 +413,44 @@ def mode_rows(text):
     return [v[0] if len(v) == 1 and re.fullmatch(MODE_VALUE, v[0]) else None for v in values]
 
 
-def saved_mode(env):
-    """The permission mode the default branch's docs/agents/fleet.md saves, or None for no row; read as
-    launch-fleet's host.py reads the host setting, from this checkout's origin, and as KN3's driver reads it."""
-    sys.dont_write_bytecode = True  # never write bytecode into launch-fleet's folder
+def saved_rows(env):
+    sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location('launch_fleet_host', HOST_PY)
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
-        module.SETTING = Path(MODE_FILE)  # the same default-branch read, for KN3's file
+        module.SETTING = Path(MODE_FILE)
         text = module.setting_text()
-    except Exception as error:  # host.py's Unreadable, or a missing git
+    except Exception as error:
         raise Exit(1, 'Could not read %s from the default branch: %s; %s' % (MODE_FILE, error, NOTHING))
-    values = mode_rows(text)
-    if len(values) > 1 or None in values:
-        raise Exit(5, '%s needs exactly one `%s `<mode>` |` row; ask the owner to fix it; %s' % (
-            MODE_FILE, MODE_ROW, NOTHING))
-    return values[0] if values else None
+    return [line.rstrip() for line in (text or '').splitlines() if line.startswith(MODE_ROWS)]
+
+
+MODE_ROWS = '| Harness permission mode'
+MODE_FLAGS = {'claude': '--claude-mode', 'codex': '--codex-mode'}
+HARNESS_OF = {program: harness for harness, program in PROGRAMS.items()}
+
+
+def routed(host, harness):
+    both = host.get('agents') == 'local' and {'claude-code', 'codex'} <= set(host.get('harnesses') or ())
+    return ['claude-code', 'codex'] if both else [harness]
+
+
+def picked_modes(state):
+    saved = state.value.get('mode') or {}
+    if isinstance(saved.get('modes'), dict):
+        return dict(saved['modes'])
+    return {PROGRAMS[saved['harness']]: saved['mode']} if saved.get('mode') else {}
+
+
+def kept(modes):
+    return {'modes': modes} if len(modes) > 1 else {}
+
+
+def mode_lines(modes):
+    if len(modes) == 1:
+        return ['%s `%s` |' % (MODE_ROW, mode) for mode in modes.values()]
+    return ['%s (%s) | `%s` |' % (MODE_ROWS, program, modes[program]) for program in sorted(modes)]
 
 
 # KN3's host-side approval (security R6, option A): the same pick saved on the owner's machine, per
@@ -583,10 +604,11 @@ def approve_locked(env, path, repo, program, picked):
                       'again.')
 
 
-def mode_section(picked):
-    return ('\n## Harness permission mode\n\nThe mode the owner picked for builders on this machine; the local '
-            'driver passes it to the harness unchanged. To change it, ask your agent to edit this one row.\n\n'
-            '| Setting | Value |\n| --- | --- |\n%s `%s` |\n' % (MODE_ROW, picked))
+def mode_section(modes):
+    return ('\n## Harness permission mode\n\nThe mode the owner picked for agents on this machine; the local '
+            'driver passes it to the harness unchanged. To change it, ask your agent to edit %s.\n\n'
+            '| Setting | Value |\n| --- | --- |\n%s\n' % (
+                'this one row' if len(modes) == 1 else 'that harness\'s row', '\n'.join(mode_lines(modes))))
 
 
 # --- Where agents run (#1358) ---------------------------------------------------
@@ -1089,31 +1111,49 @@ def mode(got):
         raise Exit(5, 'Connect the repository first (continue): the mode is for the harness it prepares; '
                       'nothing recorded.')
     harness = carried['settings']['harness']
-    modes = MODES.get(harness)
-    if not modes:
+    harnesses = routed(host, harness)
+    if any(not MODES.get(h) for h in harnesses):
         raise Exit(5, 'No permission modes are known for %s; nothing recorded.' % harness)
-    if '--mode' not in got:
-        print('%s on this machine runs with the permission mode the owner picks, once. The driver passes it '
-              'unchanged and never chooses or widens it:' % harness)
-        for name, why in modes:
-            print('- %s: %s' % (name, why))
-        print("Nothing recorded. Ask the owner which one, in those words, and pick none for them; on their answer, "
-              'run again with --mode <their pick>.')
+    flags = [MODE_FLAGS[PROGRAMS[h]] for h in harnesses] if len(harnesses) > 1 else ['--mode']
+    given = [f for f in ('--mode',) + tuple(MODE_FLAGS.values()) if f in got]
+    if not given:
+        for h in harnesses:
+            print('%s on this machine runs with the permission mode the owner picks, once. The driver passes it '
+                  'unchanged and never chooses or widens it:' % h)
+            for name, why in MODES[h]:
+                print('- %s: %s' % (name, why))
+        if len(harnesses) > 1:
+            print('Both harnesses run here: builders use %s and each review uses the other one, so each needs its '
+                  'own mode.' % harness)
+        print("Nothing recorded. Ask the owner which one%s, in those words, and pick none for them; on their answer, "
+              'run again with %s.' % (' for each harness' if len(harnesses) > 1 else '',
+                                      ' '.join('%s <their pick>' % f for f in flags)))
         return 12
-    if got['--mode'] not in [name for name, _ in modes]:
-        raise Exit(5, '%s is not one of %s\'s permission modes (%s); nothing recorded.' % (
-            got['--mode'], harness, ', '.join(name for name, _ in modes)))
+    if sorted(given) != sorted(flags):
+        raise Exit(5, 'Pick with exactly %s here%s; nothing recorded.' % (' and '.join(flags), (
+            ': builders and reviewers use both harnesses on this machine' if len(harnesses) > 1 else '')))
+    picks = {h: got[f] for h, f in zip(harnesses, flags)}
+    for h, pick in picks.items():
+        if pick not in [name for name, _ in MODES[h]]:
+            raise Exit(5, '%s is not one of %s\'s permission modes (%s); nothing recorded.' % (
+                pick, h, ', '.join(name for name, _ in MODES[h])))
+    wanted = {PROGRAMS[h]: pick for h, pick in picks.items()}
     recorded = state.value.get('setting') or {}
-    if recorded.get('state') in ('pending', 'opened', 'merged') and recorded.get('mode') != got['--mode']:
+    had = recorded.get('modes') or ({PROGRAMS[harness]: recorded['mode']} if recorded.get('mode') else {})
+    if recorded.get('state') in ('pending', 'opened', 'merged') and had != wanted:
         raise Exit(5, 'The host setting already carries %s; ask the owner to change that line instead; '
-                      'nothing recorded.' % (recorded.get('mode') or 'no permission mode'))
-    approve_host(os.environ, carried['repository'], PROGRAMS[harness], got['--mode'])
-    state.value['mode'] = {'harness': harness, 'mode': got['--mode']}
+                      'nothing recorded.' % (', '.join(sorted(had.values())) or 'no permission mode'))
+    for h, pick in picks.items():
+        approve_host(os.environ, carried['repository'], PROGRAMS[h], pick)
+    state.value['mode'] = {'harness': harness, 'mode': picks[harness]}
+    if len(picks) > 1:
+        state.value['mode']['modes'] = wanted
     if not state.save():
         raise Exit(10, 'Could not save the permission mode; nothing recorded.')
-    print('Recorded: agents on this machine run %s with the %s permission mode the owner picked, saved as this '
-          "machine's host-side approval for %s (outside the repository); the host setting adds the matching %s "
-          'row.' % (harness, got['--mode'], carried['repository'], MODE_FILE))
+    print('Recorded: agents on this machine run %s, the mode%s the owner picked, saved as this machine\'s host-side '
+          'approval for %s (outside the repository); the host setting adds the matching %s row%s.' % (
+              ' and '.join('%s with the %s permission mode' % (h, pick) for h, pick in picks.items()),
+              's' if len(picks) > 1 else '', carried['repository'], MODE_FILE, 's' if len(picks) > 1 else ''))
     return 0
 
 
@@ -1126,6 +1166,7 @@ def setting(got):
     if not host or not repo:
         raise Exit(5, 'Ask where agents run (where) and connect the repository (continue) first; nothing written.')
     picked = (state.value.get('mode') or {}).get('mode')
+    modes = picked_modes(state)
     name = None if host['agents'] == 'cloud' else host['agents']
     local = name == 'local'
     if local and not picked:
@@ -1141,16 +1182,17 @@ def setting(got):
         if fleet is None:
             raise Exit(5, '%s is not on the default branch yet: run setup and merge its settings (Agents) first; '
                           'nothing written.' % MODE_FILE)
-        values = mode_rows(fleet)
-        if values and values != [picked]:
+        values = [line.rstrip() for line in fleet.splitlines() if line.startswith(MODE_ROWS)]
+        if values and values != mode_lines(modes):
             raise Exit(5, '%s already saves %s; OpenWiz never adds a second row or replaces the owner\'s. Ask the '
                           'owner whether to change that row; nothing written.' % (
-                              MODE_FILE, ', '.join('`%s`' % v if v else 'an unreadable row' for v in values)))
+                              MODE_FILE, ', '.join('`%s`' % v for v in mode_rows(fleet) if v) or
+                              ', '.join(values)))
         writes = ([HOST_FILE] if now is None else []) + ([MODE_FILE] if not values else [])
     elif name and now is None:
         writes = [HOST_FILE]
     if not writes:
-        state.value['setting'] = {'host': name, 'state': 'merged', 'mode': picked}
+        state.value['setting'] = dict({'host': name, 'state': 'merged', 'mode': picked}, **kept(modes))
         if not state.save():
             raise Exit(10, 'Could not save the host setting; nothing written.')
         print('The host setting already matches: %s.' % (
@@ -1162,7 +1204,7 @@ def setting(got):
     if HOST_FILE in writes:
         want[HOST_FILE] = host_text(name)
     if MODE_FILE in writes:
-        want[MODE_FILE] = fleet.rstrip('\n') + '\n' + mode_section(picked)
+        want[MODE_FILE] = fleet.rstrip('\n') + '\n' + mode_section(modes)
     recorded = state.value.get('setting') or {}
     if recorded.get('state') in ('pending', 'opened'):
         found = host_pull(repo, env)
@@ -1171,19 +1213,21 @@ def setting(got):
                           'it, or answers where agents run again; nothing written.' % found[0])
         if found:
             pull_diff(repo, env, want)
-            state.value['setting'] = {'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked}
+            state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked},
+                                          **kept(modes))
             state.save()
             print('The host setting pull request is open: %s. The user merges it; launch waits for it.' % found[0])
             return 0
     said = {HOST_FILE: 'add %s holding `Host: %s`' % (HOST_FILE, name),
-            MODE_FILE: 'add one row, %s `%s` |, to %s, changing no other line' % (MODE_ROW, picked, MODE_FILE)}
+            MODE_FILE: 'add %s, %s, to %s, changing no other line' % (
+                'one row' if len(modes) == 1 else '%d rows' % len(modes), ' and '.join(mode_lines(modes)), MODE_FILE)}
     print('Effect: on a new branch %s of %s, %s, and open one pull request for you to merge. Nothing else is '
           'written.' % (HOST_BRANCH, repo, ' and '.join(said[w] for w in writes)))
     if not got.get('--yes'):
         print("Nothing written. On the user's yes to exactly this, run again with --yes.")
         return 12
     based = {HOST_FILE: None, MODE_FILE: fleet if local else None}
-    state.value['setting'] = {'host': name, 'state': 'pending', 'mode': picked}
+    state.value['setting'] = dict({'host': name, 'state': 'pending', 'mode': picked}, **kept(modes))
     if not state.save():
         raise Exit(10, 'Could not save the host setting first; nothing written.')
     base = run(['gh', 'api', 'repos/%s' % repo, '--jq', '.default_branch'], env)
@@ -1238,9 +1282,10 @@ def setting(got):
                        % (path, HOST_BRANCH))
     pull_diff(repo, env, want)
     if host_pull(repo, env) is None:
-        body = ('Adds `Host: local` to %s and the owner\'s harness permission mode as one row of %s: OpenWiz '
+        body = ('Adds `Host: local` to %s and the owner\'s harness permission mode as %s of %s: OpenWiz '
                 'starts this project\'s agents through its local driver, which passes that mode to the harness '
-                'unchanged (records v1, section 6). Merge it to start the first fleet there.' % (HOST_FILE, MODE_FILE)
+                'unchanged (records v1, section 6). Merge it to start the first fleet there.' % (
+                    HOST_FILE, 'one row' if len(modes) == 1 else 'one row per harness', MODE_FILE)
                 if local else 'Adds `Host: %s` to %s: OpenWiz starts this project\'s agents through its %s driver '
                 '(records v1, section 6). Merge it to start the first fleet there.' % (name, HOST_FILE, name))
         run(['gh', 'pr', 'create', '--repo', repo, '--head', HOST_BRANCH, '--base', branch, '--title',
@@ -1249,7 +1294,7 @@ def setting(got):
     if found is None:
         raise Exit(6, 'Whether the host setting pull request was opened is uncertain; run this again to read it '
                       'before anything else.')
-    state.value['setting'] = {'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked}
+    state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked}, **kept(modes))
     if not state.save():
         raise Exit(6, 'The host setting pull request is open (%s), but that could not be saved.' % found[0])
     print('Opened %s. The user merges it; launch waits for it on the default branch.' % found[0])
@@ -1803,18 +1848,25 @@ def launch(got):
             'merge the host setting pull request first (setting)' if name and named is None else
             'answer where agents run again, or ask to change that line', NOTHING))
     picked = (state.value.get('mode') or {}).get('mode')
-    if local and (not picked or saved_mode(env) != picked):
-        raise Exit(5, 'No `%s `%s` |` row, the Harness permission mode the owner picked, is in %s on the default '
+    modes = picked_modes(state)
+    if local and modes and set(modes) != {PROGRAMS[h] for h in routed(host, choices['harness'])}:
+        raise Exit(5, 'The permission modes saved here are not for every harness this fleet starts on this machine: '
+                      'run mode again, then setting, and merge it; ' + NOTHING)
+    if local and (not picked or saved_rows(env) != mode_lines(modes)):
+        raise Exit(5, 'No %s row, the Harness permission mode the owner picked, is in %s on the default '
                       "branch, and the local driver starts no agent without it: run mode, then setting, and merge "
-                      'it; %s' % (MODE_ROW, picked or '<mode>', MODE_FILE, NOTHING))
+                      'it; %s' % (' and '.join('`%s`' % line for line in mode_lines(modes or {'': '<mode>'})),
+                                  MODE_FILE, NOTHING))
     if local:
-        program = PROGRAMS[choices['harness']]
-        approved = host_approval(env, state.value['repo'], program)
-        if approved != picked:
-            raise Exit(5, "This machine's host-side approval for %s with %s is %s, not the `%s` row %s saves, and "
-                          "KN3's start refuses unless they match: run mode --mode %s to save the owner's pick here, "
-                          'or ask the owner which mode they mean; %s' % (
-                              state.value['repo'], program, approved or 'missing', picked, MODE_FILE, picked, NOTHING))
+        again = ' '.join('%s %s' % (MODE_FLAGS[p] if len(modes) > 1 else '--mode', modes[p]) for p in sorted(modes))
+        for program in sorted(modes):
+            approved = host_approval(env, state.value['repo'], program)
+            if approved != modes[program]:
+                raise Exit(5, "This machine's host-side approval for %s with %s is %s, not the `%s` row %s saves, "
+                              "and KN3's start refuses unless they match: run mode %s to save the owner's pick here, "
+                              'or ask the owner which mode they mean; %s' % (
+                                  state.value['repo'], program, approved or 'missing', modes[program], MODE_FILE,
+                                  again, NOTHING))
     adapters = None
     if driver:
         adapters = host.get('adapters') or env.get('OPENWIZ_ADAPTERS')
@@ -1840,7 +1892,7 @@ def launch(got):
     if same_family:
         reviewer = builder
     effects = {'fleet_thread': orchestrator, 'repo': state.value['repo'], 'spec': spec, 'project': carried['project'], 'title': title,
-               'host': host['agents'], 'mode': picked if local else None, 'builder': builder, 'reviewer': reviewer, 'grill': confirmed,
+               'host': host['agents'], 'mode': (picked if len(modes) == 1 else modes) if local else None, 'builder': builder, 'reviewer': reviewer, 'grill': confirmed,
                'tickets': [[n, ready[n]] for n in starts]}
     if driver:
         effects['heartbeat'] = adapters
@@ -1868,7 +1920,8 @@ def launch(got):
         cost = (host_cost(host['agents']) if not local else 'every agent uses %s on this machine, whose model '
                 'use is billed to you as it is today' % builder['harness'])
         if local:
-            print('Its agents run %s with the %s permission mode you picked.' % (builder['harness'], picked))
+            print('Its agents run %s you picked.' % ' and '.join(
+                '%s with the %s permission mode' % (HARNESS_OF[p], modes[p]) for p in sorted(modes)))
         print('Start the fleet %s now? It can cost money: %s.' % (where, cost))
         state.value['preview'] = {'spec': spec, 'effects': digest}
         if not state.save():

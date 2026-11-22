@@ -65,7 +65,7 @@ A finding **blocks** only with a line under it: `User path: <who does what ordin
 
 ## Ask, never guess
 
-When a finding turns on a fact no reading or run can settle, comment on the ticket `Reviewer question: #<PR> at <the full head>`, then the question on the next line, answerable in a word. Write your status `asking` (it adds `needs-info`), post no report for that head and end your turn. Resume on a record author's `Orchestrator answer: #<PR> at <the same head>`, and write `working` (it clears `needs-info`).
+When a finding turns on a fact no reading or run can settle, comment on the ticket `Reviewer question: #<PR> at <the full head>`, then the question on the next line, answerable in a word. Write your status `asking` (it adds `needs-info`), post no report for that head and end your turn. Resume on a record author's `Orchestrator answer: #<PR> at <the same head>`, and write `working` (it clears `needs-info` only when no live note is `asking` and your own login added it last; otherwise a person removes it).
 
 ## 4. Report
 

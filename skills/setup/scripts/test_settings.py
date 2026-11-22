@@ -489,7 +489,6 @@ class Check(unittest.TestCase):
                 self.assertIn(here + line, out.splitlines())
 
     def test_an_indented_code_block_is_not_the_approval_rules_table(self):
-        # catches: a four-space or tab indented table, which Markdown renders as a code sample, verified as the rules.
         valid = rules(*[(rule, 'syn-owner') for rule in DEFAULT_RULES])
         table = re.compile(r'^(?=\|)', re.M)
         for name, indent in (('four spaces', '    '), ('tab', '\t'), ('space and tab', ' \t')):

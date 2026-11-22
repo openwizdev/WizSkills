@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -22,11 +23,13 @@ SPEC = '7'
 HEAD = 'a' * 40
 MODELS = ('## Models\n\n| Role | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
           '| --- | --- | --- | --- | --- |\n'
-          '| Orchestrator | Claude Code | Table | High | `--provider claude-code --model synthetic-table-builder '
+          '| Orchestrator | Claude Code | Opus 5.5 | High | `--provider claude-code --model synthetic-table-builder '
           '--reasoning-level high` |\n'
-          '| Builder | Claude Code | Table | High | `--provider claude-code --model synthetic-table-builder '
+          '| Builder | Claude Code | Opus 5.5 | High | `--provider claude-code --model synthetic-table-builder '
           '--reasoning-level high` |\n'
-          '| Reviewer | %s | Table | High | `--provider %s --model synthetic-table-reviewer --reasoning-level high` |\n\n')
+          '| Reviewer | %s | Table | High | `--provider %s --model synthetic-table-reviewer --reasoning-level high` |\n'
+          '| Small builder | Claude Code | Actual | Medium | `--provider claude-code --model synthetic-actual-builder '
+          '--reasoning-level medium` |\n\n')
 FLEET_MD = ('# Fleet settings\n\n' + MODELS % ('Codex', 'codex') + '## CI checks\n\n| Check | Runs |\n| --- | --- |\n'
             '| `check` | everything |\n\n'
             '## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n| Record authors | `synthetic-owner` |\n')
@@ -70,6 +73,19 @@ with world() as w:
     if args[:2] == ['pr', 'view']:
         pr = w['prs'][args[2]]
         out({'state': pr['state'], 'statusCheckRollup': pr['checks']})
+    if args[:2] == ['api', '-i']:
+        pool = 'graphql' if args[2] == 'graphql' else 'core'
+        wait = w['backoff'].get(pool)
+        if w['budget'] is None:
+            sys.stdout.write('HTTP/2.0 502 Bad Gateway\r\n\r\n'); sys.exit(1)
+        if wait:
+            sys.stdout.write('HTTP/2.0 403 Forbidden\r\nRetry-After: %d\r\n\r\n{"message": "secondary rate limit"}'
+                             % wait)
+            sys.exit(1)
+        reset = int(datetime.now(timezone.utc).timestamp()) + 3600
+        heads = '' if w['bare'] else ('X-Ratelimit-Limit: 5000\r\nX-Ratelimit-Remaining: %d\r\nX-Ratelimit-Reset: %d\r\n'
+                                      'X-Ratelimit-Resource: %s\r\n' % (w['budget'], reset, pool))
+        sys.stdout.write('HTTP/2.0 200 OK\r\n%s\r\n{}' % heads); sys.exit(0)
     if args[:2] == ['api', 'rate_limit']:
         if w['budget'] is None:
             sys.exit(1)
@@ -224,7 +240,7 @@ class Session(unittest.TestCase):
                                           'next_id': 100, 'comments': {}, 'tickets': {}, 'prs': {},
                                           'branches': {}, 'questions': [], 'spec': SPEC, 'spec_open': True,
                                           'queue': False, 'every_hide': [], 'blocked': {}, 'budget': 5000,
-                                          'jobs': []}))
+                                          'jobs': [], 'backoff': {}, 'bare': False}))
         self.log = self.home / 'driver.log'
         path = [d for d in os.environ['PATH'].split(os.pathsep)
                 if not any(os.path.exists(os.path.join(d, name)) for name in ('claude', 'codex'))]
@@ -252,8 +268,8 @@ class Session(unittest.TestCase):
         self.change(lambda w: w['tickets'].update({str(n): {'title': 'synthetic %d' % n, 'state': 'OPEN'}
                                                    for n in numbers}))
 
-    def note(self, n, agent, pr=None, harness='Claude Code'):
-        fields = {'agent': agent, 'state': 'done', 'harness': harness, 'model': 'Opus 5.5',
+    def note(self, n, agent, pr=None, harness='Claude Code', model='Opus 5.5'):
+        fields = {'agent': agent, 'state': 'done', 'harness': harness, 'model': model,
                   'skills': 'build-ticket@0.2.1', 'step': 'handed back', 'time': stamp()}
         if pr:
             fields['pr'] = 'https://github.com/%s/pull/%d' % (REPO, pr)
@@ -270,7 +286,7 @@ class Session(unittest.TestCase):
         self.change(lambda w: w['prs'].update({str(p): {'ticket': n, 'head': HEAD, 'state': 'OPEN', 'checks': [
             {'__typename': 'CheckRun', 'name': 'check', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'}]}}))
 
-    def approved(self, verdict_first=False, assigned=HEAD, reviewer='Codex'):
+    def approved(self, verdict_first=False, assigned=HEAD, reviewer='Codex', reviewed=12):
         self.tickets(5)
         self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
         self.note(5, 'builder', pr=12)
@@ -279,7 +295,7 @@ class Session(unittest.TestCase):
                    'VERDICT: APPROVE at ' + HEAD]
         for body in reversed(records) if verdict_first else records:
             self.comment(12, body)
-        self.note(5, 'reviewer', harness=reviewer)
+        self.note(5, 'reviewer', pr=reviewed, harness=reviewer)
 
     def guard(self):
         now = int(time.time())
@@ -367,7 +383,7 @@ class Session(unittest.TestCase):
         self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
         time.sleep(1)
         self.assertEqual(self.merges(), [])
-        self.note(5, 'reviewer', harness='Codex')
+        self.note(5, 'reviewer', pr=12, harness='Codex')
         out = self.ended(process, 0)
         merges = self.merges()
         self.assertEqual([m[0] for m in merges], ['admit', 'merge'])
@@ -627,6 +643,73 @@ class Session(unittest.TestCase):
         self.assertEqual((third.returncode, third.stdout),
                          (1, 'session: refused: a session or heartbeat tick already runs spec #7\n'))
         self.assertEqual(len(self.starts()), 1)
+
+    def test_an_approval_whose_reviewer_note_names_another_pull_request_merges_nothing(self):
+        self.approved(reviewed=19)
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn('needs you: #12 was not merged: no done note from its selected codex reviewer for #12', out)
+        self.assertNotIn('merge', [m[0] for m in self.merges()])
+
+    def test_with_one_harness_the_builders_recorded_model_picks_the_review_model(self):
+        (self.home / 'bin/codex').unlink()
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12, model='Actual')
+        self.green(12, 5)
+        process = self.session()
+        self.until(lambda: self.records(12)[:1] and self.records(12)[0].startswith('launch-fleet: review started'),
+                   'the reviewer', process)
+        self.assertEqual([s['model'] for s in self.starts()], ['synthetic-actual-builder'])
+        process.send_signal(signal.SIGINT)
+        self.ended(process, 130)
+
+    def test_with_one_harness_an_unknown_builder_model_makes_the_review_wait(self):
+        (self.home / 'bin/codex').unlink()
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12, model='the-actual-builder')
+        self.green(12, 5)
+        out = self.ended(self.session('--idle', '5'), 3)
+        self.assertIn("needs you: the review of #12 waits: the builder's recorded model the-actual-builder is not "
+                      "a claude model in the models rule", out)
+        self.assertEqual(self.starts(), [])
+
+    def test_a_merge_waits_during_a_secondary_backoff(self):
+        self.approved()
+        self.change(lambda w: w.update(backoff={'graphql': 60}))
+        out = self.ended(self.session(), 3)
+        self.assertIn('did not admit a merge batch: paused: alarm (graphql_backoff)', out)
+        self.assertEqual(self.merges(), [])
+
+    def test_a_merge_waits_when_the_budget_reads_carry_no_rate_limit_evidence(self):
+        self.approved()
+        self.change(lambda w: w.update(bare=True))
+        out = self.ended(self.session(), 3)
+        self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
+        self.assertEqual(self.merges(), [])
+
+    def test_two_specs_of_one_repository_each_get_their_own_observation(self):
+        spec = importlib.util.spec_from_file_location('session_batches', HERE / 'session.py')
+        session = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(session)
+        session.STATE = self.lock_dir.parent
+        env = dict(self.env, GH_REPO=REPO, LAUNCH_FLEET_OVERLOAD_STATE=str(self.home / 'pause.json'))
+
+        def runner(number):
+            args = SimpleNamespace(repo=REPO, spec=number, harness='claude', model='synthetic-builder', max=3,
+                                   poll=0.05, ci_poll=0.05, idle=5)
+            return session.Session(args, 'carry on')
+        first, second = runner('7'), runner('8')
+        real, calls = json.dump, []
+
+        def interleaved(value, out, **kw):
+            if not calls:
+                calls.append(1)
+                second.batch()
+            return real(value, out, **kw)
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(json, 'dump', interleaved):
+            first.batch()
+        self.assertEqual(calls, [1])
 
     def test_a_lock_folder_removed_under_a_contender_is_not_a_second_lock(self):
         holder, ready, release = self.home / 'holder.py', self.home / 'ready', self.home / 'release'

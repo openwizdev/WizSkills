@@ -69,6 +69,7 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-limit-recovery.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-post.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-merge.py'],
+                     ['env', '-u', 'OPENWIZ_GITHUB_APP_KEY', 'python3', '-I', 'skills/launch-fleet/scripts/test-queue.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-brief.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-heartbeat.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-ledger.py'],

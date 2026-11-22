@@ -186,6 +186,14 @@ class Queue(unittest.TestCase):
         self.verdict(value, f'wait {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z may still stand: '
                      'ci, privacy, web-test last ran before it', 0)
 
+    def test_a_cancelled_run_after_the_last_green_one_is_no_duplicate(self):
+        # catches: a green run from before the cancelled one taken as its duplicate.
+        value = fixture('2253-recorded')
+        contexts(value)['nodes'].append({'__typename': 'CheckRun', 'name': 'changelog', 'status': 'COMPLETED',
+                                         'conclusion': 'CANCELLED', 'startedAt': '2026-11-22T09:50:00Z'})
+        self.verdict(value, f'wait {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z may still stand: '
+                     'ci, privacy, web-test last ran before it', 0)
+
     def test_a_missing_required_check_waits(self):
         # catches: a required check with no run on the head read as green.
         value = fixture('2253-recorded')
@@ -295,6 +303,7 @@ class Queue(unittest.TestCase):
         # catches: pages read across a push mixed into one answer.
         value = fixture('paged')
         node(value, 1)['headRefOid'] = 'b' * 40
+        node(value, 1)['commits']['nodes'][0]['commit']['oid'] = 'b' * 40
         self.unknown(value, 'changed')
 
     def test_bad_arguments_exit_2_and_read_nothing(self):

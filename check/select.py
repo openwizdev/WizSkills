@@ -10,7 +10,8 @@ ALWAYS = ('rules', 'standalone')
 KEYS = {'name', 'skill', 'commands', 'env'}
 NAME = re.compile(r'[a-z0-9]+(?:-[a-z0-9]+)*')
 SKILL_PATH = r'(?:skills/|\.\./)({names})(?![\w-])(?!\.[\w])'
-SKILL_JOINED = r'''(?:/\s*|join(?:path)?\([^)\n]*?)['"]({names})(?:['"]|/)'''
+SKILL_JOINED = r'''(?:/\s*|join(?:path)?\([^)\n]*?)['"]({names})['"]'''
+SKILL_PATH_STRING = r'''['"]({names})/'''
 JOINS_SKILLS_BY_VARIABLE = re.compile(r'''['"]skills['"]\s*(?:/|,)\s*[A-Za-z_]|skills/\$\{?[A-Za-z_]''')
 QUOTED_SKILL = r'''['"]({names})['"]'''
 LISTS_EVERY_SKILL = re.compile(r'''['"]skills['"]\s*\)\s*\.\s*(?:iterdir|r?glob)\(|skills/\*|(?:\.\.|\$\{?\w+\}?"?)/\.\./\*''')
@@ -44,11 +45,11 @@ def reads(root, shards):
     for row, home in rows.items():
         hits = set()
         if names:
-            forms = re.compile(SKILL_PATH.format(names=names) + '|' + SKILL_JOINED.format(names=names))
+            forms = re.compile('|'.join(form.format(names=names) for form in (SKILL_PATH, SKILL_JOINED, SKILL_PATH_STRING)))
             for text in code_in(root / home):
                 if LISTS_EVERY_SKILL.search(text):
                     hits.update(skills)
-                hits.update(a or b for a, b in forms.findall(text))
+                hits.update(''.join(groups) for groups in forms.findall(text))
                 if JOINS_SKILLS_BY_VARIABLE.search(text):
                     hits.update(re.findall(QUOTED_SKILL.format(names=names), text))
         hits.discard(row)

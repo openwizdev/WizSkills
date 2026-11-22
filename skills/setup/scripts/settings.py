@@ -7,9 +7,7 @@ Reads the four files in DIR/docs/agents/ (default: the current folder) and
 names each missing or unsafe setting: a missing file or section, a builder or
 reviewer table or Fixer family row without each of its three flags exactly
 once as one token, a template placeholder, a reviewer from the builder's model family, not exactly
-one valid Record authors row, an Approval rules heading, header or row that is not
-the canonical form (an `Ask before` rule, a named approver, no repeated rule), or a
-triage role without exactly one label. FILE is the saved output of
+one valid Record authors row, or a triage role without exactly one label. FILE is the saved output of
 `gh label list --limit 500 --json name`; with it, each mapped label must exist
 in the tracker exactly once. It writes nothing and runs nothing.
 

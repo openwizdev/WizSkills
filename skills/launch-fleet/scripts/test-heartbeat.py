@@ -288,9 +288,17 @@ class Heartbeat(unittest.TestCase):
         (self.home / 'due').write_text(f"fleet done #{SPEC}: synthetic spec closed; delete this fleet thread's loop\n")
         self.heartbeat('run')
         self.assertEqual(self.ticks(), ['idle', 'done'])
-        self.assertEqual(self.heartbeat('status').splitlines(),
-                         ['heartbeat: active (cron)',
-                          f'heartbeat: spec #{SPEC} is done: run heartbeat.py remove {REPO} {SPEC}'])
+        phase, hint = self.heartbeat('status').splitlines()
+        self.assertEqual(phase, 'heartbeat: active (cron)')
+        prefix = f'heartbeat: spec #{SPEC} is done: run '
+        self.assertTrue(hint.startswith(prefix), hint)
+        elsewhere = self.home / 'elsewhere'
+        elsewhere.mkdir()
+        ran = subprocess.run(['/bin/sh', '-c', hint[len(prefix):]], cwd=elsewhere, env=self.env,
+                             capture_output=True, text=True, timeout=15)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn('not installed', self.heartbeat('status'))
+        self.assertEqual((self.home / 'crontab').read_text(), '15 3 * * * /bin/true\n')
         self.assertFalse((self.home / 'driver.log').exists())
 
     def test_remove_retires_a_run_the_driver_no_longer_knows(self):

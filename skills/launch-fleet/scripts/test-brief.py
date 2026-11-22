@@ -3,6 +3,7 @@
 
 python3 -I skills/launch-fleet/scripts/test-brief.py
 """
+import ast
 from pathlib import Path
 import os
 import subprocess
@@ -77,6 +78,10 @@ class Brief(unittest.TestCase):
                 self.assertEqual(brief(*args), (2, ''))
 
 
+GH_ALLOWED = sorted(ast.literal_eval(next(
+    node.value.args[0] for node in ast.parse((HERE / 'github-app/agent-token.py').read_text()).body
+    if isinstance(node, ast.Assign) and getattr(node.targets[0], 'id', '') == 'GH_ALLOWED')))
+
 
 class Token(unittest.TestCase):
     KINDS = [(('builder', 12), 'builder-12', 'OWNER/NAME'),
@@ -103,6 +108,8 @@ class Token(unittest.TestCase):
                 self.assertIn(EXCLUSIVE, text)
                 self.assertIn(OWNER_LOGIN, text)
                 self.assertNotIn(SERVICE, text)
+                self.assertIn('Only these gh commands run through the helper: %s; it stops any other gh command, '
+                              'so run that without the helper.' % ', '.join('`gh %s`' % c for c in GH_ALLOWED), text)
 
     def test_with_no_service_every_brief_is_exactly_as_today(self):
         expected = ('You are the builder for #12. Use the build-ticket skill. ' + LOOKUP_BUILD + '.')

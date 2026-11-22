@@ -59,7 +59,7 @@ class CheckShards(unittest.TestCase):
         if root is not None:
             run.ROOT, run.SUITES = root, suites
         try:
-            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            with contextlib.redirect_stdout(out):
                 code = run.main(list(argv))
         finally:
             run.ROOT, run.SUITES = saved
@@ -156,6 +156,22 @@ class CheckShards(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn('suite inventory: skills/gamma/test_unlisted.py: unlisted', lines)
         self.assertEqual(lines[-1], 'check: fail')
+
+    def test_list_refuses_while_a_test_file_is_unlisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.synthetic(tmp)
+            code, lines = self.check('--list', root=root, suites=SYNTHETIC)
+            self.assertEqual(code, 0)
+            self.assertEqual([shard['name'] for shard in json.loads('\n'.join(lines))],
+                             ['rules', 'standalone', 'alpha', 'beta', 'gamma'])
+            (root / 'skills' / 'gamma' / 'test_unlisted.py').write_text('', encoding='utf-8')
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code, lines = self.check('--list', root=root, suites=SYNTHETIC)
+            self.assertEqual(self.ran(root), [])
+        self.assertEqual((code, lines), (1, []))
+        self.assertEqual(err.getvalue().splitlines(),
+                         ['suite inventory: skills/gamma/test_unlisted.py: unlisted'])
 
     def test_an_unknown_shard_or_argument_exits_2_and_runs_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1141,6 +1141,184 @@ class Launch(unittest.TestCase):
 
 
 
+FAKE_SESSION = r'''import importlib.util, json, os, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('real_session', %(real)r)
+real = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(real)
+real.arguments(sys.argv[1:])  # what launch hands over must pass the real session runner's own parser
+with open(os.environ['FAKE_SESSION_LOG'], 'a') as log:
+    log.write(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'adapters': os.environ.get('OPENWIZ_ADAPTERS'),
+                          'heartbeat': Path(os.environ['FAKE_HEARTBEAT_ON']).exists()}) + '\n')
+script = json.loads(Path(os.environ['FAKE_SESSION_SCRIPT']).read_text())
+sys.stdout.write(script['stdout'])
+sys.exit(script['exit'])
+'''
+FAKE_HEARTBEAT = r'''import json, os, sys
+from pathlib import Path
+on = Path(os.environ['FAKE_HEARTBEAT_ON'])
+with open(os.environ['FAKE_HEARTBEAT_LOG'], 'a') as log:
+    log.write(json.dumps({'argv': sys.argv[1:], 'adapters': os.environ.get('OPENWIZ_ADAPTERS')}) + '\n')
+if sys.argv[1] == 'status':
+    print('heartbeat: active (cron)' if on.exists() else 'heartbeat: not installed')
+elif sys.argv[1] == 'install' and sys.argv[-1] == '--yes':
+    on.write_text('installed')
+elif sys.argv[1] == 'install':
+    print('heartbeat: a synthetic job would run fleet.sh spec %s every 10 minutes' % sys.argv[3])
+else:
+    sys.exit(99)
+'''
+NEEDS_YOU = ('session: tick 1: started #901, #902\n'
+             'session: stopped at tick 4: needs you: needs-info #902: a question for the orchestrator\n'
+             'carry on: python3 -I /synthetic/launch-fleet/scripts/session.py run synthetic-owner/synthetic-notes '
+             '--spec 900 --harness claude --model syn-claude-model-01\n')
+
+
+class LocalSession(unittest.TestCase):
+    """TM7 (#2329): on this machine the first fleet runs in the open chat, through launch-fleet's session runner."""
+
+    def road(self, session=(3, NEEDS_YOU)):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import test_onboarding
+        journey = next(j for j in test_onboarding.ROAD['journeys'] if j['name'] == 'small-change')
+        road = test_onboarding.Road(self, journey)
+        (road.dir / 'bin/room-cli').unlink()
+        home = road.dir / 'skills'
+        (home / 'install/scripts').mkdir(parents=True)
+        (road.dir / 'contracts').symlink_to(SKILL_DIR.parents[1] / 'contracts', target_is_directory=True)
+        shutil.copyfile(HELPER, home / 'install/scripts/first_fleet.py')
+        (home / 'install/teach.md').symlink_to(SKILL_DIR / 'teach.md')
+        for name in ('setup', 'to-tickets'):
+            (home / name).symlink_to(SKILL_DIR.parent / name, target_is_directory=True)
+        shutil.copytree(SKILL_DIR.parent / 'launch-fleet', home / 'launch-fleet')
+        scripts = home / 'launch-fleet/scripts'
+        (scripts / 'session.py').write_text(FAKE_SESSION % {'real': str(SKILL_DIR.parent / 'launch-fleet/scripts/session.py')})
+        (scripts / 'heartbeat.py').write_text(FAKE_HEARTBEAT)
+        road.home = road.dir / 'home'
+        road.home.mkdir()
+        road.extra_env.update(HOME=str(road.home), FAKE_SESSION_LOG=str(road.dir / 'session.log'),
+                              FAKE_SESSION_SCRIPT=str(road.dir / 'session.json'),
+                              FAKE_HEARTBEAT_LOG=str(road.dir / 'heartbeat.log'),
+                              FAKE_HEARTBEAT_ON=str(road.dir / 'heartbeat-on'))
+        self.script(road, *session)
+        road.replay_road(stop=lambda t: t['step'] == 'launch')
+        self.assertIsNone(shutil.which('room-cli', path=road.env()['PATH']))
+        return road
+
+    def script(self, road, code, out):
+        (road.dir / 'session.json').write_text(json.dumps({'exit': code, 'stdout': out}))
+
+    def log(self, road, name):
+        path = road.dir / name
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def installs(self, road):
+        return [c['argv'] for c in self.log(road, 'heartbeat.log') if c['argv'][0] == 'install']
+
+    def launched(self, road):
+        preview = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(preview.returncode, 12, preview.stdout + preview.stderr)
+        digest = re.findall(r'(?m)^Confirmation: ([0-9a-f]{64})$', preview.stdout)[0]
+        self.assertEqual(self.log(road, 'session.log'), [], 'the preview starts nothing')
+        return preview, road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest])
+
+    def test_a_local_launch_starts_the_session_in_this_chat_and_installs_no_heartbeat(self):
+        # catches: the local yes still handing over to the 10-minute heartbeat, a session started with
+        # other than the user's builder, a second session on a repeat, or a heartbeat installed alongside
+        road = self.road()
+        preview, yes = self.launched(road)
+        self.assertIn('session', preview.stdout)
+        self.assertIn('in this chat', preview.stdout)
+        self.assertNotIn('every 10 minutes', preview.stdout)
+        self.assertIn('Start the fleet on this machine now? It can cost money: ', preview.stdout)
+        self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
+        sessions = self.log(road, 'session.log')
+        self.assertEqual([s['argv'] for s in sessions], [['run', road.repo, '--spec', '900', '--harness', 'claude',
+                                                          '--model', 'syn-claude-model-01']])
+        self.assertEqual(sessions[0]['adapters'], str(road.dir / 'adapters'), 'host.py finds the local driver')
+        self.assertEqual(Path(sessions[0]['cwd']).resolve(), road.dir.resolve(), "from the project's checkout")
+        self.assertFalse(sessions[0]['heartbeat'])
+        self.assertEqual(self.installs(road), [], 'no heartbeat, not even a preview of one')
+        lines = yes.stdout.splitlines()
+        for line in NEEDS_YOU.splitlines():
+            self.assertIn(line, lines, "the session's own ticks and stop are shown in the chat")
+        self.assertLess(lines.index('The plan passed its checks, so the fleet started in this chat: 2 builders, '
+                                    'each on one small ticket, and each next step starts the moment a run ends. '
+                                    'Keep this chat open; nothing for you to do until the first merge.'),
+                        lines.index(NEEDS_YOU.splitlines()[0]))
+        self.assertNotIn("launch-fleet's Launch section", yes.stdout, 'no handoff for the orchestrator to follow')
+        self.assertIn('launch --spec 900 --heartbeat', yes.stdout, 'the opt-in is offered after the session')
+        self.assertEqual(road.spawns(), [])
+        again = road.helper(['launch', '--spec', '900', '--yes', '--confirm', '0' * 64])
+        self.assertEqual(again.returncode, 0, again.stdout)
+        self.assertIn('already started once', again.stdout)
+        self.assertIn('carry on: python3 -I /synthetic/launch-fleet/scripts/session.py run', again.stdout)
+        self.assertEqual(len(self.log(road, 'session.log')), 1, 'never a second session from launch')
+        watch = road.helper(['progress', '--spec', '900'])
+        self.assertEqual(watch.returncode, 0, watch.stdout)
+        self.assertIn("Spec #900's session in this chat stopped: needs you: needs-info #902: a question for the "
+                      'orchestrator', watch.stdout)
+        self.assertIn('No heartbeat is installed', watch.stdout)
+        self.assertEqual(self.installs(road), [])
+
+    def test_each_session_stop_is_reported_and_a_refused_session_withdraws_the_yes(self):
+        # catches: a finished spec still offered a heartbeat, an interrupt or an unreadable stop reported as done,
+        # or a session refused by the shared lock counted as this launch's start
+        done = 'session: done: spec #900: every ticket is closed\n'
+        stops = ((0, done, 0, 'session finished spec #900', False),
+                 (130, 'session: stopped on interrupt at tick 2; the runs it started keep going\ncarry on: x\n', 0,
+                  'stopped on interrupt', True),
+                 (2, '', 1, 'stopped: a read failed', True))
+        for code, out, exit, said, offered in stops:
+            with self.subTest(session=code):
+                road = self.road(session=(code, out))
+                _, yes = self.launched(road)
+                self.assertEqual(yes.returncode, exit, yes.stdout + yes.stderr)
+                self.assertIn(said, yes.stdout)
+                self.assertEqual('--heartbeat' in yes.stdout, offered)
+                self.assertEqual(road.saved()['launch']['state'], 'started')
+                watch = road.helper(['progress', '--spec', '900'])
+                self.assertIn("Spec #900's session in this chat", watch.stdout)
+        road = self.road(session=(1, 'session: refused: a session or heartbeat tick already runs spec #900\n'))
+        _, yes = self.launched(road)
+        self.assertEqual(yes.returncode, 5, yes.stdout)
+        self.assertIn('a session or heartbeat tick already runs spec #900', yes.stdout)
+        self.assertNotIn('launch', road.saved(), 'the yes is withdrawn: preview again and ask again')
+        self.assertEqual(self.installs(road), [])
+
+    def test_the_heartbeat_is_installed_only_on_its_own_opt_in_yes(self):
+        # catches: the session's yes installing a heartbeat, an install without its own preview and yes,
+        # an opt-in before the session ran, or another digest standing in for the heartbeat's
+        road = self.road()
+        early = road.helper(['launch', '--spec', '900', '--heartbeat'])
+        self.assertEqual(early.returncode, 5, early.stdout)
+        self.assertIn('session', early.stdout)
+        _, yes = self.launched(road)
+        self.assertEqual(yes.returncode, 0, yes.stdout)
+        self.assertEqual(self.installs(road), [])
+        offer = road.helper(['launch', '--spec', '900', '--heartbeat'])
+        self.assertEqual(offer.returncode, 12, offer.stdout + offer.stderr)
+        self.assertIn('heartbeat: a synthetic job would run fleet.sh spec 900 every 10 minutes', offer.stdout)
+        self.assertIn('after this chat closes', offer.stdout)
+        self.assertEqual(self.installs(road), [['install', road.repo, '900', 'claude', 'syn-claude-model-01']],
+                         'its preview only')
+        digest = re.findall(r'(?m)^Confirmation: ([0-9a-f]{64})$', offer.stdout)[0]
+        self.assertEqual(road.helper(['launch', '--spec', '900', '--heartbeat', '--yes']).returncode, 2)
+        launch_digest = road.saved()['launch']['effects']
+        for wrong in (launch_digest, '0' * 64):
+            refused = road.helper(['launch', '--spec', '900', '--heartbeat', '--yes', '--confirm', wrong])
+            self.assertEqual(refused.returncode, 5, refused.stdout)
+        self.assertEqual(len(self.installs(road)), 1, 'no install without its own yes')
+        installed = road.helper(['launch', '--spec', '900', '--heartbeat', '--yes', '--confirm', digest])
+        self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+        self.assertEqual(self.installs(road)[-1], ['install', road.repo, '900', 'claude', 'syn-claude-model-01', '--yes'])
+        self.assertEqual(self.log(road, 'heartbeat.log')[-2]['adapters'], str(road.dir / 'adapters'))
+        self.assertIn("Spec #900's local heartbeat is active", installed.stdout)
+        self.assertEqual(len(self.log(road, 'session.log')), 1, 'the opt-in starts no session')
+        watch = road.helper(['progress', '--spec', '900'])
+        self.assertIn("Spec #900's local heartbeat is active", watch.stdout)
+
+
 YES_DEMO = ['create-repo', '--repo', REPO, '--yes']
 
 

@@ -911,7 +911,7 @@ class NoCloudRoomRequired(unittest.TestCase):
                       'a start record can be posted for an ineligible ticket')
         self.assertIn('proceed only on exit 1 with', before)
         self.assertIn('ready: no: no launch-fleet start record from a record author', before)
-        self.assertLess(before.index('gh api user --jq .login'), before.index('post'))
+        self.assertLess(before.index('gh api user --jq .login'), before.index('Post from'))
         self.assertIn('`Record authors`', before)
         self.assertTrue(command)
         gate, start, _ = after.partition('driver start')

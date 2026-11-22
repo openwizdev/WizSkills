@@ -26,6 +26,7 @@ KINDS = ('builder', 'reviewer', 'fleet')
 STATES = ('working', 'asking', 'done', 'stopped')
 CLAIMING = ('working', 'asking')
 ASKING_LABEL = 'needs-info'
+ASKED_WITHIN = timedelta(minutes=2)
 KEYS = (('agent', 300, True), ('state', 300, True), ('harness', 60, True), ('model', 60, True),
         ('skills', 300, True), ('step', 300, True), ('time', 300, True), ('pr', 300, False), ('preview', 300, False))
 REPO = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
@@ -388,7 +389,28 @@ def add_own(repo, n, login, locked):
             pass
 
 
-def take_own(repo, n, login, labels):
+def asked_label(repo, n, made, fields, author):
+    try:
+        found = gh('POST', 'graphql', {'query': EDITS, 'variables': {'id': made['node_id'], 'n': HISTORY}})
+        nodes = found['data']['node']['userContentEdits']['nodes']
+        versions = [(parse(x['diff']), x['editedAt']) for x in nodes]
+        k = next(j for j, (v, _) in enumerate(versions) if v == fields) + 1
+        start = None
+        while k < len(versions) and versions[k][0] and versions[k][0]['state'] == 'asking':
+            start, k = versions[k][1], k + 1
+        if start is None or k >= HISTORY:
+            return None
+        asked = when(start.replace('.000', '')[:19] + 'Z')
+        events = label_events(repo, n)
+        last = max((j for j, e in enumerate(events) if e['event'] == 'labeled'), default=None)
+        if last is None or not by(events[last], author) or not TIME.fullmatch(events[last].get('created_at') or ''):
+            return None
+        return last if asked <= when(events[last]['created_at']) <= asked + ASKED_WITHIN else None
+    except (Failed, StopIteration, KeyError, TypeError, AttributeError, ValueError):
+        return None
+
+
+def take_own(repo, n, login, labels, asked=None):
     def labelled():
         return ASKING_LABEL in [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
     def once(pairs):
@@ -403,6 +425,8 @@ def take_own(repo, n, login, labels):
     mine = own['event'] if exact and type(own['event']) is int and own['event'] >= 0 else None
     left = [f'#{n}: {ASKING_LABEL} left on: no note asks, and this writer can\'t show its own write '
             'added it; a person takes it off']
+    if mine is None and asked is not None and not app(asked[2]) and ASKING_LABEL in labels:
+        mine = asked_label(repo, n, *asked)
     if mine is None:
         forget(repo, n)
         return left if ASKING_LABEL in labels else []
@@ -503,7 +527,9 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
         if asking and ASKING_LABEL not in labels:
             add_own(repo, n, login, locked)
         elif not beat and not asking:
-            report = take_own(repo, n, login, labels)
+            asked = (made, fields, author) if (verb == 'edited' and own[1]['state'] == 'asking'
+                                               and args.state in ('working', 'done')) else None
+            report = take_own(repo, n, login, labels, asked)
     print(f'#{n}: {kind} {state}, status note {note_id} {verb}', file=out)
     for line in report:
         print(line, file=out)

@@ -455,6 +455,7 @@ class Session:
         todo = [line for line in lines if not LEFT.match(line) and line not in finished
                 and not (MERGE.fullmatch(line) and MERGE.fullmatch(line)[1] in self.queued)]
         if finished and not todo:
+            did += self.landed()
             if did:
                 print('session: tick %d: %s' % (self.tick_no, '; '.join(did)), flush=True)
             raise Done(finished[0])

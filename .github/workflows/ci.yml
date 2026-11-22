@@ -8,39 +8,129 @@
 # pinned with package-lock.json (40 packages, MIT or ISC), installed by
 # `npm ci --ignore-scripts`. Used only by check/changesets.py; never shipped.
 name: WizSkills check
+# One job per shard from `python3 check/run.py --list` (contracts/check-shards.v1.md),
+# the changeset and comment gates in their own job, and a final job named `check`
+# that passes only when every other job passed: `check` stays the required check.
 on:
-  push:
   pull_request:
+  merge_group:
+  push:
+    branches: [main]
 permissions:
   contents: read
 jobs:
-  check:
-    name: check
+  list:
+    name: list shards
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 10
+    outputs:
+      shards: ${{ steps.list.outputs.shards }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # The pull request's merge commit and its first parent, main's tip.
+      - name: List the shards (the inventory guard fails this job on an unlisted test)
+        id: list
+        # A shard needs the pinned browser when its skill's folder names playwright-core.
+        run: |
+          python3 check/run.py --list > "$RUNNER_TEMP/shards.json"
+          python3 -I - "$RUNNER_TEMP/shards.json" >> "$GITHUB_OUTPUT" <<'PY'
+          import json, pathlib, sys
+          shards = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          def browser(skill):
+              folder = pathlib.Path('skills', skill or '')
+              return bool(skill) and folder.is_dir() and any(
+                  'playwright-core' in path.read_text(errors='ignore')
+                  for path in folder.rglob('*') if path.is_file())
+          matrix = [{'shard': s['name'], 'browser': browser(s['skill'])} for s in shards]
+          for row in matrix:
+              print(f"shard {row['shard']}: browser {'yes' if row['browser'] else 'no'}", file=sys.stderr)
+          print('shards=' + json.dumps(matrix))
+          PY
+  gates:
+    name: gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The pull request's merge commit (or the merge group's commit) and its
+          # first parent: main's tip, or the group's base.
           fetch-depth: 2
+      - name: Name the base the gates compare against
+        if: github.event_name != 'push'
+        env:
+          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+        run: echo "GATE_BASE=${GROUP_BASE:-HEAD^1}" >> "$GITHUB_ENV"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-browser-false
       - name: Install the pinned Changesets
         run: npm ci --ignore-scripts
       - name: Changeset gate (a pull request that changes a skill names it in a new changeset)
-        if: github.event_name == 'pull_request'
-        run: python3 -I check/changesets.py check --base HEAD^1
+        if: github.event_name != 'push'
+        run: python3 -I check/changesets.py check --base "$GATE_BASE"
       - name: Comment check
-        if: github.event_name == 'pull_request'
+        if: github.event_name != 'push'
         run: |
           python3 -I tools/comment-check/test_ci.py
           python3 -I tools/comment-check/test_commands.py
-          python3 -I tools/comment-check/check.py diff --base HEAD^1
+          python3 -I tools/comment-check/check.py diff --base "$GATE_BASE"
+  shard:
+    name: shard ${{ matrix.shard }}
+    needs: list
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.list.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-browser-${{ matrix.browser }}
+      - name: Install the pinned Changesets
+        run: npm ci --ignore-scripts
+      - if: matrix.browser
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-1.64.1-chromium
       - name: Install pinned test-only browser tools
+        if: matrix.browser
         run: |
           npm install --no-save --ignore-scripts playwright-core@1.64.1
           node node_modules/playwright-core/cli.js install --with-deps chromium
           node --input-type=module -e "import { chromium } from 'playwright-core'; console.log('OPENWIZ_CHROMIUM=' + chromium.executablePath())" >> "$GITHUB_ENV"
-      - name: Skill rules, standalone check and every skill's suites
+      - name: Deliberate red for the proof that one failing shard fails check (removed next commit)
+        if: matrix.shard == 'feedback'
+        run: exit 1
+      - name: Run shard ${{ matrix.shard }}
         env:
           TEST_JOBS: 2
-        run: python3 check/run.py
+          SHARD: ${{ matrix.shard }}
+        run: python3 check/run.py --shard "$SHARD"
+  check:
+    name: check
+    needs: [list, gates, shard]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, sys
+          results = {job: need['result'] for job, need in json.loads(os.environ['RESULTS']).items()}
+          for job, result in results.items():
+              print(f'{job}: {result}')
+          sys.exit(0 if all(result == 'success' for result in results.values()) else 1)
+          PY

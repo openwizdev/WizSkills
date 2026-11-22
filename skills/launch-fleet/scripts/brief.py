@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Print one brief the fleet sends, literally (WS8, #1181). Send its output unchanged.
 
-  brief.py builder OWNER/NAME#N                     N: the ticket, in its tracker repository
-  brief.py reviewer OWNER/NAME#P COMMIT             P: the pull request, in its own repository
-  brief.py re-check OWNER/NAME#P COMMIT OLD_HEAD IDS ANSWER     IDS: R1,R2 or none; ANSWER: the builder's comment link or none
-  brief.py fresh OWNER/NAME#N OWNER/NAME#P BRANCH COMMIT
+  brief.py builder N
+  brief.py reviewer P COMMIT
+  brief.py re-check P COMMIT OLD_HEAD IDS ANSWER     IDS: R1,R2 or none; ANSWER: the builder's comment link or none
+  brief.py fresh N P BRANCH COMMIT
   brief.py diagnose
   brief.py fleet S OWNER/NAME                       the fleet thread's first wake
   brief.py wake S OWNER/NAME                        a spec's fleet loop
@@ -14,10 +14,7 @@
 A loop prompt is private routing: it may name the orchestrator's thread, which
 never goes into a public record.
 
-Every ticket and pull request is written as OWNER/NAME#N, so an agent whose sandbox is
-another repository's copy never reads its own issue of that number (OpenWiz #2307).
-
-Exit 2 and print nothing for an unknown kind or a malformed target, a bare number included. The
+Exit 2 and print nothing for an unknown kind or a malformed target. The
 skill-file lookup belongs to the recipient, so it is printed unexpanded.
 """
 import os

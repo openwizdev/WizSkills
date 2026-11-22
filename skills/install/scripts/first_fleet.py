@@ -35,7 +35,6 @@ from GitHub and prints the teacher's merged line and closing offer.
 
 It adds no approval, planner or engine. `continue` carries what install and
 setup already recorded in the installed OpenWiz state (DIR is its `<state>`):
-the one selected repository, its host, the acting GitHub identity,
 the private brain `openwiz init` made, the prepared harness, model and effort,
 and whether install already gave the explanation. It reads current setup
 evidence only and refuses, naming each one, when a prerequisite is missing,
@@ -48,25 +47,6 @@ any retry of a create whose answer was lost. It never pushes into a repository.
 
 `select` records the existing repository the owner confirmed, before Connect,
 as this onboarding's one repository; it reads and changes nothing else.
-
-`launch` starts the first fleet the way launch-fleet starts every fleet, only
-on the user's yes right before it (a preview names the host and that it can
-cost money, with a digest of its exact effects; `--yes --confirm DIGEST`
-starts only if a fresh read still has exactly those effects), and only from the spec's latest approval when it is the machine plan
-approval of this onboarding's confirmed grill, on the host the user chose (a
-driver host only once its setting is on the default branch). It
-reads launch-fleet's own frontier (../../launch-fleet/scripts/fleet.sh
-frontier, which checks that to-tickets's approval is current), keeps this
-spec's tickets, reads the fleet settings setup wrote (every builder table the
-user's choice, each reviewer from the other model family). On the yes it
-starts nothing itself: it saves the yes and names launch-fleet's own start
-path (references/launch.md: the project's loops, then "Starting one": the
-spec's loop, its private loop-map entry and the `launch-fleet: fleet active,
-loop fleet-<S>` record) for CloudRoom, or the local heartbeat for a driver
-host. It reads the CloudRoom activation record or the heartbeat's active
-status. It never calls the engine or the engine's tick.
-Every command
-checks the checkout is the repository this onboarding recorded.
 
 `next` reads only the state file and prints the first unfinished step and
 what to run there, so a fresh session resumes without repeating an effect.

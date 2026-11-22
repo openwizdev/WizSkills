@@ -425,7 +425,8 @@ def main():
         if (state / 'starting').exists():
             print(f'heartbeat: start unresolved: reconcile {state / "starting"}')
         if last_tick(state) == 'done':
-            print(f'heartbeat: spec #{args.spec} is done: run heartbeat.py remove {args.repo} {args.spec}')
+            removal = shlex.join([*config['argv'][:3], 'remove', args.repo, args.spec])
+            print(f'heartbeat: spec #{args.spec} is done: run {removal}')
         return 0
     if args.action == 'run':
         try:

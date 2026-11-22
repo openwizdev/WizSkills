@@ -96,7 +96,6 @@ class CheckShards(unittest.TestCase):
         self.assertEqual([shard['skill'] for shard in shards[:2]], [None, None])
         standalone = ['python3', '-I', 'check/standalone.py', '--tree', '.']
         self.assertEqual(shards[1]['commands'], [{'suite': standalone, 'argv': standalone, 'cwd': '.'}])
-        # A split suite (WQ2) is in each of its part shards `<row>.<n>`, and only there.
         whole = [s for s in shards[2:] if '.' not in s['name']]
         listed_commands = sorted((shard['skill'], tuple(command['suite']))
                                  for shard in whole for command in shard['commands'])
@@ -248,12 +247,10 @@ class CheckShards(unittest.TestCase):
                     self.assertEqual((code, lines, self.ran(root)), (2, [], []))
 
 
-# A fleet.sh that does nothing: each part still selects and counts its cases.
 FAKE_FLEET = '#!/bin/sh\nexit 0\n'
 
 
 def part_record(path):
-    """A launch-fleet test.sh part's TEST_SHARD_RAN record: its counts and groups."""
     record = {'groups_ran': []}
     for line in Path(path).read_text(encoding='utf-8').splitlines():
         key, value = line.split()[:2]
@@ -265,8 +262,6 @@ def part_record(path):
 
 
 class SplitSuites(unittest.TestCase):
-    """The parts of each split suite together run exactly the whole suite's cases (WQ2)."""
-
     def test_the_parts_of_launch_fleet_test_sh_run_every_case_once(self):
         p = subprocess.run([sys.executable, '-I', str(HERE / 'run.py'), '--list'],
                            capture_output=True, text=True)

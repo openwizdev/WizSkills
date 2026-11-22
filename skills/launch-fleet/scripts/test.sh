@@ -26,9 +26,8 @@
 # line there (`-` prints them, as on GitHub Actions).
 # TEST_SHARD=K/N (#743) runs only shard K's groups of N, for CI's parallel
 # members: TEST_SHARD_MAP=<file> gives each group its shard ("GROUP SHARD"
-# lines, from ci/shard/lanes.py); a group past the map's last, or every group
-# without a map, goes to shard ((GROUP - 1) mod N) + 1. With TEST_SHARD_RAN=<file>
-# it writes there its case count,
+# lines, from ci/shard/lanes.py); a group past the map's last goes to shard
+# ((GROUP - 1) mod N) + 1. It writes TEST_SHARD_RAN=<file>: its case count,
 # the run's total ($CASES) and group count, and each group it ran with its
 # milliseconds; the ci job checks the shards' counts add up to the total.
 set -u
@@ -53,7 +52,6 @@ if [ -n "${TEST_SHARD:-}" ]; then
   case $SHARD_K$SHARD_N in *[!0-9]*) echo "FAIL TEST_SHARD is not K/N: $TEST_SHARD"; exit 1 ;; esac
   [ "$SHARD_K" -le "$SHARD_N" ] || { echo "FAIL TEST_SHARD is not K/N: $TEST_SHARD"; exit 1; }
   [ -z "${TEST_ONLY:-}" ] || { echo "FAIL TEST_SHARD runs a whole run's share, not TEST_ONLY"; exit 1; }
-  # No TEST_SHARD_MAP: every group goes by ((GROUP - 1) mod N) + 1 (WQ2's parts).
   [ -z "${TEST_SHARD_MAP:-}" ] || [ -r "$TEST_SHARD_MAP" ] \
     || { echo "FAIL TEST_SHARD_MAP is not readable: $TEST_SHARD_MAP"; exit 1; }
   # Every line "GROUP SHARD", each group once, each shard 1 to N: the last group mapped.
@@ -464,7 +462,7 @@ if [ -z "$WORKER" ] && [ -z "${TEST_ONLY:-}" ]; then
   fi
   only_reads "$tmp"/w*/case-*/gh*.log "$tmp"/w*/cache-*/gh.log "$tmp"/w*/loop/log[0-9]
   if [ -n "$SHARD_K" ]; then
-    # The ci job adds up the shards' counts; each shard records its own (with TEST_SHARD_RAN).
+    # The ci job adds up the shards' counts; each shard records its own.
     { printf 'cases %s\ntotal %s\ngroups %s\n' "$cases" "$CASES" "${groups:-0}"
       sort -n "$tmp/times" 2> /dev/null | sed 's/^/group /'; } > "$tmp/ran" \
       && { [ -z "${TEST_SHARD_RAN:-}" ] || cp "$tmp/ran" "$TEST_SHARD_RAN"; } \

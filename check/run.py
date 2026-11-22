@@ -81,14 +81,10 @@ SUITES = {
               ['python3', '-I', 'check/test_bench.py']],
 }
 
-# The long suites, each run as numbered part shards `<row>.<n>` instead of in its
-# row's shard (WQ2, contracts/check-shards.v1.md): the suite and its part count.
-# launch-fleet's test.sh takes part n of N as TEST_SHARD=n/N, its groups round-robin.
 PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}
 
 
 def rows():
-    """Each suites shard in list order: (shard name, its row, its commands, its env)."""
     for name, commands in SUITES.items():
         split, count = PARTS.get(name, (None, 0))
         yield name, name, [c for c in commands if c != split], {}

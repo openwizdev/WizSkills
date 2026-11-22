@@ -1,15 +1,37 @@
 #!/usr/bin/env python3
 """The install skill's first-fleet checks (#1108, joined to install in #636). Standard library only.
 
+  first_fleet.py where --state FILE [--agents HOST] [--build DIR] [--yes]
   first_fleet.py continue --state FILE --setup-state DIR [--explained]
   first_fleet.py decisions --state FILE --setup-state DIR [--yes]
   first_fleet.py create-repo --state FILE --repo OWNER/NAME [--yes]
   first_fleet.py select --state FILE --repo OWNER/NAME
-  first_fleet.py choose --state FILE --options FILE (--harness P --model M --effort E | --from-setup) --agents cloud|local
+  first_fleet.py mode --state FILE [--mode MODE]
+  first_fleet.py setting --state FILE [--yes]
+  first_fleet.py grill --state FILE --confirmed URL
+  first_fleet.py choose --state FILE --options FILE (--harness P --model M --effort E | --from-setup) [--agents HOST]
   first_fleet.py spec --state FILE --spec N --repo OWNER/NAME
   first_fleet.py launch --state FILE --spec N [--yes --confirm DIGEST]
   first_fleet.py progress --state FILE --spec N --openwiz PROGRAM
+  first_fleet.py first-merge --state FILE --pr N
   first_fleet.py next --state FILE [--setup-state DIR]
+
+The onboarding road (#1358): `where` offers every host this OpenWiz can run
+agents on (DW9, #2006): Cloudroom, and each driver the installed build carries
+that answers `version` (driver v1), this machine's local driver and boat.dev's
+included; a driver whose `version` fails is not offered, and it says why. It
+records the user's pick (--agents HOST: `cloud`, or a driver's name) only on
+their answer (--yes), after checking what that needs and printing the
+teacher's walk-through for anything missing; it never runs a sign-in. On this machine `mode` lists
+the harness's permission modes, each explained, picks none, and records the
+one the owner names (J254 A); KN3's driver passes it unchanged. `setting` writes that choice to
+the project's host setting, docs/agents/host.md (records v1, section 6), as one
+pull request the user merges, only on --yes: its `Host: <driver>` line is the
+one launch-fleet reads; Cloudroom needs no file. `grill`
+records the private comment URL of the user's yes to the grill in chat; the
+plan then approves itself by its checks (to-tickets' machine plan approval),
+and no plan approval is asked. `first-merge` reads a merged pull request back
+from GitHub and prints the teacher's merged line and closing offer.
 
 It adds no approval, planner or engine. `continue` carries what install and
 setup already recorded in the installed OpenWiz state (DIR is its `<state>`):
@@ -27,24 +49,24 @@ any retry of a create whose answer was lost. It never pushes into a repository.
 `select` records the existing repository the owner confirmed, before Connect,
 as this onboarding's one repository; it reads and changes nothing else.
 
-`launch` starts the first fleet the way launch-fleet starts every fleet: it
+`launch` starts the first fleet the way launch-fleet starts every fleet, only
+on the user's yes right before it (a preview names the host and that it can
+cost money, with a digest of its exact effects; `--yes --confirm DIGEST`
+starts only if a fresh read still has exactly those effects), and only from the spec's latest approval when it is the machine plan
+approval of this onboarding's confirmed grill, on the host the user chose (a
+driver host only once its setting is on the default branch). It
 reads launch-fleet's own frontier (../../launch-fleet/scripts/fleet.sh
 frontier, which checks that to-tickets's approval is current), keeps this
 spec's tickets, reads the fleet settings setup wrote (every builder table the
-user's choice, each reviewer from the other model family), and starts one
-fleet thread for the spec, with launch-fleet's own brief. That thread makes
-its own loop, which runs the spec's check (`fleet.sh spec <S>`), records
-itself on the spec and starts the frontier's builders. A preview prints a
-confirmation digest of its exact effects; `--yes --confirm DIGEST` starts only
-if a fresh read still has exactly those effects. It never calls the engine or
-the engine's tick. The launch is saved before the start runs, and is never run
-twice: a repeat only reads the spec's fleet record and progress, and an
-uncertain start stays uncertain until that record reads back. Every command
+user's choice, each reviewer from the other model family). On the yes it
+starts nothing itself: it saves the yes and names launch-fleet's own start
+path (references/launch.md: the project's loops, then "Starting one": the
+spec's loop, its private loop-map entry and the `launch-fleet: fleet active,
+loop fleet-<S>` record), which the orchestrator follows. It says the fleet
+started only once that record reads back from a record author, and never
+starts a fleet a second way. It never calls the engine or the engine's tick.
+Every command
 checks the checkout is the repository this onboarding recorded.
-
-`choose` records the choice, then for Cloud reads the fleet's builder tables
-back: Choose the agents is done only once both name exactly that choice. Local
-stays recorded but unfinished, since a Local fleet cannot launch yet.
 
 `next` reads only the state file and prints the first unfinished step and
 what to run there, so a fresh session resumes without repeating an effect.
@@ -60,12 +82,15 @@ its one launch record.
 Exits: 0 done; 1 a read failed; 2 usage; 5 refused, nothing started;
 6 uncertain, never retried; 7 busy; 10 state unavailable; 12 preview, awaiting --yes.
 """
+import base64
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -75,12 +100,18 @@ import urllib.parse
 
 LAUNCH_FLEET = Path(__file__).resolve().parents[2] / 'launch-fleet'
 FLEET_SH = LAUNCH_FLEET / 'scripts/fleet.sh'
+HOST_PY = LAUNCH_FLEET / 'scripts/host.py'
 OPTIONS = {
+    'where': ({'--state'}, {'--yes'}, {'--build', '--agents'}),
+    'mode': ({'--state'}, set(), {'--mode'}),
+    'setting': ({'--state'}, {'--yes'}, set()),
+    'grill': ({'--state', '--confirmed'}, set(), set()),
+    'first-merge': ({'--state', '--pr'}, set(), set()),
     'continue': ({'--state', '--setup-state'}, {'--explained'}, set()),
     'decisions': ({'--state', '--setup-state'}, {'--yes'}, set()),
     'create-repo': ({'--state', '--repo'}, {'--yes'}, set()),
     'select': ({'--state', '--repo'}, set(), set()),
-    'choose': ({'--state', '--options', '--agents'}, {'--from-setup'}, {'--harness', '--model', '--effort'}),
+    'choose': ({'--state', '--options'}, {'--from-setup'}, {'--harness', '--model', '--effort', '--agents'}),
     'spec': ({'--state', '--spec', '--repo'}, set(), set()),
     'launch': ({'--state', '--spec'}, {'--yes'}, {'--confirm'}),
     'progress': ({'--state', '--spec', '--openwiz'}, set(), set()),
@@ -88,6 +119,12 @@ OPTIONS = {
 }
 FAMILY = {'claude-code': 'claude', 'codex': 'gpt'}
 REVIEWER = {'claude': 'Reviewer for Claude-built', 'gpt': 'Reviewer for GPT-built'}
+SETTINGS = Path(__file__).resolve().parents[2] / 'setup/scripts/settings.py'
+FLEET_MD = Path('docs/agents/fleet.md')
+OLDER = ('Builder', 'Builder for small tickets', REVIEWER['claude'], REVIEWER['gpt'], 'Fixer')
+RECOMMENDED = {'claude': ('claude-code', 'claude-opus-5-5', 'medium'), 'gpt': ('codex', 'gpt-6.2-sol', 'medium')}
+WRITTEN_NAMES = {'claude-code': 'Claude Code', 'codex': 'Codex', 'claude-opus-5-5': 'Opus 5.5',
+                 'claude-sonnet-5-5': 'Sonnet 5.5', 'gpt-6.2-sol': 'Sol 6.2'}
 STATES = ('ready', 'building', 'in_review', 'changes_requested', 'merged', 'held', 'blocked')
 NOTHING = 'nothing started.'
 # setup.v1's current-evidence window and its codes that establish `verified`.
@@ -99,6 +136,33 @@ NAMES = {'cloudroom': 'CloudRoom', 'harness': 'Agent harness', 'personal_github'
          'github_app': 'OpenWiz GitHub App', 'project': 'Project'}
 REPOSITORY = r'[A-Za-z0-9][-A-Za-z0-9]*/[-A-Za-z0-9_.]+'
 FLEET_RECORD = 'launch-fleet: fleet active, loop fleet-'
+GRILL = r'https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/(issues|pull)/[1-9][0-9]*#issuecomment-[1-9][0-9]*'
+TEACH = Path(__file__).resolve().parents[1] / 'teach.md'
+# Harnesses this machine can run, by setup's provider name: the local driver's harness program (#1368).
+PROGRAMS = {'claude-code': 'claude', 'codex': 'codex'}
+HOST_FILE = 'docs/agents/host.md'
+DRIVER_NAME = r'[a-z0-9]+(?:-[a-z0-9]+)*'
+VERSION_WAIT = 60
+PROBE_ENV = ('PATH', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR')
+RECORDS = r'openwiz:records v[1-9][0-9]{0,2}'
+CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox')
+LOGIN_LINE = 'https://github.com/openwizdev/OpenWiz/blob/main/adapters/%s/README.md'
+HOSTS = {
+    'local': {'label': 'this machine', 'where': 'on this machine'},
+    'boat': {'label': 'boat.dev, each agent in its own cloud sandbox', 'where': 'on boat.dev',
+             'program': 'boat', 'link': 'https://boat.dev',
+             'then': 'Then sign in to boat yourself, and connect GitHub and your harness in its dashboard.',
+             'login': 'Login: held by boat.dev. Sign in to boat yourself, then connect GitHub and the key or '
+                      "subscription for your harness in boat.dev's dashboard (Agents & Proxying); OpenWiz never "
+                      'touches that login.',
+             'ask': 'Have you signed in to boat.dev and connected GitHub and your harness in its dashboard?',
+             'run': 'Agents run on boat.dev, many at once, each in its own sandbox, through the boat CLI you are '
+                    'signed into.',
+             'cost': 'boat.dev bills per second while each sandbox runs, against your boat plan, and model-provider '
+                     'charges are separate'},
+}
+NOT_HOSTS = ('cloud', 'cloudroom', 'template')
+HOST_BRANCH = 'openwiz/host-setting'
 
 
 class Exit(Exception):
@@ -121,8 +185,8 @@ def strict(text):
 
 def parse(argv):
     if not argv or argv[0] not in OPTIONS:
-        raise Exit(2, 'usage: first_fleet.py continue|create-repo|select|choose|spec|launch|progress|next ... '
-                      '(see its header)')
+        raise Exit(2, 'usage: first_fleet.py where|continue|decisions|create-repo|select|mode|setting|grill|choose|spec|launch|'
+                      'progress|first-merge|next ... (see its header)')
     values, switches, optional = OPTIONS[argv[0]]
     got, rest = {}, argv[1:]
     while rest:
@@ -147,10 +211,18 @@ def parse(argv):
         raise Exit(2, 'usage: --spec takes an issue number')
     if argv[0] == 'launch' and ('--confirm' in got) != bool(got.get('--yes')) or not re.fullmatch(r'[0-9a-f]{64}', got.get('--confirm', '0' * 64)):
         raise Exit(2, 'usage: --yes takes --confirm with the digest of the preview the user said yes to')
+    if '--build' in got and not os.path.isabs(got['--build']):
+        raise Exit(2, 'usage: --build takes the verified install\'s build folder by absolute path')
+    if '--pr' in got and not re.fullmatch(r'[1-9][0-9]{0,9}', got['--pr']):
+        raise Exit(2, 'usage: --pr takes a pull request number')
+    if '--confirmed' in got and not re.fullmatch(GRILL, got['--confirmed']):
+        raise Exit(2, "usage: --confirmed takes the private comment URL of the user's yes to the grill")
     if '--repo' in got and not re.fullmatch(REPOSITORY, got['--repo']):
         raise Exit(2, 'usage: --repo takes owner/name')
-    if '--agents' in got and got['--agents'] not in ('cloud', 'local'):
-        raise Exit(2, 'usage: --agents is cloud or local')
+    if '--agents' in got and (not re.fullmatch(DRIVER_NAME, got['--agents']) or len(got['--agents']) > 40):
+        raise Exit(2, 'usage: --agents is cloud or a driver\'s name, as where lists them')
+    if argv[0] == 'where' and got.get('--yes') and '--agents' not in got:
+        raise Exit(2, 'usage: where --yes takes the --agents the user picked')
     if '--setup-state' in got and not os.path.isabs(got['--setup-state']):
         raise Exit(2, 'usage: --setup-state takes the installed state folder by absolute path')
     if '--openwiz' in got:
@@ -190,7 +262,7 @@ class State:
             value = strict(self.path.read_text(encoding='utf-8'))
         except (OSError, ValueError):
             raise Exit(10, 'The onboarding state is unreadable; ' + NOTHING)
-        known = {'created', 'choices', 'repo', 'spec', 'preview', 'launch', 'setup'}
+        known = {'created', 'choices', 'repo', 'spec', 'launch', 'setup', 'host', 'setting', 'grill', 'merge', 'preview', 'mode'}
         if not isinstance(value, dict) or set(value) - known:
             raise Exit(10, 'The onboarding state has an unknown shape; ' + NOTHING)
         return value
@@ -213,11 +285,410 @@ class State:
             return False
 
 
-def run(argv, env=None):
+def run(argv, env=None, timeout=600, stdin=None):
     try:
-        return subprocess.run(argv, capture_output=True, timeout=600, env=env)
+        return subprocess.run(argv, capture_output=True, timeout=timeout, env=env, stdin=stdin)
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+# --- The teacher (teach.md, #1359) -------------------------------------------
+
+def teach(heading, fill=(), which=0):
+    """teach.md's line under `## heading`, each `<...>` filled in order and the rest of its words kept."""
+    try:
+        section = TEACH.read_text(encoding='utf-8').split('\n## ' + heading + '\n', 1)[1].split('\n## ', 1)[0]
+        line = [text[2:] for text in section.split('\n') if text.startswith('> ')][which]
+    except (OSError, IndexError):
+        raise Exit(1, "The teacher's lines (teach.md) are unreadable; " + NOTHING)
+    holes = re.findall(r'`?<[^>]+>`?', line)
+    if len(holes) != len(fill):
+        raise Exit(1, "teach.md's %s line has %d blanks, not %d; %s" % (heading, len(holes), len(fill), NOTHING))
+    fill = list(fill)
+    return re.sub(r'`?<[^>]+>`?', lambda _: fill.pop(0), line)
+
+
+# --- Other tickets' interfaces (#1358) ------------------------------------------
+# KN3's local driver (#1368, OpenWiz #1455, merged as 583f2ae) and KN6's host
+# setting reader (#1371, WizSkills #64), both merged; nothing here is a stub.
+
+def adapters_of(got, env):
+    """The host drivers' folder: the verified build's `runtime/adapters` (install.v1), else OPENWIZ_ADAPTERS."""
+    if got.get('--build'):
+        return str(Path(got['--build']) / 'runtime/adapters')
+    return env.get('OPENWIZ_ADAPTERS') or None
+
+
+def driver_answer(env, adapters, name):
+    """A driver's `version` answer (driver v1, D1), or the reason it has none, as (answer, None) or (None, why).
+
+    The driver is `<adapters>/<name>/driver`: the verified build's `runtime/adapters`, which launch-fleet's
+    host.py finds through OPENWIZ_ADAPTERS. Only `version` is called here: it starts nothing. The reason never
+    quotes the driver's own words, which may name a private path or account."""
+    adapters = adapters or ''
+    path = Path(adapters, name, 'driver')
+    if not os.path.isabs(adapters) or not path.is_file() or not os.access(path, os.X_OK):
+        return None, 'there is no runnable driver'
+    probe = {k: env[k] for k in PROBE_ENV if k in env}
+    result = run([str(path), 'version'], probe, timeout=VERSION_WAIT, stdin=subprocess.DEVNULL)
+    if result is None:
+        return None, 'its `version` did not answer'
+    if result.returncode != 0:
+        return None, 'its `version` failed (exit %d); run it by hand to see why' % result.returncode
+    try:
+        version = strict(result.stdout.decode('utf-8'))
+        assert isinstance(version, dict) and set(version) == {'driver', 'records', 'can'}
+        assert isinstance(version['driver'], str) and re.fullmatch(DRIVER_NAME, version['driver'])
+        assert len(version['driver']) <= 40
+        records, can = version['records'], version['can']
+        assert isinstance(records, list) and records and len(set(map(str, records))) == len(records)
+        assert all(isinstance(r, str) and re.fullmatch(RECORDS, r) for r in records)
+        assert 'openwiz:records v1' in records
+        assert isinstance(can, list) and len(set(map(str, can))) == len(can)
+        assert all(isinstance(c, str) and c in CAN for c in can) and {'start', 'wake', 'stop'} <= set(can)
+    except (AssertionError, UnicodeDecodeError, ValueError, TypeError):
+        return None, "its `version` answer is not driver v1's"
+    if version['driver'] != name:
+        return None, 'its `version` names another driver'
+    return version, None
+
+
+def local_driver(env, adapters):
+    """KN3's local driver (#1368, OpenWiz 583f2ae): its `version` answer, or None."""
+    return driver_answer(env, adapters, 'local')[0]
+
+
+def installed_drivers(env, adapters):
+    """Every driver in the build's adapters folder, by name, each its `version` answer or why not (DW9, #2006).
+
+    Cloudroom is offered as `cloud`, launch-fleet's own route with no host file, so its driver and the name
+    `cloud` are not listed; `template` is the copyable example driver, not a host."""
+    try:
+        names = sorted(p.name for p in Path(adapters).iterdir() if p.name not in NOT_HOSTS
+                       and re.fullmatch(DRIVER_NAME, p.name) and len(p.name) <= 40 and Path(p, 'driver').exists()) \
+            if adapters and os.path.isabs(adapters) else []
+    except OSError:
+        names = []
+    return {name: driver_answer(env, adapters, name) for name in names}
+
+
+def host_label(agents):
+    return 'Cloudroom' if agents == 'cloud' else HOSTS.get(agents, {}).get('label', agents)
+
+
+def where_of(agents):
+    return 'in Cloudroom' if agents == 'cloud' else HOSTS.get(agents, {}).get('where', 'on ' + agents)
+
+
+def host_cost(agents):
+    if agents == 'cloud':
+        return 'it uses your Cloud Credits, unknown until measured, and model-provider charges are separate'
+    return HOSTS.get(agents, {}).get('cost', '%s charges as its own plan says, unknown until measured, and '
+                                             'model-provider charges are separate' % agents)
+
+
+def host_setting(env):
+    """KN6 (#1371): the host docs/agents/host.md names on the default branch, or None when it names none.
+
+    Read by launch-fleet's own reader, `host.py which` (records v1, section 6), from this checkout's origin,
+    so the onboarding and the fleet read the same setting the same way."""
+    result = run([sys.executable, '-I', str(HOST_PY), 'which'], env)
+    if result is None:
+        raise Exit(1, 'Could not read the host setting (%s); %s' % (HOST_FILE, NOTHING))
+    out = result.stdout.decode('utf-8', 'replace').strip()
+    why = result.stderr.decode('utf-8', 'replace').strip().removeprefix('host.py: ')
+    if result.returncode == 2 and 'needs exactly one' in why:
+        raise Exit(5, '%s; fix it, or ask to change that line; %s' % (why, NOTHING))
+    named = re.fullmatch(r'host: ([a-z0-9]+(?:-[a-z0-9]+)*)', out) if result.returncode == 0 else None
+    if not named:
+        raise Exit(1, 'Could not read the host setting (%s): %s; %s' % (HOST_FILE, why or 'no answer', NOTHING))
+    return None if named[1] == 'none' else named[1]
+
+
+# The harness permission mode the owner picks once (J254 A), saved where KN3's merged driver (OpenWiz
+# 583f2ae, adapters/local) reads it, the repository's docs/agents/fleet.md, as exactly one row
+# `| Harness permission mode | `<mode>` |` whose value is one plain word; the driver passes it to the
+# harness unchanged (`claude --permission-mode`, `codex --sandbox`) and starts nothing without it.
+MODE_FILE = 'docs/agents/fleet.md'
+MODE_ROW = '| Harness permission mode |'
+MODE_VALUE = r'[A-Za-z][A-Za-z0-9_-]{0,39}'
+MODES = {
+    'claude-code': [
+        ('default', 'it stops and waits for a person before each edit or command, so an unattended builder stalls'),
+        ('acceptEdits', 'it edits files on its own and still asks before running a command'),
+        ('bypassPermissions', 'it edits files and runs any command without asking anyone')],
+    'codex': [
+        ('read-only', 'it reads files and can change nothing, so a builder cannot write its code'),
+        ('workspace-write', 'it edits files and runs commands inside its own working folder only'),
+        ('danger-full-access', 'it edits any file and runs any command on this machine, with no sandbox')],
+}
+
+
+def mode_rows(text):
+    """KN3's permission-mode rows in a fleet.md text, each as its value, or None for one it can't read."""
+    rows = [line for line in (text or '').splitlines() if line.startswith(MODE_ROW)]
+    values = [re.findall(r'`([^`]*)`', row) for row in rows]
+    return [v[0] if len(v) == 1 and re.fullmatch(MODE_VALUE, v[0]) else None for v in values]
+
+
+def saved_mode(env):
+    """The permission mode the default branch's docs/agents/fleet.md saves, or None for no row; read as
+    launch-fleet's host.py reads the host setting, from this checkout's origin, and as KN3's driver reads it."""
+    sys.dont_write_bytecode = True  # never write bytecode into launch-fleet's folder
+    spec = importlib.util.spec_from_file_location('launch_fleet_host', HOST_PY)
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        module.SETTING = Path(MODE_FILE)  # the same default-branch read, for KN3's file
+        text = module.setting_text()
+    except Exception as error:  # host.py's Unreadable, or a missing git
+        raise Exit(1, 'Could not read %s from the default branch: %s; %s' % (MODE_FILE, error, NOTHING))
+    values = mode_rows(text)
+    if len(values) > 1 or None in values:
+        raise Exit(5, '%s needs exactly one `%s `<mode>` |` row; ask the owner to fix it; %s' % (
+            MODE_FILE, MODE_ROW, NOTHING))
+    return values[0] if values else None
+
+
+# KN3's host-side approval (security R6, option A): the same pick saved on the owner's machine, per
+# repository and harness, outside the repository, in the merged driver's form (OpenWiz 583f2ae):
+# $OPENWIZ_LOCAL_STATE/approvals.json (default ~/.local/state/openwiz-local), one JSON object
+# {"owner/name": {"claude"|"codex": "<mode>"}}, the user's own, mode 600. KN3's start refuses unless the
+# fleet.md row matches it, or if others can change the file.
+def approval_file(env):
+    folder = env.get('OPENWIZ_LOCAL_STATE') or os.path.expanduser('~/.local/state/openwiz-local')
+    return Path(folder) / 'approvals.json'
+
+
+def read_approvals(env):
+    """The approvals file's text and value, (None, {}) when there is none; Exit when KN3 would refuse it."""
+    path = approval_file(env)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None, {}
+    except OSError:
+        raise Exit(5, "This machine's approvals file (%s) is unreadable; fix it as the local driver's README shows, "
+                      'then run this again; %s' % (path, NOTHING))
+    with os.fdopen(fd, encoding='utf-8', newline='') as handle:  # every byte as it is, line endings too
+        info, text = os.fstat(handle.fileno()), handle.read()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+        raise Exit(5, "Others can change this machine's approvals file (%s), so the local driver won't trust it. "
+                      'The owner makes it theirs and owner-only (chmod 600) themselves and checks what it approves, '
+                      'then runs this again; OpenWiz never changes its mode; %s' % (path, NOTHING))
+    try:
+        value = strict(text)
+        assert isinstance(value, dict)
+    except (ValueError, AssertionError):
+        raise Exit(5, "This machine's approvals file (%s) is not one JSON object with each key once; fix it as the "
+                      "local driver's README shows, then run this again; %s" % (path, NOTHING))
+    return text, value
+
+
+def host_approval(env, repo, program):
+    """The mode this machine approves for this repository and harness, or None."""
+    entry = read_approvals(env)[1].get(repo)
+    mode = entry.get(program) if isinstance(entry, dict) else None
+    return mode if isinstance(mode, str) and re.fullmatch(MODE_VALUE, mode) else None
+
+
+def splice(text, repo, program, picked):
+    """text with only "repo": {"program": "picked"} added; every other byte kept."""
+    decoder, space = json.JSONDecoder(), re.compile(r'[ \t\n\r]*')
+    at = space.match(text, 0).end()
+    if text[at] != '{':
+        raise ValueError('not an object')
+    top = at
+    at = space.match(text, at + 1).end()
+    empty, target = text[at] == '}', None
+    while not empty:
+        if text[at] != '"':
+            raise ValueError('not a key')
+        key, at = json.decoder.scanstring(text, at + 1)
+        at = space.match(text, at).end()
+        if text[at] != ':':
+            raise ValueError('no colon')
+        at = space.match(text, at + 1).end()
+        if key == repo:
+            target = at
+        at = decoder.raw_decode(text, at)[1]
+        at = space.match(text, at).end()
+        if text[at] == ',':
+            at = space.match(text, at + 1).end()
+        elif text[at] == '}':
+            break
+        else:
+            raise ValueError('no comma')
+    pair = '%s: %s' % (json.dumps(program), json.dumps(picked))
+    if target is not None:
+        if text[target] != '{':
+            raise ValueError('not an object entry')
+        inner = space.match(text, target + 1).end()
+        return text[:target + 1] + pair + ('' if text[inner] == '}' else ', ') + text[target + 1:]
+    return text[:top + 1] + '%s: {%s}' % (json.dumps(repo), pair) + ('' if empty else ', ') + text[top + 1:]
+
+
+APPROVALS_WAIT = 120  # seconds another onboarding session may hold the approvals lock
+
+
+def approve_host(env, repo, program, picked):
+    """Save the owner's pick as this machine's approval: add only this entry, never change or widen another.
+
+    The whole read, splice and rename runs under one lock beside the file (approvals.json.lock), which every
+    onboarding session takes, so two sessions never lose each other's entry; the result is read back."""
+    path = approval_file(env)
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lock = os.open(str(path) + '.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        raise Exit(10, "Could not open this machine's approvals lock; nothing recorded.")
+    try:
+        waited = 0.0
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if waited >= APPROVALS_WAIT:
+                    raise Exit(7, "Another onboarding session is still saving this machine's approvals; run this "
+                                  'again; nothing recorded.')
+                time.sleep(0.2)
+                waited += 0.2
+        approve_locked(env, path, repo, program, picked)
+    finally:
+        os.close(lock)
+
+
+def approve_locked(env, path, repo, program, picked):
+    text, approvals = read_approvals(env)
+    entry = approvals.get(repo)
+    if entry is not None and not isinstance(entry, dict):
+        raise Exit(5, "This machine's approvals file has an entry for %s in another form; ask the owner to fix it; "
+                      'nothing recorded.' % repo)
+    have = (entry or {}).get(program)
+    if have == picked:
+        return
+    if have is not None:
+        raise Exit(5, 'This machine already approves %s for %s with %s; OpenWiz never changes or widens it. Ask the '
+                      'owner which mode they mean; nothing recorded.' % (have, repo, program))
+    want = json.loads(json.dumps(approvals))
+    want.setdefault(repo, {})[program] = picked
+    try:
+        new = splice(text, repo, program, picked) if text is not None else json.dumps(want, indent=2) + '\n'
+        assert strict(new) == want
+    except (ValueError, IndexError, AssertionError):
+        raise Exit(5, "This machine's approvals file can't take one more entry without changing others; ask the "
+                      'owner to add %s: {%s: %s} themselves; nothing recorded.' % (
+                          json.dumps(repo), json.dumps(program), json.dumps(picked)))
+    temp = None
+    try:
+        fd, temp = tempfile.mkstemp(prefix='.approvals.', suffix='.new', dir=path.parent)
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='') as handle:  # write the bytes exactly
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(new)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    except OSError:
+        if temp is not None:
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
+        raise Exit(10, "Could not save this machine's host-side approval; nothing recorded.")
+    if read_approvals(env) != (new, want):
+        raise Exit(6, "This machine's approvals file did not read back as written; check it before running this "
+                      'again.')
+
+
+def mode_section(picked):
+    return ('\n## Harness permission mode\n\nThe mode the owner picked for builders on this machine; the local '
+            'driver passes it to the harness unchanged. To change it, ask your agent to edit this one row.\n\n'
+            '| Setting | Value |\n| --- | --- |\n%s `%s` |\n' % (MODE_ROW, picked))
+
+
+# --- Where agents run (#1358) ---------------------------------------------------
+
+def where(got):
+    """Offer every host this OpenWiz can run agents on (DW9), check what the pick needs, print the walk-through for
+    anything missing, and record the pick on --yes."""
+    state = State(got['--state'])
+    agents, env = got.get('--agents'), gh_env()
+    adapters = adapters_of(got, env)
+    found = installed_drivers(env, adapters)
+    offered = [name for name in ['local'] + sorted(n for n in found if n != 'local')
+               if name in found and found[name][0] is not None]
+    print("Where agents can run, from this OpenWiz's drivers:")
+    if 'local' in offered:
+        print('- local: %s' % host_label('local'))
+    print('- cloud: Cloudroom, many at once, on your Cloud Credits')
+    for name in offered:
+        if name != 'local':
+            print('- %s: %s' % (name, host_label(name)))
+    for name, (_, why) in sorted(found.items()):
+        if why:
+            print('Not offered: %s: %s.' % (name, why))
+    if agents is None:
+        print("Nothing recorded. Ask where agents run, offering only these; on the user's answer, run again with "
+              '--agents <its name>.')
+        return 12
+    missing = []
+    login = run(['gh', 'api', 'user', '--jq', '.login'], env)
+    if login is None or login.returncode != 0 or not login.stdout.strip():
+        missing.append(('a GitHub sign-in', 'https://github.com/login',
+                        'Then run `gh auth login` yourself in a terminal on this machine.'))
+    harnesses = []
+    if agents == 'local':
+        harnesses = sorted(h for h, program in PROGRAMS.items() if shutil.which(program, path=env.get('PATH')))
+        if not harnesses:
+            missing.append(('Claude Code or Codex installed and signed in on this machine',
+                            'https://docs.anthropic.com/en/docs/claude-code/setup', None))
+    elif agents == 'cloud':
+        if not shutil.which('room-cli', path=env.get('PATH')):
+            missing.append(('the Cloudroom app, signed in', 'https://cloudroom.dev', None))
+    elif HOSTS.get(agents, {}).get('program') and not shutil.which(HOSTS[agents]['program'], path=env.get('PATH')):
+        known = HOSTS[agents]
+        missing.append(('the %s CLI, signed in' % known['program'], known['link'], known['then']))
+    if missing:
+        for what, link, then in missing:
+            print(teach('Where agents run', (what, link), which=1))
+            if then:
+                print(then)
+        raise Exit(5, 'Nothing recorded: run this again once the user says done.')
+    if agents == 'local' and 'local' not in offered:
+        raise Exit(5, "This OpenWiz has no local driver to run agents on this machine (pass the verified install's "
+                      "--build, or update OpenWiz); choose another host, or stop; nothing recorded.")
+    if agents != 'cloud' and agents not in offered:
+        raise Exit(5, 'This OpenWiz offers no %s driver that answers (see above); choose a host it offers, or stop; '
+                      'nothing recorded.' % agents)
+    if agents == 'local':
+        print('Agents run on this machine through OpenWiz\'s local driver, with %s you are signed into, while this '
+              'machine is awake. Their model use is billed by that harness, as it is today.' % ', '.join(harnesses))
+    elif agents == 'cloud':
+        print('Agents run in Cloudroom, many at once. They use your Cloud Credits: unknown until measured. '
+              'Model-provider charges are separate.')
+    else:
+        known = HOSTS.get(agents, {})
+        print(known.get('run', "Agents run through OpenWiz's %s driver." % agents))
+        print('Cost: %s.' % host_cost(agents))
+        print(known.get('login', "Login: where %s's driver says, in the Login line of %s. Sign in there yourself; "
+                                 'OpenWiz never touches that login.' % (agents, LOGIN_LINE % agents)))
+        print(known.get('ask', 'Have you signed in to %s as that Login line says?' % agents))
+    print('OpenWiz is free now.')
+    if not got.get('--yes'):
+        print("Nothing recorded. Ask where agents run%s; on the user's yes, run again with that --agents and --yes."
+              % ('' if agents in ('local', 'cloud') else ', and the sign-in question above'))
+        return 12
+    if state.value.get('launch'):
+        raise Exit(5, 'This onboarding already launched its fleet; ask to change the host setting instead.')
+    state.value['host'] = {'agents': agents, 'harnesses': harnesses}
+    if agents != 'cloud':
+        state.value['host']['adapters'] = adapters
+    state.value.pop('setting', None)
+    if not state.save():
+        raise Exit(10, 'Could not save where agents run; nothing recorded.')
+    print('Recorded: agents run %s.' % where_of(agents))
+    return 0
 
 
 # --- The continuation from install and setup (#636) ----------------------
@@ -335,8 +806,8 @@ def connect_decisions(got):
     except (OSError, ValueError, AssertionError):
         raise Exit(10, 'The private settings file is unreadable; nothing changed.')
     print('Effect: set Decisions\' repository pair in the private settings: public %s/%s, private %s/%s. '
-          'Restart the OpenWiz server afterwards.' % (pair['public']['owner'], pair['public']['name'],
-                                                    pair['private']['owner'], pair['private']['name']))
+          'Nothing else changes.' % (pair['public']['owner'], pair['public']['name'],
+                                     pair['private']['owner'], pair['private']['name']))
     if not got.get('--yes'):
         print("Nothing changed. On the user's yes to exactly this, run again with --yes.")
         return 12
@@ -360,7 +831,7 @@ def connect_decisions(got):
             except OSError:
                 pass
         raise Exit(10, 'Could not write the private settings; nothing changed.')
-    print('Decisions now reads the companion. Restart the OpenWiz server, then run continue.')
+    print('Decisions now reads the companion. Run the setup check, then run continue.')
     return 0
 
 
@@ -524,6 +995,278 @@ def create_repo(got):
                   'before any retry (run this again).' % name)
 
 
+# --- The host setting (records v1, section 6) --------------------------------
+
+def host_text(name='local'):
+    what = ('`local` is the machine the agents run on' if name == 'local'
+            else "`%s` is OpenWiz's %s driver" % (name, host_label(name).split(',')[0]))
+    return ('# Where agents run\n\nOpenWiz starts, wakes and stops this project\'s agents through the host named '
+            'below: a driver in OpenWiz\'s adapters/ folder. %s. To change it, ask your agent to edit this one '
+            'line.\n\nHost: %s\n' % (what, name))
+
+
+def raw(repo, path, env, ref=None):
+    """A file's text on the default branch (or ref), None when it isn't there; Exit when unreadable."""
+    target = 'repos/%s/contents/%s%s' % (repo, path, '?ref=' + ref if ref else '')
+    result = run(['gh', 'api', '--include', target, '-H', 'Accept: application/vnd.github.raw+json'], env)
+    text = result.stdout.decode('utf-8', 'replace').replace('\r\n', '\n') if result is not None else ''
+    head, _, body = text.partition('\n\n')
+    status = re.match(r'HTTP/[0-9.]+ ([0-9]{3})', head)
+    if status and status[1] == '404':
+        return None
+    if result is None or result.returncode != 0 or not status or status[1] != '200':
+        raise Exit(1, 'Could not read %s; nothing written.' % path)
+    return body
+
+
+def blob(repo, path, env, ref):
+    """A file's text on ref and its blob SHA, from one read (None, None when it isn't there); Exit when unreadable."""
+    result = run(['gh', 'api', '--include', 'repos/%s/contents/%s?ref=%s' % (repo, path, ref)], env)
+    text = result.stdout.decode('utf-8', 'replace').replace('\r\n', '\n') if result is not None else ''
+    head, _, body = text.partition('\n\n')
+    status = re.match(r'HTTP/[0-9.]+ ([0-9]{3})', head)
+    if status and status[1] == '404':
+        return None, None
+    try:
+        assert result is not None and result.returncode == 0 and status and status[1] == '200'
+        found = strict(body)
+        assert found['type'] == 'file' and found['encoding'] == 'base64'
+        assert re.fullmatch(r'[0-9a-f]{40}', found['sha'])
+        data = base64.b64decode(found['content'], validate=False)
+        return data.decode('utf-8', 'replace').replace('\r\n', '\n'), found['sha']
+    except (AssertionError, ValueError, KeyError, TypeError):
+        raise Exit(1, 'Could not read %s on %s; nothing written.' % (path, ref))
+
+
+def pull_diff(repo, env, want):
+    """R4: the host-setting branch's whole diff against the default branch must be exactly the approved changes
+    (each file in want added or changed to its approved text, and nothing else); Exit 5 naming a file that differs."""
+    base = run(['gh', 'api', 'repos/%s' % repo, '--jq', '.default_branch'], env)
+    branch = base.stdout.decode('utf-8', 'replace').strip() if base is not None and base.returncode == 0 else ''
+    result = run(['gh', 'api', 'repos/%s/compare/%s...%s' % (repo, branch, HOST_BRANCH)], env) if branch else None
+    try:
+        assert result is not None and result.returncode == 0
+        files = strict(result.stdout.decode('utf-8'))['files']
+        assert isinstance(files, list) and len(files) < 300  # GitHub lists at most 300 files
+        changed = {f['filename']: f['status'] for f in files}
+        assert len(changed) == len(files) and all(isinstance(k, str) for k in changed)
+    except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError):
+        raise Exit(6, "Could not read the host setting pull request's changes; it is not ready. Run this again to "
+                      'read them before anything else.')
+    approved = {HOST_FILE: ('added',), MODE_FILE: ('modified',)}
+    for path in sorted(set(changed) | set(want)):
+        if (changed.get(path) not in approved.get(path, ()) or path not in want
+                or raw(repo, path, env, HOST_BRANCH) != want[path]):
+            raise Exit(5, 'Branch %s changes %s beyond the approved host setting, so its pull request is not '
+                          'ready and OpenWiz opens or reports nothing. The owner deletes that branch (closing its '
+                          'pull request), then run this again.' % (HOST_BRANCH, path))
+
+
+def host_pull(repo, env):
+    """The host setting pull request's URL and state, or None when there is none; Exit when unreadable."""
+    result = run(['gh', 'pr', 'list', '--repo', repo, '--head', HOST_BRANCH, '--state', 'all',
+                  '--json', 'url,state'], env)
+    try:
+        assert result is not None and result.returncode == 0
+        pulls = strict(result.stdout.decode('utf-8'))
+        assert isinstance(pulls, list) and len(pulls) <= 1
+        assert all(isinstance(p, dict) and set(p) == {'url', 'state'} and isinstance(p['url'], str)
+                   and p['state'] in ('OPEN', 'MERGED', 'CLOSED') for p in pulls)
+        return (pulls[0]['url'], pulls[0]['state']) if pulls else None
+    except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError):
+        raise Exit(6, 'Could not read whether the host setting pull request exists; run this again to read it.')
+
+
+def mode(got):
+    """This machine's harness permission mode: each one explained, none picked, the owner's recorded (J254 A)."""
+    state = State(got['--state'])
+    host, carried = state.value.get('host'), state.value.get('setup')
+    if not host or host['agents'] != 'local':
+        raise Exit(5, 'Only agents on this machine need a permission mode; every other host sets its own. Nothing '
+                      'recorded.')
+    if not carried:
+        raise Exit(5, 'Connect the repository first (continue): the mode is for the harness it prepares; '
+                      'nothing recorded.')
+    harness = carried['settings']['harness']
+    modes = MODES.get(harness)
+    if not modes:
+        raise Exit(5, 'No permission modes are known for %s; nothing recorded.' % harness)
+    if '--mode' not in got:
+        print('%s on this machine runs with the permission mode the owner picks, once. The driver passes it '
+              'unchanged and never chooses or widens it:' % harness)
+        for name, why in modes:
+            print('- %s: %s' % (name, why))
+        print("Nothing recorded. Ask the owner which one, in those words, and pick none for them; on their answer, "
+              'run again with --mode <their pick>.')
+        return 12
+    if got['--mode'] not in [name for name, _ in modes]:
+        raise Exit(5, '%s is not one of %s\'s permission modes (%s); nothing recorded.' % (
+            got['--mode'], harness, ', '.join(name for name, _ in modes)))
+    recorded = state.value.get('setting') or {}
+    if recorded.get('state') in ('pending', 'opened', 'merged') and recorded.get('mode') != got['--mode']:
+        raise Exit(5, 'The host setting already carries %s; ask the owner to change that line instead; '
+                      'nothing recorded.' % (recorded.get('mode') or 'no permission mode'))
+    approve_host(os.environ, carried['repository'], PROGRAMS[harness], got['--mode'])
+    state.value['mode'] = {'harness': harness, 'mode': got['--mode']}
+    if not state.save():
+        raise Exit(10, 'Could not save the permission mode; nothing recorded.')
+    print('Recorded: agents on this machine run %s with the %s permission mode the owner picked, saved as this '
+          "machine's host-side approval for %s (outside the repository); the host setting adds the matching %s "
+          'row.' % (harness, got['--mode'], carried['repository'], MODE_FILE))
+    return 0
+
+
+def setting(got):
+    """Write where agents run (docs/agents/host.md) and, on this machine, the owner's permission mode (KN3's one
+    docs/agents/fleet.md row) as one pull request the user merges, only on --yes."""
+    state = State(got['--state'])
+    host = state.value.get('host')
+    repo = (state.value.get('setup') or {}).get('repository')
+    if not host or not repo:
+        raise Exit(5, 'Ask where agents run (where) and connect the repository (continue) first; nothing written.')
+    picked = (state.value.get('mode') or {}).get('mode')
+    name = None if host['agents'] == 'cloud' else host['agents']
+    local = name == 'local'
+    if local and not picked:
+        raise Exit(5, 'Ask the owner to pick the harness permission mode first (mode); nothing written.')
+    env = repository(repo)
+    now = host_setting(env)
+    if now is not None and now != name:
+        raise Exit(5, '%s already says Host: %s on the default branch; OpenWiz never overwrites it. Ask the user '
+                      'whether to change that line, or answer where agents run again; nothing written.' % (HOST_FILE, now))
+    writes = []
+    if local:
+        fleet = raw(repo, MODE_FILE, env)
+        if fleet is None:
+            raise Exit(5, '%s is not on the default branch yet: run setup and merge its settings (Agents) first; '
+                          'nothing written.' % MODE_FILE)
+        values = mode_rows(fleet)
+        if values and values != [picked]:
+            raise Exit(5, '%s already saves %s; OpenWiz never adds a second row or replaces the owner\'s. Ask the '
+                          'owner whether to change that row; nothing written.' % (
+                              MODE_FILE, ', '.join('`%s`' % v if v else 'an unreadable row' for v in values)))
+        writes = ([HOST_FILE] if now is None else []) + ([MODE_FILE] if not values else [])
+    elif name and now is None:
+        writes = [HOST_FILE]
+    if not writes:
+        state.value['setting'] = {'host': name, 'state': 'merged', 'mode': picked}
+        if not state.save():
+            raise Exit(10, 'Could not save the host setting; nothing written.')
+        print('The host setting already matches: %s.' % (
+            'Host: local and the %s permission mode, on the default branch' % picked if local
+            else 'Host: %s, on the default branch' % name if name else 'no host file, so Cloudroom, the default'))
+        return 0
+    # R4: the exact files the pull request carries, from the default branch as it is now.
+    want = {}
+    if HOST_FILE in writes:
+        want[HOST_FILE] = host_text(name)
+    if MODE_FILE in writes:
+        want[MODE_FILE] = fleet.rstrip('\n') + '\n' + mode_section(picked)
+    recorded = state.value.get('setting') or {}
+    if recorded.get('state') in ('pending', 'opened'):
+        found = host_pull(repo, env)
+        if found and found[1] == 'CLOSED':
+            raise Exit(5, 'The host setting pull request %s was closed without merging; the user reopens and merges '
+                          'it, or answers where agents run again; nothing written.' % found[0])
+        if found:
+            pull_diff(repo, env, want)
+            state.value['setting'] = {'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked}
+            state.save()
+            print('The host setting pull request is open: %s. The user merges it; launch waits for it.' % found[0])
+            return 0
+    said = {HOST_FILE: 'add %s holding `Host: %s`' % (HOST_FILE, name),
+            MODE_FILE: 'add one row, %s `%s` |, to %s, changing no other line' % (MODE_ROW, picked, MODE_FILE)}
+    print('Effect: on a new branch %s of %s, %s, and open one pull request for you to merge. Nothing else is '
+          'written.' % (HOST_BRANCH, repo, ' and '.join(said[w] for w in writes)))
+    if not got.get('--yes'):
+        print("Nothing written. On the user's yes to exactly this, run again with --yes.")
+        return 12
+    based = {HOST_FILE: None, MODE_FILE: fleet if local else None}
+    state.value['setting'] = {'host': name, 'state': 'pending', 'mode': picked}
+    if not state.save():
+        raise Exit(10, 'Could not save the host setting first; nothing written.')
+    base = run(['gh', 'api', 'repos/%s' % repo, '--jq', '.default_branch'], env)
+    branch = base.stdout.decode('utf-8', 'replace').strip() if base is not None and base.returncode == 0 else ''
+    if not branch:
+        raise Exit(1, "Could not read the default branch; nothing written.")
+
+    def tip_of(name):
+        read = run(['gh', 'api', 'repos/%s/git/ref/heads/%s' % (repo, name), '--jq', '.object.sha'], env)
+        value = read.stdout.decode('utf-8', 'replace').strip() if read is not None and read.returncode == 0 else ''
+        return value if re.fullmatch(r'[0-9a-f]{40}', value) else None
+    sha = tip_of(branch)
+    if sha is None:
+        raise Exit(1, "Could not read the default branch's tip; nothing written.")
+    if tip_of(HOST_BRANCH) is None:
+        run(['gh', 'api', '-X', 'POST', 'repos/%s/git/refs' % repo, '-f', 'ref=refs/heads/' + HOST_BRANCH,
+             '-f', 'sha=' + sha], env)
+        if tip_of(HOST_BRANCH) is None:
+            raise Exit(6, 'Whether branch %s was made is uncertain; run this again to read it before anything else.'
+                       % HOST_BRANCH)
+    # R4: each file and its blob SHA from one read; the write names exactly that blob, so GitHub refuses it when
+    # anyone changed the file after this check.
+    read = {path: blob(repo, path, env, HOST_BRANCH) for path in writes}
+    have = {path: read[path][0] for path in writes}
+    for path in writes:
+        if have[path] not in (want[path], based[path]):
+            raise Exit(5, 'Branch %s already holds another %s; OpenWiz never writes over it. The owner deletes that '
+                          'branch, or merges it if it is what they want, then run this again; nothing written.' % (
+                              HOST_BRANCH, path))
+    for path in writes:
+        if have[path] == want[path]:
+            continue
+        checked = read[path][1]
+        put = ['gh', 'api', '-X', 'PUT', 'repos/%s/contents/%s' % (repo, path), '-f',
+               'message=Where agents run: Host: %s%s' % (name, ', ' + picked if local else ''), '-f',
+               'content=' + base64.b64encode(want[path].encode()).decode(), '-f', 'branch=' + HOST_BRANCH]
+        wrote = run(put + (['-f', 'sha=' + checked] if checked else []), env)
+        if wrote is None or wrote.returncode != 0:
+            try:
+                now = blob(repo, path, env, HOST_BRANCH)
+            except Exit:
+                now = read[path]  # unreadable: the uncertain write below says to read the branch first
+            if now != read[path] and now[0] != want[path]:
+                raise Exit(5, '%s on %s changed while OpenWiz was writing it, so GitHub refused the write and the '
+                              'other change was kept; no pull request was opened. Read the branch, then run this '
+                              'again.' % (path, HOST_BRANCH))
+            raise Exit(6, 'Writing %s on %s failed or is uncertain; run this again to read the branch before '
+                          'anything else.' % (path, HOST_BRANCH))
+    for path in writes:
+        if raw(repo, path, env, HOST_BRANCH) != want[path]:
+            raise Exit(6, '%s on %s did not read back as written; run this again to read it before anything else.'
+                       % (path, HOST_BRANCH))
+    pull_diff(repo, env, want)
+    if host_pull(repo, env) is None:
+        body = ('Adds `Host: local` to %s and the owner\'s harness permission mode as one row of %s: OpenWiz '
+                'starts this project\'s agents through its local driver, which passes that mode to the harness '
+                'unchanged (records v1, section 6). Merge it to start the first fleet there.' % (HOST_FILE, MODE_FILE)
+                if local else 'Adds `Host: %s` to %s: OpenWiz starts this project\'s agents through its %s driver '
+                '(records v1, section 6). Merge it to start the first fleet there.' % (name, HOST_FILE, name))
+        run(['gh', 'pr', 'create', '--repo', repo, '--head', HOST_BRANCH, '--base', branch, '--title',
+             'Where agents run: %s' % host_label(name).split(',')[0], '--body', body], env)
+    found = host_pull(repo, env)
+    if found is None:
+        raise Exit(6, 'Whether the host setting pull request was opened is uncertain; run this again to read it '
+                      'before anything else.')
+    state.value['setting'] = {'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked}
+    if not state.save():
+        raise Exit(6, 'The host setting pull request is open (%s), but that could not be saved.' % found[0])
+    print('Opened %s. The user merges it; launch waits for it on the default branch.' % found[0])
+    return 0
+
+
+def grill(got):
+    """Record the user's yes to the grill, given in this chat and saved privately as a comment."""
+    state = State(got['--state'])
+    if state.value.get('launch') and state.value.get('grill') != got['--confirmed']:
+        raise Exit(5, 'This onboarding already launched from its grill; it plans one first fleet.')
+    state.value['grill'] = got['--confirmed']
+    if not state.save():
+        raise Exit(10, "Could not save the grill's confirmation; nothing recorded.")
+    print("Recorded: the user confirmed the grill in chat. Next: to-spec, which runs to-tickets; the plan approves "
+          'itself by its checks, and no plan approval is asked.')
+
+
 def select(got):
     """The existing repository the owner confirmed, bound to this onboarding before Connect."""
     state = State(got['--state'])
@@ -546,6 +1289,12 @@ def select(got):
 
 def choose(got):
     state = State(got['--state'])
+    host = state.value.get('host')
+    if not host:
+        raise Exit(5, 'Ask where agents run first (where); nothing recorded.')
+    if got.get('--agents', host['agents']) != host['agents']:
+        raise Exit(5, 'The user said agents run %s; answer where again to change it; nothing recorded.' % (
+            where_of(host['agents'])))
     if got.get('--from-setup'):
         carried = state.value.get('setup')
         if not carried:
@@ -564,50 +1313,171 @@ def choose(got):
         raise Exit(5, 'That harness, model and effort are not among the offered options; nothing recorded.')
     if settings['harness'] not in FAMILY:
         raise Exit(5, "The fleet's review rules cover Claude Code and Codex builders only; nothing recorded.")
-    choices = dict(settings, agents=got['--agents'])
-    read = None  # unread: the choice is recorded, its builder tables are not settled
-    if got['--agents'] == 'cloud':
+    if host['agents'] == 'local' and settings['harness'] not in host['harnesses']:
+        raise Exit(5, '%s is not on this machine, so its agents cannot run here; nothing recorded.' % settings['harness'])
+    choices = dict(settings, agents=host['agents'])
+    read = None
+    try:
+        env = repository(state.value.get('repo'))
+    except Exit:
+        env = None
+    wrote, intended = (None, None) if env is None else write_models(settings, offered)
+    try:
+        remote = None if env is None else fleet_text(env, state.value['repo'])
+    except Exit:
+        remote = None
+    if remote is not None:
         try:
-            rules = fleet_rules(repository(state.value.get('repo')), state.value['repo'])
-        except Exit:
-            rules = None
-        if rules is not None:
-            try:
-                review(choices, rules)  # the launch's own check of the same tables
-                read = True
-            except Exit:
-                read = False
+            read = models_table(remote) == intended
+        except ValueError:
+            read = False
     if read:
         choices['builder_tables'] = 'read'
     state.value['choices'] = choices
     if not state.save():
         raise Exit(10, 'Could not save the choices; nothing recorded.')
     print(chosen_line(choices) + (' (as prepared in setup)' if got.get('--from-setup') else ''))
-    if got['--agents'] == 'local':
-        print(LOCAL)
-    elif read:
-        print("Read back: both of the fleet's builder tables name exactly this choice, with an other-family "
-              'reviewer.')
+    if wrote is not None:
+        print(wrote)
+    if read:
+        print("Read back: the default branch's Models table has exactly the rows choose wrote.")
     else:
         print(tables_line(choices, 'could not be read' if read is None else 'do not name this choice yet'))
         return 1 if read is None else 0
     return 0
 
 
-LOCAL = ('Local fleet agents are not available yet: launch-fleet starts the fleet and its builders in the Cloud. '
-         'Run choose again with --agents cloud, or stop here.')
-
-
 def chosen_line(choices):
-    where = 'in the Cloud' if choices['agents'] == 'cloud' else 'on this computer (Local)'
     return 'Recorded: builders use %s %s %s, and run %s.' % (
-        choices['harness'], choices['model'], choices['effort'], where)
+        choices['harness'], choices['model'], choices['effort'], where_of(choices['agents']))
 
 
 def tables_line(choices, why):
-    return ("The fleet's builder tables %s: run setup so both name exactly %s %s %s, with the reviewer from the "
-            'other family, then run choose again with --agents cloud to read them back.' % (
+    return ("The fleet's settings on the default branch %s: commit docs/agents/fleet.md, which choose writes, "
+            'and merge it so its builders are exactly %s %s %s with the reviewer from the other family, then run '
+            'choose again to read it back.' % (
                 why, choices['harness'], choices['model'], choices['effort']))
+
+
+def models_table(text):
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location('openwiz_setup_settings', SETTINGS)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.models(text)
+
+
+def offers(offered, agent):
+    return any(h['provider'] == agent[0] and m['model'] == agent[1] and agent[2] in m['efforts']
+               for h in offered['harnesses'] for m in h['models'])
+
+
+def model_row(role, agent):
+    provider, model, effort = agent
+    return '| %s | %s | %s | %s | `--provider %s --model %s --reasoning-level %s` |' % (
+        role, WRITTEN_NAMES.get(provider, provider), WRITTEN_NAMES.get(model, model), effort[:1].upper() + effort[1:],
+        provider, model, effort)
+
+
+def write_models(settings, offered):
+    choice = (settings['harness'], settings['model'], settings['effort'])
+    try:
+        folder = settings_folder()
+    except OSError:
+        raise Exit(5, 'This checkout has no docs/agents/ folder of its own (a missing or linked folder); run setup '
+                      'first; nothing recorded.')
+    try:
+        return write_in(folder, choice, offered)
+    finally:
+        os.close(folder)
+
+
+def settings_folder():
+    folder = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in FLEET_MD.parent.parts:
+            inner = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=folder)
+            os.close(folder)
+            folder = inner
+    except OSError:
+        os.close(folder)
+        raise
+    return folder
+
+
+def write_in(folder, choice, offered):
+    name = FLEET_MD.name
+    try:
+        handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=folder)
+        try:
+            info = os.fstat(handle)
+            assert stat.S_ISREG(info.st_mode)
+            with os.fdopen(os.dup(handle), 'rb') as source:
+                text = source.read().decode('utf-8')
+        finally:
+            os.close(handle)
+    except (OSError, UnicodeError, AssertionError):
+        raise Exit(5, 'This checkout has no readable docs/agents/fleet.md; run setup first; nothing recorded.')
+    try:
+        table = models_table(text)
+    except ValueError as error:
+        raise Exit(5, "docs/agents/fleet.md's Models table breaks the models contract (%s); fix it or run setup "
+                      'again; nothing recorded.' % '; '.join(error.args[0]))
+    lines = text.split('\n')
+    if table:
+        heading = next(n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Models')
+        start = next(n for n in range(heading, len(lines)) if lines[n].startswith('|'))
+        end = next((n for n in range(start, len(lines)) if not lines[n].startswith('|')), len(lines))
+        reviewer, kept = table['Reviewer'], lines[start + 4]
+    else:
+        older = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() in OLDER]
+        if not older:
+            raise Exit(5, 'docs/agents/fleet.md has no Models table and no older model tables; run setup first; '
+                          'nothing recorded.')
+        start = end = older[0]
+        found = older_rules(text)['reviewer_' + FAMILY[choice[0]]]
+        reviewer, kept = (found and (found['harness'], found['model'], found['effort'])), None
+        source = 'the older `%s` table' % REVIEWER[FAMILY[choice[0]]]
+    family = FAMILY[choice[0]]
+    if not reviewer or FAMILY.get(reviewer[0]) in (None, family):
+        reviewer = RECOMMENDED['gpt' if family == 'claude' else 'claude']
+        kept, source = None, 'the recommended other-family choice'
+        if not offers(offered, reviewer):
+            raise Exit(5, 'The Reviewer must be from the other model family; its recommended choice, %s, is not '
+                          'offered now; nothing recorded.' % ' '.join(reviewer))
+    rows = ['| Role | Harness | Model | Effort | `room-cli thread spawn` flags |', '| --- | --- | --- | --- | --- |',
+            model_row('Orchestrator', choice), model_row('Builder', choice), kept or model_row('Reviewer', reviewer),
+            '| Small builder | follows Builder | | | |', '| Fixer | follows Builder | | | |']
+    if not table:
+        rows = ['## Models', ''] + rows + ['', "Source: install's `choose`, from the owner's choice of harness, model "
+                                           'and effort for the Orchestrator and Builder; the Reviewer is %s.' % source, '']
+    written = '\n'.join(lines[:start] + rows + lines[end:])
+    try:
+        assert models_table(written) == {'Orchestrator': choice, 'Builder': choice, 'Reviewer': reviewer,
+                                         'Small builder': None, 'Fixer': None}
+    except (ValueError, AssertionError):
+        raise Exit(5, 'cannot be written to the Models table: %s; nothing recorded.' % ' '.join(choice))
+    intended = {'Orchestrator': choice, 'Builder': choice, 'Reviewer': reviewer, 'Small builder': None, 'Fixer': None}
+    said = ('docs/agents/fleet.md: the Models table names %s for the Orchestrator and Builder, with %s as the '
+            'Reviewer' % (' '.join(choice), ' '.join(reviewer)))
+    if written == text:
+        return said + '; already written.', intended
+    temporary = '.fleet-%s' % os.urandom(8).hex()
+    try:
+        out = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                      stat.S_IMODE(info.st_mode), dir_fd=folder)
+        with os.fdopen(out, 'wb') as target:
+            target.write(written.encode('utf-8'))
+        os.replace(temporary, name, src_dir_fd=folder, dst_dir_fd=folder)
+    except OSError:
+        try:
+            os.unlink(temporary, dir_fd=folder)
+        except OSError:
+            pass
+        raise Exit(5, 'Could not write docs/agents/fleet.md; nothing recorded.')
+    return 'Wrote %s; commit it and merge it to the default branch.' % said, intended
+
+
 
 
 def repository(recorded):
@@ -701,12 +1571,37 @@ def agent(lines):
 
 def fleet_rules(env, repo):
     """The builder and reviewer tables of docs/agents/fleet.md on the default branch."""
+    return settings_rules(fleet_text(env, repo))
+
+
+def fleet_text(env, repo):
     result = run(['gh', 'api', 'repos/%s/contents/docs/agents/fleet.md' % repo,
                   '-H', 'Accept: application/vnd.github.raw+json'], env)
     if result is None or result.returncode != 0:
         raise Exit(1, "Could not read the fleet settings (docs/agents/fleet.md); run setup; " + NOTHING)
+    return result.stdout.decode('utf-8', 'replace')
+
+
+def settings_rules(text):
+    try:
+        table = models_table(text)
+    except ValueError as error:
+        raise Exit(5, "The fleet settings' Models table breaks the models contract (%s); %s" % (
+            '; '.join(error.args[0]), NOTHING))
+    if table is None:
+        return older_rules(text)
+    def named(role):
+        return dict(zip(('harness', 'model', 'effort'), table.get(role) or table['Builder']))
+    rules = {'orchestrator': named('Orchestrator'), 'builder': named('Builder'), 'builder_small': named('Small builder')}
+    for family in REVIEWER:
+        rules['reviewer_' + family] = next((named(role) for role in ('Reviewer', 'Builder')
+                                            if FAMILY.get(table[role][0]) not in (None, family)), None)
+    return rules
+
+
+def older_rules(text):
     found, name = {}, None
-    for line in result.stdout.decode('utf-8', 'replace').split('\n'):
+    for line in text.split('\n'):
         if line.startswith('## '):
             name = line[3:].strip()
             found.setdefault(name, [])
@@ -715,6 +1610,7 @@ def fleet_rules(env, repo):
     rules = {key: agent(found[title]) if title in found else None for key, title in (
         ('builder', 'Builder'), ('builder_small', 'Builder for small tickets'),
         ('reviewer_claude', REVIEWER['claude']), ('reviewer_gpt', REVIEWER['gpt']))}
+    rules['orchestrator'] = rules['builder']
     return rules
 
 
@@ -731,23 +1627,38 @@ def review(choices, rules):
     return want, reviewer
 
 
-def brief(spec, repo):
-    """launch-fleet's own fleet-thread brief ("Fleet threads", "Starting one"), literally."""
-    return ("You are the fleet thread for spec #%d of %s. Use the launch-fleet skill. Read "
-            "'skills/launch-fleet/SKILL.md' if present, otherwise find '*/skills/launch-fleet/SKILL.md' only inside "
-            "your own harness's configured plugin cache: Codex uses CODEX_HOME/plugins/cache (default "
-            "HOME/.codex/plugins/cache); Claude uses CLAUDE_CODE_PLUGIN_CACHE_DIR/cache when set, otherwise "
-            "CLAUDE_CONFIG_DIR/plugins/cache (default HOME/.claude/plugins/cache); for another harness use its "
-            "installation metadata. Prefer active installation metadata over cache scanning when available. During "
-            "cache scans exclude other harness caches, source checkouts, orphaned versions marked .orphaned_at, and "
-            "targets outside the selected cache. Follow symlinks and deduplicate real paths. Verify "
-            ".claude-plugin/plugin.json manifest name openwiz and entry ./skills/launch-fleet; report missing, "
-            "unreadable or ambiguous matches, otherwise read the unique matching file and follow it; do its Fleet "
-            "threads section, first wake." % (spec, repo))
-
-
 def fleet_recorded(spec, env):
     """Only configured record authors settle a start; unread input stays unknown."""
+    bodies = record_comments(spec, env)
+    if bodies is None:
+        return None
+    return any(body.split('\n')[0].strip() == FLEET_RECORD + str(spec) for body in bodies)
+
+
+def plan_approved(spec, env, confirmed):
+    """Exit unless the spec's latest plan approval is to-tickets' machine plan approval of this grill.
+
+    Read from record authors only; launch-fleet's frontier then checks it is current."""
+    bodies = record_comments(spec, env)
+    if bodies is None:
+        raise Exit(1, "Could not read the spec's plan approval; " + NOTHING)
+    latest = None
+    for body in bodies:
+        lines = [line.strip() for line in body.split('\n') if line.strip()]
+        if lines and (lines[0].startswith('**Plan graph approved by') or lines[0].startswith('**Machine plan approval, ')):
+            latest = lines
+    if latest is None or not re.fullmatch(r'\*\*Machine plan approval, [0-9]{4}-[0-9]{2}-[0-9]{2}, revision '
+                                          r'[1-9][0-9]*:\*\* links, relies, sizes, width and owned paths passed\.',
+                                          latest[0]):
+        raise Exit(5, "Spec #%d's latest plan approval is not to-tickets' machine plan approval: run to-tickets on "
+                      'it; no plan approval is asked; %s' % (spec, NOTHING))
+    if len(latest) < 2 or latest[1] != 'Grill confirmed: ' + confirmed:
+        raise Exit(5, "Spec #%d's machine plan approval is not for the grill the user confirmed in this chat; %s"
+                   % (spec, NOTHING))
+
+
+def record_comments(spec, env):
+    """The spec's comment bodies by configured record authors, or None when unread."""
     settings = run(['gh', 'api', 'repos/%s/contents/docs/agents/fleet.md' % env['GH_REPO'],
                     '-H', 'Accept: application/vnd.github.raw+json'], env)
     if settings is None or settings.returncode != 0:
@@ -785,8 +1696,7 @@ def fleet_recorded(spec, env):
             return None
     except (UnicodeDecodeError, ValueError):
         return None
-    return any(c['author'] is not None and c['author'].lower() in authors
-               and c['body'].split('\n')[0].strip() == FLEET_RECORD + str(spec) for c in comments)
+    return [c['body'] for c in comments if c['author'] is not None and c['author'].lower() in authors]
 
 
 def launch(got):
@@ -798,21 +1708,51 @@ def launch(got):
     carried = state.value.get('setup')
     if not carried:
         raise Exit(5, 'No verified setup was carried into this onboarding (run continue first); ' + NOTHING)
+    host, confirmed = state.value.get('host'), state.value.get('grill')
+    if not host:
+        raise Exit(5, 'The user has not said where agents run (where); ' + NOTHING)
+    if not confirmed:
+        raise Exit(5, 'The user has not confirmed the grill in this chat (grill --confirmed); ' + NOTHING)
     choices = state.value.get('choices')
-    if not choices:
-        raise Exit(5, 'The harness, model, effort and agent location are not chosen yet; ' + NOTHING)
+    if not choices or choices.get('agents') != host['agents']:
+        raise Exit(5, 'The harness, model and effort are not chosen for where agents run yet (choose); ' + NOTHING)
     env = repository(state.value.get('repo'))
     previous = state.value.get('launch')
     if previous and previous['spec'] == spec and previous['state'] != 'refused':
+        # R7: the start is launch-fleet's own (references/launch.md, "Starting one"): it counts only once launch-fleet's
+        # activation record, `launch-fleet: fleet active, loop fleet-<S>`, reads back from a record author.
         recorded = fleet_recorded(spec, env)
-        if previous['state'] in ('pending', 'uncertain') and recorded:
+        if previous['state'] != 'started' and recorded:
             previous['state'] = 'started'
-            state.save()
-        settled = previous['state'] == 'started'
-        print('Spec #%d already started once (%s); not starting again.' % (
-            spec, 'its fleet thread was started' if settled else 'uncertain: never a retry'))
+            if not state.save():
+                raise Exit(10, "Could not save the fleet's start; run this again to read it.")
+            print(record_line(spec, recorded))
+            print(teach('The fleet starting', (str(len(previous.get('tickets') or [])),)))
+            return 0
+        if previous['state'] == 'started':
+            print('Spec #%d already started once; not starting again.' % spec)
+            print(record_line(spec, recorded))
+            return 0
         print(record_line(spec, recorded))
-        return 0 if settled else 6
+        if recorded is None:
+            raise Exit(6, "Whether launch-fleet's start already ran is unknown, so its start path is not named "
+                          'again; run this again; ' + NOTHING)
+        try:
+            orchestrator = fleet_rules(env, state.value['repo'])['orchestrator']
+        except Exit:
+            orchestrator = None
+        if not orchestrator:
+            raise Exit(6, "The fleet settings name no readable Orchestrator, so the user's yes cannot be matched to "
+                          'it; fix the Models table, then run this again; ' + NOTHING)
+        if orchestrator != previous.get('orchestrator'):
+            del state.value['launch']
+            state.value.pop('preview', None)
+            if not state.save():
+                raise Exit(10, 'Could not withdraw the yes; run this again; ' + NOTHING)
+            raise Exit(5, "The fleet settings' Orchestrator is now %s, not the one the user said yes to: preview "
+                          'again and ask again; %s' % (agent_words(orchestrator), NOTHING))
+        print(handoff(spec, state.value['repo'], host, orchestrator))
+        return 6
     # Review R4: the carried setup must still be what setup verifies now.
     if not isinstance(carried.get('setup_state'), str):
         withdraw(state)
@@ -821,18 +1761,43 @@ def launch(got):
     if any(current[k] != carried.get(k) for k in current):
         withdraw(state)
         raise Exit(5, 'Setup changed since it was carried; run continue again; ' + NOTHING)
-    if choices['agents'] != 'cloud':
-        raise Exit(5, "Local fleet agents are not available yet: launch-fleet starts the fleet thread and its "
-                      'builders in the Cloud. Choose Cloud, or stop here; ' + NOTHING)
+    local = host['agents'] == 'local'
+    name = None if host['agents'] == 'cloud' else host['agents']
+    named = host_setting(env)
+    if named != name:
+        raise Exit(5, 'The host setting on the default branch says %s, but the user chose %s: %s; %s' % (
+            'Host: ' + named if named else 'no host', host_label(host['agents']).split(',')[0],
+            'merge the host setting pull request first (setting)' if name and named is None else
+            'answer where agents run again, or ask to change that line', NOTHING))
+    picked = (state.value.get('mode') or {}).get('mode')
+    if local and (not picked or saved_mode(env) != picked):
+        raise Exit(5, 'No `%s `%s` |` row, the Harness permission mode the owner picked, is in %s on the default '
+                      "branch, and the local driver starts no agent without it: run mode, then setting, and merge "
+                      'it; %s' % (MODE_ROW, picked or '<mode>', MODE_FILE, NOTHING))
+    if local:
+        program = PROGRAMS[choices['harness']]
+        approved = host_approval(env, state.value['repo'], program)
+        if approved != picked:
+            raise Exit(5, "This machine's host-side approval for %s with %s is %s, not the `%s` row %s saves, and "
+                          "KN3's start refuses unless they match: run mode --mode %s to save the owner's pick here, "
+                          'or ask the owner which mode they mean; %s' % (
+                              state.value['repo'], program, approved or 'missing', picked, MODE_FILE, picked, NOTHING))
+    if name and driver_answer(env, host.get('adapters') or env.get('OPENWIZ_ADAPTERS'), name)[0] is None:
+        raise Exit(5, "This OpenWiz's %s driver no longer answers, so no agent can run %s; %s" % (
+            name, where_of(name), NOTHING))
+    plan_approved(spec, env, confirmed)
     ready = frontier(env)
     title, members = spec_facts(spec, env)
     starts = sorted(n for n in ready if n in members)
     if not starts:
-        raise Exit(5, 'No approved ticket of spec #%d is ready to start: the plan is unapproved, changed since its '
-                      'approval, or still blocked; %s' % (spec, NOTHING))
-    builder, reviewer = review(choices, fleet_rules(env, state.value['repo']))
-    effects = {'repo': state.value['repo'], 'spec': spec, 'project': carried['project'], 'title': title,
-               'fleet_thread': builder, 'builder': builder, 'reviewer': reviewer,
+        raise Exit(5, 'No approved ticket of spec #%d is ready to start: the plan changed since its checks passed, '
+                      'or is still blocked; %s' % (spec, NOTHING))
+    rules = fleet_rules(env, state.value['repo'])
+    builder, reviewer = review(choices, rules)
+    orchestrator = rules['orchestrator']
+    where = where_of(host['agents'])
+    effects = {'fleet_thread': orchestrator, 'repo': state.value['repo'], 'spec': spec, 'project': carried['project'], 'title': title,
+               'host': host['agents'], 'mode': picked if local else None, 'builder': builder, 'reviewer': reviewer, 'grill': confirmed,
                'tickets': [[n, ready[n]] for n in starts]}
     digest = hashlib.sha256(json.dumps(effects, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     if got.get('--yes'):
@@ -841,64 +1806,66 @@ def launch(got):
             raise Exit(5, 'The effects changed since the preview the user said yes to (or it was never shown); '
                           'preview again and ask again; ' + NOTHING)
     agents = '%s %s %s' % (builder['harness'], builder['model'], builder['effort'])
-    print('Ready to start the first fleet for spec #%d, through launch-fleet, in the Cloud (CloudRoom project %s):'
-          % (spec, carried['project']))
-    print('1 fleet thread, %s. It makes its own loop, which checks spec #%d every 10 minutes '
-          "(launch-fleet's fleet.sh spec %d), and records itself on the spec." % (agents, spec, spec))
-    print('Then %d builders, each %s, on the approved frontier:' % (len(starts), agents))
-    for ticket in starts:
-        print('#%d %s' % (ticket, ready[ticket]))
-    print('Each pull request is reviewed by %s %s %s, from the other model family.' % (
-        reviewer['harness'], reviewer['model'], reviewer['effort']))
-    print('Cloud Credits: unknown until measured. Model-provider charges are separate.')
+    fleet_thread = '%s %s %s' % (orchestrator['harness'], orchestrator['model'], orchestrator['effort'])
     if not got.get('--yes'):
+        print('Ready to start the fleet for spec #%d %s, through launch-fleet: 1 fleet thread (%s), whose loop checks '
+              'the spec every 10 minutes and starts a builder (%s) for each of:' % (spec, where, fleet_thread, agents))
+        for ticket in starts:
+            print('#%d %s' % (ticket, ready[ticket]))
+        print('Each pull request is reviewed by %s %s %s, from the other model family.' % (
+            reviewer['harness'], reviewer['model'], reviewer['effort']))
+        cost = (host_cost(host['agents']) if not local else 'every agent uses %s on this machine, whose model '
+                'use is billed to you as it is today' % builder['harness'])
+        if local:
+            print('Its agents run %s with the %s permission mode you picked.' % (builder['harness'], picked))
+        print('Start the fleet %s now? It can cost money: %s.' % (where, cost))
         state.value['preview'] = {'spec': spec, 'effects': digest}
         if not state.save():
             raise Exit(10, 'Could not save the preview; ' + NOTHING)
         print('Confirmation: %s' % digest)
-        print('Nothing started. Show this to the user; on their yes to exactly these effects, run again with '
-              '--yes --confirm %s.' % digest)
+        print("Nothing started. Ask exactly that; on the user's yes, run again with --yes --confirm %s." % digest)
         return 12
-    state.value['launch'] = {'spec': spec, 'state': 'pending', 'effects': digest, 'tickets': starts}
+    state.value['launch'] = {'spec': spec, 'state': 'authorized', 'effects': digest, 'tickets': starts,
+                             'orchestrator': orchestrator}
     if not state.save():
-        raise Exit(10, 'Could not save the launch record; ' + NOTHING)
-    argv = ['room-cli', 'thread', 'spawn', '--parent-self', '--project', carried['project'],
-            '--machine', 'cloud', '--provider', builder['harness'], '--model', builder['model'],
-            '--reasoning-level', builder['effort'], '--title', 'Fleet #%d: %s' % (spec, title),
-            '--prompt', brief(spec, state.value['repo'])]
-    try:
-        result = subprocess.run(argv, capture_output=True, timeout=600, env=env)
-    except (FileNotFoundError, PermissionError):
-        # Review R2: room-cli never ran, so nothing was dispatched. A fresh
-        # preview and yes are needed before another try.
-        state.value['launch']['state'] = 'refused'
-        state.value.pop('preview', None)
-        saved = state.save()
-        raise Exit(5 if saved else 6, 'room-cli could not be run, so no fleet thread was dispatched; nothing started. '
-                   'Fix the CloudRoom installation, then preview again and ask again.' if saved else
-                   'room-cli could not be run, but that could not be saved; the start stays pending until read.')
-    except (OSError, subprocess.TimeoutExpired):
-        result = None
-    ended = 'started' if result is not None and result.returncode == 0 else 'uncertain'
-    state.value['launch']['state'] = ended
-    if not state.save():
-        print('Could not save the outcome; the start stays uncertain and is never retried.')
-        ended = 'uncertain'
-    if ended == 'started':
-        print("Started spec #%d's fleet thread. Its first wake makes its loop, records itself and starts the "
-              'builders.' % spec)
-        return 0
-    print('Whether the fleet thread started is uncertain. Never start it again by hand: run this command again '
-          "to read the spec's fleet record, or look for the thread in CloudRoom.")
-    return 6
+        raise Exit(10, 'Could not save the start the user said yes to; ' + NOTHING)
+    print("The user said yes to starting spec #%d's fleet %s. Nothing is started by this command: the fleet starts "
+          "through launch-fleet's own start path, and is said started only once its activation record reads back."
+          % (spec, where))
+    print(handoff(spec, state.value['repo'], host, orchestrator))
+    return 0
+
+
+def agent_words(agent):
+    return ' '.join(agent[k] for k in ('harness', 'model', 'effort'))
+
+
+def handoff(spec, repo, host, orchestrator):
+    """launch-fleet's own start path, named for the orchestrator to follow; never a second copy of it (R7)."""
+    adapters = host.get('adapters') if host.get('agents') != 'cloud' else None
+    approved = '--provider %s --model %s --reasoning-level %s' % (
+        orchestrator['harness'], orchestrator['model'], orchestrator['effort'])
+    return ("Next, as this project's orchestrator, follow launch-fleet's Launch section (references/launch.md) for "
+            'spec #%d of %s: its two project loops and the GitHub messages question, then "Starting one": the spec\'s '
+            "loop, its entry in the private loop map, read back, and the record `%s%d`, read back.%s The user said "
+            'yes to the fleet thread `%s`: right before creating that loop, run launch-fleet\'s `ops-starts.py flags '
+            '--repo %s fleet_thread`, and only if it prints exactly that, create the loop with `--provider %s --model '
+            '%s --reasoning %s`. If it prints anything else, create nothing and run launch --spec %d again: it asks '
+            'for a fresh preview and yes. Then run launch --spec %d again: it says the fleet started only once that '
+            'record reads back. Never start it a second way.' % (
+                spec, repo, FLEET_RECORD, spec,
+                ' Its loop runs builders %s, so give it OPENWIZ_ADAPTERS=%s, where launch-fleet\'s '
+                'host.py finds the %s driver.' % (where_of(host['agents']), adapters, host['agents'])
+                if adapters else '', approved, repo, orchestrator['harness'], orchestrator['model'],
+                orchestrator['effort'], spec, spec))
 
 
 def record_line(spec, recorded):
     if recorded is None:
         return "The spec's fleet record could not be read right now."
     if recorded:
-        return 'Spec #%d has its fleet record: the fleet thread made its loop and runs the spec.' % spec
-    return 'Spec #%d has no fleet record yet: its fleet thread has not finished its first wake.' % spec
+        return "Spec #%d has its fleet record: launch-fleet's loop runs the spec." % spec
+    return "Spec #%d has no fleet record yet: launch-fleet's start has not read back." % spec
 
 
 def watch(got):
@@ -935,6 +1902,39 @@ def progress(spec, program, env):
     return 0
 
 
+def first_merge(got):
+    """The first merge, read back from GitHub: the teacher's merged line, then the closing offer."""
+    state = State(got['--state'])
+    spec, launched = state.value.get('spec'), state.value.get('launch') or {}
+    if not spec or launched.get('spec') != spec or launched.get('state') != 'started':
+        raise Exit(5, "This onboarding's fleet has not started; there is no first merge to read.")
+    env = repository(state.value.get('repo'))
+    pull = gh_json(['pr', 'view', got['--pr'], '--repo', state.value['repo'], '--json',
+                    'number,url,title,state,mergedAt,closingIssuesReferences'], env, 'the pull request')
+    try:
+        assert isinstance(pull, dict) and isinstance(pull['closingIssuesReferences'], list)
+        closes = {(('%s/%s' % (issue['repository']['owner']['login'], issue['repository']['name'])).lower(),
+                   issue['number']) for issue in pull['closingIssuesReferences']}
+        assert all(type(n) is int and isinstance(r, str) for r, n in closes) and type(pull['number']) is int
+        assert pull['number'] == int(got['--pr']) and isinstance(pull['url'], str) and isinstance(pull['title'], str)
+        assert pull['state'] in ('OPEN', 'MERGED', 'CLOSED') and (pull['mergedAt'] is None or isinstance(pull['mergedAt'], str))
+        merged = pull['state'] == 'MERGED' and isinstance(pull['mergedAt'], str)
+    except (KeyError, TypeError, AssertionError):
+        raise Exit(1, 'The pull request did not read back completely; no merge counted.')
+    if not merged:
+        raise Exit(5, '%s has not merged; a merge counts only when GitHub reads it back.' % pull['url'])
+    _, members = spec_facts(spec, env)
+    if not closes & {(state.value['repo'].lower(), n) for n in members}:
+        raise Exit(5, "%s closes no ticket of spec #%d, so it is not this fleet's merge." % (pull['url'], spec))
+    state.value['merge'] = pull['url']
+    if not state.save():
+        raise Exit(10, 'Could not save the first merge.')
+    repo = state.value['repo']
+    print(teach('Merged', (pull['url'], ' '.join(pull['title'].split()), repo)))
+    print(teach('The closing offer', (repo.split('/')[1],)))
+    return 0
+
+
 def prepared(folder):
     """The repository setup selected for this onboarding (its prepared project, or
     else its sign-in), read only; None when there is none or it is unreadable."""
@@ -963,10 +1963,16 @@ def resume(got):
     created, launched = value.get('created') or {}, value.get('launch') or {}
     demo = created.get('repo') if created.get('state') != 'absent' else None  # an absent create made nothing
     repo, spec = value.get('repo') or demo, value.get('spec')
+    host, setting_ = value.get('host'), value.get('setting') or {}
     folder = got.get('--setup-state')
     candidate = prepared(folder) if folder else None
     choices = value.get('choices') or {}
-    if created.get('state') in ('pending', 'uncertain'):
+    if not host:
+        step = ('where', "Say the teacher's opening lines, then run where --build <build> to list the hosts this "
+                'OpenWiz offers, and ask where agents run. On the answer, run where --agents <the pick> --build '
+                "<build> and say what it prints: the cost and, for a driver host, where its login lives. Only on the "
+                "user's yes to that, run it again with --yes.")
+    elif created.get('state') in ('pending', 'uncertain'):
         step = ('project', 'Creating %s is %s: run create-repo --repo %s --yes again; it reads before it creates.'
                 % (created['repo'], created['state'], created['repo']))
     elif not repo and candidate:
@@ -974,24 +1980,36 @@ def resume(got):
                 'project: ask the owner whether this first fleet is for it. On their yes, run select --repo %s; '
                 'otherwise offer the ideas, then choose or create its one repository.' % (candidate, candidate))
     elif not repo:
-        step = ('project', 'Offer the ideas, then choose or create its one repository.')
+        step = ('project', 'Offer the three choices, with ideas.md for anyone without an idea, then choose or '
+                'create its one repository.')
     elif not value.get('setup'):
         step = ('connect', '%sConnect %s with the installed tools, then run continue.' % (
             'Setup already prepared it; ' if candidate == repo else '', repo))
-    elif spec and launched.get('spec') == spec and launched.get('state') in ('pending', 'uncertain'):
-        step = ('launch', 'The start of spec #%d is uncertain: run launch --spec %d to read its fleet record; '
-                'never start it again.' % (spec, spec))
+    elif spec and launched.get('spec') == spec and launched.get('state') in ('authorized', 'pending', 'uncertain'):
+        step = ('launch', "The user said yes to starting spec #%d: run launch --spec %d first, which checks the "
+                "Orchestrator is still the one the user said yes to and names the start path; finish launch-fleet's "
+                'start path (references/launch.md, "Starting one") exactly as it says, then run launch --spec %d to '
+                'read its fleet record back; never start it a second way.' % (spec, spec, spec))
+    elif spec and launched.get('spec') == spec and launched.get('state') == 'started' and value.get('merge'):
+        step = ('offer', 'Say the closing offer, as first-merge printed it.')
     elif spec and launched.get('spec') == spec and launched.get('state') == 'started':
-        step = ('watch', 'Run progress --spec %d.' % spec)
+        step = ('watch', "Run progress --spec %d, say the teacher's line for each moment, and run first-merge "
+                '--pr <N> when a pull request merges.' % spec)
+    elif not value.get('grill'):
+        step = ('grill', "Run the short grill; on the user's yes in chat, run grill --confirmed <its comment URL>.")
     elif not choices:
-        step = ('grill', 'Run the grill unless its summary is already confirmed; then choose the agents.')
-    elif choices.get('agents') != 'cloud':
-        step = ('agents', '%s %s' % (chosen_line(choices), LOCAL))
+        step = ('agents', 'Run choose --from-setup.')
     elif choices.get('builder_tables') != 'read':
         step = ('agents', '%s %s' % (chosen_line(choices),
-                                     tables_line(choices, 'have not read back this choice yet')))
+                                     tables_line(choices, 'have not been read back with this choice yet')))
+    elif host['agents'] == 'local' and not value.get('mode'):
+        step = ('mode', 'Run mode, explain each permission mode as it prints, pick none for the owner, then run '
+                'mode --mode <their pick>.')
+    elif setting_.get('state') not in ('opened', 'merged'):
+        step = ('setting', 'Run setting%s.' % (' again: its pull request is uncertain' if setting_ else ''))
     elif not spec:
-        step = ('plan', 'Confirm the spec, approve the exact plan, then run spec --spec <N> --repo %s.' % repo)
+        step = ('plan', 'Run to-spec, which runs to-tickets; no plan approval is asked. Then run spec --spec <N> '
+                '--repo %s.' % repo)
     else:
         step = ('launch', 'Preview with launch --spec %d and ask for a yes to exactly that.' % spec)
     print('Next: %s.' % step[0])
@@ -1004,6 +2022,16 @@ def resume(got):
 def main(argv):
     try:
         command, got = parse(argv)
+        if command == 'where':
+            return where(got)
+        if command == 'mode':
+            return mode(got)
+        if command == 'setting':
+            return setting(got)
+        if command == 'grill':
+            return grill(got)
+        if command == 'first-merge':
+            return first_merge(got)
         if command == 'continue':
             return carry_on(got)
         if command == 'decisions':

@@ -30,6 +30,13 @@ ROLES = ('needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wo
 # The whole Record authors cell, as the review and launch-fleet readers take it.
 LOGIN = r'`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`'
 CELL = re.compile(r'\s*%s(?:\s*,\s*%s)*\s*' % (LOGIN, LOGIN))
+MODELS_HEADER = ['Role', 'Harness', 'Model', 'Effort', '`room-cli thread spawn` flags']
+MODEL_ROWS = ('Orchestrator', 'Builder', 'Reviewer', 'Small builder', 'Fixer')
+ID = r'[A-Za-z0-9._-]+'
+FLAGS_CELL = re.compile(r'`--provider (%s) --model (%s(?:/%s)*) --reasoning-level (%s)`' % (ID, ID, ID, ID))
+ROSTER_HEADER = ['Name', 'Kind', 'Driver', 'Roles', 'Writes as']
+KINDS = ('harness', 'host', 'bot')
+ROSTER_ROLES = ('orchestrator', 'builder', 'reviewer', 'helper')
 USAGE = 'usage: settings.py check [--root DIR] [--labels FILE]'
 
 
@@ -63,6 +70,143 @@ def sections(text, exact=False):
     return found
 
 
+def cells(line):
+    return [cell.strip() for cell in line.strip()[1:-1].split('|')] if line.strip().endswith('|') else None
+
+
+def models(text):
+    lines = text.split('\n')
+    headings = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Models']
+    if not headings:
+        return None
+    if len(headings) > 1:
+        raise ValueError(['more than one ## Models heading'])
+    rows = []
+    for line in lines[headings[0] + 1:]:
+        if line.startswith('## '):
+            break
+        if line.startswith('|'):
+            rows.append(line)
+        elif rows:
+            break
+    if len(rows) < 2 or cells(rows[0]) != MODELS_HEADER or cells(rows[1]) != ['---'] * 5:
+        raise ValueError(["the header is not the contract's"])
+    body = [cells(row) for row in rows[2:]]
+    names = [row[0] if row and len(row) == 5 else None for row in body]
+    if names[:3] != list(MODEL_ROWS[:3]) or names[3:] not in ([], ['Small builder'], ['Fixer'],
+                                                             ['Small builder', 'Fixer']):
+        raise ValueError(['rows not Orchestrator, Builder, Reviewer, then optional Small builder, Fixer'])
+    found, broken = {}, []
+    for role, harness, model, effort, flags in body:
+        match = FLAGS_CELL.fullmatch(flags)
+        if harness == 'follows Builder':
+            found[role] = None
+            if role not in MODEL_ROWS[3:]:
+                broken.append('%s: only Small builder and Fixer may follow' % role)
+            elif model or effort or flags:
+                broken.append('%s: a following row has empty Model, Effort and flags' % role)
+        elif re.search(r'<[^>]*>', ''.join((harness, model, effort, flags))):
+            broken.append('%s: unfilled' % role)
+        elif not (harness and model and effort):
+            broken.append('%s: Harness, Model and Effort need names' % role)
+        elif not match:
+            broken.append('%s: the flags are not one exact `--provider --model --reasoning-level`' % role)
+        else:
+            found[role] = match.groups()
+    if broken:
+        raise ValueError(broken)
+    return found
+
+
+def word(text, most, chars, sep):
+    return (0 < len(text) <= most and all(c in chars or c == sep for c in text)
+            and text[0] != sep and text[-1] != sep and sep * 2 not in text)
+
+
+ALNUM = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+
+
+def roster(text):
+    lines = [line.rstrip() for line in text.split('\n')]
+
+    def is_roster(word):
+        return word.isascii() and word.lower() == 'roster'
+
+    def names_roster(line):
+        line = line.strip()
+        level = len(line) - len(line.lstrip('#'))
+        rest = line[level:]
+        return (1 <= level <= 6 and (not rest or rest[0] in ' \t')
+                and is_roster(rest.strip().rstrip('#').strip()))
+
+    def underlined(n):
+        below = lines[n + 1].strip() if n + 1 < len(lines) else ''
+        return is_roster(lines[n].strip()) and below != '' and set(below) in ({'='}, {'-'})
+
+    for n, line in enumerate(lines):
+        if (line != '## Roster' and names_roster(line)) or underlined(n):
+            raise ValueError('Roster refused: the Roster heading must be exactly ## Roster: %s' % line)
+    at = [n for n, line in enumerate(lines) if line == '## Roster']
+    if len(at) > 1:
+        raise ValueError('Roster refused: more than one ## Roster heading')
+    if not at:
+        return None
+    section = []
+    for line in lines[at[0] + 1:]:
+        if line.startswith(('# ', '## ')):
+            break
+        section.append(line)
+    first = next((n for n, line in enumerate(section) if line.lstrip().startswith('|')), None)
+    if first is None:
+        raise ValueError('Roster refused: the Roster section has no table')
+    table = []
+    for line in section[first:]:
+        if not line.lstrip().startswith('|'):
+            break
+        table.append(line)
+    rule = cells(table[1]) if len(table) > 1 else None
+    if cells(table[0]) != ROSTER_HEADER or not rule or len(rule) != 5 or not all(
+            len(cell) >= 3 and set(cell) == {'-'} for cell in rule):
+        raise ValueError('Roster refused: the header is not Name, Kind, Driver, Roles, Writes as')
+    if len(table) == 2:
+        raise ValueError('Roster refused: the table has no entries')
+    entries, person = [], None
+    for n, line in enumerate(table[2:], 1):
+        row = cells(line) or []
+        if len(row) != 5:
+            raise ValueError('Roster refused: row %d has %d cells, not 5' % (n, len(row)))
+        name, kind, driver, roles, writes = row
+        if not (word(name, 40, ALNUM + '._-', ' ') and name[0] in ALNUM and name[-1] in ALNUM):
+            raise ValueError('Roster refused: row %d: bad name: %s' % (n, name))
+        if any(entry[0].lower() == name.lower() for entry in entries):
+            raise ValueError('Roster refused: row %d: %s is already an entry' % (n, name))
+        here = 'Roster refused: row %d (%s)' % (n, name)
+        if kind not in KINDS:
+            raise ValueError('%s: unknown kind: %s' % (here, kind))
+        if not word(driver, 40, ALNUM[:26] + ALNUM[52:], '-'):
+            raise ValueError('%s: bad driver: %s' % (here, driver))
+        if not roles:
+            raise ValueError('%s: no roles' % here)
+        taken = []
+        for role in (part.strip() for part in roles.split(',')):
+            if role not in ROSTER_ROLES:
+                raise ValueError('%s: unknown role: %s' % (here, role))
+            if role in taken:
+                raise ValueError('%s: role listed twice: %s' % (here, role))
+            taken.append(role)
+        login = writes[:-len("'s App")] if writes.endswith("'s App") else ''
+        if not word(login, 39, ALNUM, '-'):
+            raise ValueError("%s: writes as %s, not <person>'s App" % (here, writes))
+        if person is not None and login != person:
+            raise ValueError("%s: writes as %s, not %s's App like row 1" % (here, writes, person))
+        person = login
+        label = '%s via %s' % (name, login)
+        if len(label) > 60:
+            raise ValueError('%s: %s is longer than 60 characters' % (here, label))
+        entries.append((name, kind, driver, taken, label))
+    return entries
+
+
 def token(flag):
     return r'(?<![\w-])--%s(?![\w-])' % flag
 
@@ -85,7 +229,23 @@ def fixer(body, problems):
 
 def fleet(text, problems):
     found, exact = sections(text), sections(text, exact=True)
-    for title in SECTIONS:
+    try:
+        table = models(text)
+    except ValueError as error:
+        problems.extend('fleet.md: Models: %s' % line for line in error.args[0])
+        table = False
+    try:
+        roster(text)
+    except ValueError as error:
+        problems.append('fleet.md: %s' % error.args[0])
+    if table:
+        builder, reviewer = table['Builder'][0], table['Reviewer'][0]
+        if reviewer not in FAMILY:
+            problems.append('fleet.md: Models: Reviewer: %s has no known model family' % reviewer)
+        elif FAMILY[reviewer] == FAMILY.get(builder):
+            problems.append('fleet.md: Models: Reviewer: %s is not from another model family than the Builder'
+                            % reviewer)
+    for title in SECTIONS if table is None else SECTIONS[len(TABLES):]:
         if title not in (exact if title == 'GitHub identity' else found):
             problems.append('fleet.md: no ## %s section' % title)
     for title in TABLES:

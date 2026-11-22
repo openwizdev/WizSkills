@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""TV12: moved public worker guard proof, all GitHub responses synthetic.
-
-Catches worker writes, broad/stale allowances and incomplete reads reported as
-clean. The recording gh accepts paginated GETs only; no credential or network.
-"""
 import copy
 import json
 from pathlib import Path

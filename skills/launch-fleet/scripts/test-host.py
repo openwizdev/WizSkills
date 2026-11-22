@@ -218,6 +218,47 @@ class Host(unittest.TestCase):
                                           'local-run-7 on host local for #7 privately before anything else'))
         self.assertEqual(len(p.calls()), 1)
 
+    def test_start_sends_the_named_skill_to_the_driver(self):
+        for skill in ('review-ticket', 'launch-fleet'):
+            with self.subTest(skill):
+                p = Project(self)
+                self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', skill),
+                                 (0, 'started #7 on local', ''))
+                self.assertEqual(p.calls(), [{'host': 'local', 'command': 'start', 'input': {
+                    'repository': REPO, 'ticket': 7, 'skill': skill, 'harness': 'claude', 'model': 'claude-opus-5-5'}}])
+                self.assertEqual(p.saved(), {'repo': REPO, 'runs': {'7': {'host': 'local', 'run': 'local-run-7'}}})
+
+    def test_start_without_a_skill_sends_todays_exact_bytes(self):
+        p = Project(self)
+        raw = p.dir / 'raw-start'
+        (p.dir / 'adapters/local/driver').write_text(
+            '#!/bin/sh\ncat > "%s"\nprintf \'{"run": "local-run-7"}\\n\'\n' % raw)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5'), (0, 'started #7 on local', ''))
+        self.assertEqual(raw.read_bytes(), b'{"repository": "synthetic-owner/synthetic-repo", "ticket": 7, '
+                                           b'"skill": "build-ticket", "harness": "claude", "model": "claude-opus-5-5"}')
+
+    def test_a_skill_outside_the_driver_schema_starts_nothing(self):
+        for skill in ('', 'Review-Ticket', 'review_ticket', '-review', 'review-', '../review-ticket', 'a' * 61):
+            with self.subTest(skill):
+                p = Project(self)
+                code, out, err = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', skill)
+                self.assertEqual((code, out), (2, ''), err)
+                self.assertTrue(err.startswith('host.py: usage: '), err)
+                self.assertEqual(p.calls(), [])
+                self.assertIsNone(p.saved())
+        p = Project(self)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', 'a' * 60)[0], 0)
+        self.assertEqual(p.calls()[0]['input']['skill'], 'a' * 60)
+
+    def test_wake_and_stop_take_no_skill(self):
+        p = Project(self)
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5')[0], 0)
+        for kind in ('wake', 'stop'):
+            with self.subTest(kind):
+                code, out, err = p.host(kind, REPO, 7, 'review-ticket')
+                self.assertEqual((code, out), (2, ''), err)
+        self.assertEqual([c['command'] for c in p.calls()], ['start'])
+
     def test_no_run_or_no_setting_leaves_the_room_cli_route(self):
         p = Project(self, setting=None)
         self.assertEqual(p.host('which'), (0, 'host: none', ''))
@@ -270,7 +311,7 @@ class Failures(unittest.TestCase):
     def test_the_drivers_own_words_stay_in_the_owners_log_never_on_the_ticket(self):
         # The orchestrator's decision on R3 at 90aed73: no free text of the driver's ever reaches the ticket.
         p = Project(self)
-        words = 'reach svc:made-up-pass-44@driver.example.invalid, then ask the synthetic operator'
+        words = 'reach svc:made-up-pass-44@example.invalid, then ask the synthetic operator'
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse', FAKE_DRIVER_NEXT=words)[0], 1)
         world = json.dumps(p.github())
         for part in ('made-up-pass-44', 'synthetic operator', 'not signed in'):
@@ -333,10 +374,10 @@ class Failures(unittest.TestCase):
                  'a thread id': 'resume %s by hand' % thread, 'a machine path': 'edit /srv/synthetic/driver.conf',
                  'a secret value': 'use %s to sign in' % secret,
                  # R3 of the re-check at 004afb6: a URL's user info, password or not, from the driver's own config.
-                 'a URL password': 'sign in at https://svc-account:made-up-pass-42@driver.example.invalid/login',
-                 'a URL user': 'open ssh://made-up-user@driver.example.invalid to sign in',
+                 'a URL password': 'sign in at https://svc-account:made-up-pass-42@example.invalid/login',
+                 'a URL user': 'open ssh://made-up-user@example.invalid to sign in',
                  # The decision on R3: a schemeless endpoint, as libcurl guesses its protocol.
-                 'a schemeless URL password': 'set the endpoint to svc:made-up-pass-43@driver.example.invalid/api'}
+                 'a schemeless URL password': 'set the endpoint to svc:made-up-pass-43@example.invalid/api'}
         for name, text in leaks.items():
             with self.subTest(name):
                 p = Project(self)

@@ -8,7 +8,49 @@ A pull request is the loop's when it closes an approved ticket (its description 
 
 **Claim it first,** for a review or a re-check alike: post `launch-fleet: review starting <commit>` on the pull request (`post.py comment`), then run `sh "<this skill's folder>/scripts/fleet.sh" claim <P> <your comment's id>`. Go on only on `go #<P>`: no older claim for that commit is live (`review starting`, `review started`, `re-check sent`), the head is still that commit, and it is still due. Otherwise edit your claim to `launch-fleet: review withdrawn <commit>`, and stop.
 
-**Starting a review** (a `review` line, printed only once CI is green on that exact commit): start the other-family reviewer from `fleet.md`'s `## Reviewer for Claude-built` or `## Reviewer for GPT-built` table, using the branch-matching checked builder record and that exact thread's provider (unknown/conflicting family waits), as in [builders.md](builders.md), titled `Review #<P> at <short commit>`, with the brief `python3 -I "<this skill's folder>/scripts/brief.py" reviewer <P> <commit>` prints Then edit the claim to `launch-fleet: review started <commit>`. If CloudRoom can't start that reviewer, edit it to `launch-fleet: review refused <commit>: <reason>`: the review waits 10 minutes, as a refused start does, and is never given to another model.
+**Starting a review** (a `review` line, printed only once CI is green on that exact commit): start the other-family reviewer `ops-starts.py flags --repo <owner>/<repo> review_of_claude_built` or `review_of_gpt_built` prints (the models contract's cross-family rule; exit 1 means the review waits), using the branch-matching checked builder record and that exact thread's provider (unknown/conflicting family waits), as in [builders.md](builders.md), titled `Review #<P> at <short commit>`, with the brief `python3 -I "<this skill's folder>/scripts/brief.py" reviewer <P> <commit>` prints Then edit the claim to `launch-fleet: review started <commit>`. If CloudRoom can't start that reviewer, edit it to `launch-fleet: review refused <commit>: <reason>`: the review waits 10 minutes, as a refused start does, and is never given to another model.
+
+### Starting a review through a host driver
+
+Use the driver for new reviews when `host.py which` reports a chosen host other than CloudRoom. For `host: none` or `host: cloudroom`, use the CloudRoom start above. An unreadable host setting leaves the review pending. A reviewer already running keeps its original route.
+
+After the review claim returns `go`, run the following shell block from the fleet project checkout. Supply the launch-fleet scripts directory, the pull request's repository and number, the full head, the claim comment id, the checked builder's driver harness and model id, and the other family's configured reviewer model id, in that order. For a driver builder, use its checked private run and record-author builder status on the ticket to verify the family and match the recorded model to its configured CLI id. Use `claude` for Claude Code and `codex` for Codex. With both programs on PATH, get the reviewer model from the corresponding `ops-starts.py flags` reviewer row described above and check its provider. An unreadable or conflicting builder assignment or required reviewer row leaves the review pending. With just the builder's harness installed, pass an empty last argument. Use the pull request number for the reviewer run and the issue number for the builder run.
+
+```sh
+set -eu
+scripts=$1 repo=$2 pr=$3 head=$4 claim=$5 builder=$6 builder_model=$7 reviewer_model=$8
+case "$builder" in
+  claude) other=codex ;;
+  codex) other=claude ;;
+  *) printf '%s\n' 'refused: unknown builder harness'; exit 1 ;;
+esac
+set -- reviewer "$pr" "$head"
+if command -v claude >/dev/null 2>&1 && command -v codex >/dev/null 2>&1; then
+  harness=$other
+  model=$reviewer_model
+  family=other-family
+elif command -v "$builder" >/dev/null 2>&1; then
+  harness=$builder
+  model=$builder_model
+  family=same-family
+  set -- "$@" same-family
+else
+  printf '%s\n' 'refused: the builder harness is unavailable'
+  exit 1
+fi
+if [ -z "$model" ]; then
+  printf '%s\n' 'refused: the review model is unavailable'
+  exit 1
+fi
+brief=$(python3 -I "$scripts/brief.py" "$@")
+assignment=$(printf 'launch-fleet: review starting %s\nDriver review: %s\n\n%s' "$head" "$family" "$brief")
+python3 -I "$scripts/post.py" edit "$repo" "$claim" "$assignment"
+python3 -I "$scripts/host.py" start "$repo" "$pr" "$harness" "$model" review-ticket
+```
+
+The trusted claim supplies the brief to the reviewer. After `started`, save and read back the private run map as in [builders.md](builders.md), then change only the claim's first line to `launch-fleet: review started <commit>`. For a definite refusal, record `review refused` as above. For an unknown start, keep the claim pending and reconcile from the private run map and the reviewer's GitHub status or verdict before retrying. Fresh driver reviews follow the same start steps.
+
+For an existing reviewer named `run:<P>`, deliver a re-check with `host.py wake <owner>/<repo> <P>`. Before waking, add `Driver re-check: <family>` to the re-check claim's second line (the family recorded at start) and put the re-check brief after a blank line. After `woke`, change only the first line to `launch-fleet: re-check sent <commit>`. For a quiet driver reviewer, read its GitHub status and verdict, wake the same run once, and record `review told again` as below. If still quiet, use `host.py stop <owner>/<repo> <P>` and save and read back the run map before marking it `review given up`. Preserve the body of the edited claim. For a driver `reconcile review` line or an uncertain wake or stop, verify the saved run and trusted GitHub records before retrying, changing the claim, or starting a replacement.
 
 **A re-check** (a `re-check` line) goes to the same reviewer: `room-cli thread tell <its thread> --mode queue --message-file <file>`, with the file holding what `python3 -I "<this skill's folder>/scripts/brief.py" re-check <P> <commit> <old head> <the ids> <the answer>` prints, then edit the claim to `launch-fleet: re-check sent <commit>`. `<old head>` is the commit the reviewer's latest `VERDICT` names; `<the ids>` are the open high and medium ids its `Next:` line leaves to the builder (`none` when `main` was merged into approved work); the builder's answer is its comment since that report, one line per id (`none` if there is none). They only point the reviewer at the delta: the same reviewer, the exact new head and its full re-check still apply. When the builder merges `main` into approved work, its new head is re-checked the same way. A `reconcile review` line means a claim never recorded how it went: ask the reviewer's thread whether it was started or told, and edit the claim to match, or to `launch-fleet: review failed <commit>: <why>`.
 
@@ -16,7 +58,7 @@ A pull request is the loop's when it closes an approved ticket (its description 
 
 1. **No verdict 30 minutes after the record:** fresh spec wakes use the GitHub and delivery checks in SKILL.md's "Each wake". Otherwise read the thread (`room-cli thread output <its thread> --all`). A tick can read and tell only the threads it started itself, so a reviewer started by an earlier tick or by the orchestrator is out of reach. When the thread is out of reach or gone, do step 2 now. Otherwise tell it again, once: `room-cli thread tell <its thread> "No report yet for pull request #<P> at <commit>. If you are still reviewing, finish and post it. If not, start now: <the brief>"`, with the brief it was given (the review brief above for `review started`, the re-check message for `re-check sent`). Then record `launch-fleet: review told again <commit>` as a new comment on the pull request.
 2. **Still no verdict 30 minutes after it was told again,** or the thread is out of reach: archive the thread (`room-cli thread archive <its thread>`), so it can't post a late verdict. First retain that reviewer's immutable claim mapping for archive-only cleanup, including when this edit replaces its original start record. Then edit the comment the line names (`post.py edit`) to `launch-fleet: review given up <commit>: <why>`. If the archive failed, say so in `<why>`: the `archive` line lists the thread again when the ticket closes.
-3. **The next check prints** `review #<P> for #<N> at <commit>: a fresh reviewer`: start one as in "Starting a review", the other-family reviewer from `fleet.md`'s `## Reviewer for Claude-built` or `## Reviewer for GPT-built` table, verified from the branch-matching `start checked` record and that exact thread's provider; unknown/conflicting family waits, never another model. A reviewer span recorded as `review given up` is never told again or asked to re-check, at any commit in that span.
+3. **The next check prints** `review #<P> for #<N> at <commit>: a fresh reviewer`: start one as in "Starting a review", the other-family reviewer `ops-starts.py flags --repo <owner>/<repo> review_of_claude_built` or `review_of_gpt_built` prints, verified from the branch-matching `start checked` record and that exact thread's provider; unknown/conflicting family waits, never another model. A reviewer span recorded as `review given up` is never told again or asked to re-check, at any commit in that span.
 
 **The report** is the latest comment on the pull request that starts `VERDICT: APPROVE at <commit>` or `VERDICT: CHANGES at <commit>`, with the full 40-character commit. It counts only for the commit it names, and only an `APPROVE` naming the current head approves. No report, a timeout, an error or a report on an older commit is never approval.
 
@@ -34,7 +76,7 @@ A pull request is the loop's when it closes an approved ticket (its description 
 
 1. **Once per pull request.** If the oldest fresh record on it is your own `launch-fleet: fresh starting <commit>` for this head, carry on at its first step not yet done. If any other record starts `launch-fleet: fresh starting` or names a `fresh round`, never start another: tell the orchestrator, as for an unknown line. Otherwise comment `launch-fleet: fresh starting <commit>`, then read the pull request's comments again: go on only if your claim is the oldest such record.
 2. **Retire, then archive, the original builder first,** resolved from private state as [builders.md](builders.md) does, so two builders never push one branch and the ticket's title finds only the fresh one. Tell it `room-cli thread tell <its thread> "A fresh builder takes over pull request #<P> for one round. Commit and push nothing more, run room-cli thread update --self --title 'Retired #<N>: <ticket title>', and end your turn."`, and end yours. On a later tick, once `room-cli thread list --include-archived --json` shows its new title, archive it (`room-cli thread archive <its thread>`) and read it back archived; keep its identity in private state. If it is out of reach, isn't retitled 30 minutes after it was told, the archive fails or you can't tell, start nothing: edit the claim to `launch-fleet: findings sent <commit>: fresh round failed: <why>`, and tell the orchestrator.
-3. **Then start the fresh builder** from `fleet.md`'s `## Fixer` row for the original builder's family, read as for a reviewer (unknown or conflicting waits), titled `#<N>: <ticket title>`, with the brief `python3 -I "<this skill's folder>/scripts/brief.py" fresh <N> <P> <branch> <commit>` prints A fleet thread starts it as its own child, as in [builders.md](builders.md).
+3. **Then start the fresh builder** on `ops-starts.py flags --repo <owner>/<repo> fix_round_for_claude_builder` or `fix_round_for_gpt_builder`, for the original builder's family (the models contract's fixer rule), read as for a reviewer (unknown or conflicting family, or exit 1, waits), titled `#<N>: <ticket title>`, with the brief `python3 -I "<this skill's folder>/scripts/brief.py" fresh <N> <P> <branch> <commit>` prints A fleet thread starts it as its own child, as in [builders.md](builders.md).
 4. **Record it:** point the private builder mapping at the fresh builder once its start is confirmed, and check that exactly one thread titled `#<N>: ` on `<branch>` is listed, the fresh one, matching that mapping. Only then edit the claim to `launch-fleet: findings sent <commit>: fresh round started, branch <branch>`; otherwise edit it to `launch-fleet: findings sent <commit>: fresh round failed: <why>`, and tell the orchestrator. Keep both identities in private state; the ticket's `start checked` record keeps its branch, and its family is unchanged. Its green head goes to the same reviewer for the final check, as a re-check does.
 
 **An overturned ruling whose stated cost is high:** read every new report for one, before its `findings` or `merge` line: a `- **Ruling <n>** overturned as R<m>` mark where the description's ruling `<n>` says `Cost if wrong: high`. It goes to Needs you ([user.md](user.md)), once per ruling, recorded as `launch-fleet: ruling sent to Jake <commit>: Ruling <n> as R<m>`. It does not hold the merge: the report's own line still applies.
@@ -59,6 +101,14 @@ Then record `launch-fleet: findings sent <commit>: decision <its comment id>: <f
    - `merge main in #<P> for #<N> at <commit>: its re-test ran on main at <base>, without <files> in #<merge>; tell its builder to merge main in`: GitHub reused an old test merge, so a reopen can't help. Tell the builder: `Merge origin/main into your branch (never rebase), run the full set and hand back a new green head: GitHub's test merge for pull request #<P> is stale, so its re-test ran without <files> in #<merge>.` Then record `launch-fleet: merge main asked <commit>`. Its new head goes back to its reviewer for a re-check, as any new head does.
 
    A red new run is a `CI failed` line, for the builder, as any red CI is. A claim with no new run 30 minutes on comes back as the `re-test` line, ending `(again: no new run 30 minutes after it was claimed)`.
+
+**The late look** (`contracts/checkpoints.v1.md`, RC3 #1831): `merge.py merge` holds the final merge of a user-visible spec (its last open planned ticket, where the spec answers `User-visible: yes` or `yes, a release`, or its answers are invalid) until the owner's look at that head's evidence is recorded. A ticket whose closing pull request is queued or merged counts as closed, so do the `merge` lines of one such spec one at a time, never in parallel; a held head that conflicts is `merge blocked`, as any conflict. `python3 -I "<this skill's folder>/scripts/merge.py" look <owner>/<repo> <P> <commit> --ticket <N>` prints the same reading and only reads. Do the row its `held:` line names; each new head starts over.
+
+| `held:` | What the fleet does |
+| --- | --- |
+| `ask-due` | Take the evidence from the pull request: a preview link, screenshots or a short video of the change working, never code (no pull request, commit, file, diff or source archive). Write one or more `Evidence: <preview\|screenshots\|video> <link>` lines and one `Look for: <what the owner should see working>` line to a file, then run `python3 -I "<this skill's folder>/scripts/merge.py" ask <owner>/<repo> <P> <commit> <checks> --ticket <N> <file>`, with `fleet.md`'s required checks comma-separated, after the merge line's verdict check (step 1 of SKILL.md's "Merging"): it posts `launch-fleet: late look asked #<P> at <commit>` on the spec once per head, only while every required check is green and the head is mergeable, and refuses a code link. With no evidence to show, or on `refused:`, tell the builder to add the evidence to the pull request's description. On `ask posted <id>` or `ask already posted <id>`, tell the orchestrator the ask's link: who records the owner's look is its routing |
+| `look-due` | Nothing: the owner's late-look record (`**Late look by <decider>, <date>, #<P> at <commit>:** ...`, from a record author) releases it, and the next `merge` line merges |
+| `changes-asked` | Tell the builder `The owner's late look at pull request #<P> at <commit> asked for changes: read the late-look record on the spec. Make them and hand back a new green head.`, then record `launch-fleet: findings sent <commit>: late look` on the pull request; send nothing again while that record is there. The new head goes through its review and gets a new ask |
 
 A move of `main` alone is never a reason to close and reopen a pull request: M1 (the base rule in `fleet.md`) and the checks above decide, and only "Re-testing" reopens one, for its re-test.
 

@@ -1,0 +1,33 @@
+$ python3 -I skills/launch-fleet/scripts/test-ops-starts.py -v   # green: review R1-R4 fixed (#1806)
+test_a_broken_models_table_is_refused_never_guessed (__main__.ModelsTable.test_a_broken_models_table_is_refused_never_guessed) ... ok
+test_a_changed_table_reaches_the_next_start_only (__main__.ModelsTable.test_a_changed_table_reaches_the_next_start_only) ... ok
+test_a_fleet_thread_starts_on_the_orchestrator_row (__main__.ModelsTable.test_a_fleet_thread_starts_on_the_orchestrator_row) ... ok
+test_a_same_family_reviewer_falls_back_to_the_builder_then_waits (__main__.ModelsTable.test_a_same_family_reviewer_falls_back_to_the_builder_then_waits) ... ok
+test_a_spec_loop_follows_the_orchestrator_row_at_its_next_start (__main__.ModelsTable.test_a_spec_loop_follows_the_orchestrator_row_at_its_next_start) ... ok
+test_an_older_fixer_of_another_family_waits (__main__.ModelsTable.test_an_older_fixer_of_another_family_waits) ... ok
+test_an_older_table_is_read_whole_or_refused (__main__.ModelsTable.test_an_older_table_is_read_whole_or_refused) ... ok
+test_every_start_spawns_what_the_contract_fixtures_say (__main__.ModelsTable.test_every_start_spawns_what_the_contract_fixtures_say) ... ok
+test_one_table_and_five_tables_start_alike (__main__.ModelsTable.test_one_table_and_five_tables_start_alike) ... ok
+test_starts_read_the_default_branch_never_the_checkout (__main__.ModelsTable.test_starts_read_the_default_branch_never_the_checkout) ... ok
+test_builder_refusals_start_nothing (__main__.Starts.test_builder_refusals_start_nothing) ... ok
+test_changed_settings_or_rule_after_persistence_are_not_reused (__main__.Starts.test_changed_settings_or_rule_after_persistence_are_not_reused) ... ok
+test_cli_pass_prints_records_and_ends (__main__.Starts.test_cli_pass_prints_records_and_ends) ... ok
+test_configured_settings_and_reviewer_family_are_effective (__main__.Starts.test_configured_settings_and_reviewer_family_are_effective) ... ok
+test_duplicate_and_overlapping_checks_record_one_start (__main__.Starts.test_duplicate_and_overlapping_checks_record_one_start) ... ok
+test_finite_pass_records_one_builder_and_one_initial_review (__main__.Starts.test_finite_pass_records_one_builder_and_one_initial_review) ... ok
+test_fresh_review_after_every_reviewer_given_up (__main__.Starts.test_fresh_review_after_every_reviewer_given_up) ... ok
+test_lost_reply_and_unrecorded_outcome_reconcile (__main__.Starts.test_lost_reply_and_unrecorded_outcome_reconcile) ... ok
+test_malformed_candidates_are_refused_alone (__main__.Starts.test_malformed_candidates_are_refused_alone) ... ok
+test_missed_start_goals_reuse_the_start_path (__main__.Starts.test_missed_start_goals_reuse_the_start_path) ... ok
+test_reapproval_keeps_intent_ids_unique (__main__.Starts.test_reapproval_keeps_intent_ids_unique) ... ok
+test_refused_start_does_not_stall_unrelated_work_and_green_ci_wakes_no_builder (__main__.Starts.test_refused_start_does_not_stall_unrelated_work_and_green_ci_wakes_no_builder) ... ok
+test_report_green_to_dispatch_delay_with_denominators (__main__.Starts.test_report_green_to_dispatch_delay_with_denominators) ... ok
+test_review_refusals_and_family_exceptions_start_nothing (__main__.Starts.test_review_refusals_and_family_exceptions_start_nothing) ... ok
+test_same_family_reviewer_table_is_refused (__main__.Starts.test_same_family_reviewer_table_is_refused) ... ok
+test_stale_generation_is_refused (__main__.Starts.test_stale_generation_is_refused) ... ok
+test_unreadable_candidates_do_not_abort_the_pass (__main__.Starts.test_unreadable_candidates_do_not_abort_the_pass) ... ok
+
+----------------------------------------------------------------------
+Ran 27 tests in 3.072s
+
+OK

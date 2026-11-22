@@ -1,0 +1,1 @@
+Before I set EXAMPLEHOST_API_TOKEN for the driver on examplehost: this may cost money. Say yes to go ahead, or no to skip it.

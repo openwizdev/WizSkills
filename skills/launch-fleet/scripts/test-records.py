@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""P4: public templates and fleet decisions, on synthetic process boundaries."""
 import json
 import os
 from pathlib import Path
@@ -27,7 +26,6 @@ class PublicRecords(unittest.TestCase):
         table = (HERE.parent / 'SKILL.md').read_text().split('## Records\n')[1].split('\n## ')[0]
         for form in forms:
             with self.subTest(form=form):
-                # Continuation alternatives in the skill repeat the common prefix implicitly.
                 self.assertIn('`' + form.removeprefix('launch-fleet: ') + '`', table.replace('`launch-fleet: ', '`'))
         self.assertNotRegex(table, r', thread <|fleet thread <id>|old builder archived, thread')
 
@@ -75,16 +73,14 @@ class Fleet(unittest.TestCase):
         return r.stdout
 
     def test_builder_with_a_driver_run_is_told_through_its_driver(self):
-        # #1371: a builder host.py started has no CloudRoom thread; its saved run is its identity.
         self.pr['checks'][0]['conclusion'] = 'FAILURE'
         self.threads = self.threads[1:]
         runs = self.dir / 'runs.json'
         self.env['LAUNCH_FLEET_RUNS'] = str(runs)
         runs.write_text(json.dumps({'repo': 'example/public', 'runs': {'12': {'host': 'local', 'run': 'run-0a1b'}}}))
         self.assertEqual(self.run_fleet('wake', '12'), f'CI failed #31 for #12 at {SHA}: tell its builder, thread run:12\n')
-        runs.write_text(json.dumps({'repo': 'example/other', 'runs': {}}))  # not this repository's: trust no run
+        runs.write_text(json.dumps({'repo': 'example/other', 'runs': {}}))
         self.assertEqual(self.run_fleet('wake', '12'), 'look #12: the private runs file is unreadable\n')
-        # R2: a wake that did not restore the private run map says so, rather than a bare thread miss.
         runs.unlink()
         self.assertEqual(self.run_fleet('wake', '12'), 'look #12: the private run map LAUNCH_FLEET_RUNS was not '
                                                        'restored from the private state\n')
@@ -95,6 +91,83 @@ class Fleet(unittest.TestCase):
     def test_builder_found_by_title_and_checked_branch(self):
         self.pr['checks'][0]['conclusion'] = 'FAILURE'
         self.assertEqual(self.run_fleet('wake', '12'), f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')
+
+    def test_builder_found_through_a_local_bare_list_or_a_cloud_children_answer_without_include_hidden(self):
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        for cli in ('local', 'cloud'):
+            with self.subTest(cli=cli):
+                self.env['FAKE_ROOM_CLI'] = cli
+                self.assertEqual(self.run_fleet('wake', '12'),
+                                 f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')
+
+    def test_a_cloud_answer_without_a_thread_list_is_out_of_reach(self):
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        self.env['FAKE_ROOM_CLI'] = 'cloud'
+        for threads in ({'id': 'thr_synbuilder'}, 'thr_synbuilder', [{'title': '#12: Synthetic'}]):
+            with self.subTest(threads=threads):
+                self.threads = threads
+                self.assertEqual(self.run_fleet('wake', '12'), 'look #12: thread discovery is out of reach\n')
+
+    def test_driver_review_rechecks_nudges_and_archives_the_pull_request_run(self):
+        runs = self.dir / 'runs.json'
+        self.env['LAUNCH_FLEET_RUNS'] = str(runs)
+        runs.write_text(json.dumps({'repo': 'example/public', 'runs': {
+            '12': {'host': 'local', 'run': 'builder-run'},
+            '31': {'host': 'local', 'run': 'reviewer-run'},
+        }}))
+        self.threads = []
+        self.say(f'review started {SHA}\nDriver review: other-family')
+        self.pr['head'] = NEW
+        self.assertEqual(self.run_fleet('wake', '12'),
+                         f're-check #31 for #12 at {NEW}: tell its reviewer, thread run:31\n')
+        self.say('re-check sent ' + NEW, 3102, '11:15')
+        self.assertEqual(self.run_fleet('wake', '12'),
+                         f'check review #31 for #12 at {NEW}: no verdict 30 minutes after '
+                         f'"re-check sent {NEW}"; read thread run:31 and tell it again (its record: comment 3102)\n')
+        self.say('review told again ' + NEW, 3103, '11:20')
+        self.assertEqual(self.run_fleet('wake', '12'),
+                         f'check review #31 for #12 at {NEW}: still no verdict 30 minutes after it was told again; '
+                         'archive thread run:31 and record review given up (its record: comment 3102)\n')
+        self.issue(12)['state'] = 'CLOSED'
+        self.pr.update(state='MERGED', mergedAt='2026-11-01T11:58:00Z')
+        self.assertEqual(self.run_fleet('wake', '12'), 'archive #12: closed; archive run:12, run:31\n')
+
+    def test_new_fleet_can_wake_a_driver_review_started_by_its_predecessor(self):
+        runs = self.dir / 'runs.json'
+        self.env['LAUNCH_FLEET_RUNS'] = str(runs)
+        runs.write_text(json.dumps({'repo': 'example/public', 'runs': {
+            '12': {'host': 'local', 'run': 'builder-run'},
+            '31': {'host': 'local', 'run': 'reviewer-run'},
+        }}))
+        self.threads = []
+        self.issue(10)['comments'].append(dict(id=1002, at='2026-11-01T11:15:00Z',
+                                               body='launch-fleet: fleet active, loop fleet-10'))
+        self.say(f'review started {SHA}\nDriver review: other-family')
+        for head, expected in (
+            (SHA, f'check review #31 for #12 at {SHA}: no verdict 30 minutes after "review started {SHA}"; '
+                  'read thread run:31 and tell it again (its record: comment 3101)'),
+            (NEW, f're-check #31 for #12 at {NEW}: tell its reviewer, thread run:31'),
+        ):
+            with self.subTest(head=head):
+                self.pr['head'] = head
+                lines = [line for line in self.run_fleet('spec', '10').splitlines() if '#31 for #12' in line]
+                self.assertEqual(lines, [expected])
+
+    def test_stopped_driver_review_cannot_borrow_a_replacements_run(self):
+        runs = self.dir / 'runs.json'
+        self.env['LAUNCH_FLEET_RUNS'] = str(runs)
+        self.threads = []
+        self.say(f'review given up {SHA}: no verdict\nDriver review: other-family')
+        self.say(f'review told again {SHA}', 3102, '11:20')
+        self.say(f'review started {NEW}\nDriver review: same-family', 3103, '11:30')
+        runs.write_text(json.dumps({'repo': 'example/public', 'runs': {
+            '12': {'host': 'local', 'run': 'builder-run'},
+            '31': {'host': 'local', 'run': 'replacement-run'},
+        }}))
+        self.pr['head'] = NEW
+        self.assertEqual(self.run_fleet('wake', '12'),
+                         f'check review #31 for #12 at {NEW}: no verdict 30 minutes after '
+                         f'"review started {NEW}"; read thread run:31 and tell it again (its record: comment 3103)\n')
 
     def test_recheck_finds_original_reviewer(self):
         for private, suffix in [(False, ''), (True, ''),
@@ -139,8 +212,6 @@ class Fleet(unittest.TestCase):
                 self.assertNotIn(THREAD, out)
 
     def test_edited_give_up_keeps_retired_identity_for_closure_only(self):
-        # The start claim can be edited at B after starting at A. A replacement
-        # may also start at B, overwriting the commit alias but never the claim.
         for replacement in (SHA, NEW):
             for discovery in (True, False):
                 with self.subTest(replacement=replacement, discovery=discovery):
@@ -254,6 +325,20 @@ class Fleet(unittest.TestCase):
         self.assertEqual(self.run_fleet('claim', '12', '1203'), 'go #12\n')
 
 
+    def test_long_form_resume_claim_keeps_its_private_thread(self):
+        outs = []
+        for ref in ('#11', 'Example/Public#11'):
+            with self.subTest(ref=ref):
+                self.issue(12)['comments'] = self.issue(12)['comments'][:1] + [
+                    dict(id=1202, at='2026-11-01T11:00:00Z', body='launch-fleet: waiting for #11'),
+                    dict(id=1203, at='2026-11-01T11:40:00Z', body=f'launch-fleet: resume starting 1202 for {ref}')]
+                path = self.dir / 'private.json'
+                path.write_text(json.dumps({'repo': self.world['repo'], 'threads': {'comment:1203': THREAD}}))
+                self.env['LAUNCH_FLEET_STATE'] = str(path)
+                outs.append(self.run_fleet('wake', '12'))
+        self.assertIn('reconcile resume #12: wait comment 1202 for #11; reconcile comment 1203', outs[0])
+        self.assertEqual(outs[1], outs[0])
+
 def load(path, name):
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, path)
@@ -263,7 +348,6 @@ def load(path, name):
 
 
 class OpsPass(unittest.TestCase):
-    """#1456: finite primary/standby passes on the real record reader and OB3 boundary."""
     ACTIONS = ('builder_start', 'review_start', 'delivery', 'hold_release', 'merge')
 
     @classmethod
@@ -273,8 +357,8 @@ class OpsPass(unittest.TestCase):
         cls.examples = json.loads((HERE.parent / 'test/ops-protocol/examples.json').read_text())
 
     def setUp(self):
-        self.refs = {}       # the synthetic create-if-absent reference store
-        self.called = []     # the effect boundary must never be called
+        self.refs = {}
+        self.called = []
         self.generations = [self.generation(1, 'primary')]
 
     def generation(self, n, owner):
@@ -315,7 +399,6 @@ class OpsPass(unittest.TestCase):
         return [(r['state'], r['reason']) for r in results]
 
     def take_over(self):
-        # The standby admits generation 2 through OB3's one record-storage attempt.
         claim = self.generation(2, 'standby')
         snapshot = self.snapshot(1, 'primary')
         self.assertEqual(self.effects.admit_claim(claim, snapshot, 'e' * 40, self.create), 'admitted')
@@ -327,14 +410,10 @@ class OpsPass(unittest.TestCase):
         primary = [self.operation(a, 1, 'primary') for a in self.ACTIONS]
         self.assertEqual(self.states(self.run_pass(1, 'primary', primary)), [('disabled', 'unfenced_effect')] * 5)
         self.take_over()
-        # The old primary resumes after the takeover: refused before any effect,
-        # release and merge paths included.
         self.assertEqual(self.states(self.run_pass(1, 'primary', primary)), [('refused', 'stale_claim')] * 5)
         standby = [self.operation(a, 2, 'standby') for a in self.ACTIONS]
         self.assertEqual(self.states(self.run_pass(2, 'standby', standby)), [('disabled', 'unfenced_effect')] * 5)
-        # A pass claiming the current number under another owner is stale too.
         self.assertEqual(self.states(self.run_pass(2, 'primary', standby)), [('refused', 'stale_claim')] * 5)
-        # A snapshot read before the takeover cannot carry the new owner's work.
         stale_read = self.operation('builder_start', 2, 'standby')
         stale_read['snapshot'] = dict(stale_read['snapshot'], generation=1, owner='primary')
         self.assertEqual(self.states(self.run_pass(2, 'standby', [stale_read])), [('refused', 'stale_claim')])
@@ -347,7 +426,6 @@ class OpsPass(unittest.TestCase):
         results = self.run_pass(1, 'primary', [project, spec])
         self.assertEqual(self.states(results), [('disabled', 'unfenced_effect'), ('duplicate', 'record_only')])
         self.assertEqual(len({r['operation_key'] for r in results}), 1)
-        # Across passes, both paths name one claim ref: the second admission is a duplicate.
         self.assertEqual(project['claim']['ref'], spec['claim']['ref'])
         for path, want in ((project, 'admitted'), (spec, 'duplicate')):
             admit = self.effects.admit_claim(path['claim'], path['snapshot'], 'e' * 40, self.create)
@@ -360,7 +438,6 @@ class OpsPass(unittest.TestCase):
         paused['snapshot']['paused'] = True
         uncertain = self.operation('builder_start', 2, 'standby', ticket=9002)
         uncertain['snapshot'] = dict(uncertain['snapshot'], ticket=9002)
-        # The old primary's start was accepted by transport but never completed.
         transport = dict(self.examples['transport'], intent_id=uncertain['intent']['id'], ticket=9002,
                          operation_key=uncertain['intent']['operation_key'], state='accepted', generation=1)
         uncertain['history'] = [transport]
@@ -402,12 +479,10 @@ class OpsPass(unittest.TestCase):
                     operation_key=operation['intent']['operation_key'], state='accepted', generation=generation)
 
     def test_r6_uncertainty_wins_over_stale_and_duplicate_classification(self):
-        # The old primary's start was accepted, then the standby took over.
         old = self.operation('builder_start', 1, 'primary')
         old['history'] = [self.accepted(old)]
         self.take_over()
         self.assertEqual(self.states(self.run_pass(1, 'primary', [old])), [('reconcile', 'uncertain_outcome')])
-        # A later copy of one operation carries the uncertainty: it is not a duplicate.
         first = self.operation('review_start', 2, 'standby')
         second = self.operation('review_start', 2, 'standby')
         second['history'] = [self.accepted(second, 2)]
@@ -421,22 +496,18 @@ class OpsPass(unittest.TestCase):
         good = self.operation('delivery', 1, 'primary')
         self.assertEqual(self.states(self.run_pass(1, 'primary', [bad, good])),
                          [('refused', 'incomplete_read'), ('disabled', 'unfenced_effect')])
-        # A well-formed claim bound to another intent is refused by OB3 and consumes nothing either.
         mismatched = self.operation('delivery', 1, 'primary')
         mismatched['claim'] = dict(mismatched['claim'], intent_id='intent-other')
         self.assertEqual(self.states(self.run_pass(1, 'primary', [mismatched, good])),
                          [('refused', 'stale_binding'), ('disabled', 'unfenced_effect')])
 
     def test_r6_stale_or_mismatched_first_copy_never_hides_current_work(self):
-        # Review round 2: only a valid, current copy consumes its key.
         self.take_over()
         stale = self.operation('delivery', 1, 'primary')
         current = self.operation('delivery', 2, 'standby')
         self.assertEqual(stale['intent']['operation_key'], current['intent']['operation_key'])
         self.assertEqual(self.states(self.run_pass(2, 'standby', [stale, current])),
                          [('refused', 'stale_claim'), ('disabled', 'unfenced_effect')])
-        # A mismatched copy carrying the operation's uncertainty: the uncertainty
-        # stays, on the first valid copy, and the mismatched copy consumes nothing.
         mismatched = self.operation('review_start', 2, 'standby')
         mismatched['claim'] = dict(mismatched['claim'], intent_id='intent-other')
         mismatched['history'] = [self.accepted(mismatched, 2)]
@@ -446,8 +517,6 @@ class OpsPass(unittest.TestCase):
         self.assertEqual(self.called, [])
 
     def test_r6_stale_claim_with_a_current_snapshot_consumes_nothing(self):
-        # Review round 3: a generation-1 claim paired with the current snapshot is
-        # refused by OB3 and must not hide the valid generation-2 copy.
         self.take_over()
         stale = self.operation('delivery', 1, 'primary')
         current = self.operation('delivery', 2, 'standby')
@@ -460,11 +529,10 @@ class OpsPass(unittest.TestCase):
         saved = {'builder:12': 'thr_synbuilder', f'review:31:{SHA}': THREAD}
         threads = [dict(id='thr_synbuilder', title='#12: Synthetic', branch='room/12-synthetic'),
                    dict(id=THREAD, title='Review #31 at ' + SHA[:8], branch=None)]
-        for discovered in (threads, None):  # the standby may not reach CloudRoom discovery
+        for discovered in (threads, None):
             self.assertEqual(self.records.builder_thread(12, 'room/12-synthetic', discovered, saved),
                              ('thr_synbuilder', None))
             self.assertEqual(self.records.reviewer_thread(31, SHA, discovered, saved), (THREAD, None))
-        # Without the private map and without discovery it names no replacement builder.
         self.assertEqual(self.records.builder_thread(12, 'room/12-synthetic', None, {}),
                          (None, 'thread discovery is out of reach'))
 
@@ -484,7 +552,6 @@ class OpsPass(unittest.TestCase):
 
 
 def wake_steps():
-    """SKILL.md's "Each wake" steps in order, each with its indented continuation."""
     section = (HERE.parent / 'SKILL.md').read_text().split('\n## Each wake\n')[1].split('\n| Line |')[0]
     steps = []
     for line in section.splitlines():
@@ -502,12 +569,8 @@ def step_with(text):
 
 
 class Dispatcher(unittest.TestCase):
-    """The wake's dispatcher text (#1164 WS27), read as an agent follows it."""
 
     def test_a_nightly_only_tick_reaches_its_alert_and_the_status_check_before_any_no_work_exit(self):
-        # catches: a safety-net tick whose only line is `nightly red` calling `fleet.sh wake` with
-        # no numbers (a usage refusal) or ending "nothing due" before the alert and the status
-        # check run, so a red nightly on a quiet day never reaches the orchestrator (#1587).
         r = subprocess.run(['sh', str(HERE / 'fleet.sh'), 'wake'], capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 2, 'fleet.sh wake with no numbers is a usage refusal')
         tick = next(x for x in wake_steps()[step_with('Read what is due')].splitlines() if 'safety-net tick' in x)
@@ -519,9 +582,6 @@ class Dispatcher(unittest.TestCase):
         self.assertGreater(exit_step, step_with('**Do every line**'), 'the no-work exit comes before the due lines')
 
     def test_only_the_claimable_lines_claim_and_merge_and_archive_keep_their_own_guards(self):
-        # catches: the dispatcher requiring `fleet.sh claim` -> `go` before every line, though the
-        # claim checker admits only builder-start, review-start, resume and release claims, so an
-        # approved green merge or an archive after closure can never run (#1604).
         step = wake_steps()[step_with('fleet.sh claim')]
         sentence = next(x for x in re.split(r'(?<=\.) ', step) if 'fleet.sh claim' in x)
         scoped = set(re.findall(r'`(start|review|resume|release|merge|archive|nightly red|re-test|CI failed)\b[^`]*`',
@@ -532,10 +592,6 @@ class Dispatcher(unittest.TestCase):
 
 
     def test_the_archive_settles_with_the_flow_inputs_and_never_archives_on_a_refused_settlement(self):
-        # catches: the archive row's `merge.py settle` dropping the project's private FM4 flow inputs
-        # that `merge` passes after `--`, so a queued merge's cost is posted with unknown role totals a
-        # later settle cannot correct (#115 R1); and archiving on a `refused:` settle, after which
-        # fleet.sh prints no archive line and the owed cost has no retry (#115 R2).
         lines = (HERE.parent / 'SKILL.md').read_text().splitlines()
         row = next(x for x in lines if x.startswith('| `archive #N` |'))
         merge = next(x for x in lines if x.startswith('4. **Merge:**'))

@@ -1,4 +1,3 @@
-"""handoff.py's command seam, with a synthetic, recording gh only (#1186)."""
 import base64
 import json
 import os
@@ -26,7 +25,6 @@ if answer == 'FAIL':
     sys.exit(1)
 print(answer if isinstance(answer, str) else json.dumps(answer))
 '''
-# Synthetic page: invented fleets, tickets and decisions, no live values.
 GOOD = '''# Orchestrator handoff
 
 **Snapshot: 2026-01-02 03:04 UTC, plan graph approved on #10.** Rules in AGENTS.md; status in STATUS.md. A new orchestrator reads this first and checks each line before acting on it.
@@ -84,8 +82,6 @@ class Handoff(unittest.TestCase):
                      if (root / 'calls').exists() else [])
             return result, calls
 
-    # ---- private: the write target must be a verified private repository ----
-
     def test_private_target_is_confirmed_by_one_get(self):
         result, calls = self.run_helper('private', REPO, answers={f'repos/{REPO}': repo()})
         self.assertEqual((result.returncode, result.stdout), (0, f'private ok: {REPO}\n'))
@@ -111,8 +107,6 @@ class Handoff(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(calls, [])
 
-    # ---- check: one page, five sections, nothing secret ----
-
     def test_the_documented_page_passes(self):
         result, calls = self.run_helper('check', 'page.md', files={'page.md': GOOD})
         self.assertEqual((result.returncode, result.stdout), (0, 'page ok\n'))
@@ -136,7 +130,7 @@ class Handoff(unittest.TestCase):
 
     def test_secrets_and_thread_ids_are_refused_without_echoing_them(self):
         secrets = ['ghp_' + 'A1b2C3d4' * 5, 'github_pat_' + 'x1Y2' * 8, 'owner@example.com',
-                   'Bearer ' + 'abcDEF123456' * 2, 'thr_abc123def', '-----BEGIN OPENSSH PRIVATE KEY-----']
+                   'Bearer ' + 'abcDEF123456' * 2, 'thr' + '_synabc123def', '-----BEGIN OPENSSH PRIVATE KEY-----']
         for secret in secrets:
             with self.subTest(secret=secret[:6]):
                 page = GOOD.replace('## Loops\n\nNone.', f'## Loops\n\nWatcher {secret} runs hourly.')
@@ -149,8 +143,6 @@ class Handoff(unittest.TestCase):
         result, _ = self.run_helper('check', 'missing.md')
         self.assertEqual(result.returncode, 2)
         self.assertNotIn('page ok', result.stdout)
-
-    # ---- landed: the private default branch holds exactly this page ----
 
     def answers(self, text=GOOD, private=True, branch='main'):
         return {f'repos/{REPO}': repo(private, branch),

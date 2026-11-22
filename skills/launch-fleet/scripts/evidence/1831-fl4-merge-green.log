@@ -1,0 +1,5 @@
+python3 -I skills/launch-fleet/scripts/test-merge.py (after merging main with FL4 #1848)
+Ran 53 tests in 38.902s
+OK
+python3 -I check/standalone.py --tree .: exit 0
+scratch run with the hold removed: test_a_held_final_merge_tells_no_report_it_landed FAILED (it merged and posted the landed comment)

@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""The setup doctor (#1449) on a synthetic setup: each planted problem prints
-its own line and fixing command, in the doctor's order; a clean setup prints
-one all-clear line; no login or token passes through it.
-
-The fakes stand in only for what lives outside WizSkills: gh, the installed
-build's setup.py (its runtime_pin) and the OpenWiz checkout's driver kit (its
-Kit.version). The doctor's own reuse of settings.py, status.py and the setup
-store's codes runs for real.
-"""
 import argparse
 import json
 import os
@@ -30,7 +21,6 @@ FLEET = ('# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- |
 TRIAGE = ('# Triage labels\n\n## Labels\n\n| Role | Label here | Meaning |\n| --- | --- | --- |\n'
           + ''.join('| `%s` | `%s` | Synthetic |\n' % (l, l) for l in LABELS))
 
-# gh: answers the doctor's three reads from files in $FAKE_DIR, logs each argv.
 FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, sys
 d = os.environ['FAKE_DIR']
@@ -51,7 +41,6 @@ if a[:1] == ['api'] and 'graphql' in a:
 sys.stderr.write('synthetic gh: refused %r\n' % a); sys.exit(9)
 '''
 
-# The build's setup.py: the real runtime_pin's shape (openwiz-build.txt and the packaged skills).
 FAKE_SETUP = r'''from pathlib import Path
 SKILLS = ('setup', 'grill', 'plan-graph', 'launch-fleet')
 def runtime_pin(runtime):
@@ -71,9 +60,6 @@ if __name__ == '__main__':  # a printed command's argv, as setup.py would get it
     open(os.path.join(os.environ['FAKE_DIR'], 'setup.log'), 'w').write(json.dumps(sys.argv[1:]))
 '''
 
-# The checkout's driver kit: Kit(args, ticket).version() -> ('pass'|'fail', what), as kit.py's.
-# Like kit.py's call(), it adds to Kit.leaks when the driver's output holds a credential shape.
-# Like kit.py, it runs the driver with Kit.env, which starts as a copy of the kit's whole environment.
 FAKE_KIT = r'''import json, os, re, subprocess
 class Kit:
     def __init__(self, args, ticket):
@@ -97,7 +83,7 @@ class Kit:
 GOOD_DRIVER = ('#!/bin/sh\necho \'{"driver": "synthetic", "records": ["openwiz:records v1"], '
                '"can": ["start", "wake", "stop"]}\'\n')
 BAD_DRIVER = '#!/bin/sh\necho \'{"error": "synthetic driver refuses version"}\'\nexit 1\n'
-LEAK = 'ghp_' + 'L' * 36  # a credential shape only the driver knows, never the doctor's environment
+LEAK = 'ghp_' + 'L' * 36
 LEAKY_DRIVER = '#!/bin/sh\necho \'{"error": "synthetic refusal %s"}\'\nexit 1\n' % LEAK
 V2_DRIVER = ('#!/bin/sh\necho \'{"driver": "synthetic", "records": ["openwiz:records v2"], '
              '"can": ["start", "wake", "stop"]}\'\n')
@@ -110,7 +96,6 @@ def write(path, text, mode=0o644):
 
 
 class Setup:
-    """One clean synthetic setup; each test plants one problem in it."""
 
     def __init__(self, root):
         self.root = root
@@ -157,7 +142,6 @@ class Setup:
 
 
 def prepare_step(setup):
-    """The fix that sends the person to the install skill's Prepare step."""
     return ("Fix: prepare setup for %s with the install skill's Prepare step (2. Connect; it asks for the CloudRoom "
             'project, operator, service issue, answer thread, harness, model and effort), then python3 -I -B '
             '%s/runtime/setup/setup.py check --state-dir %s' % (REPO, setup.build, setup.state))
@@ -177,32 +161,27 @@ class Doctor(unittest.TestCase):
         return result.stdout.splitlines()
 
     def only(self, result):
-        """The one problem line of a run with one planted problem."""
         lines = self.lines(result)
         self.assertEqual(lines[-1], 'Doctor: 1 problem.', result.stdout)
         self.assertEqual(len(lines), 2, result.stdout)
         return lines[0]
 
-    # catches: a clean setup that still prints noise, or no single all-clear line.
     def test_clean_setup_prints_one_all_clear_line(self):
         self.assertEqual(self.lines(self.s.run(), 0),
                          ['Doctor: all clear: labels, App, record author, harness listed (its sign-in is not provable yet), '
                           'driver and skills.'])
 
-    # catches: a clean setup that reads as clear without saying the driver went unchecked.
     def test_no_driver_is_said_on_the_all_clear_line(self):
         self.assertEqual(self.lines(self.s.run(driver=False), 0),
                          ['Doctor: all clear: labels, App, record author, harness listed (its sign-in is not provable yet) '
                           'and skills; no driver given.'])
 
-    # catches: a missing tracker label passing, or a fix that isn't the exact gh command.
     def test_missing_label(self):
         write(self.s.fake / 'labels.json', json.dumps([{'name': l} for l in LABELS if l != 'needs-info']))
         self.assertEqual(self.only(self.s.run()),
                          '1. Labels: needs-info is not in the tracker. Fix: gh label create needs-info --repo %s'
                          % REPO)
 
-    # catches: a printed fix a shell splits or expands: run it through sh and read the argv gh gets.
     def test_printed_label_fix_runs_as_printed(self):
         odd = "needs info $HOME 'x'"
         write(self.s.checkout / 'docs/agents/triage-labels.md', TRIAGE.replace('| `needs-info` | `needs-info` |',
@@ -214,29 +193,26 @@ class Doctor(unittest.TestCase):
         subprocess.run(['sh', '-c', fix], env=env, capture_output=True)
         self.assertEqual(self.s.gh_calls()[-1], ['label', 'create', odd, '--repo', REPO])
 
-    # catches: an unmapped triage role (settings.py's own check) going unreported.
     def test_unmapped_label_role(self):
         write(self.s.checkout / 'docs/agents/triage-labels.md', TRIAGE.replace('| `wontfix` | `wontfix` | Synthetic |\n', ''))
         self.assertEqual(self.only(self.s.run()),
                          '1. Labels: triage-labels.md: wontfix: mapped 0 times. '
                          'Fix: run the setup skill for %s, then the doctor again' % REPO)
 
-    # catches: an unreadable label list read as "no problem", or a sign-in it tries itself.
     def test_labels_unreadable_prints_the_sign_in_command(self):
         (self.s.fake / 'labels.json').unlink()
         self.assertEqual(self.only(self.s.run()),
                          '1. Labels: gh could not list the labels of %s. Fix: gh auth login' % REPO)
 
-    # catches: an App setup's check found missing passing as installed.
     def test_app_not_installed(self):
         self.s.observations['github_app'] = 'app_missing'
         self.s.save()
         self.assertEqual(self.only(self.s.run()),
-                         '2. GitHub App: not verified (app_missing). Fix: install OpenWiz\'s GitHub App on %s '
-                         'from the setup page, then python3 -I -B %s/runtime/setup/setup.py check --state-dir %s'
-                         % (REPO, self.s.build, self.s.state))
+                         '2. GitHub App: not verified (app_missing). Fix: set up OpenWiz\'s GitHub App for %s with '
+                         '%s/runtime/github-app/setup.py, as the setup skill\'s "The App" says, then '
+                         'python3 -I -B %s/runtime/setup/setup.py check --state-dir %s'
+                         % (REPO, self.s.build, self.s.build, self.s.state))
 
-    # catches: an old App check counted as current.
     def test_app_check_out_of_date(self):
         self.s.save(at=int(time.time() * 1000) - 2 * 60 * 60 * 1000)
         lines = self.lines(self.s.run())
@@ -244,7 +220,6 @@ class Doctor(unittest.TestCase):
         self.assertEqual(lines, ['2. GitHub App: its last check is out of date. ' + fix,
                                  '4. Harness: its last check is out of date. ' + fix, 'Doctor: 2 problems.'])
 
-    # catches: an explicit App skip reported as a missing App (first_fleet's rule).
     def test_app_skip_is_not_a_problem(self):
         self.s.observations['github_app'] = 'app_missing'
         self.s.identity = {'selected': 'personal_login', 'app_choice': 'skip', 'acting_login': 'synthetic-owner',
@@ -252,8 +227,6 @@ class Doctor(unittest.TestCase):
         self.s.save()
         self.assertEqual(self.s.run().returncode, 0)
 
-    # catches: setup prepared for another repository read as this one's evidence, or a prepare fix
-    # missing a flag setup.py prepare requires (it exits 2 as printed; #1578 item 4).
     def test_setup_for_another_repository(self):
         self.s.project['repository'] = 'synthetic-owner/other'
         self.s.save()
@@ -267,7 +240,6 @@ class Doctor(unittest.TestCase):
                                  '4. Harness: setup is prepared for synthetic-owner/other. ' + fix,
                                  'Doctor: 2 problems.'])
 
-    # catches: a saved prepare value a shell splits or expands: run the fix through sh, read setup.py's argv.
     def test_printed_prepare_fix_runs_as_printed(self):
         self.s.project.update(repository='synthetic-owner/other', operator="Syn Owner $HOME 'x'")
         self.s.save()
@@ -279,8 +251,6 @@ class Doctor(unittest.TestCase):
                           "--operator=Syn Owner $HOME 'x'", '--service-issue=7', '--answer-thread=syn-thread',
                           '--harness=syn-harness', '--model=syn-model', '--effort=high'])
 
-    # catches: a saved value starting with a dash read by argparse as an option, so the printed preview
-    # exits 2 (#65 R2). The parser has setup.py prepare's required flags.
     def test_dash_leading_saved_value_stays_bound_to_its_flag(self):
         self.s.project.update(repository='synthetic-owner/other', operator='-alex')
         self.s.save()
@@ -292,7 +262,6 @@ class Doctor(unittest.TestCase):
         parser.add_argument('--service-issue', type=int, required=True)
         self.assertEqual(parser.parse_args(shlex.split(fix)[5:]).operator, '-alex')
 
-    # catches: a credential-shaped saved value repeated in the printed preview (#65 R3).
     def test_credential_shaped_saved_value_is_never_printed(self):
         fix = prepare_step(self.s)
         for value in (LEAK, 'synthetic token=abcdefgh12', 'Q7x' * 10):
@@ -304,7 +273,6 @@ class Doctor(unittest.TestCase):
                              ['2. GitHub App: setup is prepared for synthetic-owner/other. ' + fix,
                               '4. Harness: setup is prepared for synthetic-owner/other. ' + fix, 'Doctor: 2 problems.'])
 
-    # catches: a prepare fix with "..." for the values setup asks the person (it exits 2 as printed; #1578 item 4).
     def test_no_prepared_project_names_the_prepare_step(self):
         self.s.project = None
         self.s.save()
@@ -313,14 +281,12 @@ class Doctor(unittest.TestCase):
         self.assertEqual(lines, ['2. GitHub App: setup has no prepared project. ' + fix,
                                  '4. Harness: setup has no prepared project. ' + fix, 'Doctor: 2 problems.'])
 
-    # catches: the credential guard refusing an ordinary long setting, so a normal project loses its preview.
     def test_long_ordinary_setting_still_gets_the_preview(self):
         self.s.project.update(repository='synthetic-owner/other', model='syn-model-2026-11-20-long-name',
                               project='SYNPROJECT0123456789ABCDEFGH')
         self.s.save()
         self.assertIn(' --model=syn-model-2026-11-20-long-name ', self.lines(self.s.run())[0])
 
-    # catches: a credential-shaped saved setting repeated on the harness line (#65 R3, same cause).
     def test_credential_shaped_setting_is_not_named_on_the_harness_line(self):
         self.s.project['model'] = LEAK
         self.s.observations['harness'] = 'harness_unavailable'
@@ -330,7 +296,6 @@ class Doctor(unittest.TestCase):
         self.assertTrue(line.startswith('4. Harness: the saved harness, model or effort is not offered '
                                         '(harness_unavailable). Fix: '), line)
 
-    # catches: a first run with no state file told only to check, which can't select a project (#65 R1).
     def test_setup_not_run_yet_names_the_prepare_step(self):
         (self.s.state / 'setup/state.json').unlink()
         lines = self.lines(self.s.run())
@@ -338,7 +303,6 @@ class Doctor(unittest.TestCase):
         self.assertEqual(lines, ['2. GitHub App: setup has not run yet. ' + fix,
                                  '4. Harness: setup has not run yet. ' + fix, 'Doctor: 2 problems.'])
 
-    # catches: an App installed on all repositories told to install the App (#1578 item 2).
     def test_app_on_all_repositories_is_told_to_select_repositories(self):
         self.s.observations['github_app'] = 'app_all_repositories'
         self.s.save()
@@ -349,21 +313,17 @@ class Doctor(unittest.TestCase):
                          'Apps), then python3 -I -B %s/runtime/setup/setup.py check --state-dir %s'
                          % (REPO, self.s.build, self.s.state))
 
-    # catches: a writer who isn't a record author passing (status.py's R4 check).
     def test_acting_login_not_a_record_author(self):
         write(self.s.fake / 'viewer.json', json.dumps({'data': {'viewer': {'login': 'synthetic-stranger'}}}))
         self.assertEqual(self.only(self.s.run()),
                          '3. Record author: synthetic-stranger is not a record author (synthetic-factory[bot], '
                          'synthetic-owner). Fix: gh auth login, as one of them')
 
-    # catches: an unnamed acting login read as an author.
     def test_acting_login_unreadable(self):
         (self.s.fake / 'viewer.json').unlink()
         self.assertEqual(self.only(self.s.run()),
                          '3. Record author: gh could not name the acting login. Fix: gh auth login')
 
-    # catches: a saved harness, model or effort that isn't offered passing, or told to sign in,
-    # which leaves the selection in place (#1578 item 3).
     def test_harness_selection_not_offered(self):
         self.s.observations['harness'] = 'harness_unavailable'
         self.s.save()
@@ -373,8 +333,6 @@ class Doctor(unittest.TestCase):
                          "again with them (the install skill's Prepare step, 2. Connect), then python3 -I -B "
                          '%s/runtime/setup/setup.py check --state-dir %s' % (self.s.build, self.s.state))
 
-    # catches: a driver that refuses version passing, or an unflagged refusal withheld (the driver
-    # kit's version check); a separate driver is updated or replaced, not the checkout (#1578 item 5).
     def test_driver_does_not_answer_version(self):
         write(self.s.driver, BAD_DRIVER, 0o755)
         self.assertEqual(self.only(self.s.run()),
@@ -382,14 +340,11 @@ class Doctor(unittest.TestCase):
                          'Fix: update or replace the driver at %s so it answers version for this OpenWiz, '
                          'then the doctor again' % (self.s.driver, self.s.driver))
 
-    # catches: the doctor's tokens reaching the driver it probes (#65 R4): this driver answers only when
-    # neither the doctor's GH_TOKEN nor its FAKE_DIR is in its environment.
     def test_driver_gets_no_doctor_environment(self):
         write(self.s.driver, '#!/bin/sh\nif [ -n "$GH_TOKEN$FAKE_DIR" ]; then echo \'{"error": "synthetic: '
               'inherited"}\'; exit 1; fi\n' + GOOD_DRIVER.split('\n', 1)[1], 0o755)
         self.assertEqual(self.lines(self.s.run(), 0)[0][:19], 'Doctor: all clear: ')
 
-    # catches: a separate driver advertising only openwiz:records v2 told to pull OpenWiz (#1578 item 5).
     def test_separate_incompatible_driver_is_told_to_update_that_driver(self):
         write(self.s.driver, V2_DRIVER, 0o755)
         self.assertEqual(self.only(self.s.run()),
@@ -397,7 +352,6 @@ class Doctor(unittest.TestCase):
                          'Fix: update or replace the driver at %s so it answers version for this OpenWiz, '
                          'then the doctor again' % (self.s.driver, self.s.driver))
 
-    # catches: the checkout's own driver told to do anything but update the checkout.
     def test_checkout_driver_is_told_to_pull_openwiz(self):
         self.s.driver = self.s.openwiz / 'adapters/driver'
         write(self.s.driver, V2_DRIVER, 0o755)
@@ -405,7 +359,6 @@ class Doctor(unittest.TestCase):
                          '5. Driver: %s does not answer version: it names no openwiz:records v1. '
                          'Fix: git -C %s pull --ff-only, then the doctor again' % (self.s.driver, self.s.openwiz))
 
-    # catches: a driver that answers version but prints a credential passing as clear (#1578 item 1).
     def test_flagged_driver_answer_is_reported_and_withheld(self):
         write(self.s.driver, GOOD_DRIVER.replace("echo '", "echo %s >&2\necho '" % LEAK, 1), 0o755)
         result = self.s.run()
@@ -416,8 +369,6 @@ class Doctor(unittest.TestCase):
                          'read it; then update or replace the driver at %s so it answers version for this OpenWiz, '
                          'then the doctor again' % (self.s.driver, self.s.driver, self.s.driver))
 
-    # catches: a driver refusal the kit flags as holding a credential printed for the agent to relay
-    # (#1578 item 1).
     def test_flagged_driver_refusal_is_withheld(self):
         write(self.s.driver, LEAKY_DRIVER, 0o755)
         result = self.s.run()
@@ -428,7 +379,6 @@ class Doctor(unittest.TestCase):
                          'through an agent, to read it; then update or replace the driver at %s so it answers version '
                          'for this OpenWiz, then the doctor again' % (self.s.driver, self.s.driver, self.s.driver))
 
-    # catches: a build whose packaged skills are gone passing (setup.py's runtime_pin).
     def test_skills_not_installed(self):
         (self.s.build / 'runtime/skills/grill/SKILL.md').unlink()
         self.assertEqual(self.only(self.s.run()),
@@ -436,7 +386,6 @@ class Doctor(unittest.TestCase):
                          'install install --assets <download folder> --target <target> --root <root>'
                          % (self.s.build, self.s.openwiz))
 
-    # catches: problems printed out of order, or the first one hiding the rest.
     def test_every_problem_in_order(self):
         write(self.s.fake / 'labels.json', json.dumps([{'name': l} for l in LABELS if l != 'needs-info']))
         self.s.observations = {'github_app': 'app_missing', 'harness': 'harness_unavailable'}
@@ -447,7 +396,6 @@ class Doctor(unittest.TestCase):
         lines = self.lines(self.s.run())
         self.assertEqual([l.split('.')[0] for l in lines], ['1', '2', '3', '4', '5', '6', 'Doctor: 6 problems'])
 
-    # catches: the doctor signing in, minting a token or writing anything through gh.
     def test_gh_is_only_read(self):
         write(self.s.fake / 'viewer.json', json.dumps({'data': {'viewer': {'login': 'synthetic-stranger'}}}))
         self.s.run()
@@ -461,12 +409,248 @@ class Doctor(unittest.TestCase):
             else:
                 self.assertEqual(argv[:2], ['label', 'list'])
 
-    # catches: a doctor run that changes the setup store it reads.
     def test_setup_store_is_unchanged(self):
         before = (self.s.state / 'setup/state.json').read_bytes()
         self.s.run()
         self.assertEqual((self.s.state / 'setup/state.json').read_bytes(), before)
         self.assertEqual(sorted(p.name for p in (self.s.state / 'setup').iterdir()), ['state.json'])
+
+
+SKILL = Path(__file__).resolve().parents[1] / 'SKILL.md'
+LINE = 'main'
+PACKAGE = Path(__file__).resolve().parent / 'fixtures/openwiz-0.1.0-commands.json'
+BARE = {'install': 'tools/install/install', 'setup.py': 'runtime/setup/setup.py',
+        'github_login.py': 'runtime/setup/github_login.py', 'cloudroom.py': 'runtime/cloudroom/cloudroom.py',
+        'access.py': 'runtime/access/access.py', 'openwiz': 'openwiz'}
+
+
+def skill_commands(text):
+    import re
+    spans = []
+    for match in re.finditer(r'```[a-z]*\n(.*?)```|`([^`\n]+)`', text, re.S):
+        spans += match[1].split('\n') if match[1] is not None else [match[2]]
+    found = []
+    for span in spans:
+        words = [w.strip('"\'[]') for w in span.split()]
+        while words and (words[0] == 'python3' or words[0].startswith('-') or '=' in words[0]):
+            words.pop(0)
+        if not words or words[0].startswith('$') and '/' not in words[0]:
+            continue
+        head = words[0].replace('"$openwiz"', '').replace('$openwiz', '')
+        tool = next((t for t in BARE.values() if t != 'openwiz' and head.endswith(t)), None)
+        if tool is None and (head in BARE or head.endswith('/openwiz')):
+            tool = BARE.get(head, 'openwiz')
+        if tool is None:
+            continue
+        rest = words[1:]
+        sub = rest[0] if rest and not rest[0].startswith('-') and not rest[0].startswith('<') else ''
+        flags = sorted({w.split('=')[0].rstrip('.,;:)') for w in rest if w.startswith('--')} - {'--help'})
+        if sub or flags:
+            found.append((tool, sub, flags, span))
+    return found
+
+
+class SkillCommandsMatchPackage(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.package = json.loads(PACKAGE.read_text())['tools']
+        cls.commands = skill_commands(SKILL.read_text())
+
+    def test_every_named_command_is_in_the_package(self):
+        wrong = []
+        for tool, sub, flags, span in self.commands:
+            subs = self.package[tool]
+            if sub not in subs:
+                wrong.append('%s: no `%s` in 0.1.0 (%s)' % (span, sub, ', '.join(s or '(none)' for s in subs)))
+                continue
+            wrong += ['%s: 0.1.0 has no %s' % (span, f) for f in flags if f not in subs[sub]]
+        self.assertEqual(wrong, [])
+
+    def test_the_install_path_names_its_steps(self):
+        named = {(tool, sub) for tool, sub, _, _ in self.commands}
+        for step in [('tools/install/install', 'preflight'), ('tools/install/install', 'download'),
+                     ('tools/install/install', 'install'), ('tools/install/install', 'skills'),
+                     ('tools/install/install', 'status'), ('runtime/setup/setup.py', 'check'),
+                     ('runtime/setup/setup.py', 'prepare'), ('runtime/cloudroom/cloudroom.py', 'status'),
+                     ('runtime/cloudroom/cloudroom.py', 'install'), ('runtime/cloudroom/cloudroom.py', 'sign-in'),
+                     ('runtime/setup/github_login.py', 'sign-in'), ('openwiz', '')]:
+            self.assertIn(step, named)
+        self.assertTrue(any(t == 'openwiz' and s == '' and '--build-identity' in f
+                            for t, s, f, _ in self.commands), 'no `<root>/current/openwiz --build-identity`')
+
+    def test_skills_and_the_restart_come_after_setup_and_the_logins(self):
+        order = [(tool, sub) for tool, sub, _, _ in self.commands]
+        skills = order.index(('tools/install/install', 'skills'))
+        for step in [('runtime/setup/setup.py', 'check'), ('runtime/cloudroom/cloudroom.py', 'sign-in'),
+                     ('runtime/setup/github_login.py', 'sign-in')]:
+            self.assertLess(order.index(step), skills, step)
+        text = SKILL.read_text()
+        self.assertIn('is older than this one; if you are told to install again, follow this skill', text)
+        self.assertIn('https://github.com/openwizdev/WizSkills/blob/%s/skills/install/SKILL.md' % LINE, text)
+
+    def test_every_cloudroom_code_has_a_row(self):
+        rows = {code for line in SKILL.read_text().split('\n') if line.startswith('| `cloudroom_')
+                for code in __import__('re').findall(r'`(cloudroom_[a-z_]+)`', line.split(' | ')[0])}
+        self.assertEqual(sorted(set(json.loads(PACKAGE.read_text())['cloudroom_codes']) - rows), [])
+
+    def test_removal_names_each_entry_and_never_deletes_a_folder_whole(self):
+        text = SKILL.read_text()
+        removal = text[text.index('## Recovery and removal'):]
+        for name in json.loads(PACKAGE.read_text())['skills']:
+            self.assertIn('`%s`' % name, removal)
+        for entry in ('`current`', '`channel.json`', '`install.lock`', '`skills/`', '/setup/`', '/cloudroom/`',
+                      '`config.json`', '`app/`', '`state.json`', '`loops/`', '`clone/`', 'ls -A', 'rmdir'):
+            self.assertIn(entry, removal)
+        self.assertNotRegex(removal, r'(?i)\bdelete `<root>`|rm -rf')
+
+    def test_step_4_overwrites_the_installed_copy_and_checks_it_by_content(self):
+        import re
+        text = SKILL.read_text()
+        mine = re.search(r'^version: (\S+)$', text, re.M)[1]
+        self.assertNotEqual(mine, json.loads(PACKAGE.read_text())['installed_install_skill_version'])
+        step4 = text[text.index('## 4. '):text.index('## 5. ')]
+        self.assertIn('git clone --depth 1 --branch %s https://github.com/openwizdev/WizSkills' % LINE, step4)
+        for home in ('.claude/skills', '.codex/skills', 'CODEX_HOME'):
+            self.assertIn(home, step4)
+        for words in ("'install ope[n] '", "'from the setup pag[e]'", "'Restart the OpenWiz serve[r]'",
+                      'cp -R "$src"/. "$d/install/"', 'cmp -s', 'version: %s' % mine):
+            self.assertIn(words, step4)
+        self.assertIn('"continue the OpenWiz install"', step4)
+        self.assertNotIn('any words do', text)
+
+    def test_a_new_session_resumes_from_installed_files_at_the_first_unfinished_step(self):
+        text = SKILL.read_text()
+        self.assertIn('\n## Resume', text)
+        resume = text[text.index('## Resume'):text.index('## 1. ')]
+        for words in ('first unfinished step', 'readlink <root>/current', '--build-identity', 'setup.py check',
+                      'version: ', 'OPENWIZ_STATE_DIR="$state"', 'identity_unreadable'):
+            self.assertIn(words, resume)
+        self.assertIn('operation_id', text)
+        after = text[text.index('## 5. '):text.index('## Recovery and removal')]
+        self.assertNotIn('$openwiz', resume + after)
+        self.assertNotRegex(text, r'\]\(\.\./\.\./contracts/')
+
+    def parts(self):
+        text = SKILL.read_text()
+        return (text, text[text.index('## 4. '):text.index('## 5. ')], text[text.index('## Resume'):text.index('## 1. ')],
+                text[text.index('## Recovery and removal'):])
+
+    def test_the_codex_folder_follows_codex_home(self):
+        text, step4, resume, removal = self.parts()
+        for part in (step4, resume, removal):
+            self.assertIn('${CODEX_HOME:-$HOME/.codex}/skills', part)
+        self.assertNotIn('never `$CODEX_HOME`', text)
+
+    def test_removal_lists_skill_folders_and_deletes_none(self):
+        import re
+        removal = self.parts()[3]
+        blocks = re.findall(r'```sh\n(.*?)```', '\n'.join(l[3:] if l.startswith('   ') else l
+                                                          for l in removal.split('\n')), re.S)
+        self.assertTrue(blocks)
+        with tempfile.TemporaryDirectory() as home:
+            for skills in ('.claude/skills', 'codex-home/skills'):
+                for name in ('install', 'research'):
+                    folder = Path(home) / skills / name
+                    folder.mkdir(parents=True)
+                    (folder / 'SKILL.md').write_text('# synthetic\n')
+                (Path(home) / skills / 'install/.openwiz-skill').write_text('not a valid receipt\n')
+            before = sorted(str(q.relative_to(home)) for q in Path(home).rglob('*'))
+            env = {'HOME': home, 'PATH': '/usr/bin:/bin', 'CODEX_HOME': str(Path(home) / 'codex-home')}
+            listed = ''.join(subprocess.run(['sh', '-c', b], env=env, capture_output=True, text=True).stdout
+                             for b in blocks)
+            self.assertEqual(sorted(str(q.relative_to(home)) for q in Path(home).rglob('*')), before)
+        for skills in ('.claude/skills', 'codex-home/skills'):
+            for name in ('install', 'research'):
+                self.assertIn('%s/%s/%s' % (home, skills, name), listed)
+        self.assertIn('recognise as OpenWiz', removal)
+
+    def test_an_uncertain_cloudroom_install_is_retried_with_its_operation(self):
+        row = next(l for l in self.parts()[0].split('\n') if l.startswith('| `cloudroom_install_uncertain`'))
+        self.assertIn('cloudroom.py install --yes --operation <operation_id> --state-dir <state>', row)
+
+    def test_a_missing_gh_gets_its_install_step(self):
+        text = self.parts()[0]
+        for words in ('login_gh_missing', 'https://cli.github.com', 'gh --version'):
+            self.assertIn(words, text)
+        self.assertIn('even on exit 0', text[text.index('## 1. '):text.index('## 2. ')])
+
+    def test_the_reader_finds_a_synthetic_skill_s_commands(self):
+        text = ('Run `install open --root <root> --browser` and\n\n```sh\n'
+                'python3 -I "$openwiz"/tools/install/install skills --root <root>\n```\n'
+                'then `<root>/current/openwiz --build-identity` and `git clone x "$openwiz"`.\n')
+        self.assertEqual([c[:3] for c in skill_commands(text)],
+                         [('tools/install/install', 'open', ['--browser', '--root']),
+                          ('tools/install/install', 'skills', ['--root']),
+                          ('openwiz', '', ['--build-identity'])])
+
+
+HOST_QUESTION = ("Where should your agents run? This computer (Claude Code or Codex you're signed in to), "
+                 "boat.dev, or CloudRoom.")
+
+
+class NoCloudRoomRequired(unittest.TestCase):
+
+    def setUp(self):
+        self.text = SKILL.read_text()
+
+    def between(self, start, end):
+        return self.text[self.text.index(start):self.text.index(end)]
+
+    def test_cloudroom_is_no_requirement_done_condition_or_resume_gate(self):
+        self.assertFalse('needs CloudRoom.' in self.text, 'needs CloudRoom.')
+        self.assertFalse('install cannot be completed here' in self.text, 'install cannot be completed here')
+        step3 = self.between('## 3. ', '## 4. ')
+        done = [l for l in step3.split('\n') if l.startswith('Done when')]
+        self.assertEqual(len(done), 1)
+        self.assertNotRegex(done[0], r'^Done when CloudRoom')
+        for line in self.between('## Resume', '## 1. ').split('\n') + done:
+            if 'cloudroom_' in line:
+                self.assertTrue('chose CloudRoom' in line, line)
+        intel = next(s for s in self.between('## 1. ', '## 2. ').split('. ') if 'Intel Mac' in s and 'stop' in s)
+        self.assertTrue('chose CloudRoom' in intel, intel)
+
+    def test_the_host_question_comes_first_and_cloudroom_runs_only_when_chosen(self):
+        self.assertTrue(HOST_QUESTION in self.text, 'missing: ' + HOST_QUESTION)
+        at = self.text.index(HOST_QUESTION)
+        self.assertLess(at, self.text.index('cloudroom.py', self.text.index('## Resume')))
+        self.assertLess(at, self.text.index('## 1. Preflight'))
+        paragraph = self.text[self.text.rindex('\n\n', 0, at):self.text.index('\n\n', at)]
+        self.assertFalse('recommend' in paragraph.lower(), 'the host question recommends one host')
+        step3 = self.between('## 3. ', '## 4. ')
+        self.assertTrue('ignore every `cloudroom_*` code' in step3, 'cloudroom_* codes are not ignored')
+        self.assertLess(step3.index('ignore every `cloudroom_*` code'), step3.index('| Code | Next |'))
+
+    def test_restart_passes_the_host_to_where_before_confirmation(self):
+        step4 = self.between('## 4. ', '## 5. ')
+        for host in ('local', 'boat', 'cloud'):
+            self.assertIn(f'continue the OpenWiz install with host {host}', step4,
+                          f'the restart message loses the {host} choice')
+        resume = self.between('## Resume', '## 1. ')
+        self.assertIn('Read the host from the continuation message', resume)
+        self.assertLess(resume.index('Read the host from the continuation message'), resume.index('setup.py check'))
+        where = self.between('### 1. Where agents run', '### 2. Choose a start')
+        self.assertIn('use the host from Resume', where)
+        self.assertIn('run `where --agents <its name> --build "$build"` without asking again', where)
+        self.assertIn("the user’s yes to the previewed effects and cost", where)
+        self.assertIn('run it again with `--yes`', where)
+
+    def test_this_computer_leads_into_the_first_fleet_with_no_cloudroom_ids(self):
+        road = self.between('## 6. ', '## Doctor')
+        opening = road[:road.index('### 1. ')]
+        self.assertFalse('CloudRoom' in opening or 'Cloudroom' in opening, opening)
+        where = road[road.index('### 1. '):road.index('### 2. ')]
+        self.assertTrue('where --agents' in where, 'where --agents')
+        self.assertFalse('suggesting this machine' in where, 'step 6.1 suggests one host')
+        self.assertTrue('the host question' in where, 'step 6.1 does not take the host question answer')
+        connect = road[road.index('### 3. '):road.index('### 4. ')]
+        for flag in ('`--project`', '`--answer-thread`'):
+            line = next(l for l in connect.split('\n') if l.strip().startswith('- ' + flag))
+            self.assertTrue('only with CloudRoom' in line, line)
+        self.assertTrue('no `--project` or `--answer-thread`' in connect, 'prepare still asks CloudRoom ids')
+        self.assertFalse('every flag required' in connect, 'every flag required')
+        for words in ('`--host local`', '`--host boat`', '`--host <its name>`', 'refuses them'):
+            self.assertTrue(words in connect, words)
 
 
 if __name__ == '__main__':

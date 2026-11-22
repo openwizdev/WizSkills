@@ -1,0 +1,314 @@
+$ python3 -I skills/launch-fleet/scripts/test-ops-starts.py   # red: before ops-starts.py reads the Models table (#1806)
+FFFFFFFFFFFFFFFFFFFFFFF.................
+======================================================================
+FAIL: test_a_broken_models_table_is_refused_never_guessed (__main__.ModelsTable.test_a_broken_models_table_is_refused_never_guessed) [| Reviewers | Codex]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 655, in test_a_broken_models_table_is_refused_never_guessed
+    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+AssertionError: Tuples differ: (2, '', 'usage: ops-starts.py ') != (2, '', 'ops-starts: refused: ')
+
+First differing element 2:
+'usage: ops-starts.py '
+'ops-starts: refused: '
+
+- (2, '', 'usage: ops-starts.py ')
++ (2, '', 'ops-starts: refused: ')
+
+======================================================================
+FAIL: test_a_broken_models_table_is_refused_never_guessed (__main__.ModelsTable.test_a_broken_models_table_is_refused_never_guessed) [| Builder | follows Builder | | | |]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 655, in test_a_broken_models_table_is_refused_never_guessed
+    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+AssertionError: Tuples differ: (2, '', 'usage: ops-starts.py ') != (2, '', 'ops-starts: refused: ')
+
+First differing element 2:
+'usage: ops-starts.py '
+'ops-starts: refused: '
+
+- (2, '', 'usage: ops-starts.py ')
++ (2, '', 'ops-starts: refused: ')
+
+======================================================================
+FAIL: test_a_broken_models_table_is_refused_never_guessed (__main__.ModelsTable.test_a_broken_models_table_is_refused_never_guessed) [--effort medium` |
+| Reviewer]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 655, in test_a_broken_models_table_is_refused_never_guessed
+    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+AssertionError: Tuples differ: (2, '', 'usage: ops-starts.py ') != (2, '', 'ops-starts: refused: ')
+
+First differing element 2:
+'usage: ops-starts.py '
+'ops-starts: refused: '
+
+- (2, '', 'usage: ops-starts.py ')
++ (2, '', 'ops-starts: refused: ')
+
+======================================================================
+FAIL: test_a_broken_models_table_is_refused_never_guessed (__main__.ModelsTable.test_a_broken_models_table_is_refused_never_guessed) [| Fixer | follows Builder | | | |
+| Small builder]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 655, in test_a_broken_models_table_is_refused_never_guessed
+    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+AssertionError: Tuples differ: (2, '', 'usage: ops-starts.py ') != (2, '', 'ops-starts: refused: ')
+
+First differing element 2:
+'usage: ops-starts.py '
+'ops-starts: refused: '
+
+- (2, '', 'usage: ops-starts.py ')
++ (2, '', 'ops-starts: refused: ')
+
+======================================================================
+FAIL: test_a_broken_models_table_is_refused_never_guessed (__main__.ModelsTable.test_a_broken_models_table_is_refused_never_guessed) [flags |]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 655, in test_a_broken_models_table_is_refused_never_guessed
+    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+AssertionError: Tuples differ: (2, '', 'usage: ops-starts.py ') != (2, '', 'ops-starts: refused: ')
+
+First differing element 2:
+'usage: ops-starts.py '
+'ops-starts: refused: '
+
+- (2, '', 'usage: ops-starts.py ')
++ (2, '', 'ops-starts: refused: ')
+
+======================================================================
+FAIL: test_a_broken_models_table_is_refused_never_guessed (__main__.ModelsTable.test_a_broken_models_table_is_refused_never_guessed) [--model vendor//demo --reasoning-level medium` |
+| Reviewer]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 655, in test_a_broken_models_table_is_refused_never_guessed
+    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+AssertionError: Tuples differ: (2, '', 'usage: ops-starts.py ') != (2, '', 'ops-starts: refused: ')
+
+First differing element 2:
+'usage: ops-starts.py '
+'ops-starts: refused: '
+
+- (2, '', 'usage: ops-starts.py ')
++ (2, '', 'ops-starts: refused: ')
+
+======================================================================
+FAIL: test_a_broken_models_table_is_refused_never_guessed (__main__.ModelsTable.test_a_broken_models_table_is_refused_never_guessed) [## Models
+
+## Loop]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 655, in test_a_broken_models_table_is_refused_never_guessed
+    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+AssertionError: Tuples differ: (2, '', 'usage: ops-starts.py ') != (2, '', 'ops-starts: refused: ')
+
+First differing element 2:
+'usage: ops-starts.py '
+'ops-starts: refused: '
+
+- (2, '', 'usage: ops-starts.py ')
++ (2, '', 'ops-starts: refused: ')
+
+======================================================================
+FAIL: test_a_broken_models_table_is_refused_never_guessed (__main__.ModelsTable.test_a_broken_models_table_is_refused_never_guessed) (older_without='Builder')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 663, in test_a_broken_models_table_is_refused_never_guessed
+    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+AssertionError: Tuples differ: (2, '', 'usage: ops-starts.py ') != (2, '', 'ops-starts: refused: ')
+
+First differing element 2:
+'usage: ops-starts.py '
+'ops-starts: refused: '
+
+- (2, '', 'usage: ops-starts.py ')
++ (2, '', 'ops-starts: refused: ')
+
+======================================================================
+FAIL: test_a_broken_models_table_is_refused_never_guessed (__main__.ModelsTable.test_a_broken_models_table_is_refused_never_guessed) (older_without='Fixer')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 663, in test_a_broken_models_table_is_refused_never_guessed
+    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+AssertionError: Tuples differ: (2, '', 'usage: ops-starts.py ') != (2, '', 'ops-starts: refused: ')
+
+First differing element 2:
+'usage: ops-starts.py '
+'ops-starts: refused: '
+
+- (2, '', 'usage: ops-starts.py ')
++ (2, '', 'ops-starts: refused: ')
+
+======================================================================
+FAIL: test_a_changed_table_reaches_the_next_start_only (__main__.ModelsTable.test_a_changed_table_reaches_the_next_start_only)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 577, in test_a_changed_table_reaches_the_next_start_only
+    self.assertEqual((before.returncode, before.stdout),
+AssertionError: Tuples differ: (2, '') != (0, '--provider claude-code --model claude-opus-5-5 --reasoning-level medium\n')
+
+First differing element 0:
+2
+0
+
+- (2, '')
++ (0, '--provider claude-code --model claude-opus-5-5 --reasoning-level medium\n')
+
+======================================================================
+FAIL: test_a_fleet_thread_starts_on_the_orchestrator_row (__main__.ModelsTable.test_a_fleet_thread_starts_on_the_orchestrator_row)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 603, in test_a_fleet_thread_starts_on_the_orchestrator_row
+    self.assertEqual((run.returncode, run.stdout), (0, want))
+AssertionError: Tuples differ: (2, '') != (0, '--provider codex --model gpt-6.2-sol --reasoning-level high\n')
+
+First differing element 0:
+2
+0
+
+- (2, '')
++ (0, '--provider codex --model gpt-6.2-sol --reasoning-level high\n')
+
+======================================================================
+FAIL: test_a_same_family_reviewer_falls_back_to_the_builder_then_waits (__main__.ModelsTable.test_a_same_family_reviewer_falls_back_to_the_builder_then_waits)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 621, in test_a_same_family_reviewer_falls_back_to_the_builder_then_waits
+    self.assertEqual(self.pass_settings(fallback, built_by='claude-code'),
+AssertionError: 'refused: fleet settings: one "## Builder[14 chars]ired' != {'builder_start': {'provider': 'codex', '[121 chars]um'}}
+
+======================================================================
+FAIL: test_every_start_spawns_what_the_contract_fixtures_say (__main__.ModelsTable.test_every_start_spawns_what_the_contract_fixtures_say) [both]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 551, in test_every_start_spawns_what_the_contract_fixtures_say
+    self.assertEqual(self.starts(fleet.read_text()), (0, contract_starts(show)))
+AssertionError: Tuples differ: (2, 'usage: ops-starts.py pass WORLD.json [37 chars]son') != (0, {'fleet_thread': '--provider claude-co[617 chars]um'})
+
+First differing element 0:
+2
+0
+
+Diff is 993 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_every_start_spawns_what_the_contract_fixtures_say (__main__.ModelsTable.test_every_start_spawns_what_the_contract_fixtures_say) [five-tables]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 551, in test_every_start_spawns_what_the_contract_fixtures_say
+    self.assertEqual(self.starts(fleet.read_text()), (0, contract_starts(show)))
+AssertionError: Tuples differ: (2, 'usage: ops-starts.py pass WORLD.json [37 chars]son') != (0, {'fleet_thread': '--provider claude-co[617 chars]um'})
+
+First differing element 0:
+2
+0
+
+Diff is 993 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_every_start_spawns_what_the_contract_fixtures_say (__main__.ModelsTable.test_every_start_spawns_what_the_contract_fixtures_say) [one-table]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 551, in test_every_start_spawns_what_the_contract_fixtures_say
+    self.assertEqual(self.starts(fleet.read_text()), (0, contract_starts(show)))
+AssertionError: Tuples differ: (2, 'usage: ops-starts.py pass WORLD.json [37 chars]son') != (0, {'fleet_thread': '--provider claude-co[617 chars]um'})
+
+First differing element 0:
+2
+0
+
+Diff is 993 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_every_start_spawns_what_the_contract_fixtures_say (__main__.ModelsTable.test_every_start_spawns_what_the_contract_fixtures_say) [overridden]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 551, in test_every_start_spawns_what_the_contract_fixtures_say
+    self.assertEqual(self.starts(fleet.read_text()), (0, contract_starts(show)))
+AssertionError: Tuples differ: (2, 'usage: ops-starts.py pass WORLD.json [37 chars]son') != (0, {'fleet_thread': '--provider codex --m[602 chars]um'})
+
+First differing element 0:
+2
+0
+
+Diff is 955 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_every_start_spawns_what_the_contract_fixtures_say (__main__.ModelsTable.test_every_start_spawns_what_the_contract_fixtures_say) [same-family]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 551, in test_every_start_spawns_what_the_contract_fixtures_say
+    self.assertEqual(self.starts(fleet.read_text()), (0, contract_starts(show)))
+AssertionError: Tuples differ: (2, 'usage: ops-starts.py pass WORLD.json [37 chars]son') != (0, {'fleet_thread': '--provider claude-co[497 chars]one})
+
+First differing element 0:
+2
+0
+
+Diff is 804 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_every_start_spawns_what_the_contract_fixtures_say (__main__.ModelsTable.test_every_start_spawns_what_the_contract_fixtures_say) [set-namespaced]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 551, in test_every_start_spawns_what_the_contract_fixtures_say
+    self.assertEqual(self.starts(fleet.read_text()), (0, contract_starts(show)))
+AssertionError: Tuples differ: (2, 'usage: ops-starts.py pass WORLD.json [37 chars]son') != (0, {'fleet_thread': '--provider claude-co[617 chars]um'})
+
+First differing element 0:
+2
+0
+
+Diff is 993 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_every_start_spawns_what_the_contract_fixtures_say (__main__.ModelsTable.test_every_start_spawns_what_the_contract_fixtures_say) [set-older-namespaced]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 551, in test_every_start_spawns_what_the_contract_fixtures_say
+    self.assertEqual(self.starts(fleet.read_text()), (0, contract_starts(show)))
+AssertionError: Tuples differ: (2, 'usage: ops-starts.py pass WORLD.json [37 chars]son') != (0, {'fleet_thread': '--provider claude-co[617 chars]um'})
+
+First differing element 0:
+2
+0
+
+Diff is 993 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_one_table_and_five_tables_start_alike (__main__.ModelsTable.test_one_table_and_five_tables_start_alike) (small=False, built_by='claude-code')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 564, in test_one_table_and_five_tables_start_alike
+    self.assertEqual(self.pass_settings(self.one, small, built_by), want)
+AssertionError: 'refused: fleet settings: one "## Builder[14 chars]ired' != {'builder_start': {'provider': 'claude-co[131 chars]um'}}
+
+======================================================================
+FAIL: test_one_table_and_five_tables_start_alike (__main__.ModelsTable.test_one_table_and_five_tables_start_alike) (small=False, built_by='codex')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 564, in test_one_table_and_five_tables_start_alike
+    self.assertEqual(self.pass_settings(self.one, small, built_by), want)
+AssertionError: 'refused: fleet settings: one "## Builder[14 chars]ired' != {'builder_start': {'provider': 'claude-co[141 chars]um'}}
+
+======================================================================
+FAIL: test_one_table_and_five_tables_start_alike (__main__.ModelsTable.test_one_table_and_five_tables_start_alike) (small=True, built_by='claude-code')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 564, in test_one_table_and_five_tables_start_alike
+    self.assertEqual(self.pass_settings(self.one, small, built_by), want)
+AssertionError: 'refused: fleet settings: one "## Builder[14 chars]ired' != {'builder_start': {'provider': 'claude-co[131 chars]um'}}
+
+======================================================================
+FAIL: test_one_table_and_five_tables_start_alike (__main__.ModelsTable.test_one_table_and_five_tables_start_alike) (small=True, built_by='codex')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/launch-fleet/scripts/test-ops-starts.py", line 564, in test_one_table_and_five_tables_start_alike
+    self.assertEqual(self.pass_settings(self.one, small, built_by), want)
+AssertionError: 'refused: fleet settings: one "## Builder[14 chars]ired' != {'builder_start': {'provider': 'claude-co[141 chars]um'}}
+
+----------------------------------------------------------------------
+Ran 23 tests in 1.022s
+
+FAILED (failures=23)

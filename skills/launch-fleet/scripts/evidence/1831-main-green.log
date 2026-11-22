@@ -1,0 +1,5 @@
+python3 -I skills/launch-fleet/scripts/test-merge.py (after merging main with #209)
+Ran 39 tests in 25.241s
+OK
+python3 -I check/standalone.py --tree .: exit 0
+cmp contracts/checkpoints.v1.md with OpenWiz main's: identical

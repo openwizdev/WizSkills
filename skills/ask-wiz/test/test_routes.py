@@ -1,4 +1,3 @@
-"""ask-wiz routes to exactly the skills the package ships (#1186)."""
 import json
 from pathlib import Path
 import re
@@ -11,7 +10,6 @@ NAME = re.compile(r'`([a-z0-9]+(?:-[a-z0-9]+)*)`')
 
 
 def routed(text):
-    """Every backticked skill-shaped name in a table row of the router."""
     names = set()
     for line in text.splitlines():
         if line.startswith('|') and not set(line) <= set('|-: '):

@@ -1,32 +1,4 @@
 #!/usr/bin/env python3
-"""The install skill's setup doctor (#1449). Python 3.9+, standard library only.
-
-  doctor.py --repo OWNER/NAME --state-dir STATE --build BUILD --openwiz CHECKOUT
-            [--root PROJECT] [--driver PROGRAM]
-
-Checks setup against reality, in this order, and prints each problem on its
-own line with the command that fixes it:
-
-  1. Labels: each triage role's label exists in the tracker (the setup
-     skill's settings.py check, on `gh label list`).
-  2. GitHub App: the last setup check verified it for this repository, or
-     the user skipped it (the codes `setup.py check` recorded, read the way
-     first_fleet.py reads them).
-  3. Record author: the acting gh login is one (status.py's author check).
-  4. Harness: the last setup check listed it (as for the App).
-  5. Driver: PROGRAM answers `version` (the OpenWiz checkout's driver kit,
-     kernel/driver-kit/kit.py); skipped without --driver. An answer the kit
-     flags as possibly holding a credential is withheld, never printed.
-  6. Skills: the installed build carries its skills (the build's
-     setup.py runtime_pin).
-
-It runs only those existing checks, and only reads: it never signs in, never
-reads or mints a token and never writes the setup state. A sign-in problem
-prints the command for the person to run. A clean setup prints one all-clear
-line. PROJECT (default: the current folder) is the project's checkout.
-
-Exits: 0 all clear; 2 usage; 5 problems printed.
-"""
 import argparse
 import importlib.util
 import json
@@ -55,8 +27,6 @@ def load(name, path):
 first_fleet = load('openwiz_first_fleet', SKILLS / 'install/scripts/first_fleet.py')
 settings = load('openwiz_settings', SKILLS / 'setup/scripts/settings.py')
 status = load('openwiz_status', SKILLS / 'launch-fleet/scripts/status.py')
-# A saved value that might be a credential is never printed (#65 R3): status.py's credential shapes, and,
-# failing closed for the one free-text value (the operator), any long unbroken run no name has.
 CREDENTIAL = [pattern for what, pattern in status.PRIVATE if what == 'a credential']
 TOKEN_LIKE = re.compile(r'[A-Za-z0-9_+/=-]{20,}')
 
@@ -68,7 +38,6 @@ MISSING_LABEL = re.compile(r'triage-labels\.md: [^:]+: label (.+) is not in the 
 
 
 def labels(args):
-    """Check 1: settings.py's triage check, given the tracker's labels."""
     problems, found = [], []
     try:
         listed = subprocess.run(['gh', 'label', 'list', '--repo', args.repo, '--limit', '500', '--json', 'name'],
@@ -91,7 +60,6 @@ def labels(args):
 
 
 def setup_state(folder):
-    """The setup store's value, or the reason it can't be read (first_fleet's rules)."""
     path = Path(folder) / 'setup/state.json'
     try:
         info = os.lstat(path)
@@ -108,11 +76,8 @@ def setup_state(folder):
 
 
 def recorded(args, value, why, component):
-    """(problem, fix) for one component's recorded setup check, or None when it holds."""
     check = 'python3 -I -B %s --state-dir %s' % (
         shlex.quote(str(Path(args.build) / 'runtime/setup/setup.py')) + ' check', shlex.quote(args.state_dir))
-    # Setup holds none of prepare's values, or none it may show: the Prepare step asks the person for them
-    # (#1578 item 4, #65 R1 and R3).
     guided = ("prepare setup for %s with the install skill's Prepare step (2. Connect; it asks for the CloudRoom "
               'project, operator, service issue, answer thread, harness, model and effort), then %s'
               % (args.repo, check))
@@ -123,8 +88,6 @@ def recorded(args, value, why, component):
     if not isinstance(project, dict) or not isinstance(project.get('repository'), str):
         return 'setup has no prepared project', guided
     if project['repository'].lower() != args.repo.lower():
-        # Every flag setup.py prepare requires, from the saved project, as a preview that saves nothing. Each
-        # value is bound to its flag in one word, so a dash-leading value stays a value (#65 R2).
         flags = [('--state-dir', args.state_dir), ('--repository', args.repo)] + [
             (flag, str(project.get(key))) for flag, key in (
                 ('--project', 'project'), ('--operator', 'operator'), ('--service-issue', 'service_issue'),
@@ -161,9 +124,9 @@ def recorded(args, value, why, component):
                 'GitHub Apps), then %s' % (args.repo.split('/')[0], args.repo, check))
     if component == 'github_app':
         return ('not verified (%s)' % code,
-                "install OpenWiz's GitHub App on %s from the setup page, then %s" % (args.repo, check))
+                "set up OpenWiz's GitHub App for %s with %s, as the setup skill's \"The App\" says, then %s" % (
+                    args.repo, shlex.quote(str(Path(args.build) / 'runtime/github-app/setup.py')), check))
     if code == 'harness_unavailable':
-        # setup.py records this only when it read the offered catalogue and the selection isn't in it.
         chosen = '%s, %s, %s effort' % (project.get('harness'), project.get('model'), project.get('effort'))
         return ('%s is not offered (%s)' % ('the saved harness, model or effort' if unsafe(chosen) else chosen, code),
                 'choose a harness, model and effort that openwiz models --json offers and prepare setup again '
@@ -172,7 +135,6 @@ def recorded(args, value, why, component):
 
 
 def author(args):
-    """Check 3: status.py's R4 check, the acting login against the Record authors row."""
     login = status.viewer()
     if login is None:
         return [('gh could not name the acting login', 'gh auth login')]
@@ -186,31 +148,25 @@ def author(args):
 
 
 def driver(args):
-    """Check 5: the driver kit's own version check."""
     pull = 'git -C %s pull --ff-only, then the doctor again' % shlex.quote(args.openwiz)
     try:
         kit = load('openwiz_driver_kit', Path(args.openwiz) / 'kernel/driver-kit/kit.py')
         checker = kit.Kit(types.SimpleNamespace(driver=args.driver), None)
-        # The driver gets no token or other value of the doctor's environment, only what a program needs to
-        # start, and the kit's own run mark (#65 R4). A kit with no Kit.env could pass on everything: refuse it.
         if not isinstance(getattr(checker, 'env', None), dict):
             raise TypeError('Kit.env')
         checker.env = dict({k: os.environ[k] for k in ('PATH', 'HOME', 'LANG') if k in os.environ},
                            **{k: v for k, v in checker.env.items() if k == 'OPENWIZ_KIT_RUN'})
         verdict, what = checker.version()
-    except Exception as error:  # a kit that can't run is a problem to report, never a crash
+    except Exception as error:
         return [('the driver kit could not run (%s)' % type(error).__name__, pull)]
     leaks = getattr(checker, 'leaks', None)
     if verdict == 'pass' and leaks == []:
         return []
-    # A driver outside the checkout is its own program: pulling OpenWiz leaves it as it is (#1578 item 5).
     found = shutil.which(args.driver) or args.driver
     inside = Path(args.openwiz).resolve() in Path(found).resolve().parents
     update = pull if inside else ('update or replace the driver at %s so it answers version for this OpenWiz, '
                                   'then the doctor again' % shlex.quote(args.driver))
     if leaks != []:
-        # The kit flags the driver's answer as possibly holding a credential, or can't say (a kit without
-        # the flag): never repeat it, even when version otherwise passed (#1578 item 1).
         return [("%s's version answer may hold a credential (%s), so the doctor withholds it"
                  % (args.driver, 'the driver kit flags it' if leaks else 'this driver kit cannot check it'), 'run %s version in your own terminal, not through an agent, to read it; then %s'
                  % (shlex.quote(args.driver), update))]
@@ -218,11 +174,10 @@ def driver(args):
 
 
 def skills(args):
-    """Check 6: the build's own runtime_pin, which needs its packaged skills."""
     try:
         setup = load('openwiz_build_setup', Path(args.build) / 'runtime/setup/setup.py')
         pinned = setup.runtime_pin(Path(args.build) / 'runtime')
-    except Exception:  # a build without a usable setup.py has no usable skills either
+    except Exception:
         pinned = None
     if pinned:
         return []
@@ -256,7 +211,6 @@ def main(argv):
     if count:
         print('Doctor: %d problem%s.' % (count, '' if count == 1 else 's'))
         return 5
-    # setup.py's own check proves a harness listed, never its sign-in (setup R5); say no more than that.
     print('Doctor: all clear: labels, App, record author, harness listed (its sign-in is not provable yet)%s.'
           % (', driver and skills' if args.driver is not None else ' and skills; no driver given'))
     return 0

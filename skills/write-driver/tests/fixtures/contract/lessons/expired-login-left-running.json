@@ -1,0 +1,9 @@
+{
+  "lesson": "expired-login",
+  "exit": 1,
+  "answer": {
+    "error": "run run-synthetic01: the first turn ended at once: the harness is not signed in (exit 1)",
+    "next": "sign in to exampleagent on examplehost yourself, then start again"
+  },
+  "left_running": true
+}

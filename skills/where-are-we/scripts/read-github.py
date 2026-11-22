@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""Collect compact GitHub status sources through explicit GETs; never infer activity.
-
-  read-github.py        milestones, open issues and open pull requests
-  read-github.py runs   queued and in-progress CI runs
-"""
 import json
 import subprocess
 import sys
@@ -61,7 +56,6 @@ def project(source, item):
 
 
 def gh_pages(endpoint):
-    """The pages through `gh`, with the caller's own repository placeholders."""
     try:
         result = subprocess.run(
             ['gh', 'api', '--method', 'GET', '--paginate', '--slurp', endpoint],
@@ -81,7 +75,7 @@ def read(source, endpoint):
         pages, reason = gh_pages(endpoint)
         if reason:
             return {'state': 'unconfirmed', 'reason': reason}
-        if source in RUNS:  # run pages are objects, each holding one list of runs
+        if source in RUNS:
             if not isinstance(pages, list) or any(not isinstance(page, dict) for page in pages):
                 raise ValueError('expected run pages')
             pages = [page.get('workflow_runs') for page in pages]

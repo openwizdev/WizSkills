@@ -2,7 +2,7 @@
 name: ask-wiz
 description: Recommend the skill or flow for the user's question, including OpenWiz, installed and discoverable skills. User-started only; agents may suggest ask-wiz when the user seems confused, but never run it in their own workflows.
 disable-model-invocation: true
-version: 0.2.0
+version: 0.2.1
 ---
 
 # Ask Wiz
@@ -39,6 +39,7 @@ Done when the user has one named recommendation with its start words, and nothin
 | `where-are-we` | Read the current status and get one next move, at any point |
 | `triage` | Sort incoming bugs and ideas; approved work enters the fleet |
 | `diagnose` | Find a hard bug's cause from a tight failing loop, in the caller's scope |
+| `feedback` | Report an OpenWiz problem as one public issue, after its exact preview and your yes |
 | `huntr` | Find and prove small unplanned work under its configured approval gate |
 | `wayfind` | Map an effort too big or unclear for one grill, then hand it to `to-spec` |
 | `hill-climb` | Improve an outcome through judged candidates and human checkpoints |
@@ -47,6 +48,7 @@ Done when the user has one named recommendation with its start words, and nothin
 | `install` | Install OpenWiz from its one install line and get to the first fleet |
 | `setup` | Configure a project's issue tracker, labels and fleet settings |
 | `handoff` | Give a fresh orchestrator the project's durable state |
+| `write-driver` | Write and prove an OpenWiz driver for your own host, from one pasted line |
 | `ask-wiz` | Choose a skill or flow when unsure, started by the user |
 
 At a phase boundary (a design settled, a plan written, a ticket built, a result checked), read [the CloudRoom thread guide](PHASE-BOUNDARIES.md) to choose whether to keep going, start a fresh thread from a handoff, or send a bounded task to a child thread.

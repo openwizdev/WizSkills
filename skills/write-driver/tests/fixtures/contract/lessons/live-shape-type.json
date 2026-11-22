@@ -1,0 +1,11 @@
+{
+  "lesson": "live-shape",
+  "live": {
+    "id": "sb-synthetic-1",
+    "cpus": "2"
+  },
+  "fixture": {
+    "id": "sb-synthetic-1",
+    "cpus": 2
+  }
+}

@@ -1214,7 +1214,15 @@ single_nodes() {
 # an issue approved on its own.
 LIB='
 def lines: gsub("\r"; "") | split("\n");
-def first_line: ([lines[] | select(test("\\S"))] | first) // "";
+# #2096: an issue reference is #N or OWNER/NAME#N. A long form naming this
+# repository ($W.repo, compared case-insensitively) reads as #N everywhere a
+# line is parsed; one naming another repository stays as written, so no parse
+# reads it, and ref_looks refuses it naming its line.
+def long_ref: "(?<![A-Za-z0-9_./-])(?<o>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#(?<n>[1-9][0-9]*)";
+def short: gsub(long_ref; if (.o | ascii_downcase) == $W.repo then "#\(.n)" else "\(.o)#\(.n)" end);
+def foreign: [scan(long_ref) | select((.[0] | ascii_downcase) != $W.repo) | "\(.[0])#\(.[1])"] | unique;
+def first_text: ([lines[] | select(test("\\S"))] | first) // "";
+def first_line: first_text | short;
 def rec: (first_line | sub("^\\s+"; "")) as $l
   | if ($l | startswith("launch-fleet:")) then ($l | ltrimstr("launch-fleet:") | sub("^\\s+"; "") | sub("\\s+$"; "")) else null end;
 # In a claim ($W.claim: {n, id}), the claimed issue'"'"'s records are those older
@@ -1285,7 +1293,9 @@ def machine_record($ls): ($ls | until(length == 0 or .[-1] != ""; .[:-1])) as $l
   | (if $n > 1 then (select((at_($l; 5) | test("^Changed since revision \($n - 1): .+\\.$")) and at_($l; 6) == "") | 7) else 5 end) as $k
   | select(at_($l; $k) == "| Ticket | Title | Blocked by | Label |" and at_($l; $k + 1) == "| --- | --- | --- | --- |")
   | ($k + 2 + $t) as $j
-  | [$l[$k + 2:$j][] | capture("^\\| #(?<n>[1-9][0-9]*) \\| (?<title>.+) \\| (?<b>none|#[1-9][0-9]*(?: #[1-9][0-9]*)*) \\| (?<label>ready-for-agent|ready-for-human|none) \\|$")
+  | [$l[$k + 2:$j][] | capture("^\\| (?<t>[^ |]+) \\| (?<title>.+) \\| (?<b>[^|]+) \\| (?<label>ready-for-agent|ready-for-human|none) \\|$")
+     | (.t | short) as $ref | (.b | short) as $b
+     | select(($ref | test("^#[1-9][0-9]*$")) and ($b | test("^(none|#[1-9][0-9]*(?: #[1-9][0-9]*)*)$"))) | . + {n: $ref[1:], b: $b}
      | {number: (.n | tonumber), title: (.title | gsub("\\\\\\|"; "|")), blockers: .b, label: .label}] as $rows
   | select(($rows | length) == $t and at_($l; $j) == "")
   | (at_($l; $j + 1) | capture("^Fingerprint: `(?<f>[0-9a-f]{64})`$") | .f) as $f
@@ -1304,8 +1314,8 @@ def approval: (.body | lines) as $ls | ($ls | map(select(test("\\S"))) | first /
       {id: .databaseId, at: .createdAt, machine: false,
        revision: ([$head | capture(", revision (?<n>[0-9]+):\\*\\*") | .n | tonumber] | first),
        fingerprint: ([$ls[] | capture("^\\s*Fingerprint:\\s*`?(?<f>[0-9a-f]{64})`?\\s*$") | .f] | first),
-       rows: [$ls[] | select(test("^\\|\\s*#[0-9]+\\s*\\|")) | split("|") | map(sub("^\\s+"; "") | sub("\\s+$"; "")) | .[1:-1]
-              | select(length >= 4) | {number: (.[0] | ltrimstr("#") | tonumber), label: .[-1]}]}
+       rows: [$ls[] | short | select(test("^\\|\\s*#[0-9]+\\s*\\|")) | split("|") | map(sub("^\\s+"; "") | sub("\\s+$"; "")) | .[1:-1]
+              | select(length >= 4 and (.[-2] | foreign | length) == 0) | {number: (.[0] | ltrimstr("#") | tonumber), label: .[-1]}]}
     else (.databaseId as $id | .createdAt as $at | [machine_record($ls)] | first // empty | {id: $id, at: $at, machine: true} + .) end;
 def latest($s): [$s.comments.nodes[] | approval] | max_by(.id);
 def subs($s): [$s.subIssues.nodes[].number];
@@ -1431,6 +1441,15 @@ def waiting: [.comments.nodes[] | . as $c | (.body | first_line) as $line
 def pending_wait: waiting as $w | records as $rs
   | if $w != null and (any($rs[]; .r == "resume sent \($w.id) for #\($w.number)") | not) then $w else null end;
 
+# #2096: a record or orchestrator line in a shape that names one of this
+# repository'"'"'s issues, naming another repository'"'"'s instead: refused once,
+# naming its line, never skipped silently.
+# Only the reference in the shape'"'"'s own place counts, never prose after it.
+def ref_line: "^(?:launch-fleet:\\s*(?:waiting for|resume (?:starting|sent|failed|withdrawn) [0-9]+ for|held for ordering: (?:issue|PR)|held for|noted) |Orchestrator(?: \\([^\\r\\n]*\\))?: \\*\\*(?:(?:yes|confirmed)[,:] )?wait for )(?<r>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*)";
+def legacy_ordering_refs: "^Orchestrator: \\*\\*held for ordering only; the plan and its approval are unchanged\\.\\*\\* (?<r>(?:[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,8}) .+ Released \\(`ready-for-agent` back, `held` off\\) as soon as (?<release>(?:[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,8}) merges\\.$";
+def ref_looks: records as $rs | .number as $n | .comments.nodes[] | . as $c | (.body | first_text | sub("^\\s+"; "") | sub("\\s+$"; "")) as $l
+  | ([($l | capture(ref_line) | .r), ($l | capture(legacy_ordering_refs) | .r, .release) | foreign[]] | unique) as $f | select(($f | length) > 0)
+  | look($n; $rs; "comment \($c.databaseId)'"'"'s line `\($l | short)` names \($f | join(", ")), not this repository");
 def resume_claim($w): [records[] | select(.r | test("^resume starting \($w.id) for #\($w.number)(, thread thr_[A-Za-z0-9_-]+)?$"))] | min_by(.id);
 
 def looks: [
@@ -1790,6 +1809,7 @@ def ticket_lines_now($s): . as $t
           and (any(records[]; .r | test("^told the user\\b")) | not)
        then "person #\(.number): \(.title) (spec #\($s.number)) is ready, and only the user can do it" else empty end)
     else
+      ref_looks,
       ordering_lines($s),
       (if release_due($s) and (ordering_hold == null) then "release #\(.number): approved again since its hold; take the held label off" else empty end),
       (if building then due_notes($s)[]
@@ -1879,7 +1899,7 @@ def ticket_lines_now($s): . as $t
                    ($live | thread) as $th
                    | ([$here[] | kind("review told again") | select(thread == $th)] | max_by(.id)) as $told
                    | fleet_of($s) as $f
-                   | if $th != null and ($live | inherited($f)) then out_of_reach($at; $th; $f; $live)
+                   | if $th != null and ($th | startswith("run:") | not) and ($live | inherited($f)) then out_of_reach($at; $th; $f; $live)
                      elif $th == null then look($p.number; $rs; "\"\($live.r)\" names no thread, so its reviewer can'"'"'t be checked")
                      elif $told == null then
                        (if ($live | age) >= 1800 then "check review \($at): no verdict 30 minutes after \"\($live.r)\"; read thread \($th) and tell it again (its record: comment \($live.id))" else empty end)
@@ -1895,7 +1915,7 @@ def ticket_lines_now($s): . as $t
                    | (if $last == null then "" else " (retry after \"\($last.r)\")" end) as $retry
                    | fleet_of($s) as $f
                    | if refused_lately($last; "review") then empty
-                     elif $first != null and ($first | thread) != null and ($first | inherited($f)) then
+                     elif $first != null and ($first | thread) != null and ($first | thread | startswith("run:") | not) and ($first | inherited($f)) then
                        out_of_reach($at; $first | thread; $f; $first)
                      elif $first != null then "re-check \($at): tell its reviewer, thread \($first | thread)\($retry)"
                      elif ($quiet | length) > 0 then "review \($at): a fresh reviewer\($retry)"
@@ -1955,7 +1975,15 @@ def ticket_lines($s):
 
 # A spec'"'"'s approval: a look when it lists no tickets, a re-approve when the
 # plan changed since.
-def approval_lines: . as $s | records as $srs | latest($s) as $a
+# #2096: a table line of the latest approval whose Ticket or Blocked by cell
+# names another repository'"'"'s issue: refused, naming its line (that row
+# approves nothing). A title may name anything.
+def approval_refs($s): ([$s.comments.nodes[] | select(.body | first_text | sub("^\\s+"; "") | test("^\\*\\*(?:Plan graph approved by|Machine plan approval, )"))] | max_by(.databaseId)) as $c
+  | if $c == null then empty else
+      $c.body | lines[] | sub("\\s+$"; "") | select(startswith("|")) | . as $l
+      | (split("|")[1:-1] | select(length >= 4) | [(.[0], .[-2]) | foreign[]] | unique) as $f | select(($f | length) > 0)
+      | "its latest plan graph approval'"'"'s line `\($l | short)` names \($f | join(", ")), not this repository" end;
+def approval_lines: . as $s | records as $srs | (approval_refs($s) | look($s.number; $srs; .)), (latest($s) as $a
   | if $a == null then empty
     elif ($a.rows | length) == 0 then look(.number; $srs; "its latest plan graph approval lists no tickets")
     else
@@ -1965,7 +1993,7 @@ def approval_lines: . as $s | records as $srs | latest($s) as $a
         else "changed since revision \($a.revision // "?") (fingerprint now \($now[:12]))" as $what
         | if any($s | records[]; .r == "needs approval: \($what)") then empty
           else "re-approve #\($s.number): \($what)" end end
-    end;
+    end);
 
 # R2 (decision 7030919773): with a video, one look, once: its "look: <reason>"
 # record settles it. Comments on the video steer nothing.

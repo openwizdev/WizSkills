@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.4.0 - 2026-11-22
+
+- Skills added: `feedback`, `write-driver`.
+- The `feedback` skill is back: your agent files one public OpenWiz issue only after its exact preview and your explicit yes with its code, and tells you triage labels it `feedback`, and that the issue gets one comment naming the fix's pull request and release only if triage sends it to a fleet and that fix merges.
+- The plan links contract and `check-links.sh` read a `## Links` line that names its blocker in the long form of the plan's own repository (`owner/name#N`, any case) as `#N`, and refuse one naming another repository with its line named.
+- The models and feedback-loop contract copies match OpenWiz main again: local host selection and labelled model choices, and the feedback form's pinned warning and confirmation.
+- `ask-wiz` 0.2.2: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `ask-wiz` 0.2.2: The `feedback` skill is back: your agent files one public OpenWiz issue only after its exact preview and your explicit yes with its code, and tells you triage labels it `feedback`, and that the issue gets one comment naming the fix's pull request and release only if triage sends it to a fleet and that fix merges.
+- `ask-wiz` 0.2.2: New write-driver skill: paste one line and it takes you to an OpenWiz driver of your own that passes 5 of 5 on your host, reports the time from paste, and shares it only on your yes; ask-wiz routes to it.
+- `build-ticket` 0.2.2: Builders ask for a missing proof or a narrow grant through the status writer's `asking` write, reviewers' status line names the ticket number rather than the pull request's, and a log-and-merge check refuses a new finding on unchanged code.
+- `build-ticket` 0.2.2: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `build-ticket` 0.2.2: Builders commit only as their GitHub noreply address: `ticket.py author` refuses while anything overrides it, and `ticket.py push` sends only HEAD to origin and refuses any commit origin lacks whose author or committer is not a noreply address named as its login.
+- `build-ticket` 0.2.2: Builders take only the App's token and push from the identity page and keep the identity `ticket.py author` set.
+- `build-ticket` 0.2.2: `ticket.py push` reports a commit whose name is not its noreply address's login apart from one whose address is not a noreply address.
+- `diagnose` 0.2.2: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `feedback` 0.3.0: The `feedback` skill is back: your agent files one public OpenWiz issue only after its exact preview and your explicit yes with its code, and tells you triage labels it `feedback`, and that the issue gets one comment naming the fix's pull request and release only if triage sends it to a fleet and that fix merges.
+- `feedback` 0.3.0: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `grill` 0.2.2: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `handoff` 0.3.1: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `handoff` 0.3.1: The installed install, setup, triage, handoff and where-are-we skills no longer ship their recorded evidence logs; their instructions, references, scripts and tests are unchanged.
+- `hill-climb` 0.2.2: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `huntr` 0.2.2: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `image` 0.2.2: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `install` 0.4.0: A new project starts with one Models table (Orchestrator, Builder and Reviewer, with the Small builder and Fixer following the Builder): setup writes and checks it, still accepting the older five tables, and the first fleet's choice writes the harness, model and effort into it and starts from it.
+- `install` 0.4.0: The onboarding road offers every host your installed OpenWiz has a working driver for, boat.dev included, says why any other driver isn't offered, and writes your pick as the project's host setting.
+- `install` 0.4.0: Run your first fleet with the local heartbeat when you choose this computer, boat.dev, or another driver.
+- `install` 0.4.0: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `install` 0.4.0: The installed install, setup, triage, handoff and where-are-we skills no longer ship their recorded evidence logs; their instructions, references, scripts and tests are unchanged.
+- `install` 0.4.0: The install skill matches OpenWiz 0.1.0: setup by `setup.py check` with each code's next step, no setup page; skills installed into your agents; a pinned-tag download while 0.1.0 is not GitHub's Latest; and the binary at `<root>/current/openwiz`.
+- `install` 0.4.0: The Models section `choose` adds to older fleet settings now has its Source line, so Connect still accepts the file. A retried first-fleet launch asks for a fresh preview and yes if the Orchestrator changed before the fleet started.
+- `install` 0.4.0: The install no longer requires CloudRoom: it asks first where your agents run (this computer, boat.dev or CloudRoom, as equal choices), runs CloudRoom's steps only if you pick it, and this computer leads straight into the first fleet with no CloudRoom project or answer thread.
+- `launch-fleet` 0.4.0: launch-fleet starts every agent from the one Models table in `docs/agents/fleet.md`, read from GitHub's default branch at each start: builders, small builders, reviewers by the cross-family rule, fixers by the fixer rule, and a spec's fleet thread on the Orchestrator row, which each wake keeps its loop on. Projects with only the older five tables keep working, read whole. `ops-starts.py flags --repo <owner>/<repo>` prints each start's spawn flags.
+- `launch-fleet` 0.4.0: launch-fleet holds the final merge of a user-visible spec, or a release, for the owner's late look: `merge.py ask` posts the checkpoints contract's evidence ask on the spec, and `merge.py merge` merges only once the owner's late-look record approves that head; every other merge flows as before.
+- `launch-fleet` 0.4.0: With a token service configured, launch-fleet gives every agent it starts and every fleet wake its GitHub token through the agent helper, and each brief keeps approvals, settings and workflow pushes on the owner's login; with none, nothing changes.
+- `launch-fleet` 0.4.0: When a fix for a feedback report merges, launch-fleet posts one comment on the report saying it landed, in which pull request and which release will carry it.
+- `launch-fleet` 0.4.0: launch-fleet's `host.py start` takes an optional skill to run through the host's driver, such as `review-ticket` or `launch-fleet`; without one it starts `build-ticket` exactly as before.
+- `launch-fleet` 0.4.0: Run a fleet's GitHub heartbeat every ten minutes on your computer, with commands to preview, install, pause, resume, remove or run it now.
+- `launch-fleet` 0.4.0: Fleets outside CloudRoom start, wake and stop reviewers through the host driver, using the other harness when both are installed and marking reviews by the same family when only one is available.
+- `launch-fleet` 0.4.0: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `launch-fleet` 0.4.0: launch-fleet finds its builders and reviewers through a Local `room-cli` on your own machine as well as through the Cloud CLI, reading both thread-list answers.
+- `launch-fleet` 0.4.0: A long-form reference to the fleet's own repository (`owner/name#N`, any case) reads as `#N` in approval rows, waits, claims and holds, and one naming another repository is refused with its line named instead of being skipped silently.
+- `launch-fleet` 0.4.0: On a merge-queue repository, `merge.py merge` enqueues through GitHub's merge queue pinned to the approved head, refuses while required checks are still running, and writes its `merge queued` receipt only after it reads the queue entry back.
+- `launch-fleet` 0.4.0: launch-fleet's models test fixture for an older-tables `set` now matches OpenWiz's, with the `Source:` line `set` adds.
+- `research` 0.2.2: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `review-ticket` 0.4.0: Fleets outside CloudRoom start, wake and stop reviewers through the host driver, using the other harness when both are installed and marking reviews by the same family when only one is available.
+- `review-ticket` 0.4.0: Builders ask for a missing proof or a narrow grant through the status writer's `asking` write, reviewers' status line names the ticket number rather than the pull request's, and a log-and-merge check refuses a new finding on unchanged code.
+- `review-ticket` 0.4.0: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `review-ticket` 0.4.0: A re-check after a large `main` merge now checks the pull request's own changes from the local checkout instead of failing at GitHub's 300-file compare limit, and says which commit it could not read when it refuses.
+- `setup` 0.3.0: A new project starts with one Models table (Orchestrator, Builder and Reviewer, with the Small builder and Fixer following the Builder): setup writes and checks it, still accepting the older five tables, and the first fleet's choice writes the harness, model and effort into it and starts from it.
+- `setup` 0.3.0: A new project starts with a Roster of one entry, the person's own harness taking every role, and setup's check reads the table, refusing a malformed row or an unknown role by name.
+- `setup` 0.3.0: The installed install, setup, triage, handoff and where-are-we skills no longer ship their recorded evidence logs; their instructions, references, scripts and tests are unchanged.
+- `to-spec` 0.3.0: Every new spec carries its two checkpoint answers (one-way door, user-visible), and to-tickets' approval check refuses a new spec without them; older specs read as early only.
+- `to-spec` 0.3.0: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `to-spec` 0.3.0: write-driver no longer ships a generated Python bytecode file; to-spec drops a test that only checked its own wording.
+- `to-tickets` 0.3.0: Every new spec carries its two checkpoint answers (one-way door, user-visible), and to-tickets' approval check refuses a new spec without them; older specs read as early only.
+- `to-tickets` 0.3.0: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `to-tickets` 0.3.0: A long-form reference to the fleet's own repository (`owner/name#N`, any case) reads as `#N` in approval rows, waits, claims and holds, and one naming another repository is refused with its line named instead of being skipped silently.
+- `to-tickets` 0.3.0: The plan links contract and `check-links.sh` read a `## Links` line that names its blocker in the long form of the plan's own repository (`owner/name#N`, any case) as `#N`, and refuse one naming another repository with its line named.
+- `to-tickets` 0.3.0: to-tickets pins its relies check reading the whole ticket before refusing a planned path, and write-driver's eval names the wake-note evidence and pull request URL it supplies rather than observes.
+- `triage` 0.3.0: Triage sends a small, clear OpenWiz feedback report to a fleet as an approved brief with owned paths and both closing lines, linked back to the report; holds every other report for the owner; and never replies on a report without the owner's yes to the exact text.
+- `triage` 0.3.0: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `triage` 0.3.0: The installed install, setup, triage, handoff and where-are-we skills no longer ship their recorded evidence logs; their instructions, references, scripts and tests are unchanged.
+- `triage` 0.3.0: Triage's tests now check the no-reply rule on feedback reports by running the feedback path against a fake GitHub and watching every write.
+- `wayfind` 0.2.2: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `where-are-we` 0.2.1: Comments in skill scripts and tests are cut to the kinds the comments contract allows; behaviour is unchanged, and CI now fails a pull request that adds any other comment.
+- `where-are-we` 0.2.1: The installed install, setup, triage, handoff and where-are-we skills no longer ship their recorded evidence logs; their instructions, references, scripts and tests are unchanged.
+- `write-driver` 0.3.0: New write-driver skill: paste one line and it takes you to an OpenWiz driver of your own that passes 5 of 5 on your host, reports the time from paste, and shares it only on your yes; ask-wiz routes to it.
+- `write-driver` 0.3.0: write-driver gains an end-to-end eval: a scripted session runs the skill's script steps against a fake host, from paste to 5 of 5, its time and its share, recording synthetic wake-note evidence and reporting a supplied pull request URL, and fails if a costly step runs unasked, a live lesson is skipped, the clock does not start at paste, or a declined share posts.
+- `write-driver` 0.3.0: write-driver no longer ships a generated Python bytecode file; to-spec drops a test that only checked its own wording.
+- `write-driver` 0.3.0: to-tickets pins its relies check reading the whole ticket before refusing a planned path, and write-driver's eval names the wake-note evidence and pull request URL it supplies rather than observes.
+
+## 0.3.1 - 2026-11-22
+
+- `install` 0.3.1: Install OpenWiz 0.1.0 without CloudRoom and resolve all clashing skill names with one confirmation.
+
 ## 0.3.0 - 2026-11-20
 
 - `ask-wiz` 0.2.1: The installed grill, ask-wiz, build-ticket and review-ticket skills no longer ship their recorded evidence logs; their instructions, references, scripts and tests are unchanged.

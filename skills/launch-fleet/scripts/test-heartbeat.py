@@ -59,8 +59,8 @@ class Heartbeat(unittest.TestCase):
         self.bin.mkdir()
         self.scripts = self.home / "installed 100% it's" / 'scripts'
         self.scripts.mkdir(parents=True)
-        for name in ('heartbeat', 'host', 'status', 'post'):
-            shutil.copyfile(HERE / (name + '.py'), self.scripts / (name + '.py'))
+        shutil.copyfile(HERE / 'heartbeat.py', self.scripts / 'heartbeat.py')
+        (self.scripts / 'host.py').symlink_to(HERE / 'host.py')
         (self.scripts / 'fleet.sh').write_text(CHECK)
         (self.home / 'due').touch()
         self.checkout = self.home / 'checkout'

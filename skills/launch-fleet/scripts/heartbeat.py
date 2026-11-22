@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
@@ -195,6 +196,59 @@ def install(args, name, state):
         job.install()
 
 
+def tick(state, config, paused):
+    outcome = 'check failed'
+    try:
+        if paused:
+            outcome = 'paused'
+            return 0
+        _, _, _, _, repo, spec = config['argv']
+        inherited = ('HOME', 'USER', 'LOGNAME', 'TMPDIR', 'SSH_AUTH_SOCK', 'XDG_RUNTIME_DIR',
+                     'DBUS_SESSION_BUS_ADDRESS')
+        env = {key: os.environ[key] for key in inherited if key in os.environ}
+        env.update(config['environment'], GH_REPO=repo, GH_PROMPT_DISABLED='1', GIT_TERMINAL_PROMPT='0')
+        repo_key = hashlib.sha256(repo.lower().encode()).hexdigest()[:20]
+        env.setdefault('LAUNCH_FLEET_RUNS', str(state.parent / f'runs-{repo_key}.json'))
+        result = subprocess.run(['sh', str(HERE / 'fleet.sh'), 'spec', spec], cwd=config['cwd'], env=env,
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300)
+        if result.returncode:
+            print(f'heartbeat: check failed (exit {result.returncode})', file=sys.stderr)
+            return 2
+        lines = [line for line in result.stdout.splitlines() if line.strip()]
+        if not lines or lines[0].startswith(f'fleet done #{spec}:'):
+            outcome = 'idle'
+            return 0
+
+        outcome = 'start unresolved'
+        attempt = state / 'starting'
+        if attempt.exists():
+            print(f'heartbeat: reconcile the previous start in {attempt}', file=sys.stderr)
+            return 1
+        attempt.mkdir(mode=0o700)
+        env['LAUNCH_FLEET_HEARTBEAT_RUNS'] = env['LAUNCH_FLEET_RUNS']
+        env['LAUNCH_FLEET_RUNS'] = str(attempt / 'runs.json')
+        result = subprocess.run(
+            [sys.executable, '-I', str(HERE / 'host.py'), 'start', repo, spec,
+             config['harness'], config['model'], 'launch-fleet'],
+            cwd=config['cwd'], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=1000,
+        )
+        if result.returncode:
+            if result.stdout.startswith(('refused:', 'stopped (driver start failed):')) or result.returncode == 2:
+                outcome = 'start refused'
+                shutil.rmtree(attempt)
+            print(f'heartbeat: {outcome} (exit {result.returncode})', file=sys.stderr)
+            return result.returncode
+        last = state / 'last-wake'
+        if last.exists():
+            shutil.rmtree(last)
+        attempt.rename(last)
+        outcome = 'started'
+        return 0
+    finally:
+        stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        with (state / 'ticks.log').open('a') as log:
+            log.write(f'{stamp} {outcome}\n')
+
 def main():
     args = arguments()
     key = hashlib.sha256(f'{args.repo.lower()}#{args.spec}'.encode()).hexdigest()[:20]
@@ -225,7 +279,7 @@ def main():
         elif args.action == 'resume':
             status.unlink(missing_ok=True)
         else:
-            raise Refused('tick is unavailable')
+            return tick(state, config, status.exists())
     return 0
 
 

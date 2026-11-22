@@ -92,7 +92,7 @@ SECRET_NAME = re.compile(r'TOKEN|SECRET|PASSWORD|CREDENTIAL|_KEY$|^KEY')  # the 
 # stdout only, as the ticket never carries the driver's words (the decision on R3 at 90aed73).
 USERINFO = re.compile(r'(?:[a-z][a-z0-9+.-]*:)?//[^\s/?#@]*@|(?<![\w.%+-])[^\s/?#@:]+:[^\s/?#@]*@[a-z0-9]', re.I)
 LOG = 'driver-failures.log'                       # owner-only, beside LAUNCH_FLEET_RUNS: the driver's own words
-ROLES = {'review-ticket': ('reviewer', 'pull request')}
+ROLES = {'review-ticket': ('reviewer', 'pull request', "pull request's reviewer")}
 
 
 class Unreadable(Exception):
@@ -271,7 +271,7 @@ def logged(repo, n, host, command, refusal):
 
 
 def role(skill):
-    return ROLES.get(skill, ('builder', 'ticket'))
+    return ROLES.get(skill, ('builder', 'ticket', 'builder'))
 
 
 def report(repo, n, host, command, entry, skill='build-ticket'):
@@ -280,13 +280,13 @@ def report(repo, n, host, command, entry, skill='build-ticket'):
     The comment never carries the driver's words (the orchestrator's decision on R3 at 90aed73): a fixed
     reason, the exit category and a pointer to the owner-only log's entry. Each write is tried even when the
     other failed (R1 of the review at 1f9c7f6); post.Stop names every failure."""
-    agent, item = role(skill)
+    agent, item, named = role(skill)
     stopped, comments = reports(repo, n)
     failed = [] if entry else ['the driver log %s could not be written' % LOG]
     if not stopped:
         try:
             note(repo, n, 'stopped', "the %s driver refused this %s's %s 3 times; the reason is in a comment "
-                                     "here" % (host, agent, command))
+                                     "here" % (host, named, command))
         except Exception as e:
             failed.append(why(e))
     if not comments:
@@ -317,7 +317,7 @@ def clear(repo, n, host, done, skill='build-ticket'):
             failed.append(why(e))
     if stopped:
         try:
-            note(repo, n, 'done', 'the %s driver %s this %s on a later try' % (host, done, role(skill)[0]))
+            note(repo, n, 'done', 'the %s driver %s this %s on a later try' % (host, done, role(skill)[2]))
         except Exception as e:
             failed.append(why(e))
     if failed:

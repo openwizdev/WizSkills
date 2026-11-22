@@ -33,6 +33,7 @@ DECISION = re.compile(rf"\*\*Orchestrator decision:\*\* (fix once more|log and m
                       r"(?: Polish issues: (#[1-9][0-9]*(?:, #[1-9][0-9]*)*)\.)? Why: \S.*", re.S)
 ADDITIONAL = re.compile(r"\*\*Additional\b[^*\n]*? check: `([^`]+)`")
 CLOSES = re.compile(r"(?im)^\s*(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+((?:[\w.-]+/[\w.-]+)?#[1-9][0-9]*)\b")
+TICKET = re.compile(r"[\w.-]+/[\w.-]+#[1-9][0-9]*")
 LOGIN = r"`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`"
 AUTHORS_CELL = re.compile(rf"\s*{LOGIN}(?:\s*,\s*{LOGIN})*\s*")
 TEST_RULE = re.compile(r"\b(?:catches|no new test): \S")
@@ -271,16 +272,23 @@ def same(comment, text):
     return (comment.get("body") or "").replace("\r\n", "\n").strip() == text.strip()
 
 
-def admit(repo, number, assigned, skip=None):
+def admit(repo, number, assigned, skip=None, ticket=None):
+    if ticket is not None and not TICKET.fullmatch(ticket):
+        raise Refusal(f"--ticket must be OWNER/NAME#N, not {ticket!r}")
     pr = get(f"repos/{repo}/pulls/{number}")
     head = pr["head"]["sha"]
     if pr.get("state") != "open":
         raise Stop(f"stop: {'merged' if pr.get('merged') else 'closed'}; archive your own thread")
     if pr.get("draft"):
         raise Stop("stop: draft")
-    ticket = CLOSES.search(pr.get("body") or "")
-    if not ticket:
+    body = (pr.get("body") or "").replace("\r\n", "\n")
+    if ticket is not None:
+        if not re.search(rf"(?m)^[ \t]*Refs[ \t]+{re.escape(ticket)}[ \t]*$", body):
+            raise Stop(f"stop: no Refs {ticket} line names the assigned ticket")
+    elif not (closes := CLOSES.search(body)):
         raise Stop("stop: no Closes line names a ticket")
+    else:
+        ticket = closes[1] if not closes[1].startswith("#") else repo + closes[1]
     if head != assigned:
         raise Stop(f"stop: the head is {head}, not the assigned {assigned}")
     fleet = setting(repo, pr["base"]["ref"], "docs/agents/fleet.md")
@@ -320,13 +328,12 @@ def admit(repo, number, assigned, skip=None):
         mode = "final" if last["state"] == "fresh" else "re-check"
     if last is not None and last["head"] == head and mode != "log-and-merge":
         raise Stop(f"stop: already reported at {head}")
-    ref = ticket[1] if not ticket[1].startswith("#") else repo + ticket[1]
-    return {"pr": pr, "head": head, "ticket": ref, "checks": names, "authors": authors,
+    return {"pr": pr, "head": head, "ticket": ticket, "checks": names, "authors": authors,
             "comments": comments, "last": last, "mode": mode, "decision": decision}
 
 
-def pin(repo, number, assigned):
-    s = admit(repo, number, assigned)
+def pin(repo, number, assigned, ticket=None):
+    s = admit(repo, number, assigned, ticket=ticket)
     line = f"review {s['mode']} #{number} at {s['head']}; ticket {s['ticket']}; checks {', '.join(s['checks'])}"
     if s["last"] is not None:
         ids = [int(f["id"][1:]) for f in s["last"]["findings"]]
@@ -357,14 +364,15 @@ def changed_since(base, last, head):
                               "checkout and origin does not give it")
 
     def names(*spec):
-        out = git("diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", *spec, "--")
+        out = git("diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", *spec, "--",
+                  what=f"cannot read the pull request's own changes: git diff {' '.join(spec)}")
         return set(filter(None, out.split("\0")))
     return names(last, head) & (names(f"{base}...{last}") | names(f"{base}...{head}"))
 
 
-def report_problems(path, repo, number, assigned):
+def report_problems(path, repo, number, assigned, ticket=None):
     text = Path(path).read_text(encoding="utf-8").replace("\r\n", "\n")
-    s = admit(repo, number, assigned, skip=text)
+    s = admit(repo, number, assigned, skip=text, ticket=ticket)
     changed = None
     if s["mode"] in ("re-check", "final"):
         changed = changed_since(s["pr"]["base"].get("sha"), s["last"]["head"], s["head"])
@@ -373,13 +381,14 @@ def report_problems(path, repo, number, assigned):
     return text, s, check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"], s["decision"], changed)
 
 
-def git(*args):
+def git(*args, what=None):
     try:
         out = subprocess.run(["git", *args], capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
-        out = None
+    except (OSError, subprocess.TimeoutExpired) as e:
+        out, why = None, f"git did not run ({type(e).__name__})"
     if out is None or out.returncode:
-        raise Refusal(f"cannot read {args[-1]} with git")
+        why = (out.stderr.strip().splitlines() or [f"exit {out.returncode}"])[-1] if out else why
+        raise Refusal(f"{what} failed: {why}" if what else f"cannot read {args[-1]} with git")
     return out.stdout
 
 
@@ -415,8 +424,8 @@ def self_check(path, base):
     return lines + [f"self-check: {len(misses)} miss{'es' if len(misses) != 1 else ''}" if misses else "self-check: ok"]
 
 
-def post(path, repo, number, assigned):
-    text, s, problems = report_problems(path, repo, number, assigned)
+def post(path, repo, number, assigned, ticket=None):
+    text, s, problems = report_problems(path, repo, number, assigned, ticket)
     mine = [c for c in s["comments"] if authored(c, s["authors"]) and same(c, text)]
     if mine:
         return f"already posted {mine[0]['id']}"
@@ -483,6 +492,8 @@ DESCRIPTION = (
     '  follow-up --repo TICKET_REPO ...   file one polish issue or logged blocker for triage, once\n'
     "  self-check DESCRIPTION [--base REF]       the builder's own pass on its checkout, before any review\n"
     '\n'
+    'pin, check and post take --ticket OWNER/NAME#N for an explicitly assigned\n'
+    "ticket, admitted only by an exact `Refs OWNER/NAME#N` line; without it a Closes line names it.\n"
     'Each command reads one pull-request snapshot and admits it (open, ready, a\n'
     'ticket, the assigned head, every required check green there) before anything\n'
     'else (self-check reads only the local checkout and description, before a pull\n'
@@ -504,6 +515,8 @@ def main(argv=None):
         c.add_argument("--repo", required=True)
         c.add_argument("--pr", required=True, type=int)
         c.add_argument("--head", required=True, help="the assigned head, all 40 characters")
+        c.add_argument("--ticket", help="an explicitly assigned OWNER/NAME#N, taken only from its exact "
+                                        "`Refs OWNER/NAME#N` line in the description")
     f = sub.add_parser("follow-up")
     for name in ("repo", "ticket", "spec", "pr", "head", "id", "title", "finding"):
         f.add_argument("--" + name, required=True)
@@ -519,13 +532,13 @@ def main(argv=None):
             print("\n".join(lines))
             return 0 if lines == ["self-check: ok"] else 1
         if a.command == "pin":
-            print(pin(a.repo, a.pr, a.head))
+            print(pin(a.repo, a.pr, a.head, a.ticket))
         elif a.command == "check":
-            problems = report_problems(a.report, a.repo, a.pr, a.head)[2]
+            problems = report_problems(a.report, a.repo, a.pr, a.head, a.ticket)[2]
             print("\n".join(problems) if problems else "report ok")
             return 1 if problems else 0
         elif a.command == "post":
-            print(post(a.report, a.repo, a.pr, a.head))
+            print(post(a.report, a.repo, a.pr, a.head, a.ticket))
         else:
             print(follow_up(a))
     except Stop as e:

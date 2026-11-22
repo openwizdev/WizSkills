@@ -42,10 +42,13 @@ def template():
     git("checkout", "-q", head)
     git("merge", "-q", "--no-edit", "main")
     git("branch", "-f", "merged")
-    return root, base, old, head, newer, main, git("rev-parse", "HEAD")
+    merged = git("rev-parse", "HEAD")
+    unrelated = git("commit-tree", git("rev-parse", "base^{tree}"), "-m", "replaced history")
+    git("branch", "-f", "unrelated", unrelated)
+    return root, base, old, head, newer, main, merged, unrelated
 
 
-ORIGIN, BASE, OLD, HEAD, NEWER, MAIN, MERGED = template()
+ORIGIN, BASE, OLD, HEAD, NEWER, MAIN, MERGED, UNRELATED = template()
 FLEET = """# Fleet settings
 
 ## CI checks
@@ -280,6 +283,38 @@ class Review(unittest.TestCase):
                 self.assertEqual(out.returncode, 1)
                 self.assertEqual(out.stdout.strip(), expected)
 
+    def test_an_assigned_ticket_is_taken_only_from_its_exact_refs_line(self):
+        refs = DESCRIPTION.replace("Closes example/product#41", "Refs example/product#41")
+        self.world({}, pr={"body": refs})
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#41")
+        self.assertEqual((out.returncode, out.stdout.strip()),
+                         (0, f"review full #7 at {HEAD}; ticket {PRODUCT}#41; checks check"), out.stderr)
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (1, "stop: no Closes line names a ticket"))
+        self.world({}, pr={"body": refs.replace("\n", "\r\n")})
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#41")
+        self.assertEqual(out.stdout.strip(), f"review full #7 at {HEAD}; ticket {PRODUCT}#41; checks check")
+        both = "Closes example/skills#9\n" + refs
+        self.world({}, pr={"body": both})
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#41")
+        self.assertEqual(out.stdout.strip(), f"review full #7 at {HEAD}; ticket {PRODUCT}#41; checks check")
+        stop = f"stop: no Refs {PRODUCT}#41 line names the assigned ticket"
+        for name, body in {"other number": refs.replace("#41", "#42"), "unqualified": refs.replace(PRODUCT, ""),
+                           "other repository": refs.replace(PRODUCT, SKILLS), "more on the line":
+                           refs.replace("#41", "#41 and #42"), "inside a sentence": "See Refs example/product#41.\n",
+                           "only a Closes line": DESCRIPTION}.items():
+            with self.subTest(name):
+                self.world({}, pr={"body": body})
+                out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#41")
+                self.assertEqual((out.returncode, out.stdout.strip()), (1, stop))
+        for bad in ("#41", "example/product", "example/product#0", "example/product#41 "):
+            with self.subTest(bad):
+                self.world({}, pr={"body": refs})
+                out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", bad)
+                self.assertEqual((out.returncode, out.stdout), (2, ""))
+                self.assertIn("--ticket must be OWNER/NAME#N", out.stderr)
+                self.assertEqual(self.state()["calls"], [])
+
     def test_missing_or_malformed_record_authors_trust_nobody(self):
         for name, row in {"absent": "", "empty": "| Record authors | |\n",
                           "malformed": "| Record authors | everyone |\n"}.items():
@@ -505,6 +540,13 @@ class Review(unittest.TestCase):
                 self.assertEqual((out.returncode, out.stdout), (2, ""), out.stderr)
                 self.assertEqual(out.stderr.strip(), f"refused: cannot read the pull request's own changes: "
                                  f"commit {missing} is not in this checkout and origin does not give it")
+
+    def test_a_recheck_names_the_revisions_and_gits_failure_when_the_diff_fails(self):
+        self.world({}, pr={"base": {"ref": "main", "sha": UNRELATED}}, comments=[report(FULL)])
+        out = self.run_helper("check", self.file("r.md", RECHECK), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout), (2, ""), out.stderr)
+        self.assertEqual(out.stderr.strip(), f"refused: cannot read the pull request's own changes: git diff "
+                         f"{UNRELATED}...{OLD} failed: fatal: {UNRELATED}...{OLD}: no merge base")
 
     def hand_back(self, code_line):
         upstream, work = self.root / "upstream", self.root / "work"

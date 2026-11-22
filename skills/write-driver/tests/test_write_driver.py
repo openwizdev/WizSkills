@@ -903,15 +903,12 @@ class NoCredential(Base):
 
 
 class KeyHostCopy(Base):
-    """`copy --key-host`: the README's key line, from OpenWiz's registry, names only (driver v1 N4)."""
 
     def copy(self, *args, openwiz=OPENWIZ, into=None, check=None):
         into = into or self.tmp / 'repo'
         return self.wd('copy', '--state', self.state, '--openwiz', openwiz, '--into', into, *args, check=check)
 
     def test_a_key_host_copy_names_the_host_its_variable_and_its_keychain_entry_on_one_line(self):
-        # catches: a key line naming the variable without the keychain entry, which KY1's kit fails ("names
-        # EXAMPLEHOST_API_KEY, the key's variable"), or one that drops N4's "the driver never sees it"
         self.begin()
         self.copy('--login', 'host', '--key-host', 'examplehost', check=0)
         lines = (self.tmp / 'repo' / 'adapters' / 'examplehost' / 'README.md').read_text().split('\n')
@@ -922,8 +919,6 @@ class KeyHostCopy(Base):
         self.assertEqual([x for x in lines if x.startswith('API key:')], [lines[4]])
 
     def test_a_key_host_copy_refuses_what_the_registry_does_not_hold(self):
-        # catches: a key line written for a host OpenWiz never reviewed, for a login that stays on the machine,
-        # beside a second key line, or from a registry that isn't one, and a refusal that repeats its input
         self.begin()
         broken = self.tmp / 'broken-openwiz'
         shutil.copytree(OPENWIZ, broken)
@@ -948,7 +943,6 @@ class KeyHostCopy(Base):
 
 
 def key_host_lines():
-    """SKILL.md's key-host lines: the paragraph that opens `**A key host.**`, to the next numbered step."""
     skill = (SCRIPT.parents[1] / 'SKILL.md').read_text()
     start = skill.find('**A key host.**')
     if start < 0:
@@ -958,11 +952,8 @@ def key_host_lines():
 
 
 class KeyHost(unittest.TestCase):
-    """The key-host lines (driver v1 N4, openwizdev/OpenWiz#2379's helper) and a driver written by them."""
 
     def test_a_key_host_driver_calls_only_the_helper_with_a_method_and_a_path(self):
-        # catches: a skill that lets the agent call the host's API itself, or send the helper more than the
-        # request (a key, a header, an address), so the driver handles the key or chooses where it goes
         text = key_host_lines()
         for words in ("the helper, `hostkey.py` in OpenWiz's `kernel/driver-kit/`, with `python3 -I`", 'every call to the host\'s API',
                       'exactly `host`, `method` (`GET`, `POST` or `DELETE`), `path` and an optional `body`',
@@ -970,29 +961,21 @@ class KeyHost(unittest.TestCase):
             self.assertIn(words, text)
 
     def test_a_key_hosts_readme_line_comes_from_copy_key_host(self):
-        # catches: a skill that keeps `--key-variable` for a key host, whose README line KY1's kit fails, or has
-        # the agent write the key line by hand
         self.assertIn("Run `copy` with `--key-host <the host's registered name>` instead of `--key-variable`",
                       key_host_lines())
 
     def test_adding_a_key_host_is_one_reviewed_row_in_the_registry(self):
-        # catches: a skill that tells the user to point the helper at their host themselves, or to edit the
-        # registry in their own copy, instead of one reviewed row through OpenWiz
         text = key_host_lines()
         self.assertIn('one reviewed row in `kernel/driver-kit/hosts.json`', text)
         self.assertIn('through an issue or pull request on openwizdev/OpenWiz', text)
 
     def test_the_key_stays_with_the_user_and_the_driver_never_sees_it(self):
-        # catches: a skill that says where the key goes but not that it stays the user's, or that has the agent
-        # handle it on the way
         text = key_host_lines()
         self.assertIn("in the user's system keychain or in an environment variable they set", text)
         self.assertIn('the driver never sees it', text)
         self.assertIn("the kit's token check covers the key", text)
 
     def test_the_key_host_lines_never_ask_for_read_or_pass_a_key(self):
-        # catches (W1): key-host lines that have the agent set, export, store or look up the key, which the
-        # guard forbids, or that drop the guard
         text = key_host_lines()
         self.assertIn('ask for, read, print, store or pass the key', text)
         for tool in ('export ', 'secret-tool', 'security ', 'DEVIN_API_KEY', '=<'):
@@ -1002,13 +985,11 @@ class KeyHost(unittest.TestCase):
                       'password, secret or cookie', skill)
 
     def test_a_host_that_cannot_wake_or_stop_the_same_run_ends_in_a_plain_no(self):
-        # catches: a skill that writes a start-only driver for a key host, which no kit run can pass
         text = key_host_lines()
         self.assertIn("can't wake the same run or stop it gets no driver", text)
         self.assertIn('say so plainly, run `$W stop-all`, and stop', text)
 
     def test_the_sample_key_host_driver_names_no_key_and_reaches_the_host_only_through_the_helper(self):
-        # catches: a sample driver that reads the key, calls the keychain or opens its own connection
         driver = (FIXTURES / 'key-host' / 'driver.txt').read_text()
         self.assertIn("'kernel', 'driver-kit', 'hostkey.py'", driver)
         self.assertIn("{'host': HOST, 'method': method, 'path': path}", driver)
@@ -1019,8 +1000,6 @@ class KeyHost(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('WRITE_DRIVER_OPENWIZ'),
                          'set WRITE_DRIVER_OPENWIZ to an OpenWiz checkout with the key helper to run the real kit')
     def test_the_sample_key_host_driver_passes_the_real_kit_on_a_fake_host(self):
-        # catches: lines that teach a driver the real kit (openwizdev/OpenWiz#2379) fails: a helper it can't
-        # find, a call outside the helper, or a README key line from `copy --key-host` the kit refuses
         import importlib.machinery
         import importlib.util
         openwiz = Path(os.environ['WRITE_DRIVER_OPENWIZ']).resolve()

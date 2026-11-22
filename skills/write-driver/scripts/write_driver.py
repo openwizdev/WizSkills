@@ -391,8 +391,6 @@ REGISTRY_KEYCHAIN = re.compile(r'[a-z0-9]+(?:[.-][a-z0-9]+)*')
 
 
 def key_host_line(openwiz, name):
-    """The README's key line for a host the key helper reaches: that host's variable and keychain entry, names
-    only, read from OpenWiz's reviewed registry, on one line, as KY1's kit accepts it."""
     # SECURITY: the refusal never says what it was given or read: either may be a key
     bad = Refused('the key host is not registered in kernel/driver-kit/hosts.json of the OpenWiz checkout, for a '
                   'login the host holds: add it there through OpenWiz first')
@@ -411,8 +409,7 @@ def key_host_line(openwiz, name):
 
 def login_line(readme, line, key_variable=None, key_line=None):
     """Open the README, right under its title, with exactly this login line, and no other; for a cloud host that
-    takes an API key, the name of the variable the user sets for it under that line, never a value; for a key
-    host, key_line instead."""
+    takes an API key, the name of the variable the user sets for it under that line, never a value."""
     lines = readme.read_text(encoding='utf-8').split('\n') if readme.exists() else []
     if not lines or not lines[0].startswith('# '):
         raise Refused('the template README.md has no title to put the login line under: write it by hand')

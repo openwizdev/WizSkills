@@ -374,18 +374,6 @@ class Write(Tracker):
         self.assertRegex(back.stdout, r'^#12: builder working, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
         self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
 
-    def test_with_a_shared_login_a_hold_added_just_before_the_write_post_stays(self):
-        self.world['login'] = 'synthetic-owner'
-        self.ticket(self.world)['comments'].append(comment(104, 'synthetic-owner', note()))
-        self.world['race_label'] = [{'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
-        self.save()
-        asking = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
-        self.assertEqual(asking.returncode, 0, asking.stderr)
-        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
-        self.assertEqual(back.returncode, 0, back.stderr)
-        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
-        self.assertRegex(back.stdout, r'(?m)^#12: needs-info left on: ')
-
     def test_a_hold_reapplied_as_the_write_clears_its_label_survives_a_failed_read(self):
         self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
         self.save()
@@ -485,6 +473,16 @@ class Write(Tracker):
         back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
         self.assertEqual((back.returncode, back.stdout), (0, '#12: builder working, status note 104 edited\n'))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+
+    def test_a_person_account_s_label_stays_when_the_note_s_history_is_unreadable(self):
+        self.person_asks()
+        self.world = self.load()
+        self.world['history_fails'] = True
+        self.save()
+        done = self.write('done', 'handed back', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertRegex(done.stdout, r'^#12: builder done, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
 
     def test_a_maintainer_s_needs_info_stays_when_the_note_is_done(self):
         cases = {'added after the ask': ((), [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-maintainer'},

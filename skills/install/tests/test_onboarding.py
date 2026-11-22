@@ -103,6 +103,7 @@ class Road(Journey):
         helper = home / 'install/scripts/first_fleet.py'
         if not helper.exists():
             helper.parent.mkdir(parents=True)
+            (self.dir / 'contracts').symlink_to(SKILL_DIR.parents[1] / 'contracts', target_is_directory=True)
             shutil.copyfile(SKILL_DIR / 'scripts/first_fleet.py', helper)
             (home / 'install/teach.md').symlink_to(SKILL_DIR / 'teach.md')
             (home / 'setup').symlink_to(SKILL_DIR.parent / 'setup', target_is_directory=True)

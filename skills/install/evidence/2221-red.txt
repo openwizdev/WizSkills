@@ -1,0 +1,31 @@
+# #2221 red: NoCloudRoomRequired against main's install skill at 9cfdab5, before the fix (synthetic)
+$ python3 -I skills/install/tests/test_doctor.py NoCloudRoomRequired
+FFF
+======================================================================
+FAIL: test_cloudroom_is_no_requirement_done_condition_or_resume_gate (__main__.NoCloudRoomRequired.test_cloudroom_is_no_requirement_done_condition_or_resume_gate)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 601, in test_cloudroom_is_no_requirement_done_condition_or_resume_gate
+    self.assertFalse('needs CloudRoom.' in self.text, 'needs CloudRoom.')
+AssertionError: True is not false : needs CloudRoom.
+
+======================================================================
+FAIL: test_the_host_question_comes_first_and_cloudroom_runs_only_when_chosen (__main__.NoCloudRoomRequired.test_the_host_question_comes_first_and_cloudroom_runs_only_when_chosen)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 614, in test_the_host_question_comes_first_and_cloudroom_runs_only_when_chosen
+    self.assertTrue(HOST_QUESTION in self.text, 'missing: ' + HOST_QUESTION)
+AssertionError: False is not true : missing: Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom.
+
+======================================================================
+FAIL: test_this_computer_leads_into_the_first_fleet_with_no_cloudroom_ids (__main__.NoCloudRoomRequired.test_this_computer_leads_into_the_first_fleet_with_no_cloudroom_ids)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 630, in test_this_computer_leads_into_the_first_fleet_with_no_cloudroom_ids
+    self.assertFalse('suggesting this machine' in where, 'step 6.1 suggests one host')
+AssertionError: True is not false : step 6.1 suggests one host
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.001s
+
+FAILED (failures=3)

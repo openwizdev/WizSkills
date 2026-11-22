@@ -28,6 +28,8 @@ with log.open('a') as f:
     f.write(' '.join([name, *args]) + '\n')
 if name == 'systemctl' and args == ['--user', 'show-environment']:
     sys.exit(0 if (home / 'systemd').exists() else 1)
+if name == 'systemctl' and args[1:3] == ['enable', '--now'] and (home / 'enable-failure').exists():
+    sys.exit(4)
 if name == 'crontab':
     table = home / 'crontab'
     if args == ['-l']:
@@ -141,6 +143,17 @@ class Heartbeat(unittest.TestCase):
                           'systemctl --user daemon-reload', f'systemctl --user enable --now {timer.name}',
                           f'systemctl --user disable --now {timer.name}', 'systemctl --user daemon-reload'])
 
+    def test_partial_install_rolls_back(self):
+        (self.home / 'systemd').touch()
+        failure = self.home / 'enable-failure'
+        failure.touch()
+        self.heartbeat('install', 'codex', 'synthetic-model', '--yes', expected=1)
+        self.assertEqual(self.files('.config/systemd/user/*'), [])
+        self.assertIn('not installed', self.heartbeat('status'))
+        failure.unlink()
+        self.install()
+        self.assertIn('active', self.heartbeat('status'))
+
     def test_cron_install_and_remove(self):
         original = (self.home / 'crontab').read_text()
         preview = self.preview()
@@ -209,12 +222,17 @@ printf '{"run":"synthetic-run"}\\n'""")
                          ['idle', 'started', 'started', 'check failed'])
 
     def test_pause_and_resume_run_now(self):
+        crontab = self.home / 'crontab'
+        original = crontab.read_text()
         self.install()
+        installed = crontab.read_text()
         self.heartbeat('pause')
+        self.assertEqual(crontab.read_text(), original)
         self.assertIn('paused', self.heartbeat('status'))
         self.heartbeat('run')
         self.assertFalse((self.home / 'check.log').exists())
         self.heartbeat('resume')
+        self.assertEqual(crontab.read_text(), installed)
         self.assertIn('active', self.heartbeat('status'))
         self.heartbeat('run')
         self.assertEqual((self.home / 'check.log').read_text().splitlines(), [f'{REPO} spec {SPEC}'])

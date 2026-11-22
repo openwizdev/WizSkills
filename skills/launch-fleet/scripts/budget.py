@@ -5,9 +5,10 @@ python3 -I budget.py admit N [HEADERS-FILE...]
 
 Each HEADERS-FILE is a response as `gh api -i` writes it (with --paginate, one
 header block per page). The allowance is the REST `core` pool of the newest
-answer: the latest reset window, and in it the lowest remaining, whatever the
-order of the files. With no file, or when the newest answer is past its reset,
-it reads `gh api rate_limit`, which costs no allowance.
+answer: the latest reset window (resets within ten minutes of the latest),
+and in it the lowest remaining, whatever the order of the files. With no
+file, or when the newest answer is past its reset, it reads
+`gh api rate_limit`, which costs no allowance.
 
 The batch of N reads is admitted when remaining - N stays at or above a
 quarter of the limit: the rest is kept for builders and reviewers, as
@@ -30,6 +31,9 @@ FIELDS = ('limit', 'remaining', 'reset', 'resource')
 POOL = 'core'
 STATUS = re.compile(rb'HTTP/\d(\.\d)? \d{3}( .*)?$')
 NUMBER = re.compile(r'(0|[1-9][0-9]{0,17})$')
+# GitHub's reset for one hour's window differs by a second or so between
+# answers; a new window resets about an hour later.
+WINDOW = 600
 
 
 class Unknown(Exception):
@@ -122,7 +126,7 @@ def rate_limit():
 
 def newest(pools):
     reset = max(p['reset'] for p in pools)
-    window = [p for p in pools if p['reset'] == reset]
+    window = [p for p in pools if p['reset'] >= reset - WINDOW]
     if len({p['limit'] for p in window}) != 1:
         raise Unknown('the newest answers give two limits')
     return min(window, key=lambda p: p['remaining'])

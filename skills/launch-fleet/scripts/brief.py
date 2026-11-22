@@ -2,7 +2,7 @@
 """Print one brief the fleet sends, literally (WS8, #1181). Send its output unchanged.
 
   brief.py builder N
-  brief.py reviewer P COMMIT [same-family]
+  brief.py reviewer P COMMIT
   brief.py re-check P COMMIT OLD_HEAD IDS ANSWER     IDS: R1,R2 or none; ANSWER: the builder's comment link or none
   brief.py fresh N P BRANCH COMMIT
   brief.py diagnose

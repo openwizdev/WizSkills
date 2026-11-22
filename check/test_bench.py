@@ -85,8 +85,6 @@ class SavedLogs(unittest.TestCase):
         self.assertEqual(rows['rules'], ['1.5', '1/1', '1.5'])
 
     def test_a_timed_end_line_still_ends_its_suite_timed_from_the_log(self):
-        # check/run.py may print `pass in 12.3s` / `fail (N) in 12.3s`; the
-        # printed seconds differ here so the table must come from timestamps.
         with tempfile.TemporaryDirectory() as tmp:
             shutil.copytree(SAVED / '103', Path(tmp) / '103')
             log = Path(tmp) / '103' / '1030.log'

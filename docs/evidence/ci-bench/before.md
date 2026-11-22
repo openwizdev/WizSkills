@@ -16,7 +16,7 @@ Seconds per phase. **Median** is over the runs that know the phase; **Known** co
 - **setup:** the "Set up job", checkout and "Install the pinned Changesets" steps.
 - **changeset gate**, **comment check**, **browser tools:** their workflow steps (GitHub reports steps to the whole second).
 - **rules**, **standalone:** from the `check/run.py` step's start to its `rules:` line, then to its `standalone:` line.
-- **suite …:** each suite command's `running` line to its `pass` or `fail` line.
+- **suite …:** each suite command's `running` line to its `pass` or `fail` line, with or without the ` in N.Ns` that `check/run.py` may add; the time comes from the log's timestamps either way, so the AFTER bench reads its window the same way.
 - **total:** the attempt's start to its job's completed time, so a rerun never counts the wait before it.
 
 Lower Known counts are steps or suites added to (or restored on) `main` during the window. A pull request whose branch predates one never runs it, so those runs do not know it: the comment check step ran in 56 runs, `test-heartbeat.py` in 8.

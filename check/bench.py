@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import re
 import statistics
 import subprocess
 import sys
@@ -24,7 +25,8 @@ its latest attempt.
 Phases: queue wait (job created to started), setup (set up job, checkout,
 Changesets install), the changeset gate, the comment check, the browser-tools
 install, the rules and the standalone check (from the `check/run.py` log),
-each suite (its `running` line to its `pass`/`fail` line) and the total (the
+each suite (its `running` line to its `pass`/`fail` line, with or without
+run.py's ` in N.Ns`, timed from the log either way) and the total (the
 attempt's start to its last job completed). A phase a run never finished is `unknown`,
 never zero, and stays out of the median. A run with several jobs takes each
 phase's longest job.
@@ -35,6 +37,7 @@ SETUP_STEPS = ('Set up job', 'Run actions/checkout', 'Install the pinned Changes
 STEP_PHASES = (('changeset gate', 'Changeset gate'), ('comment check', 'Comment check'),
                ('browser tools', 'Install pinned test-only browser tools'))
 RUN_PY = '##[group]Run python3 check/run.py'
+TIMED = re.compile(r' in \d+(?:\.\d+)?s$')
 FIXED = ('queue wait', 'setup', 'changeset gate', 'comment check', 'browser tools', 'rules', 'standalone')
 
 
@@ -80,6 +83,7 @@ def job_phases(job, log):
             out['standalone'] = seconds(rules_at, at)
         elif text.startswith('suite ') and ': ' in text:
             suite, _, state = text.rpartition(': ')
+            state = TIMED.sub('', state)
             if state == 'running':
                 running[suite] = at
                 out.setdefault(suite, None)

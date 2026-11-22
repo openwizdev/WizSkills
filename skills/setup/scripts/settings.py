@@ -304,12 +304,23 @@ def approval(text, problems):
         problems.append(here + 'more than one ## Approval rules heading')
     if len(at) != 1:
         return
-    table = []
+    table, fence = [], None
     for line in lines[at[0] + 1:]:
-        if line.startswith(('# ', '## ')) or (table and not line.lstrip().startswith('|')):
+        mark = re.match(r' {0,3}(`{3,}|~{3,})(.*)', line)
+        if line.startswith(('# ', '## ')):
             break
-        if re.match(r' {0,3}\|', line) or (len(table) > 1 and line.lstrip().startswith('|')):
+        if fence:
+            if mark and mark.group(1)[0] == fence[0] and len(mark.group(1)) >= len(fence) and not mark.group(2).strip():
+                fence = None
+        elif re.match(r' {0,3}\|', line):
             table.append(cells(line))
+        elif table and line.lstrip().startswith('|'):
+            problems.append(here + 'a row indented as code ends the table: ' + line.strip())
+            break
+        elif table:
+            break
+        elif mark:
+            fence = mark.group(1)
     if len(table) < 3 or table[0] != ['Rule', 'Approver'] or table[1] != ['---', '---']:
         problems.append(here + 'the table is not | Rule | Approver |')
         return

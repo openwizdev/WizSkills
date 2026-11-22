@@ -290,6 +290,28 @@ class Session(unittest.TestCase):
                                                          '--base-rule-checked'])
         self.assertIn('session: done: every ticket of spec #7 is closed\n', out)
 
+    def test_a_run_that_ends_before_its_start_answers_still_counts_as_ended(self):
+        self.tickets(3)
+        hold = self.home / 'hold'
+        hold.touch()
+        process = self.session('--idle', '20', FAKE_DRIVER_HOLD=str(hold))
+        self.until(lambda: len(self.starts()) == 1, 'the start', process)
+        self.note(3, 'builder')   # the local driver answers only once the first turn settles
+        time.sleep(1.1)           # so the note's second is before the answer's
+        hold.unlink()
+        out = self.ended(process, 3)
+        self.assertIn('needs you: nothing is due on spec #7 and no run or check is going\n', out)
+
+    def test_checks_that_never_finish_stop_the_session_after_idle(self):
+        self.tickets(4)
+        process = self.session('--idle', '1')
+        self.until(lambda: self.records(4) == ['launch-fleet: started'], 'the start', process)
+        self.change(lambda w: w['prs'].update({'13': {'ticket': 4, 'head': HEAD, 'state': 'OPEN', 'checks': [
+            {'__typename': 'CheckRun', 'name': 'check', 'status': 'IN_PROGRESS', 'conclusion': None}]}}))
+        self.note(4, 'builder', pr=13)
+        out = self.ended(process, 3)
+        self.assertIn('needs you: nothing moved on spec #7 for 1 seconds\n', out)
+
     def test_a_question_stops_the_session_before_anything_starts(self):
         self.tickets(8, 9)
         self.change(lambda w: w['questions'].append(8))

@@ -1,6 +1,6 @@
 # Builders
 
-Read this for a `start`, `reconcile start`, `check start`, `resume` or `reconcile resume` line, a refused probe, or a Claude plan-limit restart. The builder brief is `python3 -I scripts/brief.py builder <N>`.
+Read this for a `start`, `reconcile start`, `check start`, `resume` or `reconcile resume` line, a refused probe, or a Claude plan-limit restart. The builder brief is `python3 -I scripts/brief.py builder <ticket repo>#<N>`, with the ticket's tracker repository as OWNER/NAME.
 
 ## 3. Builders
 
@@ -12,7 +12,7 @@ Read this for a `start`, `reconcile start`, `check start`, `resume` or `reconcil
    ```sh
    room-cli thread spawn --top-level --provider <harness> --model <model> --reasoning-level <effort> \
      --title "#<N>: <ticket title>" \
-     --prompt "$(python3 -I "<this skill's folder>/scripts/brief.py" builder <N>)"
+     --prompt "$(python3 -I "<this skill's folder>/scripts/brief.py" builder <ticket repo>#<N>)"
    ```
 
    Everything about the work is in the ticket and its spec, so the brief never drifts from them. A top-level thread starts from the default branch on GitHub, and outlives this tick. A fleet thread starts it as its own child instead (`--parent-self --project "$ROOM_PROJECT_ID"` in place of `--top-level`), so it can reach it (SKILL.md, "Fleet threads").

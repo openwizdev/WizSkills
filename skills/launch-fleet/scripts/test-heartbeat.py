@@ -83,6 +83,15 @@ else:
 """
 
 
+def cron_command_of(field):
+    command, i = [], 0
+    while i < len(field) and field[i] != '%':
+        escaped = field.startswith('\\%', i)
+        command.append('%' if escaped else field[i])
+        i += 2 if escaped else 1
+    return ''.join(command)
+
+
 class Heartbeat(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory(prefix='heartbeat proof ')
@@ -195,7 +204,7 @@ class Heartbeat(unittest.TestCase):
         self.assertTrue(current.startswith(original))
         line, = current[len(original):].splitlines()
         self.assertIn(line + '\n', preview)
-        command = line.split(' ', 5)[5].replace(r'\%', '%')
+        command = cron_command_of(line.split(' ', 5)[5])
         ran = subprocess.run(['/bin/sh', '-c', command], env=self.env, capture_output=True, text=True, timeout=15)
         self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
         self.assertEqual((self.home / 'check.log').read_text(), f'{REPO} spec {SPEC}\n')
@@ -253,6 +262,57 @@ class Heartbeat(unittest.TestCase):
                          ['idle', 'started', 'woke', 'check failed'])
         self.heartbeat('remove')
         self.assertEqual(self.driver_calls(), [['start', expected], wake, ['stop', {'run': 'synthetic-run-1'}]])
+
+    def ticks(self):
+        log, = self.files('.local/state/openwiz-heartbeat/*/ticks.log')
+        return [line.split(' ', 1)[1] for line in log.read_text().splitlines()]
+
+    def test_status_names_an_unresolved_start_and_each_blocked_tick_logs_it(self):
+        self.setup_driver()
+        self.install()
+        state, = self.files('.local/state/openwiz-heartbeat/*')
+        (state / 'starting').mkdir()
+        (self.home / 'due').write_text(DUE)
+        self.heartbeat('run', expected=1)
+        self.heartbeat('run', expected=1)
+        self.assertEqual(self.ticks(), ['start unresolved', 'start unresolved'])
+        self.assertEqual(self.heartbeat('status').splitlines(),
+                         ['heartbeat: active (cron)', f'heartbeat: start unresolved: reconcile {state / "starting"}'])
+        self.assertFalse((self.home / 'driver.log').exists())
+
+    def test_a_closed_spec_logs_done_and_status_says_to_remove(self):
+        self.setup_driver()
+        self.install()
+        self.heartbeat('run')
+        self.assertEqual(self.heartbeat('status').splitlines(), ['heartbeat: active (cron)'])
+        (self.home / 'due').write_text(f"fleet done #{SPEC}: synthetic spec closed; delete this fleet thread's loop\n")
+        self.heartbeat('run')
+        self.assertEqual(self.ticks(), ['idle', 'done'])
+        phase, hint = self.heartbeat('status').splitlines()
+        self.assertEqual(phase, 'heartbeat: active (cron)')
+        prefix = f'heartbeat: spec #{SPEC} is done: run '
+        self.assertTrue(hint.startswith(prefix), hint)
+        elsewhere = self.home / 'elsewhere'
+        elsewhere.mkdir()
+        ran = subprocess.run(['/bin/sh', '-c', hint[len(prefix):]], cwd=elsewhere, env=self.env,
+                             capture_output=True, text=True, timeout=15)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn('not installed', self.heartbeat('status'))
+        self.assertEqual((self.home / 'crontab').read_text(), '15 3 * * * /bin/true\n')
+        self.assertFalse((self.home / 'driver.log').exists())
+
+    def test_remove_retires_a_run_the_driver_no_longer_knows(self):
+        self.setup_driver()
+        self.install()
+        (self.home / 'due').write_text(DUE)
+        self.heartbeat('run')
+        (self.home / 'wake-mode').write_text('unknown')
+        self.heartbeat('remove')
+        self.assertEqual([kind for kind, _ in self.driver_calls()], ['start', 'stop'])
+        self.assertEqual(self.files('.local/state/openwiz-heartbeat/openwiz-heartbeat-*'), [])
+        retired, = self.files('.local/state/openwiz-heartbeat/retired-runs/*/*.json')
+        self.assertEqual(json.loads(retired.read_text())['runs'][SPEC]['run'], 'synthetic-run-1')
+        self.assertIn('not installed', self.heartbeat('status'))
 
     def test_terminal_refusals_replace_the_run_without_losing_ids(self):
         self.setup_driver()

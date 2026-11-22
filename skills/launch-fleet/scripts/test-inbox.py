@@ -52,7 +52,7 @@ class Recheck(unittest.TestCase):
     def decide(self, view):
         return inbox.recheck(view)
 
-    def test_only_the_factory_records_and_verdicts_count(self):
+    def test_an_outsider_or_authorless_record_or_verdict_routes_nothing(self):
         for who in (OUTSIDER, None):
             with self.subTest(author=who):
                 verdict = [{'comment': 502, 'author': who, 'verdict': 'CHANGES', 'head': OLD}]

@@ -261,7 +261,7 @@ class AuditProof(unittest.TestCase):
         self.assertEqual(report['entries'][-1]['decision'], 'uncertain')
         self.assertEqual(report['entries'][-1]['remediation'], 'escalate')
 
-    def test_only_the_factory_records_confer_anything(self):
+    def test_an_outsider_or_authorless_grant_confers_nothing(self):
         decided = {9012: dict(valid=True, final_diff_digest=None), 9014: dict(valid=True, final_diff_digest=None)}
         for who in (OUTSIDER, None):
             rows = self.records()

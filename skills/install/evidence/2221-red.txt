@@ -45,3 +45,10 @@ AssertionError: False is not true : `--host local`
 Ran 3 tests in 0.001s
 
 FAILED (failures=1)
+
+# #2221 red, R1: the required restart loses the host on PR #249 (synthetic)
+$ python3 -I skills/install/tests/test_doctor.py NoCloudRoomRequired.test_restart_passes_the_host_to_where_before_confirmation
+FAIL: test_restart_passes_the_host_to_where_before_confirmation (__main__.NoCloudRoomRequired.test_restart_passes_the_host_to_where_before_confirmation)
+AssertionError: the restart message loses the local choice
+Ran 1 test in 0.000s
+FAILED (failures=1)

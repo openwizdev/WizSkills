@@ -621,6 +621,20 @@ class NoCloudRoomRequired(unittest.TestCase):
         self.assertTrue('ignore every `cloudroom_*` code' in step3, 'cloudroom_* codes are not ignored')
         self.assertLess(step3.index('ignore every `cloudroom_*` code'), step3.index('| Code | Next |'))
 
+    def test_restart_passes_the_host_to_where_before_confirmation(self):
+        step4 = self.between('## 4. ', '## 5. ')
+        for host in ('local', 'boat', 'cloud'):
+            self.assertIn(f'continue the OpenWiz install with host {host}', step4,
+                          f'the restart message loses the {host} choice')
+        resume = self.between('## Resume', '## 1. ')
+        self.assertIn('Read the host from the continuation message', resume)
+        self.assertLess(resume.index('Read the host from the continuation message'), resume.index('setup.py check'))
+        where = self.between('### 1. Where agents run', '### 2. Choose a start')
+        self.assertIn('use the host from Resume', where)
+        self.assertIn('run `where --agents <its name> --build "$build"` without asking again', where)
+        self.assertIn("the user’s yes to the previewed effects and cost", where)
+        self.assertIn('run it again with `--yes`', where)
+
     def test_this_computer_leads_into_the_first_fleet_with_no_cloudroom_ids(self):
         road = self.between('## 6. ', '## Doctor')
         opening = road[:road.index('### 1. ')]

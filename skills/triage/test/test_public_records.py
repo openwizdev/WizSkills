@@ -282,11 +282,16 @@ class FeedbackPath(unittest.TestCase):
     def test_verify_admits_only_a_complete_brief(self):
         def brief(**change):
             b = {"number": 9200, "author": "synthetic-owner", "body": BRIEF_BODY, "labels": ["ready-for-agent"],
-                 "milestone": "9.4.2", "comments": [{"author": "synthetic-owner", "body": APPROVAL}]}
+                 "milestone": "9.4.2", "comments": [{"author": "synthetic-owner", "body": APPROVAL}],
+                 "last_edited_at": "2026-11-01T09:00:00Z",
+                 "ready_labelled": [{"at": "2026-11-01T08:00:00Z", "by": "synthetic-user"},
+                                    {"at": "2026-11-01T09:00:01Z", "by": "Synthetic-Owner"}]}
             b.update(change)
             return {"report": 9101, "version": "9.4.2", "record_authors": ["openwiz[bot]", "Synthetic-Owner"],
                     "brief": b}
         rc, out, text = plan(brief(), "verify")
+        self.assertEqual((rc, out), (0, {"verified": 9200, "report": 9101}), text)
+        rc, out, text = plan(brief(last_edited_at=None), "verify")
         self.assertEqual((rc, out), (0, {"verified": 9200, "report": 9101}), text)
         for change, why in [
             ({"comments": []}, "approval"),
@@ -299,6 +304,11 @@ class FeedbackPath(unittest.TestCase):
             ({"body": BRIEF_BODY + "\n"}, "report link"),
             ({"labels": []}, "ready-for-agent"),
             ({"milestone": None}, "milestone"),
+            ({"ready_labelled": []}, "added by a record author"),
+            ({"ready_labelled": [{"at": "2026-11-01T09:00:01Z", "by": "synthetic-user"}]}, "added by a record author"),
+            ({"ready_labelled": [{"at": "2026-11-01T09:00:01Z", "by": None}]}, "added by a record author"),
+            ({"ready_labelled": [{"at": "2026-11-01T08:59:59Z", "by": "synthetic-owner"}]}, "after the brief's last edit"),
+            ({"ready_labelled": [{"at": "2026-11-01T09:00:00Z", "by": "synthetic-owner"}]}, "after the brief's last edit"),
         ]:
             with self.subTest(change=str(change)[:60]):
                 rc, _, text = plan(brief(**change), "verify")

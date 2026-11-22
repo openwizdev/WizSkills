@@ -1311,8 +1311,8 @@ def choose(got):
     if got.get('--agents', host['agents']) != host['agents']:
         raise Exit(5, 'The user said agents run %s; answer where again to change it; nothing recorded.' % (
             where_of(host['agents'])))
+    carried = state.value.get('setup')
     if got.get('--from-setup'):
-        carried = state.value.get('setup')
         if not carried:
             raise Exit(5, 'No setup was carried into this onboarding (run continue first); nothing recorded.')
         settings = carried['settings']
@@ -1324,6 +1324,10 @@ def choose(got):
         harnesses = [h for h in offered['harnesses'] if h['provider'] == settings['harness']]
     except (OSError, ValueError, KeyError, TypeError, AssertionError):
         raise Exit(1, 'The saved `openwiz models --json` output is unreadable; nothing recorded.')
+    local_source = host['agents'] != 'cloud' and (not carried or 'host' in carried)
+    if local_source and offered.get('source') != 'local':
+        raise Exit(5, 'Read the local options with `openwiz models --json --host %s`; nothing recorded.'
+                   % host['agents'])
     efforts = [e for h in harnesses for m in h['models'] if m['model'] == settings['model'] for e in m['efforts']]
     if len(harnesses) != 1 or settings['effort'] not in efforts:
         raise Exit(5, 'That harness, model and effort are not among the offered options; nothing recorded.')

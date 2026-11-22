@@ -185,7 +185,7 @@ For that repository, each tool previews and applies only on the yes (`--yes`, or
    - `--operator`: the name a loop's on or off switch records as who did it; recommend the user's GitHub login.
    - `--service-issue`: an open issue in that repository for OpenWiz's service records (not a pull request). With none, offer to open one, titled "OpenWiz service records", on the yes.
    - `--answer-thread`: the user's CloudRoom thread in that project that gets the fleet's answers, from the same `ls`; another project's thread reads `project_answer_refused`.
-   - `--harness`, `--model`, `--effort`: what the user picks from `<root>/current/openwiz models --json`; on this machine, only the harnesses `where` found.
+   - `--harness`, `--model`, `--effort`: what the user picks from `<root>/current/openwiz models --json` with CloudRoom. With a driver host, use `<root>/current/openwiz models --json --host <its name>` and offer its local options.
 
    Without `--yes` it prints the effects and an operation id; on the yes, run it again with `--yes --operation <id>`.
 3. **The App, or an explicit skip:** recommend the App, set up with the installed `"$build"/runtime/github-app/setup.py` as the `setup` skill's "The App" says. Only the user's answer selects `github_login.py skip-app`; an App failure never becomes a skip.
@@ -202,7 +202,7 @@ Done when `grill` recorded the confirmation.
 
 ### 5. Agents
 
-Harness, model and effort were answered at Connect. Save `<root>/current/openwiz models --json` privately, then run `first_fleet.py choose --options <saved file> --from-setup` (without a carried setup, ask the three and pass `--harness --model --effort`). `choose` writes the choice into `docs/agents/fleet.md`'s Models table, keeping the Reviewer in the other family. Commit that file and merge it, then run the same `choose` again: it reads the table back.
+Harness, model and effort were answered at Connect. Save `<root>/current/openwiz models --json` privately with CloudRoom. With a driver host, save `<root>/current/openwiz models --json --host <its name>` and use its local options. Then run `first_fleet.py choose --options <saved file> --from-setup` (without a carried setup, ask the three and pass `--harness --model --effort`). `choose` writes the choice into `docs/agents/fleet.md`'s Models table, keeping the Reviewer in the other family. Commit that file and merge it, then run the same `choose` again: it reads the table back.
 
 Done when the choice is recorded and the default branch's Models table names it.
 
@@ -222,9 +222,9 @@ Done when the machine plan approval is on the spec and `spec` saved it.
 
 ### 8. Launch
 
-Preview with `first_fleet.py launch --spec <N>`. It reads the spec's machine plan approval for this grill, the host the user chose (a driver host, this machine or boat.dev or another, only once its host setting is merged) and launch-fleet's own frontier, then prints the start's effects and one question that names the host and says it can cost money. Show the effects and ask that question as printed. This is the one yes before the fleet starts; never skip it, even though the cost was shown at **Where agents run**. On the yes, run it with `--yes --confirm <the digest it printed>`. It refuses if anything changed since the preview: preview again and ask again. It starts nothing itself: it saves the yes and names launch-fleet's own start path. As this project's orchestrator, follow launch-fleet's Launch section ([references/launch.md](../launch-fleet/references/launch.md)): the project's two loops, the GitHub messages question (a gate, in its own words), then "Starting one": the spec's loop, its private loop-map entry, read back, and the `launch-fleet: fleet active, loop fleet-<S>` record, read back. For every driver host (this machine, boat.dev or another), give that loop, which runs launch-fleet's `host.py`, `OPENWIZ_ADAPTERS` as `launch` printed it: without it `host.py` refuses every start. Cloudroom needs none. Then run `first_fleet.py launch --spec <N>` again: it says **The fleet starting** only once that record reads back; until then it exits 6. Never start the fleet a second way.
+Preview with `first_fleet.py launch --spec <N>`. It reads the spec's machine plan approval for this grill, the host the user chose (a driver host, this machine or boat.dev or another, only once its host setting is merged) and launch-fleet's own frontier, then prints the start's effects and one question that names the host and says it can cost money. Show the effects and ask that question as printed. This is the one yes before the fleet starts; never skip it, even though the cost was shown at **Where agents run**. On the yes, run it with `--yes --confirm <the digest it printed>`. It refuses if anything changed since the preview: preview again and ask again. It starts nothing itself: it saves the yes and names launch-fleet's own start path. With CloudRoom, follow launch-fleet's Launch section ([references/launch.md](../launch-fleet/references/launch.md)): the project's two loops, the GitHub messages question (a gate, in its own words), then "Starting one": the spec's loop, its private loop-map entry, read back, and the `launch-fleet: fleet active, loop fleet-<S>` record, read back. With a driver host, follow the local heartbeat handoff as `launch` printed it, including the heartbeat preview and approval. Then run `first_fleet.py launch --spec <N>` again. For CloudRoom it says **The fleet starting** when the activation record reads back. For a driver host it confirms the active heartbeat. Never start the fleet a second way.
 
-Done when `launch` read the activation record back and printed **The fleet starting**.
+Done when `launch` reads back the CloudRoom activation record or the active heartbeat for the chosen driver host.
 
 ### 9. Watch
 

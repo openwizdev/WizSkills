@@ -1109,7 +1109,6 @@ def step_block(heading, end, keep, listed=False):
 
 
 class StepFourReadsTheInstallerOutput(unittest.TestCase):
-    """#2191, #2398: step 4 reads each row of openwiz.skills-install.v1 and the release's own skill list."""
 
     def run_step(self, output, code):
         tmp = Path(tempfile.mkdtemp())
@@ -1131,7 +1130,6 @@ class StepFourReadsTheInstallerOutput(unittest.TestCase):
         return step4, [l.replace(str(home), '~') for l in out.stdout.split('\n') if l]
 
     def test_partial_counts_as_done_and_each_skip_and_missing_skill_is_named(self):
-        # catches: step 4 reading only "outcome", hiding a per-skill skip, and a fixed skill count going stale
         skip = 'Move or rename your own grill, then run this again.'
         step4, lines = self.run_step({
             'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'partial',
@@ -1157,7 +1155,6 @@ class StepFourReadsTheInstallerOutput(unittest.TestCase):
             self.assertIn(words, step4)
 
     def test_refused_means_nothing_was_installed(self):
-        # catches: exit 5 read as a success, or an absent folder left unnamed
         step4, lines = self.run_step({
             'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'refused',
             'canonical': 'HOME/root/skills', 'skills': ['install'],
@@ -1171,7 +1168,6 @@ class StepFourReadsTheInstallerOutput(unittest.TestCase):
 class UninstallListsEveryHeartbeatJob(unittest.TestCase):
 
     def test_a_nested_second_install_is_listed_like_any_job_and_nothing_is_touched(self):
-        # catches: #2377, a second install whose state sits inside the first's read as "this install"
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)
         jobs = tmp / 'home/.local/state/openwiz-heartbeat'

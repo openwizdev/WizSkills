@@ -118,7 +118,6 @@ def builder_thread(n, branch, threads, state, runs=None):
 
 
 def pull_key(repo, obj):
-    """A pull request's review key: its bare number here, OWNER/NAME#N in another repository (#1977)."""
     other = obj.get('repository')
     other = other.get('nameWithOwner') if isinstance(other, dict) else None
     if isinstance(other, str) and other.lower() != repo.lower():
@@ -127,7 +126,6 @@ def pull_key(repo, obj):
 
 
 def review_keys(state):
-    """The map with each review key's repository read case-insensitively, as GitHub names it."""
     keys = {}
     for key, value in state.items():
         qualified = re.fullmatch(r'(review:)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(#[0-9]+:.+)', key)

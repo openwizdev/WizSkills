@@ -11,7 +11,6 @@ if os.environ.get('FAKE_ROOM_CLI', 'local') == 'cloud':
         sys.exit(2)
     print(json.dumps({'children': threads}))
 else:
-    # Local lists a hidden thread only with --include-hidden (#2104).
     if '--include-hidden' not in sys.argv and isinstance(threads, list):
         threads = [t for t in threads if not (isinstance(t, dict) and t.get('hidden'))]
     if '--json' in sys.argv:

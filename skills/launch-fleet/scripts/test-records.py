@@ -97,7 +97,6 @@ class Fleet(unittest.TestCase):
         for cli in ('local', 'cloud'):
             with self.subTest(cli=cli):
                 self.env['FAKE_ROOM_CLI'] = cli
-                # Local lists this hidden builder only with --include-hidden (#2104).
                 self.threads[0]['hidden'] = cli == 'local'
                 self.assertEqual(self.run_fleet('wake', '12'),
                                  f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')
@@ -574,7 +573,6 @@ def step_with(text):
 
 
 class CrossRepositoryReviews(unittest.TestCase):
-    """#1977: another repository's pull request #31 must not route through this repository's #31 keys."""
     TOOLS, LOCAL = 'thr_syntools31', 'thr_synlocal31'
 
     @classmethod

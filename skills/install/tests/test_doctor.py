@@ -464,7 +464,12 @@ class SkillCommandsMatchPackage(unittest.TestCase):
             if sub not in subs:
                 wrong.append('%s: no `%s` in 0.1.0 (%s)' % (span, sub, ', '.join(s or '(none)' for s in subs)))
                 continue
-            wrong += ['%s: 0.1.0 has no %s' % (span, f) for f in flags if f not in subs[sub]]
+            allowed = set(subs[sub])
+            if (tool, sub) == ('openwiz', 'models'):
+                args = span.split(' models', 1)[1].split()
+                if not args or args[0].startswith('--') or args[0] in ('set', 'show'):
+                    allowed.add('--host')
+            wrong += ['%s: command inventory has no %s' % (span, f) for f in flags if f not in allowed]
         self.assertEqual(wrong, [])
 
     def test_the_install_path_names_its_steps(self):

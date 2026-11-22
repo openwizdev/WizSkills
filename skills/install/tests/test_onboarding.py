@@ -756,6 +756,30 @@ class HostApproval(unittest.TestCase):
         self.assertEqual(road.approvals(), {road.repo: {'claude': 'acceptEdits'}}, 'never widened')
         self.assertFalse([c for c in road.gh_calls() if c[:1] == ['auth']])
 
+    def test_with_both_harnesses_one_ask_saves_each_harness_mode_and_its_own_row(self):
+        road = self.road('small-change')
+        road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
+        state = road.saved()
+        state['host']['harnesses'] = ['claude-code', 'codex']
+        road.state.write_text(json.dumps(state))
+        asked = road.helper(['mode'])
+        self.assertEqual(asked.returncode, 12, asked.stdout)
+        listed = [m for m, _ in re.findall(r'(?m)^- (\S+): (.+)$', asked.stdout)]
+        self.assertEqual(listed, ['default', 'acceptEdits', 'bypassPermissions', 'read-only', 'workspace-write',
+                                  'danger-full-access'], 'one ask covers the builder and the other-family reviewer')
+        half = road.helper(['mode', '--mode', 'acceptEdits'])
+        self.assertEqual(half.returncode, 5, half.stdout)
+        self.assertIsNone(road.approvals(), 'a pick for only one harness saves nothing')
+        picked = road.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+        self.assertEqual(picked.returncode, 0, picked.stdout)
+        self.assertEqual(road.approvals(), {road.repo: {'claude': 'acceptEdits', 'codex': 'workspace-write'}})
+        wrote = road.helper(['setting', '--yes'])
+        self.assertEqual(wrote.returncode, 0, wrote.stdout)
+        fleet = json.loads(road.world_path.read_text())['branches']['openwiz/host-setting']['docs/agents/fleet.md']
+        self.assertEqual(re.findall(r'(?m)^\| Harness permission mode.*$', fleet),
+                         ['| Harness permission mode (claude) | `acceptEdits` |',
+                          '| Harness permission mode (codex) | `workspace-write` |'])
+
     def test_the_approval_adds_only_this_entry_keeps_every_other_byte_and_is_owner_only_600(self):
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
@@ -816,6 +840,34 @@ class HostApproval(unittest.TestCase):
         self.assertIn('| Harness permission mode | `acceptEdits` |', result.stdout)
         self.assertIn('run mode, then setting, and merge it', result.stdout)
         self.assertEqual(road.spawns(), [])
+
+    def test_with_both_harnesses_the_reviewers_own_row_and_approval_gate_the_launch(self):
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
+        codex = road.dir / 'bin/codex'
+        codex.write_text('#!/bin/sh\nexit 97\n')
+        codex.chmod(0o755)
+        state = road.saved()
+        state['host']['harnesses'] = ['claude-code', 'codex']
+        state['mode'] = {'harness': 'claude-code', 'mode': 'acceptEdits',
+                         'modes': {'claude': 'acceptEdits', 'codex': 'workspace-write'}}
+        road.state.write_text(json.dumps(state))
+        rows = ('\n## Harness permission mode\n\n| Setting | Value |\n| --- | --- |\n'
+                '| Harness permission mode (claude) | `acceptEdits` |\n'
+                '| Harness permission mode (codex) | `workspace-write` |\n')
+        road.origin_write({'docs/agents/fleet.md': fleet_md(builder=CLAUDE, small=CLAUDE) + rows})
+        path = road.host_state / 'approvals.json'
+        path.write_text(json.dumps({road.repo: {'claude': 'acceptEdits'}}))
+        path.chmod(0o600)
+        refused = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(refused.returncode, 5, refused.stdout)
+        self.assertIn('codex', refused.stdout, 'names the reviewer harness with no approval')
+        self.assertNotIn('Confirmation:', refused.stdout)
+        path.write_text(json.dumps({road.repo: {'claude': 'acceptEdits', 'codex': 'workspace-write'}}))
+        preview = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(preview.returncode, 12, preview.stdout)
+        self.assertIn('claude-code with the acceptEdits permission mode and codex with the workspace-write '
+                      'permission mode', preview.stdout)
 
 
 class ReviewRound(unittest.TestCase):

@@ -1751,11 +1751,7 @@ BRAIN_FILES = {'.openwiz/brain/README.md': '# Brain\n\nSynthetic.\n',
 
 
 class OneSetupPullRequest(unittest.TestCase):
-    """#2325 (spec #2322, P4): Connect shows the recommended setup as one block that one yes records, asks the
-    permission mode once with no recommendation, and setup opens one pull request the user merges once."""
-
     def road(self):
-        """A machine with no room-cli, its repository chosen, and init's brain pull request open."""
         j = Journey(self)
         (j.dir / 'bin/room-cli').unlink()
         j.extra_env['OPENWIZ_LOCAL_STATE'] = str(j.dir / 'host-state')
@@ -1773,8 +1769,6 @@ class OneSetupPullRequest(unittest.TestCase):
     def saved(self, j):
         return json.loads(j.state.read_text())
 
-    # catches: a Connect that asks operator, service issue, models and the App one question each, or a block whose
-    # yes records only part of it (the reviewer or the identity asked again later).
     def test_the_defaults_are_one_block_and_one_yes_records_all_of_them(self):
         j = self.road()
         shown = j.helper(['defaults', '--options', str(j.options)])
@@ -1804,7 +1798,6 @@ class OneSetupPullRequest(unittest.TestCase):
             'operator': 'synthetic-other', 'service_issue': 7, 'harness': SOL[0], 'model': SOL[1], 'effort': SOL[2],
             'reviewer': list(CLAUDE), 'identity': 'app'}, 'any line the user changes, and the reviewer follows')
 
-    # catches: a mode ask that needs the merged setup first (so a second merge), recommends one, or asks twice.
     def test_the_permission_mode_is_asked_once_before_the_merge_with_no_recommendation(self):
         j = self.road()
         self.assertEqual(j.helper(['defaults', '--options', str(j.options), '--yes']).returncode, 0)
@@ -1817,8 +1810,6 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual(picked.returncode, 0, picked.stdout + picked.stderr)
         self.assertEqual(self.saved(j)['mode']['modes'], {'claude': 'acceptEdits', 'codex': 'workspace-write'})
 
-    # catches: the Models table, host file and mode row in their own pull requests beside the brain's, or any step
-    # before the grill asking for a second merge.
     def test_setup_opens_exactly_one_pull_request_with_the_brain_models_host_and_mode(self):
         j = self.road()
         said = [j.helper(['defaults', '--options', str(j.options), '--yes']),
@@ -1846,8 +1837,6 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual(self.saved(j)['setting']['pull'], BRAIN_PULL)
         for result in said:
             self.assertNotRegex(result.stdout, r'(?i)\bmerge', 'only the one setup pull request asks for a merge')
-        # The user merges it once; then setup checks, continue carries it, the grill runs, and the Agents step
-        # only reads the Models table back.
         merged = {k: branch[k] for k in ('docs/agents/host.md', 'docs/agents/fleet.md')}
         j.origin_write(merged)
         world['files'].update(branch)
@@ -1871,8 +1860,6 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: plan.')
 
 
-    # catches: a driver host other than this machine (no mode rows) whose Models table write is refused on the
-    # brain's branch, or sent to a second pull request.
     def test_a_driver_host_puts_its_models_table_and_host_in_the_brains_pull_request(self):
         j = self.road()
         state = self.saved(j)

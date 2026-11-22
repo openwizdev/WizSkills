@@ -50,14 +50,6 @@ any retry of a create whose answer was lost. It never pushes into a repository.
 `select` records the existing repository the owner confirmed, before Connect,
 as this onboarding's one repository; it reads and changes nothing else.
 
-`defaults` (#2325) shows Connect's recommended setup as one block: the user's
-GitHub login as operator, a new service issue, the current builder and
-reviewer models, and the user's own login instead of the GitHub App for the
-first fleet. One yes (--yes) records all of it; a flag changes its line. Then
-`mode` and `setting` need no carried setup: `setting` adds the Models table,
-the host file and the mode rows to the brain's own pull request (init's
-openwiz/brain branch) when it is open, so setup is one pull request merged once.
-
 `next` reads only the state file and prints the first unfinished step and
 what to run there, so a fresh session resumes without repeating an effect.
 With --setup-state it also reads, never writes, the repository setup
@@ -1084,8 +1076,7 @@ def blob(repo, path, env, ref):
 
 def pull_diff(repo, env, want, head=HOST_BRANCH):
     """R4: the host-setting branch's whole diff against the default branch must be exactly the approved changes
-    (each file in want added or changed to its approved text, and nothing else, but on the brain's branch the
-    brain files init added); Exit 5 naming a file that differs."""
+    (each file in want added or changed to its approved text, and nothing else); Exit 5 naming a file that differs."""
     base = run(['gh', 'api', 'repos/%s' % repo, '--jq', '.default_branch'], env)
     branch = base.stdout.decode('utf-8', 'replace').strip() if base is not None and base.returncode == 0 else ''
     result = run(['gh', 'api', 'repos/%s/compare/%s...%s' % (repo, branch, head)], env) if branch else None
@@ -1184,8 +1175,7 @@ def mode(got):
 
 def setting(got):
     """Write where agents run (docs/agents/host.md) and, on this machine, the owner's permission mode (KN3's one
-    docs/agents/fleet.md row) as one pull request the user merges, only on --yes. With Connect's recorded
-    defaults it writes their Models table too, on the brain's own pull request while that is open (#2325)."""
+    docs/agents/fleet.md row) as one pull request the user merges, only on --yes."""
     state = State(got['--state'])
     host, chosen = state.value.get('host'), state.value.get('defaults')
     repo = (state.value.get('setup') or {}).get('repository') or (state.value.get('repo') if chosen else None)
@@ -1391,7 +1381,6 @@ def select(got):
 
 
 def read_options(path):
-    """The saved `openwiz models --json` output; Exit when unreadable."""
     try:
         offered = strict(Path(path).read_text(encoding='utf-8'))
         assert offered['schema'] == 'openwiz.cloud-options.v1' and offered['state'] == {'kind': 'offered'}
@@ -1403,7 +1392,6 @@ def read_options(path):
 
 
 def recommended(host, offered):
-    """The current builder: the recommended one of the first harness this host has, else its first offered model."""
     usable = [p for p in ('claude-code', 'codex') if host['agents'] != 'local' or p in host.get('harnesses', ())]
     for provider in usable:
         if offers(offered, RECOMMENDED[FAMILY[provider]]):
@@ -1417,7 +1405,6 @@ def recommended(host, offered):
 
 
 def defaults(got):
-    """Connect's recommended setup as one block (#2325); one yes records all of it, a flag changes its line."""
     state = State(got['--state'])
     host, repo = state.value.get('host'), state.value.get('repo')
     if not host or not repo:
@@ -1646,9 +1633,6 @@ def write_in(folder, choice, offered, driver=False):
 
 
 def models_change(text, choice, offered, driver=False, reviewer=None):
-    """fleet.md's text with its Models table naming choice (before the older tables when it has none), the
-    intended table and what it says. The Reviewer is the given one, else the table's other-family one, else the
-    recommended other-family choice; Exit when the text or the choice can't take it."""
     try:
         table = models_table(text)
     except ValueError as error:
@@ -1696,8 +1680,6 @@ def models_change(text, choice, offered, driver=False, reviewer=None):
 
 
 def reviewer_of(found, choice, offered, driver):
-    """The Reviewer for choice: found when it is from the other family, else the recommended other-family choice;
-    on a driver host without that harness, (that choice, its missing harness) for a same-family review."""
     family = FAMILY[choice[0]]
     if found and FAMILY.get(found[0]) not in (None, family):
         return found, None

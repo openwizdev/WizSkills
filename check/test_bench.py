@@ -84,6 +84,21 @@ class SavedLogs(unittest.TestCase):
         self.assertNotIn(BETA, rows)
         self.assertEqual(rows['rules'], ['1.5', '1/1', '1.5'])
 
+    def test_a_timed_end_line_still_ends_its_suite_timed_from_the_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copytree(SAVED / '103', Path(tmp) / '103')
+            log = Path(tmp) / '103' / '1030.log'
+            text = log.read_text(encoding='utf-8')
+            for end in ('test_alpha.py: fail (1)', 'test.sh: pass'):
+                self.assertIn(end + '\n', text)
+                text = text.replace(end + '\n', end + ' in 9.9s\n')
+            log.write_text(text, encoding='utf-8')
+            code, out, err = bench('--saved', tmp, '--window', 'timed end lines')
+        self.assertEqual(code, 0, err)
+        _, rows = table(out)
+        self.assertEqual(rows[ALPHA], ['80.0', '1/1', '80.0'])
+        self.assertEqual(rows[BETA], ['40.0', '1/1', '40.0'])
+
 
 def with_fake_gh(*args):
     with tempfile.TemporaryDirectory() as tmp:

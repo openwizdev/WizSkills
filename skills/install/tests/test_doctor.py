@@ -590,6 +590,125 @@ class SkillCommandsMatchPackage(unittest.TestCase):
                           ('openwiz', '', ['--build-identity'])])
 
 
+SYNTHETIC_TAG = 'v0.1.1'
+SYNTHETIC_SOURCE = 'b' * 40
+FAKE_CURL = r"""#!/usr/bin/env python3
+import os, sys
+url = next(a for a in sys.argv[1:] if a.startswith('https://'))
+with open(os.environ['FAKE_LOG'], 'a') as log:
+    log.write('curl %s\n' % url)
+if url.endswith('/releases/latest') and '-w' in sys.argv:
+    print('https://github.com/openwizdev/OpenWiz/releases/tag/' + os.environ['FAKE_TAG'])
+elif '-o' in sys.argv and sys.argv[sys.argv.index('-o') + 1] != '/dev/null':
+    open(sys.argv[sys.argv.index('-o') + 1], 'w').write('synthetic\n')
+"""
+FAKE_GIT = r"""#!/usr/bin/env python3
+import os, sys
+with open(os.environ['FAKE_LOG'], 'a') as log:
+    log.write('git %s\n' % ' '.join(sys.argv[1:]))
+if sys.argv[1] == 'clone':
+    tool = os.path.join(sys.argv[-1], 'tools/install/install')
+    os.makedirs(os.path.dirname(tool))
+    open(tool, 'w').write(open(os.environ['FAKE_INSTALLER']).read())
+"""
+# A synthetic 0.1.1 package's installer: it answers only the subcommands and flags its --help lists, and
+# its installed binary reports the package's own build identity.
+FAKE_INSTALLER = r"""import json, os, sys
+package = json.load(open(os.environ['FAKE_PACKAGE']))
+sub, args = sys.argv[1], sys.argv[2:]
+helps = package['tools']['tools/install/install']
+if sub not in helps or any(a.startswith('--') and a not in helps[sub] for a in args):
+    sys.exit('usage: install {%s}' % ','.join(helps))
+with open(os.environ['FAKE_LOG'], 'a') as log:
+    log.write('install %s\n' % ' '.join(sys.argv[1:]))
+value = lambda flag: args[args.index(flag) + 1]
+if sub == 'preflight':
+    print(json.dumps({'outcome': 'ready', 'target': 'x86_64-unknown-linux-gnu'}))
+elif sub == 'download':
+    os.makedirs(value('--dir'), exist_ok=True)
+elif sub == 'install':
+    build = os.path.join(value('--root'), 'service/builds/synthetic')
+    os.makedirs(build)
+    binary = os.path.join(build, 'openwiz')
+    identity = json.dumps({'version': package['version'], 'source': os.environ['FAKE_SOURCE']}, separators=(',', ':'))
+    open(binary, 'w').write('#!/bin/sh\necho %s\n' % repr(identity))
+    os.chmod(binary, 0o755)
+    os.symlink(build, os.path.join(value('--root'), 'current'))
+    print(json.dumps({'outcome': 'activated', 'activated': True, 'version': package['version']}))
+"""
+
+
+class InstallsTheReleaseItFetches(unittest.TestCase):
+    """Run steps 1 and 2 as written against a synthetic 0.1.1 release that is GitHub's Latest."""
+
+    def run_steps(self):
+        import re
+        text = SKILL.read_text()
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__('shutil').rmtree, tmp)
+        package = json.loads(PACKAGE.read_text())
+        package['version'] = SYNTHETIC_TAG[1:]
+        (tmp / 'package.json').write_text(json.dumps(package))
+        (tmp / 'installer.py').write_text(FAKE_INSTALLER)
+        bin_dir = tmp / 'bin'
+        bin_dir.mkdir()
+        for name, body in (('curl', FAKE_CURL), ('git', FAKE_GIT)):
+            write(bin_dir / name, body, 0o755)
+        env = {'HOME': str(tmp), 'PATH': '%s:/usr/bin:/bin' % bin_dir, 'FAKE_LOG': str(tmp / 'log'),
+               'FAKE_TAG': SYNTHETIC_TAG, 'FAKE_PACKAGE': str(tmp / 'package.json'),
+               'FAKE_INSTALLER': str(tmp / 'installer.py'), 'FAKE_SOURCE': SYNTHETIC_SOURCE}
+        found = {'<private temporary folder>': str(tmp / 'work'), '<root>': str(tmp / 'root'),
+                 '"$openwiz"': str(tmp / 'work/openwiz')}
+        (tmp / 'work').mkdir()
+        outputs = []
+        steps = text[text.index('## 1. '):text.index('## 3. ')]
+        for n, block in enumerate(re.findall(r'```sh\n(.*?)```', steps, re.S)):
+            found['<private download folder>'] = str(tmp / ('download-%d' % n))
+            for key, value in found.items():
+                block = block.replace(key, value)
+            out = subprocess.run(['sh', '-c', block], env=env, capture_output=True, text=True).stdout
+            outputs.append(out)
+            tag = re.search(r'/releases/tag/(\S+)', out)
+            if tag:
+                found.update({'<tag>': tag[1], '<version>': tag[1].lstrip('v')})
+            target = re.search(r'"target": "([^"]+)"', out)
+            if target:
+                found['<target>'] = target[1]
+        log = (tmp / 'log').read_text() if (tmp / 'log').exists() else ''
+        for key, value in found.items():
+            steps = steps.replace(key, value)
+        return steps, log, outputs
+
+    def test_preflight_clones_the_tag_of_the_release_it_installs(self):
+        steps, log, outputs = self.run_steps()
+        clones = [l for l in log.split('\n') if l.startswith('git clone')]
+        self.assertEqual(clones, ['git clone --depth 1 --branch %s https://github.com/openwizdev/OpenWiz %s'
+                                  % (SYNTHETIC_TAG, clones[0].split()[-1])] if clones else ['a clone'])
+
+    def test_the_pinned_tag_fallback_fetches_that_release_s_files(self):
+        steps, log, outputs = self.run_steps()
+        fetched = sorted(l.split()[1] for l in log.split('\n') if l.startswith('curl ') and '/releases/download/' in l)
+        base = 'https://github.com/openwizdev/OpenWiz/releases/download/%s/' % SYNTHETIC_TAG
+        self.assertEqual(fetched, [base + f for f in ('openwiz-0.1.1-x86_64-unknown-linux-gnu.tar.gz',
+                                                      'openwiz-x86_64-unknown-linux-gnu.manifest.json',
+                                                      'openwiz-x86_64-unknown-linux-gnu.sha256')])
+
+    def test_the_done_check_expects_the_installed_release_s_build_identity(self):
+        steps, log, outputs = self.run_steps()
+        identity = '{"version":"0.1.1","source":"%s"}' % SYNTHETIC_SOURCE
+        self.assertIn(identity, outputs[-1])
+        step2 = steps[steps.index('## 2. '):]
+        self.assertIn('`"version":"0.1.1"`', step2)
+        self.assertNotIn('0.1.0', step2)
+
+    def test_only_the_explicit_line_names_0_1_0(self):
+        text = SKILL.read_text()
+        named = [l for l in text[text.index('## Resume'):text.index('## 5. ')].split('\n') if '0.1.0' in l]
+        self.assertEqual(len(named), 1, named)
+        self.assertIn('To install 0.1.0, use `v0.1.0`', named[0])
+        self.assertNotIn('version: 0.2.0', text)
+
+
 HOST_QUESTION = ("Where should your agents run? This computer (Claude Code or Codex you're signed in to), "
                  "boat.dev, or CloudRoom.")
 

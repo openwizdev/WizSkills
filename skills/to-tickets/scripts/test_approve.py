@@ -1,4 +1,3 @@
-"""approve.py's size limit (openwizdev/OpenWiz#2495): run approve.py on synthetic graph, revision and spec files."""
 import hashlib
 import json
 from pathlib import Path

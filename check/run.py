@@ -45,6 +45,7 @@ SUITES = {
               ['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/image/references']],
     'to-spec': [['python3', '-I', 'skills/to-spec/test/test_video.py']],
     'to-tickets': [['python3', '-I', 'skills/to-tickets/scripts/test_check_approval.py'],
+                   ['python3', '-I', 'skills/to-tickets/scripts/test_approve.py'],
                    ['sh', 'skills/to-tickets/test/test-revision.sh'],
                    ['python3', '-I', 'skills/to-tickets/test/test_relies.py'],
                    ['python3', '-I', 'skills/to-tickets/test/test_picture.py'],

@@ -52,9 +52,10 @@ count = world['calls'] = world.get('calls', 0) + 1
 json.dump(world, open(os.environ['FAKE_WORLD'], 'w'))
 if world.get('fail_call') == count:
     sys.exit('HTTP 502: synthetic failure')
-if world.get('errors_call') == count:
-    print(json.dumps({'data': None, 'errors': [{'type': 'SYNTHETIC', 'message': 'synthetic error'}]}))
-    sys.exit(1)
+errors = [{'type': 'SYNTHETIC', 'message': 'synthetic error'}] if world.get('errors_call') == count else []
+
+def answer(data):
+    print(json.dumps({'data': data, **({'errors': errors} if errors else {})}))
 if 'mutation' in query:
     sys.exit('fake gh: a write')
 
@@ -81,17 +82,17 @@ after = fields.get('after')
 if 'subIssues' in query:
     subs = world['specs'].get(repo + '#' + fields['number'])
     if subs is None:
-        print(json.dumps({'data': {'repository': {'issue': None}}}))
+        answer({'repository': {'issue': None}})
         sys.exit(0)
     nodes, info = page([issue(s.split('#')[0], int(s.split('#')[1])) for s in subs], world['page'], after)
-    print(json.dumps({'data': {'repository': {'issue': {'subIssues': {'pageInfo': info, 'nodes': nodes}}}}}))
+    answer({'repository': {'issue': {'subIssues': {'pageInfo': info, 'nodes': nodes}}}})
 elif 'issues(' in query:
     closed = sorted(int(n) for n, i in world['repos'][repo]['issues'].items() if i['state'] == 'CLOSED')
     nodes, info = page([issue(repo, n) for n in closed], world['page'], after)
-    print(json.dumps({'data': {'repository': {'issues': {'pageInfo': info, 'nodes': nodes}}}}))
+    answer({'repository': {'issues': {'pageInfo': info, 'nodes': nodes}}})
 else:
     number = int(fields['number'])
-    print(json.dumps({'data': {'repository': {'issue': {'comments': comments(repo, number, after)}}}}))
+    answer({'repository': {'issue': {'comments': comments(repo, number, after)}}})
 '''
 
 
@@ -229,7 +230,7 @@ class Ledger(unittest.TestCase):
                  'the first page fails': dict(fail_call=1),
                  'the second read fails': dict(fail_call=2),
                  'the fourth read fails': dict(fail_call=4),
-                 'an answer with errors': dict(errors_call=3)}
+                 'a whole answer that also carries errors': dict(errors_call=3)}
         for name, faults in cases.items():
             with self.subTest(name):
                 code, out, err = World(self, big, **faults).run(REPO)

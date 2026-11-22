@@ -221,6 +221,34 @@ printf '{"run":"synthetic-run"}\\n'""")
         self.assertEqual([line.split(' ', 1)[1] for line in log.read_text().splitlines()],
                          ['idle', 'started', 'started', 'check failed'])
 
+    def test_check_uses_driver_routes_without_cloudroom_probe(self):
+        self.program(self.bin / 'room-cli', """printf '%s\n' "$*" >> "$HOME/room-cli.log"
+printf '[]\n'""")
+        world = {'specs': [], 'singles': [{'number': 9, 'comments': {'nodes': [
+            {'createdAt': '2030-01-02T00:00:00Z', 'databaseId': 100, 'body': 'launch-fleet: started'},
+        ]}}]}
+        records = self.home / 'records.json'
+        records.write_text(json.dumps(world))
+        runs = self.home / 'runs.json'
+        runs.write_text(json.dumps({'repo': REPO, 'runs': {'9': {'host': 'local', 'run': 'synthetic-run'}}}))
+        self.env['LAUNCH_FLEET_RUNS'] = str(runs)
+        command = [sys.executable, '-I', str(HERE / 'records.py'), REPO, 'false']
+        original = subprocess.run(command, input=records.read_text(), env=self.env,
+                                  capture_output=True, text=True, check=True, timeout=15)
+        probe = self.home / 'room-cli.log'
+        self.assertEqual(probe.read_text().splitlines(), ['thread list --include-archived --include-hidden --json'])
+        probe.unlink()
+
+        (self.scripts / 'fleet.sh').write_text(
+            f'{shlex.quote(sys.executable)} -I {shlex.quote(str(HERE / "records.py"))} "$GH_REPO" false '
+            '< "$HOME/records.json" > "$HOME/annotated.json"\n')
+        self.install()
+        self.heartbeat('run')
+        self.assertFalse(probe.exists(), 'the heartbeat invoked the CloudRoom thread probe')
+        actual = json.loads((self.home / 'annotated.json').read_text())
+        self.assertEqual(actual, json.loads(original.stdout))
+        self.assertEqual(actual['singles'][0]['comments']['nodes'][0]['resolvedThread'], 'run:9')
+
     def test_pause_and_resume_run_now(self):
         crontab = self.home / 'crontab'
         original = crontab.read_text()

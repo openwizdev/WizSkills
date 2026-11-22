@@ -24,7 +24,13 @@ HERE = Path(__file__).resolve().parent
 REPO = 'synthetic-owner/synthetic-repo'
 # launch-fleet's own installed version, its SKILL.md front matter, which the status writer
 # binds (#1663); the bundle's version can differ from it.
-VERSION = re.search(r'(?m)^version: ([0-9.]+)$', (HERE.parent / 'SKILL.md').read_text()).group(1)
+def front_version(text):
+    """The `version:` of a SKILL.md's front matter, plain or quoted, or None (#1891)."""
+    found = re.search(r'(?m)^version: ([0-9.]+)$', text)
+    return found and found.group(1)
+
+
+VERSION = front_version((HERE.parent / 'SKILL.md').read_text())
 FLEET_MD = ('# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n'
             '| Record authors | `openwiz[bot]`, `synthetic-owner` |\n')
 MARK = 'launch-fleet: driver start failed'
@@ -420,6 +426,39 @@ class Token(unittest.TestCase):
             ['owner key', 'owner key']))
         self.assertEqual(self.requests(p), [])
         self.assertFalse((p.dir / 'token-private').exists())
+
+
+    def test_each_skill_started_without_a_roster_asks_for_its_own_role_at_the_same_scope(self):
+        p = Project(self)
+        env = self.service(p)
+        for n, skill in ((7, 'build-ticket'), (8, 'review-ticket'), (9, 'launch-fleet'), (10, 'grill')):
+            self.assertEqual(p.host('start', REPO, n, 'claude', 'claude-opus-5-5', skill, **env),
+                             (0, 'started #%s on local' % n, ''))
+        for held in (p.dir / 'token-private').iterdir():
+            held.unlink()
+        for n in (7, 8, 9, 10):
+            self.assertEqual(p.host('wake', REPO, n, **env), (0, 'woke #%s on local' % n, ''))
+        wanted = ['builder-7', 'reviewer-8', 'fleet-9', 'builder-10']
+        self.assertEqual([r['request'] for r in self.requests(p)],
+                         [{'schema': 'openwiz.token-service.v1', 'kind': 'request', 'requester': who,
+                           'repositories': [REPO], 'permissions': WRITE} for who in wanted * 2])
+        folder = p.runs.parent / 'agent-token-bin'
+        self.assertEqual({path.relative_to(folder).as_posix(): re.findall(r'--requester (\S+)', path.read_text())
+                          for path in folder.glob('*/*')},
+                         {'%s/%s' % (shim, name): [who] for who, shim in zip(wanted, (
+                             'synthetic-owner--synthetic-repo-7', 'synthetic-owner--synthetic-repo-reviewer-8',
+                             'synthetic-owner--synthetic-repo-fleet-9', 'synthetic-owner--synthetic-repo-10'))
+                          for name in ('gh', 'git')})
+
+
+class Version(unittest.TestCase):
+    def test_the_installed_version_reads_plain_or_quoted(self):
+        for line in ('version: 0.2.0', 'version: "0.2.0"', "version: '0.2.0'"):
+            with self.subTest(line):
+                self.assertEqual(front_version('---\nname: launch-fleet\n%s\n---\n' % line), '0.2.0')
+        for line in ('version: "0.2.0\'', 'version: 0.2', 'name: launch-fleet'):
+            with self.subTest(line):
+                self.assertIsNone(front_version('---\n%s\n---\n' % line))
 
 
 class Failures(unittest.TestCase):

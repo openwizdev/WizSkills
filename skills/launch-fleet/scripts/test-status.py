@@ -499,6 +499,25 @@ class Write(Tracker):
             self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
         self.assertNotIn('DELETE', [method for method, _ in self.writes()])
 
+    def test_a_hold_already_on_at_the_ask_and_replaced_after_it_stays(self):
+        for by in ('synthetic-owner', 'synthetic-maintainer'):
+            with self.subTest(by):
+                self.setUp()
+                self.person_asks([{'event': 'labeled', 'label': {'name': 'needs-info'}, 'actor': {'login': by},
+                                   'created_at': ago(60)}])
+                self.assertNotIn('POST', [method for method, _ in self.writes()][1:])
+                self.world = self.load()
+                stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                self.ticket(self.world)['events'] += [
+                    {'event': kind, 'label': {'name': 'needs-info'}, 'actor': {'login': 'synthetic-owner'},
+                     'created_at': stamp} for kind in ('unlabeled', 'labeled')]
+                self.save()
+                done = self.write('done', 'handed back', '2030-01-02T05:00:00Z', '--note', '104')
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertRegex(done.stdout, r'^#12: builder done, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
+                self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+                self.assertNotIn('DELETE', [method for method, _ in self.writes()])
+
     def test_a_maintainer_s_hold_reapplied_as_a_person_account_clears_survives_a_failed_read(self):
         self.person_asks()
         self.world = self.load()

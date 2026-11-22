@@ -211,9 +211,10 @@ change and keeps the older rows in step; its report says `models_table_added: tr
 ## The offered-models snapshot
 
 `docs/agents/models-offered.json`, beside `fleet.md`, is a
-`snapshot` (`openwiz.models-offered.v1`): what the user's signed-in
-harnesses offered at one `cloud status` read, so the app can show real
-choices without access to the harnesses.
+`snapshot` (`openwiz.models-offered.v1`): what CloudRoom offered at one
+`cloud status` read or OpenWiz's current choices for the installed local
+harnesses, so the app can show the choices without a fresh read. The
+label identifies the list's provenance.
 
 - `read_at` (milliseconds since the epoch), `label`, `state`, `harnesses`
   and `unavailable` mean what `openwiz models --json`
@@ -259,7 +260,10 @@ the CLI's existing `openwiz.cli-error.v1` document. Exit numbers keep the
 `models.list` and `models.set`, with results `models.v1.schema.json#/$defs/show_report`,
 `list_report` and `set_report`; they ship with MD2 (#1804) and are listed
 in `help --agent`'s catalogue (`crates/cli/src/agent-catalogue.json`) and
-human help. Plain `openwiz models [--json]` is unchanged. `cli.v1.md` is a
+human help. The forms below describe the CloudRoom behaviour. For 0.1.1,
+see [host selection and local models](setup.v1.md#the-local-offered-list)
+for the `--host` selector on plain `models`, `models set` and `models show`,
+and for the local `set` eligibility and report rules. `cli.v1.md` is a
 contract WizSkills carries byte for byte, so these rows live here until a
 WizSkills release carries them; `cli.v1.schema.json` already lists their
 effect.

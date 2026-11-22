@@ -42,11 +42,11 @@ def headers(limit=5000, remaining=4000, reset=RESET, resource='core', status='20
 
 
 def rate_limit(limit=5000, remaining=4000, reset=RESET, core=True, graphql_remaining=4500, graphql=True):
-    pool = {'limit': limit, 'remaining': remaining, 'reset': reset,
-            'used': 0, 'resource': 'core'}
-    points = {'limit': 5000, 'remaining': graphql_remaining, 'reset': RESET + 60,
-              'used': 0, 'resource': 'graphql'}
-    resources = {'graphql': points} if graphql else {}
+    pool = {'limit': limit, 'used': 0, 'remaining': remaining, 'reset': reset}
+    points = {'limit': 5000, 'used': 0, 'remaining': graphql_remaining, 'reset': RESET + 60}
+    resources = {'search': {'limit': 30, 'used': 0, 'remaining': 30, 'reset': NOW + 60}}
+    if graphql:
+        resources['graphql'] = points
     if core:
         resources['core'] = pool
     return json.dumps({'resources': resources, 'rate': pool}) + '\n'
@@ -143,7 +143,7 @@ class Budget(unittest.TestCase):
 
     def test_another_resource_is_unknown(self):
         answer = self.decision(self.admit(1, self.file(headers(resource='search'))), 2)
-        self.assertIn('search', answer['reason'])
+        self.assertIn('neither core nor graphql', answer['reason'])
 
     def test_core_and_graphql_answers_together_are_unknown(self):
         core = self.file(headers(), 'core.txt')
@@ -186,17 +186,50 @@ class Budget(unittest.TestCase):
         newer = self.file(headers(remaining=1255, reset=RESET), 'newer.txt')
         self.assertEqual(self.decision(self.admit(10, older, newer), 1)['remaining'], 1255)
 
-    def test_every_page_of_a_paginated_answer_counts(self):
-        pages = headers(remaining=3000) + headers(remaining=1255)
-        self.assertEqual(self.decision(self.admit(10, self.file(pages)), 1)['remaining'], 1255)
+    def test_rate_limit_is_read_in_github_s_own_shape(self):
+        self.gh_world(out=json.dumps({
+            'resources': {
+                'core': {'limit': 5000, 'used': 1, 'remaining': 4999, 'reset': RESET},
+                'search': {'limit': 30, 'used': 0, 'remaining': 30, 'reset': NOW + 60},
+                'graphql': {'limit': 5000, 'used': 7, 'remaining': 4993, 'reset': RESET + 60},
+                'integration_manifest': {'limit': 5000, 'used': 0, 'remaining': 5000, 'reset': RESET},
+            },
+            'rate': {'limit': 5000, 'used': 1, 'remaining': 4999, 'reset': RESET},
+        }) + '\n')
+        self.assertEqual(self.decision(self.admit(1), 0)['remaining'], 4999)
+        self.assertEqual(self.decision(self.admit(1, '--resource', 'graphql'), 0)['remaining'], 4993)
+
+    def test_rate_limit_naming_another_pool_inside_is_unknown(self):
+        self.gh_world(out=json.dumps({'resources': {
+            'core': {'limit': 5000, 'used': 0, 'remaining': 4000, 'reset': RESET, 'resource': 'search'}}}) + '\n')
+        self.decision(self.admit(1), 2)
+
+    def test_only_the_header_block_before_the_first_blank_line_counts(self):
+        body = headers(remaining=4000, reset=RESET + 3600)
+        answer = self.decision(self.admit(1, self.file(headers(remaining=1500, body=body))), 1)
+        self.assertEqual((answer['remaining'], answer['reset']), (1500, RESET))
+
+    def test_a_file_that_does_not_start_with_its_status_line_is_unknown(self):
+        for name, text in {'leading body': '{"synthetic": true}\n' + headers(),
+                           'leading blank': '\r\n' + headers(),
+                           'no blank line': headers().split('\r\n\r\n')[0]}.items():
+            with self.subTest(name):
+                self.decision(self.admit(1, self.file(text)), 2)
+
+    def test_an_unknown_resource_is_never_echoed(self):
+        marker = 'synthetic_marker_q'
+        result = self.admit(1, self.file(headers(resource=marker)))
+        self.decision(result, 2)
+        self.assertNotIn(marker, result.stdout + result.stderr)
 
     def test_one_unknown_answer_makes_the_batch_unknown(self):
         good = self.file(headers(), 'good.txt')
         bad = self.file(headers(drop=('x-ratelimit-reset',)), 'bad.txt')
         self.decision(self.admit(1, good, bad), 2)
         self.decision(self.admit(1, good, str(self.tmp / 'absent.txt')), 2)
-        windows = self.file(headers(limit=5000, remaining=3000) + headers(limit=15000, remaining=3000))
-        self.decision(self.admit(1, windows), 2)
+        five = self.file(headers(limit=5000, remaining=3000), 'five.txt')
+        fifteen = self.file(headers(limit=15000, remaining=3000), 'fifteen.txt')
+        self.decision(self.admit(1, five, fifteen), 2)
 
     def test_never_prints_a_token_or_a_body(self):
         text = headers(remaining='bad', extra='Authorization: token %s\r\n' % SECRET, body=SECRET + '\n')

@@ -178,6 +178,9 @@ class CrossSkillReads(unittest.TestCase):
 class TheRealTree(unittest.TestCase):
 
     TRACED = {
+        'image': {'hill-climb'},
+        'review-ticket': {'build-ticket'},
+        'setup': {'install', 'review-ticket'},
         'triage': {'launch-fleet', 'to-tickets', 'wayfind'},
     }
 

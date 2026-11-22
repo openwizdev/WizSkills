@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=908
+CASES=909
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -988,6 +988,9 @@ expect 'decision: a wake on the parked pull request prints the decision line' 0 
 decision #31 for #12 at $S31: Jake's answer in comment 3104; act on it as references/reviews.md says
 EOF
 expect 'decision: a decision naming another head wakes nothing new' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** fix once more: R2 at \(sha(99)). Why: synthetic.")' -- check <<EOF
+findings #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect 'decision: a decision for another head that mentions this head in its reason wakes nothing new' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** fix once more: R2 at \(sha(99)). Why: the same finding is also open at \(sha(31)).")' -- check <<EOF
 findings #31 for #12 at $S31: tell its builder, thread thr_syn12
 EOF
 expect 'decision: an outsider decision on a parked head wakes nothing new' 0 check.json "$PARKED31"' | pr_by(31; 3104; "11:40"; outsider; "**Orchestrator decision:** fix once more: R2 at \(sha(31)). Why: synthetic.")' -- check <<EOF

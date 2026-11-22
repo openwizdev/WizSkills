@@ -132,6 +132,7 @@ class Heartbeat(unittest.TestCase):
         self.assert_preview_file(service, preview)
         self.assert_preview_file(timer, preview)
         self.assertIn('Type=oneshot\n', service.read_text())
+        self.assertIn('KillMode=process\n', service.read_text())
         self.assertIn("installed 100%% it's", service.read_text())
         self.heartbeat('remove')
         self.assertEqual(self.files('.config/systemd/user/*'), [])
@@ -217,6 +218,33 @@ printf '{"run":"synthetic-run"}\\n'""")
         self.assertIn('active', self.heartbeat('status'))
         self.heartbeat('run')
         self.assertEqual((self.home / 'check.log').read_text().splitlines(), [f'{REPO} spec {SPEC}'])
+
+    def test_concurrent_tick_refuses(self):
+        self.install()
+        entered, release = self.home / 'entered', self.home / 'release'
+        os.mkfifo(entered)
+        os.mkfifo(release)
+        release_fd = os.open(release, os.O_RDWR)
+        first = subprocess.Popen(self.invoke('run'), cwd=self.checkout, env=self.env,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            wait = subprocess.run(['/bin/cat', str(entered)], capture_output=True, text=True, timeout=10)
+            self.assertEqual(wait.stdout, 'entered\n')
+            self.assertIn('already running', self.heartbeat('run', expected=1))
+        finally:
+            os.write(release_fd, b'release\n')
+            os.close(release_fd)
+            try:
+                out, err = first.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                first.kill()
+                first.communicate()
+                raise
+        self.assertEqual(first.returncode, 0, out + err)
+        self.assertEqual((self.home / 'check.log').read_text().splitlines(), [f'{REPO} spec {SPEC}'])
+        log, = self.files('.local/state/openwiz-heartbeat/*/ticks.log')
+        self.assertEqual([line.split(' ', 1)[1] for line in log.read_text().splitlines()], ['busy', 'idle'])
+
 
 if __name__ == '__main__':
     unittest.main()

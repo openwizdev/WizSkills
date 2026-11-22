@@ -519,7 +519,7 @@ class SkillCommandsMatchPackage(unittest.TestCase):
         for home in ('.claude/skills', '.codex/skills', 'CODEX_HOME'):
             self.assertIn(home, step4)
         for words in ("'install ope[n] '", "'from the setup pag[e]'", "'Restart the OpenWiz serve[r]'",
-                      'cp -R "$src"/. "$d/install/"', 'cmp -s', 'version: %s' % mine):
+                      'cp -R "$src"/. "$d/install/"', 'cmp -s', "want='version: <version of this skill>'"):
             self.assertIn(words, step4)
         self.assertIn('"continue the OpenWiz install"', step4)
         self.assertNotIn('any words do', text)

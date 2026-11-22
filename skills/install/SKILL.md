@@ -53,7 +53,7 @@ grep -m1 '^version:' ~/.claude/skills/install/SKILL.md "${CODEX_HOME:-$HOME/.cod
 
 - No `<root>/current`, or `--build-identity` does not read the `<version>` of the release you install (step 1 reads it): resume at step 1.
 - `status` does not read the GitHub account, or the user chose CloudRoom and `check` does not read `cloudroom_login_verified`: resume at step 3. `identity_unreadable` means GitHub gave no clear answer: wait a minute and run `status` again; it clears.
-- The running agent's `install/SKILL.md` is missing, or does not read `version: 0.3.1`: resume at step 4. When that agent's folder holds OpenWiz's 18 skills, run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4.
+- The running agent's `install/SKILL.md` is missing, or does not read `version: <version of this skill>`, this file's own `version:` line at the top: resume at step 4. When that agent's folder holds OpenWiz's 18 skills, run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4.
 - Otherwise resume at step 5; for a first fleet already under way, at step 6 with `first_fleet.py next`. If it prints `Next: where.`, follow step 6.1 with the recovered choice.
 
 ## 1. Preflight
@@ -146,13 +146,14 @@ python3 -I "$openwiz"/tools/install/install skills --root <root>
 
 It copies the 18 skills into `<root>/skills` and into each agent folder present here: `~/.claude/skills` (Claude Code), `${CODEX_HOME:-$HOME/.codex}/skills` (Codex: `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise `~/.codex/skills`), `~/.cursor/skills`, `~/.config/opencode/skills` and `~/.grok/skills`. It prints `"outcome": "installed"` even when it copied nothing, so check two things: its `harnesses` entry for the agent you are running in reads `installed`, and that agent's folder, the entry's `path` (`ls ~/.claude/skills`, or for Codex `ls "${CODEX_HOME:-$HOME/.codex}/skills"`), now holds all 18 by name: `ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`. If the entry reads `absent`, that agent's folder (`~/.claude`, or for Codex `$CODEX_HOME` when set, otherwise `~/.codex`) is missing on this computer: tell the user which folder, that their agent has no OpenWiz skills, and its `next` step; never create the folder yourself. A skill of the user's own with the same name refuses the whole step: report it.
 
-Then make every installed copy of this skill this one, the whole folder. The copy `install skills` just wrote comes from the release's package and can be older: `grep -m1 '^version:' <root>/skills/install/SKILL.md` prints its real version, an older copy's `SKILL.md` and scripts can still name a setup page and a server OpenWiz removed, and a new session loads it whatever the user says. Take this skill's own folder: the one you read it from when it is on this computer (a WizSkills clone or plugin: set `src` to it and skip the clone), otherwise a fresh clone of WizSkills (it installs nothing). Then overwrite each agent folder that holds OpenWiz's copy (marked by `.openwiz-skill`), and check every file by content:
+Then make every installed copy of this skill this one, the whole folder. The copy `install skills` just wrote comes from the release's package and can be older: `grep -m1 '^version:' <root>/skills/install/SKILL.md` prints its real version, an older copy's `SKILL.md` and scripts can still name a setup page and a server OpenWiz removed, and a new session loads it whatever the user says. Take this skill's own folder: the one you read it from when it is on this computer (a WizSkills clone or plugin: set `src` to it and skip the clone), otherwise a fresh clone of WizSkills (it installs nothing). Then overwrite each agent folder that holds OpenWiz's copy (marked by `.openwiz-skill`), and check every file by content. `<version of this skill>` is the `version:` at the top of this file, such as `0.4.0`:
 
 ```sh
 wizskills=<private temporary folder>/WizSkills
 git clone --depth 1 --branch main https://github.com/openwizdev/WizSkills "$wizskills"
 src="$wizskills"/skills/install
-fixed() { grep -q '^version: 0.3.1$' "$1/SKILL.md" && ! grep -q -e 'install ope[n] ' -e 'from the setup pag[e]' -e 'Restart the OpenWiz serve[r]' "$1/SKILL.md" "$1"/scripts/*.py; }
+want='version: <version of this skill>'
+fixed() { grep -qxF "$want" "$1/SKILL.md" && ! grep -q -e 'install ope[n] ' -e 'from the setup pag[e]' -e 'Restart the OpenWiz serve[r]' "$1/SKILL.md" "$1"/scripts/*.py; }
 if fixed "$src"; then echo "source ok"; else echo "NOT THIS SKILL: $src"; fi
 fixed "$src" && for d in "$HOME/.claude/skills" "$HOME/.codex/skills" ${CODEX_HOME:+"$CODEX_HOME/skills"} "$HOME/.cursor/skills" "$HOME/.config/opencode/skills" "$HOME/.grok/skills"; do
   [ -f "$d/install/.openwiz-skill" ] || continue
@@ -170,7 +171,7 @@ An agent finds new skills only when it starts, so the user restarts it now. Give
 - boat.dev: `continue the OpenWiz install with host boat`
 - CloudRoom: `continue the OpenWiz install with host cloud`
 
-Keep the full message. "continue the OpenWiz install" names the skill, and the host at the end carries the user's answer into Resume. Any installed copy that does not read `version: 0.3.1` is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md) and resume at the first unfinished step, as Resume says.
+Keep the full message. "continue the OpenWiz install" names the skill, and the host at the end carries the user's answer into Resume. Any installed copy whose `version:` line is older than this file's is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md) and resume at the first unfinished step, as Resume says.
 
 Done when the running agent's folder holds the 18 skills by name and every `ok:` line printed with no `STILL OLD`, or the user knows which folder is missing, and the user has the restart message with their chosen host.
 

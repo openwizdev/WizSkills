@@ -22,8 +22,16 @@ Take them from that line to setup, then down the onboarding road to their first 
 - **Credentials stay out of the conversation.** Never ask for a key or token in chat or put one in a prompt, argument, URL, log, issue or file. Keys go only through the tools' protected setup, into owner-only state on this computer or CloudRoom's secret store. Save the user's exact words only under [open-development](https://github.com/openwizdev/WizSkills/blob/main/contracts/open-development.v1.md).
 - **Uncertain is never retried blindly.** Run the same command again: it reads its record first and never repeats an effect.
 - **Read JSON and exit codes, never a screen.** Run installed programs by absolute path: there is no `openwiz` on `PATH`; it is `<root>/current/openwiz`. Python 3.9+ only: no Rust, Cargo, Node, npm or source build; if a step seems to need one, stop and say so.
-- **OpenWiz 0.1.0 needs CloudRoom.** Its setup reads a signed-in CloudRoom wherever the agents run, and `continue` refuses without it. Say so before the install. There is no setup page or local server in 0.1.0: setup is the commands below.
+- **CloudRoom is optional.** It is one place agents can run, beside this computer and boat.dev, never a requirement or a done condition: its install and sign-in run only when the user picks it. There is no setup page or local server: setup is the commands below.
 - **Free now; other charges are separate.** OpenWiz is free now. Paid plans come later. CloudRoom and model charges are separate and not included. More Cloud Credits are CloudRoom's own plan, from `https://cloudroom.dev/pricing`. Referral verification is unavailable. No referral is applied. Never add a code or parameter to that link.
+
+## Where your agents run
+
+Ask this first, before step 1, in these exact words, with the three as equal choices and no recommendation:
+
+> Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom.
+
+Keep the answer for the whole install: it is the host the onboarding road's step 1 records. **This computer** and **boat.dev** skip every CloudRoom step: CloudRoom's install and sign-in, and its rows in step 3. **CloudRoom** runs them all, exactly as written. In a new session that has not heard the answer (after step 4's restart, too), ask it again before anything else, unless `first_fleet.py next` already reads a recorded host. Moving to CloudRoom later runs step 3's CloudRoom rows, then continues where the user was.
 
 Keep `<root>` (default `$HOME/.local/lib/openwiz`), and the `build` and `state_root` paths `install` prints as `<build>` (also `build=<build>` in the shell) and `<state>`, all absolute and owner-only. Run runtime tools with `python3 -I -B` and `OPENWIZ_STATE_DIR=<state>`, and pass `--state-dir <state>`. After a restart, read them from the installed files, as Resume says.
 
@@ -42,7 +50,7 @@ grep -m1 '^version:' ~/.claude/skills/install/SKILL.md "${CODEX_HOME:-$HOME/.cod
 `<root>` is `$HOME/.local/lib/openwiz` unless the user chose another. Take the first that holds:
 
 - No `<root>/current`, or `--build-identity` does not read 0.1.0: resume at step 1.
-- `check` does not read `cloudroom_login_verified`, or `status` does not read the GitHub account: resume at step 3. `identity_unreadable` means GitHub gave no clear answer: wait a minute and run `status` again; it clears.
+- `status` does not read the GitHub account, or the user chose CloudRoom and `check` does not read `cloudroom_login_verified`: resume at step 3. `identity_unreadable` means GitHub gave no clear answer: wait a minute and run `status` again; it clears.
 - The running agent's `install/SKILL.md` is missing, or does not read `version: 0.3.1`: resume at step 4. When that agent's folder holds OpenWiz's 18 skills, run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4.
 - Otherwise resume at step 5; for a first fleet already under way, at step 6 with `first_fleet.py next`.
 
@@ -54,7 +62,7 @@ git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$open
 python3 -I "$openwiz"/tools/install/install preflight
 ```
 
-`git clone` may warn that `refs/tags/v0.1.0` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) is unsupported for 0.1.0: the `openwiz` binary runs there, but CloudRoom offers no Intel Mac build today, so say so plainly and stop before installing. Exit 5 names each missing item and its `next` step: tell the user plainly what they do themselves (CloudRoom: install the app, open it once and sign in; `gh`: install it and run `gh auth login` in their own terminal). Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`). Read its `checks` even on exit 0: `gh` reading `missing` does not stop preflight, but setup needs it. Then the user installs GitHub CLI first, from https://cli.github.com, and `gh --version` shows it is there; then continue.
+`git clone` may warn that `refs/tags/v0.1.0` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) has a build, but CloudRoom offers no Intel Mac build today: if the user chose CloudRoom, say so plainly, offer this computer or boat.dev instead, and stop before installing if they keep CloudRoom. Exit 5 names each missing item and its `next` step: tell the user plainly what they do themselves (`gh`: install it and run `gh auth login` in their own terminal). `room-cli` reading `missing` never stops preflight; it matters only if the user chose CloudRoom, and step 3 installs CloudRoom then. Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`). Read its `checks` even on exit 0: `gh` reading `missing` does not stop preflight, but setup needs it. Then the user installs GitHub CLI first, from https://cli.github.com, and `gh --version` shows it is there; then continue.
 
 Done when preflight passes, or the user has each next step.
 
@@ -94,14 +102,14 @@ python3 -I -B "$build"/runtime/setup/setup.py check --state-dir <state>
 
 It reads each connection and records only its own results in `<state>`. It prints one bare code per component and no next step, so read each code below. Run `check` again after each change.
 
-**CloudRoom** (`cloudroom`), with `python3 -I -B "$build"/runtime/cloudroom/cloudroom.py status | install | sign-in --state-dir <state>`:
+**CloudRoom** (`cloudroom`), only if the user chose CloudRoom. Otherwise skip this table and ignore every `cloudroom_*` code `check` prints (the host-aware report reads `cloudroom_not_needed`): it never blocks this install. With CloudRoom, use `python3 -I -B "$build"/runtime/cloudroom/cloudroom.py status | install | sign-in --state-dir <state>`:
 
 | Code | Next |
 | --- | --- |
 | `cloudroom_login_verified` | Done: signed in now. |
 | `cloudroom_not_installed` | `cloudroom.py install --state-dir <state>` previews CloudRoom's checksum-checked installer; on the yes, `cloudroom.py install --yes --operation <id> --state-dir <state>`. Then sign in. |
 | `cloudroom_installed`, `cloudroom_reused`, `cloudroom_login_missing`, `cloudroom_login_unknown` | The person signs in themselves: show them `cloudroom.py sign-in --state-dir <state>` to run in their own terminal (it opens CloudRoom's own sign-in once, or the app the first time), and wait until they say done. Then `status`. On Linux, sign-in needs a desktop session and FUSE (the AppImage needs `fusermount`, from `fuse3` or `libfuse2`): a headless VPS cannot sign in. If nothing opens within a minute, the user opens `~/Applications/Cloudroom.AppImage` themselves. |
-| `cloudroom_unsupported` | CloudRoom offers no build for this computer (an Intel Mac, or Linux on ARM). OpenWiz 0.1.0 needs CloudRoom, so the install cannot be completed here yet: say so plainly and stop. |
+| `cloudroom_unsupported` | CloudRoom offers no build for this computer (an Intel Mac, or Linux on ARM): say so plainly, and offer this computer or boat.dev instead. |
 | `cloudroom_source_unchecked` | `cloudroom.py install` could not read or check CloudRoom's published installer and its checksum (a network failure, or CloudRoom changed its download guide or release): nothing was proposed or downloaded. Run `install` again shortly. If it stays, `cloudroom.py install --yes --state-dir <state>` opens CloudRoom's download page once instead; the user installs CloudRoom from there, opens it once and signs in. Then `status`. |
 | `cloudroom_installing` | An install is running: `status` again shortly. |
 | `cloudroom_install_uncertain` | A plain `install` only shows the pending operation again. Read its `operation_id` from `cloudroom.py install --state-dir <state>` (inside `operation`), then reconcile that same operation: `cloudroom.py install --yes --operation <operation_id> --state-dir <state>`. Never preview a new install over it. |
@@ -115,7 +123,7 @@ It reads each connection and records only its own results in `<state>`. It print
 
 **The rest** (`harness_unselected`, `identity_unselected`, `project_unprepared`, `app_missing`) is expected now: each waits for the repository the user picks on the onboarding road, and Connect sets it. Phone access is optional: `python3 -I -B "$build"/runtime/access/access.py configure --plan <private file> --state-dir <state>` previews it; `access.py --help` gives the plan's shape.
 
-Done when CloudRoom reads `cloudroom_login_verified` and GitHub's `status` reads the account, or the user chose to stop with the remaining next steps.
+Done when GitHub's `status` reads the account and, only if the user chose CloudRoom, CloudRoom reads `cloudroom_login_verified`; or the user chose to stop with the remaining next steps.
 
 
 ## 4. Skills into your agents, then a restart
@@ -162,7 +170,7 @@ Continue only if the user wants their first build; otherwise finish with the ins
 
 ### 1. Where agents run
 
-Run `first_fleet.py where --build "$build"`. It lists every host this OpenWiz can run agents on: Cloudroom (`cloud`), and each driver the verified build's `runtime/adapters` carries that answers `version`, such as this machine (`local`) and boat.dev (`boat`). A driver whose `version` fails is not offered: say its `Not offered:` line as printed. Ask **Where agents run**'s question, offering only the listed hosts, suggesting this machine when it is listed. On the answer, run `where --agents <its name> --build "$build"`. It checks what that host needs: a GitHub sign-in everywhere; on this machine Claude Code or Codex on `PATH`; for Cloudroom `room-cli`; for boat.dev the `boat` CLI. For anything missing it prints **Where agents run**'s walk-through line with a link; say it as printed. The user signs in themselves; run it again when they say done. Exit 12 prints what that host's agents cost; say it, and that Cloudroom uses Cloud Credits. For a driver host other than this machine it also prints where the login lives (boat.dev: `Login: held by boat.dev`, with its dashboard steps; any other: the driver's Login line) and one question asking whether the user has signed in there; ask it as printed. The user signs in themselves. On their yes, run it again with `--yes`: it records the pick, and for a driver host the build's `runtime/adapters`. A driver host's `Host: <name>` line, the one launch-fleet reads, is written at **Host setting**; Cloudroom needs none. With nothing usable listed, offer Cloudroom or stopping.
+Run `first_fleet.py where --build "$build"`. It lists every host this OpenWiz can run agents on: Cloudroom (`cloud`), and each driver the verified build's `runtime/adapters` carries that answers `version`, such as this machine (`local`) and boat.dev (`boat`). A driver whose `version` fails is not offered: say its `Not offered:` line as printed. The user already answered the host question ("Where your agents run", above): this computer is `local`, boat.dev `boat`, CloudRoom `cloud`. When that host is listed, run `where --agents <its name> --build "$build"` without asking again. When it is not, say its `Not offered:` line and ask the host question again, offering only the listed hosts, as equal choices. It checks what that host needs: a GitHub sign-in everywhere; on this machine Claude Code or Codex on `PATH`; for Cloudroom `room-cli`; for boat.dev the `boat` CLI. For anything missing it prints **Where agents run**'s walk-through line with a link; say it as printed. The user signs in themselves; run it again when they say done. Exit 12 prints what that host's agents cost; say it, and that Cloudroom uses Cloud Credits. For a driver host other than this machine it also prints where the login lives (boat.dev: `Login: held by boat.dev`, with its dashboard steps; any other: the driver's Login line) and one question asking whether the user has signed in there; ask it as printed. The user signs in themselves. On their yes, run it again with `--yes`: it records the pick, and for a driver host the build's `runtime/adapters`. A driver host's `Host: <name>` line, the one launch-fleet reads, is written at **Host setting**; Cloudroom needs none. With nothing usable listed, offer Cloudroom or stopping.
 
 Done when `where` recorded the answer.
 
@@ -171,7 +179,7 @@ Done when `where` recorded the answer.
 Offer three ways to start: a small change in a repository they have, a fresh project from their idea, or something they've always wanted to build. Anyone without an idea gets two or three ideas from that choice's group in [ideas.md](ideas.md); their own idea always wins. Then its one repository:
 
 - **A repository they have:** confirm it, and that the fleet opens branches and pull requests there, then run `first_fleet.py select --repo <owner>/<name>`.
-- **A new repository:** GitHub sign-in first, which the person does themselves: show them `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state> --yes` to run in their own terminal (it opens GitHub's browser page), and wait until they say done. Then run the read-only check, `python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir <state>`, and continue only when it reads their account. Then `first_fleet.py create-repo --repo <owner>/<name>` previews it and its one README commit; on the yes, add `--yes`. Exit 6: run it again. The user makes or picks its Cloudroom project.
+- **A new repository:** GitHub sign-in first, which the person does themselves: show them `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state> --yes` to run in their own terminal (it opens GitHub's browser page), and wait until they say done. Then run the read-only check, `python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir <state>`, and continue only when it reads their account. Then `first_fleet.py create-repo --repo <owner>/<name>` previews it and its one README commit; on the yes, add `--yes`. Exit 6: run it again. With CloudRoom, the user makes or picks its CloudRoom project.
 
 Done when the idea and one repository are chosen and read back. There is no second repository.
 
@@ -180,11 +188,11 @@ Done when the idea and one repository are chosen and read back. There is no seco
 For that repository, each tool previews and applies only on the yes (`--yes`, or `--yes --operation <id>` from its preview):
 
 1. **Sign-in:** run the read-only `github_login.py status --repository <owner>/<name> --state-dir <state>`. Only its account and push-access read-back count. Signed out, or without push access, the person fixes it themselves, as in step 2 (`github_login.py sign-in --repository <owner>/<name> --state-dir <state> --yes` in their own terminal); then run `status` again.
-2. **Prepare:** `setup.py prepare --state-dir <state> --repository <owner>/<name> --project <project id> --operator <login> --service-issue <N> --answer-thread <thread id> --harness <harness> --model <model> --effort <effort>`, every flag required, one question each, with a recommendation:
-   - `--project`: the CloudRoom project the fleet runs in, by id (`<root>/current/openwiz ls --json` groups threads by project).
+2. **Prepare:** `setup.py prepare --state-dir <state> --repository <owner>/<name> --project <project id> --operator <login> --service-issue <N> --answer-thread <thread id> --harness <harness> --model <model> --effort <effort>`, one question each, with a recommendation. For this computer or boat.dev, `prepare` takes that host and asks no `--project` or `--answer-thread` ([setup v1](https://github.com/openwizdev/OpenWiz/blob/main/contracts/setup.v1.md), the host-aware report); with CloudRoom, every flag is needed:
+   - `--project`, only with CloudRoom: the CloudRoom project the fleet runs in, by id (`<root>/current/openwiz ls --json` groups threads by project).
    - `--operator`: the name a loop's on or off switch records as who did it; recommend the user's GitHub login.
    - `--service-issue`: an open issue in that repository for OpenWiz's service records (not a pull request). With none, offer to open one, titled "OpenWiz service records", on the yes.
-   - `--answer-thread`: the user's CloudRoom thread in that project that gets the fleet's answers, from the same `ls`; another project's thread reads `project_answer_refused`.
+   - `--answer-thread`, only with CloudRoom: the user's CloudRoom thread in that project that gets the fleet's answers, from the same `ls`; another project's thread reads `project_answer_refused`.
    - `--harness`, `--model`, `--effort`: what the user picks from `<root>/current/openwiz models --json`; on this machine, only the harnesses `where` found.
 
    Without `--yes` it prints the effects and an operation id; on the yes, run it again with `--yes --operation <id>`.
@@ -263,4 +271,4 @@ To remove OpenWiz, on the user's yes: there is no remove command and no server t
    done
    ```
 
-Removal revokes nothing: show the user how to uninstall the App or remove repositories from it, delete any phone-access tunnel or rule, and delete the fleet loops in CloudRoom. Never remove or revoke anything without their yes.
+Removal revokes nothing: show the user how to uninstall the App or remove repositories from it, delete any phone-access tunnel or rule, and and, with CloudRoom, delete the fleet loops there. Never remove or revoke anything without their yes.

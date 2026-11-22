@@ -35,7 +35,7 @@ from GitHub and prints the teacher's merged line and closing offer.
 
 It adds no approval, planner or engine. `continue` carries what install and
 setup already recorded in the installed OpenWiz state (DIR is its `<state>`):
-the one selected repository and CloudRoom project, the acting GitHub identity,
+the one selected repository, its host, the acting GitHub identity,
 the private brain `openwiz init` made, the prepared harness, model and effort,
 and whether install already gave the explanation. It reads current setup
 evidence only and refuses, naming each one, when a prerequisite is missing,
@@ -62,9 +62,9 @@ user's choice, each reviewer from the other model family). On the yes it
 starts nothing itself: it saves the yes and names launch-fleet's own start
 path (references/launch.md: the project's loops, then "Starting one": the
 spec's loop, its private loop-map entry and the `launch-fleet: fleet active,
-loop fleet-<S>` record), which the orchestrator follows. It says the fleet
-started only once that record reads back from a record author, and never
-starts a fleet a second way. It never calls the engine or the engine's tick.
+loop fleet-<S>` record) for CloudRoom, or the local heartbeat for a driver
+host. It reads the CloudRoom activation record or the heartbeat's active
+status. It never calls the engine or the engine's tick.
 Every command
 checks the checkout is the repository this onboarding recorded.
 
@@ -90,6 +90,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -101,6 +102,7 @@ import urllib.parse
 LAUNCH_FLEET = Path(__file__).resolve().parents[2] / 'launch-fleet'
 FLEET_SH = LAUNCH_FLEET / 'scripts/fleet.sh'
 HOST_PY = LAUNCH_FLEET / 'scripts/host.py'
+HEARTBEAT = LAUNCH_FLEET / 'scripts/heartbeat.py'
 OPTIONS = {
     'where': ({'--state'}, {'--yes'}, {'--build', '--agents'}),
     'mode': ({'--state'}, set(), {'--mode'}),
@@ -629,8 +631,8 @@ def where(got):
         if why:
             print('Not offered: %s: %s.' % (name, why))
     if agents is None:
-        print("Nothing recorded. Ask where agents run, offering only these; on the user's answer, run again with "
-              '--agents <its name>.')
+        print("Nothing recorded. Reuse the user's host choice if known and offered here. With no choice, offer "
+              'the listed hosts. Then run again with --agents <its name>.')
         return 12
     missing = []
     login = run(['gh', 'api', 'user', '--jq', '.login'], env)
@@ -676,8 +678,11 @@ def where(got):
         print(known.get('ask', 'Have you signed in to %s as that Login line says?' % agents))
     print('OpenWiz is free now.')
     if not got.get('--yes'):
-        print("Nothing recorded. Ask where agents run%s; on the user's yes, run again with that --agents and --yes."
-              % ('' if agents in ('local', 'cloud') else ', and the sign-in question above'))
+        if agents == 'cloud':
+            print("Nothing recorded. Ask where agents run; on the user's yes, run again with that --agents and --yes.")
+        else:
+            print("Nothing recorded. On the user's yes to the effects and cost above, run again with the same "
+                  '--agents and --yes.')
         return 12
     if state.value.get('launch'):
         raise Exit(5, 'This onboarding already launched its fleet; ask to change the host setting instead.')
@@ -1655,6 +1660,20 @@ def fleet_recorded(spec, env):
     return any(body.split('\n')[0].strip() == FLEET_RECORD + str(spec) for body in bodies)
 
 
+def activation(spec, host, env):
+    if host == 'cloud':
+        return fleet_recorded(spec, env)
+    result = run([sys.executable, '-I', str(HEARTBEAT), 'status', env['GH_REPO'], str(spec)], env, timeout=30)
+    if result is None or result.returncode:
+        return None
+    status = result.stdout.strip()
+    if status == b'heartbeat: not installed':
+        return False
+    if re.fullmatch(rb'heartbeat: active [(](launchd|systemd|cron)[)]', status):
+        return True
+    return None
+
+
 def plan_approved(spec, env, confirmed):
     """Exit unless the spec's latest plan approval is to-tickets' machine plan approval of this grill.
 
@@ -1737,23 +1756,24 @@ def launch(got):
     if not choices or choices.get('agents') != host['agents']:
         raise Exit(5, 'The harness, model and effort are not chosen for where agents run yet (choose); ' + NOTHING)
     env = repository(state.value.get('repo'))
+    agents_host = host['agents']
+    driver = agents_host != 'cloud'
     previous = state.value.get('launch')
     if previous and previous['spec'] == spec and previous['state'] != 'refused':
-        # R7: the start is launch-fleet's own (references/launch.md, "Starting one"): it counts only once launch-fleet's
-        # activation record, `launch-fleet: fleet active, loop fleet-<S>`, reads back from a record author.
-        recorded = fleet_recorded(spec, env)
+        recorded = activation(spec, agents_host, env)
         if previous['state'] != 'started' and recorded:
             previous['state'] = 'started'
             if not state.save():
                 raise Exit(10, "Could not save the fleet's start; run this again to read it.")
-            print(record_line(spec, recorded))
-            print(teach('The fleet starting', (str(len(previous.get('tickets') or [])),)))
+            print(record_line(spec, recorded, agents_host))
+            if not driver:
+                print(teach('The fleet starting', (str(len(previous.get('tickets') or [])),)))
             return 0
         if previous['state'] == 'started':
             print('Spec #%d already started once; not starting again.' % spec)
-            print(record_line(spec, recorded))
+            print(record_line(spec, recorded, agents_host))
             return 0
-        print(record_line(spec, recorded))
+        print(record_line(spec, recorded, agents_host))
         if recorded is None:
             raise Exit(6, "Whether launch-fleet's start already ran is unknown, so its start path is not named "
                           'again; run this again; ' + NOTHING)
@@ -1771,7 +1791,14 @@ def launch(got):
                 raise Exit(10, 'Could not withdraw the yes; run this again; ' + NOTHING)
             raise Exit(5, "The fleet settings' Orchestrator is now %s, not the one the user said yes to: preview "
                           'again and ask again; %s' % (agent_words(orchestrator), NOTHING))
-        print(handoff(spec, state.value['repo'], host, orchestrator))
+        adapters = previous.get('adapters') if driver else None
+        if driver and not adapters:
+            del state.value['launch']
+            state.value.pop('preview', None)
+            if not state.save():
+                raise Exit(10, 'Could not withdraw the yes; run this again; ' + NOTHING)
+            raise Exit(5, 'The saved yes predates the heartbeat handoff. Run continue, then preview again; ' + NOTHING)
+        print(handoff(spec, state.value['repo'], adapters, orchestrator))
         return 6
     # Review R4: the carried setup must still be what setup verifies now.
     if not isinstance(carried.get('setup_state'), str):
@@ -1802,9 +1829,13 @@ def launch(got):
                           "KN3's start refuses unless they match: run mode --mode %s to save the owner's pick here, "
                           'or ask the owner which mode they mean; %s' % (
                               state.value['repo'], program, approved or 'missing', picked, MODE_FILE, picked, NOTHING))
-    if name and driver_answer(env, host.get('adapters') or env.get('OPENWIZ_ADAPTERS'), name)[0] is None:
-        raise Exit(5, "This OpenWiz's %s driver no longer answers, so no agent can run %s; %s" % (
-            name, where_of(name), NOTHING))
+    adapters = None
+    if driver:
+        adapters = host.get('adapters') or env.get('OPENWIZ_ADAPTERS')
+        if driver_answer(env, adapters, name)[0] is None:
+            raise Exit(5, "This OpenWiz's %s driver no longer answers, so no agent can run %s; %s" % (
+                name, where_of(name), NOTHING))
+        env.update(OPENWIZ_ADAPTERS=adapters, LAUNCH_FLEET_GITHUB_ONLY='1')
     plan_approved(spec, env, confirmed)
     ready = frontier(env)
     title, members = spec_facts(spec, env)
@@ -1815,10 +1846,18 @@ def launch(got):
     rules = fleet_rules(env, state.value['repo'])
     builder, reviewer = review(choices, rules)
     orchestrator = rules['orchestrator']
-    where = where_of(host['agents'])
+    where = where_of(agents_host)
+    if driver and (orchestrator is None or orchestrator['harness'] not in PROGRAMS or
+                   not shutil.which(PROGRAMS[orchestrator['harness']], path=env.get('PATH'))):
+        raise Exit(5, 'The orchestrator needs an installed Claude Code or Codex harness for the heartbeat; ' + NOTHING)
+    same_family = driver and not shutil.which(PROGRAMS[reviewer['harness']], path=env.get('PATH'))
+    if same_family:
+        reviewer = builder
     effects = {'fleet_thread': orchestrator, 'repo': state.value['repo'], 'spec': spec, 'project': carried['project'], 'title': title,
                'host': host['agents'], 'mode': picked if local else None, 'builder': builder, 'reviewer': reviewer, 'grill': confirmed,
                'tickets': [[n, ready[n]] for n in starts]}
+    if driver:
+        effects['heartbeat'] = adapters
     digest = hashlib.sha256(json.dumps(effects, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     if got.get('--yes'):
         shown = state.value.get('preview') or {}
@@ -1828,12 +1867,18 @@ def launch(got):
     agents = '%s %s %s' % (builder['harness'], builder['model'], builder['effort'])
     fleet_thread = '%s %s %s' % (orchestrator['harness'], orchestrator['model'], orchestrator['effort'])
     if not got.get('--yes'):
-        print('Ready to start the fleet for spec #%d %s, through launch-fleet: 1 fleet thread (%s), whose loop checks '
-              'the spec every 10 minutes and starts a builder (%s) for each of:' % (spec, where, fleet_thread, agents))
+        if driver:
+            print('Ready to start the fleet for spec #%d %s through launch-fleet. A local heartbeat checks GitHub '
+                  'every 10 minutes and starts an orchestrator wake (%s) when work is due. '
+                  'Ready for a builder (%s):' % (spec, where, fleet_thread, agents))
+        else:
+            print('Ready to start the fleet for spec #%d %s, through launch-fleet: 1 fleet thread (%s), whose loop '
+                  'checks the spec every 10 minutes and starts a builder (%s) for each of:' %
+                  (spec, where, fleet_thread, agents))
         for ticket in starts:
             print('#%d %s' % (ticket, ready[ticket]))
-        print('Each pull request is reviewed by %s %s %s, from the other model family.' % (
-            reviewer['harness'], reviewer['model'], reviewer['effort']))
+        family = 'marked same-family review' if same_family else 'from the other model family'
+        print('Each pull request is reviewed by %s, %s.' % (agent_words(reviewer), family))
         cost = (host_cost(host['agents']) if not local else 'every agent uses %s on this machine, whose model '
                 'use is billed to you as it is today' % builder['harness'])
         if local:
@@ -1847,12 +1892,18 @@ def launch(got):
         return 12
     state.value['launch'] = {'spec': spec, 'state': 'authorized', 'effects': digest, 'tickets': starts,
                              'orchestrator': orchestrator}
+    if driver:
+        state.value['launch']['adapters'] = adapters
     if not state.save():
         raise Exit(10, 'Could not save the start the user said yes to; ' + NOTHING)
-    print("The user said yes to starting spec #%d's fleet %s. Nothing is started by this command: the fleet starts "
-          "through launch-fleet's own start path, and is said started only once its activation record reads back."
-          % (spec, where))
-    print(handoff(spec, state.value['repo'], host, orchestrator))
+    if driver:
+        print("The user said yes to starting spec #%d's fleet %s. Follow the heartbeat handoff for the scheduled job."
+              % (spec, where))
+    else:
+        print("The user said yes to starting spec #%d's fleet %s. Nothing is started by this command: the fleet starts "
+              "through launch-fleet's own start path, and is said started only once its activation record reads back."
+              % (spec, where))
+    print(handoff(spec, state.value['repo'], adapters, orchestrator))
     return 0
 
 
@@ -1860,27 +1911,35 @@ def agent_words(agent):
     return ' '.join(agent[k] for k in ('harness', 'model', 'effort'))
 
 
-def handoff(spec, repo, host, orchestrator):
+def handoff(spec, repo, adapters, orchestrator):
     """launch-fleet's own start path, named for the orchestrator to follow; never a second copy of it (R7)."""
-    adapters = host.get('adapters') if host.get('agents') != 'cloud' else None
+    if adapters:
+        return ("Next, as this project's orchestrator, follow launch-fleet's Launch section "
+                "(references/launch.md#hosts-without-cloudroom) for the local heartbeat for spec #%d of %s. "
+                "Use OPENWIZ_ADAPTERS=%s, driver harness `%s` and model `%s`. Show the scheduled job preview "
+                "and apply it on the user's yes. Then run launch --spec %d again to read back its status." % (
+                    spec, repo, shlex.quote(adapters), PROGRAMS[orchestrator['harness']], orchestrator['model'], spec))
     approved = '--provider %s --model %s --reasoning-level %s' % (
         orchestrator['harness'], orchestrator['model'], orchestrator['effort'])
     return ("Next, as this project's orchestrator, follow launch-fleet's Launch section (references/launch.md) for "
             'spec #%d of %s: its two project loops and the GitHub messages question, then "Starting one": the spec\'s '
-            "loop, its entry in the private loop map, read back, and the record `%s%d`, read back.%s The user said "
+            "loop, its entry in the private loop map, read back, and the record `%s%d`, read back. The user said "
             'yes to the fleet thread `%s`: right before creating that loop, run launch-fleet\'s `ops-starts.py flags '
             '--repo %s fleet_thread`, and only if it prints exactly that, create the loop with `--provider %s --model '
             '%s --reasoning %s`. If it prints anything else, create nothing and run launch --spec %d again: it asks '
             'for a fresh preview and yes. Then run launch --spec %d again: it says the fleet started only once that '
             'record reads back. Never start it a second way.' % (
-                spec, repo, FLEET_RECORD, spec,
-                ' Its loop runs builders %s, so give it OPENWIZ_ADAPTERS=%s, where launch-fleet\'s '
-                'host.py finds the %s driver.' % (where_of(host['agents']), adapters, host['agents'])
-                if adapters else '', approved, repo, orchestrator['harness'], orchestrator['model'],
+                spec, repo, FLEET_RECORD, spec, approved, repo, orchestrator['harness'], orchestrator['model'],
                 orchestrator['effort'], spec, spec))
 
 
-def record_line(spec, recorded):
+def record_line(spec, recorded, host):
+    if host != 'cloud':
+        if recorded is None:
+            return "Spec #%d's active local heartbeat could not be confirmed." % spec
+        if recorded:
+            return "Spec #%d's local heartbeat is active. It checks GitHub every 10 minutes." % spec
+        return "Spec #%d has no local heartbeat installed yet." % spec
     if recorded is None:
         return "The spec's fleet record could not be read right now."
     if recorded:
@@ -1894,7 +1953,8 @@ def watch(got):
     if state.value.get('spec') != spec:
         raise Exit(5, 'This onboarding planned no spec #%d.' % spec)
     env = repository(state.value.get('repo'))
-    print(record_line(spec, fleet_recorded(spec, env)))
+    host = (state.value.get('host') or {}).get('agents', 'cloud')
+    print(record_line(spec, activation(spec, host, env), host))
     return progress(spec, got['--openwiz'], env)
 
 
@@ -1989,7 +2049,8 @@ def resume(got):
     choices = value.get('choices') or {}
     if not host:
         step = ('where', "Say the teacher's opening lines, then run where --build <build> to list the hosts this "
-                'OpenWiz offers, and ask where agents run. On the answer, run where --agents <the pick> --build '
+                'OpenWiz offers. Reuse the choice from this chat or the install continuation. Ask where agents run '
+                'when no offered host is known. Then run where --agents <the pick> --build '
                 "<build> and say what it prints: the cost and, for a driver host, where its login lives. Only on the "
                 "user's yes to that, run it again with --yes.")
     elif created.get('state') in ('pending', 'uncertain'):
@@ -2002,9 +2063,16 @@ def resume(got):
     elif not repo:
         step = ('project', 'Offer the three choices, with ideas.md for anyone without an idea, then choose or '
                 'create its one repository.')
+    elif not value.get('setup') and host['agents'] != 'cloud':
+        step = ('connect', 'Prepare %s with setup.py prepare --host %s and omit CloudRoom IDs. '
+                'Run setup.py check, then continue.' % (repo, host['agents']))
     elif not value.get('setup'):
         step = ('connect', '%sConnect %s with the installed tools, then run continue.' % (
             'Setup already prepared it; ' if candidate == repo else '', repo))
+    elif spec and launched.get('spec') == spec and launched.get('state') in ('authorized', 'pending', 'uncertain') \
+            and host['agents'] != 'cloud':
+        step = ('launch', 'Run launch --spec %d to read back the heartbeat status and follow the handoff it prints.'
+                % spec)
     elif spec and launched.get('spec') == spec and launched.get('state') in ('authorized', 'pending', 'uncertain'):
         step = ('launch', "The user said yes to starting spec #%d: run launch --spec %d first, which checks the "
                 "Orchestrator is still the one the user said yes to and names the start path; finish launch-fleet's "
@@ -2018,7 +2086,11 @@ def resume(got):
     elif not value.get('grill'):
         step = ('grill', "Run the short grill; on the user's yes in chat, run grill --confirmed <its comment URL>.")
     elif not choices:
-        step = ('agents', 'Run choose --from-setup.')
+        if host['agents'] == 'cloud':
+            step = ('agents', 'Run choose --from-setup.')
+        else:
+            step = ('agents', 'Save openwiz models --json --host %s, then run choose --options <saved file> '
+                    '--from-setup.' % host['agents'])
     elif choices.get('builder_tables') != 'read':
         step = ('agents', '%s %s' % (chosen_line(choices),
                                      tables_line(choices, 'have not been read back with this choice yet')))

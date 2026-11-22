@@ -185,7 +185,7 @@ For that repository, each tool previews and applies only on the yes (`--yes`, or
    - `--operator`: the name a loop's on or off switch records as who did it; recommend the user's GitHub login.
    - `--service-issue`: an open issue in that repository for OpenWiz's service records (not a pull request). With none, offer to open one, titled "OpenWiz service records", on the yes.
    - `--answer-thread`: the user's CloudRoom thread in that project that gets the fleet's answers, from the same `ls`; another project's thread reads `project_answer_refused`.
-   - `--harness`, `--model`, `--effort`: what the user picks from `<root>/current/openwiz models --json` with CloudRoom. With a driver host, use `<root>/current/openwiz models --json --host <its name>` and offer its local options.
+   - `--harness`, `--model`, `--effort`: what the user picks from `<root>/current/openwiz models --json --host cloud` with CloudRoom. With a driver host, use `<root>/current/openwiz models --json --host <its name>` and offer its local options.
 
    Without `--yes` it prints the effects and an operation id; on the yes, run it again with `--yes --operation <id>`.
 3. **The App, or an explicit skip:** recommend the App, set up with the installed `"$build"/runtime/github-app/setup.py` as the `setup` skill's "The App" says. Only the user's answer selects `github_login.py skip-app`; an App failure never becomes a skip.
@@ -202,7 +202,7 @@ Done when `grill` recorded the confirmation.
 
 ### 5. Agents
 
-Harness, model and effort were answered at Connect. Save `<root>/current/openwiz models --json` privately with CloudRoom. With a driver host, save `<root>/current/openwiz models --json --host <its name>` and use its local options. Then run `first_fleet.py choose --options <saved file> --from-setup` (without a carried setup, ask the three and pass `--harness --model --effort`). `choose` writes the choice into `docs/agents/fleet.md`'s Models table, keeping the Reviewer in the other family. Commit that file and merge it, then run the same `choose` again: it reads the table back.
+Harness, model and effort were answered at Connect. Save `<root>/current/openwiz models --json --host cloud` privately with CloudRoom. With a driver host, save `<root>/current/openwiz models --json --host <its name>` and use its local options. Then run `first_fleet.py choose --options <saved file> --from-setup` (without a carried setup, ask the three and pass `--harness --model --effort`). `choose` writes the choice into `docs/agents/fleet.md`'s Models table, keeping the Reviewer in the other family. Commit that file and merge it, then run the same `choose` again: it reads the table back.
 
 Done when the choice is recorded and the default branch's Models table names it.
 

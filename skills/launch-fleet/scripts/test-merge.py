@@ -109,7 +109,8 @@ if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'enqueuePul
     refused = (kind == 'fail' or got.get('id') != 'PR_synthetic' + str(pr['number'])
                or got.get('head') != pr['headRefOid'] or running or not pr['isMergeQueueEnabled'])
     if not refused and kind != 'pending':
-        pr.update(isInMergeQueue=True, mergeQueueEntry={'headCommit': {'oid': pr['headRefOid']}})
+        pr.update(isInMergeQueue=True, mergeQueueEntry={'headCommit': {'oid': pr['headRefOid']}},
+                  enqueued={'actor': {'login': world['me']}})
     with open(path, 'w') as f:
         json.dump(world, f)
     if refused:
@@ -130,6 +131,7 @@ if args[:2] == ['api', 'graphql'] and r.returncode == 0:
         node['closingIssuesReferences'] = {'pageInfo': {'hasNextPage': False}, 'nodes': world['pr'].get('closes', [])}
         node['repository'] = {'nameWithOwner': world['repo']}
         node['id'] = 'PR_synthetic' + str(world['pr']['number'])
+        node['enqueued'] = {'nodes': [world['pr']['enqueued']] if world['pr'].get('enqueued') else []}
     out = json.dumps(value)
 sys.stdout.write(out)
 sys.stderr.write(r.stderr)
@@ -270,10 +272,11 @@ class Merge(unittest.TestCase):
         w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'enqueue': 'moved'})
         project(w, PRINTS)
         code, out = self.merge(w, '--ticket', 12)
-        self.assertEqual(code, 1)
-        self.assertTrue(out.startswith('blocked: '), out)
+        self.assertEqual((code, out), (1, 'not queued: GraphQL: Pull request is not ready to be enqueued; it reads '
+                                          'back as: its head is %s, not %s; nothing was recorded, so run it again '
+                                          'next wake' % (OTHER, HEAD)))
         self.assertEqual(w.load()['pr']['state'], 'OPEN')
-        self.assertEqual(w.bodies(12), [])
+        self.assertEqual((w.bodies(7), w.bodies(12)), ([], []))
 
     def test_the_queue_takes_it_and_its_record_says_what_allowed_it(self):
         w = World(self, pr=pr(isMergeQueueEnabled=True))
@@ -630,6 +633,28 @@ class Queue(unittest.TestCase):
         w.save(value)
         self.assertEqual(self.merge(w), (1, 'blocked: left the merge queue: failed checks; recorded 5002'))
         self.assertEqual(sum('enqueue' in x for x in w.writes()), 1)
+
+    def test_a_queue_merge_whose_receipt_failed_still_settles_its_cost(self):
+        w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'post': 'fail'})
+        project(w, PRINTS)
+        code, out = self.merge(w)
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith('queued; receipt unconfirmed '), out)
+        value = w.load()
+        value['pr'].update(state='MERGED', mergeCommit={'oid': 'c' * 40}, isInMergeQueue=False, mergeQueueEntry=None)
+        w.save(value)
+        settle = lambda: w.run('merge.py', 'settle', REPO, 7, 12, cwd=w.dir / 'project')
+        self.assertEqual(settle(), (0, 'cost posted 5001'))
+        self.assertEqual(w.bodies(12), ['launch-fleet: cost: ' + LINE])
+        self.assertEqual(settle(), (0, 'cost already posted 5001'))
+        self.assertEqual(w.bodies(7), [])
+
+    def test_a_merge_someone_else_enqueued_without_a_receipt_has_nothing_to_settle(self):
+        w = World(self, pr=pr(state='MERGED', mergeCommit={'oid': 'c' * 40},
+                              enqueued={'actor': {'login': 'someone-else'}}))
+        project(w, PRINTS)
+        self.assertEqual(w.run('merge.py', 'settle', REPO, 7, 12, cwd=w.dir / 'project'), (0, 'no queued merge'))
+        self.assertEqual(w.writes(), [])
 
     def test_a_queued_pull_request_without_its_receipt_gets_one(self):
         # catches: a pull request someone else queued staying without the receipt the removal guard

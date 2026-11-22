@@ -1044,7 +1044,6 @@ class PreferCut(unittest.TestCase):
                 self.assertIn("prefer: b.json:", out.stderr)
 
     def test_a_cycle_through_file_links_is_refused_before_measuring(self):
-        # catches: a cycle checked only after file links are dropped, so a cyclic cut is preferred
         w = "waiting", "builder"
         valid = cut([("A", *w), ("B", *w)], [("A", "B")])
         for kinds in (("file", "file"), ("real", "file")):

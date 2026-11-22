@@ -241,7 +241,6 @@ class Clean(unittest.TestCase):
                                  (1, 'left: 1 [DEBUG-a4f2] in src/app.py:2 (staged)\n'))
 
     def test_a_quoted_name_is_hashed_as_itself_not_its_unquoted_sibling(self):
-        # catches: a path sent to `git hash-object --stdin-paths`, which reads `"app.py"` as `app.py`
         with tempfile.TemporaryDirectory() as tmp:
             git_tree(tmp)
             Path(tmp, '.gitignore').write_text('build/\n/app.py\n')
@@ -254,7 +253,6 @@ class Clean(unittest.TestCase):
             self.assertEqual((r.returncode, r.stdout), (1, 'left: 1 [DEBUG-a4f2] in "app.py":2 (staged)\n'))
 
     def test_a_tracked_name_with_a_newline_never_stops_the_cleanup(self):
-        # catches: a newline in a tracked name splitting the hash list, so `clean` refuses
         with tempfile.TemporaryDirectory() as tmp:
             git_tree(tmp)
             Path(tmp, 'two\nlines.txt').write_text('notes\n')

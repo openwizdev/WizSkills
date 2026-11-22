@@ -191,6 +191,7 @@ TICKET='number
           pageInfo { hasNextPage }
           nodes {
             number state isDraft merged mergedAt closedAt baseRefName headRefOid
+            repository { databaseId nameWithOwner }
             commits(last: 1) {
               nodes {
                 commit {
@@ -244,7 +245,7 @@ query() {
   nodes(ids: $ids) { ... on Issue {
     id number stateReason repository { nameWithOwner }
     labels(first: 100) { pageInfo { hasNextPage } nodes { name } }
-    closedByPullRequestsReferences(first: 5, includeClosedPrs: true) { nodes { number merged baseRefName } }
+    closedByPullRequestsReferences(first: 5, includeClosedPrs: true) { nodes { number merged baseRefName repository { nameWithOwner } } }
   } }
 }' ;;
     Nodes) printf '%s\n' 'query Nodes($ids: [ID!]!) {
@@ -327,7 +328,7 @@ gql() {
   op=$1 out=$2
   shift 2
   case $op in
-    Blockers | Nodes) ;;
+    Blockers | Nodes | Checks) ;;
     *) set -- -F owner="$OWNER" -F name="$NAME" "$@" ;;
   esac
   # GI1: a full read of `spec S` keeps each answer, by its whole request; a
@@ -534,7 +535,9 @@ next_page() {
   host=${GH_HOST:-github.com}
   if [ "$host" = github.com ]; then prefix=https://api.github.com/; else prefix=https://$host/api/v3/; fi
   case $next in "$prefix"*) next=${next#"$prefix"} ;; *) return 1 ;; esac
-  case $next in "repos/$REPO/"* | "repositories/$REPO_ID/"* | search/issues\?*) printf '%s\n' "$next" ;; *) return 1 ;; esac
+  # #2376: a closing PR's own repository (owner/name and id) keeps its pages there.
+  case $next in "repos/${2:-$REPO}/"* | "repositories/${3:-$REPO_ID}/"*) printf '%s\n' "$next" ;;
+    search/issues\?*) [ -z "${2:-}" ] && printf '%s\n' "$next" ;; *) return 1 ;; esac
 }
 rest_pages() (
   endpoint=$1 destination=$2
@@ -545,7 +548,7 @@ rest_pages() (
     [ "$page" -le 1000 ] || exit 1
     rest "$endpoint" "$destination.page" || exit 1
     cat "$destination.page" >> "$destination" || exit 1
-    endpoint=$(next_page "$destination.page.http") || exit 1
+    endpoint=$(next_page "$destination.page.http" ${3:+"$3" "$4"}) || exit 1
   done
 )
 
@@ -563,8 +566,8 @@ parallel_reads() (
   for lane in "$lanes"/lane-*; do
     [ -f "$lane" ] || continue
     (
-      while read -r number kind; do
-        "$reader" "$number" "$kind" || exit 1
+      while read -r number kind repo id; do
+        "$reader" "$number" "$kind" ${repo:+"$repo" "$id"} || exit 1
       done < "$lane"
     ) &
     pids="$pids $!"
@@ -585,30 +588,46 @@ AUTHORED='def authored($a): map(select(((.user | if type == "object" then .login
 # and labelled-event selection also stay there: REST references/check lists
 # alone do not establish the same facts.
 # Per-check memoization avoids re-reading an issue reached through two specs.
+# #2376: a closing PR in another repository (REPO ID) is read, and kept, as
+# that repository's: never as this repository's same number.
+PR_REPO='def pr_repo($r): .repository.nameWithOwner
+  | if type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") then
+      (if ascii_downcase == ($r | ascii_downcase) then $r else . end)
+    else error("a pull request names no repository") end;'
+# item_file KIND N [REPO]: the facts file of item N, keyed by its repository.
+item_file() {
+  case ${3:-$REPO} in "$REPO") printf '%s/%s-%s.json\n' "$TMP" "$1" "$2" ;;
+    *) printf '%s/%s-%s-%s.json\n' "$TMP" "$1" "$(printf '%s' "$3" | tr / @)" "$2" ;; esac
+}
 comment_facts() (
-  n=$1
-  [ ! -f "$TMP/comments-$n.json" ] || exit 0
+  n=$1 repo=${2:-$REPO} id=${3:-}
+  file=$(item_file comments "$n" "$repo") || exit 1
+  [ ! -f "$file" ] || exit 0
+  if [ "$repo" != "$REPO" ]; then
+    case $id in '' | 0* | *[!0-9]*) exit 1 ;; esac
+    set -- "$repo" "$id"
+  else set --; fi
   # REST already walks the whole history. Never cap it at the former
   # GraphQL window, and never interpret a partially read history as facts.
   # The existing incomplete-history guard prints look for this item alone.
-  if rest_pages "repos/$REPO/issues/$n/comments?per_page=100" "$TMP/comments-$n.raw" 2> /dev/null \
+  if rest_pages "repos/$repo/issues/$n/comments?per_page=100" "$file.raw" "$@" 2> /dev/null \
     && jq -se --slurpfile a "$TMP/authors.json" "$AUTHORED"'select(length > 0 and all(.[]; type == "array")) | add
       | select(all(.[]; type == "object" and (.id | type) == "number"
           and (.body | type) == "string" and (.created_at | type) == "string"
           and (.updated_at | type) == "string"))
       | {pageInfo: {hasPreviousPage: false},
          nodes: (authored($a[0]) | map({databaseId: .id, createdAt: .created_at, updatedAt: .updated_at, body, author: (.user.login | ascii_downcase)}))}' \
-      "$TMP/comments-$n.raw" > "$TMP/comments-$n.json" 2> /dev/null; then
+      "$file.raw" > "$file" 2> /dev/null; then
     exit 0
   fi
-  printf '%s\n' '{"pageInfo":{"hasPreviousPage":true},"nodes":[]}' > "$TMP/comments-$n.json"
+  printf '%s\n' '{"pageInfo":{"hasPreviousPage":true},"nodes":[]}' > "$file"
 )
 # Each issue's three REST resources are independent too. Fetch them in the
 # same pool before constructing facts, so one issue never serializes them.
 issue_read() (
   n=$1 part=$2
   case $part in
-    comments) comment_facts "$n" ;;
+    comments) comment_facts "$n" "${3:-}" "${4:-}" ;;
     detail) rest "repos/$REPO/issues/$n" "$TMP/facts-issue-$n.json.detail" ;;
     blockers) rest_pages "repos/$REPO/issues/$n/dependencies/blocked_by?per_page=100" "$TMP/facts-issue-$n.json.blockers" ;;
     *) exit 1 ;;
@@ -616,14 +635,14 @@ issue_read() (
 )
 issue_facts() (
   n=$1 kind=$2
-  facts=$TMP/facts-$kind-$n.json
+  facts=$(item_file "facts-$kind" "$n" "${3:-}") || exit 1
   [ ! -f "$facts" ] || exit 0
-  comment_facts "$n" || exit 1
+  comment_facts "$n" "${3:-}" "${4:-}" || exit 1
   if [ "$kind" = pr ]; then
     # The head, its CI rollup and the PR metadata stay together in the one
     # GraphQL answer. Mixing later REST metadata could borrow another head's
     # passing checks. Only the PR's comments need a separate REST read.
-    jq -cn --argjson n "$n" --slurpfile c "$TMP/comments-$n.json" '{number: $n, comments: $c[0]}' > "$facts"
+    jq -cn --argjson n "$n" --slurpfile c "$(item_file comments "$n" "${3:-}")" '{number: $n, comments: $c[0]}' > "$facts"
     exit $?
   fi
   if [ "$kind" = issue ]; then
@@ -655,13 +674,13 @@ closure_file() (
 # PR head. Counts, identities and cursors must reconcile across every page.
 check_contexts() (
   source=$1
-  jq -c '
+  jq -c --arg repo "$REPO" "$PR_REPO"'
     def valid_pr: (.headRefOid | type == "string" and test("^[0-9a-f]{40}$"))
       and (.commits.nodes | type == "array" and length == 1)
       and .commits.nodes[0].commit.oid == .headRefOid
       and (.commits.nodes[0].commit | has("statusCheckRollup"));
     [.. | objects | select(has("headRefOid") and .state == "OPEN")]
-    | if all(.[]; valid_pr) then group_by(.number)[]
+    | if all(.[]; valid_pr) then group_by([pr_repo($repo), .number])[]
       | if (map(.headRefOid) | unique | length) == 1
           and (map(.commits.nodes[0].commit.statusCheckRollup) | unique | length) == 1
         then .[0] else error("conflicting PR check snapshots") end
@@ -670,6 +689,7 @@ check_contexts() (
   while IFS= read -r pr; do
     printf '%s\n' "$pr" > "$source.pr" || exit 1
     oid=$(jq -r '.headRefOid' "$source.pr") || exit 1
+    pr_repo=$(jq -r --arg repo "$REPO" "$PR_REPO"'pr_repo($repo)' "$source.pr") || exit 1
     jq '.commits.nodes[0].commit.statusCheckRollup' "$source.pr" > "$source.rollup" || exit 1
     # A commit with no rollup has no successful required CI to borrow.
     [ "$(cat "$source.rollup")" != null ] || continue
@@ -711,38 +731,42 @@ check_contexts() (
       cursor=$(jq -r '.pageInfo.endCursor' "$source.contexts") || exit 1
       jq --arg c "$cursor" '. + [$c]' "$source.cursors" > "$source.next-cursors" \
         && mv "$source.next-cursors" "$source.cursors" || exit 1
-      gql Checks "$source.check-page" -f oid="$oid" -f cursor="$cursor"
+      gql Checks "$source.check-page" -F owner="${pr_repo%%/*}" -F name="${pr_repo#*/}" -f oid="$oid" -f cursor="$cursor"
       jq -e --arg oid "$oid" '.data.repository.object.oid == $oid' "$source.check-page" > /dev/null || exit 1
       jq '.data.repository.object.statusCheckRollup.contexts' "$source.check-page" > "$source.contexts" || exit 1
     done
     jq --slurpfile nodes "$source.nodes" --slurpfile page "$source.contexts" \
       '.contexts = $page[0] | .contexts.nodes = $nodes[0]' "$source.rollup" > "$source.complete" || exit 1
-    jq --slurpfile rollup "$source.complete" '{number, rollup: $rollup[0]}' "$source.pr" >> "$source.checks" || exit 1
+    jq --arg r "$pr_repo" --slurpfile rollup "$source.complete" '{key: "\($r)#\(.number)", rollup: $rollup[0]}' "$source.pr" >> "$source.checks" || exit 1
   done < "$source.prs"
-  jq -s 'map({key: (.number | tostring), value: .rollup}) | from_entries' "$source.checks" > "$source.rollups" || exit 1
-  jq --slurpfile r "$source.rollups" 'walk(if type == "object" and has("headRefOid")
-      and .state == "OPEN" and $r[0][(.number | tostring)] != null
-    then .commits.nodes[0].commit.statusCheckRollup = $r[0][(.number | tostring)] else . end)' \
+  jq -s 'map({key, value: .rollup}) | from_entries' "$source.checks" > "$source.rollups" || exit 1
+  jq --arg repo "$REPO" --slurpfile r "$source.rollups" "$PR_REPO"'walk(if type == "object" and has("headRefOid")
+      and .state == "OPEN" and $r[0]["\(pr_repo($repo))#\(.number)"] != null
+    then .commits.nodes[0].commit.statusCheckRollup = $r[0]["\(pr_repo($repo))#\(.number)"] else . end)' \
     "$source" > "$source.next" && mv "$source.next" "$source"
 )
 hydrate() (
   source=$1 extra_comments=${2:-}
   check_contexts "$source" || exit 1
-  jq -r '[.. | objects | select(has("number"))
+  # A PR in another repository is wanted with that repository and its id.
+  jq -r --arg repo "$REPO" "$PR_REPO"'[.. | objects | select(has("number"))
     | select(.closedByPullRequestsReferences.pageInfo != null or has("subIssues")
         or has("subIssuesSummary") or has("commits"))
-    | {n: .number, k: (if has("commits") then "pr" else "issue" end)}]
-    | unique_by([.n, .k])[] | "\(.n) \(.k)"' "$source" > "$source.wanted" || exit 1
+    | {n: .number, k: (if has("commits") then "pr" else "issue" end)}
+      + (if has("commits") and pr_repo($repo) != $repo then {r: pr_repo($repo), id: .repository.databaseId} else {} end)]
+    | unique_by([.n, .k, .r])[] | "\(.n) \(.k)\(if .r then " \(.r) \(.id)" else "" end)"' "$source" > "$source.wanted" || exit 1
   # Validate every work item before launching any readers, then assemble
   # their facts once instead of spawning jq again for every issue.
-  : > "$source.requests" || exit 1
+  : > "$source.requests" && : > "$source.keys" || exit 1
   set --
-  while read -r n kind; do
+  while read -r n kind repo id; do
     case $n in '' | *[!0-9]*) exit 1 ;; esac
     case $kind in issue | pr) ;; *) exit 1 ;; esac
-    set -- "$@" "$TMP/facts-$kind-$n.json"
-    [ ! -f "$TMP/facts-$kind-$n.json" ] || continue
-    [ -f "$TMP/comments-$n.json" ] || printf '%s comments\n' "$n" >> "$source.requests" || exit 1
+    facts=$(item_file "facts-$kind" "$n" "$repo") || exit 1
+    set -- "$@" "$facts"
+    printf '%s\n' "${repo:+$repo#}$n" >> "$source.keys" || exit 1
+    [ ! -f "$facts" ] || continue
+    [ -f "$(item_file comments "$n" "$repo")" ] || printf '%s comments%s\n' "$n" "${repo:+ $repo $id}" >> "$source.requests" || exit 1
     if [ "$kind" = issue ]; then
       printf '%s detail\n%s blockers\n' "$n" "$n" >> "$source.requests" || exit 1
     fi
@@ -757,7 +781,8 @@ hydrate() (
   parallel_reads issue_read "$source.jobs" || exit 1
   parallel_reads issue_facts "$source.wanted" || exit 1
   if [ $# -gt 0 ]; then
-    jq -s 'map({key: (.number | tostring), value: .}) | from_entries' "$@" > "$source.facts" || exit 1
+    jq -s --rawfile k "$source.keys" '[($k | split("\n") | .[:-1]), .] | transpose
+      | map({key: .[0], value: .[1]}) | from_entries' "$@" > "$source.facts" || exit 1
   else printf '{}' > "$source.facts" || exit 1; fi
   jq -r '[.[] | .blockedBy.nodes[]? | select(.state == "CLOSED") | .node_id]
     | unique[]' "$source.facts" > "$source.blockers" || exit 1
@@ -777,10 +802,11 @@ hydrate() (
     (if has("blockedBy") then .blockedBy.nodes |= map(. +
       ($c[0][.node_id] // {closedByPullRequestsReferences: {nodes: []}})) else . end))' \
     "$source.facts" > "$source.next" && mv "$source.next" "$source.facts" || exit 1
-  jq --slurpfile facts "$source.facts" 'walk(if type == "object" and has("number")
+  jq --arg repo "$REPO" --slurpfile facts "$source.facts" "$PR_REPO"'walk(if type == "object" and has("number")
     and (.closedByPullRequestsReferences.pageInfo != null or has("subIssues")
       or has("subIssuesSummary") or has("commits"))
-    then . + $facts[0][(.number | tostring)] else . end)' "$source" > "$source.next" \
+    then . + $facts[0][if has("commits") and pr_repo($repo) != $repo then "\(pr_repo($repo))#\(.number)"
+      else .number | tostring end] else . end)' "$source" > "$source.next" \
     && mv "$source.next" "$source"
 )
 
@@ -2471,7 +2497,16 @@ guard() {
   while read -r _ n _; do
     n=${n#\#}
     is_number "$n" || die "can't read the re-test guard's line for #$n"
-    rest_pages "repos/$REPO/pulls/$n/files?per_page=100" "$TMP/prfiles-$n.raw" || die "can't read the files of #$n"
+    # #2376: the files of a closing PR are its own repository's; two PRs
+    # with this number in different repositories stop the check.
+    home=$(jq -er --arg repo "$REPO" --argjson n "$n" "$PR_REPO"'[.. | objects
+      | select(has("headRefOid") and .number == $n) | [pr_repo($repo), .repository.databaseId]] | unique
+      | if length == 1 then .[0] | if .[0] == $repo then $repo else "\(.[0]) \(.[1])" end
+        else error("not one pull request") end' "$TMP/world.json") \
+      || die "can't tell which repository's #$n the re-test guard means"
+    # shellcheck disable=SC2086 # "owner/name id" for another repository
+    set -- $home
+    rest_pages "repos/$1/pulls/$n/files?per_page=100" "$TMP/prfiles-$n.raw" ${2:+"$1" "$2"} || die "can't read the files of #$n"
     files=$(jq -cs "$FILES" "$TMP/prfiles-$n.raw") || die "can't read the files of #$n"
     printf '%s"%s":%s' "$sep" "$n" "$files" >> "$TMP/prfiles.json" || die "can't write"
     sep=','
@@ -2621,23 +2656,25 @@ keep_read() {
       else error("two answers to one request") end) | from_entries' "$@" > "$keep_out/graphql.json" 2> /dev/null || return 0
   merged=false
   for f in "$@"; do jq -e '.data.repository.pullRequests' "$f" > /dev/null 2>&1 && merged=true && break; done
-  jq -r --arg r "$REPO" --arg d "$DEFAULT" --arg identity "$IDENTITY_PROBE" --argjson merged "$merged" '
+  # #2376: a closing PR's probes ask its own repository.
+  jq -r --arg r "$REPO" --arg d "$DEFAULT" --arg identity "$IDENTITY_PROBE" --argjson merged "$merged" "$PR_REPO"'
     def prs: .closedByPullRequestsReferences.nodes[]?;
-    def pr_probes: "repos/\($r)/pulls/\(.number)",
+    def pull: "repos/\(pr_repo($r))/pulls/\(.number)";
+    def pr_probes: pull,
       # CI on a merged PR never selects a due line. Its metadata remains a
       # probe, and every non-merged PR keeps both head-status probes.
-      (select(.state != "MERGED") | .headRefOid // empty
-        | "repos/\($r)/commits/\(.)/check-runs?per_page=100", "repos/\($r)/commits/\(.)/status");
+      (select(.state != "MERGED") | pr_repo($r) as $p | .headRefOid // empty
+        | "repos/\($p)/commits/\(.)/check-runs?per_page=100", "repos/\($p)/commits/\(.)/status");
     def timeline: "repos/\($r)/issues/\(.number)/timeline?per_page=100";
     ["repos/\($r)", $identity,
      (.specs[] | "repos/\($r)/issues/\(.number)/sub_issues?per_page=100",
        (.subIssues.nodes[] | timeline, (prs | pr_probes),
          (.blockedBy.nodes[]? | select(.state == "CLOSED") | timeline,
            "repos/\(.repository.nameWithOwner // $r)/issues/\(.number)",
-           (prs | "repos/\($r)/pulls/\(.number)")))),
+           (prs | pull)))),
      (.waited // {} | to_entries[] | if (.key | startswith("PR:")) then "repos/\($r)/pulls/\(.key[3:])"
        else "repos/\($r)/issues/\(.key)", "repos/\($r)/issues/\(.key)/timeline?per_page=100",
-         (.value // {} | prs | "repos/\($r)/pulls/\(.number)") end),
+         (.value // {} | prs | pull) end),
      (if $merged then "repos/\($r)/git/ref/heads/\($d | @uri)" else empty end)]
     | unique[]' "$TMP/world.json" > "$keep_out/probes" 2> /dev/null || return 0
   replayable=true

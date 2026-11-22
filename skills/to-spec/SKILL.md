@@ -64,7 +64,9 @@ refusal it fixes and re-checks. It never comes back to the owner.
 
 Skip this step for the install's first fleet, and only for it: when the install
 skill's plan step runs you for that fleet, the spec gets no video and the launch
-follows the machine plan approval straight away. Every other spec gets its video.
+follows the machine plan approval straight away. A reset or change of that spec or
+plan gets a new machine approval and still no video: for this fleet that
+replaces step 5's new video. Every other spec gets its video.
 
 One animatic: what changes for a user and in the codebase, in the grill's
 words, in build order (step 1 is what starts first in the approved plan). No

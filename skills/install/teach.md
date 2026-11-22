@@ -38,7 +38,7 @@ When its summary is ready:
 
 ## The spec and its video
 
-> Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. See it at `<spec link>` or at openwiz.dev/app; your first fleet has no video, so it starts as soon as the plan checks itself, with nothing for you to do.
+> Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. See it at `<spec link>` or at openwiz.dev/app; your first fleet has no video, so once the plan checks itself I'll show what starting it does and ask for your yes.
 
 ## The fleet starting
 

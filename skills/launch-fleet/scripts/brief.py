@@ -15,7 +15,7 @@ A loop prompt is private routing: it may name the orchestrator's thread, which
 never goes into a public record.
 
 Every ticket and pull request is written as OWNER/NAME#N, so an agent whose sandbox is
-another repository's copy never reads its own issue of that number (#2307).
+another repository's copy never reads its own issue of that number (OpenWiz #2307).
 
 Exit 2 and print nothing for an unknown kind or a malformed target, a bare number included. The
 skill-file lookup belongs to the recipient, so it is printed unexpanded.

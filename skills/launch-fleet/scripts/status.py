@@ -664,7 +664,7 @@ def scan(repo, authors, now):
             own = notes(comments, authors)
             found.append((issue['number'], own, mismatches(
                 issue['number'], [label['name'] for label in issue['labels']['nodes']],
-                own, issue['closedByPullRequestsReferences']['nodes'], now)))
+                own, issue['closedByPullRequestsReferences']['nodes'], now), comments))
         if not issues['pageInfo']['hasNextPage']:
             break
         cursor = issues['pageInfo']['endCursor']
@@ -672,14 +672,16 @@ def scan(repo, authors, now):
 
 
 def check(args, now):
-    found = [line for _, _, lines in scan(args.repo, record_authors(args.repo), now) for line in lines]
+    found = [line for _, _, lines, _ in scan(args.repo, record_authors(args.repo), now) for line in lines]
     for line in found:
         print(line)
     return 1 if found else 0
 
 
 REPAIRING = 'adding needs-info for an asking note'
-BESIDE = REPAIRING + ' beside a stopped fleet note'
+PENDING = '<!-- openwiz:needs-info-repair v1 -->'
+PENDING_BODY = (PENDING + '\nlaunch-fleet is adding needs-info for an asking note beside a stopped fleet note; '
+                'this comment goes once the label is settled.')
 REPAIRED = 'settled needs-info'
 
 
@@ -706,6 +708,12 @@ def label_events(repo, n):
 def actor(event):
     login = (event.get('actor') or {}).get('login')
     return login if isinstance(login, str) else None
+
+
+def pending_marks(comments, login):
+    return [int(c['id']) for c in comments if isinstance(c.get('user'), dict)
+            and isinstance(c['user'].get('login'), str) and c['user']['login'].lower() == login.lower()
+            and (c.get('body') or '').split('\n', 1)[0] == PENDING]
 
 
 def by(event, login):
@@ -764,10 +772,12 @@ def settle(repo, n, authors, login, base, pending):
         fleet = [x for x in everyone if x[3] == login.lower()]
         reuse = fleet[-1][0] if fleet and not fleet[-1][1]['state'].startswith('stopped') else None
         stopped = reuse is None and bool(everyone) and everyone[-1][1]['state'].startswith('stopped')
-        step = BESIDE if stopped else REPAIRING
-        note_id = record(repo, n, base, 'working', step, reuse)[0]
+        if stopped:
+            note_id, marked = int(gh('POST', comments, {'body': PENDING_BODY})['id']), True
+        else:
+            note_id, marked = record(repo, n, base, 'working', REPAIRING, reuse)[0], False
     else:
-        note_id, step = pending[0], pending[1]['step']
+        note_id, marked = pending
     report, mine = [], None
     if still is not None and not labelled():
         before = len(label_events(repo, n))
@@ -780,7 +790,7 @@ def settle(repo, n, authors, login, base, pending):
             report.append(f'#{n} note {still[0]} {still[1]["agent"]} asking: {ASKING_LABEL} added')
     if still is None:
         report += left(repo, n, login, labelled) if mine is None else cleanup(repo, n, login, mine, labelled)
-    if step == BESIDE:
+    if marked:
         gh('DELETE', f'repos/{repo}/issues/comments/{note_id}')
     else:
         record(repo, n, base, 'done', REPAIRED, note_id)
@@ -811,10 +821,13 @@ def repair(args, now):
     authors, found = guarded('could not read', read)
     login = viewer()
     reported = 0
-    for n, own, lines in found:
-        pending = None if login is None else next(
-            (x for x in reversed(own) if x[1]['agent'] == 'fleet' and x[3] == login.lower()
-             and x[1]['state'] == 'working' and x[1]['step'] in (REPAIRING, BESIDE)), None)
+    for n, own, lines, comments in found:
+        pending = None
+        if login is not None:
+            note = next((x for x in reversed(own) if x[1]['agent'] == 'fleet' and x[3] == login.lower()
+                         and x[1]['state'] == 'working' and x[1]['step'] == REPAIRING), None)
+            marks = pending_marks(comments, login)
+            pending = (note[0], False) if note else (marks[-1], True) if marks else None
         asks = any(line.endswith(f': no {ASKING_LABEL} label') for line in lines)
         if login is not None and (asks or pending):
             settled = guarded(f'could not repair #{n}', lambda: settle(args.repo, n, authors, login, base, pending))

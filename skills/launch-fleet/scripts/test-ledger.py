@@ -184,7 +184,7 @@ class Ledger(unittest.TestCase):
         w = World(self, MIXED, others=others, specs=specs)
         self.assertEqual(w.run(REPO, '--spec', '1'), (0, '#10  PR #110  12.50\n'
                                                          '#11  PR #111  unknown\n'
-                                                         'synthetic-owner/synthetic-skills#7  PR #70  2.00\n'
+                                                         'synthetic-owner/synthetic-skills#7  PR synthetic-owner/synthetic-skills#70  2.00\n'
                                                          'Merged: 3; known: 2; unknown: 1; total: 14.50 credits; '
                                                          'cost per merged PR: 7.25 credits (2 of 3 known)\n', ''))
 
@@ -236,6 +236,33 @@ class Ledger(unittest.TestCase):
             odd = dict(big, **{'40': closed(lead('launch-fleet: cost: something else'))})
             code, out, _ = World(self, odd).run(REPO)
             self.assertEqual((code, out), (1, ''))
+
+    def test_the_writers_grouped_credit_amounts_are_read(self):
+        issues = {'10': closed(known(10, 110, '1,000.25')), '11': closed(known(11, 111, '2,500,000'))}
+        self.assertEqual(World(self, issues).run(REPO), (0, '#10  PR #110  1000.25\n'
+                                                            '#11  PR #111  2500000.00\n'
+                                                            'Merged: 2; known: 2; unknown: 0; total: 2501000.25 credits; '
+                                                            'cost per merged PR: 1250500.13 credits (2 of 2 known)\n', ''))
+        for bad in ('1,00.25', '1000,000', ',100', '1,000,00'):
+            with self.subTest(bad):
+                code, out, _ = World(self, {'10': closed(known(10, 110, bad))}).run(REPO)
+                self.assertEqual((code, out), (1, ''))
+
+    def test_one_row_per_pull_request_when_several_tickets_carry_its_cost(self):
+        issues = {'10': closed(known(10, 110, '12.5')), '11': closed(known(11, 110, '12.5')),
+                  '12': closed(lead('launch-fleet: cost unknown (PR #120): no cost command')),
+                  '13': closed(known(13, 120, '4')),
+                  '14': closed(lead('launch-fleet: cost unknown (PR synthetic-owner/synthetic-work#110): x'))}
+        self.assertEqual(World(self, issues).run(REPO), (0, '#13  PR #120  4.00\n'
+                                                            '#14  PR #110  unknown\n'
+                                                            'Merged: 2; known: 1; unknown: 1; total: 4.00 credits; '
+                                                            'cost per merged PR: 4.00 credits (1 of 2 known)\n', ''))
+        others = {'7': closed(known(7, 9, '2'))}
+        same = {'14': closed(lead('launch-fleet: cost unknown (PR synthetic-owner/synthetic-skills#9): x'))}
+        w = World(self, same, others=others, specs={REPO + '#1': [REPO + '#14', OTHER + '#7']})
+        self.assertEqual(w.run(REPO, '--spec', '1'), (0, '#14  PR synthetic-owner/synthetic-skills#9  unknown\n'
+                                                         'Merged: 1; known: 0; unknown: 1; total: unknown; '
+                                                         'cost per merged PR: unknown (0 of 1 known)\n', ''))
 
     def test_every_page_is_read(self):
         big = {str(n): closed(lead('launch-fleet: x'), lead('launch-fleet: y'), known(n, 100 + n, '1'))

@@ -30,6 +30,10 @@ class Refused(Exception):
     pass
 
 
+class Busy(Refused):
+    pass
+
+
 def command(args, *, text=None):
     result = subprocess.run(args, input=text, capture_output=True, text=True, timeout=30,
                             env=dict(os.environ, LC_ALL='C'))
@@ -61,7 +65,8 @@ class Job:
                 'Label': self.name, 'ProgramArguments': self.argv, 'StartInterval': INTERVAL * 60,
             }).decode()}
         if self.backend == 'systemd':
-            service = '[Service]\nType=oneshot\nExecStart=' + ' '.join(map(systemd_argument, self.argv)) + '\n'
+            execute = ' '.join(map(systemd_argument, self.argv))
+            service = f'[Service]\nType=oneshot\nKillMode=process\nExecStart={execute}\n'
             timer = f'[Timer]\nOnCalendar=*:0/{INTERVAL}\n\n[Install]\nWantedBy=timers.target\n'
             return {self.folder / (self.name + '.service'): service, self.folder / self.timer: timer}
         return {}
@@ -168,7 +173,7 @@ def locked(directory):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise Refused('a heartbeat operation is already running') from None
+            raise Busy('a heartbeat operation is already running') from None
         if not os.path.samestat(os.fstat(fd), directory.stat()):
             raise Refused('the heartbeat installation changed')
         yield
@@ -245,9 +250,13 @@ def tick(state, config, paused):
         outcome = 'started'
         return 0
     finally:
-        stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-        with (state / 'ticks.log').open('a') as log:
-            log.write(f'{stamp} {outcome}\n')
+        log_tick(state, outcome)
+
+
+def log_tick(state, outcome):
+    stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    with (state / 'ticks.log').open('a') as log:
+        log.write(f'{stamp} {outcome}\n')
 
 def main():
     args = arguments()
@@ -269,6 +278,13 @@ def main():
         phase = 'paused' if status.exists() else 'active'
         print(f'heartbeat: {phase} ({config["backend"]})')
         return 0
+    if args.action == 'run':
+        try:
+            with locked(state):
+                return tick(state, json.loads(config_path.read_text()), status.exists())
+        except Busy:
+            log_tick(state, 'busy')
+            raise
     with locked(state):
         config = json.loads(config_path.read_text())
         if args.action == 'remove':
@@ -278,8 +294,6 @@ def main():
             status.touch()
         elif args.action == 'resume':
             status.unlink(missing_ok=True)
-        else:
-            return tick(state, config, status.exists())
     return 0
 
 

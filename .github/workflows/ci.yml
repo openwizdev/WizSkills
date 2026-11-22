@@ -7,40 +7,129 @@
 # Release-tool dependency record (WS18/J187): @changesets/cli 3.0.3 (MIT),
 # pinned with package-lock.json (40 packages, MIT or ISC), installed by
 # `npm ci --ignore-scripts`. Used only by check/changesets.py; never shipped.
+
+# comment-ok: dependency record, the same kind as the two records above.
+# CI cache dependency record (J187, WQ3/#2272): actions/cache 6.1.0 (MIT), pinned
+# by commit 55cc8345863c7cc4c66a329aec7e433d2d1c52a9. Used only by CI to cache
+# ~/.npm and the pinned Playwright browser; never shipped. No skill gains a dependency.
 name: WizSkills check
 on:
-  push:
   pull_request:
+  merge_group:
+  push:
+    branches: [main]
 permissions:
   contents: read
+env:
+  PLAYWRIGHT_CORE_VERSION: 1.64.1
 jobs:
-  check:
-    name: check
+  list:
+    name: list shards
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 10
+    outputs:
+      shards: ${{ steps.list.outputs.shards }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # The pull request's merge commit and its first parent, main's tip.
-          fetch-depth: 2
+      - name: List the shards; a shard needs the browser when its skill's folder names playwright-core (the inventory guard fails this job on an unlisted test)
+        id: list
+        run: |
+          python3 check/run.py --list > "$RUNNER_TEMP/shards.json"
+          python3 -I - "$RUNNER_TEMP/shards.json" >> "$GITHUB_OUTPUT" <<'PY'
+          import json, pathlib, sys
+          shards = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          def browser(skill):
+              folder = pathlib.Path('skills', skill or '')
+              return bool(skill) and folder.is_dir() and any(
+                  'playwright-core' in path.read_text(errors='ignore')
+                  for path in folder.rglob('*') if path.is_file())
+          matrix = [{'shard': s['name'], 'browser': browser(s['skill'])} for s in shards]
+          for row in matrix:
+              print(f"shard {row['shard']}: browser {'yes' if row['browser'] else 'no'}", file=sys.stderr)
+          print('shards=' + json.dumps(matrix))
+          PY
+  gates:
+    name: gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-browser-false
       - name: Install the pinned Changesets
         run: npm ci --ignore-scripts
-      - name: Changeset gate (a pull request that changes a skill names it in a new changeset)
-        if: github.event_name == 'pull_request'
-        run: python3 -I check/changesets.py check --base HEAD^1
-      - name: Comment check
-        if: github.event_name == 'pull_request'
+      - name: Changeset gate (a pull request that changes a skill names it in a new changeset; base is the merge group's base, or the pull request merge commit's first parent)
+        if: github.event_name != 'push'
+        env:
+          GATE_BASE: ${{ github.event.merge_group.base_sha || 'HEAD^1' }}
+        run: python3 -I check/changesets.py check --base "$GATE_BASE"
+      - name: Comment check's own tests
+        if: github.event_name != 'push'
         run: |
           python3 -I tools/comment-check/test_ci.py
           python3 -I tools/comment-check/test_commands.py
-          python3 -I tools/comment-check/check.py diff --base HEAD^1
+      - name: Comment check
+        if: github.event_name != 'push'
+        env:
+          GATE_BASE: ${{ github.event.merge_group.base_sha }}
+        run: python3 -I tools/comment-check/check.py diff --base "${GATE_BASE:-HEAD^1}"
+  shard:
+    name: shard ${{ matrix.shard }}
+    needs: list
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.list.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-browser-${{ matrix.browser }}-playwright-core-${{ env.PLAYWRIGHT_CORE_VERSION }}
+      - name: Install the pinned Changesets
+        run: npm ci --ignore-scripts
+      - if: matrix.browser
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ env.PLAYWRIGHT_CORE_VERSION }}-chromium-${{ hashFiles('.github/workflows/ci.yml') }}
       - name: Install pinned test-only browser tools
+        if: matrix.browser
         run: |
-          npm install --no-save --ignore-scripts playwright-core@1.64.1
+          npm install --no-save --ignore-scripts "playwright-core@$PLAYWRIGHT_CORE_VERSION"
           node node_modules/playwright-core/cli.js install --with-deps chromium
           node --input-type=module -e "import { chromium } from 'playwright-core'; console.log('OPENWIZ_CHROMIUM=' + chromium.executablePath())" >> "$GITHUB_ENV"
-      - name: Skill rules, standalone check and every skill's suites
+      - name: Run shard ${{ matrix.shard }}
         env:
           TEST_JOBS: 2
-        run: python3 check/run.py
+          SHARD: ${{ matrix.shard }}
+        run: python3 check/run.py --shard "$SHARD"
+  check:
+    name: check
+    needs: [list, gates, shard]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, sys
+          results = {job: need['result'] for job, need in json.loads(os.environ['RESULTS']).items()}
+          for job, result in results.items():
+              print(f'{job}: {result}')
+          sys.exit(0 if all(result == 'success' for result in results.values()) else 1)
+          PY

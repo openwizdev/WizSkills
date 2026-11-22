@@ -52,10 +52,10 @@ if [ -n "${TEST_SHARD:-}" ]; then
   case $SHARD_K$SHARD_N in *[!0-9]*) echo "FAIL TEST_SHARD is not K/N: $TEST_SHARD"; exit 1 ;; esac
   [ "$SHARD_K" -le "$SHARD_N" ] || { echo "FAIL TEST_SHARD is not K/N: $TEST_SHARD"; exit 1; }
   [ -z "${TEST_ONLY:-}" ] || { echo "FAIL TEST_SHARD runs a whole run's share, not TEST_ONLY"; exit 1; }
-  [ -r "${TEST_SHARD_MAP:-}" ] && [ -n "${TEST_SHARD_RAN:-}" ] \
-    || { echo "FAIL TEST_SHARD needs TEST_SHARD_MAP and TEST_SHARD_RAN"; exit 1; }
+  [ -z "${TEST_SHARD_MAP:-}" ] || [ -r "$TEST_SHARD_MAP" ] \
+    || { echo "FAIL TEST_SHARD_MAP is not readable: $TEST_SHARD_MAP"; exit 1; }
   # Every line "GROUP SHARD", each group once, each shard 1 to N: the last group mapped.
-  SHARD_MAPPED=$(awk -v n="$SHARD_N" 'NF != 2 || $1 !~ /^[1-9][0-9]*$/ || $2 !~ /^[1-9][0-9]*$/ || $2 > n || seen[$1]++ { bad = 1 }
+  [ -z "${TEST_SHARD_MAP:-}" ] || SHARD_MAPPED=$(awk -v n="$SHARD_N" 'NF != 2 || $1 !~ /^[1-9][0-9]*$/ || $2 !~ /^[1-9][0-9]*$/ || $2 > n || seen[$1]++ { bad = 1 }
     $1 > max { max = $1 } END { if (bad) exit 1; print max + 0 }' "$TEST_SHARD_MAP") \
     || { echo "FAIL TEST_SHARD_MAP is not one \"GROUP SHARD\" line a group: $TEST_SHARD_MAP"; exit 1; }
 fi
@@ -69,7 +69,7 @@ else
   trap 'rm -rf "$tmp"' EXIT
   SHARED=$tmp
   if [ -n "$SHARD_K" ]; then
-    mkdir "$tmp/mine" && awk -v k="$SHARD_K" '$2 == k { print $1 }' "$TEST_SHARD_MAP" | while read -r g; do : > "$tmp/mine/$g"; done \
+    mkdir "$tmp/mine" && awk -v k="$SHARD_K" '$2 == k { print $1 }' "${TEST_SHARD_MAP:-/dev/null}" | while read -r g; do : > "$tmp/mine/$g"; done \
       || { echo "FAIL setup: the shard's groups"; exit 1; }
   fi
 fi
@@ -464,9 +464,10 @@ if [ -z "$WORKER" ] && [ -z "${TEST_ONLY:-}" ]; then
   if [ -n "$SHARD_K" ]; then
     # The ci job adds up the shards' counts; each shard records its own.
     { printf 'cases %s\ntotal %s\ngroups %s\n' "$cases" "$CASES" "${groups:-0}"
-      sort -n "$tmp/times" 2> /dev/null | sed 's/^/group /'; } > "$TEST_SHARD_RAN" \
-      || bad 'the shard record' "can't write $TEST_SHARD_RAN"
-    echo "shard $SHARD_K of $SHARD_N: $cases of $CASES cases, $(grep -c '^group ' "$TEST_SHARD_RAN") of ${groups:-0} groups"
+      sort -n "$tmp/times" 2> /dev/null | sed 's/^/group /'; } > "$tmp/ran" \
+      && { [ -z "${TEST_SHARD_RAN:-}" ] || cat "$tmp/ran" > "$TEST_SHARD_RAN"; } \
+      || bad 'the shard record' "can't write ${TEST_SHARD_RAN:-its record}"
+    echo "shard $SHARD_K of $SHARD_N: $cases of $CASES cases, $(grep -c '^group ' "$tmp/ran") of ${groups:-0} groups"
   else
     [ "$cases" = "$CASES" ] || bad 'every case ran' "$cases cases ran, not $CASES"
   fi

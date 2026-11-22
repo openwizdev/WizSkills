@@ -37,7 +37,7 @@ Keep `<root>` (default `$HOME/.local/lib/openwiz`), and the `build` and `state_r
 
 ## Resume
 
-A new session, whatever the user said ("continue", or the one line again), starts here: find the first unfinished step and resume there. Use only the installed files, never a temporary clone: a restart loses it.
+Two roads lead past step 4. **The same session (the default):** step 4 has you read the running agent's installed `install/SKILL.md` and carry on at step 5 in this chat, with the host, release, `<root>`, `<build>` and `<state>` it already holds; you don't start here. **A new session** (after step 4's fallback restart, or when the chat ended), whatever the user said ("continue", the continuation message, or the one line again), starts here: find the first unfinished step and resume there. Use only the installed files, never a temporary clone: a new session doesn't have it.
 
 Read the host from the continuation message: `local` means this computer, `boat` means boat.dev, and `cloud` means CloudRoom. Read the release from it too: `release <tag>` names the release step 1 chose (its `<tag>`, and `<version>` without the `v`); use that release, never GitHub's Latest again, everywhere below. Use that choice for the setup checks below and carry it to step 6.1. If the message has no host, reuse the answer from this chat or `host.agents` if it is already recorded in the owner-only first-fleet state. Ask the host question only if you have none of those.
 
@@ -53,7 +53,7 @@ grep -m1 '^version:' ~/.claude/skills/install/SKILL.md "${CODEX_HOME:-$HOME/.cod
 
 - No `<root>/current`, or `--build-identity` does not read the `<version>` of the release you install (step 1 reads it): resume at step 1.
 - `status` does not read the GitHub account, or the user chose CloudRoom and `check` does not read `cloudroom_login_verified`: resume at step 3. `identity_unreadable` means GitHub gave no clear answer: wait a minute and run `status` again; it clears.
-- The running agent's `install/SKILL.md` is missing, or does not read `version: <version of this skill>`, this file's own `version:` line at the top: resume at step 4. When that agent's folder holds OpenWiz's 18 skills, run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4.
+- The running agent's `install/SKILL.md` is missing, or does not read `version: <version of this skill>`, this file's own `version:` line at the top: resume at step 4. When that agent's folder holds OpenWiz's 18 skills, run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4. Either way, step 4 ends by carrying on in this session; the restart is again only its fallback.
 - Otherwise resume at step 5; for a first fleet already under way, at step 6 with `first_fleet.py next`. If it prints `Next: where.`, follow step 6.1 with the recovered choice.
 
 ## 1. Preflight
@@ -149,7 +149,7 @@ It reads each connection and records only its own results in `<state>`. It print
 Done when GitHub's `status` reads the account and, only if the user chose CloudRoom, CloudRoom reads `cloudroom_login_verified`; or the user chose to stop with the remaining next steps.
 
 
-## 4. Skills into your agents, then a restart
+## 4. Skills into your agents, then carry on
 
 Only now, with setup checked and the logins done, copy OpenWiz's skills into the user's agents:
 
@@ -178,17 +178,26 @@ fixed "$src" && for d in <installed agent folders>; do
 done
 ```
 
-If it prints `NOT THIS SKILL` (the clone failed, or the branch still serves an older copy), nothing was copied: stop before the restart, say so, and try again shortly. A `not OpenWiz's, left alone` line is the user's own skill: never copy over it, and say so if it is the running agent's. A `STILL OLD` line means that folder's copy did not take (it may not be writable): report it and fix it before the restart; never restart onto an old copy. A later `install skills` run, such as a repair, writes the old copy again: repeat this block after it.
+If it prints `NOT THIS SKILL` (the clone failed, or the branch still serves an older copy), nothing was copied: stop here, say so, and try again shortly. A `not OpenWiz's, left alone` line is the user's own skill: never copy over it, and say so if it is the running agent's. A `STILL OLD` line means that folder's copy did not take (it may not be writable): report it and fix it before you carry on; never carry on with, or restart onto, an old copy. A later `install skills` run, such as a repair, writes the old copy again: repeat this block after it.
 
-An agent finds new skills only when it starts, so the user restarts it now. Give them the one message for their chosen host to paste into the new session:
+**Carry on in this session; no restart.** An agent lists new skills only when it starts, so don't wait for it to find them: read the running agent's installed copy of this skill in full, by path, and follow it from step 5. That exact file is the `path` of the running agent's `harnesses` entry plus `/install/SKILL.md`, the folder the block just printed `ok:` for:
+
+- Claude Code: `~/.claude/skills/install/SKILL.md`
+- Codex: `${CODEX_HOME:-$HOME/.codex}/skills/install/SKILL.md`
+
+Read it with your file tool, or `cat` it, and check its `version:` line reads `version: <version of this skill>`. From then on `<this skill's folder>` is that file's folder (`~/.claude/skills/install`, or `${CODEX_HOME:-$HOME/.codex}/skills/install`) for `teach.md`, `ideas.md` and `scripts/`, never a temporary clone. Keep what this chat already holds (the host answer, the release `<tag>`, `<root>`, `<build>` and `<state>`) and ask nothing again.
+
+Give the user their host's continuation message all the same, for a later session if this chat ends early:
 
 - This computer: `continue the OpenWiz install with host local and release <tag>`
 - boat.dev: `continue the OpenWiz install with host boat and release <tag>`
 - CloudRoom: `continue the OpenWiz install with host cloud and release <tag>`
 
-Keep the full message. "continue the OpenWiz install" names the skill, the host carries the user's answer into Resume, and `release <tag>` (step 1's, filled in) keeps the chosen release after GitHub's Latest moves. Any installed copy whose `version:` line is older than this file's is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md) and resume at the first unfinished step, as Resume says.
+Keep the full message. "continue the OpenWiz install" names the skill, the host carries the user's answer into Resume, and `release <tag>` (step 1's, filled in) keeps the chosen release after GitHub's Latest moves.
 
-Done when the running agent's folder holds the 18 skills by name and every `ok:` line printed with no `STILL OLD`, or the user knows which folder is missing, and the user has the restart message with their chosen host.
+**The restart is the fallback,** only when this agent cannot read that file and follow it in this session: its tools can't open a file outside the project, or it can follow only the skills it loaded at start. Then the user restarts the agent and pastes that message into the new session, which starts at Resume. Any installed copy whose `version:` line is older than this file's is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md) and resume at the first unfinished step, as Resume says.
+
+Done when the running agent's folder holds the 18 skills by name and every `ok:` line printed with no `STILL OLD`, or the user knows which folder is missing; the user has the continuation message with their chosen host; and you have read that agent's installed `install/SKILL.md` and carry on at step 5 in this session, or, only as the fallback, the user is restarting their agent.
 
 ## 5. Teach
 

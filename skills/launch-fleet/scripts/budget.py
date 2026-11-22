@@ -1,25 +1,4 @@
 #!/usr/bin/env python3
-"""REST read budget (#2433, FR3): admit or refuse the next batch of REST reads.
-
-python3 -I budget.py admit N [HEADERS-FILE...]
-
-Each HEADERS-FILE is a response as `gh api -i` writes it (with --paginate, one
-header block per page). The allowance is the REST `core` pool of the newest
-answer: the latest reset window (resets within ten minutes of the latest),
-and in it the lowest remaining, whatever the order of the files. With no
-file, or when the newest answer is past its reset, it reads
-`gh api rate_limit`, which costs no allowance.
-
-The batch of N reads is admitted when remaining - N stays at or above a
-quarter of the limit: the rest is kept for builders and reviewers, as
-fleet.sh's GraphQL `allowance` keeps. One JSON line on stdout:
-{"allowed": bool, "remaining": n, "limit": n, "reset": unix, "reason": "..."}.
-Exit 0 admits, 1 backs off until the reset, 2 is unknown (missing, malformed
-or contradictory headers, another pool, or an unreadable rate_limit) and also
-refuses; bad arguments are exit 2 with nothing on stdout. It never prints a
-token, a header value it doesn't use or a response body.
-$LAUNCH_FLEET_NOW (seconds since 1970) stands in for the clock in tests.
-"""
 import json
 import os
 import re
@@ -31,9 +10,7 @@ FIELDS = ('limit', 'remaining', 'reset', 'resource')
 POOL = 'core'
 STATUS = re.compile(rb'HTTP/\d(\.\d)? \d{3}( .*)?$')
 NUMBER = re.compile(r'(0|[1-9][0-9]{0,17})$')
-# GitHub's reset for one hour's window differs by a second or so between
-# answers; a new window resets about an hour later.
-WINDOW = 600
+SAME_WINDOW_SECONDS = 600
 
 
 class Unknown(Exception):
@@ -49,7 +26,6 @@ def answer(allowed, reason, pool=None, code=None):
 
 
 def checked(values, where):
-    """One answer's pool from its raw fields, or Unknown."""
     missing = [f for f in FIELDS if f not in values]
     if missing:
         raise Unknown('%s has no %s' % (where, ', '.join(missing)))
@@ -70,7 +46,6 @@ def checked(values, where):
 
 
 def from_file(path, n):
-    """Every answer in one `gh api -i` file, each a checked pool."""
     where = 'answer %d' % n
     try:
         with open(path, 'rb') as f:
@@ -126,7 +101,7 @@ def rate_limit():
 
 def newest(pools):
     reset = max(p['reset'] for p in pools)
-    window = [p for p in pools if p['reset'] >= reset - WINDOW]
+    window = [p for p in pools if p['reset'] >= reset - SAME_WINDOW_SECONDS]
     if len({p['limit'] for p in window}) != 1:
         raise Unknown('the newest answers give two limits')
     return min(window, key=lambda p: p['remaining'])

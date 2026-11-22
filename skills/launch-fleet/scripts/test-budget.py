@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""budget.py's tests (#2433, FR3): REST read admission on header fixtures and
-under a fake `gh` for the `rate_limit` fallback. Every value is synthetic."""
 import json
 import os
 from pathlib import Path
@@ -100,15 +98,11 @@ class Budget(unittest.TestCase):
         self.assertTrue(answer['reason'])
         return answer
 
-    # catches: a gate that refuses a healthy allowance, or reads rate_limit
-    # when headers were given.
     def test_plenty_admits(self):
         answer = self.decision(self.admit(10, self.file(headers())), 0)
         self.assertEqual((answer['remaining'], answer['limit'], answer['reset']), (4000, 5000, RESET))
         self.assertEqual(self.asked(), [])
 
-    # catches: an off-by-one at the reserve (strictly above instead of at or
-    # above), or a reserve that is not a quarter of the limit.
     def test_at_the_reserve_admits_and_one_more_backs_off(self):
         path = self.file(headers(remaining=1260))
         self.decision(self.admit(10, path), 0)
@@ -117,23 +111,19 @@ class Budget(unittest.TestCase):
         self.assertIn('2030-03-17T18:16:40Z', answer['reason'])
         self.assertIn('1250', answer['reason'])
 
-    # catches: a quarter rounded down, which lets a batch eat into the reserve.
     def test_a_limit_not_divisible_by_four_keeps_the_whole_quarter(self):
         self.decision(self.admit(1, self.file(headers(limit=5001, remaining=1252))), 0)
         self.decision(self.admit(2, self.file(headers(limit=5001, remaining=1252))), 1)
 
-    # catches: an empty allowance read as unknown or admitted.
     def test_empty_backs_off_until_the_reset(self):
         answer = self.decision(self.admit(1, self.file(headers(remaining=0, status='403 Forbidden'))), 1)
         self.assertEqual(answer['remaining'], 0)
         self.assertIn('2030-03-17T18:16:40Z', answer['reason'])
 
-    # catches: GraphQL points counted as the REST allowance.
     def test_a_graphql_resource_is_unknown(self):
         answer = self.decision(self.admit(1, self.file(headers(resource='graphql'))), 2)
         self.assertIn('graphql', answer['reason'])
 
-    # catches: a missing header read as zero, or as plenty.
     def test_missing_headers_are_unknown(self):
         for name in ('x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'x-ratelimit-resource'):
             with self.subTest(name):
@@ -142,7 +132,6 @@ class Budget(unittest.TestCase):
         self.decision(self.admit(1, self.file('{"synthetic": true}\n')), 2)
         self.assertEqual(self.asked(), [])
 
-    # catches: malformed or contradictory headers trusted as numbers.
     def test_malformed_or_contradictory_headers_are_unknown(self):
         cases = {
             'word': headers(remaining='many'),
@@ -155,8 +144,6 @@ class Budget(unittest.TestCase):
             with self.subTest(name):
                 self.decision(self.admit(1, self.file(text)), 2)
 
-    # catches: argument order trusted as time order: the newest window, and
-    # in it the lowest remaining, is the allowance now.
     def test_the_newest_answer_decides_whatever_the_order(self):
         old = self.file(headers(remaining=4000, reset=RESET - 3600), 'old.txt')
         early = self.file(headers(remaining=3000), 'early.txt')
@@ -166,19 +153,15 @@ class Budget(unittest.TestCase):
                 answer = self.decision(self.admit(10, *order), 1)
                 self.assertEqual(answer['remaining'], 1255)
 
-    # catches: a window told apart by its exact reset, when GitHub's reset
-    # for one window differs by a second between answers.
     def test_resets_a_second_apart_are_one_window(self):
         older = self.file(headers(remaining=3000, reset=RESET + 1), 'older.txt')
         newer = self.file(headers(remaining=1255, reset=RESET), 'newer.txt')
         self.assertEqual(self.decision(self.admit(10, older, newer), 1)['remaining'], 1255)
 
-    # catches: only the first page of a `gh api -i --paginate` file read.
     def test_every_page_of_a_paginated_answer_counts(self):
         pages = headers(remaining=3000) + headers(remaining=1255)
         self.assertEqual(self.decision(self.admit(10, self.file(pages)), 1)['remaining'], 1255)
 
-    # catches: one unreadable page hidden by a readable one.
     def test_one_unknown_answer_makes_the_batch_unknown(self):
         good = self.file(headers(), 'good.txt')
         bad = self.file(headers(drop=('x-ratelimit-reset',)), 'bad.txt')
@@ -187,14 +170,12 @@ class Budget(unittest.TestCase):
         windows = self.file(headers(limit=5000, remaining=3000) + headers(limit=15000, remaining=3000))
         self.decision(self.admit(1, windows), 2)
 
-    # catches: a body, a token or a header value echoed on output.
     def test_never_prints_a_token_or_a_body(self):
         text = headers(remaining='bad', extra='Authorization: token %s\r\n' % SECRET, body=SECRET + '\n')
         self.decision(self.admit(1, self.file(text)), 2)
         self.gh_world(out='{"message": "%s"}\n' % SECRET)
         self.decision(self.admit(1), 2)
 
-    # catches: the fallback not used, or asked with anything but rate_limit.
     def test_without_headers_it_reads_rate_limit(self):
         answer = self.decision(self.admit(10), 0)
         self.assertEqual((answer['remaining'], answer['limit'], answer['reset']), (4000, 5000, RESET))
@@ -204,7 +185,6 @@ class Budget(unittest.TestCase):
         self.gh_world(out=rate_limit(remaining=0))
         self.decision(self.admit(1), 1)
 
-    # catches: an unreadable rate_limit read as plenty or as empty.
     def test_an_unreadable_rate_limit_is_unknown(self):
         cases = {
             'gh fails': {'fail': True},
@@ -219,8 +199,6 @@ class Budget(unittest.TestCase):
                 self.gh_world(**world)
                 self.decision(self.admit(1), 2)
 
-    # catches: headers past their reset trusted, so a refilled allowance
-    # still backs off, or a spent one is refilled by arithmetic.
     def test_headers_past_their_reset_read_rate_limit_again(self):
         stale = self.file(headers(remaining=0, reset=NOW - 1))
         self.assertEqual(self.decision(self.admit(1, stale), 0)['remaining'], 4000)
@@ -228,7 +206,6 @@ class Budget(unittest.TestCase):
         self.gh_world(fail=True)
         self.decision(self.admit(1, stale), 2)
 
-    # catches: a nonsense batch size admitted.
     def test_a_bad_batch_size_is_refused(self):
         path = self.file(headers())
         for n in ('0', '-1', 'ten', ''):

@@ -124,8 +124,9 @@ python3 -I skills/launch-fleet/scripts/budget.py admit 12 headers-1.txt headers-
 
 Each file is an earlier answer as `gh api -i` writes it. It reads the
 `x-ratelimit-limit`, `-remaining`, `-reset` and `-resource` headers of every
-answer and takes the newest: the latest reset window, and in it the lowest
-remaining, whatever the files' order. With no file, or when that answer is
+answer and takes the newest: the latest reset window (resets within ten
+minutes of the latest are one window), and in it the lowest remaining,
+whatever the files' order. With no file, or when that answer is
 past its reset, it reads `gh api rate_limit`, which costs no allowance. It
 admits the batch when `remaining - N` stays at or above a quarter of the limit,
 the reserve kept for builders and reviewers, as `fleet.sh`'s GraphQL
@@ -137,7 +138,8 @@ Exit 0 admits, 1 backs off (the reason names the reset time) and 2 is unknown,
 which also refuses: a missing, malformed or contradictory header, an answer
 from another pool (GraphQL's `graphql`, or `search`), one unreadable answer
 among several, or an unreadable `rate_limit`. It never prints a token or a
-response body.
+response body. Bad arguments are exit 2 with nothing on stdout.
+`$LAUNCH_FLEET_NOW` (seconds since 1970) stands in for the clock in tests.
 
 Beside the overload admission: the observer above pauses whole actions on a
 complete snapshot of both pools at under 10%; the read budget refuses one REST

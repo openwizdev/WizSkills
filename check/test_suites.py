@@ -96,14 +96,22 @@ class CheckShards(unittest.TestCase):
         self.assertEqual([shard['skill'] for shard in shards[:2]], [None, None])
         standalone = ['python3', '-I', 'check/standalone.py', '--tree', '.']
         self.assertEqual(shards[1]['commands'], [{'suite': standalone, 'argv': standalone, 'cwd': '.'}])
+        # A split suite (WQ2) is in each of its part shards `<row>.<n>`, and only there.
+        whole = [s for s in shards[2:] if '.' not in s['name']]
         listed_commands = sorted((shard['skill'], tuple(command['suite']))
-                                 for shard in shards[2:] for command in shard['commands'])
-        expected = sorted((name, tuple(command))
-                          for name, commands in run.SUITES.items() for command in commands)
+                                 for shard in whole for command in shard['commands'])
+        split = {(row, tuple(suite)) for row, (suite, _) in run.PARTS.items()}
+        expected = sorted((name, tuple(command)) for name, commands in run.SUITES.items()
+                          for command in commands if (name, tuple(command)) not in split)
         self.assertEqual(listed_commands, expected)
+        for row, (suite, count) in run.PARTS.items():
+            self.assertEqual([(s['name'], s['skill'], [c['suite'] for c in s['commands']])
+                              for s in shards if s['name'].startswith(row + '.')],
+                             [(f'{row}.{n}', row, [suite]) for n in range(1, count + 1)])
         for shard in shards:
             self.assertEqual(set(shard), {'name', 'skill', 'commands', 'env'})
-            self.assertEqual(shard['env'], {})
+            if '.' not in shard['name']:
+                self.assertEqual(shard['env'], {})
             for command in shard['commands']:
                 self.assertEqual(set(command), {'suite', 'argv', 'cwd'})
 

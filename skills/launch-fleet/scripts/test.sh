@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=906
+CASES=907
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -984,6 +984,9 @@ expect 'decision: a decision on a parked head wakes the fleet' 0 check.json "$PA
 decision #31 for #12 at $S31: Jake's answer in comment 3104; act on it as references/reviews.md says
 EOF
 expect 'decision: the fleet record after the decision quiets it' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** fix once more: R2 at \(sha(31)). Why: synthetic.") | pr_say(31; 3105; "11:45"; "launch-fleet: findings sent \(sha(31)): decision 3104: fix once more")' -- check < /dev/null
+expect 'decision: a wake on the parked pull request prints the decision line' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** log and merge: R2 at \(sha(31)). Polish issues: #64. Why: synthetic.")' -- wake 31 <<EOF
+decision #31 for #12 at $S31: Jake's answer in comment 3104; act on it as references/reviews.md says
+EOF
 expect 'decision: an outsider decision on a parked head wakes nothing new' 0 check.json "$PARKED31"' | pr_by(31; 3104; "11:40"; outsider; "**Orchestrator decision:** fix once more: R2 at \(sha(31)). Why: synthetic.")' -- check <<EOF
 findings #31 for #12 at $S31: tell its builder, thread thr_syn12
 EOF

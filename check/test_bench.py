@@ -39,8 +39,7 @@ def bench(*args, env=None):
 
 
 def table(text):
-    """The bench's Markdown table as {phase: [median, known, per-run...]}."""
-    rows = [line.strip('|').split('|') for line in text.splitlines() if line.startswith('| ')]
+    rows = [line.strip('|').split('|') for line in text.splitlines() if line.startswith('| ') and not line.startswith('| ---')]
     header = [cell.strip() for cell in rows[0]]
     return header, {cells[0].strip(): [c.strip() for c in cells[1:]] for cells in rows[1:]}
 

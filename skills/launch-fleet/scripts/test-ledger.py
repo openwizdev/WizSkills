@@ -250,12 +250,16 @@ class Ledger(unittest.TestCase):
                   'a body from --input': ['api', path + '/comments', '--input', '-'],
                   'a GraphQL mutation': ['api', 'graphql', '-f', 'query=mutation { a: b(input: {}) { c } }'],
                   'a named mutation in a joined field': ['api', 'graphql', '-Fquery=mutation M { a { b } }'],
-                  'a gh command that writes': ['issue', 'comment', '10', '--body', 'x']}
+                  'a gh command that writes': ['issue', 'comment', '10', '--body', 'x'],
+                  'a flag it does not know': ['api', '--synthetic-flag', 'POST', path + '/comments'],
+                  'a second endpoint': ['api', f'repos/{REPO}/issues', 'POST', path + '/comments'],
+                  'a query it cannot read': ['api', 'graphql', '-F', 'query=@synthetic.graphql']}
         reads = {'a GraphQL query sent with an explicit POST': ['api', 'graphql', '--method', 'POST', '-f',
                                                                 'query=query { viewer { login } }'],
                  'a shorthand GraphQL query': ['api', 'graphql', '-f', 'query={ viewer { login } }'],
                  'a REST GET with query fields': ['api', '-X', 'GET', f'repos/{REPO}/issues', '-f', 'state=closed'],
-                 'a plain REST read': ['api', f'repos/{REPO}/contents/docs/agents/fleet.md', '-H', 'Accept: x']}
+                 'a plain REST read': ['api', f'repos/{REPO}/contents/docs/agents/fleet.md', '-H', 'Accept: x'],
+                 'a paginated REST read': ['api', '--paginate', '--slurp', f'repos/{REPO}/issues']}
         for name, args in {**writes, **reads}.items():
             with self.subTest(name):
                 w = World(self, MIXED)

@@ -237,6 +237,7 @@ class Session:
         """Claim and start each builder: the first alone, as the batch's probe, then the rest together."""
         started, stops = [], []
         for batch in (numbers[:1], numbers[1:]):
+            since = int(time.time())  # before the driver runs: a quick run's note may land before it answers
             claims = [(n, c) for n in batch for c in [self.claim(n, 'launch-fleet: starting',
                                                                  'launch-fleet: start withdrawn')] if c]
             with ThreadPoolExecutor(max_workers=max(1, len(claims))) as pool:
@@ -246,7 +247,7 @@ class Session:
                 if r.returncode:
                     stops.append(self.refusal(claim, 'launch-fleet: start refused: %s', n, r))
                     continue
-                self.live[('builder', n)] = int(time.time())
+                self.live[('builder', n)] = since
                 self.edit(claim, 'launch-fleet: started')
                 started.append(n)
             if stops:
@@ -269,11 +270,12 @@ class Session:
             raise NeedsYou('brief.py made no reviewer brief for #%s' % p)
         rest = '\nDriver review: %s\n\n%s' % (family, brief.stdout.strip())
         self.edit(claim, 'launch-fleet: review starting %s%s' % (head, rest))
+        since = int(time.time())
         r = script('host.py', 'start', self.repo, p, self.a.reviewer_harness, self.a.reviewer_model, 'review-ticket')
         if r.returncode:
             raise NeedsYou(self.refusal(claim, 'launch-fleet: review refused %s: %%s%s' % (head, rest.replace('%', '%%')),
                                         p, r))
-        self.live[('reviewer', p)] = int(time.time())
+        self.live[('reviewer', p)] = since
         self.edit(claim, 'launch-fleet: review started %s%s' % (head, rest))
         return True
 
@@ -359,12 +361,12 @@ class Session:
 
     def wait(self):
         """Back once a run it started has ended, or a known pull request's checks may have moved."""
-        idle = time.monotonic() + self.a.idle
-        while time.monotonic() < idle:
+        while time.monotonic() - self.moved < self.a.idle:
             if self.live:
                 for key, since in sorted(self.live.items()):
                     if self.ended(*key, since):
                         del self.live[key]
+                        self.moved = time.monotonic()
                         return
                 time.sleep(self.a.poll)
                 continue
@@ -374,11 +376,14 @@ class Session:
                 raise NeedsYou('nothing is due on spec #%s and no run or check is going' % self.spec)
             time.sleep(self.a.ci_poll)
             return
-        raise NeedsYou('nothing moved on spec #%s for %d seconds' % (self.spec, self.a.idle))
+        raise NeedsYou('nothing moved on spec #%s for %g seconds' % (self.spec, self.a.idle))
 
     def loop(self):
+        self.moved = time.monotonic()   # the last tick that did something, or the last run that ended
         while True:
-            if not self.tick():
+            if self.tick():
+                self.moved = time.monotonic()
+            else:
                 self.wait()
 
 

@@ -13,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 
 
 HERE = Path(__file__).resolve().parent
@@ -225,6 +226,118 @@ def install(args, name, state):
         paused.unlink()
 
 
+def tick_environment(state, config, repo):
+    inherited = ('HOME', 'USER', 'LOGNAME', 'TMPDIR', 'SSH_AUTH_SOCK', 'XDG_RUNTIME_DIR',
+                 'DBUS_SESSION_BUS_ADDRESS')
+    env = {key: os.environ[key] for key in inherited if key in os.environ}
+    env.update(config['environment'], GH_REPO=repo, GH_PROMPT_DISABLED='1', GIT_TERMINAL_PROMPT='0',
+               LAUNCH_FLEET_GITHUB_ONLY='1')
+    repo_key = hashlib.sha256(repo.lower().encode()).hexdigest()[:20]
+    env.setdefault('LAUNCH_FLEET_RUNS', str(state.parent / f'runs-{repo_key}.json'))
+    return env
+
+
+def host_call(config, env, action, *args):
+    _, _, _, _, repo, spec = config['argv']
+    return subprocess.run(
+        [sys.executable, '-I', str(HERE / 'host.py'), action, repo, spec, *args],
+        cwd=config['cwd'], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=1000,
+    )
+
+
+def orchestrator_environment(state, env):
+    return dict(env, LAUNCH_FLEET_HEARTBEAT_RUNS=env['LAUNCH_FLEET_RUNS'],
+                LAUNCH_FLEET_RUNS=str(state / 'last-wake' / 'runs.json'))
+
+
+def saved_run(path, spec):
+    try:
+        return json.loads(path.read_text())['runs'].get(spec)
+    except FileNotFoundError:
+        return None
+
+
+def absent_errors(run_id):
+    return (f'no run {run_id}', f'unknown run {run_id}', f'run {run_id} is unknown')
+
+
+def terminal_wake(result, log, offset, repo, spec, run):
+    if result.returncode != 1 or not result.stdout.startswith('stopped (driver start failed):'):
+        return False
+    try:
+        with log.open('rb') as stream:
+            stream.seek(offset)
+            entry = json.loads(stream.readline(8192))
+    except (OSError, ValueError):
+        return False
+    return (entry.get('repo') == repo and entry.get('ticket') == int(spec) and entry.get('host') == run['host']
+            and entry.get('command') == 'wake' and entry.get('exit') == 1
+            and entry.get('error') in (*absent_errors(run['run']), f'run {run["run"]} is stopped'))
+
+
+def replace_map(path, value):
+    with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as pending:
+        json.dump(value, pending)
+    os.replace(pending.name, path)
+
+
+def archive_run(state, path, spec, run, *, absent=False):
+    history = state.parent / 'retired-runs' / state.name
+    key = hashlib.sha256(json.dumps([run['host'], run['run']]).encode()).hexdigest()
+    with path.with_suffix('.json.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        value = json.loads(path.read_text())
+        current = value['runs'].get(spec)
+        if current not in (run, dict(run, stopped=True)):
+            raise Refused('the orchestrator run changed before it could be retired')
+        history.mkdir(mode=0o700, parents=True, exist_ok=True)
+        archived = history / (key + '.json')
+        replace_map(archived, value)
+        if absent:
+            current['stopped'] = True
+            replace_map(path, value)
+
+
+def wake_or_start(state, config, env, repo, spec):
+    if (state / 'starting').exists():
+        print(f'heartbeat: reconcile the previous start in {state / "starting"}', file=sys.stderr)
+        return 1, 'start unresolved'
+    env = orchestrator_environment(state, env)
+    path = Path(env['LAUNCH_FLEET_RUNS'])
+    run = saved_run(path, spec)
+    if run:
+        if not run.get('stopped'):
+            refusal_log = path.with_name('driver-failures.log')
+            offset = refusal_log.stat().st_size if refusal_log.exists() else 0
+            result = host_call(config, env, 'wake')
+            if result.returncode == 0:
+                return 0, 'woke'
+            if not terminal_wake(result, refusal_log, offset, repo, spec, run):
+                return result.returncode, 'wake unresolved'
+
+            stop = host_call(config, env, 'stop')
+            error = stop.stdout.partition('; next:')[0]
+            absent = stop.returncode == 1 and error in {f'refused: {e}' for e in absent_errors(run['run'])}
+            if stop.returncode and not absent:
+                return stop.returncode, 'stop unresolved'
+            archive_run(state, path, spec, run, absent=absent)
+        else:
+            archive_run(state, path, spec, run)
+
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    starting = state / 'starting'
+    starting.mkdir(mode=0o700)
+    result = host_call(config, env, 'start', config['harness'], config['model'], 'launch-fleet')
+    if result.returncode == 0:
+        starting.rmdir()
+        return 0, 'started'
+    if result.stdout.startswith(('refused:', 'stopped (driver start failed):')) or result.returncode == 2:
+        starting.rmdir()
+        return result.returncode, 'start refused'
+    (starting / 'host-result').write_text(result.stdout)
+    return result.returncode, 'start unresolved'
+
+
 def tick(state, config, paused):
     outcome = 'check failed'
     try:
@@ -232,13 +345,7 @@ def tick(state, config, paused):
             outcome = 'paused'
             return 0
         _, _, _, _, repo, spec = config['argv']
-        inherited = ('HOME', 'USER', 'LOGNAME', 'TMPDIR', 'SSH_AUTH_SOCK', 'XDG_RUNTIME_DIR',
-                     'DBUS_SESSION_BUS_ADDRESS')
-        env = {key: os.environ[key] for key in inherited if key in os.environ}
-        env.update(config['environment'], GH_REPO=repo, GH_PROMPT_DISABLED='1', GIT_TERMINAL_PROMPT='0',
-                   LAUNCH_FLEET_GITHUB_ONLY='1')
-        repo_key = hashlib.sha256(repo.lower().encode()).hexdigest()[:20]
-        env.setdefault('LAUNCH_FLEET_RUNS', str(state.parent / f'runs-{repo_key}.json'))
+        env = tick_environment(state, config, repo)
         result = subprocess.run(['sh', str(HERE / 'fleet.sh'), 'spec', spec], cwd=config['cwd'], env=env,
                                 stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300)
         if result.returncode:
@@ -248,40 +355,34 @@ def tick(state, config, paused):
         if not lines or lines[0].startswith(f'fleet done #{spec}:'):
             outcome = 'idle'
             return 0
-
-        outcome = 'start unresolved'
-        attempt = state / 'starting'
-        if attempt.exists():
-            print(f'heartbeat: reconcile the previous start in {attempt}', file=sys.stderr)
-            return 1
-        attempt.mkdir(mode=0o700)
-        env['LAUNCH_FLEET_HEARTBEAT_RUNS'] = env['LAUNCH_FLEET_RUNS']
-        env['LAUNCH_FLEET_RUNS'] = str(attempt / 'runs.json')
-        result = subprocess.run(
-            [sys.executable, '-I', str(HERE / 'host.py'), 'start', repo, spec,
-             config['harness'], config['model'], 'launch-fleet'],
-            cwd=config['cwd'], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=1000,
-        )
-        if result.returncode:
-            if result.stdout.startswith(('refused:', 'stopped (driver start failed):')) or result.returncode == 2:
-                outcome = 'start refused'
-                shutil.rmtree(attempt)
-            print(f'heartbeat: {outcome} (exit {result.returncode})', file=sys.stderr)
-            return result.returncode
-        last = state / 'last-wake'
-        if last.exists():
-            shutil.rmtree(last)
-        attempt.rename(last)
-        outcome = 'started'
-        return 0
+        outcome = 'wake unresolved'
+        code, outcome = wake_or_start(state, config, env, repo, spec)
+        if code:
+            print(f'heartbeat: {outcome} (exit {code})', file=sys.stderr)
+        return code
     finally:
         log_tick(state, outcome)
+
+
+def remove_run(state, config):
+    if (state / 'starting').exists():
+        raise Refused(f'reconcile the previous start in {state / "starting"} before removing its state')
+    _, _, _, _, repo, spec = config['argv']
+    env = orchestrator_environment(state, tick_environment(state, config, repo))
+    path = Path(env['LAUNCH_FLEET_RUNS'])
+    run = saved_run(path, spec)
+    if not run:
+        return
+    if not run.get('stopped') and host_call(config, env, 'stop').returncode:
+        raise Refused(f'could not stop the orchestrator; its run map remains at {path}')
+    archive_run(state, path, spec, run)
 
 
 def log_tick(state, outcome):
     stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     with (state / 'ticks.log').open('a') as log:
         log.write(f'{stamp} {outcome}\n')
+
 
 def main():
     args = arguments()
@@ -314,7 +415,9 @@ def main():
         config = json.loads(config_path.read_text())
         job = Job(name, config['argv'], config['backend'], config['folder'])
         if args.action == 'remove':
+            status.touch()
             job.remove()
+            remove_run(state, config)
             shutil.rmtree(state)
         elif args.action == 'pause':
             status.touch()

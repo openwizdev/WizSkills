@@ -1565,8 +1565,6 @@ class Resume(unittest.TestCase):
         return result.stdout
 
     def test_a_fresh_session_resumes_at_the_first_unfinished_step(self):
-        # catches: a resumed journey that restarts from the top, or jumps past an
-        # unfinished step (a grill before Connect is carried, a launch before the spec is recorded).
         j = Journey(self)
         j.world['files']['docs/agents/fleet.md'] = models_md()
         j.save_world()
@@ -1590,8 +1588,6 @@ class Resume(unittest.TestCase):
         self.assertIn('progress --spec 900', self.next(j))
 
     def test_an_interrupted_or_withdrawn_step_is_resumed_not_skipped(self):
-        # catches: an uncertain create or start reported as done (inviting a second
-        # effect), and a withdrawn setup skipped because later choices are saved.
         j = Journey(self)
         self.assertEqual(j.helper(['where', '--agents', 'cloud', '--yes']).returncode, 0)
         j.repos.write_text(github(create='lost', fail_after_create=2))
@@ -1616,9 +1612,6 @@ class Resume(unittest.TestCase):
 
 
     def test_an_existing_repository_prepared_before_continue_resumes_at_connect(self):
-        # catches: #1571, an owner who confirmed an existing repository and prepared it
-        # in setup, interrupted before continue, is offered a repository again
-        # (Next: project), inviting a second repository while Connect is under way.
         j = Journey(self)
         self.assertEqual(j.helper(['where', '--agents', 'cloud', '--yes']).returncode, 0)
         other = 'synthetic-owner/synthetic-existing'
@@ -1635,9 +1628,6 @@ class Resume(unittest.TestCase):
         self.assertEqual(j.gh_creates(), [], 'nothing created')
 
     def test_a_prepared_repository_is_never_taken_as_this_onboardings_selection(self):
-        # catches: review R2, a repository setup prepared for an earlier project on this
-        # host taken as this onboarding's selection (Next: connect for the wrong repository)
-        # when this onboarding recorded none.
         j = Journey(self)
         self.assertEqual(j.helper(['where', '--agents', 'cloud', '--yes']).returncode, 0)
         previous = 'synthetic-owner/previous-project'
@@ -1652,9 +1642,6 @@ class Resume(unittest.TestCase):
                          'a setup store others can read or replace is never trusted')
 
     def test_a_local_choice_resumes_at_choose_the_agents_until_its_builder_tables_read_back(self):
-        # catches: #1571, a saved answer for this machine counted as a finished Choose the agents
-        # while the builder tables don't name it yet, so a resumed owner skips to the plan (Next: plan).
-        # The road (#1358) makes this machine a real choice, so it reads back like Cloudroom.
         j = Journey(self)
         j.replay(until='agents')
         state = json.loads(j.state.read_text())
@@ -1676,9 +1663,6 @@ class Resume(unittest.TestCase):
         self.assertEqual(self.next(j).splitlines()[0], 'Next: setting.', 'the host setting follows the agents (#1358)')
 
     def test_a_cloud_choice_resumes_at_choose_the_agents_until_its_builder_tables_read_back(self):
-        # catches: #1571, a saved Cloud choice counted as a finished Choose the agents
-        # while setup has not yet made the builder tables name it, so a fresh session
-        # skips the pending builder settings (Next: plan).
         j = Journey(self)
         j.replay(until='agents')
         j.world['files']['docs/agents/fleet.md'] = fleet_md(builder=CLAUDE, small=CLAUDE)
@@ -1701,9 +1685,6 @@ class Resume(unittest.TestCase):
 
 
     def test_a_recorded_launch_resumes_before_the_agent_checks(self):
-        # catches: review R1, a launched or uncertain first fleet saved before the
-        # builder-table read-back existed sent back to Choose the agents, losing its
-        # progress or its never-start-again recovery.
         def older(j):
             state = json.loads(j.state.read_text())
             state['choices'].pop('builder_tables', None)
@@ -1722,9 +1703,6 @@ class Resume(unittest.TestCase):
         self.assertIn('never start it a second way', said)
 
     def test_a_connected_repository_outlives_a_withdrawn_setup_after_an_absent_demo(self):
-        # catches: an absent demo create counted as "no repository" once setup is
-        # withdrawn, so resume asks for a repository again and create-repo makes a
-        # second one while the connected repository is still saved (review R1).
         j = Journey(self)
         self.assertEqual(j.helper(['where', '--agents', 'cloud', '--yes']).returncode, 0)
         other = 'synthetic-owner/synthetic-existing'
@@ -1748,8 +1726,6 @@ BRAIN_BRANCH = 'openwiz/brain'
 BRAIN_PULL = 'https://github.com/%s/pull/940' % REPO
 BRAIN_FILES = {'.openwiz/brain/README.md': '# Brain\n\nSynthetic.\n',
                '.openwiz/brain/settings.json': '{"brain_location": "in_repository"}\n'}
-# The build's own init.py is the one source of the brain files a proposal must hold; this synthetic one
-# derives them from the brain record the same way.
 FAKE_INIT = ('import json\nFOLDER = ".openwiz/brain"\n\n\ndef files(brain):\n'
              '    return {FOLDER + "/README.md": "# Brain\\n\\nSynthetic.\\n",\n'
              '            FOLDER + "/settings.json": json.dumps({"brain_location": brain["location"]}) + "\\n"}\n')
@@ -1786,7 +1762,6 @@ class OneSetupPullRequest(unittest.TestCase):
         return j
 
     def applied(self, j, brain='in_repository', pull='open', identity='personal_login'):
-        """The setup state after the block's yes was applied: prepare, the App skip and init."""
         state = setup_state(settings=OPUS, identity=identity, brain=brain, overrides={'cloudroom': 'cloudroom_not_needed'})
         state['project'].update(host='local', project=None, answer_thread=None)
         if brain:
@@ -1810,7 +1785,6 @@ class OneSetupPullRequest(unittest.TestCase):
         return json.loads(j.world_path.read_text())
 
     def yes(self, j, *flags):
-        """The block's preview, then the yes to exactly that preview."""
         shown = j.helper(['defaults', '--options', str(j.options), *flags])
         self.assertEqual(shown.returncode, 12, shown.stdout + shown.stderr)
         digest = re.search(r'--confirm ([0-9a-f]{64})\b', shown.stdout)
@@ -1850,8 +1824,6 @@ class OneSetupPullRequest(unittest.TestCase):
             'reviewer': list(CLAUDE), 'identity': 'app'}, 'any line the user changes, and the reviewer follows')
 
     def test_the_block_discloses_every_effect_its_one_yes_covers(self):
-        # catches: a block whose yes covers effects it never showed (the service issue, init's labels and
-        # brain pull request, the setup pull request's files), so a later step has to ask a second yes.
         j = self.road()
         shown = j.helper(['defaults', '--options', str(j.options)])
         self.assertEqual(shown.returncode, 12, shown.stdout + shown.stderr)
@@ -1920,8 +1892,6 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: plan.')
 
     def test_a_readme_only_repository_gets_its_setup_files_in_the_one_setup_pull_request(self):
-        # catches (R1): a fresh repository, as create-repo makes it, sent to the setup skill for a second
-        # pull request because docs/agents/fleet.md is not on its default branch yet.
         j = self.road(files={'README.md': '# synthetic\n'})
         self.yes(j)
         self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
@@ -1949,8 +1919,6 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertIn('\nHost: local\n', branch['docs/agents/host.md'])
 
     def test_a_companion_brain_merged_by_init_leaves_one_setup_pull_request(self):
-        # catches (R3, with init merging a companion it created): a merged companion brain pull request
-        # still asked for, or an open one left unsaid.
         for pull, said in (('merged', 'already merged'), ('open', 'https://github.com/%s-brain/pull/3' % REPO)):
             j = self.road(brain='companion', pull=pull)
             self.yes(j)
@@ -1964,8 +1932,6 @@ class OneSetupPullRequest(unittest.TestCase):
                 self.assertNotIn('pull/3', opened.stdout, 'a merged brain pull request is done, never asked for')
 
     def test_a_write_cut_short_on_the_brains_branch_is_completed_on_the_retry(self):
-        # catches (R4): GitHub keeps the host file but loses the fleet file write, and the retry calls the
-        # still-completable pull request foreign and asks to delete the brain's branch.
         j = self.road()
         self.yes(j)
         self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
@@ -1989,8 +1955,6 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual(self.world(j)['host_pulls'], [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}])
 
     def test_resume_after_the_blocks_yes_runs_its_unapplied_operations_first(self):
-        # catches (R5): saved defaults taken as proof that prepare, the App skip and init ran, so a resumed
-        # session asks the mode and opens a settings pull request before init proposed the brain.
         j = self.road(setup=False)
         self.yes(j)
         first = j.helper(['next', '--setup-state', str(j.setup_dir)])
@@ -2012,8 +1976,6 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertTrue(state)
 
     def test_the_yes_binds_the_block_the_user_saw(self):
-        # catches (R6): a yes recorded with values read again at apply time, so a changed models list turns
-        # the builder the user saw into another one.
         j = self.road()
         shown = j.helper(['defaults', '--options', str(j.options)])
         self.assertIn('- Builder: claude-code claude-opus-5-5 medium', shown.stdout)
@@ -2032,7 +1994,6 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertNotIn('defaults', self.saved(j), 'a changed block needs a fresh yes')
 
     def test_the_reviewer_line_takes_its_own_change(self):
-        # catches (R7): a block that shows the reviewer but only lets the builder change.
         j = self.road()
         flags = ('--reviewer-harness', SOL[0], '--reviewer-model', SOL[1], '--reviewer-effort', SOL[2])
         shown = j.helper(['defaults', '--options', str(j.options), *flags])
@@ -2053,8 +2014,6 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual(ModelsTable.models(self, fleet)['Reviewer'], SOL)
 
     def test_a_brain_proposal_holding_anything_else_is_never_written_to(self):
-        # catches (R8): any added file under .openwiz/brain/ accepted as init's, and the settings written
-        # before the proposal was checked.
         for extra in ({'.openwiz/brain/decisions/note.md': 'An unrelated note.\n'},
                       {'.openwiz/brain/README.md': '# Brain\n\nChanged by hand.\n'}):
             j = self.road()

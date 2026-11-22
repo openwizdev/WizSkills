@@ -7,6 +7,11 @@
 # Release-tool dependency record (WS18/J187): @changesets/cli 3.0.3 (MIT),
 # pinned with package-lock.json (40 packages, MIT or ISC), installed by
 # `npm ci --ignore-scripts`. Used only by check/changesets.py; never shipped.
+
+# comment-ok: dependency record, the same kind as the two records above.
+# CI cache dependency record (WQ3/#2272): actions/cache v6.1.0 (MIT), pinned
+# by commit 55cc8345863c7cc4c66a329aec7e433d2d1c52a9. Caches ~/.npm and the pinned
+# Playwright browser between CI runs only. No skill or npm dependency is added.
 name: WizSkills check
 on:
   pull_request:

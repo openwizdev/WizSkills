@@ -176,13 +176,20 @@ class CrossSkillReads(unittest.TestCase):
             self.assertEqual(got, [*ALWAYS, 'beta-two'])
 
 
+EVERY_SKILL = sorted(p.name for p in (HERE.parent / 'skills').iterdir() if (p / 'SKILL.md').is_file())
+
+
 class TheRealTree(unittest.TestCase):
 
     TRACED = {
+        'check': set(EVERY_SKILL),
         'image': {'hill-climb'},
+        'install': {'launch-fleet', 'setup', 'to-tickets'},
+        'launch-fleet': {'to-tickets', 'triage'},
         'review-ticket': {'build-ticket'},
         'setup': {'install', 'review-ticket'},
         'triage': {'launch-fleet', 'to-tickets', 'wayfind'},
+        'to-tickets': {'grill', 'handoff', 'setup', 'to-spec'},
     }
 
     def test_every_traced_read_is_found(self):

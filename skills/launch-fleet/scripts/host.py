@@ -74,8 +74,9 @@ def sibling(name):
     return module
 
 
-status, post = sibling('status'), sibling('post')
+status, post, ops = sibling('status'), sibling('post'), sibling('ops-starts')
 SETTING = Path('docs/agents/host.md')
+FLEET_SETTINGS = Path('docs/agents/fleet.md')
 NAME = re.compile(r'[a-z0-9]+(-[a-z0-9]+)*')     # a driver's name, as driver v1's schema has it
 RUN = re.compile(r'[A-Za-z0-9._:-]{1,100}')       # D2
 REPO = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
@@ -93,6 +94,16 @@ SECRET_NAME = re.compile(r'TOKEN|SECRET|PASSWORD|CREDENTIAL|_KEY$|^KEY')  # the 
 # stdout only, as the ticket never carries the driver's words (the decision on R3 at 90aed73).
 USERINFO = re.compile(r'(?:[a-z][a-z0-9+.-]*:)?//[^\s/?#@]*@|(?<![\w.%+-])[^\s/?#@:]+:[^\s/?#@]*@[a-z0-9]', re.I)
 LOG = 'driver-failures.log'                       # owner-only, beside LAUNCH_FLEET_RUNS: the driver's own words
+ROSTER_HEADER = ['Name', 'Kind', 'Driver', 'Roles', 'Writes as']
+KINDS = ('harness', 'host', 'bot')
+ROLES = ('orchestrator', 'builder', 'reviewer', 'helper')
+SKILL_ROLES = {'build-ticket': 'builder', 'review-ticket': 'reviewer', 'launch-fleet': 'orchestrator'}
+HARNESS_NAMES = {'claude-code': 'Claude Code', 'codex': 'Codex'}
+ENTRY = re.compile(r'(?=.{1,40}$)[A-Za-z0-9](?:[A-Za-z0-9._-]| (?! ))*(?<=[A-Za-z0-9])')
+LOGIN = re.compile(r'[A-Za-z0-9]+(-[A-Za-z0-9]+)*')
+DRIVER_HARNESS = re.compile(r'[a-z0-9][a-z0-9._-]{0,59}')
+DRIVER_MODEL = re.compile(r'[A-Za-z0-9][A-Za-z0-9 ._:@+-]{0,59}')
+WHICH_ROSTER = "roster: each start goes to its picked entry's driver"
 
 
 class Unreadable(Exception):
@@ -128,7 +139,7 @@ def git(*args):
     return r.returncode, r.stdout
 
 
-def setting_text():
+def setting_text(setting=SETTING):
     """The setting file on origin's default branch at its current tip, or None when that tip has no file.
 
     Never the checkout's copy: a fleet's checkout can be older than the default branch (records v1, section 6)."""
@@ -140,11 +151,11 @@ def setting_text():
     code, _ = git('fetch', '--quiet', '--no-tags', '--no-write-fetch-head', 'origin', 'refs/heads/' + branch[1])
     if code != 0 or git('cat-file', '-e', tip[1] + '^{commit}')[0] != 0:
         raise Unreadable("origin's default branch %s could not be fetched at %s" % (branch[1], tip[1]))
-    if git('cat-file', '-e', '%s:%s' % (tip[1], SETTING))[0] != 0:
+    if git('cat-file', '-e', '%s:%s' % (tip[1], setting))[0] != 0:
         return None
-    code, text = git('show', '%s:%s' % (tip[1], SETTING))
+    code, text = git('show', '%s:%s' % (tip[1], setting))
     if code != 0:
-        raise Unreadable('%s is unreadable on %s' % (SETTING, branch[1]))
+        raise Unreadable('%s is unreadable on %s' % (setting, branch[1]))
     return text
 
 
@@ -170,6 +181,148 @@ def driver(host):
     return path
 
 
+def roster_cells(line):
+    line = line.strip()
+    if len(line) < 2 or line[0] != '|' or line[-1] != '|':
+        return None
+    return [c.strip() for c in line[1:-1].split('|')]
+
+
+def names_roster(line):
+    line = line.strip()
+    level = len(line) - len(line.lstrip('#'))
+    rest = line[level:]
+    word = rest.strip().rstrip('#').strip()
+    return 1 <= level <= 6 and (rest == '' or rest[0] in ' \t') and word.isascii() and word.lower() == 'roster'
+
+
+def roster(text):
+    lines = [line.rstrip() for line in text.split('\n')]
+    if lines and lines[-1] == '':
+        lines.pop()
+
+    def underlined(i):
+        below = lines[i + 1].strip() if i + 1 < len(lines) else ''
+        word = lines[i].strip()
+        return word.isascii() and word.lower() == 'roster' and below != '' and set(below) in ({'='}, {'-'})
+    odd = next((line for i, line in enumerate(lines) if (line != '## Roster' and names_roster(line)) or underlined(i)),
+               None)
+    if odd is not None:
+        raise Outcome('Roster refused: the Roster heading must be exactly ## Roster: %s' % odd)
+    at = [i for i, line in enumerate(lines) if line == '## Roster']
+    if len(at) > 1:
+        raise Outcome('Roster refused: more than one ## Roster heading')
+    if not at:
+        return None
+    section = []
+    for line in lines[at[0] + 1:]:
+        if line.startswith('# ') or line.startswith('## '):
+            break
+        section.append(line)
+    first = next((i for i, line in enumerate(section) if line.lstrip().startswith('|')), None)
+    if first is None:
+        raise Outcome('Roster refused: the Roster section has no table')
+    table = []
+    for line in section[first:]:
+        if not line.lstrip().startswith('|'):
+            break
+        table.append(line)
+    rule = roster_cells(table[1]) if len(table) > 1 else None
+    if roster_cells(table[0]) != ROSTER_HEADER or not rule or len(rule) != 5 or not all(
+            len(c) >= 3 and set(c) == {'-'} for c in rule):
+        raise Outcome('Roster refused: the header is not Name, Kind, Driver, Roles, Writes as')
+    if len(table) == 2:
+        raise Outcome('Roster refused: the table has no entries')
+    entries = []
+    for n, line in enumerate(table[2:], 1):
+        row = roster_cells(line) or []
+        if len(row) != 5:
+            raise Outcome('Roster refused: row %d has %d cells, not 5' % (n, len(row)))
+        name, kind, host, roles, writes = row
+        if not ENTRY.fullmatch(name):
+            raise Outcome('Roster refused: row %d: bad name: %s' % (n, name))
+        if any(e['name'].lower() == name.lower() for e in entries):
+            raise Outcome('Roster refused: row %d: %s is already an entry' % (n, name))
+        at = 'Roster refused: row %d (%s)' % (n, name)
+        if kind not in KINDS:
+            raise Outcome('%s: unknown kind: %s' % (at, kind))
+        if not (len(host) <= 40 and NAME.fullmatch(host)):
+            raise Outcome('%s: bad driver: %s' % (at, host))
+        if roles == '':
+            raise Outcome('%s: no roles' % at)
+        taken = []
+        for role in (r.strip() for r in roles.split(',')):
+            if role not in ROLES:
+                raise Outcome('%s: unknown role: %s' % (at, role))
+            if role in taken:
+                raise Outcome('%s: role listed twice: %s' % (at, role))
+            taken.append(role)
+        person = writes[:-len("'s App")] if writes.endswith("'s App") else ''
+        if not (len(person) <= 39 and LOGIN.fullmatch(person)):
+            raise Outcome("%s: writes as %s, not <person>'s App" % (at, writes))
+        if entries and entries[0]['writes_as'] != writes:
+            raise Outcome("%s: writes as %s, not %s like row 1" % (at, writes, entries[0]['writes_as']))
+        label = '%s via %s' % (name, person)
+        if len(label) > 60:
+            raise Outcome('%s: %s is longer than 60 characters' % (at, label))
+        entries.append({'name': name, 'kind': kind, 'driver': host, 'roles': taken, 'writes_as': writes,
+                        'label': label})
+    return entries
+
+
+def note_model(name):
+    return '%s default effort' % (name[:42].rstrip() + '...' if len(name) > 45 else name)
+
+
+def pick(entries, repo, ticket, role, choice):
+    if choice is None:
+        return {'pick': None, 'waits': 'models', 'look': None}
+    provider, model = choice['provider'], choice['model']
+    harness = 'claude' if provider == 'claude-code' else provider
+    if not (DRIVER_HARNESS.fullmatch(harness) and DRIVER_MODEL.fullmatch(model)):
+        return {'pick': None, 'waits': 'driver',
+                'look': "roster: driver v1 can't start %s %s; choose another model in the Models table" % (harness, model)}
+    named = HARNESS_NAMES.get(provider, provider)
+    entry = next((e for e in entries if role in e['roles'] and (e['kind'] != 'harness' or e['name'] == named)), None)
+    if entry is None:
+        return {'pick': None, 'waits': 'roster', 'look': 'roster: no entry may take the %s role with %s' % (role, named)}
+    person = entry['writes_as'][:-len("'s App")]
+    return {'pick': {'name': entry['name'], 'kind': entry['kind'], 'driver': entry['driver'],
+                     'start': {'harness': harness, 'model': model},
+                     'note': {'harness': entry['label'], 'model': note_model(choice['model_name'])},
+                     'writes_as': entry['writes_as'],
+                     'token': {'service': person, 'requester': '%s-%s' % (role, ticket), 'repositories': [repo]}},
+            'waits': None, 'look': None}
+
+
+def model_name(text, provider, model):
+    for line in ops._section(text, 'Models') or []:
+        row = roster_cells(line)
+        if row and len(row) == 5:
+            try:
+                flags = ops._flags(row[4])
+            except ValueError:
+                continue
+            if flags[:2] == [provider, model]:
+                return row[2]
+    return None
+
+
+def roster_start(text, repo, n, harness, model, skill):
+    entries = roster(text)
+    role = SKILL_ROLES.get(skill)
+    if role is None:
+        raise Outcome('refused: the Roster gives no role to the %s skill' % skill)
+    provider = 'claude-code' if harness == 'claude' else harness
+    name = model_name(text, provider, model)
+    chosen = pick(entries, repo, int(n), role, {'provider': provider, 'model': model, 'model_name': name or model})
+    if chosen['look']:
+        raise Outcome(chosen['look'])
+    if name is None:
+        raise Outcome('refused: no Models table row starts %s %s' % (provider, model))
+    return role, chosen['pick']
+
+
 ANSWERS = {'start': {'run'}, 'wake': {'run', 'woke'}, 'stop': {'run', 'stopped'}}
 
 
@@ -185,12 +338,12 @@ def strict(text):
         return None
 
 
-def token_step(repo, n):
+def token_step(repo, n, requester):
     if not configured():
         return
     try:
         r = subprocess.run([sys.executable, '-I', str(HERE / 'github-app/agent-token.py'), 'start', '--requester',
-                            'builder-%s' % n, '--repository', repo], stdin=subprocess.DEVNULL,
+                            requester, '--repository', repo], stdin=subprocess.DEVNULL,
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as e:
         print('host.py: the agent helper did not run (%s); #%s starts as the owner\'s login' % (type(e).__name__, n),
@@ -211,7 +364,7 @@ PATH=$rest
 export PATH
 command -v {name} > /dev/null || {{ echo "openwiz: no {name} on PATH" >&2; exit 127; }}
 unset {key}
-exec {python} -I {helper} run --requester builder-{n} --repository {repo} -- {name} "$@"
+exec {python} -I {helper} run --requester {requester} --repository {repo} -- {name} "$@"
 """
 DRIVER_ENV = None
 
@@ -220,7 +373,7 @@ def configured():
     return bool(os.environ.get('OPENWIZ_TOKEN_SERVICE'))
 
 
-def builder_env(repo, n):
+def builder_env(repo, n, requester):
     folder = runs_path().parent / 'agent-token-bin' / ('%s-%s' % (repo.replace('/', '--'), n))
     try:
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -229,7 +382,7 @@ def builder_env(repo, n):
         for name in ('gh', 'git'):
             fd, tmp = tempfile.mkstemp(dir=folder, prefix='.shim-')
             with os.fdopen(fd, 'w') as f:
-                f.write(SHIM.format(n=n, name=name, folder=shlex.quote(str(folder)), key=LEGACY_KEY, repo=repo,
+                f.write(SHIM.format(requester=requester, name=name, folder=shlex.quote(str(folder)), key=LEGACY_KEY, repo=repo,
                                     python=shlex.quote(sys.executable),
                                     helper=shlex.quote(str(HERE / 'github-app/agent-token.py'))))
             os.chmod(tmp, 0o700)
@@ -421,7 +574,8 @@ def load(repo):
     if not (isinstance(value, dict) and set(value) == {'repo', 'runs'} and value['repo'] == repo
             and isinstance(value['runs'], dict)
             and all(TICKET.fullmatch(k) and isinstance(v, dict)
-                    and set(v) in ({'host', 'run'}, {'host', 'run', 'stopped'}) and v.get('stopped', True) is True
+                    and {'host', 'run'} <= set(v) <= {'host', 'role', 'run', 'stopped'} and v.get('stopped', True) is True
+                    and v.get('role', 'builder') in ROLES
                     and isinstance(v['host'], str) and NAME.fullmatch(v['host'])
                     and isinstance(v['run'], str) and RUN.fullmatch(v['run']) for k, v in value['runs'].items())):
         raise Unreadable('%s is not a runs file for %s' % (path, repo))
@@ -467,7 +621,8 @@ def main(argv):
         os.environ.pop(LEGACY_KEY, None)
     kind = argv[0] if argv else ''
     if kind == 'which' and len(argv) == 1:
-        print('host: %s' % (chosen() or 'none'))
+        text = setting_text(FLEET_SETTINGS)
+        print(WHICH_ROSTER if text is not None and roster(text) is not None else 'host: %s' % (chosen() or 'none'))
         return 0
     shapes = {'start': (5, 6), 'wake': (3,), 'stop': (3,)}
     skill = argv[5] if kind == 'start' and len(argv) == 6 else 'build-ticket'
@@ -477,29 +632,38 @@ def main(argv):
                          'stop OWNER/NAME N')
     repo, n = argv[1], argv[2]
     run = load(repo)['runs'].get(n)
+    role = picked = None
+    if kind == 'start':
+        text = setting_text(FLEET_SETTINGS)
+        if text is not None and roster(text) is not None:
+            role, picked = roster_start(text, repo, n, argv[3], argv[4], skill)
+    elif run:
+        role = run.get('role')
+    requester = '%s-%s' % (role or 'builder', n)
     if configured():
-        DRIVER_ENV = builder_env(repo, n)
+        DRIVER_ENV = builder_env(repo, n, requester)
     live = 'refused: #%s already has a run on %s; wake or stop it instead'
     if kind == 'start':
-        host = chosen()
+        host = picked['driver'] if picked else chosen()
         if host is None:
             raise Outcome('refused: no host is chosen in %s' % SETTING)
         driver(host)
         ready(repo)
         if run and not run.get('stopped'):
             raise Outcome(live % (n, run['host']))
-        token_step(repo, n)
+        token_step(repo, n, requester)
         new = attempt(repo, n, host, 'start', {'repository': repo, 'ticket': int(n), 'skill': skill,
                                                 'harness': argv[3], 'model': argv[4]})
 
         def add(runs):
             if runs.get(n) != run:  # another start saved a run for #N meanwhile
                 raise Outcome('unknown: #%s got a second run, %s on %s; stop one of them' % (n, new, host))
-            runs[n] = {'host': host, 'run': new}
+            runs[n] = dict({'host': host, 'run': new}, **({'role': role} if picked else {}))
         if not record(repo, add):
             raise Outcome('unknown: #%s started on %s but its run was not saved; save run %s on host %s for #%s '
                           'privately before anything else' % (n, host, new, host, n))
-        print('started #%s on %s' % (n, host))
+        print('started #%s on %s%s' % (n, host, ' as %s, %s' % (picked['note']['harness'], picked['note']['model'])
+                                          if picked else ''))
         unclear = cleared(repo, n, host, 'started')
         if unclear:
             print(unclear)
@@ -508,7 +672,7 @@ def main(argv):
         raise Outcome('no run: #%s was not started through a driver' % n)
     unclear = None
     if kind == 'wake':
-        token_step(repo, n)
+        token_step(repo, n, requester)
         attempt(repo, n, run['host'], kind, {'run': run['run']})
         unclear = cleared(repo, n, run['host'], 'woke')
     else:

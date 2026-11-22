@@ -674,44 +674,44 @@ class Roster(unittest.TestCase):
 
     def test_a_bot_entrys_start_carries_its_owners_app_token_and_its_label_on_a_project_that_isnt_ours(self):
         p, repo = self.project('other-user', ('local', 'helper-bot'))
-        env = dict(Token.service(self, p), **Token.builder(self, p))
+        env = dict(Token().service(p), **Token().builder(p))
         started = p.host('start', repo, 10, 'codex', 'gpt-6.2-sol', 'launch-fleet', **env)
         self.assertEqual(started, (0, 'started #10 on helper-bot as Helper Bot via syn-maker, Sol 6.2 default effort',
                                    ''))
         self.assertEqual(p.calls()[0], {'host': 'helper-bot', 'command': 'start', 'input': {
             'repository': 'syn-maker/garden', 'ticket': 10, 'skill': 'launch-fleet', 'harness': 'codex',
             'model': 'gpt-6.2-sol'}})
-        self.assertEqual(Token.requests(self, p)[0]['request'], {
+        self.assertEqual(Token().requests(p)[0]['request'], {
             'schema': 'openwiz.token-service.v1', 'kind': 'request', 'requester': 'orchestrator-10',
             'repositories': ['syn-maker/garden'], 'permissions': WRITE})
         woke = p.host('wake', repo, 10, **env)
         self.assertEqual(woke, (0, 'woke #10 on helper-bot', ''))
-        self.assertEqual(Token.seen(self, p), (
+        self.assertEqual(Token().seen(p), (
             [{'command': 'start', 'git_helper_is_the_apps': True, 'legacy_key': False},
              {'command': 'wake', 'git_helper_is_the_apps': True, 'legacy_key': False}],
             ['app no-key', 'app no-key']))
-        requests = Token.requests(self, p)
+        requests = Token().requests(p)
         self.assertEqual({(r['request']['requester'], tuple(r['request']['repositories'])) for r in requests},
                          {('orchestrator-10', ('syn-maker/garden',))})
         self.assertEqual([r['legacy_key'] for r in requests], [False] * len(requests))
         self.assertNotIn('synthetic-owner', json.dumps([requests, p.calls()]))
-        self.assertEqual(Token.exposed(self, p, *started[1:], *woke[1:]), [])
+        self.assertEqual(Token().exposed(p, *started[1:], *woke[1:]), [])
 
     def test_with_no_roster_starts_are_exactly_as_today(self):
         p = Project(self)
         p.fleet((ROSTER / 'no-roster/fleet.md').read_text())
-        env = Token.service(self, p)
+        env = Token().service(p)
         self.assertEqual(p.host('which'), (0, 'host: local', ''))
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', 'review-ticket', **env),
                          (0, 'started #7 on local', ''))
         self.assertEqual(p.host('start', REPO, 8, 'codex', 'vendor/demo', 'grill', **env), (0, 'started #8 on local', ''))
         self.assertEqual(p.saved(), {'repo': REPO, 'runs': {'7': {'host': 'local', 'run': 'local-run-7'},
                                                             '8': {'host': 'local', 'run': 'local-run-8'}}})
-        self.assertEqual([r['request']['requester'] for r in Token.requests(self, p)], ['builder-7', 'builder-8'])
+        self.assertEqual([r['request']['requester'] for r in Token().requests(p)], ['builder-7', 'builder-8'])
         for held in (p.dir / 'token-private').iterdir():
             held.unlink()
         self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', ''))
-        self.assertEqual([r['request']['requester'] for r in Token.requests(self, p)][-1], 'builder-7')
+        self.assertEqual([r['request']['requester'] for r in Token().requests(p)][-1], 'builder-7')
 
 
 if __name__ == '__main__':

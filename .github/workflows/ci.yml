@@ -8,9 +8,6 @@
 # pinned with package-lock.json (40 packages, MIT or ISC), installed by
 # `npm ci --ignore-scripts`. Used only by check/changesets.py; never shipped.
 name: WizSkills check
-# One job per shard from `python3 check/run.py --list` (contracts/check-shards.v1.md),
-# the changeset and comment gates in their own job, and a final job named `check`
-# that passes only when every other job passed: `check` stays the required check.
 on:
   pull_request:
   merge_group:
@@ -29,9 +26,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: List the shards (the inventory guard fails this job on an unlisted test)
+      - name: List the shards; a shard needs the browser when its skill's folder names playwright-core (the inventory guard fails this job on an unlisted test)
         id: list
-        # A shard needs the pinned browser when its skill's folder names playwright-core.
         run: |
           python3 check/run.py --list > "$RUNNER_TEMP/shards.json"
           python3 -I - "$RUNNER_TEMP/shards.json" >> "$GITHUB_OUTPUT" <<'PY'
@@ -55,10 +51,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # The pull request's merge commit (or the merge group's commit) and its
-          # first parent: main's tip, or the group's base.
           fetch-depth: 2
-      - name: Name the base the gates compare against
+      - name: Name the base the gates compare against (the merge group's base, or the pull request merge commit's first parent)
         if: github.event_name != 'push'
         env:
           GROUP_BASE: ${{ github.event.merge_group.base_sha }}

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CHECKER = HERE.parent / 'check-links.sh'
 LINKS = HERE / 'links'
+SCHEMA = HERE.parents[2] / 'contracts' / 'plan-links.v1.schema.json'
 
 EXIT = {
     'clean-wide': 0,
@@ -18,6 +20,7 @@ EXIT = {
     'real-and-file': 0,
     'refuse-duplicate': 1,
     'refuse-file-without-file': 1,
+    'refuse-foreign-line-breaks': 1,
     'refuse-malformed': 1,
     'refuse-no-reason': 1,
     'refuse-not-a-blocker': 1,
@@ -49,6 +52,17 @@ class Fixtures(unittest.TestCase):
                 self.assertEqual(json.loads(report.stdout), json.loads((LINKS / case / 'report.json').read_bytes()))
                 self.assertEqual(report.stderr, expected_err)
                 self.assertEqual(report.returncode, code)
+
+    def test_a_foreign_line_with_logical_line_breaks_fits_the_schema_under_ecmascript(self):
+        report = json.loads(check('refuse-foreign-line-breaks', '--json').stdout)
+        message = report['refusals'][0]['message']
+        self.assertTrue({'\u2028', '\u2029', '\r'} <= set(message))
+        pattern = re.search(r'"pattern": ("\^malformed section: line [^\n]*")', SCHEMA.read_text())[1]
+        node = subprocess.run(['node', '-e', 'const [p, m] = JSON.parse(require("fs").readFileSync(0, "utf8"));'
+                               'process.stdout.write(String(new RegExp(p, "u").test(m)))'],
+                              input=json.dumps([json.loads(pattern), message]), capture_output=True, text=True,
+                              timeout=60)
+        self.assertEqual((node.returncode, node.stdout), (0, 'true'), node.stderr)
 
 
 if __name__ == '__main__':

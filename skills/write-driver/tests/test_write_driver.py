@@ -919,7 +919,7 @@ class KeyHost(unittest.TestCase):
         # catches: a skill that lets the agent call the host's API itself, or send the helper more than the
         # request (a key, a header, an address), so the driver handles the key or chooses where it goes
         text = key_host_lines()
-        for words in ('`python3 -I kernel/driver-kit/hostkey.py`', 'every call to the host\'s API',
+        for words in ("the helper, `hostkey.py` in OpenWiz's `kernel/driver-kit/`, with `python3 -I`", 'every call to the host\'s API',
                       'exactly `host`, `method` (`GET`, `POST` or `DELETE`), `path` and an optional `body`',
                       'exactly `status` and `body`', 'never a key, a header or an address'):
             self.assertIn(words, text)
@@ -958,7 +958,7 @@ class KeyHost(unittest.TestCase):
 
     def test_the_sample_key_host_driver_names_no_key_and_reaches_the_host_only_through_the_helper(self):
         # catches: a sample driver that reads the key, calls the keychain or opens its own connection
-        driver = (FIXTURES / 'key-host' / 'driver').read_text()
+        driver = (FIXTURES / 'key-host' / 'driver.txt').read_text()
         self.assertIn("'kernel', 'driver-kit', 'hostkey.py'", driver)
         self.assertIn("{'host': HOST, 'method': method, 'path': path}", driver)
         for word in ('DEVIN_API_KEY', 'openwiz-devin', 'secret-tool', 'security', 'urllib', 'http.client',
@@ -979,6 +979,9 @@ class KeyHost(unittest.TestCase):
         shutil.copytree(openwiz / 'kernel', tree / 'kernel')
         shutil.copytree(openwiz / 'adapters' / 'template', tree / 'adapters' / 'template')
         shutil.copytree(FIXTURES / 'key-host', tree / 'adapters' / 'devin')
+        # stored as data, never run from here: it reaches the helper only from inside an OpenWiz tree
+        os.replace(tree / 'adapters' / 'devin' / 'driver.txt', tree / 'adapters' / 'devin' / 'driver')
+        (tree / 'adapters' / 'devin' / 'driver').chmod(0o755)
         shutil.copy(tree / 'adapters' / 'template' / 'schema.json', tree / 'adapters' / 'devin' / 'schema.json')
         kits = tree / 'kernel' / 'driver-kit'
 

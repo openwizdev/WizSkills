@@ -888,5 +888,12 @@ class NoCloudRoomRequired(unittest.TestCase):
         self.assertTrue('"Without CloudRoom" above' in step6, 'no pointer to "Without CloudRoom"')
 
 
+    def test_manual_plan_ends_at_the_ready_label_readback(self):
+        plan = self.between('- **Plan:**', '- **Start one ticket')
+        self.assertIn('read the ready labels back', plan, 'manual planning has no stopping point')
+        self.assertIn('Skip the `launch-fleet` handoff and the steering video', plan)
+        self.assertIn('return to the hand-start steps below', plan)
+
+
 if __name__ == '__main__':
     unittest.main()

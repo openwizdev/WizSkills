@@ -37,3 +37,19 @@ AssertionError: False is not true : missing: Installed. Without CloudRoom today 
 Ran 4 tests in 0.001s
 
 FAILED (failures=4)
+
+# Review red: R1 manual planning falls through to the fleet and video (synthetic)
+$ python3 -I skills/install/tests/test_doctor.py NoCloudRoomRequired.test_manual_plan_ends_at_the_ready_label_readback
+F
+======================================================================
+FAIL: test_manual_plan_ends_at_the_ready_label_readback (__main__.NoCloudRoomRequired.test_manual_plan_ends_at_the_ready_label_readback)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/install/tests/test_doctor.py", line 893, in test_manual_plan_ends_at_the_ready_label_readback
+    self.assertIn('read the ready labels back', plan, 'manual planning has no stopping point')
+AssertionError: 'read the ready labels back' not found in "- **Plan:** in the project's clone, run `setup` (it writes `docs/agents/`, including the `Record authors` row; the App is optional, and skipping it is the user's answer), then `grill`, `to-spec` and `to-tickets`, each with the user's own confirmations. These read and write GitHub only.\n" : manual planning has no stopping point
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (failures=1)

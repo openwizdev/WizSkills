@@ -110,15 +110,15 @@ python3 -I "<this skill's folder>/scripts/session.py" run "<owner>/<repo>" --spe
 It runs in the foreground, one tick after another, with no timer. Each tick reads `fleet.sh spec <S>` and does the lines a script can do alone, by this skill's own claims and records:
 - a `start` line starts that ticket's builder through `host.py`, at most `--max` (default 3) at once;
 - a `check start` line records `start checked`;
-- a `review` line starts the reviewer;
-- a `merge` line merges through `merge.py`.
+- a `review` line starts the reviewer: the other family of the builder recorded on the ticket (its status note's harness) when both `claude` and `codex` are installed, or the same family when only the builder's is, with that harness's model from `--harness`/`--model` or `--reviewer-harness`/`--reviewer-model`;
+- a `merge` line merges through `merge.py`, as "Merging" in this skill says: the newest `VERDICT:` must be an APPROVE at that head posted after the pull request's current review assignment, `fleet.sh overload merge-batch` must admit the batch, and without a merge queue a fresh `fleet.sh every` must still print that exact line. A queued merge counts as merged only once `merge.py read` reads it merged.
 
-After a tick that did something, it ticks again at once. Otherwise it waits for a run it started to end (that agent's status note leaves `working`), or, with no run going, for a known pull request's checks to finish.
+After a tick that did something, it ticks again at once. Otherwise it waits for a run to end (that agent's status note on the ticket leaves `working`; a reviewer's note is on its pull request's ticket), or, with no run going, for a queued merge or a known pull request's checks. On start, and so on `carry on`, it rebuilds the spec's running builders, reviewers and queued merges from their GitHub records, so `--max` counts builders still running from an earlier session.
 
 It stops in three cases, and prints where it stopped and a `carry on:` command:
-- **Done (exit 0):** every ticket of the spec is closed. `archive` lines stay with this skill.
+- **Done (exit 0):** the check prints `spec done` or `close spec` for the spec, or the spec is no longer open and every ticket of it is closed. The spec summary, closing the spec and `archive` lines stay with this skill.
 - **Needs you (exit 3):** a line it doesn't do (a question, findings, a red check, a look), a refused start or merge, or nothing moving for `--idle` seconds. Handle that line with this skill, then run the `carry on:` command.
-- **Interrupt (exit 130).**
+- **Interrupt (exit 130):** it stops at once. A start or merge still answering keeps going on its own, and its record stays for this skill to reconcile.
 
 Builders and reviewers it started keep running after it stops. It holds the spec's heartbeat lock, so a session and a heartbeat tick never run together: a second session, or a heartbeat tick during one, is refused (exit 1).
 

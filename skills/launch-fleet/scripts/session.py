@@ -344,7 +344,8 @@ class Session:
         if ready[:room]:
             started = self.start(ready[:room])
             self.acted.update(starts[n] for n in started)
-            did.append('started ' + ', '.join('#' + n for n in started))
+            if started:  # every claim withdrawn: another tick holds them
+                did.append('started ' + ', '.join('#' + n for n in started))
         acted = bool(did)
         if ready[room:]:
             did.append('%s wait%s for the cap (%d)' % (', '.join('#' + n for n in ready[room:]),

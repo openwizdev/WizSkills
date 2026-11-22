@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=903
+CASES=910
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1638,6 +1638,28 @@ expect 'long form: a title naming another repository refuses nothing' 0 check.js
 start #13: W3: widget page (spec #10)
 EOF
 expect 'long form: a raised refusal is not raised again' 0 check.json 'say(12; 1202; "11:00"; "launch-fleet: waiting for other-owner/other-repo#71") | say(12; 1203; "11:05"; "launch-fleet: look: comment 1202'"'"'s line `launch-fleet: waiting for other-owner/other-repo#71` names other-owner/other-repo#71, not this repository")' -- check < /dev/null
+
+### #2376: a closing pull request in another repository is read from its own
+
+# PR #31 lives in synthetic-owner/synthetic-tools and closes this repository's
+# #12. Its comments, every check page and its probes are that repository's.
+TOOLS='pull(31; .repo = "synthetic-owner/synthetic-tools")'
+UNRELATED31='.issues += [{number: 31, title: "Synthetic unrelated issue", state: "CLOSED", parent: null, labels: [], blockedBy: [], body: "", comments: [{id: 3199, at: at("11:40"), body: "Synthetic unrelated comment"}]}]'
+expect "cross-repository PR: its comments are its own repository's when this one has no #31 (#2376)" 0 check.json "store31 | $TOOLS" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect "cross-repository PR: its comments are its own repository's when this one's #31 is another issue (#2376)" 0 check.json "store31 | $TOOLS | $UNRELATED31" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect "cross-repository PR: a second comment page is read from its own repository (#2376)" 0 check.json "store31 | $TOOLS | pull(31; .comments = discussion(119) + .comments)" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect "cross-repository PR: more than 20 checks are read page by page from its own repository (#2376)" 0 check.json "$MANY31 | pr_say(31; 3102; \"11:30\"; \"VERDICT: APPROVE at \(sha(31))\") | $TOOLS" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect "cross-repository PR: a claim beside one with more than 20 checks succeeds (#2376)" 0 check.json "merge12 | open_pr(31; 14; \"#14: synthetic tools\") | pull(31; .checks = ([range(40) | {name: \"optional-\(.)\", status: \"COMPLETED\", conclusion: \"SUCCESS\"}] + .checks)) | $TOOLS | say(13; 1301; \"11:55\"; \"launch-fleet: starting\")" -- claim 13 1301 <<EOF
+go #13
+EOF
 
 ### #1340: a machine plan approval starts the fleet; the video's comments steer it
 
@@ -3978,6 +4000,25 @@ gi1_case 'GI7: another installation gets a full read' installation
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
 gi1_case "GI7: a switch from the account to the App gets a full read" switch
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
+# #2376: the probes of a pull request in another repository read that
+# repository's: it is unchanged while nothing changes, and its new verdict or
+# head gets a full read.
+gi1_tools_case() {
+  name=$1 change=$2
+  selected "$name" || return 0
+  take heavy || return 0
+  cases=$((cases + 1))
+  d=$tmp/gi1-$cases gi1_why=''
+  mkdir "$d" && world check.json "$GI1 | pull(35; .repo = \"synthetic-owner/synthetic-tools\")" "$d" > "$d/world.json" \
+    || { bad "$name" "setup"; return; }
+  gi1_pair 1 0 && gi1_read 1 && gi1_pair 2 60 && gi1_read 2 && gi1_pair 3 120 && gi1_unchanged 3 \
+    || { bad "$name" "$gi1_why"; return; }
+  gi1_change "$change" || { bad "$name" "can't make the change"; return; }
+  gi1_pair 4 180 && gi1_full 4 || { bad "$name" "$gi1_why"; return; }
+  echo "ok   $name"
+}
+gi1_tools_case "cross-repository PR: its new verdict gets a full read (#2376)" 'pr_say(35; 3502; "11:59"; "VERDICT: APPROVE at \(sha(35))")'
+gi1_tools_case "cross-repository PR: its new head gets a full read (#2376)" 'pull(35; .head = sha("35f"))'
 if [ -s "$tmp/gi1-points.txt" ]; then cat "$tmp/gi1-points.txt"; fi
 
 ### GI2 (#2544): GitHub's messages wake a spec's fleet thread through its loop
@@ -4048,6 +4089,7 @@ case ${TEST_ONLY:-} in
   'WZ-PROBE:*') expected=3 ;;
   'GI2:*') expected=13 ;;
   'CW-G:*') expected=2 ;;
+  'cross-repository PR:*') expected=7 ;;
 esac
 [ "$cases" = "$expected" ] || bad 'the selected cases ran' "$cases cases ran, not $expected: is \"$TEST_ONLY\" a case's name?"
 

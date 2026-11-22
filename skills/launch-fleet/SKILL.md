@@ -18,7 +18,7 @@ These hold on every line, before every effect.
 - **Builder and reviewer apart.** The reviewer is always the other family, by the models contract's cross-family rule for the builder's recorded family (`ops-starts.py flags --repo <owner>/<repo> review_of_claude_built` or `review_of_gpt_built`); unknown or conflicting family, or a rule that waits, waits. Never swap a refused provider or model for another.
 - **Models.** Every start takes its `room-cli thread spawn` flags from `fleet.md`'s one `## Models` table, read from the default branch at that start: `python3 -I "<this skill's folder>/scripts/ops-starts.py" flags --repo <owner>/<repo> <start>` prints them, reading GitHub's default branch and never the checkout's copy, from the older five tables when the project has no Models table, and refuses a broken table. A merged change reaches the next agent started; running agents keep their model.
 - **Never wait awake.** No wake, builder or reviewer keeps a watcher, poll loop or `sleep`. End the turn; a later event or scheduled wake resumes from the records.
-- **Action gates stay the user's.** Publishing, spending, secrets, deleting user data, cut-overs and the repository webhook need the user's recorded yes. Shorter text grants no new authority.
+- **Approval rules ask their approver.** Every rule in `fleet.md`'s Approval rules needs its named approver's recorded yes first; with no such section, publishing, spending, secrets, deleting user data, cut-overs and the repository webhook need the user's. Planning and a machine approval grant no rule. Shorter text grants no new authority.
 
 ## Launch
 

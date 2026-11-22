@@ -76,9 +76,11 @@ other-family reviewers stay independent, and the fleet owns exact-head checks
 and merge. The plan's outcome is the spec's lead time, from the spec's creation
 to its last ticket's merge, for the war room:
 `python3 -I "<this skill's folder>/scripts/lead_time.py" <collector JSON> --spec <spec>`
-reads the collector's `flow` fact and keeps unknown unknown. Every action gate
-(publish, spend, secrets, deleting user data, cut-overs) and the owner's
-release go stay as they are. Older human-approved plans and approvals on their own follow [records.md](records.md); before
+reads the collector's `flow` fact and keeps unknown unknown. Every rule in
+`fleet.md`'s Approval rules asks its named approver first; with no such section,
+publishing, spending, secrets, deleting user data, cut-overs and the repository
+webhook ask the user. Planning and a machine approval grant no rule, and the
+owner's release go stays as it is. Older human-approved plans and approvals on their own follow [records.md](records.md); before
 labelling one, `sh "<this skill's folder>/scripts/check-approval.sh" <spec>` must
 validate its posted table. End the turn
 while waiting.

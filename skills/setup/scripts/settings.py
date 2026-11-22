@@ -7,7 +7,8 @@ Reads the four files in DIR/docs/agents/ (default: the current folder) and
 names each missing or unsafe setting: a missing file or section, a builder or
 reviewer table or Fixer family row without each of its three flags exactly
 once as one token, a template placeholder, a reviewer from the builder's model family, not exactly
-one valid Record authors row, or a triage role without exactly one label. FILE is the saved output of
+one valid Record authors row, an Approval rules row without an `Ask before` rule and a
+named approver or repeating a rule, or a triage role without exactly one label. FILE is the saved output of
 `gh label list --limit 500 --json name`; with it, each mapped label must exist
 in the tracker exactly once. It writes nothing and runs nothing.
 
@@ -275,6 +276,7 @@ def fleet(text, problems):
                 problems.append('fleet.md: %s: %s is not from another model family' % (title, provider))
     if 'Fixer' in found:
         fixer(found['Fixer'], problems)
+    approval(text, problems)
     identity = exact.get('GitHub identity')
     if identity is not None:
         rows = re.findall(r'^\| *Record authors *\|.*$', identity, re.M)
@@ -287,6 +289,44 @@ def fleet(text, problems):
                                 % (number, len(rows), row.strip()))
         elif len(cells) != 4 or cells[3].strip() or not CELL.fullmatch(cells[2]):
             problems.append('fleet.md: GitHub identity: Record authors needs one or more exact logins')
+
+
+def approval(text, problems):
+    """The optional Approval rules table: each row an `Ask before` rule with a named approver, once."""
+    lines = text.split('\n')
+    at = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Approval rules']
+    here = 'fleet.md: Approval rules: '
+    if len(at) > 1:
+        problems.append(here + 'more than one ## Approval rules heading')
+    if len(at) != 1:
+        return
+    table = []
+    for line in lines[at[0] + 1:]:
+        if line.startswith(('# ', '## ')) or (table and not line.startswith('|')):
+            break
+        if line.startswith('|'):
+            table.append(cells(line))
+    if len(table) < 3 or table[0] != ['Rule', 'Approver'] or table[1] != ['---', '---']:
+        problems.append(here + 'the table is not | Rule | Approver |')
+        return
+    seen = []
+    for n, row in enumerate(table[2:], 1):
+        if not row or len(row) != 2:
+            problems.append(here + 'row %d: not two cells' % n)
+            continue
+        rule, approver = row
+        name, key = 'row %d (%s): ' % (n, rule), ' '.join(rule.lower().split())
+        if not rule.startswith('Ask before '):
+            problems.append(here + name + 'the rule does not start "Ask before"')
+        elif key in seen:
+            problems.append(here + name + 'repeats row %d' % (seen.index(key) + 1))
+        elif not approver:
+            problems.append(here + name + 'no approver')
+        elif re.search(r'<[^>]*>', approver):
+            problems.append(here + name + 'unfilled approver ' + approver)
+        elif approver.lower() == 'the user':
+            problems.append(here + name + 'the approver is "the user", not a person')
+        seen.append(key)
 
 
 def triage(text, labels, problems):

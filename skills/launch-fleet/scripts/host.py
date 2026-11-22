@@ -2,7 +2,9 @@
 """Start, wake and stop builders through the project's chosen host driver (#1371).
 
   host.py which                              the host docs/agents/host.md chooses, or `host: none`
-  host.py start OWNER/NAME N HARNESS MODEL   start #N's builder through that host's driver
+  host.py start OWNER/NAME N HARNESS MODEL [SKILL]
+                                             start #N's agent through that host's driver, running SKILL
+                                             (default build-ticket), a name as driver v1's schema has it
   host.py wake OWNER/NAME N                  wake #N's run, on the host that started it
   host.py stop OWNER/NAME N                  stop #N's run, on the host that started it
 
@@ -409,9 +411,12 @@ def main(argv):
     if kind == 'which' and len(argv) == 1:
         print('host: %s' % (chosen() or 'none'))
         return 0
-    shapes = {'start': 5, 'wake': 3, 'stop': 3}
-    if shapes.get(kind) != len(argv) or not REPO.fullmatch(argv[1]) or not TICKET.fullmatch(argv[2]):
-        raise Unreadable('usage: which | start OWNER/NAME N HARNESS MODEL | wake OWNER/NAME N | stop OWNER/NAME N')
+    shapes = {'start': (5, 6), 'wake': (3,), 'stop': (3,)}
+    skill = argv[5] if kind == 'start' and len(argv) == 6 else 'build-ticket'
+    if (len(argv) not in shapes.get(kind, ()) or not REPO.fullmatch(argv[1]) or not TICKET.fullmatch(argv[2])
+            or not NAME.fullmatch(skill) or len(skill) > 60):
+        raise Unreadable('usage: which | start OWNER/NAME N HARNESS MODEL [SKILL] | wake OWNER/NAME N | '
+                         'stop OWNER/NAME N')
     repo, n = argv[1], argv[2]
     run = load(repo)['runs'].get(n)
     live = 'refused: #%s already has a run on %s; wake or stop it instead'
@@ -423,7 +428,7 @@ def main(argv):
         ready(repo)
         if run and not run.get('stopped'):
             raise Outcome(live % (n, run['host']))
-        new = attempt(repo, n, host, 'start', {'repository': repo, 'ticket': int(n), 'skill': 'build-ticket',
+        new = attempt(repo, n, host, 'start', {'repository': repo, 'ticket': int(n), 'skill': skill,
                                                 'harness': argv[3], 'model': argv[4]})
 
         def add(runs):

@@ -175,6 +175,25 @@ class Check(unittest.TestCase):
         self.assertEqual(code, 5, out)
         self.assertIn('Record authors row 2 of 2', out)
 
+    def test_the_app_identity_row_is_off_unless_it_says_on(self):
+        # catches: a typo such as `yes` or a second row verified, so an operator
+        # believes the App identity is on (or off) while loop.sh reads the
+        # opposite; a missing row stays valid, since it means off (#2394).
+        row = '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |\n'
+        for value in ('on', 'off', '`on`'):
+            fleet = FLEET.replace(row, row + '| App identity | %s |\n' % value)
+            code, out = self.check(self.project(**{'fleet.md': fleet}))
+            self.assertEqual(code, 0, value + '\n' + out)
+        for value in ('yes', 'On', '<on or off>', 'on | note'):
+            fleet = FLEET.replace(row, row + '| App identity | %s |\n' % value)
+            code, out = self.check(self.project(**{'fleet.md': fleet}))
+            self.assertEqual(code, 5, value + '\n' + out)
+            self.assertIn('fleet.md: GitHub identity: App identity must be exactly on or off', out)
+        two = FLEET.replace(row, row + '| App identity | on |\n| App identity | off |\n')
+        code, out = self.check(self.project(**{'fleet.md': two}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: GitHub identity: App identity row 2 of 2: | App identity | off |', out)
+
     def test_a_record_authors_cell_is_validated_whole(self):
         # catches: a row the readers refuse whole (text beside the logins, an extra
         # cell) passed because each backticked login parsed on its own.

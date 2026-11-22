@@ -106,6 +106,8 @@ class Road(Journey):
         gh.chmod(0o755)
 
     def tool(self, turn):
+        if 'session' in turn:
+            (self.dir / 'session.json').write_text(json.dumps(turn['session']))
         if 'progress' in turn:
             note = '<!-- openwiz:status v1 -->\nagent: builder\nstate: working\n'
             shapes = {'merged': ('CLOSED', 'COMPLETED', [1], [], []), 'in_review': ('OPEN', None, [1], [], []),
@@ -141,6 +143,12 @@ class Road(Journey):
                 f"assert sys.argv[1:] == ['status', {self.repo!r}, '900'], sys.argv[1:]\n"
                 "path = Path('heartbeat-status')\n"
                 "print(path.read_text() if path.exists() else 'heartbeat: not installed')\n")
+            (home / 'launch-fleet/scripts/session.py').write_text(  # a recorded session runner (TM3's own tests run it)
+                "import json, os, sys\nfrom pathlib import Path\n"
+                f"with open({str(self.dir / 'session.log')!r}, 'a') as log:\n"
+                "    log.write(json.dumps({'argv': sys.argv[1:], 'adapters': os.environ.get('OPENWIZ_ADAPTERS')}) + '\\n')\n"
+                f"script = json.loads(Path({str(self.dir / 'session.json')!r}).read_text())\n"
+                "sys.stdout.write(script['stdout'])\nsys.exit(script['exit'])\n")
         with patch('test_first_fleet.HELPER', helper):
             return super().helper(args)
 
@@ -167,8 +175,6 @@ class Road(Journey):
             self.save_world()
         elif what == 'fleet_record':
             self.fleet_record()
-        elif what == 'heartbeat_active':
-            (self.dir / 'heartbeat-status').write_text('heartbeat: active (cron)')
         elif what == 'merged':
             pull = turn['pull']
             self.world.setdefault('onboard_pulls', []).append({
@@ -269,7 +275,7 @@ class Conversation(unittest.TestCase):
                 self.assertEqual(spoken, ORDER)
                 for turn in said:
                     if journey['host'] == 'local' and turn['say'] == 'fleet-start':
-                        self.assertIn('local heartbeat is active', turn['agent'])
+                        self.assertTrue(pattern(lines['The fleet starting'][1]).fullmatch(turn['agent']), turn['agent'])
                     else:
                         self.assertTrue(says(turn['agent'], turn['say'], lines), (turn['say'], turn['agent']))
                     self.assertNotRegex(turn['agent'], r'<[^>]+>')
@@ -292,8 +298,8 @@ class Conversation(unittest.TestCase):
                 self.assertFalse([t for t in turns if re.search(r'(?i)\bapprove\b', t.get('agent', ''))])
                 launch = [t['tool'] for t in turns if t.get('tool', [''])[0] == 'launch']
                 self.assertEqual(launch, [['launch', '--spec', '900'],
-                                          ['launch', '--spec', '900', '--yes', '--confirm', '@preview'],
-                                          ['launch', '--spec', '900']])
+                                          ['launch', '--spec', '900', '--yes', '--confirm', '@preview']]
+                                 + ([] if local else [['launch', '--spec', '900']]))
 
     def test_every_gate_is_asked_before_its_effect(self):
         for journey in ROAD['journeys']:
@@ -340,13 +346,18 @@ class Replay(unittest.TestCase):
                 self.assertIn(ask, launches[0].splitlines())
                 yes = next(result.stdout for args, result in road.calls if args[:4] == ['launch', '--spec', '900', '--yes'])
                 fleet = next(t['agent'] for t in journey['turns'] if t.get('say') == 'fleet-start')
-                self.assertNotIn(fleet, yes.splitlines(), 'not before the activation record reads back')
-                self.assertIn(fleet, launches[-1].splitlines())
                 if journey['host'] == 'local':
-                    self.assertIn("launch-fleet's Launch section", yes)
-                    self.assertIn('local heartbeat', yes)
-                    self.assertIn('driver harness `claude`', yes)
+                    self.assertIn(fleet, yes.splitlines(), 'the session in this chat is the start')
+                    sessions = [json.loads(line) for line in (road.dir / 'session.log').read_text().splitlines()]
+                    self.assertEqual(sessions, [{'argv': ['run', road.repo, '--spec', '900', '--harness', 'claude',
+                                                          '--model', 'syn-claude-model-01'],
+                                                 'adapters': str(road.dir / 'adapters')}])
+                    self.assertNotIn("launch-fleet's Launch section", yes)
                     self.assertNotIn('Starting one', yes)
+                else:
+                    self.assertNotIn(fleet, yes.splitlines(), 'not before the activation record reads back')
+                    self.assertIn(fleet, launches[-1].splitlines())
+                if journey['host'] == 'local':
                     self.assertEqual(sum(args == ['mode'] for args, _ in road.calls), 1)
                     self.assertEqual(road.saved()['mode']['mode'], 'acceptEdits')
                     self.assertIn('Host: local', road.world['files']['docs/agents/host.md'])
@@ -355,7 +366,7 @@ class Replay(unittest.TestCase):
                     watched = [r.stdout for args, r in road.calls if args[:1] == ['progress']]
                     self.assertIn('#%d merged' % road.tickets[0]['number'], watched[-1].splitlines())
                 adapters = 'OPENWIZ_ADAPTERS=%s' % (road.dir / 'adapters')
-                self.assertEqual(adapters in yes, journey['host'] == 'local', 'the loop finds the local driver (R2)')
+                self.assertNotIn(adapters, yes, 'the session gets the local driver itself; no loop to give it to')
                 merged = outputs[('first-merge', '--pr', '911')].splitlines()
                 for moment in ('merged', 'offer'):
                     said = next(t['agent'] for t in journey['turns'] if t.get('say') == moment)
@@ -525,6 +536,7 @@ class LaunchYes(unittest.TestCase):
                 road = Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
                 road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
                 road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
+                (road.dir / 'session.json').write_text(json.dumps({'exit': 130, 'stdout': ''}))
                 preview = road.helper(['launch', '--spec', '900'])
                 self.assertEqual(preview.returncode, 12, preview.stdout)
                 self.assertEqual(road.spawns(), [])
@@ -541,7 +553,9 @@ class LaunchYes(unittest.TestCase):
                 self.assertEqual(road.spawns(), [], 'no fleet starts without the yes to this preview')
                 said_yes = road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest[0]])
                 self.assertEqual(said_yes.returncode, 0, said_yes.stdout)
-                self.assertEqual(road.saved()['launch']['state'], 'authorized', 'only that yes hands the start over')
+                self.assertEqual(road.saved()['launch']['state'], 'started' if where == 'on this machine'
+                                 else 'authorized', 'only that yes hands the start over')
+                self.assertEqual((road.dir / 'session.log').exists(), where == 'on this machine')
                 self.assertEqual(road.spawns(), [])
 
 

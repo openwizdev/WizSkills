@@ -89,7 +89,9 @@ class CheckShards(unittest.TestCase):
         p = subprocess.run([sys.executable, '-I', str(HERE / 'run.py'), '--list'],
                            capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
-        shards = json.loads(p.stdout)
+        self.covers_every_suite_exactly_once(json.loads(p.stdout))
+
+    def covers_every_suite_exactly_once(self, shards):
         names = [shard['name'] for shard in shards]
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(names[:2], ['rules', 'standalone'])
@@ -262,6 +264,29 @@ def part_record(path):
 
 
 class SplitSuites(unittest.TestCase):
+    def test_an_extra_dotted_shard_fails_the_exactly_once_guard(self):
+        shards = run.shards(run.ROOT)
+        versions = next(c for s in shards if s['name'] == 'check' for c in s['commands']
+                        if c['suite'][-1] == 'check/test_versions.py')
+        extra = [*shards, {'name': 'check.1', 'skill': 'check', 'commands': [versions], 'env': {}}]
+        CheckShards('test_list_covers_every_suite_exactly_once').covers_every_suite_exactly_once(shards)
+        with self.assertRaises(AssertionError):
+            CheckShards('test_list_covers_every_suite_exactly_once').covers_every_suite_exactly_once(extra)
+
+    def test_a_part_record_path_that_is_a_folder_fails_the_part(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            groups = Path(tmp, 'map')
+            groups.write_text(''.join(f'{g} 2\n' for g in range(1, 10001)), encoding='utf-8')
+            folder = Path(tmp, 'record')
+            folder.mkdir()
+            env = {**run.clean_env(), 'TEST_SHARD': '1/2', 'TEST_SHARD_MAP': str(groups),
+                   'TEST_SHARD_RAN': str(folder), 'TEST_JOBS': '1'}
+            p = subprocess.run(['sh', 'skills/launch-fleet/scripts/test.sh'], cwd=HERE.parent, env=env,
+                               capture_output=True, text=True)
+            self.assertEqual(list(folder.iterdir()), [])
+        self.assertEqual(p.returncode, 1, p.stdout[-400:])
+        self.assertIn("can't write " + str(folder), p.stdout)
+
     def test_the_parts_of_launch_fleet_test_sh_run_every_case_once(self):
         p = subprocess.run([sys.executable, '-I', str(HERE / 'run.py'), '--list'],
                            capture_output=True, text=True)

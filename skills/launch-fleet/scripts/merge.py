@@ -16,17 +16,21 @@
 mergeable: <state>` or `wait: <why>`; CHECKS are fleet.md's required checks,
 comma-separated. Both only read.
 
-`merge` reads, admits and merges HEAD with `gh pr merge --merge
---match-head-commit` (never `--admin`), reads it back and records the outcome:
+`merge` reads, admits and merges HEAD, reads it back and records the outcome:
 `merged <commit>; cost ...` (exit 0), `queued; recorded <id>` (exit 0),
 `pending: ...` (exit 0, nothing recorded: read again next wake),
-`blocked: <why>; recorded <id>` (exit 1). The queue receipt (`launch-fleet:
-merge queued <commit>`) is what tells a later removal from a fresh enqueue and
-what `settle` reads, so it is recorded before the enqueue: a receipt it can't
-confirm prints `not queued: ...` (exit 1) and nothing is enqueued; the next run
-reuses a receipt that did land. A pull request read as queued without its
-receipt gets one then (`queued; recorded <id>`, or `queued; receipt
-unconfirmed ...`, exit 1). Without a merge queue it merges only
+`blocked: <why>; recorded <id>` (exit 1). With a merge queue it enqueues
+through GraphQL `enqueuePullRequest` pinned to HEAD (`expectedHeadOid`), and
+while any of CHECKS is still running on HEAD it prints `refused: its required
+checks are running: ...` (exit 1) and enqueues and records nothing; a refused
+enqueue prints `not queued: <GitHub's reason>; ...` (exit 1) and records
+nothing. The queue receipt (`launch-fleet: merge queued <commit>`) is what
+tells a later removal from a fresh enqueue and what `settle` reads, and it is
+written only after reading back a queue entry for HEAD (#2154): a pull request
+read as queued without its receipt gets one (`queued; recorded <id>`, or
+`queued; receipt unconfirmed ...`, exit 1, repaired on the next run). Without
+a merge queue it merges with `gh pr merge --merge --match-head-commit` (never
+`--admin`), only
 with `--base-rule-checked`, after you applied fleet.md's base rule and
 `fleet.sh every` still prints this merge line. BODY names the APPROVE and the
 plan approval that allowed it.
@@ -102,13 +106,15 @@ Stop = post.Stop
 
 QUERY = '''query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { defaultBranchRef { name } pullRequest(number: $number) {
-    state baseRefName headRefOid isMergeQueueEnabled isInMergeQueue mergeable mergeCommit { oid }
+    id state baseRefName headRefOid isMergeQueueEnabled isInMergeQueue mergeable mergeCommit { oid }
     mergeQueueEntry { headCommit { oid } } repository { nameWithOwner }
     closingIssuesReferences(first: 50) { pageInfo { hasNextPage } nodes { number body repository { nameWithOwner } } }
     timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 1) {
       nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } } }
     commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 50) { pageInfo { hasNextPage }
-      nodes { __typename ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } }'''
+      nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } } } } } } } } } }'''
+ENQUEUE = '''mutation($id: ID!, $head: GitObjectID!) {
+  enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head}) { mergeQueueEntry { headCommit { oid } } } }'''
 COST = 'tools/collector/cost_line.py'
 SHA = re.compile(r'[0-9a-f]{40}')
 TICKET = re.compile(r'(?:([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#)?([1-9][0-9]{0,11})')
@@ -193,6 +199,30 @@ def admission(main, p, head, checks):
     if p['isMergeQueueEnabled'] is False:
         return f"base rule: no merge queue; mergeable: {p['mergeable']}"
     return 'wait: whether the merge queue is on is unknown'
+
+
+def running(p, checks):
+    """The required checks still running on the pull request's head, by name."""
+    commit = ((p.get('commits') or {}).get('nodes') or [{}])[0].get('commit') or {}
+    nodes = ((commit.get('statusCheckRollup') or {}).get('contexts') or {}).get('nodes') or []
+    busy = {n.get('name') or n.get('context') for n in nodes
+            if (n.get('__typename') == 'CheckRun' and n.get('status') != 'COMPLETED')
+            or (n.get('__typename') == 'StatusContext' and n.get('state') in ('PENDING', 'EXPECTED'))}
+    return [c for c in checks if c in busy]
+
+
+def enqueue(p, head):
+    """Ask the merge queue to take the pull request at HEAD only; None, or GitHub's refusal."""
+    if not isinstance(p.get('id'), str):
+        return "the pull request's id could not be read"
+    try:
+        r = subprocess.run(['gh', 'api', 'graphql', '-f', f"id={p['id']}", '-f', f'head={head}',
+                            '-f', f'query={ENQUEUE}'], capture_output=True, text=True, timeout=60,
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return 'the enqueue call did not finish'
+    why = ' '.join(r.stderr.split())[:200] or 'the enqueue call failed'
+    return None if r.returncode == 0 else why
 
 
 def ticket_of(repo, number, p, ticket):
@@ -622,6 +652,10 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
     ticket_of(repo, number, p, ticket)
     if '; it left the queue at ' in state and any(h == head for h, _ in receipts(repo, number)):
         blocked('left the merge queue: ' + state.split(': ', 1)[1])
+    busy = running(p, checks) if p['isMergeQueueEnabled'] is True else []
+    if busy:
+        raise Stop('refused: its required checks are running: ' + ', '.join(busy)
+                   + '; nothing was enqueued or recorded, so run it again once they finish')
     admit = admission(main, p, head, checks)
     if admit.startswith('wait: '):
         blocked(admit[6:])
@@ -632,17 +666,19 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
         raise Stop(held(why, ref))
     if admit.startswith('base rule: ') and not checked:
         raise Stop(admit + '; check the base rule and fleet.sh every, then pass --base-rule-checked')
-    # Save before you send: the queue may merge it or let it go before any later wake, and the
-    # receipt is what settle and the removal guard read then.
-    kept = receipt('not queued: the queue receipt is unconfirmed, so nothing was enqueued') \
-        if admit.startswith('admit: ') else None
-    done = post.gh('pr', 'merge', str(number), '--repo', repo, '--merge', '--match-head-commit', head,
-                   '--body', body) is not None
+    if admit.startswith('admit: '):
+        refused = enqueue(p, head)
+        done = refused is None
+    else:
+        refused, done = None, post.gh('pr', 'merge', str(number), '--repo', repo, '--merge',
+                                      '--match-head-commit', head, '--body', body) is not None
     state = where(*snapshot(repo, number), head)
     if state.startswith('merged '):
         return state + '; ' + cost(repo, number, head, ticket, extra)
     if state == 'queued':
-        return 'queued; recorded ' + str(kept or receipt('queued; receipt unconfirmed'))
+        return 'queued; recorded ' + str(receipt('queued; receipt unconfirmed'))
+    if state.startswith('open') and refused:
+        raise Stop(f'not queued: {refused}; nothing was recorded, so run it again next wake')
     if state.startswith('open') and done:
         return 'pending: the merge command succeeded but it still reads open; read it again next wake'
     blocked(state[6:] if state.startswith('stop: ') else state)

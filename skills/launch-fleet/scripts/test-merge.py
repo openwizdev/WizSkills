@@ -104,8 +104,8 @@ if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'enqueuePul
     if kind == 'moved':
         pr['headRefOid'] = 'b' * 40
     world['writes'].append({'enqueue': got.get('id'), 'head': got.get('head')})
-    running = [c for c in pr['checks'] if c.get('status', 'COMPLETED') != 'COMPLETED'
-               or c.get('state') in ('PENDING', 'EXPECTED')]
+    running = [c for c in pr['checks'] if (c.get('name') or c.get('context')) == 'check'
+               and (c.get('status', 'COMPLETED') != 'COMPLETED' or c.get('state') in ('PENDING', 'EXPECTED'))]
     refused = (kind == 'fail' or got.get('id') != 'PR_synthetic' + str(pr['number'])
                or got.get('head') != pr['headRefOid'] or running or not pr['isMergeQueueEnabled'])
     if not refused and kind != 'pending':
@@ -164,7 +164,7 @@ def pr(**changes):
              'isMergeQueueEnabled': False, 'isInMergeQueue': False, 'mergeCommit': None,
              'mergeQueueEntry': None, 'mergeable': 'MERGEABLE', 'left': None, 'more_checks': False,
              'closes': closes((REPO, 12)),
-             'checks': [{'__typename': 'CheckRun', 'name': 'check', 'conclusion': 'SUCCESS'},
+             'checks': [{'__typename': 'CheckRun', 'name': 'check', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'},
                         {'__typename': 'StatusContext', 'context': 'privacy', 'state': 'SUCCESS'}]}
     value.update(changes)
     return value
@@ -267,14 +267,9 @@ class Merge(unittest.TestCase):
         self.assertEqual(w.bodies(12), ['launch-fleet: cost: ' + LINE])
 
     def test_the_head_moving_after_admission_never_merges_another_commit(self):
-        w = World(self, pr=pr(isMergeQueueEnabled=True))
+        w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'enqueue': 'moved'})
         project(w, PRINTS)
-        # Admission reads HEAD; GitHub then sees another head at merge time.
-        script = w.dir / 'bin/gh'
-        script.write_text(script.read_text().replace(
-            'exec ', 'case "$1 $2" in "pr merge") "%s" -I -c "import json,os;p=os.environ[\'FAKE_WORLD\'];'
-            'w=json.load(open(p));w[\'pr\'][\'headRefOid\']=\'%s\';json.dump(w,open(p,\'w\'))";; esac\nexec '
-            % (sys.executable, OTHER), 1))
+        # Admission reads HEAD; GitHub then sees another head at enqueue time.
         code, out = self.merge(w, '--ticket', 12)
         self.assertEqual(code, 1)
         self.assertTrue(out.startswith('blocked: '), out)
@@ -609,15 +604,15 @@ class Queue(unittest.TestCase):
         self.assertEqual(w.run('merge.py', 'settle', REPO, 7, 12, cwd=w.dir / 'project'), (0, 'no queued merge'))
         self.assertEqual(w.writes(), [])
 
-    def test_an_unconfirmed_queue_receipt_enqueues_nothing(self):
-        # catches: an enqueue whose receipt failed, so the queue can merge it (no cost to settle) or
-        # let it go (re-enqueued at the same head) before any later wake repairs it (#1631, R1).
+    def test_an_unconfirmed_queue_receipt_is_repaired_on_the_next_wake(self):
+        # catches: an enqueue whose receipt failed staying without the receipt settle and the
+        # removal guard read (#1631, R1), once the receipt follows the read-back (#2154).
         w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'post': 'fail'})
         project(w, PRINTS)
         code, out = self.merge(w)
         self.assertEqual(code, 1)
-        self.assertTrue(out.startswith('not queued: '), out)
-        self.assertEqual((w.bodies(7), w.writes(), w.load()['pr']['isInMergeQueue']), ([], [], False))
+        self.assertTrue(out.startswith('queued; receipt unconfirmed '), out)
+        self.assertEqual((w.bodies(7), w.load()['pr']['isInMergeQueue']), ([], True))
         self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
         self.assertEqual(w.bodies(7), [self.receipt()])
         self.assertEqual(self.merge(w), (0, 'queued; the queue merges it or lets it go'))
@@ -628,7 +623,7 @@ class Queue(unittest.TestCase):
                            left={'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks'})
         w.save(value)
         self.assertEqual(self.merge(w), (1, 'blocked: left the merge queue: failed checks; recorded 5002'))
-        self.assertEqual(sum('merge' in x for x in w.writes()), 1)
+        self.assertEqual(sum('enqueue' in x for x in w.writes()), 1)
 
     def test_a_queued_pull_request_without_its_receipt_gets_one(self):
         # catches: a pull request someone else queued staying without the receipt the removal guard
@@ -641,21 +636,19 @@ class Queue(unittest.TestCase):
         self.assertEqual(w.bodies(7), [self.receipt()])
 
     def test_a_receipt_written_but_not_read_back_is_not_posted_twice(self):
-        # catches: a retry duplicating a receipt whose write happened but could not be confirmed,
-        # or enqueueing before it is confirmed.
+        # catches: a retry duplicating a receipt whose write happened but could not be confirmed.
         w = World(self, pr=pr(isMergeQueueEnabled=True), faults={'post': 'lost'}, me='someone-else')
         project(w, PRINTS)
         code, out = self.merge(w)
         self.assertEqual(code, 1)
-        self.assertTrue(out.startswith('not queued: '), out)
-        self.assertFalse(any('merge' in x for x in w.writes()))
+        self.assertTrue(out.startswith('queued; receipt unconfirmed '), out)
         # The read-back missed it; the next wake reads it as the record author's.
         value = w.load()
         value['me'] = value['comments']['7'][0]['user']['login'] = 'openwiz[bot]'
         w.save(value)
-        self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
+        self.assertEqual(self.merge(w), (0, 'queued; the queue merges it or lets it go'))
         self.assertEqual(w.bodies(7), [self.receipt()])
-        self.assertEqual(sum('merge' in x for x in w.writes()), 1)
+        self.assertEqual(sum('enqueue' in x for x in w.writes()), 1)
 
 
 # RC3 (#1831): the late look, read with the checkpoints contract's own forms

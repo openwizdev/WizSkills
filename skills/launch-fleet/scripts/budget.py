@@ -9,7 +9,7 @@ import time
 FIELDS = ('limit', 'remaining', 'reset', 'resource')
 POOL = 'core'
 STATUS = re.compile(rb'HTTP/\d(\.\d)? \d{3}( .*)?$')
-NUMBER = re.compile(r'(0|[1-9][0-9]{0,17})$')
+NUMBER = re.compile(r'0|[1-9][0-9]{0,17}')
 SAME_WINDOW_SECONDS = 600
 
 
@@ -25,7 +25,7 @@ def answer(allowed, reason, pool=None, code=None):
     return code
 
 
-def checked(values, where):
+def checked(values, where, text):
     missing = [f for f in FIELDS if f not in values]
     if missing:
         raise Unknown('%s has no %s' % (where, ', '.join(missing)))
@@ -35,7 +35,7 @@ def checked(values, where):
     pool = {}
     for field in ('limit', 'remaining', 'reset'):
         value = values[field]
-        if isinstance(value, str) and NUMBER.match(value):
+        if text and isinstance(value, str) and NUMBER.fullmatch(value):
             value = int(value)
         if type(value) is not int or value < 0:
             raise Unknown('%s has an unreadable %s' % (where, field))
@@ -60,7 +60,7 @@ def from_file(path, n):
                 block = {}
             continue
         if not line:
-            pools.append(checked(block, where))
+            pools.append(checked(block, where, text=True))
             block = None
             continue
         name, colon, value = line.partition(b':')
@@ -96,7 +96,7 @@ def rate_limit():
         raise Unknown('%s has no %s allowance' % (where, POOL))
     if not isinstance(values, dict):
         raise Unknown('%s has no %s allowance' % (where, POOL))
-    return checked(values, where)
+    return checked(values, where, text=False)
 
 
 def newest(pools):

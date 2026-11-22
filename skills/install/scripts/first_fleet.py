@@ -1326,7 +1326,7 @@ def choose(got):
         env = repository(state.value.get('repo'))
     except Exit:
         env = None
-    wrote, intended = (None, None) if env is None else write_models(settings, offered)
+    wrote, intended = (None, None) if env is None else write_models(settings, offered, host['agents'] != 'cloud')
     try:
         remote = None if env is None else fleet_text(env, state.value['repo'])
     except Exit:
@@ -1384,7 +1384,7 @@ def model_row(role, agent):
         provider, model, effort)
 
 
-def write_models(settings, offered):
+def write_models(settings, offered, driver=False):
     choice = (settings['harness'], settings['model'], settings['effort'])
     try:
         folder = settings_folder()
@@ -1392,7 +1392,7 @@ def write_models(settings, offered):
         raise Exit(5, 'This checkout has no docs/agents/ folder of its own (a missing or linked folder); run setup '
                       'first; nothing recorded.')
     try:
-        return write_in(folder, choice, offered)
+        return write_in(folder, choice, offered, driver)
     finally:
         os.close(folder)
 
@@ -1410,7 +1410,7 @@ def settings_folder():
     return folder
 
 
-def write_in(folder, choice, offered):
+def write_in(folder, choice, offered, driver=False):
     name = FLEET_MD.name
     try:
         handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=folder)
@@ -1444,10 +1444,13 @@ def write_in(folder, choice, offered):
         reviewer, kept = (found and (found['harness'], found['model'], found['effort'])), None
         source = 'the older `%s` table' % REVIEWER[FAMILY[choice[0]]]
     family = FAMILY[choice[0]]
+    alone = None
     if not reviewer or FAMILY.get(reviewer[0]) in (None, family):
         reviewer = RECOMMENDED['gpt' if family == 'claude' else 'claude']
         kept, source = None, 'the recommended other-family choice'
-        if not offers(offered, reviewer):
+        if driver and not any(h['provider'] == reviewer[0] for h in offered['harnesses']):
+            alone = reviewer[0]
+        elif not offers(offered, reviewer):
             raise Exit(5, 'The Reviewer must be from the other model family; its recommended choice, %s, is not '
                           'offered now; nothing recorded.' % ' '.join(reviewer))
     rows = ['| Role | Harness | Model | Effort | `room-cli thread spawn` flags |', '| --- | --- | --- | --- | --- |',
@@ -1465,6 +1468,9 @@ def write_in(folder, choice, offered):
     intended = {'Orchestrator': choice, 'Builder': choice, 'Reviewer': reviewer, 'Small builder': None, 'Fixer': None}
     said = ('docs/agents/fleet.md: the Models table names %s for the Orchestrator and Builder, with %s as the '
             'Reviewer' % (' '.join(choice), ' '.join(reviewer)))
+    if alone:
+        said += ('. %s is not installed here, so each review runs with the builder\'s harness, marked '
+                 'same-family review' % alone)
     if written == text:
         return said + '; already written.', intended
     temporary = '.fleet-%s' % os.urandom(8).hex()

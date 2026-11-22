@@ -33,29 +33,33 @@ SWITCHES = ('--paginate', '--slurp', '-i', '--include', '--silent', '--verbose')
 def operation(args):
     if args[:1] != ['api']:
         return 'gh ' + ' '.join(args[:2])
-    method, endpoint, body, query, rest = None, None, False, None, list(args[1:])
+    method, endpoint, body, opaque, queries, rest = None, None, False, False, [], list(args[1:])
     while rest:
         a = rest.pop(0)
         name, eq, value = a.partition('=') if a.startswith('--') else (a, '', '')
         if a[:2] in ('-X', '-f', '-F') and len(a) > 2:
-            name, eq, value = a[:2], '=', a[2:]
+            name, eq, value = a[:2], '=', a[2:].removeprefix('=')
         if name in VALUED:
             value = value if eq else (rest.pop(0) if rest else '')
             if name in ('-X', '--method'):
                 method = value.upper()
             elif name in BODY:
                 body = True
+                opaque = opaque or name == '--input'
                 if value.startswith('query='):
-                    query = value[len('query='):]
+                    queries.append(value[len('query='):])
         elif a in SWITCHES:
             pass
         elif a.startswith('-') or endpoint is not None:
             return 'unknown'
         else:
             endpoint = a
+    if endpoint is None:
+        return 'unknown'
     if endpoint == 'graphql':
-        if query is None or query.startswith('@'):
+        if opaque or len(queries) != 1 or queries[0].startswith('@'):
             return 'unknown'
+        query = queries[0]
         if re.search(r'\b(mutation|subscription)\b', query):
             return 'mutation'
         return 'query' if re.match(r'\s*(query\b|\{)', query) else 'unknown'

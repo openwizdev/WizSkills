@@ -92,6 +92,7 @@ SECRET_NAME = re.compile(r'TOKEN|SECRET|PASSWORD|CREDENTIAL|_KEY$|^KEY')  # the 
 # stdout only, as the ticket never carries the driver's words (the decision on R3 at 90aed73).
 USERINFO = re.compile(r'(?:[a-z][a-z0-9+.-]*:)?//[^\s/?#@]*@|(?<![\w.%+-])[^\s/?#@:]+:[^\s/?#@]*@[a-z0-9]', re.I)
 LOG = 'driver-failures.log'                       # owner-only, beside LAUNCH_FLEET_RUNS: the driver's own words
+ROLES = {'review-ticket': ('reviewer', 'pull request')}
 
 
 class Unreadable(Exception):
@@ -269,18 +270,23 @@ def logged(repo, n, host, command, refusal):
     return stamp
 
 
-def report(repo, n, host, command, entry):
+def role(skill):
+    return ROLES.get(skill, ('builder', 'ticket'))
+
+
+def report(repo, n, host, command, entry, skill='build-ticket'):
     """After the third refusal: the fleet note and one comment on #N, each only when #N lacks it.
 
     The comment never carries the driver's words (the orchestrator's decision on R3 at 90aed73): a fixed
     reason, the exit category and a pointer to the owner-only log's entry. Each write is tried even when the
     other failed (R1 of the review at 1f9c7f6); post.Stop names every failure."""
+    agent, item = role(skill)
     stopped, comments = reports(repo, n)
     failed = [] if entry else ['the driver log %s could not be written' % LOG]
     if not stopped:
         try:
-            note(repo, n, 'stopped', "the %s driver refused this builder's %s 3 times; the reason is in a comment "
-                                     "here" % (host, command))
+            note(repo, n, 'stopped', "the %s driver refused this %s's %s 3 times; the reason is in a comment "
+                                     "here" % (host, agent, command))
         except Exception as e:
             failed.append(why(e))
     if not comments:
@@ -288,16 +294,16 @@ def report(repo, n, host, command, entry):
                  "%s for #%s." % (LOG, entry, n)) if entry else \
             "they could not be saved to the fleet owner's private driver log, so run the driver by hand to read them."
         try:
-            post.comment(repo, int(n), "%s\n\nThe %s driver refused to %s this ticket's builder 3 times (exit 1: "
-                                       "refused). Its own words are kept off this public ticket: %s"
-                                       % (MARK, host, command, where))
+            post.comment(repo, int(n), "%s\n\nThe %s driver refused to %s this %s's %s 3 times (exit 1: "
+                                       "refused). Its own words are kept off this public %s: %s"
+                                       % (MARK, host, command, item, agent, item, where))
         except Exception as e:
             failed.append(why(e))
     if failed:
         raise post.Stop('; '.join(failed))
 
 
-def clear(repo, n, host, done):
+def clear(repo, n, host, done, skill='build-ticket'):
     """After a success: mark #N's failure comments cleared and follow a stopped fleet note with a done one.
 
     Each write is tried even when another failed, as report()'s are; post.Stop names every failure."""
@@ -311,7 +317,7 @@ def clear(repo, n, host, done):
             failed.append(why(e))
     if stopped:
         try:
-            note(repo, n, 'done', 'the %s driver %s this builder on a later try' % (host, done))
+            note(repo, n, 'done', 'the %s driver %s this %s on a later try' % (host, done, role(skill)[0]))
         except Exception as e:
             failed.append(why(e))
     if failed:
@@ -326,16 +332,16 @@ def attempt(repo, n, host, command, given):
         line = "stopped (%s): the %s driver refused #%s's %s 3 times; next: %s" % (FAILED, host, n, command,
                                                                                 public(refusal.next))
         try:
-            report(repo, n, host, command, logged(repo, n, host, command, refusal))
+            report(repo, n, host, command, logged(repo, n, host, command, refusal), given.get('skill', 'build-ticket'))
         except Exception as e:  # nothing started: the next refusal writes what is missing
             line += "; unknown: the ticket's report is incomplete (%s)" % why(e)
         raise Outcome(line)
 
 
-def cleared(repo, n, host, done):
+def cleared(repo, n, host, done, skill='build-ticket'):
     """clear() after a success is saved: an `unknown: ...` line when it could not, or None."""
     try:
-        clear(repo, n, host, done)
+        clear(repo, n, host, done, skill)
     except Exception as e:  # the run is saved: any failure here only delays the clearing
         return 'unknown: the failure report on #%s was not cleared (%s); the next success clears it' % (n, why(e))
     return None
@@ -437,7 +443,7 @@ def main(argv):
             raise Outcome('unknown: #%s started on %s but its run was not saved; save run %s on host %s for #%s '
                           'privately before anything else' % (n, host, new, host, n))
         print('started #%s on %s' % (n, host))
-        unclear = cleared(repo, n, host, 'started')
+        unclear = cleared(repo, n, host, 'started', skill)
         if unclear:
             print(unclear)
         return 0

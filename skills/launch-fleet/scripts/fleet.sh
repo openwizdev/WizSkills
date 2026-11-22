@@ -1898,7 +1898,7 @@ def ticket_lines_now($s): . as $t
                    ($live | thread) as $th
                    | ([$here[] | kind("review told again") | select(thread == $th)] | max_by(.id)) as $told
                    | fleet_of($s) as $f
-                   | if $th != null and ($live | inherited($f)) then out_of_reach($at; $th; $f; $live)
+                   | if $th != null and ($th | startswith("run:") | not) and ($live | inherited($f)) then out_of_reach($at; $th; $f; $live)
                      elif $th == null then look($p.number; $rs; "\"\($live.r)\" names no thread, so its reviewer can'"'"'t be checked")
                      elif $told == null then
                        (if ($live | age) >= 1800 then "check review \($at): no verdict 30 minutes after \"\($live.r)\"; read thread \($th) and tell it again (its record: comment \($live.id))" else empty end)
@@ -1914,7 +1914,7 @@ def ticket_lines_now($s): . as $t
                    | (if $last == null then "" else " (retry after \"\($last.r)\")" end) as $retry
                    | fleet_of($s) as $f
                    | if refused_lately($last; "review") then empty
-                     elif $first != null and ($first | thread) != null and ($first | inherited($f)) then
+                     elif $first != null and ($first | thread) != null and ($first | thread | startswith("run:") | not) and ($first | inherited($f)) then
                        out_of_reach($at; $first | thread; $f; $first)
                      elif $first != null then "re-check \($at): tell its reviewer, thread \($first | thread)\($retry)"
                      elif ($quiet | length) > 0 then "review \($at): a fresh reviewer\($retry)"

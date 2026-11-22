@@ -4,6 +4,8 @@
 python3 -I skills/launch-fleet/scripts/test-brief.py
 """
 from pathlib import Path
+import runpy
+import shutil
 import subprocess
 import sys
 import unittest
@@ -67,9 +69,6 @@ class Brief(unittest.TestCase):
         self.assertNotIn('same-family review', brief('reviewer', 31, HEAD)[1])
 
     def test_non_cloudroom_review_start_uses_the_installed_harnesses(self):
-        import runpy
-        import shutil
-
         fixture = runpy.run_path(str(HERE / 'test-host.py'))
         section = (HERE.parent / 'references/reviews.md').read_text().partition(
             '### Starting a review through a host driver\n')[2]
@@ -102,7 +101,7 @@ class Brief(unittest.TestCase):
                                        cwd=project.dir / 'repo', env=env, capture_output=True, text=True,
                                        timeout=30)
                 self.assertEqual((start.returncode, start.stdout.strip(), start.stderr),
-                                 (0, 'started #31 on local', ''))
+                                 (0, f'edited {claim_id}\nstarted #31 on local', ''))
                 self.assertEqual(project.calls(), [{'host': 'local', 'command': 'start', 'input': {
                     'repository': repo, 'ticket': 31, 'skill': 'review-ticket', 'harness': reviewer, 'model': model}}])
                 [(record, body)] = project.ticket(31)

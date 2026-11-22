@@ -2,7 +2,7 @@
 """Print one brief the fleet sends, literally (WS8, #1181). Send its output unchanged.
 
   brief.py builder N
-  brief.py reviewer P COMMIT
+  brief.py reviewer P COMMIT [same-family]
   brief.py re-check P COMMIT OLD_HEAD IDS ANSWER     IDS: R1,R2 or none; ANSWER: the builder's comment link or none
   brief.py fresh N P BRANCH COMMIT
   brief.py diagnose
@@ -56,13 +56,19 @@ FORMS = {
 
 
 def main(argv):
+    same_family = len(argv) == 4 and argv[0] == 'reviewer' and argv[3] == 'same-family'
+    if same_family:
+        argv = argv[:3]
     form = FORMS.get(argv[0]) if argv else None
     if form is None or len(argv) - 1 != len(form[0]) \
             or not all(re.fullmatch(p, a) for p, a in zip(form[0], argv[1:])):
         return 2
-    print(form[1].format(*argv[1:], **{k: LOOKUP.format(s=s) for k, s in
-                                       (('b', 'build-ticket'), ('r', 'review-ticket'), ('d', 'diagnose'),
-                                        ('f', 'launch-fleet'))}))
+    brief = form[1].format(*argv[1:], **{k: LOOKUP.format(s=s) for k, s in
+                                     (('b', 'build-ticket'), ('r', 'review-ticket'), ('d', 'diagnose'),
+                                      ('f', 'launch-fleet'))})
+    if same_family:
+        brief += ' Put "same-family review" on the line immediately below the VERDICT header.'
+    print(brief)
     return 0
 
 

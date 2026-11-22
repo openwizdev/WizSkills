@@ -110,7 +110,7 @@ if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'enqueuePul
                or got.get('head') != pr['headRefOid'] or running or not pr['isMergeQueueEnabled'])
     if not refused and kind != 'pending':
         pr.update(isInMergeQueue=True, mergeQueueEntry={'headCommit': {'oid': pr['headRefOid']}},
-                  enqueued={'actor': {'login': world['me']}})
+                  enqueued={'enqueuer': {'login': world['me']}})
     with open(path, 'w') as f:
         json.dump(world, f)
     if refused:
@@ -651,7 +651,7 @@ class Queue(unittest.TestCase):
 
     def test_a_merge_someone_else_enqueued_without_a_receipt_has_nothing_to_settle(self):
         w = World(self, pr=pr(state='MERGED', mergeCommit={'oid': 'c' * 40},
-                              enqueued={'actor': {'login': 'someone-else'}}))
+                              enqueued={'enqueuer': {'login': 'someone-else'}}))
         project(w, PRINTS)
         self.assertEqual(w.run('merge.py', 'settle', REPO, 7, 12, cwd=w.dir / 'project'), (0, 'no queued merge'))
         self.assertEqual(w.writes(), [])

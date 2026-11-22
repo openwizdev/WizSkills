@@ -107,6 +107,8 @@ QUERY = '''query($owner: String!, $name: String!, $number: Int!) {
     closingIssuesReferences(first: 50) { pageInfo { hasNextPage } nodes { number body repository { nameWithOwner } } }
     timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 1) {
       nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } } }
+    enqueued: timelineItems(itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT], last: 1) {
+      nodes { ... on AddedToMergeQueueEvent { enqueuer { login } } } }
     commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 50) { pageInfo { hasNextPage }
       nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } } } } } } } } } }'''
 ENQUEUE = '''mutation($id: ID!, $head: GitObjectID!) {
@@ -394,14 +396,24 @@ def _cost(repo, number, home, ticket, extra):
     return 'cost posted ' + post.comment(home, ticket, body).split()[-1]
 
 
+def enqueued_by_us(repo, p):
+    nodes = ((p or {}).get('enqueued') or {}).get('nodes') or []
+    login = ((nodes[-1] if isinstance(nodes[-1], dict) else {}).get('enqueuer') or {}).get('login') if nodes else None
+    return login is not None and post.ours({'user': {'login': login}}, post.authors(repo))
+
+
 def settle(repo, number, ticket, extra=()):
     found = receipts(repo, number)
     if found:
         told = cost(repo, number, found[-1][0], ticket, extra)
     else:  # a direct merge still owes its landed comment (#127 R1)
         main, p = snapshot(repo, number)
-        merged = where(main, p, (p or {}).get('headRefOid')).startswith('merged ')
-        told = 'no queued merge' + (landed(repo, number, p) if merged else '')
+        head = (p or {}).get('headRefOid')
+        merged = where(main, p, head).startswith('merged ')
+        if merged and enqueued_by_us(repo, p):
+            told = cost(repo, number, head, ticket, extra)
+        else:
+            told = 'no queued merge' + (landed(repo, number, p) if merged else '')
     if '; landed unknown: ' in told:
         raise Stop('unknown: ' + told)
     return told
@@ -671,10 +683,12 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
         return state + '; ' + cost(repo, number, head, ticket, extra)
     if state == 'queued':
         return 'queued; recorded ' + str(receipt('queued; receipt unconfirmed'))
-    if state.startswith('open') and refused:
-        raise Stop(f'not queued: {refused}; nothing was recorded, so run it again next wake')
     if state.startswith('open') and done:
         return 'pending: the merge command succeeded but it still reads open; read it again next wake'
+    if admit.startswith('admit: '):
+        back = f'; it reads back as: {state[6:]}' if state.startswith('stop: ') else ''
+        raise Stop(f"not queued: {refused or 'the enqueue call succeeded'}{back}; "
+                   'nothing was recorded, so run it again next wake')
     blocked(state[6:] if state.startswith('stop: ') else state)
 
 

@@ -158,6 +158,7 @@ def connect_usable(text):
 
 
 SETTINGS = SKILL_DIR.parent / 'setup/scripts/settings.py'
+TICKET_FIELDS = 'number,state,stateReason,closedByPullRequestsReferences,blockedBy,comments'
 OPUS = ('claude-code', 'claude-opus-5-5', 'medium')
 SOL = ('codex', 'gpt-6.2-sol', 'medium')
 
@@ -830,6 +831,42 @@ class Launch(unittest.TestCase):
                      '5 tickets: 3 building, 2 blocked', 'Counts are progress, not a first merge'):
             self.assertIn(line, watch)
         self.assertEqual(stat.S_IMODE(j.state.stat().st_mode), 0o600, 'owner-only state')
+
+    def test_local_progress_reads_github_only_and_never_cloudroom(self):
+        j = Journey(self)
+        j.replay(until='watch')
+        state = json.loads(j.state.read_text())
+        state['host'] = {'agents': 'local', 'harnesses': ['claude-code', 'codex']}
+        j.state.write_text(json.dumps(state))
+        (j.dir / 'bin/room-cli').unlink()
+        note = '<!-- openwiz:status v1 -->\nagent: builder\nstate: working\n'
+        views = {901: ('CLOSED', 'COMPLETED', [1901], [], []), 902: ('OPEN', None, [1902], [], []),
+                 903: ('OPEN', None, [], [], [note]), 904: ('OPEN', None, [], [(901, 'CLOSED'), (903, 'OPEN')], []),
+                 905: ('OPEN', None, [], [(901, 'CLOSED')], [])}
+        answers = {str(n): {'number': n, 'state': s, 'stateReason': why,
+                            'closedByPullRequestsReferences': [{'number': p} for p in pulls],
+                            'blockedBy': {'nodes': [{'number': b, 'state': bs} for b, bs in blockers]},
+                            'comments': [{'body': body, 'author': {'login': 'synthetic-factory[bot]'}}
+                                         for body in bodies]}
+                   for n, (s, why, pulls, blockers, bodies) in views.items()}
+        (j.dir / 'tickets.json').write_text(json.dumps(answers))
+        gh = j.dir / 'bin/gh'
+        gh.write_text(
+            '#!%s -I\nimport json, os, sys\nfrom pathlib import Path\na = sys.argv[1:]\n'
+            "if a[:2] == ['issue', 'view'] and a[3:] == ['--json', '%s']:\n"
+            "    print(json.dumps(json.loads(Path(%r).read_text())[a[2]]))\n    sys.exit(0)\n"
+            "os.execv(%r, [%r, '-I', '-S', %r, *a])\n" % (
+                sys.executable, TICKET_FIELDS, str(j.dir / 'tickets.json'), sys.executable, sys.executable,
+                str(FAKE_GH)))
+        gh.chmod(0o755)
+        before = len(j.logged())
+        result = j.helper(['progress', '--spec', '900'])
+        self.assertEqual(j.logged()[before:], [], 'a local fleet never runs the CloudRoom-backed openwiz fleet')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for line in ('#901 merged', '#902 in_review', '#903 building', '#904 blocked', '#905 ready',
+                     '5 tickets: 1 ready, 1 building, 1 in review, 1 merged, 1 blocked',
+                     'Counts are progress, not a first merge'):
+            self.assertIn(line, result.stdout)
 
     def test_repeat_and_reload_never_start_again(self):
         j = Journey(self)

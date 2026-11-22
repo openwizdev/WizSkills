@@ -43,8 +43,6 @@ class CheckSuites(unittest.TestCase):
         self.assertIn('suite inventory: check/test_synthetic.py: unlisted', out.getvalue())
 
 
-# A synthetic tree: each suite appends its own name to `ran.log`, so a test
-# reads which commands a run executed, in order, from outside run.py.
 SYNTHETIC = {
     'alpha': [['python3', '-I', 'skills/alpha/test_one.py'],
               ['python3', '-I', 'skills/alpha/test_two.py']],

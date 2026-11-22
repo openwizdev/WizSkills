@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -593,7 +594,7 @@ sys.exit(0 if result.wasSuccessful() and not empty else 1)
 """
 
 
-def suites(root):
+def suites(root, names=None):
     covered = set()
     for commands in SUITES.values():
         for command in commands:
@@ -616,6 +617,8 @@ def suites(root):
         print(f'suite inventory: {rel}: unlisted', flush=True)
     failed = bool(unlisted)
     for name, commands in SUITES.items():
+        if names is not None and name not in names:
+            continue
         for command in commands:
             shown = ' '.join(command)
             rel, folder = command_path(command)
@@ -640,13 +643,16 @@ def suites(root):
                     continue
                 argv[-1] = str(target.resolve())
             print(f'suite {name}: {shown}: running', flush=True)
+            started = time.monotonic()
             try:
                 code = subprocess.run(argv, cwd=cwd, env=clean_env()).returncode
             except OSError:
                 print(f'suite {name}: {shown}: cannot start', flush=True)
                 failed = True
                 continue
-            print(f'suite {name}: {shown}: {"pass" if code == 0 else f"fail ({code})"}', flush=True)
+            seconds = time.monotonic() - started
+            print(f'suite {name}: {shown}: {"pass" if code == 0 else f"fail ({code})"} in {seconds:.1f}s',
+                  flush=True)
             failed = failed or code != 0
     return not failed
 
@@ -662,16 +668,48 @@ def standalone(root):
     return code == 0
 
 
+STANDALONE = ['python3', '-I', 'check/standalone.py', '--tree', '.']
+USAGE = 'usage: python3 check/run.py [--list | --shard <name>[,<name>...]]'
+
+
+def shards():
+    return [{'name': 'rules', 'skill': None, 'commands': [], 'env': {}},
+            {'name': 'standalone', 'skill': None, 'commands': [STANDALONE], 'env': {}},
+            *({'name': name, 'skill': name, 'commands': [list(c) for c in commands], 'env': {}}
+              for name, commands in SUITES.items())]
+
+
+def selection(argv):
+    if not argv:
+        return [shard['name'] for shard in shards()]
+    if argv == ['--list']:
+        return None
+    if len(argv) != 2 or argv[0] != '--shard':
+        return USAGE
+    known = [shard['name'] for shard in shards()]
+    wanted = argv[1].split(',')
+    unknown = [name for name in wanted if name not in known]
+    if unknown:
+        return f'unknown shard: {", ".join(repr(name) for name in unknown)} (see --list)'
+    return [name for name in known if name in wanted]
+
+
 def main(argv):
-    if argv:
-        print('usage: python3 check/run.py (no arguments)', file=sys.stderr)
+    selected = selection(argv)
+    if isinstance(selected, str):
+        print(selected, file=sys.stderr)
         return 2
-    findings = rules(ROOT)
-    for rule, file, line, message in findings:
-        print(f'rules: {rule} {file}{f":{line}" if line else ""}: {message}', flush=True)
-    print(f'rules: {"pass" if not findings else f"fail ({len(findings)})"}', flush=True)
-    ok_standalone = standalone(ROOT)
-    ok_suites = suites(ROOT)
+    if selected is None:
+        print(json.dumps(shards(), indent=2))
+        return 0
+    findings = []
+    if 'rules' in selected:
+        findings = rules(ROOT)
+        for rule, file, line, message in findings:
+            print(f'rules: {rule} {file}{f":{line}" if line else ""}: {message}', flush=True)
+        print(f'rules: {"pass" if not findings else f"fail ({len(findings)})"}', flush=True)
+    ok_standalone = standalone(ROOT) if 'standalone' in selected else True
+    ok_suites = suites(ROOT, set(selected))
     ok = not findings and ok_standalone and ok_suites
     print(f'check: {"pass" if ok else "fail"}', flush=True)
     return 0 if ok else 1

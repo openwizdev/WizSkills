@@ -552,7 +552,8 @@ def graphql(w, repo, o, ids, page, answer):
         rollup = None if get(p, 'rollup') is None else {
             'state': get(p, 'rollup'),
             'contexts': context_page(p)}
-        return {'number': get(p, 'number'), 'state': get(p, 'state'), 'isDraft': alt(get(p, 'draft'), False),
+        return {'id': alt(get(p, 'id'), 'PR_%s' % get(p, 'number')),
+                'number': get(p, 'number'), 'state': get(p, 'state'), 'isDraft': alt(get(p, 'draft'), False),
                 'merged': get(p, 'state') == 'MERGED', 'mergedAt': get(p, 'mergedAt'),
                 'closedAt': get(p, 'closedAt'),  # K9 (#337): when a closed one closed
                 'baseRefName': get(p, 'base'), 'headRefOid': get(p, 'head'),

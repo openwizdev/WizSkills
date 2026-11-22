@@ -190,7 +190,7 @@ TICKET='number
         closedByPullRequestsReferences(first: 5, includeClosedPrs: true) {
           pageInfo { hasNextPage }
           nodes {
-            number state isDraft merged mergedAt closedAt baseRefName headRefOid
+            id number state isDraft merged mergedAt closedAt baseRefName headRefOid
             repository { databaseId nameWithOwner }
             commits(last: 1) {
               nodes {
@@ -676,7 +676,7 @@ check_contexts() (
       and .commits.nodes[0].commit.oid == .headRefOid
       and (.commits.nodes[0].commit | has("statusCheckRollup"));
     [.. | objects | select(has("headRefOid") and .state == "OPEN")]
-    | if all(.[]; valid_pr) then group_by([pr_repo($repo), .number])[]
+    | if all(.[]; valid_pr) then group_by([(.id // ""), pr_repo($repo), .number])[]
       | if (map(.headRefOid) | unique | length) == 1
           and (map(.commits.nodes[0].commit.statusCheckRollup) | unique | length) == 1
         then .[0] else error("conflicting PR check snapshots") end
@@ -733,12 +733,12 @@ check_contexts() (
     done
     jq --slurpfile nodes "$source.nodes" --slurpfile page "$source.contexts" \
       '.contexts = $page[0] | .contexts.nodes = $nodes[0]' "$source.rollup" > "$source.complete" || exit 1
-    jq --arg r "$pr_repo" --slurpfile rollup "$source.complete" '{key: "\($r)#\(.number)", rollup: $rollup[0]}' "$source.pr" >> "$source.checks" || exit 1
+    jq --arg r "$pr_repo" --slurpfile rollup "$source.complete" '{key: ([(.id // ""), $r, .number] | tojson), rollup: $rollup[0]}' "$source.pr" >> "$source.checks" || exit 1
   done < "$source.prs"
   jq -s 'map({key, value: .rollup}) | from_entries' "$source.checks" > "$source.rollups" || exit 1
   jq --arg repo "$REPO" --slurpfile r "$source.rollups" "$PR_REPO"'walk(if type == "object" and has("headRefOid")
-      and .state == "OPEN" and $r[0]["\(pr_repo($repo))#\(.number)"] != null
-    then .commits.nodes[0].commit.statusCheckRollup = $r[0]["\(pr_repo($repo))#\(.number)"] else . end)' \
+      and .state == "OPEN" and $r[0][([(.id // ""), pr_repo($repo), .number] | tojson)] != null
+    then .commits.nodes[0].commit.statusCheckRollup = $r[0][([(.id // ""), pr_repo($repo), .number] | tojson)] else . end)' \
     "$source" > "$source.next" && mv "$source.next" "$source"
 )
 hydrate() (

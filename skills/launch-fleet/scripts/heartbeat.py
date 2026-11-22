@@ -22,7 +22,8 @@ WORD = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,119}')
 INTERVAL = 10
 TOOLS_ENV = (
     'PATH', 'OPENWIZ_ADAPTERS', 'OPENWIZ_LOCAL_STATE', 'LAUNCH_FLEET_RUNS', 'GH_CONFIG_DIR',
-    'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME',
+    'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'LAUNCH_FLEET_OVERLOAD_INPUT',
+    'LAUNCH_FLEET_OVERLOAD_STATE', 'LAUNCH_FLEET_OVERLOAD_SUPPLY',
 )
 
 
@@ -31,6 +32,10 @@ class Refused(Exception):
 
 
 class Busy(Refused):
+    pass
+
+
+class Incomplete(Refused):
     pass
 
 
@@ -92,6 +97,17 @@ class Job:
                 raise Refused('the heartbeat line already exists in crontab')
         elif any(path.exists() or path.is_symlink() for path in self.files()):
             raise Refused('a heartbeat scheduler file already exists')
+
+    def activate(self):
+        self.available()
+        try:
+            self.install()
+        except (Refused, OSError, subprocess.TimeoutExpired):
+            try:
+                self.remove()
+            except (Refused, OSError, subprocess.TimeoutExpired) as cleanup:
+                raise Incomplete(f'scheduler cleanup failed ({cleanup}); run remove before retrying') from None
+            raise
 
     def install(self):
         if self.backend == 'cron':
@@ -190,15 +206,23 @@ def install(args, name, state):
     job.preview()
     if not args.yes:
         return
-    job.available()
     settings = {key: os.environ[key] for key in TOOLS_ENV if key in os.environ}
     settings.setdefault('PATH', os.defpath)
     state.mkdir(mode=0o700, parents=True)
     with locked(state):
         config = {'backend': backend, 'folder': str(folder), 'argv': argv, 'cwd': str(Path.cwd()),
                   'harness': args.harness, 'model': args.model, 'environment': settings}
-        (state / 'config.json').write_text(json.dumps(config) + '\n')
-        job.install()
+        paused = state / 'paused'
+        try:
+            paused.touch()
+            (state / 'config.json').write_text(json.dumps(config) + '\n')
+            job.activate()
+        except Incomplete:
+            raise
+        except (Refused, OSError, subprocess.TimeoutExpired):
+            shutil.rmtree(state)
+            raise
+        paused.unlink()
 
 
 def tick(state, config, paused):
@@ -287,13 +311,16 @@ def main():
             raise
     with locked(state):
         config = json.loads(config_path.read_text())
+        job = Job(name, config['argv'], config['backend'], config['folder'])
         if args.action == 'remove':
-            Job(name, config['argv'], config['backend'], config['folder']).remove()
+            job.remove()
             shutil.rmtree(state)
         elif args.action == 'pause':
             status.touch()
-        elif args.action == 'resume':
-            status.unlink(missing_ok=True)
+            job.remove()
+        elif status.exists():
+            job.activate()
+            status.unlink()
     return 0
 
 

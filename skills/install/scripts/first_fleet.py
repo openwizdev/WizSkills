@@ -1950,7 +1950,6 @@ TICKET_FIELDS = 'number,state,stateReason,closedByPullRequestsReferences,blocked
 
 
 def ticket_state(view):
-    """One ticket's progress from its GitHub issue alone: no CloudRoom read."""
     pulls = view['closedByPullRequestsReferences']
     if view['state'] == 'CLOSED':
         return 'merged' if view['stateReason'] == 'COMPLETED' and pulls else 'unknown'
@@ -1967,7 +1966,6 @@ def ticket_state(view):
 
 
 def github_progress(spec, env):
-    """A driver host's progress, read from GitHub only (the CloudRoom-backed `openwiz fleet` is never run)."""
     try:
         _, members = spec_facts(spec, env)
         states = []

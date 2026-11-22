@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -12,6 +13,7 @@ import unittest
 HERE = Path(__file__).resolve().parent
 REPO = 'example/fleet'
 SPEC = '7'
+DUE = 'start #9: synthetic ticket (spec #7)\nreview #10: synthetic review (spec #7)\n'
 
 
 MANAGER = r"""
@@ -148,8 +150,73 @@ class Heartbeat(unittest.TestCase):
         self.assertTrue(current.startswith(original))
         line, = current[len(original):].splitlines()
         self.assertIn(line + '\n', preview)
+        command = line.split(' ', 5)[5].replace(r'\%', '%')
+        ran = subprocess.run(['/bin/sh', '-c', command], env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertEqual((self.home / 'check.log').read_text(), f'{REPO} spec {SPEC}\n')
         self.heartbeat('remove')
         self.assertEqual((self.home / 'crontab').read_text(), original)
+
+    def setup_driver(self):
+        real_git = shutil.which('git')
+        git_env = dict(self.env, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1',
+                       GIT_AUTHOR_NAME='Synthetic', GIT_AUTHOR_EMAIL='tests@example.invalid',
+                       GIT_COMMITTER_NAME='Synthetic', GIT_COMMITTER_EMAIL='tests@example.invalid')
+        for args in [
+            ('init', '-q', '-b', 'main'),
+            ('remote', 'add', 'origin', str(self.checkout)),
+        ]:
+            subprocess.run([real_git, *args], cwd=self.checkout, env=git_env, check=True, capture_output=True)
+        settings = self.checkout / 'docs/agents'
+        settings.mkdir(parents=True)
+        (settings / 'host.md').write_text('Host: local\n')
+        for args in [('add', '.'), ('commit', '-qm', 'fixture')]:
+            subprocess.run([real_git, *args], cwd=self.checkout, env=git_env, check=True, capture_output=True)
+        shutil.copyfile(HERE / 'fixtures/fake_github.py', self.scripts / 'fake_github.py')
+        (self.home / 'world.json').write_text(json.dumps({
+            'repo': REPO, 'me': 'synthetic-owner', 'next_id': 5000, 'comments': {}, 'writes': [], 'faults': {},
+            'fleet_md': '## GitHub identity\n\n| Record authors | `synthetic-owner` |\n',
+        }))
+        self.program(self.bin / 'gh',
+                     f'export FAKE_WORLD="$HOME/world.json"; exec {shlex.quote(sys.executable)} -I '
+                     f'{shlex.quote(str(self.scripts / "fake_github.py"))} "$@"')
+        driver = self.adapters / 'local' / 'driver'
+        driver.parent.mkdir(parents=True)
+        self.program(driver, """[ "$1" = start ] || exit 2
+cat >> "$HOME/driver.log"
+printf '\\n' >> "$HOME/driver.log"
+printf '{"run":"synthetic-run"}\\n'""")
+
+    def test_due_and_idle_ticks(self):
+        self.setup_driver()
+        self.install()
+        self.heartbeat('run', env={'HOME': str(self.home)})
+        self.assertEqual((self.home / 'check.log').read_text().splitlines(), [f'{REPO} spec {SPEC}'])
+        self.assertFalse((self.home / 'driver.log').exists())
+        (self.home / 'due').write_text(DUE)
+        self.heartbeat('run')
+        self.heartbeat('run')
+        expected = {'repository': REPO, 'ticket': 7, 'skill': 'launch-fleet',
+                    'harness': 'codex', 'model': 'synthetic-model'}
+        self.assertEqual([json.loads(line) for line in (self.home / 'driver.log').read_text().splitlines()],
+                         [expected, expected])
+        (self.home / 'check-failure').touch()
+        self.heartbeat('run', expected=2)
+        self.assertEqual(len((self.home / 'driver.log').read_text().splitlines()), 2)
+        log, = self.files('.local/state/openwiz-heartbeat/*/ticks.log')
+        self.assertEqual([line.split(' ', 1)[1] for line in log.read_text().splitlines()],
+                         ['idle', 'started', 'started', 'check failed'])
+
+    def test_pause_and_resume_run_now(self):
+        self.install()
+        self.heartbeat('pause')
+        self.assertIn('paused', self.heartbeat('status'))
+        self.heartbeat('run')
+        self.assertFalse((self.home / 'check.log').exists())
+        self.heartbeat('resume')
+        self.assertIn('active', self.heartbeat('status'))
+        self.heartbeat('run')
+        self.assertEqual((self.home / 'check.log').read_text().splitlines(), [f'{REPO} spec {SPEC}'])
 
 if __name__ == '__main__':
     unittest.main()

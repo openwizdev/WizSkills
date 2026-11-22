@@ -355,10 +355,6 @@ class Cost(unittest.TestCase):
 
 
 
-# CL1 (#2282): without the project's command, the cost line is read from the ticket's agents in private
-# state with `room-cli usage <thread> --json`. FAKE_USAGE maps a thread to how the fake answers it:
-# {"credits": x, "first": hours} (first hour that many hours ago, or "window": the 7-day window's first
-# hour, or "none": no hours), {"fail": 1}, {"raw": text} or {"json": value}; each call is logged.
 ROOM_CLI = r"""import datetime, json, os, sys
 args = sys.argv[1:]
 with open(os.environ['FAKE_USAGE_LOG'], 'a') as f:
@@ -433,14 +429,11 @@ class CostFromAgents(unittest.TestCase):
         return sorted(json.loads(x)[1] for x in log.read_text().splitlines()) if log.exists() else []
 
     def no_id(self, w, out):
-        # catches: a thread id from private state or from room-cli's answer reaching the public line.
         self.assertNotIn(TH, out)
         for body in w.bodies(12) + [json.dumps(x) for x in w.writes()]:
             self.assertNotIn(TH, body)
 
     def test_the_line_carries_the_builders_credits_and_the_reviewers_summed(self):
-        # catches: a reviewer read twice through its claim alias, another ticket's agents counted, a fleet
-        # or sender thread counted as a reviewer, or reviewers not summed.
         w = self.world()
         self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
         self.assertEqual(w.bodies(12), [known('3.5', '3.25', '6.75')])
@@ -450,15 +443,12 @@ class CostFromAgents(unittest.TestCase):
         self.assertEqual(len(w.bodies(12)), 1)
 
     def test_no_command_and_no_state_posts_the_all_unknown_line(self):
-        # catches: no private state read as zero, or the old "no cost command" line kept.
         w = self.world(state=None)
         self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
         self.assertEqual(w.bodies(12), [known('unknown', 'unknown', 'unknown')])
         self.assertEqual(self.reads(w), [])
 
     def test_each_unknown_role_makes_the_total_unknown_never_zero(self):
-        # catches: an unreadable, driver-started or older-than-the-window agent counted as zero, so a
-        # partial sum is posted as the total.
         no_builder = {k: v for k, v in THREADS.items() if k != 'builder:12'}
         no_reviewer = {k: v for k, v in THREADS.items() if not k.startswith('review:7:')}
         bad = lambda answer: dict(USAGE, **{BUILDER: answer})
@@ -497,7 +487,6 @@ class CostFromAgents(unittest.TestCase):
                 self.no_id(w, '')
 
     def test_the_projects_own_command_still_wins(self):
-        # catches: the agents' credits read instead of the project's FM4 command when it is present.
         w = self.world()
         (w.dir / 'project/tools/collector/cost_line.py').write_text(PRINTS)
         self.assertEqual(self.cost(w), (0, 'cost posted 5001'))

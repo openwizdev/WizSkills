@@ -407,8 +407,7 @@ def _cost(repo, number, home, ticket, extra):
 
 
 
-# CL1 (#2282): without the project's command, the ticket's agents' credits from `room-cli usage`.
-USAGE_WINDOW_DAYS = 7  # `room-cli usage THREAD --json` covers the last 7 UTC days, today included
+USAGE_WINDOW_DAYS = 7
 
 
 def _amount(value, unit, places):
@@ -431,8 +430,6 @@ def _cost_line(number, ticket, builder, reviewer):
 
 
 def _usage(thread):
-    """One thread's credits with its subagents, or None when the read fails, is malformed or may not
-    cover the thread's whole life (its first hour is the window's first hour or earlier)."""
     try:
         r = subprocess.run(['room-cli', 'usage', thread, '--json'], capture_output=True, text=True, timeout=60,
                            stdin=subprocess.DEVNULL)
@@ -451,8 +448,6 @@ def _usage(thread):
 
 
 def _agents_line(repo, number, ticket):
-    """The cost line from LAUNCH_FLEET_STATE's builder:<N> and review:<P>:... threads; an unknown role,
-    and then the total, is unknown, never zero."""
     try:
         threads = records.private_state(repo) if os.environ.get('LAUNCH_FLEET_STATE') else None
         runs = records.driver_runs(repo)

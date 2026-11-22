@@ -4,7 +4,7 @@
     write_driver.py begin --state <dir>
     write_driver.py host --state <dir> --host <host> --costly yes|no
     write_driver.py copy --state <dir> --openwiz <checkout> --into <repository folder> --login machine|host
-                        [--key-variable <NAME> | --key-host <registered host>]
+                        [--key-variable <NAME>]
     write_driver.py ticket --host <host> --account <login> --out <folder>
     write_driver.py ask --state <dir> --operation kit|expired-login|host [--step <host step>] --effect <effect>
     write_driver.py reply --state <dir> --file <the user's next message>

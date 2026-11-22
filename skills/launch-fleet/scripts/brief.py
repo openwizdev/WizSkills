@@ -66,7 +66,10 @@ TOKEN = (" GitHub token: run every gh or git command that reaches GitHub through
          "request every time and `--repository` once for each repository you read or write (all of one owner). Inside a run git "
          "reaches GitHub over HTTPS only, never SSH. The helper is your only App-token route: never run "
          "`openwiz github token`, the App-token block in launch-fleet's `references/identity.md`, or any command with "
-         "`OPENWIZ_GITHUB_APP_KEY` in its environment. If it gets no token it says so once on stderr and runs the command as the owner's login: go on. Approvals, "
+         "`OPENWIZ_GITHUB_APP_KEY` in its environment. If it gets no token it says so once on stderr and runs the command as the owner's login: go on. "
+         "Only these gh commands run through the helper: `gh api`, `gh cache`, `gh issue`, `gh label`, `gh pr`, "
+         "`gh release`, `gh repo`, `gh run`, `gh search`, `gh status`, `gh workflow`; it stops any other gh command, "
+         "so run that without the helper. Approvals, "
          "repository settings and pushes that change `.github/workflows/` stay on the owner's login: run those "
          "without the helper.")
 

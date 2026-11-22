@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=908
+CASES=909
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1332,6 +1332,9 @@ withdraw #13: its owned-path bullet "$BTWO" can't be read
 EOF
 expect 'F6 claim: a running bullet naming two repositories withdraws, naming that bullet (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(70; "'"$BTWO"'") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
 withdraw #13: #70's owned-path bullet "$BTWO" can't be read, and #70 is running or claimed first
+EOF
+expect 'F6 claim: an Owned paths section with no bullet withdraws, saying so (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | issue(13; .body = "## Owned paths\n\n`src/page/`\n")' -- claim 13 1301 <<EOF
+withdraw #13: its Owned paths section has no bullet
 EOF
 expect 'needs-info: a new question after the last one was asked' 0 check.json 'issue(12; .labels += ["needs-answer"]) | say(12; 1202; "11:00"; "Which store?") | say(12; 1203; "11:05"; "launch-fleet: asked the orchestrator") | say(12; 1204; "11:30"; "And one more thing?")' -- check <<EOF
 needs-info #12: a question for the orchestrator

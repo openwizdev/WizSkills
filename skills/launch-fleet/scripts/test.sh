@@ -40,6 +40,8 @@ fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
 RUN_FLEET=''   # another fleet.sh for the next `again` case only
+SAME=''
+chain=0 support=0 forced=''
 # The one line a check that exits 0 may print on stderr: what it asked GitHub.
 POINTS='fleet\.sh: used [0-9]+ GitHub points in [0-9]+ questions, [0-9]+ unchanged; ([0-9]+ of [0-9]+ left|no GraphQL read)'
 
@@ -195,7 +197,7 @@ def quiet31: pr31 | pr_say(31; 3101; "10:30"; "launch-fleet: review failed \(sha
   | told31(3102; "11:00"; sha(31); "thr_synrev31");
 '
 
-selected() { case $1 in ${TEST_ONLY:-*}) return 0 ;; *) return 1 ;; esac; }
+selected() { [ -n "$forced" ] && return 0; case $1 in ${TEST_ONLY:-*}) return 0 ;; *) return 1 ;; esac; }
 
 bad() { echo "FAIL $1: $2"; fails=$((fails + 1)); }
 
@@ -282,9 +284,9 @@ expect() {
   name=$1 want_status=$2 fixture=$3 filter=$4
   shift 4
   want_err=$ERR ERR=''
-  if ! selected "$name"; then cat > /dev/null; last=''; return; fi
+  if ! selected "$name"; then chain=0; keep expect "$name" "$want_status" "$fixture" "$filter" "$@"; last=''; return; fi
   take || { cat > /dev/null; last=''; return; }
-  cases=$((cases + 1))
+  cases=$((cases + 1)) chain=0
   last=$tmp/case-$cases run=1
   mkdir "$last" || { bad "$name" "no case folder"; cat > /dev/null; return; }
   cat > "$last/want" || { bad "$name" "can't read the expected output"; return; }
@@ -302,18 +304,49 @@ expect() {
 # folder, with the same cache, on the world the last check read changed by
 # FILTER ("." for none). Stdin is the exact stdout expected; it exits 0.
 again() {
+  want_err=$ERR ERR='' fleet=${RUN_FLEET:-$FLEET} RUN_FLEET='' same=$SAME SAME=''
+  if ! selected "$1"; then
+    if [ "$chain" = 0 ]; then cat > /dev/null; else keep again "$@"; fi
+    return
+  fi
+  [ "$mine" = yes ] || { cat > /dev/null; return; }
+  [ "$chain" = 0 ] || replay
   name=$1 filter=$2
   shift 2
-  want_err=$ERR ERR='' fleet=${RUN_FLEET:-$FLEET} RUN_FLEET=''
-  if ! selected "$name"; then cat > /dev/null; return; fi
-  [ "$mine" = yes ] || { cat > /dev/null; return; }
   cases=$((cases + 1))
   if [ "${run:-0}" = 1 ]; then prev=''; else prev=${run:-0}; fi
   if [ -z "$last" ] || [ ! -s "$last/world$prev.json" ]; then bad "$name" "no check before it"; cat > /dev/null; return; fi
   run=$((run + 1)) want_status=0
-  cat > "$last/want$run" || { bad "$name" "can't read the expected output"; return; }
+  if [ -n "$same" ]; then cp "$last/want$prev" "$last/want$run" < /dev/null; else cat > "$last/want$run"; fi \
+    || { bad "$name" "can't read the expected output"; return; }
   jq "$LIB $filter" "$last/world$prev.json" > "$last/world$run.json" || { bad "$name" "the filter failed"; return; }
   run_case "$fleet" "$run" "$@"
+}
+
+same() { SAME=yes; again "$@" < /dev/null; }
+
+keep() {
+  [ -n "${TEST_ONLY:-}" ] || { cat > /dev/null; return; }
+  chain=$((chain + 1))
+  cat > "$tmp/chain-$chain" || { bad "$2" "can't keep the expected output"; return; }
+  if [ "$1" = expect ]; then kf='' ks=''; else kf=$fleet ks=$same; fi
+  eval "chain_err$chain=\$want_err chain_fleet$chain=\$kf chain_same$chain=\$ks chain_argc$chain=$#"
+  ki=0
+  for a; do ki=$((ki + 1)); eval "chain_${chain}_$ki=\$a"; done
+}
+
+replay() {
+  rn=$chain chain=0 rk=0 forced=yes rw=$want_err rf=$fleet rs=$same
+  while [ "$rk" -lt "$rn" ]; do
+    rk=$((rk + 1))
+    eval "rc=\$chain_argc$rk ERR=\$chain_err$rk RUN_FLEET=\$chain_fleet$rk SAME=\$chain_same$rk"
+    set --
+    ri=0
+    while [ "$ri" -lt "$rc" ]; do ri=$((ri + 1)); eval "set -- \"\$@\" \"\$chain_${rk}_$ri\""; done
+    "$@" < "$tmp/chain-$rk"
+    support=$((support + 1))
+  done
+  forced='' ERR='' RUN_FLEET='' SAME='' want_err=$rw fleet=$rf same=$rs
 }
 
 # run_case FLEET N [VAR=VALUE...] -- ARGS...: one run of FLEET in $last, on
@@ -1203,8 +1236,8 @@ EOF
 expect 'R1: a plain bold wait without a period resumes' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator: **wait for #71** Once it merges, continue.") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check <<EOF
 resume #12: #71 merged; tell its builder, thread thr_syn12 (wait comment 1202)
 EOF
-again 'long form: an orchestrator wait for this repository resumes as #N does (#2096)' 'issue(12; .comments[-1].body |= sub("#71"; "SYNTHETIC-OWNER/synthetic-repo#71"))' -- check < "${last:-/dev/null}/out"
-again 'long form: prose after a wait naming another repository refuses nothing (#2096)' 'issue(12; .comments[-1].body = "Orchestrator: **wait for #71.** It ports other-owner/other-repo#5.")' -- check < "${last:-/dev/null}/out"
+same 'long form: an orchestrator wait for this repository resumes as #N does (#2096)' 'issue(12; .comments[-1].body |= sub("#71"; "SYNTHETIC-OWNER/synthetic-repo#71"))' -- check
+same 'long form: prose after a wait naming another repository refuses nothing (#2096)' 'issue(12; .comments[-1].body = "Orchestrator: **wait for #71.** It ports other-owner/other-repo#5.")' -- check
 expect 'R1: an unknown lead-in is not a wait instruction' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator (PC, ops): **do not wait for #71.**") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check < /dev/null
 expect 'R1: free-form prose alone is not a wait instruction' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator (PC, ops): **yes (Q6).** Once #71 has a verified merge, continue.") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- check < /dev/null
 expect 'R1: a structured record covers a free-form orchestrator answer' 0 check.json 'say(12; 1202; "11:00"; "Orchestrator (PC, ops): **yes (Q6).** Once #71 has a verified merge, continue.") | say(12; 1203; "11:00"; "launch-fleet: waiting for #71") | closed_single(71; "11:30") | merged_pr(72; 71; "11:30"; [])' -- wake 12 <<EOF
@@ -1217,7 +1250,7 @@ EOF
 expect 'stall: a structured wait resumes a standalone builder' 0 check.json 'own_approval(70; 7002; "10:00") | say(70; 7003; "10:01"; "launch-fleet: start checked, thread thr_syn70, branch room/70-link") | say(70; 7004; "11:00"; "launch-fleet: waiting for #11")' -- wake 70 <<EOF
 resume #70: #11 merged; tell its builder, thread thr_syn70 (wait comment 7004)
 EOF
-again 'long form: a waiting record for this repository resumes as #N does (#2096)' 'issue(70; .comments[-1].body = "launch-fleet: waiting for synthetic-owner/Synthetic-Repo#11")' -- wake 70 < "${last:-/dev/null}/out"
+same 'long form: a waiting record for this repository resumes as #N does (#2096)' 'issue(70; .comments[-1].body = "launch-fleet: waiting for synthetic-owner/Synthetic-Repo#11")' -- wake 70
 expect 'stall: an open blocker keeps its builder waiting' 0 check.json "$WAIT12 | $MERGE71 | issue(71; .state = \"OPEN\")" -- check < /dev/null
 expect 'stall: a closed blocker without a merge keeps its builder waiting' 0 check.json "$WAIT12 | closed_single(71; \"11:30\")" -- check < /dev/null
 expect 'stall: a blocker merged to another base keeps its builder waiting' 0 check.json "$WAIT12 | $MERGE71 | pull(72; .base = \"release-1\")" -- check < /dev/null
@@ -1252,7 +1285,7 @@ CLAIM12="$WAIT12 | $MERGE71 | say(12; 1203; \"11:59\"; \"launch-fleet: resume st
 expect 'stall: oldest resume claim may deliver' 0 check.json "$CLAIM12" -- claim 12 1203 <<EOF
 go #12
 EOF
-again 'long form: a resume claim for this repository delivers as #N does (#2096)' 'issue(12; .comments[-1].body |= sub("for #71"; "for synthetic-owner/synthetic-repo#71"))' -- claim 12 1203 < "${last:-/dev/null}/out"
+same 'long form: a resume claim for this repository delivers as #N does (#2096)' 'issue(12; .comments[-1].body |= sub("for #71"; "for synthetic-owner/synthetic-repo#71"))' -- claim 12 1203
 expect 'stall: incomplete spec facts withdraw a resume claim' 0 check.json "$CLAIM12 | reduce range(100; 201) as \$n (.; ticket(\$n; \"Synthetic ticket\"; [\"ready-for-agent\"]; []))" -- claim 12 1203 <<EOF
 withdraw #12: that resume is not due or an older claim holds it
 EOF
@@ -3829,8 +3862,6 @@ if [ -z "${TEST_ONLY:-}" ] || [ "$TEST_ONLY" = o10-release ]; then
   fi
 fi
 
-### A focused run of an `again` case runs the cases it follows (#2131)
-
 if [ -z "${TEST_ONLY:-}" ] || [ "$TEST_ONLY" = focused-again ]; then
   if take; then
     cases=$((cases + 1))
@@ -4093,6 +4124,7 @@ case ${TEST_ONLY:-} in
   'GI2:*') expected=13 ;;
   'CW-G:*') expected=2 ;;
 esac
+cases=$((cases - support))
 [ "$cases" = "$expected" ] || bad 'the selected cases ran' "$cases cases ran, not $expected: is \"$TEST_ONLY\" a case's name?"
 
 echo "$cases cases, $fails failed"

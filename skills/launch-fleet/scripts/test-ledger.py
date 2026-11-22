@@ -199,14 +199,44 @@ class Ledger(unittest.TestCase):
                      {'ticket': '#14', 'pr': 'synthetic-owner/synthetic-skills#9', 'credits': None}],
             'merged': 5, 'known': 2, 'unknown': 3, 'total': 19.75, 'cost_per_merged_pr': 9.88})
 
-    def test_it_writes_nothing(self):
-        w = World(self, MIXED)
-        self.assertEqual(w.run(REPO)[0], 0)
+    def assert_read_only(self, w):
         calls = w.calls()
         self.assertTrue(calls)
         for call in calls:
             self.assertNotIn('--method', call)
             self.assertFalse(any('mutation' in a for a in call), call)
+
+    def test_it_writes_nothing(self):
+        w = World(self, MIXED)
+        self.assertEqual(w.run(REPO)[0], 0)
+        self.assert_read_only(w)
+
+    def test_the_read_only_check_sees_every_write_spelling_and_passes_every_read(self):
+        path = f'repos/{REPO}/issues/10'
+        writes = {'a short -X POST': ['api', '-X', 'POST', path + '/comments', '-f', 'body=x'],
+                  'a joined -XPATCH': ['api', '-XPATCH', path, '-f', 'state=closed'],
+                  'a long --method=DELETE': ['api', '--method=DELETE', path + '/labels/x'],
+                  'a lower-case method': ['api', '--method', 'put', path + '/lock'],
+                  'fields that make gh POST': ['api', path + '/comments', '-f', 'body=x'],
+                  'a long --raw-field=': ['api', path + '/comments', '--raw-field=body=x'],
+                  'a body from --input': ['api', path + '/comments', '--input', '-'],
+                  'a GraphQL mutation': ['api', 'graphql', '-f', 'query=mutation { a: b(input: {}) { c } }'],
+                  'a named mutation in a joined field': ['api', 'graphql', '-Fquery=mutation M { a { b } }'],
+                  'a gh command that writes': ['issue', 'comment', '10', '--body', 'x']}
+        reads = {'a GraphQL query sent with an explicit POST': ['api', 'graphql', '--method', 'POST', '-f',
+                                                                'query=query { viewer { login } }'],
+                 'a shorthand GraphQL query': ['api', 'graphql', '-f', 'query={ viewer { login } }'],
+                 'a REST GET with query fields': ['api', '-X', 'GET', f'repos/{REPO}/issues', '-f', 'state=closed'],
+                 'a plain REST read': ['api', f'repos/{REPO}/contents/docs/agents/fleet.md', '-H', 'Accept: x']}
+        for name, args in {**writes, **reads}.items():
+            with self.subTest(name):
+                w = World(self, MIXED)
+                subprocess.run(['gh', *args], capture_output=True, env=w.env, cwd=w.dir, timeout=60)
+                if name in writes:
+                    with self.assertRaises(AssertionError, msg='a write passed the read-only check'):
+                        self.assert_read_only(w)
+                else:
+                    self.assert_read_only(w)
 
     def test_a_failed_or_partial_read_prints_nothing_and_exits_1(self):
         big = {str(n): closed(known(n, 100 + n, '1'), lead('launch-fleet: archived'), lead('launch-fleet: x'))

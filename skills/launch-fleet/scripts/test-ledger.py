@@ -224,6 +224,14 @@ class Ledger(unittest.TestCase):
         with self.subTest('a missing spec'):
             code, out, _ = World(self, big).run(REPO, '--spec', '99')
             self.assertEqual((code, out), (1, ''))
+        with self.subTest('a comment body that is not text'):
+            odd = dict(big, **{'41': closed({'login': 'synthetic-lead', 'type': 'User', 'body': None})})
+            code, out, _ = World(self, odd).run(REPO)
+            self.assertEqual((code, out), (1, ''))
+        with self.subTest('an issue state it does not know'):
+            odd = dict(big, **{'42': dict(closed(known(42, 142, '1')), state='SYNTHETIC')})
+            code, out, _ = World(self, odd, specs={REPO + '#1': [REPO + '#30', REPO + '#42']}).run(REPO, '--spec', '1')
+            self.assertEqual((code, out), (1, ''))
         with self.subTest('an unreadable cost record'):
             odd = dict(big, **{'40': closed(lead('launch-fleet: cost: something else'))})
             code, out, _ = World(self, odd).run(REPO)

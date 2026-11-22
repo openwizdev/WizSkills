@@ -10,6 +10,7 @@ LINKS = HERE / 'links'
 
 EXIT = {
     'clean-wide': 0,
+    'comment-and-fence-markers': 1,
     'closed-blocker': 0,
     'external-blockers': 0,
     'low-stock': 0,

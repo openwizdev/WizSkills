@@ -5,6 +5,7 @@ The fixtures of the [plan links contract](../../../../contracts/plan-links.v1.md
 | Case | Shows | Checker |
 | --- | --- | --- |
 | `clean-wide` | A contract-first ticket and four tickets on it, all real; a fenced example heading that is not a section | pass |
+| `comment-and-fence-markers` | A comment opener inside a code block and a code fence inside a comment hide nothing; a comment opened after an inline comment on the same line hides its `## Links` | `no_reason` |
 | `real-and-file` | Real and file links; the file links reported, ordered, files joined | pass |
 | `refuse-no-reason` | A section missing a line (for an external blocker), a body with no section, `none` with a blocker | `no_reason` |
 | `refuse-not-a-blocker` | A line naming a ticket that is not a native blocker | `not_a_blocker` |

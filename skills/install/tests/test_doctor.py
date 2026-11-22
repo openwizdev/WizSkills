@@ -763,7 +763,7 @@ class RestartReadsTheSkillsOwnVersion(unittest.TestCase):
         (folder / '.openwiz-skill').write_text(receipt)
         (folder / 'SKILL.md').write_text(body)
 
-    def overwrite(self, version='0.4.0'):
+    def overwrite(self, version='0.4.0', folders=None):
         import re
         tmp, copy, text = self.synthetic_release(version)
         home = tmp / 'home'
@@ -777,7 +777,7 @@ class RestartReadsTheSkillsOwnVersion(unittest.TestCase):
         every = ('"$HOME/.claude/skills" "${CODEX_HOME:-$HOME/.codex}/skills" "$HOME/.cursor/skills" '
                  '"$HOME/.config/opencode/skills" "$HOME/.grok/skills"')
         block = (block.replace('<private temporary folder>', str(tmp / 'work'))
-                      .replace('<version of this skill>', mine).replace('<installed agent folders>', every))
+                      .replace('<version of this skill>', mine).replace('<installed agent folders>', folders or every))
         (tmp / 'work').mkdir()
         env = {'HOME': str(home), 'PATH': '%s:/usr/bin:/bin' % bin_dir}
         return home, lambda: subprocess.run(['sh', '-c', block], env=env, capture_output=True, text=True).stdout
@@ -800,6 +800,26 @@ class RestartReadsTheSkillsOwnVersion(unittest.TestCase):
         self.assertIn('ok: %s' % ours, out.split('\n'))
         self.assertNotIn(str(theirs), ' '.join(l for l in out.split('\n') if l.startswith(('ok:', 'STILL OLD'))))
 
+    def test_a_parent_link_the_installer_refused_is_never_followed(self):
+        home, run = self.overwrite(folders='"$HOME/.claude/skills" "$HOME/.codex/skills"')
+        ours = home / '.claude/skills/install'
+        self.agent_copy(ours, RECEIPT, '---\nname: install\nversion: 0.2.0\n---\n')
+        dotfiles = home.parent / 'dotfiles/codex'
+        self.agent_copy(dotfiles / 'skills/install', RECEIPT, '# kept in the user\'s dotfiles\n')
+        (home / '.codex').symlink_to(dotfiles)
+        out = run()
+        self.assertEqual((dotfiles / 'skills/install/SKILL.md').read_text(), '# kept in the user\'s dotfiles\n')
+        self.assertIn('ok: %s' % ours, out.split('\n'))
+        self.assertEqual([l for l in out.split('\n') if '.codex' in l and l.startswith(('ok:', 'STILL OLD'))], [])
+
+    def test_a_resume_without_installer_results_never_guesses_destinations(self):
+        text = SKILL.read_text()
+        step4 = text[text.index('## 4. '):text.index('## 5. ')]
+        self.assertNotIn('without that output, the five agent folders', step4)
+        self.assertIn('Without this session\'s `install skills` output (a resumed session), run `install skills` '
+                      'again from a fresh clone of the chosen `<tag>` and use its rows; if you can\'t, copy '
+                      'nothing and tell the user', step4)
+
     def test_resume_and_the_restart_name_no_fixed_skill_version(self):
         import re
         text = SKILL.read_text()
@@ -819,6 +839,35 @@ class RemovalStopsTheHeartbeatThenUsesTheInstaller(unittest.TestCase):
         self.assertIn('~/.local/state/openwiz-heartbeat/', removal[:preview])
         self.assertNotIn('there is no remove command', removal)
         self.assertIn('Only for 0.1.0\'s installer, which has no `remove`', removal)
+
+    def test_only_this_install_s_heartbeat_is_listed_for_removal(self):
+        import re, shutil
+        text = SKILL.read_text()
+        removal = text[text.index('## Recovery and removal'):]
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        jobs = tmp / 'home/.local/state/openwiz-heartbeat'
+        for name, repo, spec, adapters in (
+                ('openwiz-heartbeat-a', 'synthetic-owner/first', '7', tmp / ('first/state/service/builds/%s/runtime/adapters' % ('a' * 40))),
+                ('openwiz-heartbeat-b', 'synthetic-owner/second', '8', tmp / ('second/state/service/builds/%s/runtime/adapters' % ('b' * 40))),
+                ('openwiz-heartbeat-c', 'synthetic-owner/third', '9', None)):
+            (jobs / name).mkdir(parents=True)
+            environment = {'OPENWIZ_ADAPTERS': str(adapters)} if adapters else {}
+            (jobs / name / 'config.json').write_text(json.dumps({
+                'backend': 'cron', 'argv': ['python3', '-I', '/shared/launch-fleet/scripts/heartbeat.py', 'run', repo, spec],
+                'environment': environment}))
+        before = sorted(str(p) for p in tmp.rglob('*'))
+        blocks = [b for b in re.findall(r'```sh\n(.*?)```', removal, re.S) if 'openwiz-heartbeat' in b]
+        self.assertEqual(len(blocks), 1)
+        block = blocks[0].replace('<state>', str(tmp / 'first/state')).replace('<root>', str(tmp / 'first'))
+        out = subprocess.run(['sh', '-c', block], env={'HOME': str(tmp / 'home'), 'PATH': '/usr/bin:/bin'},
+                             capture_output=True, text=True).stdout.split('\n')
+        self.assertEqual(sorted(str(p) for p in tmp.rglob('*')), before)
+        self.assertEqual([l.split(' (')[0] for l in out if l], ['this install: synthetic-owner/first 7',
+                                                                'ask first: synthetic-owner/second 8',
+                                                                'ask first: synthetic-owner/third 9'])
+        self.assertIn('Remove only the `this install:` jobs', removal)
+        self.assertIn('touch an `ask first:` job only after the user names it as part of this uninstall', removal)
 
 
 HOST_QUESTION = ("Where should your agents run? This computer (Claude Code or Codex you're signed in to), "

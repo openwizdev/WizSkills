@@ -291,6 +291,9 @@ class Review(unittest.TestCase):
                          (0, f"review full #7 at {HEAD}; ticket {PRODUCT}#41; checks check"), out.stderr)
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7")
         self.assertEqual((out.returncode, out.stdout.strip()), (1, "stop: no Closes line names a ticket"))
+        self.world({}, pr={"body": refs.replace("\n", "\r\n")})
+        out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#41")
+        self.assertEqual(out.stdout.strip(), f"review full #7 at {HEAD}; ticket {PRODUCT}#41; checks check")
         both = "Closes example/skills#9\n" + refs
         self.world({}, pr={"body": both})
         out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#41")
@@ -306,9 +309,11 @@ class Review(unittest.TestCase):
                 self.assertEqual((out.returncode, out.stdout.strip()), (1, stop))
         for bad in ("#41", "example/product", "example/product#0", "example/product#41 "):
             with self.subTest(bad):
+                self.world({}, pr={"body": refs})
                 out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", bad)
                 self.assertEqual((out.returncode, out.stdout), (2, ""))
                 self.assertIn("--ticket must be OWNER/NAME#N", out.stderr)
+                self.assertEqual(self.state()["calls"], [])
 
     def test_missing_or_malformed_record_authors_trust_nobody(self):
         for name, row in {"absent": "", "empty": "| Record authors | |\n",

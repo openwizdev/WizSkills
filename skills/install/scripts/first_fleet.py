@@ -1941,7 +1941,50 @@ def watch(got):
     env = repository(state.value.get('repo'))
     host = (state.value.get('host') or {}).get('agents', 'cloud')
     print(record_line(spec, activation(spec, host, env), host))
+    if host != 'cloud':
+        return github_progress(spec, env)
     return progress(spec, got['--openwiz'], env)
+
+
+TICKET_FIELDS = 'number,state,stateReason,closedByPullRequestsReferences,blockedBy,comments'
+
+
+def ticket_state(view):
+    """One ticket's progress from its GitHub issue alone: no CloudRoom read."""
+    pulls = view['closedByPullRequestsReferences']
+    if view['state'] == 'CLOSED':
+        return 'merged' if view['stateReason'] == 'COMPLETED' and pulls else 'unknown'
+    if pulls:
+        return 'in_review'
+    if any(b['state'] == 'OPEN' for b in view['blockedBy']['nodes']):
+        return 'blocked'
+    for comment in view['comments']:
+        lines = comment['body'].splitlines()
+        if lines[:1] == ['<!-- openwiz:status v1 -->'] and 'agent: builder' in lines and (
+                'state: working' in lines or 'state: asking' in lines):
+            return 'building'
+    return 'ready'
+
+
+def github_progress(spec, env):
+    """A driver host's progress, read from GitHub only (the CloudRoom-backed `openwiz fleet` is never run)."""
+    try:
+        _, members = spec_facts(spec, env)
+        states = []
+        for number in sorted(members):
+            view = gh_json(['issue', 'view', str(number), '--json', TICKET_FIELDS], env, 'ticket #%d' % number)
+            assert view['number'] == number
+            states.append((number, ticket_state(view)))
+    except (Exit, AssertionError, KeyError, TypeError, AttributeError):
+        print('Progress for spec #%d is unreadable right now.' % spec)
+        return 1
+    for number, known in states:
+        print('#%d %s' % (number, known))
+    found = [known for _, known in states]
+    parts = ['%d %s' % (found.count(s), s.replace('_', ' ')) for s in STATES + ('unknown',) if found.count(s)]
+    print('%d tickets: %s' % (len(found), ', '.join(parts) or 'none yet'))
+    print('Counts are progress, not a first merge: a merge counts only when GitHub reads it back.')
+    return 0
 
 
 def progress(spec, program, env):

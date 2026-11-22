@@ -86,7 +86,7 @@ HEARTBEAT = LAUNCH_FLEET / 'scripts/heartbeat.py'
 OPTIONS = {
     'where': ({'--state'}, {'--yes'}, {'--build', '--agents'}),
     'mode': ({'--state'}, set(), {'--mode', '--claude-mode', '--codex-mode'}),
-    'setting': ({'--state'}, {'--yes'}, set()),
+    'setting': ({'--state'}, {'--yes'}, {'--setup-state', '--build'}),
     'grill': ({'--state', '--confirmed'}, set(), set()),
     'first-merge': ({'--state', '--pr'}, set(), set()),
     'continue': ({'--state', '--setup-state'}, {'--explained'}, set()),
@@ -1228,6 +1228,15 @@ def setting(got):
             'Host: local and the %s permission mode, on the default branch' % picked if local
             else 'Host: %s, on the default branch' % name if name else 'no host file, so Cloudroom, the default'))
         return 0
+    brain = None
+    if chosen and not state.value.get('setup'):
+        if not got.get('--setup-state'):
+            raise Exit(5, "Run setting with --setup-state <state>: it first reads that the block's steps ran; "
+                          'nothing written.')
+        pending, brain = connect_pending(got['--setup-state'], state.value)
+        if pending:
+            raise Exit(5, "The block's yes is not applied yet, so there is no brain pull request to add to. %s "
+                          'Nothing written.' % connect_step(pending, state.value))
     # R4: the exact files the pull request carries, from the default branch as it is now.
     want = {}
     if HOST_FILE in writes:
@@ -2289,6 +2298,86 @@ def first_merge(got):
     return 0
 
 
+def setup_value(folder):
+    """The installed setup's owner-only state file, read only; Exit when it is unsafe or unreadable."""
+    path = Path(folder) / 'setup/state.json'
+    try:
+        info = os.lstat(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise Exit(10, "OpenWiz's setup state must be an owner-only file; " + NOTHING)
+        value = strict(path.read_text(encoding='utf-8'))
+        assert value['schema'] == 'openwiz.setup-state.v1' and isinstance(value['operations'], list)
+        return value
+    except FileNotFoundError:
+        return {'operations': []}
+    except (OSError, ValueError, KeyError, TypeError, AssertionError):
+        raise Exit(10, "OpenWiz's setup state is unreadable; " + NOTHING)
+
+
+def init_pull(folder, value):
+    """The brain pull request init's newest applied operation recorded ({'number', 'state'}), or None."""
+    path = Path(folder) / 'setup/init.json'
+    try:
+        info = os.lstat(path)
+        assert stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077
+        journal = strict(path.read_text(encoding='utf-8'))
+        assert journal['schema'] == 'openwiz.init-journal.v1' and isinstance(journal['operations'], dict)
+        for operation in reversed(value['operations']):
+            entry = journal['operations'].get(operation.get('operation_id')) if isinstance(operation, dict) else None
+            if entry is None or operation.get('kind') != 'prepare_project' or operation.get('phase') != 'applied':
+                continue
+            pull = entry['pull']
+            assert set(pull) == {'number', 'state'} and type(pull['number']) is int and pull['number'] > 0
+            assert pull['state'] in ('open', 'merged', 'closed')
+            return pull
+    except (OSError, ValueError, KeyError, TypeError, AssertionError):
+        pass
+    return None
+
+
+CONNECT_STEPS = {
+    'prepare': "Run the block's steps 1 and 2: the service issue, then setup.py prepare --state-dir <state> "
+               '--repository %(repo)s --operator %(operator)s --service-issue <N> --harness %(harness)s --model '
+               '%(model)s --effort %(effort)s%(host)s, its preview then --yes --operation <id>.',
+    'identity': "Run the block's step 3: %(identity)s, its preview then --yes --operation <id>.",
+    'init': "Run the block's step 4: openwiz init --repository %(repo)s --state-dir <state> --json, then "
+            '--yes --operation <id>.',
+}
+
+
+def connect_pending(folder, onboarding):
+    """Connect's first step the block's yes has not applied yet (prepare, identity or init) and None, or None and
+    the verified init result: the brain record with the pull request init proposed it in. Read only (R5)."""
+    repo, chosen, host = onboarding['repo'], onboarding['defaults'], onboarding['host']
+    value = setup_value(folder)
+    project, identity, brain = value.get('project'), value.get('identity'), value.get('brain')
+    same = lambda name: isinstance(name, str) and name.lower() == repo.lower()
+    if not (isinstance(project, dict) and same(project.get('repository'))
+            and project.get('operator') == chosen['operator']
+            and tuple(project.get(k) for k in ('harness', 'model', 'effort')) == (
+                chosen['harness'], chosen['model'], chosen['effort'])
+            and project.get('host', 'cloud') == host['agents']
+            and chosen['service_issue'] in ('new', project.get('service_issue'))):
+        return 'prepare', None
+    if not (isinstance(identity, dict) and same(identity.get('repository'))
+            and identity.get('selected') == chosen['identity']):
+        return 'identity', None
+    pull = init_pull(folder, value)
+    if not (isinstance(brain, dict) and same(brain.get('code_repository'))
+            and isinstance(brain.get('brain_repository'), str) and re.fullmatch(REPOSITORY, brain['brain_repository'])
+            and brain.get('location') in ('in_repository', 'companion')) or pull is None:
+        return 'init', None
+    return None, dict(brain, pull=pull)
+
+
+def connect_step(pending, onboarding):
+    chosen, agents = onboarding['defaults'], onboarding['host']['agents']
+    return CONNECT_STEPS[pending] % dict(
+        chosen, repo=onboarding['repo'], host='' if agents == 'cloud' else ' --host %s' % agents,
+        identity='the OpenWiz GitHub App setup' if chosen['identity'] == 'app' else 'github_login.py skip-app')
+
+
+
 def prepared(folder):
     """The repository setup selected for this onboarding (its prepared project, or
     else its sign-in), read only; None when there is none or it is unreadable."""
@@ -2337,9 +2426,14 @@ def resume(got):
     elif not repo:
         step = ('project', 'Offer the three choices, with ideas.md for anyone without an idea, then choose or '
                 'create its one repository.')
+    elif not value.get('setup') and value.get('defaults') and not folder:
+        step = ('connect', "Run next again with --setup-state <state>: it reads which of the block's steps setup "
+                'has applied.')
+    elif not value.get('setup') and value.get('defaults') and connect_pending(folder, value)[0]:
+        step = ('connect', connect_step(connect_pending(folder, value)[0], value))
     elif not value.get('setup') and value.get('defaults') and host['agents'] == 'local' and not value.get('mode'):
-        step = ('mode', "Once prepare and openwiz init ran on the setup's yes, run mode, explain each permission "
-                'mode as it prints, pick none for the owner, then run mode --mode <their pick>.')
+        step = ('mode', 'Run mode, explain each permission mode as it prints, pick none for the owner, then run '
+                'mode --mode <their pick>.')
     elif not value.get('setup') and value.get('defaults') and setting_.get('state') not in ('opened', 'merged'):
         step = ('setting', "Run setting%s: it adds the settings to the brain's pull request, the one setup pull "
                 'request.' % (' again: its pull request is uncertain' if setting_ else ''))

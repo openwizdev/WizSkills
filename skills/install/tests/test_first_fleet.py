@@ -1820,7 +1820,7 @@ class OneSetupPullRequest(unittest.TestCase):
         return said
 
     def setting(self, j, *more):
-        return j.helper(['setting', *more])
+        return j.helper(['setting', '--setup-state', str(j.setup_dir), '--build', str(j.build), *more])
 
     def test_the_defaults_are_one_block_and_one_yes_records_all_of_them(self):
         j = self.road()

@@ -52,6 +52,37 @@ if [ -f "$HOME/check-failure" ]; then exit 2; fi
 """
 
 
+DRIVER = r"""
+import json
+from pathlib import Path
+import sys
+
+home = Path.home()
+action = sys.argv[1]
+request = json.load(sys.stdin)
+log = home / 'driver.log'
+previous = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+with log.open('a') as stream:
+    print(json.dumps([action, request]), file=stream)
+mode = (home / 'wake-mode').read_text() if (home / 'wake-mode').exists() else ''
+if action == 'start':
+    number = 1 + sum(kind == 'start' for kind, _ in previous)
+    print(json.dumps({'run': f'synthetic-run-{number}'}))
+elif mode == 'unknown':
+    print(json.dumps({'error': 'no run ' + request['run'], 'next': 'check the saved run'}))
+    sys.exit(1)
+elif action == 'wake' and mode == 'stopped':
+    print(json.dumps({'error': 'run ' + request['run'] + ' is stopped', 'next': 'start a new run'}))
+    sys.exit(1)
+elif action == 'wake' and mode == 'ambiguous':
+    sys.exit(2)
+elif action in ('wake', 'stop'):
+    print(json.dumps(dict(request, **{'woke' if action == 'wake' else 'stopped': True})))
+else:
+    sys.exit(2)
+"""
+
+
 class Heartbeat(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory(prefix='heartbeat proof ')
@@ -196,10 +227,10 @@ class Heartbeat(unittest.TestCase):
                      f'{shlex.quote(str(self.scripts / "fake_github.py"))} "$@"')
         driver = self.adapters / 'local' / 'driver'
         driver.parent.mkdir(parents=True)
-        self.program(driver, """[ "$1" = start ] || exit 2
-cat >> "$HOME/driver.log"
-printf '\\n' >> "$HOME/driver.log"
-printf '{"run":"synthetic-run"}\\n'""")
+        self.program(driver, f'exec {shlex.quote(sys.executable)} -I -c {shlex.quote(DRIVER)} "$@"')
+
+    def driver_calls(self):
+        return [json.loads(line) for line in (self.home / 'driver.log').read_text().splitlines()]
 
     def test_due_and_idle_ticks(self):
         self.setup_driver()
@@ -212,14 +243,52 @@ printf '{"run":"synthetic-run"}\\n'""")
         self.heartbeat('run')
         expected = {'repository': REPO, 'ticket': 7, 'skill': 'launch-fleet',
                     'harness': 'codex', 'model': 'synthetic-model'}
-        self.assertEqual([json.loads(line) for line in (self.home / 'driver.log').read_text().splitlines()],
-                         [expected, expected])
+        wake = ['wake', {'run': 'synthetic-run-1'}]
+        self.assertEqual(self.driver_calls(), [['start', expected], wake])
         (self.home / 'check-failure').touch()
         self.heartbeat('run', expected=2)
-        self.assertEqual(len((self.home / 'driver.log').read_text().splitlines()), 2)
+        self.assertEqual(self.driver_calls(), [['start', expected], wake])
         log, = self.files('.local/state/openwiz-heartbeat/*/ticks.log')
         self.assertEqual([line.split(' ', 1)[1] for line in log.read_text().splitlines()],
-                         ['idle', 'started', 'started', 'check failed'])
+                         ['idle', 'started', 'woke', 'check failed'])
+        self.heartbeat('remove')
+        self.assertEqual(self.driver_calls(), [['start', expected], wake, ['stop', {'run': 'synthetic-run-1'}]])
+
+    def test_terminal_refusals_replace_the_run_without_losing_ids(self):
+        self.setup_driver()
+        self.install()
+        (self.home / 'due').write_text(DUE)
+        self.heartbeat('run')
+        mode = self.home / 'wake-mode'
+        mode.write_text('stopped')
+        self.heartbeat('run')
+        mode.write_text('unknown')
+        self.heartbeat('run')
+        mode.unlink()
+        self.heartbeat('run')
+        calls = self.driver_calls()
+        self.assertEqual([kind for kind, _ in calls],
+                         ['start', 'wake', 'wake', 'wake', 'stop', 'start',
+                          'wake', 'wake', 'wake', 'stop', 'start', 'wake'])
+        self.assertEqual([record['run'] for kind, record in calls if kind != 'start'],
+                         ['synthetic-run-1'] * 4 + ['synthetic-run-2'] * 4 + ['synthetic-run-3'])
+        saved_ids = {row['run'] for path in self.files('.local/state/openwiz-heartbeat/**/*.json')
+                     for row in json.loads(path.read_text()).get('runs', {}).values()}
+        self.assertEqual(saved_ids, {'synthetic-run-1', 'synthetic-run-2', 'synthetic-run-3'})
+
+    def test_ambiguous_wake_keeps_the_existing_run(self):
+        self.setup_driver()
+        self.install()
+        (self.home / 'due').write_text(DUE)
+        self.heartbeat('run')
+        mode = self.home / 'wake-mode'
+        mode.write_text('ambiguous')
+        self.heartbeat('run', expected=1)
+        mode.unlink()
+        self.heartbeat('run')
+        calls = self.driver_calls()
+        self.assertEqual([kind for kind, _ in calls], ['start', 'wake', 'wake'])
+        self.assertEqual([record['run'] for kind, record in calls if kind == 'wake'], ['synthetic-run-1'] * 2)
 
     def test_check_uses_driver_routes_without_cloudroom_probe(self):
         self.program(self.bin / 'room-cli', """printf '%s\n' "$*" >> "$HOME/room-cli.log"

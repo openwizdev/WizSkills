@@ -61,8 +61,8 @@ FILES = {
 
 def skill_steps():
     """The journey's step names, in order, from the packaged skill's numbered sections."""
-    explain, _, branch = SKILL.read_text().partition('## 5. The onboarding road\n')
-    names = re.findall(r'^## 4\. (Teach)$', explain, re.M)
+    explain, _, branch = SKILL.read_text().partition('## 6. First fleet\n')
+    names = ['teach'] if re.search(r'^## 5\. Explain$', explain, re.M) else []
     names.extend(re.findall(r'^### [0-9]+\. (.+)$', branch.partition('\n## ')[0], re.M))
     return [name.split()[-1].lower() for name in names]
 

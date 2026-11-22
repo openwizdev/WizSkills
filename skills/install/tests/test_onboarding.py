@@ -177,16 +177,20 @@ class Conversation(unittest.TestCase):
     """The packaged skill and the recorded roads, read as conversations."""
 
     def test_the_skill_says_each_moment_in_order_and_asks_no_plan_approval(self):
-        # catches: the skill dropping a moment's line, the three choices or the grill's yes, or keeping a plan approval
         text = (SKILL_DIR / 'SKILL.md').read_text()
-        headings = ['Up front', 'Install done', 'Where agents run', 'The grill', 'The spec and its video',
-                    'The fleet starting', 'A pull request opened', 'Reviewed', 'Merged', 'The closing offer']
-        at = [text.find('**%s**' % h) for h in headings]
-        self.assertNotIn(-1, at, dict(zip(headings, at)))
-        self.assertEqual(at, sorted(at))
-        for words in ('ideas.md', 'teach.md', 'grill --confirmed', 'first-merge'):
-            self.assertIn(words, text)
-        self.assertNotRegex(text, r'(?i)exact-plan approval|approve the plan|demo repository \(recommended\)')
+        at = text.index('## 6. First fleet')
+        explain = text[text.index('## 5. Explain'):at]
+        self.assertIn('Done when the user has seen it.', explain)
+        road = text[at:text.index('## Doctor', at)]
+        headings = ['The grill', 'The spec and its video', 'The fleet starting',
+                    'A pull request opened', 'Reviewed', 'Merged', 'The closing offer']
+        positions = [road.find('**%s**' % h) for h in headings]
+        self.assertNotIn(-1, positions, dict(zip(headings, positions)))
+        self.assertEqual(positions, sorted(positions))
+        for words in ('ideas.md', 'teach.md', 'grill --confirmed', 'first-merge', 'small change',
+                      'fresh project', "they've always wanted"):
+            self.assertIn(words, road)
+        self.assertNotRegex(road, r'(?i)exact-plan approval|approve the plan|demo repository \(recommended\)')
 
     def test_the_owner_steers_through_the_orchestrator_never_by_video_comment(self):
         # catches: the road teaching the owner to steer by commenting on the spec's video, which steers nothing

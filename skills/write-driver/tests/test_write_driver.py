@@ -902,5 +902,107 @@ class NoCredential(Base):
         self.assertEqual(oct((self.state / 'run.json').stat().st_mode & 0o777), '0o600')
 
 
+def key_host_lines():
+    """SKILL.md's key-host lines: the paragraph that opens `**A key host.**`, to the next numbered step."""
+    skill = (SCRIPT.parents[1] / 'SKILL.md').read_text()
+    start = skill.find('**A key host.**')
+    if start < 0:
+        return ''  # no key-host lines: each test then fails at its own assertion
+    end = skill.find('\n3. ', start)
+    return ' '.join(skill[start:end if end > 0 else None].split())
+
+
+class KeyHost(unittest.TestCase):
+    """The key-host lines (driver v1 N4, openwizdev/OpenWiz#2379's helper) and a driver written by them."""
+
+    def test_a_key_host_driver_calls_only_the_helper_with_a_method_and_a_path(self):
+        # catches: a skill that lets the agent call the host's API itself, or send the helper more than the
+        # request (a key, a header, an address), so the driver handles the key or chooses where it goes
+        text = key_host_lines()
+        for words in ('`python3 -I kernel/driver-kit/hostkey.py`', 'every call to the host\'s API',
+                      'exactly `host`, `method` (`GET`, `POST` or `DELETE`), `path` and an optional `body`',
+                      'exactly `status` and `body`', 'never a key, a header or an address'):
+            self.assertIn(words, text)
+
+    def test_adding_a_key_host_is_one_reviewed_row_in_the_registry(self):
+        # catches: a skill that tells the user to point the helper at their host themselves, or to edit the
+        # registry in their own copy, instead of one reviewed row through OpenWiz
+        text = key_host_lines()
+        self.assertIn('one reviewed row in `kernel/driver-kit/hosts.json`', text)
+        self.assertIn('through an issue or pull request on openwizdev/OpenWiz', text)
+
+    def test_the_key_stays_with_the_user_and_the_driver_never_sees_it(self):
+        # catches: a skill that says where the key goes but not that it stays the user's, or that has the agent
+        # handle it on the way
+        text = key_host_lines()
+        self.assertIn("in the user's system keychain or in an environment variable they set", text)
+        self.assertIn('the driver never sees it', text)
+        self.assertIn("the kit's token check covers the key", text)
+
+    def test_the_key_host_lines_never_ask_for_read_or_pass_a_key(self):
+        # catches (W1): key-host lines that have the agent set, export, store or look up the key, which the
+        # guard forbids, or that drop the guard
+        text = key_host_lines()
+        self.assertIn('ask for, read, print, store or pass the key', text)
+        for tool in ('export ', 'secret-tool', 'security ', 'DEVIN_API_KEY', '=<'):
+            self.assertNotIn(tool, text)
+        skill = (SCRIPT.parents[1] / 'SKILL.md').read_text()
+        self.assertIn('- **Never a login or key.** Never ask for, read, print, store or pass a login, token, key, '
+                      'password, secret or cookie', skill)
+
+    def test_a_host_that_cannot_wake_or_stop_the_same_run_ends_in_a_plain_no(self):
+        # catches: a skill that writes a start-only driver for a key host, which no kit run can pass
+        text = key_host_lines()
+        self.assertIn("can't wake the same run or stop it gets no driver", text)
+        self.assertIn('say so plainly, run `$W stop-all`, and stop', text)
+
+    def test_the_sample_key_host_driver_names_no_key_and_reaches_the_host_only_through_the_helper(self):
+        # catches: a sample driver that reads the key, calls the keychain or opens its own connection
+        driver = (FIXTURES / 'key-host' / 'driver').read_text()
+        self.assertIn("'kernel', 'driver-kit', 'hostkey.py'", driver)
+        self.assertIn("{'host': HOST, 'method': method, 'path': path}", driver)
+        for word in ('DEVIN_API_KEY', 'openwiz-devin', 'secret-tool', 'security', 'urllib', 'http.client',
+                     'socket', 'Authorization', 'environ'):
+            self.assertNotIn(word, driver)
+
+    @unittest.skipUnless(os.environ.get('WRITE_DRIVER_OPENWIZ'),
+                         'set WRITE_DRIVER_OPENWIZ to an OpenWiz checkout with the key helper to run the real kit')
+    def test_the_sample_key_host_driver_passes_the_real_kit_on_a_fake_host(self):
+        # catches: lines that teach a driver the real kit (openwizdev/OpenWiz#2379) fails: a helper it can't
+        # find, a call outside the helper, or a README naming the key's variable on its own line
+        import importlib.machinery
+        import importlib.util
+        openwiz = Path(os.environ['WRITE_DRIVER_OPENWIZ']).resolve()
+        tmp = Path(tempfile.mkdtemp(prefix='write-driver-key-host-'))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        tree = tmp / 'openwiz'
+        shutil.copytree(openwiz / 'kernel', tree / 'kernel')
+        shutil.copytree(openwiz / 'adapters' / 'template', tree / 'adapters' / 'template')
+        shutil.copytree(FIXTURES / 'key-host', tree / 'adapters' / 'devin')
+        shutil.copy(tree / 'adapters' / 'template' / 'schema.json', tree / 'adapters' / 'devin' / 'schema.json')
+        kits = tree / 'kernel' / 'driver-kit'
+
+        def module(path):
+            spec = importlib.util.spec_from_loader(path.name, importlib.machinery.SourceFileLoader(path.name, str(path)))
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+            return m
+        tests = module(kits / 'test_kit.py')
+        host = module(kits / 'kit.py').FakeHost()
+        self.addCleanup(host.close)
+        env = {k: v for k, v in os.environ.items() if k not in ('OPENWIZ_GITHUB_APP_KEY', 'DEVIN_API_KEY')}
+        ticket = tests.tracker(str(tmp))
+        env.update(KIT_TRACKER=ticket, OPENWIZ_TEMPLATE_STATE=str(tmp / 'state'), PATH=str(kits / 'fixtures') + os.pathsep + env['PATH'],
+                   OPENWIZ_HOSTKEY_TEST_KEY='synthetic-canary-0123456789abcdef', OPENWIZ_HOSTKEY_TEST_ORIGIN=host.origin)
+        p = subprocess.run([sys.executable, '-I', str(kits / 'kit.py'), '--driver', str(tree / 'adapters' / 'devin' /
+                            'driver'), '--repo', 'example/site', '--ticket', '7', '--harness', 'fake-harness', '--model',
+                            'Synthetic 1', '--tracker', ticket, '--wait', '8'],
+                           env=env, capture_output=True, text=True, timeout=300)
+        print(p.stdout, end='')
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn('the devin key reached its host only from the key helper, in its header', p.stdout)
+        self.assertTrue(host.requests, 'the driver never reached the fake host')
+
+
 if __name__ == '__main__':
     unittest.main()

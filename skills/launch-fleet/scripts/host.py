@@ -98,9 +98,7 @@ ROSTER_HEADER = ['Name', 'Kind', 'Driver', 'Roles', 'Writes as']
 KINDS = ('harness', 'host', 'bot')
 ROLES = ('orchestrator', 'builder', 'reviewer', 'helper')
 SKILL_ROLES = {'build-ticket': 'builder', 'review-ticket': 'reviewer', 'launch-fleet': 'orchestrator'}
-# With no Roster, a start's token requester names its skill's role as the briefs do (#2263); any other skill
-# asks as builder-<N>, as before.
-SKILL_LABELS = {'review-ticket': 'reviewer', 'launch-fleet': 'fleet'}
+NO_ROSTER_REQUESTERS = {'review-ticket': 'reviewer', 'launch-fleet': 'fleet'}
 HARNESS_NAMES = {'claude-code': 'Claude Code', 'codex': 'Codex'}
 ENTRY = re.compile(r'(?=.{1,40}$)[A-Za-z0-9](?:[A-Za-z0-9._-]| (?! ))*(?<=[A-Za-z0-9])')
 LOGIN = re.compile(r'[A-Za-z0-9]+(-[A-Za-z0-9]+)*')
@@ -581,8 +579,8 @@ def load(repo):
             and isinstance(value['runs'], dict)
             and all(TICKET.fullmatch(k) and isinstance(v, dict)
                     and {'host', 'run'} <= set(v) <= {'host', 'requester', 'role', 'run', 'stopped'}
-                    and not {'requester', 'role'} <= set(v)
-                    and v.get('requester', 'reviewer-' + k) in ('%s-%s' % (r, k) for r in SKILL_LABELS.values())
+                    and ('requester' not in v or 'role' not in v and v['requester'] in
+                         ['%s-%s' % (label, k) for label in NO_ROSTER_REQUESTERS.values()])
                     and v.get('stopped', True) is True
                     and v.get('role', 'builder') in ROLES
                     and isinstance(v['host'], str) and NAME.fullmatch(v['host'])
@@ -652,10 +650,10 @@ def main(argv):
             role, picked = roster_start(text, entries, repo, n, argv[3], argv[4], skill)
     elif run:
         role = run.get('role')
-    requester = (run or {}).get('requester') if kind != 'start' else None
-    if requester is None:
-        label = SKILL_LABELS.get(skill, 'builder') if kind == 'start' else 'builder'
-        requester = '%s-%s' % (role or label, n)
+    if kind == 'start':
+        requester = '%s-%s' % (role or NO_ROSTER_REQUESTERS.get(skill, 'builder'), n)
+    else:
+        requester = (run or {}).get('requester') or '%s-%s' % (role or 'builder', n)
     if configured() and kind != 'start':
         DRIVER_ENV = builder_env(repo, n, requester)
     live = 'refused: #%s already has a run on %s; wake or stop it instead'
@@ -677,7 +675,7 @@ def main(argv):
             if runs.get(n) != run:  # another start saved a run for #N meanwhile
                 raise Outcome('unknown: #%s got a second run, %s on %s; stop one of them' % (n, new, host))
             runs[n] = dict({'host': host, 'run': new}, **({'role': role} if picked else
-                                                          {'requester': requester} if skill in SKILL_LABELS else {}))
+                                                          {'requester': requester} if skill in NO_ROSTER_REQUESTERS else {}))
         if not record(repo, add):
             raise Outcome('unknown: #%s started on %s but its run was not saved; save run %s on host %s for #%s '
                           'privately before anything else' % (n, host, new, host, n))

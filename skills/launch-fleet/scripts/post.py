@@ -44,7 +44,7 @@ def authors(repo):
     try:
         text = gitread.show(repo, 'docs/agents/fleet.md')
     except gitread.Error:
-        text = None  # unread is never authors: the refusal below
+        text = None
     try:
         return grants.record_authors(text or '')
     except ValueError:

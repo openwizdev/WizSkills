@@ -19,7 +19,6 @@ FIX = HERE.parent / 'test/ops-starts'
 PROJECT = FIX / 'project'
 
 
-# Any gh call fails and is logged: fleet.md comes from git (gitread.py), never a `contents` read.
 FAKE_GH = """import os, sys
 with open(os.environ['FAKE_GH_LOG'], 'a') as log:
     log.write(' '.join(sys.argv[1:]) + '\\n')
@@ -30,7 +29,6 @@ STALE = 'This checkout is stale: never read it.\n'
 
 
 def serve(tmp, env, repo, default_branch):
-    """A synthetic GitHub origin for repo whose default branch holds default_branch as fleet.md (absent on None)."""
     import shutil
     import subprocess
     origins = tmp / 'origins'
@@ -695,7 +693,7 @@ class ModelsTable(unittest.TestCase):
                                    '| Reviewer', '`--provider claude-code --model claude-sonnet-5-5 '
                                    '--reasoning-level low` |\n| Reviewer', 1)
         self.assertNotEqual(changed, self.one)
-        read = []  # no gh call at all: fleet.md comes from git
+        read = []
         with tempfile.TemporaryDirectory() as tmp:
             run, calls = run_cli(tmp, changed, 'flags', '--repo', 'synthetic/ops', 'builder', checkout=self.one)
             self.assertEqual((run.returncode, run.stdout, calls),

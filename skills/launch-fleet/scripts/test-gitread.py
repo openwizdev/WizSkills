@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""FR6 (#2623) proofs: gitread.py reads default-branch files from a fetched git cache, never the API.
-
-A local bare repository stands in for GitHub: git's own `url.<base>.insteadOf`
-points https://github.com/ at it, so gitread.py runs unchanged. A fake `gh` on
-PATH fails and logs every call, so any API read shows up. Synthetic data only.
-"""
 import importlib.util
 import os
 from pathlib import Path
@@ -37,7 +31,6 @@ def attempt(read, *args):
 
 
 class Origin:
-    """A synthetic GitHub: bare repositories under <tmp>/origins, edited through a work tree."""
 
     def __init__(self, test):
         self.tmp = Path(tempfile.mkdtemp())
@@ -100,7 +93,7 @@ class GitRead(unittest.TestCase):
         self.assertEqual(self.o.read()[0], 0)
         self.o.commit({'docs/agents/fleet.md': 'moved on\n'})
         self.assertEqual(self.o.read(), (0, FLEET_MD, ''))
-        shutil.rmtree(self.o.bare)  # no origin at all: any fetch would fail
+        shutil.rmtree(self.o.bare)
         self.assertEqual(self.o.read(), (0, FLEET_MD, ''))
         self.assertEqual(self.o.gh_calls(), [])
 
@@ -141,7 +134,7 @@ class GitRead(unittest.TestCase):
         self.assertIn('not a verified cache', err)
         self.o.git(None, '--git-dir', str(cache), 'config', 'gitread.repo', REPO)
         stamp = (cache / 'gitread-fetched').read_text().split()[0]
-        (cache / 'gitread-fetched').write_text(f'{stamp} {"0" * 40}\n')  # a fresh stamp naming no cached commit
+        (cache / 'gitread-fetched').write_text(f'{stamp} {"0" * 40}\n')
         code, out, err = self.o.read()
         self.assertEqual((code, out), (2, ''))
         self.assertIn('does not hold', err)
@@ -149,6 +142,11 @@ class GitRead(unittest.TestCase):
         cache.mkdir()
         code, out, _ = self.o.read()
         self.assertEqual((code, out), (2, ''))
+        shutil.rmtree(self.o.tmp / 'cache')
+        (self.o.tmp / 'cache').write_text('not a folder\n')
+        code, out, err = self.o.read()
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('could not use the cache', err)
 
     def test_bad_arguments_are_refused(self):
         for args in (('show', REPO), ('cat', REPO, 'x'), ('show', '../x', 'x'),
@@ -160,7 +158,6 @@ class GitRead(unittest.TestCase):
 
 
 class NoContentsReads(unittest.TestCase):
-    """post.py's authors and ops-starts.py's read_fleet read fleet.md through git; any `contents` read fails."""
 
     def setUp(self):
         self.o = Origin(self)

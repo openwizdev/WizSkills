@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""FR6 (#2623): read a file at the tip of a repository's default branch from git, not the API.
-
-python3 -I gitread.py show OWNER/NAME PATH [--max-age SECONDS]
-
-Prints PATH as it is at the tip of OWNER/NAME's default branch. One bare cache per
-repository lives under ${XDG_CACHE_HOME:-~/.cache}/launch-fleet/git/; it fetches the
-default branch (`git fetch --depth 1`) at most once per --max-age seconds (60 by
-default) and reads with `git show`. A fetch costs no REST allowance; this never runs
-`gh`. Fail closed: a failed fetch, a missing path or a cache it can't verify is exit 2
-with the reason on stderr, never empty text or a copy older than --max-age.
-
-Importable: `gitread.show(repo, path, max_age=60)` returns the text or raises
-gitread.Error. Origin is https://github.com/OWNER/NAME.git, so git's own
-`url.<base>.insteadOf` config (and credential helper) applies.
-"""
 import fcntl
 import os
 from pathlib import Path
@@ -26,7 +11,8 @@ sys.dont_write_bytecode = True
 REPO = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
 SHA = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
 MAX_AGE = 60
-STAMP = 'gitread-fetched'  # "<epoch seconds> <commit>" of the last good fetch, inside the bare cache
+STAMP = 'gitread-fetched'
+USAGE = 'gitread: usage: gitread.py show OWNER/NAME PATH [--max-age SECONDS]'
 
 
 class Error(Exception):
@@ -48,7 +34,6 @@ def git(cache, *args):
 
 
 def verified(cache, repo):
-    """The cache exists and is the bare cache of exactly this repository, or Error."""
     run = git(cache, 'config', '--get', 'gitread.repo')
     if run.returncode != 0 or run.stdout.decode(errors='replace').strip() != repo:
         raise Error(f'cache {cache} is not a verified cache of {repo}; remove it to start afresh')
@@ -58,7 +43,6 @@ def verified(cache, repo):
 
 
 def stamp(cache):
-    """(fetched_at, commit) of the last good fetch, or None when absent or unreadable."""
     try:
         when, commit = (cache / STAMP).read_text().split()
         when = float(when)
@@ -78,7 +62,6 @@ def fetch(cache, repo):
     commit = run.stdout.decode(errors='replace').strip()
     if run.returncode != 0 or not SHA.fullmatch(commit):
         raise Error(f'the fetch of {repo} named no commit')
-    # Keep the commit reachable from a ref so a later gc never drops what the stamp names.
     if git(cache, 'update-ref', 'refs/gitread/tip', commit).returncode != 0:
         raise Error(f'could not record the fetched tip of {repo}')
     tmp = cache / (STAMP + '.tmp')
@@ -88,6 +71,13 @@ def fetch(cache, repo):
 
 
 def show(repo, path, max_age=MAX_AGE):
+    try:
+        return locked_show(repo, path, max_age)
+    except OSError as error:
+        raise Error(f'could not use the cache for {repo}: {error}')
+
+
+def locked_show(repo, path, max_age):
     if type(repo) is not str or not REPO.fullmatch(repo) or repo.split('/')[1] in ('.', '..'):
         raise Error(f'not a repository: {repo!r}')
     if (type(path) is not str or not path or path.startswith('/') or '\n' in path or '\0' in path
@@ -97,11 +87,8 @@ def show(repo, path, max_age=MAX_AGE):
         raise Error(f'not a max age: {max_age!r}')
     owner, name = repo.split('/')
     cache = cache_root() / owner / (name + '.git')
-    try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        lock = open(cache.parent / (name + '.lock'), 'w')
-    except OSError as error:
-        raise Error(f'could not open the cache for {repo}: {error}')
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    lock = open(cache.parent / (name + '.lock'), 'w')
     with lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not cache.exists():
@@ -138,10 +125,10 @@ def main(argv):
             max_age = -1
         del args[at:at + 2]
         if max_age < 0 or '--max-age' in args:
-            print('gitread: usage: gitread.py show OWNER/NAME PATH [--max-age SECONDS]', file=sys.stderr)
+            print(USAGE, file=sys.stderr)
             return 2
     if len(args) != 3 or args[0] != 'show':
-        print('gitread: usage: gitread.py show OWNER/NAME PATH [--max-age SECONDS]', file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     try:
         text = show(args[1], args[2], max_age)

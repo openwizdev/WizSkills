@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import runpy
 from pathlib import Path
 import subprocess
 import sys
@@ -160,6 +161,7 @@ class World:
         self.log.write_text('')
         self.env = dict(os.environ, PATH='%s:%s' % (self.dir / 'bin', os.environ['PATH']),
                         FAKE_WORLD=str(self.dir / 'world.json'), FAKE_LOG=str(self.log))
+        self.env.update(runpy.run_path(str(HERE / 'fixtures/git_origin.py'))['env'](self.dir, {REPO: fleet}))
 
     def run(self, *args):
         r = subprocess.run([sys.executable, '-I', str(LEDGER), *args], capture_output=True, text=True,

@@ -66,7 +66,11 @@ export GH_REPO
 inside=
 case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
 unset LAUNCH_FLEET_TOKEN_STEP
-if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ]; then
+identity_off=
+if [ -n "$inside" ] || [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] || [ -n "${OPENWIZ_GITHUB_APP_KEY:-}" ]; then
+  identity_off=1
+fi
+if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ] && [ -z "$identity_off" ]; then
   helper=$(cd -P "$(dirname "$0")" && pwd)/github-app/agent-token.py
   LAUNCH_FLEET_TOKEN_STEP=$$
   export LAUNCH_FLEET_TOKEN_STEP
@@ -83,7 +87,9 @@ fi
 # unchanged probe asks what that identity can read; never an inherited value.
 app=
 unset LAUNCH_FLEET_GITHUB_AUTH
-if [ -n "$inside" ]; then
+if [ -n "$identity_off" ]; then
+  echo "loop.sh: the App identity is off; GitHub as today's account" >&2
+elif [ -n "$inside" ]; then
   if [ -n "${OPENWIZ_AGENT_TOKEN_RUN:-}" ]; then
     LAUNCH_FLEET_GITHUB_AUTH=installation
     export LAUNCH_FLEET_GITHUB_AUTH

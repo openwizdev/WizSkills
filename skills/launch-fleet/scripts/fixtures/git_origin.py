@@ -28,5 +28,5 @@ def env(root, fleets):
         git('update-index', '--add', '--cacheinfo', f'100644,{blob},{path}')
         commit = git('commit-tree', git('write-tree'), '-m', 'synthetic')
         git('update-ref', 'HEAD', commit)
-    return {'XDG_CACHE_HOME': os.path.join(base, 'cache'), 'GIT_CONFIG_COUNT': '1',
+    return {'GITREAD_LOCAL_ONLY': '1', 'XDG_CACHE_HOME': os.path.join(base, 'cache'), 'GIT_CONFIG_COUNT': '1',
             'GIT_CONFIG_KEY_0': f'url.file://{origins}/.insteadOf', 'GIT_CONFIG_VALUE_0': 'https://github.com/'}

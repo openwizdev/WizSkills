@@ -97,7 +97,9 @@ def write(cache, name, text):
 
 def fetch(cache, repo):
     write(cache, FAILED, f'{time.time()}\n')
-    run = git(cache, '-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential',
+    local = ('-c', 'protocol.allow=never', '-c', 'protocol.file.allow=always') \
+        if os.environ.get('GITREAD_LOCAL_ONLY') else ()
+    run = git(cache, *local, '-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential',
               'fetch', '--quiet', '--depth', '1', '--no-tags', f'https://github.com/{repo}.git', 'HEAD')
     if run.returncode != 0:
         raise Error(f'could not fetch the default branch of {repo}: '

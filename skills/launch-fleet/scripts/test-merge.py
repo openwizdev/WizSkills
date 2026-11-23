@@ -971,8 +971,6 @@ class Queue(unittest.TestCase):
         self.assertEqual(w.bodies(12), ['launch-fleet: cost: ' + LINE])
 
     def test_a_direct_merge_after_an_earlier_heads_receipt_still_settles_its_cost(self):
-        # catches: settle running cost at the newest queue receipt's head, so a replacement head the
-        # fleet merged directly after a failed cost write is refused on every wake (R2).
         old = 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % OTHER
         w = World(self, pr=pr(), comments={'7': [comment(4000, old)]})
         project(w, PRINTS)
@@ -1588,8 +1586,6 @@ class Landed(unittest.TestCase):
         self.assertEqual(len([x for x in w.writes() if x.get('post') == 9101]), 2)
 
     def test_a_duplicate_left_by_a_refused_delete_is_deleted_after_the_milestone_moves(self):
-        # catches: the retry matching the duplicate by the current milestone's text, so a report moved to
-        # a later release after the refused delete keeps both comments and settle reports success (R1).
         receipt = comment(4000, 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD)
         w = self.world(self.issues, comments={'9201': [receipt]}, faults={'delete': 'fail'})
         project(w, None)

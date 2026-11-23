@@ -137,14 +137,15 @@ MERGE_HELP = (
     'and reads it back: `merged <commit>; cost ...` (exit 0). Anything else is `blocked: <why>; recorded <id>` '
     '(exit 1). TICKET is checked before any write. BODY names the APPROVE and the plan approval that allowed it.')
 SETTLE_HELP = (
-    '`settle` is the cost a merge still owes: it reads the newest record author\'s queue receipt on the pull request '
-    'and runs `cost` at that commit (`refused: ...` while it isn\'t merged there). Without a receipt it runs `cost` at '
-    'the merged head when a record author enqueued or merged it, so a merge whose cost write failed still gets its '
-    'line once; otherwise it prints `no queued merge` (with the landed outcome when the pull request merged). Any '
+    '`settle` is the cost a merge still owes: it runs `cost` at the merged head when a record author\'s queue '
+    'receipt names that head, or a record author enqueued or merged it, so a merge whose cost write failed still gets '
+    'its line once, even after an earlier head\'s receipt. Before a merge it runs `cost` at the newest receipt\'s '
+    'commit (`refused: ...` while it isn\'t merged there); otherwise it prints `no queued merge` (with the landed '
+    'outcome when the pull request merged). Any '
     '`landed unknown:` makes it `unknown: ...` (exit 1), so the work stays open for a later wake, which reads the '
     'report again. A landed comment is read back after posting; when an earlier one is there too, the earliest '
-    'stands and ours is deleted, and a later duplicate naming this fix that a refused delete left behind is deleted '
-    'on the next run, read back, before it counts as posted.')
+    'stands and ours is deleted, and a later duplicate naming this fix, at any milestone, that a refused delete left '
+    'behind is deleted on the next run, read back, before it counts as posted.')
 
 
 def snapshot(repo, number):
@@ -303,8 +304,9 @@ def land(fix, report, auth):
     found = [c['id'] for c in before if post.ours(c, auth) and type(c.get('id')) is int
              and LANDED_ANY.fullmatch(c.get('body') or '')]
     if found:
+        mine = LANDED.split('{version}')[0].format(pr=fix)
         return drop(repo, report, min(found), [c['id'] for c in before if c.get('id') in found
-                                               and c['id'] != min(found) and c.get('body') == body])
+                                               and c['id'] != min(found) and c['body'].startswith(mine)])
     made = post.read_json('api', '--method', 'POST', f'repos/{repo}/issues/{report}/comments', '-f', f'body={body}')
     if not isinstance(made, dict) or type(made.get('id')) is not int:
         return f'landed unknown: the write on {at} returned no receipt, so reconcile {at} and never retry blind'
@@ -533,16 +535,15 @@ def merged_by_us(repo, p):
 
 def settle(repo, number, ticket, extra=()):
     found = receipts(repo, number)
-    if found:
+    main, p = snapshot(repo, number)
+    head = (p or {}).get('headRefOid')
+    merged = where(main, p, head).startswith('merged ')
+    if merged and (any(h == head for h, _ in found) or enqueued_by_us(repo, p) or merged_by_us(repo, p)):
+        told = cost(repo, number, head, ticket, extra)
+    elif found and not merged:
         told = cost(repo, number, found[-1][0], ticket, extra)
     else:  # a direct merge still owes its landed comment (#127 R1)
-        main, p = snapshot(repo, number)
-        head = (p or {}).get('headRefOid')
-        merged = where(main, p, head).startswith('merged ')
-        if merged and (enqueued_by_us(repo, p) or merged_by_us(repo, p)):
-            told = cost(repo, number, head, ticket, extra)
-        else:
-            told = 'no queued merge' + (landed(repo, number, p) if merged else '')
+        told = 'no queued merge' + (landed(repo, number, p) if merged else '')
     if '; landed unknown: ' in told:
         raise Stop('unknown: ' + told)
     return told

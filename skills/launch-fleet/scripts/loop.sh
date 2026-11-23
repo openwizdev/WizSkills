@@ -108,6 +108,7 @@ if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ] && [ -z "$identity_of
   export LAUNCH_FLEET_TOKEN_STEP
   exec python3 -I "$helper" run --requester fleet-check --repository "$GH_REPO" --read -- sh "$0"
 fi
+if [ -n "$identity_off" ] || [ -z "$inside" ]; then restore_today_account; fi
 # The check reads GitHub as the OpenWiz App (GI7, #2549; the identity contract
 # `openwiz.github-identity.v1`): with the loop's OPENWIZ_GITHUB_APP_KEY secret,
 # `openwiz github token --read` mints a read-only installation token for gh
@@ -117,7 +118,6 @@ fi
 # says so on stderr, so it never stops for it.
 # The check is told which identity reads (LAUNCH_FLEET_GITHUB_AUTH), so its
 # unchanged probe asks what that identity can read; never an inherited value.
-if [ -n "$identity_off" ] || [ -z "$inside" ]; then restore_today_account; fi
 app=
 unset LAUNCH_FLEET_GITHUB_AUTH
 if [ -n "$identity_off" ]; then

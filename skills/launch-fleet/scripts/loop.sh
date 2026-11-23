@@ -44,7 +44,7 @@ restore_today_account() {
     GIT_CONFIG_COUNT=$restore_at
     export GIT_CONFIG_COUNT
   else
-    for restore_name in $(set | while IFS= read -r restore_line; do
+    for restore_name in $(unset OPENWIZ_GITHUB_APP_KEY GH_TOKEN GITHUB_TOKEN; set | while IFS= read -r restore_line; do
       case $restore_line in GIT_CONFIG_KEY_[0-9]*=* | GIT_CONFIG_VALUE_[0-9]*=*) restore_name=${restore_line%%=*} ;; *) continue ;; esac
       case ${restore_name##*_} in *[!0-9]*) ;; *) printf '%s\n' "$restore_name" ;; esac
     done); do

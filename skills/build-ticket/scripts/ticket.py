@@ -276,11 +276,14 @@ def cmd_size(repo, n):
     i = 0
     while i < len(fields) and fields[i]:
         added, deleted, path = fields[i].split('\t', 2)
+        source = path
         if not path:
-            path, i = fields[i + 2], i + 2
-        side = count[bool(TEST_PATH.search(path))]
-        side[0] += sum(int(x) for x in (added, deleted) if x.isdigit())
-        side[1] += 1
+            source, path, i = fields[i + 1], fields[i + 2], i + 2
+        new_test, old_test = bool(TEST_PATH.search(path)), bool(TEST_PATH.search(source))
+        count[new_test][0] += int(added) if added.isdigit() else 0
+        count[old_test][0] += int(deleted) if deleted.isdigit() else 0
+        for test in {new_test, old_test}:
+            count[test][1] += 1
         i += 1
     (lines, files), (test_lines, test_files) = count[False], count[True]
     target = f'{plan}: about {SIZE_PLANS[plan]} lines and {SIZE_FILES} files'

@@ -309,15 +309,6 @@ class Merge(unittest.TestCase):
         self.assertEqual(w.bodies(7), ['launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD])
         self.assertEqual(w.bodies(12), [])
 
-    def test_a_queue_that_let_it_go_blocks_it(self):
-        left = {'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks'}
-        w = World(self, pr=pr(isMergeQueueEnabled=True, left=left),
-                  comments={'7': [comment(4000, 'launch-fleet: merge queued %s: APPROVE 1' % HEAD)]})
-        project(w, PRINTS)
-        code, out = self.merge(w, '--ticket', 12)
-        self.assertEqual((code, out), (1, 'blocked: left the merge queue: failed checks; recorded 5001'))
-        self.assertFalse(any('merge' in x for x in w.writes()))
-
     def test_a_lost_merge_response_is_read_back(self):
         w = World(self, pr=pr(), faults={'merge': 'lost'})
         project(w, PRINTS)
@@ -894,12 +885,13 @@ class Queue(unittest.TestCase):
         self.assertEqual(w.bodies(7), [self.receipt()])
         self.assertEqual(self.merge(w), (0, 'queued; the queue merges it or lets it go'))
         self.assertEqual(w.bodies(7), [self.receipt()])
-        # The queue lets it go: the receipt blocks a second enqueue at that head.
         value = w.load()
-        value['pr'].update(isInMergeQueue=False, mergeQueueEntry=None,
-                           left={'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks'})
+        at = value['comments']['7'][0]['created_at']
+        value['pr'].update(isInMergeQueue=False, mergeQueueEntry=None, checks=[run_of('SUCCESS', at)],
+                           removals=[{'createdAt': at, 'reason': 'dequeued', 'actor': {'login': 'synthetic-person'}}])
         w.save(value)
-        self.assertEqual(self.merge(w), (1, 'blocked: left the merge queue: failed checks; recorded 5002'))
+        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5002'))
+        self.assertEqual(self.merge(w), (1, 'blocked: a person took it out of the queue (dequeued); recorded 5003'))
         self.assertEqual(sum('enqueue' in x for x in w.writes()), 1)
 
     def test_a_queue_merge_whose_receipt_failed_still_settles_its_cost(self):

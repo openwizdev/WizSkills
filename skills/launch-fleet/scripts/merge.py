@@ -103,6 +103,9 @@ Stop = post.Stop
 _spec = importlib.util.spec_from_file_location('launch_fleet_records', HERE / 'records.py')
 records = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(records)
+_spec = importlib.util.spec_from_file_location('launch_fleet_queue', HERE / 'queue.py')
+decider = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(decider)
 
 QUERY = '''query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { defaultBranchRef { name } pullRequest(number: $number) {
@@ -746,6 +749,50 @@ def ask(repo, number, head, checks, ticket, path):
 
 
 
+def verdict(repo, number, head, checks):
+    try:
+        return decider.read(repo, number, head, checks)[0]
+    except decider.Unknown as why:
+        return f'unknown: {why}'
+
+
+def dropped(repo, number, head, line):
+    """`dropped; recorded <id>` for queue.py's `dropped` verdict, read back; else None."""
+    if not line.startswith(f'dropped {head}: '):
+        return None
+    try:
+        return 'dropped; recorded ' + post.comment(repo, number, 'launch-fleet: merge ' + line).split()[-1]
+    except Stop as outcome:
+        raise Stop(f'dropped; not recorded ({outcome}); run it again next wake')
+
+
+def requeue(repo, number, head, checks, p, receipt, blocked):
+    """Act on queue.py's verdict for a receipted head that left the queue (FR2, #2450)."""
+    line = verdict(repo, number, head, checks)
+    told = dropped(repo, number, head, line)
+    if told:
+        return told
+    if line.startswith(f'wait {head}: '):
+        return 'waiting: ' + line.split(': ', 1)[1]
+    if line.startswith(f'blocked {head}: '):
+        blocked(line.split(': ', 1)[1])
+    if line.startswith('unknown: '):
+        return f"pending: {line.split(': ', 1)[1]}; read it again next wake"
+    if not line.startswith(f'requeue {head}: '):
+        return f'pending: the queue reads {line}; read it again next wake'
+    refused = enqueue(p, head)
+    state = where(*snapshot(repo, number), head)
+    if state == 'queued':
+        return f're-queued; its receipt {receipt} still names {head}'
+    if '; it left the queue at ' in state:
+        told = dropped(repo, number, head, verdict(repo, number, head, checks))
+        if told:
+            return told
+    if refused is None:
+        return 'pending: the enqueue call succeeded but it still reads open; read it again next wake'
+    raise Stop(f'not re-queued: {refused}; nothing was recorded, so run it again next wake')
+
+
 def merge(repo, number, head, checks, body, ticket, checked, extra):
     def blocked(why):
         raise Stop(f'blocked: {why}; recorded ' + record(repo, number, f'launch-fleet: merge blocked {head}: {why}'))
@@ -771,8 +818,9 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
     if state.startswith('stop: '):
         blocked(state[6:])
     ticket_of(repo, number, p, ticket)
-    if '; it left the queue at ' in state and any(h == head for h, _ in receipts(repo, number)):
-        blocked('left the merge queue: ' + state.split(': ', 1)[1])
+    mine = [i for h, i in receipts(repo, number) if h == head] if '; it left the queue at ' in state else []
+    if mine:
+        return requeue(repo, number, head, checks, p, mine[-1], blocked)
     busy = running(p, checks) if p['isMergeQueueEnabled'] is True else []
     if busy:
         raise Stop('refused: its required checks are running: ' + ', '.join(busy)
@@ -798,6 +846,10 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
         return state + '; ' + cost(repo, number, head, ticket, extra)
     if state == 'queued':
         return 'queued; recorded ' + str(receipt('queued; receipt unconfirmed'))
+    if '; it left the queue at ' in state:
+        told = dropped(repo, number, head, verdict(repo, number, head, checks))
+        if told:
+            return told
     if state.startswith('open') and done:
         return 'pending: the merge command succeeded but it still reads open; read it again next wake'
     if admit.startswith('admit: '):

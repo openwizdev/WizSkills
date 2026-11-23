@@ -1926,6 +1926,23 @@ class OneSetupPullRequest(unittest.TestCase):
             'operator': 'synthetic-other', 'service_issue': 7, 'harness': SOL[0], 'model': SOL[1], 'effort': SOL[2],
             'reviewer': list(CLAUDE), 'identity': 'app'}, 'any line the user changes, and the reviewer follows')
 
+    def test_the_acting_identity_line_follows_the_host(self):
+        j = self.road()
+        value = self.saved(j)
+        value['host'] = {'agents': 'cloud'}
+        j.state.write_text(json.dumps(value))
+        cloud = j.helper(['defaults', '--options', str(j.options)])
+        self.assertEqual(cloud.returncode, 12, cloud.stdout + cloud.stderr)
+        self.assertIn('- Acting identity: the OpenWiz GitHub App, recommended with CloudRoom', cloud.stdout)
+        self.yes(j)
+        self.assertEqual(self.saved(j)['defaults']['identity'], 'app')
+        self.yes(j, '--login')
+        self.assertEqual(self.saved(j)['defaults']['identity'], 'personal_login', '--login picks the own login')
+        self.assertEqual(j.helper(['defaults', '--options', str(j.options), '--app', '--login']).returncode, 2)
+        local = self.road()
+        self.yes(local)
+        self.assertEqual(self.saved(local)['defaults']['identity'], 'personal_login', 'any other host: own login')
+
     def test_the_block_discloses_every_effect_its_one_yes_covers(self):
         j = self.road()
         shown = j.helper(['defaults', '--options', str(j.options)])

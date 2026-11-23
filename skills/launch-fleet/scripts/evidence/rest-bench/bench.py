@@ -87,8 +87,12 @@ def fleet_suite(out):
         '  PATH=\'%s\':"$PATH" GH_METER_LOG=\'%s\' GH_METER_ROLE=fleet GH_METER_RATE=0 exec /bin/sh \'%s\' "$@"\n'
         'fi\nexec /bin/sh \'%s\' "$@"\n' % (runs, SHIM, log, SCRIPTS / 'fleet.sh', SCRIPTS / 'fleet.sh'))
     env = dict(os.environ, FLEET_SH=str(wrapper), TEST_JOBS=os.environ.get('TEST_JOBS', '2'))
-    run = subprocess.run(['sh', str(SCRIPTS / 'test.sh')], env=env, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL)
+    with open(out / 'test.sh.log', 'w') as output:
+        run = subprocess.run(['sh', str(SCRIPTS / 'test.sh')], env=env, stdout=output, stderr=subprocess.STDOUT)
+    if run.returncode:
+        failed = [line for line in (out / 'test.sh.log').read_text().splitlines() if line.startswith('FAIL')]
+        print('test.sh failed under the meter (%d FAIL lines):' % len(failed), *failed[:40], sep='\n',
+              file=sys.stderr)
     return log, len(runs.read_text().splitlines()) if runs.exists() else 0, run.returncode
 
 
@@ -160,12 +164,19 @@ def sample(path):
         print(len(points(path)), point['t'], flush=True)
 
 
+def lone(samples, kind):
+    return [b for a, b, c in zip(samples, samples[1:], samples[2:])
+            if a[kind]['reset'] == c[kind]['reset'] != b[kind]['reset']]
+
+
 def live(path):
     samples = points(path)
     good = [s for s in samples if 'core' in s]
     for kind in ('core', 'graphql'):
+        odd = lone(good, kind)
+        kept = [s for s in good if s not in odd]
         spent, windows = 0, 1
-        for a, b in zip(good, good[1:]):
+        for a, b in zip(kept, kept[1:]):
             if b[kind]['reset'] == a[kind]['reset']:
                 spent += b[kind]['used'] - a[kind]['used']
             else:
@@ -173,10 +184,12 @@ def live(path):
                 windows += 1
         print('%s: %d samples over %d minutes, %d used (a lower bound across %d reset windows), '
               'min remaining %d of %d'
-              % (kind, len(good), (good[-1]['epoch'] - good[0]['epoch']) // 60, spent, windows,
-                 min(s[kind]['remaining'] for s in good), good[0][kind]['limit']))
+              % (kind, len(kept), (kept[-1]['epoch'] - kept[0]['epoch']) // 60, spent, windows,
+                 min(s[kind]['remaining'] for s in kept), kept[0][kind]['limit']))
+        for s in odd:
+            print('  left out: %s, used %d, reset %d, unlike both neighbours (another allowance window)'
+                  % (s['t'], s[kind]['used'], s[kind]['reset']))
     print('unreadable samples: %d' % (len(samples) - len(good)))
-
 
 if __name__ == '__main__':
     if sys.argv[1:2] == ['fixtures'] and len(sys.argv) == 3:

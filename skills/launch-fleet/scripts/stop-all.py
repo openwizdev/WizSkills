@@ -42,8 +42,7 @@ def pause_heartbeat(repo, spec_n, dry_run, wait):
         time.sleep(1)
         code, line = code_and_last_line('heartbeat.py', 'pause', repo, spec_n)
     if (code, line) == (1, BUSY):
-        return ('heartbeat: not paused (a tick still held the heartbeat lock after %d seconds); the next tick can '
-                'start runs: run stop-all again when it ends' % wait), False
+        return 'heartbeat: not paused (a tick still held the heartbeat lock after %d seconds)' % wait, False
     return ('heartbeat: paused', True) if code == 0 else ('heartbeat: not paused (%s)' % line, False)
 
 
@@ -70,9 +69,9 @@ def main(argv):
         description="Pause spec SPEC's heartbeat (waiting for a running tick to end), then stop every live run in host.py's runs file "
                     "($LAUNCH_FLEET_RUNS) through its own driver's stop, one at a time.",
         epilog='Each run prints `#N on <driver>: <result>`. Exit 0: all stopped and the heartbeat paused or not '
-               'installed. Exit 1: a driver missing, refusing or failing stop, or a heartbeat that did not pause; '
-               'the other runs are still stopped. Exit 2: bad usage, nothing done; or an unreadable runs file: '
-               'the heartbeat is still paused and no run is stopped.')
+               'installed. Exit 1: a driver missing, refusing or failing stop, and the other runs are still '
+               'stopped; or a heartbeat that did not pause, and no run is read or stopped. Exit 2: bad usage, '
+               'nothing done; or an unreadable runs file: the heartbeat is still paused and no run is stopped.')
     parser.add_argument('repo', metavar='OWNER/NAME')
     parser.add_argument('spec', metavar='SPEC')
     parser.add_argument('--dry-run', action='store_true')
@@ -84,6 +83,10 @@ def main(argv):
         parser.error('expected OWNER/NAME and a positive spec number')
     line, ok = pause_heartbeat(args.repo, args.spec, args.dry_run, args.wait)
     print(line, flush=True)
+    if not ok and not args.dry_run:
+        print('stop-all: nothing stopped, since the heartbeat can still start runs: run stop-all again once it can '
+              'pause')
+        return 1
     try:
         runs = host.load(args.repo)['runs']
     except host.Unreadable as e:

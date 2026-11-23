@@ -211,8 +211,8 @@ class StopAll(unittest.TestCase):
                 out = home.stop_all('--wait', '1', expected=1)
                 self.assertEqual(out, ['heartbeat: a tick holds the heartbeat lock; waiting up to 1 seconds for it',
                                        'heartbeat: not paused (a tick still held the heartbeat lock after 1 seconds)',
-                                       'stop-all: nothing stopped, since the next tick could start runs again: run '
-                                       'stop-all again when the tick ends'])
+                                       'stop-all: nothing stopped, since the heartbeat can still start runs: run '
+                                       'stop-all again once it can pause'])
                 self.assertEqual(home.heartbeat(), 'heartbeat: active (cron)')
                 self.assertEqual(home.calls(), [])
                 self.assertEqual(home.runs.read_text(), runs)

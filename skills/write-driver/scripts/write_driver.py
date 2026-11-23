@@ -916,6 +916,8 @@ def cmd_lesson(a):
         save(a.state, state)
         print('expired-login not run: skipped on your no')
         return 3
+    state['lessons'].pop('expired-login', None)
+    mark_clock(state)
     save(a.state, state)
     driver = os.path.abspath(a.driver)
     box = Path(tempfile.mkdtemp(prefix='write-driver-probe-'))

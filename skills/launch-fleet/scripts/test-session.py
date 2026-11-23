@@ -78,13 +78,13 @@ with world() as w:
         wait = w['backoff'].get(pool)
         if w['budget'] is None:
             sys.stdout.write('HTTP/2.0 502 Bad Gateway\r\n\r\n'); sys.exit(1)
-        if wait:
-            sys.stdout.write('HTTP/2.0 403 Forbidden\r\nRetry-After: %d\r\n\r\n{"message": "secondary rate limit"}'
-                             % wait)
-            sys.exit(1)
         reset = int(datetime.now(timezone.utc).timestamp()) + 3600
         heads = '' if w['bare'] else ('X-Ratelimit-Limit: 5000\r\nX-Ratelimit-Remaining: %d\r\nX-Ratelimit-Reset: %d\r\n'
                                       'X-Ratelimit-Resource: %s\r\n' % (w['budget'], reset, pool))
+        if wait:
+            sys.stdout.write('HTTP/2.0 403 Forbidden\r\n%sRetry-After: %d\r\n\r\n{"message": "secondary rate limit"}'
+                             % (heads, wait))
+            sys.exit(1)
         sys.stdout.write('HTTP/2.0 200 OK\r\n%s\r\n{}' % heads); sys.exit(0)
     if args[:2] == ['api', 'rate_limit']:
         if w['budget'] is None:

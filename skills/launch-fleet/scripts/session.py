@@ -363,12 +363,35 @@ class Session:
             return row[0], row[1], 'other-family'
         if not shutil.which(built):
             raise NeedsYou("#%s's builder harness %s is not installed, so its review waits" % (n, built))
-        models = {row[1] for start, row in rows.items() if start in ('builder', 'small_builder') and row
-                  and row[0] == built}
+        recorded = [f['model'] for f in (status.parse(c['body']) for c in self.thread(n))
+                    if f and f['agent'] == 'builder']
+        models = {cli for harness, names, cli in self.identities() if harness == built and recorded[-1:] and
+                  recorded[-1] in names}
         if len(models) != 1:
-            raise NeedsYou("the review of #%s waits: the models rule names %s %s builder model"
-                           % (p, 'no' if not models else 'more than one', built))
+            raise NeedsYou("the review of #%s waits: the builder's recorded model %s is %s a %s model in the "
+                           "models rule" % (p, (recorded or ['(none)'])[-1], 'not' if not models else 'more than',
+                                            built))
         return built, models.pop(), 'same-family'
+
+    def identities(self):
+        found, section, setting = [], None, {}
+        for row in self.fleet().splitlines() + ['## end']:
+            if row.startswith('## '):
+                if {'Harness', 'Model', 'Effort'} <= set(setting):
+                    harness, model, effort = (setting[k] for k in ('Harness', 'Model', 'Effort'))
+                    if harness[1] and model[1]:
+                        found.append((PROVIDERS.get(harness[1]), {model[0], model[1], '%s %s' % (model[0], effort[0])},
+                                      model[1]))
+                section, setting = row[3:], {}
+                continue
+            cells = [c.strip() for c in row.strip().strip('|').split('|')] if row.startswith('|') else []
+            flags = FLAGS.search(cells[-1]) if cells else None
+            if section == 'Models' and len(cells) == 5 and flags:
+                found.append((PROVIDERS.get(flags[1]), {flags[2], cells[2], '%s %s' % (cells[2], cells[3])}, flags[2]))
+            elif len(cells) == 3 and cells[0] in ('Harness', 'Model', 'Effort'):
+                value = re.fullmatch(r'`--(?:provider|model|reasoning-level) (\S+)`', cells[2])
+                setting[cells[0]] = (cells[1], value[1] if value else None)
+        return found
 
     def review(self, p, n, head):
         harness, model, family = self.reviewer(p, n)
@@ -409,10 +432,14 @@ class Session:
             raise NeedsYou("#%s was not merged: its review assignment names no reviewer family" % p)
         built = self.built(n)
         selected = OTHER[built] if family[1] == 'other-family' else built
+        newest = max(verdicts, key=lambda c: c['id'])
         notes = self.notes('reviewer', n, stamp(current.get('created_at')))
-        if not notes or notes[-1]['state'] != 'done' or DRIVERS.get(notes[-1]['harness']) != selected:
-            raise NeedsYou('#%s was not merged: no done note from its selected %s reviewer since its review '
-                           'assignment' % (p, selected))
+        url = 'https://github.com/%s/pull/%s' % (self.repo, p)
+        if (not notes or notes[-1]['state'] != 'done' or DRIVERS.get(notes[-1]['harness']) != selected
+                or notes[-1].get('pr', '').lower() != url.lower()
+                or stamp(notes[-1]['time']) < stamp(newest.get('created_at'))):
+            raise NeedsYou('#%s was not merged: no done note from its selected %s reviewer for #%s after its VERDICT '
+                           'and review assignment' % (p, selected, p))
 
     def observe(self):
         names = set(self.checks().split(','))
@@ -444,34 +471,54 @@ class Session:
                 seen.append(str(job['id']))
             except (KeyError, TypeError, Unreadable):
                 complete = False
-        limits = post.read_json('api', 'rate_limit')
         budgets = {}
-        for pool, name in (('rest', 'core'), ('graphql', 'graphql')):
-            try:
-                one = limits['resources'][name]
-                budgets[pool] = {'remaining': one['remaining'], 'limit': one['limit'], 'reset_at': one['reset'],
-                                 'retry_after': 0}
-            except (KeyError, TypeError):
+        for pool, argv in (('rest', ['repos/%s/actions/runs?per_page=1' % self.repo]),
+                           ('graphql', ['graphql', '-f', 'query=query{rateLimit{remaining}}'])):
+            budget = self.budget(pool, argv)
+            if budget is None:
                 complete = False
+            else:
+                budgets[pool] = budget
         observed = list({job['id']: job for job in observed}.values())
         return {'repository': self.repo, 'observed_at': int(time.time()), 'complete': complete,
                 'queue': {'complete': complete and len(observed) <= 10000, 'jobs': observed[:10000]},
                 'budgets': budgets}
 
+    def budget(self, pool, argv):
+        r = run(['gh', 'api', '-i', *argv])
+        lines = r.stdout.replace('\r\n', '\n').split('\n\n', 1)[0].split('\n')
+        code = re.fullmatch(r'HTTP/[0-9.]+ ([0-9]{3})(?: .*)?', lines[0])
+        heads = {k.strip().lower(): v.strip() for k, _, v in (line.partition(':') for line in lines[1:])}
+        try:
+            numbers = [int(heads['x-ratelimit-' + k]) for k in ('remaining', 'limit', 'reset')]
+        except (KeyError, ValueError):
+            return None
+        wait = heads.get('retry-after')
+        if not code or heads.get('x-ratelimit-resource') != ('core' if pool == 'rest' else 'graphql'):
+            return None
+        if wait is not None and not wait.isdigit():
+            return None
+        if code[1] != '200' and wait is None:
+            return None
+        return {'remaining': numbers[0], 'limit': numbers[1], 'reset_at': numbers[2],
+                'retry_after': int(time.time()) + int(wait) if wait else 0}
+
     def batch(self):
-        env = dict(os.environ)
+        env, own = dict(os.environ), None
         if not (env.get('LAUNCH_FLEET_OVERLOAD_SUPPLY') or env.get('LAUNCH_FLEET_OVERLOAD_INPUT')):
-            path = STATE / ('overload-input-%s.json' % self.key)
             try:
                 STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
-                fd = os.open(path.with_suffix('.tmp'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                fd, own = tempfile.mkstemp(prefix='overload-input-%s-' % self.key, suffix='.json', dir=STATE)
                 with os.fdopen(fd, 'w') as out:
                     json.dump(self.observe(), out)
-                os.replace(path.with_suffix('.tmp'), path)
             except OSError as e:
                 raise Unreadable("can't write the overload observation (%s)" % type(e).__name__)
-            env['LAUNCH_FLEET_OVERLOAD_INPUT'] = str(path)
-        r = run(['sh', str(HERE / 'fleet.sh'), 'overload', 'merge-batch'], env)
+            env['LAUNCH_FLEET_OVERLOAD_INPUT'] = own
+        try:
+            r = run(['sh', str(HERE / 'fleet.sh'), 'overload', 'merge-batch'], env)
+        finally:
+            if own:
+                os.unlink(own)
         try:
             answer = json.loads(r.stdout)
         except ValueError:
@@ -529,9 +576,12 @@ class Session:
                 raise NeedsYou('#%s left the merge queue: %s' % (p, out or 'merge.py read said nothing'))
         return did
 
-    def checks(self):
-        text = post.gh('api', 'repos/%s/contents/docs/agents/fleet.md' % self.repo,
+    def fleet(self):
+        return post.gh('api', 'repos/%s/contents/docs/agents/fleet.md' % self.repo,
                        '-H', 'Accept: application/vnd.github.raw+json') or ''
+
+    def checks(self):
+        text = self.fleet()
         section, names = None, []
         for row in text.splitlines():
             if row.startswith('## '):

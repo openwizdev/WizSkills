@@ -17,6 +17,10 @@ owns. `**Relies on:**` lists exact backticked interface-file paths on one line,
 or `nothing`. Use `## Done by` for a person's ticket. Proof names the spec
 claim and how to show it, red first.
 
+A ticket whose change can't be undone by reverting its merge gets the line
+`One-way door: yes` on its own at the end of Parent; its builder agrees an
+approach note first (build-ticket). Every other ticket gets no such line.
+
 Use the [Plan links contract](../../contracts/plan-links.v1.md) for each native
 blocker's `real` behavior or exceptional `file` reason. Include external
 blockers. Use GitHub CLI 2.94 or later and body files. Create each ticket with

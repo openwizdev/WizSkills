@@ -16,10 +16,15 @@ Read this when a review, a CI failure, a conflict with `main` or an orchestrator
 
 **1 + 1** (review-loops contract, v2): one review plus one re-check. A verdict holds only for the commit it names.
 
-1. Fix every open `[blocking]` finding once, red first: a proof that shows the break, then the fix. Name its cause and fix every reachable route that shares it; a route outside your owned paths is an exact-path question. Never fix `[polish]` here unless an orchestrator decision says so.
-2. Or dispute a finding once, with evidence. A finding waiting only on another owner's evidence needs no new head.
-3. Rerun the scoped checks, push a new green commit and update Rulings.
-4. Answer in one pull request comment, one line per id: `R1 fixed at <commit>: <proof>` or `R1 disputed: <evidence>`. End your turn.
+1. Fix each open `[blocking]` finding once or dispute it once with evidence. For a fix, name its cause and copy its `Class:` line from the [verdict format](../../review-ticket/references/verdict.md#class), including `other: <word>` when it uses that form. Ask on the ticket if the class is missing or unclear. List every variant of that class the diff can reach that shares the cause, including the reported route. A route outside your owned paths is an exact-path question.
+2. Write a failing-first test for each listed variant and keep the red run with the failure for each test. Fix the shared cause across all the listed routes and rerun the same tests. A finding waiting only on another owner's evidence needs no new head. Never fix `[polish]` here unless an orchestrator decision says so.
+3. Rerun the scoped checks and update Rulings. At the new green head, run every command the reviewer gave under `Shows the break:` before pushing. Record each original command and what it prints, including the exit status when it shows the result. Write `no command supplied` if the reviewer gave none. If a command still shows the break or cannot be run, resolve that before marking the finding fixed. Push the new green head.
+4. Answer in one pull request comment, one line per id. Keep the field labels in the order shown. Write output line breaks as `\n` and escape literal pipes in field values as `\|`. Use synthetic evidence or a public-safe evidence reference. End your turn.
+
+```text
+R1 fixed at <commit>: Class: <class word or other: word> | Variants: <all reachable variants sharing the cause> | Red run: <test and failing result for each variant, or a reference to that run> | Shows the break: <each reviewer command and its output at commit, or no command supplied>
+R2 disputed: <evidence>
+```
 
 | `Next:` line | What you do |
 | --- | --- |
@@ -28,6 +33,6 @@ Read this when a review, a CI failure, a conflict with `main` or an orchestrator
 | `park R2 as a decision for Jake.` | Nothing: it waits for his decision |
 | `none open. It merges by the project's merge rules.` | Nothing |
 
-**A fresh round** brief on an existing pull request: fix only the `Risk:` blockers the newest verdict's `fresh` line names, once each, red first; open no new pull request; push green and end your turn.
+**A fresh round** brief on an existing pull request: fix only the `Risk:` blockers the newest verdict's `fresh` line names, once each, using steps 1 to 4 above. Open no new pull request.
 
 **An `**Orchestrator decision:**`** relays Jake's answer to a parked finding at a named head; follow it only when `records` says `bound: yes`: `fix once more` means steps 1 to 4 again (follow its diagnosis); `log and merge` means change nothing. Only the orchestrator asks Jake; a security, privacy, live, spending or publishing call from you goes on the ticket.

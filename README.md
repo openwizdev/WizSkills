@@ -18,7 +18,9 @@ claude plugin marketplace add https://github.com/openwizdev/WizSkills.git#v0.1.2
 claude plugin install openwiz@wizskills --scope project
 ```
 
-Codex and other agents: see [docs/install.md](docs/install.md), which also shows how to check a release before you run it.
+`--scope project` enables the plugin for this one project only: run the install in each project that should have the skills.
+
+Codex and other agents: see [docs/install.md](docs/install.md), which also shows how to check a release before you run it. `install.sh` prints the version and commit it installed. Codex's skill catalog lists each skill at its `.agents/skills/<name>` link path, not at the installed folder the link points to.
 
 ## How it works
 
@@ -33,6 +35,10 @@ A skill is a folder, `skills/<name>/`, with a `SKILL.md` your agent reads and th
 | Watch | [`where-are-we`](skills/where-are-we/SKILL.md) | Tells you where things stand |
 
 Every skill is listed in [skills/README.md](skills/README.md). Skills write their records to GitHub by OpenWiz's [records rules](https://github.com/openwizdev/OpenWiz/blob/main/kernel/records.v1.md). WizSkills supplies no credentials: your agent uses its own signed-in tools.
+
+## Checking a change
+
+Run `npm ci --ignore-scripts` once before `python3 check/run.py`: without it, the release tests fail because Changesets is not installed.
 
 ## Links
 

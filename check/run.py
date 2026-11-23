@@ -81,6 +81,7 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-budget.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-snapshot.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-gitread.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-ghcache.py']],
     # Not a skill: the check's own version rule and changesets (WS18).
     'check': [['python3', '-I', 'check/test_notice.py'],
@@ -88,7 +89,8 @@ SUITES = {
               ['python3', '-I', 'check/test_changesets.py'],
               ['python3', '-I', 'check/test_suites.py'],
               ['python3', '-I', 'check/test_bench.py'],
-              ['python3', '-I', 'check/test_select.py']],
+              ['python3', '-I', 'check/test_select.py'],
+              ['python3', '-I', 'check/test_checklist_rules.py']],
 }
 
 PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}

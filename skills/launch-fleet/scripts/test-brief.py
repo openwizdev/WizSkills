@@ -91,8 +91,7 @@ class Brief(unittest.TestCase):
         project = fixture['Project'](self, hosts=hosts)
         if hosts == ():
             fixture['effort_drivers'](project, **{'takes-effort': 'takes'})
-        if 'Roster' in fleet:
-            project.fleet(fleet)
+        project.fleet(fleet)
         world = project.github()
         world['fleet_md'] = fleet
         project.world.write_text(fixture['json'].dumps(world))

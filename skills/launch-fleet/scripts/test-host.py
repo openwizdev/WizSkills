@@ -631,7 +631,7 @@ class Roster(unittest.TestCase):
         repo = json.loads((ROSTER / case / 'case.json').read_text()).get('repository', REPO)
         p = Project(self, setting=setting, hosts=hosts, repo=repo)
         effort_drivers(p, **{host: 'takes' for host in hosts})
-        p.fleet((ROSTER / case / 'fleet.md').read_text())
+        p.fleet((ROSTER / case / 'fleet.md').read_text() + FLEET_MD[len('# Fleet settings\n'):])
         return p, repo
 
     def test_every_fixture_reads_picks_and_refuses_as_the_roster_contract_says(self):

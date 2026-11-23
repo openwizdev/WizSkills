@@ -610,6 +610,36 @@ class HostAwareSetup(unittest.TestCase):
         self.assertIn('Starting one', launch)
 
 
+class ConnectIdentity(unittest.TestCase):
+    def step(self):
+        connect = SKILL.read_text().split('### 3. Connect', 1)[1].split('\n### ', 1)[0]
+        found = re.search(r'^3\. .*?(?=^[0-9]+\. )', connect, re.M | re.S)
+        self.assertIsNotNone(found, 'Connect has a step 3')
+        return found[0]
+
+    def branch(self, step, label):
+        found = re.search(r'^   - \*\*%s:\*\* (.+)$' % re.escape(label), step, re.M)
+        self.assertIsNotNone(found, 'step 3 has a %r branch' % label)
+        return found[1]
+
+    def test_other_hosts_get_the_personal_login_and_no_cloudroom_step(self):
+        other = self.branch(self.step(), 'With any other host')
+        self.assertRegex(other, r'^recommend the personal GitHub login')
+        self.assertIn('`github_login.py skip-app`', other)
+        self.assertIn('the App needs CloudRoom today', other)
+        self.assertIn('only if the user asks for it', other)
+        for cloudroom_step in ('--agent-for', 'secret', '"The App"', 'runtime/github-app/setup.py'):
+            self.assertNotIn(cloudroom_step, other)
+
+    def test_cloudroom_keeps_the_app_and_only_an_answer_selects_the_skip(self):
+        step = self.step()
+        cloud = self.branch(step, 'With CloudRoom (`cloud`)')
+        self.assertIn('recommend the App, set up with the installed `"$build"/runtime/github-app/setup.py` as the '
+                      '`setup` skill\'s "The App" says', cloud)
+        self.assertIn("Only the user's answer selects `github_login.py skip-app`; an App failure never becomes a skip.",
+                      step)
+
+
 class Continuation(unittest.TestCase):
     """#636: onboarding continues from install's verified setup and init, never
     from a guess. Catches a fabricated, stale or unselected identity or brain

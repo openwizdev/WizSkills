@@ -987,11 +987,10 @@ class KeyHostExpiredLogin(Base):
         host_file = self.tmp / 'host-file'
         host_file.write_text('synthetic host file\n')
         port = 'int(os.environ.get("OPENWIZ_HOSTKEY_TEST_ORIGIN", ":4010").rpartition(":")[2])'
-        reach = {'the fake host': '__import__("socket").create_connection(("127.0.0.1", %s), 2)' % port,
-                 'the same port on another loopback address':
-                     '__import__("socket").create_connection(("127.0.0.2", %s), 2)' % port,
-                 'the same port on another address': '__import__("socket").create_connection(("192.0.2.1", %s), 2)'
-                                                     % port,
+        connect = 's = __import__("socket").socket(); s.settimeout(2); s.connect(("%s", ' + port + '))'
+        reach = {'the fake host': connect % '127.0.0.1',
+                 'the same port on another loopback address': connect % '127.0.0.2',
+                 'the same port on another address': connect % '192.0.2.1',
                  'a local socket pair': '__import__("socket").socketpair()'}
         for n, (name, probe) in enumerate(reach.items()):
             with self.subTest('driver: ' + name):
@@ -1001,10 +1000,10 @@ class KeyHostExpiredLogin(Base):
                 p = self.lesson(self.key_driver('reach-%d' % n, probe=guarded), check=0)
                 self.assertIn('expired-login pass', p.stdout)
         # A checkout helper that, on any reach, answers 200 instead of the fake host's 401: the driver then
-        # answers a run, and the lesson fails.
+        # answers a run, and the lesson fails. Python itself sets LC_CTYPE in a C locale (PEP 538).
         helper = dict(reach, **{
             'the caller\'s key': 'assert any(%r in v for v in os.environ.values())' % SECRET,
-            'any variable but the override': 'assert set(os.environ) - {"OPENWIZ_HOSTKEY_TEST_ORIGIN"}',
+            'any variable but the override': 'assert set(os.environ) - {"OPENWIZ_HOSTKEY_TEST_ORIGIN", "LC_CTYPE"}',
             'a host file': 'open(%r).read()' % str(host_file),
             'its parent\'s environment': 'assert open("/proc/%d/environ" % os.getppid(), "rb").read()'})
         evil = self.tmp / 'evil'

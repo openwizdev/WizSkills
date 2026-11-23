@@ -15,6 +15,11 @@ MAX_AGE = 60
 STAMP = 'gitread-fetched'
 FAILED = 'gitread-failed'
 KEEP = re.compile(r'GIT_CONFIG_(GLOBAL|SYSTEM|NOSYSTEM|PARAMETERS|COUNT|KEY_[0-9]+|VALUE_[0-9]+)')
+QUIET = {name: '0' for name in ('GIT_TRACE', 'GIT_TRACE2', 'GIT_TRACE2_EVENT', 'GIT_TRACE2_PERF', 'GIT_TRACE_CURL',
+                                 'GIT_CURL_VERBOSE', 'GIT_TRACE_PACKET', 'GIT_TRACE_PACKFILE', 'GIT_TRACE_PACK_ACCESS',
+                                 'GIT_TRACE_PERFORMANCE', 'GIT_TRACE_SETUP', 'GIT_TRACE_SHALLOW', 'GIT_TRACE_REFS',
+                                 'GIT_TRACE_FSMONITOR')}
+QUIET.update(GIT_TRACE_REDACT='1', GIT_TRACE_CURL_NO_DATA='1')
 USAGE = 'gitread: usage: gitread.py show OWNER/NAME PATH [--max-age SECONDS]'
 
 
@@ -55,7 +60,7 @@ def private_root():
 
 def git(cache, *args):
     env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_') or KEEP.fullmatch(key)}
-    env.update(GIT_TERMINAL_PROMPT='0', GIT_DIR=str(cache))
+    env.update(QUIET, GIT_TERMINAL_PROMPT='0', GIT_DIR=str(cache))
     try:
         run = subprocess.run(['git', *args], capture_output=True, env=env, timeout=60, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as error:

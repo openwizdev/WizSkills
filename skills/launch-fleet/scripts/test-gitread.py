@@ -291,7 +291,7 @@ class GitRead(unittest.TestCase):
         self.o.env['GITREAD_LOCAL_ONLY'] = '1'
         code, out, err = self.o.read()
         self.assertEqual((code, out, hits), (2, '', []), err)
-        self.assertIn("transport 'http' not allowed", err)
+        self.assertEqual(err, f'gitread: could not fetch the default branch of {REPO}\n')
         self.o.env['GIT_CONFIG_KEY_0'] = f'url.file://{self.o.tmp / "origins"}/.insteadOf'
         self.assertEqual(self.o.read('docs/agents/fleet.md', '--max-age', '0'), (0, FLEET_MD, ''))
 

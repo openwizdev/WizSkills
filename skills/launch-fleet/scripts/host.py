@@ -96,6 +96,7 @@ EFFORT_NEXT = ("this host can't set effort: remove the effort for this harness i
 CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox', 'effort')
 ROLE_ROWS = {'builder': ('Builder', 'Small builder', 'Fixer'), 'reviewer': ('Reviewer',),
              'orchestrator': ('Orchestrator',)}
+MODELS_ROWS = tuple(r for rows in ROLE_ROWS.values() for r in rows)
 FLEET = ('LAUNCH_FLEET_HARNESS', 'LAUNCH_FLEET_MODEL', 'LAUNCH_FLEET_SKILLS')
 WITHHELD = 'withheld, as it held a credential, a private id or a machine path; run the driver by hand'
 SECRET_NAME = re.compile(r'TOKEN|SECRET|PASSWORD|CREDENTIAL|_KEY$|^KEY')  # the driver kit's rule
@@ -307,29 +308,52 @@ def pick(entries, repo, ticket, role, choice):
             'waits': None, 'look': None}
 
 
-def models_row(text, provider, model, taking):
+def models_row(text, provider, model, taking, picked=None):
+    """The (model name, effort or None) of the Models row this start runs, or None when no row starts it.
+
+    The row is the caller's pick (`--row`), one of the role's own rows; a row that follows Builder runs Builder's.
+    Without a pick it is the role's own row for this provider and model, then any row for them; the role's own rows
+    for them that disagree on effort are refused, as only the caller knows which one it picked."""
     rows = [row for row in (roster_cells(line) for line in ops._section(text, 'Models') or []) if row]
     header = rows[0] if rows else []
+    own = ROLE_ROWS.get(taking, ())
+    if picked is not None and picked not in own:
+        raise Outcome("refused: --row %s is not one of the %s role's Models rows: %s" % (picked, taking, ', '.join(own)))
     if not ('Role' in header and 'Model' in header and len(rows) > 2):
         return None
-    found = []
+    found = {}
     for row in rows[2:]:
-        words = row[-1][1:-1].split(' ') if len(row) == len(header) and len(row[-1]) > 1 \
-            and row[-1][0] == row[-1][-1] == '`' else []
-        if words[:4] == ['--provider', provider, '--model', model] and (
-                len(words) == 4 or (len(words) == 6 and words[4] == '--reasoning-level')):
-            effort = row[header.index('Effort')].lower() if 'Effort' in header else ''
-            found.append((row[header.index('Role')] in ROLE_ROWS.get(taking, ()), row[header.index('Model')],
-                          effort or None))
-    return next(((name, effort) for own, name, effort in sorted(found, key=lambda f: not f[0])), None)
+        if len(row) != len(header):
+            continue
+        role = row[header.index('Role')]
+        if [c for i, c in enumerate(row) if c and i != header.index('Role')] == ['follows Builder']:
+            found.setdefault(role, 'Builder')
+            continue
+        words = row[-1][1:-1].split(' ') if len(row[-1]) > 1 and row[-1][0] == row[-1][-1] == '`' else []
+        starts = words[:4] == ['--provider', provider, '--model', model] and (
+            len(words) == 4 or (len(words) == 6 and words[4] == '--reasoning-level'))
+        effort = row[header.index('Effort')].lower() if 'Effort' in header else ''
+        found.setdefault(role, (starts, row[header.index('Model')], effort or None))
+    if picked is not None:
+        chosen = found.get(picked, 'Builder' if picked != 'Builder' else None)
+        chosen = found.get(chosen) if isinstance(chosen, str) else chosen
+        if not (chosen and chosen[0]):
+            raise Outcome("refused: the Models table's %s row does not start %s %s" % (picked, provider, model))
+        return chosen[1:]
+    mine = [r for r in own if isinstance(found.get(r), tuple) and found[r][0]]
+    if len({found[r][2] for r in mine}) > 1:
+        raise Outcome('refused: the Models table rows %s start %s %s at different efforts; pass --row with the one '
+                      'picked' % (', '.join(mine), provider, model))
+    rest = [r for r in found if isinstance(found[r], tuple) and found[r][0] and r not in mine]
+    return next((found[r][1:] for r in mine + rest), None)
 
 
-def roster_start(text, entries, repo, n, harness, model, skill):
+def roster_start(text, entries, repo, n, harness, model, skill, picked=None):
     taking = SKILL_ROLES.get(skill)
     if taking is None:
         raise Outcome('refused: the Roster gives no role to the %s skill' % skill)
     provider = 'claude-code' if harness == 'claude' else harness
-    row = models_row(text, provider, model, taking)
+    row = models_row(text, provider, model, taking, picked)
     chosen = pick(entries, repo, int(n), taking, {'provider': provider, 'model': model,
                                                   'model_name': row[0] if row else model})
     if chosen['look']:
@@ -698,12 +722,15 @@ def main(argv):
         text = setting_text(FLEET_SETTINGS)
         print(WHICH_ROSTER if text is not None and roster(text) is not None else 'roster: none')
         return 0
+    row = None
+    if kind == 'start' and len(argv) in (7, 8) and argv[-2] == '--row':
+        argv, row = argv[:-2], argv[-1]
     shapes = {'start': (5, 6), 'wake': (3,), 'stop': (3,)}
     skill = argv[5] if kind == 'start' and len(argv) == 6 else 'build-ticket'
     if (len(argv) not in shapes.get(kind, ()) or not REPO.fullmatch(argv[1]) or not TICKET.fullmatch(argv[2])
-            or not NAME.fullmatch(skill) or len(skill) > 60):
-        raise Unreadable('usage: which | roster | start OWNER/NAME N HARNESS MODEL [SKILL] | wake OWNER/NAME N | '
-                         'stop OWNER/NAME N')
+            or not NAME.fullmatch(skill) or len(skill) > 60 or row not in (None, *MODELS_ROWS)):
+        raise Unreadable('usage: which | roster | start OWNER/NAME N HARNESS MODEL [SKILL] [--row ROW] | '
+                         'wake OWNER/NAME N | stop OWNER/NAME N')
     repo, n = argv[1], argv[2]
     run = load(repo)['runs'].get(n)
     taking = picked = effort = None
@@ -711,7 +738,7 @@ def main(argv):
         text = setting_text(FLEET_SETTINGS)
         entries = roster(text) if text is not None else None
         if entries is not None:
-            taking, picked, effort = roster_start(text, entries, repo, n, argv[3], argv[4], skill)
+            taking, picked, effort = roster_start(text, entries, repo, n, argv[3], argv[4], skill, row)
     elif run:
         taking = run.get('role')
     requester = '%s-%s' % (taking or 'builder', n)

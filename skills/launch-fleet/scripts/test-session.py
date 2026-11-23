@@ -642,6 +642,18 @@ class Session(unittest.TestCase):
         self.assertEqual(sent, [{'repository': REPO, 'ticket': 12, 'skill': 'review-ticket', 'harness': 'claude',
                                  'model': 'synthetic-actual-builder', 'effort': 'medium'}])
 
+    def test_with_a_roster_and_one_harness_a_builder_model_on_no_worker_row_makes_the_review_wait(self):
+        (self.home / 'bin/codex').unlink()
+        lead = ('| Orchestrator | Claude Code | Lead | High | `--provider claude-code --model synthetic-lead '
+                '--reasoning-level high` |\n')
+        rows = (MODELS % ('Codex', 'codex')).split('\n')
+        self.roster('\n'.join(rows[:4]) + '\n' + lead + '\n'.join(rows[5:]))
+        self.built(model='Lead')
+        out = self.ended(self.session('--idle', '5'), 3)
+        self.assertIn("needs you: the review of #12 waits: the builder's recorded model Lead is on no builder, "
+                      "fixer or reviewer row of the Models table\n", out)
+        self.assertEqual((self.host_starts(), self.starts(), self.records(12)), ([], [], []))
+
     def test_without_a_roster_host_starts_take_the_arguments_they_took_before_rows(self):
         self.logged_host()
         self.tickets(5)

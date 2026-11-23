@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""gh-meter.py through its shim and its report (OpenWiz#2621, FR5 of #2428).
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ABOUT = """gh-meter.py through its shim and its report (OpenWiz#2621, FR5 of #2428).
 
 python3 -I skills/launch-fleet/scripts/test-gh-meter.py
 
@@ -8,13 +16,6 @@ the shim as a script would. The fake answers `api rate_limit` with a `used`
 that every other call raises by one, so the before and after values are known.
 Expected values are literals, never computed the way the meter computes them.
 """
-import json
-import os
-from pathlib import Path
-import subprocess
-import sys
-import tempfile
-import unittest
 
 HERE = Path(__file__).resolve().parent
 METER = HERE / 'gh-meter.py'
@@ -103,6 +104,7 @@ class Meter(unittest.TestCase):
             (['issue', 'view', '12', '--json', 'body'], 'view', 'issue view', 'graphql'),
             (['pr', 'comment', '3', '--body', 'x'], 'comment', 'pr comment', 'graphql'),
             (['run', 'view', '991', '--log-failed'], 'view', 'run view', 'rest'),
+            (['-R', 'synthetic-owner/synthetic-repo', 'pr', 'view', '3'], 'view', 'pr view', 'graphql'),
             (['auth', 'status'], 'status', 'auth status', 'none'),
         ]
         for args, *_ in cases:
@@ -191,10 +193,22 @@ class Meter(unittest.TestCase):
         self.assertIn('Total: 30 calls, 21 REST units, 9 GraphQL calls', out)
 
     def test_report_refuses_a_bad_log(self):
-        bad = self.dir / 'bad.jsonl'
-        bad.write_text('not json\n')
-        run = self.report(bad)
-        self.assertEqual((run.returncode, run.stdout), (2, ''))
+        good = {'time': '2026-01-01T00:00:00Z', 'role': 'fleet', 'method': 'GET', 'endpoint': 'user',
+                'kind': 'rest', 'exit': 0, 'rest_units': 1, 'rest_used_before': None, 'rest_used_after': None}
+        ok = self.dir / 'ok.jsonl'
+        ok.write_text(json.dumps(good) + '\n')
+        self.assertEqual(self.report(ok).returncode, 0)
+        bad = ['not json', '[]', json.dumps(dict(good, role='boss')), json.dumps(dict(good, kind='soap')),
+               json.dumps(dict(good, rest_units='1')), json.dumps(dict(good, rest_units=True)),
+               json.dumps(dict(good, rest_units=-1)), json.dumps(dict(good, rest_used_before='5')),
+               json.dumps(dict(good, endpoint=7)), json.dumps(dict(good, extra=1)),
+               json.dumps({k: v for k, v in good.items() if k != 'method'}),
+               json.dumps(good)[:-1] + ', "role": "builder"}']
+        for i, text in enumerate(bad):
+            path = self.dir / ('bad%d.jsonl' % i)
+            path.write_text(json.dumps(good) + '\n' + text + '\n')
+            run = self.report(path)
+            self.assertEqual((run.returncode, run.stdout), (2, ''), text)
         self.assertEqual(self.report(self.dir / 'missing.jsonl').returncode, 2)
 
     def test_install_refuses_a_quote_in_the_path(self):

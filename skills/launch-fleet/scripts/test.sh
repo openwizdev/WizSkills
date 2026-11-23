@@ -3260,8 +3260,8 @@ parallel_case() {
         || { bad "$name" "reset trace"; return; }
       parallel_check '' && [ ! -s "$d/out" ] && points_only "$d/err" \
         || { bad "$name" "repeat failed"; return; }
-      [ "$(grep -c ' conditional 304$' "$d/http.log")" = 151 ] \
-        || { bad "$name" "exactly 151 revalidations required"; return; }
+      [ "$(grep -c ' conditional 304$' "$d/http.log")" = 150 ] \
+        || { bad "$name" "exactly 150 revalidations required"; return; }
     fi
   fi
   # Read the trace only after fleet.sh and all of its workers have returned.
@@ -3281,7 +3281,7 @@ assert (state['peak'] == 3 if mode == 'one' else
         8 <= state['peak'] <= 64 if mode == 'graphs' else
         16 <= state['peak'] <= 64 if mode == 'specs' else state['peak'] == 64), state
 if mode != 'failure':
-    expected = {'one': 5, 'pages': 151, 'specs': 71, 'graphs': 80, 'warm': 151,
+    expected = {'one': 5, 'pages': 151, 'specs': 71, 'graphs': 80, 'warm': 150,
                 # The unreadable closed single also needs its detail/blockers.
                 'comment_failure': 153}.get(mode, 151)
     assert len(starts) == expected and len(set(starts)) == expected, len(starts)
@@ -4146,7 +4146,7 @@ start #13: W3: widget page (spec #10)
 EOF
 
 FR9_SINGLES='own_approval(70; 7002; "09:00") | reduce range(71; 91) as $n (.; closed_single($n; "11:00"))'
-FR9_HELD="$OWN13"' claim13 | other_spec | '"$HELD81"
+FR9_HELD="${OWN13-}"' claim13 | other_spec | '"${HELD81-}"
 expect 'FR9: the check reads the open issues and the issues outside specs with no REST call' 0 check.json "$FR9_SINGLES" FAKE_GH_PAGE=5 FAKE_GH_FAIL=issues_page= -- check <<EOF
 start #70: Fix the broken link in the widget docs (approved on its own)
 EOF

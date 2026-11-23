@@ -922,12 +922,15 @@ class Effort(unittest.TestCase):
     def test_only_driver_v1s_exact_version_answer_is_read(self):
         good = {'driver': 'takes-effort', 'records': ['openwiz:records v1'], 'can': ['start', 'wake', 'stop', 'effort']}
         bad = ['{"driver": "x", "driver": "takes-effort", "records": ["openwiz:records v1"], '
-               '"can": ["start", "wake", "stop", "effort"]}', 'effort', '[]', '{}']
+               '"can": ["start", "wake", "stop", "effort"]}', 'effort', '[]', '{}', '["driver", "records", "can"]']
         bad += [json.dumps(dict(good, **change)) for change in (
             {'can': 'start wake stop effort'}, {'can': ['start', 'wake', 'stop', 'effort', 'effort']},
             {'can': ['start', 'stop', 'effort']}, {'can': ['start', 'wake', 'stop', 'effort', 'fly']},
             {'can': ['start', 'wake', 'stop', {'effort': True}]}, {'records': []}, {'records': 'openwiz:records v1'},
-            {'driver': 'Takes Effort'}, {'driver': None})]
+            {'driver': 'Takes Effort'}, {'driver': None}, {'driver': 'a' * 41},
+            {'records': ['openwiz:records v1', 'openwiz:records v1']}, {'records': ['records v1']},
+            {'records': ['openwiz:records v0']}, {'records': ['openwiz:records v1000']},
+            {'records': ['openwiz:records v1 ']})]
         bad.append(json.dumps({k: v for k, v in good.items() if k != 'can'}))
         p = self.project()
         effort_drivers(p, **{'takes-effort': 'odd'})
@@ -937,8 +940,11 @@ class Effort(unittest.TestCase):
                                  (2, '', "host.py: the takes-effort driver's version answer is not driver v1's; "
                                          "nothing was started"))
         self.assertEqual((start_inputs(p), p.saved()), ([], None))
-        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', FAKE_VERSION=json.dumps(good))[0], 0)
-        self.assertEqual(start_inputs(p)[0][1]['effort'], 'medium')
+        for n, answer in enumerate((good, dict(good, driver='a' * 40, records=['openwiz:records v1',
+                                                                             'openwiz:records v999'])), 7):
+            self.assertEqual(p.host('start', REPO, n, 'claude', 'claude-opus-5-5', FAKE_VERSION=json.dumps(answer))[0],
+                             0, answer)
+        self.assertEqual([given['effort'] for _, given in start_inputs(p)], ['medium', 'medium'])
 
 
 if __name__ == '__main__':

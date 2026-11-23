@@ -16,7 +16,7 @@ USAGE = """One read of a repository's open work per wake (#2625, spec #2428 FR8)
   snapshot.py facts OUT N            print issue or pull request N's bounded facts
 
 `write` checks `gh api rate_limit` (free) first and reads through whichever of
-GraphQL or REST has more left, refusing while that is under 1,500. REST pages go
+GraphQL or REST has more left, refusing any read that would leave under 1,500. REST pages go
 out with `If-None-Match` and the ETags saved beside OUT (`OUT.etags`), so an
 unchanged page is a free 304. Any partial page, null node, count mismatch or
 error writes nothing. `facts` refuses a snapshot that is incomplete, older than
@@ -34,7 +34,8 @@ grants = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(grants)
 
 REPO = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
-RESERVE = 1500
+RESERVE, READ_COST = 1500, 1
+BUDGET = {}
 FRESH = timedelta(minutes=30)
 CAP, CUT_ROOM = 60 * 1024, 1024
 DELETED_ACCOUNT = 'ghost'
@@ -81,9 +82,9 @@ COMMENT_FIELDS = ('totalCount pageInfo { hasNextPage endCursor } '
                   'nodes { databaseId author { login __typename } createdAt updatedAt body }')
 ITEM_FIELDS = ('number title state body updatedAt labels(first: 100) { pageInfo { hasNextPage } nodes { name } } '
                'comments(first: $cfirst) { %s }' % COMMENT_FIELDS)
-LIST = ('query %s($owner: String!, $name: String!, $first: Int!, $cfirst: Int!, $after: String) { '
-        'rateLimit { remaining } repository(owner: $owner, name: $name) { '
-        'fleet: object(expression: "HEAD:docs/agents/fleet.md") { ... on Blob { text } } '
+LIST = ('query %s($owner: String!, $name: String!, $first: Int!, $cfirst: Int!, $after: String, '
+        '$withFleet: Boolean!) { rateLimit { remaining } repository(owner: $owner, name: $name) { '
+        'fleet: object(expression: "HEAD:docs/agents/fleet.md") @include(if: $withFleet) { ... on Blob { text } } '
         '%s(states: OPEN, first: $first, after: $after, orderBy: {field: CREATED_AT, direction: ASC}) { '
         'totalCount pageInfo { hasNextPage endCursor } nodes { %s } } } }')
 ISSUES = LIST % ('SnapshotIssues', 'issues', ITEM_FIELDS)
@@ -95,11 +96,19 @@ MORE = ('query SnapshotComments($owner: String!, $name: String!, $number: Int!, 
         '... on PullRequest { comments(first: $first, after: $after) { %s } } } } }' % (COMMENT_FIELDS, COMMENT_FIELDS))
 
 
+def spend(allowance):
+    need(BUDGET.get(allowance, 0) - READ_COST >= RESERVE,
+         f'the {allowance} allowance would fall under 1,500 with the next read; back off')
+
+
 def graphql(query, **variables):
     args = ['api', 'graphql', '-f', 'query=' + query]
     for k, v in variables.items():
-        if v is not None:
+        if type(v) is bool:
+            args += ['-F', f'{k}={str(v).lower()}']
+        elif v is not None:
             args += ['-F' if type(v) is int else '-f', f'{k}={v}']
+    spend('graphql')
     r = gh(*args)
     data = as_json(r.stdout, 'GraphQL') if r.stdout.strip() else None
     need(r.returncode == 0 and isinstance(data, dict) and not data.get('errors'), 'GraphQL read failed')
@@ -107,6 +116,7 @@ def graphql(query, **variables):
     need(isinstance(data, dict) and isinstance(data.get('repository'), dict), 'GraphQL answer has no repository')
     left = (data.get('rateLimit') or {}).get('remaining')
     need(type(left) is int and left >= RESERVE, 'the GraphQL allowance fell under 1,500 mid-read')
+    BUDGET['graphql'] = left
     return data['repository']
 
 
@@ -184,8 +194,11 @@ def read_graphql(repo):
     for query, field, kind in ((ISSUES, 'issues', 'issue'), (PULLS, 'pullRequests', 'pull')):
         cursor, got, total = None, 0, None
         while True:
-            page = graphql(query, owner=owner, name=name, first=PAGE, cfirst=COMMENTS, after=cursor)
-            fleet_md = ((page.get('fleet') or {}).get('text')) if fleet_md is None else fleet_md
+            first_page = query is ISSUES and cursor is None
+            page = graphql(query, owner=owner, name=name, first=PAGE, cfirst=COMMENTS, after=cursor,
+                           withFleet=first_page)
+            if first_page:
+                fleet_md = (page.get('fleet') or {}).get('text')
             conn = page.get(field)
             nodes, more, cursor = connection(conn, field)
             total = conn.get('totalCount') if total is None else total
@@ -204,6 +217,7 @@ def rest(path, cache, raw=False):
     saved = cache.get(path)
     if saved:
         args += ['-H', 'If-None-Match: ' + saved['etag']]
+    spend('core')
     r = gh(*args)
     head, sep, body = r.stdout.replace('\r\n', '\n').partition('\n\n')
     lines = head.split('\n')
@@ -214,6 +228,7 @@ def rest(path, cache, raw=False):
         headers[k.strip().lower()] = v.strip()
     left = headers.get('x-ratelimit-remaining', '')
     need(left.isdigit() and int(left) >= RESERVE, f'the REST allowance fell under 1,500 mid-read ({path})')
+    BUDGET['core'] = int(left)
     if status == '304' and saved:
         return saved['body'], saved.get('next')
     need(r.returncode == 0 and status == '200' and sep, f'REST read failed: {path}')
@@ -308,8 +323,9 @@ def write(repo, out):
     need(REPO.fullmatch(repo), 'repository must be OWNER/NAME')
     left = allowances()
     via = 'graphql' if left['graphql'] >= left['core'] else 'rest'
-    need(left['graphql' if via == 'graphql' else 'core'] >= RESERVE,
-         'both allowances are under 1,500 (graphql %d, core %d); back off' % (left['graphql'], left['core']))
+    BUDGET.update(left)
+    need(left['graphql' if via == 'graphql' else 'core'] - READ_COST >= RESERVE,
+         'both allowances would fall under 1,500 (graphql %d, core %d); back off' % (left['graphql'], left['core']))
     read_at = datetime.now(timezone.utc).strftime(STAMP)
     etags = Path(str(out) + '.etags')
     if via == 'graphql':

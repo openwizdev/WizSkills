@@ -1,23 +1,4 @@
 #!/usr/bin/env python3
-"""Conditional REST reads with saved ETags, for every Python poller (FR7).
-
-    import ghcache
-    ghcache.get('repos/OWNER/NAME/issues/7')           # one answer, parsed
-    ghcache.pages('repos/OWNER/NAME/issues/7/comments?per_page=100')  # every page
-
-    python3 -I ghcache.py get ENDPOINT [--accept MEDIA]
-
-Each GET runs `gh api --include` with the saved ETag in `If-None-Match`, so an
-unchanged answer is a `304` that costs no primary allowance. A `200` saves its
-ETag and body under `${XDG_CACHE_HOME:-~/.cache}/launch-fleet/rest/`, written
-atomically with the body's SHA-256, which is checked on every reuse.
-
-It fails closed: a damaged entry, a `304` with no entry, or any other status
-raises `Error` (the CLI exits 1), never an empty answer. A damaged entry is
-removed as it raises, so the next read starts afresh. It only reads: it never
-sends or caches a write, and its errors never carry a token or a body.
-Python 3.11+ standard library and `gh`.
-"""
 import hashlib
 import json
 import os
@@ -33,7 +14,7 @@ MEDIA = 'application/vnd.github+json'
 
 
 class Error(Exception):
-    """A read that cannot be trusted: never treat it as an empty answer."""
+    pass
 
 
 def cache_dir():
@@ -47,7 +28,6 @@ def _request(endpoint, accept):
 
 
 def _load(path, request, endpoint):
-    """The checked entry at PATH, None when there is none; raises when damaged."""
     if not os.path.lexists(path):
         return None
     try:
@@ -70,7 +50,6 @@ def _load(path, request, endpoint):
 
 
 def _save(path, entry):
-    """Write ENTRY to PATH whole or not at all; a failed save loses only the saving."""
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd, pending = tempfile.mkstemp(dir=path.parent, prefix='.rest.')
@@ -86,7 +65,6 @@ def _save(path, entry):
 
 
 def _parse(raw, endpoint):
-    """(status, headers, body) from `gh api --include` output."""
     head, sep, body = raw.partition(b'\r\n\r\n')
     if not sep:
         head, sep, body = raw.partition(b'\n\n')
@@ -103,7 +81,6 @@ def _parse(raw, endpoint):
 
 
 def _read(endpoint, accept=None):
-    """(body text, Link header) for one GET of ENDPOINT, revalidated."""
     if not isinstance(endpoint, str) or not endpoint or endpoint.startswith('-') or '\n' in endpoint:
         raise Error('ghcache: not an endpoint: %r' % (endpoint,))
     accept = accept or MEDIA
@@ -114,7 +91,6 @@ def _read(endpoint, accept=None):
     if entry:
         command += ['-H', 'If-None-Match: %s' % entry['etag']]
     try:
-        # gh exits 1 on a 304 as on a refusal: the status line decides.
         raw = subprocess.run(command + [endpoint], stdin=subprocess.DEVNULL, capture_output=True).stdout
     except OSError:
         raise Error('ghcache: could not run gh for %s' % endpoint) from None
@@ -122,7 +98,6 @@ def _read(endpoint, accept=None):
     if status == 304:
         if not entry:
             raise Error('ghcache: 304 for %s with no saved answer' % endpoint)
-        # A page may be unchanged while one was appended: fresh Link wins.
         return entry['body'], headers.get('link', entry['link'])
     if status != 200:
         raise Error('ghcache: HTTP %d for %s' % (status, endpoint))
@@ -145,12 +120,10 @@ def _json(text, endpoint):
 
 
 def get(endpoint, accept=None):
-    """ENDPOINT's answer, parsed from JSON; a 304 gives the saved one."""
     return _json(_read(endpoint, accept)[0], endpoint)
 
 
 def pages(endpoint):
-    """Every page of the list at ENDPOINT, following `Link: rel="next"`, joined."""
     items, seen = [], set()
     while endpoint:
         if endpoint in seen:

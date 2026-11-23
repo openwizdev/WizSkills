@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""ghcache.py under a fake `gh`: conditional REST reads with saved ETags.
-
-python3 -I skills/launch-fleet/scripts/test-ghcache.py
-
-Every answer here is synthetic; nothing reaches GitHub.
-"""
 import json
 import os
 from pathlib import Path
@@ -16,9 +10,6 @@ import unittest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-# The fake answers from FAKE_WORLD: {endpoint: {status, etag, body, link}}.
-# It answers 304 when If-None-Match names the endpoint's current ETag, and
-# logs each call's arguments, so a test sees exactly what was sent.
 FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, sys
 args = sys.argv[1:]
@@ -90,7 +81,6 @@ class GhCache(unittest.TestCase):
         return sorted(p for p in rest.iterdir() if not p.name.startswith('.')) if rest.is_dir() else []
 
     def test_first_read_saves_the_etag_and_the_second_gets_a_304(self):
-        # catches: a poller that never revalidates, so every read spends allowance
         self.assertEqual(self.ghcache.get(ISSUE), {'number': 7, 'title': 'first'})
         self.assertEqual(len(self.entries()), 1)
         self.assertEqual(json.loads(self.entries()[0].read_text())['etag'], '"a1"')
@@ -98,7 +88,6 @@ class GhCache(unittest.TestCase):
         self.assertEqual(self.sent_tags(), [[], ['"a1"']])
 
     def test_a_changed_answer_replaces_the_saved_one(self):
-        # catches: a stale body kept after GitHub answers 200 with a new ETag
         self.ghcache.get(ISSUE)
         self.world({ISSUE: {'etag': '"b2"', 'body': '{"number": 7, "title": "second"}'}})
         self.assertEqual(self.ghcache.get(ISSUE), {'number': 7, 'title': 'second'})
@@ -107,7 +96,6 @@ class GhCache(unittest.TestCase):
         self.assertEqual(len(self.entries()), 1)
 
     def test_pages_reads_every_page_and_revalidates_each(self):
-        # catches: only the first page read, or a 304 page dropping its Link
         self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}, {"id": 2}]',
                                'link': '<%s>; rel="next", <%s>; rel="last"' % (PAGE2, PAGE2)},
                     PAGE2: {'etag': '"p2"', 'body': '[{"id": 3}]'}})
@@ -117,7 +105,6 @@ class GhCache(unittest.TestCase):
         self.assertEqual(self.sent_tags(), [[], [], ['"p1"'], ['"p2"']])
 
     def test_a_damaged_entry_raises(self):
-        # catches: a tampered or torn entry served as GitHub's answer
         self.ghcache.get(ISSUE)
         entry = self.entries()[0]
         saved = json.loads(entry.read_text())
@@ -129,14 +116,25 @@ class GhCache(unittest.TestCase):
         with self.assertRaises(self.ghcache.Error):
             self.ghcache.get(ISSUE)
 
+    def test_an_entry_with_a_repeated_key_or_a_symlink_raises(self):
+        self.ghcache.get(ISSUE)
+        entry = self.entries()[0]
+        good = entry.read_text()
+        entry.write_text(good[:-1] + ', "etag": "\\"forged\\""}')
+        with self.assertRaises(self.ghcache.Error):
+            self.ghcache.get(ISSUE)
+        (self.tmp / 'elsewhere').write_text(good)
+        entry.symlink_to(self.tmp / 'elsewhere')
+        with self.assertRaises(self.ghcache.Error):
+            self.ghcache.get(ISSUE)
+        self.assertEqual(self.sent_tags(), [[]])
+
     def test_a_304_without_an_entry_raises(self):
-        # catches: an empty answer returned when there is nothing to revalidate
         self.world({ISSUE: {'etag': '"a1"', 'body': '{}'}, 'always304': True})
         with self.assertRaises(self.ghcache.Error):
             self.ghcache.get(ISSUE)
 
     def test_a_403_raises_without_the_body(self):
-        # catches: a refusal read as an empty list, or its body logged
         self.world({ISSUE: {'status': 403, 'body': '{"message": "synthetic-secret-body"}'}})
         with self.assertRaises(self.ghcache.Error) as raised:
             self.ghcache.get(ISSUE)
@@ -145,7 +143,6 @@ class GhCache(unittest.TestCase):
         self.assertEqual(self.entries(), [])
 
     def test_reads_only_and_keys_on_the_media_type(self):
-        # catches: a write sent through the cache, or two media types sharing one entry
         self.ghcache.get(ISSUE)
         self.ghcache.get(ISSUE, accept='application/vnd.github.full+json')
         self.assertEqual(len(self.entries()), 2)
@@ -154,13 +151,11 @@ class GhCache(unittest.TestCase):
         self.assertEqual(self.sent_tags(), [[], []])
 
     def test_an_answer_without_an_etag_is_not_saved(self):
-        # catches: an unvalidatable body saved and replayed later
         self.world({ISSUE: {'body': '{"number": 7}'}})
         self.assertEqual(self.ghcache.get(ISSUE), {'number': 7})
         self.assertEqual(self.entries(), [])
 
     def test_cli_get_prints_the_body(self):
-        # catches: the CLI missing, or printing a revalidated read as nothing
         script = [sys.executable, '-I', str(HERE / 'ghcache.py'), 'get', ISSUE]
         for _ in range(2):
             run = subprocess.run(script, capture_output=True, text=True)

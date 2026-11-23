@@ -82,6 +82,45 @@ def default_ref(target, name, branch):
     return 0 if status == 200 else 1
 
 
+def seeded_file(argv):
+    read = len(argv) == 5 and argv[:4] == ['api', '--include', '-X', 'GET'] and re.fullmatch(
+        r'repos/([^/]+/[^/]+)/contents/((?:tests|\.github)/[^?]+)\?ref=(.+)', argv[4])
+    put = len(argv) in (10, 12) and argv[:3] == ['api', '-X', 'PUT'] and re.fullmatch(
+        r'repos/([^/]+/[^/]+)/contents/((?:tests|\.github)/[^?]+)', argv[3])
+    path = Path(os.environ['FAKE_GH_REPOS']) if os.environ.get('FAKE_GH_REPOS') else None
+    if not (read or put) or path is None:
+        return None
+    state = json.loads(path.read_text())
+    repo = state['repos'].get((read or put)[1].lower())
+    if repo is None:
+        return None
+    fields = dict(value.split('=', 1) for value in argv[5::2]) if put else {}
+    files = repo['branches'].setdefault(read[3] if read else fields['branch'], {})
+    if read:
+        state['log'].append(['GET', argv[4]])
+        path.write_text(json.dumps(state))
+        if read[2] not in files:
+            sys.stdout.write('HTTP/2.0 404 Fixture\r\n\r\n{"message": "Not Found"}')
+            return 1
+        sys.stdout.write('HTTP/2.0 200 Fixture\r\n\r\n' + json.dumps({
+            'type': 'file', 'encoding': 'base64', 'sha': blob_sha(files[read[2]]),
+            'content': base64.b64encode(files[read[2]].encode()).decode()}))
+        return 0
+    if (put[2] in files) != ('sha' in fields):
+        sys.stderr.write('gh: sha mismatch (HTTP 409)\n')
+        return 1
+    files[put[2]] = base64.b64decode(fields['content']).decode()
+    state['log'].append(['PUT', argv[3]])
+    lost = state.get('seed_lost', 0) > 0
+    state['seed_lost'] = state.get('seed_lost', 0) - lost
+    path.write_text(json.dumps(state))
+    if lost:
+        sys.stderr.write('gh: synthetic lost reply (HTTP 502)\n')
+        return 1
+    print(json.dumps({'content': {'path': put[2]}}))
+    return 0
+
+
 def blob_sha(text):
     data = text.encode()
     return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
@@ -203,6 +242,9 @@ def main(argv):
         return 0
     if argv[:2] == ['repo', 'create'] or (argv[:2] == ['repo', 'view'] and len(argv) > 2 and not argv[2].startswith('-')):
         return demo(argv)
+    answered = seeded_file(argv)
+    if answered is not None:
+        return answered
     if len(argv) == 5 and argv[:4] == ['api', '--include', '-X', 'GET']:
         match = re.fullmatch(r'repos/([^/]+/[^/]+)/git/ref/heads/(.+)', argv[4])
         if match:

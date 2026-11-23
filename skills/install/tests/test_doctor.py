@@ -917,7 +917,7 @@ class StepFourNeverDowngrades(unittest.TestCase):
         self.assertEqual(out.split('\n'), ['source ok', 'ok: %s' % agent, ''])
         installed = (agent / 'SKILL.md').read_text()
         self.assertEqual(installed.split('\nversion: ', 1)[1].split('\n', 1)[0], self.newer(mine), 'never downgraded')
-        self.assertIn('**With any other host:** recommend the personal GitHub login', installed)
+        self.assertIn('**On every host, for the first fleet:** recommend the personal GitHub login', installed)
 
     def test_an_older_or_missing_bundled_copy_falls_back_to_this_skills_tag(self):
         for bundled in ('0.0.1', None):

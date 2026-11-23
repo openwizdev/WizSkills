@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 REPO = 'synthetic-owner/synthetic-repo'
@@ -873,6 +874,20 @@ class Effort(unittest.TestCase):
         self.assertEqual(p.host('start', REPO, 10, 'claude', 'claude-opus-5-5', 'launch-fleet'),
                          (0, 'started #10 on takes-effort as Takes Effort via syn-owner, Opus 5.5 high effort', ''))
         self.assertEqual(start_inputs(p)[-1][1]['effort'], 'high')
+
+    def test_a_stopped_fleet_note_still_reads_as_stopped_for_the_wake_repair_whatever_its_reason(self):
+        host = host_module()
+        for reason, mark in host.REASONS.items():
+            with self.subTest(reason):
+                thread = [{'id': 1, 'body': 'stopped (%s)' % reason}, {'id': 2, 'body': mark + '\n\nrefused'}]
+                with mock.patch.object(host.post, 'authors', lambda repo: set()), \
+                        mock.patch.object(host.post, 'ours', lambda c, authors: True), \
+                        mock.patch.object(host.post, 'thread', lambda repo, n: thread), \
+                        mock.patch.object(host.status, 'parse', lambda body: {'agent': 'fleet', 'state': body}
+                                          if body.startswith('stopped') else None):
+                    stopped, comments = host.reports(REPO, '8')
+                    self.assertEqual((stopped, [c['id'] for c in comments]), (True, [2]))
+                    self.assertEqual(host.stops(REPO, '8')[0], reason)
 
     def test_a_later_start_without_the_effort_clears_the_report(self):
         p = self.project()

@@ -4314,7 +4314,7 @@ case ${TEST_ONLY:-} in
   'GI1:*') expected=16 ;;
   'WZ-PROBE:*') expected=3 ;;
   'GI2:*') expected=13 ;;
-  'CW-G:*') expected=2 ;;
+  'CW-G:*') expected=4 ;;
   'cross-repository PR:*') expected=12 ;;
 esac
 [ "$cases" = "$expected" ] || bad 'the selected cases ran' "$cases cases ran, not $expected: is \"$TEST_ONLY\" a case's name?"

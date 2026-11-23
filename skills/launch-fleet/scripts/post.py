@@ -5,6 +5,7 @@ from email.utils import parsedate_to_datetime
 import fcntl
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -53,7 +54,7 @@ def state_path():
 
 
 def number(value):
-    return type(value) in (int, float) and value >= 0
+    return type(value) in (int, float) and math.isfinite(value) and value >= 0
 
 
 def valid(value):
@@ -75,7 +76,7 @@ def pacer_state():
         path.parent.mkdir(parents=True, exist_ok=True)
         lock = open(path.with_name(path.name + '.lock'), 'a')
     except OSError:
-        raise Stop(f'refused: the write pacer\'s state folder {path.parent} cannot be used; nothing was written')
+        raise Stop('refused: the write pacer\'s state folder cannot be used; nothing was written')
     with lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
@@ -83,14 +84,14 @@ def pacer_state():
         except (OSError, ValueError):
             value = None
         if not valid(value):
-            raise Stop(f'refused: the write pacer\'s state {path} is unreadable; nothing was written')
+            raise Stop('refused: the write pacer\'s state file is unreadable; nothing was written')
         yield value
         temp = path.with_name(f'{path.name}.{os.getpid()}.tmp')
         try:
             temp.write_text(json.dumps(value))
             os.replace(temp, path)
         except OSError:
-            raise Stop(f'refused: the write pacer\'s state {path} cannot be saved; nothing was written')
+            raise Stop('refused: the write pacer\'s state file cannot be saved; nothing was written')
 
 
 def alive(pid):

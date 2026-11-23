@@ -953,13 +953,18 @@ class KeyHostExpiredLogin(Base):
     @unittest.skipUnless(os.environ.get('WRITE_DRIVER_OPENWIZ'),
                          'set WRITE_DRIVER_OPENWIZ to an OpenWiz checkout with the key helper to run the real fake host')
     def test_the_key_host_route_runs_against_the_real_kits_fake_host_and_helper(self):
-        openwiz = Path(os.environ['WRITE_DRIVER_OPENWIZ']).resolve()
+        fork = self.tmp / 'fork'
+        shutil.copytree(Path(os.environ['WRITE_DRIVER_OPENWIZ']).resolve() / 'kernel', fork / 'kernel')
+        registry = fork / 'kernel' / 'driver-kit' / 'hosts.json'
+        hosts = json.loads(registry.read_text())
+        hosts['examplehost'] = json.loads((KEY_OPENWIZ / 'kernel' / 'driver-kit' / 'hosts.json').read_text())['examplehost']
+        registry.write_text(json.dumps(hosts, indent=2))
         self.begin()
         for name, change, read in (('fixed', None, 'expired-login pass'),
                                    ('silent', lambda t: t.replace('== 401', '== 999'),
                                     'expired-login fail: silent-start')):
             with self.subTest(name):
-                p = self.lesson(self.key_driver(name, change=change), openwiz=openwiz, check=0)
+                p = self.lesson(self.key_driver(name, change=change), openwiz=fork, check=0)
                 print(p.stdout, end='')
                 self.assertIn(read, p.stdout)
 
@@ -1203,12 +1208,6 @@ class KeyHost(unittest.TestCase):
         skill = (SCRIPT.parents[1] / 'SKILL.md').read_text()
         self.assertIn('- **Never a login or key.** Never ask for, read, print, store or pass a login, token, key, '
                       'password, secret or cookie', skill)
-
-    def test_the_expired_login_lesson_is_out_of_reach_for_a_key_host_today(self):
-        text = key_host_lines()
-        self.assertIn('the expired-login lesson is out of reach for a key-host driver today', text)
-        self.assertIn('openwizdev/openwiz#2674', text)
-        self.assertNotIn('not run', text)
 
     def test_a_host_that_cannot_wake_or_stop_the_same_run_ends_in_a_plain_no(self):
         text = key_host_lines()

@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -158,6 +159,7 @@ def connect_usable(text):
 
 
 SETTINGS = SKILL_DIR.parent / 'setup/scripts/settings.py'
+TICKET_FIELDS = 'number,state,stateReason,closedByPullRequestsReferences,blockedBy,comments'
 OPUS = ('claude-code', 'claude-opus-5-5', 'medium')
 SOL = ('codex', 'gpt-6.2-sol', 'medium')
 
@@ -248,6 +250,10 @@ def github(repos=(), **switches):
     return json.dumps(world)
 
 
+SEEDED = ('PUT', 'repos/%s/contents/tests/test_check.py' % REPO), \
+    ('PUT', 'repos/%s/contents/.github/workflows/check.yml' % REPO)
+
+
 class Journey:
     """One replay: a private folder with its state, fakes and synthetic GitHub."""
 
@@ -319,6 +325,7 @@ class Journey:
                    FAKE_OPENWIZ_SCRIPT=str(self.script), FAKE_OPENWIZ_LOG=str(self.log),
                    FAKE_ROOM_SCRIPT=str(self.room_script), FAKE_ROOM_LOG=str(self.room_log),
                    FAKE_GH_REPOS=str(self.repos), FAKE_GH_CREATE_LOG=str(self.created_log), **self.extra_env)
+        env.update(runpy.run_path(str(SKILL_DIR.parent / 'launch-fleet/scripts/fixtures/git_origin.py'))['env'](self.dir, {self.world['repo']: self.world['files'].get('docs/agents/fleet.md')}))
         return env
 
     def save_world(self):
@@ -526,6 +533,118 @@ class RecordedJourney(unittest.TestCase):
         for ticket in plan['tickets']:
             self.assertNotIn(ticket['title'].split(': ', 1)[1], packaged)
         self.assertNotIn('| Ticket |', packaged)
+
+
+class HostAwareSetup(unittest.TestCase):
+    def test_driver_setup_carries_without_cloudroom_and_keeps_github_and_harness_gates(self):
+        cases = (
+            ('local', 'local', 'harness_listed', 'project_verified', 0, 'agents on local'),
+            ('boat', 'boat', 'harness_listed', 'project_verified', 0, 'agents on boat'),
+            ('syn-driver-2', 'syn-driver-2', 'harness_listed', 'project_verified', 0, 'agents on syn-driver-2'),
+            ('local', 'local', 'harness_not_installed', 'project_verified', 5, 'harness_not_installed'),
+            ('local', 'local', 'harness_listed', 'project_no_write', 5, 'project_no_write'),
+            ('local', 'boat', 'harness_listed', 'project_verified', 5, 'host boat'),
+        )
+        for picked, prepared, harness, project, code, message in cases:
+            with self.subTest(picked=picked, prepared=prepared, harness=harness, project=project):
+                j = Journey(self)
+                (j.dir / 'bin/room-cli').unlink()
+                repo = 'synthetic-owner/synthetic-repo'
+                choice = SOL if prepared == 'boat' else OPUS
+                state = setup_state(repository=repo, settings=choice, overrides={
+                    'cloudroom': 'cloudroom_not_needed', 'harness': harness, 'project': project})
+                state['project'].update(host=prepared, project=None, answer_thread=None, operator='Synthetic Operator')
+                j.write_setup(state)
+                j.state.write_text(json.dumps({
+                    'repo': repo, 'host': {'agents': picked, 'harnesses': []}}))
+                j.state.chmod(0o600)
+                self.assertIsNone(shutil.which('room-cli', path=j.env()['PATH']))
+                result = j.helper(['continue', '--explained'])
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                self.assertIn(message, result.stdout)
+                self.assertNotIn('CloudRoom project', result.stdout)
+                self.assertEqual('setup' in json.loads(j.state.read_text()), code == 0)
+
+    def test_choose_reads_nc1_local_options_and_refuses_cloudroom_fallback(self):
+        j = Journey(self)
+        (j.dir / 'bin/room-cli').unlink()
+        state = setup_state(settings=OPUS, overrides={'cloudroom': 'cloudroom_not_needed'})
+        state['project'].update(host='local', project=None, answer_thread=None)
+        j.write_setup(state)
+        j.state.write_text(json.dumps({
+            'repo': REPO, 'host': {'agents': 'local', 'harnesses': ['claude-code']},
+            'setup': {'host': 'local', 'settings': dict(zip(('harness', 'model', 'effort'), OPUS))}}))
+        j.state.chmod(0o600)
+        options = offering(OPUS, SOL)
+        j.options.write_text(json.dumps(options))
+        refused = j.helper(['choose', '--from-setup'])
+        self.assertEqual(refused.returncode, 5, refused.stdout + refused.stderr)
+        self.assertIn('models --json --host local', refused.stdout)
+        self.assertNotIn('choices', json.loads(j.state.read_text()))
+        options['source'] = 'local'
+        j.options.write_text(json.dumps(options))
+        picked = j.helper(['choose', '--from-setup'])
+        self.assertEqual(picked.returncode, 0, picked.stdout + picked.stderr)
+        self.assertEqual(json.loads(j.state.read_text())['choices']['model'], OPUS[1])
+
+    def test_a_codex_only_machine_records_its_choice_and_leaves_the_review_same_family(self):
+        j = Journey(self)
+        j.replay(until='agents')
+        state = json.loads(j.state.read_text())
+        state['host'] = {'agents': 'local', 'harnesses': ['codex']}
+        state['setup']['settings'] = dict(zip(('harness', 'model', 'effort'), SOL))
+        j.state.write_text(json.dumps(state))
+        options = offering(SOL)
+        options['harnesses'] = [h for h in options['harnesses'] if h['provider'] == 'codex']
+        options['source'] = 'local'
+        j.options.write_text(json.dumps(options))
+        j.checkout.write_text(models_md(orchestrator=OPUS, builder=OPUS, reviewer=SOL))
+        result = j.helper(['choose', '--from-setup'])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(j.state.read_text())['choices']['model'], SOL[1])
+        self.assertEqual(ModelsTable.models(self, j.checkout.read_text())['Reviewer'], OPUS,
+                         'the table keeps a valid other-family Reviewer')
+        self.assertIn('same-family review', result.stdout)
+
+    def test_install_passes_the_chosen_host_to_models_and_follows_the_driver_handoff(self):
+        text = SKILL.read_text()
+        for step in ('### 3. Connect', '### 5. Agents'):
+            section = text.split(step, 1)[1].split('\n### ', 1)[0]
+            self.assertIn('models --json --host <its name>', section)
+        launch = text.split('### 8. Launch', 1)[1].split('\n### ', 1)[0]
+        self.assertIn('heartbeat', launch)
+        self.assertIn('Starting one', launch)
+
+
+class ConnectIdentity(unittest.TestCase):
+    def step(self):
+        connect = SKILL.read_text().split('### 3. Connect', 1)[1].split('\n### ', 1)[0]
+        found = re.search(r'^3\. .*?(?=^[0-9]+\. )', connect, re.M | re.S)
+        self.assertIsNotNone(found, 'Connect has a step 3')
+        return found[0]
+
+    def branch(self, step, label):
+        found = re.search(r'^   - \*\*%s:\*\* (.+)$' % re.escape(label), step, re.M)
+        self.assertIsNotNone(found, 'step 3 has a %r branch' % label)
+        return found[1]
+
+    def test_every_host_gets_the_personal_login_and_no_cloudroom_step(self):
+        other = self.branch(self.step(), 'On every host, for the first fleet')
+        self.assertRegex(other, r'^recommend the personal GitHub login')
+        self.assertIn('`github_login.py skip-app`', other)
+        for cloudroom_step in ('--agent-for', 'secret', '"The App"', 'runtime/github-app/setup.py'):
+            self.assertNotIn(cloudroom_step, other)
+
+    def test_the_app_is_offered_and_only_an_answer_selects_the_skip(self):
+        step = self.step()
+        offered = self.branch(step, 'The App, offered instead')
+        self.assertIn('`--app`', offered)
+        self.assertIn('set up with the installed `"$build"/runtime/github-app/setup.py` as the `setup` skill\'s '
+                      '"The App" says', offered)
+        self.assertIn('the App needs CloudRoom today', offered)
+        self.assertNotIn('recommend the App', step)
+        self.assertIn("Only the user's answer selects `github_login.py skip-app`; an App failure never becomes a skip.",
+                      step)
 
 
 class Continuation(unittest.TestCase):
@@ -749,6 +868,42 @@ class Launch(unittest.TestCase):
                      '5 tickets: 3 building, 2 blocked', 'Counts are progress, not a first merge'):
             self.assertIn(line, watch)
         self.assertEqual(stat.S_IMODE(j.state.stat().st_mode), 0o600, 'owner-only state')
+
+    def test_local_progress_reads_github_only_and_never_cloudroom(self):
+        j = Journey(self)
+        j.replay(until='watch')
+        state = json.loads(j.state.read_text())
+        state['host'] = {'agents': 'local', 'harnesses': ['claude-code', 'codex']}
+        j.state.write_text(json.dumps(state))
+        (j.dir / 'bin/room-cli').unlink()
+        note = '<!-- openwiz:status v1 -->\nagent: builder\nstate: working\n'
+        views = {901: ('CLOSED', 'COMPLETED', [1901], [], []), 902: ('OPEN', None, [1902], [], []),
+                 903: ('OPEN', None, [], [], [note]), 904: ('OPEN', None, [], [(901, 'CLOSED'), (903, 'OPEN')], []),
+                 905: ('OPEN', None, [], [(901, 'CLOSED')], [])}
+        answers = {str(n): {'number': n, 'state': s, 'stateReason': why,
+                            'closedByPullRequestsReferences': [{'number': p} for p in pulls],
+                            'blockedBy': {'nodes': [{'number': b, 'state': bs} for b, bs in blockers]},
+                            'comments': [{'body': body, 'author': {'login': 'synthetic-factory[bot]'}}
+                                         for body in bodies]}
+                   for n, (s, why, pulls, blockers, bodies) in views.items()}
+        (j.dir / 'tickets.json').write_text(json.dumps(answers))
+        gh = j.dir / 'bin/gh'
+        gh.write_text(
+            '#!%s -I\nimport json, os, sys\nfrom pathlib import Path\na = sys.argv[1:]\n'
+            "if a[:2] == ['issue', 'view'] and a[3:] == ['--json', '%s']:\n"
+            "    print(json.dumps(json.loads(Path(%r).read_text())[a[2]]))\n    sys.exit(0)\n"
+            "os.execv(%r, [%r, '-I', '-S', %r, *a])\n" % (
+                sys.executable, TICKET_FIELDS, str(j.dir / 'tickets.json'), sys.executable, sys.executable,
+                str(FAKE_GH)))
+        gh.chmod(0o755)
+        before = len(j.logged())
+        result = j.helper(['progress', '--spec', '900'])
+        self.assertEqual(j.logged()[before:], [], 'a local fleet never runs the CloudRoom-backed openwiz fleet')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for line in ('#901 merged', '#902 in_review', '#903 building', '#904 blocked', '#905 ready',
+                     '5 tickets: 1 ready, 1 building, 1 in review, 1 merged, 1 blocked',
+                     'Counts are progress, not a first merge'):
+            self.assertIn(line, result.stdout)
 
     def test_repeat_and_reload_never_start_again(self):
         j = Journey(self)
@@ -1059,7 +1214,7 @@ class DemoRepository(unittest.TestCase):
         created = j.helper(YES_DEMO)
         self.assertEqual(created.returncode, 0, created.stdout)
         self.assertIn('Created and read back', created.stdout)
-        self.assertEqual(self.writes(j), [['POST', 'user/repos']])
+        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)])
 
     # Catches: a yes given to a preview that never said the repository gets
     # an initial README commit on its default branch, or a preview that writes.
@@ -1087,7 +1242,8 @@ class DemoRepository(unittest.TestCase):
                 again = j.helper(YES_DEMO)
                 self.assertEqual(again.returncode, 0, again.stdout)
                 self.assertIn('Created and read back', again.stdout)
-                self.assertEqual(self.writes(j), [['POST', 'user/repos']], 'one create, no seed push, no other write')
+                self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)],
+                                 'one create and its disclosed test and check, no other write')
 
     # Catches: an onboarding whose own repository exists without a default
     # branch (an interrupted or earlier empty create) being reported created,
@@ -1131,7 +1287,38 @@ class DemoRepository(unittest.TestCase):
         again = j.helper(YES_DEMO)
         self.assertEqual(again.returncode, 0, again.stdout)
         self.assertEqual(self.world(j)['repos'], world['repos'], 'a repeat only reads')
-        self.assertEqual(self.writes(j), [['POST', 'user/repos']])
+        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)])
+
+    def test_the_new_repository_gets_the_disclosed_passing_test_and_check_workflow(self):
+        j = Journey(self)
+        preview = j.helper(['create-repo', '--repo', REPO])
+        self.assertEqual(preview.returncode, 12, preview.stdout)
+        for words in ('tests/test_check.py', '.github/workflows/check.yml', 'job named check',
+                      'python3 -m unittest discover -s tests'):
+            self.assertIn(words, preview.stdout)
+        self.assertEqual(self.writes(j), [], 'the preview writes nothing')
+        world = self.world(j)
+        world['seed_lost'] = 1
+        j.repos.write_text(json.dumps(world))
+        done = j.helper(YES_DEMO)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn('passing test', done.stdout)
+        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)], 'a lost reply is read back')
+        self.assertTrue(json.loads(j.state.read_text())['created']['seeded'])
+        main = self.world(j)['repos'][REPO.lower()]['branches']['main']
+        project = j.dir / 'seeded'
+        for name, text in main.items():
+            (project / name).parent.mkdir(parents=True, exist_ok=True)
+            (project / name).write_text(text)
+        ran = subprocess.run([sys.executable, '-I', '-m', 'unittest', 'discover', '-s', 'tests'], cwd=project,
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn('Ran 1 test', ran.stderr)
+        workflow = main['.github/workflows/check.yml']
+        self.assertRegex(workflow, r'\njobs:\n  check:\n')
+        self.assertIn('run: python3 -m unittest discover -s tests\n', workflow)
+        self.assertEqual(j.helper(YES_DEMO).returncode, 0)
+        self.assertEqual(len(self.writes(j)), 3, 'a repeat writes nothing')
 
 
 class ModelsTable(unittest.TestCase):
@@ -1447,8 +1634,6 @@ class Resume(unittest.TestCase):
         return result.stdout
 
     def test_a_fresh_session_resumes_at_the_first_unfinished_step(self):
-        # catches: a resumed journey that restarts from the top, or jumps past an
-        # unfinished step (a grill before Connect is carried, a launch before the spec is recorded).
         j = Journey(self)
         j.world['files']['docs/agents/fleet.md'] = models_md()
         j.save_world()
@@ -1472,8 +1657,6 @@ class Resume(unittest.TestCase):
         self.assertIn('progress --spec 900', self.next(j))
 
     def test_an_interrupted_or_withdrawn_step_is_resumed_not_skipped(self):
-        # catches: an uncertain create or start reported as done (inviting a second
-        # effect), and a withdrawn setup skipped because later choices are saved.
         j = Journey(self)
         self.assertEqual(j.helper(['where', '--agents', 'cloud', '--yes']).returncode, 0)
         j.repos.write_text(github(create='lost', fail_after_create=2))
@@ -1498,9 +1681,6 @@ class Resume(unittest.TestCase):
 
 
     def test_an_existing_repository_prepared_before_continue_resumes_at_connect(self):
-        # catches: #1571, an owner who confirmed an existing repository and prepared it
-        # in setup, interrupted before continue, is offered a repository again
-        # (Next: project), inviting a second repository while Connect is under way.
         j = Journey(self)
         self.assertEqual(j.helper(['where', '--agents', 'cloud', '--yes']).returncode, 0)
         other = 'synthetic-owner/synthetic-existing'
@@ -1517,9 +1697,6 @@ class Resume(unittest.TestCase):
         self.assertEqual(j.gh_creates(), [], 'nothing created')
 
     def test_a_prepared_repository_is_never_taken_as_this_onboardings_selection(self):
-        # catches: review R2, a repository setup prepared for an earlier project on this
-        # host taken as this onboarding's selection (Next: connect for the wrong repository)
-        # when this onboarding recorded none.
         j = Journey(self)
         self.assertEqual(j.helper(['where', '--agents', 'cloud', '--yes']).returncode, 0)
         previous = 'synthetic-owner/previous-project'
@@ -1534,9 +1711,6 @@ class Resume(unittest.TestCase):
                          'a setup store others can read or replace is never trusted')
 
     def test_a_local_choice_resumes_at_choose_the_agents_until_its_builder_tables_read_back(self):
-        # catches: #1571, a saved answer for this machine counted as a finished Choose the agents
-        # while the builder tables don't name it yet, so a resumed owner skips to the plan (Next: plan).
-        # The road (#1358) makes this machine a real choice, so it reads back like Cloudroom.
         j = Journey(self)
         j.replay(until='agents')
         state = json.loads(j.state.read_text())
@@ -1558,9 +1732,6 @@ class Resume(unittest.TestCase):
         self.assertEqual(self.next(j).splitlines()[0], 'Next: setting.', 'the host setting follows the agents (#1358)')
 
     def test_a_cloud_choice_resumes_at_choose_the_agents_until_its_builder_tables_read_back(self):
-        # catches: #1571, a saved Cloud choice counted as a finished Choose the agents
-        # while setup has not yet made the builder tables name it, so a fresh session
-        # skips the pending builder settings (Next: plan).
         j = Journey(self)
         j.replay(until='agents')
         j.world['files']['docs/agents/fleet.md'] = fleet_md(builder=CLAUDE, small=CLAUDE)
@@ -1583,9 +1754,6 @@ class Resume(unittest.TestCase):
 
 
     def test_a_recorded_launch_resumes_before_the_agent_checks(self):
-        # catches: review R1, a launched or uncertain first fleet saved before the
-        # builder-table read-back existed sent back to Choose the agents, losing its
-        # progress or its never-start-again recovery.
         def older(j):
             state = json.loads(j.state.read_text())
             state['choices'].pop('builder_tables', None)
@@ -1604,9 +1772,6 @@ class Resume(unittest.TestCase):
         self.assertIn('never start it a second way', said)
 
     def test_a_connected_repository_outlives_a_withdrawn_setup_after_an_absent_demo(self):
-        # catches: an absent demo create counted as "no repository" once setup is
-        # withdrawn, so resume asks for a repository again and create-repo makes a
-        # second one while the connected repository is still saved (review R1).
         j = Journey(self)
         self.assertEqual(j.helper(['where', '--agents', 'cloud', '--yes']).returncode, 0)
         other = 'synthetic-owner/synthetic-existing'
@@ -1624,6 +1789,459 @@ class Resume(unittest.TestCase):
         self.assertEqual(second.returncode, 5, second.stdout)
         self.assertIn(other, second.stdout)
         self.assertEqual([c[1] for c in j.gh_creates()].count('create'), creates, 'no second repository')
+
+
+BRAIN_BRANCH = 'openwiz/brain'
+BRAIN_PULL = 'https://github.com/%s/pull/940' % REPO
+BRAIN_FILES = {'.openwiz/brain/README.md': '# Brain\n\nSynthetic.\n',
+               '.openwiz/brain/settings.json': '{"brain_location": "in_repository"}\n'}
+FAKE_INIT = ('import json\nFOLDER = ".openwiz/brain"\n\n\ndef files(brain):\n'
+             '    return {FOLDER + "/README.md": "# Brain\\n\\nSynthetic.\\n",\n'
+             '            FOLDER + "/settings.json": json.dumps({"brain_location": brain["location"]}) + "\\n"}\n')
+INIT_OPERATION = 'a' * 32
+SETUP_FILES = ('docs/agents/fleet.md', 'docs/agents/issue-tracker.md', 'docs/agents/triage-labels.md',
+               'docs/agents/domain.md')
+
+
+ISSUES_GH = r"""
+import json, os, re, sys
+path, fake, lose, argv = sys.argv[1], sys.argv[2], sys.argv[3] == '1', sys.argv[4:]
+repo = 'synthetic-owner/synthetic-sheep'
+issues = json.loads(open(path).read())
+if argv[:1] == ['api'] and len(argv) == 2 and re.fullmatch(
+        r'repos/%s/issues\?state=open&creator=synthetic-owner&per_page=100' % re.escape(repo), argv[1]):
+    print(json.dumps([{'number': i['number'], 'title': i['title'], 'state': 'open',
+                       'user': {'login': 'synthetic-owner'}} for i in issues]))
+    sys.exit(0)
+if argv[:4] == ['api', '-X', 'POST', 'repos/%s/issues' % repo]:
+    fields = dict(value.split('=', 1) for value in argv[5::2])
+    issues.append({'number': 31 + len(issues), 'title': fields['title']})
+    open(path, 'w').write(json.dumps(issues))
+    if lose:
+        sys.stderr.write('gh: synthetic lost reply (HTTP 502)\n')
+        sys.exit(1)
+    print(json.dumps({'number': issues[-1]['number'], 'title': fields['title'], 'state': 'open'}))
+    sys.exit(0)
+os.execv(sys.executable, [sys.executable, '-I', '-S', fake] + argv)
+"""
+
+
+class OneSetupPullRequest(unittest.TestCase):
+    def road(self, files=None, brain='in_repository', pull='open', setup=True):
+        j = Journey(self)
+        (j.dir / 'bin/room-cli').unlink()
+        j.extra_env['OPENWIZ_LOCAL_STATE'] = str(j.dir / 'host-state')
+        value = {'repo': REPO, 'host': {'agents': 'local', 'harnesses': ['claude-code', 'codex']}}
+        if setup:
+            value['service'] = {'repo': REPO, 'state': 'opened', 'number': 7}
+        j.state.write_text(json.dumps(value))
+        j.state.chmod(0o600)
+        options = offering(OPUS, SOL)
+        options['source'] = 'local'
+        j.options.write_text(json.dumps(options))
+        j.build = j.dir / 'build'
+        (j.build / 'runtime/setup').mkdir(parents=True)
+        (j.build / 'runtime/setup/init.py').write_text(FAKE_INIT)
+        if files is not None:
+            j.world['files'] = files
+        if brain == 'in_repository':
+            j.world['branches'] = {BRAIN_BRANCH: dict(j.world['files'], **BRAIN_FILES)}
+            j.world['host_pulls'] = [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}]
+            j.world['onboard_pulls'] = [{'number': 940, 'url': BRAIN_PULL, 'state': 'OPEN',
+                                         'headRefName': BRAIN_BRANCH, 'baseRefName': 'main',
+                                         'isCrossRepository': False}]
+        j.save_world()
+        if setup:
+            self.applied(j, brain=brain, pull=pull)
+        self.assertIsNone(shutil.which('room-cli', path=j.env()['PATH']))
+        return j
+
+    def applied(self, j, brain='in_repository', pull='open', identity='personal_login'):
+        state = setup_state(settings=OPUS, identity=identity, brain=brain, overrides={'cloudroom': 'cloudroom_not_needed'})
+        state['project'].update(host='local', project=None, answer_thread=None)
+        if brain:
+            state['operations'] = [{'operation_id': INIT_OPERATION, 'kind': 'prepare_project', 'phase': 'applied',
+                                    'fingerprint': 'b' * 64, 'effects': ['Synthetic.'],
+                                    'reason': 'Brain proposed. Merge its pull request to accept it.'}]
+            number = 940 if brain == 'in_repository' else 3
+            journal = {'schema': 'openwiz.init-journal.v1', 'operations': {INIT_OPERATION: {
+                'rows': [], 'pull': {'number': number, 'state': pull}, 'wrote': True}}}
+            path = j.setup_dir / 'setup/init.json'
+        j.write_setup(state)
+        if brain:
+            path.write_text(json.dumps(journal))
+            path.chmod(0o600)
+        return state
+
+    def issues(self, j, existing=(), lose_reply=False):
+        j.issues_path = j.dir / 'service-issues.json'
+        j.issues_path.write_text(json.dumps(list(existing)))
+        script = j.dir / 'issues_gh.py'
+        script.write_text(ISSUES_GH)
+        (j.dir / 'bin/gh').write_text('#!/bin/sh\nexec "%s" -I -S "%s" "%s" "%s" %s "$@"\n' % (
+            sys.executable, script, j.issues_path, FAKE_GH, '1' if lose_reply else '0'))
+
+    def opened(self, j):
+        return [i for i in json.loads(j.issues_path.read_text()) if i['title'] == 'OpenWiz service records']
+
+    def saved(self, j):
+        return json.loads(j.state.read_text())
+
+    def world(self, j):
+        return json.loads(j.world_path.read_text())
+
+    def yes(self, j, *flags):
+        shown = j.helper(['defaults', '--options', str(j.options), *flags])
+        self.assertEqual(shown.returncode, 12, shown.stdout + shown.stderr)
+        digest = re.search(r'--confirm ([0-9a-f]{64})\b', shown.stdout)
+        self.assertIsNotNone(digest, shown.stdout)
+        said = j.helper(['defaults', '--options', str(j.options), *flags, '--yes', '--confirm', digest[1]])
+        self.assertEqual(said.returncode, 0, said.stdout + said.stderr)
+        return said
+
+    def setting(self, j, *more):
+        return j.helper(['setting', '--setup-state', str(j.setup_dir), '--build', str(j.build), *more])
+
+    def test_the_defaults_are_one_block_and_one_yes_records_all_of_them(self):
+        j = self.road()
+        shown = j.helper(['defaults', '--options', str(j.options)])
+        self.assertEqual(shown.returncode, 12, shown.stdout + shown.stderr)
+        lines = shown.stdout.splitlines()
+        block = [line for line in lines if line.startswith('- ')]
+        self.assertEqual(block, [
+            '- Operator: synthetic-owner, your GitHub login',
+            '- Service issue: a new issue in %s, "OpenWiz service records"' % REPO,
+            '- Builder: claude-code claude-opus-5-5 medium',
+            '- Reviewer: codex syn-codex-model-01 high',
+            '- Acting identity: your own GitHub login, synthetic-owner, instead of the OpenWiz GitHub App, for the '
+            'first fleet'], shown.stdout)
+        self.assertEqual(sum('?' in line for line in lines), 1, 'one question for the whole block')
+        self.assertNotIn('defaults', self.saved(j), 'the preview records nothing')
+        self.assertNotRegex(shown.stdout, r'(?i)permission mode', 'the mode is never in the block')
+        self.yes(j)
+        self.assertEqual(self.saved(j)['defaults'], {
+            'operator': 'synthetic-owner', 'service_issue': 'new', 'harness': OPUS[0], 'model': OPUS[1],
+            'effort': OPUS[2], 'reviewer': list(CODEX), 'identity': 'personal_login'},
+            "the project's own other-family Reviewer stays, as choose keeps it")
+        self.yes(j, '--operator', 'synthetic-other', '--service-issue', '7', '--app', '--harness', SOL[0], '--model',
+                 SOL[1], '--effort', SOL[2])
+        self.assertEqual(self.saved(j)['defaults'], {
+            'operator': 'synthetic-other', 'service_issue': 7, 'harness': SOL[0], 'model': SOL[1], 'effort': SOL[2],
+            'reviewer': list(CLAUDE), 'identity': 'app'}, 'any line the user changes, and the reviewer follows')
+
+    def test_the_first_fleet_recommends_the_own_login_on_every_host(self):
+        j = self.road()
+        value = self.saved(j)
+        value['host'] = {'agents': 'cloud'}
+        j.state.write_text(json.dumps(value))
+        cloud = j.helper(['defaults', '--options', str(j.options)])
+        self.assertEqual(cloud.returncode, 12, cloud.stdout + cloud.stderr)
+        self.assertIn('- Acting identity: your own GitHub login, synthetic-owner, instead of the OpenWiz GitHub App, '
+                      'for the first fleet', cloud.stdout)
+        self.yes(j)
+        self.assertEqual(self.saved(j)['defaults']['identity'], 'personal_login', 'CloudRoom too: own login')
+        self.yes(j, '--app')
+        self.assertEqual(self.saved(j)['defaults']['identity'], 'app', '--app picks the App')
+        self.assertEqual(j.helper(['defaults', '--options', str(j.options), '--login']).returncode, 2,
+                         'no flag for what is already the default')
+        local = self.road()
+        self.yes(local)
+        self.assertEqual(self.saved(local)['defaults']['identity'], 'personal_login')
+
+    def test_the_block_discloses_every_effect_its_one_yes_covers(self):
+        j = self.road()
+        shown = j.helper(['defaults', '--options', str(j.options)])
+        self.assertEqual(shown.returncode, 12, shown.stdout + shown.stderr)
+        effects = [line for line in shown.stdout.splitlines() if re.match(r'[0-9]\. ', line)]
+        self.assertEqual(len(effects), 5, shown.stdout)
+        for words in ('"OpenWiz service records"', 'setup.py prepare', 'github_login.py skip-app', 'openwiz init',
+                      'labels', "brain's pull request", 'docs/agents/host.md', 'Models table'):
+            self.assertIn(words, '\n'.join(effects), shown.stdout)
+
+    def test_the_permission_mode_is_asked_once_before_the_merge_with_no_recommendation(self):
+        j = self.road()
+        self.yes(j)
+        asked = j.helper(['mode'])
+        self.assertEqual(asked.returncode, 12, asked.stdout + asked.stderr)
+        self.assertNotRegex(asked.stdout, r'(?i)recommend')
+        for name in ('default', 'acceptEdits', 'bypassPermissions', 'read-only', 'workspace-write'):
+            self.assertIn('- %s: ' % name, asked.stdout)
+        picked = j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+        self.assertEqual(picked.returncode, 0, picked.stdout + picked.stderr)
+        self.assertEqual(self.saved(j)['mode']['modes'], {'claude': 'acceptEdits', 'codex': 'workspace-write'})
+
+    def test_setup_opens_exactly_one_pull_request_with_the_brain_models_host_and_mode(self):
+        j = self.road()
+        said = [self.yes(j), j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])]
+        preview = self.setting(j)
+        self.assertEqual(preview.returncode, 12, preview.stdout + preview.stderr)
+        self.assertIn(BRAIN_BRANCH, preview.stdout)
+        opened = self.setting(j, '--yes')
+        self.assertEqual(opened.returncode, 0, opened.stdout + opened.stderr)
+        self.assertIn(BRAIN_PULL, opened.stdout)
+        world = self.world(j)
+        self.assertEqual(world['host_pulls'], [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}],
+                         'exactly one pull request: the brain\'s')
+        self.assertEqual(sorted(world['branches']), [BRAIN_BRANCH], 'no second setup branch')
+        branch = world['branches'][BRAIN_BRANCH]
+        self.assertEqual({k: branch[k] for k in BRAIN_FILES}, BRAIN_FILES, 'the brain stays as init proposed it')
+        self.assertIn('\nHost: local\n', branch['docs/agents/host.md'])
+        fleet = branch['docs/agents/fleet.md']
+        self.assertEqual(ModelsTable.models(self, fleet), {'Orchestrator': OPUS, 'Builder': OPUS, 'Reviewer': CODEX,
+                                                           'Small builder': None, 'Fixer': None})
+        self.assertIn('| Harness permission mode (claude) | `acceptEdits` |', fleet)
+        self.assertIn('| Harness permission mode (codex) | `workspace-write` |', fleet)
+        self.assertEqual(sorted(set(branch) - set(FILES) - set(BRAIN_FILES)), ['docs/agents/host.md'])
+        self.assertEqual(sorted(k for k in FILES if branch[k] != FILES[k]), ['docs/agents/fleet.md'])
+        self.assertEqual(self.saved(j)['setting']['pull'], BRAIN_PULL)
+        for result in said:
+            self.assertNotRegex(result.stdout, r'(?i)\bmerge', 'only the one setup pull request asks for a merge')
+        merged = {k: branch[k] for k in ('docs/agents/host.md', 'docs/agents/fleet.md')}
+        j.origin_write(merged)
+        world['files'].update(branch)
+        world['host_pulls'][0]['state'] = 'MERGED'
+        world['onboard_pulls'][0]['state'] = 'MERGED'
+        j.world = world
+        j.save_world()
+        carried = j.helper(['continue', '--explained'])
+        self.assertEqual(carried.returncode, 0, carried.stdout + carried.stderr)
+        self.assertEqual(j.helper(['grill', '--confirmed', GRILL]).returncode, 0)
+        read = j.helper(['choose', '--from-setup'])
+        self.assertEqual(read.returncode, 0, read.stdout + read.stderr)
+        self.assertIn('Read back', read.stdout)
+        self.assertNotRegex(read.stdout, r'(?i)\bcommit|\bmerge it')
+        self.assertEqual(self.saved(j)['choices']['builder_tables'], 'read')
+        again = self.setting(j)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(self.world(j)['host_pulls'], world['host_pulls'], 'nothing reopened')
+        self.assertEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: plan.')
+
+    def test_a_readme_only_repository_gets_its_setup_files_in_the_one_setup_pull_request(self):
+        j = self.road(files={'README.md': '# synthetic\n'})
+        made = j.helper(['create-repo', '--repo', REPO, '--yes'])
+        self.assertEqual(made.returncode, 0, made.stdout)
+        seeded = json.loads(j.repos.read_text())['repos'][REPO.lower()]['branches']['main']
+        world = self.world(j)
+        world['files'] = dict(seeded)
+        for name in world['branches']:
+            world['branches'][name] = dict(seeded, **BRAIN_FILES)
+        j.world = world
+        j.save_world()
+        self.yes(j)
+        self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                         .returncode, 0)
+        opened = self.setting(j, '--yes')
+        self.assertEqual(opened.returncode, 0, opened.stdout + opened.stderr)
+        world = self.world(j)
+        self.assertEqual(world['host_pulls'], [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}])
+        branch = world['branches'][BRAIN_BRANCH]
+        self.assertEqual(sorted(set(branch) - set(seeded) - set(BRAIN_FILES)),
+                         sorted(SETUP_FILES + ('docs/agents/host.md',)))
+        project = j.dir / 'merged'
+        for name in SETUP_FILES:
+            (project / name).parent.mkdir(parents=True, exist_ok=True)
+            (project / name).write_text(branch[name])
+        check = subprocess.run([sys.executable, '-I', str(SETTINGS), 'check', '--root', str(project)],
+                               capture_output=True, text=True, timeout=60)
+        self.assertEqual(check.returncode, 0, check.stdout)
+        fleet = branch['docs/agents/fleet.md']
+        self.assertEqual(ModelsTable.models(self, fleet), {'Orchestrator': OPUS, 'Builder': OPUS, 'Reviewer': SOL,
+                                                           'Small builder': None, 'Fixer': None})
+        self.assertIn('| Harness permission mode (claude) | `acceptEdits` |', fleet)
+        self.assertIn('| Record authors | `synthetic-owner` |', fleet)
+        self.assertTrue(connect_usable(fleet), "setup.py check's fleet_settings_usable reads the new fleet.md")
+        self.assertIn('| 1 | root | `python3 -m unittest discover -s tests` | `check` |', fleet)
+        self.assertIn('| `check` | 1 |', fleet)
+        self.assertNotRegex(''.join(branch[n] for n in SETUP_FILES), r'<[^>\n]*>', 'no template placeholder left')
+        self.assertIn('\nHost: local\n', branch['docs/agents/host.md'])
+
+    def test_an_existing_repository_without_tests_or_ci_is_named_never_seeded(self):
+        j = self.road(files={'README.md': '# synthetic\n'})
+        before = self.world(j)
+        shown = j.helper(['defaults', '--options', str(j.options)])
+        self.assertEqual(shown.returncode, 5, shown.stdout)
+        for words in ('no test command or CI check', 'one passing test and a CI workflow with a job named check',
+                      'setup skill', 'Nothing recorded'):
+            self.assertIn(words, shown.stdout)
+        self.assertNotIn('defaults', self.saved(j))
+        self.assertEqual(self.world(j), before, 'nothing written to the repository')
+        self.assertEqual(json.loads(j.repos.read_text())['log'], [], 'no test or workflow added')
+
+    def test_a_companion_brain_merged_by_init_leaves_one_setup_pull_request(self):
+        for pull, said in (('merged', 'already merged'), ('open', 'https://github.com/%s-brain/pull/3' % REPO)):
+            j = self.road(brain='companion', pull=pull)
+            self.yes(j)
+            self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                             .returncode, 0)
+            opened = self.setting(j, '--yes')
+            self.assertEqual(opened.returncode, 0, opened.stdout + opened.stderr)
+            self.assertEqual([p['head'] for p in self.world(j)['host_pulls']], ['openwiz/host-setting'])
+            self.assertIn(said, opened.stdout)
+            if pull == 'merged':
+                self.assertNotIn('pull/3', opened.stdout, 'a merged brain pull request is done, never asked for')
+
+    def test_a_write_cut_short_on_the_brains_branch_is_completed_on_the_retry(self):
+        j = self.road()
+        self.yes(j)
+        self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                         .returncode, 0)
+        mark = j.dir / 'fail-fleet-put'
+        mark.write_text('')
+        (j.dir / 'bin/gh').write_text(
+            '#!/bin/sh\ncase "$*" in *"-X PUT repos/%s/contents/docs/agents/fleet.md"*)\n'
+            '  if [ -e "%s" ]; then rm "%s"; echo "gh: synthetic server error (HTTP 502)" >&2; exit 1; fi;;\n'
+            'esac\nexec "%s" -I -S "%s" "$@"\n' % (REPO, mark, mark, sys.executable, FAKE_GH))
+        cut = self.setting(j, '--yes')
+        self.assertEqual(cut.returncode, 6, cut.stdout + cut.stderr)
+        branch = self.world(j)['branches'][BRAIN_BRANCH]
+        self.assertIn('docs/agents/host.md', branch)
+        self.assertEqual(branch['docs/agents/fleet.md'], FILES['docs/agents/fleet.md'])
+        again = self.setting(j, '--yes')
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn(BRAIN_PULL, again.stdout)
+        fleet = self.world(j)['branches'][BRAIN_BRANCH]['docs/agents/fleet.md']
+        self.assertIn('| Harness permission mode (codex) | `workspace-write` |', fleet)
+        self.assertEqual(self.world(j)['host_pulls'], [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}])
+
+    def test_resume_after_the_blocks_yes_runs_its_unapplied_operations_first(self):
+        j = self.road(setup=False)
+        self.yes(j)
+        first = j.helper(['next', '--setup-state', str(j.setup_dir)])
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(first.stdout.splitlines()[0], 'Next: connect.', first.stdout)
+        self.assertIn('service-issue --yes', first.stdout)
+        refused = self.setting(j, '--yes')
+        self.assertEqual(refused.returncode, 5, refused.stdout + refused.stderr)
+        self.issues(j, existing=[{'number': 7, 'title': 'OpenWiz service records'}])
+        self.assertEqual(j.helper(['service-issue', '--yes']).returncode, 0)
+        second = j.helper(['next', '--setup-state', str(j.setup_dir)]).stdout
+        self.assertIn('setup.py prepare', second)
+        self.assertIn('--service-issue 7 ', second)
+        state = self.applied(j, brain=None)
+        resumed = j.helper(['next', '--setup-state', str(j.setup_dir)]).stdout
+        self.assertEqual(resumed.splitlines()[0], 'Next: connect.', resumed)
+        self.assertIn('openwiz init', resumed)
+        self.assertEqual(self.setting(j, '--yes').returncode, 5)
+        self.assertEqual(self.world(j)['host_pulls'], [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}],
+                         'no pull request before init ran')
+        self.assertEqual(self.world(j)['branches'][BRAIN_BRANCH], dict(FILES, **BRAIN_FILES), 'nothing written')
+        self.applied(j)
+        self.assertEqual(j.helper(['next', '--setup-state', str(j.setup_dir)]).stdout.splitlines()[0], 'Next: mode.')
+        self.assertTrue(state)
+
+    def test_a_resumed_connect_reuses_the_service_issue_it_already_opened(self):
+        j = self.road(setup=False)
+        self.issues(j)
+        self.yes(j)
+        opened = j.helper(['service-issue', '--yes'])
+        self.assertEqual(opened.returncode, 0, opened.stdout + opened.stderr)
+        self.assertEqual([i['number'] for i in self.opened(j)], [31])
+        resumed = j.helper(['next', '--setup-state', str(j.setup_dir)])
+        self.assertEqual(resumed.stdout.splitlines()[0], 'Next: connect.', resumed.stdout)
+        self.assertIn('--service-issue 31', resumed.stdout, 'resume names the issue already opened')
+        self.applied(j)
+        earlier = j.helper(['next', '--setup-state', str(j.setup_dir)]).stdout
+        self.assertIn('setup.py prepare', earlier, 'an earlier prepare for issue 7 is not taken as issue 31')
+        self.assertIn('--service-issue 31', earlier)
+        again = j.helper(['service-issue', '--yes'])
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual([i['number'] for i in self.opened(j)], [31], 'a resumed step 1 opens no second issue')
+        j = self.road(setup=False)
+        self.issues(j, existing=[{'number': 12, 'title': 'OpenWiz service records'}])
+        self.yes(j)
+        found = j.helper(['service-issue', '--yes'])
+        self.assertEqual(found.returncode, 0, found.stdout + found.stderr)
+        self.assertEqual([i['number'] for i in self.opened(j)], [12], 'an issue opened before is reused')
+        self.assertIn('--service-issue 12', j.helper(['next', '--setup-state', str(j.setup_dir)]).stdout)
+        j = self.road(setup=False)
+        self.issues(j, lose_reply=True)
+        self.yes(j)
+        lost = j.helper(['service-issue', '--yes'])
+        self.assertEqual(lost.returncode, 6, lost.stdout + lost.stderr)
+        self.issues(j, existing=self.opened(j))
+        settled = j.helper(['service-issue', '--yes'])
+        self.assertEqual(settled.returncode, 0, settled.stdout + settled.stderr)
+        self.assertEqual([i['number'] for i in self.opened(j)], [31], 'a lost reply is read back, never sent again')
+
+    def test_the_yes_binds_the_block_the_user_saw(self):
+        j = self.road()
+        shown = j.helper(['defaults', '--options', str(j.options)])
+        self.assertIn('- Builder: claude-code claude-opus-5-5 medium', shown.stdout)
+        digest = re.search(r'--confirm ([0-9a-f]{64})\b', shown.stdout)
+        options = offering(SOL)
+        options['source'] = 'local'
+        options['harnesses'] = [h for h in options['harnesses'] if h['provider'] == 'codex']
+        j.options.write_text(json.dumps(options))
+        bare = j.helper(['defaults', '--options', str(j.options), '--yes'])
+        self.assertNotEqual(bare.returncode, 0, bare.stdout)
+        self.assertNotIn('defaults', self.saved(j), 'a yes without the preview it answers records nothing')
+        self.assertIsNotNone(digest, shown.stdout)
+        stale = j.helper(['defaults', '--options', str(j.options), '--yes', '--confirm', digest[1]])
+        self.assertEqual(stale.returncode, 5, stale.stdout + stale.stderr)
+        self.assertIn('- Builder: codex gpt-6.2-sol medium', stale.stdout, 'the new block is shown to ask again')
+        self.assertNotIn('defaults', self.saved(j), 'a changed block needs a fresh yes')
+
+    def test_the_reviewer_line_takes_its_own_change(self):
+        j = self.road()
+        flags = ('--reviewer-harness', SOL[0], '--reviewer-model', SOL[1], '--reviewer-effort', SOL[2])
+        shown = j.helper(['defaults', '--options', str(j.options), *flags])
+        self.assertEqual(shown.returncode, 12, shown.stdout + shown.stderr)
+        self.assertIn('- Reviewer: codex gpt-6.2-sol medium', shown.stdout)
+        same = j.helper(['defaults', '--options', str(j.options), '--reviewer-harness', OPUS[0], '--reviewer-model',
+                         OPUS[1], '--reviewer-effort', OPUS[2]])
+        self.assertEqual(same.returncode, 5, 'a reviewer from the builder\'s family is refused')
+        absent = j.helper(['defaults', '--options', str(j.options), '--reviewer-harness', 'codex', '--reviewer-model',
+                           'gpt-6.2-sol', '--reviewer-effort', 'xhigh'])
+        self.assertEqual(absent.returncode, 5, 'a reviewer the saved options do not offer is refused')
+        self.yes(j, *flags)
+        self.assertEqual(self.saved(j)['defaults']['reviewer'], list(SOL))
+        self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                         .returncode, 0)
+        self.assertEqual(self.setting(j, '--yes').returncode, 0)
+        fleet = self.world(j)['branches'][BRAIN_BRANCH]['docs/agents/fleet.md']
+        self.assertEqual(ModelsTable.models(self, fleet)['Reviewer'], SOL)
+
+    def test_a_brain_proposal_holding_anything_else_is_never_written_to(self):
+        for extra in ({'.openwiz/brain/decisions/note.md': 'An unrelated note.\n'},
+                      {'.openwiz/brain/README.md': '# Brain\n\nChanged by hand.\n'}):
+            j = self.road()
+            j.world['branches'][BRAIN_BRANCH].update(extra)
+            j.save_world()
+            before = self.world(j)['branches'][BRAIN_BRANCH]
+            self.yes(j)
+            self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                             .returncode, 0)
+            refused = self.setting(j, '--yes')
+            self.assertEqual(refused.returncode, 5, refused.stdout + refused.stderr)
+            self.assertIn(next(iter(extra)), refused.stdout + refused.stderr)
+            self.assertEqual(self.world(j)['branches'][BRAIN_BRANCH], before, 'nothing written to the proposal')
+        j = self.road()
+        j.world['onboard_pulls'][0]['baseRefName'] = 'elsewhere'
+        j.save_world()
+        self.yes(j)
+        self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                         .returncode, 0)
+        self.assertEqual(self.setting(j, '--yes').returncode, 5, 'a brain pull request onto another base')
+        self.assertNotIn('docs/agents/host.md', self.world(j)['branches'][BRAIN_BRANCH])
+
+    def test_a_driver_host_puts_its_models_table_and_host_in_the_brains_pull_request(self):
+        j = self.road()
+        state = self.saved(j)
+        state['host'] = {'agents': 'boat', 'harnesses': []}
+        j.state.write_text(json.dumps(state))
+        setup = json.loads((j.setup_dir / 'setup/state.json').read_text())
+        setup['project']['host'] = 'boat'
+        j.write_setup(setup)
+        self.yes(j)
+        self.assertEqual(j.helper(['mode']).returncode, 5, 'a permission mode is for this machine only')
+        opened = self.setting(j, '--yes')
+        self.assertEqual(opened.returncode, 0, opened.stdout + opened.stderr)
+        world = self.world(j)
+        self.assertEqual(world['host_pulls'], [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}])
+        branch = world['branches'][BRAIN_BRANCH]
+        self.assertIn('\nHost: boat\n', branch['docs/agents/host.md'])
+        self.assertEqual(ModelsTable.models(self, branch['docs/agents/fleet.md'])['Builder'], OPUS)
+        self.assertNotIn('Harness permission mode', branch['docs/agents/fleet.md'])
 
 
 if __name__ == '__main__':

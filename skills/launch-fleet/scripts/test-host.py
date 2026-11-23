@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -71,6 +72,7 @@ class Project:
                         FAKE_DRIVER_LOG=str(self.log), PATH='%s:%s' % (bin_dir, os.environ['PATH']),
                         FAKE_WORLD=str(self.world), LAUNCH_FLEET_HARNESS='Claude Code',
                         LAUNCH_FLEET_MODEL='Opus 5.5 Medium', LAUNCH_FLEET_SKILLS='launch-fleet@' + VERSION)
+        self.env.update(runpy.run_path(str(HERE / 'fixtures/git_origin.py'))['env'](self.dir, {REPO: FLEET_MD}))
 
     def git(self, *args):
         subprocess.run(['git', *args], check=True, env=self.git_env, capture_output=True, timeout=60)
@@ -434,6 +436,21 @@ class Failures(unittest.TestCase):
         self.assertEqual(len(p.calls()), 6)
         self.assertEqual(len(p.github()['writes']), writes)
         self.assertEqual((p.fleet_notes(), len(p.failures())), ([STOPPED], 1))
+
+    def test_a_refused_reviewer_start_is_reported_as_the_reviewers(self):
+        p = Project(self)
+        self.assertEqual(p.host('start', REPO, 31, 'claude', 'm', 'review-ticket', FAKE_DRIVER_MODE='refuse')[0], 1)
+        steps = lambda: [next(line[len('step: '):] for line in body.split('\n') if line.startswith('step: '))
+                         for first, body in p.ticket(31) if first == '<!-- openwiz:status v1 -->']
+        self.assertEqual(steps(), ["the local driver refused this pull request's reviewer's start 3 times; the "
+                                   "reason is in a comment here"])
+        self.assertEqual(p.failures(31), [(MARK, "The local driver refused to start this pull request's reviewer 3 "
+                                                 "times (exit 1: refused). Its own words are kept off this public pull "
+                                                 "request: the fleet's owner can read them in the private driver log, "
+                                                 "`driver-failures.log` beside `LAUNCH_FLEET_RUNS`, entry %s for #31."
+                                           % p.driver_log()[0]['time'])])
+        self.assertEqual(p.host('start', REPO, 31, 'claude', 'm', 'review-ticket'), (0, 'started #31 on local', ''))
+        self.assertEqual(steps()[1:], ["the local driver started this pull request's reviewer on a later try"])
 
     def test_the_drivers_own_words_stay_in_the_owners_log_never_on_the_ticket(self):
         # The orchestrator's decision on R3 at 90aed73: no free text of the driver's ever reaches the ticket.

@@ -190,7 +190,8 @@ TICKET='number
         closedByPullRequestsReferences(first: 5, includeClosedPrs: true) {
           pageInfo { hasNextPage }
           nodes {
-            number state isDraft merged mergedAt closedAt baseRefName headRefOid
+            id number state isDraft merged mergedAt closedAt baseRefName headRefOid isMergeQueueEnabled
+            repository { databaseId nameWithOwner }
             commits(last: 1) {
               nodes {
                 commit {
@@ -244,7 +245,7 @@ query() {
   nodes(ids: $ids) { ... on Issue {
     id number stateReason repository { nameWithOwner }
     labels(first: 100) { pageInfo { hasNextPage } nodes { name } }
-    closedByPullRequestsReferences(first: 5, includeClosedPrs: true) { nodes { number merged baseRefName } }
+    closedByPullRequestsReferences(first: 5, includeClosedPrs: true) { nodes { number merged baseRefName repository { nameWithOwner } } }
   } }
 }' ;;
     Nodes) printf '%s\n' 'query Nodes($ids: [ID!]!) {
@@ -327,7 +328,8 @@ gql() {
   op=$1 out=$2
   shift 2
   case $op in
-    Blockers | Nodes) ;;
+    Blockers | Nodes | Checks) ;;
+    Merged) [ "${1:-}" = -F ] || set -- -F owner="$OWNER" -F name="$NAME" "$@" ;;
     *) set -- -F owner="$OWNER" -F name="$NAME" "$@" ;;
   esac
   # GI1: a full read of `spec S` keeps each answer, by its whole request; a
@@ -534,7 +536,8 @@ next_page() {
   host=${GH_HOST:-github.com}
   if [ "$host" = github.com ]; then prefix=https://api.github.com/; else prefix=https://$host/api/v3/; fi
   case $next in "$prefix"*) next=${next#"$prefix"} ;; *) return 1 ;; esac
-  case $next in "repos/$REPO/"* | "repositories/$REPO_ID/"* | search/issues\?*) printf '%s\n' "$next" ;; *) return 1 ;; esac
+  case $next in "repos/${2:-$REPO}/"* | "repositories/${3:-$REPO_ID}/"*) printf '%s\n' "$next" ;;
+    search/issues\?*) [ -z "${2:-}" ] && printf '%s\n' "$next" ;; *) return 1 ;; esac
 }
 rest_pages() (
   endpoint=$1 destination=$2
@@ -543,9 +546,10 @@ rest_pages() (
   while [ -n "$endpoint" ]; do
     page=$((page + 1))
     [ "$page" -le 1000 ] || exit 1
+    printf '%s\n' "$endpoint" > "$destination.at" || exit 1
     rest "$endpoint" "$destination.page" || exit 1
     cat "$destination.page" >> "$destination" || exit 1
-    endpoint=$(next_page "$destination.page.http") || exit 1
+    endpoint=$(next_page "$destination.page.http" ${3:+"$3" "$4"}) || exit 1
   done
 )
 
@@ -563,8 +567,8 @@ parallel_reads() (
   for lane in "$lanes"/lane-*; do
     [ -f "$lane" ] || continue
     (
-      while read -r number kind; do
-        "$reader" "$number" "$kind" || exit 1
+      while read -r number kind repo id; do
+        "$reader" "$number" "$kind" ${repo:+"$repo" "$id"} || exit 1
       done < "$lane"
     ) &
     pids="$pids $!"
@@ -585,30 +589,45 @@ AUTHORED='def authored($a): map(select(((.user | if type == "object" then .login
 # and labelled-event selection also stay there: REST references/check lists
 # alone do not establish the same facts.
 # Per-check memoization avoids re-reading an issue reached through two specs.
+PR_REPO='def pr_repo($r): .repository.nameWithOwner
+  | if type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") then
+      (if ascii_downcase == ($r | ascii_downcase) then $r else . end)
+    else error("a pull request names no repository") end;'
+item_file() {
+  case ${3:-$REPO} in "$REPO") printf '%s/%s-%s.json\n' "$TMP" "$1" "$2" ;;
+    *) printf '%s/%s-%s-%s.json\n' "$TMP" "$1" "$(printf '%s' "$3" | tr / @)" "$2" ;; esac
+}
 comment_facts() (
-  n=$1
-  [ ! -f "$TMP/comments-$n.json" ] || exit 0
+  n=$1 repo=${2:-$REPO} id=${3:-}
+  file=$(item_file comments "$n" "$repo") || exit 1
+  [ ! -f "$file" ] || exit 0
+  if [ "$repo" != "$REPO" ]; then
+    case $id in '' | 0* | *[!0-9]*) exit 1 ;; esac
+    set -- "$repo" "$id"
+  else set --; fi
   # REST already walks the whole history. Never cap it at the former
   # GraphQL window, and never interpret a partially read history as facts.
   # The existing incomplete-history guard prints look for this item alone.
-  if rest_pages "repos/$REPO/issues/$n/comments?per_page=100" "$TMP/comments-$n.raw" 2> /dev/null \
-    && jq -se --slurpfile a "$TMP/authors.json" "$AUTHORED"'select(length > 0 and all(.[]; type == "array")) | add
+  if ! rest_pages "repos/$repo/issues/$n/comments?per_page=100" "$file.raw" "$@" 2> "$file.err"; then
+    why="$(cat "$file.raw.at") failed: $(grep . "$file.err" | tail -n 1)"
+  elif jq -se --slurpfile a "$TMP/authors.json" "$AUTHORED"'select(length > 0 and all(.[]; type == "array")) | add
       | select(all(.[]; type == "object" and (.id | type) == "number"
           and (.body | type) == "string" and (.created_at | type) == "string"
           and (.updated_at | type) == "string"))
       | {pageInfo: {hasPreviousPage: false},
          nodes: (authored($a[0]) | map({databaseId: .id, createdAt: .created_at, updatedAt: .updated_at, body, author: (.user.login | ascii_downcase)}))}' \
-      "$TMP/comments-$n.raw" > "$TMP/comments-$n.json" 2> /dev/null; then
+      "$file.raw" > "$file" 2> /dev/null; then
     exit 0
-  fi
-  printf '%s\n' '{"pageInfo":{"hasPreviousPage":true},"nodes":[]}' > "$TMP/comments-$n.json"
+  else why="an unreadable answer to $(cat "$file.raw.at")"; fi
+  why=$(printf '%s' "$why" | tr -cd ' -~' | cut -c1-300)
+  jq -cn --arg e "$why" '{pageInfo: {hasPreviousPage: true}, nodes: [], error: $e}' > "$file"
 )
 # Each issue's three REST resources are independent too. Fetch them in the
 # same pool before constructing facts, so one issue never serializes them.
 issue_read() (
   n=$1 part=$2
   case $part in
-    comments) comment_facts "$n" ;;
+    comments) comment_facts "$n" "${3:-}" "${4:-}" ;;
     detail) rest "repos/$REPO/issues/$n" "$TMP/facts-issue-$n.json.detail" ;;
     blockers) rest_pages "repos/$REPO/issues/$n/dependencies/blocked_by?per_page=100" "$TMP/facts-issue-$n.json.blockers" ;;
     *) exit 1 ;;
@@ -616,14 +635,14 @@ issue_read() (
 )
 issue_facts() (
   n=$1 kind=$2
-  facts=$TMP/facts-$kind-$n.json
+  facts=$(item_file "facts-$kind" "$n" "${3:-}") || exit 1
   [ ! -f "$facts" ] || exit 0
-  comment_facts "$n" || exit 1
+  comment_facts "$n" "${3:-}" "${4:-}" || exit 1
   if [ "$kind" = pr ]; then
     # The head, its CI rollup and the PR metadata stay together in the one
     # GraphQL answer. Mixing later REST metadata could borrow another head's
     # passing checks. Only the PR's comments need a separate REST read.
-    jq -cn --argjson n "$n" --slurpfile c "$TMP/comments-$n.json" '{number: $n, comments: $c[0]}' > "$facts"
+    jq -cn --argjson n "$n" --slurpfile c "$(item_file comments "$n" "${3:-}")" '{number: $n, comments: $c[0]}' > "$facts"
     exit $?
   fi
   if [ "$kind" = issue ]; then
@@ -655,13 +674,13 @@ closure_file() (
 # PR head. Counts, identities and cursors must reconcile across every page.
 check_contexts() (
   source=$1
-  jq -c '
+  jq -c --arg repo "$REPO" "$PR_REPO"'
     def valid_pr: (.headRefOid | type == "string" and test("^[0-9a-f]{40}$"))
       and (.commits.nodes | type == "array" and length == 1)
       and .commits.nodes[0].commit.oid == .headRefOid
       and (.commits.nodes[0].commit | has("statusCheckRollup"));
     [.. | objects | select(has("headRefOid") and .state == "OPEN")]
-    | if all(.[]; valid_pr) then group_by(.number)[]
+    | if all(.[]; valid_pr) then group_by([(.id // ""), pr_repo($repo), .number])[]
       | if (map(.headRefOid) | unique | length) == 1
           and (map(.commits.nodes[0].commit.statusCheckRollup) | unique | length) == 1
         then .[0] else error("conflicting PR check snapshots") end
@@ -670,6 +689,7 @@ check_contexts() (
   while IFS= read -r pr; do
     printf '%s\n' "$pr" > "$source.pr" || exit 1
     oid=$(jq -r '.headRefOid' "$source.pr") || exit 1
+    pr_repo=$(jq -r --arg repo "$REPO" "$PR_REPO"'pr_repo($repo)' "$source.pr") || exit 1
     jq '.commits.nodes[0].commit.statusCheckRollup' "$source.pr" > "$source.rollup" || exit 1
     # A commit with no rollup has no successful required CI to borrow.
     [ "$(cat "$source.rollup")" != null ] || continue
@@ -711,38 +731,41 @@ check_contexts() (
       cursor=$(jq -r '.pageInfo.endCursor' "$source.contexts") || exit 1
       jq --arg c "$cursor" '. + [$c]' "$source.cursors" > "$source.next-cursors" \
         && mv "$source.next-cursors" "$source.cursors" || exit 1
-      gql Checks "$source.check-page" -f oid="$oid" -f cursor="$cursor"
+      gql Checks "$source.check-page" -F owner="${pr_repo%%/*}" -F name="${pr_repo#*/}" -f oid="$oid" -f cursor="$cursor"
       jq -e --arg oid "$oid" '.data.repository.object.oid == $oid' "$source.check-page" > /dev/null || exit 1
       jq '.data.repository.object.statusCheckRollup.contexts' "$source.check-page" > "$source.contexts" || exit 1
     done
     jq --slurpfile nodes "$source.nodes" --slurpfile page "$source.contexts" \
       '.contexts = $page[0] | .contexts.nodes = $nodes[0]' "$source.rollup" > "$source.complete" || exit 1
-    jq --slurpfile rollup "$source.complete" '{number, rollup: $rollup[0]}' "$source.pr" >> "$source.checks" || exit 1
+    jq --arg r "$pr_repo" --slurpfile rollup "$source.complete" '{key: ([(.id // ""), $r, .number] | tojson), rollup: $rollup[0]}' "$source.pr" >> "$source.checks" || exit 1
   done < "$source.prs"
-  jq -s 'map({key: (.number | tostring), value: .rollup}) | from_entries' "$source.checks" > "$source.rollups" || exit 1
-  jq --slurpfile r "$source.rollups" 'walk(if type == "object" and has("headRefOid")
-      and .state == "OPEN" and $r[0][(.number | tostring)] != null
-    then .commits.nodes[0].commit.statusCheckRollup = $r[0][(.number | tostring)] else . end)' \
+  jq -s 'map({key, value: .rollup}) | from_entries' "$source.checks" > "$source.rollups" || exit 1
+  jq --arg repo "$REPO" --slurpfile r "$source.rollups" "$PR_REPO"'walk(if type == "object" and has("headRefOid")
+      and .state == "OPEN" and $r[0][([(.id // ""), pr_repo($repo), .number] | tojson)] != null
+    then .commits.nodes[0].commit.statusCheckRollup = $r[0][([(.id // ""), pr_repo($repo), .number] | tojson)] else . end)' \
     "$source" > "$source.next" && mv "$source.next" "$source"
 )
 hydrate() (
   source=$1 extra_comments=${2:-}
   check_contexts "$source" || exit 1
-  jq -r '[.. | objects | select(has("number"))
+  jq -r --arg repo "$REPO" "$PR_REPO"'[.. | objects | select(has("number"))
     | select(.closedByPullRequestsReferences.pageInfo != null or has("subIssues")
         or has("subIssuesSummary") or has("commits"))
-    | {n: .number, k: (if has("commits") then "pr" else "issue" end)}]
-    | unique_by([.n, .k])[] | "\(.n) \(.k)"' "$source" > "$source.wanted" || exit 1
+    | {n: .number, k: (if has("commits") then "pr" else "issue" end)}
+      + (if has("commits") and pr_repo($repo) != $repo then {r: pr_repo($repo), id: .repository.databaseId} else {} end)]
+    | unique_by([.n, .k, .r])[] | "\(.n) \(.k)\(if .r then " \(.r) \(.id)" else "" end)"' "$source" > "$source.wanted" || exit 1
   # Validate every work item before launching any readers, then assemble
   # their facts once instead of spawning jq again for every issue.
-  : > "$source.requests" || exit 1
+  : > "$source.requests" && : > "$source.keys" || exit 1
   set --
-  while read -r n kind; do
+  while read -r n kind repo id; do
     case $n in '' | *[!0-9]*) exit 1 ;; esac
     case $kind in issue | pr) ;; *) exit 1 ;; esac
-    set -- "$@" "$TMP/facts-$kind-$n.json"
-    [ ! -f "$TMP/facts-$kind-$n.json" ] || continue
-    [ -f "$TMP/comments-$n.json" ] || printf '%s comments\n' "$n" >> "$source.requests" || exit 1
+    facts=$(item_file "facts-$kind" "$n" "$repo") || exit 1
+    set -- "$@" "$facts"
+    printf '%s\n' "${repo:+$repo#}$n" >> "$source.keys" || exit 1
+    [ ! -f "$facts" ] || continue
+    [ -f "$(item_file comments "$n" "$repo")" ] || printf '%s comments%s\n' "$n" "${repo:+ $repo $id}" >> "$source.requests" || exit 1
     if [ "$kind" = issue ]; then
       printf '%s detail\n%s blockers\n' "$n" "$n" >> "$source.requests" || exit 1
     fi
@@ -757,7 +780,8 @@ hydrate() (
   parallel_reads issue_read "$source.jobs" || exit 1
   parallel_reads issue_facts "$source.wanted" || exit 1
   if [ $# -gt 0 ]; then
-    jq -s 'map({key: (.number | tostring), value: .}) | from_entries' "$@" > "$source.facts" || exit 1
+    jq -s --rawfile k "$source.keys" '[($k | split("\n") | .[:-1]), .] | transpose
+      | map({key: .[0], value: .[1]}) | from_entries' "$@" > "$source.facts" || exit 1
   else printf '{}' > "$source.facts" || exit 1; fi
   jq -r '[.[] | .blockedBy.nodes[]? | select(.state == "CLOSED") | .node_id]
     | unique[]' "$source.facts" > "$source.blockers" || exit 1
@@ -777,10 +801,11 @@ hydrate() (
     (if has("blockedBy") then .blockedBy.nodes |= map(. +
       ($c[0][.node_id] // {closedByPullRequestsReferences: {nodes: []}})) else . end))' \
     "$source.facts" > "$source.next" && mv "$source.next" "$source.facts" || exit 1
-  jq --slurpfile facts "$source.facts" 'walk(if type == "object" and has("number")
+  jq --arg repo "$REPO" --slurpfile facts "$source.facts" "$PR_REPO"'walk(if type == "object" and has("number")
     and (.closedByPullRequestsReferences.pageInfo != null or has("subIssues")
       or has("subIssuesSummary") or has("commits"))
-    then . + $facts[0][(.number | tostring)] else . end)' "$source" > "$source.next" \
+    then . + $facts[0][if has("commits") and pr_repo($repo) != $repo then "\(pr_repo($repo))#\(.number)"
+      else .number | tostring end] else . end)' "$source" > "$source.next" \
     && mv "$source.next" "$source"
 )
 
@@ -1451,9 +1476,11 @@ def ref_looks: records as $rs | .number as $n | .comments.nodes[] | . as $c | (.
   | look($n; $rs; "comment \($c.databaseId)'"'"'s line `\($l | short)` names \($f | join(", ")), not this repository");
 def resume_claim($w): [records[] | select(.r | test("^resume starting \($w.id) for #\($w.number)(, thread thr_[A-Za-z0-9_-]+)?$"))] | min_by(.id);
 
+def history_why: "comment history could not be read in full"
+  + (.comments.error | if type == "string" then ": \(.)" else "" end);
 def looks: [
   (records[] | select(.error != null) | .error),
-  (if .comments.pageInfo.hasPreviousPage then "comment history could not be read in full" else empty end),
+  (if .comments.pageInfo.hasPreviousPage then history_why else empty end),
   (if .labels.pageInfo.hasNextPage then "more than 20 labels" else empty end),
   (if .blockedBy.pageInfo.hasNextPage then "more than 20 blockers" else empty end),
   (if .closedByPullRequestsReferences.pageInfo.hasNextPage then "more than 5 linked pull requests" else empty end),
@@ -1541,26 +1568,25 @@ def release_due($s): release_candidate($s)
 # nor the line'"'"'s files hold an input the ticket relies on, and the two
 # tickets'"'"' owned paths don'"'"'t clash. Anything else is hard.
 def scope_tickets: [$W.specs[].subIssues.nodes[], $W.singles[], ($W.active // [])[]];
-# Owned paths exactly as to-tickets'"'"' approve.py reads them: the lines under
-# `## Owned paths` to the next `## `, each `- ` bullet'"'"'s backticked paths, in
-# its one `in \`owner/repo\`` repository or this one, shared when the bullet
-# says `(shared`. [] when the ticket has no such section (a legacy ticket
-# claims no path); null when the section can'"'"'t be read as approval reads it.
-def owned_paths: ((.body // "") | split("\n")) as $l
+def owned_read: ((.body // "") | split("\n")) as $l
   | ([range(0; $l | length) | select($l[.] | rtrimstr("\r") | test("^## Owned paths\\s*$"))] | first) as $h
   | if $h == null then [] else
       ([$l[$h + 1:][] | rtrimstr("\r")] | (([to_entries[] | select(.value | startswith("## ")) | .key] | first) // length) as $e | .[:$e]
        | map(select(startswith("- ")) | .[2:])) as $bullets
-      | if ($bullets | length) == 0 then null else
-          [$bullets[] | . as $b | [scan("\\bin `([^`]+)`") | .[0]] as $repos
-           | if ($repos | length) > 1 or any($repos[]; test("^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$") | not) then {bad: true}
-             else ([scan("`([^`]+)`") | .[0] | select(. as $p | any($repos[]; . == $p) | not)]) as $ps
-               | if ($ps | length) == 0 then {bad: true}
+      | if ($bullets | length) == 0 then [{bad: true}] else
+          [$bullets[] | . as $b | [scan("\\bin `([^`]+)`") | .[0]] as $ins
+           | ([$ins[] | select(test("^[A-Za-z0-9-]+/[A-Za-z0-9_-]+$"))] | unique_by(ascii_downcase)) as $named
+           | (if ($ins | length) > 0 and ($ins | last | test("^[A-Za-z0-9-]+/[A-Za-z0-9_-]+$")) then $ins | last
+              elif ($named | length) == 1 then $named[0] else null end) as $repo
+           | if $repo == null and ($named | length) > 1 then {bad: $b}
+             else ([scan("`([^`]+)`") | .[0] | select(. != $repo)]) as $ps
+               | if ($ps | length) == 0 then {bad: $b}
                  else $ps[] | (rtrimstr("/") | split("/")) as $parts
-                   | if startswith("/") or any($parts[]; . == "" or . == "." or . == "..") or contains(" ") then {bad: true}
-                     else {repo: (if ($repos | length) == 1 then $repos[0] | ascii_downcase else $W.repo end),
-                           path: ., shared: ($b | contains("(shared"))} end end end]
-          | if any(.[]; .bad) then null else . end end end;
+                   | if startswith("/") or any($parts[]; . == "" or . == "." or . == "..") or contains(" ") then {bad: $b}
+                     else {repo: (if $repo != null then $repo | ascii_downcase else $W.repo end),
+                           path: ., shared: ($b | contains("(shared"))} end end end] end end;
+def owned_paths: owned_read | if any(.[]; has("bad")) then null else . end;
+def owned_unread: [owned_read[] | .bad // empty] | first;
 # fnmatch.fnmatchcase, as approve.py matches a path segment: * ? [seq] [!seq].
 def glob_re: explode as $c | ($c | length) as $n
   | {i: 0, out: "^"} | until(.i >= $n;
@@ -1743,6 +1769,7 @@ def guard($p; $at; $rs; $head; $c):
   # Each required check'"'"'s latest run, as required_ci picks it (latest_check).
   [$W.checks[] as $n | [$c.statusCheckRollup.contexts.nodes[]? | select((.name // .context) == $n)] | latest_check] as $latest
   | if any($latest[]; . == null or (.conclusion // .state) != "SUCCESS") then empty
+    elif $p.isMergeQueueEnabled == true then "merge \($at): APPROVE and CI green"
     elif any($latest[]; (.checkSuite.workflowRun.createdAt | type) != "string") then
       look($p.number; $rs; "a required check on its head names no workflow run, so main'"'"'s moves since its CI can'"'"'t be checked")
     elif ($c.committedDate | type) != "string" then
@@ -1750,8 +1777,11 @@ def guard($p; $at; $rs; $head; $c):
     else
       ( ([$latest[].checkSuite.workflowRun.createdAt] | min) as $ran
         | ([$c.committedDate, $ran] | min) as $t0
-        | $W.prfiles["\($p.number)"] as $mine
-        | if $mine == null then "guard #\($p.number) \($t0)"
+        | ($p.repository.nameWithOwner // "" | if ascii_downcase == $W.repo then "" else . end) as $home
+        | (if $home == "" then "\($p.number)" else "\($home)#\($p.number)" end) as $key
+        | $W.prfiles[$key] as $mine
+        | (if $home == "" then $W.merged else [($W.mergedIn // {})[$home][]? | select(.base == $p.baseRefName)] end) as $merged
+        | if $mine == null or ($home != "" and ($W.mergedIn // {})[$home] == null) then "guard \($home)#\($p.number) \($t0)"
           else
             ($mine | file_names) as $names
             | ([$rs[] | select(.r | test("^re-test (starting|sent) " + $head + "\\b"))] | max_by(.id)) as $claim
@@ -1760,15 +1790,16 @@ def guard($p; $at; $rs; $head; $c):
             | (if $rerun and $rec != null
                   and all($latest[]; (.checkSuite.workflowRun.databaseId | tostring) == $rec.run)
                then $rec.b else null end) as $b
-            | ([$W.merged[] | select($b != null and .commit == $b)] | first) as $base
+            | ([$merged[] | select($b != null and .commit == $b)] | first) as $base
             | (if $base != null then [$t0, $base.mergedAt] | max else $t0 end) as $since
-            | [$W.merged[] | select(.mergedAt >= $since and (.commit == $b | not))
+            | [$merged[] | select(.mergedAt >= $since and (.commit == $b | not))
                 | {pr: .number, at: .mergedAt} + (clash($names; .files | file_names) // {files: []})
                 | select(.files | length > 0)] | sort_by(.pr)
             | . as $clashes
             | ($clashes | map("\(.files | join(", ")) in #\(.pr)\(.why)") | join("; ")) as $what
             | if length == 0 then
-                if any($W.prfiles | to_entries[]; (.key | tonumber) < $p.number
+                if any($W.prfiles | to_entries[] | select(.key | if $home == "" then test("^[0-9]+$") else startswith($home + "#") end);
+                       (.key | split("#") | last | tonumber) < $p.number
                        and clash($names; .value | file_names) != null) then empty
                 else "merge \($at): APPROVE and CI green" end
               elif $base != null and any($clashes[]; .at < $claim.at) then
@@ -1788,10 +1819,10 @@ def out_of_reach($at; $th; $f; $rec):
 
 # What each part of a spec has due.
 def ticket_lines_now($s): . as $t
-  | if .comments.pageInfo.hasPreviousPage then look(.number; []; "comment history could not be read in full")
+  | if .comments.pageInfo.hasPreviousPage then look(.number; []; history_why)
     elif .state == "CLOSED" and any(.closedByPullRequestsReferences.nodes[]; .comments.pageInfo.hasPreviousPage) then
       (.closedByPullRequestsReferences.nodes[] | select(.comments.pageInfo.hasPreviousPage)
-       | look(.number; []; "comment history could not be read in full"))
+       | look(.number; []; history_why))
     elif .state == "CLOSED" then
       completion_request,
       ([(records[] | kind("started|start checked") | thread),
@@ -1863,7 +1894,7 @@ def ticket_lines_now($s): . as $t
        | "#\(.number) for #\($t.number) at \($head)" as $at
        | (.commits.nodes[0].commit // {}) as $c
        | if .baseRefName != $W.default then look(.number; $rs; "its base is \(.baseRefName), not \($W.default)")
-         elif .comments.pageInfo.hasPreviousPage then look(.number; $rs; "comment history could not be read in full")
+         elif .comments.pageInfo.hasPreviousPage then look(.number; $rs; history_why)
          elif any($rs[]; .error != null) then ([$rs[] | select(.error != null) | .error] | unique[] | look($p.number; $rs; .))
          elif $c.statusCheckRollup != null and $c.statusCheckRollup.contexts.pageInfo.hasNextPage != false then look(.number; $rs; "check contexts could not be read in full")
          # GitHub shortens messageHeadline; the hand-back marker may be beyond
@@ -1887,8 +1918,12 @@ def ticket_lines_now($s): . as $t
                   | (if $block != null and (($block.r | test("^merge blocked \($head): base moved, reopened for fresh CI(?:[.;](?:\\s|$)|$)")) | not) then empty
                      else guard($p; $at; $rs; $head; $c) end)
                 else
-                  (if any($rs[]; (.r | test("^findings sent\\b")) and (.r | names($head))) then empty
-                   else "findings \($at): tell its builder\($t | bthread)" end) end)
+                  ([$p.comments.nodes[] | select([.body | first_line | capture("^\\*\\*Orchestrator decision:\\*\\* (?:fix once more|log and merge): R[0-9]+(?:(?:, R[0-9]+)* and R[0-9]+)? at (?<c>[0-9a-f]{40})\\. ") | .c] == [$head])] | max_by(.databaseId)) as $d
+                  | (if $d != null and $d.databaseId > $v.databaseId and all($rs[]; .id < $d.databaseId)
+                        and ($v.body | test("(^|\n)Next: park [^\n]* as a decision for Jake\\.\\s*$")) then
+                       "decision \($at): Jake'"'"'s answer in comment \($d.databaseId); act on it as references/reviews.md says"
+                     elif any($rs[]; (.r | test("^findings sent\\b")) and (.r | names($head))) then empty
+                     else "findings \($at): tell its builder\($t | bthread)" end) end)
              else
                [$rs[] | select(.r | names($head))] as $here
                | ([$here[] | kind("review started|re-check sent") | select(.closed | not)] | max_by(.id)) as $live
@@ -2001,7 +2036,7 @@ def steer_lines: .number as $n | records as $srs
 
 def spec_lines: . as $s | records as $srs
   | if .subIssues.pageInfo.hasNextPage then look(.number; $srs; "more than 100 tickets, so its graph can'"'"'t all be read")
-    elif .comments.pageInfo.hasPreviousPage then look(.number; $srs; "comment history could not be read in full")
+    elif .comments.pageInfo.hasPreviousPage then look(.number; $srs; history_why)
     else
       latest($s) as $a
       | approval_lines, steer_lines,
@@ -2035,7 +2070,7 @@ def wakes_for: has("partial") or has("named");
 def is_named($s): ($s | has("named") | not) or (.number | among($s.named));
 def part_lines: . as $s | records as $srs
   | if .subIssues.pageInfo.hasNextPage or (.total // 0) > 100 then look(.number; $srs; "more than 100 tickets, so its graph can'"'"'t all be read")
-    elif .comments.pageInfo.hasPreviousPage then look(.number; $srs; "comment history could not be read in full")
+    elif .comments.pageInfo.hasPreviousPage then look(.number; $srs; history_why)
     else approval_lines, steer_lines, (.subIssues.nodes[] | select(is_named($s)) | ticket_lines($s)) end;
 
 def candidates: ($W.specs[] as $s | $s.subIssues.nodes[] | select(is_named($s)) | {t: ., s: $s}),
@@ -2126,9 +2161,13 @@ def claim: $W.claim.n as $n | $W.claim.id as $id
               | ([$near[] | select(history_unread) | .number] | unique | first) as $u
               | ([$near[] | select((open_prs | length) > 0 or (start | .state != "queued" and (.state != "claimed" or .rec.id < $id)))
                   | .number] | unique | first) as $m
-              | if $mine == null then "withdraw #\($n): its owned paths can'"'"'t be read as the plan approval reads them"
+              | if $mine == null then (owned_unread as $b | if $b == true then "withdraw #\($n): its Owned paths section has no bullet"
+                  else "withdraw #\($n): its owned-path bullet \"\($b)\" can'"'"'t be read" end)
                 elif $u != null then "withdraw #\($n): its owned paths collide with #\($u), whose start history can'"'"'t be read"
-                elif $m != null then "withdraw #\($n): its owned paths collide with #\($m), which is running or claimed first"
+                elif $m != null then ([$near[] | select(.number == $m) | owned_unread] | first) as $b
+                  | if $b == null then "withdraw #\($n): its owned paths collide with #\($m), which is running or claimed first"
+                    elif $b == true then "withdraw #\($n): #\($m)'"'"'s Owned paths section has no bullet, and #\($m) is running or claimed first"
+                    else "withdraw #\($n): #\($m)'"'"'s owned-path bullet \"\($b)\" can'"'"'t be read, and #\($m) is running or claimed first" end
                 else "go #\($n)" end
             else "withdraw #\($n): it is not on the frontier now" end end
     else
@@ -2466,25 +2505,72 @@ EOF
 # pull request P changes, into the world, and the merges since the oldest
 # <time>. An open pull request'"'"'s files can change, so they are never cached.
 guard() {
-  printf '{' > "$TMP/prfiles.json" || die "can't write"
+  printf '{' > "$TMP/prfiles.json" && : > "$TMP/guard-homes" || die "can't write"
   sep=''
-  while read -r _ n _; do
-    n=${n#\#}
-    is_number "$n" || die "can't read the re-test guard's line for #$n"
-    rest_pages "repos/$REPO/pulls/$n/files?per_page=100" "$TMP/prfiles-$n.raw" || die "can't read the files of #$n"
-    files=$(jq -cs "$FILES" "$TMP/prfiles-$n.raw") || die "can't read the files of #$n"
-    printf '%s"%s":%s' "$sep" "$n" "$files" >> "$TMP/prfiles.json" || die "can't write"
+  while read -r _ ref _; do
+    n=${ref##*#} home=${ref%#*}
+    is_number "$n" || die "can't read the re-test guard's line for $ref"
+    if [ -z "$home" ]; then
+      rest_pages "repos/$REPO/pulls/$n/files?per_page=100" "$TMP/prfiles-$n.raw" || die "can't read the files of #$n"
+      raw=$TMP/prfiles-$n.raw key=$n
+    else
+      id=$(jq -er --arg h "$home" --argjson n "$n" '[.. | objects | select(has("headRefOid") and .number == $n
+          and .repository.nameWithOwner == $h) | .repository.databaseId] | unique
+        | if length == 1 and (.[0] | type) == "number" then .[0] else error("not one pull request") end' "$TMP/world.json") \
+        || die "can't read the repository of $ref"
+      raw=$(item_file prfiles "$n" "$home").raw key=$ref
+      rest_pages "repos/$home/pulls/$n/files?per_page=100" "$raw" "$home" "$id" || die "can't read the files of $ref"
+      printf '%s %s\n' "$home" "$id" >> "$TMP/guard-homes" || die "can't write"
+    fi
+    files=$(jq -cs "$FILES" "$raw") || die "can't read the files of $ref"
+    printf '%s"%s":%s' "$sep" "$key" "$files" >> "$TMP/prfiles.json" || die "can't write"
     sep=','
   done << EOF
-$(grep '^guard #' "$TMP/out.txt" | sort -u)
+$(grep '^guard ' "$TMP/out.txt" | sort -u)
 EOF
   printf '}' >> "$TMP/prfiles.json" || die "can't write"
   jq --slurpfile f "$TMP/prfiles.json" '.prfiles = $f[0]' "$TMP/world.json" > "$TMP/w2.json" && mv "$TMP/w2.json" "$TMP/world.json" \
     || die "can't record the files of the pull requests to merge"
+  sort -u "$TMP/guard-homes" > "$TMP/guard-homes.sorted" || die "can't write"
+  while read -r home id; do
+    since=$(grep "^guard $home#" "$TMP/out.txt" | jq -Rnr '[inputs | split(" ")[2]] | min | fromdateiso8601 - 1 | todate') \
+      && foreign_merges "$home" "$id" "$since" || die "can't read the merges of $home"
+  done < "$TMP/guard-homes.sorted"
+  grep -q '^guard #' "$TMP/out.txt" || return 0
   # The oldest run, less one second, so a merge in the same second is read too.
   since=$(grep '^guard #' "$TMP/out.txt" | jq -Rnr '[inputs | split(" ")[2]] | min | fromdateiso8601 - 1 | todate') \
     || die "can't read the times their CI ran"
   merges "$since"
+}
+
+foreign_merges() {
+  home=$1 id=$2 cutoff=$3
+  : > "$TMP/foreign-merged.txt" || return 1
+  cursor='' pages=0
+  while :; do
+    pages=$((pages + 1))
+    [ $pages -le 20 ] || return 1
+    if [ -z "$cursor" ]; then set --; else set -- -f cursor="$cursor"; fi
+    gql Merged "$TMP/page.json" -F owner="${home%%/*}" -F name="${home#*/}" "$@"
+    jq -c --arg c "$cutoff" '.data.repository.pullRequests.nodes[] | select(.mergedAt != null and .mergedAt >= $c)
+      | {number, mergedAt, commit: .mergeCommit.oid, base: .baseRefName}' "$TMP/page.json" >> "$TMP/foreign-merged.txt" || return 1
+    more=$(jq -r --arg c "$cutoff" '.data.repository.pullRequests
+      | if .pageInfo.hasNextPage and ([.nodes[].updatedAt] | min // "") >= $c then "yes" else "no" end' "$TMP/page.json") || return 1
+    [ "$more" = yes ] || break
+    cursor=$(jq -er '.data.repository.pullRequests.pageInfo.endCursor' "$TMP/page.json") || return 1
+  done
+  printf '[' > "$TMP/foreign-merged.json" || return 1
+  sep=''
+  while read -r line; do
+    n=$(printf '%s' "$line" | jq -er .number) || return 1
+    raw=$(item_file files "$n" "$home").raw
+    rest_pages "repos/$home/pulls/$n/files?per_page=100" "$raw" "$home" "$id" || return 1
+    printf '%s' "$sep" >> "$TMP/foreign-merged.json" && jq -cs --argjson m "$line" "($FILES)"' as $f | $m + {files: $f}' "$raw" >> "$TMP/foreign-merged.json" || return 1
+    sep=','
+  done < "$TMP/foreign-merged.txt"
+  printf ']' >> "$TMP/foreign-merged.json" || return 1
+  jq --arg h "$home" --slurpfile m "$TMP/foreign-merged.json" '.mergedIn[$h] = $m[0]' "$TMP/world.json" > "$TMP/w2.json" \
+    && mv "$TMP/w2.json" "$TMP/world.json"
 }
 
 # ---- The unchanged probe (GI1, #2543) ----
@@ -2621,24 +2707,29 @@ keep_read() {
       else error("two answers to one request") end) | from_entries' "$@" > "$keep_out/graphql.json" 2> /dev/null || return 0
   merged=false
   for f in "$@"; do jq -e '.data.repository.pullRequests' "$f" > /dev/null 2>&1 && merged=true && break; done
-  jq -r --arg r "$REPO" --arg d "$DEFAULT" --arg identity "$IDENTITY_PROBE" --argjson merged "$merged" '
+  jq -r --arg r "$REPO" --arg d "$DEFAULT" --arg identity "$IDENTITY_PROBE" --argjson merged "$merged" "$PR_REPO"'
     def prs: .closedByPullRequestsReferences.nodes[]?;
-    def pr_probes: "repos/\($r)/pulls/\(.number)",
+    def pull: "repos/\(pr_repo($r))/pulls/\(.number)";
+    def pr_probes: pull,
       # CI on a merged PR never selects a due line. Its metadata remains a
       # probe, and every non-merged PR keeps both head-status probes.
-      (select(.state != "MERGED") | .headRefOid // empty
-        | "repos/\($r)/commits/\(.)/check-runs?per_page=100", "repos/\($r)/commits/\(.)/status");
+      (select(.state != "MERGED") | pr_repo($r) as $p | .headRefOid // empty
+        | "repos/\($p)/commits/\(.)/check-runs?per_page=100", "repos/\($p)/commits/\(.)/status");
     def timeline: "repos/\($r)/issues/\(.number)/timeline?per_page=100";
     ["repos/\($r)", $identity,
      (.specs[] | "repos/\($r)/issues/\(.number)/sub_issues?per_page=100",
        (.subIssues.nodes[] | timeline, (prs | pr_probes),
          (.blockedBy.nodes[]? | select(.state == "CLOSED") | timeline,
            "repos/\(.repository.nameWithOwner // $r)/issues/\(.number)",
-           (prs | "repos/\($r)/pulls/\(.number)")))),
+           (prs | pull)))),
      (.waited // {} | to_entries[] | if (.key | startswith("PR:")) then "repos/\($r)/pulls/\(.key[3:])"
        else "repos/\($r)/issues/\(.key)", "repos/\($r)/issues/\(.key)/timeline?per_page=100",
-         (.value // {} | prs | "repos/\($r)/pulls/\(.number)") end),
-     (if $merged then "repos/\($r)/git/ref/heads/\($d | @uri)" else empty end)]
+         (.value // {} | prs | pull) end),
+     (if $merged then "repos/\($r)/git/ref/heads/\($d | @uri)" else empty end),
+     (. as $w | .mergedIn // {} | keys[] as $h
+       | [$w | .. | objects | select(has("headRefOid") and (.baseRefName | type) == "string"
+           and .repository.nameWithOwner? == $h) | .baseRefName] | unique[]
+       | "repos/\($h)/git/ref/heads/\(@uri)")]
     | unique[]' "$TMP/world.json" > "$keep_out/probes" 2> /dev/null || return 0
   replayable=true
   : > "$keep_out/etags.json" || return 0
@@ -2727,10 +2818,10 @@ links_read
 selection
 jqw "$cmd" > "$TMP/out.txt" || die "can't work out what is due"
 case $(head -n 1 "$TMP/out.txt") in error\ *) die "$(head -n 1 "$TMP/out.txt" | cut -c7-)" ;; esac
-if grep -q '^guard #' "$TMP/out.txt"; then
+if grep -q '^guard ' "$TMP/out.txt"; then
   guard
   jqw "$cmd" > "$TMP/out.txt" || die "can't work out what is due"
-  ! grep -q '^guard #' "$TMP/out.txt" || die "the re-test guard could not read what it needs"
+  ! grep -q '^guard ' "$TMP/out.txt" || die "the re-test guard could not read what it needs"
 fi
 if [ "$cmd" = check ]; then
   nightly

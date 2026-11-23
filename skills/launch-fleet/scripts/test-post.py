@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import runpy
 from pathlib import Path
 import subprocess
 import sys
@@ -8,6 +9,7 @@ import tempfile
 import unittest
 
 HERE = Path(__file__).resolve().parent
+git_origin = runpy.run_path(str(HERE / 'fixtures/git_origin.py'))['env']
 REPO = 'synthetic-owner/synthetic-repo'
 FLEET_MD = ('# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n'
             '| Record authors | `openwiz[bot]`, `synthetic-owner` |\n')
@@ -29,6 +31,7 @@ class World:
         value.update(extra)
         self.save(value)
         self.env = dict(os.environ, PATH='%s:%s' % (bin_dir, os.environ['PATH']), FAKE_WORLD=str(self.path))
+        self.env.update(git_origin(self.dir, {value['repo']: value['fleet_md']}))
 
     def load(self):
         return json.loads(self.path.read_text())
@@ -51,6 +54,27 @@ class World:
 
     def bodies(self, number):
         return [c['body'] for c in self.load()['comments'].get(str(number), [])]
+
+    def log_gh_calls(self, hide_post_on=None):
+        log, hide = self.dir / 'calls.log', self.dir / 'hide.py'
+        hide.write_text('import json, os, sys\nw = json.load(open(os.environ["FAKE_WORLD"]))\n'
+                        'w["comments"][sys.argv[1]] = []\njson.dump(w, open(os.environ["FAKE_WORLD"], "w"))\n')
+        drop = ('' if hide_post_on is None else 'case " $* " in *" POST repos/%s/issues/%d/comments "*) "%s" -I "%s" %d;; esac\n'
+                % (REPO, hide_post_on, sys.executable, hide, hide_post_on))
+        (self.dir / 'bin' / 'gh').write_text(
+            '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n"%s" -I "%s" "$@"\ncode=$?\n%sexit $code\n'
+            % (log, sys.executable, HERE / 'fixtures/fake_github.py', drop))
+        self.calls_log = log
+
+    def comment_route_calls(self):
+        out = []
+        for line in self.calls_log.read_text().splitlines():
+            words = line.split(' ')
+            route = next(w for w in words if w.startswith('repos/')).split('?')[0].split('/')
+            if route[3:4] == ['issues'] and route[5:] == ['comments']:
+                method = words[words.index('--method') + 1] if '--method' in words else 'GET'
+                out.append((method, int(route[4])))
+        return out
 
 
 def comment(cid, body, login='openwiz[bot]'):
@@ -112,10 +136,11 @@ class Post(unittest.TestCase):
         self.assertTrue(out.startswith('unknown: '), out)
 
     def test_identical_text_from_anyone_else_is_not_the_record(self):
-        w = World(self, me='someone-else', faults={'post': 'lost'})
+        w = World(self, me='someone-else')
         code, out = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')
-        self.assertEqual(code, 1)
-        self.assertTrue(out.startswith('unknown: '), out)
+        self.assertEqual((code, out), (1, 'unknown: the record on #12 could not be read back; read #12 before any retry'))
+        self.assertEqual(w.writes(), [{'post': 12, 'body': 'launch-fleet: starting'}])
+        self.assertEqual([(c['id'], c['user']['login']) for c in w.load()['comments']['12']], [(5001, 'someone-else')])
 
     def test_without_record_authors_nothing_is_trusted(self):
         for fleet_md in (None, '# Fleet settings\n', FLEET_MD.replace('`openwiz[bot]`, ', '`openwiz[bot]` ')):
@@ -167,6 +192,21 @@ class SelfGrant(unittest.TestCase):
         self.assertEqual(w.bodies(3), ['launch-fleet: spec changed for #12: the proof table names the after bench'])
         self.assertEqual(w.bodies(12)[-1], 'launch-fleet: granted spec change on #3: the proof table names the after bench')
         self.assertEqual(len(w.writes()), 5)
+
+    def test_the_spec_record_reads_back_before_the_ticket_grant_is_posted(self):
+        w = World(self)
+        w.log_gh_calls()
+        code, out = w.run('self-grant.py', REPO, 12, 'spec-change', 'the proof names the after bench', '--spec', 3)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(w.comment_route_calls(), [('GET', 3), ('POST', 3), ('GET', 3), ('GET', 12), ('POST', 12), ('GET', 12)])
+
+    def test_a_posted_spec_change_missing_from_read_back_posts_no_grant(self):
+        w = World(self)
+        w.log_gh_calls(hide_post_on=3)
+        code, out = w.run('self-grant.py', REPO, 12, 'spec-change', 'the proof names the after bench', '--spec', 3)
+        self.assertEqual((code, out), (1, 'unknown: the record on #3 could not be read back; read #3 before any retry'))
+        self.assertEqual(w.writes(), [{'post': 3, 'body': 'launch-fleet: spec changed for #12: the proof names the after bench'}])
+        self.assertEqual(w.comment_route_calls(), [('GET', 3), ('POST', 3), ('GET', 3)])
 
     def test_a_model_or_effort_change_or_any_other_ask_is_refused(self):
         w = World(self)

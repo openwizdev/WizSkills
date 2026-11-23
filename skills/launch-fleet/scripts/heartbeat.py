@@ -298,6 +298,13 @@ def archive_run(state, path, spec, run, *, absent=False):
             replace_map(path, value)
 
 
+def stop_run(config, env, run):
+    stop = host_call(config, env, 'stop')
+    error = stop.stdout.partition('; next:')[0]
+    absent = stop.returncode == 1 and error in {f'refused: {e}' for e in absent_errors(run['run'])}
+    return (0 if absent else stop.returncode), absent
+
+
 def wake_or_start(state, config, env, repo, spec):
     if (state / 'starting').exists():
         print(f'heartbeat: reconcile the previous start in {state / "starting"}', file=sys.stderr)
@@ -315,11 +322,9 @@ def wake_or_start(state, config, env, repo, spec):
             if not terminal_wake(result, refusal_log, offset, repo, spec, run):
                 return result.returncode, 'wake unresolved'
 
-            stop = host_call(config, env, 'stop')
-            error = stop.stdout.partition('; next:')[0]
-            absent = stop.returncode == 1 and error in {f'refused: {e}' for e in absent_errors(run['run'])}
-            if stop.returncode and not absent:
-                return stop.returncode, 'stop unresolved'
+            code, absent = stop_run(config, env, run)
+            if code:
+                return code, 'stop unresolved'
             archive_run(state, path, spec, run, absent=absent)
         else:
             archive_run(state, path, spec, run)
@@ -352,7 +357,10 @@ def tick(state, config, paused):
             print(f'heartbeat: check failed (exit {result.returncode})', file=sys.stderr)
             return 2
         lines = [line for line in result.stdout.splitlines() if line.strip()]
-        if not lines or lines[0].startswith(f'fleet done #{spec}:'):
+        if lines and lines[0].startswith(f'fleet done #{spec}:'):
+            outcome = 'done'
+            return 0
+        if not lines:
             outcome = 'idle'
             return 0
         outcome = 'wake unresolved'
@@ -373,9 +381,20 @@ def remove_run(state, config):
     run = saved_run(path, spec)
     if not run:
         return
-    if not run.get('stopped') and host_call(config, env, 'stop').returncode:
-        raise Refused(f'could not stop the orchestrator; its run map remains at {path}')
-    archive_run(state, path, spec, run)
+    absent = False
+    if not run.get('stopped'):
+        code, absent = stop_run(config, env, run)
+        if code:
+            raise Refused(f'could not stop the orchestrator; its run map remains at {path}')
+    archive_run(state, path, spec, run, absent=absent)
+
+
+def last_tick(state):
+    try:
+        lines = (state / 'ticks.log').read_text().splitlines()
+    except FileNotFoundError:
+        return None
+    return lines[-1].partition(' ')[2] if lines else None
 
 
 def log_tick(state, outcome):
@@ -403,6 +422,11 @@ def main():
         config = json.loads(config_path.read_text())
         phase = 'paused' if status.exists() else 'active'
         print(f'heartbeat: {phase} ({config["backend"]})')
+        if (state / 'starting').exists():
+            print(f'heartbeat: start unresolved: reconcile {state / "starting"}')
+        if last_tick(state) == 'done':
+            removal = shlex.join([*config['argv'][:3], 'remove', args.repo, args.spec])
+            print(f'heartbeat: spec #{args.spec} is done: run {removal}')
         return 0
     if args.action == 'run':
         try:

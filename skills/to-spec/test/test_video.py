@@ -43,7 +43,7 @@ w.setparams((1, 2, 16000, 0, 'NONE', ''))
 amp = 0 if mode.startswith('silent') else 8000
 w.writeframes(b''.join(int(amp * math.sin(i / 8)).to_bytes(2, 'little', signed=True) for i in range(8000)))
 w.close()
-sys.exit(3 if mode == 'silent-exit-3' else 0)
+sys.exit(3 if mode.endswith('-exit-3') else 0)
 '''
 
 
@@ -156,6 +156,7 @@ class SpecVideo(unittest.TestCase):
         helper.write_text(VOICE)
         cases = {
             'fails, leaving a silent take': ('silent-exit-3', False),
+            'fails, leaving an audible take': ('tone-exit-3', False),
             'exits 0 with a silent take': ('silent', False),
             'writes nothing beside a stale take': ('nothing', True),
         }
@@ -180,6 +181,8 @@ class SpecVideo(unittest.TestCase):
                 lines = result.stderr.splitlines()
                 self.assertEqual(len(lines), 1, result.stderr)
                 self.assertTrue(lines[0].startswith('animatic: moment 3: '), result.stderr)
+                if mode.endswith('-exit-3'):
+                    self.assertIn('(exit 3)', lines[0])
                 self.assertEqual(list(out_dir.iterdir()), [], 'a refused build left a file at the output')
 
     @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')

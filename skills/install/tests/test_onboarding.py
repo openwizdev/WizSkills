@@ -11,10 +11,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_first_fleet import (CLAUDE, FIXTURES, GRILL, Journey, SKILL_DIR,  # noqa: E402 -- it follows the sys.path line that finds it
+from test_first_fleet import (CLAUDE, FAKE_GH, FIXTURES, GRILL, TICKET_FIELDS, Journey, SKILL_DIR,  # noqa: E402 -- it follows the sys.path line that finds it
                               demo_repository, fleet_md, github, setup_state, skill_steps)
 
 ROAD = json.loads((FIXTURES / 'onboarding.json').read_text())
@@ -93,6 +94,55 @@ class Road(Journey):
         case.addCleanup(shutil.rmtree, self.host_state, True)
         self.extra_env.update(OPENWIZ_ADAPTERS=str(self.dir / 'adapters'), OPENWIZ_LOCAL_STATE=str(self.host_state),
                               FAKE_DRIVER_LOG=str(self.dir / 'driver.log'), FAKE_GH_ARGV_LOG=str(self.dir / 'gh-argv.log'))
+        self.ticket_views = self.dir / 'tickets.json'
+        gh = self.dir / 'bin/gh'
+        gh.write_text(
+            '#!%s -I\nimport json, os, sys\nfrom pathlib import Path\na = sys.argv[1:]\n'
+            "if a[:2] == ['issue', 'view'] and a[3:] == ['--json', '%s'] and Path(%r).exists():\n"
+            "    print(json.dumps(json.loads(Path(%r).read_text())[a[2]]))\n    sys.exit(0)\n"
+            "os.execv(%r, [%r, '-I', '-S', %r, *a])\n" % (
+                sys.executable, TICKET_FIELDS, str(self.ticket_views), str(self.ticket_views), sys.executable,
+                sys.executable, str(FAKE_GH)))
+        gh.chmod(0o755)
+
+    def tool(self, turn):
+        if 'progress' in turn:
+            note = '<!-- openwiz:status v1 -->\nagent: builder\nstate: working\n'
+            shapes = {'merged': ('CLOSED', 'COMPLETED', [1], [], []), 'in_review': ('OPEN', None, [1], [], []),
+                      'building': ('OPEN', None, [], [], [note]), 'blocked': ('OPEN', None, [], [1], []),
+                      'ready': ('OPEN', None, [], [], [])}
+            views = {}
+            for ticket, known in zip(self.tickets, turn['progress']):
+                state, why, pulls, blockers, notes = shapes[known]
+                views[str(ticket['number'])] = {
+                    'number': ticket['number'], 'state': state, 'stateReason': why,
+                    'closedByPullRequestsReferences': [{'number': 1900 + ticket['number'] % 100} for _ in pulls],
+                    'blockedBy': {'nodes': [{'number': 1, 'state': 'OPEN'} for _ in blockers]},
+                    'comments': [{'body': body, 'author': {'login': 'synthetic-factory[bot]'}} for body in notes]}
+            self.ticket_views.write_text(json.dumps(views))
+        return super().tool(turn)
+
+    def helper(self, args):
+        host = self.saved().get('host', {}).get('agents', 'cloud')
+        if host == 'cloud' or args[0] not in ('launch', 'progress'):
+            return super().helper(args)
+        home = self.dir / 'skills'
+        helper = home / 'install/scripts/first_fleet.py'
+        if not helper.exists():
+            helper.parent.mkdir(parents=True)
+            (self.dir / 'contracts').symlink_to(SKILL_DIR.parents[1] / 'contracts', target_is_directory=True)
+            shutil.copyfile(SKILL_DIR / 'scripts/first_fleet.py', helper)
+            (home / 'install/teach.md').symlink_to(SKILL_DIR / 'teach.md')
+            (home / 'setup').symlink_to(SKILL_DIR.parent / 'setup', target_is_directory=True)
+            (home / 'to-tickets').symlink_to(SKILL_DIR.parent / 'to-tickets', target_is_directory=True)
+            shutil.copytree(SKILL_DIR.parent / 'launch-fleet', home / 'launch-fleet')
+            (home / 'launch-fleet/scripts/heartbeat.py').write_text(
+                "from pathlib import Path\nimport sys\n"
+                f"assert sys.argv[1:] == ['status', {self.repo!r}, '900'], sys.argv[1:]\n"
+                "path = Path('heartbeat-status')\n"
+                "print(path.read_text() if path.exists() else 'heartbeat: not installed')\n")
+        with patch('test_first_fleet.HELPER', helper):
+            return super().helper(args)
 
     def approvals(self):
         path = self.host_state / 'approvals.json'
@@ -117,6 +167,8 @@ class Road(Journey):
             self.save_world()
         elif what == 'fleet_record':
             self.fleet_record()
+        elif what == 'heartbeat_active':
+            (self.dir / 'heartbeat-status').write_text('heartbeat: active (cron)')
         elif what == 'merged':
             pull = turn['pull']
             self.world.setdefault('onboard_pulls', []).append({
@@ -139,8 +191,14 @@ class Road(Journey):
             elif turn.get('approve') == 'machine':
                 self.machine_approve()
             elif 'setup' in turn:
-                self.write_setup(setup_state(turn['setup'], repository=self.repo,
-                                             settings=('claude-code', 'syn-claude-model-01', 'high')))
+                state = setup_state(turn['setup'], repository=self.repo,
+                                    settings=('claude-code', 'syn-claude-model-01', 'high'))
+                host = self.saved().get('host', {}).get('agents', 'cloud')
+                if host != 'cloud':
+                    state['project'].update(host=host, project=None, answer_thread=None)
+                    state['observations']['cloudroom']['code'] = 'cloudroom_not_needed'
+                    self.options.write_text(json.dumps(dict(json.loads(self.options.read_text()), source='local')))
+                self.write_setup(state)
             elif 'tool' in turn:
                 results.append((turn, self.tool(turn)))
         return results
@@ -210,7 +268,10 @@ class Conversation(unittest.TestCase):
                 spoken = [t['say'] for t in said if t['say'] != 'missing']
                 self.assertEqual(spoken, ORDER)
                 for turn in said:
-                    self.assertTrue(says(turn['agent'], turn['say'], lines), (turn['say'], turn['agent']))
+                    if journey['host'] == 'local' and turn['say'] == 'fleet-start':
+                        self.assertIn('local heartbeat is active', turn['agent'])
+                    else:
+                        self.assertTrue(says(turn['agent'], turn['say'], lines), (turn['say'], turn['agent']))
                     self.assertNotRegex(turn['agent'], r'<[^>]+>')
                 self.assertEqual([t['agent'] for t in said[:3]], lines['Up front'])
         self.assertTrue(any(t.get('say') == 'missing' for j in ROAD['journeys'] for t in j['turns']))
@@ -267,6 +328,9 @@ class Replay(unittest.TestCase):
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):
                 road = Road(self, journey)
+                if journey['host'] == 'local':
+                    (road.dir / 'bin/room-cli').unlink()
+                    self.assertIsNone(shutil.which('room-cli', path=road.env()['PATH']))
                 for turn, result in road.replay_road():
                     self.assertEqual(result.returncode, turn['exit'], (turn['tool'], result.stdout, result.stderr))
                 self.assertEqual(road.spawns(), [], "the start is launch-fleet's own path, never a one-off thread")
@@ -278,6 +342,18 @@ class Replay(unittest.TestCase):
                 fleet = next(t['agent'] for t in journey['turns'] if t.get('say') == 'fleet-start')
                 self.assertNotIn(fleet, yes.splitlines(), 'not before the activation record reads back')
                 self.assertIn(fleet, launches[-1].splitlines())
+                if journey['host'] == 'local':
+                    self.assertIn("launch-fleet's Launch section", yes)
+                    self.assertIn('local heartbeat', yes)
+                    self.assertIn('driver harness `claude`', yes)
+                    self.assertNotIn('Starting one', yes)
+                    self.assertEqual(sum(args == ['mode'] for args, _ in road.calls), 1)
+                    self.assertEqual(road.saved()['mode']['mode'], 'acceptEdits')
+                    self.assertIn('Host: local', road.world['files']['docs/agents/host.md'])
+                    self.assertEqual([c for c in road.logged() if c['form'] == 'fleet'], [],
+                                     'a local fleet reads progress from GitHub, never through CloudRoom')
+                    watched = [r.stdout for args, r in road.calls if args[:1] == ['progress']]
+                    self.assertIn('#%d merged' % road.tickets[0]['number'], watched[-1].splitlines())
                 adapters = 'OPENWIZ_ADAPTERS=%s' % (road.dir / 'adapters')
                 self.assertEqual(adapters in yes, journey['host'] == 'local', 'the loop finds the local driver (R2)')
                 merged = outputs[('first-merge', '--pr', '911')].splitlines()
@@ -556,6 +632,8 @@ class Drivers(unittest.TestCase):
         said_yes = road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest])
         self.assertEqual(said_yes.returncode, 0, said_yes.stdout)
         self.assertIn('OPENWIZ_ADAPTERS=%s' % (road.dir / 'adapters'), said_yes.stdout)
+        self.assertIn('local heartbeat', said_yes.stdout)
+        self.assertNotIn('Starting one', said_yes.stdout)
         self.assertEqual(road.spawns(), [])
         self.assertFalse((road.dir / 'boat.log').exists(), 'the road itself never runs boat')
 
@@ -709,6 +787,30 @@ class HostApproval(unittest.TestCase):
         self.assertEqual(road.approvals(), {road.repo: {'claude': 'acceptEdits'}}, 'never widened')
         self.assertFalse([c for c in road.gh_calls() if c[:1] == ['auth']])
 
+    def test_with_both_harnesses_one_ask_saves_each_harness_mode_and_its_own_row(self):
+        road = self.road('small-change')
+        road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
+        state = road.saved()
+        state['host']['harnesses'] = ['claude-code', 'codex']
+        road.state.write_text(json.dumps(state))
+        asked = road.helper(['mode'])
+        self.assertEqual(asked.returncode, 12, asked.stdout)
+        listed = [m for m, _ in re.findall(r'(?m)^- (\S+): (.+)$', asked.stdout)]
+        self.assertEqual(listed, ['default', 'acceptEdits', 'bypassPermissions', 'read-only', 'workspace-write',
+                                  'danger-full-access'], 'one ask covers the builder and the other-family reviewer')
+        half = road.helper(['mode', '--mode', 'acceptEdits'])
+        self.assertEqual(half.returncode, 5, half.stdout)
+        self.assertIsNone(road.approvals(), 'a pick for only one harness saves nothing')
+        picked = road.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+        self.assertEqual(picked.returncode, 0, picked.stdout)
+        self.assertEqual(road.approvals(), {road.repo: {'claude': 'acceptEdits', 'codex': 'workspace-write'}})
+        wrote = road.helper(['setting', '--yes'])
+        self.assertEqual(wrote.returncode, 0, wrote.stdout)
+        fleet = json.loads(road.world_path.read_text())['branches']['openwiz/host-setting']['docs/agents/fleet.md']
+        self.assertEqual(re.findall(r'(?m)^\| Harness permission mode.*$', fleet),
+                         ['| Harness permission mode (claude) | `acceptEdits` |',
+                          '| Harness permission mode (codex) | `workspace-write` |'])
+
     def test_the_approval_adds_only_this_entry_keeps_every_other_byte_and_is_owner_only_600(self):
         road = self.road()
         road.replay_road(stop=lambda t: t.get('tool') == ['mode'])
@@ -769,6 +871,34 @@ class HostApproval(unittest.TestCase):
         self.assertIn('| Harness permission mode | `acceptEdits` |', result.stdout)
         self.assertIn('run mode, then setting, and merge it', result.stdout)
         self.assertEqual(road.spawns(), [])
+
+    def test_with_both_harnesses_the_reviewers_own_row_and_approval_gate_the_launch(self):
+        road = self.road()
+        road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
+        codex = road.dir / 'bin/codex'
+        codex.write_text('#!/bin/sh\nexit 97\n')
+        codex.chmod(0o755)
+        state = road.saved()
+        state['host']['harnesses'] = ['claude-code', 'codex']
+        state['mode'] = {'harness': 'claude-code', 'mode': 'acceptEdits',
+                         'modes': {'claude': 'acceptEdits', 'codex': 'workspace-write'}}
+        road.state.write_text(json.dumps(state))
+        rows = ('\n## Harness permission mode\n\n| Setting | Value |\n| --- | --- |\n'
+                '| Harness permission mode (claude) | `acceptEdits` |\n'
+                '| Harness permission mode (codex) | `workspace-write` |\n')
+        road.origin_write({'docs/agents/fleet.md': fleet_md(builder=CLAUDE, small=CLAUDE) + rows})
+        path = road.host_state / 'approvals.json'
+        path.write_text(json.dumps({road.repo: {'claude': 'acceptEdits'}}))
+        path.chmod(0o600)
+        refused = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(refused.returncode, 5, refused.stdout)
+        self.assertIn('codex', refused.stdout, 'names the reviewer harness with no approval')
+        self.assertNotIn('Confirmation:', refused.stdout)
+        path.write_text(json.dumps({road.repo: {'claude': 'acceptEdits', 'codex': 'workspace-write'}}))
+        preview = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(preview.returncode, 12, preview.stdout)
+        self.assertIn('claude-code with the acceptEdits permission mode and codex with the workspace-write '
+                      'permission mode', preview.stdout)
 
 
 class ReviewRound(unittest.TestCase):
@@ -968,6 +1098,154 @@ class FirstMerge(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertTrue(says(result.stdout.splitlines()[-2], 'merged'), result.stdout)
         self.assertTrue(says(result.stdout.splitlines()[-1], 'offer'), result.stdout)
+
+
+def step_block(heading, end, keep, listed=False):
+    text = (SKILL_DIR / 'SKILL.md').read_text()
+    part = text[text.index(heading):text.index(end, text.index(heading))]
+    if listed:
+        part = '\n'.join(l[3:] if l.startswith('   ') else l for l in part.split('\n'))
+    return part, next(b for b in re.findall(r'```sh\n(.*?)```', part, re.S) if keep in b)
+
+
+class StepFourReadsTheInstallerOutput(unittest.TestCase):
+
+    def run_step(self, output, code):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        home = tmp / 'home'
+        rows = json.loads(json.dumps(output).replace('HOME', str(home)))
+        for row in rows['harnesses']:
+            on_disk = row.pop('on_disk', [])
+            for name in on_disk:
+                (Path(row['path']) / name).mkdir(parents=True)
+                source = on_disk[name] if isinstance(on_disk, dict) else rows['source']
+                (Path(row['path']) / name / '.openwiz-skill').write_text('openwiz.skill-copy.v1\n%s\n' % source)
+        fake = tmp / 'openwiz/tools/install/install'
+        fake.parent.mkdir(parents=True)
+        (tmp / 'output.json').write_text(json.dumps(rows))
+        fake.write_text('import sys\nsys.stdout.write(open(%r).read())\nsys.exit(%d)\n' % (str(tmp / 'output.json'), code))
+        step4, block = step_block('## 4. ', '## 5. ', 'install skills')
+        block = (block.replace('"$openwiz"', shlex.quote(str(tmp / 'openwiz'))).replace('<root>', str(tmp / 'root'))
+                 .replace('<private file>', str(tmp / 'skills.json')))
+        out = subprocess.run(['sh', '-c', block], env={'HOME': str(home), 'PATH': os.environ['PATH']},
+                             capture_output=True, text=True)
+        return step4, [l.replace(str(home), '~') for l in out.stdout.split('\n') if l]
+
+    def test_partial_counts_as_done_and_each_skip_and_missing_skill_is_named(self):
+        skip = 'Move or rename your own grill, then run this again.'
+        step4, lines = self.run_step({
+            'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'partial',
+            'canonical': 'HOME/root/skills', 'skills': ['grill', 'install', 'write-driver'],
+            'harnesses': [
+                {'id': 'claude-code', 'path': 'HOME/.claude/skills', 'state': 'partial', 'next': 'see below',
+                 'skipped': [{'skill': 'grill', 'path': 'HOME/.claude/skills/grill', 'next': skip}],
+                 'on_disk': ['grill', 'install', 'write-driver']},
+                {'id': 'codex', 'path': 'HOME/.codex/skills', 'state': 'installed', 'next': 'ok',
+                 'on_disk': ['grill', 'install']},
+                {'id': 'cursor', 'path': 'HOME/.cursor/skills', 'state': 'absent', 'next': 'Install Cursor first.'}]}, 0)
+        self.assertEqual(lines, ['exit: 0',
+                                 'partial: claude-code ~/.claude/skills (next: see below)',
+                                 'skipped: grill in claude-code (next: %s)' % skip,
+                                 'installed: codex ~/.codex/skills',
+                                 'missing: write-driver in codex',
+                                 'absent: cursor ~/.cursor/skills (next: Install Cursor first.)',
+                                 'outcome: partial, 3 skills'])
+        self.assertNotIn('refuses the whole step', step4)
+        self.assertNotRegex(step4 + step_block('## Resume', '## 1. ', '')[0], r'\b1[0-9] skills|ask-wiz')
+        for words in ('`installed` or `partial`', 'each `skipped:` line', 'never delete or overwrite it',
+                      'A `missing:` line'):
+            self.assertIn(words, step4)
+
+    def test_an_older_copy_left_by_a_failed_write_is_not_done(self):
+        failed = ('OpenWiz could not write HOME/.codex/skills (File too large), so Codex got 1 of 2 skills. '
+                  'Make it writable, then run this again.')
+        step4, lines = self.run_step({
+            'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'partial',
+            'canonical': 'HOME/root/skills', 'skills': ['install', 'review-ticket'],
+            'harnesses': [{'id': 'codex', 'path': 'HOME/.codex/skills', 'state': 'partial', 'next': failed,
+                           'on_disk': {'install': 'f' * 40, 'review-ticket': 'e' * 40}}]}, 0)
+        self.assertEqual(lines, ['exit: 0', 'partial: codex ~/.codex/skills (next: %s)' % failed.replace('HOME', '~'),
+                                 "missing: review-ticket in codex (not this release's copy)",
+                                 'outcome: partial, 2 skills'])
+
+    def test_refused_means_nothing_was_installed(self):
+        step4, lines = self.run_step({
+            'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'refused',
+            'canonical': 'HOME/root/skills', 'skills': ['install'],
+            'harnesses': [{'id': 'claude-code', 'path': 'HOME/.claude/skills', 'state': 'absent', 'next': 'No ~/.claude.'},
+                          {'id': 'codex', 'path': 'HOME/.codex/skills', 'state': 'absent', 'next': 'No ~/.codex.'}]}, 5)
+        self.assertEqual(lines, ['exit: 5', 'absent: claude-code ~/.claude/skills (next: No ~/.claude.)',
+                                 'absent: codex ~/.codex/skills (next: No ~/.codex.)', 'outcome: refused, 1 skills'])
+        self.assertIn('`outcome: refused` (exit 5) means nothing was installed', step4)
+
+
+class UninstallListsEveryHeartbeatJob(unittest.TestCase):
+
+    def test_a_nested_second_install_is_listed_like_any_job_and_nothing_is_touched(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        jobs = tmp / 'home/.local/state/openwiz-heartbeat'
+        first = tmp / ('first/state/service/builds/%s/runtime/adapters' % ('a' * 40))
+        nested = tmp / ('first/state/second/state/service/builds/%s/runtime/adapters' % ('b' * 40))
+        for name, repo, spec, adapters in (('openwiz-heartbeat-a', 'synthetic-owner/first', '7', first),
+                                           ('openwiz-heartbeat-b', 'synthetic-owner/second', '8', nested),
+                                           ('openwiz-heartbeat-c', 'synthetic-owner/third', '9', None)):
+            (jobs / name).mkdir(parents=True)
+            (jobs / name / 'config.json').write_text(json.dumps({
+                'backend': 'cron', 'argv': ['python3', '-I', '/shared/heartbeat.py', 'run', repo, spec],
+                'environment': {'OPENWIZ_ADAPTERS': str(adapters)} if adapters else {}}))
+        before = sorted(str(p) for p in tmp.rglob('*'))
+        removal, block = step_block('## Recovery and removal', '\nRemoval revokes', 'openwiz-heartbeat', listed=True)
+        block = block.replace('<state>', str(tmp / 'first/state')).replace('<root>', str(tmp / 'first'))
+        out = subprocess.run(['sh', '-c', block], env={'HOME': str(tmp / 'home'), 'PATH': '/usr/bin:/bin'},
+                             capture_output=True, text=True).stdout.split('\n')
+        self.assertEqual(sorted(str(p) for p in tmp.rglob('*')), before)
+        self.assertEqual([l for l in out if l], ['job: synthetic-owner/first 7 (adapters: %s)' % first,
+                                                 'job: synthetic-owner/second 8 (adapters: %s)' % nested,
+                                                 'job: synthetic-owner/third 9 (adapters: none)'])
+        self.assertNotIn('this install:', removal)
+        self.assertIn('remove only the jobs the user names', removal)
+        self.assertIn('Never decide which jobs are this install\'s', removal)
+
+
+class ExpressFirstFleet(unittest.TestCase):
+
+    def section(self, text, heading):
+        return text.split(heading + '\n', 1)[1].split('\n#', 1)[0]
+
+    def test_the_first_fleet_is_one_grill_round_of_about_three_parallel_tickets_and_no_video(self):
+        skill = (SKILL_DIR / 'SKILL.md').read_text()
+        with self.subTest('6.4 Grill'):
+            grill = self.section(skill, '### 4. Grill')
+            self.assertRegex(grill, r'\bone short round\b')
+            self.assertRegex(grill, r'about three small tickets[^.]*no blockers between them[^.]*no shared owned paths'
+                                    r'[^.]*all three build in parallel')
+            self.assertNotRegex(grill, r'(?i)\btwo rounds\b|\b4 to 7\b')
+            start = teach_lines()['The grill'][0]
+            self.assertRegex(start, r'\bone round\b')
+            self.assertRegex(start, r'\babout three\b')
+        with self.subTest('6.7 Plan'):
+            plan = self.section(skill, '### 7. Plan')
+            self.assertRegex(plan, r"install's first fleet[^.]*straight to the launch with no video")
+            self.assertRegex(plan, r'for this fleet only; a later spec[^.]*gets its video')
+            self.assertRegex(plan, r'reset or change of this spec or plan[^.]*no video')
+            self.assertNotIn('video link', plan)
+        with self.subTest('The spec and its video'):
+            spec = teach_lines()['The spec and its video']
+            self.assertEqual(len(spec), 1)
+            self.assertNotIn('<video link>', spec[0])
+            self.assertRegex(spec[0], r'first fleet has no video')
+            self.assertNotRegex(spec[0], r'(?i)starts as soon as|nothing for you to do')
+            self.assertRegex(spec[0], r'ask for your yes')
+        with self.subTest('to-spec step 4'):
+            step = self.section((SKILL_DIR.parent / 'to-spec' / 'SKILL.md').read_text(),
+                                '## 4. Make the steering video')
+            first = step.strip().split('\n\n', 1)[0].replace('\n', ' ')
+            self.assertRegex(first, r"^Skip this step for the install's first fleet, and only for it:")
+            self.assertRegex(first, r'reset or change of that spec or plan[^.]*new machine approval[^.]*no video'
+                                    r"[^.]*step 5's new video")
+            self.assertRegex(first, r'Every other spec gets its video\.$')
 
 
 if __name__ == '__main__':

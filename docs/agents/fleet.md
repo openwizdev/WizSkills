@@ -38,7 +38,7 @@ New assignments follow the current orchestrator ruling. Existing agents keep the
 
 ## Test commands
 
-Run `python3 check/run.py` at the repository root. The hosted workflow installs the pinned test-only browser tools first and runs the suite with `TEST_JOBS=2`. Source: [WizSkills CI](../../.github/workflows/ci.yml).
+Run `python3 check/run.py` at the repository root, or `python3 check/run.py --shard <name>[,<name>...]` for the shards `python3 check/run.py --list` names ([check shards contract](../../contracts/check-shards.v1.md)). The hosted workflow runs one job per listed shard with `TEST_JOBS=2` (on a pull request, only the shards `check/select.py` picks for its changed files; merge groups and pushes to `main` run every shard), installing the pinned test-only browser tools only in the shards whose skill names `playwright-core`, and the changeset and comment gates in their own job. Source: [WizSkills CI](../../.github/workflows/ci.yml).
 
 Evidence (red and green runs, logs, screenshots, review captures) goes in the pull request's description or comments, never in the tree.
 
@@ -46,11 +46,17 @@ Evidence (red and green runs, logs, screenshots, review captures) goes in the pu
 
 | Check | Runs | Required by fleet on |
 | --- | --- | --- |
-| `check` | Skill rules, standalone check and every skill suite | Pull requests to `main` at the exact proposed head |
+| `check` | Passes only when every job passed: one job per shard from `run.py --list` (skill rules, standalone check and every skill suite; on a pull request, every shard `check/select.py` selects) and the gates job; on pull requests, merge groups and pushes to `main` | Pull requests and merge groups to `main` at the exact proposed head |
 
 ## Standing merge rules
 
-The fleet verifies the selected other-family reviewer's APPROVE and a passing `check` at the same PR head. It admits the merge with `PUT /repos/openwizdev/WizSkills/pulls/<number>/merge` and `sha` set to that head, then reads the result back. Jake's release and publication decisions are separate. Source: [WizSkills setup ruling](https://github.com/jparker2006/ClosedWiz/issues/3065#issuecomment-6998365073).
+The fleet verifies the selected other-family reviewer's APPROVE and a passing `check` at the same PR head. `main` merges through GitHub's merge queue: the fleet runs `python3 -I "<launch-fleet's folder>/scripts/merge.py" merge openwizdev/WizSkills <P> <commit> <checks> "<the APPROVE and the plan approval it relies on>" --ticket openwizdev/OpenWiz#<N>`, with this file's required checks comma-separated. It enqueues the PR pinned to the approved head (`enqueuePullRequest` with `expectedHeadOid`) and records `merge queued` only after it reads the queue entry back. The queue tests the PR against the current `main` and merges it.
+
+While the merge queue is on, a move of `main` is never a reason to merge `main` in or re-test an approved PR. Its builder merges `main` in only when the PR conflicts with `main`, or when the queue removes it for a failed merge group. After such a removal, `merge.py` records `merge blocked` for that head, and the fleet, not the orchestrator, tells the builder to merge `main` in and hand back a new head for a re-check ([launch-fleet's reviews](../../skills/launch-fleet/references/reviews.md)). The builder waits for that message.
+
+While `merge.py` prints `base rule: no merge queue`, the queue is not on yet: the fleet admits the merge with `PUT /repos/openwizdev/WizSkills/pulls/<number>/merge` and `sha` set to the approved head, then reads the result back. The re-test guard still applies here: the fleet merges only while `fleet.sh every` still prints a fresh `merge` line for that head, and a `re-test` line instead means a re-test on the latest `main`.
+
+Jake's release and publication decisions are separate. Sources: orchestrator setup ruling, 2026-11-19, under spec [openwizdev/OpenWiz#1141](https://github.com/openwizdev/OpenWiz/issues/1141) ([private record](https://github.com/jparker2006/ClosedWiz/issues/3065#issuecomment-6998365073)), and [the merge queue spec](https://github.com/openwizdev/OpenWiz/issues/2134).
 
 ## GitHub identity
 

@@ -245,6 +245,23 @@ def keep(o, *keys):
     return {k: get(o, k) for k in keys}
 
 
+def pull_repo(w, p):
+    return p.get('repo') or w['repo'] if isinstance(p, dict) else w['repo']
+
+
+def foreign_repos(w):
+    return sorted({pull_repo(w, p) for p in each_opt(w.get('pulls'))} - {w['repo']})
+
+
+def repo_id(w, r):
+    return 1 if r == w['repo'] else 2 + foreign_repos(w).index(r)
+
+
+def view(w, r):
+    return dict(w, repo=r, issues=each_opt(w.get('issues')) if r == w['repo'] else [],
+                pulls=[p for p in each_opt(w.get('pulls')) if pull_repo(w, p) == r])
+
+
 # --- the call ---------------------------------------------------------------
 
 def main(argv):
@@ -402,7 +419,7 @@ def graphql(w, repo, o, ids, page, answer):
     if op in ('Singles', 'Nodes', 'Blockers'):
         if owner + name:
             fail(op + ' takes no owner or name')
-    elif owner + '/' + name != repo:
+    elif owner + '/' + name != repo and not (op in ('Checks', 'Merged') and owner + '/' + name in foreign_repos(w)):
         fail('graphql for %s/%s, not %s' % (owner, name, repo))
     label = ''
     if op == 'Singles':
@@ -435,12 +452,13 @@ def graphql(w, repo, o, ids, page, answer):
         raise Status(1)
     remaining = tonumber(env.get('FAKE_GH_REMAINING') or '5000')
     issues, pulls = each(w.get('issues')), each(w.get('pulls'))
+    own_pulls = view(w, repo)['pulls']
     # Item (ClosedWiz#259): a number that is neither an issue nor a pull request
     # answers as GitHub does: the item null, an `errors` entry of type NOT_FOUND
     # (observed live, 2026-11-01), and `gh` exits 1.
     if op == 'Item':
         n = argjson(number)
-        if not any(get(x, 'number') == n for x in issues + pulls):
+        if not any(get(x, 'number') == n for x in issues + own_pulls):
             default = w.get('default')
             sys.stdout.write(compact({
                 'data': {'rateLimit': {'cost': 1, 'remaining': remaining, 'limit': 5000, 'resetAt': '2026-11-01T13:00:00Z'},
@@ -534,10 +552,12 @@ def graphql(w, repo, o, ids, page, answer):
         rollup = None if get(p, 'rollup') is None else {
             'state': get(p, 'rollup'),
             'contexts': context_page(p)}
-        return {'number': get(p, 'number'), 'state': get(p, 'state'), 'isDraft': alt(get(p, 'draft'), False),
+        return {'id': alt(get(p, 'id'), 'PR_%s' % get(p, 'number')),
+                'number': get(p, 'number'), 'state': get(p, 'state'), 'isDraft': alt(get(p, 'draft'), False),
                 'merged': get(p, 'state') == 'MERGED', 'mergedAt': get(p, 'mergedAt'),
                 'closedAt': get(p, 'closedAt'),  # K9 (#337): when a closed one closed
                 'baseRefName': get(p, 'base'), 'headRefOid': get(p, 'head'),
+                'repository': {'databaseId': repo_id(w, pull_repo(w, p)), 'nameWithOwner': pull_repo(w, p)},
                 'commits': {'nodes': [{'commit': {'oid': get(p, 'head'),
                                                   # The full message is returned only when requested;
                                                   # GitHub's display headline can be truncated.
@@ -545,7 +565,8 @@ def graphql(w, repo, o, ids, page, answer):
                                                      if re.search(r'\bmessage\b', query) else {}),
                                                   'committedDate': get(p, 'committed'),  # K9 (#337)
                                                   'statusCheckRollup': rollup}}]},
-                'comments': comments(p)}
+                'comments': comments(p),
+                **({'isMergeQueueEnabled': p['queue']} if 'queue' in p and 'isMergeQueueEnabled' in query else {})}
 
     def ticket(t):
         blockers = []
@@ -581,9 +602,10 @@ def graphql(w, repo, o, ids, page, answer):
         ps = [p for p in pulls if get(p, 'head') == o['oid']]
         if not ps:
             fail('unknown commit: ' + o['oid'])
-        p = ps[0]
+        ps = [p for p in ps if pull_repo(w, p) == owner + '/' + name]
+        p = ps[0] if ps else None
         start = int(cursor or '0')
-        out = {'data': {'repository': {'object': {
+        out = {'data': {'repository': {'object': None}}} if p is None else {'data': {'repository': {'object': {
             'oid': p.get('contextOids', {}).get(str(start), get(p, 'head')),
             'statusCheckRollup': {'state': get(p, 'rollup'), 'contexts': context_page(p, start)}}}}}
     elif op == 'Singles':
@@ -629,7 +651,7 @@ def graphql(w, repo, o, ids, page, answer):
                                'subIssuesSummary': {'total': subs_total(get(s, 'number'))}}
             return t
         n = number_of(number)
-        ps = [p for p in pulls if get(p, 'number') == n]
+        ps = [p for p in own_pulls if get(p, 'number') == n]
         if ps:
             p = ps[0]
             start = 0 if cursor == '' else number_of(cursor)
@@ -660,7 +682,7 @@ def graphql(w, repo, o, ids, page, answer):
                 'subIssues': {'pageInfo': {'hasNextPage': truthy(alt(get(s, 'subIssuesTruncated'), False)) or len(subs) > tickets},
                               'nodes': [ticket(t) for t in subs[:tickets]]}}}}}
     else:
-        merged = sort_by([p for p in pulls if get(p, 'state') == 'MERGED'], lambda p: get(p, 'updatedAt'))[::-1]
+        merged = sort_by([p for p in view(w, owner + '/' + name)['pulls'] if get(p, 'state') == 'MERGED'], lambda p: get(p, 'updatedAt'))[::-1]
         out = {'data': {'repository': {'pullRequests': window([
             {'number': get(p, 'number'), 'mergedAt': get(p, 'mergedAt'), 'updatedAt': get(p, 'updatedAt'),
              'baseRefName': get(p, 'base'),
@@ -675,7 +697,8 @@ def graphql(w, repo, o, ids, page, answer):
         nodes = [{'id': sha_text(get(t, 'number')), 'number': get(t, 'number'),
                   'repository': {'nameWithOwner': w['repo']}, 'labels': t['labels'], 'stateReason': t['stateReason'],
                   'closedByPullRequestsReferences': {'nodes': [
-                      {'number': get(p, 'number'), 'merged': get(p, 'merged'), 'baseRefName': get(p, 'baseRefName')}
+                      {'number': get(p, 'number'), 'merged': get(p, 'merged'), 'baseRefName': get(p, 'baseRefName'),
+                       'repository': get(p, 'repository')}
                       for p in t['closedByPullRequestsReferences']['nodes']]}} for t in data['nodes']]
         data['nodes'] = nodes + [b for b in each_opt(w.get('blockerNodes')) if get(b, 'id') in ids]
     for needle, key in (('blockedBy(first:', 'blockedBy'), ('comments(last:', 'comments'), ('labels(first:', 'labels')):
@@ -706,6 +729,13 @@ def rest(w, repo, path, page, paginate, include, accept, conditional, answer):
     # HTTP fixtures keep transport metadata separate from the logical-read log.
     if path.startswith('repositories/1/'):
         path = 'repos/%s/%s' % (repo, path[len('repositories/1/'):])
+    for r in foreign_repos(w):
+        prefix = 'repositories/%d/' % repo_id(w, r)
+        if path.startswith(prefix):
+            path = 'repos/%s/%s' % (r, path[len(prefix):])
+    home = ([r for r in foreign_repos(w) if path.startswith('repos/%s/' % r)] + [repo])[0]
+    home_id = repo_id(w, home)
+    w, repo = view(w, home), home
     rest_page = path.rsplit('&page=', 1)[1] if '&page=' in path else '1'
     if not re.fullmatch(r'[0-9]+', rest_page):
         fail('bad REST page')
@@ -742,7 +772,7 @@ def rest(w, repo, path, page, paginate, include, accept, conditional, answer):
         if count > offset + n:
             base = path.split('&page=', 1)[0]
             if base.startswith('repos/%s/' % repo):
-                base = 'repositories/1/' + base[len('repos/%s/' % repo):]
+                base = 'repositories/%d/' % home_id + base[len('repos/%s/' % repo):]
             link = 'https://api.github.com/%s&page=%d' % (base, rest_page + 1)
         if isinstance(v, list):
             v = v[offset:offset + n]

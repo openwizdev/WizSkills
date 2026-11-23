@@ -143,11 +143,11 @@ class SpecVideo(unittest.TestCase):
         ]:
             with self.subTest(fields=fields):
                 moments = copy.deepcopy(self.moments)
-                moments[1]['frame'].update(fields)
+                moments[3]['frame'].update(fields)
                 result = run('check', self.write(moments))
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertEqual(result.stdout, '')
-                self.assertEqual(result.stderr, f'animatic: moment 2: {reason}\n')
+                self.assertEqual(result.stderr, f'animatic: moment 4: {reason}\n')
 
     def test_benches_are_refused_in_narration_and_frame_text(self):
         for where in ['narration', 'frame']:
@@ -262,12 +262,12 @@ import json, os, pathlib, sys
 name = pathlib.Path(sys.argv[0]).name
 with open(os.environ['DECODER_CALLS'], 'a') as log:
     print(json.dumps([name, *sys.argv[1:]]), file=log)
-os.execv(os.environ[name], sys.argv)
+os.execv(os.environ[f'REAL_{name.upper()}'], sys.argv)
 '''
         calls = self.tmp / 'calls.jsonl'
         env = dict(os.environ, PATH=f'{install}{os.pathsep}{os.environ["PATH"]}', DECODER_CALLS=str(calls))
         for name in ['ffmpeg', 'ffprobe']:
-            env[name] = shutil.which(name)
+            env[f'REAL_{name.upper()}'] = shutil.which(name)
             wrapper = install / name
             wrapper.write_text(decoder)
             wrapper.chmod(0o755)

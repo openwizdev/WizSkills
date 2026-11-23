@@ -142,6 +142,14 @@ class Rate(unittest.TestCase):
             self.assertEqual(r.stdout, '', args)
 
 
+    def test_non_finite_timeouts_are_refused_before_running(self):
+        for timeout in ('nan', 'inf', '-inf'):
+            with self.subTest(timeout=timeout), tempfile.TemporaryDirectory() as tmp:
+                r = run('rate', '--runs', '1', '--timeout', timeout, '--', *counter(tmp, set()))
+                self.assertEqual((r.returncode, r.stdout, Path(tmp, 'count').exists()),
+                                 (2, '', False))
+
+
 def git_tree(tmp):
     def git(*a):
         subprocess.run(['git', *a], cwd=tmp, check=True, capture_output=True,

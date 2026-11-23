@@ -1,0 +1,92 @@
+Total: 18704 calls, 9296 REST units, 4663 GraphQL calls, from 5 logs
+
+Per role (REST units counted; used delta measured, null-free calls only):
+
+| Role | Calls | REST calls | GraphQL calls | REST units | Used delta |
+| --- | --- | --- | --- | --- | --- |
+| fleet | 16893 | 12582 | 4311 | 7837 | - |
+| orchestrator | 1811 | 1459 | 352 | 1459 | - |
+
+Per endpoint:
+
+| Method | Endpoint | Kind | Calls | REST units |
+| --- | --- | --- | --- | --- |
+| GET | repos/synthetic-owner/synthetic-repo/issues/:n/comments | rest | 4093 | 2775 |
+| GET | repos/synthetic-owner/synthetic-repo/issues/:n | rest | 2981 | 1832 |
+| GET | repos/synthetic-owner/synthetic-repo/issues/:n/dependencies/blocked_by | rest | 2773 | 1825 |
+| GET | repos/synthetic-owner/synthetic-repo/pulls/:n/files | rest | 400 | 400 |
+| GET | repos/synthetic-owner/synthetic-repo/contents/docs/agents/fleet.md | rest | 468 | 392 |
+| GET | repos/synthetic-owner/synthetic-repo/issues/:n/timeline | rest | 812 | 286 |
+| GET | repos/synthetic-owner/synthetic-repo/issues | rest | 258 | 185 |
+| GET | repos/synthetic-owner/synthetic-repo/contents/docs/agents/triage-labels.md | rest | 258 | 182 |
+| GET | repos/example/tracker/issues/:n/comments | rest | 137 | 137 |
+| GET | repos/synthetic-owner/synthetic-repo/pulls/:n | rest | 335 | 118 |
+| GET | repos/openwizdev/OpenWiz/issues/:n/comments | rest | 109 | 109 |
+| GET | repos/example/tracker/issues/:n/events | rest | 97 | 97 |
+| GET | repos/openwizdev/OpenWiz/contents/docs/agents/fleet.md | rest | 83 | 83 |
+| POST | repos/synthetic-owner/synthetic-repo/issues/:n/comments | rest | 69 | 69 |
+| GET | repos/example/tracker/issues/:n | rest | 67 | 67 |
+| GET | repos/synthetic-owner/synthetic-tickets/issues/:n/comments | rest | 64 | 64 |
+| GET | search/issues | rest | 63 | 63 |
+| GET | repos/synthetic/ops/contents/docs/agents/fleet.md | rest | 56 | 56 |
+| GET | repos/openwizdev/OpenWiz/issues/:n | rest | 52 | 52 |
+| GET | repos/synthetic-owner/synthetic-repo/commits/:n/check-runs | rest | 132 | 49 |
+| GET | repos/synthetic-owner/synthetic-repo/commits/:n/status | rest | 132 | 49 |
+| GET | repos/example/tracker/contents/docs/agents/fleet.md | rest | 45 | 45 |
+| GET | repos/synthetic-owner/synthetic-tickets/contents/docs/agents/fleet.md | rest | 44 | 44 |
+| POST | repos/openwizdev/OpenWiz/issues/:n/comments | rest | 32 | 32 |
+| GET | repos/synthetic-owner/synthetic-repo/issues/:n/sub_issues | rest | 71 | 31 |
+| POST | repos/example/tracker/issues/:n/labels | rest | 27 | 27 |
+| GET | repos/synthetic-owner/synthetic-repo/git/ref/heads/main | rest | 71 | 26 |
+| GET | repos/synthetic-owner/synthetic-repo | rest | 71 | 25 |
+| GET | user | rest | 66 | 25 |
+| POST | repos/example/tracker/issues/:n/comments | rest | 22 | 22 |
+| POST | repos/synthetic-owner/synthetic-tickets/issues/:n/comments | rest | 20 | 20 |
+| PATCH | repos/example/tracker/issues/comments/:n | rest | 19 | 19 |
+| GET | repos/synthetic-owner/synthetic-repo/issues/comments/:n | rest | 15 | 15 |
+| GET | repos/synthetic-owner/synthetic-repo/git/matching-refs/heads/room/12- | rest | 10 | 10 |
+| GET | repos/example/public/issues/:n/comments | rest | 14 | 7 |
+| DELETE | repos/example/tracker/issues/:n/labels/needs-info | rest | 6 | 6 |
+| GET | repos/openwizdev/WizSkills/issues/:n/comments | rest | 6 | 6 |
+| GET | repos/example/public/issues/:n | rest | 11 | 5 |
+| GET | repos/example/public/issues/:n/dependencies/blocked_by | rest | 10 | 5 |
+| GET | repos/synthetic-owner/synthetic-tickets/issues/comments/:n | rest | 5 | 5 |
+| GET | repos/example/public/issues/:n/timeline | rest | 4 | 4 |
+| GET | repos/openwizdev/WizSkills/contents/docs/agents/fleet.md | rest | 4 | 4 |
+| GET | installation/repositories | rest | 6 | 3 |
+| DELETE | repos/example/tracker/issues/comments/:n | rest | 3 | 3 |
+| PATCH | repos/synthetic-owner/synthetic-repo/issues/comments/:n | rest | 3 | 3 |
+| GET | repos/example/public/pulls/:n | rest | 2 | 2 |
+| POST | repos/openwizdev/WizSkills/issues/:n/comments | rest | 2 | 2 |
+| GET | repos/example/public/contents/docs/agents/fleet.md | rest | 2 | 1 |
+| GET | repos/example/public/contents/docs/agents/triage-labels.md | rest | 2 | 1 |
+| GET | repos/example/public/issues | rest | 2 | 1 |
+| GET | repos/example/public | rest | 1 | 1 |
+| GET | repos/example/public/commits/:n/check-runs | rest | 1 | 1 |
+| GET | repos/example/public/commits/:n/status | rest | 1 | 1 |
+| GET | repos/example/public/git/ref/heads/main | rest | 1 | 1 |
+| GET | repos/example/public/issues/:n/sub_issues | rest | 1 | 1 |
+| GET | repos/example/public/pulls/:n/files | rest | 1 | 1 |
+| DELETE | repos/openwizdev/OpenWiz/issues/comments/:n | rest | 1 | 1 |
+| view | issue view | graphql | 3164 | 0 |
+| POST | graphql | graphql | 1267 | 0 |
+| view | repo view | graphql | 226 | 0 |
+| merge | pr merge | graphql | 6 | 0 |
+
+Top five endpoints by REST units:
+1. GET repos/synthetic-owner/synthetic-repo/issues/:n/comments: 2775 units, 4093 calls
+2. GET repos/synthetic-owner/synthetic-repo/issues/:n: 1832 units, 2981 calls
+3. GET repos/synthetic-owner/synthetic-repo/issues/:n/dependencies/blocked_by: 1825 units, 2773 calls
+4. GET repos/synthetic-owner/synthetic-repo/pulls/:n/files: 400 units, 400 calls
+5. GET repos/synthetic-owner/synthetic-repo/contents/docs/agents/fleet.md: 392 units, 468 calls
+| Script | Role | Fixture runs | Calls | REST calls | GraphQL calls | REST units | REST units per run | REST units per spec-hour (x6 wakes) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| fleet.sh spec | fleet | 261 | 16893 | 12582 | 4311 | 7837 | 30.0 | 180 |
+| merge.py | orchestrator | 174 | 1206 | 942 | 264 | 942 | 5.4 | 32 |
+| status.py repair | orchestrator | 45 | 511 | 423 | 88 | 423 | 9.4 | 56 |
+| post.py | orchestrator | 21 | 38 | 38 | 0 | 38 | 1.8 | 11 |
+| ops-starts.py | orchestrator | 60 | 56 | 56 | 0 | 56 | 0.9 | 6 |
+| brief.py | orchestrator | 49 | 0 | 0 | 0 | 0 | 0.0 | 0 |
+
+Agent-CLI stubs: 25 installed; 0 calls reached them
+

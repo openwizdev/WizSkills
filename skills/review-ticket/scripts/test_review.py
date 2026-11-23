@@ -915,8 +915,11 @@ class Review(unittest.TestCase):
         first, again = re.findall(r"```md\n(.*?)```", contract, re.S)
         head = review.parse(first)["head"]
         self.world({"checks": green(head)}, pr={"head": {"sha": head}})
-        out = self.run_helper("check", self.file("first.md", first), "--repo", SKILLS, "--pr", "7")
-        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+        skill = re.findall(r"```md\n(.*?)```", (HELPER.parent.parent / "SKILL.md").read_text(), re.S)
+        for name, text in {"verdict.md": first, "SKILL.md": skill[0]}.items():
+            with self.subTest(name):
+                out = self.run_helper("check", self.file("first.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
         problems = review.check(again, DESCRIPTION, "re-check", review.parse(again)["head"], review.parse(first))
         self.assertEqual([p for p in problems if "Disproved" in p], [])
         problems = review.check(again.replace("Disproved: 1 candidate findings dropped.\n\n", ""), DESCRIPTION,

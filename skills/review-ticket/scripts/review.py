@@ -263,6 +263,16 @@ def check(text, description, mode, head, earlier, decision=None, changed=None):
         problems.append("Rulings: none. stands beside a ruling mark")
     if not listed and not r["no_rulings"]:
         problems.append("with no rulings listed, the report says Rulings: none.")
+    disproved = [x.strip() for x in text.replace("\r\n", "\n").split("\n") if x.strip().startswith("Disproved:")]
+    checked = next((n for n, p in enumerate(r["paras"]) if p.startswith("Checked:")), None)
+    if not disproved:
+        problems.append("no Disproved: line; write Disproved: <n> candidate findings dropped. before Checked:")
+    elif len(disproved) > 1:
+        problems.append(f"{len(disproved)} Disproved: lines; write exactly one")
+    elif not re.fullmatch(r"Disproved: (?:0|[1-9][0-9]*) candidate findings dropped\.", disproved[0]):
+        problems.append("the Disproved: line reads Disproved: <n> candidate findings dropped.")
+    elif disproved[0] not in r["paras"] or checked is None or r["paras"].index(disproved[0]) > checked:
+        problems.append("the Disproved: line is its own paragraph before Checked:")
     if PRIVATE.search(text):
         problems.append("private material: a token or thread id")
     return problems

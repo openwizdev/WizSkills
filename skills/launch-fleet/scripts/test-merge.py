@@ -3,6 +3,7 @@
 
 python3 -I skills/launch-fleet/scripts/test-merge.py
 """
+import ast
 import contextlib
 import importlib.util
 import io
@@ -2029,9 +2030,7 @@ class Drops(unittest.TestCase):
                                             'check last ran before it' % REMOVED_AT))
         self.assertEqual((w.bodies(7), w.writes()), ([receipt, drop], [{'delete': 4002}]))
 
-    def pending_exits(self):
-        """Every `pending: ` template merge.py returns, each `{}` one formatted value."""
-        import ast
+    def pending_templates_merge_returns(self):
         found = set()
         for node in ast.walk(ast.parse((HERE / 'merge.py').read_text())):
             value = node.value if isinstance(node, ast.Return) else None
@@ -2086,7 +2085,7 @@ class Drops(unittest.TestCase):
             (disagree, 'refused re-queue read back', lambda: records(faults={'enqueue': 'half lost'}), (), 'enqueue'),
             ('pending: the commit that last left the merge queue does not read; nothing was written, '
              'so read it again next wake', 'unreadable removed commit',
-             lambda: records(dict(removals=[dict(removal, beforeCommit={'oid': None})])), (), None),
+             lambda: fresh(removals=[dict(removal, beforeCommit={'oid': None})]), (), None),
             (unread, 'receipt, drop record, claim and duplicate',
              lambda: records(dict(enqueued=None), [comment(4006, CLAIMED)]), (), None),
             (unread, 'first enqueue read back', lambda: fresh(faults={'enqueue': dict(removal, hidden=True)}), (),
@@ -2116,7 +2115,7 @@ class Drops(unittest.TestCase):
              'base-rule merge', lambda: fresh(isMergeQueueEnabled=False, faults={'merge': 'pending'}),
              ('--base-rule-checked',), 'merge'),
         ]
-        self.assertEqual(self.pending_exits(), {template for template, *_ in cases})
+        self.assertEqual(self.pending_templates_merge_returns(), {template for template, *_ in cases})
         for template, name, build, flags, mutation in cases:
             with self.subTest(name, template=template):
                 w = build()

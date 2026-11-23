@@ -1278,7 +1278,7 @@ class LocalSession(unittest.TestCase):
         lines = yes.stdout.splitlines()
         for line in NEEDS_YOU.splitlines():
             self.assertIn(line, lines, "the session's own ticks and stop are shown in the chat")
-        self.assertLess(lines.index('The plan passed its checks, so the fleet started in this chat: 2 builders, '
+        self.assertLess(lines.index('The plan passed its checks, so the fleet started in this chat: 3 builders, '
                                     'each on one small ticket, and each next step starts the moment a run ends. Watch '
                                     'them here and at openwiz.dev/app; keep this chat open: it stops here when it '
                                     'needs you, such as an approved pull request for you to merge.'),

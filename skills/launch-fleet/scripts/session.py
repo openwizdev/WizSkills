@@ -683,11 +683,11 @@ class Session:
         return before != now if before is not None else bool(self.held)
 
     def wait(self):
-        if self.again:
-            self.again = False
-            time.sleep(self.a.ci_poll)
-            return
         while time.monotonic() - self.moved < self.a.idle:
+            if self.again:
+                self.again = False
+                time.sleep(self.a.ci_poll)
+                return
             if self.live or self.queued or self.held:
                 for key, (since, number) in sorted(self.live.items()):
                     if self.ended(*key, since, number):

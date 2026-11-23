@@ -313,7 +313,7 @@ class Token(unittest.TestCase):
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_DELETE(self):
-                seen.append((self.command, self.path, self.headers.get('Authorization')))
+                seen.append((self.command, self.path, self.headers.get('Authorization') == 'Bearer ' + TOKEN))
                 self.send_response(statuses.pop(0))
                 self.send_header('Content-Length', '0')
                 self.end_headers()
@@ -429,7 +429,7 @@ class Token(unittest.TestCase):
         base, seen = self.loopback_github_api([401, 204])
         env = dict(self.service(p), OPENWIZ_GITHUB_API_BASE=base)
         private = p.dir / 'token-private'
-        revoke = ('DELETE', '/installation/token', 'Bearer ' + TOKEN)
+        revoke = ('DELETE', '/installation/token', True)
         started = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env)
         self.assertEqual(started, (0, 'started #7 on local', ''))
         self.assertEqual(seen, [])
@@ -441,12 +441,12 @@ class Token(unittest.TestCase):
         kept = list(private.iterdir())
         self.assertEqual([re.sub('[0-9a-f]{32}', 'N', f.name) for f in kept], ['kept-N-N.json'])
         self.assertEqual(kept[0].stat().st_mode & 0o777, 0o600)
-        self.assertEqual(json.loads(kept[0].read_text())['token'], TOKEN)
+        self.assertTrue(json.loads(kept[0].read_text())['token'] == TOKEN)
         revoked = p.host('wake', REPO, 7, **env, FAKE_SERVICE_REFUSE='1')
         self.assertEqual(revoked, (0, 'woke #7 on local', NOTE))
         self.assertEqual(seen, [revoke, revoke])
         self.assertEqual(list(private.iterdir()), [])
-        self.assertEqual(self.exposed(p, *started[1:], *refused[1:], *revoked[1:]), [])
+        self.assertFalse(self.exposed(p, *started[1:], *refused[1:], *revoked[1:]))
 
     def test_with_no_service_no_helper_runs_and_starts_are_as_today(self):
         p = Project(self)

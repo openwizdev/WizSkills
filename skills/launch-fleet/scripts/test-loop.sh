@@ -302,8 +302,6 @@ done
   [ "$(cat "$work/env")" = synthetic-own-account-2843 ])
 echo "ok   restore_today_account drops every git config entry, sparse indexes included, on an unreadable mark and keeps an own GH_TOKEN (#2843)"
 
-# catches: with both rollback marks unreadable, the entry names were split on the caller's IFS, so under
-# IFS=: (or an empty IFS, or one made of name characters) nothing was unset and the helpers stayed exported.
 for shell in bash dash; do
   command -v "$shell" > /dev/null
   for ifs in : '' _ 5 G -; do

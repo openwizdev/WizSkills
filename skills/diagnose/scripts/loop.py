@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 import os
 import re
 import secrets
@@ -94,6 +95,15 @@ def read_blobs(root, ids):
     return blobs
 
 
+def blob_id(path, kind):
+    try:
+        with open(path, 'rb') as file:
+            data = file.read()
+    except OSError:
+        return None
+    return hashlib.new(kind, b'blob %d\0' % len(data) + data).hexdigest()
+
+
 def lines(content, prefix):
     text = content.decode('utf-8', 'replace').replace('\r\n', '\n').replace('\r', '\n')
     return [n for n, line in enumerate(text.split('\n'), 1) if prefix in line]
@@ -115,12 +125,10 @@ def clean(args):
         if mode in (b'100644', b'100755'):
             staged[os.fsdecode(path)] = blob.decode()
     paths = set(staged) | {os.fsdecode(p) for p in filter(None, listed.split(b'\0'))}
-    present = sorted(p for p in staged if os.path.isfile(os.path.join(root, p)))
-    hashed = git(root, 'hash-object', '--no-filters', '--stdin-paths',
-                 input=''.join(f'{p}\n' for p in present).encode()).split()
-    if len(hashed) != len(present):
+    kind = git(root, 'rev-parse', '--show-object-format').decode().strip()
+    if kind not in ('sha1', 'sha256'):
         refuse('cannot read the Git work tree or index')
-    same = {p for p, h in zip(present, hashed) if h.decode() == staged[p]}
+    same = {p for p in staged if blob_id(os.path.join(root, p), kind) == staged[p]}
     blobs = read_blobs(root, {blob for p, blob in staged.items() if p not in same})
     left = []
     for path in sorted(paths):

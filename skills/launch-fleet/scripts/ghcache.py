@@ -27,13 +27,19 @@ def _request(endpoint, accept):
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+def _once(pairs):
+    if len({key for key, _ in pairs}) != len(pairs):
+        raise ValueError
+    return dict(pairs)
+
+
 def _load(path, request, endpoint):
     if not os.path.lexists(path):
         return None
     try:
         if path.is_symlink() or not path.is_file():
             raise ValueError
-        entry = json.loads(path.read_text(encoding='utf-8'))
+        entry = json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=_once)
         if (not isinstance(entry, dict) or set(entry) != {'request', 'etag', 'link', 'body', 'sha256'}
                 or entry['request'] != request or not isinstance(entry['etag'], str)
                 or not ETAG.fullmatch(entry['etag']) or not isinstance(entry['link'], str)

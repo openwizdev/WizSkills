@@ -1734,6 +1734,29 @@ SETUP_FILES = ('docs/agents/fleet.md', 'docs/agents/issue-tracker.md', 'docs/age
                'docs/agents/domain.md')
 
 
+ISSUES_GH = r"""
+import json, os, re, sys
+path, fake, lose, argv = sys.argv[1], sys.argv[2], sys.argv[3] == '1', sys.argv[4:]
+repo = 'synthetic-owner/synthetic-sheep'
+issues = json.loads(open(path).read())
+if argv[:1] == ['api'] and len(argv) == 2 and re.fullmatch(
+        r'repos/%s/issues\?state=open&creator=synthetic-owner&per_page=100' % re.escape(repo), argv[1]):
+    print(json.dumps([{'number': i['number'], 'title': i['title'], 'state': 'open',
+                       'user': {'login': 'synthetic-owner'}} for i in issues]))
+    sys.exit(0)
+if argv[:4] == ['api', '-X', 'POST', 'repos/%s/issues' % repo]:
+    fields = dict(value.split('=', 1) for value in argv[5::2])
+    issues.append({'number': 31 + len(issues), 'title': fields['title']})
+    open(path, 'w').write(json.dumps(issues))
+    if lose:
+        sys.stderr.write('gh: synthetic lost reply (HTTP 502)\n')
+        sys.exit(1)
+    print(json.dumps({'number': issues[-1]['number'], 'title': fields['title'], 'state': 'open'}))
+    sys.exit(0)
+os.execv(sys.executable, [sys.executable, '-I', '-S', fake] + argv)
+"""
+
+
 class OneSetupPullRequest(unittest.TestCase):
     def road(self, files=None, brain='in_repository', pull='open', setup=True):
         j = Journey(self)
@@ -1777,6 +1800,17 @@ class OneSetupPullRequest(unittest.TestCase):
             path.write_text(json.dumps(journal))
             path.chmod(0o600)
         return state
+
+    def issues(self, j, existing=(), lose_reply=False):
+        j.issues_path = j.dir / 'service-issues.json'
+        j.issues_path.write_text(json.dumps(list(existing)))
+        script = j.dir / 'issues_gh.py'
+        script.write_text(ISSUES_GH)
+        (j.dir / 'bin/gh').write_text('#!/bin/sh\nexec "%s" -I -S "%s" "%s" "%s" %s "$@"\n' % (
+            sys.executable, script, j.issues_path, FAKE_GH, '1' if lose_reply else '0'))
+
+    def opened(self, j):
+        return [i for i in json.loads(j.issues_path.read_text()) if i['title'] == 'OpenWiz service records']
 
     def saved(self, j):
         return json.loads(j.state.read_text())
@@ -1915,6 +1949,7 @@ class OneSetupPullRequest(unittest.TestCase):
                                                            'Small builder': None, 'Fixer': None})
         self.assertIn('| Harness permission mode (claude) | `acceptEdits` |', fleet)
         self.assertIn('| Record authors | `synthetic-owner` |', fleet)
+        self.assertTrue(connect_usable(fleet), "setup.py check's fleet_settings_usable reads the new fleet.md")
         self.assertNotRegex(''.join(branch[n] for n in SETUP_FILES), r'<[^>\n]*>', 'no template placeholder left')
         self.assertIn('\nHost: local\n', branch['docs/agents/host.md'])
 
@@ -1974,6 +2009,36 @@ class OneSetupPullRequest(unittest.TestCase):
         self.applied(j)
         self.assertEqual(j.helper(['next', '--setup-state', str(j.setup_dir)]).stdout.splitlines()[0], 'Next: mode.')
         self.assertTrue(state)
+
+    def test_a_resumed_connect_reuses_the_service_issue_it_already_opened(self):
+        j = self.road(setup=False)
+        self.issues(j)
+        self.yes(j)
+        opened = j.helper(['service-issue', '--yes'])
+        self.assertEqual(opened.returncode, 0, opened.stdout + opened.stderr)
+        self.assertEqual([i['number'] for i in self.opened(j)], [31])
+        resumed = j.helper(['next', '--setup-state', str(j.setup_dir)])
+        self.assertEqual(resumed.stdout.splitlines()[0], 'Next: connect.', resumed.stdout)
+        self.assertIn('--service-issue 31', resumed.stdout, 'resume names the issue already opened')
+        again = j.helper(['service-issue', '--yes'])
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual([i['number'] for i in self.opened(j)], [31], 'a resumed step 1 opens no second issue')
+        j = self.road(setup=False)
+        self.issues(j, existing=[{'number': 12, 'title': 'OpenWiz service records'}])
+        self.yes(j)
+        found = j.helper(['service-issue', '--yes'])
+        self.assertEqual(found.returncode, 0, found.stdout + found.stderr)
+        self.assertEqual([i['number'] for i in self.opened(j)], [12], 'an issue opened before is reused')
+        self.assertIn('--service-issue 12', j.helper(['next', '--setup-state', str(j.setup_dir)]).stdout)
+        j = self.road(setup=False)
+        self.issues(j, lose_reply=True)
+        self.yes(j)
+        lost = j.helper(['service-issue', '--yes'])
+        self.assertEqual(lost.returncode, 6, lost.stdout + lost.stderr)
+        self.issues(j, existing=self.opened(j))
+        settled = j.helper(['service-issue', '--yes'])
+        self.assertEqual(settled.returncode, 0, settled.stdout + settled.stderr)
+        self.assertEqual([i['number'] for i in self.opened(j)], [31], 'a lost reply is read back, never sent again')
 
     def test_the_yes_binds_the_block_the_user_saw(self):
         j = self.road()

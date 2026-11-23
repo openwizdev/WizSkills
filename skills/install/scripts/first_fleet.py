@@ -131,7 +131,8 @@ DRIVER_NAME = r'[a-z0-9]+(?:-[a-z0-9]+)*'
 VERSION_WAIT = 60
 PROBE_ENV = ('PATH', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR')
 RECORDS = r'openwiz:records v[1-9][0-9]{0,2}'
-CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox')
+CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox', 'effort')
+REQUIRED_CAN = {'start', 'wake', 'stop'}
 LOGIN_LINE = 'https://github.com/openwizdev/OpenWiz/blob/main/adapters/%s/README.md'
 HOSTS = {
     'local': {'label': 'this machine', 'where': 'on this machine'},
@@ -322,6 +323,23 @@ def adapters_of(got, env):
     return env.get('OPENWIZ_ADAPTERS') or None
 
 
+def driver_capabilities(adapters):
+    """Read the kit shipped beside the adapters, with CAN for builds without the kit."""
+    schema = Path(adapters).parent / 'kernel/driver-kit/schema.json'
+    try:
+        text = schema.read_text(encoding='utf-8')
+    except FileNotFoundError:
+        return CAN
+    kit = strict(text)
+    if kit['contract'] != 'openwiz:driver v1':
+        raise ValueError('expected driver v1')
+    words = kit['commands']['version']['output']['properties']['can']['items']['enum']
+    if (not isinstance(words, list) or not all(isinstance(word, str) and word for word in words)
+            or len(set(words)) != len(words) or not REQUIRED_CAN <= set(words)):
+        raise ValueError('invalid can enum')
+    return words
+
+
 def driver_answer(env, adapters, name):
     """A driver's `version` answer (driver v1, D1), or the reason it has none, as (answer, None) or (None, why).
 
@@ -332,6 +350,10 @@ def driver_answer(env, adapters, name):
     path = Path(adapters, name, 'driver')
     if not os.path.isabs(adapters) or not path.is_file() or not os.access(path, os.X_OK):
         return None, 'there is no runnable driver'
+    try:
+        capabilities = driver_capabilities(adapters)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, 'the driver kit has an invalid driver v1 schema'
     probe = {k: env[k] for k in PROBE_ENV if k in env}
     result = run([str(path), 'version'], probe, timeout=VERSION_WAIT, stdin=subprocess.DEVNULL)
     if result is None:
@@ -348,7 +370,7 @@ def driver_answer(env, adapters, name):
         assert all(isinstance(r, str) and re.fullmatch(RECORDS, r) for r in records)
         assert 'openwiz:records v1' in records
         assert isinstance(can, list) and len(set(map(str, can))) == len(can)
-        assert all(isinstance(c, str) and c in CAN for c in can) and {'start', 'wake', 'stop'} <= set(can)
+        assert all(isinstance(c, str) and c in capabilities for c in can) and REQUIRED_CAN <= set(can)
     except (AssertionError, UnicodeDecodeError, ValueError, TypeError):
         return None, "its `version` answer is not driver v1's"
     if version['driver'] != name:

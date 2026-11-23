@@ -91,10 +91,7 @@ class Brief(unittest.TestCase):
         project = fixture['Project'](self, hosts=hosts)
         if hosts == ():
             fixture['effort_drivers'](project, **{'takes-effort': 'takes'})
-        project.fleet(fleet)
-        world = project.github()
-        world['fleet_md'] = fleet
-        project.world.write_text(fixture['json'].dumps(world))
+        fixture['serve'](project, fleet)
         bin_dir = project.dir / 'bin'
         for program in ('git', 'python3'):
             (bin_dir / program).symlink_to(shutil.which(program))

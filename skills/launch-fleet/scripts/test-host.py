@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -621,6 +622,16 @@ def effort_drivers(p, **modes):
         (folder / 'driver').chmod(0o755)
 
 
+def serve(p, text, repo=REPO):
+    p.fleet(text)
+    world = p.github()
+    world['fleet_md'] = text
+    p.world.write_text(json.dumps(world))
+    origin = HERE / 'fixtures/git_origin.py'
+    if origin.exists():
+        p.env.update(runpy.run_path(str(origin))['env'](p.dir, dict({REPO: FLEET_MD}, **{repo: text})))
+
+
 def start_inputs(p):
     return [(c['host'], c['input']) for c in p.calls() if c['command'] == 'start']
 
@@ -631,7 +642,7 @@ class Roster(unittest.TestCase):
         repo = json.loads((ROSTER / case / 'case.json').read_text()).get('repository', REPO)
         p = Project(self, setting=setting, hosts=hosts, repo=repo)
         effort_drivers(p, **{host: 'takes' for host in hosts})
-        p.fleet((ROSTER / case / 'fleet.md').read_text() + FLEET_MD[len('# Fleet settings\n'):])
+        serve(p, (ROSTER / case / 'fleet.md').read_text() + FLEET_MD[len('# Fleet settings\n'):], repo)
         return p, repo
 
     def test_every_fixture_reads_picks_and_refuses_as_the_roster_contract_says(self):
@@ -989,11 +1000,7 @@ class SelectedRow(unittest.TestCase):
     def project(self):
         p = Project(self, hosts=())
         effort_drivers(p, **{'takes-effort': 'takes'})
-        text = (EFFORT / 'cross-family.md').read_text() + FLEET_MD[len('# Fleet settings\n'):]
-        p.fleet(text)
-        world = p.github()
-        world['fleet_md'] = text
-        p.world.write_text(json.dumps(world))
+        serve(p, (EFFORT / 'cross-family.md').read_text() + FLEET_MD[len('# Fleet settings\n'):])
         return p
 
     def picked(self, p, start):

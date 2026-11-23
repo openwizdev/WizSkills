@@ -59,6 +59,10 @@ fcntl.flock(lock, fcntl.LOCK_EX)
 if '--method' in args and args[args.index('--method') + 1] == 'DELETE':
     with open(path) as f:
         world = json.load(f)
+    if world.get('faults', {}).pop('delete', None) == 'fail':
+        with open(path, 'w') as f:
+            json.dump(world, f)
+        sys.exit('HTTP 502')
     gone = int(issue[0][-1])
     for items in world.get('comments', {}).values():
         if any(c['id'] == gone for c in items):
@@ -122,6 +126,13 @@ if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'enqueuePul
 r = subprocess.run([sys.executable, '-I', %r, *args], env=dict(os.environ, FAKE_WORLD=path),
                    capture_output=True, text=True)
 out = r.stdout
+if args[:2] == ['pr', 'merge'] and r.returncode == 0:
+    with open(path) as f:
+        world = json.load(f)
+    if world['pr']['state'] == 'MERGED':
+        world['pr']['mergedBy'] = {'login': world['me']}
+        with open(path, 'w') as f:
+            json.dump(world, f)
 if args[:2] == ['api', 'graphql'] and r.returncode == 0:
     value = json.loads(out)
     node = value['data']['repository']['pullRequest']
@@ -132,6 +143,7 @@ if args[:2] == ['api', 'graphql'] and r.returncode == 0:
         node['repository'] = {'nameWithOwner': world['repo']}
         node['id'] = 'PR_synthetic' + str(world['pr']['number'])
         node['enqueued'] = {'nodes': [world['pr']['enqueued']] if world['pr'].get('enqueued') else []}
+        node['mergedBy'] = world['pr'].get('mergedBy')
     out = json.dumps(value)
 sys.stdout.write(out)
 sys.stderr.write(r.stderr)
@@ -149,6 +161,7 @@ class World(T.World):
         (self.dir / 'bin/gh').write_text(gh)
         self.others = {repo: T.World(test, repo=repo, **value) for repo, value in (others or {}).items()}
         self.env['FAKE_WORLDS'] = json.dumps({r: str(o.path) for r, o in self.others.items()})
+        self.env.update(T.git_origin(self.dir, {r: w.load()['fleet_md'] for r, w in [(self.load()['repo'], self), *self.others.items()]}))
 
 
 def closes(*refs):
@@ -287,7 +300,7 @@ class Merge(unittest.TestCase):
         self.assertEqual(w.bodies(12), [])
 
     def test_a_queue_that_let_it_go_blocks_it(self):
-        left = {'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks'}
+        left = {'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks', 'beforeCommit': {'oid': HEAD}}
         w = World(self, pr=pr(isMergeQueueEnabled=True, left=left),
                   comments={'7': [comment(4000, 'launch-fleet: merge queued %s: APPROVE 1' % HEAD)]})
         project(w, PRINTS)
@@ -716,6 +729,17 @@ class CrossRepository(unittest.TestCase):
                 self.assertTrue(out.startswith('refused: '), out)
                 self.assertEqual((w.writes(), w.others[TICKETS].writes()), ([], []))
 
+    def test_a_wrong_ticket_on_a_queued_or_stopped_pull_request_writes_nothing(self):
+        queued = dict(isMergeQueueEnabled=True, isInMergeQueue=True, mergeQueueEntry={'headCommit': {'oid': HEAD}})
+        for name, changes in {'queued without its receipt': queued, 'stopped': dict(headRefOid=OTHER),
+                              'closed': dict(state='CLOSED')}.items():
+            with self.subTest(name):
+                w = self.world([(TICKETS, 12)], **changes)
+                project(w, PRINTS)
+                code, out = Merge.merge(self, w, '--ticket', 13)
+                self.assertEqual((code, out), (1, 'refused: PR #7 does not close 13'))
+                self.assertEqual((w.writes(), w.others[TICKETS].writes()), ([], []))
+
     def test_the_named_one_of_two_same_number_tickets_gets_it(self):
         # catches: a qualified ticket ignored in favour of the PR repository's same number.
         w = self.world([(TICKETS, 12), (REPO, 12)], state='MERGED', mergeCommit={'oid': 'c' * 40})
@@ -874,7 +898,8 @@ class Queue(unittest.TestCase):
         # The queue lets it go: the receipt blocks a second enqueue at that head.
         value = w.load()
         value['pr'].update(isInMergeQueue=False, mergeQueueEntry=None,
-                           left={'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks'})
+                           left={'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks',
+                                 'beforeCommit': {'oid': HEAD}})
         w.save(value)
         self.assertEqual(self.merge(w), (1, 'blocked: left the merge queue: failed checks; recorded 5002'))
         self.assertEqual(sum('enqueue' in x for x in w.writes()), 1)
@@ -900,6 +925,64 @@ class Queue(unittest.TestCase):
         project(w, PRINTS)
         self.assertEqual(w.run('merge.py', 'settle', REPO, 7, 12, cwd=w.dir / 'project'), (0, 'no queued merge'))
         self.assertEqual(w.writes(), [])
+
+    def test_an_earlier_heads_removal_never_blocks_the_replacement_head(self):
+        left = {'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks', 'beforeCommit': {'oid': OTHER}}
+        w = World(self, pr=pr(isMergeQueueEnabled=True, left=left), comments={'7': [comment(4000, self.receipt())]})
+        project(w, PRINTS)
+        self.assertEqual(self.merge(w), (0, 'queued; recorded 4000'))
+        self.assertEqual(w.writes(), [{'enqueue': 'PR_synthetic7', 'head': HEAD}])
+        self.assertEqual(w.bodies(7), [self.receipt()])
+
+    def test_the_replacement_heads_unconfirmed_receipt_is_retried_after_an_earlier_removal(self):
+        left = {'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks', 'beforeCommit': {'oid': OTHER}}
+        w = World(self, pr=pr(isMergeQueueEnabled=True, left=left), faults={'post': 'lost'}, me='someone-else')
+        project(w, PRINTS)
+        code, out = self.merge(w)
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith('queued; receipt unconfirmed '), out)
+        value = w.load()
+        value['me'] = value['comments']['7'][0]['user']['login'] = 'openwiz[bot]'
+        value['pr'].update(isInMergeQueue=False, mergeQueueEntry=None)
+        w.save(value)
+        self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
+        self.assertEqual(sum('enqueue' in x for x in w.writes()), 2)
+        self.assertFalse(any(b.startswith('launch-fleet: merge blocked') for b in w.bodies(7)))
+
+    def test_a_removal_whose_commit_cannot_be_read_writes_nothing(self):
+        left = {'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks'}
+        w = World(self, pr=pr(isMergeQueueEnabled=True, left=left), comments={'7': [comment(4000, self.receipt())]})
+        project(w, PRINTS)
+        code, out = self.merge(w)
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith('unknown: '), out)
+        self.assertEqual(w.writes(), [])
+
+    def test_settling_after_the_fleets_direct_merge_posts_the_cost_it_still_owes(self):
+        w = World(self, pr=pr())
+        project(w, PRINTS)
+        w.update(faults={'post': 'fail'})
+        code, out = Merge.merge(self, w, '--ticket', 12, '--base-rule-checked')
+        self.assertEqual(code, 1, out)
+        self.assertEqual((w.load()['pr']['state'], w.bodies(12)), ('MERGED', []))
+        settle = lambda: w.run('merge.py', 'settle', REPO, 7, 12, cwd=w.dir / 'project')
+        self.assertEqual(settle(), (0, 'cost posted 5001'))
+        self.assertEqual(w.bodies(12), ['launch-fleet: cost: ' + LINE])
+        self.assertEqual(settle(), (0, 'cost already posted 5001'))
+        self.assertEqual(w.bodies(12), ['launch-fleet: cost: ' + LINE])
+
+    def test_a_direct_merge_after_an_earlier_heads_receipt_still_settles_its_cost(self):
+        old = 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % OTHER
+        w = World(self, pr=pr(), comments={'7': [comment(4000, old)]})
+        project(w, PRINTS)
+        w.update(faults={'post': 'fail'})
+        code, out = Merge.merge(self, w, '--ticket', 12, '--base-rule-checked')
+        self.assertEqual(code, 1, out)
+        self.assertEqual((w.load()['pr']['state'], w.bodies(12)), ('MERGED', []))
+        settle = lambda: w.run('merge.py', 'settle', REPO, 7, 12, cwd=w.dir / 'project')
+        self.assertEqual(settle(), (0, 'cost posted 5001'))
+        self.assertEqual(w.bodies(12), ['launch-fleet: cost: ' + LINE])
+        self.assertEqual(settle(), (0, 'cost already posted 5001'))
 
     def test_a_queued_pull_request_without_its_receipt_gets_one(self):
         # catches: a pull request someone else queued staying without the receipt the removal guard
@@ -1476,6 +1559,76 @@ class Landed(unittest.TestCase):
         deleted = [x['delete'] for x in w.writes() if 'delete' in x]
         self.assertEqual((len(posted), len(deleted)), (2, 1))
         self.assertGreater(deleted[0], kept[0]['id'])
+
+    def test_a_refused_duplicate_delete_is_retried_and_keeps_the_settle_open(self):
+        receipt = comment(4000, 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD)
+        w = self.world(self.issues, comments={'9201': [receipt]}, faults={'delete': 'fail'})
+        project(w, None)
+        w.env['FAKE_RACE'] = '9101'
+        runs = [subprocess.Popen([sys.executable, '-I', str(HERE / 'merge.py'), 'cost', DEST, '9201', HEAD, '9106'],
+                                 stdout=subprocess.PIPE, text=True, env=w.env, cwd=w.dir / 'project')
+                for _ in range(2)]
+        outs = sorted(r.communicate(timeout=60)[0].strip().split('; ')[-1] for r in runs)
+        del w.env['FAKE_RACE']
+        first, later = [c['id'] for c in w.load()['comments']['9101']]
+        self.assertTrue(outs[1].startswith('landed unknown: our duplicate %d ' % later), outs)
+        self.assertEqual(w.bodies(9101), [LANDED, LANDED])
+        settle = lambda: w.run('merge.py', 'settle', DEST, 9201, 9106, cwd=w.dir / 'project')
+        w.update(faults={'delete': 'fail'})
+        code, out = settle()
+        self.assertEqual(code, 1, out)
+        self.assertTrue(out.startswith('unknown: ') and '; landed unknown: ' in out, out)
+        self.assertEqual(w.bodies(9101), [LANDED, LANDED])
+        code, out = settle()
+        self.assertEqual((code, out.split('; ')[-1]), (0, 'landed already posted %d' % first), out)
+        self.assertEqual([c['id'] for c in w.load()['comments']['9101']], [first])
+        self.assertEqual(settle()[1].split('; ')[-1], 'landed already posted %d' % first)
+        self.assertEqual([x['delete'] for x in w.writes() if 'delete' in x], [later])
+        self.assertEqual(len([x for x in w.writes() if x.get('post') == 9101]), 2)
+
+    def test_a_duplicate_left_by_a_refused_delete_is_deleted_after_the_milestone_moves(self):
+        receipt = comment(4000, 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD)
+        w = self.world(self.issues, comments={'9201': [receipt]}, faults={'delete': 'fail'})
+        project(w, None)
+        w.env['FAKE_RACE'] = '9101'
+        runs = [subprocess.Popen([sys.executable, '-I', str(HERE / 'merge.py'), 'cost', DEST, '9201', HEAD, '9106'],
+                                 stdout=subprocess.PIPE, text=True, env=w.env, cwd=w.dir / 'project')
+                for _ in range(2)]
+        outs = sorted(r.communicate(timeout=60)[0].strip().split('; ')[-1] for r in runs)
+        del w.env['FAKE_RACE']
+        first, later = [c['id'] for c in w.load()['comments']['9101']]
+        self.assertTrue(outs[1].startswith('landed unknown: our duplicate %d ' % later), outs)
+        value = w.load()
+        value['issues']['9101']['milestone'] = {'title': '9.5.0'}
+        w.save(value)
+        code, out = w.run('merge.py', 'settle', DEST, 9201, 9106, cwd=w.dir / 'project')
+        self.assertEqual((code, out.split('; ')[-1]), (0, 'landed already posted %d' % first), out)
+        self.assertEqual([c['id'] for c in w.load()['comments']['9101']], [first])
+        self.assertEqual([x['delete'] for x in w.writes() if 'delete' in x], [later])
+
+    def test_a_later_landed_comment_for_another_fix_is_left_alone(self):
+        other = LANDED.replace('OpenWiz#9201', 'WizSite#9200')
+        w = self.world(self.issues, comments={'9101': [comment(4000, LANDED), comment(4001, other)]})
+        project(w, None)
+        code, out = self.merge(w)
+        self.assertEqual((code, out.split('; ')[-1]), (0, 'landed already posted 4000'), out)
+        self.assertEqual(w.bodies(9101), [LANDED, other])
+        self.assertFalse(any('delete' in x for x in w.writes()))
+
+
+class Help(unittest.TestCase):
+    def test_the_merge_help_describes_the_current_merge_order(self):
+        r = subprocess.run([sys.executable, '-I', str(HERE / 'merge.py'), '--help'], capture_output=True, text=True,
+                           timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = ' '.join(r.stdout.split())
+        self.assertIn('merge.py merge OWNER/NAME PR HEAD CHECKS BODY --ticket TICKET', text)
+        order = [text.find(x) for x in ('refused: its required checks are running', 'expectedHeadOid',
+                                        'queued; recorded <id>')]
+        self.assertTrue(-1 not in order and order == sorted(order), order)
+        self.assertIn('only after it reads the queue entry back', text)
+        self.assertNotIn('recorded before the enqueue', text)
+        self.assertNotIn('recorded before the enqueue', M.__doc__)
 
 
 class WizSkillsRoute(unittest.TestCase):

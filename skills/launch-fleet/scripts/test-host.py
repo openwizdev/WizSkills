@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -71,6 +72,7 @@ class Project:
                         FAKE_DRIVER_LOG=str(self.log), PATH='%s:%s' % (bin_dir, os.environ['PATH']),
                         FAKE_WORLD=str(self.world), LAUNCH_FLEET_HARNESS='Claude Code',
                         LAUNCH_FLEET_MODEL='Opus 5.5 Medium', LAUNCH_FLEET_SKILLS='launch-fleet@' + VERSION)
+        self.env.update(runpy.run_path(str(HERE / 'fixtures/git_origin.py'))['env'](self.dir, {REPO: FLEET_MD}))
 
     def git(self, *args):
         subprocess.run(['git', *args], check=True, env=self.git_env, capture_output=True, timeout=60)

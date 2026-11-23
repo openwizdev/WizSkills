@@ -196,6 +196,12 @@ worktree_tree() {
     return $status
 }
 
+installed() {
+    trap '' PIPE
+    printf 'install.sh: %s WizSkills %s (commit %s) at %s\n' "$1" "$version" "$record_commit" "$dest" || :
+    exit 0
+}
+
 check_package() {
     plugin=$1/.claude-plugin/plugin.json
     changelog=$1/CHANGELOG.md
@@ -241,7 +247,7 @@ if [ $existing -eq 0 ]; then
         fi
     fi
     [ "$(inode "$dest")" = "$staged" ] || fail 1 'destination appeared during installation'
-    exit 0
+    installed installed
 fi
 
 [ -d "$dest/.git" ] && [ ! -L "$dest/.git" ] || fail 1 'destination is not this release'
@@ -253,4 +259,4 @@ g -C "$dest" symbolic-ref -q HEAD >/dev/null 2>&1 && fail 1 'destination is not 
 g -C "$dest" diff-index --cached --quiet "$record_commit" -- >/dev/null 2>&1 || fail 1 'destination is dirty'
 [ "$(worktree_tree "$dest")" = "$record_tree" ] || fail 1 'destination is dirty'
 check_package "$dest" || fail 1 'plugin.json or CHANGELOG.md disagrees with the version'
-exit 0
+installed 'already installed'

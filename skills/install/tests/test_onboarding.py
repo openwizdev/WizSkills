@@ -1116,8 +1116,11 @@ class StepFourReadsTheInstallerOutput(unittest.TestCase):
         home = tmp / 'home'
         rows = json.loads(json.dumps(output).replace('HOME', str(home)))
         for row in rows['harnesses']:
-            for name in row.pop('on_disk', []):
+            on_disk = row.pop('on_disk', [])
+            for name in on_disk:
                 (Path(row['path']) / name).mkdir(parents=True)
+                source = on_disk[name] if isinstance(on_disk, dict) else rows['source']
+                (Path(row['path']) / name / '.openwiz-skill').write_text('openwiz.skill-copy.v1\n%s\n' % source)
         fake = tmp / 'openwiz/tools/install/install'
         fake.parent.mkdir(parents=True)
         (tmp / 'output.json').write_text(json.dumps(rows))
@@ -1142,7 +1145,7 @@ class StepFourReadsTheInstallerOutput(unittest.TestCase):
                  'on_disk': ['grill', 'install']},
                 {'id': 'cursor', 'path': 'HOME/.cursor/skills', 'state': 'absent', 'next': 'Install Cursor first.'}]}, 0)
         self.assertEqual(lines, ['exit: 0',
-                                 'partial: claude-code ~/.claude/skills',
+                                 'partial: claude-code ~/.claude/skills (next: see below)',
                                  'skipped: grill in claude-code (next: %s)' % skip,
                                  'installed: codex ~/.codex/skills',
                                  'missing: write-driver in codex',
@@ -1153,6 +1156,18 @@ class StepFourReadsTheInstallerOutput(unittest.TestCase):
         for words in ('`installed` or `partial`', 'each `skipped:` line', 'never delete or overwrite it',
                       'A `missing:` line'):
             self.assertIn(words, step4)
+
+    def test_an_older_copy_left_by_a_failed_write_is_not_done(self):
+        failed = ('OpenWiz could not write HOME/.codex/skills (File too large), so Codex got 1 of 2 skills. '
+                  'Make it writable, then run this again.')
+        step4, lines = self.run_step({
+            'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'partial',
+            'canonical': 'HOME/root/skills', 'skills': ['install', 'review-ticket'],
+            'harnesses': [{'id': 'codex', 'path': 'HOME/.codex/skills', 'state': 'partial', 'next': failed,
+                           'on_disk': {'install': 'f' * 40, 'review-ticket': 'e' * 40}}]}, 0)
+        self.assertEqual(lines, ['exit: 0', 'partial: codex ~/.codex/skills (next: %s)' % failed.replace('HOME', '~'),
+                                 "missing: review-ticket in codex (not this release's copy)",
+                                 'outcome: partial, 2 skills'])
 
     def test_refused_means_nothing_was_installed(self):
         step4, lines = self.run_step({

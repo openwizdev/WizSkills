@@ -604,11 +604,34 @@ def host_module():
     return module
 
 
+EFFORT = ROSTER / 'effort'
+EFFORT_NEXT = ("this host can't set effort: remove the effort for this harness in your Models table or Roster to run "
+               "it at the host's default")
+CANT = "launch-fleet: driver can't set effort"
+
+
+def effort_drivers(p, **modes):
+    """Each named host's driver becomes fixtures/roster/effort/driver.py in that mode: it answers `version`."""
+    for host, mode in modes.items():
+        folder = p.dir / 'adapters' / host
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / 'driver').write_text('#!/bin/sh\nFAKE_DRIVER_HOST=%s FAKE_EFFORT_MODE=%s exec "%s" -I "%s" "$@"\n'
+                                       % (host, mode, sys.executable, EFFORT / 'driver.py'))
+        (folder / 'driver').chmod(0o755)
+
+
+def starts(p):
+    """Each start the drivers were sent, in order: (host, its input)."""
+    return [(c['host'], c['input']) for c in p.calls() if c['command'] == 'start']
+
+
 class Roster(unittest.TestCase):
 
     def project(self, case, hosts, setting='Host: local\n'):
+        """A Roster case's project; each host's driver takes effort, as #2594's Roster start needs to send it."""
         repo = json.loads((ROSTER / case / 'case.json').read_text()).get('repository', REPO)
         p = Project(self, setting=setting, hosts=hosts, repo=repo)
+        effort_drivers(p, **{host: 'takes' for host in hosts})
         p.fleet((ROSTER / case / 'fleet.md').read_text())
         return p, repo
 
@@ -757,6 +780,32 @@ class Roster(unittest.TestCase):
         after = self.shims(p)
         self.assertEqual({k: v for k, v in after.items() if k in running}, running)
         self.assertEqual(sorted(set(sum((v for k, v in after.items() if k not in running), []))), ['builder-9'])
+
+
+class Effort(unittest.TestCase):
+    """#2594: a Roster start carries the Models table's effort to a driver whose `can` lists it, or starts nothing."""
+
+    def project(self, fleet='fleet.md'):
+        p = Project(self, hosts=())
+        effort_drivers(p, **{'takes-effort': 'takes', 'no-effort': 'cant', 'refuses-effort': 'refuses'})
+        p.fleet((EFFORT / fleet).read_text())
+        return p
+
+    def comments(self, p, n):
+        return [(first, rest.strip()) for first, rest in p.ticket(n) if first.startswith('launch-fleet: ')]
+
+    def test_a_roster_start_on_a_driver_that_takes_effort_sends_the_models_tables_effort(self):
+        p = self.project()
+        started = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5')
+        self.assertEqual(starts(p), [('takes-effort', {'repository': REPO, 'ticket': 7, 'skill': 'build-ticket',
+                                                       'harness': 'claude', 'model': 'claude-opus-5-5',
+                                                       'effort': 'medium'})])
+        self.assertEqual(started,
+                         (0, 'started #7 on takes-effort as Takes Effort via syn-owner, Opus 5.5 medium effort', ''))
+        self.assertEqual([c['command'] for c in p.calls()], ['version', 'start'])
+        self.assertEqual(p.saved(), {'repo': REPO, 'runs': {'7': {'host': 'takes-effort', 'role': 'builder',
+                                                                  'run': 'takes-effort-run-7'}}})
+        self.assertEqual((p.fleet_notes(), self.comments(p, 7)), ([], []))
 
 
 if __name__ == '__main__':

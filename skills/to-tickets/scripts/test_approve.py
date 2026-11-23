@@ -250,6 +250,9 @@ class CrossRepositoryRelies(unittest.TestCase):
         out, calls = self.approve(self.plan('CLOSED', f'`{CONTRACT}` in `{SECOND}`'),
                                   {'answer': reply({'mode': REGULAR}), 'exit': 1})
         self.assertEqual((out.returncode, out.stdout), (2, ''), out.stderr)
+        out, calls = self.approve(self.plan('CLOSED', f'`{CONTRACT}` in `{SECOND}`'),
+                                  {'files': {f'{SECOND}:{CONTRACT}': REGULAR}, 'renamed': 'synthetic-owner/moved-repo'})
+        self.assertEqual((out.returncode, out.stdout, len(calls)), (2, '', 1), out.stderr)
 
     def test_a_bad_path_is_refused_without_a_read(self):
         for relies in (f'`../{CONTRACT}` in `{SECOND}`', f'`contracts/*.md` in `{SECOND}`',

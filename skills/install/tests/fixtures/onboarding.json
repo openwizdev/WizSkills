@@ -152,7 +152,7 @@
     {
      "step": "grill",
      "say": "grill-start",
-     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+     "agent": "Now a short grill: one round of a few questions, one at a time, so your first fleet is about three small changes that build side by side, and what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
     },
     {
      "step": "grill",
@@ -296,7 +296,7 @@
     {
      "step": "plan",
      "say": "spec",
-     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. Watch its short video at https://openwiz.dev/app/videos/syn-900 or see it at openwiz.dev/app; nothing for you to do while the plan checks itself."
+     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. See it at https://github.com/synthetic-owner/synthetic-notes/issues/900 or at openwiz.dev/app; your first fleet has no video, so once the plan checks itself I'll show what starting it does and ask for your yes."
     },
     {
      "step": "plan",
@@ -593,7 +593,7 @@
     {
      "step": "grill",
      "say": "grill-start",
-     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+     "agent": "Now a short grill: one round of a few questions, one at a time, so your first fleet is about three small changes that build side by side, and what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
     },
     {
      "step": "grill",
@@ -681,7 +681,7 @@
     {
      "step": "plan",
      "say": "spec",
-     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. Watch its short video at https://openwiz.dev/app/videos/syn-900 or see it at openwiz.dev/app; nothing for you to do while the plan checks itself."
+     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. See it at https://github.com/synthetic-owner/synthetic-todo/issues/900 or at openwiz.dev/app; your first fleet has no video, so once the plan checks itself I'll show what starting it does and ask for your yes."
     },
     {
      "step": "plan",
@@ -981,7 +981,7 @@
     {
      "step": "grill",
      "say": "grill-start",
-     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+     "agent": "Now a short grill: one round of a few questions, one at a time, so your first fleet is about three small changes that build side by side, and what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
     },
     {
      "step": "grill",
@@ -1122,7 +1122,7 @@
     {
      "step": "plan",
      "say": "spec",
-     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. Watch its short video at https://openwiz.dev/app/videos/syn-900 or see it at openwiz.dev/app; nothing for you to do while the plan checks itself."
+     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. See it at https://github.com/synthetic-owner/synthetic-quiz/issues/900 or at openwiz.dev/app; your first fleet has no video, so once the plan checks itself I'll show what starting it does and ask for your yes."
     },
     {
      "step": "plan",

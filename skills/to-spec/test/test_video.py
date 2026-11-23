@@ -1,9 +1,11 @@
+from array import array
 import copy
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -12,8 +14,8 @@ SCRIPT = HERE.parent / 'scripts/animatic.mjs'
 STORYBOARD = HERE / 'synthetic/storyboard.json'
 
 
-def run(*args, cwd=None):
-    return subprocess.run(['node', str(SCRIPT), *map(str, args)], capture_output=True, text=True, cwd=cwd)
+def run(*args, cwd=None, env=None):
+    return subprocess.run(['node', str(SCRIPT), *map(str, args)], capture_output=True, text=True, cwd=cwd, env=env)
 
 
 def can_render():
@@ -33,15 +35,24 @@ def other_filesystem(than):
 
 
 VOICE = '''
-import math, os, sys, wave
+import json, math, os, sys, wave
 text = sys.stdin.read()
-mode = os.environ['VOICE_MODE'] if text == os.environ['VOICE_LINE'] else 'tone'
+if len(sys.argv) > 2 and sys.argv[2] != text:
+    sys.exit('narration argument differs from stdin')
+mode = os.environ.get('VOICE_MODE', 'tone') if text == os.environ.get('VOICE_LINE') else 'tone'
 if mode == 'nothing':
     sys.exit(0)
-w = wave.open(sys.argv[1] + '.wav', 'wb')
+if mode == 'symlink':
+    os.symlink(os.environ['VOICE_SOURCE'], sys.argv[1] + '.wav')
+    sys.exit(0)
+suffix = '.bin' if mode == 'wrong-extension' else '.wav'
+w = wave.open(sys.argv[1] + suffix, 'wb')
 w.setparams((1, 2, 16000, 0, 'NONE', ''))
 amp = 0 if mode.startswith('silent') else 8000
-w.writeframes(b''.join(int(amp * math.sin(i / 8)).to_bytes(2, 'little', signed=True) for i in range(8000)))
+tones = json.loads(os.environ.get('VOICE_TONES', '{}'))
+hz, sample_count = tones.get(text, (320, 8000))
+w.writeframes(b''.join(int(amp * math.sin(math.tau * hz * i / 16000)).to_bytes(2, 'little', signed=True)
+                       for i in range(sample_count)))
 w.close()
 sys.exit(3 if mode.endswith('-exit-3') else 0)
 '''
@@ -58,6 +69,11 @@ class SpecVideo(unittest.TestCase):
         path.write_text(json.dumps(moments))
         return path
 
+    def voice_command(self, *, argument=False):
+        helper = self.tmp / 'voice.py'
+        helper.write_text(VOICE)
+        return f'python3 -I "{helper}" {{out}}' + (' {text}' if argument else '')
+
     def test_link_is_ready_to_insert_in_spec(self):
         result = run('link', 'https://example.com/videos/synthetic.mp4?lang=en')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -67,11 +83,14 @@ class SpecVideo(unittest.TestCase):
     def test_link_refuses_unsafe_or_ambiguous_destinations(self):
         for url in ['file:///tmp/video.mp4', 'https://user:secret@example.com/video.mp4',
                     'https://example.com/clip)\n[extra](https://example.org',
-                    'https://example.com:bad/video.mp4', 'https:///video.mp4']:
+                    'https://example.com:bad/video.mp4', 'https://example.com:0/video.mp4',
+                    'https://example.com:000/video.mp4', 'https:///video.mp4']:
             with self.subTest(url=url):
                 result = run('link', url)
-                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertEqual(result.stdout, '')
+                self.assertEqual(result.stderr,
+                                 'animatic: use a verified HTTPS playback URL without credentials\n')
 
     def test_the_synthetic_grill_storyboard_passes_in_build_order(self):
         result = run('check', STORYBOARD)
@@ -115,19 +134,48 @@ class SpecVideo(unittest.TestCase):
                 self.assertFalse((self.tmp / 'build').exists(), 'build rendered a refused storyboard')
                 self.assertFalse((self.tmp / 'spec.mp4').exists())
 
+    def test_malformed_frames_are_refused_with_a_moment_number(self):
+        for fields, reason in [
+            ({'type': 'constructor'}, 'a frame is title, user or codebase'),
+            ({'type': ['codebase']}, 'a frame is title, user or codebase'),
+            ({'paths': 123}, 'paths is a list of 1 to 4 lines'),
+            ({'points': {}}, 'points is a list of 1 to 4 lines'),
+        ]:
+            with self.subTest(fields=fields):
+                moments = copy.deepcopy(self.moments)
+                moments[3]['frame'].update(fields)
+                result = run('check', self.write(moments))
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, '')
+                self.assertEqual(result.stderr, f'animatic: moment 4: {reason}\n')
+
+    def test_benches_are_refused_in_narration_and_frame_text(self):
+        for where in ['narration', 'frame']:
+            with self.subTest(where=where):
+                moments = copy.deepcopy(self.moments)
+                if where == 'narration':
+                    moments[2]['say'] = 'Look at the benches.'
+                else:
+                    moments[2]['frame']['points'] = ['Look at the benches.']
+                result = run('check', self.write(moments))
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, '')
+                self.assertEqual(result.stderr,
+                                 'animatic: moment 3: no bench and no graph in the video; the graph stays on the spec\n')
+
     @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
     def test_build_renders_each_frame_with_its_voice_in_order(self):
-        shutil.copy(STORYBOARD, self.tmp / 'storyboard.json')
-        tone = ('python3 -I -c "import sys, wave, math; n = len(sys.stdin.read().split()); '
-                'w = wave.open(sys.argv[1] + \'.wav\', \'wb\'); w.setparams((1, 2, 16000, 0, \'NONE\', \'\')); '
-                'w.writeframes(b\'\'.join(int(8000 * math.sin(i / 8)).to_bytes(2, \'little\', signed=True) '
-                'for i in range(int(16000 * (0.6 + 0.1 * n)))))" {out}')
+        signatures = [(440, 9600), (550, 11200), (660, 12800), (770, 14400), (880, 16000)]
+        for i, moment in enumerate(self.moments):
+            moment['frame']['headline'] = '\u2003' * (2 * i) + '██'
+        tones = {m['say']: signature for m, signature in zip(self.moments, signatures)}
+        env = dict(os.environ, VOICE_TONES=json.dumps(tones))
         out = self.tmp / 'spec.mp4'
-        result = run('build', self.tmp / 'storyboard.json', '-o', out, '--tts-command', tone, cwd=Path.cwd())
+        result = run('build', self.write(self.moments), '-o', out, '--tts-command', self.voice_command(),
+                     cwd=Path.cwd(), env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('no warnings', result.stdout)
-        words = [len(m['say'].split()) for m in self.moments]
-        lengths = [0.6 + 0.1 * n + 0.4 for n in words]
+        lengths = [1.0, 1.1, 1.2, 1.3, 1.4]
         meta = json.loads(subprocess.check_output([
             'ffprobe', '-v', 'error', '-show_entries', 'format=duration:stream=codec_type,codec_name,r_frame_rate',
             '-of', 'json', str(out)]))
@@ -139,16 +187,104 @@ class SpecVideo(unittest.TestCase):
 
         def tiny(args):
             return subprocess.check_output(['ffmpeg', '-v', 'error', *args, '-frames:v', '1',
-                                            '-vf', 'scale=48:27', '-pix_fmt', 'gray', '-f', 'rawvideo', '-'])
+                                            '-vf', 'scale=80:45', '-pix_fmt', 'gray', '-f', 'rawvideo', '-'])
 
         pictures = [tiny(['-i', str(f)]) for f in frames]
         start = 0.0
-        for i, length in enumerate(lengths):
+        for i, ((hz, _), length) in enumerate(zip(signatures, lengths)):
             shot = tiny(['-ss', f'{start + length / 2:.2f}', '-i', str(out)])
+            marker_slots = [
+                sum(shot[y * 80 + x] > 230 for y in range(45) for x in range(6 + 8 * slot, 12 + 8 * slot))
+                for slot in range(len(signatures))
+            ]
+            self.assertEqual(marker_slots.index(max(marker_slots)), i,
+                             f'moment {i + 1} shows the wrong storyboard marker: {marker_slots}')
             nearest = min(range(len(pictures)),
                           key=lambda k: sum(abs(a - b) for a, b in zip(shot, pictures[k])))
             self.assertEqual(nearest, i, f'moment {i + 1} shows frame {nearest + 1}')
+            pcm = subprocess.check_output([
+                'ffmpeg', '-v', 'error', '-ss', f'{start + 0.1:.2f}', '-i', str(out),
+                '-t', '0.25', '-map', '0:a:0', '-ac', '1', '-ar', '16000', '-f', 's16le', '-'])
+            samples = array('h', pcm)
+            if sys.byteorder != 'little':
+                samples.byteswap()
+            self.assertEqual(len(samples), 4000)
+            rising_edges = sum(a <= 0 < b for a, b in zip(samples, samples[1:]))
+            self.assertAlmostEqual(rising_edges * 4, hz, delta=8, msg=f'moment {i + 1} has the wrong voice')
             start += length
+
+    @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
+    def test_rebuilding_a_shorter_storyboard_uses_only_its_own_frames_in_the_sheet(self):
+        extra = copy.deepcopy(self.moments[-1])
+        extra['frame']['headline'] = 'A frame from the longer storyboard'
+        tone = self.voice_command()
+        for count, moments in [(6, [*self.moments, extra]), (5, self.moments)]:
+            result = run('build', self.write(moments), '-o', self.tmp / f'spec-{count}.mp4',
+                         '--tts-command', tone, cwd=Path.cwd())
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        last_tile = subprocess.check_output([
+            'ffmpeg', '-v', 'error', '-i', str(self.tmp / 'build/sheet.png'),
+            '-vf', 'crop=iw/3:ih/2:iw*2/3:ih/2,scale=1:1', '-pix_fmt', 'rgb24',
+            '-frames:v', '1', '-f', 'rawvideo', '-'])
+        self.assertEqual(last_tile, bytes(3), 'the sixth tile still shows an earlier frame')
+
+    @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
+    def test_custom_voice_receives_literal_narration_as_an_argument_and_stdin(self):
+        self.moments[2]['say'] = "Costs $& in 'fees' and prints {out} and {text}."
+        result = run('build', self.write(self.moments[:3]), '-o', self.tmp / 'spec.mp4',
+                     '--tts-command', self.voice_command(argument=True), cwd=Path.cwd())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
+    def test_custom_voice_output_must_be_a_supported_regular_file(self):
+        tone = self.voice_command()
+        source = self.tmp / 'source.wav'
+        subprocess.run(['python3', '-I', str(self.tmp / 'voice.py'), str(source.with_suffix(''))],
+                       input='A local tone.', text=True, check=True)
+        out = self.tmp / 'spec.mp4'
+        for mode in ['wrong-extension', 'symlink']:
+            with self.subTest(mode=mode):
+                env = dict(os.environ, VOICE_MODE=mode, VOICE_LINE=self.moments[2]['say'], VOICE_SOURCE=str(source))
+                result = run('build', self.write(self.moments[:3]), '-o', out.with_stem(mode),
+                             '--tts-command', tone, cwd=Path.cwd(), env=env)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn('animatic: moment 3: the voice wrote no supported regular audio file', result.stderr)
+                self.assertFalse(out.with_stem(mode).exists())
+                self.assertTrue(source.is_file())
+                self.assertEqual(list((self.tmp / 'build').glob('line-03.src.*')), [])
+
+    @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
+    def test_media_decoders_receive_a_file_only_protocol_allowlist(self):
+        install = self.tmp / 'bin'
+        install.mkdir()
+        decoder = '''#!/usr/bin/env python3
+import json, os, pathlib, sys
+name = pathlib.Path(sys.argv[0]).name
+with open(os.environ['DECODER_CALLS'], 'a') as log:
+    print(json.dumps([name, *sys.argv[1:]]), file=log)
+os.execv(os.environ[f'REAL_{name.upper()}'], sys.argv)
+'''
+        calls = self.tmp / 'calls.jsonl'
+        env = dict(os.environ, PATH=f'{install}{os.pathsep}{os.environ["PATH"]}', DECODER_CALLS=str(calls))
+        for name in ['ffmpeg', 'ffprobe']:
+            env[f'REAL_{name.upper()}'] = shutil.which(name)
+            wrapper = install / name
+            wrapper.write_text(decoder)
+            wrapper.chmod(0o755)
+        result = run('build', self.write(self.moments[:3]), '-o', self.tmp / 'spec.mp4',
+                     '--tts-command', self.voice_command(), cwd=Path.cwd(), env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        counts = {'ffmpeg': 0, 'ffprobe': 0}
+        for line in calls.read_text().splitlines():
+            name, *args = json.loads(line)
+            inputs = [len(args) - 1] if name == 'ffprobe' else [i + 1 for i, arg in enumerate(args) if arg == '-i']
+            for i in inputs:
+                if args[i].endswith('.wav'):
+                    counts[name] += 1
+                    with self.subTest(decoder=name, source=Path(args[i]).name):
+                        boundary = i if name == 'ffprobe' else i - 1
+                        self.assertEqual(args[boundary - 2:boundary], ['-protocol_whitelist', 'file'])
+        self.assertEqual(counts, {'ffmpeg': 9, 'ffprobe': 3})
 
     @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
     def test_a_failed_or_silent_voice_for_one_moment_fails_the_build_and_names_it(self):

@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -11,6 +12,8 @@ spec = importlib.util.spec_from_file_location('launch_fleet_host', HERE / 'host.
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
 TIMEOUT = host.TIMEOUT + 30
+BUSY = 'heartbeat: a heartbeat operation is already running'
+WAIT = 600
 
 
 def code_and_last_line(name, *args):
@@ -23,7 +26,7 @@ def code_and_last_line(name, *args):
     return r.returncode, lines[-1] if lines else '%s exit %d' % (name, r.returncode)
 
 
-def pause_heartbeat(repo, spec_n, dry_run):
+def pause_heartbeat(repo, spec_n, dry_run, wait):
     code, line = code_and_last_line('heartbeat.py', 'status', repo, spec_n)
     if code == 0 and line == 'heartbeat: not installed':
         return line, True
@@ -31,7 +34,16 @@ def pause_heartbeat(repo, spec_n, dry_run):
         return 'heartbeat: not paused (%s)' % line, False
     if dry_run:
         return 'heartbeat: would pause', True
+    deadline = time.monotonic() + wait
     code, line = code_and_last_line('heartbeat.py', 'pause', repo, spec_n)
+    if (code, line) == (1, BUSY):
+        print('heartbeat: a tick holds the heartbeat lock; waiting up to %d seconds for it' % wait, flush=True)
+    while (code, line) == (1, BUSY) and time.monotonic() < deadline:
+        time.sleep(1)
+        code, line = code_and_last_line('heartbeat.py', 'pause', repo, spec_n)
+    if (code, line) == (1, BUSY):
+        return ('heartbeat: not paused (a tick still held the heartbeat lock after %d seconds); the next tick can '
+                'start runs: run stop-all again when it ends' % wait), False
     return ('heartbeat: paused', True) if code == 0 else ('heartbeat: not paused (%s)' % line, False)
 
 
@@ -47,9 +59,15 @@ def stop_run(repo, n, run):
     return 'not stopped: the driver %s stop (%s)' % (kind, line), False
 
 
+def seconds(text):
+    if not text.isdigit() or int(text) > 3600:
+        raise argparse.ArgumentTypeError('expected whole seconds from 0 to 3600')
+    return int(text)
+
+
 def main(argv):
     parser = argparse.ArgumentParser(
-        description="Pause spec SPEC's heartbeat, then stop every live run in host.py's runs file "
+        description="Pause spec SPEC's heartbeat (waiting for a running tick to end), then stop every live run in host.py's runs file "
                     "($LAUNCH_FLEET_RUNS) through its own driver's stop, one at a time.",
         epilog='Each run prints `#N on <driver>: <result>`. Exit 0: all stopped and the heartbeat paused or not '
                'installed. Exit 1: a driver missing, refusing or failing stop, or a heartbeat that did not pause; '
@@ -58,10 +76,13 @@ def main(argv):
     parser.add_argument('repo', metavar='OWNER/NAME')
     parser.add_argument('spec', metavar='SPEC')
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--wait', type=seconds, default=WAIT, metavar='SECONDS',
+                        help='how long to wait for a running heartbeat tick to release its lock (0 to 3600, '
+                             'default %d)' % WAIT)
     args = parser.parse_args(argv)
     if not host.REPO.fullmatch(args.repo) or not host.TICKET.fullmatch(args.spec):
         parser.error('expected OWNER/NAME and a positive spec number')
-    line, ok = pause_heartbeat(args.repo, args.spec, args.dry_run)
+    line, ok = pause_heartbeat(args.repo, args.spec, args.dry_run, args.wait)
     print(line, flush=True)
     try:
         runs = host.load(args.repo)['runs']

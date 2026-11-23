@@ -1007,6 +1007,12 @@ class KeyHost(unittest.TestCase):
         self.assertIn('- **Never a login or key.** Never ask for, read, print, store or pass a login, token, key, '
                       'password, secret or cookie', skill)
 
+    def test_the_expired_login_lesson_is_out_of_reach_for_a_key_host_today(self):
+        text = key_host_lines()
+        self.assertIn('the expired-login lesson is out of reach for a key-host driver today', text)
+        self.assertIn('openwizdev/openwiz#2674', text)
+        self.assertNotIn('not run', text)
+
     def test_a_host_that_cannot_wake_or_stop_the_same_run_ends_in_a_plain_no(self):
         text = key_host_lines()
         self.assertIn("can't wake the same run or stop it gets no driver", text)

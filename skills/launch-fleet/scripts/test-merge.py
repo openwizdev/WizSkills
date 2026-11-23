@@ -1544,8 +1544,6 @@ def run_of(conclusion, at, name='check'):
 
 
 class Drops(unittest.TestCase):
-    """#2450: a merge-queue drop at a receipted head, read with queue.py and acted on across wakes."""
-
     receipt = 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD
 
     def merge(self, w):

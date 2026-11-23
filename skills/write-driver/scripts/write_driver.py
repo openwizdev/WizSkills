@@ -32,12 +32,13 @@ Python 3.9+, standard library, Linux or macOS.
 """
 import argparse
 import ctypes
+import errno
 import importlib.util
 import json
 import math
 import os
 import re
-import secrets
+import select
 import shlex
 import signal
 import shutil
@@ -707,9 +708,10 @@ def reply_text(path):
     return text[:-1] if text.endswith('\n') else text
 
 
-def descendants():
+def descendants(skip=None):
     """Live processes under this one: what the probe's driver started, wherever its session went, since this
-    process is their subreaper. It reads only each process's parent from /proc/<pid>/stat, never an environment."""
+    process is their subreaper; never `skip` or what it started. It reads only each process's parent from
+    /proc/<pid>/stat, never an environment."""
     while True:  # reap what has already exited here
         try:
             if os.waitpid(-1, os.WNOHANG)[0] == 0:
@@ -728,7 +730,7 @@ def descendants():
     found, todo = set(), [os.getpid()]
     while todo:
         for child in parents.get(todo.pop(), []):
-            if child not in found:
+            if child not in found and child != skip:
                 found.add(child)
                 todo.append(child)
     return found
@@ -768,7 +770,7 @@ def landlock_abi():
         return 0
 
 
-def stage(driver, into, openwiz=None):
+def stage(driver, into, openwiz=None, relay=None):
     """Copy only the driver's executable and the files of its `fixtures/` folder into the probe's box, so nothing
     else beside it is in reach; a link or any other kind of file there is refused, never followed."""
     def copy(src, dest):
@@ -786,8 +788,10 @@ def stage(driver, into, openwiz=None):
     if openwiz is not None:
         kit = into / 'kernel' / 'driver-kit'
         kit.mkdir(mode=0o700, parents=True)
-        for name in KEY_HELPER:
-            copy(str(Path(openwiz) / 'kernel' / 'driver-kit' / name), kit / name)
+        copy(str(Path(openwiz) / 'kernel' / 'driver-kit' / 'hosts.json'), kit / 'hosts.json')
+        fd = os.open(kit / 'hostkey.py', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
+        with os.fdopen(fd, 'w') as f:
+            f.write(RELAY % str(relay))
         into = into / 'adapters'
         into.mkdir(mode=0o700)
         into = into / os.path.basename(os.path.dirname(driver))
@@ -809,10 +813,11 @@ def stage(driver, into, openwiz=None):
     return str(staged)
 
 
-def isolation(box, port=None):
-    """What runs in the probe's child before it becomes the driver, or Refused when this system can't isolate it."""
+def isolation(box, *more, script=False):
+    """What runs in the probe's child before it becomes the driver, or Refused when this system can't isolate it:
+    `box` and `more` are its only writable folders, and `script` lets it read this file too."""
     abi, arch = landlock_abi(), SYSCALLS.get(os.uname().machine)
-    if abi < (1 if port is None else 4) or arch is None:
+    if abi < 1 or arch is None:
         raise Refused('this system cannot isolate the expired-login probe (it needs Linux Landlock on x86_64 or '
                       'aarch64), so it runs nothing: check that lesson on a machine that can')
     # Each right this kernel's Landlock knows: refer (2), truncate (3), device ioctl (5); TCP (4) and the
@@ -824,20 +829,14 @@ def isolation(box, port=None):
     python.append(os.path.dirname(os.path.realpath(sys.executable)))
     reads = sorted({str(Path(x).resolve()) for x in SYSTEM + tuple(python) + ('/proc',) if os.path.isdir(x)})
     rules = [(x, READ) for x in reads] + [(x, access) for x, access in SYSTEM_FILES if os.path.isfile(x)]
-    rules += [('/dev/null', (2 | 4 | 1 << 14) & fs), (str(box), fs)]  # box holds the staged driver too
+    rules += [('/dev/null', (2 | 4 | 1 << 14) & fs)] + [(str(x), fs) for x in (box,) + more]
+    if script:
+        rules.append((str(Path(__file__).resolve()), 4))
     audit, (socket, pair, uring) = arch
     ld, jeq, jge, ret = 0x20, 0x15, 0x35, 0x06
     allow, refuse, kill = 0x7fff0000, 0x00050000 | 1, 0x80000000  # 1: EPERM
     program = [(ld, 0, 0, 4), (jeq, 0, 7, audit), (ld, 0, 0, 0), (jge, 5, 0, 0x40000000), (jeq, 3, 0, socket),
                (jeq, 2, 0, pair), (jeq, 1, 0, uring), (ret, 0, 0, allow), (ret, 0, 0, refuse), (ret, 0, 0, kill)]
-    if port is not None:
-        # SECURITY: socket(AF_INET, SOCK_STREAM, 0 or IPPROTO_TCP) only, so no datagram, raw, SCTP, IPv6 or local
-        # socket; Landlock then lets that TCP socket connect only to the fake host's port and bind none.
-        program = [(ld, 0, 0, 4), (jeq, 0, 16, audit), (ld, 0, 0, 0), (jge, 14, 0, 0x40000000),
-                   (jeq, 3, 0, socket), (jeq, 11, 0, pair), (jeq, 10, 0, uring), (ret, 0, 0, allow),
-                   (ld, 0, 0, 16), (jeq, 0, 7, 2), (ld, 0, 0, 24), (0x54, 0, 0, 0xf), (jeq, 0, 4, 1),
-                   (ld, 0, 0, 32), (jeq, 1, 0, 0), (jeq, 0, 1, 6), (ret, 0, 0, allow), (ret, 0, 0, refuse),
-                   (ret, 0, 0, kill)]
     filters = ctypes.create_string_buffer(b''.join(struct.pack('=HBBI', *i) for i in program))
     fprog = ctypes.create_string_buffer(struct.pack('=HxxxxxxQ', len(program), ctypes.addressof(filters)))
     keep = (filters, fprog)  # fprog points into filters: both live as long as enter
@@ -849,8 +848,6 @@ def isolation(box, port=None):
             fd = os.open(path, os.O_PATH | os.O_CLOEXEC)
             syscall(LANDLOCK_ADD, ruleset, 1, ctypes.c_char_p(struct.pack('=Qi', access, fd)), 0)
             os.close(fd)
-        if port is not None:
-            syscall(LANDLOCK_ADD, ruleset, 2, ctypes.c_char_p(struct.pack('=QQ', 2, port)), 0)
         if libc.prctl(38, 1, 0, 0, 0) != 0:  # PR_SET_NO_NEW_PRIVS
             raise OSError(ctypes.get_errno(), 'no_new_privs')
         syscall(LANDLOCK_RESTRICT, ruleset, 0)
@@ -860,7 +857,6 @@ def isolation(box, port=None):
     return enter
 
 
-KEY_HELPER = ('hostkey.py', 'hosts.json')
 
 
 def key_route(a):
@@ -868,9 +864,9 @@ def key_route(a):
         return None
     if a.key_host is None or a.openwiz is None:
         raise Refused('the key-host route needs both --key-host and --openwiz: the host and the OpenWiz checkout '
-                      'whose key helper and fake host the probe uses')
+                      'whose key helper the probe runs')
     key_host_line(a.openwiz, a.key_host)
-    for name in KEY_HELPER + ('kit.py',):
+    for name in ('hostkey.py', 'hosts.json'):
         if not (Path(a.openwiz) / 'kernel' / 'driver-kit' / name).is_file():
             raise Refused('the OpenWiz checkout has no kernel/driver-kit/%s, so the key-host route cannot run: '
                           'use a checkout with the key helper' % name)
@@ -920,9 +916,33 @@ def cmd_lesson(a):
     mark_clock(state)
     save(a.state, state)
     driver = os.path.abspath(a.driver)
+    expected = render('sign_in_next', harness=a.harness, host=state['host'])
+    code, answer, left = probe_start(a, state, driver, openwiz, 401)
+    if openwiz is not None:
+        # SECURITY: the negative control: the same start against the fake host answering 500, so a driver that
+        # names the sign-in step whatever the host says never passes as handling the 401
+        control = probe_start(a, state, driver, openwiz, 500)
+        if control[1].get('next') == expected:
+            raise Refused('the driver names the sign-in step even when the host answers 500, so its answer to the '
+                          "401 proves nothing: make `start` name it only on the helper's `status` 401, then check "
+                          'again')
+        left = left or control[2]
+    answer = {k: v if isinstance(v, str) else json.dumps(v) for k, v in answer.items()}
+    return record_lesson(a.state, state, {'lesson': 'expired-login', 'exit': code, 'answer': answer,
+                                          'left_running': left}, expect_next=expected)
+
+
+PROBE_WAIT = 300
+
+
+def probe_start(a, state, driver, openwiz, status):
+    """One boxed run of the driver's `start`, and `stop` of a run it answers: its exit code, its answer and
+    whether it left anything running. Its harness is the stand-in, or with `openwiz` the key helper's fake host
+    answering `status`. Refused when it proves nothing; whatever happens, nothing it started outlives it."""
     box = Path(tempfile.mkdtemp(prefix='write-driver-probe-'))
     host = None
     try:
+        enter = isolation(box)  # before anything is staged or started
         for name in ('bin', 'home', 'state'):
             (box / name).mkdir(mode=0o700)
         ran = box / 'ran'
@@ -930,69 +950,279 @@ def cmd_lesson(a):
             fd = os.open(box / 'bin' / a.harness, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
             with os.fdopen(fd, 'w') as f:
                 f.write(STAND_IN % shlex.quote(str(ran)))
-        driver = stage(driver, box / 'driver', openwiz)
+        else:
+            (box / 'relay').mkdir(mode=0o700)
+        driver = stage(driver, box / 'driver', openwiz, box / 'relay')
         env = {'PATH': os.pathsep.join([str(box / 'bin'), os.path.join(os.path.dirname(driver), 'fixtures'),
                                         '/usr/local/bin', '/usr/bin', '/bin']),
                'HOME': str(box / 'home'), 'LANG': 'C.UTF-8',
                'OPENWIZ_%s_STATE' % state['host'].upper().replace('-', '_'): str(box / 'state')}
-        port = None
-        if openwiz is not None:
-            # SECURITY: the kit's own fake host, answering every call 401 with a throwaway test key, so no real
-            # key or live host is ever in reach
-            key = 'write-driver-probe-' + secrets.token_hex(16)
-            host = kit_checks(openwiz).FakeHost(status=401, test_key=key)
-            port = host.server.server_address[1]
-            env[TEST_ORIGIN] = host.origin
-        enter = isolation(box, port)
         ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER: keep what it starts
+        if openwiz is not None:
+            host = FakeHost(openwiz, box / 'relay', status)
         request = {'repository': 'example-user/%s-driver-kit' % state['host'], 'ticket': 1,
                    'skill': 'build-ticket', 'harness': a.harness, 'model': 'stand-in'}
         try:
             p = subprocess.run([driver, 'start'], input=json.dumps(request), env=env, capture_output=True,
-                               text=True, timeout=300, cwd=str(box / 'home'), preexec_fn=enter)
-        except subprocess.SubprocessError as e:
-            if isinstance(e, subprocess.TimeoutExpired):
-                raise
-            raise Refused('the expired-login probe could not isolate the driver, so it ran nothing')
-        try:
-            answer = json.loads(p.stdout)
-        except ValueError:
-            answer = {'error': 'the driver printed no JSON'}
-        if not isinstance(answer, dict):
-            answer = {'error': 'the driver printed no JSON object'}
-        if p.returncode == 0 and isinstance(answer.get('run'), str):
-            # It answered a run its first turn never keeps: stop it, as everything this skill started.
-            subprocess.run([driver, 'stop'], input=json.dumps({'run': answer['run']}), env=env,
-                           capture_output=True, text=True, timeout=300, cwd=str(box / 'home'), preexec_fn=enter)
-        deadline = time.monotonic() + 5
-        while descendants() and time.monotonic() < deadline:
-            time.sleep(0.1)
-        left = descendants()
-        for pid in left:  # stop what it left, and say it was left
+                               text=True, timeout=PROBE_WAIT, cwd=str(box / 'home'), preexec_fn=enter)
             try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
-        descendants()
-        if openwiz is not None:
-            with host.lock:
-                keyed = [r for r in host.requests if [v for k, v in r[1] if k.lower() == 'authorization']
-                         == ['Bearer ' + key]]
-            if not keyed:
+                answer = json.loads(p.stdout)
+            except ValueError:
+                answer = {'error': 'the driver printed no JSON'}
+            if not isinstance(answer, dict):
+                answer = {'error': 'the driver printed no JSON object'}
+            if p.returncode == 0 and isinstance(answer.get('run'), str):
+                # It answered a run its first turn never keeps: stop it, as everything this skill started.
+                subprocess.run([driver, 'stop'], input=json.dumps({'run': answer['run']}), env=env,
+                               capture_output=True, text=True, timeout=PROBE_WAIT, cwd=str(box / 'home'),
+                               preexec_fn=enter)
+        except subprocess.TimeoutExpired:
+            raise Refused("the driver's start or stop did not answer within %d seconds, so the probe stopped it and "
+                          'everything it started, and records nothing: make it answer, then check again'
+                          % PROBE_WAIT)
+        except subprocess.SubprocessError:
+            raise Refused('the expired-login probe could not isolate the driver, so it ran nothing')
+        skip = host.p.pid if host else None
+        deadline = time.monotonic() + 5
+        while descendants(skip) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        left = bool(descendants(skip))
+        if host is not None:
+            if not host.finish():
                 raise Refused("the driver never reached the kit's fake host through the key helper, so this proves "
                               "nothing: make `start` call the host through ../../kernel/driver-kit/hostkey.py, then "
                               "check again")
         elif not ran.exists():
             raise Refused('the driver never ran the stand-in harness %s, so this proves nothing: make `start` run '
                           'the harness by its name on PATH, then check again' % a.harness)
+        return p.returncode, answer, left
     finally:
+        # SECURITY: after a timeout or any other exception too, stop everything it started, the fake host with it
+        for _ in range(50):
+            pids = descendants()
+            if not pids:
+                break
+            for pid in pids:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            time.sleep(0.02)
         if host is not None:
             host.close()
         shutil.rmtree(box, ignore_errors=True)
-    answer = {k: v if isinstance(v, str) else json.dumps(v) for k, v in answer.items()}
-    return record_lesson(a.state, state, {'lesson': 'expired-login', 'exit': p.returncode, 'answer': answer,
-                                          'left_running': bool(left)},
-                         expect_next=render('sign_in_next', harness=a.harness, host=state['host']))
+
+
+# --- the key-host route's fake host ----------------------------------------------------------------------
+# SECURITY: no process of the key-host probe can open a socket, so none reaches any address. The checkout's key
+# helper never runs in the caller, nor in the driver's reach: the fake host, this file's own `fake-host` mode with
+# an empty environment in a box of its own, is the only process that runs it, each time boxed again with only
+# the loopback override in its environment, and it talks HTTP to the helper over two pipes in place of its TCP
+# connection. Only that helper holds those pipes, so only it can get the throwaway test key. What stands at the
+# helper's place beside the driver is the relay: it hands its stdin to the fake host through the box's relay
+# folder and prints the helper's answer.
+RELAY = '''#!/usr/bin/env python3
+"""write-driver's relay, standing where the kit's key helper stands: it hands its stdin to the probe's fake host,
+which runs the helper out of the driver's reach, and prints the helper's answer. It is not the key helper."""
+import os
+import sys
+RELAY = %r
+data = sys.stdin.buffer.read((1 << 20) + 1)
+base = os.path.join(RELAY, os.urandom(16).hex())
+os.mkfifo(base + '.out', 0o600)
+with open(base + '.part', 'wb') as f:
+    f.write(data)
+os.rename(base + '.part', base + '.in')
+with open(base + '.out', 'rb') as f:
+    reply = f.read()
+code, _, out = reply.partition(b'\\n')
+sys.stdout.buffer.write(out)
+sys.stdout.flush()
+sys.exit(int(code) if code.isdigit() else 1)
+'''
+LAUNCHER = '''import os, runpy, socket, sys
+helper, out, back = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+class Pipe:
+    def sendall(self, data):
+        data = memoryview(data)
+        while data:
+            data = data[os.write(out, data):]
+    def makefile(self, *args, **kwargs):
+        return os.fdopen(back, 'rb', closefd=False)
+    def setsockopt(self, *args):
+        pass
+    def settimeout(self, *args):
+        pass
+    def close(self):
+        pass
+socket.create_connection = lambda *args, **kwargs: Pipe()
+sys.argv = [helper]
+runpy.run_path(helper, run_name='__main__')
+'''
+FAKE_ORIGIN = 'http://127.0.0.1:1'
+KEY_PATH = '/.openwiz/hostkey-test-key'
+LIMIT = 1 << 20
+HELPER_WAIT = 120
+
+
+class FakeHost:
+    """The probe's side of the fake host: it stages the helper in the host's own folder and starts the host."""
+    def __init__(self, openwiz, relay, status):
+        self.home = Path(tempfile.mkdtemp(prefix='write-driver-host-'))
+        for name in ('hostkey.py', 'hosts.json'):
+            src = os.open(Path(openwiz) / 'kernel' / 'driver-kit' / name, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(src, 'rb') as f:
+                if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                    raise Refused('the probe copies only plain files: %s is not one' % name)
+                with open(os.open(self.home / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as g:
+                    shutil.copyfileobj(f, g)
+        self.p = subprocess.Popen([sys.executable, '-I', str(Path(__file__).resolve()), 'fake-host', str(status),
+                                   str(relay), str(self.home / 'hostkey.py')], env={}, stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=str(self.home),
+                                  preexec_fn=isolation(self.home, relay, script=True))
+
+    def finish(self):
+        """How many helper calls bore the test key and had their answer handed back; then the host stops."""
+        try:
+            out = self.p.communicate(timeout=HELPER_WAIT + 30)[0]
+            return int(json.loads(out)['answered'])
+        except (ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
+            return 0
+
+    def close(self):
+        if self.p.poll() is None:
+            self.p.kill()
+        for pipe in (self.p.stdin, self.p.stdout):
+            pipe.close()
+        self.p.wait()
+        shutil.rmtree(self.home, ignore_errors=True)
+
+
+def fake_host(status, relay, helper):
+    """The fake host itself, boxed: it answers each request the relay hands it by running the helper, until the
+    probe closes its stdin, then prints how many it answered."""
+    key = 'write-driver-probe-' + os.urandom(16).hex()
+    answered = 0
+    while not select.select([sys.stdin], [], [], 0.05)[0]:
+        for name in sorted(os.listdir(relay)):
+            if re.fullmatch(r'[0-9a-f]{32}\.in', name):
+                answered += relay_one(os.path.join(relay, name[:-3]), helper, key, int(status))
+    print(json.dumps({'answered': answered}))
+    return 0
+
+
+def relay_one(base, helper, key, status):
+    try:
+        fd = os.open(base + '.in', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return 0
+    with os.fdopen(fd, 'rb') as f:
+        data = f.read(LIMIT + 1) if stat.S_ISREG(os.fstat(fd).st_mode) else b''
+    os.unlink(base + '.in')
+    keyed, code, out = run_helper(helper, data, key, status)
+    return int(deliver(base + '.out', b'%d\n' % code + out) and keyed)
+
+
+def run_helper(helper, data, key, status):
+    """The checkout's helper, on `data`, boxed in the host's box with only the loopback override, its HTTP on
+    pipes to this process: whether it sent the test key, its exit code and its stdout."""
+    deadline = time.monotonic() + HELPER_WAIT
+    up, from_helper = os.pipe()
+    to_helper, down = os.pipe()
+    with tempfile.TemporaryFile(dir=os.path.dirname(helper)) as stdin, \
+            tempfile.TemporaryFile(dir=os.path.dirname(helper)) as stdout:
+        stdin.write(data)
+        stdin.seek(0)
+        p = subprocess.Popen([sys.executable, '-I', '-c', LAUNCHER, helper, str(from_helper), str(to_helper)],
+                             stdin=stdin, stdout=stdout, stderr=subprocess.DEVNULL, env={TEST_ORIGIN: FAKE_ORIGIN},
+                             cwd=os.path.dirname(helper), pass_fds=(from_helper, to_helper))
+        os.close(from_helper)
+        os.close(to_helper)
+        try:
+            keyed = serve(up, down, key, status, deadline)
+            try:
+                p.wait(max(0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.wait()
+        finally:
+            os.close(up)
+            os.close(down)
+        stdout.seek(0)
+        return keyed, p.returncode if p.returncode in (0, 1) else 1, stdout.read(LIMIT + 1)
+
+
+def serve(up, down, key, status, deadline):
+    """Answer the helper's HTTP requests on its pipes: the test key at its path, `status` to anything else.
+    True when any request bore exactly that key."""
+    def more():
+        if not select.select([up], [], [], max(0, deadline - time.monotonic()))[0]:
+            return b''
+        return os.read(up, 65536)
+    buf, keyed = b'', False
+    while True:
+        while b'\r\n\r\n' not in buf:
+            chunk = more()
+            if not chunk or len(buf) > LIMIT:
+                return keyed
+            buf += chunk
+        head, _, buf = buf.partition(b'\r\n\r\n')
+        lines = head.decode('latin-1').split('\r\n')
+        method, _, path = lines[0].partition(' ')
+        path = path.rpartition(' ')[0]
+        headers = [(k.strip().lower(), v.strip()) for k, _, v in (x.partition(':') for x in lines[1:])]
+        size = [v for k, v in headers if k == 'content-length']
+        size = int(size[0]) if len(size) == 1 and size[0].isdigit() and int(size[0]) <= LIMIT else 0
+        while len(buf) < size:
+            chunk = more()
+            if not chunk:
+                return keyed
+            buf += chunk
+        buf = buf[size:]
+        if (method, path) == ('GET', KEY_PATH):
+            code, body = 200, json.dumps({'key': key}).encode()
+        else:
+            keyed = keyed or [v for k, v in headers if k == 'authorization'] == ['Bearer ' + key]
+            code, body = status, b'{}'
+        reply = b'HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s' % (
+            code, {200: b'OK', 401: b'Unauthorized', 500: b'Internal Server Error'}[code], len(body), body)
+        try:
+            os.write(down, reply)
+        except OSError:
+            return keyed
+
+
+def deliver(path, reply):
+    """Hand the helper's answer to the relay waiting on its FIFO; False when no relay reads it in time."""
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+            break
+        except OSError as e:
+            if e.errno != errno.ENXIO or time.monotonic() > deadline:
+                return False
+            time.sleep(0.02)
+    try:
+        if not stat.S_ISFIFO(os.fstat(fd).st_mode):
+            return False
+        view = memoryview(reply)
+        while view:
+            if not select.select([], [fd], [], max(0, deadline - time.monotonic()))[1]:
+                return False
+            try:
+                view = view[os.write(fd, view):]
+            except BlockingIOError:
+                pass
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 
 def cmd_started(a):
@@ -1266,4 +1496,6 @@ def main(argv):
 
 
 if __name__ == '__main__':
+    if sys.argv[1:2] == ['fake-host']:
+        sys.exit(fake_host(*sys.argv[2:]))
     sys.exit(main(sys.argv[1:]))

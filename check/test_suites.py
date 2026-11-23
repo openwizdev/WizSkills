@@ -2,11 +2,13 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import re
 import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -87,21 +89,30 @@ class CheckShards(unittest.TestCase):
         p = subprocess.run([sys.executable, '-I', str(HERE / 'run.py'), '--list'],
                            capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
-        shards = json.loads(p.stdout)
+        self.covers_every_suite_exactly_once(json.loads(p.stdout))
+
+    def covers_every_suite_exactly_once(self, shards):
         names = [shard['name'] for shard in shards]
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(names[:2], ['rules', 'standalone'])
         self.assertEqual([shard['skill'] for shard in shards[:2]], [None, None])
         standalone = ['python3', '-I', 'check/standalone.py', '--tree', '.']
         self.assertEqual(shards[1]['commands'], [{'suite': standalone, 'argv': standalone, 'cwd': '.'}])
+        whole = [s for s in shards[2:] if '.' not in s['name']]
         listed_commands = sorted((shard['skill'], tuple(command['suite']))
-                                 for shard in shards[2:] for command in shard['commands'])
-        expected = sorted((name, tuple(command))
-                          for name, commands in run.SUITES.items() for command in commands)
+                                 for shard in whole for command in shard['commands'])
+        split = {(row, tuple(suite)) for row, (suite, _) in run.PARTS.items()}
+        expected = sorted((name, tuple(command)) for name, commands in run.SUITES.items()
+                          for command in commands if (name, tuple(command)) not in split)
         self.assertEqual(listed_commands, expected)
+        self.assertEqual([(s['name'], s['skill'], [c['suite'] for c in s['commands']])
+                          for s in shards if '.' in s['name']],
+                         [(f'{row}.{n}', row, [suite]) for row, (suite, count) in run.PARTS.items()
+                          for n in range(1, count + 1)])
         for shard in shards:
             self.assertEqual(set(shard), {'name', 'skill', 'commands', 'env'})
-            self.assertEqual(shard['env'], {})
+            if '.' not in shard['name']:
+                self.assertEqual(shard['env'], {})
             for command in shard['commands']:
                 self.assertEqual(set(command), {'suite', 'argv', 'cwd'})
 
@@ -236,6 +247,80 @@ class CheckShards(unittest.TestCase):
                     with contextlib.redirect_stderr(io.StringIO()):
                         code, lines = self.check(*argv, root=root, suites=SYNTHETIC)
                     self.assertEqual((code, lines, self.ran(root)), (2, [], []))
+
+
+FAKE_FLEET = '#!/bin/sh\nexit 0\n'
+
+
+def part_record(path):
+    record = {'groups_ran': []}
+    for line in Path(path).read_text(encoding='utf-8').splitlines():
+        key, value = line.split()[:2]
+        if key == 'group':
+            record['groups_ran'].append(int(value))
+        else:
+            record[key] = int(value)
+    return record
+
+
+class SplitSuites(unittest.TestCase):
+    def test_an_extra_dotted_shard_fails_the_exactly_once_guard(self):
+        shards = run.shards(run.ROOT)
+        versions = next(c for s in shards if s['name'] == 'check' for c in s['commands']
+                        if c['suite'][-1] == 'check/test_versions.py')
+        extra = [*shards, {'name': 'check.1', 'skill': 'check', 'commands': [versions], 'env': {}}]
+        CheckShards('test_list_covers_every_suite_exactly_once').covers_every_suite_exactly_once(shards)
+        with self.assertRaises(AssertionError):
+            CheckShards('test_list_covers_every_suite_exactly_once').covers_every_suite_exactly_once(extra)
+
+    def test_a_part_record_path_that_is_a_folder_fails_the_part(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            groups = Path(tmp, 'map')
+            groups.write_text(''.join(f'{g} 2\n' for g in range(1, 10001)), encoding='utf-8')
+            folder = Path(tmp, 'record')
+            folder.mkdir()
+            env = {**run.clean_env(), 'TEST_SHARD': '1/2', 'TEST_SHARD_MAP': str(groups),
+                   'TEST_SHARD_RAN': str(folder), 'TEST_JOBS': '1'}
+            p = subprocess.run(['sh', 'skills/launch-fleet/scripts/test.sh'], cwd=HERE.parent, env=env,
+                               capture_output=True, text=True)
+            self.assertEqual(list(folder.iterdir()), [])
+        self.assertEqual(p.returncode, 1, p.stdout[-400:])
+        self.assertIn("can't write " + str(folder), p.stdout)
+
+    def test_the_parts_of_launch_fleet_test_sh_run_every_case_once(self):
+        p = subprocess.run([sys.executable, '-I', str(HERE / 'run.py'), '--list'],
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        suite = ['sh', 'skills/launch-fleet/scripts/test.sh']
+        parts = [shard for shard in json.loads(p.stdout)
+                 if any(command['suite'] == suite for command in shard['commands'])]
+        self.assertTrue(parts and all(shard['name'].startswith('launch-fleet.') for shard in parts),
+                        f'launch-fleet test.sh is not split into parts: {[s["name"] for s in parts]}')
+        for shard in parts:
+            self.assertEqual(shard['skill'], 'launch-fleet')
+            self.assertEqual([command['suite'] for command in shard['commands']], [suite])
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp, 'fleet.sh')
+            fake.write_text(FAKE_FLEET, encoding='utf-8')
+            def one(shard):
+                record = Path(tmp, shard['name'] + '.ran')
+                command = shard['commands'][0]
+                env = {**run.clean_env(), **shard['env'], 'FLEET_SH': str(fake),
+                       'TEST_SHARD_RAN': str(record), 'TEST_JOBS': '1'}
+                subprocess.run(command['argv'], cwd=HERE.parent / command['cwd'], env=env,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.assertTrue(record.is_file(), f'{shard["name"]} wrote no record')
+                return shard['name'], part_record(record)
+            with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+                records = dict(pool.map(one, parts))
+        totals = {(r['total'], r['groups']) for r in records.values()}
+        self.assertEqual(len(totals), 1, totals)
+        (total, groups), = totals
+        ran = [g for r in records.values() for g in r['groups_ran']]
+        self.assertEqual(sorted(ran), list(range(1, groups + 1)),
+                         'every group of the whole suite runs in exactly one part')
+        self.assertEqual(sum(r['cases'] for r in records.values()), total,
+                         "the parts' cases add up to the whole suite's")
 
 
 if __name__ == '__main__':

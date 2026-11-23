@@ -384,7 +384,30 @@ LOGIN = {'machine': 'Login: stays on your machine', 'host': 'Login: held by {hos
 KEY_VARIABLE = re.compile(r'[A-Z][A-Z0-9]{0,15}(?:_[A-Z0-9]{1,16}){1,5}')
 
 
-def login_line(readme, line, key_variable=None):
+REGISTRY = ('kernel', 'driver-kit', 'hosts.json')
+REGISTRY_NAME = re.compile(r'[a-z0-9]+(?:-[a-z0-9]+)*')
+REGISTRY_VARIABLE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
+REGISTRY_KEYCHAIN = re.compile(r'[a-z0-9]+(?:[.-][a-z0-9]+)*')
+
+
+def key_host_line(openwiz, name):
+    # SECURITY: the refusal never says what it was given or read: either may be a key
+    bad = Refused('the key host is not registered in kernel/driver-kit/hosts.json of the OpenWiz checkout, for a '
+                  'login the host holds: add it there through OpenWiz first')
+    try:
+        hosts = json.loads((Path(openwiz).joinpath(*REGISTRY)).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        raise bad
+    entry = hosts.get(name) if isinstance(hosts, dict) and isinstance(name, str) else None
+    if not (REGISTRY_NAME.fullmatch(name) and isinstance(entry, dict) and isinstance(entry.get('variable'), str)
+            and isinstance(entry.get('keychain'), str) and REGISTRY_VARIABLE.fullmatch(entry['variable'])
+            and REGISTRY_KEYCHAIN.fullmatch(entry['keychain'])):
+        raise bad
+    return ('API key: through the key helper for `%s`: set `%s` yourself, or keep it in your keychain as `%s`; '
+            'the driver never sees it.' % (name, entry['variable'], entry['keychain']))
+
+
+def login_line(readme, line, key_variable=None, key_line=None):
     """Open the README, right under its title, with exactly this login line, and no other; for a cloud host that
     takes an API key, the name of the variable the user sets for it under that line, never a value."""
     lines = readme.read_text(encoding='utf-8').split('\n') if readme.exists() else []
@@ -394,6 +417,7 @@ def login_line(readme, line, key_variable=None):
     while rest and not rest[0].strip():
         rest.pop(0)
     key = ['API key: set `%s` yourself; the driver never asks for it.' % key_variable, ''] if key_variable else []
+    key = [key_line, ''] if key_line else key
     readme.write_text('\n'.join([lines[0], '', line, ''] + key + rest), encoding='utf-8')
 
 
@@ -414,6 +438,11 @@ def cmd_copy(a):
         raise Refused('the key variable is a name only (2 to 6 words of capitals or digits joined by _, as '
                       'EXAMPLEHOST_API_KEY), for a login the host holds, and nothing the kit reads as a credential: '
                       'never a value')
+    key_line = None
+    if a.key_host is not None:
+        if a.login != 'host' or a.key_variable is not None:
+            raise Refused('the key host is for a login the host holds, without --key-variable')
+        key_line = key_host_line(a.openwiz, a.key_host)
     src = Path(a.openwiz) / 'adapters' / 'template'
     dest = Path(a.into) / 'adapters' / host
     if dest.exists():
@@ -439,7 +468,7 @@ def cmd_copy(a):
                 new = new.replace(old, to.format(**values))
             if new != text:
                 path.write_text(new, encoding='utf-8')
-        login_line(tmp / host / 'README.md', LOGIN[a.login].format(host=host), a.key_variable)
+        login_line(tmp / host / 'README.md', LOGIN[a.login].format(host=host), a.key_variable, key_line)
         os.replace(tmp / host, dest)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -524,14 +553,61 @@ def cmd_kit(a):
     save(a.state, state)
     # The kit calls the driver through this proxy, so every run its `start` answers is recorded for stop-all,
     # even when the kit's start check then fails and it never stops that run itself.
-    proxy = Path(a.state) / 'kit-driver'
-    proxy.write_text('#!/bin/sh\nexec %s -I %s proxy --state %s --openwiz %s --driver %s "$@"\n' % tuple(
-        shlex.quote(x) for x in (sys.executable, os.path.abspath(__file__), os.path.abspath(a.state),
-                                 os.path.abspath(a.openwiz), os.path.abspath(a.driver))))
-    proxy.chmod(0o700)
+    stage = Path(a.state) / 'kit'
+    shutil.rmtree(stage, ignore_errors=True)
+    try:
+        return kit_in_stage(a, stage)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+PROXY = '.write-driver-proxy'
+TEST_ORIGIN = 'OPENWIZ_HOSTKEY_TEST_ORIGIN'
+
+
+def kit_view(folder, view, state):
+    for name in sorted(os.listdir(folder)):
+        source = os.path.realpath(os.path.join(folder, name))
+        if name == '__pycache__' or source == state:
+            continue
+        if state.startswith(source + os.sep) and os.path.isdir(source):
+            os.mkdir(os.path.join(view, name), 0o700)
+            kit_view(source, os.path.join(view, name), state)
+        else:
+            os.symlink(source, os.path.join(view, name))
+
+
+def kit_in_stage(a, stage):
+    checks = forms()['checks']
+    folder = os.path.dirname(os.path.abspath(a.driver))
+    if os.path.lexists(os.path.join(folder, PROXY)):
+        print("the kit could not run: the driver's folder holds %s, the name its proxy takes: rename it" % PROXY)
+        return 2
+    view, synthetic = stage / 'view', stage / 'synthetic'
+    # SECURITY: a start under a test origin the kit sets itself, its key check's fake host, is recorded only in
+    # throwaway state, so stop-all never replays it on the live route.
+    launch = shlex.quote('x' + os.environ[TEST_ORIGIN]) if TEST_ORIGIN in os.environ else "''"
+    proxy = ('#!/bin/sh\ncase "${%s+x}${%s-}" in %s) state=%s ;; *) state=%s ;; esac\n'
+             'exec %s -I %s proxy --state "$state" --openwiz %s --driver %s "$@"\n' % (
+                 TEST_ORIGIN, TEST_ORIGIN, launch, *(shlex.quote(os.path.abspath(x)) for x in (
+                     a.state, synthetic, sys.executable, __file__, a.openwiz, a.driver))))
+    try:
+        os.mkdir(stage, 0o700)
+        os.mkdir(view, 0o700)
+        with os.fdopen(os.open(view / PROXY, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o700), 'w') as f:
+            f.write(proxy)
+        kit_view(folder, str(view), os.path.realpath(a.state))
+        save(synthetic, load(a.state))
+    except OSError as e:
+        print("the kit could not run: the driver's folder could not be staged for it (%s)" % type(e).__name__)
+        return 2
+    for name in ('README.md', os.path.join('fixtures', 'kit-host.json')):
+        if os.path.exists(os.path.join(folder, name)) != os.path.exists(view / name):
+            print("the kit could not run: its view of the driver's folder does not read %s as the folder does" % name)
+            return 2
     argv = [sys.executable, '-I', str(Path(a.openwiz) / 'kernel' / 'driver-kit' / 'kit.py'), '--driver',
-            str(proxy), '--repo', a.repo, '--ticket', str(a.ticket), '--harness', a.harness, '--model', a.model,
-            '--skill', a.skill, '--wait', str(a.wait)]
+            str(view / PROXY), '--repo', a.repo, '--ticket', str(a.ticket), '--harness', a.harness, '--model',
+            a.model, '--skill', a.skill, '--wait', str(a.wait)]
     try:
         p = subprocess.run(argv, capture_output=True, text=True)
     except OSError as e:
@@ -803,6 +879,8 @@ def cmd_lesson(a):
         save(a.state, state)
         print('expired-login not run: skipped on your no')
         return 3
+    state['lessons'].pop('expired-login', None)
+    mark_clock(state)
     save(a.state, state)
     driver = os.path.abspath(a.driver)
     box = Path(tempfile.mkdtemp(prefix='write-driver-probe-'))
@@ -1046,6 +1124,7 @@ def parser():
     p = cmd('copy')
     p.add_argument('--login', choices=tuple(LOGIN), required=True)
     p.add_argument('--key-variable')
+    p.add_argument('--key-host')
     p.add_argument('--openwiz', required=True)
     p.add_argument('--into', required=True)
     p = cmd('ticket')

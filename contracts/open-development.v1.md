@@ -579,4 +579,3 @@ Investigate prj_planted42 start failures
 - The named literals are not checked in CI on the public repository.
 - **Decisions across two repositories** are owned by #2141 and verified on configured fixture feeds. Single-repository mode remains the default until a pair is explicitly configured. Fixture results do not establish live discovery of the real settings or either feed.
 - Text inside images is not read by the check.
-- Today's `rust` job in `.github/workflows/ci.yml` falls back to a runner label not on F2's list, so the check refuses it until the CI specs change it. Today's builder commits use an address C3 refuses, so builders need GitHub's private address.

@@ -546,6 +546,7 @@ def admit(title, body, comments):
 
 
 HOME = "/" + "home" + "/"
+USERS = "/" + "Users" + "/"
 
 
 class PrivatePattern(unittest.TestCase):
@@ -557,19 +558,23 @@ class PrivatePattern(unittest.TestCase):
     def test_source_spells_no_home_path(self):
         self.assertFalse(HOME in FEEDBACK.read_text(), "feedback.py spells a home path")
 
+    def test_source_spells_no_macos_home_path(self):
+        self.assertFalse(USERS in FEEDBACK.read_text(), "feedback.py spells a macOS home path")
+
     def test_private_pattern_is_unchanged(self):
         expected = (r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[abpr]-[\w-]{10,})"
-                    r"|(?:^|[\s(\"'])(?:/Users/|" + HOME + r"|/root/|~/|[A-Za-z]:\\)"
+                    r"|(?:^|[\s(\"'])(?:" + USERS + r"|" + HOME + r"|/root/|~/|[A-Za-z]:\\)"
                     r"|\bthr_[A-Za-z0-9]+|\b[\w.+-]+@[\w-]+\.[\w.-]+\b|-----BEGIN [A-Z ]*PRIVATE KEY-----")
         self.assertEqual(self.feedback.PRIVATE.pattern, expected)
         self.assertEqual(self.feedback.PRIVATE.flags, re.compile(expected, re.M).flags)
 
     def test_private_pattern_still_finds_a_home_path(self):
         for text in [HOME + "synthetic/work", "under " + HOME + "synthetic", "(" + HOME + "synthetic)",
-                     "'" + HOME + "synthetic'", "x\n" + HOME + "synthetic"]:
+                     "'" + HOME + "synthetic'", "x\n" + HOME + "synthetic", USERS + "synthetic/project",
+                     "at " + USERS + "synthetic"]:
             with self.subTest(text=text):
                 self.assertTrue(self.feedback.PRIVATE.search(text))
-        for text in ["a" + HOME + "synthetic", "https://github.com" + HOME + "synthetic", "home/synthetic"]:
+        for text in ["a" + HOME + "synthetic", "https://github.com" + HOME + "synthetic", "home/synthetic", "a" + USERS + "synthetic"]:
             with self.subTest(text=text):
                 self.assertFalse(self.feedback.PRIVATE.search(text))
 

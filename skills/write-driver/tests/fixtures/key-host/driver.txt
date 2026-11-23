@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""A synthetic key-host driver written as write-driver teaches: OpenWiz's template, with every host API call sent
+through the kit's key helper as a method and a path only. It lives at <openwiz>/adapters/<host>/ for the kit."""
+import importlib.machinery, importlib.util, json, os, subprocess, sys
+sys.dont_write_bytecode = True
+HERE = os.path.dirname(os.path.abspath(__file__))
+HELPER = os.path.join(HERE, '..', '..', 'kernel', 'driver-kit', 'hostkey.py')
+spec = importlib.util.spec_from_loader('template', importlib.machinery.SourceFileLoader(
+    'template', os.path.join(HERE, '..', 'template', 'driver')))
+t = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(t)
+HOST = 'devin'
+
+
+def ask(method, path, body=None):
+    request = {'host': HOST, 'method': method, 'path': path}
+    if body is not None:
+        request['body'] = body
+    p = subprocess.run([sys.executable, '-I', HELPER], input=json.dumps(request), capture_output=True, text=True,
+                       timeout=120)
+    try:
+        out = json.loads(p.stdout)
+    except ValueError:
+        raise t.Refused('the key helper gave no answer', 'run kernel/driver-kit/hostkey.py by hand')
+    if p.returncode:
+        raise t.Refused('the key helper refused: ' + out['error'], out['next'])
+    if not 200 <= out['status'] < 300:
+        raise t.Refused('the host answered %d' % out['status'], 'check the host, then retry')
+    return out['body']
+
+
+launch, end = t.launch, t.end
+
+
+def keyed_launch(req, run, woken):
+    ask('POST', '/v1/runs/%s/%s' % (run, 'wake' if woken else 'start'), {'ticket': req['ticket']})
+    return launch(req, run, woken)
+
+
+def keyed_end(turns, run):
+    ask('DELETE', '/v1/runs/%s' % run)
+    return end(turns, run)
+
+
+t.launch, t.end = keyed_launch, keyed_end
+if __name__ == '__main__':
+    t.main()

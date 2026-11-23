@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=927
+CASES=945
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -989,6 +989,23 @@ EOF
 expect 'CHANGES on this head: findings to the builder' 0 check.json 'reviewing31 | pr_say(31; 3102; "11:30"; "VERDICT: CHANGES at \(sha(31))\n\nFull review by a synthetic reviewer.\n\n- **R1 [medium]** a finding")' -- check <<EOF
 findings #31 for #12 at $S31: tell its builder, thread thr_syn12
 EOF
+PARKED31='reviewing31 | pr_say(31; 3102; "11:30"; "VERDICT: CHANGES at \(sha(31))\n\nFinal check of R2, by a synthetic reviewer.\n\nNext: park R2 as a decision for Jake.") | pr_say(31; 3103; "11:35"; "launch-fleet: parked \(sha(31)): R2 for Jake")'
+expect 'decision: a decision on a parked head wakes the fleet' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** fix once more: R2 at \(sha(31)). Why: synthetic.")' -- check <<EOF
+decision #31 for #12 at $S31: Jake's answer in comment 3104; act on it as references/reviews.md says
+EOF
+expect 'decision: the fleet record after the decision quiets it' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** fix once more: R2 at \(sha(31)). Why: synthetic.") | pr_say(31; 3105; "11:45"; "launch-fleet: findings sent \(sha(31)): decision 3104: fix once more")' -- check < /dev/null
+expect 'decision: a wake on the parked pull request prints the decision line' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** log and merge: R2 at \(sha(31)). Polish issues: #64. Why: synthetic.")' -- wake 31 <<EOF
+decision #31 for #12 at $S31: Jake's answer in comment 3104; act on it as references/reviews.md says
+EOF
+expect 'decision: a decision naming another head wakes nothing new' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** fix once more: R2 at \(sha(99)). Why: synthetic.")' -- check <<EOF
+findings #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect 'decision: a decision for another head that mentions this head in its reason wakes nothing new' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** fix once more: R2 at \(sha(99)). Why: the same finding is also open at \(sha(31)).")' -- check <<EOF
+findings #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect 'decision: an outsider decision on a parked head wakes nothing new' 0 check.json "$PARKED31"' | pr_by(31; 3104; "11:40"; outsider; "**Orchestrator decision:** fix once more: R2 at \(sha(31)). Why: synthetic.")' -- check <<EOF
+findings #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
 expect 'findings already sent: wait for a new head' 0 check.json 'reviewing31 | pr_say(31; 3102; "11:30"; "VERDICT: CHANGES at \(sha(31))") | pr_say(31; 3103; "11:35"; "launch-fleet: findings sent \(sha(31))")' -- check < /dev/null
 expect 'a new green head after a review: re-check by the same reviewer' 0 check.json 'reviewing31 | pr_say(31; 3102; "11:30"; "VERDICT: CHANGES at \(sha(31))") | pr_say(31; 3103; "11:35"; "launch-fleet: findings sent \(sha(31))") | pull(31; .head = ("31f" * 40)[:40])' -- check <<EOF
 re-check #31 for #12 at $S31F: tell its reviewer, thread thr_synrev31
@@ -1232,7 +1249,7 @@ expect 'stall: a wait never starts a second builder' 0 check.json "$WAIT12 | $ME
 expect 'stall: a wait without an existing builder starts nothing early' 0 check.json 'say(13; 1301; "11:00"; "launch-fleet: waiting for #11")' -- wake 13 < /dev/null
 expect 'stall: arbitrary prose quoting a wait is not a wait instruction' 0 check.json 'say(12; 1202; "11:00"; "A report said wait for #11; this is not an instruction.")' -- check < /dev/null
 expect 'stall: unreadable waiter comments produce a look rather than resume' 0 check.json "$WAIT12 | $MERGE71" FAKE_GH_FAIL=issue_comments_12_page=1 -- wake 12 <<EOF
-look #12: comment history could not be read in full
+look #12: comment history could not be read in full: repos/synthetic-owner/synthetic-repo/issues/12/comments?per_page=100 failed: fake gh: planted failure: issue comments 12 page=1
 EOF
 expect 'stall: an unrelated targeted wake leaves the waiter for the safety net' 0 check.json "$WAIT12 | $MERGE71" -- wake 71 < /dev/null
 expect 'stall: every existing builder waiting on a merge gets a line' 0 check.json "$WAIT12 | $MERGE71 | say(13; 1301; \"11:01\"; \"launch-fleet: start checked, thread thr_syn13, branch room/13-page\") | say(13; 1302; \"11:02\"; \"launch-fleet: waiting for #71\")" -- check <<EOF
@@ -1761,6 +1778,37 @@ start #13: W3: widget page (spec #10)
 EOF
 expect 'long form: a raised refusal is not raised again' 0 check.json 'say(12; 1202; "11:00"; "launch-fleet: waiting for other-owner/other-repo#71") | say(12; 1203; "11:05"; "launch-fleet: look: comment 1202'"'"'s line `launch-fleet: waiting for other-owner/other-repo#71` names other-owner/other-repo#71, not this repository")' -- check < /dev/null
 
+TOOLS='pull(31; .repo = "synthetic-owner/synthetic-tools")'
+UNRELATED31='.issues += [{number: 31, title: "Synthetic unrelated issue", state: "CLOSED", parent: null, labels: [], blockedBy: [], body: "", comments: [{id: 3199, at: at("11:40"), body: "Synthetic unrelated comment"}]}]'
+expect "cross-repository PR: its comments are its own repository's when this one has no #31 (#2376)" 0 check.json "store31 | $TOOLS" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect "cross-repository PR: its comments are its own repository's when this one's #31 is another issue (#2376)" 0 check.json "store31 | $TOOLS | $UNRELATED31" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect "cross-repository PR: a second comment page is read from its own repository (#2376)" 0 check.json "store31 | $TOOLS | pull(31; .comments = discussion(119) + .comments)" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect "cross-repository PR: more than 20 checks are read page by page from its own repository (#2376)" 0 check.json "$MANY31 | pr_say(31; 3102; \"11:30\"; \"VERDICT: APPROVE at \(sha(31))\") | $TOOLS" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect "cross-repository PR: a claim beside one with more than 20 checks succeeds (#2376)" 0 check.json "merge12 | open_pr(31; 14; \"#14: synthetic tools\") | pull(31; .checks = ([range(40) | {name: \"optional-\(.)\", status: \"COMPLETED\", conclusion: \"SUCCESS\"}] + .checks)) | $TOOLS | say(13; 1301; \"11:55\"; \"launch-fleet: starting\")" -- claim 13 1301 <<EOF
+go #13
+EOF
+expect "cross-repository PR: a failed comment page is reported with its request and error (#2376 R1)" 0 check.json "store31 | $TOOLS | pull(31; .comments = discussion(119) + .comments)" FAKE_GH_FAIL=issue_comments_31_page=2 -- check <<EOF
+look #31: comment history could not be read in full: repositories/2/issues/31/comments?per_page=100&page=2 failed: fake gh: planted failure: issue comments 31 page=2
+EOF
+TOOLS31D='.pulls += [.pulls[] | select(.number == 31) | .repo = "synthetic-owner/synthetic-tools" | .id = "PR_tools_31" | .head = sha("31d") | .draft = true | .closes = [14] | .comments = []]'
+expect "cross-repository PR: a same-numbered PR in another repository leaves the re-test guard alone (#2376 R2)" 0 check.json "store31 | $TOOLS31D" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect "cross-repository PR: a merge in this repository is no clash for it (#2376 R3)" 0 check.json "store31 | $TOOLS | main24(\"11:15\"; [changed(\"src/store/store.rs\"; \"modified\")])" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect "cross-repository PR: a merge in its own repository is its clash (#2376 R3)" 0 check.json "store31 | $TOOLS | main24(\"11:15\"; [changed(\"src/store/store.rs\"; \"modified\")]) | pull(24; .repo = \"synthetic-owner/synthetic-tools\")" -- check <<EOF
+re-test #31 for #12 at $S31: main changed src/store/store.rs in #24 after 2026-11-01T10:30:00Z, which its CI may not have tested; run its CI again on the latest main
+EOF
+
 ### #1340: a machine plan approval starts the fleet; the video's comments steer it
 
 expect 'machine: a valid machine plan approval starts its fleet' 0 check.json 'merge12 | machine_only' -- check <<EOF
@@ -2061,20 +2109,20 @@ expect 'history: a 120-comment standalone issue retains its approval' 0 check.js
 start #70: Fix the broken link in the widget docs (approved on its own)
 EOF
 expect 'history: an unreadable standalone history cannot start' 0 check.json 'own_approval(70; 7002; "10:00") | issue(70; .comments += discussion(118))' FAKE_GH_FAIL=issue_comments_70_page=2 -- wake 70 <<EOF
-look #70: comment history could not be read in full
+look #70: comment history could not be read in full: repositories/1/issues/70/comments?per_page=100&page=2 failed: fake gh: planted failure: issue comments 70 page=2
 EOF
 expect 'history: an unreadable spec history cannot start its tickets' 0 check.json 'merge12 | issue(10; .comments += discussion(119))' FAKE_GH_FAIL=issue_comments_10_page=2 -- check <<EOF
-look #10: comment history could not be read in full
+look #10: comment history could not be read in full: repositories/1/issues/10/comments?per_page=100&page=2 failed: fake gh: planted failure: issue comments 10 page=2
 EOF
 expect 'history: an unreadable third page cannot archive a closed ticket' 0 check.json 'merge12 | issue(12; .comments += discussion(118))' FAKE_GH_PAGE=50 FAKE_GH_FAIL=issue_comments_12_page=3 -- wake 12 <<EOF
-look #12: comment history could not be read in full
+look #12: comment history could not be read in full: repositories/1/issues/12/comments?per_page=100&page=3 failed: fake gh: planted failure: issue comments 12 page=3
 EOF
 log_has 'history: an unreadable third page cannot archive a closed ticket' 1 '^issue comments 12 page=1$'
 log_has 'history: an unreadable third page cannot archive a closed ticket' 1 '^issue comments 12 page=2$'
 log_has 'history: an unreadable third page cannot archive a closed ticket' 1 '^issue comments 12 page=3$'
 
 expect 'history: a closed ticket cannot hide an unreadable PR history' 0 check.json 'merge12 | pr_say(22; 2201; "10:00"; "launch-fleet: review started \(sha(22)), thread thr_synrev22") | pull(22; .comments += discussion(119))' FAKE_GH_FAIL=issue_comments_22_page=2 -- wake 12 <<EOF
-look #22: comment history could not be read in full
+look #22: comment history could not be read in full: repositories/1/issues/22/comments?per_page=100&page=2 failed: fake gh: planted failure: issue comments 22 page=2
 EOF
 
 # R1: a transient read failure must not close the spec while its agents
@@ -2082,22 +2130,22 @@ EOF
 CLOSING_HISTORY='all_closed | issue(12; .comments |= map(select(.id != 1202)))
   | say(10; 1002; "11:30"; "launch-fleet: spec summary")'
 expect 'history: an unreadable ticket cannot close its spec' 0 check.json "$CLOSING_HISTORY" FAKE_GH_FAIL=issue_comments_12_page=1 -- check <<EOF
-look #12: comment history could not be read in full
+look #12: comment history could not be read in full: repos/synthetic-owner/synthetic-repo/issues/12/comments?per_page=100 failed: fake gh: planted failure: issue comments 12 page=1
 EOF
 expect 'history: an unreadable linked PR cannot close its spec' 0 check.json "$CLOSING_HISTORY" FAKE_GH_FAIL=issue_comments_22_page=1 -- check <<EOF
-look #22: comment history could not be read in full
+look #22: comment history could not be read in full: repos/synthetic-owner/synthetic-repo/issues/22/comments?per_page=100 failed: fake gh: planted failure: issue comments 22 page=1
 EOF
 
 ### The check: what it can't read in full
 
 expect 'an unreadable second ticket comment page: look' 0 check.json 'issue(12; .comments += discussion(119))' FAKE_GH_FAIL=issue_comments_12_page=2 -- check <<EOF
-look #12: comment history could not be read in full
+look #12: comment history could not be read in full: repositories/1/issues/12/comments?per_page=100&page=2 failed: fake gh: planted failure: issue comments 12 page=2
 EOF
 expect 'a spec with more than 100 tickets: look' 0 check.json 'issue(10; .subIssuesTruncated = true)' -- check <<EOF
 look #10: more than 100 tickets, so its graph can't all be read
 EOF
 expect 'an unreadable second PR comment page: look' 0 check.json 'reviewing31 | pull(31; .comments += discussion(119))' FAKE_GH_FAIL=issue_comments_31_page=2 -- check <<EOF
-look #31: comment history could not be read in full
+look #31: comment history could not be read in full: repositories/1/issues/31/comments?per_page=100&page=2 failed: fake gh: planted failure: issue comments 31 page=2
 EOF
 expect 'a ticket look already raised is not raised again' 0 check.json 'issue(12; .labels += [range(1; 22) | "synthetic-label-\(.)"]) | say(12; 1202; "11:00"; "launch-fleet: look: more than 20 labels")' -- check < /dev/null
 expect 'a pull request look already raised is not raised again' 0 check.json 'pr31 | pull(31; .base = "release-1") | pr_say(31; 3101; "11:00"; "launch-fleet: look: its base is release-1, not main")' -- check < /dev/null
@@ -3276,7 +3324,7 @@ parallel_case() {
   elif [ "$mode" = comment_failure ]; then
     parallel_check comments && points_only "$d/err" \
       || { bad "$name" "comment failure must return an alert: $(cat "$d/err")"; return; }
-    printf '%s\n' 'look #800: comment history could not be read in full' > "$d/want" \
+    printf '%s\n' 'look #800: comment history could not be read in full: repos/synthetic-owner/synthetic-repo/issues/800/comments?per_page=100 failed: fake gh: planted concurrent worker failure' > "$d/want" \
       && cmp -s "$d/want" "$d/out" || { bad "$name" "expected only the comment-history alert"; return; }
   else
     if ! parallel_check ''; then bad "$name" "$(cat "$d/err")"; return; fi
@@ -3788,7 +3836,7 @@ withdraw #13: that ordering release is not due or an older claim holds it
 EOF_ORDER
 expect 'ordering: a production live role remains held even with an ordering record' 0 check.json "$ORDER13 | $ORDER71 | issue(13; .labels += [\"ready-for-human\"])" -- check < /dev/null
 expect 'ordering: unreadable held comments cannot authorize release' 0 check.json "$ORDER13 | $ORDER71" FAKE_GH_FAIL=issue_comments_13_page=1 -- wake 13 <<EOF_ORDER
-look #13: comment history could not be read in full
+look #13: comment history could not be read in full: repos/synthetic-owner/synthetic-repo/issues/13/comments?per_page=100 failed: fake gh: planted failure: issue comments 13 page=1
 EOF_ORDER
 expect 'ordering: proven failure without label changes permits release retry' 0 check.json "$ORDER13 | $ORDER71 | $ORDERCLAIM | edit(13; 1302; \"11:59\"; \"launch-fleet: release failed 1301: confirmed no labels changed\")" -- wake 13 <<EOF_ORDER
 release #13: ordering hold 1301; issue #71 merged to main; restore ready-for-agent and remove held
@@ -4100,6 +4148,28 @@ gi1_case 'GI7: another installation gets a full read' installation
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
 gi1_case "GI7: a switch from the account to the App gets a full read" switch
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
+gi1_tools_case() {
+  name=$1 change=$2 start=${3:-"$GI1 | pull(35; .repo = \"synthetic-owner/synthetic-tools\")"} tools_before=${4:-} tools_after=${5:-}
+  selected "$name" || return 0
+  take heavy || return 0
+  cases=$((cases + 1))
+  d=$tmp/gi1-$cases gi1_why=''
+  mkdir "$d" && world check.json "$start" "$d" > "$d/world.json" \
+    || { bad "$name" "setup"; return; }
+  gi1_pair 1 0 && gi1_read 1 && gi1_pair 2 60 && gi1_read 2 && gi1_pair 3 120 && gi1_unchanged 3 \
+    || { bad "$name" "$gi1_why"; return; }
+  [ -z "$tools_before" ] || grep -qxF "$tools_before" "$d/out-3" || { bad "$name" "run 3 printed $(cat "$d/out-3")"; return; }
+  gi1_change "$change" || { bad "$name" "can't make the change"; return; }
+  gi1_pair 4 180 && gi1_full 4 || { bad "$name" "$gi1_why"; return; }
+  [ -z "$tools_after" ] || grep -qxF "$tools_after" "$d/out-4" || { bad "$name" "run 4 printed $(cat "$d/out-4")"; return; }
+  echo "ok   $name"
+}
+gi1_tools_case "cross-repository PR: its new verdict gets a full read (#2376)" 'pr_say(35; 3502; "11:59"; "VERDICT: APPROVE at \(sha(35))")'
+gi1_tools_case "cross-repository PR: its new head gets a full read (#2376)" 'pull(35; .head = sha("35f"))'
+gi1_tools_case "cross-repository PR: a same-file merge into its own repository's base gets a full read (#2376 R4)" \
+  'main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pull(24; .repo = "synthetic-owner/synthetic-tools")' \
+  "store31 | $TOOLS" "merge #31 for #12 at $S31: APPROVE and CI green" \
+  "re-test #31 for #12 at $S31: main changed src/store/store.rs in #24 after 2026-11-01T10:30:00Z, which its CI may not have tested; run its CI again on the latest main"
 if [ -s "$tmp/gi1-points.txt" ]; then cat "$tmp/gi1-points.txt"; fi
 
 ### GI2 (#2544): GitHub's messages wake a spec's fleet thread through its loop
@@ -4143,7 +4213,7 @@ EOF
 expect "GI2: a loop id room-cli would read as a flag runs nothing, as today" 0 check.json 'merge12 | say(10; 1090; "10:00"; "launch-fleet: fleet active, loop --all")' -- wake 13 < /dev/null
 expect 'GI2: a loop two specs claim runs for neither, and each is left as today' 0 check.json "merge12 | $SPEC40 | $GI2_FLEET10 | say(40; 4090; \"10:00\"; \"launch-fleet: fleet active, loop $GI2_LOOP10\")" -- wake 13 41 < /dev/null
 expect 'GI2: an unreadable comment history runs no loop and is looked at, as today' 0 check.json "merge12 | $GI2_FLEET10 | issue(10; .comments += discussion(118))" FAKE_GH_FAIL=issue_comments_10_page=1 -- wake 13 <<EOF
-look #10: comment history could not be read in full
+look #10: comment history could not be read in full: repos/synthetic-owner/synthetic-repo/issues/10/comments?per_page=100 failed: fake gh: planted failure: issue comments 10 page=1
 EOF
 expect "GI2: the project check and the fleet thread's own check are unchanged" 0 check.json "merge12 | $GI2_FLEET10" -- spec 10 <<EOF
 start #13: W3: widget page (spec #10)
@@ -4171,6 +4241,7 @@ case ${TEST_ONLY:-} in
   'WZ-PROBE:*') expected=3 ;;
   'GI2:*') expected=13 ;;
   'CW-G:*') expected=2 ;;
+  'cross-repository PR:*') expected=12 ;;
 esac
 [ "$cases" = "$expected" ] || bad 'the selected cases ran' "$cases cases ran, not $expected: is \"$TEST_ONLY\" a case's name?"
 

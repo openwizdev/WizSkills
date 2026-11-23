@@ -640,8 +640,7 @@ def ready(repo):
 def record(repo, change, label=None):
     """Under the runs file's lock, re-read it, apply change(runs) and save it owner-only, read back.
 
-    label(requesters) changes the requesters file the same way, saved first when it returns True. False
-    when a save or its read-back failed. Starts at once each keep their run."""
+    False when the save or its read-back failed. Starts at once each keep their run."""
     path = runs_path()
     try:
         with open(str(path) + '.lock', 'a') as lock:

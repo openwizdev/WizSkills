@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 SHA = re.compile(r"[0-9a-f]{40}")
 VERDICT = re.compile(r"VERDICT: (APPROVE|CHANGES) at ([0-9a-f]{40})")
-FINDING = re.compile(r"- \*\*(R[1-9][0-9]*) \[([a-z]+(?:-[a-z]+)?)\]\*\* (.*)")
+FINDING = re.compile(r"- \*\*(R[1-9][0-9]*) \[([a-z-]+)\]\*\* (.*)")
 NEW = re.compile(r"`[^`\s]+:[1-9][0-9]*` \((?:Standards|Spec|Sweep)\) \S")
 STATUSES = ("resolved at ", "withdrawn: ", "still open after the ", "disputed, kept: ", "Polish issue: #",
             "Pre-existing issue: #")

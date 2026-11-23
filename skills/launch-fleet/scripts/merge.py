@@ -20,12 +20,6 @@ TICKET is `N` or `OWNER/NAME#N`, and must be one of the issues the pull
 request closes: a bare `N` names its one closing issue numbered N, in whatever
 repository; anything else is `refused: ...` before any write.
 
-PR is `N`, in OWNER/NAME, or `PR-OWNER/PR-NAME#N` as a due line names a pull
-request in another repository (#2792): then every read and write of the pull
-request is in PR-OWNER/PR-NAME, OWNER/NAME is the ticket's repository, and a
-bare TICKET `T` means OWNER/NAME#T. A pull request that reads as another
-repository's (a rename or transfer) is a `stop:` before any write.
-
 `cost`, also run by `merge` after a verified merge, runs the project's FM4
 command `tools/collector/cost_line.py --repo OWNER/NAME --pr PR [COST ARGS]`
 from the current directory and posts `launch-fleet: cost: <its line>` on the
@@ -163,6 +157,11 @@ MERGE_HELP = (
     "`--base-rule-checked`, after you applied fleet.md's base rule and `fleet.sh every` still prints this merge line, "
     'and reads it back: `merged <commit>; cost ...` (exit 0). Anything else is `blocked: <why>; recorded <id>` '
     '(exit 1). TICKET is checked before any write. BODY names the APPROVE and the plan approval that allowed it.')
+PR_HELP = (
+    'PR is `N`, in OWNER/NAME, or `PR-OWNER/PR-NAME#N` as a due line names a pull request in another repository '
+    "(#2792): then every read and write of the pull request is in PR-OWNER/PR-NAME, OWNER/NAME is the ticket's "
+    "repository, and a bare TICKET `T` means OWNER/NAME#T. A pull request that reads as another repository's (a "
+    'rename or transfer) is a `stop:` before any write.')
 SETTLE_HELP = (
     '`settle` is the cost a merge still owes: it runs `cost` at the merged head when a record author\'s queue '
     'receipt names that head, or a record author enqueued or merged it, so a merge whose cost write failed still gets '
@@ -1131,7 +1130,7 @@ def main(argv):
     usage = __doc__.split('\n\n')[1]
     if argv in (['--help'], ['-h']):
         parts = __doc__.split('\n\n')
-        print('\n\n'.join(parts[:3] + [MERGE_HELP] + parts[3:] + [SETTLE_HELP]))
+        print('\n\n'.join(parts[:3] + [PR_HELP, MERGE_HELP] + parts[3:] + [SETTLE_HELP]))
         return 0
     try:
         verb, repo, number, *rest = argv

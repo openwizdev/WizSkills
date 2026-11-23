@@ -1765,8 +1765,6 @@ def clash($mine; $theirs):
     elif any($theirs[]; is_test) and any($mine[]; is_doc | not) then
       {files: [$theirs[] | select(is_test)], why: " (tests that may read its files)"}
     else null end;
-# #2792: a pull request in another repository than this one is named in full,
-# so merge.py acts on that repository; one here keeps its short name.
 def pr_ref: (.repository.nameWithOwner // "") as $o
   | if $o == "" or ($o | ascii_downcase) == $W.repo then "#\(.number)" else "\($o)#\(.number)" end;
 def guard($p; $at; $rs; $head; $c):

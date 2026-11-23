@@ -155,7 +155,7 @@ def gql_comments(owner, name, number, first_conn):
         comments.append({'id': c['databaseId'], 'author': gql_login(c.get('author')),
                          'created_at': stamp(c.get('createdAt'), number), 'updated_at': stamp(c.get('updatedAt'), number),
                          'body': c['body']})
-    return comments
+    return unique_ids(comments, number)
 
 
 def gql_item(owner, name, node, kind):
@@ -233,9 +233,20 @@ def rest_list(path, cache, what):
         need(all(isinstance(x, dict) for x in chunk), f'null node: {what}')
         need(len(chunk) == REST_PAGE or not nxt, f'partial page: {what} page {page} has {len(chunk)}')
         rows += chunk
-        if not nxt:
+        if len(chunk) < REST_PAGE:
             return rows
         page += 1
+
+
+def unique_ids(comments, number):
+    ids = [c['id'] for c in comments]
+    need(len(ids) == len(set(ids)), f'#{number} lists one comment id twice; read again')
+    return comments
+
+
+def outside_code(markdown):
+    text = re.sub(r'(?ms)^ {0,3}(```|~~~).*?(?:^ {0,3}\1[^\n]*$|\Z)', '', markdown)
+    return re.sub(r'(`+).+?\1', '', text, flags=re.S)
 
 
 def rest_login(user):
@@ -270,14 +281,14 @@ def read_rest(repo, cache):
         closing = []
         if kind == 'pull':
             need(type(heads[number]) is str, f'null node: #{number} head')
-            for other, n in CLOSES.findall(body):
+            for other, n in CLOSES.findall(outside_code(body)):
                 ref = '%s#%s' % (other or repo, n)
                 if ref not in closing:
                     closing.append(ref)
         items.append({'number': number, 'kind': kind, 'title': i['title'], 'state': 'OPEN',
                       'labels': names(i['labels'], number), 'body': body,
                       'updated_at': stamp(i.get('updated_at'), number), 'head': heads.get(number) if kind == 'pull' else None,
-                      'closing_issues': closing, 'comments': comments})
+                      'closing_issues': closing, 'comments': unique_ids(comments, number)})
     return items, fleet_md
 
 
@@ -318,9 +329,12 @@ def write(repo, out):
     need(len(numbers) == len(set(numbers)), 'an item was read twice: the list moved between pages; read again')
     snap = {'repo': repo, 'read_at': read_at, 'complete': True, 'via': via, 'record_authors': authors,
             'items': sorted(items, key=lambda i: i['number'])}
-    atomic(out, json.dumps(snap, indent=1) + '\n')
-    if via == 'rest':
-        atomic(etags, json.dumps(cache) + '\n')
+    try:
+        if via == 'rest':
+            atomic(etags, json.dumps(cache) + '\n')
+        atomic(out, json.dumps(snap, indent=1) + '\n')
+    except OSError as e:
+        raise Stop(f'could not save the snapshot or its ETags ({type(e).__name__}); the previous snapshot stands')
     comments = sum(len(i['comments']) for i in items)
     print(f'snapshot: {repo} read by {via}: {len(items)} open items, {comments} comments, at {read_at}')
 

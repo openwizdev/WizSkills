@@ -892,6 +892,13 @@ class Session(unittest.TestCase):
         self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge', 'admit', 'merge'])
         self.assertEqual(out.count('#12 merged'), 1)
 
+    def test_a_merge_that_stays_pending_still_stops_at_the_idle_limit(self):
+        self.approved()
+        self.change(lambda w: w.update(pending=10 ** 6))
+        out = self.ended(self.session('--idle', '2', '--ci-poll', '0.2'), 3, timeout=20)
+        self.assertIn('needs you: nothing moved on spec #7 for 2 seconds\n', out)
+        self.assertNotIn('merged', out)
+
     def test_a_late_look_hold_stops_the_session_with_merge_pys_own_line(self):
         self.approved()
         self.change(lambda w: w.update(held=True))

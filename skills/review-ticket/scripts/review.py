@@ -37,8 +37,10 @@ TICKET = re.compile(r"[\w.-]+/[\w.-]+#[1-9][0-9]*")
 LOGIN = r"`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`"
 AUTHORS_CELL = re.compile(rf"\s*{LOGIN}(?:\s*,\s*{LOGIN})*\s*")
 TEST_RULE = re.compile(r"\b(?:catches|no new test): \S")
-SELF_CHECK = re.compile(r"(?im)^##[ \t]+self-check[ \t]*\n((?:(?!##[ \t]).*(?:\n|\Z))*)")
-PROBE = re.compile(r"`[^`]+`.*\bprinted\b.*\S|\bn/a: *\S")
+SELF_CHECK = re.compile(r"(?i) {0,3}##[ \t]+self-check[ \t]*")
+SECTION_END = re.compile(r" {0,3}#{1,2}(?:[ \t]|$)")
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
+PROBE = re.compile(r"`[^`]+`.*\bprinted\b[^A-Za-z0-9`]*[A-Za-z0-9`]|\bn/a:[^A-Za-z0-9]*[A-Za-z0-9]")
 PRIVATE = re.compile(r"\b(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_-]{8,}|\bthr_[A-Za-z0-9]{4,}|(?i:\bbearer\s+[A-Za-z0-9._-]{8,})")
 
 
@@ -394,15 +396,33 @@ def git(*args, what=None):
     return out.stdout
 
 
+def unfenced(description):
+    fence = None
+    for number, line in enumerate(description.split("\n"), 1):
+        mark = FENCE.match(line)
+        if fence is None and mark:
+            fence = mark[1]
+        elif fence is None:
+            yield number, line
+        elif mark and mark[1][0] == fence[0] and len(mark[1]) >= len(fence) and not line.strip().strip(fence[0]):
+            fence = None
+
+
 def self_check_misses(description):
-    section = SELF_CHECK.search(description)
-    if not section:
+    lines, inside, found = [], False, False
+    for number, line in unfenced(description):
+        if SELF_CHECK.fullmatch(line) and not found:
+            inside = found = True
+        elif inside and SECTION_END.match(line):
+            inside = False
+        elif inside and line.strip():
+            lines.append((number, line))
+    if not found:
         return ["no ## Self-check section with one line per probe"]
-    lines = [x.strip() for x in section[1].splitlines() if x.strip()]
     if not lines:
         return ["the ## Self-check section has no probe lines"]
-    return [f'the ## Self-check line "{x}" has neither a `command` with what it printed nor n/a: <why>'
-            for x in lines if not PROBE.search(x)]
+    return [f"the ## Self-check line at description line {n} has neither a `command` with what it printed "
+            "nor n/a: <why>" for n, x in lines if not PROBE.search(x)]
 
 
 def self_check(path, base):

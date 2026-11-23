@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3 - 2026-11-23
+
+- `install` 0.4.2: Install checks the OpenWiz version before offering agent hosts and offers only CloudRoom for OpenWiz 0.1.0.
+
 ## 0.4.2 - 2026-11-23
 
 - Two packaged files no longer spell a machine home path literally.

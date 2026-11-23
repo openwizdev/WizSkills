@@ -955,7 +955,7 @@ class KeyHost(unittest.TestCase):
 
     def test_a_key_host_driver_calls_only_the_helper_as_ky1_fixes_it(self):
         text = key_host_lines()
-        for words in ("the key helper, `hostkey.py` in OpenWiz's `kernel/driver-kit/`, run with `python3 -I`",
+        for words in ("key helper, `hostkey.py` in OpenWiz's `kernel/driver-kit/`, run with `python3 -I`",
                       "is the only way the driver reaches the host",
                       "`host`, the host's registered name; `method`, `GET`, `POST` or `DELETE`; `path`, an absolute "
                       "path on the host; and, optionally, `body`, an object",

@@ -172,14 +172,28 @@ def check_relies(tickets, owners, root, root_repo):
     return why
 
 
-def check_sizes(tickets):
+SIZES_SINCE = '2026-11-23T00:00:00Z'
+
+
+def check_sizes(tickets, spec_text):
+    spec = json.loads(spec_text)
+    created = spec.get('createdAt') if isinstance(spec, dict) else None
+    if not isinstance(created, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', created):
+        raise Unreadable('the spec has no createdAt')
     why, counts = [], {'S': 0, 'M': 0, 'L': 0}
     for t in tickets:
         sizes = re.findall(r'\bSize: ([A-Za-z]+)\b', t['body'])
         if len(sizes) != 1 or sizes[0] not in counts:
             why.append(f'#{t["number"]} needs exactly one `Size: S`, `M` or `L`')
-        else:
-            counts[sizes[0]] += 1
+            continue
+        counts[sizes[0]] += 1
+        if created < SIZES_SINCE:
+            continue
+        if sizes[0] == 'L':
+            why.append(f'#{t["number"]} is `Size: L`; split it into tickets of S or M')
+        elif sizes[0] == 'M' and not any(re.fullmatch(r'Why M: *\S.*', line.rstrip())
+                                         for line in section(t['body'], 'Parent') or []):
+            why.append(f'#{t["number"]} is `Size: M` without a `Why M: <reason it can\'t split>` line in Parent')
     return why, counts
 
 
@@ -371,7 +385,7 @@ def main():
         agents = [t for t in open_tickets if not human(t)]
         owned_why, owners = check_owned(graph, agents)
         failures += [('relies', why) for why in check_relies(agents, owners, args.root.resolve(), graph['repo'].lower())]
-        size_why, sizes = check_sizes(open_tickets)
+        size_why, sizes = check_sizes(open_tickets, spec_text)
         failures += [('sizes', why) for why in size_why]
         width_why, chain, widest = check_width(graph)
         failures += [('width', why) for why in width_why]

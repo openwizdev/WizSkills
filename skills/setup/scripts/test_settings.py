@@ -80,6 +80,21 @@ def with_roster(section):
     return NEW.replace('## Test commands', section + '\n## Test commands')
 
 
+DEFAULT_RULES = ('Ask before publishing a release, a tag or a package',
+                 'Ask before spending money or credits beyond the recorded limits',
+                 'Ask before adding, reading or changing a secret', 'Ask before deleting user data',
+                 'Ask before a cut-over', 'Ask before installing the repository webhook')
+
+
+def rules(*rows, heading='## Approval rules'):
+    return '%s\n\nEach rule asks its approver.\n\n| Rule | Approver |\n| --- | --- |\n%s\nSource: synthetic.\n\n' % (
+        heading, ''.join('| %s | %s |\n' % row for row in rows))
+
+
+def with_rules(section):
+    return NEW.replace('## Standing merge rules', section + '## Standing merge rules')
+
+
 class Check(unittest.TestCase):
 
     def project(self, **changes):
@@ -432,6 +447,110 @@ class Check(unittest.TestCase):
                 self.assertEqual(code, 5, out)
                 self.assertIn('fleet.md: ' + line, out.splitlines())
                 self.assertEqual(sum('Roster' in got for got in out.splitlines()), 1, 'the first broken rule only')
+
+    def test_approval_rules_are_optional_and_a_broken_row_is_refused_by_row(self):
+        valid = [(rule, 'syn-owner') for rule in DEFAULT_RULES]
+        for n, text in enumerate((NEW, FLEET, with_rules(rules(*valid)), NEW.replace('Intro.\n', 'Intro.\n\nApproval rules\n'))):
+            with self.subTest(passes=n):
+                code, out = self.check(self.project(**{'fleet.md': text}))
+                self.assertEqual(code, 0, out)
+        here = 'fleet.md: Approval rules: '
+        cases = {
+            'blank': ((DEFAULT_RULES[3], ' '), 'row 2 (%s): no approver' % DEFAULT_RULES[3]),
+            'the user': ((DEFAULT_RULES[3], '`The User`'), 'row 2 (%s): the approver is "the user", not a person'
+                         % DEFAULT_RULES[3]),
+            'the user spaced': ((DEFAULT_RULES[3], '**The  User**'), 'row 2 (%s): the approver is "the user", not a person'
+                                % DEFAULT_RULES[3]),
+            'placeholder': ((DEFAULT_RULES[3], '<a name>'), 'row 2 (%s): unfilled approver <a name>' % DEFAULT_RULES[3]),
+            'wording': (('Publish only with a yes', 'syn-owner'),
+                        'row 2 (Publish only with a yes): the rule does not start "Ask before"'),
+            'repeat': ((DEFAULT_RULES[0].replace('a tag', 'A  tag'), 'syn-other'),
+                       'row 2 (%s): repeats row 1' % DEFAULT_RULES[0].replace('a tag', 'A  tag')),
+        }
+        for name, (row, line) in cases.items():
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': with_rules(rules(valid[0], row))}))
+                self.assertEqual(code, 5, out)
+                self.assertIn(here + line, out.splitlines())
+        for text, line in ((with_rules(rules(*valid) * 2), 'more than one ## Approval rules heading'),
+                           (with_rules(rules(*valid).replace('| Approver |', '| Who |')),
+                            'the table is not | Rule | Approver |'),
+                           (with_rules(rules(valid[0], (DEFAULT_RULES[3], 'the user'), heading='### Approval Rules')),
+                            'the heading must be exactly ## Approval rules: ### Approval Rules'),
+                           (with_rules(rules(valid[0], (DEFAULT_RULES[3], 'the user'), heading='## Approval rules ##')),
+                            'the heading must be exactly ## Approval rules: ## Approval rules ##'),
+                           (with_rules(rules(valid[0], (DEFAULT_RULES[3], 'the user'), heading='Approval rules\n---')),
+                            'the heading must be exactly ## Approval rules: Approval rules'),
+                           (with_rules(rules(valid[0], (DEFAULT_RULES[3], 'the user')).replace('\n| Ask before d', '\n  | Ask before d')),
+                            'row 2 (%s): the approver is "the user", not a person' % DEFAULT_RULES[3])):
+            with self.subTest(line):
+                code, out = self.check(self.project(**{'fleet.md': text}))
+                self.assertEqual(code, 5, out)
+                self.assertIn(here + line, out.splitlines())
+
+    def test_an_indented_code_block_is_not_the_approval_rules_table(self):
+        valid = rules(*[(rule, 'syn-owner') for rule in DEFAULT_RULES])
+        table = re.compile(r'^(?=\|)', re.M)
+        for name, indent in (('four spaces', '    '), ('tab', '\t'), ('space and tab', ' \t')):
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': with_rules(table.sub(indent, valid))}))
+                self.assertEqual(code, 5, out)
+                self.assertIn('fleet.md: Approval rules: the table is not | Rule | Approver |', out.splitlines())
+        with self.subTest('indented delimiter row'):
+            code, out = self.check(self.project(**{'fleet.md': with_rules(valid.replace('\n| --- |', '\n    | --- |'))}))
+            self.assertEqual(code, 5, out)
+            self.assertIn('fleet.md: Approval rules: the table is not | Rule | Approver |', out.splitlines())
+        for name, indent in (('one space', ' '), ('three spaces', '   ')):
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': with_rules(table.sub(indent, valid))}))
+                self.assertEqual(code, 0, out)
+
+    def test_only_a_rendered_table_is_the_approval_rules(self):
+        valid = rules(*[(rule, 'syn-owner') for rule in DEFAULT_RULES])
+        here = 'fleet.md: Approval rules: '
+        second = '| %s | syn-owner |' % DEFAULT_RULES[1]
+        refused = {
+            'second delimiter under an indented one': (valid.replace('| --- | --- |\n', '    | --- | --- |\n| --- | --- |\n'),
+                                                       'a row indented as code ends the table: | --- | --- |'),
+            'indented rule row': (valid.replace('\n' + second, '\n    ' + second),
+                                  'a row indented as code ends the table: ' + second),
+            'tab indented rule row': (valid.replace('\n' + second, '\n\t' + second),
+                                      'a row indented as code ends the table: ' + second),
+            'backtick fence': (valid.replace('| Rule |', '```\n| Rule |').replace('\nSource:', '```\nSource:'),
+                               'the table is not | Rule | Approver |'),
+            'tilde fence': (valid.replace('| Rule |', '~~~~ md\n| Rule |').replace('\nSource:', '~~~~\nSource:'),
+                            'the table is not | Rule | Approver |'),
+            'unclosed fence': (valid.replace('| Rule |', '```\n| Rule |'), 'the table is not | Rule | Approver |'),
+        }
+        for name, (text, line) in refused.items():
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': with_rules(text)}))
+                self.assertEqual(code, 5, out)
+                self.assertIn(here + line, out.splitlines())
+        example = '```\n| Rule | Approver |\n| --- | --- |\n| Ask before x | the user |\n```\n\n'
+        passes = {
+            'a fenced example before the table': valid.replace('| Rule |', example + '| Rule |', 1),
+            'a fence closed by a longer one': valid.replace('| Rule |', example.replace('```\n\n', '````\n\n') + '| Rule |', 1),
+            'three spaces on every row': re.sub(r'^(?=\|)', '   ', valid, flags=re.M),
+        }
+        for name, text in passes.items():
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': with_rules(text)}))
+                self.assertEqual(code, 0, out)
+
+    def test_the_template_writes_the_six_default_rules_and_a_filled_copy_passes(self):
+        template = TEMPLATE.read_text()
+        self.assertEqual(template.count('\n## Approval rules\n'), 1)
+        self.assertLess(template.index('\n## Approval rules\n'), template.index('\n## Standing merge rules\n'))
+        section = '## Approval rules\n' + template.split('\n## Approval rules\n', 1)[1].split('\n## ', 1)[0] + '\n'
+        rows = [line.strip('|').split('|') for line in section.splitlines() if line.startswith('|')][2:]
+        self.assertEqual([rule.strip() for rule, _ in rows], list(DEFAULT_RULES))
+        self.assertIn('\nSource: ', section)
+        code, out = self.check(self.project(**{'fleet.md': with_rules(section)}))
+        self.assertEqual(code, 5, out)
+        self.assertEqual(sum('unfilled approver' in line for line in out.splitlines()), 6, out)
+        code, out = self.check(self.project(**{'fleet.md': with_rules(re.sub(r'<[^>]*>', 'syn-owner', section))}))
+        self.assertEqual(code, 0, out)
 
     def test_usage_errors_exit_2(self):
         # catches: a mistyped command read as a verified project.

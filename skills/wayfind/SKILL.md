@@ -1,7 +1,7 @@
 ---
 name: wayfind
 description: Chart an effort too big for one grill (many specs, even many versions, far out) as a map of the decisions it needs, and settle them one at a time until its designs are ready for to-spec and to-tickets. Use when a grill shows the effort is bigger than one grill, when asked to wayfind, or to work through an open map. Not for an effort one grill can settle.
-version: 0.2.1
+version: 0.2.2
 ---
 
 # Wayfind

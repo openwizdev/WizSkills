@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -44,11 +45,13 @@ SUITES = {
               ['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/image/references']],
     'to-spec': [['python3', '-I', 'skills/to-spec/test/test_video.py']],
     'to-tickets': [['python3', '-I', 'skills/to-tickets/scripts/test_check_approval.py'],
+                   ['python3', '-I', 'skills/to-tickets/scripts/test_approve.py'],
                    ['sh', 'skills/to-tickets/test/test-revision.sh'],
                    ['python3', '-I', 'skills/to-tickets/test/test_relies.py'],
                    ['python3', '-I', 'skills/to-tickets/test/test_picture.py'],
                    ['python3', '-I', 'skills/to-tickets/test/test_request.py'],
-                   ['python3', '-I', 'skills/to-tickets/test/test_lead_time.py']],
+                   ['python3', '-I', 'skills/to-tickets/test/test_lead_time.py'],
+                   ['python3', '-I', 'skills/to-tickets/test/test_links.py']],
     'review-ticket': [['python3', '-I', 'skills/review-ticket/scripts/test_review.py']],
     'wayfind': [['python3', '-I', 'skills/wayfind/test/test_frontier.py']],
     'research': [['python3', '-I', 'skills/research/test/test_workers.py'],
@@ -68,17 +71,34 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-limit-recovery.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-post.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-merge.py'],
+                     ['env', '-u', 'OPENWIZ_GITHUB_APP_KEY', 'python3', '-I', 'skills/launch-fleet/scripts/test-queue.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-brief.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-heartbeat.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-ledger.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-host.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-session.py'],
-                     ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py']],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-stop-all.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-budget.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-snapshot.py']],
     # Not a skill: the check's own version rule and changesets (WS18).
     'check': [['python3', '-I', 'check/test_notice.py'],
               ['python3', '-I', 'check/test_versions.py'],
               ['python3', '-I', 'check/test_changesets.py'],
-              ['python3', '-I', 'check/test_suites.py']],
+              ['python3', '-I', 'check/test_suites.py'],
+              ['python3', '-I', 'check/test_bench.py'],
+              ['python3', '-I', 'check/test_select.py']],
 }
+
+PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}
+
+
+def rows():
+    for name, commands in SUITES.items():
+        split, count = PARTS.get(name, (None, 0))
+        yield name, name, [c for c in commands if c != split], {}
+        for n in range(1, count + 1):
+            yield f'{name}.{n}', name, [split], {'TEST_SHARD': f'{n}/{count}'}
 
 # The skills not adapted from Matt Pocock's, each with the source line its
 # SKILL.md carries exactly, on a line of its own, instead of his notice.
@@ -594,7 +614,7 @@ sys.exit(0 if result.wasSuccessful() and not empty else 1)
 """
 
 
-def suites(root):
+def unlisted_tests(root):
     covered = set()
     for commands in SUITES.values():
         for command in commands:
@@ -612,42 +632,60 @@ def suites(root):
                   ((p.name.startswith('test') and p.suffix in ('.py', '.sh'))
                    or p.name.endswith('.test.mjs'))}
     discovered.update(p.relative_to(root).as_posix() for p in (root / 'check').glob('test*.py'))
-    unlisted = discovered - covered
-    for rel in sorted(unlisted):
+    return sorted(discovered - covered)
+
+
+HUNTR_CONSUMER = 'check/fixtures/huntr-project'
+
+
+def invocation(root, name, command):
+    rel, folder = command_path(command)
+    target = root / rel
+    present = target.is_dir() and any(target.glob('test*.py')) if folder else target.is_file()
+    if target.is_symlink() or not present:
+        return f'suite {name}: {" ".join(command)}: missing'
+    cwd = '.'
+    argv = list(command)
+    if folder:
+        argv = ['python3', '-I', '-c', UNIT_RUNNER, rel, 'test*.py']
+    elif command[0] == 'python3' and unittest_file(target):
+        argv = ['python3', '-I', '-c', UNIT_RUNNER, target.parent.relative_to(root).as_posix(), target.name]
+    if name == 'huntr':
+        cwd = HUNTR_CONSUMER
+        settings = root / cwd / 'docs/agents/huntr.md'
+        if not settings.is_file() or settings.is_symlink():
+            return f'suite {name}: synthetic consumer missing'
+        argv[-1] = os.path.relpath(target, root / cwd)
+    return {'suite': list(command), 'argv': argv, 'cwd': cwd}
+
+
+def suites(root, names=None):
+    unlisted = unlisted_tests(root)
+    for rel in unlisted:
         print(f'suite inventory: {rel}: unlisted', flush=True)
     failed = bool(unlisted)
-    for name, commands in SUITES.items():
+    for name, row, commands, env in rows():
+        if names is not None and name not in names:
+            continue
         for command in commands:
             shown = ' '.join(command)
-            rel, folder = command_path(command)
-            target = root / rel
-            present = target.is_dir() and any(target.glob('test*.py')) if folder else target.is_file()
-            if target.is_symlink() or not present:
-                print(f'suite {name}: {shown}: missing', flush=True)
+            run = invocation(root, row, command)
+            if isinstance(run, str):
+                print(run, flush=True)
                 failed = True
                 continue
-            cwd = root
-            argv = [sys.executable if command[0] == 'python3' else command[0], *command[1:]]
-            if folder:
-                argv = [sys.executable, '-I', '-c', UNIT_RUNNER, rel, 'test*.py']
-            elif command[0] == 'python3' and unittest_file(target):
-                argv = [sys.executable, '-I', '-c', UNIT_RUNNER, target.parent.relative_to(root).as_posix(), target.name]
-            if name == 'huntr':
-                cwd = root / 'check/fixtures/huntr-project'
-                settings = cwd / 'docs/agents/huntr.md'
-                if not settings.is_file() or settings.is_symlink():
-                    print(f'suite {name}: synthetic consumer missing', flush=True)
-                    failed = True
-                    continue
-                argv[-1] = str(target.resolve())
+            argv = [sys.executable if run['argv'][0] == 'python3' else run['argv'][0], *run['argv'][1:]]
             print(f'suite {name}: {shown}: running', flush=True)
+            started = time.monotonic()
             try:
-                code = subprocess.run(argv, cwd=cwd, env=clean_env()).returncode
+                code = subprocess.run(argv, cwd=root / run['cwd'], env={**clean_env(), **env}).returncode
             except OSError:
                 print(f'suite {name}: {shown}: cannot start', flush=True)
                 failed = True
                 continue
-            print(f'suite {name}: {shown}: {"pass" if code == 0 else f"fail ({code})"}', flush=True)
+            seconds = time.monotonic() - started
+            print(f'suite {name}: {shown}: {"pass" if code == 0 else f"fail ({code})"} in {seconds:.1f}s',
+                  flush=True)
             failed = failed or code != 0
     return not failed
 
@@ -663,16 +701,58 @@ def standalone(root):
     return code == 0
 
 
+STANDALONE = ['python3', '-I', 'check/standalone.py', '--tree', '.']
+USAGE = 'usage: python3 check/run.py [--list | --shard <name>[,<name>...]]'
+
+
+def shards(root):
+    return [{'name': 'rules', 'skill': None, 'commands': [], 'env': {}},
+            {'name': 'standalone', 'skill': None,
+             'commands': [{'suite': STANDALONE, 'argv': STANDALONE, 'cwd': '.'}], 'env': {}},
+            *({'name': name, 'skill': row, 'commands': [invocation(root, row, c) for c in commands], 'env': env}
+              for name, row, commands, env in rows())]
+
+
+def selection(argv):
+    known = ['rules', 'standalone', *(name for name, *_ in rows())]
+    if not argv:
+        return known
+    if argv == ['--list']:
+        return None
+    if len(argv) != 2 or argv[0] != '--shard':
+        return USAGE
+    wanted = argv[1].split(',')
+    unknown = [name for name in wanted if name not in known]
+    if unknown:
+        return f'unknown shard: {", ".join(repr(name) for name in unknown)} (see --list)'
+    return [name for name in known if name in wanted]
+
+
 def main(argv):
-    if argv:
-        print('usage: python3 check/run.py (no arguments)', file=sys.stderr)
+    selected = selection(argv)
+    if isinstance(selected, str):
+        print(selected, file=sys.stderr)
         return 2
-    findings = rules(ROOT)
-    for rule, file, line, message in findings:
-        print(f'rules: {rule} {file}{f":{line}" if line else ""}: {message}', flush=True)
-    print(f'rules: {"pass" if not findings else f"fail ({len(findings)})"}', flush=True)
-    ok_standalone = standalone(ROOT)
-    ok_suites = suites(ROOT)
+    if selected is None:
+        unlisted = unlisted_tests(ROOT)
+        for rel in unlisted:
+            print(f'suite inventory: {rel}: unlisted', file=sys.stderr, flush=True)
+        listed = shards(ROOT)
+        problems = [c for shard in listed for c in shard['commands'] if isinstance(c, str)]
+        for problem in problems:
+            print(problem, file=sys.stderr, flush=True)
+        if unlisted or problems:
+            return 1
+        print(json.dumps(listed, indent=2))
+        return 0
+    findings = []
+    if 'rules' in selected:
+        findings = rules(ROOT)
+        for rule, file, line, message in findings:
+            print(f'rules: {rule} {file}{f":{line}" if line else ""}: {message}', flush=True)
+        print(f'rules: {"pass" if not findings else f"fail ({len(findings)})"}', flush=True)
+    ok_standalone = standalone(ROOT) if 'standalone' in selected else True
+    ok_suites = suites(ROOT, set(selected))
     ok = not findings and ok_standalone and ok_suites
     print(f'check: {"pass" if ok else "fail"}', flush=True)
     return 0 if ok else 1

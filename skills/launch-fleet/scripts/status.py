@@ -26,6 +26,7 @@ KINDS = ('builder', 'reviewer', 'fleet')
 STATES = ('working', 'asking', 'done', 'stopped')
 CLAIMING = ('working', 'asking')
 ASKING_LABEL = 'needs-info'
+ASKED_WITHIN = timedelta(minutes=2)
 KEYS = (('agent', 300, True), ('state', 300, True), ('harness', 60, True), ('model', 60, True),
         ('skills', 300, True), ('step', 300, True), ('time', 300, True), ('pr', 300, False), ('preview', 300, False))
 REPO = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
@@ -366,31 +367,78 @@ def forget(repo, n):
 
 
 def add_own(repo, n, login, locked):
+    if not locked:
+        gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+        return
     forget(repo, n)
     try:
         before = len(label_events(repo, n))
     except Failed:
         before = None
     gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
-    if before is None or not app(login) or not locked:
+    if before is None or not app(login):
         return
     try:
         new = label_events(repo, n)[before:]
     except Failed:
         return
     if len(new) == 1 and new[0]['event'] == 'labeled' and by(new[0], login):
-        path = proof(repo, n)
-        try:
-            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            path.with_suffix('.tmp').write_text(json.dumps({'login': login.lower(), 'event': before}))
-            os.replace(path.with_suffix('.tmp'), path)
-        except OSError:
-            pass
+        keep(repo, n, login, before)
 
 
-def take_own(repo, n, login, labels):
+def keep(repo, n, login, event):
+    path = proof(repo, n)
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.with_suffix('.tmp').write_text(json.dumps({'login': login.lower(), 'event': event}))
+        os.replace(path.with_suffix('.tmp'), path)
+        return True
+    except OSError:
+        return False
+
+
+def left_on(n):
+    return [f'#{n}: {ASKING_LABEL} left on: no note asks, and this writer can\'t show its own write '
+            'added it; a person takes it off']
+
+
+def held(repo, n, comments, authors):
+    now = datetime.now(timezone.utc)
+    if any(x[1]['state'] == 'asking' and live(x, now) for x in notes(pages(comments), authors)):
+        return []
+    labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+    return left_on(n) if ASKING_LABEL in labels else []
+
+
+def asked_label(repo, n, made, fields, author):
+    try:
+        found = gh('POST', 'graphql', {'query': EDITS, 'variables': {'id': made['node_id'], 'n': HISTORY}})
+        nodes = found['data']['node']['userContentEdits']['nodes']
+        versions = [(parse(x['diff']), x['editedAt']) for x in nodes]
+        k = next(j for j, (v, _) in enumerate(versions) if v == fields) + 1
+        start = None
+        while k < len(versions) and versions[k][0] and versions[k][0]['state'] == 'asking':
+            start, k = versions[k][1], k + 1
+        if start is None or k >= HISTORY:
+            return None
+        asked = when(start.replace('.000', '')[:19] + 'Z')
+        events = label_events(repo, n)
+        stamps = [when(e['created_at']) if TIME.fullmatch(e.get('created_at') or '') else None for e in events]
+        first = next((j for j, t in enumerate(stamps) if t is None or t >= asked), None)
+        if (first is None or stamps[first] is None or events[first]['event'] != 'labeled'
+                or not by(events[first], author)):
+            return None
+        return first if stamps[first] <= asked + ASKED_WITHIN else None
+    except (Failed, StopIteration, KeyError, TypeError, AttributeError, ValueError):
+        return None
+
+
+def take_own(repo, n, login, labels, asked=None, locked=False):
     def labelled():
         return ASKING_LABEL in [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+    left = left_on(n)
+    if not locked:
+        return left if ASKING_LABEL in labels else []
     def once(pairs):
         if len({k for k, _ in pairs}) != len(pairs):
             raise ValueError('a repeated key')
@@ -401,12 +449,13 @@ def take_own(repo, n, login, labels):
         own = None
     exact = isinstance(own, dict) and set(own) == {'login', 'event'} and own['login'] == login.lower()
     mine = own['event'] if exact and type(own['event']) is int and own['event'] >= 0 else None
-    left = [f'#{n}: {ASKING_LABEL} left on: no note asks, and this writer can\'t show its own write '
-            'added it; a person takes it off']
+    if mine is None and asked is not None and not app(asked[2]) and ASKING_LABEL in labels:
+        found = asked_label(repo, n, *asked)
+        mine = found if found is not None and keep(repo, n, login, found) else None
     if mine is None:
         forget(repo, n)
         return left if ASKING_LABEL in labels else []
-    report = cleanup(repo, n, login, mine, labelled, 'this write')
+    report = cleanup(repo, n, login, mine, labelled, 'this write', any_login=True)
     report = report or (left if labelled() else [])
     forget(repo, n)
     return report
@@ -477,6 +526,10 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
             prior = parse(replaced(made, fields, args.floor if beat else None))
         except Failed:
             step_down(found, note_id, kind, fields, repo)
+            if not beat and own[1]['state'] == 'asking':
+                with contextlib.suppress(Failed, KeyError, TypeError, IndexError, ValueError):
+                    for line in held(repo, n, comments, authors):
+                        print(line, file=out)
             raise
         if prior and prior['state'] not in CLAIMING and prior != own[1]:
             if mine is None:
@@ -503,7 +556,9 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
         if asking and ASKING_LABEL not in labels:
             add_own(repo, n, login, locked)
         elif not beat and not asking:
-            report = take_own(repo, n, login, labels)
+            asked = (made, fields, author) if (verb == 'edited' and own[1]['state'] == 'asking'
+                                               and args.state in ('working', 'done')) else None
+            report = take_own(repo, n, login, labels, asked, locked)
     print(f'#{n}: {kind} {state}, status note {note_id} {verb}', file=out)
     for line in report:
         print(line, file=out)
@@ -609,7 +664,7 @@ def scan(repo, authors, now):
             own = notes(comments, authors)
             found.append((issue['number'], own, mismatches(
                 issue['number'], [label['name'] for label in issue['labels']['nodes']],
-                own, issue['closedByPullRequestsReferences']['nodes'], now)))
+                own, issue['closedByPullRequestsReferences']['nodes'], now), comments))
         if not issues['pageInfo']['hasNextPage']:
             break
         cursor = issues['pageInfo']['endCursor']
@@ -617,13 +672,16 @@ def scan(repo, authors, now):
 
 
 def check(args, now):
-    found = [line for _, _, lines in scan(args.repo, record_authors(args.repo), now) for line in lines]
+    found = [line for _, _, lines, _ in scan(args.repo, record_authors(args.repo), now) for line in lines]
     for line in found:
         print(line)
     return 1 if found else 0
 
 
 REPAIRING = 'adding needs-info for an asking note'
+PENDING = '<!-- openwiz:needs-info-repair v1 -->'
+PENDING_BODY = (PENDING + '\nlaunch-fleet is adding needs-info for an asking note beside a stopped fleet note; '
+                'this comment goes once the label is settled.')
 REPAIRED = 'settled needs-info'
 
 
@@ -647,12 +705,22 @@ def label_events(repo, n):
             if e.get('event') in ('labeled', 'unlabeled') and (e.get('label') or {}).get('name') == ASKING_LABEL]
 
 
+def actor(event):
+    login = (event.get('actor') or {}).get('login')
+    return login if isinstance(login, str) else None
+
+
+def pending_marks(comments, login):
+    return [int(c['id']) for c in comments if isinstance(c.get('user'), dict)
+            and isinstance(c['user'].get('login'), str) and c['user']['login'].lower() == login.lower()
+            and (c.get('body') or '').split('\n', 1)[0] == PENDING]
+
+
 def by(event, login):
-    actor = (event.get('actor') or {}).get('login')
-    return isinstance(actor, str) and actor.lower() == login.lower()
+    return actor(event) is not None and actor(event).lower() == login.lower()
 
 
-def cleanup(repo, n, login, mine, labelled, taker='the repair'):
+def cleanup(repo, n, login, mine, labelled, taker='the repair', any_login=False):
     events = label_events(repo, n)
     if labelled():
         last = max((k for k, e in enumerate(events) if e['event'] == 'labeled'), default=None)
@@ -664,11 +732,11 @@ def cleanup(repo, n, login, mine, labelled, taker='the repair'):
     off = [k for k, e in enumerate(after) if e['event'] == 'unlabeled' and by(e, login)]
     if not off:
         return []
-    people = [e for e in after[:off[-1]] if e['event'] == 'labeled' and not by(e, login)]
+    people = [e for e in after[:off[-1]] if e['event'] == 'labeled' and (any_login or not by(e, login))]
     if not people or labelled():
         return []
     gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
-    who = people[-1]['actor']['login']
+    who = actor(people[-1]) or 'an account GitHub does not name'
     return [f'#{n}: {ASKING_LABEL} put back: {who} applied it as {taker} took it off; check whose it is']
 
 
@@ -680,7 +748,7 @@ def left(repo, n, login, labelled):
     if not labelled():
         return []
     applied = [e for e in label_events(repo, n) if e['event'] == 'labeled']
-    if applied and not by(applied[-1], login):
+    if applied and actor(applied[-1]) is not None and not by(applied[-1], login):
         return []
     return [f'#{n}: {ASKING_LABEL} left on: no note asks, and the repair can\'t tell whether it or a person '
             'added it; check whose it is']
@@ -700,10 +768,16 @@ def settle(repo, n, authors, login, base, pending):
     if pending is None:
         if still is None or labelled():
             return []
-        fleet = [x for x in notes(pages(comments), authors) if x[1]['agent'] == 'fleet' and x[3] == login.lower()]
-        note_id = record(repo, n, base, 'working', REPAIRING, fleet[-1][0] if fleet else None)[0]
+        everyone = [x for x in notes(pages(comments), authors) if x[1]['agent'] == 'fleet']
+        fleet = [x for x in everyone if x[3] == login.lower()]
+        reuse = fleet[-1][0] if fleet and not fleet[-1][1]['state'].startswith('stopped') else None
+        stopped = reuse is None and bool(everyone) and everyone[-1][1]['state'].startswith('stopped')
+        if stopped:
+            note_id, marked = int(gh('POST', comments, {'body': PENDING_BODY})['id']), True
+        else:
+            note_id, marked = record(repo, n, base, 'working', REPAIRING, reuse)[0], False
     else:
-        note_id = pending[0]
+        note_id, marked = pending
     report, mine = [], None
     if still is not None and not labelled():
         before = len(label_events(repo, n))
@@ -716,7 +790,10 @@ def settle(repo, n, authors, login, base, pending):
             report.append(f'#{n} note {still[0]} {still[1]["agent"]} asking: {ASKING_LABEL} added')
     if still is None:
         report += left(repo, n, login, labelled) if mine is None else cleanup(repo, n, login, mine, labelled)
-    record(repo, n, base, 'done', REPAIRED, note_id)
+    if marked:
+        gh('DELETE', f'repos/{repo}/issues/comments/{note_id}')
+    else:
+        record(repo, n, base, 'done', REPAIRED, note_id)
     return report
 
 
@@ -744,10 +821,13 @@ def repair(args, now):
     authors, found = guarded('could not read', read)
     login = viewer()
     reported = 0
-    for n, own, lines in found:
-        pending = None if login is None else next(
-            (x for x in reversed(own) if x[1]['agent'] == 'fleet' and x[3] == login.lower()
-             and x[1]['state'] == 'working' and x[1]['step'] == REPAIRING), None)
+    for n, own, lines, comments in found:
+        pending = None
+        if login is not None:
+            note = next((x for x in reversed(own) if x[1]['agent'] == 'fleet' and x[3] == login.lower()
+                         and x[1]['state'] == 'working' and x[1]['step'] == REPAIRING), None)
+            marks = pending_marks(comments, login)
+            pending = (note[0], False) if note else (marks[-1], True) if marks else None
         asks = any(line.endswith(f': no {ASKING_LABEL} label') for line in lines)
         if login is not None and (asks or pending):
             settled = guarded(f'could not repair #{n}', lambda: settle(args.repo, n, authors, login, base, pending))

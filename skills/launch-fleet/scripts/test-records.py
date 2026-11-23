@@ -97,6 +97,7 @@ class Fleet(unittest.TestCase):
         for cli in ('local', 'cloud'):
             with self.subTest(cli=cli):
                 self.env['FAKE_ROOM_CLI'] = cli
+                self.threads[0]['hidden'] = cli == 'local'
                 self.assertEqual(self.run_fleet('wake', '12'),
                                  f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')
 
@@ -156,9 +157,9 @@ class Fleet(unittest.TestCase):
     def test_stopped_driver_review_cannot_borrow_a_replacements_run(self):
         runs = self.dir / 'runs.json'
         self.env['LAUNCH_FLEET_RUNS'] = str(runs)
-        self.threads = []
-        self.say(f'review given up {SHA}: no verdict\nDriver review: other-family')
-        self.say(f'review told again {SHA}', 3102, '11:20')
+        self.threads = [dict(id=THREAD, title='Review #31 at ' + NEW[:8], branch=None, archivedAt=None)]
+        self.say(f'review given up {NEW}: no verdict\nDriver review: other-family')
+        self.say(f'review told again {NEW}', 3102, '11:20')
         self.say(f'review started {NEW}\nDriver review: same-family', 3103, '11:30')
         runs.write_text(json.dumps({'repo': 'example/public', 'runs': {
             '12': {'host': 'local', 'run': 'builder-run'},
@@ -168,6 +169,9 @@ class Fleet(unittest.TestCase):
         self.assertEqual(self.run_fleet('wake', '12'),
                          f'check review #31 for #12 at {NEW}: no verdict 30 minutes after '
                          f'"review started {NEW}"; read thread run:31 and tell it again (its record: comment 3103)\n')
+        self.issue(12)['state'] = 'CLOSED'
+        self.pr.update(state='MERGED', mergedAt='2026-11-01T11:58:00Z')
+        self.assertEqual(self.run_fleet('wake', '12'), 'archive #12: closed; archive run:12, run:31\n')
 
     def test_recheck_finds_original_reviewer(self):
         for private, suffix in [(False, ''), (True, ''),
@@ -566,6 +570,59 @@ def step_with(text):
     found = [i for i, step in enumerate(wake_steps()) if text in step]
     assert len(found) == 1, (text, found)
     return found[0]
+
+
+class CrossRepositoryReviews(unittest.TestCase):
+    TOOLS, LOCAL = 'thr_t-tools31', 'thr_l-local31'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.records = load(HERE / 'records.py', 'fleet_records_cross')
+
+    def pull(self, repository, records):
+        return dict(number=31, repository=dict(nameWithOwner=repository), commits={'nodes': []},
+                    comments={'nodes': [dict(databaseId=i, createdAt=f'2026-11-01T11:{i % 100:02d}:00Z', body=b)
+                                        for i, b in records]})
+
+    def routes(self, state, *pulls, threads=None):
+        ticket = dict(number=12, comments={'nodes': []}, closedByPullRequestsReferences={'nodes': list(pulls)})
+        world = self.records.annotate({'specs': [], 'singles': [ticket]}, 'example/public', False, threads, state)
+        return [[(c['resolvedThread'], c['recordError']) for c in p['comments']['nodes'][1:]]
+                for p in world['singles'][0]['closedByPullRequestsReferences']['nodes']]
+
+    def test_another_repositorys_pull_request_reads_its_own_qualified_key(self):
+        started = [(3101, 'launch-fleet: review started ' + SHA), (3102, 'launch-fleet: re-check sent ' + NEW)]
+        state = {f'review:31:{SHA}': self.LOCAL, f'review:Example/Tools#31:{SHA}': self.TOOLS}
+        self.assertEqual(self.routes(state, self.pull('example/public', started), self.pull('example/tools', started)),
+                         [[(self.LOCAL, None)], [(self.TOOLS, None)]])
+
+    def test_this_repositorys_bare_key_never_routes_a_same_numbered_pull_request_elsewhere(self):
+        started = [(3101, 'launch-fleet: review started ' + SHA), (3102, 'launch-fleet: re-check sent ' + NEW)]
+        self.assertEqual(self.routes({f'review:31:{SHA}': self.LOCAL}, self.pull('example/tools', started)),
+                         [[(None, 'thread discovery is out of reach')]])
+        self.assertEqual(self.routes({f'review:31:{SHA}': self.LOCAL}, self.pull('Example/Public', started)),
+                         [[(self.LOCAL, None)]])
+
+    def test_discovery_never_gives_another_repositorys_pull_request_this_repositorys_reviewer(self):
+        started = [(3101, 'launch-fleet: review started ' + SHA), (3102, 'launch-fleet: re-check sent ' + NEW)]
+        local = dict(id=self.LOCAL, title='Review #31 at ' + SHA[:8], branch=None)
+        tools = dict(id=self.TOOLS, title='Review Example/Tools#31 at ' + SHA[:8], branch=None)
+        self.assertEqual(self.routes({}, self.pull('example/public', started), self.pull('example/tools', started),
+                                     threads=[local]),
+                         [[(self.LOCAL, None)], [(None, f'no thread matches review:example/tools#31:{SHA}')]])
+        self.assertEqual(self.routes({}, self.pull('example/public', started), self.pull('example/tools', started),
+                                     threads=[local, tools]),
+                         [[(self.LOCAL, None)], [(self.TOOLS, None)]])
+
+    def test_another_repositorys_edited_give_up_archives_from_its_own_claim_key(self):
+        gave_up = [(3101, f'launch-fleet: review given up {SHA}: no verdict'),
+                   (3102, f'launch-fleet: review told again {SHA}')]
+        state = {'review:31:claim:3101': self.LOCAL, 'review:example/tools#31:claim:3101': self.TOOLS}
+        ticket = dict(number=12, comments={'nodes': []},
+                      closedByPullRequestsReferences={'nodes': [self.pull('example/tools', gave_up)]})
+        world = self.records.annotate({'specs': [], 'singles': [ticket]}, 'example/public', False, [], state)
+        first = world['singles'][0]['closedByPullRequestsReferences']['nodes'][0]['comments']['nodes'][0]
+        self.assertEqual(first.get('archiveThread'), self.TOOLS)
 
 
 class Dispatcher(unittest.TestCase):

@@ -190,7 +190,7 @@ TICKET='number
         closedByPullRequestsReferences(first: 5, includeClosedPrs: true) {
           pageInfo { hasNextPage }
           nodes {
-            number state isDraft merged mergedAt closedAt baseRefName headRefOid
+            id number state isDraft merged mergedAt closedAt baseRefName headRefOid isMergeQueueEnabled
             commits(last: 1) {
               nodes {
                 commit {
@@ -661,7 +661,7 @@ check_contexts() (
       and .commits.nodes[0].commit.oid == .headRefOid
       and (.commits.nodes[0].commit | has("statusCheckRollup"));
     [.. | objects | select(has("headRefOid") and .state == "OPEN")]
-    | if all(.[]; valid_pr) then group_by(.number)[]
+    | if all(.[]; valid_pr) then group_by([(.id // ""), .number])[]
       | if (map(.headRefOid) | unique | length) == 1
           and (map(.commits.nodes[0].commit.statusCheckRollup) | unique | length) == 1
         then .[0] else error("conflicting PR check snapshots") end
@@ -717,12 +717,12 @@ check_contexts() (
     done
     jq --slurpfile nodes "$source.nodes" --slurpfile page "$source.contexts" \
       '.contexts = $page[0] | .contexts.nodes = $nodes[0]' "$source.rollup" > "$source.complete" || exit 1
-    jq --slurpfile rollup "$source.complete" '{number, rollup: $rollup[0]}' "$source.pr" >> "$source.checks" || exit 1
+    jq --slurpfile rollup "$source.complete" '{id, number, rollup: $rollup[0]}' "$source.pr" >> "$source.checks" || exit 1
   done < "$source.prs"
-  jq -s 'map({key: (.number | tostring), value: .rollup}) | from_entries' "$source.checks" > "$source.rollups" || exit 1
+  jq -s 'map({key: ([(.id // ""), .number] | tojson), value: .rollup}) | from_entries' "$source.checks" > "$source.rollups" || exit 1
   jq --slurpfile r "$source.rollups" 'walk(if type == "object" and has("headRefOid")
-      and .state == "OPEN" and $r[0][(.number | tostring)] != null
-    then .commits.nodes[0].commit.statusCheckRollup = $r[0][(.number | tostring)] else . end)' \
+      and .state == "OPEN" and $r[0][([(.id // ""), .number] | tojson)] != null
+    then .commits.nodes[0].commit.statusCheckRollup = $r[0][([(.id // ""), .number] | tojson)] else . end)' \
     "$source" > "$source.next" && mv "$source.next" "$source"
 )
 hydrate() (
@@ -1541,26 +1541,25 @@ def release_due($s): release_candidate($s)
 # nor the line'"'"'s files hold an input the ticket relies on, and the two
 # tickets'"'"' owned paths don'"'"'t clash. Anything else is hard.
 def scope_tickets: [$W.specs[].subIssues.nodes[], $W.singles[], ($W.active // [])[]];
-# Owned paths exactly as to-tickets'"'"' approve.py reads them: the lines under
-# `## Owned paths` to the next `## `, each `- ` bullet'"'"'s backticked paths, in
-# its one `in \`owner/repo\`` repository or this one, shared when the bullet
-# says `(shared`. [] when the ticket has no such section (a legacy ticket
-# claims no path); null when the section can'"'"'t be read as approval reads it.
-def owned_paths: ((.body // "") | split("\n")) as $l
+def owned_read: ((.body // "") | split("\n")) as $l
   | ([range(0; $l | length) | select($l[.] | rtrimstr("\r") | test("^## Owned paths\\s*$"))] | first) as $h
   | if $h == null then [] else
       ([$l[$h + 1:][] | rtrimstr("\r")] | (([to_entries[] | select(.value | startswith("## ")) | .key] | first) // length) as $e | .[:$e]
        | map(select(startswith("- ")) | .[2:])) as $bullets
-      | if ($bullets | length) == 0 then null else
-          [$bullets[] | . as $b | [scan("\\bin `([^`]+)`") | .[0]] as $repos
-           | if ($repos | length) > 1 or any($repos[]; test("^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$") | not) then {bad: true}
-             else ([scan("`([^`]+)`") | .[0] | select(. as $p | any($repos[]; . == $p) | not)]) as $ps
-               | if ($ps | length) == 0 then {bad: true}
+      | if ($bullets | length) == 0 then [{bad: true}] else
+          [$bullets[] | . as $b | [scan("\\bin `([^`]+)`") | .[0]] as $ins
+           | ([$ins[] | select(test("^[A-Za-z0-9-]+/[A-Za-z0-9_-]+$"))] | unique_by(ascii_downcase)) as $named
+           | (if ($ins | length) > 0 and ($ins | last | test("^[A-Za-z0-9-]+/[A-Za-z0-9_-]+$")) then $ins | last
+              elif ($named | length) == 1 then $named[0] else null end) as $repo
+           | if $repo == null and ($named | length) > 1 then {bad: $b}
+             else ([scan("`([^`]+)`") | .[0] | select(. != $repo)]) as $ps
+               | if ($ps | length) == 0 then {bad: $b}
                  else $ps[] | (rtrimstr("/") | split("/")) as $parts
-                   | if startswith("/") or any($parts[]; . == "" or . == "." or . == "..") or contains(" ") then {bad: true}
-                     else {repo: (if ($repos | length) == 1 then $repos[0] | ascii_downcase else $W.repo end),
-                           path: ., shared: ($b | contains("(shared"))} end end end]
-          | if any(.[]; .bad) then null else . end end end;
+                   | if startswith("/") or any($parts[]; . == "" or . == "." or . == "..") or contains(" ") then {bad: $b}
+                     else {repo: (if $repo != null then $repo | ascii_downcase else $W.repo end),
+                           path: ., shared: ($b | contains("(shared"))} end end end] end end;
+def owned_paths: owned_read | if any(.[]; has("bad")) then null else . end;
+def owned_unread: [owned_read[] | .bad // empty] | first;
 # fnmatch.fnmatchcase, as approve.py matches a path segment: * ? [seq] [!seq].
 def glob_re: explode as $c | ($c | length) as $n
   | {i: 0, out: "^"} | until(.i >= $n;
@@ -1743,6 +1742,7 @@ def guard($p; $at; $rs; $head; $c):
   # Each required check'"'"'s latest run, as required_ci picks it (latest_check).
   [$W.checks[] as $n | [$c.statusCheckRollup.contexts.nodes[]? | select((.name // .context) == $n)] | latest_check] as $latest
   | if any($latest[]; . == null or (.conclusion // .state) != "SUCCESS") then empty
+    elif $p.isMergeQueueEnabled == true then "merge \($at): APPROVE and CI green"
     elif any($latest[]; (.checkSuite.workflowRun.createdAt | type) != "string") then
       look($p.number; $rs; "a required check on its head names no workflow run, so main'"'"'s moves since its CI can'"'"'t be checked")
     elif ($c.committedDate | type) != "string" then
@@ -2126,9 +2126,13 @@ def claim: $W.claim.n as $n | $W.claim.id as $id
               | ([$near[] | select(history_unread) | .number] | unique | first) as $u
               | ([$near[] | select((open_prs | length) > 0 or (start | .state != "queued" and (.state != "claimed" or .rec.id < $id)))
                   | .number] | unique | first) as $m
-              | if $mine == null then "withdraw #\($n): its owned paths can'"'"'t be read as the plan approval reads them"
+              | if $mine == null then (owned_unread as $b | if $b == true then "withdraw #\($n): its Owned paths section has no bullet"
+                  else "withdraw #\($n): its owned-path bullet \"\($b)\" can'"'"'t be read" end)
                 elif $u != null then "withdraw #\($n): its owned paths collide with #\($u), whose start history can'"'"'t be read"
-                elif $m != null then "withdraw #\($n): its owned paths collide with #\($m), which is running or claimed first"
+                elif $m != null then ([$near[] | select(.number == $m) | owned_unread] | first) as $b
+                  | if $b == null then "withdraw #\($n): its owned paths collide with #\($m), which is running or claimed first"
+                    elif $b == true then "withdraw #\($n): #\($m)'"'"'s Owned paths section has no bullet, and #\($m) is running or claimed first"
+                    else "withdraw #\($n): #\($m)'"'"'s owned-path bullet \"\($b)\" can'"'"'t be read, and #\($m) is running or claimed first" end
                 else "go #\($n)" end
             else "withdraw #\($n): it is not on the frontier now" end end
     else

@@ -64,7 +64,7 @@
     {
      "step": "run",
      "say": "where",
-     "agent": "Your agents need a place to run: this machine, with Claude Code you're already signed into, or Cloudroom or another cloud host to run many at once. Which would you like?"
+     "agent": "Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom."
     },
     {
      "step": "run",
@@ -152,7 +152,7 @@
     {
      "step": "grill",
      "say": "grill-start",
-     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+     "agent": "Now a short grill: one round of a few questions, one at a time, so your first fleet is about three small changes that build side by side, and what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
     },
     {
      "step": "grill",
@@ -296,7 +296,7 @@
     {
      "step": "plan",
      "say": "spec",
-     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. Watch its short video at https://openwiz.dev/app/videos/syn-900 or see it at openwiz.dev/app; nothing for you to do while the plan checks itself."
+     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. See it at https://github.com/synthetic-owner/synthetic-notes/issues/900 or at openwiz.dev/app; your first fleet has no video, so once the plan checks itself I'll show what starting it does and ask for your yes."
     },
     {
      "step": "plan",
@@ -344,7 +344,7 @@
     },
     {
      "step": "launch",
-     "world": "fleet_record"
+     "world": "heartbeat_active"
     },
     {
      "step": "launch",
@@ -358,7 +358,7 @@
     {
      "step": "launch",
      "say": "fleet-start",
-     "agent": "The plan passed its checks, so the fleet started: 2 builders, each on one small ticket. Watch them work at openwiz.dev/app; nothing for you to do until the first merge."
+     "agent": "Spec #900's local heartbeat is active. It checks GitHub every 10 minutes."
     },
     {
      "step": "watch",
@@ -486,7 +486,7 @@
     {
      "step": "run",
      "say": "where",
-     "agent": "Your agents need a place to run: this machine, with Claude Code you're already signed into, or Cloudroom or another cloud host to run many at once. Which would you like?"
+     "agent": "Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom."
     },
     {
      "step": "run",
@@ -593,7 +593,7 @@
     {
      "step": "grill",
      "say": "grill-start",
-     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+     "agent": "Now a short grill: one round of a few questions, one at a time, so your first fleet is about three small changes that build side by side, and what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
     },
     {
      "step": "grill",
@@ -681,7 +681,7 @@
     {
      "step": "plan",
      "say": "spec",
-     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. Watch its short video at https://openwiz.dev/app/videos/syn-900 or see it at openwiz.dev/app; nothing for you to do while the plan checks itself."
+     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. See it at https://github.com/synthetic-owner/synthetic-todo/issues/900 or at openwiz.dev/app; your first fleet has no video, so once the plan checks itself I'll show what starting it does and ask for your yes."
     },
     {
      "step": "plan",
@@ -874,7 +874,7 @@
     {
      "step": "run",
      "say": "where",
-     "agent": "Your agents need a place to run: this machine, with Claude Code you're already signed into, or Cloudroom or another cloud host to run many at once. Which would you like?"
+     "agent": "Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom."
     },
     {
      "step": "run",
@@ -981,7 +981,7 @@
     {
      "step": "grill",
      "say": "grill-start",
-     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+     "agent": "Now a short grill: one round of a few questions, one at a time, so your first fleet is about three small changes that build side by side, and what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
     },
     {
      "step": "grill",
@@ -1122,7 +1122,7 @@
     {
      "step": "plan",
      "say": "spec",
-     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. Watch its short video at https://openwiz.dev/app/videos/syn-900 or see it at openwiz.dev/app; nothing for you to do while the plan checks itself."
+     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. See it at https://github.com/synthetic-owner/synthetic-quiz/issues/900 or at openwiz.dev/app; your first fleet has no video, so once the plan checks itself I'll show what starting it does and ask for your yes."
     },
     {
      "step": "plan",
@@ -1170,7 +1170,7 @@
     },
     {
      "step": "launch",
-     "world": "fleet_record"
+     "world": "heartbeat_active"
     },
     {
      "step": "launch",
@@ -1184,7 +1184,7 @@
     {
      "step": "launch",
      "say": "fleet-start",
-     "agent": "The plan passed its checks, so the fleet started: 3 builders, each on one small ticket. Watch them work at openwiz.dev/app; nothing for you to do until the first merge."
+     "agent": "Spec #900's local heartbeat is active. It checks GitHub every 10 minutes."
     },
     {
      "step": "watch",

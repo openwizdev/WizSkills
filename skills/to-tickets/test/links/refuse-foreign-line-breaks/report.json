@@ -1,0 +1,35 @@
+{
+  "schema": "openwiz.plan-links.v1",
+  "kind": "report",
+  "repo": "synthetic-owner/synthetic-repo",
+  "source": {
+    "kind": "spec",
+    "spec": 9300
+  },
+  "result": "refused",
+  "counts": {
+    "tickets": 2,
+    "links": 1,
+    "real": 0,
+    "file": 0,
+    "unlabelled": 1,
+    "refusals": 1
+  },
+  "links": [
+    {
+      "ticket": 9302,
+      "blocker": 9301,
+      "blocker_state": "OPEN",
+      "kind": "unlabelled",
+      "files": []
+    }
+  ],
+  "refusals": [
+    {
+      "ticket": 9302,
+      "number": null,
+      "code": "malformed",
+      "message": "malformed section: line `- other-owner/other-repo#9301 real: the shape\u2028which\u2029the command\rreads` names other-owner/other-repo#9301, not this repository"
+    }
+  ]
+}

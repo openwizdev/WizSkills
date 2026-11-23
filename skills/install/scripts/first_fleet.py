@@ -87,13 +87,17 @@ HEARTBEAT = LAUNCH_FLEET / 'scripts/heartbeat.py'
 OPTIONS = {
     'where': ({'--state'}, {'--yes'}, {'--build', '--agents'}),
     'mode': ({'--state'}, set(), {'--mode', '--claude-mode', '--codex-mode'}),
-    'setting': ({'--state'}, {'--yes'}, set()),
+    'service-issue': ({'--state'}, {'--yes'}, set()),
+    'setting': ({'--state'}, {'--yes'}, {'--setup-state', '--build'}),
     'grill': ({'--state', '--confirmed'}, set(), set()),
     'first-merge': ({'--state', '--pr'}, set(), set()),
     'continue': ({'--state', '--setup-state'}, {'--explained'}, set()),
     'decisions': ({'--state', '--setup-state'}, {'--yes'}, set()),
     'create-repo': ({'--state', '--repo'}, {'--yes'}, set()),
     'select': ({'--state', '--repo'}, set(), set()),
+    'defaults': ({'--state', '--options'}, {'--yes', '--app'},
+                 {'--operator', '--service-issue', '--harness', '--model', '--effort', '--confirm',
+                  '--reviewer-harness', '--reviewer-model', '--reviewer-effort'}),
     'choose': ({'--state', '--options'}, {'--from-setup'}, {'--harness', '--model', '--effort', '--agents'}),
     'spec': ({'--state', '--spec', '--repo'}, set(), set()),
     'launch': ({'--state', '--spec'}, {'--yes', '--heartbeat', '--carry-on'}, {'--confirm'}),
@@ -146,6 +150,9 @@ HOSTS = {
 }
 NOT_HOSTS = ('cloud', 'cloudroom', 'template')
 HOST_BRANCH = 'openwiz/host-setting'
+BRAIN_BRANCH = 'openwiz/brain'
+BRAIN_FOLDER = '.openwiz/brain/'
+ALONE = "%s is not installed here, so each review runs with the builder's harness, marked same-family review"
 
 
 class Exit(Exception):
@@ -168,7 +175,8 @@ def strict(text):
 
 def parse(argv):
     if not argv or argv[0] not in OPTIONS:
-        raise Exit(2, 'usage: first_fleet.py where|continue|decisions|create-repo|select|mode|setting|grill|choose|spec|launch|'
+        raise Exit(2, 'usage: first_fleet.py where|continue|decisions|create-repo|select|defaults|service-issue|mode|setting|grill|'
+                      'choose|spec|launch|'
                       'progress|first-merge|next ... (see its header)')
     values, switches, optional = OPTIONS[argv[0]]
     got, rest = {}, argv[1:]
@@ -185,6 +193,18 @@ def parse(argv):
     missing = sorted(values - set(got))
     if missing:
         raise Exit(2, 'usage: missing %s' % ', '.join(missing))
+    if argv[0] == 'defaults' and len({'--harness', '--model', '--effort'} & set(got)) not in (0, 3):
+        raise Exit(2, 'usage: defaults changes the builder with all of --harness, --model and --effort')
+    if argv[0] == 'defaults' and len({'--reviewer-harness', '--reviewer-model', '--reviewer-effort'} & set(got)) \
+            not in (0, 3):
+        raise Exit(2, 'usage: defaults changes the reviewer with all of --reviewer-harness, --reviewer-model and '
+                      '--reviewer-effort')
+    if argv[0] == 'defaults' and ('--confirm' in got) != bool(got.get('--yes')):
+        raise Exit(2, 'usage: --yes takes --confirm with the digest of the block the user said yes to')
+    if '--service-issue' in got and not re.fullmatch(r'[1-9][0-9]{0,9}', got['--service-issue']):
+        raise Exit(2, 'usage: --service-issue takes an open issue number')
+    if '--operator' in got and not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})', got['--operator']):
+        raise Exit(2, 'usage: --operator takes a GitHub login')
     if argv[0] == 'choose':
         named = {'--harness', '--model', '--effort'} & set(got)
         if got.get('--from-setup') and named or not got.get('--from-setup') and len(named) != 3:
@@ -247,7 +267,8 @@ class State:
             value = strict(self.path.read_text(encoding='utf-8'))
         except (OSError, ValueError):
             raise Exit(10, 'The onboarding state is unreadable; ' + NOTHING)
-        known = {'created', 'choices', 'repo', 'spec', 'launch', 'setup', 'host', 'setting', 'grill', 'merge', 'preview', 'mode'}
+        known = {'created', 'choices', 'repo', 'spec', 'launch', 'setup', 'host', 'setting', 'grill', 'merge', 'preview', 'mode',
+                 'defaults', 'service'}
         if not isinstance(value, dict) or set(value) - known:
             raise Exit(10, 'The onboarding state has an unknown shape; ' + NOTHING)
         return value
@@ -951,16 +972,82 @@ def look(name):
 
 
 def created_line(name, seen):
-    return 'Created and read back: %s, private, default branch %s at commit %s.' % (
-        name, seen['branch'], seen['commit'])
+    return ('Created and read back: %s, private, default branch %s at commit %s, with its passing test and its CI '
+            'check, check.' % (name, seen['branch'], seen['commit']))
+
+
+SEED_COMMAND = 'python3 -m unittest discover -s tests'
+SEED = {
+    'tests/test_check.py': 'import unittest\n\n\nclass Check(unittest.TestCase):\n    def test_runs(self):\n'
+                           '        self.assertTrue(True)\n\n\nif __name__ == \'__main__\':\n    unittest.main()\n',
+    '.github/workflows/check.yml': (
+        'name: check\non:\n  push:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  check:\n'
+        '    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
+        ' # v7.0.1\n        with:\n          persist-credentials: false\n      - run: %s\n' % SEED_COMMAND),
+}
+
+
+def seeded(value, repo):
+    created = value.get('created') or {}
+    return created.get('state') == 'created' and created.get('seeded') is True and \
+        str(created.get('repo', '')).lower() == repo.lower()
+
+
+def untested(repo):
+    return Exit(5, "%s has no docs/agents/fleet.md yet, so OpenWiz has no test command or CI check to name in it, "
+                   "and OpenWiz's setup check needs one of each; OpenWiz adds no test or workflow to a repository "
+                   'it did not create. One line fixes it: ask your agent to "add one passing test and a CI '
+                   'workflow with a job named check, then run the setup skill", and merge what it opens; then run '
+                   'this again. Nothing recorded.' % repo)
+
+
+def seed_file(name, path, branch):
+    result = run(['gh', 'api', '--include', '-X', 'GET', 'repos/%s/contents/%s?ref=%s' % (
+        name, path, urllib.parse.quote(branch, safe=''))], gh_env())
+    text = result.stdout.decode('utf-8', 'replace').replace('\r\n', '\n') if result is not None else ''
+    head, _, body = text.partition('\n\n')
+    status = re.match(r'HTTP/[0-9.]+ ([0-9]{3})', head)
+    if status and status[1] == '404':
+        return None
+    try:
+        assert status and status[1] == '200'
+        found = strict(body)
+        assert found['type'] == 'file' and found['encoding'] == 'base64'
+        return base64.b64decode(found['content'], validate=False).decode('utf-8', 'replace')
+    except (AssertionError, ValueError, KeyError, TypeError):
+        raise Exit(6, 'Could not read %s on %s; run this again to read it before anything else.' % (path, name))
+
+
+def seed(state, name, seen):
+    for path, text in SEED.items():
+        have = seed_file(name, path, seen['branch'])
+        if have == text:
+            continue
+        if have is not None:
+            raise Exit(5, '%s already holds another %s; OpenWiz never writes over it. Nothing more written.'
+                       % (name, path))
+        run(['gh', 'api', '-X', 'PUT', 'repos/%s/contents/%s' % (name, path), '-f',
+             'message=OpenWiz: a passing test and its CI check', '-f',
+             'content=' + base64.b64encode(text.encode()).decode(), '-f', 'branch=' + seen['branch']], gh_env())
+        if seed_file(name, path, seen['branch']) != text:
+            raise Exit(6, 'Whether %s was written to %s is uncertain; run this again: it reads the file back before '
+                          'any write. If GitHub refused the workflow, run gh auth refresh -s workflow first.'
+                       % (path, name))
+    state.value['created'] = {'repo': name, 'state': 'created', **seen, 'seeded': True}
+    if not state.save():
+        raise Exit(6, '%s has its test and CI check, but that could not be saved; run this again to read them '
+                      'back.' % name)
 
 
 def create_repo(got):
     name = got['--repo']
     print('Effect: create one new private GitHub repository, %s, with your gh identity, in one GitHub create with '
           'its initial commit: a README.md holding only the title "# %s" on its default branch, which OpenWiz '
-          'init needs to propose the brain. Nothing else is created or pushed; its CloudRoom project stays yours '
-          'to make or pick.' % (name, name.split('/')[1]))
+          'init needs to propose the brain. Then add two files there, one commit each: tests/test_check.py, one '
+          'test that passes, and .github/workflows/check.yml, a CI workflow whose one job named check runs %s on '
+          "each push and pull request; OpenWiz's setup check needs a test command and a CI check to name. Nothing "
+          'else is created or pushed; its CloudRoom project stays yours to make or pick.' % (
+              name, name.split('/')[1], SEED_COMMAND))
     if not got.get('--yes'):
         print("Nothing created. On the user's yes to exactly this, run again with --yes.")
         return 12
@@ -982,10 +1069,14 @@ def create_repo(got):
     if seen is None:
         raise Exit(1 if not record else 6, 'Could not read whether %s exists; nothing created.' % name)
     if record and record['repo'] == name and record['state'] in ('pending', 'uncertain', 'created'):
+        if isinstance(seen, dict) and record.get('seeded') and record.get('branch') == seen['branch']:
+            print(created_line(name, seen))
+            return 0
         if isinstance(seen, dict):
             state.value['created'] = {'repo': name, 'state': 'created', **seen}
             if not state.save():
                 raise Exit(6, 'Could not save the created repository; it exists, so never create it again.')
+            seed(state, name, seen)
             print(created_line(name, seen))
             return 0
         if seen == 'public':
@@ -1013,6 +1104,7 @@ def create_repo(got):
     state.value['created'] = {'repo': name, 'state': ended, **(seen if ended == 'created' else {})}
     saved = state.save()
     if ended == 'created' and saved:
+        seed(state, name, seen)
         print(created_line(name, seen))
         return 0
     if ended == 'absent' and saved:
@@ -1064,33 +1156,9 @@ def blob(repo, path, env, ref):
         raise Exit(1, 'Could not read %s on %s; nothing written.' % (path, ref))
 
 
-def pull_diff(repo, env, want):
-    """R4: the host-setting branch's whole diff against the default branch must be exactly the approved changes
-    (each file in want added or changed to its approved text, and nothing else); Exit 5 naming a file that differs."""
-    base = run(['gh', 'api', 'repos/%s' % repo, '--jq', '.default_branch'], env)
-    branch = base.stdout.decode('utf-8', 'replace').strip() if base is not None and base.returncode == 0 else ''
-    result = run(['gh', 'api', 'repos/%s/compare/%s...%s' % (repo, branch, HOST_BRANCH)], env) if branch else None
-    try:
-        assert result is not None and result.returncode == 0
-        files = strict(result.stdout.decode('utf-8'))['files']
-        assert isinstance(files, list) and len(files) < 300  # GitHub lists at most 300 files
-        changed = {f['filename']: f['status'] for f in files}
-        assert len(changed) == len(files) and all(isinstance(k, str) for k in changed)
-    except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError):
-        raise Exit(6, "Could not read the host setting pull request's changes; it is not ready. Run this again to "
-                      'read them before anything else.')
-    approved = {HOST_FILE: ('added',), MODE_FILE: ('modified',)}
-    for path in sorted(set(changed) | set(want)):
-        if (changed.get(path) not in approved.get(path, ()) or path not in want
-                or raw(repo, path, env, HOST_BRANCH) != want[path]):
-            raise Exit(5, 'Branch %s changes %s beyond the approved host setting, so its pull request is not '
-                          'ready and OpenWiz opens or reports nothing. The owner deletes that branch (closing its '
-                          'pull request), then run this again.' % (HOST_BRANCH, path))
-
-
-def host_pull(repo, env):
+def host_pull(repo, env, head=HOST_BRANCH):
     """The host setting pull request's URL and state, or None when there is none; Exit when unreadable."""
-    result = run(['gh', 'pr', 'list', '--repo', repo, '--head', HOST_BRANCH, '--state', 'all',
+    result = run(['gh', 'pr', 'list', '--repo', repo, '--head', head, '--state', 'all',
                   '--json', 'url,state'], env)
     try:
         assert result is not None and result.returncode == 0
@@ -1106,14 +1174,15 @@ def host_pull(repo, env):
 def mode(got):
     """This machine's harness permission mode: each one explained, none picked, the owner's recorded (J254 A)."""
     state = State(got['--state'])
-    host, carried = state.value.get('host'), state.value.get('setup')
+    host, carried, chosen = state.value.get('host'), state.value.get('setup'), state.value.get('defaults')
     if not host or host['agents'] != 'local':
         raise Exit(5, 'Only agents on this machine need a permission mode; every other host sets its own. Nothing '
                       'recorded.')
-    if not carried:
-        raise Exit(5, 'Connect the repository first (continue): the mode is for the harness it prepares; '
+    if not carried and not chosen:
+        raise Exit(5, 'Connect the repository first (defaults): the mode is for the harness it prepares; '
                       'nothing recorded.')
-    harness = carried['settings']['harness']
+    harness = carried['settings']['harness'] if carried else chosen['harness']
+    repo = carried['repository'] if carried else state.value['repo']
     harnesses = routed(host, harness)
     if any(not MODES.get(h) for h in harnesses):
         raise Exit(5, 'No permission modes are known for %s; nothing recorded.' % harness)
@@ -1147,7 +1216,7 @@ def mode(got):
         raise Exit(5, 'The host setting already carries %s; ask the owner to change that line instead; '
                       'nothing recorded.' % (', '.join(sorted(had.values())) or 'no permission mode'))
     for h, pick in picks.items():
-        approve_host(os.environ, carried['repository'], PROGRAMS[h], pick)
+        approve_host(os.environ, repo, PROGRAMS[h], pick)
     state.value['mode'] = {'harness': harness, 'mode': picks[harness]}
     if len(picks) > 1:
         state.value['mode']['modes'] = wanted
@@ -1156,7 +1225,7 @@ def mode(got):
     print('Recorded: agents on this machine run %s, the mode%s the owner picked, saved as this machine\'s host-side '
           'approval for %s (outside the repository); the host setting adds the matching %s row%s.' % (
               ' and '.join('%s with the %s permission mode' % (h, pick) for h, pick in picks.items()),
-              's' if len(picks) > 1 else '', carried['repository'], MODE_FILE, 's' if len(picks) > 1 else ''))
+              's' if len(picks) > 1 else '', repo, MODE_FILE, 's' if len(picks) > 1 else ''))
     return 0
 
 
@@ -1164,10 +1233,10 @@ def setting(got):
     """Write where agents run (docs/agents/host.md) and, on this machine, the owner's permission mode (KN3's one
     docs/agents/fleet.md row) as one pull request the user merges, only on --yes."""
     state = State(got['--state'])
-    host = state.value.get('host')
-    repo = (state.value.get('setup') or {}).get('repository')
+    host, chosen = state.value.get('host'), state.value.get('defaults')
+    repo = (state.value.get('setup') or {}).get('repository') or (state.value.get('repo') if chosen else None)
     if not host or not repo:
-        raise Exit(5, 'Ask where agents run (where) and connect the repository (continue) first; nothing written.')
+        raise Exit(5, 'Ask where agents run (where) and connect the repository (defaults) first; nothing written.')
     picked = (state.value.get('mode') or {}).get('mode')
     modes = picked_modes(state)
     name = None if host['agents'] == 'cloud' else host['agents']
@@ -1179,21 +1248,37 @@ def setting(got):
     if now is not None and now != name:
         raise Exit(5, '%s already says Host: %s on the default branch; OpenWiz never overwrites it. Ask the user '
                       'whether to change that line, or answer where agents run again; nothing written.' % (HOST_FILE, now))
-    writes = []
-    if local:
+    writes, values, models = [], [], None
+    fresh = None
+    if local or chosen:
         fleet = raw(repo, MODE_FILE, env)
-        if fleet is None:
+        if fleet is None and not chosen:
             raise Exit(5, '%s is not on the default branch yet: run setup and merge its settings (Agents) first; '
                           'nothing written.' % MODE_FILE)
+    if chosen:
+        choice = (chosen['harness'], chosen['model'], chosen['effort'])
+    if chosen and fleet is None and not seeded(state.value, repo):
+        raise untested(repo)
+    if chosen and fleet is None:
+        fresh = new_settings(repo, env, choice, tuple(chosen['reviewer']), host['agents'])
+        fleet = models = fresh[MODE_FILE]
+    elif chosen:
+        models, intended, _ = models_change(fleet, choice, None, reviewer=tuple(chosen['reviewer']))
+        if models_table(fleet) == intended:
+            models = None
+    if local and fresh:
+        values = []
+    elif local:
         values = [line.rstrip() for line in fleet.splitlines() if line.startswith(MODE_ROWS)]
         if values and values != mode_lines(modes):
             raise Exit(5, '%s already saves %s; OpenWiz never adds a second row or replaces the owner\'s. Ask the '
                           'owner whether to change that row; nothing written.' % (
                               MODE_FILE, ', '.join('`%s`' % v for v in mode_rows(fleet) if v) or
                               ', '.join(values)))
-        writes = ([HOST_FILE] if now is None else []) + ([MODE_FILE] if not values else [])
-    elif name and now is None:
-        writes = [HOST_FILE]
+    if name and now is None:
+        writes.append(HOST_FILE)
+    if local and not values or models:
+        writes.append(MODE_FILE)
     if not writes:
         state.value['setting'] = dict({'host': name, 'state': 'merged', 'mode': picked}, **kept(modes))
         if not state.save():
@@ -1202,41 +1287,79 @@ def setting(got):
             'Host: local and the %s permission mode, on the default branch' % picked if local
             else 'Host: %s, on the default branch' % name if name else 'no host file, so Cloudroom, the default'))
         return 0
+    brain = None
+    if chosen and not state.value.get('setup'):
+        if not got.get('--setup-state'):
+            raise Exit(5, "Run setting with --setup-state <state>: it first reads that the block's steps ran; "
+                          'nothing written.')
+        pending, brain = connect_pending(got['--setup-state'], state.value)
+        if pending:
+            raise Exit(5, "The block's yes is not applied yet, so there is no brain pull request to add to. %s "
+                          'Nothing written.' % connect_step(pending, state.value))
     # R4: the exact files the pull request carries, from the default branch as it is now.
-    want = {}
+    want = dict(fresh or {})
     if HOST_FILE in writes:
         want[HOST_FILE] = host_text(name)
-    if MODE_FILE in writes:
-        want[MODE_FILE] = fleet.rstrip('\n') + '\n' + mode_section(modes)
-    recorded = state.value.get('setting') or {}
-    if recorded.get('state') in ('pending', 'opened'):
-        found = host_pull(repo, env)
-        if found and found[1] == 'CLOSED':
-            raise Exit(5, 'The host setting pull request %s was closed without merging; the user reopens and merges '
-                          'it, or answers where agents run again; nothing written.' % found[0])
-        if found:
-            pull_diff(repo, env, want)
-            state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked},
-                                          **kept(modes))
-            state.save()
-            print('The host setting pull request is open: %s. The user merges it; launch waits for it.' % found[0])
-            return 0
-    said = {HOST_FILE: 'add %s holding `Host: %s`' % (HOST_FILE, name),
-            MODE_FILE: 'add %s, %s, to %s, changing no other line' % (
-                'one row' if len(modes) == 1 else '%d rows' % len(modes), ' and '.join(mode_lines(modes)), MODE_FILE)}
-    print('Effect: on a new branch %s of %s, %s, and open one pull request for you to merge. Nothing else is '
-          'written.' % (HOST_BRANCH, repo, ' and '.join(said[w] for w in writes)))
-    if not got.get('--yes'):
-        print("Nothing written. On the user's yes to exactly this, run again with --yes.")
-        return 12
-    based = {HOST_FILE: None, MODE_FILE: fleet if local else None}
-    state.value['setting'] = dict({'host': name, 'state': 'pending', 'mode': picked}, **kept(modes))
-    if not state.save():
-        raise Exit(10, 'Could not save the host setting first; nothing written.')
+    if MODE_FILE in writes and not fresh:
+        want[MODE_FILE] = (models or fleet).rstrip('\n') + '\n' + mode_section(modes) if local and not values \
+            else models
+    elif fresh and local:
+        want[MODE_FILE] = fresh[MODE_FILE].rstrip('\n') + '\n' + mode_section(modes)
+    if fresh:
+        writes = [w for w in writes if w != MODE_FILE] + list(fresh)
+    based = {path: None for path in writes}
+    if MODE_FILE in writes and not fresh:
+        based[MODE_FILE] = fleet
     base = run(['gh', 'api', 'repos/%s' % repo, '--jq', '.default_branch'], env)
     branch = base.stdout.decode('utf-8', 'replace').strip() if base is not None and base.returncode == 0 else ''
     if not branch:
         raise Exit(1, "Could not read the default branch; nothing written.")
+    recorded = state.value.get('setting') or {}
+    head, note, proposed = recorded.get('branch', HOST_BRANCH), '', {}
+    if brain is not None:
+        head, note = brain_head(repo, env, branch, brain)
+        if head == BRAIN_BRANCH:
+            proposed = brain_files(got, host, brain)
+    elif recorded.get('state') not in ('pending', 'opened'):
+        head = HOST_BRANCH
+    if recorded.get('state') in ('pending', 'opened') or head == BRAIN_BRANCH:
+        found = host_pull(repo, env, head)
+        if found and found[1] == 'CLOSED':
+            raise Exit(5, 'The host setting pull request %s was closed without merging; the user reopens and merges '
+                          'it, or answers where agents run again; nothing written.' % found[0])
+        if found and not branch_check(repo, env, branch, head, proposed, want, based):
+            state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked,
+                                           'branch': head}, **kept(modes))
+            state.save()
+            print('The %s pull request is open: %s. The user merges it; launch waits for it.%s' % (
+                'one setup' if chosen else 'host setting', found[0], note))
+            return 0
+    rows = 'add %s, %s' % ('one row' if len(modes) == 1 else '%d rows' % len(modes), ' and '.join(mode_lines(modes)))
+    table = models and 'set its Models table to %s for the Orchestrator and Builder, with %s as the Reviewer' % (
+        ' '.join(choice), ' '.join(chosen['reviewer']))
+    said = {HOST_FILE: 'add %s holding `Host: %s`' % (HOST_FILE, name),
+            MODE_FILE: '%s, to %s, changing no other line' % (rows, MODE_FILE) if not models else
+            'in %s, %s, changing no other line' % (MODE_FILE, ' and '.join(
+                [table] + ([rows] if local and not values else [])))}
+    if fresh:
+        said[MODE_FILE] = ('add the setup files a new project needs: %s with its Models table naming %s for the '
+                           'Orchestrator and Builder and %s as the Reviewer%s, and %s' % (
+                               MODE_FILE, ' '.join(choice), ' '.join(chosen['reviewer']),
+                               ', with ' + rows[4:] if local else '', ', '.join(p for p in fresh if p != MODE_FILE)))
+    shown = [said[w] for w in writes if w in said]
+    if head == BRAIN_BRANCH:
+        print("Effect: on branch %s of %s, the brain's open pull request, %s, so that one pull request carries the "
+              'brain and these settings, for you to merge once. Nothing else is written.' % (
+                  head, repo, ' and '.join(shown)))
+    else:
+        print('Effect: on a new branch %s of %s, %s, and open one pull request for you to merge. Nothing else is '
+              'written.' % (HOST_BRANCH, repo, ' and '.join(shown)))
+    if not got.get('--yes'):
+        print("Nothing written. On the user's yes to exactly this, run again with --yes.")
+        return 12
+    state.value['setting'] = dict({'host': name, 'state': 'pending', 'mode': picked, 'branch': head}, **kept(modes))
+    if not state.save():
+        raise Exit(10, 'Could not save the host setting first; nothing written.')
 
     def tip_of(name):
         read = run(['gh', 'api', 'repos/%s/git/ref/heads/%s' % (repo, name), '--jq', '.object.sha'], env)
@@ -1245,63 +1368,237 @@ def setting(got):
     sha = tip_of(branch)
     if sha is None:
         raise Exit(1, "Could not read the default branch's tip; nothing written.")
-    if tip_of(HOST_BRANCH) is None:
-        run(['gh', 'api', '-X', 'POST', 'repos/%s/git/refs' % repo, '-f', 'ref=refs/heads/' + HOST_BRANCH,
+    if tip_of(head) is None:
+        run(['gh', 'api', '-X', 'POST', 'repos/%s/git/refs' % repo, '-f', 'ref=refs/heads/' + head,
              '-f', 'sha=' + sha], env)
-        if tip_of(HOST_BRANCH) is None:
+        if tip_of(head) is None:
             raise Exit(6, 'Whether branch %s was made is uncertain; run this again to read it before anything else.'
-                       % HOST_BRANCH)
+                       % head)
+    elif head == BRAIN_BRANCH:
+        branch_check(repo, env, branch, head, proposed, want, based)
     # R4: each file and its blob SHA from one read; the write names exactly that blob, so GitHub refuses it when
     # anyone changed the file after this check.
-    read = {path: blob(repo, path, env, HOST_BRANCH) for path in writes}
+    read = {path: blob(repo, path, env, head) for path in writes}
     have = {path: read[path][0] for path in writes}
     for path in writes:
         if have[path] not in (want[path], based[path]):
             raise Exit(5, 'Branch %s already holds another %s; OpenWiz never writes over it. The owner deletes that '
                           'branch, or merges it if it is what they want, then run this again; nothing written.' % (
-                              HOST_BRANCH, path))
+                              head, path))
     for path in writes:
         if have[path] == want[path]:
             continue
         checked = read[path][1]
         put = ['gh', 'api', '-X', 'PUT', 'repos/%s/contents/%s' % (repo, path), '-f',
-               'message=Where agents run: Host: %s%s' % (name, ', ' + picked if local else ''), '-f',
-               'content=' + base64.b64encode(want[path].encode()).decode(), '-f', 'branch=' + HOST_BRANCH]
+               'message=%s' % ('OpenWiz setup: the Models table' + (', Host: %s' % name if name else '') +
+                               (', ' + picked if local else '') if models else
+                               'Where agents run: Host: %s%s' % (name, ', ' + picked if local else '')), '-f',
+               'content=' + base64.b64encode(want[path].encode()).decode(), '-f', 'branch=' + head]
         wrote = run(put + (['-f', 'sha=' + checked] if checked else []), env)
         if wrote is None or wrote.returncode != 0:
             try:
-                now = blob(repo, path, env, HOST_BRANCH)
+                now = blob(repo, path, env, head)
             except Exit:
                 now = read[path]  # unreadable: the uncertain write below says to read the branch first
             if now != read[path] and now[0] != want[path]:
                 raise Exit(5, '%s on %s changed while OpenWiz was writing it, so GitHub refused the write and the '
                               'other change was kept; no pull request was opened. Read the branch, then run this '
-                              'again.' % (path, HOST_BRANCH))
+                              'again.' % (path, head))
             raise Exit(6, 'Writing %s on %s failed or is uncertain; run this again to read the branch before '
-                          'anything else.' % (path, HOST_BRANCH))
-    for path in writes:
-        if raw(repo, path, env, HOST_BRANCH) != want[path]:
-            raise Exit(6, '%s on %s did not read back as written; run this again to read it before anything else.'
-                       % (path, HOST_BRANCH))
-    pull_diff(repo, env, want)
-    if host_pull(repo, env) is None:
+                          'anything else.' % (path, head))
+    if branch_check(repo, env, branch, head, proposed, want, based):
+        raise Exit(6, 'The settings on %s did not read back as written; run this again to read them before anything '
+                      'else.' % head)
+    if host_pull(repo, env, head) is None:
         body = ('Adds `Host: local` to %s and the owner\'s harness permission mode as %s of %s: OpenWiz '
                 'starts this project\'s agents through its local driver, which passes that mode to the harness '
                 'unchanged (records v1, section 6). Merge it to start the first fleet there.' % (
                     HOST_FILE, 'one row' if len(modes) == 1 else 'one row per harness', MODE_FILE)
                 if local else 'Adds `Host: %s` to %s: OpenWiz starts this project\'s agents through its %s driver '
-                '(records v1, section 6). Merge it to start the first fleet there.' % (name, HOST_FILE, name))
-        run(['gh', 'pr', 'create', '--repo', repo, '--head', HOST_BRANCH, '--base', branch, '--title',
-             'Where agents run: %s' % host_label(name).split(',')[0], '--body', body], env)
-    found = host_pull(repo, env)
+                '(records v1, section 6). Merge it to start the first fleet there.' % (name, HOST_FILE, name)
+                if name else 'Sets the Models table of %s to the setup the owner said yes to. Merge it to finish '
+                'setup.' % MODE_FILE)
+        if fresh:
+            body += ' It also adds the setup files a new project needs, %s, from the setup the owner said yes to.' % (
+                ', '.join(fresh))
+        elif models and name:
+            body += ' It also sets the Models table of %s to the setup the owner said yes to.' % MODE_FILE
+        run(['gh', 'pr', 'create', '--repo', repo, '--head', head, '--base', branch, '--title',
+             'Where agents run: %s' % host_label(name).split(',')[0] if name else 'OpenWiz setup', '--body', body],
+            env)
+    found = host_pull(repo, env, head)
     if found is None:
         raise Exit(6, 'Whether the host setting pull request was opened is uncertain; run this again to read it '
                       'before anything else.')
-    state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked}, **kept(modes))
+    state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked,
+                                   'branch': head}, **kept(modes))
     if not state.save():
         raise Exit(6, 'The host setting pull request is open (%s), but that could not be saved.' % found[0])
-    print('Opened %s. The user merges it; launch waits for it on the default branch.' % found[0])
+    if head == BRAIN_BRANCH:
+        print('The one setup pull request, %s, now carries the brain and these settings. The user merges it once; '
+              'then run the setup check and continue.' % found[0])
+    else:
+        print('Opened %s. The user merges it; launch waits for it on the default branch.%s' % (found[0], note))
     return 0
+
+
+SETUP_TEMPLATES = Path(__file__).resolve().parents[2] / 'setup/templates'
+COMPARE_LIMIT = 300
+FRESH_SOURCE = "Source: install's `setting`, from the owner's yes to Connect's block of defaults."
+SEED_SOURCE = ("Source: `tests/test_check.py` and `.github/workflows/check.yml`, which install's `create-repo` added "
+               "on the owner's yes when it created this repository.")
+
+
+def new_settings(repo, env, choice, reviewer, agents):
+    login = run(['gh', 'api', 'user', '--jq', '.login'], gh_env())
+    login = login.stdout.decode('utf-8', 'replace').strip() if login is not None and login.returncode == 0 else ''
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,38}', login):
+        raise Exit(1, 'Could not read your GitHub login; nothing written.')
+    try:
+        template = (SETUP_TEMPLATES / 'fleet.md').read_text(encoding='utf-8')
+        labels = (SETUP_TEMPLATES / 'triage-labels.md').read_text(encoding='utf-8')
+        parts = re.split(r'^(?=## )', template, flags=re.M)
+        sections = {part.split('\n', 1)[0][3:].strip(): part for part in parts[1:]}
+
+        def intro(title):
+            return sections[title].split('\n|', 1)[0].rstrip('\n') + '\n\n'
+        made = {
+            'Models': intro('Models') + '\n'.join([
+                '| Role | Harness | Model | Effort | `room-cli thread spawn` flags |', '| --- | --- | --- | --- | --- |',
+                model_row('Orchestrator', choice), model_row('Builder', choice), model_row('Reviewer', reviewer),
+                '| Small builder | follows Builder | | | |', '| Fixer | follows Builder | | | |']) +
+            '\n\n%s\n\n' % FRESH_SOURCE,
+            'Roster': intro('Roster') + '| Name | Kind | Driver | Roles | Writes as |\n| --- | --- | --- | --- | --- |\n'
+            "| %s | harness | %s | orchestrator, builder, reviewer, helper | %s's App |\n\n" % (
+                WRITTEN_NAMES.get(choice[0], choice[0]), 'cloudroom' if agents == 'cloud' else agents, login),
+            'Test commands': '## Test commands\n\nThe full set, in this order. A builder runs all of it locally, and '
+            'opens its pull request only when every command passes.\n\n| # | Folder | Command | CI check |\n'
+            '| --- | --- | --- | --- |\n| 1 | root | `%s` | `check` |\n\n%s\n\n' % (SEED_COMMAND, SEED_SOURCE),
+            'CI checks': '## CI checks\n\n| Check | Runs | Required on |\n| --- | --- | --- |\n'
+            '| `check` | 1 | none yet: no branch rule |\n\n%s\n\n' % SEED_SOURCE,
+            'Standing merge rules': '## Standing merge rules\n\nNone yet: every merge waits for the user.\n\n%s\n\n'
+            % FRESH_SOURCE,
+            'Approval rules': re.sub(r'^Source: <.*$', FRESH_SOURCE, re.sub(
+                r"<the person's name or GitHub login>", '`%s`' % login, sections.get('Approval rules', '')),
+                flags=re.M),
+            'GitHub identity': '## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n| Record authors | `%s` |\n\n'
+            "Source: `gh api user`, the account the owner signed in with.\n" % login}
+        fleet = parts[0] + ''.join(made.get(title, sections[title]) for title in sections)
+        if not fleet.endswith('\n'):
+            fleet += '\n'
+        triage = re.sub(r'^\| `([a-z-]+)` \| `<label>` \|', r'| `\1` | `\1` |', labels, flags=re.M)
+    except (OSError, UnicodeError, KeyError, IndexError):
+        raise Exit(5, "Could not read the setup skill's templates; nothing written.")
+    files = {
+        MODE_FILE: fleet,
+        'docs/agents/issue-tracker.md': (
+            '# Issue tracker: GitHub\n\nThis project\'s versions, specs and tickets live in its GitHub repository, '
+            '%s. Use the `gh` CLI for everything.\n\n## Where things live\n\n- A version is a milestone, named '
+            'after the version.\n- A spec is an issue in that milestone; its body is the spec.\n- Each of its tickets '
+            'is a sub-issue, with "blocked by" links to the tickets it waits for, and its work is its pull request.'
+            '\n\n## Repositories\n\n- **Development tracker:** %s.\n'
+            '- **Private records:** the brain `openwiz init` made, `.openwiz/brain/`.\n\n%s Run the `setup` skill '
+            'to add more.\n' % (repo, repo, FRESH_SOURCE)),
+        'docs/agents/triage-labels.md': triage,
+        'docs/agents/domain.md': (
+            '# Domain docs\n\nWhere this project keeps its words and its decisions.\n\n## Before exploring, read '
+            'these\n\n- **`GLOSSARY.md`** at the root, when present: the project\'s words, each defined once.\n'
+            '- **`docs/adr/`**, when present: one short file per hard-to-reverse decision.\n'
+            '- **The brain**, `.openwiz/brain/` (from `openwiz init`): `grills/` holds each grill with its confirmed '
+            'answers and `decisions/` the decision records. Read the grill that fed the spec; never copy it into a '
+            'public tree.\n\nIf the glossary or ADRs do not exist yet, carry on without them: the `grill` skill '
+            'creates them as terms and decisions get settled.\n\n%s\n' % FRESH_SOURCE),
+    }
+    module = settings_module()
+    problems = []
+    module.fleet(files[MODE_FILE], problems)
+    module.triage(triage, None, problems)
+    if problems or re.search(r'<[^>\n]*>', fleet + triage):
+        raise Exit(5, "The new project's setup files would fail setup's own check (%s); nothing written."
+                   % '; '.join(problems or ['a template placeholder is left']))
+    return files
+
+
+def brain_head(repo, env, branch, brain):
+    number = brain['pull']['number']
+    if brain['location'] == 'in_repository':
+        found = brain_pull(brain['brain_repository'], number, env)
+        if found is None:
+            raise Exit(1, "Could not read the brain's pull request #%d; nothing written." % number)
+        url, state, head, base, crossed = found
+        if head != BRAIN_BRANCH or base != branch or crossed:
+            raise Exit(5, "The brain's pull request %s is not init's proposal from %s onto %s, so OpenWiz adds "
+                          'nothing to it; nothing written.' % (url, BRAIN_BRANCH, branch))
+        if state == 'CLOSED':
+            raise Exit(5, "The brain's pull request %s was closed without merging; run openwiz init again; nothing "
+                          'written.' % url)
+        if state == 'OPEN':
+            return BRAIN_BRANCH, ''
+        return HOST_BRANCH, " The brain's pull request is already merged, so this is the one setup pull request."
+    found = brain_pull(brain['brain_repository'], number, env)
+    state = found[1] if found else brain['pull']['state'].upper()
+    url = 'https://github.com/%s/pull/%d' % (brain['brain_repository'], number)
+    if state == 'MERGED':
+        return HOST_BRANCH, (" The brain's pull request in its private companion is already merged, so this is the "
+                             'one setup pull request.')
+    return HOST_BRANCH, (" The brain's pull request in its private companion, %s, is %s: the user merges it too."
+                         % (url, 'closed; run openwiz init again' if state == 'CLOSED' else 'not merged yet'))
+
+
+def brain_pull(repo, number, env):
+    result = run(['gh', 'pr', 'view', str(number), '--repo', repo, '--json',
+                  'url,state,headRefName,baseRefName,isCrossRepository'], env)
+    try:
+        assert result is not None and result.returncode == 0
+        found = strict(result.stdout.decode('utf-8'))
+        assert set(found) == {'url', 'state', 'headRefName', 'baseRefName', 'isCrossRepository'}
+        assert found['state'] in ('OPEN', 'MERGED', 'CLOSED') and type(found['isCrossRepository']) is bool
+        assert all(isinstance(found[k], str) for k in ('url', 'headRefName', 'baseRefName'))
+        return found['url'], found['state'], found['headRefName'], found['baseRefName'], found['isCrossRepository']
+    except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError):
+        return None
+
+
+def brain_files(got, host, brain):
+    build = got.get('--build') or (str(Path(host['adapters']).parents[1]) if host.get('adapters') else None)
+    if not build:
+        raise Exit(5, 'Run setting with --build <the verified build folder>: it reads the brain files init '
+                      'proposes from it; nothing written.')
+    try:
+        sys.dont_write_bytecode = True
+        spec = importlib.util.spec_from_file_location('openwiz_init', Path(build) / 'runtime/setup/init.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        files = module.files({k: v for k, v in brain.items() if k != 'pull'})
+        assert isinstance(files, dict) and files and all(
+            isinstance(k, str) and k.startswith(BRAIN_FOLDER) and isinstance(v, str) for k, v in files.items())
+        return files
+    except Exception:
+        raise Exit(5, "Could not read the brain files init proposes from %s; nothing written." % build)
+
+
+def branch_check(repo, env, branch, head, proposed, want, based):
+    result = run(['gh', 'api', 'repos/%s/compare/%s...%s' % (repo, branch, head)], env)
+    try:
+        assert result is not None and result.returncode == 0
+        files = strict(result.stdout.decode('utf-8'))['files']
+        assert isinstance(files, list) and len(files) < COMPARE_LIMIT
+        changed = {f['filename']: f['status'] for f in files}
+        assert len(changed) == len(files) and all(isinstance(k, str) for k in changed)
+    except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError):
+        raise Exit(6, "Could not read the setup pull request's changes; it is not ready. Run this again to read "
+                      'them before anything else.')
+    missing = []
+    for path in sorted(set(changed) | set(proposed) | set(want)):
+        text = raw(repo, path, env, head) if path in changed or path in proposed else based.get(path)
+        if path in proposed and (changed.get(path) != 'added' or text != proposed[path]) \
+                or path not in proposed and (path not in want or text not in (want[path], based[path])):
+            raise Exit(5, 'Branch %s changes %s beyond the approved setup, so its pull request is not ready and '
+                          'OpenWiz writes, opens or reports nothing. The owner deletes that branch (closing its '
+                          'pull request), then run this again.' % (head, path))
+        if path in want and text != want[path]:
+            missing.append(path)
+    return missing
 
 
 def grill(got):
@@ -1331,6 +1628,199 @@ def select(got):
     if not state.save():
         raise Exit(10, 'Could not save the repository; nothing recorded.')
     print('Recorded: this onboarding is for %s. Connect it next.' % name)
+    return 0
+
+
+def read_options(path):
+    try:
+        offered = strict(Path(path).read_text(encoding='utf-8'))
+        assert offered['schema'] == 'openwiz.cloud-options.v1' and offered['state'] == {'kind': 'offered'}
+        assert all(isinstance(h['provider'], str) and isinstance(m['model'], str) and isinstance(m['efforts'], list)
+                   and all(isinstance(e, str) for e in m['efforts']) for h in offered['harnesses'] for m in h['models'])
+        return offered
+    except (OSError, ValueError, KeyError, TypeError, AssertionError):
+        raise Exit(1, 'The saved `openwiz models --json` output is unreadable; nothing recorded.')
+
+
+def recommended(host, offered):
+    usable = [p for p in ('claude-code', 'codex') if host['agents'] != 'local' or p in host.get('harnesses', ())]
+    for provider in usable:
+        if offers(offered, RECOMMENDED[FAMILY[provider]]):
+            return RECOMMENDED[FAMILY[provider]]
+    for provider in usable:
+        for h in offered['harnesses']:
+            for m in (h['models'] if h['provider'] == provider else []):
+                if m['efforts']:
+                    return provider, m['model'], 'medium' if 'medium' in m['efforts'] else m['efforts'][0]
+    raise Exit(5, 'No harness %s has is offered in the saved models list; nothing recorded.' % where_of(host['agents']))
+
+
+def defaults(got):
+    state = State(got['--state'])
+    host, repo = state.value.get('host'), state.value.get('repo')
+    if not host or not repo:
+        raise Exit(5, 'Ask where agents run (where) and choose the repository (select or create-repo) first; '
+                      'nothing recorded.')
+    offered = read_options(got['--options'])
+    if host['agents'] != 'cloud' and offered.get('source') != 'local':
+        raise Exit(5, 'Read the local options with `openwiz models --json --host %s`; nothing recorded.'
+                   % host['agents'])
+    login = run(['gh', 'api', 'user', '--jq', '.login'], gh_env())
+    login = login.stdout.decode('utf-8', 'replace').strip() if login is not None and login.returncode == 0 else ''
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,38}', login):
+        raise Exit(5, 'Could not read your GitHub login; sign in to GitHub yourself (Connect, Sign-in), then run '
+                      'this again; nothing recorded.')
+    choice = ((got['--harness'], got['--model'], got['--effort']) if '--harness' in got
+              else recommended(host, offered))
+    if choice[0] not in FAMILY or not offers(offered, choice):
+        raise Exit(5, 'That harness, model and effort are not among the offered options; nothing recorded.')
+    if host['agents'] == 'local' and choice[0] not in host.get('harnesses', ()):
+        raise Exit(5, '%s is not on this machine, so its agents cannot run here; nothing recorded.' % choice[0])
+    driver = host['agents'] != 'cloud'
+    override = (got['--reviewer-harness'], got['--reviewer-model'], got['--reviewer-effort']) \
+        if '--reviewer-harness' in got else None
+    if override and (FAMILY.get(override[0]) in (None, FAMILY[choice[0]]) or not offers(offered, override)):
+        raise Exit(5, 'The Reviewer must be from the other model family than the Builder and among the offered '
+                      'options; nothing recorded.')
+    if override and host['agents'] == 'local' and override[0] not in host.get('harnesses', ()):
+        raise Exit(5, '%s is not on this machine, so its reviews cannot run here; nothing recorded.' % override[0])
+    env = repository(repo)
+    fleet = raw(repo, MODE_FILE, env)
+    if fleet is None and not seeded(state.value, repo):
+        raise untested(repo)
+    if fleet is None:
+        reviewer, alone = (override, None) if override else reviewer_of(None, choice, offered, driver)
+        alone = alone and ALONE % alone
+    else:
+        _, intended, said = models_change(fleet, choice, offered, driver, reviewer=override)
+        reviewer, alone = intended['Reviewer'], said.split('. ', 1)[1] if '. ' in said else None
+    issue = int(got['--service-issue']) if '--service-issue' in got else 'new'
+    app = bool(got.get('--app'))
+    record = {'operator': got.get('--operator', login), 'service_issue': issue, 'harness': choice[0],
+              'model': choice[1], 'effort': choice[2], 'reviewer': list(reviewer),
+              'identity': 'app' if app else 'personal_login'}
+    recorded = state.value.get('defaults')
+    if (state.value.get('setting') or {}).get('state') in ('pending', 'opened', 'merged') and recorded != record:
+        raise Exit(5, 'The setup pull request already carries the recorded setup; ask the owner to change that '
+                      'line there instead; nothing recorded.')
+    block = ['- Operator: %s%s' % (record['operator'], ', your GitHub login' if record['operator'] == login else ''),
+             '- Service issue: %s' % ('a new issue in %s, "OpenWiz service records"' % repo if issue == 'new'
+                                      else 'issue #%d in %s' % (issue, repo)),
+             '- Builder: %s' % ' '.join(choice),
+             '- Reviewer: %s%s' % (' '.join(reviewer), ' (%s)' % alone if alone else ''),
+             '- Acting identity: %s' % (
+                 'the OpenWiz GitHub App' if app else
+                 'your own GitHub login, %s, instead of the OpenWiz GitHub App, for the first fleet' % login)]
+    name = None if host['agents'] == 'cloud' else host['agents']
+    files = ('the setup files a new project needs (docs/agents/fleet.md, issue-tracker.md, triage-labels.md and '
+             'domain.md) with the Models table above' if fleet is None else
+             'the Models table above in docs/agents/fleet.md')
+    effects = [
+        '1. %s' % ('service-issue: use your open issue titled "OpenWiz service records" in %s, or open one.' % repo
+                   if issue == 'new'
+                   else 'Use issue #%d in %s for the service records; nothing is opened.' % (issue, repo)),
+        "2. setup.py prepare: save these values as %s's project in this computer's private OpenWiz setup state."
+        % repo,
+        '3. %s' % ('The OpenWiz GitHub App setup, as its own steps show.' if app else
+                   'github_login.py skip-app: your own GitHub login acts and the App stays unset.'),
+        "4. openwiz init: create the OpenWiz labels %s is missing and open the brain's pull request (for a public "
+        'repository, in the private companion it creates).' % repo,
+        "5. setting: add to the brain's pull request %s%s. For a companion brain these go in one settings pull "
+        'request of %s instead.' % (files, '' if not name else ', and docs/agents/host.md with `Host: %s`%s' % (
+            name, ' and the rows for the mode question that follows this block' if name == 'local' else ''), repo)]
+    digest = hashlib.sha256(json.dumps({'repo': repo, 'login': login, 'host': host['agents'], 'record': record,
+                                        'block': block, 'effects': effects}, sort_keys=True).encode()).hexdigest()
+    print('Recommended setup for %s; one yes accepts all of it:' % repo)
+    print('\n'.join(block))
+    print('That yes covers these steps, each run from its own preview; anything a preview shows beyond its step is '
+          'asked first:')
+    print('\n'.join(effects))
+    if not got.get('--yes'):
+        print('Use this setup, or change any line?')
+        print("Nothing recorded. On the user's yes, run again with --yes --confirm %s; for a changed line add its "
+              'flag: --operator, --service-issue, --harness with --model and --effort, --reviewer-harness with '
+              '--reviewer-model and --reviewer-effort, or --app, and show the new block.' % digest)
+        return 12
+    if got['--confirm'] != digest:
+        raise Exit(5, 'This setup is not the one the user said yes to: show this block and ask again; nothing '
+                      'recorded.')
+    state.value['defaults'] = record
+    if not state.save():
+        raise Exit(10, 'Could not save the setup; nothing recorded.')
+    print('Recorded this setup, as the user said yes to it. Next, on that same yes, run steps 1 to 4 in order; then '
+          'the permission mode (mode, this machine only) and step 5, setting.')
+    return 0
+
+
+SERVICE_TITLE = 'OpenWiz service records'
+
+
+def service_number(value):
+    chosen, service = value.get('defaults') or {}, value.get('service') or {}
+    if isinstance(chosen.get('service_issue'), int):
+        return chosen['service_issue']
+    if service.get('repo') == value.get('repo') and service.get('state') == 'opened':
+        return service['number']
+    return None
+
+
+def service_found(repo, login, env):
+    result = run(['gh', 'api', 'repos/%s/issues?state=open&creator=%s&per_page=100' % (repo, login)], env)
+    try:
+        assert result is not None and result.returncode == 0
+        issues = strict(result.stdout.decode('utf-8'))
+        assert isinstance(issues, list)
+        found = [i['number'] for i in issues if i.get('title') == SERVICE_TITLE and 'pull_request' not in i
+                 and (i.get('user') or {}).get('login') == login]
+        assert all(type(n) is int and n > 0 for n in found)
+        return min(found) if found else None
+    except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError, AttributeError):
+        raise Exit(6, 'Could not read whether %s already has an open "%s" issue; nothing opened. Run this again '
+                      'to read it.' % (repo, SERVICE_TITLE))
+
+
+def service_issue(got):
+    state = State(got['--state'])
+    repo, chosen = state.value.get('repo'), state.value.get('defaults')
+    if not repo or not chosen:
+        raise Exit(5, 'Take the yes to the recommended setup (defaults) first; nothing opened.')
+    number = service_number(state.value)
+    if number is not None:
+        print('Service issue: #%d in %s. Next, the block\'s step 2: setup.py prepare with --service-issue %d.'
+              % (number, repo, number))
+        return 0
+    print('Effect: in %s, use your open issue titled "%s" when there is one, or else open one new issue with that '
+          'title, with your gh identity, for OpenWiz\'s service records. Nothing else is written.'
+          % (repo, SERVICE_TITLE))
+    if not got.get('--yes'):
+        print("Nothing opened. On the user's yes to the recommended setup, run again with --yes.")
+        return 12
+    env = repository(repo)
+    login = run(['gh', 'api', 'user', '--jq', '.login'], gh_env())
+    login = login.stdout.decode('utf-8', 'replace').strip() if login is not None and login.returncode == 0 else ''
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,38}', login):
+        raise Exit(1, 'Could not read your GitHub login; nothing opened.')
+    number = service_found(repo, login, env)
+    if number is None:
+        state.value['service'] = {'repo': repo, 'state': 'pending'}
+        if not state.save():
+            raise Exit(10, 'Could not save the service issue first; nothing opened.')
+        made = run(['gh', 'api', '-X', 'POST', 'repos/%s/issues' % repo, '-f', 'title=' + SERVICE_TITLE, '-f',
+                    'body=OpenWiz keeps its service records for %s here.' % repo], env)
+        try:
+            assert made is not None and made.returncode == 0
+            reply = strict(made.stdout.decode('utf-8'))
+            assert reply.get('title') == SERVICE_TITLE and type(reply.get('number')) is int and reply['number'] > 0
+            number = reply['number']
+        except (AssertionError, UnicodeDecodeError, ValueError, AttributeError):
+            raise Exit(6, 'Whether the "%s" issue was opened in %s is uncertain; run this again: it reads the open '
+                          'issues before it opens one.' % (SERVICE_TITLE, repo))
+    state.value['service'] = {'repo': repo, 'state': 'opened', 'number': number}
+    if not state.save():
+        raise Exit(6, 'Issue #%d in %s holds the service records, but that could not be saved; run this again to '
+                      'read it back.' % (number, repo))
+    print('Service issue: #%d in %s. Next, the block\'s step 2: setup.py prepare with --service-issue %d.'
+          % (number, repo, number))
     return 0
 
 
@@ -1374,11 +1864,23 @@ def choose(got):
         env = repository(state.value.get('repo'))
     except Exit:
         env = None
-    wrote, intended = (None, None) if env is None else write_models(settings, offered, host['agents'] != 'cloud')
     try:
         remote = None if env is None else fleet_text(env, state.value['repo'])
     except Exit:
         remote = None
+    wrote = intended = None
+    if remote is not None and state.value.get('defaults'):
+        try:
+            choice = (settings['harness'], settings['model'], settings['effort'])
+            _, intended, said = models_change(remote, choice, offered, host['agents'] != 'cloud',
+                                              reviewer=tuple(state.value['defaults']['reviewer']))
+            wrote = said + '; already on the default branch, from the setup pull request.'
+            if models_table(remote) != intended:
+                wrote = intended = None
+        except (Exit, ValueError):
+            wrote = intended = None
+    if wrote is None and env is not None:
+        wrote, intended = write_models(settings, offered, host['agents'] != 'cloud')
     if remote is not None:
         try:
             read = models_table(remote) == intended
@@ -1412,12 +1914,16 @@ def tables_line(choices, why):
                 why, choices['harness'], choices['model'], choices['effort']))
 
 
-def models_table(text):
+def settings_module():
     sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location('openwiz_setup_settings', SETTINGS)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.models(text)
+    return module
+
+
+def models_table(text):
+    return settings_module().models(text)
 
 
 def offers(offered, agent):
@@ -1471,54 +1977,7 @@ def write_in(folder, choice, offered, driver=False):
             os.close(handle)
     except (OSError, UnicodeError, AssertionError):
         raise Exit(5, 'This checkout has no readable docs/agents/fleet.md; run setup first; nothing recorded.')
-    try:
-        table = models_table(text)
-    except ValueError as error:
-        raise Exit(5, "docs/agents/fleet.md's Models table breaks the models contract (%s); fix it or run setup "
-                      'again; nothing recorded.' % '; '.join(error.args[0]))
-    lines = text.split('\n')
-    if table:
-        heading = next(n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Models')
-        start = next(n for n in range(heading, len(lines)) if lines[n].startswith('|'))
-        end = next((n for n in range(start, len(lines)) if not lines[n].startswith('|')), len(lines))
-        reviewer, kept = table['Reviewer'], lines[start + 4]
-    else:
-        older = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() in OLDER]
-        if not older:
-            raise Exit(5, 'docs/agents/fleet.md has no Models table and no older model tables; run setup first; '
-                          'nothing recorded.')
-        start = end = older[0]
-        found = older_rules(text)['reviewer_' + FAMILY[choice[0]]]
-        reviewer, kept = (found and (found['harness'], found['model'], found['effort'])), None
-        source = 'the older `%s` table' % REVIEWER[FAMILY[choice[0]]]
-    family = FAMILY[choice[0]]
-    alone = None
-    if not reviewer or FAMILY.get(reviewer[0]) in (None, family):
-        reviewer = RECOMMENDED['gpt' if family == 'claude' else 'claude']
-        kept, source = None, 'the recommended other-family choice'
-        if driver and not any(h['provider'] == reviewer[0] for h in offered['harnesses']):
-            alone = reviewer[0]
-        elif not offers(offered, reviewer):
-            raise Exit(5, 'The Reviewer must be from the other model family; its recommended choice, %s, is not '
-                          'offered now; nothing recorded.' % ' '.join(reviewer))
-    rows = ['| Role | Harness | Model | Effort | `room-cli thread spawn` flags |', '| --- | --- | --- | --- | --- |',
-            model_row('Orchestrator', choice), model_row('Builder', choice), kept or model_row('Reviewer', reviewer),
-            '| Small builder | follows Builder | | | |', '| Fixer | follows Builder | | | |']
-    if not table:
-        rows = ['## Models', ''] + rows + ['', "Source: install's `choose`, from the owner's choice of harness, model "
-                                           'and effort for the Orchestrator and Builder; the Reviewer is %s.' % source, '']
-    written = '\n'.join(lines[:start] + rows + lines[end:])
-    try:
-        assert models_table(written) == {'Orchestrator': choice, 'Builder': choice, 'Reviewer': reviewer,
-                                         'Small builder': None, 'Fixer': None}
-    except (ValueError, AssertionError):
-        raise Exit(5, 'cannot be written to the Models table: %s; nothing recorded.' % ' '.join(choice))
-    intended = {'Orchestrator': choice, 'Builder': choice, 'Reviewer': reviewer, 'Small builder': None, 'Fixer': None}
-    said = ('docs/agents/fleet.md: the Models table names %s for the Orchestrator and Builder, with %s as the '
-            'Reviewer' % (' '.join(choice), ' '.join(reviewer)))
-    if alone:
-        said += ('. %s is not installed here, so each review runs with the builder\'s harness, marked '
-                 'same-family review' % alone)
+    written, intended, said = models_change(text, choice, offered, driver)
     if written == text:
         return said + '; already written.', intended
     temporary = '.fleet-%s' % os.urandom(8).hex()
@@ -1537,6 +1996,63 @@ def write_in(folder, choice, offered, driver=False):
     return 'Wrote %s; commit it and merge it to the default branch.' % said, intended
 
 
+def models_change(text, choice, offered, driver=False, reviewer=None):
+    try:
+        table = models_table(text)
+    except ValueError as error:
+        raise Exit(5, "docs/agents/fleet.md's Models table breaks the models contract (%s); fix it or run setup "
+                      'again; nothing recorded.' % '; '.join(error.args[0]))
+    lines = text.split('\n')
+    if table:
+        heading = next(n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Models')
+        start = next(n for n in range(heading, len(lines)) if lines[n].startswith('|'))
+        end = next((n for n in range(start, len(lines)) if not lines[n].startswith('|')), len(lines))
+        found, kept = table['Reviewer'], lines[start + 4]
+        source = None
+    else:
+        older = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() in OLDER]
+        if not older:
+            raise Exit(5, 'docs/agents/fleet.md has no Models table and no older model tables; run setup first; '
+                          'nothing recorded.')
+        start = end = older[0]
+        found = older_rules(text)['reviewer_' + FAMILY[choice[0]]]
+        found, kept = (found and (found['harness'], found['model'], found['effort'])), None
+        source = 'the older `%s` table' % REVIEWER[FAMILY[choice[0]]]
+    alone = None
+    if reviewer is None:
+        reviewer, alone = reviewer_of(found, choice, offered, driver)
+    if reviewer != found:
+        kept, source = None, 'the recommended other-family choice'
+    rows = ['| Role | Harness | Model | Effort | `room-cli thread spawn` flags |', '| --- | --- | --- | --- | --- |',
+            model_row('Orchestrator', choice), model_row('Builder', choice), kept or model_row('Reviewer', reviewer),
+            '| Small builder | follows Builder | | | |', '| Fixer | follows Builder | | | |']
+    if not table:
+        rows = ['## Models', ''] + rows + ['', "Source: install's `choose`, from the owner's choice of harness, model "
+                                           'and effort for the Orchestrator and Builder; the Reviewer is %s.' % source, '']
+    written = '\n'.join(lines[:start] + rows + lines[end:])
+    intended = {'Orchestrator': choice, 'Builder': choice, 'Reviewer': reviewer, 'Small builder': None, 'Fixer': None}
+    try:
+        assert models_table(written) == intended
+    except (ValueError, AssertionError):
+        raise Exit(5, 'cannot be written to the Models table: %s; nothing recorded.' % ' '.join(choice))
+    said = ('docs/agents/fleet.md: the Models table names %s for the Orchestrator and Builder, with %s as the '
+            'Reviewer' % (' '.join(choice), ' '.join(reviewer)))
+    if alone:
+        said += '. ' + ALONE % alone
+    return written, intended, said
+
+
+def reviewer_of(found, choice, offered, driver):
+    family = FAMILY[choice[0]]
+    if found and FAMILY.get(found[0]) not in (None, family):
+        return found, None
+    reviewer = RECOMMENDED['gpt' if family == 'claude' else 'claude']
+    if driver and not any(h['provider'] == reviewer[0] for h in offered['harnesses']):
+        return reviewer, reviewer[0]
+    if not offers(offered, reviewer):
+        raise Exit(5, 'The Reviewer must be from the other model family; its recommended choice, %s, is not '
+                      'offered now; nothing recorded.' % ' '.join(reviewer))
+    return reviewer, None
 
 
 def repository(recorded):
@@ -2285,6 +2801,88 @@ def first_merge(got):
     return 0
 
 
+def setup_value(folder):
+    path = Path(folder) / 'setup/state.json'
+    try:
+        info = os.lstat(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise Exit(10, "OpenWiz's setup state must be an owner-only file; " + NOTHING)
+        value = strict(path.read_text(encoding='utf-8'))
+        assert value['schema'] == 'openwiz.setup-state.v1' and isinstance(value['operations'], list)
+        return value
+    except FileNotFoundError:
+        return {'operations': []}
+    except (OSError, ValueError, KeyError, TypeError, AssertionError):
+        raise Exit(10, "OpenWiz's setup state is unreadable; " + NOTHING)
+
+
+def init_pull(folder, value):
+    path = Path(folder) / 'setup/init.json'
+    try:
+        info = os.lstat(path)
+        assert stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077
+        journal = strict(path.read_text(encoding='utf-8'))
+        assert journal['schema'] == 'openwiz.init-journal.v1' and isinstance(journal['operations'], dict)
+        for operation in reversed(value['operations']):
+            entry = journal['operations'].get(operation.get('operation_id')) if isinstance(operation, dict) else None
+            if entry is None or operation.get('kind') != 'prepare_project' or operation.get('phase') != 'applied':
+                continue
+            pull = entry['pull']
+            assert set(pull) == {'number', 'state'} and type(pull['number']) is int and pull['number'] > 0
+            assert pull['state'] in ('open', 'merged', 'closed')
+            return pull
+    except (OSError, ValueError, KeyError, TypeError, AssertionError):
+        pass
+    return None
+
+
+CONNECT_STEPS = {
+    'service': "Run the block's step 1: service-issue --yes. It reuses the open \"OpenWiz service records\" "
+               'issue or opens one, and reads a lost reply back before any second try.',
+    'prepare': "Run the block's step 2: setup.py prepare --state-dir <state> "
+               '--repository %(repo)s --operator %(operator)s --service-issue %(issue)s --harness %(harness)s --model '
+               '%(model)s --effort %(effort)s%(host)s, its preview then --yes --operation <id>.',
+    'identity': "Run the block's step 3: %(identity)s, its preview then --yes --operation <id>.",
+    'init': "Run the block's step 4: openwiz init --repository %(repo)s --state-dir <state> --json, then "
+            '--yes --operation <id>.',
+}
+
+
+def connect_pending(folder, onboarding):
+    repo, chosen, host = onboarding['repo'], onboarding['defaults'], onboarding['host']
+    value = setup_value(folder)
+    project, identity, brain = value.get('project'), value.get('identity'), value.get('brain')
+    issue = service_number(onboarding)
+    if issue is None:
+        return 'service', None
+    same = lambda name: isinstance(name, str) and name.lower() == repo.lower()
+    if not (isinstance(project, dict) and same(project.get('repository'))
+            and project.get('operator') == chosen['operator']
+            and tuple(project.get(k) for k in ('harness', 'model', 'effort')) == (
+                chosen['harness'], chosen['model'], chosen['effort'])
+            and project.get('host', 'cloud') == host['agents']
+            and issue == project.get('service_issue')):
+        return 'prepare', None
+    if not (isinstance(identity, dict) and same(identity.get('repository'))
+            and identity.get('selected') == chosen['identity']):
+        return 'identity', None
+    pull = init_pull(folder, value)
+    if not (isinstance(brain, dict) and same(brain.get('code_repository'))
+            and isinstance(brain.get('brain_repository'), str) and re.fullmatch(REPOSITORY, brain['brain_repository'])
+            and brain.get('location') in ('in_repository', 'companion')) or pull is None:
+        return 'init', None
+    return None, dict(brain, pull=pull)
+
+
+def connect_step(pending, onboarding):
+    chosen, agents = onboarding['defaults'], onboarding['host']['agents']
+    return CONNECT_STEPS[pending] % dict(
+        chosen, repo=onboarding['repo'], host='' if agents == 'cloud' else ' --host %s' % agents,
+        issue=service_number(onboarding),
+        identity='the OpenWiz GitHub App setup' if chosen['identity'] == 'app' else 'github_login.py skip-app')
+
+
+
 def prepared(folder):
     """The repository setup selected for this onboarding (its prepared project, or
     else its sign-in), read only; None when there is none or it is unreadable."""
@@ -2333,12 +2931,26 @@ def resume(got):
     elif not repo:
         step = ('project', 'Offer the three choices, with ideas.md for anyone without an idea, then choose or '
                 'create its one repository.')
+    elif not value.get('setup') and value.get('defaults') and not folder:
+        step = ('connect', "Run next again with --setup-state <state>: it reads which of the block's steps setup "
+                'has applied.')
+    elif not value.get('setup') and value.get('defaults') and connect_pending(folder, value)[0]:
+        step = ('connect', connect_step(connect_pending(folder, value)[0], value))
+    elif not value.get('setup') and value.get('defaults') and host['agents'] == 'local' and not value.get('mode'):
+        step = ('mode', 'Run mode, explain each permission mode as it prints, pick none for the owner, then run '
+                'mode --mode <their pick>.')
+    elif not value.get('setup') and value.get('defaults') and setting_.get('state') not in ('opened', 'merged'):
+        step = ('setting', "Run setting --setup-state <state> --build <build>%s: it adds the settings to the brain's "
+                'pull request, the one setup pull request.' % (' again: its pull request is uncertain' if setting_ else ''))
+    elif not value.get('setup') and value.get('defaults'):
+        step = ('connect', 'The user merges the one setup pull request (%s); then run setup.py check, then continue.'
+                % setting_.get('pull', 'setting names it'))
     elif not value.get('setup') and host['agents'] != 'cloud':
-        step = ('connect', 'Prepare %s with setup.py prepare --host %s and omit CloudRoom IDs. '
-                'Run setup.py check, then continue.' % (repo, host['agents']))
+        step = ('connect', 'Show the recommended setup with defaults and take one yes. Prepare %s with setup.py '
+                'prepare --host %s and omit CloudRoom IDs. Run setup.py check, then continue.' % (repo, host['agents']))
     elif not value.get('setup'):
-        step = ('connect', '%sConnect %s with the installed tools, then run continue.' % (
-            'Setup already prepared it; ' if candidate == repo else '', repo))
+        step = ('connect', '%sShow the recommended setup with defaults and take one yes. Connect %s with the '
+                'installed tools, then run continue.' % ('Setup already prepared it; ' if candidate == repo else '', repo))
     elif spec and launched.get('spec') == spec and launched.get('state') in ('authorized', 'pending', 'uncertain') \
             and host['agents'] != 'cloud':
         step = ('launch', 'Run launch --spec %d to read back the heartbeat status and follow the handoff it prints.'
@@ -2402,6 +3014,10 @@ def main(argv):
             return create_repo(got)
         if command == 'select':
             return select(got)
+        if command == 'defaults':
+            return defaults(got)
+        if command == 'service-issue':
+            return service_issue(got)
         if command == 'choose':
             return choose(got)
         if command == 'spec':

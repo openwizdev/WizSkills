@@ -88,5 +88,8 @@ Source: <linked source files, or decider, date and plain decision with a Markdow
 | Setting | Value |
 | --- | --- |
 | Record authors | `<app-slug>[bot]`, `<the login of the account the fleet falls back to>` |
+| App identity | off |
+
+`App identity` stays `off`: nothing reads this row yet (OpenWiz #2394), so no value lets agents or `loop.sh` mint the App's token (`openwiz github token`).
 
 Source: <the App's settings, and `gh api user` on the account the fleet runs as>.

@@ -167,10 +167,10 @@ Accepted/sent never means work completed; created never means started.
 | `fleet.tick.preview` | `fleet-tick.v1.schema.json#/$defs/envelope` |
 | `fleet.due` | `cli.v1.schema.json#/$defs/fleet_due` (`--json`) |
 | `loop off/on` | This schema's `loop_switch`: existing unwrapped event, **no schema field** |
-| `loop validate` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/validate_report` |
-| `loop export` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/export_report` (LC3, #791) |
-| `loop plan` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/plan_report` (LC4, #792) |
-| `loop apply` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/apply_report` (LC5, #793) |
+| `loop validate` | OpenWiz's loop-cli.v1 contract (not carried here): `loop-cli.v1.schema.json#/$defs/validate_report` |
+| `loop export` | OpenWiz's loop-cli.v1 contract (not carried here): `loop-cli.v1.schema.json#/$defs/export_report` (LC3, #791) |
+| `loop plan` | OpenWiz's loop-cli.v1 contract (not carried here): `loop-cli.v1.schema.json#/$defs/plan_report` (LC4, #792) |
+| `loop apply` | OpenWiz's loop-cli.v1 contract (not carried here): `loop-cli.v1.schema.json#/$defs/apply_report` (LC5, #793) |
 
 Tick (`--dry-run`) exits 0 after reporting its plan, 1 for a required global
 read, setup, planning or output failure, and 2 for invalid options, including

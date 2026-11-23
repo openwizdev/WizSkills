@@ -16,21 +16,6 @@
 mergeable: <state>` or `wait: <why>`; CHECKS are fleet.md's required checks,
 comma-separated. Both only read.
 
-`merge` reads, admits and merges HEAD with `gh pr merge --merge
---match-head-commit` (never `--admin`), reads it back and records the outcome:
-`merged <commit>; cost ...` (exit 0), `queued; recorded <id>` (exit 0),
-`pending: ...` (exit 0, nothing recorded: read again next wake),
-`blocked: <why>; recorded <id>` (exit 1). The queue receipt (`launch-fleet:
-merge queued <commit>`) is what tells a later removal from a fresh enqueue and
-what `settle` reads, so it is recorded before the enqueue: a receipt it can't
-confirm prints `not queued: ...` (exit 1) and nothing is enqueued; the next run
-reuses a receipt that did land. A pull request read as queued without its
-receipt gets one then (`queued; recorded <id>`, or `queued; receipt
-unconfirmed ...`, exit 1). Without a merge queue it merges only
-with `--base-rule-checked`, after you applied fleet.md's base rule and
-`fleet.sh every` still prints this merge line. BODY names the APPROVE and the
-plan approval that allowed it.
-
 TICKET is `N` or `OWNER/NAME#N`, and must be one of the issues the pull
 request closes: a bare `N` names its one closing issue numbered N, in whatever
 repository; anything else is `refused: ...` before any write.
@@ -74,17 +59,9 @@ spec: its opening line for PR and HEAD, then EVIDENCE-FILE's `Evidence:` and
 `Look for:` lines. It posts only for a head whose CHECKS are green and that is
 mergeable, refuses an ask the contract refuses (code links included) and posts
 one ask per head (`ask posted <id>`, `ask already posted <id>`).
-
-`settle` is the cost a queued merge still owes: it reads the newest record
-author's queue receipt on the pull request and runs `cost` at that commit
-(`refused: ...` while it isn't merged there), or prints `no queued merge`
-(with the landed outcome when the pull request merged directly). Any `landed
-unknown:` makes it `unknown: ...` (exit 1), so the work stays open for a later
-wake, which reads the report again. A landed comment is read back after
-posting; when an earlier one is there too, the earliest stands and ours is
-deleted.
 """
 import datetime
+import fcntl
 import importlib.util
 import json
 import os
@@ -92,6 +69,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 from urllib.parse import urlsplit
 
 sys.dont_write_bytecode = True
@@ -103,24 +81,31 @@ Stop = post.Stop
 _spec = importlib.util.spec_from_file_location('launch_fleet_records', HERE / 'records.py')
 records = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(records)
+_spec = importlib.util.spec_from_file_location('launch_fleet_queue', HERE / 'queue.py')
+decider = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(decider)
 
 QUERY = '''query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { defaultBranchRef { name } pullRequest(number: $number) {
     id state baseRefName headRefOid isMergeQueueEnabled isInMergeQueue mergeable mergeCommit { oid }
-    mergeQueueEntry { headCommit { oid } } repository { nameWithOwner }
+    mergedBy { login } mergeQueueEntry { headCommit { oid } } repository { nameWithOwner }
     closingIssuesReferences(first: 50) { pageInfo { hasNextPage } nodes { number body repository { nameWithOwner } } }
-    timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 1) {
-      nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } } }
+    timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 100) {
+      nodes { ... on RemovedFromMergeQueueEvent { createdAt reason beforeCommit { oid } } } }
     enqueued: timelineItems(itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT], last: 1) {
-      nodes { ... on AddedToMergeQueueEvent { enqueuer { login } } } }
+      nodes { ... on AddedToMergeQueueEvent { id createdAt enqueuer { login } } } }
     commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 50) { pageInfo { hasNextPage }
       nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } } } } } } } } } }'''
 ENQUEUE = '''mutation($id: ID!, $head: GitObjectID!) {
   enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head}) { mergeQueueEntry { headCommit { oid } } } }'''
 COST = 'tools/collector/cost_line.py'
 SHA = re.compile(r'[0-9a-f]{40}')
+TIME = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z')
+SPENT = 'its claim and then its enqueue were written, so its one re-queue is spent'
 TICKET = re.compile(r'(?:([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#)?([1-9][0-9]{0,11})')
 QUEUED = re.compile(r'launch-fleet: merge queued ([0-9a-f]{40})\b')
+RERAN = 'every required check ran again after the removal and is green'
+CLAIMED = 'launch-fleet: merge re-queue claimed '
 # The late look (RC3): the checkpoints contract's forms and the open-development contract's deciders.
 CONTRACT = HERE.parents[2] / 'contracts/checkpoints.v1.md'
 DECIDERS = ('Jake',)
@@ -145,6 +130,43 @@ PULL_REQUEST = re.compile(r'openwizdev/[A-Za-z0-9._-]+#[1-9][0-9]*')
 LANDED = 'Landed: the fix for this report merged in {pr} and will ship in OpenWiz {version}.'
 LANDED_ANY = re.compile(r'Landed: the fix for this report merged in openwizdev/[A-Za-z0-9._-]+#[1-9][0-9]* '
                         r'and will ship in OpenWiz [0-9]+\.[0-9]+\.[0-9]+\.')
+MERGE_HELP = (
+    '`merge` reads, admits and merges HEAD, never with `--admin`, and records the outcome. With the merge queue '
+    'on, it first refuses while a required check on HEAD is still running (`refused: its required checks are '
+    'running: ...`, exit 1, nothing enqueued or recorded), then enqueues HEAD pinned (`enqueuePullRequest` with '
+    '`expectedHeadOid`) and records the queue receipt (`launch-fleet: merge queued <commit>`) only after it reads '
+    'the queue entry back: `queued; recorded <id>` (exit 0). An enqueue that does not read back as queued prints '
+    "`not queued: <GitHub's reason>; nothing was recorded ...` (exit 1), or `pending: ...` (exit 0, read again next "
+    'wake) when the call succeeded but it still reads open. A pull request read as queued without its receipt gets '
+    'one then (`queued; recorded <id>`, or `queued; receipt unconfirmed ...`, exit 1). The receipt is what `settle` '
+    'reads. Out of the queue, a head with its receipt or a `launch-fleet: merge dropped` record, or whose removal of '
+    "HEAD came after the fleet's own latest enqueue, acts on `queue.py read` (also on any enqueue's read-back): "
+    '`dropped; recorded <id>` posts the drop record once, `waiting: <cause>` writes nothing, a '
+    'second drop, a merge conflict or a person\'s removal is `blocked: ...`, and once every required check ran '
+    'green after the removal it passes the late look again, claims its one retry (`launch-fleet: merge re-queue '
+    'claimed <commit>: <reason> at <time>`, the earliest counts) and prints `re-queued; ...`. A claimed retry is '
+    'spent: it is never enqueued again at that head, and a later wake that still sees no enqueue records `blocked: '
+    're-queue claimed but not confirmed`. A removal of HEAD whose enqueue does not read yet, and queue facts it '
+    'cannot read or that disagree, are `pending: ...` with nothing written. Two runs on one machine take turns. '
+    "A re-queue's read-back `pending: ...` comes after two writes, its claim and then its enqueue, and says so; "
+    'it writes nothing more, no drop record and no delete, and a removal is recorded only once it reads after '
+    'an enqueue by a record author made after the claim. A first enqueue\'s or merge\'s read-back `pending: ...` '
+    'comes after that one call and says so. Every other `pending: ...` comes before any write, and only a wake '
+    'that ends neither `pending: ...` nor `unknown: ...` deletes later duplicates of a receipt, drop record or '
+    'claim. Without a merge queue it merges with `gh pr merge --merge --match-head-commit` only with '
+    "`--base-rule-checked`, after you applied fleet.md's base rule and `fleet.sh every` still prints this merge line, "
+    'and reads it back: `merged <commit>; cost ...` (exit 0). Anything else is `blocked: <why>; recorded <id>` '
+    '(exit 1). TICKET is checked before any write. BODY names the APPROVE and the plan approval that allowed it.')
+SETTLE_HELP = (
+    '`settle` is the cost a merge still owes: it runs `cost` at the merged head when a record author\'s queue '
+    'receipt names that head, or a record author enqueued or merged it, so a merge whose cost write failed still gets '
+    'its line once, even after an earlier head\'s receipt. Before a merge it runs `cost` at the newest receipt\'s '
+    'commit (`refused: ...` while it isn\'t merged there); otherwise it prints `no queued merge` (with the landed '
+    'outcome when the pull request merged). Any '
+    '`landed unknown:` makes it `unknown: ...` (exit 1), so the work stays open for a later wake, which reads the '
+    'report again. A landed comment is read back after posting; when an earlier one is there too, the earliest '
+    'stands and ours is deleted, and a later duplicate naming this fix, at any milestone, that a refused delete left '
+    'behind is deleted on the next run, read back, before it counts as posted.')
 
 
 def snapshot(repo, number):
@@ -168,14 +190,18 @@ def where(main, p, head):
     if p['state'] == 'MERGED' and isinstance((p.get('mergeCommit') or {}).get('oid'), str):
         return 'merged ' + p['mergeCommit']['oid']
     entry = ((p.get('mergeQueueEntry') or {}).get('headCommit') or {}).get('oid')
-    if p['state'] == 'OPEN' and p['isInMergeQueue'] is True and entry == head:
+    inside, on = p.get('isInMergeQueue'), p.get('isMergeQueueEnabled')
+    if p['state'] == 'OPEN' and inside is True and on is True and entry == head:
         return 'queued'
-    if p['state'] == 'OPEN' and p['isInMergeQueue'] is False and type(p['isMergeQueueEnabled']) is bool:
+    if p['state'] == 'OPEN' and inside is False and type(on) is bool and p.get('mergeQueueEntry') is None:
         nodes = (p.get('timelineItems') or {}).get('nodes') or []
         left = nodes[-1] if nodes else None
-        return ('open, the merge queue is ' + ('on' if p['isMergeQueueEnabled'] else 'off')
+        return ('open, the merge queue is ' + ('on' if on else 'off')
                 + (f"; it left the queue at {left['createdAt']}: {left['reason']}" if left else ''))
-    return f"stop: {p['state']}, in the merge queue: {p['isInMergeQueue']}"
+    if p['state'] == 'OPEN':
+        return (f'pending: its queue facts disagree (in the merge queue: {inside}, merge queue on: {on}, '
+                f'queue entry: {entry}); nothing was written, so read it again next wake')
+    return f"stop: {p['state']}, in the merge queue: {inside}"
 
 
 def admission(main, p, head, checks):
@@ -299,10 +325,13 @@ def land(fix, report, auth):
     before = post.thread(repo, report)
     if before is None:
         return f'landed unknown: {at} could not be read, so nothing was posted'
-    for c in before:
-        if post.ours(c, auth) and LANDED_ANY.fullmatch(c.get('body') or ''):
-            return f"landed already posted {c.get('id')}"
     body = LANDED.format(pr=fix, version=version)
+    found = [c['id'] for c in before if post.ours(c, auth) and type(c.get('id')) is int
+             and LANDED_ANY.fullmatch(c.get('body') or '')]
+    if found:
+        mine = LANDED.split('{version}')[0].format(pr=fix)
+        return drop(repo, report, min(found), [c['id'] for c in before if c.get('id') in found
+                                               and c['id'] != min(found) and c['body'].startswith(mine)])
     made = post.read_json('api', '--method', 'POST', f'repos/{repo}/issues/{report}/comments', '-f', f'body={body}')
     if not isinstance(made, dict) or type(made.get('id')) is not int:
         return f'landed unknown: the write on {at} returned no receipt, so reconcile {at} and never retry blind'
@@ -315,10 +344,17 @@ def land(fix, report, auth):
                    and LANDED_ANY.fullmatch(c.get('body') or ''))
     if earliest == made['id']:
         return f"landed posted {made['id']} on {at}"
-    post.gh('api', '--method', 'DELETE', f"repos/{repo}/issues/comments/{made['id']}")
-    back = post.thread(repo, report)
-    if back is None or any(c.get('id') == made['id'] for c in back):
-        return f"landed unknown: our duplicate {made['id']} on {at} could not be deleted, so reconcile {at}"
+    return drop(repo, report, earliest, [made['id']])
+
+
+def drop(repo, report, earliest, duplicates):
+    at = f'{repo}#{report}'
+    for d in duplicates:
+        post.gh('api', '--method', 'DELETE', f'repos/{repo}/issues/comments/{d}')
+    back = post.thread(repo, report) if duplicates else []
+    kept = [d for d in duplicates if back is None or any(c.get('id') == d for c in back)]
+    if kept:
+        return f'landed unknown: our duplicate {kept[0]} on {at} could not be deleted, so reconcile {at}'
     return f'landed already posted {earliest}'
 
 
@@ -517,18 +553,22 @@ def enqueued_by_us(repo, p):
     return login is not None and post.ours({'user': {'login': login}}, post.authors(repo))
 
 
+def merged_by_us(repo, p):
+    login = ((p or {}).get('mergedBy') or {}).get('login')
+    return isinstance(login, str) and post.ours({'user': {'login': login}}, post.authors(repo))
+
+
 def settle(repo, number, ticket, extra=()):
     found = receipts(repo, number)
-    if found:
+    main, p = snapshot(repo, number)
+    head = (p or {}).get('headRefOid')
+    merged = where(main, p, head).startswith('merged ')
+    if merged and (any(h == head for h, _ in found) or enqueued_by_us(repo, p) or merged_by_us(repo, p)):
+        told = cost(repo, number, head, ticket, extra)
+    elif found and not merged:
         told = cost(repo, number, found[-1][0], ticket, extra)
     else:  # a direct merge still owes its landed comment (#127 R1)
-        main, p = snapshot(repo, number)
-        head = (p or {}).get('headRefOid')
-        merged = where(main, p, head).startswith('merged ')
-        if merged and enqueued_by_us(repo, p):
-            told = cost(repo, number, head, ticket, extra)
-        else:
-            told = 'no queued merge' + (landed(repo, number, p) if merged else '')
+        told = 'no queued merge' + (landed(repo, number, p) if merged else '')
     if '; landed unknown: ' in told:
         raise Stop('unknown: ' + told)
     return told
@@ -746,33 +786,289 @@ def ask(repo, number, head, checks, ticket, path):
 
 
 
+def serial(repo, number):
+    path = Path(tempfile.gettempdir()) / f"openwiz-merge-{repo.replace('/', '-')}-{number}.lock"
+    try:
+        handle = open(path, 'a')
+        fcntl.flock(handle, fcntl.LOCK_EX)
+    except OSError as why:
+        raise Stop(f'unknown: the merge lock {path} could not be taken ({why}); nothing was read or written')
+    return handle
+
+
+def first_line(c):
+    return (c.get('body') or '').replace('\r\n', '\n').split('\n', 1)[0]
+
+
+def mine(repo, number):
+    auth = post.authors(repo)
+    items = post.thread(repo, number)
+    if items is None:
+        raise Stop(f'unknown: #{number} could not be read; run it again next wake')
+    return sorted((c for c in items if post.ours(c, auth) and type(c.get('id')) is int), key=lambda c: c['id'])
+
+
+def records_at(repo, number, head):
+    ours = mine(repo, number)
+    return ([c['id'] for c in ours if (m := QUEUED.match(first_line(c))) and m.group(1) == head],
+            [c for c in ours if first_line(c).startswith(f'launch-fleet: merge dropped {head}: ')],
+            [c for c in ours if first_line(c).startswith(f'{CLAIMED}{head}: ')])
+
+
+def twin_key(line):
+    if m := QUEUED.match(line):
+        return 'queued ' + m.group(1)
+    if line.startswith(('launch-fleet: merge dropped ', CLAIMED)):
+        return line
+    return None
+
+
+def reconcile(repo, number):
+    seen = set()
+    try:
+        ours = mine(repo, number)
+    except Stop:
+        return
+    for c in ours:
+        key = twin_key(first_line(c))
+        if key in seen:
+            post.gh('api', '--method', 'DELETE', f'repos/{repo}/issues/comments/{c["id"]}')
+        elif key:
+            seen.add(key)
+
+
+def earliest(repo, number, made, same):
+    auth = post.authors(repo)
+    items = post.thread(repo, number)
+    twins = sorted((c for c in items or [] if post.ours(c, auth) and type(c.get('id')) is int
+                    and same(first_line(c))), key=lambda c: c['id'])
+    if not twins:
+        raise Stop(f'unknown: #{number} could not be read back after {made} was posted; '
+                   f'read #{number} before any retry')
+    if twins[0]['id'] == made:
+        return twins[0]
+    post.gh('api', '--method', 'DELETE', f'repos/{repo}/issues/comments/{made}')
+    back = post.thread(repo, number)
+    if back is None or any(c.get('id') == made for c in back):
+        raise Stop(f'unknown: our duplicate {made} on #{number} could not be deleted; reconcile #{number}')
+    return twins[0]
+
+
+def once(repo, number, made, same):
+    return earliest(repo, number, made, same)['id']
+
+
+def written(why, what):
+    return f'pending: {why}; {what}, and nothing more is written until it reads, so read it again next wake'
+
+
+def reason_of(pending):
+    return pending.removeprefix('pending: ').split('; ', 1)[0]
+
+
+def retried(repo, p, line, claimed, before=None):
+    added = ((p.get('enqueued') or {}).get('nodes') or [None])[-1]
+    added = added if isinstance(added, dict) else {}
+    at, login, left = added.get('createdAt'), (added.get('enqueuer') or {}).get('login'), line.rsplit(' at ', 1)[-1]
+    return (isinstance(at, str) and isinstance(claimed, str) and bool(TIME.fullmatch(claimed))
+            and claimed <= at <= left and isinstance(added.get('id'), str) and added['id'] != before
+            and isinstance(login, str) and post.ours({'user': {'login': login}}, post.authors(repo)))
+
+
+def tied(repo, p, head):
+    nodes = [n if isinstance(n, dict) else {} for n in (p.get('timelineItems') or {}).get('nodes') or []]
+    oid = (nodes[-1].get('beforeCommit') or {}).get('oid') if nodes else head
+    if not (isinstance(oid, str) and SHA.fullmatch(oid)):
+        return ('pending: the commit that last left the merge queue does not read; nothing was written, '
+                'so read it again next wake')
+    exact = [n for n in nodes if (n.get('beforeCommit') or {}).get('oid') == head]
+    if not exact:
+        return None
+    left = exact[-1].get('createdAt')
+    added = ((p.get('enqueued') or {}).get('nodes') or [None])[-1]
+    added = added if isinstance(added, dict) else {}
+    at, login = added.get('createdAt'), (added.get('enqueuer') or {}).get('login')
+    if not (isinstance(at, str) and isinstance(left, str) and isinstance(login, str)) or at > left:
+        return (f'pending: {head} left the merge queue at {left}, and the enqueue it left does not read yet; '
+                'nothing was written, so read it again next wake')
+    return at if enqueued_by_us(repo, p) else None
+
+
+def verdict(repo, number, head, checks, since=None):
+    real = decider.fleet_records
+
+    def counted(*args):
+        found, drops = real(*args)
+        return found + [at for at, _ in drops] + ([since] if since else []), drops
+
+    decider.fleet_records = counted
+    try:
+        return decider.read(repo, number, head, checks)[0]
+    except decider.Unknown as why:
+        return f'unknown: {why}'
+    finally:
+        decider.fleet_records = real
+
+
+def removal(head, line, p):
+    if not line.startswith(f'dropped {head}: '):
+        return None
+    reason, at = line.split(': ', 1)[1].rsplit(' at ', 1)
+    left = [n for n in (p.get('timelineItems') or {}).get('nodes') or []
+            if isinstance(n, dict) and n.get('createdAt') == at and n.get('reason') == reason]
+    if not left:
+        return f'pending: its removal at {at} does not read on the pull request yet; read it again next wake'
+    oid = (left[-1].get('beforeCommit') or {}).get('oid')
+    if not (isinstance(oid, str) and SHA.fullmatch(oid)):
+        raise Stop('unknown: the commit that left the merge queue could not be read; nothing was enqueued or '
+                   'recorded, so run it again next wake')
+    if oid != head:
+        return f'pending: its removal at {at} took {oid} out of the queue, not {head}; read it again next wake'
+    return 'launch-fleet: merge ' + line
+
+
+def dropped(repo, number, head, line, p):
+    body = removal(head, line, p)
+    if body is None or body.startswith('pending: '):
+        return body
+    try:
+        made = int(post.comment(repo, number, body).split()[-1])
+        return f'dropped; recorded {once(repo, number, made, lambda first: first == body)}'
+    except Stop as outcome:
+        raise Stop(f'dropped; not recorded ({outcome}); run it again next wake')
+
+
+def gate(repo, number, head, ticket, p, blocked):
+    why, ref, _ = look(repo, number, head, ticket, p)
+    if why == 'ask-due' and p['mergeable'] == 'CONFLICTING':
+        blocked('not mergeable: CONFLICTING')
+    if why not in ('flows', 'released'):
+        raise Stop(held(why, ref))
+
+
+def claim(repo, number, head, drops):
+    body = CLAIMED + first_line(drops[0]).removeprefix('launch-fleet: merge dropped ')
+    try:
+        made = int(post.comment(repo, number, body).split()[-1])
+    except Stop as outcome:
+        raise Stop(f'not re-queued: its re-queue claim was not recorded ({outcome}); nothing was enqueued, '
+                   'so run it again next wake')
+    try:
+        first = earliest(repo, number, made, lambda line: line.startswith(f'{CLAIMED}{head}: '))
+    except Stop as outcome:
+        return f'pending: its claim {made} was not confirmed as the only one ({outcome}); nothing was enqueued'
+    if first['id'] != made:
+        return f"pending: an earlier run claimed its one re-queue in {first['id']}; this run enqueued nothing"
+    return first.get('created_at')
+
+
+def requeue(repo, number, head, checks, ticket, p, kept, drops, claims, since, blocked, receipt):
+    line = verdict(repo, number, head, checks, since)
+    told = removal(head, line, p)
+    if told and told.startswith('pending: '):
+        return told
+    if line.startswith('unknown: '):
+        return f"pending: {line.split(': ', 1)[1]}; read it again next wake"
+    if not (told or line.startswith((f'wait {head}: ', f'blocked {head}: ', f'requeue {head}: '))):
+        return f'pending: the queue reads {line}; read it again next wake'
+    if line == f'requeue {head}: {RERAN}' and not (claims or drops):
+        return 'pending: its drop record does not read yet; read it again next wake'
+    if told and claims and not retried(repo, p, line, claims[0].get('created_at')):
+        return (f"pending: its removal at {line.rsplit(' at ', 1)[-1]} does not read as a re-queue after its claim "
+                'yet; nothing was written, so read it again next wake')
+    if told:
+        return dropped(repo, number, head, line, p)
+    if line.startswith(f'wait {head}: '):
+        return 'waiting: ' + line.split(': ', 1)[1]
+    if line.startswith(f'blocked {head}: '):
+        blocked(line.split(': ', 1)[1])
+    if claims:
+        blocked('re-queue claimed but not confirmed')
+    if line != f'requeue {head}: {RERAN}':
+        return ('waiting: ' + line.split(': ', 1)[1] + ', but nothing ties those runs to the failed merge group, '
+                'so it goes back in only once every required check ran again after the removal and is green')
+    gate(repo, number, head, ticket, p, blocked)
+    claimed = claim(repo, number, head, drops)
+    if claimed is not None and claimed.startswith('pending: '):
+        return claimed
+    before = ((p.get('enqueued') or {}).get('nodes') or [None])[-1]
+    before = before.get('id') if isinstance(before, dict) else None
+    refused = enqueue(p, head)
+    main, back = snapshot(repo, number)
+    state = where(main, back, head)
+    if state.startswith('pending: '):
+        return written(reason_of(state), SPENT)
+    if state == 'queued':
+        if kept is not None:
+            return f're-queued; its receipt {kept} still names {head}'
+        return f"re-queued; recorded {receipt('re-queued; receipt unconfirmed')}"
+    if state.startswith('open'):
+        line = verdict(repo, number, head, checks, since)
+        if line.startswith('unknown: '):
+            return written(line.split(': ', 1)[1], SPENT)
+        told = removal(head, line, back)
+        if told and told.startswith('pending: '):
+            return written(reason_of(told), SPENT)
+        if told and not retried(repo, back, line, claimed, before):
+            return written(f"its removal at {line.rsplit(' at ', 1)[-1]} does not read as its re-queue yet", SPENT)
+        if told:
+            return dropped(repo, number, head, line, back)
+    if refused is None:
+        return written('the enqueue call succeeded but it does not read queued yet', SPENT)
+    raise Stop(f'not re-queued: {refused}; its claim is spent, so it is never enqueued again at {head}')
+
+
 def merge(repo, number, head, checks, body, ticket, checked, extra):
     def blocked(why):
         raise Stop(f'blocked: {why}; recorded ' + record(repo, number, f'launch-fleet: merge blocked {head}: {why}'))
 
     def receipt(fail):
-        """The queue receipt for HEAD, the newest one or a new one; `fail` prefixes an unconfirmed write."""
         mine = [i for h, i in receipts(repo, number) if h == head]
         if mine:
             return mine[-1]
+        text = f'launch-fleet: merge queued {head}: {body}'
         try:
-            return post.comment(repo, number, f'launch-fleet: merge queued {head}: {body}').split()[-1]
+            made = int(post.comment(repo, number, text).split()[-1])
+            return once(repo, number, made, lambda first: bool(m := QUEUED.match(first)) and m.group(1) == head)
         except Stop as outcome:
             raise Stop(f'{fail} ({outcome}); run it again next wake')
 
     main, p = snapshot(repo, number)
     state = where(main, p, head)
+    ticket_of(repo, number, p, ticket)
     if state.startswith('merged '):
         return state + '; ' + cost(repo, number, head, ticket, extra)
+    if state.startswith('pending: '):
+        return state
     if state == 'queued':
+        reconcile(repo, number)
         if any(h == head for h, _ in receipts(repo, number)):
             return 'queued; the queue merges it or lets it go'
         return 'queued; recorded ' + str(receipt('queued; receipt unconfirmed'))
     if state.startswith('stop: '):
         blocked(state[6:])
-    ticket_of(repo, number, p, ticket)
-    if '; it left the queue at ' in state and any(h == head for h, _ in receipts(repo, number)):
-        blocked('left the merge queue: ' + state.split(': ', 1)[1])
+    since = tied(repo, p, head)
+    on = p['isMergeQueueEnabled'] is True or since is not None
+    kept, drops, claims = records_at(repo, number, head) if on else ([], [], [])
+    if (kept or drops or claims) and '; it left the queue at ' in state:
+        left = (((p.get('timelineItems') or {}).get('nodes') or [{}])[-1].get('beforeCommit') or {}).get('oid')
+        if not (isinstance(left, str) and SHA.fullmatch(left)):
+            raise Stop('unknown: the commit that left the merge queue could not be read; nothing was enqueued or '
+                       'recorded, so run it again next wake')
+    if since and since.startswith('pending: '):
+        return since
+    if kept or drops or claims or since:
+        told = None
+        try:
+            told = requeue(repo, number, head, checks, ticket, p, kept[0] if kept else None, drops, claims, since,
+                           blocked, receipt)
+            return told
+        except Stop as outcome:
+            told = str(outcome)
+            raise
+        finally:
+            if told and not told.startswith(('pending: ', 'unknown: ')):
+                reconcile(repo, number)
     busy = running(p, checks) if p['isMergeQueueEnabled'] is True else []
     if busy:
         raise Stop('refused: its required checks are running: ' + ', '.join(busy)
@@ -780,11 +1076,7 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
     admit = admission(main, p, head, checks)
     if admit.startswith('wait: '):
         blocked(admit[6:])
-    why, ref, _ = look(repo, number, head, ticket, p)
-    if why == 'ask-due' and p['mergeable'] == 'CONFLICTING':
-        blocked('not mergeable: CONFLICTING')
-    if why not in ('flows', 'released'):
-        raise Stop(held(why, ref))
+    gate(repo, number, head, ticket, p, blocked)
     if admit.startswith('base rule: ') and not checked:
         raise Stop(admit + '; check the base rule and fleet.sh every, then pass --base-rule-checked')
     if admit.startswith('admit: '):
@@ -793,16 +1085,30 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
     else:
         refused, done = None, post.gh('pr', 'merge', str(number), '--repo', repo, '--merge',
                                       '--match-head-commit', head, '--body', body) is not None
-    state = where(*snapshot(repo, number), head)
+    main, back = snapshot(repo, number)
+    state = where(main, back, head)
     if state.startswith('merged '):
         return state + '; ' + cost(repo, number, head, ticket, extra)
     if state == 'queued':
         return 'queued; recorded ' + str(receipt('queued; receipt unconfirmed'))
+    if state.startswith('pending: '):
+        return written(reason_of(state), 'its enqueue was sent' if admit.startswith('admit: ') else
+                       'its merge was sent')
+    if admit.startswith('admit: ') and state.startswith('open'):
+        since = tied(repo, back, head)
+        if since and since.startswith('pending: '):
+            return written(reason_of(since), 'its enqueue was sent')
+        line = verdict(repo, number, head, checks, since)
+        told = dropped(repo, number, head, line, back)
+        if told:
+            return told
+        if line.startswith('unknown: ') and refused is None:
+            return f"pending: {line.split(': ', 1)[1]}; nothing was recorded, so read it again next wake"
     if state.startswith('open') and done:
         return 'pending: the merge command succeeded but it still reads open; read it again next wake'
     if admit.startswith('admit: '):
-        back = f'; it reads back as: {state[6:]}' if state.startswith('stop: ') else ''
-        raise Stop(f"not queued: {refused or 'the enqueue call succeeded'}{back}; "
+        tail = f'; it reads back as: {state[6:]}' if state.startswith('stop: ') else ''
+        raise Stop(f"not queued: {refused or 'the enqueue call succeeded'}{tail}; "
                    'nothing was recorded, so run it again next wake')
     blocked(state[6:] if state.startswith('stop: ') else state)
 
@@ -813,6 +1119,10 @@ def main(argv):
         at = argv.index('--')
         argv, extra = argv[:at], argv[at + 1:]
     usage = __doc__.split('\n\n')[1]
+    if argv in (['--help'], ['-h']):
+        parts = __doc__.split('\n\n')
+        print('\n\n'.join(parts[:3] + [MERGE_HELP] + parts[3:] + [SETTLE_HELP]))
+        return 0
     try:
         verb, repo, number, *rest = argv
         head = None if verb == 'settle' else rest.pop(0)  # settle reads its commit from the queue receipt
@@ -838,8 +1148,9 @@ def main(argv):
             print(ask(repo, number, head, rest[0].split(','), rest[2], rest[3]))
         elif verb == 'merge' and len(rest) >= 4 and rest[2] == '--ticket' and TICKET.fullmatch(rest[3]) \
                 and set(rest[4:]) <= {'--base-rule-checked'}:
-            print(merge(repo, number, head, rest[0].split(','), rest[1], rest[3],
-                        '--base-rule-checked' in rest[4:], extra))
+            with serial(repo, number):
+                print(merge(repo, number, head, rest[0].split(','), rest[1], rest[3],
+                            '--base-rule-checked' in rest[4:], extra))
         else:
             print(usage, file=sys.stderr)
             return 2

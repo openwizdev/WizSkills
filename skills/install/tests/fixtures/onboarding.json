@@ -280,11 +280,8 @@
        },
        {
         "number": 903,
-        "title": "E3: a test for both messages",
-        "blockers": [
-         901,
-         902
-        ]
+        "title": "E3: the save error names the file, with a test",
+        "blockers": []
        }
       ]
      }
@@ -654,13 +651,6 @@
         "number": 903,
         "title": "T3: delete a task",
         "blockers": []
-       },
-       {
-        "number": 904,
-        "title": "T4: tasks saved on this machine",
-        "blockers": [
-         901
-        ]
        }
       ]
      }

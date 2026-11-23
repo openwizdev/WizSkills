@@ -25,13 +25,17 @@ class SnapshotTest(unittest.TestCase):
 
     def check_snapshot_commands(self, skill):
         dispatch = skill.split('## 2. Dispatch fresh workers\n', 1)[1].split('## Worker:', 1)[0]
-        blocks = re.findall(r'```sh\n(.*?)\n```', dispatch, re.S)
+        opener = r'^```sh[ \t]*\n'
+        blocks = re.findall(opener + r'(.*?)^```[ \t]*$', dispatch, re.M | re.S)
+        self.assertEqual(len(blocks), len(re.findall(opener, dispatch, re.M)),
+                         'unclosed dispatch sh block')
         self.assertTrue(blocks)
         for block in blocks:
             assigned = set(re.findall(r'^\s*([a-zA-Z0-9_]+)=', block, re.M))
             for name in re.findall(r'\$\{?([a-zA-Z0-9_]+)', block):
                 self.assertIn(name, assigned, f'cross-shell variable ${name}: {block}')
         commands = [line for block in blocks for line in block.splitlines()]
+        self.assertIn('mktemp', commands, 'missing standalone mktemp')
         checker = 'sh "<research-skill-folder>/scripts/check-workers.sh" '
 
         def command(verb):

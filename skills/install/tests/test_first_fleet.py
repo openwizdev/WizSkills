@@ -249,6 +249,48 @@ def github(repos=(), **switches):
     return json.dumps(world)
 
 
+SEED_GH = r"""
+import base64, hashlib, json, os, re, sys
+fake, argv = sys.argv[1], sys.argv[2:]
+path = os.environ.get('FAKE_GH_REPOS')
+state = json.loads(open(path).read()) if path else {'repos': {}}
+read = len(argv) == 5 and argv[:4] == ['api', '--include', '-X', 'GET'] and re.fullmatch(
+    r'repos/([^/]+/[^/]+)/contents/((?:tests|\.github)/[^?]+)\?ref=(.+)', argv[4])
+put = len(argv) in (10, 12) and argv[:3] == ['api', '-X', 'PUT'] and re.fullmatch(
+    r'repos/([^/]+/[^/]+)/contents/((?:tests|\.github)/[^?]+)', argv[3])
+match = read or put
+repo = state['repos'].get(match[1].lower()) if match else None
+if repo is None:
+    os.execv(sys.executable, [sys.executable, '-I', '-S', fake] + argv)
+files = repo['branches'].setdefault(read[3] if read else dict(v.split('=', 1) for v in argv[5::2])['branch'], {})
+sha = lambda text: hashlib.sha1(b'blob %d\0' % len(text.encode()) + text.encode()).hexdigest()
+if read:
+    state['log'].append(['GET', argv[4]])
+    open(path, 'w').write(json.dumps(state))
+    if read[2] not in files:
+        sys.stdout.write('HTTP/2.0 404 Fixture\r\n\r\n{"message": "Not Found"}')
+        sys.exit(1)
+    sys.stdout.write('HTTP/2.0 200 Fixture\r\n\r\n' + json.dumps({'type': 'file', 'encoding': 'base64', 'sha': sha(
+        files[read[2]]), 'content': base64.b64encode(files[read[2]].encode()).decode()}))
+    sys.exit(0)
+fields = dict(v.split('=', 1) for v in argv[5::2])
+if (put[2] in files) != ('sha' in fields):
+    sys.stderr.write('gh: sha mismatch (HTTP 409)\n')
+    sys.exit(1)
+files[put[2]] = base64.b64decode(fields['content']).decode()
+state['log'].append(['PUT', argv[3]])
+lost = state.get('seed_lost', 0) > 0
+state['seed_lost'] = state.get('seed_lost', 0) - lost
+open(path, 'w').write(json.dumps(state))
+if lost:
+    sys.stderr.write('gh: synthetic lost reply (HTTP 502)\n')
+    sys.exit(1)
+print(json.dumps({'content': {'path': put[2]}}))
+"""
+SEEDED = ('PUT', 'repos/%s/contents/tests/test_check.py' % REPO), \
+    ('PUT', 'repos/%s/contents/.github/workflows/check.yml' % REPO)
+
+
 class Journey:
     """One replay: a private folder with its state, fakes and synthetic GitHub."""
 
@@ -269,7 +311,8 @@ class Journey:
         self.openwiz = self.dir / 'bin/openwiz'
         self.openwiz.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, FIXTURES / 'fake_openwiz.py'))
         gh = self.dir / 'bin/gh'
-        gh.write_text('#!/bin/sh\nexec "%s" -I -S "%s" "$@"\n' % (sys.executable, FAKE_GH))
+        (self.dir / 'seed_gh.py').write_text(SEED_GH)
+        gh.write_text('#!/bin/sh\nexec "%s" -I -S "%s" "%s" "$@"\n' % (sys.executable, self.dir / 'seed_gh.py', FAKE_GH))
         room = self.dir / 'bin/room-cli'
         room.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, FIXTURES / 'fake_room_cli.py'))
         self.repos = self.dir / 'repos.json'
@@ -1177,7 +1220,7 @@ class DemoRepository(unittest.TestCase):
         created = j.helper(YES_DEMO)
         self.assertEqual(created.returncode, 0, created.stdout)
         self.assertIn('Created and read back', created.stdout)
-        self.assertEqual(self.writes(j), [['POST', 'user/repos']])
+        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)])
 
     # Catches: a yes given to a preview that never said the repository gets
     # an initial README commit on its default branch, or a preview that writes.
@@ -1205,7 +1248,8 @@ class DemoRepository(unittest.TestCase):
                 again = j.helper(YES_DEMO)
                 self.assertEqual(again.returncode, 0, again.stdout)
                 self.assertIn('Created and read back', again.stdout)
-                self.assertEqual(self.writes(j), [['POST', 'user/repos']], 'one create, no seed push, no other write')
+                self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)],
+                                 'one create and its disclosed test and check, no other write')
 
     # Catches: an onboarding whose own repository exists without a default
     # branch (an interrupted or earlier empty create) being reported created,
@@ -1249,7 +1293,42 @@ class DemoRepository(unittest.TestCase):
         again = j.helper(YES_DEMO)
         self.assertEqual(again.returncode, 0, again.stdout)
         self.assertEqual(self.world(j)['repos'], world['repos'], 'a repeat only reads')
-        self.assertEqual(self.writes(j), [['POST', 'user/repos']])
+        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)])
+
+    # Catches #2325 R1: a repository OpenWiz creates with no test or CI check, whose setup files OpenWiz's
+    # runtime setup check then refuses; a seed the preview never named; a lost seed reply written twice.
+    def test_the_new_repository_gets_the_disclosed_passing_test_and_check_workflow(self):
+        j = Journey(self)
+        preview = j.helper(['create-repo', '--repo', REPO])
+        self.assertEqual(preview.returncode, 12, preview.stdout)
+        for words in ('tests/test_check.py', '.github/workflows/check.yml', 'job named check',
+                      'python3 -m unittest discover -s tests'):
+            self.assertIn(words, preview.stdout)
+        self.assertEqual(self.writes(j), [], 'the preview writes nothing')
+        world = self.world(j)
+        world['seed_lost'] = 1
+        j.repos.write_text(json.dumps(world))
+        lost = j.helper(YES_DEMO)
+        self.assertEqual(lost.returncode, 6, lost.stdout)
+        self.assertIn('run this again', lost.stdout)
+        done = j.helper(YES_DEMO)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)], 'a lost reply is read back')
+        self.assertTrue(json.loads(j.state.read_text())['created']['seeded'])
+        main = self.world(j)['repos'][REPO.lower()]['branches']['main']
+        project = j.dir / 'seeded'
+        for name, text in main.items():
+            (project / name).parent.mkdir(parents=True, exist_ok=True)
+            (project / name).write_text(text)
+        ran = subprocess.run([sys.executable, '-I', '-m', 'unittest', 'discover', '-s', 'tests'], cwd=project,
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn('Ran 1 test', ran.stderr)
+        workflow = main['.github/workflows/check.yml']
+        self.assertRegex(workflow, r'\njobs:\n  check:\n')
+        self.assertIn('run: python3 -m unittest discover -s tests\n', workflow)
+        self.assertEqual(j.helper(YES_DEMO).returncode, 0)
+        self.assertEqual(len(self.writes(j)), 3, 'a repeat writes nothing')
 
 
 class ModelsTable(unittest.TestCase):
@@ -1753,7 +1832,7 @@ if argv[:4] == ['api', '-X', 'POST', 'repos/%s/issues' % repo]:
         sys.exit(1)
     print(json.dumps({'number': issues[-1]['number'], 'title': fields['title'], 'state': 'open'}))
     sys.exit(0)
-os.execv(sys.executable, [sys.executable, '-I', '-S', fake] + argv)
+os.execv(sys.executable, [sys.executable, '-I', '-S', os.path.join(os.path.dirname(path), 'seed_gh.py'), fake] + argv)
 """
 
 
@@ -1930,6 +2009,15 @@ class OneSetupPullRequest(unittest.TestCase):
 
     def test_a_readme_only_repository_gets_its_setup_files_in_the_one_setup_pull_request(self):
         j = self.road(files={'README.md': '# synthetic\n'})
+        made = j.helper(['create-repo', '--repo', REPO, '--yes'])
+        self.assertEqual(made.returncode, 0, made.stdout)
+        seeded = json.loads(j.repos.read_text())['repos'][REPO.lower()]['branches']['main']
+        world = self.world(j)
+        world['files'] = dict(seeded)
+        for name in world['branches']:
+            world['branches'][name] = dict(seeded, **BRAIN_FILES)
+        j.world = world
+        j.save_world()
         self.yes(j)
         self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
                          .returncode, 0)
@@ -1938,7 +2026,7 @@ class OneSetupPullRequest(unittest.TestCase):
         world = self.world(j)
         self.assertEqual(world['host_pulls'], [{'head': BRAIN_BRANCH, 'state': 'OPEN', 'url': BRAIN_PULL}])
         branch = world['branches'][BRAIN_BRANCH]
-        self.assertEqual(sorted(set(branch) - {'README.md'} - set(BRAIN_FILES)),
+        self.assertEqual(sorted(set(branch) - set(seeded) - set(BRAIN_FILES)),
                          sorted(SETUP_FILES + ('docs/agents/host.md',)))
         project = j.dir / 'merged'
         for name in SETUP_FILES:
@@ -1953,8 +2041,24 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertIn('| Harness permission mode (claude) | `acceptEdits` |', fleet)
         self.assertIn('| Record authors | `synthetic-owner` |', fleet)
         self.assertTrue(connect_usable(fleet), "setup.py check's fleet_settings_usable reads the new fleet.md")
+        self.assertIn('| 1 | root | `python3 -m unittest discover -s tests` | `check` |', fleet)
+        self.assertIn('| `check` | 1 |', fleet)
         self.assertNotRegex(''.join(branch[n] for n in SETUP_FILES), r'<[^>\n]*>', 'no template placeholder left')
         self.assertIn('\nHost: local\n', branch['docs/agents/host.md'])
+
+    # Catches #2325 R1: an existing repository without tests or CI given setup files OpenWiz's setup check
+    # refuses, or a workflow added to it silently.
+    def test_an_existing_repository_without_tests_or_ci_is_named_never_seeded(self):
+        j = self.road(files={'README.md': '# synthetic\n'})
+        before = self.world(j)
+        shown = j.helper(['defaults', '--options', str(j.options)])
+        self.assertEqual(shown.returncode, 5, shown.stdout)
+        for words in ('no test command or CI check', 'one passing test and a CI workflow with a job named check',
+                      'setup skill', 'nothing recorded'):
+            self.assertIn(words, shown.stdout)
+        self.assertNotIn('defaults', self.saved(j))
+        self.assertEqual(self.world(j), before, 'nothing written to the repository')
+        self.assertEqual(json.loads(j.repos.read_text())['log'], [], 'no test or workflow added')
 
     def test_a_companion_brain_merged_by_init_leaves_one_setup_pull_request(self):
         for pull, said in (('merged', 'already merged'), ('open', 'https://github.com/%s-brain/pull/3' % REPO)):

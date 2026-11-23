@@ -9,7 +9,7 @@ python3 -I tools/review-rounds/bench.py \
   --merged-from 2026-11-15T23:00Z --merged-to 2026-11-22T22:58Z [--opened-after <time>]
 ```
 
-It prints Markdown tables, then the same numbers as a fenced JSON block. It exits 1 with a `bench:` line when a read fails or a search can't be trusted, and 2 for bad arguments.
+It prints Markdown tables, then the same numbers as a fenced JSON block. It exits 1 with a `bench:` line when a read fails or a search can't be trusted, and 2 for bad arguments. Naming one repository twice, in any letter case (GitHub names are case-insensitive), is a bad argument.
 
 ## Definitions
 

@@ -272,11 +272,13 @@ def main(argv=None, graphql=gh_graphql, out=sys.stdout):
     parser.add_argument('--merged-to', required=True, type=parse_time)
     parser.add_argument('--opened-after', type=parse_time)
     args = parser.parse_args(argv)
+    seen = {}
     for repo in args.repo:
         if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
             parser.error('--repo must be owner/name: ' + repo)
-    if len(set(args.repo)) != len(args.repo):
-        parser.error('--repo repeated')
+        if repo.lower() in seen:
+            parser.error('--repo repeated: %s and %s name one repository' % (seen[repo.lower()], repo))
+        seen[repo.lower()] = repo
     if args.merged_from > args.merged_to:
         parser.error('--merged-from is after --merged-to')
     try:

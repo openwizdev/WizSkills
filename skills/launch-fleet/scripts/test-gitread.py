@@ -249,10 +249,13 @@ class GitRead(unittest.TestCase):
 
     def test_a_signed_in_gh_lends_git_its_credential_for_this_fetch(self):
         hits = self.o.behind_http(self, gh=SIGNED_IN_GH)
+        origin = self.o.env['GIT_CONFIG_KEY_0'][len('url.http://'):-len('/.insteadOf')]
+        (self.o.tmp / 'stale-credentials').write_text(f'http://x-access-token:stale@{origin}\n')
+        (self.o.tmp / 'gitconfig').write_text(f'[credential]\n\thelper = store --file {self.o.tmp}/stale-credentials\n')
         self.assertEqual(self.o.read(), (0, FLEET_MD, ''))
         self.assertEqual(self.o.gh_calls(), ['auth git-credential get', 'auth git-credential store'])
         self.assertEqual(hits[0], f'/{REPO}.git/info/refs?service=git-upload-pack')
-        self.assertNotIn('synthetic-token', ''.join(self.o.read('docs/agents/fleet.md', '--max-age', '0')))
+        self.assertEqual(self.o.read('docs/agents/fleet.md', '--max-age', '0'), (0, FLEET_MD, ''))
 
     def test_a_failed_fetch_holds_its_cooldown_under_the_lock(self):
         hits = self.o.behind_http(self)

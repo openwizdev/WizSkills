@@ -13,10 +13,18 @@ cp "$HERE/../../to-tickets/revision.sh" "$HERE/../../to-tickets/check-links.sh" 
 cp "$HERE/carried/alarm.py" "$work/plugin cache/skills/launch-fleet/scripts/carried/"
 mkdir "$work/plugin cache/skills/launch-fleet/scripts/github-app"
 cp "$HERE/github-app/agent-token.py" "$work/plugin cache/skills/launch-fleet/scripts/github-app/"
+mkdir -p "$work/plugin cache/skills/setup/scripts"
+cp "$HERE/../../setup/scripts/settings.py" "$work/plugin cache/skills/setup/scripts/"
 mkdir "$work/linked skills"
 ln -s "$work/plugin cache/skills/launch-fleet" "$work/linked skills/launch-fleet"
 # GI7 (#2549): the fake gh also records the token each call gets (synthetic).
-printf '#!/bin/sh\nprintf "%%s %%s\\n" "${GH_TOKEN:-none}" "${LAUNCH_FLEET_GITHUB_AUTH:-account}" >> "%s"\n[ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && echo key >> "%s" || echo no-key >> "%s"\nexec "%s" -I -S "%s" "$@"\n' \
+printf '%s\n' 'import base64, json, sys' \
+  'data = json.load(open(sys.argv[1]))["files"]["docs/agents/fleet.md"].encode()' \
+  'text = base64.b64encode(data).decode()' \
+  'body = "".join(text[n:n + 60] + "\n" for n in range(0, len(text), 60))' \
+  'print(json.dumps({"type": "file", "encoding": "base64", "size": len(data), "content": body}))' > "$work/contents.py"
+printf '#!/bin/sh\nif [ $# = 2 ] && [ "$1" = api ] && [ "$2" = repos/synthetic-owner/synthetic-repo/contents/docs/agents/fleet.md ]; then\n  printf "%%s %%s\\n" "${GH_TOKEN:-none}" "${LAUNCH_FLEET_GITHUB_AUTH:-account}" >> "%s"; echo read >> "%s"\n  exec "%s" -I "%s" "%s"\nfi\nprintf "%%s %%s\\n" "${GH_TOKEN:-none}" "${LAUNCH_FLEET_GITHUB_AUTH:-account}" >> "%s"\n[ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && echo key >> "%s" || echo no-key >> "%s"\nexec "%s" -I -S "%s" "$@"\n' \
+  "$work/read.log" "$work/order.log" "$(command -v python3)" "$work/contents.py" "$work/world.json" \
   "$work/gh-token.log" "$work/gh-key.log" "$work/gh-key.log" "$(command -v python3)" "$FIX/gh.py" > "$work/bin/gh"
 chmod +x "$work/bin/gh"
 export PATH="$work/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo
@@ -117,6 +125,8 @@ cp "$HERE/../../to-tickets/revision.sh" "$HERE/../../to-tickets/check-links.sh" 
 cp "$HERE/carried/alarm.py" "$work/installed/skills/launch-fleet/scripts/carried/"
 mkdir "$work/installed/skills/launch-fleet/scripts/github-app"
 cp "$HERE/github-app/agent-token.py" "$work/installed/skills/launch-fleet/scripts/github-app/"
+mkdir -p "$work/installed/skills/setup/scripts"
+cp "$HERE/../../setup/scripts/settings.py" "$work/installed/skills/setup/scripts/"
 rm -rf "$work/cache"
 status=0
 sh "$work/installed/skills/launch-fleet/scripts/loop.sh" > "$work/out" 2> "$work/err" || status=$?
@@ -128,7 +138,7 @@ echo 'ok   a direct installed loop runs its installed helpers, not the consumer 
 off="loop.sh: the App identity is off; GitHub as today's account"
 token=synthetic-app-token-2549
 {
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n' "$work/openwiz.log"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\necho mint >> "%s"\n' "$work/openwiz.log" "$work/order.log"
   printf '[ "${FAKE_OPENWIZ_FAIL:-}" = 1 ] && { echo "openwiz: github token: refused" >&2; exit 5; }\n'
   printf 'printf "%%s\\n" %s\necho "expires_at 1793538000" >&2\n' "$token"
 } > "$work/bin/openwiz"
@@ -149,7 +159,18 @@ identity() { # "token identity" every gh call gets; the stderr line expected, or
 }
 (OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj identity 'none account' "$off")
 [ ! -s "$work/openwiz.log" ]
-echo "ok   with the key secret the check never mints and reads GitHub as today's account (#2394)"
+[ "$(cat "$work/read.log")" = 'none account' ]
+echo "ok   with the key secret and no App identity row the check reads fleet.md on today's account, never mints (#2394, #2835)"
+cp "$work/world.json" "$work/world-off.json"
+jq '.files["docs/agents/fleet.md"] |= (sub("\\| App \\| Synthetic, for the factory \\|\n"; "") + "| App identity | on |\n")' \
+  "$work/world-off.json" > "$work/world-on.json"
+cp "$work/world-on.json" "$work/world.json"
+(: > "$work/read.log"; : > "$work/order.log"; OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj identity "$token installation" '')
+[ "$(cat "$work/openwiz.log")" = 'github token --repository synthetic-owner/synthetic-repo --read' ]
+[ "$(cat "$work/read.log")" = 'none account' ]
+[ "$(cat "$work/order.log")" = "$(printf 'read\nmint')" ]
+echo 'ok   with the App identity on, one account read of fleet.md, then the check reads GitHub with a read-only App token and prints none (#2549, #2835)'
+cp "$work/world-off.json" "$work/world.json"
 (LAUNCH_FLEET_GITHUB_AUTH=installation identity 'none account' "$fallback")
 [ ! -s "$work/openwiz.log" ]
 (OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj FAKE_OPENWIZ_FAIL=1 identity 'none account' "$off")
@@ -172,7 +193,20 @@ service() {
 [ -s "$work/gh-key.log" ] && [ -z "$(grep -vx no-key "$work/gh-key.log")" ]
 [ ! -s "$work/service.log" ]
 ! grep -q "$ga4" "$work/out" "$work/err" "$work/gh.log"
-echo "ok   with a token service the wake never runs the helper and reads GitHub as today's account (#2394)"
+echo "ok   with a token service and no App identity row the wake never runs the helper and reads GitHub as today's account (#2394)"
+printf '%s\n' 'import runpy, sys' "open('$work/order.log', 'a').write('helper\\n')" \
+  "runpy.run_path('$FIX/token_service.py', run_name='__main__')" > "$work/service-order.py"
+cp "$work/world-on.json" "$work/world.json"
+(service; export OPENWIZ_TOKEN_SERVICE="$work/service-order.py"; : > "$work/gh-key.log"; : > "$work/read.log"; : > "$work/order.log"
+  identity 'none account' "$off"
+  [ "$(cat "$work/read.log")" = 'none account' ]
+  [ "$(cat "$work/order.log")" = "$(printf 'read\nhelper')" ])
+[ "$(jq -c .legacy_key "$work/service.log")" = false ]
+[ "$(jq -c .request "$work/service.log")" = '{"schema":"openwiz.token-service.v1","kind":"request","requester":"fleet-check","repositories":["synthetic-owner/synthetic-repo"],"permissions":{"metadata":"read","contents":"read","issues":"read","pull_requests":"read","checks":"read","actions":"read"}}' ]
+[ "$(jq -c .argv "$work/service.log")" = '["mint"]' ]
+! grep -q "$ga4" "$work/out" "$work/err" "$work/gh.log"
+cp "$work/world-off.json" "$work/world.json"
+echo "ok   with the App identity on and a token service, one account read of fleet.md, then one read-only helper run; its continuation stays on today's account (#1846, #2835)"
 mkdir "$work/probe"
 for tool in mktemp mkdir cat; do
   printf '#!/bin/sh\n[ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && echo key >> "%s" || echo no-key >> "%s"\nexec %s "$@"\n' \

@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""Mechanical checklist lines as checks (openwiz #2707, UR9).
-
-python3 -I check/checklist_rules.py diff --base <rev>
-
-Reads the lines `git diff <rev>...HEAD` adds to test files (a file named
-`test*` or `*.test.*`, or any file under a `test/` or `tests/` folder) and
-refuses each one that breaks a line of skills/build-ticket/checklist.md
-tagged `(mechanical, check <rule>)`. Lines already on the base are never
-read. It prints one `checklist: <rule> <file>:<line>: <fixed message>` per
-finding, then `checklist: pass` or `checklist: fail (<n>)`, and exits 0, 1 on
-a finding, or 2 when the arguments or the diff can't be read, printing no
-pass. Python 3.11+ standard library and git; no network, nothing written.
-"""
 import ast
 import re
 import subprocess

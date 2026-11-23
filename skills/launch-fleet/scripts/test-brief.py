@@ -31,7 +31,7 @@ OWNER_LOGIN = ("Approvals, repository settings and pushes that change `.github/w
 
 
 def brief(*args, **env):
-    base = {k: v for k, v in os.environ.items() if not k.startswith('OPENWIZ_')}
+    base = {k: v for k, v in os.environ.items() if not k.startswith('OPENWIZ_') and k != 'GH_REPO'}
     r = subprocess.run([sys.executable, '-I', str(HERE / 'brief.py'), *map(str, args)],
                        capture_output=True, text=True, timeout=30, env={**base, **env})
     return r.returncode, r.stdout.rstrip('\n')
@@ -162,6 +162,31 @@ class Repository(unittest.TestCase):
                      ('fresh', 12, PR, 'room/12-synthetic', HEAD), ('fresh', TICKET, 31, 'room/12-synthetic', HEAD)):
             with self.subTest(args=args):
                 self.assertEqual(brief(*args), (2, ''))
+
+    def test_a_sessions_bare_pull_request_is_named_in_the_sessions_repository(self):
+        there = {'GH_REPO': 'synthetic-owner/synthetic-code'}
+        for extra in ((), ('same-family',)):
+            for env in (there, dict(there, OPENWIZ_TOKEN_SERVICE=SERVICE)):
+                with self.subTest(extra=extra, env=env):
+                    code, text = brief('reviewer', 31, HEAD, *extra, **env)
+                    self.assertEqual((code, text), brief('reviewer', PR, HEAD, *extra, **env))
+                    self.assertEqual(code, 0)
+                    self.assertIn('reviewer for pull request %s at %s.' % (PR, HEAD), text)
+                    self.assertIsNone(re.search(r'(?<![A-Za-z0-9_.-])#[0-9]', text), text)
+                    self.assertIn(PASS_REPO, text)
+
+    def test_a_bare_number_with_no_usable_repository_prints_no_brief(self):
+        for repo in (None, '', 'synthetic-code', 'not a repo', 'synthetic-owner/synthetic-code#31',
+                     'github.com/synthetic-owner/synthetic-code', 'synthetic-owner/..', 'synthetic-owner/.'):
+            for extra in ((), ('same-family',)):
+                with self.subTest(repo=repo, extra=extra):
+                    env = {} if repo is None else {'GH_REPO': repo}
+                    self.assertEqual(brief('reviewer', 31, HEAD, *extra, **env), (2, ''))
+        for args in (('builder', 12), ('re-check', 31, HEAD, OLD, 'R1', 'none'),
+                     ('fresh', 12, PR, 'room/12-synthetic', HEAD), ('fresh', TICKET, 31, 'room/12-synthetic', HEAD),
+                     ('reviewer', '#31', HEAD), ('reviewer', 0, HEAD), ('reviewer', '31 x', HEAD)):
+            with self.subTest(args=args):
+                self.assertEqual(brief(*args, GH_REPO='synthetic-owner/synthetic-code'), (2, ''))
 
 
 GH_ALLOWED = sorted(ast.literal_eval(next(

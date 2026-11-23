@@ -19,6 +19,35 @@ repository() {
   esac
 }
 
+restore_today_account() {
+  [ -n "${OPENWIZ_AGENT_TOKEN_RUN+x}${OPENWIZ_AGENT_TOKEN_GIT_AT+x}${OPENWIZ_AGENT_TOKEN_PATH_WAS+x}${OPENWIZ_AGENT_TOKEN_EXEC_WAS+x}${OPENWIZ_AGENT_TOKEN_SSH_WAS+x}${OPENWIZ_AGENT_TOKEN_PROTOCOLS_WAS+x}${OPENWIZ_AGENT_TOKEN_GH_CONFIG_WAS+x}" ] || return 0
+  for restore_pair in PATH:PATH GIT_EXEC_PATH:EXEC GIT_SSH_COMMAND:SSH GIT_ALLOW_PROTOCOL:PROTOCOLS GH_CONFIG_DIR:GH_CONFIG; do
+    restore_name=${restore_pair%%:*}
+    restore_mark=OPENWIZ_AGENT_TOKEN_${restore_pair#*:}_WAS
+    eval "restore_value=\${$restore_mark-}"
+    unset "$restore_mark"
+    case $restore_value in
+      1*) eval "$restore_name=\${restore_value#1}"; export "$restore_name" ;;
+      *) unset "$restore_name" ;;
+    esac
+  done
+  restore_at=${OPENWIZ_AGENT_TOKEN_GIT_AT-}
+  restore_count=${GIT_CONFIG_COUNT-}
+  case $restore_at in '' | *[!0-9]* | 0?* | ??????????*) restore_at= ;; esac
+  case $restore_count in '' | *[!0-9]* | 0?* | ??????????*) restore_at= ;; esac
+  if [ -z "$restore_at" ] || [ "$restore_at" -gt "$restore_count" ]; then
+    unset GIT_CONFIG_COUNT
+  else
+    while [ "$restore_count" -gt "$restore_at" ]; do
+      restore_count=$((restore_count - 1))
+      unset "GIT_CONFIG_KEY_$restore_count" "GIT_CONFIG_VALUE_$restore_count"
+    done
+    GIT_CONFIG_COUNT=$restore_at
+    export GIT_CONFIG_COUNT
+  fi
+  unset GH_TOKEN OPENWIZ_AGENT_TOKEN_RUN OPENWIZ_AGENT_TOKEN_GIT_AT restore_pair restore_name restore_mark restore_value restore_at restore_count
+}
+
 spec_number() { case $1 in '' | 0* | *[!0-9]* | ??????????*) return 1 ;; esac; }
 
 if [ "${1:-}" = --bundle ]; then
@@ -40,7 +69,8 @@ if [ "${1:-}" = --bundle ]; then
     printf '#!/bin/sh\nGH_REPO=%s\nexport GH_REPO\n' "$2"
     [ $# = 2 ] || printf 'FLEET_SPEC=%s\nexport FLEET_SPEC\n' "$3"
     cat <<'OPENWIZ_BUNDLE_BOOTSTRAP'
-[ -z "${OPENWIZ_TOKEN_SERVICE:-}" ] || unset OPENWIZ_GITHUB_APP_KEY
+app_key=
+[ -z "${OPENWIZ_GITHUB_APP_KEY+set}" ] || { unset OPENWIZ_GITHUB_APP_KEY; app_key=1; }
 runtime=$(mktemp -d) || { echo "loop.sh: can't unpack the bundled loop" >&2; exit 2; }
 trap 'rm -rf "$runtime"' EXIT
 trap 'exit 2' HUP INT TERM
@@ -52,7 +82,8 @@ OPENWIZ_BUNDLE_BOOTSTRAP
       cat "$source/$file" || exit 2
       printf '\nOPENWIZ_BUNDLED_HELPER_EOF\n'
     done
-    printf 'LAUNCH_FLEET_RUNTIME="$runtime/skills" sh "$runtime/skills/launch-fleet/scripts/loop.sh"\n'
+    printf 'if [ -n "$app_key" ]; then OPENWIZ_GITHUB_APP_KEY= LAUNCH_FLEET_RUNTIME="$runtime/skills" sh "$runtime/skills/launch-fleet/scripts/loop.sh"\n'
+    printf 'else LAUNCH_FLEET_RUNTIME="$runtime/skills" sh "$runtime/skills/launch-fleet/scripts/loop.sh"; fi\n'
   } > "$bundle" || die "can't bundle the installed helpers"
   cat "$bundle" || die "can't print the bundled loop"
   exit 0
@@ -67,8 +98,9 @@ inside=
 case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
 unset LAUNCH_FLEET_TOKEN_STEP
 identity_off=
-if [ -n "$inside" ] || [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] || [ -n "${OPENWIZ_GITHUB_APP_KEY:-}" ]; then
+if [ -n "$inside" ] || [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] || [ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ]; then
   identity_off=1
+  unset OPENWIZ_GITHUB_APP_KEY
 fi
 if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ] && [ -z "$identity_off" ]; then
   helper=$(cd -P "$(dirname "$0")" && pwd)/github-app/agent-token.py
@@ -85,6 +117,7 @@ fi
 # says so on stderr, so it never stops for it.
 # The check is told which identity reads (LAUNCH_FLEET_GITHUB_AUTH), so its
 # unchanged probe asks what that identity can read; never an inherited value.
+if [ -n "$identity_off" ] || [ -z "$inside" ]; then restore_today_account; fi
 app=
 unset LAUNCH_FLEET_GITHUB_AUTH
 if [ -n "$identity_off" ]; then
@@ -94,7 +127,7 @@ elif [ -n "$inside" ]; then
     LAUNCH_FLEET_GITHUB_AUTH=installation
     export LAUNCH_FLEET_GITHUB_AUTH
   fi
-elif [ -z "${OPENWIZ_GITHUB_APP_KEY:-}" ]; then
+elif [ -z "${OPENWIZ_GITHUB_APP_KEY+set}" ]; then
   echo "loop.sh: no OPENWIZ_GITHUB_APP_KEY secret; GitHub as today's account" >&2
 elif ! command -v openwiz > /dev/null; then
   echo "loop.sh: no openwiz to mint the App token; GitHub as today's account" >&2

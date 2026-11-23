@@ -207,7 +207,7 @@ for tool in gh git; do
   printf '#!/bin/sh\necho %s >> "%s"\nexec "%s" "$@"\n' "$tool" "$work/shim.log" "$(command -v "$tool")" > "$work/shim/$tool"
   chmod +x "$work/shim/$tool"
 done
-printf '#!/bin/sh\nenv | grep -E "^(GIT_CONFIG|GIT_EXEC_PATH=|GIT_SSH|GIT_ALLOW_PROTOCOL=|GH_CONFIG_DIR=|GH_TOKEN=|OPENWIZ_AGENT_TOKEN_)" >> "%s"\nexec "%s" "$@"\n' \
+printf '#!/bin/sh\nenv | grep -E "^(GIT_CONFIG|GIT_EXEC_PATH=|GIT_SSH|GIT_ALLOW_PROTOCOL=|GH_CONFIG_DIR=|GH_TOKEN=|OPENWIZ_AGENT_TOKEN_(RUN|GIT_AT|[A-Z_]*_WAS)=)" >> "%s"\nexec "%s" "$@"\n' \
   "$work/git-env.log" "$(command -v git)" > "$work/was/git"
 chmod +x "$work/was/git"
 printf '%s\n' "GH_CONFIG_DIR=$work/gh-config-was" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=synthetic.kept \

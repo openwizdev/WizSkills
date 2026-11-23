@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import json
 import os
+import stat
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -28,11 +30,14 @@ if status == 200 and (world.get('always304') or (sent and sent[0] == answer.get(
 out = ['HTTP/2.0 %d %s' % (status, {200: 'OK', 304: 'Not Modified', 403: 'Forbidden'}[status])]
 if answer.get('etag'):
     out.append('Etag: %s' % answer['etag'])
-if answer.get('link'):
+if answer.get('link') and not (status == 304 and answer.get('no_link_on_304')):
     out.append('Link: %s' % answer['link'])
 sys.stdout.write('\r\n'.join(out) + '\r\n\r\n')
 if status != 304:
-    sys.stdout.write(answer['body'])
+    sys.stdout.write(answer['body'][:answer['drop']] if 'drop' in answer else answer['body'])
+if 'drop' in answer:
+    print('gh: synthetic connection reset', file=sys.stderr)
+    sys.exit(1)
 sys.exit(0 if status == 200 else 1)
 '''
 
@@ -164,6 +169,112 @@ class GhCache(unittest.TestCase):
         self.world({ISSUE: {'status': 403, 'body': '{"message": "no"}'}})
         run = subprocess.run(script, capture_output=True, text=True)
         self.assertEqual((run.returncode, run.stdout), (1, ''))
+
+    def test_a_200_from_a_gh_that_fails_is_an_error_and_not_saved(self):
+        self.world({ISSUE: {'etag': '"a1"', 'body': '{"number": 7}', 'drop': 0}})
+        with self.assertRaises(self.ghcache.Error):
+            self.ghcache.get(ISSUE)
+        self.assertEqual(self.entries(), [])
+        script = [sys.executable, '-I', str(HERE / 'ghcache.py'), 'get', ISSUE]
+        run = subprocess.run(script, capture_output=True, text=True)
+        self.assertEqual((run.returncode, run.stdout), (1, ''))
+        self.assertEqual(self.entries(), [])
+        self.world({ISSUE: {'etag': '"a1"', 'body': '{"number": 7}'}})
+        self.assertEqual(self.ghcache.get(ISSUE), {'number': 7})
+        self.assertEqual(self.ghcache.get(ISSUE), {'number': 7})
+        self.assertEqual(self.sent_tags()[-1], ['"a1"'])
+
+    def test_a_tampered_etag_or_link_raises_before_any_request(self):
+        self.ghcache.get(ISSUE)
+        entry = self.entries()[0]
+        good = entry.read_text()
+        for field, value in (('etag', '"forged"'), ('link', '<https://example.invalid/x>; rel="next"')):
+            saved = json.loads(good)
+            saved[field] = value
+            entry.write_text(json.dumps(saved))
+            entry.chmod(0o600)
+            with self.assertRaises(self.ghcache.Error):
+                self.ghcache.get(ISSUE)
+        self.assertEqual(self.sent_tags(), [[]])
+
+    def test_a_fresh_link_on_a_304_is_saved_and_reused(self):
+        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]'}})
+        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}])
+        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]', 'link': '<%s>; rel="next"' % PAGE2},
+                    PAGE2: {'etag': '"p2"', 'body': '[{"id": 3}]'}})
+        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}, {'id': 3}])
+        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]', 'link': '<%s>; rel="next"' % PAGE2,
+                               'no_link_on_304': True},
+                    PAGE2: {'etag': '"p2"', 'body': '[{"id": 3}]'}})
+        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}, {'id': 3}])
+        self.assertEqual(self.sent_tags(), [[], ['"p1"'], [], ['"p1"'], ['"p2"']])
+
+    def rest(self):
+        return self.cache / 'launch-fleet' / 'rest'
+
+    def test_the_cache_root_is_owner_only_even_when_it_already_exists(self):
+        self.rest().mkdir(parents=True, mode=0o755)
+        self.rest().chmod(0o755)
+        self.ghcache.get(ISSUE)
+        self.assertEqual(stat.S_IMODE(self.rest().stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(self.entries()[0].stat().st_mode), 0o600)
+
+    def test_unsafe_directories_and_entries_are_refused_before_use(self):
+        self.ghcache.get(ISSUE)
+        entry = self.entries()[0]
+        for mode in (0o604, 0o602, 0o640):
+            entry.chmod(mode)
+            with self.assertRaises(self.ghcache.Error):
+                self.ghcache.get(ISSUE)
+            self.assertTrue(entry.exists())
+        entry.chmod(0o600)
+        parent = self.cache / 'launch-fleet'
+        parent.chmod(0o777)
+        with self.assertRaises(self.ghcache.Error):
+            self.ghcache.get(ISSUE)
+        parent.chmod(0o700)
+        real = self.tmp / 'real-rest'
+        self.rest().rename(real)
+        self.rest().symlink_to(real)
+        with self.assertRaises(self.ghcache.Error):
+            self.ghcache.get(ISSUE)
+        self.rest().unlink()
+        real.rename(self.rest())
+        with mock.patch('os.getuid', return_value=os.getuid() + 1):
+            with self.assertRaises(self.ghcache.Error):
+                self.ghcache.get(ISSUE)
+        self.assertEqual(self.sent_tags(), [[]])
+        self.assertEqual(self.ghcache.get(ISSUE), {'number': 7, 'title': 'first'})
+
+    def test_errors_name_the_path_only(self):
+        secret = 'synthetic-credential'
+        risky = ISSUE + '?access_token=' + secret
+        self.world({risky: {'status': 403, 'body': '{}'}})
+        with self.assertRaises(self.ghcache.Error) as raised:
+            self.ghcache.get(risky)
+        self.assertIn(ISSUE, str(raised.exception))
+        self.assertNotIn(secret, str(raised.exception))
+        loop = 'https://synthetic-user:%s@api.github.com/repositories/1/c?page=1&token=%s' % (secret, secret)
+        self.world({COMMENTS: {'etag': '"p1"', 'body': '[]', 'link': '<%s>; rel="next"' % loop},
+                    loop: {'etag': '"p2"', 'body': '{}'}})
+        with self.assertRaises(self.ghcache.Error) as raised:
+            self.ghcache.pages(COMMENTS)
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertIn('/repositories/1/c', str(raised.exception))
+        self.world({COMMENTS: {'etag': '"p1"', 'body': '[]', 'link': '<%s>; rel="next"' % loop},
+                    loop: {'etag': '"p3"', 'body': '[]', 'link': '<%s>; rel="next"' % loop}})
+        with self.assertRaises(self.ghcache.Error) as raised:
+            self.ghcache.pages(COMMENTS)
+        self.assertIn('loop', str(raised.exception))
+        self.assertNotIn(secret, str(raised.exception))
+        self.world({risky: {'etag': '"r1"', 'body': 'not json'}})
+        with self.assertRaises(self.ghcache.Error) as raised:
+            self.ghcache.get(risky)
+        self.assertNotIn(secret, str(raised.exception))
+        self.world({})
+        with self.assertRaises(self.ghcache.Error) as raised:
+            self.ghcache.get(risky)
+        self.assertNotIn(secret, str(raised.exception))
 
 
 if __name__ == '__main__':

@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""Synthetic driver v1 with a `version` answer, for the effort cases (#2594).
-
-FAKE_EFFORT_MODE picks one of four drivers:
-  takes    lists `effort` in `can`, and records each start's input with it
-  cant     leaves `effort` out of `can`, and refuses a start that carries `effort` (D1)
-  refuses  lists `effort` in `can`, then refuses each start that carries it with the contract's exact `next`
-  odd      answers `version` with a field driver v1 doesn't have
-It answers `version` and those refusals itself; every other call goes to fixtures/driver.py, which logs it to
-FAKE_DRIVER_LOG and answers as the other cases' drivers do. Every call this script answers is logged the same way.
-"""
 import json
 import os
 from pathlib import Path
@@ -32,7 +22,8 @@ if command == 'version':
     log()
     answer = {'driver': host, 'records': ['openwiz:records v1'],
               'can': ['start', 'wake', 'stop'] + ([] if mode == 'cant' else ['effort'])}
-    print(json.dumps(dict(answer, effort='medium') if mode == 'odd' else answer))
+    print(os.environ.get('FAKE_VERSION', json.dumps(dict(answer, effort='medium'))) if mode == 'odd'
+          else json.dumps(answer))
     sys.exit(0)
 if command == 'start' and 'effort' in given and mode in ('cant', 'refuses'):
     log()

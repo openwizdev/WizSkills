@@ -611,7 +611,6 @@ CANT = "launch-fleet: driver can't set effort"
 
 
 def effort_drivers(p, **modes):
-    """Each named host's driver becomes fixtures/roster/effort/driver.py in that mode: it answers `version`."""
     for host, mode in modes.items():
         folder = p.dir / 'adapters' / host
         folder.mkdir(parents=True, exist_ok=True)
@@ -620,15 +619,13 @@ def effort_drivers(p, **modes):
         (folder / 'driver').chmod(0o755)
 
 
-def starts(p):
-    """Each start the drivers were sent, in order: (host, its input)."""
+def start_inputs(p):
     return [(c['host'], c['input']) for c in p.calls() if c['command'] == 'start']
 
 
 class Roster(unittest.TestCase):
 
     def project(self, case, hosts, setting='Host: local\n'):
-        """A Roster case's project; each host's driver takes effort, as #2594's Roster start needs to send it."""
         repo = json.loads((ROSTER / case / 'case.json').read_text()).get('repository', REPO)
         p = Project(self, setting=setting, hosts=hosts, repo=repo)
         effort_drivers(p, **{host: 'takes' for host in hosts})
@@ -661,19 +658,19 @@ class Roster(unittest.TestCase):
         self.assertEqual(p.host('which'), (0, 'host: local', ''))
         self.assertEqual(p.host('roster'), (0, "roster: each start goes to its picked entry's driver", ''))
         self.assertEqual(p.host('start', repo, 7, 'claude', 'claude-opus-5-5'),
-                         (0, 'started #7 on cloudroom as Claude Code via syn-owner, Opus 5.5 default effort', ''))
+                         (0, 'started #7 on cloudroom as Claude Code via syn-owner, Opus 5.5 medium effort', ''))
         self.assertEqual(p.host('start', repo, 8, 'codex', 'gpt-6.2-sol'),
-                         (0, 'started #8 on local as Own computer via syn-owner, Sol 6.2 default effort', ''))
+                         (0, 'started #8 on local as Own computer via syn-owner, Sol 6.2 medium effort', ''))
         self.assertEqual(p.host('start', repo, 9, 'codex', 'gpt-6.2-sol', 'review-ticket'),
-                         (0, 'started #9 on cloudroom as Codex via syn-owner, Sol 6.2 default effort', ''))
+                         (0, 'started #9 on cloudroom as Codex via syn-owner, Sol 6.2 medium effort', ''))
         self.assertEqual(p.host('start', repo, 10, 'claude', 'claude-opus-5-5', 'launch-fleet'),
-                         (0, 'started #10 on demo-bot as Demo Bot via syn-owner, Opus 5.5 default effort', ''))
-        self.assertEqual([(c['host'], c['input']['ticket'], c['input']['skill'], c['input']['harness'],
-                           c['input']['model']) for c in p.calls()],
-                         [('cloudroom', 7, 'build-ticket', 'claude', 'claude-opus-5-5'),
-                          ('local', 8, 'build-ticket', 'codex', 'gpt-6.2-sol'),
-                          ('cloudroom', 9, 'review-ticket', 'codex', 'gpt-6.2-sol'),
-                          ('demo-bot', 10, 'launch-fleet', 'claude', 'claude-opus-5-5')])
+                         (0, 'started #10 on demo-bot as Demo Bot via syn-owner, Opus 5.5 medium effort', ''))
+        self.assertEqual([(host, given['ticket'], given['skill'], given['harness'], given['model'], given['effort'])
+                          for host, given in start_inputs(p)],
+                         [('cloudroom', 7, 'build-ticket', 'claude', 'claude-opus-5-5', 'medium'),
+                          ('local', 8, 'build-ticket', 'codex', 'gpt-6.2-sol', 'medium'),
+                          ('cloudroom', 9, 'review-ticket', 'codex', 'gpt-6.2-sol', 'medium'),
+                          ('demo-bot', 10, 'launch-fleet', 'claude', 'claude-opus-5-5', 'medium')])
         self.assertEqual(p.saved(), {'repo': repo, 'runs': {
             '7': {'host': 'cloudroom', 'role': 'builder', 'run': 'cloudroom-run-7'},
             '8': {'host': 'local', 'role': 'builder', 'run': 'local-run-8'},
@@ -694,7 +691,7 @@ class Roster(unittest.TestCase):
                          (1, 'refused: the Roster gives no role to the grill skill', ''))
         self.assertEqual((p.calls(), p.saved()), ([], None))
         self.assertEqual(p.host('start', repo, 2004, 'claude', 'claude-opus-5-5', 'launch-fleet'),
-                         (0, 'started #2004 on demo-bot as Demo Bot via syn-owner, Opus 5.5 default effort', ''))
+                         (0, 'started #2004 on demo-bot as Demo Bot via syn-owner, Opus 5.5 medium effort', ''))
         p, repo = self.project('namespaced', ('local', 'cloudroom'))
         self.assertEqual(p.host('start', repo, 4002, 'codex', 'vendor/demo', 'review-ticket'),
                          (1, "roster: driver v1 can't start codex vendor/demo; choose another model in the Models "
@@ -716,11 +713,11 @@ class Roster(unittest.TestCase):
         p, repo = self.project('other-user', ('local', 'helper-bot'))
         env = dict(Token().service(p), **Token().builder(p))
         started = p.host('start', repo, 10, 'codex', 'gpt-6.2-sol', 'launch-fleet', **env)
-        self.assertEqual(started, (0, 'started #10 on helper-bot as Helper Bot via syn-maker, Sol 6.2 default effort',
+        self.assertEqual(started, (0, 'started #10 on helper-bot as Helper Bot via syn-maker, Sol 6.2 medium effort',
                                    ''))
-        self.assertEqual(p.calls()[0], {'host': 'helper-bot', 'command': 'start', 'input': {
+        self.assertEqual(start_inputs(p)[0], ('helper-bot', {
             'repository': 'syn-maker/garden', 'ticket': 10, 'skill': 'launch-fleet', 'harness': 'codex',
-            'model': 'gpt-6.2-sol'}})
+            'model': 'gpt-6.2-sol', 'effort': 'medium'}))
         self.assertEqual(Token().requests(p)[0]['request'], {
             'schema': 'openwiz.token-service.v1', 'kind': 'request', 'requester': 'orchestrator-10',
             'repositories': ['syn-maker/garden'], 'permissions': WRITE})
@@ -783,8 +780,6 @@ class Roster(unittest.TestCase):
 
 
 class Effort(unittest.TestCase):
-    """#2594: a Roster start carries the Models table's effort to a driver whose `can` lists it, or starts nothing."""
-
     def project(self, fleet='fleet.md'):
         p = Project(self, hosts=())
         effort_drivers(p, **{'takes-effort': 'takes', 'no-effort': 'cant', 'refuses-effort': 'refuses'})
@@ -797,7 +792,7 @@ class Effort(unittest.TestCase):
     def test_a_roster_start_on_a_driver_that_takes_effort_sends_the_models_tables_effort(self):
         p = self.project()
         started = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5')
-        self.assertEqual(starts(p), [('takes-effort', {'repository': REPO, 'ticket': 7, 'skill': 'build-ticket',
+        self.assertEqual(start_inputs(p), [('takes-effort', {'repository': REPO, 'ticket': 7, 'skill': 'build-ticket',
                                                        'harness': 'claude', 'model': 'claude-opus-5-5',
                                                        'effort': 'medium'})])
         self.assertEqual(started,
@@ -806,6 +801,116 @@ class Effort(unittest.TestCase):
         self.assertEqual(p.saved(), {'repo': REPO, 'runs': {'7': {'host': 'takes-effort', 'role': 'builder',
                                                                   'run': 'takes-effort-run-7'}}})
         self.assertEqual((p.fleet_notes(), self.comments(p, 7)), ([], []))
+
+    def cant(self, host, harness, effort, item, agent, said):
+        return (CANT, "The %s driver can't run %s at %s effort, so this %s's %s was not started%s Nothing starts it "
+                      "without that effort: remove the Effort for this role in the Models table to run it at the "
+                      "host's default, or give the role a Roster entry whose driver can set it."
+                % (host, harness, effort, item, agent, said))
+
+    def test_a_driver_whose_can_leaves_effort_out_is_never_sent_it_and_starts_nothing(self):
+        p = self.project()
+        env = Token().service(p)
+        line = "stopped (driver can't set effort): the no-effort driver can't run codex at medium effort"
+        for _ in range(2):
+            self.assertEqual(p.host('start', REPO, 8, 'codex', 'gpt-6.2-sol', 'review-ticket', **env), (1, line, ''))
+        self.assertEqual([c['command'] for c in p.calls()], ['version', 'version'])
+        self.assertEqual((p.saved(), Token().requests(p)), (None, []))
+        self.assertFalse((p.runs.parent / 'agent-token-bin').exists())
+        self.assertEqual(p.fleet_notes(8), ["stopped (driver can't set effort)"])
+        self.assertEqual(self.comments(p, 8), [self.cant('no-effort', 'codex', 'medium', 'pull request', 'reviewer',
+                                                         ' (its version leaves effort out of what it can do).')])
+        self.assertEqual(p.driver_log(), [])
+
+    def test_a_driver_refusing_the_effort_with_driver_v1s_text_starts_nothing_and_is_never_retried_without_it(self):
+        p = self.project()
+        p.fleet((EFFORT / 'fleet.md').read_text()
+                .replace('| takes-effort | builder |', '| takes-effort | orchestrator |')
+                .replace('| refuses-effort | orchestrator |', '| refuses-effort | builder |'))
+        line = "stopped (driver can't set effort): the refuses-effort driver can't run claude at medium effort"
+        self.assertEqual(p.host('start', REPO, 9, 'claude', 'claude-opus-5-5'), (1, line, ''))
+        self.assertEqual(start_inputs(p), [('refuses-effort', {'repository': REPO, 'ticket': 9, 'skill': 'build-ticket',
+                                                         'harness': 'claude', 'model': 'claude-opus-5-5',
+                                                         'effort': 'medium'})])
+        self.assertEqual([c['command'] for c in p.calls()], ['version', 'start'])
+        self.assertEqual([(e['host'], e['error'], e['next']) for e in p.driver_log()],
+                         [('refuses-effort', "the synthetic host can't run claude at medium effort", EFFORT_NEXT)])
+        said = (" (exit 1: refused, with driver v1's effort refusal). Its own words are kept off this public ticket: "
+                "the fleet's owner can read them in the private driver log, `driver-failures.log` beside "
+                "`LAUNCH_FLEET_RUNS`, entry %s for #9." % p.driver_log()[0]['time'])
+        self.assertEqual(self.comments(p, 9), [self.cant('refuses-effort', 'claude', 'medium', 'ticket', 'builder',
+                                                         said)])
+        self.assertNotIn('synthetic host', json.dumps(p.github()['comments']))
+        self.assertEqual((p.fleet_notes(9), p.saved()), (["stopped (driver can't set effort)"], None))
+        self.assertEqual(p.host('start', REPO, 10, 'claude', 'claude-opus-5-5', 'launch-fleet'),
+                         (0, 'started #10 on takes-effort as Takes Effort via syn-owner, Opus 5.5 high effort', ''))
+        self.assertEqual(start_inputs(p)[-1][1]['effort'], 'high')
+
+    def test_a_later_start_without_the_effort_clears_the_report(self):
+        p = self.project()
+        self.assertEqual(p.host('start', REPO, 8, 'codex', 'gpt-6.2-sol', 'review-ticket')[0], 1)
+        p.fleet((EFFORT / 'fleet.md').read_text().replace('| Sol 6.2 | Medium |', '| Sol 6.2 |  |'))
+        self.assertEqual(p.host('start', REPO, 8, 'codex', 'gpt-6.2-sol', 'review-ticket'),
+                         (0, 'started #8 on no-effort as No Effort via syn-owner, Sol 6.2 default effort', ''))
+        self.assertEqual(start_inputs(p), [('no-effort', {'repository': REPO, 'ticket': 8, 'skill': 'review-ticket',
+                                                    'harness': 'codex', 'model': 'gpt-6.2-sol'})])
+        self.assertEqual([first for first, _ in self.comments(p, 8)], [CANT + ', cleared'])
+        self.assertTrue(self.comments(p, 8)[0][1].endswith('Cleared: the no-effort driver started it later.'))
+        self.assertEqual(p.fleet_notes(8), ["stopped (driver can't set effort)", 'done'])
+
+    def test_with_no_effort_column_or_a_blank_effort_cell_roster_starts_are_unchanged(self):
+        for name, fleet in (('no column', (EFFORT / 'no-effort-column.md').read_text()),
+                            ('blank cells', (EFFORT / 'fleet.md').read_text().replace(' | Medium |', ' |  |')
+                             .replace(' | High |', ' |  |'))):
+            with self.subTest(name):
+                p = self.project()
+                p.fleet(fleet)
+                self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5'),
+                                 (0, 'started #7 on takes-effort as Takes Effort via syn-owner, Opus 5.5 default '
+                                     'effort', ''))
+                self.assertEqual(p.host('start', REPO, 8, 'codex', 'gpt-6.2-sol', 'review-ticket'),
+                                 (0, 'started #8 on no-effort as No Effort via syn-owner, Sol 6.2 default effort', ''))
+                self.assertEqual(p.host('start', REPO, 9, 'claude', 'claude-opus-5-5', 'launch-fleet'),
+                                 (0, 'started #9 on refuses-effort as Refuses Effort via syn-owner, Opus 5.5 default '
+                                     'effort', ''))
+                self.assertEqual([c['command'] for c in p.calls()], ['start'] * 3)
+                self.assertEqual([sorted(given) for _, given in start_inputs(p)],
+                                 [['harness', 'model', 'repository', 'skill', 'ticket']] * 3)
+
+    def test_an_effort_driver_v1_cant_carry_or_an_odd_version_answer_starts_nothing(self):
+        p = self.project()
+        p.fleet((EFFORT / 'fleet.md').read_text().replace('| Opus 5.5 | Medium |', '| Opus 5.5 | Very High |'))
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5'),
+                         (1, "refused: the Models table's Effort for claude-code claude-opus-5-5 is not one plain word "
+                             "driver v1 takes: very high", ''))
+        self.assertEqual(p.calls(), [])
+        p = self.project()
+        effort_drivers(p, **{'takes-effort': 'odd'})
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5'),
+                         (2, '', "host.py: the takes-effort driver's version answer is not driver v1's; nothing was "
+                                 "started"))
+        self.assertEqual(([c['command'] for c in p.calls()], p.saved()), (['version'], None))
+
+    def test_only_driver_v1s_exact_version_answer_is_read(self):
+        good = {'driver': 'takes-effort', 'records': ['openwiz:records v1'], 'can': ['start', 'wake', 'stop', 'effort']}
+        bad = ['{"driver": "x", "driver": "takes-effort", "records": ["openwiz:records v1"], '
+               '"can": ["start", "wake", "stop", "effort"]}', 'effort', '[]', '{}']
+        bad += [json.dumps(dict(good, **change)) for change in (
+            {'can': 'start wake stop effort'}, {'can': ['start', 'wake', 'stop', 'effort', 'effort']},
+            {'can': ['start', 'stop', 'effort']}, {'can': ['start', 'wake', 'stop', 'effort', 'fly']},
+            {'can': ['start', 'wake', 'stop', {'effort': True}]}, {'records': []}, {'records': 'openwiz:records v1'},
+            {'driver': 'Takes Effort'}, {'driver': None})]
+        bad.append(json.dumps({k: v for k, v in good.items() if k != 'can'}))
+        p = self.project()
+        effort_drivers(p, **{'takes-effort': 'odd'})
+        for text in bad:
+            with self.subTest(text):
+                self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', FAKE_VERSION=text),
+                                 (2, '', "host.py: the takes-effort driver's version answer is not driver v1's; "
+                                         "nothing was started"))
+        self.assertEqual((start_inputs(p), p.saved()), ([], None))
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', FAKE_VERSION=json.dumps(good))[0], 0)
+        self.assertEqual(start_inputs(p)[0][1]['effort'], 'medium')
 
 
 if __name__ == '__main__':

@@ -1113,7 +1113,8 @@ def create_repo(got):
                 raise Exit(5, '%s has no default branch and initial commit, which init needs; OpenWiz never pushes '
                               'one into an existing repository. Add a first commit yourself, or choose a new '
                               'name; nothing created.' % name)
-            state.value['created'] = {'repo': name, 'state': 'uncertain'}
+            state.value['created'] = {'repo': name, 'state': 'uncertain',
+                                      **({'id': record['id']} if record.get('id') else {})}
             state.save()
             raise Exit(6, '%s exists, but its default branch and initial commit did not read back; nothing more '
                           'was created or pushed. Run this again to read it back.' % name)

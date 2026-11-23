@@ -5,19 +5,28 @@ from pathlib import Path
 import runpy
 import subprocess
 import sys
+import time
 
 USAGE = """The REST bench of FR5 (OpenWiz#2621): calls per run on the existing fixtures.
 
 python3 -I bench.py fixtures OUT      run each wake script's own test suite with
                                      that script's runs under gh-meter.py, one
                                      log per script in OUT, and print the table
+python3 -I bench.py sample SAMPLES   read `gh api rate_limit` (free) every 3 minutes
+                                     until SAMPLES holds 21 points; rerun to resume.
+                                     Under 1,500 left in either allowance it
+                                     reads nothing until that one resets
 python3 -I bench.py live SAMPLES      the hour's REST and GraphQL `used` from
-                                     `gh api rate_limit` samples (JSON lines)
+                                     `gh api rate_limit` samples (JSON lines:
+                                     epoch, t, and core/graphql limit, used,
+                                     remaining, reset)
 
 fleet.sh spec runs through test.sh's FLEET_SH; each Python script's suite runs
 in this process with subprocess patched, so only that script's own runs (and
 whatever they start) see the meter's shim first on PATH. Every run uses its
-suite's own fake `gh` and GH_METER_RATE=0, so nothing reaches GitHub.
+suite's own fake `gh` and GH_METER_RATE=0, so nothing reaches GitHub. Every
+agent, harness and host CLI (AGENT_CLIS) is stubbed next on PATH, behind the
+suites' own fakes: a stub records its name and exits 127, as if missing.
 The AFTER bench reruns the same command on the same fixtures.
 """
 
@@ -25,6 +34,10 @@ HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent.parent
 METER = SCRIPTS / 'gh-meter.py'
 WAKES_PER_HOUR = 6
+AGENT_CLIS = ('boat', 'claude', 'codex', 'room-cli', 'bb', 'opencode', 'cursor-agent', 'droid', 'gemini', 'aider',
+              'amp', 'qwen', 'goose', 'copilot', 'crush', 'pi', 'kimi', 'cline', 'pane', 'hermes', 'devin',
+              'antigravity', 'fx', 'openclaw', 'agent-zero')
+SAMPLES, GAP, FLOOR = 21, 180, 1500
 PYTHON = [
     ('merge.py', None, 'test-merge.py'),
     ('status.py', 'repair', 'test-status.py'),
@@ -90,6 +103,12 @@ def fixtures(out):
     out = Path(out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     SHIM = out / 'shim'
+    stubs, called = out / 'agent-stubs', out / 'agent-cli-calls'
+    stubs.mkdir(exist_ok=True)
+    for name in AGENT_CLIS:
+        (stubs / name).write_text("#!/bin/sh\necho %s >> '%s'\nexit 127\n" % (name, called))
+        (stubs / name).chmod(0o755)
+    os.environ['PATH'] = '%s:%s' % (stubs, os.environ.get('PATH', ''))
     if subprocess.run([sys.executable, '-I', str(METER), 'install', str(SHIM)]).returncode:
         sys.exit('bench: the shim did not install')
     rows = [('fleet.sh spec', 'fleet', *fleet_suite(out))]
@@ -104,14 +123,45 @@ def fixtures(out):
         print('| %s | %s | %d | %d | %d | %d | %d | %.1f | %.0f |'
               % (name, role, runs, calls, rest, graphql, units, per, per * WAKES_PER_HOUR))
     print()
+    reached = called.read_text().split() if called.exists() else []
+    print('Agent-CLI stubs: %d installed; %d calls reached them%s' % (
+        len(AGENT_CLIS), len(reached), ''.join(' (%s x%d)' % (n, reached.count(n)) for n in sorted(set(reached)))))
+    print()
     report = subprocess.run([sys.executable, '-I', str(METER), 'report', *[str(r[2]) for r in rows if r[2].exists()]])
     broken = [r[0] for r in rows if r[4] != 0 or r[3] == 0]
     if broken or report.returncode:
         sys.exit('bench: a suite failed under the meter, or ran its script no times: %s' % ', '.join(broken))
 
 
+def points(path):
+    return [json.loads(line) for line in Path(path).read_text().splitlines()] if Path(path).exists() else []
+
+
+def sample(path):
+    while len(points(path)) < SAMPLES:
+        last = points(path)[-1:]
+        if last:
+            time.sleep(max(0, last[0]['epoch'] + GAP - time.time(), *[
+                last[0][kind]['reset'] + 5 - time.time()
+                for kind in ('core', 'graphql') if kind in last[0] and last[0][kind]['remaining'] < FLOOR]))
+        read = subprocess.run(['gh', 'api', 'rate_limit'], capture_output=True, text=True)
+        now = time.time()
+        point = {'epoch': round(now), 't': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))}
+        try:
+            resources = json.loads(read.stdout)['resources'] if read.returncode == 0 else None
+            for kind in ('core', 'graphql') if resources else ():
+                point[kind] = {k: resources[kind][k] for k in ('limit', 'used', 'remaining', 'reset')}
+        except (ValueError, KeyError, TypeError):
+            point = {k: point[k] for k in ('epoch', 't')}
+        if 'core' not in point:
+            point['error'] = 'rate_limit unreadable'
+        with open(path, 'a') as f:
+            f.write(json.dumps(point) + '\n')
+        print(len(points(path)), point['t'], flush=True)
+
+
 def live(path):
-    samples = [json.loads(line) for line in Path(path).read_text().splitlines()]
+    samples = points(path)
     good = [s for s in samples if 'core' in s]
     for kind in ('core', 'graphql'):
         spent, windows = 0, 1
@@ -123,7 +173,7 @@ def live(path):
                 windows += 1
         print('%s: %d samples over %d minutes, %d used (a lower bound across %d reset windows), '
               'min remaining %d of %d'
-              % (kind, len(good), (good[-1]['t'] - good[0]['t']) // 60, spent, windows,
+              % (kind, len(good), (good[-1]['epoch'] - good[0]['epoch']) // 60, spent, windows,
                  min(s[kind]['remaining'] for s in good), good[0][kind]['limit']))
     print('unreadable samples: %d' % (len(samples) - len(good)))
 
@@ -131,6 +181,8 @@ def live(path):
 if __name__ == '__main__':
     if sys.argv[1:2] == ['fixtures'] and len(sys.argv) == 3:
         fixtures(sys.argv[2])
+    elif sys.argv[1:2] == ['sample'] and len(sys.argv) == 3:
+        sample(sys.argv[2])
     elif sys.argv[1:2] == ['live'] and len(sys.argv) == 3:
         live(sys.argv[2])
     else:

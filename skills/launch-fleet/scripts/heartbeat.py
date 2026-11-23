@@ -336,7 +336,9 @@ def wake_or_start(state, config, env, repo, spec):
     if result.returncode == 0:
         starting.rmdir()
         return 0, 'started'
-    if result.stdout.startswith(('refused:', 'stopped (driver start failed):')) or result.returncode == 2:
+    if (result.returncode == 1 and result.stdout.startswith(
+            ('refused:', 'stopped (driver start failed):', "stopped (driver can't set effort):"))) \
+            or result.returncode == 2:
         starting.rmdir()
         return result.returncode, 'start refused'
     (starting / 'host-result').write_text(result.stdout)

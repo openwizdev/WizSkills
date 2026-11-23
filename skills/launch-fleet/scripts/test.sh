@@ -2136,6 +2136,65 @@ expect 'history: an unreadable linked PR cannot close its spec' 0 check.json "$C
 look #22: comment history could not be read in full: repos/synthetic-owner/synthetic-repo/issues/22/comments?per_page=100 failed: fake gh: planted failure: issue comments 22 page=1
 EOF
 
+### FR4 (#2454): issue facts by GraphQL, REST through the read budget
+
+expect 'FR4: a spec check reads issue facts by GraphQL, never REST' 0 check.json 'merge12' -- spec 10 <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+log_has 'FR4: a spec check reads issue facts by GraphQL, never REST' 1 '^graphql Facts count=7$'
+log_has 'FR4: a spec check reads issue facts by GraphQL, never REST' 0 '^issue comments '
+log_has 'FR4: a spec check reads issue facts by GraphQL, never REST' 0 '^detail '
+log_has 'FR4: a spec check reads issue facts by GraphQL, never REST' 0 '^dependencies '
+expect 'FR4: a 120-comment ticket is read to its first comment' 0 check.json "$WAIT12 | $MERGE71 | issue(12; .comments += discussion(118))" -- wake 12 <<EOF
+resume #12: #71 merged; tell its builder, thread thr_syn12 (wait comment 1202)
+EOF
+log_has 'FR4: a 120-comment ticket is read to its first comment' 1 '^graphql Comments number=12 before=20$'
+log_has 'FR4: a 120-comment ticket is read to its first comment' 0 '^issue comments '
+expect 'FR4: a missing comment page is exit 2' 2 check.json "$WAIT12 | $MERGE71 | issue(12; .comments += discussion(118))" FAKE_GH_FAIL=graphql_Comments_number=12 -- wake 12 <<EOF
+fleet.sh: the GitHub query Comments failed
+EOF
+expect 'FR4: a missing issue is exit 2, never empty facts' 2 check.json 'issue(12; .comments += discussion(118))' FAKE_GH_FAIL=graphql_Facts -- spec 10 <<EOF
+fleet.sh: the GitHub query Facts failed
+EOF
+expect 'FR4: a REST allowance near the reserve backs off with exit 2' 2 check.json 'merge12' FAKE_GH_REST_REMAINING=1500 -- spec 10 <<EOF
+fleet.sh: backing off: 1 core reads would leave 1499 of 5000, under the 1500 kept for builders and reviewers, until 2026-11-01T13:00:00Z
+EOF
+expect 'FR4: a REST refusal after the GraphQL reads uses no partial fact' 2 check.json "$WAIT12 | $MERGE71" FAKE_GH_REST_REMAINING=1500 -- wake 12 <<EOF
+fleet.sh: backing off: 1 core reads would leave 1499 of 5000, under the 1500 kept for builders and reviewers, until 2026-11-01T13:00:00Z
+EOF
+expect 'FR4: an unknown REST allowance is exit 2' 2 check.json 'merge12' FAKE_GH_FAIL=rate_limit -- spec 10 <<EOF
+fleet.sh: backing off: unknown allowance: rate_limit can't be read
+EOF
+
+# A failing gh stops every lane at once (FR5's bench, #2621: about 2,800
+# calls in 80 seconds across 64 lanes). A first `spec 10` keeps its unchanged
+# entry; the second runs with a gh that answers only the free rate_limit read,
+# so its probe lanes fail. It must exit 2 after at most one call per lane.
+storm_case() {
+  name='FR4: a failing gh stops the lanes at once'
+  selected "$name" || return
+  take || return 0
+  cases=$((cases + 1))
+  d=$tmp/storm-$cases
+  mkdir -p "$d/bin" || { bad "$name" "setup"; return; }
+  jq "$LIB"' . as $w | reduce range(100; 140) as $n ($w; ticket($n; "Synthetic ticket"; ["ready-for-agent"]; []))' \
+    "$FIX/check.json" > "$d/world.json" || { bad "$name" "fixture"; return; }
+  storm_run() {
+    env PATH="$1:$PATH" GH_REPO=synthetic-owner/synthetic-repo OPENWIZ_STATE_DIR="$d/no-installation" \
+      FAKE_GH_WORLD="$d/world.json" FAKE_GH_LOG="$d/gh.log" LAUNCH_FLEET_NOW=$NOW LAUNCH_FLEET_CACHE="$d/cache" \
+      LAUNCH_FLEET_REVISION="$FIX/revision.sh" sh "$FLEET" spec 10 > "$d/out" 2> "$d/err"
+  }
+  storm_run "$tmp/bin" || { bad "$name" "the first check failed: $(head -c 300 "$d/err")"; return; }
+  printf '#!/bin/sh\n[ "$*" = "api rate_limit" ] && exec "%s/gh" "$@"\nprintf "%%s\\n" "$*" >> "%s/failed.log"\necho "gh: synthetic failure" >&2\nexit 1\n' \
+    "$tmp/bin" "$d" > "$d/bin/gh" && chmod +x "$d/bin/gh" && : > "$d/failed.log" || { bad "$name" "the failing gh"; return; }
+  storm_run "$d/bin"
+  status=$? calls=$(grep -c '' "$d/failed.log")
+  if [ "$status" != 2 ] || [ -s "$d/out" ]; then bad "$name" "exit $status, not 2, or stdout: $(head -c 300 "$d/out")"; return; fi
+  [ "$calls" -le 9 ] || { bad "$name" "$calls failing calls, more than one per lane and the GraphQL read"; return; }
+  echo "ok   $name"
+}
+storm_case
+
 ### The check: what it can't read in full
 
 expect 'an unreadable second ticket comment page: look' 0 check.json 'issue(12; .comments += discussion(119))' FAKE_GH_FAIL=issue_comments_12_page=2 -- check <<EOF

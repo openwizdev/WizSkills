@@ -21,7 +21,10 @@ python3 -I bench.py live SAMPLES      the hour's REST and GraphQL `used` from
                                      epoch, t, and core/graphql limit, used,
                                      remaining, reset)
 
-fleet.sh spec runs through test.sh's FLEET_SH; each Python script's suite runs
+fleet.sh spec runs through test.sh's FLEET_SH: a copy of fleet.sh whose first
+lines meter a top-level `spec` run, in a mirror of this folder (its other
+files linked), so a case that changes the copy changes what it hashes as
+itself. Each Python script's suite runs
 in this process with subprocess patched, so only that script's own runs (and
 whatever they start) see the meter's shim first on PATH. Every run uses its
 suite's own fake `gh` and GH_METER_RATE=0, so nothing reaches GitHub. Every
@@ -81,11 +84,18 @@ def python_suite(out, script, sub, test):
 
 def fleet_suite(out):
     log, runs = out / 'fleet.sh.jsonl', out / 'fleet.sh.runs'
-    wrapper = out / 'fleet-metered.sh'
-    wrapper.write_text(
-        '#!/bin/sh\nif [ "${1:-}" = spec ]; then\n  echo run >> \'%s\'\n'
-        '  PATH=\'%s\':"$PATH" GH_METER_LOG=\'%s\' GH_METER_ROLE=fleet GH_METER_RATE=0 exec /bin/sh \'%s\' "$@"\n'
-        'fi\nexec /bin/sh \'%s\' "$@"\n' % (runs, SHIM, log, SCRIPTS / 'fleet.sh', SCRIPTS / 'fleet.sh'))
+    mirror = out / 'tree' / 'skills' / 'launch-fleet' / 'scripts'
+    mirror.mkdir(parents=True)
+    for entry in SCRIPTS.iterdir():
+        if entry.name != 'fleet.sh':
+            (mirror / entry.name).symlink_to(entry)
+    (out / 'tree' / 'skills' / 'to-tickets').symlink_to(SCRIPTS.parent.parent / 'to-tickets')
+    shebang, rest = (SCRIPTS / 'fleet.sh').read_text().split('\n', 1)
+    wrapper = mirror / 'fleet.sh'
+    wrapper.write_text(shebang + '\n' + (
+        'if [ "${1:-}" = spec ] && [ -z "${GH_METER_LOG:-}" ]; then\n  echo run >> \'%s\'\n'
+        '  PATH=\'%s\':"$PATH" GH_METER_LOG=\'%s\' GH_METER_ROLE=fleet GH_METER_RATE=0\n'
+        '  export PATH GH_METER_LOG GH_METER_ROLE GH_METER_RATE\nfi\n' % (runs, SHIM, log)) + rest)
     env = dict(os.environ, FLEET_SH=str(wrapper), TEST_JOBS=os.environ.get('TEST_JOBS', '2'))
     with open(out / 'test.sh.log', 'w') as output:
         run = subprocess.run(['sh', str(SCRIPTS / 'test.sh')], env=env, stdout=output, stderr=subprocess.STDOUT)

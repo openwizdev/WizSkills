@@ -330,15 +330,16 @@ def synthetic_clone(where):
         return git('rev-parse', 'HEAD')
 
     git('init', '-q')
+    base = commit({'README.md': ['base']}, 'O')
     a_lines = ['a%d' % i for i in range(1, 11)]
-    a = commit({'a.py': a_lines, 'b.py': ['b%d' % i for i in range(1, 6)]}, 'A')
+    a = commit({'a.py': a_lines, 'b.py': ['b%d' % i for i in range(1, 6)], 'tests/test_a.py': ['t1', 't2', 't3']}, 'A')
     fixed = ['new0', 'new1'] + a_lines[:4] + ['A5'] + a_lines[5:]
     b = commit({'a.py': fixed, 'c.py': ['c1']}, 'B')
     c = commit({'a.py': fixed[:10] + ['A9', 'a10']}, 'C')
-    return a, b, c
+    return base, a, b, c
 
 
-def late_repos(a, b, c):
+def late_repos(base, a, b, c):
     rounds = [
         comment('VERDICT: CHANGES at %s\n\n- **R1 [blocking]** `a.py:5` (Spec) First review.' % a, minute=1),
         # At B, a.py lines 1-2 are new and line 7 is the changed a5; line 5 is the untouched a3.
@@ -349,26 +350,71 @@ def late_repos(a, b, c):
                 '- **R5 [blocking]** `c.py:1` (Spec) In a file the fix added.\n'
                 '- **R6 [blocking]** `a.py:2-4` (Spec) A range that starts on an added line.\n'
                 '- **R7 [blocking]** `docs/x.md` (Spec) No line named.\n'
-                '- **R0 [polish]** `b.py:1` (Spec) Not blocking.\n' % (b, b), minute=2),
+                '- **R0 [polish]** `b.py:1` (Spec) Not blocking. Polish issue: #31.\n' % (b, b), minute=2),
         # From A to C, line 11 is the changed a9 and line 12 the untouched a10.
         comment('VERDICT: CHANGES at %s\n\n- **R8 [blocking]** `a.py:11` (Sweep) On the later fix.\n'
-                '- **R9 [blocking]** `a.py:12` (Spec) Untouched since the first review.\n' % c, minute=3),
-        comment('VERDICT: APPROVE at %s' % c, minute=4),
+                '- **R9 [blocking]** `a.py:12` (Spec) Untouched since the first review.\n'
+                '- **R10 [polish]** `a.py:1` (Sweep) Polish issue: #32.\n' % c, minute=3),
+        comment('VERDICT: APPROVE at %s\n\n- **R3 [blocking]** withdrawn: the evidence holds.\n'
+                '- **R0 [polish]** Polish issue: #31.\n- **R10 [polish]** Polish issue: #32.\n'
+                '- **R11 [polish]** Polish issue: #33.\n- **R12 [polish]** Polish issue: #34.\n' % c, minute=4),
+        comment('VERDICT: APPROVE at %s\n\n- **R3 [blocking]** withdrawn: still withdrawn.\n' % c, minute=5),
     ]
     missing = [comment('VERDICT: CHANGES at %s' % a, minute=1),
                comment('VERDICT: CHANGES at %s\n\n- **R1 [blocking]** `a.py:1` (Spec) Head not in the clone.'
-                       % ('e' * 40), minute=2)]
-    return {'synthetic/late': [pr(8, rounds), pr(9, missing)], 'synthetic/beta': beta()}
+                       % ('e' * 40), minute=2),
+               comment('VERDICT: APPROVE at %s\n\n- **R1 [blocking]** withdrawn: not reproduced.\n'
+                       '- **R2 [polish]** Polish issue: #40.\n- **R3 [polish]** Polish issue: #41.\n'
+                       '- **R4 [polish]** Polish issue: #42.\n' % ('e' * 40), minute=3)]
+    fixed = pr(8, rounds, ['Ticket. Size: S.'])
+    fixed.update(baseRefOid=base, headRefOid=c)
+    fixed['closingIssuesReferences'][0]['repository'] = {'nameWithOwner': 'synthetic/late'}
+    gone = pr(9, missing, ['Ticket. Size: M.'], diff=(400, 0))
+    gone.update(baseRefOid=base, headRefOid='e' * 40)
+    gone['closingIssuesReferences'][0]['repository'] = {'nameWithOwner': 'synthetic/tickets'}
+    recent = pr(10, [comment('VERDICT: APPROVE at %s\n\n- **R1 [polish]** Polish issue: #35.\n' % c)],
+                merged='2026-01-16T00:00:00Z')
+    return {'synthetic/late': [fixed, gone, recent], 'synthetic/beta': beta()}
+
+
+NOW = '2026-01-20T00:00:00Z'
+
+
+def polish(number, state='OPEN', reason=None, closed=None, title=None):
+    return {'number': number, 'title': title or 'A claim (polish for #1, R%d)' % number, 'state': state,
+            'stateReason': reason, 'closedAt': closed}
+
+
+ISSUES = {
+    ('synthetic/late', 31): polish(31, 'CLOSED', 'COMPLETED', '2026-01-13T00:00:00Z'),
+    ('synthetic/late', 32): polish(32),
+    ('synthetic/late', 33): polish(33, 'CLOSED', 'NOT_PLANNED', '2026-01-13T00:00:00Z'),
+    # Merged 2026-01-12, so due 2026-01-19: closed after that, it was still open when due.
+    ('synthetic/late', 34): polish(34, 'CLOSED', 'COMPLETED', '2026-01-19T12:00:00Z'),
+    ('synthetic/late', 35): polish(35),
+    ('synthetic/tickets', 40): polish(40, 'CLOSED', 'COMPLETED', '2026-01-14T00:00:00Z'),
+    ('synthetic/tickets', 42): polish(42, title='Not a polish issue'),
+    ('synthetic/late', 40): polish(40),
+}
+
+
+def fake_issue(lookups):
+    def issue(repo, number):
+        lookups.append((repo, number))
+        return ISSUES.get((repo, number))
+    return issue
 
 
 LATE_ARGS = ['--repo', 'synthetic/late', '--repo', 'synthetic/beta', '--merged-from', START, '--merged-to', END]
 
 
-def run_late(argv, fake, git=None):
+def run_late(argv, fake, git=None, **kwargs):
     out, err = io.StringIO(), io.StringIO()
     stderr, sys.stderr = sys.stderr, err
+    if git is not None:
+        kwargs['git'] = git
+    kwargs = {k: v for k, v in kwargs.items() if k in inspect.signature(bench.main).parameters}
     try:
-        kwargs = {} if git is None else {'git': git}
         code = bench.main(argv, graphql=fake.graphql, out=out, **kwargs)
     except SystemExit as stop:
         code = stop.code
@@ -384,9 +430,10 @@ class LateFindings(unittest.TestCase):
         self.heads = synthetic_clone(self.clone)
         self.addCleanup(self.temp.cleanup)
 
-    def late_run(self, git=None):
+    def late_run(self, git=None, lookups=None):
         code, text, err = run_late(LATE_ARGS + ['--clone', 'synthetic/late=' + self.clone],
-                                   FakeGitHub(late_repos(*self.heads)), git)
+                                   FakeGitHub(late_repos(*self.heads)), git,
+                                   issue=fake_issue([] if lookups is None else lookups), now=bench.parse_time(NOW))
         self.assertEqual((code, err), (0, ''))
         return text, result_of(text)
 
@@ -398,11 +445,47 @@ class LateFindings(unittest.TestCase):
                          {'blocking': 2, 'late': 1, 'pct': 50, 'changed': 0, 'unchanged': 0, 'unknown': 1})
         self.assertEqual(result['all']['All']['late'],
                          {'blocking': 12, 'late': 10, 'pct': 83, 'changed': 4, 'unchanged': 3, 'unknown': 3})
-        self.assertEqual(result['all']['All']['rounds']['mean'], 3.33)
-        self.assertIn('| All | 3 | 3 | 3.33 | 12 | 10 (83%) | 4 (40%) | 3 (30%) | 3 (30%) |', text.splitlines())
+        self.assertEqual(result['all']['All']['rounds']['mean'], 3.25)
+        self.assertIn('| All | 4 | 4 | 3.25 | 12 | 10 (83%) | 4 (40%) | 3 (30%) | 3 (30%) |', text.splitlines())
+
+    def test_withdrawn_blockers_and_ignored_polish_issues(self):
+        lookups = []
+        text, result = self.late_run(lookups=lookups)
+        self.assertEqual(result['all']['synthetic/late'].get('withdrawn_ignored'), {
+            'blocking': 10, 'withdrawn': 2, 'withdrawn_pct': 20,
+            'polish': 8, 'not_due': 1, 'unknown': 2, 'due': 5, 'ignored': 3, 'ignored_pct': 60,
+            'either_pct': 33})
+        self.assertEqual(result['all']['synthetic/beta']['withdrawn_ignored'], {
+            'blocking': 2, 'withdrawn': 0, 'withdrawn_pct': 0, 'polish': 0, 'not_due': 0, 'unknown': 0, 'due': 0,
+            'ignored': 0, 'ignored_pct': None, 'either_pct': 0})
+        # The PR merged 2026-01-16 isn't due until 2026-01-23, so its polish issue #35 is never read.
+        self.assertEqual(sorted(lookups), [('synthetic/late', n) for n in (31, 32, 33, 34)]
+                         + [('synthetic/tickets', n) for n in (40, 41, 42)])
+        self.assertIn('| synthetic/late | 3 | 3 | 3 | 10 | 2 (20%) | 8 | 1 | 2 | 3 of 5 (60%) | 33% |',
+                      text.splitlines())
+
+    def test_diff_size_splits_tests_from_code_in_the_bands(self):
+        text, result = self.late_run()
+        # Base to C: a.py 12, b.py 5 and c.py 1 changed lines; tests/test_a.py 3.
+        size = {'sized': 1, 'unknown': 2, 'code_lines': 18, 'test_lines': 3, 'code_files': 3, 'test_files': 1}
+        self.assertEqual(result['all']['synthetic/late'].get('size'), size)
+        self.assertEqual(result['ticket_bands']['under 300']['size'], dict(size, unknown=0))
+        self.assertEqual(result['ticket_bands']['300-599']['size'], {
+            'sized': 0, 'unknown': 1, 'code_lines': None, 'test_lines': None, 'code_files': None, 'test_files': None})
+        self.assertEqual(result['all']['synthetic/beta']['size']['unknown'], 1)
+        self.assertIn('| under 300 | 1 | 1 | 5 | 1 | 18 | 3 | 3 | 1 | 0 |', text.splitlines())
+
+    def test_test_paths(self):
+        self.assertTrue(hasattr(bench, 'is_test'), 'no test-path rule')
+        for path in ('tests/a.rs', 'crates/x/tests/b.rs', 'tools/review-rounds/test_bench.py', 'web/a.test.ts',
+                     'web/a.spec.js', 'go/a_test.go', 'src/__tests__/x.js', 'check/fixtures/f.json'):
+            self.assertTrue(bench.is_test(path), path)
+        for path in ('src/testing.rs', 'contest.py', 'docs/tests.md', 'latest/a.py', 'attest_x.py'):
+            self.assertFalse(bench.is_test(path), path)
 
     def test_without_a_clone_every_late_finding_is_unknown(self):
-        code, text, err = run_late(LATE_ARGS, FakeGitHub(late_repos(*self.heads)))
+        code, text, err = run_late(LATE_ARGS, FakeGitHub(late_repos(*self.heads)), issue=fake_issue([]),
+                                   now=bench.parse_time(NOW))
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(result_of(text)['all']['All'].get('late'),
                          {'blocking': 12, 'late': 10, 'pct': 83, 'changed': 0, 'unchanged': 0, 'unknown': 10})

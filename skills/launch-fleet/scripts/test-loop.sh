@@ -282,6 +282,20 @@ for marks in x:3 01:3 4:3 :3 -:3 1:x 1:01 1: 1:- 1:1234567890 x:- -:-; do
     absent '^OPENWIZ_AGENT_TOKEN_' "$work/env"
     absent '^GH_TOKEN=' "$work/env")
 done
+for marks in x:- -:- x:x -:01; do
+  (inherit; at=${marks%%:*} count=${marks#*:}
+    if [ "$at" = - ]; then unset OPENWIZ_AGENT_TOKEN_GIT_AT; else export OPENWIZ_AGENT_TOKEN_GIT_AT="$at"; fi
+    if [ "$count" = - ]; then unset GIT_CONFIG_COUNT; else export GIT_CONFIG_COUNT="$count"; fi
+    unset GIT_CONFIG_KEY_2 GIT_CONFIG_VALUE_2
+    export GIT_CONFIG_KEY_5=synthetic.sparse GIT_CONFIG_VALUE_5=five GIT_CONFIG_KEY_12=synthetic.sparse \
+      GIT_CONFIG_VALUE_40=forty
+    for copy in loop block; do
+      sh -c '. "$1"; restore_today_account; env' sh "$work/restore.$copy" > "$work/env"
+      absent -E '^GIT_CONFIG_(COUNT|KEY_[0-9]+|VALUE_[0-9]+)=' "$work/env"
+      sh -x -c '. "$1"; restore_today_account' sh "$work/restore.$copy" 2> "$work/trace"
+      absent -E 'synthetic-installation-token-2843|synthetic.sparse|forty' "$work/trace"
+    done)
+done
 (unset OPENWIZ_AGENT_TOKEN_RUN; export GH_TOKEN=synthetic-own-account-2843
   sh -c '. "$1"; restore_today_account; printf "%s\n" "$GH_TOKEN"' sh "$work/restore.loop" > "$work/env"
   [ "$(cat "$work/env")" = synthetic-own-account-2843 ])

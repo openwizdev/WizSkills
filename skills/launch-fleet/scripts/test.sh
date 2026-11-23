@@ -3674,10 +3674,6 @@ expect 'scope blocker: the needs-info label off, the start is checked again' 0 c
 check start #13: thread thr_syn13, no branch 30 minutes after the start
 EOF
 
-### The approach note (#2838): a one-way-door ticket's reviewer and builder agree first
-
-# #13 is marked one-way, its builder started at 11:50 with no branch yet, and
-# its note 1302 waits. Every comment is a record author's, as the fixture's are.
 DOOR13='merge12 | issue(13; .body = "## Parent\n\nTicket of spec #10.\nOne-way door: yes\n\n## What to build\n\n" + .body) | say(13; 1301; "11:50"; "launch-fleet: started, thread thr_syn13") | say(13; 1302; "11:52"; "Approach note: synthetic plan.")'
 OK13='say(13; 1303; "11:53"; "launch-fleet: approach review started 1302")'
 expect 'approach: a new note starts its reviewer' 0 check.json "$DOOR13" -- check <<EOF

@@ -253,7 +253,6 @@ class Host(unittest.TestCase):
         self.assertEqual(p.calls()[0]['input']['skill'], 'a' * 60)
 
     def test_a_one_way_door_builder_start_is_refused_before_any_driver_call(self):
-        # #2838 (R6 on WizSkills#316): a driver runs one builder per ticket, so no reviewer could answer its note.
         p = Project(self)
         world = p.github()
         world['body'] = '## Parent\n\nTicket of spec #1.\nOne-way door: yes\n\n## What to build\n\nSynthetic.\n'
@@ -263,7 +262,6 @@ class Host(unittest.TestCase):
                              "reviewer before the build, and a driver runs only the builder; next: ask the orchestrator",
                           ''))
         self.assertEqual((p.calls(), p.saved(), p.github()['writes']), ([], None, []))
-        # The spec's own fleet run and a reviewer's run are no builder starts.
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', 'launch-fleet')[:2], (0, 'started #7 on local'))
         self.assertEqual(p.host('start', REPO, 8, 'codex', 'm', 'review-ticket')[:2], (0, 'started #8 on local'))
 

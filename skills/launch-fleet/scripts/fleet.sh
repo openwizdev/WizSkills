@@ -1817,6 +1817,29 @@ def guard($p; $at; $rs; $head; $c):
 def out_of_reach($at; $th; $f; $rec):
   "check review \($at): its reviewer, thread \($th), was started before fleet thread \($f.thread), so it is out of reach; record review given up (its record: comment \($rec.id))";
 
+def one_way: [(.body // "") | lines[] | sub("^\\s+"; "") | sub("\\s+$"; "")] as $l
+  | ([range($l | length) | select($l[.] == "## Parent")] | first) as $i
+  | $i != null and ($l[$i + 1:] | (map(startswith("## ")) | index(true)) as $j
+      | any((if $j == null then . else .[:$j] end)[]; . == "One-way door: yes"));
+def approach_note: [plain[] | select(.body | first_text | sub("^\\s+"; "") | startswith("Approach note:"))] | max_by(.databaseId);
+def approach_answer($n): [plain[] | select(.databaseId > $n.databaseId and .createdAt >= ($n.updatedAt // $n.createdAt))
+    | {id: .databaseId, l: (.body | first_text | sub("^\\s+"; "") | sub("\\s+$"; ""))}
+    | select(.l == "Approach OK: \($n.databaseId)" or .l == "Approach changes: \($n.databaseId)")] | max_by(.id);
+def approach_waiting: one_way and (approach_note as $n | $n != null
+  and (approach_answer($n) as $a | $a == null or (any(records[]; .r == "approach resume sent \($a.id)") | not)));
+def approach_claims($re; $id): [records[] | select(.r | test("^approach (" + $re + ") \($id)(\\b|$)"))];
+def approach_reconcile($c; $what): if $c == null or ($c | age) < 600 then empty
+  else "reconcile approach #\(.number): claim \($c.id) for \($what), no outcome after 10 minutes" end;
+def approach_lines: approach_note as $n | select($n != null) | approach_answer($n) as $a
+  | if $a != null then
+      if any(approach_claims("resume sent"; $a.id)[]; true) then empty
+      elif any(approach_claims("resume starting"; $a.id)[]; true) then approach_reconcile(approach_claims("resume starting"; $a.id) | min_by(.id); "answer \($a.id)")
+      else "approach resume #\(.number): \($a.l) in comment \($a.id); tell its builder\(bthread)" end
+    elif any(approach_claims("review started|re-check sent"; $n.databaseId)[]; true) then empty
+    elif any(approach_claims("review starting"; $n.databaseId)[]; true) then approach_reconcile(approach_claims("review starting"; $n.databaseId) | min_by(.id); "note \($n.databaseId)")
+    elif any(approach_claims("review refused"; $n.databaseId)[]; $W.now - (.edited | fromdateiso8601) < 600) then empty
+    elif any(records[]; .r | test("^approach (review started|re-check sent) ")) then "approach re-check #\(.number): note \($n.databaseId); tell its approach reviewer"
+    else "approach review #\(.number): note \($n.databaseId); start its other-family reviewer" end;
 # What each part of a spec has due.
 def ticket_lines_now($s): . as $t
   | if .comments.pageInfo.hasPreviousPage then look(.number; []; history_why)
@@ -1856,13 +1879,16 @@ def ticket_lines_now($s): . as $t
                  "reconcile resume #\(.number): wait comment \($w.id) for #\($w.number); reconcile comment \($claim.id), thread \($claim | thread)"
                else empty end
              else empty end end),
-      (if has_role("needs-info") then
+      (if one_way and (start.state | . == "started" or . == "checked") then approach_lines else empty end),
+      (if has_role("needs-info") and (approach_waiting | not) then
          # A question or answer edited since it was asked counts as new (R1 on #1442).
          ([plain[] | .updatedAt // .createdAt] | max) as $q | ([records[] | kind("asked the orchestrator|granted") | .at] | max) as $a
          | if $a == null or ($q != null and $q > $a) then "needs-info #\(.number): a question for the orchestrator" else empty end
        else empty end),
       (start as $st
-       | if $st.state == "queued" then
+       | if $st.state == "queued" and ($st.last.r // "" | startswith("start refused: one-way door under a host driver")) then
+           records as $rs | look(.number; $rs; "start refused: one-way door under a host driver; the orchestrator decides how #\(.number) is built")
+         elif $st.state == "queued" then
            (if may_start($s) then "start #\(.number): \(.title) (\(where($s))"
               + (if $st.last then "; retry after \"\($st.last.r)\"" else "" end) + ")"
             elif ready_unchecked($s) and (refused_lately(start.last; "start") | not) and approver_why != null then
@@ -1875,7 +1901,7 @@ def ticket_lines_now($s): . as $t
          elif $st.state == "started" then
            ($W.branches["\(.number)"] // []) as $br
            | if ($br | length) > 0 then "check start #\(.number): thread \($st.rec | thread), branch \($br | join(", "))"
-             elif ($st.rec | age) < 1800 then empty
+             elif ($st.rec | age) < 1800 or approach_waiting then empty
              elif has_role("needs-info") then
                # One wake per unchanged blocker (#694): a builder blocked on its
                # scope question has no branch to show. Its state key is the
@@ -1994,7 +2020,7 @@ def take_over_again($s; $st): records as $rs
     else "take over #\(.number): builder thread \($x) is archived; start a builder to "
       + (if ($br | length) == 1 then "continue branch \($br[0])" else "build it, as it has no branch yet" end)
       + " (its record: comment \($st.last.id); retry after \"\($st.last.r)\")" end;
-def to_builder: test("^(note|resume|reconcile resume|check start|CI failed|findings|merge main in) ");
+def to_builder: test("^(note|resume|reconcile resume|check start|CI failed|findings|merge main in|approach resume) ");
 def ticket_lines($s):
   (if .state == "OPEN" and is_planned($s) and (looks | length) == 0 then
      .blockedBy.nodes[]? | completion_request
@@ -2143,6 +2169,11 @@ def claim: $W.claim.n as $n | $W.claim.id as $id
                and $W.waited["\($w.number)"].closedByPullRequestsReferences.pageInfo.hasNextPage == false
                and resume_claim($w) == null
             then "go #\($n)" else "withdraw #\($n): that resume is not due or an older claim holds it" end
+        elif (($cm.body | rec // "") | test("^approach (review|resume) starting [0-9]+$")) then
+          ($cm.body | rec | capture("^approach (?<k>review|resume) starting (?<id>[0-9]+)$")) as $k
+          | (if $k.k == "review" then "^approach (review|re-check) #\($n): note \($k.id);" else "^approach resume #\($n): .* in comment \($k.id);" end) as $due
+          | if any($c.t | ticket_lines($c.s); test($due)) then "go #\($n)"
+            else "withdraw #\($n): that approach line is not due or an older claim holds it" end
         elif ($cm.body | rec) != "starting" then "error comment \($id) on #\($n) is not a \"launch-fleet: starting\" claim"
         else $c.s as $s | $c.t | start as $st
           | if .state != "OPEN" then "withdraw #\($n): it is closed"

@@ -813,6 +813,12 @@ class Review(unittest.TestCase):
         self.assertEqual([issue["title"] for issue in issues], ["Follow-up of #41 (spec #38)"] * 2)
         self.assertEqual(self.state()["writes"], 2)
 
+    def test_logged_blocker_retry_recognizes_an_existing_legacy_title(self):
+        self.world({"issues": {PRODUCT: [{"number": 69, "title": "Help says zip archive file (follow-up for #41, R2)"}]}})
+        out = self.follow_up("--logged", "re-check", "--user-path", "a cook exports twice; one is lost")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "already filed #69"), out.stdout + out.stderr)
+        self.assertEqual(self.state()["writes"], 0)
+
     def test_follow_up_reads_again_when_the_first_listing_is_stale(self):
         self.world({"hidden_issue_reads": 1, "lose": True})
         out = self.follow_up()

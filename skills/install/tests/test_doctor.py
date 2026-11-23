@@ -644,14 +644,17 @@ elif sub == 'install':
     identity = json.dumps({'version': version, 'source': os.environ['FAKE_SOURCE']}, separators=(',', ':'))
     open(binary, 'w').write('#!/bin/sh\necho %s\n' % repr(identity))
     os.chmod(binary, 0o755)
-    os.symlink(build, os.path.join(value('--root'), 'current'))
+    current = os.path.join(value('--root'), 'current')
+    os.symlink(build, current + '.new')
+    os.replace(current + '.new', current)
     print(json.dumps({'outcome': 'installed', 'activated': True, 'version': version}))
 """
 
 
 class InstallsTheReleaseItFetches(unittest.TestCase):
 
-    def run_steps(self, installer=INSTALLER_0_1_1, latest_after_preflight=SYNTHETIC_TAG):
+    def run_steps(self, installer=INSTALLER_0_1_1, latest_after_preflight=SYNTHETIC_TAG,
+                  latest=SYNTHETIC_TAG, installed_version=None):
         import re
         text = SKILL.read_text()
         tmp = Path(tempfile.mkdtemp())
@@ -661,7 +664,7 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
         package['tools']['tools/install/install'] = installer
         (tmp / 'package.json').write_text(json.dumps(package))
         (tmp / 'installer.py').write_text(FAKE_INSTALLER)
-        (tmp / 'latest').write_text(SYNTHETIC_TAG)
+        (tmp / 'latest').write_text(latest)
         bin_dir = tmp / 'bin'
         bin_dir.mkdir()
         for name, body in (('curl', FAKE_CURL), ('git', FAKE_GIT)):
@@ -673,6 +676,16 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
                  '"$openwiz"': str(tmp / 'work/openwiz'), '<private download folder>': str(tmp / 'download')}
         (tmp / 'work').mkdir()
         runs = []
+        if installed_version:
+            previous = tmp / 'root/service/builds/previous'
+            previous.mkdir(parents=True)
+            identity = json.dumps({'version': installed_version}, separators=(',', ':'))
+            write(previous / 'openwiz', '#!/bin/sh\nprintf "%%s\\n" %s\n' % shlex.quote(identity), 0o755)
+            (tmp / 'root/current').symlink_to(previous)
+            resume = text[text.index('## Resume'):text.index('## 1. ')]
+            block = re.search(r'```sh\n(.*?--build-identity)\n```', resume)[1].replace('<root>', found['<root>'])
+            done = subprocess.run(['sh', '-c', block], env=env, capture_output=True, text=True)
+            runs.append((block, done.returncode, done.stdout))
         steps = text[text.index('## 1. '):text.index('## 3. ')]
         host = text[text.index('## Where your agents run'):text.index('## Resume')]
         for block in re.findall(r'```sh\n(.*?)```', host + steps, re.S):
@@ -689,6 +702,8 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
             target = re.search(r'"target": "([^"]+)"', done.stdout)
             if target:
                 found['<target>'] = target[1]
+            if done.stdout == 'cloudroom-only\n':
+                break
             if 'git clone' in block:
                 (tmp / 'latest').write_text(latest_after_preflight)
         log = (tmp / 'log').read_text() if (tmp / 'log').exists() else ''
@@ -736,6 +751,40 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
         self.assertIn('when 0.1.0 is the release you install', host)
         self.assertIn('the pinned `v0.1.0` fetch in step 2, never its `download`', host)
         self.assertNotIn('version: 0.2.0', text)
+        self.assertNotIn('0.1.0', text[text.index('## 1. '):text.index('## 5. ')])
+
+    def test_latest_010_offers_only_cloudroom(self):
+        _, log, runs = self.run_steps(latest='v0.1.0')
+        self.assertIn('curl https://github.com/openwizdev/OpenWiz/releases/latest', log)
+        self.assertEqual(runs[-1][1:], (0, 'cloudroom-only\n'))
+        self.assertNotIn('git clone', log)
+        host = SKILL.read_text().split('## Where your agents run', 1)[1].split('## Resume', 1)[0]
+        cloudroom_only, _, choose_host = host.partition('For `choose-host`')
+        self.assertIn("This computer and boat.dev need OpenWiz 0.1.1 or later, which isn't released yet. "
+                      "Today, OpenWiz 0.1.0 runs agents on CloudRoom only.", cloudroom_only)
+        self.assertNotIn(HOST_QUESTION, cloudroom_only)
+        self.assertIn('> ' + HOST_QUESTION, choose_host)
+
+    def test_latest_011_offers_the_three_hosts_and_runs_preflight(self):
+        _, log, runs = self.run_steps(latest='v0.1.1')
+        self.assertIn('choose-host\n', [out for _, code, out in runs if code == 0])
+        self.assertIn('git clone --depth 1 --branch v0.1.1', log)
+        self.assertIn('install preflight', log)
+
+    def test_installed_010_with_latest_011_goes_to_step_one(self):
+        _, log, runs = self.run_steps(latest='v0.1.1', installed_version='0.1.0')
+        self.assertEqual(json.loads(runs[0][2])['version'], '0.1.0')
+        self.assertIn('curl https://github.com/openwizdev/OpenWiz/releases/latest', log)
+        text = SKILL.read_text()
+        resume = text[text.index('## Resume'):text.index('## 1. ')]
+        self.assertNotIn('If the installed build or the release you will install is 0.1.0', resume,
+                         'Installed 0.1.0 triggers the unreleased message even with Latest v0.1.1')
+        outputs = [out for _, code, out in runs if code == 0]
+        self.assertIn('choose-host\n', outputs)
+        self.assertNotIn('cloudroom-only\n', outputs)
+        self.assertIn('git clone --depth 1 --branch v0.1.1', log)
+        self.assertIn('install preflight', log)
+        self.assertEqual(json.loads(self.identity(runs))['version'], '0.1.1')
 
     def test_the_restart_message_carries_the_chosen_release(self):
         text = SKILL.read_text()
@@ -1022,17 +1071,6 @@ class InstallHostReleaseTests(unittest.TestCase):
         self.assertLess(resume.index('<root>/current/openwiz --build-identity'),
                         resume.index('Ask the host question'))
 
-    def test_010_offers_only_cloudroom_before_the_three_way_question(self):
-        skill = SKILL.read_text()
-        host = skill.split('## Where your agents run\n', 1)[1].split('## Resume', 1)[0]
-        old_release, version_gate, later_releases = host.partition('For OpenWiz 0.1.1 or later')
-        self.assertTrue(version_gate)
-        self.assertIn('For OpenWiz 0.1.0, offer only CloudRoom.', old_release)
-        self.assertIn("This computer and boat.dev need OpenWiz 0.1.1 or later, which isn't released yet. "
-                      "Today, OpenWiz 0.1.0 runs agents on CloudRoom only.", old_release)
-        self.assertNotIn(HOST_QUESTION, old_release)
-        self.assertIn('> ' + HOST_QUESTION, later_releases)
-        self.assertNotIn('0.1.0 is no longer Latest', skill)
 
 
 if __name__ == '__main__':

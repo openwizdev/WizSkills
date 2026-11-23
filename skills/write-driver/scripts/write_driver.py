@@ -15,6 +15,7 @@
     write_driver.py lesson wake-after-turn --state <dir> --turn-ended yes|no --wake answered|error
                         --note-edited yes|no --second-note yes|no
     write_driver.py lesson expired-login --state <dir> --driver <program> --harness <h> [--asked <ask id>]
+                        [--key-host <registered host> --openwiz <checkout>]
     write_driver.py started run --state <dir> --driver <program> --run <run id>
     write_driver.py started add --state <dir> --what <what> -- <its stop command...>
     write_driver.py stop-all --state <dir>
@@ -27,7 +28,8 @@ JSON file, <dir>/run.json. Exit 0: done; 1: refused (the last line says why), or
 2: the kit could not run; 3: skipped on the user's no. It never reads, asks for, prints or stores a login, token or key: GitHub is
 reached only through the user's own signed-in `gh`. The kit reaches the driver through `proxy`, which
 records each run its `start` answers, once the kit's own checks accept that answer, for stop-all. The
-expired-login probe runs the driver under Landlock and seccomp, or not at all, so on macOS it alone is skipped.
+expired-login probe runs the driver under Landlock and seccomp, or not at all, so on macOS it alone is skipped;
+a key-host driver's probe runs against the kit's fake host answering 401, with only that one TCP port open.
 Python 3.9+, standard library, Linux or macOS.
 """
 import argparse
@@ -37,6 +39,7 @@ import json
 import math
 import os
 import re
+import secrets
 import shlex
 import signal
 import shutil
@@ -767,7 +770,7 @@ def landlock_abi():
         return 0
 
 
-def stage(driver, into):
+def stage(driver, into, openwiz=None):
     """Copy only the driver's executable and the files of its `fixtures/` folder into the probe's box, so nothing
     else beside it is in reach; a link or any other kind of file there is refused, never followed."""
     def copy(src, dest):
@@ -782,6 +785,14 @@ def stage(driver, into):
             out = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode or 0o600)
             with os.fdopen(out, 'wb') as g:
                 shutil.copyfileobj(f, g)
+    if openwiz is not None:
+        kit = into / 'kernel' / 'driver-kit'
+        kit.mkdir(mode=0o700, parents=True)
+        for name in KEY_HELPER:
+            copy(str(Path(openwiz) / 'kernel' / 'driver-kit' / name), kit / name)
+        into = into / 'adapters'
+        into.mkdir(mode=0o700)
+        into = into / os.path.basename(os.path.dirname(driver))
     into.mkdir(mode=0o700)
     staged = into / os.path.basename(driver)
     copy(driver, staged)
@@ -800,10 +811,10 @@ def stage(driver, into):
     return str(staged)
 
 
-def isolation(box):
+def isolation(box, port=None):
     """What runs in the probe's child before it becomes the driver, or Refused when this system can't isolate it."""
     abi, arch = landlock_abi(), SYSCALLS.get(os.uname().machine)
-    if abi < 1 or arch is None:
+    if abi < (1 if port is None else 4) or arch is None:
         raise Refused('this system cannot isolate the expired-login probe (it needs Linux Landlock on x86_64 or '
                       'aarch64), so it runs nothing: check that lesson on a machine that can')
     # Each right this kernel's Landlock knows: refer (2), truncate (3), device ioctl (5); TCP (4) and the
@@ -821,6 +832,14 @@ def isolation(box):
     allow, refuse, kill = 0x7fff0000, 0x00050000 | 1, 0x80000000  # 1: EPERM
     program = [(ld, 0, 0, 4), (jeq, 0, 7, audit), (ld, 0, 0, 0), (jge, 5, 0, 0x40000000), (jeq, 3, 0, socket),
                (jeq, 2, 0, pair), (jeq, 1, 0, uring), (ret, 0, 0, allow), (ret, 0, 0, refuse), (ret, 0, 0, kill)]
+    if port is not None:
+        # SECURITY: socket(AF_INET, SOCK_STREAM, 0 or IPPROTO_TCP) only, so no datagram, raw, SCTP, IPv6 or local
+        # socket; Landlock then lets that TCP socket connect only to the fake host's port and bind none.
+        program = [(ld, 0, 0, 4), (jeq, 0, 16, audit), (ld, 0, 0, 0), (jge, 14, 0, 0x40000000),
+                   (jeq, 3, 0, socket), (jeq, 11, 0, pair), (jeq, 10, 0, uring), (ret, 0, 0, allow),
+                   (ld, 0, 0, 16), (jeq, 0, 7, 2), (ld, 0, 0, 24), (0x54, 0, 0, 0xf), (jeq, 0, 4, 1),
+                   (ld, 0, 0, 32), (jeq, 1, 0, 0), (jeq, 0, 1, 6), (ret, 0, 0, allow), (ret, 0, 0, refuse),
+                   (ret, 0, 0, kill)]
     filters = ctypes.create_string_buffer(b''.join(struct.pack('=HBBI', *i) for i in program))
     fprog = ctypes.create_string_buffer(struct.pack('=HxxxxxxQ', len(program), ctypes.addressof(filters)))
     keep = (filters, fprog)  # fprog points into filters: both live as long as enter
@@ -832,6 +851,8 @@ def isolation(box):
             fd = os.open(path, os.O_PATH | os.O_CLOEXEC)
             syscall(LANDLOCK_ADD, ruleset, 1, ctypes.c_char_p(struct.pack('=Qi', access, fd)), 0)
             os.close(fd)
+        if port is not None:
+            syscall(LANDLOCK_ADD, ruleset, 2, ctypes.c_char_p(struct.pack('=QQ', 2, port)), 0)
         if libc.prctl(38, 1, 0, 0, 0) != 0:  # PR_SET_NO_NEW_PRIVS
             raise OSError(ctypes.get_errno(), 'no_new_privs')
         syscall(LANDLOCK_RESTRICT, ruleset, 0)
@@ -839,6 +860,23 @@ def isolation(box):
         if libc.prctl(22, 2, ctypes.c_void_p(ctypes.addressof(keep[1])), 0, 0) != 0:
             raise OSError(ctypes.get_errno(), 'seccomp')
     return enter
+
+
+KEY_HELPER = ('hostkey.py', 'hosts.json')
+
+
+def key_route(a):
+    if a.key_host is None and a.openwiz is None:
+        return None
+    if a.key_host is None or a.openwiz is None:
+        raise Refused('the key-host route needs both --key-host and --openwiz: the host and the OpenWiz checkout '
+                      'whose key helper and fake host the probe uses')
+    key_host_line(a.openwiz, a.key_host)
+    for name in KEY_HELPER + ('kit.py',):
+        if not (Path(a.openwiz) / 'kernel' / 'driver-kit' / name).is_file():
+            raise Refused('the OpenWiz checkout has no kernel/driver-kit/%s, so the key-host route cannot run: '
+                          'use a checkout with the key helper' % name)
+    return a.openwiz
 
 
 STAND_IN = """#!/bin/sh
@@ -866,6 +904,7 @@ def cmd_lesson(a):
     if not field('harness', a.harness):
         raise Refused('%s is not a harness name: 1 to 40 lower-case letters, digits or -, starting with a letter'
                       % a.harness)
+    openwiz = key_route(a)
     if sys.platform == 'darwin':  # Landlock, seccomp and /proc are Linux's: on a Mac only this probe is skipped
         state['lessons']['expired-login'] = 'not run'
         mark_clock(state)
@@ -882,19 +921,29 @@ def cmd_lesson(a):
     save(a.state, state)
     driver = os.path.abspath(a.driver)
     box = Path(tempfile.mkdtemp(prefix='write-driver-probe-'))
+    host = None
     try:
         for name in ('bin', 'home', 'state'):
             (box / name).mkdir(mode=0o700)
         ran = box / 'ran'
-        fd = os.open(box / 'bin' / a.harness, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
-        with os.fdopen(fd, 'w') as f:
-            f.write(STAND_IN % shlex.quote(str(ran)))
-        driver = stage(driver, box / 'driver')  # it runs from here: nothing else beside it is in reach
+        if openwiz is None:
+            fd = os.open(box / 'bin' / a.harness, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
+            with os.fdopen(fd, 'w') as f:
+                f.write(STAND_IN % shlex.quote(str(ran)))
+        driver = stage(driver, box / 'driver', openwiz)  # it runs from here: nothing else beside it is in reach
         env = {'PATH': os.pathsep.join([str(box / 'bin'), os.path.join(os.path.dirname(driver), 'fixtures'),
                                         '/usr/local/bin', '/usr/bin', '/bin']),
                'HOME': str(box / 'home'), 'LANG': 'C.UTF-8',
                'OPENWIZ_%s_STATE' % state['host'].upper().replace('-', '_'): str(box / 'state')}
-        enter = isolation(box)
+        port = None
+        if openwiz is not None:
+            # SECURITY: the kit's own fake host, answering every call 401 with a throwaway test key, so no real
+            # key or live host is ever in reach
+            key = 'write-driver-probe-' + secrets.token_hex(16)
+            host = kit_checks(openwiz).FakeHost(status=401, test_key=key)
+            port = host.server.server_address[1]
+            env[TEST_ORIGIN] = host.origin
+        enter = isolation(box, port)
         ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER: keep what it starts
         request = {'repository': 'example-user/%s-driver-kit' % state['host'], 'ticket': 1,
                    'skill': 'build-ticket', 'harness': a.harness, 'model': 'stand-in'}
@@ -925,10 +974,20 @@ def cmd_lesson(a):
             except OSError:
                 pass
         descendants()
-        if not ran.exists():
+        if openwiz is not None:
+            with host.lock:
+                keyed = [r for r in host.requests if [v for k, v in r[1] if k.lower() == 'authorization']
+                         == ['Bearer ' + key]]
+            if not keyed:
+                raise Refused("the driver never reached the kit's fake host through the key helper, so this proves "
+                              "nothing: make `start` call the host through ../../kernel/driver-kit/hostkey.py, then "
+                              "check again")
+        elif not ran.exists():
             raise Refused('the driver never ran the stand-in harness %s, so this proves nothing: make `start` run '
                           'the harness by its name on PATH, then check again' % a.harness)
     finally:
+        if host is not None:
+            host.close()
         shutil.rmtree(box, ignore_errors=True)
     answer = {k: v if isinstance(v, str) else json.dumps(v) for k, v in answer.items()}
     return record_lesson(a.state, state, {'lesson': 'expired-login', 'exit': p.returncode, 'answer': answer,
@@ -1159,6 +1218,8 @@ def parser():
     q.add_argument('--driver', required=True)
     q.add_argument('--harness', required=True)
     q.add_argument('--asked')
+    q.add_argument('--key-host')
+    q.add_argument('--openwiz')
     for q in lesson.choices.values():
         q.add_argument('--state', required=True)
     p = sub.add_parser('started')

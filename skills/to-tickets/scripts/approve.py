@@ -121,7 +121,7 @@ def on_default_branch(repo, path):
     if same and entry is None and out.returncode != 0 and isinstance(errors, list) and errors and all(
             isinstance(e, dict) and {k: e.get(k) for k in NOT_FOUND} == NOT_FOUND for e in errors):
         return False
-    if (same and out.returncode == 0 and not errors and isinstance(entry, dict)
+    if (same and out.returncode == 0 and 'errors' not in answer and isinstance(entry, dict)
             and type(entry.get('mode')) is int and entry['mode'] in MODES):
         return MODES[entry['mode']]
     raise Unreadable(f'cannot read `{path}` in `{repo}` from its default branch')

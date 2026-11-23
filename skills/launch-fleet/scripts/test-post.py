@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -234,7 +235,7 @@ SECONDARY = ('{"message": "You have exceeded a secondary rate limit and have bee
 
 
 def paced_world(test, login='synthetic-owner', post_answer=None):
-    """A World whose writes pace in its own state folder, whose gh names `login` as the signed-in account and,
+    """A World whose writes pace in its own state folder, whose gh hosts file names `login` as the signed-in account and,
     with post_answer=(status line, headers), answers the next comment POST with that GitHub refusal."""
     w = World(test)
     w.env['XDG_STATE_HOME'] = str(w.dir / 'state')
@@ -247,8 +248,11 @@ def paced_world(test, login='synthetic-owner', post_answer=None):
         reply.write_text('%s\r\n%s\r\n\r\n%s' % (status, ''.join(h + '\r\n' for h in headers), SECONDARY))
         answer = ('case " $* " in *" POST "*) if [ ! -e "%s.used" ]; then : > "%s.used"; cat "%s"; '
                   'echo "gh: secondary rate limit (HTTP 403)" >&2; exit 1; fi;; esac\n' % (reply, reply, reply))
-    gh.write_text('#!/bin/sh\nif [ "$*" = "config get -h github.com user" ]; then echo %s; exit 0; fi\n%s%s'
-                  % (login, answer, fake))
+    gh.write_text('#!/bin/sh\n%s%s' % (answer, fake))
+    (w.dir / 'gh').mkdir()
+    (w.dir / 'gh' / 'hosts.yml').write_text('github.com:\n    git_protocol: https\n    users:\n        %s:\n'
+                                            '    user: %s\n' % (login, login))
+    w.env['GH_CONFIG_DIR'] = str(w.dir / 'gh')
     return w
 
 
@@ -303,7 +307,7 @@ class Pacer(unittest.TestCase):
         seed(w, full([oldest] + [now - 1] * 59))
         self.assertEqual(w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting'), (0, 'posted 5001'))
         times = state(w)['accounts'].get('synthetic-owner', [])
-        self.assertEqual(len(times), 60)
+        self.assertEqual(len(times), 61)
         self.assertGreaterEqual(max(times), oldest + 60)
         self.assertEqual(len(w.writes()), 1)
         self.assertEqual(state(w)['inflight'], [])
@@ -345,18 +349,36 @@ class Pacer(unittest.TestCase):
         self.assertEqual(state(w)['until'], 0)
         self.assertEqual(w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting'), (0, 'posted 5001'))
 
-    def test_two_processes_racing_for_the_last_slot_get_one_write(self):
+    def test_processes_racing_for_the_last_slot_get_one_write(self):
         w = paced_world(self)
         now = time.time()
         seed(w, full([now - 1] * 59))
         runs = [subprocess.Popen([sys.executable, '-I', str(HERE / 'post.py'), 'comment', REPO, '12',
                                   'launch-fleet: starting'], stdout=subprocess.PIPE, text=True, env=w.env, cwd=w.dir)
-                for _ in range(2)]
-        outs = sorted((r.communicate(timeout=60)[0].strip(), r.returncode) for r in runs)
-        self.assertEqual([code for _, code in outs], [0, 1] if outs[0][0].startswith('posted') else [1, 0])
-        self.assertEqual(sorted(out.split(' ')[0] for out, _ in outs), ['posted', 'refused:'])
+                for _ in range(8)]
+        outs = [(r.communicate(timeout=60)[0].strip(), r.returncode) for r in runs]
+        self.assertEqual(sorted((out.split(' ')[0], code) for out, code in outs),
+                         [('posted', 0)] + [('refused:', 1)] * 7, outs)
         self.assertEqual(len(w.writes()), 1)
         self.assertEqual(len(state(w)['accounts'].get('synthetic-owner', [])), 60)
+
+    def test_a_write_waits_while_another_process_holds_the_state_lock(self):
+        w = paced_world(self)
+        seed(w, full([]))
+        lock = open(w.dir / 'state' / (STATE + '.lock'), 'a')
+        self.addCleanup(lock.close)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        run = subprocess.Popen([sys.executable, '-I', str(HERE / 'post.py'), 'comment', REPO, '12',
+                                'launch-fleet: starting'], stdout=subprocess.PIPE, text=True, env=w.env, cwd=w.dir)
+        try:
+            run.wait(timeout=1.5)
+        except subprocess.TimeoutExpired:
+            pass
+        self.assertIsNone(run.returncode)
+        self.assertEqual((w.writes(), state(w)), ([], full([])))
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        self.assertEqual((run.communicate(timeout=60)[0].strip(), run.returncode), ('posted 5001', 0))
+        self.assertEqual(len(w.writes()), 1)
 
     def test_an_edit_is_unpaced_but_waits_for_the_in_flight_cap(self):
         w = paced_world(self)

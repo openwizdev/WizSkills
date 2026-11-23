@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+import fcntl
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -27,6 +33,181 @@ def gh(*args):
     except (OSError, subprocess.TimeoutExpired):
         return None
     return r.stdout if r.returncode == 0 else None
+
+
+# The write pacer (FR10): every content-creating write takes a slot from its account's bucket, below GitHub's
+# secondary limits (about 80 a minute, 500 an hour, 100 concurrent); edits only count toward the in-flight cap.
+PER_MINUTE, PER_HOUR, IN_FLIGHT = 60, 400, 20
+WINDOW = 30      # seconds a write waits for a slot before it refuses
+STALE = 90       # seconds after which an in-flight entry is over (gh's own timeout is 60)
+SECONDARY_WAIT = 60  # GitHub's advice when a secondary limit names no time
+
+
+def stamp(at):
+    return datetime.fromtimestamp(at, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def state_path():
+    base = os.environ.get('XDG_STATE_HOME') or os.path.join(os.path.expanduser('~'), '.local', 'state')
+    return Path(base) / 'launch-fleet' / 'writes.json'
+
+
+def number(value):
+    return type(value) in (int, float) and value >= 0
+
+
+def valid(value):
+    return (isinstance(value, dict) and set(value) == {'accounts', 'inflight', 'until'}
+            and isinstance(value['accounts'], dict)
+            and all(isinstance(k, str) and isinstance(v, list) and all(number(t) for t in v)
+                    for k, v in value['accounts'].items())
+            and isinstance(value['inflight'], list)
+            and all(isinstance(e, list) and len(e) == 2 and type(e[0]) is int and e[0] > 0 and number(e[1])
+                    for e in value['inflight'])
+            and number(value['until']))
+
+
+@contextmanager
+def pacer_state():
+    """The machine's write state under its lock; saved (atomically) only when the block ends without an error."""
+    path = state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock = open(path.with_name(path.name + '.lock'), 'a')
+    except OSError:
+        raise Stop(f'refused: the write pacer\'s state folder {path.parent} cannot be used; nothing was written')
+    with lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            value = json.loads(path.read_text()) if path.exists() else {'accounts': {}, 'inflight': [], 'until': 0}
+        except (OSError, ValueError):
+            value = None
+        if not valid(value):
+            raise Stop(f'refused: the write pacer\'s state {path} is unreadable; nothing was written')
+        yield value
+        temp = path.with_name(f'{path.name}.{os.getpid()}.tmp')
+        try:
+            temp.write_text(json.dumps(value))
+            os.replace(temp, path)
+        except OSError:
+            raise Stop(f'refused: the write pacer\'s state {path} cannot be saved; nothing was written')
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def account():
+    """The signed-in github.com login from gh's own hosts file (no API call), else one shared 'unknown' bucket."""
+    base = os.environ.get('GH_CONFIG_DIR') or os.path.join(
+        os.environ.get('XDG_CONFIG_HOME') or os.path.join(os.path.expanduser('~'), '.config'), 'gh')
+    try:
+        text = Path(base, 'hosts.yml').read_text()
+    except (OSError, UnicodeError):
+        return 'unknown'
+    block = re.search(r'^github\.com:[ \t]*\n((?:[ \t]+.*\n?|\n)*)', text, re.M)
+    login = re.search(r'^[ \t]+user:[ \t]*([A-Za-z0-9-]+)[ \t]*$', block.group(1), re.M) if block else None
+    return login.group(1) if login else 'unknown'
+
+
+def take(paced):
+    """Take a write slot (and, when paced, a bucket token), waiting up to WINDOW seconds; refuse with no slot."""
+    key = account() if paced else None
+    deadline = time.time() + WINDOW
+    while True:
+        with pacer_state() as s:
+            now = time.time()
+            s['inflight'] = [e for e in s['inflight'] if now - e[1] < STALE and alive(e[0])]
+            s['accounts'] = {k: kept for k, v in s['accounts'].items() if (kept := [t for t in v if now - t < 3600])}
+            free = s['until']
+            times = sorted(s['accounts'].get(key, [])) if paced else []
+            recent = [t for t in times if now - t < 60]
+            if len(recent) >= PER_MINUTE:
+                free = max(free, recent[-PER_MINUTE] + 60)
+            if len(times) >= PER_HOUR:
+                free = max(free, times[-PER_HOUR] + 3600)
+            busy = len(s['inflight']) >= IN_FLIGHT
+            if free <= now and not busy:
+                if paced:
+                    s['accounts'][key] = times + [now]
+                entry = [os.getpid(), now]
+                s['inflight'].append(entry)
+                return entry
+            if busy:
+                free = max(free, sorted(e[1] for e in s['inflight'])[-IN_FLIGHT] + STALE)
+            if free > deadline and (not busy or now >= deadline):
+                raise Stop(f'refused: write paced, retry after {stamp(free)}')
+        time.sleep(max(0.05, min(0.5 if busy else free - now, deadline - now)))
+
+
+def release(entry):
+    try:
+        with pacer_state() as s:
+            if entry in s['inflight']:
+                s['inflight'].remove(entry)
+    except Stop:
+        pass  # the entry goes stale and is dropped then
+
+
+def answer(text):
+    """gh api --include output as (status, lowercased headers, body); status None when no head came."""
+    head = re.match(r'HTTP/\S+ (\d{3})[^\n]*\n(.*?)\r?\n\r?\n', text, re.S)
+    if head is None:
+        return None, {}, text
+    headers = {}
+    for line in head.group(2).splitlines():
+        name, sep, value = line.partition(':')
+        if sep:
+            headers[name.strip().lower()] = value.strip()
+    return int(head.group(1)), headers, text[head.end():]
+
+
+def secondary_wait(status, headers, said):
+    """Seconds GitHub asks every writer to wait, or None when this answer is no secondary limit."""
+    after = headers.get('retry-after', '')
+    named = 'secondary rate limit' in said.lower()
+    if status not in (403, 429) or not (after or named):
+        return None
+    if re.fullmatch(r'[0-9]{1,9}', after):
+        return int(after)
+    if after:
+        try:
+            return max(0, parsedate_to_datetime(after).timestamp() - time.time())
+        except (TypeError, ValueError):
+            return SECONDARY_WAIT
+    reset = headers.get('x-ratelimit-reset', '')
+    if headers.get('x-ratelimit-remaining') == '0' and re.fullmatch(r'[0-9]{1,12}', reset):
+        return max(0, int(reset) - time.time())
+    return SECONDARY_WAIT
+
+
+def write(where, *args, paced=True):
+    """One GitHub write through the pacer: its answer's body, or None when it failed.
+
+    A secondary-limit answer records its wait for every writer on this machine and stops, never retried."""
+    entry = take(paced)
+    try:
+        r = subprocess.run(['gh', 'api', '--include', *args], capture_output=True, text=True, timeout=60,
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    finally:
+        release(entry)
+    status, headers, body = answer(r.stdout)
+    wait = secondary_wait(status, headers, body + r.stderr)
+    if wait is not None:
+        until = time.time() + wait
+        with pacer_state() as s:
+            s['until'] = max(s['until'], until)
+        raise Stop(f'unknown: GitHub refused the write on {where} under its secondary rate limit; '
+                   f'no write leaves this machine before {stamp(until)}; reconcile {where} before any retry')
+    return body if r.returncode == 0 else None
 
 
 def read_json(*args):
@@ -71,7 +252,11 @@ def comment(repo, number, body):
     if before is None:
         raise Stop(f'unknown: #{number} could not be read before writing; nothing was written')
     seen = {c.get('id') for c in before}
-    made = read_json('api', '--method', 'POST', f'repos/{repo}/issues/{number}/comments', '-f', f'body={body}')
+    text = write(f'#{number}', '--method', 'POST', f'repos/{repo}/issues/{number}/comments', '-f', f'body={body}')
+    try:
+        made = None if text is None else json.loads(text)
+    except ValueError:
+        made = None
     if not isinstance(made, dict) or type(made.get('id')) is not int:
         raise Stop(f'unknown: the write on #{number} returned no receipt, so no record is adopted; '
                    f'reconcile #{number} before any retry')
@@ -92,7 +277,7 @@ def edit(repo, comment_id, body):
         raise Stop(f'unknown: comment {comment_id} could not be read; nothing was written')
     if not ours(current, auth):
         raise Stop(f'refused: comment {comment_id} is not a record author\'s')
-    gh('api', '--method', 'PATCH', path, '-f', f'body={body}')
+    write(f'comment {comment_id}', '--method', 'PATCH', path, '-f', f'body={body}', paced=False)
     back = read_json('api', path)
     if not (ours(back, auth) and back.get('body') == body):
         raise Stop(f'unknown: comment {comment_id} does not read back as the edit; read it before any retry')

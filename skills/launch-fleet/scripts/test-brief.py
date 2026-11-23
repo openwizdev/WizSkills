@@ -102,6 +102,7 @@ class Brief(unittest.TestCase):
                     executable.chmod(0o755)
                 repo = fixture['REPO']
                 env = dict(project.env, PATH=str(bin_dir))
+                env['XDG_STATE_HOME'] = str(project.dir / 'state')
                 env.pop('CDPATH', None)
                 claim = subprocess.run([sys.executable, '-I', str(HERE / 'post.py'), 'comment',
                                         repo, '31', 'launch-fleet: review starting ' + HEAD],

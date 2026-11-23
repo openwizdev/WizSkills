@@ -31,6 +31,7 @@ class World:
         value.update(extra)
         self.save(value)
         self.env = dict(os.environ, PATH='%s:%s' % (bin_dir, os.environ['PATH']), FAKE_WORLD=str(self.path))
+        self.env['XDG_STATE_HOME'] = str(self.dir / 'state')
 
     def load(self):
         return json.loads(self.path.read_text())
@@ -238,7 +239,6 @@ def paced_world(test, login='synthetic-owner', post_answer=None):
     """A World whose writes pace in its own state folder, whose gh hosts file names `login` as the signed-in account and,
     with post_answer=(status line, headers), answers the next comment POST with that GitHub refusal."""
     w = World(test)
-    w.env['XDG_STATE_HOME'] = str(w.dir / 'state')
     gh = w.dir / 'bin' / 'gh'
     fake = gh.read_text().split('\n', 1)[1]
     answer = ''

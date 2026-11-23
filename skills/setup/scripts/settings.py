@@ -288,6 +288,12 @@ def fleet(text, problems):
                                 % (number, len(rows), row.strip()))
         elif len(cells) != 4 or cells[3].strip() or not CELL.fullmatch(cells[2]):
             problems.append('fleet.md: GitHub identity: Record authors needs one or more exact logins')
+        rows = re.findall(r'^\| *App identity *\|.*$', identity, re.M)
+        for number, row in enumerate(rows[1:], 2):
+            problems.append('fleet.md: GitHub identity: App identity row %d of %d: %s'
+                            % (number, len(rows), row.strip()))
+        if rows and not re.fullmatch(r'\| *App identity *\| *(`?)(on|off)\1 *\| *', rows[0]):
+            problems.append('fleet.md: GitHub identity: App identity must be exactly on or off')
 
 
 def approval(text, problems):

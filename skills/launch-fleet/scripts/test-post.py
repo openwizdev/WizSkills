@@ -666,6 +666,7 @@ class Pacer(unittest.TestCase):
                 seed(w, full([]))
                 folder = w.dir / 'state' / 'launch-fleet'
                 (folder / name).write_bytes(data)
+                (folder / 'writes.json.lock').touch()
                 before = {p.name: p.read_bytes() for p in folder.iterdir()}
                 r = subprocess.run([sys.executable, '-I', str(HERE / 'post.py'), 'comment', REPO, '12',
                                     'launch-fleet: starting'], capture_output=True, text=True, env=w.env, cwd=w.dir,

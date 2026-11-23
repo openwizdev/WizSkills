@@ -107,11 +107,22 @@ def holds(path):
     return sorted(p for p in path.parent.glob(path.name + '.hold.*') if not p.name.endswith('.tmp'))
 
 
-def decode(text):
+def decode(data):
     try:
-        return json.loads(text, object_pairs_hook=unique)
+        return json.loads(data.decode('utf-8'), object_pairs_hook=unique)
     except (ValueError, RecursionError, MemoryError):
         return None
+
+
+def scan(path):
+    try:
+        held = holds(path)
+        waits = [decode(p.read_bytes()) for p in held]
+    except OSError:
+        waits = [None]
+    if not all(number(t) for t in waits):
+        raise Stop('refused: the write pacer\'s state file is unreadable; nothing was written')
+    return held, waits
 
 
 @contextmanager
@@ -131,15 +142,13 @@ def pacer_state(deadline):
                 if time.monotonic() >= deadline:
                     raise paced(time.time())
                 time.sleep(0.05)
-        waits = []
         try:
-            value = decode(path.read_text()) if path.exists() else {'accounts': {}, 'inflight': [], 'until': 0}
-            held = holds(path)
-            waits = [decode(p.read_text()) for p in held]
+            value = decode(path.read_bytes()) if path.exists() else {'accounts': {}, 'inflight': [], 'until': 0}
         except OSError:
             value = None
-        if not valid(value) or not all(number(t) for t in waits):
+        if not valid(value):
             raise Stop('refused: the write pacer\'s state file is unreadable; nothing was written')
+        held, waits = scan(path)
         value['until'] = max([value['until'], *waits])
         yield value
         save(path, value)
@@ -189,6 +198,10 @@ def take(paced_write):
             if left <= 0 or (free > now + left and not busy):
                 raise paced(max(free, now))
             if free <= now and not busy:
+                late = max(scan(state_path())[1], default=0)
+                if late > now:
+                    s['until'] = max(s['until'], late)
+                    continue
                 if paced_write:
                     s['accounts'][key] = times + [now]
                 entry = [os.getpid(), now]

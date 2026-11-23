@@ -275,7 +275,6 @@ def spawn_flags(models):
 
 
 def host_args(models):
-    """Each start's `host.py start` harness, model and the Models row it was picked from, fallbacks included."""
     out = {}
     for start, (kind, key) in STARTS.items():
         c = models[kind][key]['choice']

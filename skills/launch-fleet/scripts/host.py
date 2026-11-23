@@ -94,7 +94,7 @@ EFFORT = re.compile(r'[a-z][a-z0-9-]{0,19}')
 EFFORT_NEXT = ("this host can't set effort: remove the effort for this harness in your Models table or Roster to "
                "run it at the host's default")
 CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox', 'effort')
-WORKER_ROWS = ('Builder', 'Small builder', 'Fixer', 'Reviewer')  # ops-starts.py's picks, fallbacks included
+WORKER_ROWS = ('Builder', 'Small builder', 'Fixer', 'Reviewer')
 ROLE_ROWS = {'builder': WORKER_ROWS, 'reviewer': WORKER_ROWS, 'orchestrator': ('Orchestrator',)}
 RECORDS = re.compile(r'openwiz:records v[1-9][0-9]{0,2}')
 MODELS_ROWS = WORKER_ROWS + ('Orchestrator',)

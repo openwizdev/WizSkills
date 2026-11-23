@@ -87,16 +87,7 @@ def token_step(kind, args):
     return TOKEN.format(who=who.format(*args), repo=repo.format(*args) if repo else 'OWNER/NAME')
 
 
-def in_session(argv):
-    repo = os.environ.get('GH_REPO', '')
-    if argv[:1] != ['reviewer'] or len(argv) < 2 or not re.fullmatch(N, argv[1]) \
-            or not re.fullmatch(REPO, repo) or repo.split('/')[1] in ('.', '..'):
-        return argv
-    return ['reviewer', '%s#%s' % (repo, argv[1]), *argv[2:]]
-
-
 def main(argv):
-    argv = in_session(argv)
     same_family = len(argv) == 4 and argv[0] == 'reviewer' and argv[3] == 'same-family'
     if same_family:
         argv = argv[:3]

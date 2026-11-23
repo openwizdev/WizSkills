@@ -710,8 +710,7 @@ def reply_text(path):
 
 def descendants(skip=None):
     """Live processes under this one: what the probe's driver started, wherever its session went, since this
-    process is their subreaper; never `skip` or what it started. It reads only each process's parent from
-    /proc/<pid>/stat, never an environment."""
+    process is their subreaper. It reads only each process's parent from /proc/<pid>/stat, never an environment."""
     while True:  # reap what has already exited here
         try:
             if os.waitpid(-1, os.WNOHANG)[0] == 0:
@@ -814,8 +813,7 @@ def stage(driver, into, openwiz=None, relay=None):
 
 
 def isolation(box, *more, script=False):
-    """What runs in the probe's child before it becomes the driver, or Refused when this system can't isolate it:
-    `box` and `more` are its only writable folders, and `script` lets it read this file too."""
+    """What runs in the probe's child before it becomes the driver, or Refused when this system can't isolate it."""
     abi, arch = landlock_abi(), SYSCALLS.get(os.uname().machine)
     if abi < 1 or arch is None:
         raise Refused('this system cannot isolate the expired-login probe (it needs Linux Landlock on x86_64 or '
@@ -936,13 +934,10 @@ PROBE_WAIT = 300
 
 
 def probe_start(a, state, driver, openwiz, status):
-    """One boxed run of the driver's `start`, and `stop` of a run it answers: its exit code, its answer and
-    whether it left anything running. Its harness is the stand-in, or with `openwiz` the key helper's fake host
-    answering `status`. Refused when it proves nothing; whatever happens, nothing it started outlives it."""
     box = Path(tempfile.mkdtemp(prefix='write-driver-probe-'))
     host = None
     try:
-        enter = isolation(box)  # before anything is staged or started
+        enter = isolation(box)
         for name in ('bin', 'home', 'state'):
             (box / name).mkdir(mode=0o700)
         ran = box / 'ran'
@@ -972,7 +967,6 @@ def probe_start(a, state, driver, openwiz, status):
             if not isinstance(answer, dict):
                 answer = {'error': 'the driver printed no JSON object'}
             if p.returncode == 0 and isinstance(answer.get('run'), str):
-                # It answered a run its first turn never keeps: stop it, as everything this skill started.
                 subprocess.run([driver, 'stop'], input=json.dumps({'run': answer['run']}), env=env,
                                capture_output=True, text=True, timeout=PROBE_WAIT, cwd=str(box / 'home'),
                                preexec_fn=enter)
@@ -1013,7 +1007,6 @@ def probe_start(a, state, driver, openwiz, status):
         shutil.rmtree(box, ignore_errors=True)
 
 
-# --- the key-host route's fake host ----------------------------------------------------------------------
 # SECURITY: no process of the key-host probe can open a socket, so none reaches any address. The checkout's key
 # helper never runs in the caller, nor in the driver's reach: the fake host, this file's own `fake-host` mode with
 # an empty environment in a box of its own, is the only process that runs it, each time boxed again with only
@@ -1066,7 +1059,6 @@ HELPER_WAIT = 120
 
 
 class FakeHost:
-    """The probe's side of the fake host: it stages the helper in the host's own folder and starts the host."""
     def __init__(self, openwiz, relay, status):
         self.home = Path(tempfile.mkdtemp(prefix='write-driver-host-'))
         for name in ('hostkey.py', 'hosts.json'):
@@ -1082,7 +1074,6 @@ class FakeHost:
                                   preexec_fn=isolation(self.home, relay, script=True))
 
     def finish(self):
-        """How many helper calls bore the test key and had their answer handed back; then the host stops."""
         try:
             out = self.p.communicate(timeout=HELPER_WAIT + 30)[0]
             return int(json.loads(out)['answered'])
@@ -1099,8 +1090,6 @@ class FakeHost:
 
 
 def fake_host(status, relay, helper):
-    """The fake host itself, boxed: it answers each request the relay hands it by running the helper, until the
-    probe closes its stdin, then prints how many it answered."""
     key = 'write-driver-probe-' + os.urandom(16).hex()
     answered = 0
     while not select.select([sys.stdin], [], [], 0.05)[0]:
@@ -1124,8 +1113,6 @@ def relay_one(base, helper, key, status):
 
 
 def run_helper(helper, data, key, status):
-    """The checkout's helper, on `data`, boxed in the host's box with only the loopback override, its HTTP on
-    pipes to this process: whether it sent the test key, its exit code and its stdout."""
     deadline = time.monotonic() + HELPER_WAIT
     up, from_helper = os.pipe()
     to_helper, down = os.pipe()
@@ -1153,8 +1140,6 @@ def run_helper(helper, data, key, status):
 
 
 def serve(up, down, key, status, deadline):
-    """Answer the helper's HTTP requests on its pipes: the test key at its path, `status` to anything else.
-    True when any request bore exactly that key."""
     def more():
         if not select.select([up], [], [], max(0, deadline - time.monotonic()))[0]:
             return b''
@@ -1193,7 +1178,6 @@ def serve(up, down, key, status, deadline):
 
 
 def deliver(path, reply):
-    """Hand the helper's answer to the relay waiting on its FIFO; False when no relay reads it in time."""
     deadline = time.monotonic() + 10
     while True:
         try:

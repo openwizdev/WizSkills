@@ -901,7 +901,6 @@ class KeyHostExpiredLogin(Base):
             udp.recv(1)
 
     def run_in_process(self, *args, abi=None):
-        """The probe in this process, with every program it starts seen: (exit code, stdout, launched argv)."""
         import contextlib
         import io
         from unittest import mock
@@ -926,7 +925,6 @@ class KeyHostExpiredLogin(Base):
         return code, out.getvalue(), launched
 
     def marked_checkout(self):
-        """A checkout whose kit and helper each leave a mark outside any box, wherever they run unboxed."""
         marked = self.tmp / 'marked'
         if not marked.exists():
             shutil.copytree(KEY_OPENWIZ, marked)
@@ -939,7 +937,6 @@ class KeyHostExpiredLogin(Base):
         return marked
 
     def test_a_key_host_route_it_cannot_check_runs_nothing(self):
-        # catches: a half-given or unregistered route launching the driver or anything else
         self.begin()
         driver = self.key_driver('refused')
         no_helper = self.tmp / 'no-helper'
@@ -958,8 +955,6 @@ class KeyHostExpiredLogin(Base):
         self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_without_landlock_the_key_host_route_launches_nothing_and_runs_no_checkout_code(self):
-        # catches: the checkout's kit or helper running in the caller's process, with the caller's environment,
-        # before the probe knows it can box it (R1), and anything launched on a kernel that can't box it
         self.begin()
         self.env['DEVIN_API_KEY'] = SECRET
         code, out, launched = self.run_in_process('--driver', self.key_driver('old-kernel'), '--key-host',
@@ -971,7 +966,6 @@ class KeyHostExpiredLogin(Base):
         self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_the_checkout_code_runs_only_boxed_and_never_in_the_caller(self):
-        # catches: the checkout's kit imported by the caller, or its helper run unboxed (R1)
         self.begin()
         self.env['DEVIN_API_KEY'] = SECRET
         p = self.lesson(self.key_driver('fixed'), openwiz=self.marked_checkout(), check=0)
@@ -979,8 +973,6 @@ class KeyHostExpiredLogin(Base):
         self.assertFalse((self.tmp / 'checkout-ran').exists(), 'the checkout ran outside a box')
 
     def test_neither_the_driver_nor_the_helper_reaches_any_address(self):
-        # catches: TCP to the fake host's port on another address, or to any address at all, from the driver
-        # or from a checkout helper (R2); and the helper seeing the caller's key or environment (R1)
         self.begin()
         self.env['EXAMPLEHOST_API_KEY'] = SECRET
         self.env['DEVIN_API_KEY'] = SECRET
@@ -999,8 +991,6 @@ class KeyHostExpiredLogin(Base):
                            '        else:\n            refuse("the probe reached it", "nothing")' % probe)
                 p = self.lesson(self.key_driver('reach-%d' % n, probe=guarded), check=0)
                 self.assertIn('expired-login pass', p.stdout)
-        # A checkout helper that, on any reach, answers 200 instead of the fake host's 401: the driver then
-        # answers a run, and the lesson fails. Python itself sets LC_CTYPE in a C locale (PEP 538).
         helper = dict(reach, **{
             'the caller\'s key': 'assert any(%r in v for v in os.environ.values())' % SECRET,
             'any variable but the override': 'assert set(os.environ) - {"OPENWIZ_HOSTKEY_TEST_ORIGIN", "LC_CTYPE"}',
@@ -1019,7 +1009,6 @@ class KeyHostExpiredLogin(Base):
         self.assertIn('expired-login pass', p.stdout)
 
     def test_a_driver_that_takes_the_test_key_itself_proves_nothing(self):
-        # catches: a driver that fetches the fake host's test key and calls it without the helper passing (R3)
         self.begin()
         take = ('import urllib.request\n        origin = os.environ.get("OPENWIZ_HOSTKEY_TEST_ORIGIN", '
                 '"http://127.0.0.1:4010")\n        try:\n'
@@ -1032,8 +1021,6 @@ class KeyHostExpiredLogin(Base):
         self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_a_driver_that_names_the_sign_in_step_whatever_the_host_says_proves_nothing(self):
-        # catches: an unconditional sign-in answer passing as 401 handling: the negative control runs start
-        # again against a fake host answering 500 (R3)
         self.begin()
         driver = self.key_driver('always', change=lambda t: t.replace("out['status'] == 401", 'True'))
         p = self.lesson(driver, check=1)
@@ -1041,7 +1028,6 @@ class KeyHostExpiredLogin(Base):
         self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_a_driver_that_hangs_leaves_nothing_running(self):
-        # catches: a timed-out start leaving its worker running after the probe exits (R4)
         self.begin()
         token = 'write-driver-test-worker-%d' % os.getpid()
         hang = ('subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)", %r], '
@@ -1062,7 +1048,6 @@ class KeyHostExpiredLogin(Base):
             for pid in workers():
                 os.kill(pid, signal.SIGKILL)
         self.addCleanup(kill_left)
-        # The probe's 300-second wait for start, cut to 3 so the test is quick.
         run = ('import subprocess, sys\nsys.path.insert(0, %r)\nimport write_driver as wd\nreal = subprocess.run\n'
                'def run(*a, **k):\n    if k.get("timeout") == 300:\n        k["timeout"] = 3\n'
                '    return real(*a, **k)\nwd.subprocess.run = run\nsys.exit(wd.main(sys.argv[1:]))\n'
@@ -1082,7 +1067,6 @@ class KeyHostExpiredLogin(Base):
         self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_the_skill_teaches_the_key_host_route_in_place_of_out_of_reach(self):
-        # catches: the skill text losing the route, its two refusals after start, or where it runs
         text = key_host_lines()
         self.assertNotIn('out of reach', text)
         self.assertIn('`$W lesson expired-login --state <state> --driver <driver> --harness <h> --key-host '

@@ -402,7 +402,7 @@ take() {
 
 # only_reads LOG...: every gh call in these logs was one of fleet.sh's reads.
 only_reads() {
-  grep -h -v -E '^(repo view|nightly runs branch=[^ ]+|commit comments [0-9a-f]{40}|contents docs/agents/(fleet|triage-labels)\.md|graphql (Specs|Merged) cursor=[0-9a-z]+|graphql Spec number=[0-9]+( size=[0-9]+)?|graphql Singles cursor=[0-9a-z]+|files [0-9]+|refs heads/room/[0-9]+-|graphql (Nodes|Blockers) count=[0-9]+|graphql Writer login=[a-z0-9-]+|graphql Checks oid=[0-9a-f]{40} cursor=[0-9]+|graphql Item number=[0-9]+ size=(2|5)( cursor=[0-9]+)?|issue view [0-9]+ (subIssues|body|number,title,blockedBy)|issues page=[0-9]+|search issues page=[0-9]+|issue comments [0-9]+ page=[0-9]+|detail [0-9]+|dependencies [0-9]+ page=[0-9]+|repo clone|repository|user|installation repositories|sub issues [0-9]+ page=[0-9]+|timeline [0-9]+ page=[0-9]+|(check runs|status) [0-9a-f]{40}|ref heads/[A-Za-z0-9._/-]+)$' "$@" 2> /dev/null \
+  grep -h -v -E '^(repo view|nightly runs branch=[^ ]+|commit comments [0-9a-f]{40}|contents docs/agents/(fleet|triage-labels)\.md|graphql (Specs|Merged) cursor=[0-9a-z]+|graphql Spec number=[0-9]+( size=[0-9]+)?|graphql (Singles|Search) cursor=[0-9a-z]+|files [0-9]+|refs heads/room/[0-9]+-|graphql (Nodes|Blockers) count=[0-9]+|graphql Writer login=[a-z0-9-]+|graphql Checks oid=[0-9a-f]{40} cursor=[0-9]+|graphql Item number=[0-9]+ size=(2|5)( cursor=[0-9]+)?|issue view [0-9]+ (subIssues|body|number,title,blockedBy)|issues page=[0-9]+|search issues page=[0-9]+|issue comments [0-9]+ page=[0-9]+|detail [0-9]+|dependencies [0-9]+ page=[0-9]+|repo clone|repository|user|installation repositories|sub issues [0-9]+ page=[0-9]+|timeline [0-9]+ page=[0-9]+|(check runs|status) [0-9a-f]{40}|ref heads/[A-Za-z0-9._/-]+)$' "$@" 2> /dev/null \
     | sed 's/^/    /' > "$tmp/odd-calls"
   if [ -s "$tmp/odd-calls" ]; then bad 'only reads' "unexpected gh calls:"; cat "$tmp/odd-calls"; else echo "ok   every gh call was one of fleet.sh's reads"; fi
 }
@@ -1589,12 +1589,12 @@ EOF
 expect 'an open issue approved on its own, past the first page of the search, starts (#259)' 0 check.json 'own_approval(70; 7002; "09:00") | reduce range(71; 91) as $n (.; closed_single($n; "11:00"))' FAKE_GH_PAGE=5 -- check <<EOF
 start #70: Fix the broken link in the widget docs (approved on its own)
 EOF
-log_has 'an open issue approved on its own, past the first page of the search, starts (#259)' 6 '^search issues page='
+log_has 'an open issue approved on its own, past the first page of the search, starts (#259)' 6 '^graphql Search cursor='
 
 expect 'a closed issue approved on its own is archived, even past the first page of closed issues (Sol R2)' 0 check.json 'own_approval(70; 7002; "09:00") | say(70; 7003; "09:10"; "launch-fleet: start checked, thread thr_syn70, branch room/70-fix-eeee") | issue(70; .state = "CLOSED" | .updatedAt = at("09:30")) | reduce range(71; 91) as $n (.; closed_single($n; "11:00"))' FAKE_GH_PAGE=5 -- check <<EOF
 archive #70: closed; archive thr_syn70
 EOF
-log_has 'a closed issue approved on its own is archived, even past the first page of closed issues (Sol R2)' 6 '^search issues page='
+log_has 'a closed issue approved on its own is archived, even past the first page of closed issues (Sol R2)' 6 '^graphql Search cursor='
 expect 'a search that lists fewer issues outside specs than it counts fails loudly' 2 check.json 'own_approval(70; 7002; "09:00") | issue(70; .state = "CLOSED" | .updatedAt = at("09:30")) | reduce range(71; 91) as $n (.; closed_single($n; "11:00"))' FAKE_GH_SEARCH_CAP=10 -- check <<EOF
 the search listed 10 of 21 issues outside specs
 EOF
@@ -2142,8 +2142,8 @@ EOF
 expect 'the frontier read in pages of one' 0 frontier.json . FAKE_GH_PAGE=1 -- frontier <<EOF
 $FRONTIER
 EOF
-log_has 'the frontier read in pages of one' 1 '^graphql Specs'
-log_has 'the frontier read in pages of one' 20 '^issues page='
+log_has 'the frontier read in pages of one' 20 '^graphql Specs'
+log_has 'the frontier read in pages of one' 0 '^issues page='
 # F6 (#1353): only a hard blocker holds a start. A `file` link (the two only
 # share files) is context; owned paths that collide with a running ticket, or
 # with a lower-numbered ticket starting in the same read, hold it instead.
@@ -2473,17 +2473,12 @@ EOF
 
 ### Budget: GitHub's allowance (ClosedWiz#189)
 
-# The literal costs below were measured through the fake transport. The
-# small fixture asks five GraphQL reads (metadata, spec, blocker closures,
-# single, merges), plus 26 REST GETs and the repository privacy read: 32 questions. A repeat revalidates REST
-# responses; 304s cost no primary allowance. Revision reads still cost one
-# GraphQL point each. The old bundled query cost six points in nine calls.
-ERR='fleet.sh: used 5 GitHub points in 32 questions, 0 unchanged; 5000 of 5000 left'
+ERR='fleet.sh: used 7 GitHub points in 31 questions, 0 unchanged; 5000 of 5000 left'
 expect 'budget: the check reports the points and questions it used, on stderr' 0 check.json . -- check < /dev/null
 log_has 'budget: the check reports the points and questions it used, on stderr' 0 '^graphql Singles cursor=none$'
-log_has 'budget: the check reports the points and questions it used, on stderr' 2 '^search issues page=1$'
+log_has 'budget: the check reports the points and questions it used, on stderr' 2 '^graphql Search cursor=none$'
 log_has 'budget: the check reports the points and questions it used, on stderr' 1 '^graphql Nodes count=1$'
-ERR='fleet.sh: used 15 GitHub points in 44 questions, 0 unchanged; 5000 of 5000 left'
+ERR='fleet.sh: used 17 GitHub points in 43 questions, 0 unchanged; 5000 of 5000 left'
 expect 'budget: revision.sh'"'"'s questions are counted, a point each' 0 check.json 'merge12' -- check <<EOF
 start #13: W3: widget page (spec #10)
 EOF
@@ -2493,7 +2488,7 @@ EOF
 ERR='fleet.sh: backing off: 1249 of 5000 GitHub points left, under the 1250 kept for builders and reviewers, until 2026-11-01T13:00:00Z'
 expect 'budget: a low allowance backs off: one line, exit 0, nothing more asked' 0 check.json 'merge12' FAKE_GH_REMAINING=1249 -- check < /dev/null
 log_has 'budget: a low allowance backs off: one line, exit 0, nothing more asked' 1 '.'
-ERR='fleet.sh: used 15 GitHub points in 44 questions, 0 unchanged; 1250 of 5000 left'
+ERR='fleet.sh: used 17 GitHub points in 43 questions, 0 unchanged; 1250 of 5000 left'
 expect 'budget: a quarter of the allowance left still checks' 0 check.json 'merge12' FAKE_GH_REMAINING=1250 -- check <<EOF
 start #13: W3: widget page (spec #10)
 EOF
@@ -2513,7 +2508,7 @@ EOF
 # Several fleets: current measured costs are 43 points / 127 questions
 # cold and 6 / 83 warm (including the repository privacy read). Conditional REST increases raw calls but makes
 # unchanged REST answers free; fingerprint reuse still avoids revision reads.
-ERR='fleet.sh: used 43 GitHub points in 127 questions, 0 unchanged; 5000 of 5000 left'
+ERR='fleet.sh: used 45 GitHub points in 126 questions, 0 unchanged; 5000 of 5000 left'
 expect 'budget: several fleets, the first check' 0 frontier.json . -- check <<EOF
 start #41: G1: gadget reader (spec #40)
 start #45: G5: gadget import (spec #40)
@@ -2526,7 +2521,7 @@ re-approve #50: changed since revision 1 (fingerprint now $(fp12 frontier.json .
 look #50: open sub-issue #53 is not in the approved plan
 look #60: planned #62 is closed without a verified merge
 EOF
-ERR='fleet.sh: used 6 GitHub points in 83 questions, 77 unchanged; 5000 of 5000 left'
+ERR='fleet.sh: used 8 GitHub points in 82 questions, 74 unchanged; 5000 of 5000 left'
 again 'budget: several fleets, the next check: the same lines, about a quarter of the points' . -- check <<EOF
 start #41: G1: gadget reader (spec #40)
 start #45: G5: gadget import (spec #40)
@@ -2539,7 +2534,7 @@ re-approve #50: changed since revision 1 (fingerprint now $(fp12 frontier.json .
 look #50: open sub-issue #53 is not in the approved plan
 look #60: planned #62 is closed without a verified merge
 EOF
-log_has 'budget: several fleets, the next check: the same lines, about a quarter of the points' 82 '.'
+log_has 'budget: several fleets, the next check: the same lines, about a quarter of the points' 81 '.'
 log_has 'budget: several fleets, the next check: the same lines, about a quarter of the points' 0 '^issue view'
 log_has 'budget: several fleets, the next check: the same lines, about a quarter of the points' 0 '^graphql Spec number=80'
 
@@ -3115,13 +3110,13 @@ cache_case() {
   fi
   if ! cache_check 1; then bad "$name" "first read: $(cat "$d/err1")"; return; fi
   if [ "$mode" = transport ]; then
-    # Hand-counted from check.json: six issues, one linked PR, two label searches.
-    if grep -q '^graphql Singles' "$d/gh.log" || [ "$(wc -l < "$d/http.log")" -ne 26 ] \
-      || [ "$(grep -c '^search/issues?.* 200$' "$d/http.log")" -ne 2 ] \
-      || [ "$(grep -c '/issues?state=open.* 200$' "$d/http.log")" -ne 1 ] \
+    if grep -q '^graphql Singles' "$d/gh.log" || [ "$(wc -l < "$d/http.log")" -ne 23 ] \
+      || [ "$(grep -c '^search/issues?' "$d/http.log")" -ne 0 ] \
+      || [ "$(grep -c '/issues?state=open' "$d/http.log")" -ne 0 ] \
+      || [ "$(grep -c '^graphql Search cursor=none$' "$d/gh.log")" -ne 2 ] \
       || [ "$(grep -c '/issues/[0-9]*/comments?.* 200$' "$d/http.log")" -ne 7 ] \
       || [ "$(grep -c '/dependencies/blocked_by?.* 200$' "$d/http.log")" -ne 6 ]; then
-      bad "$name" "issue listing, search and comments must use REST"; return
+      bad "$name" "comments must use REST, the issue listing and search GraphQL"; return
     fi
     echo "ok   $name"; return
   fi
@@ -3166,17 +3161,16 @@ cache_case() {
   if ! cache_check 2; then bad "$name" "repeat read: $(cat "$d/err2")"; return; fi
   case $mode in
     pages)
-      cmp -s "$d/out1" "$d/out2" && [ "$(grep -c '/issues?state=open.* 304$' "$d/http.log")" = 5 ] \
-        || { bad "$name" "all five cached issue pages must be revalidated"; return; }
-      jq '.issues += [{number: 71, title: "Synthetic extra issue", state: "OPEN", parent: null,
-        body: "", labels: [], blockedBy: [], comments: []}]' "$d/world.json" > "$d/new.json" \
-        && mv "$d/new.json" "$d/world.json" || { bad "$name" "append page"; return; }
+      cmp -s "$d/out1" "$d/out2" && [ "$(grep -c '/issues/11/comments?.* 304$' "$d/http.log")" = 2 ] \
+        || { bad "$name" "both cached comment pages must be revalidated"; return; }
+      jq '(.issues[] | select(.number == 11) | .comments) += [{id: 1199, at: "2026-11-01T11:00:00Z", body: "Synthetic note"}]' \
+        "$d/world.json" > "$d/new.json" && mv "$d/new.json" "$d/world.json" || { bad "$name" "append page"; return; }
       : > "$d/http.log"
-      cache_check 3 && cmp -s "$d/out2" "$d/out3" && grep -q '/issues?state=open.*page=6 unconditional 200$' "$d/http.log" \
-        || { bad "$name" "a 304 with a new next-page Link must expose page six"; return; } ;;
+      cache_check 3 && cmp -s "$d/out2" "$d/out3" && grep -q '/issues/11/comments?.*page=3 unconditional 200$' "$d/http.log" \
+        || { bad "$name" "a 304 with a new next-page Link must expose page three"; return; } ;;
     unchanged | upgrade)
-      cmp -s "$d/out1" "$d/out2" && [ "$(grep -c ' 304$' "$d/http.log")" = 25 ] \
-        || { bad "$name" "same output and exactly twenty-five REST 304s required"; return; } ;;
+      cmp -s "$d/out1" "$d/out2" && [ "$(grep -c ' 304$' "$d/http.log")" = 22 ] \
+        || { bad "$name" "same output and exactly twenty-two REST 304s required"; return; } ;;
     changed)
       printf 'nightly red 801 attempt 1 at %s: https://github.com/synthetic-owner/synthetic-repo/actions/runs/801 (failure)\n' "$(sha 81)" > "$d/want"
       cmp -s "$d/want" "$d/out2" && grep -q 'runs?.* 200$' "$d/http.log" \
@@ -3185,15 +3179,15 @@ cache_case() {
       cache_check 3 && cmp -s "$d/out2" "$d/out3" && grep -q 'runs?.* 304$' "$d/http.log" \
         || { bad "$name" "replacement was not reused on 304"; return; } ;;
     corrupt | duplicate | split | unreadable)
-      cmp -s "$d/out1" "$d/out2" && [ "$(grep -c ' unconditional 200$' "$d/http.log")" = 25 ] \
-        || { bad "$name" "invalid cache must make twenty-five unconditional REST reads"; return; } ;;
+      cmp -s "$d/out1" "$d/out2" && [ "$(grep -c ' unconditional 200$' "$d/http.log")" = 22 ] \
+        || { bad "$name" "invalid cache must make twenty-two unconditional REST reads"; return; } ;;
   esac
   echo "ok   $name"
 }
 cache_case 'REST cache: reader updates retain conditional GETs' upgrade
 cache_case 'REST cache: changed PR heads cannot borrow previous checks' mixed
 cache_case 'REST cache: paginated 304s retain and refresh next-page links' pages
-cache_case 'REST cache: issue listing search and comments use REST' transport
+cache_case 'REST cache: comments use REST, the issue listing and search GraphQL' transport
 cache_case 'REST cache: 304 keeps the same check output' unchanged
 cache_case 'REST cache: a changed response replaces the cached answer' changed
 cache_case 'REST cache: split envelope objects are ignored' split
@@ -3266,8 +3260,8 @@ parallel_case() {
         || { bad "$name" "reset trace"; return; }
       parallel_check '' && [ ! -s "$d/out" ] && points_only "$d/err" \
         || { bad "$name" "repeat failed"; return; }
-      [ "$(grep -c ' conditional 304$' "$d/http.log")" = 154 ] \
-        || { bad "$name" "exactly 154 revalidations required"; return; }
+      [ "$(grep -c ' conditional 304$' "$d/http.log")" = 151 ] \
+        || { bad "$name" "exactly 151 revalidations required"; return; }
     fi
   fi
   # Read the trace only after fleet.sh and all of its workers have returned.
@@ -3287,9 +3281,9 @@ assert (state['peak'] == 3 if mode == 'one' else
         8 <= state['peak'] <= 64 if mode == 'graphs' else
         16 <= state['peak'] <= 64 if mode == 'specs' else state['peak'] == 64), state
 if mode != 'failure':
-    expected = {'one': 5, 'pages': 158, 'specs': 74, 'graphs': 83, 'warm': 154,
+    expected = {'one': 5, 'pages': 151, 'specs': 71, 'graphs': 80, 'warm': 151,
                 # The unreadable closed single also needs its detail/blockers.
-                'comment_failure': 157}.get(mode, 155)
+                'comment_failure': 153}.get(mode, 151)
     assert len(starts) == expected and len(set(starts)) == expected, len(starts)
     assert all(starts.count('repos/synthetic-owner/synthetic-repo/issues/%s/comments?per_page=100' % n) == 1
                for n in (range(70, 71) if mode == 'one' else range(900, 916) if mode in ('specs', 'graphs') else range(800, 928))), starts
@@ -4150,8 +4144,6 @@ EOF
 expect "GI2: the project check and the fleet thread's own check are unchanged" 0 check.json "merge12 | $GI2_FLEET10" -- spec 10 <<EOF
 start #13: W3: widget page (spec #10)
 EOF
-
-### FR9 (#2627): the wide reads are GraphQL
 
 FR9_SINGLES='own_approval(70; 7002; "09:00") | reduce range(71; 91) as $n (.; closed_single($n; "11:00"))'
 FR9_HELD="$OWN13"' claim13 | other_spec | '"$HELD81"

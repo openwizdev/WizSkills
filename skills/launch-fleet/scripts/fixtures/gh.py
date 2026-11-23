@@ -30,10 +30,6 @@ Faults, for the error cases:
   FAKE_GH_ERRORS=<op>    GraphQL query <op> answers with `errors`, exit 0
   FAKE_GH_PAGE=<n>       page size for the paginated reads (default 100)
   FAKE_GH_SEARCH_CAP=<n> the search lists at most <n> issues, though it counts them all
-  FAKE_GH_SHORT=<op>     GraphQL query <op>'s list (Specs: the open issues; Search:
-                         the issues found) leaves out each page's last issue,
-                         though it counts them all: a partial page
-  FAKE_GH_NULL=<op>      that list's first issue on each page is null
   FAKE_GH_NIGHTLY_HTTP=<status> the nightly runs read answers with this HTTP status
 
 GitHub's allowance (ClosedWiz#189). Every GraphQL answer carries rateLimit:

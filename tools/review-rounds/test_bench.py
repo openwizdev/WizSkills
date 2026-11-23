@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
+import inspect
 import io
 import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -303,6 +306,133 @@ class ReadOnly(unittest.TestCase):
     def test_source_has_no_mutation(self):
         with open(bench.__file__, encoding='utf-8') as handle:
             self.assertNotRegex(handle.read(), r'(?i)\bmutation\b')
+
+
+GIT_ENV = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_AUTHOR_NAME': 'Synthetic',
+           'GIT_AUTHOR_EMAIL': 'synthetic@example.invalid', 'GIT_COMMITTER_NAME': 'Synthetic',
+           'GIT_COMMITTER_EMAIL': 'synthetic@example.invalid', 'GIT_AUTHOR_DATE': '2026-01-01T00:00:00Z',
+           'GIT_COMMITTER_DATE': '2026-01-01T00:00:00Z'}
+
+
+def synthetic_clone(where):
+    """Three commits: A is the first verdict's head, B the fix, C a later fix."""
+    def git(*args):
+        return subprocess.run(['git', '-C', where] + list(args), check=True, capture_output=True, text=True,
+                              env=dict(os.environ, **GIT_ENV)).stdout.strip()
+
+    def commit(files, message):
+        for name, lines in files.items():
+            os.makedirs(os.path.dirname(os.path.join(where, name)) or where, exist_ok=True)
+            with open(os.path.join(where, name), 'w', encoding='utf-8') as handle:
+                handle.write(''.join(line + '\n' for line in lines))
+        git('add', '-A')
+        git('commit', '-q', '--no-gpg-sign', '-m', message)
+        return git('rev-parse', 'HEAD')
+
+    git('init', '-q')
+    a_lines = ['a%d' % i for i in range(1, 11)]
+    a = commit({'a.py': a_lines, 'b.py': ['b%d' % i for i in range(1, 6)]}, 'A')
+    fixed = ['new0', 'new1'] + a_lines[:4] + ['A5'] + a_lines[5:]
+    b = commit({'a.py': fixed, 'c.py': ['c1']}, 'B')
+    c = commit({'a.py': fixed[:10] + ['A9', 'a10']}, 'C')
+    return a, b, c
+
+
+def late_repos(a, b, c):
+    rounds = [
+        comment('VERDICT: CHANGES at %s\n\n- **R1 [blocking]** `a.py:5` (Spec) First review.' % a, minute=1),
+        # At B, a.py lines 1-2 are new and line 7 is the changed a5; line 5 is the untouched a3.
+        comment('VERDICT: CHANGES at %s\n\n- **R1 [blocking]** resolved at %s.\n'
+                '- **R2 [blocking]** `a.py:7` (Spec) On the fixed line.\n'
+                '- **R3 [blocking]** `a.py:5` (Sweep) On an untouched line the fix moved down.\n'
+                '- **R4 [blocking]** `b.py:2` (Standards) In a file the fix left alone.\n'
+                '- **R5 [blocking]** `c.py:1` (Spec) In a file the fix added.\n'
+                '- **R6 [blocking]** `a.py:2-4` (Spec) A range that starts on an added line.\n'
+                '- **R7 [blocking]** `docs/x.md` (Spec) No line named.\n'
+                '- **R0 [polish]** `b.py:1` (Spec) Not blocking.\n' % (b, b), minute=2),
+        # From A to C, line 11 is the changed a9 and line 12 the untouched a10.
+        comment('VERDICT: CHANGES at %s\n\n- **R8 [blocking]** `a.py:11` (Sweep) On the later fix.\n'
+                '- **R9 [blocking]** `a.py:12` (Spec) Untouched since the first review.\n' % c, minute=3),
+        comment('VERDICT: APPROVE at %s' % c, minute=4),
+    ]
+    missing = [comment('VERDICT: CHANGES at %s' % a, minute=1),
+               comment('VERDICT: CHANGES at %s\n\n- **R1 [blocking]** `a.py:1` (Spec) Head not in the clone.'
+                       % ('e' * 40), minute=2)]
+    return {'synthetic/late': [pr(8, rounds), pr(9, missing)], 'synthetic/beta': beta()}
+
+
+LATE_ARGS = ['--repo', 'synthetic/late', '--repo', 'synthetic/beta', '--merged-from', START, '--merged-to', END]
+
+
+def run_late(argv, fake, git=None):
+    out, err = io.StringIO(), io.StringIO()
+    stderr, sys.stderr = sys.stderr, err
+    try:
+        kwargs = {} if git is None else {'git': git}
+        code = bench.main(argv, graphql=fake.graphql, out=out, **kwargs)
+    except SystemExit as stop:
+        code = stop.code
+    finally:
+        sys.stderr = stderr
+    return code, out.getvalue(), err.getvalue()
+
+
+class LateFindings(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.clone = self.temp.name
+        self.heads = synthetic_clone(self.clone)
+        self.addCleanup(self.temp.cleanup)
+
+    def late_run(self, git=None):
+        code, text, err = run_late(LATE_ARGS + ['--clone', 'synthetic/late=' + self.clone],
+                                   FakeGitHub(late_repos(*self.heads)), git)
+        self.assertEqual((code, err), (0, ''))
+        return text, result_of(text)
+
+    def test_late_counts_split_by_what_the_fix_changed(self):
+        text, result = self.late_run()
+        self.assertEqual(result['all']['synthetic/late']['late'],
+                         {'blocking': 10, 'late': 9, 'pct': 90, 'changed': 4, 'unchanged': 3, 'unknown': 2})
+        self.assertEqual(result['all']['synthetic/beta']['late'],
+                         {'blocking': 2, 'late': 1, 'pct': 50, 'changed': 0, 'unchanged': 0, 'unknown': 1})
+        self.assertEqual(result['all']['All']['late'],
+                         {'blocking': 12, 'late': 10, 'pct': 83, 'changed': 4, 'unchanged': 3, 'unknown': 3})
+        self.assertEqual(result['all']['All']['rounds']['mean'], 3.33)
+        self.assertIn('| All | 3 | 3 | 3.33 | 12 | 10 (83%) | 4 (40%) | 3 (30%) | 3 (30%) |', text.splitlines())
+
+    def test_without_a_clone_every_late_finding_is_unknown(self):
+        code, text, err = run_late(LATE_ARGS, FakeGitHub(late_repos(*self.heads)))
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(result_of(text)['all']['All'].get('late'),
+                         {'blocking': 12, 'late': 10, 'pct': 83, 'changed': 0, 'unchanged': 0, 'unknown': 10})
+
+    def test_git_gets_only_local_diff_and_object_checks(self):
+        self.assertIn('git', inspect.signature(bench.main).parameters)
+        calls = []
+
+        def git(args, **kwargs):
+            calls.append(args)
+            return subprocess.run(args, **kwargs)
+
+        self.late_run(git)
+        self.assertTrue(calls)
+        for args in calls:
+            self.assertEqual(args[:3], ['git', '-C', self.clone])
+            self.assertIn(next(a for a in args[3:] if not a.startswith('-')), ('diff', 'cat-file'), args)
+
+    def test_any_other_git_command_never_runs(self):
+        self.assertTrue(hasattr(bench, 'local_git'), 'no local git guard')
+        calls = []
+        for args in (['push', 'origin'], ['fetch'], ['-c', 'x=y', 'diff'], ['config', 'x']):
+            with self.assertRaises(bench.BenchError, msg=args):
+                bench.local_git(self.clone, args, runner=calls.append)
+        self.assertEqual(calls, [])
+
+    def test_source_names_no_contents_trees_or_diff_api(self):
+        with open(bench.__file__, encoding='utf-8') as handle:
+            source = handle.read()
+        self.assertNotRegex(source, r'(?i)contents|/git/trees|\btrees\b|compare|gh api (?!graphql)|\brepos/')
 
 
 if __name__ == '__main__':

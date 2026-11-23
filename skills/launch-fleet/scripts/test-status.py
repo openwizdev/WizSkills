@@ -733,7 +733,7 @@ class Write(Tracker):
                 result = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
                 self.assertEqual((result.returncode, result.stdout), (2, ''))
                 self.assertIn('record authors', result.stderr)
-                self.assertEqual([c['method'] for c in self.calls()], ['GET'])
+                self.assertEqual(self.calls(), [])
                 self.assertEqual(self.load(), self.world)
 
 

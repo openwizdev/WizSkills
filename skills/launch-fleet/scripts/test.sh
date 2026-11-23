@@ -1533,19 +1533,15 @@ elif mkdir -p "$A/remote" "$A/bin" "$A/install/github-app" \
   && printf 'import sys\nopen(%s, "a").write(" ".join(sys.argv[1:]) + "\\n")\nsys.exit(9)\n' "'$A/helper.log'" > "$A/install/github-app/agent-token.py" \
   && chmod +x "$A/bin/gh" "$A/bin/openwiz" \
   && jq --argjson now "$NOW" '.observed_at = $now | .budgets[] |= (.reset_at = ($now + 3600))' \
-    "$HERE/carried/healthy.json" > "$A/observation.json" \
-  && python3 -I - "$HERE/../references/identity.md" > "$A/block.sh" <<'PY'
+    "$HERE/carried/healthy.json" > "$A/observation.json"; then
+  printf 'start #13: W3: widget page (spec #10)\n' > "$A/want"
+  python3 -I - "$HERE/../references/identity.md" > "$A/block.sh" <<'PY' || bad 'app identity: the block' "can't extract it"
 import sys
 text = open(sys.argv[1]).read()
 block = text.split('<!-- GI7 identity -->', 1)[1].split('```sh\n', 1)[1].split('```', 1)[0]
 sys.stdout.write(''.join(line[4:] if line.startswith('    ') else line.lstrip() + '\n' if not line.strip() else line
                          for line in block.splitlines(True)).replace('<owner>/<repo>', 'synthetic-owner/synthetic-repo'))
 PY
-then
-  # The App identity is off for everyone (#2394, split per the orchestrator):
-  # whatever fleet.md says, loop.sh (with the key or a token service) and the
-  # identity block never run the recording fake openwiz or the agent helper.
-  printf 'start #13: W3: widget page (spec #10)\n' > "$A/want"
   printf '%s\nprintf "token=%%s\\n" "$app_token"\n' "$(cat "$A/block.sh")" > "$A/block-run.sh"
   off="loop.sh: the App identity is off; GitHub as today's account"
   block_off="GitHub as today's account: the App identity is off"

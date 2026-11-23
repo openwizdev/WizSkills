@@ -4,4 +4,4 @@
 "build-ticket": patch
 ---
 
-The App identity is opt-in: agents and the fleet loop mint the App's token only when `docs/agents/fleet.md`'s `App identity` row says `on`, and otherwise act as today's account.
+The App identity is off for everyone: agents and the fleet loop never mint the App's token or run the agent helper, and act as today's account. Setup's `fleet.md` template gains an `App identity | off` row, which `settings.py check` holds to exactly `on` or `off`; nothing reads it yet.

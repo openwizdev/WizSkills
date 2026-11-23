@@ -26,7 +26,7 @@ if [ "${1:-}" = --bundle ]; then
   repository "$2" || die 'GH_REPO must be owner/name'
   [ $# = 2 ] || spec_number "$3" || die "FLEET_SPEC must be a spec's number"
   source=$(cd -P "$(dirname "$0")/../.." && pwd) || die "can't find the installed skills"
-  files='launch-fleet/scripts/loop.sh launch-fleet/scripts/fleet.sh launch-fleet/scripts/records.py to-tickets/revision.sh to-tickets/check-links.sh launch-fleet/scripts/carried/alarm.py launch-fleet/scripts/github-app/agent-token.py setup/scripts/settings.py'
+  files='launch-fleet/scripts/loop.sh launch-fleet/scripts/fleet.sh launch-fleet/scripts/records.py to-tickets/revision.sh to-tickets/check-links.sh launch-fleet/scripts/carried/alarm.py launch-fleet/scripts/github-app/agent-token.py'
   for file in $files; do
     [ -r "$source/$file" ] || die "can't read installed $file"
     # The quoted heredoc must preserve every byte, without interpreting shell
@@ -45,7 +45,7 @@ runtime=$(mktemp -d) || { echo "loop.sh: can't unpack the bundled loop" >&2; exi
 trap 'rm -rf "$runtime"' EXIT
 trap 'exit 2' HUP INT TERM
 mkdir -p "$runtime/skills/launch-fleet/scripts/carried" "$runtime/skills/launch-fleet/scripts/github-app" \
-  "$runtime/skills/to-tickets" "$runtime/skills/setup/scripts" || exit 2
+  "$runtime/skills/to-tickets" || exit 2
 OPENWIZ_BUNDLE_BOOTSTRAP
     for file in $files; do
       printf 'cat > "$runtime/skills/%s" <<%s || exit 2\n' "$file" "'OPENWIZ_BUNDLED_HELPER_EOF'"
@@ -66,15 +66,13 @@ export GH_REPO
 inside=
 case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
 unset LAUNCH_FLEET_TOKEN_STEP
-app_identity() {
-  settings=$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GH_REPO/contents/docs/agents/fleet.md" 2> /dev/null < /dev/null) \
-    || return 1
-  printf '%s\n' "$settings" \
-    | python3 -I "${LAUNCH_FLEET_RUNTIME:-$(cd -P "$(dirname "$0")/../.." && pwd)}/setup/scripts/settings.py" app-identity \
-      > /dev/null 2>&1
-}
+# The App identity is off for everyone (OpenWiz #2394): nothing reads an opt-in
+# yet, so with the key's secret, a token service or an inherited token step,
+# loop.sh mints nothing, never runs the agent helper, and reads GitHub as
+# today's account. The opt-in reader's ticket is the only change that may set
+# identity_off from fleet.md.
 identity_off=
-if [ -z "$inside" ] && { [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] || [ -n "${OPENWIZ_GITHUB_APP_KEY:-}" ]; } && ! app_identity; then
+if [ -n "$inside" ] || [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] || [ -n "${OPENWIZ_GITHUB_APP_KEY:-}" ]; then
   identity_off=1
 fi
 if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ] && [ -z "$identity_off" ]; then
@@ -83,7 +81,8 @@ if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ] && [ -z "$identity_of
   export LAUNCH_FLEET_TOKEN_STEP
   exec python3 -I "$helper" run --requester fleet-check --repository "$GH_REPO" --read -- sh "$0"
 fi
-# The check reads GitHub as the OpenWiz App (GI7, #2549; the identity contract
+# With the App identity on (not yet possible, above), the check reads GitHub as
+# the OpenWiz App (GI7, #2549; the identity contract
 # `openwiz.github-identity.v1`): with the loop's OPENWIZ_GITHUB_APP_KEY secret,
 # `openwiz github token --read` mints a read-only installation token for gh
 # (GH_TOKEN) and git (its credential helper reads GH_TOKEN from the
@@ -94,13 +93,13 @@ fi
 # unchanged probe asks what that identity can read; never an inherited value.
 app=
 unset LAUNCH_FLEET_GITHUB_AUTH
-if [ -n "$inside" ]; then
+if [ -n "$identity_off" ]; then
+  echo "loop.sh: the App identity is off; GitHub as today's account" >&2
+elif [ -n "$inside" ]; then
   if [ -n "${OPENWIZ_AGENT_TOKEN_RUN:-}" ]; then
     LAUNCH_FLEET_GITHUB_AUTH=installation
     export LAUNCH_FLEET_GITHUB_AUTH
   fi
-elif [ -n "$identity_off" ]; then
-  echo "loop.sh: App identity is not on in docs/agents/fleet.md; GitHub as today's account" >&2
 elif [ -z "${OPENWIZ_GITHUB_APP_KEY:-}" ]; then
   echo "loop.sh: no OPENWIZ_GITHUB_APP_KEY secret; GitHub as today's account" >&2
 elif ! command -v openwiz > /dev/null; then

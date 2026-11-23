@@ -37,8 +37,7 @@ FLAGS_CELL = re.compile(r'`--provider (%s) --model (%s(?:/%s)*) --reasoning-leve
 ROSTER_HEADER = ['Name', 'Kind', 'Driver', 'Roles', 'Writes as']
 KINDS = ('harness', 'host', 'bot')
 ROSTER_ROLES = ('orchestrator', 'builder', 'reviewer', 'helper')
-USAGE = 'usage: settings.py check [--root DIR] [--labels FILE] | settings.py app-identity < fleet.md'
-APP_IDENTITY_ON = re.compile(r'\| *App identity *\| *(on|`on`) *\| *')
+USAGE = 'usage: settings.py check [--root DIR] [--labels FILE]'
 
 
 def read(path, problems):
@@ -365,23 +364,7 @@ def triage(text, labels, problems):
                 role, mapped[0], 'is not in the tracker' if not count else 'is in the tracker %d times' % count))
 
 
-def app_identity_on(text):
-    section, rows = False, []
-    for line in text.splitlines():
-        if line.lstrip().startswith(('```', '~~~')) and not rows:
-            return False
-        if line.startswith('## '):
-            section = line.rstrip('\r') == '## GitHub identity'
-        elif section and re.match(r'\| *App identity *\|', line):
-            rows.append(line.rstrip('\r'))
-    return len(rows) == 1 and APP_IDENTITY_ON.fullmatch(rows[0]) is not None
-
-
 def main(argv):
-    if argv == ['app-identity']:
-        on = app_identity_on(sys.stdin.read())
-        print('App identity: ' + ('on' if on else 'off'))
-        return 0 if on else 1
     if not argv or argv[0] != 'check':
         print(USAGE)
         return 2

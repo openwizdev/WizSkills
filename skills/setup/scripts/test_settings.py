@@ -190,7 +190,7 @@ class Check(unittest.TestCase):
         self.assertEqual(code, 5, out)
         self.assertIn('Record authors row 2 of 2', out)
 
-    def test_the_app_identity_row_is_off_unless_it_says_on(self):
+    def test_setup_checks_the_app_identity_row_is_exactly_on_or_off(self):
         row = '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |\n'
         for value in ('on', 'off', '`on`'):
             fleet = FLEET.replace(row, row + '| App identity | %s |\n' % value)
@@ -205,25 +205,6 @@ class Check(unittest.TestCase):
         code, out = self.check(self.project(**{'fleet.md': two}))
         self.assertEqual(code, 5, out)
         self.assertIn('fleet.md: GitHub identity: App identity row 2 of 2: | App identity | off |', out)
-
-    def test_app_identity_reads_on_only_from_one_row_with_no_fence_before_it(self):
-        def read(text):
-            result = subprocess.run([sys.executable, '-I', str(SCRIPT), 'app-identity'], input=text,
-                                    capture_output=True, text=True, timeout=60)
-            return result.returncode, result.stdout.strip()
-        row = '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |\n'
-        on = FLEET.replace(row, row + '| App identity | on |\n')
-        self.assertEqual(read(on), (0, 'App identity: on'))
-        self.assertEqual(read(on.replace('| on |', '| `on` |')), (0, 'App identity: on'))
-        offs = [FLEET, on.replace('| on |', '| off |'), on.replace('| on |', '| `on |'), on.replace('| on |', '| On |'),
-                on.replace('| App identity | on |\n', '| App identity | on |\n| App identity | on |\n'),
-                on.replace('## GitHub identity', '## Elsewhere'),
-                FLEET + '\n````md\n```\n| App identity | on |\n```\n````\n',
-                FLEET + '\n~~~md\n```sh\n| App identity | on |\n~~~\n',
-                FLEET + '\n```\n```not a closing fence\n| App identity | on |\n```\n',
-                '```\n```\n' + on]
-        for text in offs:
-            self.assertEqual(read(text), (1, 'App identity: off'), text[-160:])
 
     def test_a_record_authors_cell_is_validated_whole(self):
         # catches: a row the readers refuse whole (text beside the logins, an extra

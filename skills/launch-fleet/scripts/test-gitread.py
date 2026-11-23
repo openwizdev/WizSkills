@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import base64
+import http.server
 import importlib.util
 import os
 from pathlib import Path
@@ -6,7 +8,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from unittest import mock
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -14,6 +18,10 @@ REPO = 'synthetic-owner/synthetic-repo'
 FLEET_MD = ('# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n'
             '| Record authors | `openwiz[bot]`, `synthetic-owner` |\n')
 FAKE_GH = '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_GH_LOG"\necho "gh: refused in this test" >&2\nexit 1\n'
+SIGNED_IN_GH = ('#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_GH_LOG"\ncat > /dev/null\n'
+                'if [ "$*" = "auth git-credential get" ]; then\n'
+                '  printf "username=x-access-token\\npassword=synthetic-token\\n"\nfi\nexit 0\n')
+BASIC = 'Basic ' + base64.b64encode(b'x-access-token:synthetic-token').decode()
 
 
 def load(name):
@@ -76,6 +84,58 @@ class Origin:
 
     def gh_calls(self):
         return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def cache(self, repo=REPO):
+        return self.tmp / 'cache/launch-fleet/git' / f'{repo}.git'
+
+    def behind_http(self, test, gh=FAKE_GH):
+        (self.tmp / 'bin/gh').write_text(gh)
+        hits, origins = [], self.tmp / 'origins'
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                self.serve()
+
+            def do_POST(self):
+                self.serve()
+
+            def serve(self):
+                hits.append(self.path)
+                if self.headers.get('Authorization') != BASIC:
+                    self.send_response(401)
+                    self.send_header('WWW-Authenticate', 'Basic realm="synthetic"')
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
+                body = self.rfile.read(int(self.headers.get('Content-Length') or 0))
+                path, _, query = self.path.partition('?')
+                cgi = dict(os.environ, GIT_PROJECT_ROOT=str(origins), GIT_HTTP_EXPORT_ALL='1', PATH_INFO=path,
+                           QUERY_STRING=query, REQUEST_METHOD=self.command, REMOTE_USER='x-access-token',
+                           CONTENT_TYPE=self.headers.get('Content-Type') or '', CONTENT_LENGTH=str(len(body)),
+                           HTTP_CONTENT_ENCODING=self.headers.get('Content-Encoding') or '',
+                           HTTP_GIT_PROTOCOL=self.headers.get('Git-Protocol') or '')
+                out = subprocess.run(['git', 'http-backend'], input=body, env=cgi, capture_output=True,
+                                     timeout=60).stdout
+                head, _, payload = out.partition(b'\r\n\r\n')
+                headers = [line.split(': ', 1) for line in head.decode().split('\r\n') if ': ' in line]
+                status = next((int(v.split()[0]) for k, v in headers if k == 'Status'), 200)
+                self.send_response(status)
+                for key, value in headers:
+                    if key != 'Status':
+                        self.send_header(key, value)
+                self.send_header('Content-Length', str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        test.addCleanup(server.server_close)
+        test.addCleanup(server.shutdown)
+        self.env['GIT_CONFIG_KEY_0'] = f'url.http://127.0.0.1:{server.server_address[1]}/.insteadOf'
+        return hits
 
 
 class GitRead(unittest.TestCase):
@@ -148,6 +208,79 @@ class GitRead(unittest.TestCase):
         self.assertEqual((code, out), (2, ''))
         self.assertIn('could not use the cache', err)
 
+    def test_the_cache_is_owner_only_under_any_umask(self):
+        saved = os.umask(0o022)
+        self.addCleanup(os.umask, saved)
+        self.assertEqual(self.o.read(), (0, FLEET_MD, ''))
+        root = self.o.tmp / 'cache/launch-fleet/git'
+        self.assertEqual(root.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((self.o.cache() / 'gitread-fetched').read_text().count(' '), 1)
+
+    def test_a_cache_path_it_cannot_trust_is_refused(self):
+        root = self.o.tmp / 'cache/launch-fleet/git'
+        root.mkdir(parents=True)
+        root.chmod(0o755)
+        code, out, err = self.o.read()
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('open to other users', err)
+        self.assertFalse((root / 'synthetic-owner').exists(), 'nothing is fetched into an open cache')
+        root.rmdir()
+        (self.o.tmp / 'elsewhere').mkdir(mode=0o700)
+        root.symlink_to(self.o.tmp / 'elsewhere')
+        code, out, err = self.o.read()
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('is a symlink', err)
+        self.assertEqual(list((self.o.tmp / 'elsewhere').iterdir()), [])
+        root.unlink()
+        root.mkdir(mode=0o700)
+        (root / 'synthetic-owner').mkdir()
+        self.o.cache().symlink_to(self.o.tmp / 'elsewhere')
+        code, out, err = self.o.read()
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('is a symlink', err)
+        self.assertEqual(list((self.o.tmp / 'elsewhere').iterdir()), [])
+        self.o.cache().unlink()
+        gitread = load('gitread')
+        with mock.patch.dict(os.environ, self.o.env, clear=True), \
+                mock.patch('os.geteuid', return_value=os.geteuid() + 1):
+            with self.assertRaisesRegex(gitread.Error, 'not owned by you'):
+                gitread.show(REPO, 'docs/agents/fleet.md')
+        self.assertFalse(self.o.cache().exists())
+
+    def test_a_signed_in_gh_lends_git_its_credential_for_this_fetch(self):
+        hits = self.o.behind_http(self, gh=SIGNED_IN_GH)
+        self.assertEqual(self.o.read(), (0, FLEET_MD, ''))
+        self.assertEqual(self.o.gh_calls(), ['auth git-credential get', 'auth git-credential store'])
+        self.assertEqual(hits[0], f'/{REPO}.git/info/refs?service=git-upload-pack')
+        self.assertNotIn('synthetic-token', ''.join(self.o.read('docs/agents/fleet.md', '--max-age', '0')))
+
+    def test_a_failed_fetch_holds_its_cooldown_under_the_lock(self):
+        hits = self.o.behind_http(self)
+        code, out, err = self.o.read()
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('could not fetch', err)
+        self.assertEqual(len(hits), 1)
+        code, out, err = self.o.read()
+        self.assertEqual(len(hits), 1, 'a read inside the cooldown never fetches again')
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('last fetch', err)
+        self.assertEqual(self.o.gh_calls(), ['auth git-credential get'])
+        (self.o.tmp / 'bin/gh').write_text(SIGNED_IN_GH)
+        self.assertEqual(self.o.read('docs/agents/fleet.md', '--max-age', '0'), (0, FLEET_MD, ''))
+        self.assertEqual(self.o.read(), (0, FLEET_MD, ''))
+        self.assertEqual(len(self.o.gh_calls()), 3)
+
+    def test_a_fresh_stamp_must_name_the_pinned_tip(self):
+        self.assertEqual(self.o.read()[0], 0)
+        old = (self.o.cache() / 'gitread-fetched').read_text().split()[1]
+        self.o.commit({'docs/agents/fleet.md': 'moved on\n'})
+        self.assertEqual(self.o.read('docs/agents/fleet.md', '--max-age', '0'), (0, 'moved on\n', ''))
+        when = (self.o.cache() / 'gitread-fetched').read_text().split()[0]
+        (self.o.cache() / 'gitread-fetched').write_text(f'{when} {old}\n')
+        code, out, err = self.o.read()
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('does not match', err)
+
     def test_bad_arguments_are_refused(self):
         for args in (('show', REPO), ('cat', REPO, 'x'), ('show', '../x', 'x'),
                      ('show', REPO, 'x', '--max-age'), ('show', REPO, 'x', '--max-age', '-1')):
@@ -169,7 +302,7 @@ class NoContentsReads(unittest.TestCase):
 
     def test_post_authors_reads_fleet_md_from_git(self):
         post = load('post')
-        self.assertEqual(attempt(post.authors, REPO), post.grants.record_authors(FLEET_MD))
+        self.assertEqual(attempt(post.authors, REPO), frozenset({'openwiz[bot]', 'synthetic-owner'}))
         self.assertEqual(self.o.gh_calls(), [])
         shutil.rmtree(self.o.bare)
         shutil.rmtree(self.o.tmp / 'cache')

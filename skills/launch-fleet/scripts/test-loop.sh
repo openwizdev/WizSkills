@@ -179,8 +179,87 @@ echo "ok   a service that would refuse is never asked (#1846, #2394)"
 (service; export OPENWIZ_TOKEN_SERVICE= PATH="$work/probe:$work/bin:/usr/bin:/bin"; : > "$work/probe.log"
   identity 'none account' "$off")
 [ ! -s "$work/service.log" ]
-[ -s "$work/probe.log" ] && [ -z "$(grep -vx key "$work/probe.log")" ]
-echo 'ok   with no service configured the wake keeps the key and still never mints (#1846, #2394)'
+[ -s "$work/probe.log" ] && [ -z "$(grep -vx no-key "$work/probe.log")" ]
+echo 'ok   with no service configured the wake drops the key and still never mints (#1846, #2394, #2843)'
+
+absent() {
+  if grep -q "$@"; then echo "found: $*" >&2; return 1; fi
+}
+sentinel=synthetic-key-sentinel-2843
+(export OPENWIZ_GITHUB_APP_KEY="$sentinel" PATH="$work/probe:$PATH"; : > "$work/probe.log"; : > "$work/gh-key.log"
+  for script in "$work/loop.sh" "$work/installed/skills/launch-fleet/scripts/loop.sh"; do
+    rm -rf "$work/cache"
+    sh -x "$script" > "$work/out" 2> "$work/trace" || { cat "$work/trace" >&2; exit 1; }
+    cmp "$work/want" "$work/out"
+    grep -q '^+ ' "$work/trace"
+    grep -qxF "$off" "$work/trace"
+    absent -F "$sentinel" "$work/trace"
+  done
+  [ -s "$work/probe.log" ] && [ -z "$(grep -vx no-key "$work/probe.log")" ]
+  [ -s "$work/gh-key.log" ] && [ -z "$(grep -vx no-key "$work/gh-key.log")" ])
+echo "ok   the off decision never expands the key and no child gets it (#2843)"
+
+mkdir "$work/shim" "$work/was"
+for tool in gh git; do
+  printf '#!/bin/sh\necho %s >> "%s"\nexec "%s" "$@"\n' "$tool" "$work/shim.log" "$(command -v "$tool")" > "$work/shim/$tool"
+  chmod +x "$work/shim/$tool"
+done
+printf '#!/bin/sh\nenv | grep -E "^(GIT_CONFIG|GIT_EXEC_PATH=|GIT_SSH|GIT_ALLOW_PROTOCOL=|GH_CONFIG_DIR=|GH_TOKEN=|OPENWIZ_AGENT_TOKEN_)" >> "%s"\nexec "%s" "$@"\n' \
+  "$work/git-env.log" "$(command -v git)" > "$work/was/git"
+chmod +x "$work/was/git"
+printf '%s\n' "GH_CONFIG_DIR=$work/gh-config-was" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=synthetic.kept \
+  GIT_CONFIG_VALUE_0=yes > "$work/git-env.want"
+inherit() {
+  export PATH="$work/shim:$work/was:$PATH" OPENWIZ_AGENT_TOKEN_PATH_WAS="1$work/was:$PATH" \
+    GIT_EXEC_PATH="$(git --exec-path)" OPENWIZ_AGENT_TOKEN_EXEC_WAS=0 \
+    GIT_SSH_COMMAND="$work/shim/git" OPENWIZ_AGENT_TOKEN_SSH_WAS=0 \
+    GIT_ALLOW_PROTOCOL=file:https:ssh OPENWIZ_AGENT_TOKEN_PROTOCOLS_WAS=0 \
+    GH_CONFIG_DIR="$work/shim/gh-config" OPENWIZ_AGENT_TOKEN_GH_CONFIG_WAS="1$work/gh-config-was" \
+    GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=synthetic.kept GIT_CONFIG_VALUE_0=yes \
+    GIT_CONFIG_KEY_1=credential.https://github.com.helper GIT_CONFIG_VALUE_1= \
+    GIT_CONFIG_KEY_2=credential.https://github.com.helper GIT_CONFIG_VALUE_2="!$work/shim/git" \
+    OPENWIZ_AGENT_TOKEN_RUN="$work/shim/run-synthetic.json" OPENWIZ_AGENT_TOKEN_GIT_AT=1 \
+    GH_TOKEN=synthetic-installation-token-2843
+  : > "$work/shim.log"; : > "$work/git-env.log"; : > "$work/gh-token.log"
+}
+dropped() {
+  [ ! -s "$work/shim.log" ]
+  [ -s "$work/git-env.log" ] && sort -u "$work/git-env.log" | cmp - "$work/git-env.want"
+  [ -s "$work/gh-token.log" ] && [ -z "$(grep -vx 'none account' "$work/gh-token.log")" ]
+}
+for marker in '$$' ''; do
+  (line=$fallback; if [ -n "$marker" ]; then service; line=$off; fi; inherit; rm -rf "$work/cache"
+    sh -c "LAUNCH_FLEET_TOKEN_STEP=$marker; export LAUNCH_FLEET_TOKEN_STEP; exec sh \"\$1\"" sh "$work/loop.sh" \
+      > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; exit 1; }
+    cmp "$work/want" "$work/out"
+    [ "$(head -n 1 "$work/err")" = "$line" ] && [ "$(wc -l < "$work/err" | tr -d ' ')" = 2 ]
+    dropped
+    [ ! -s "$work/service.log" ])
+done
+echo "ok   a matching step marker with inherited shims runs every command as today's account (#2843)"
+
+sed -n '/<!-- GI7 identity -->/,/^  ```$/p' "$HERE/../references/identity.md" | sed '1,2d;$d;s/^  //' > "$work/block.sh"
+(inherit
+  sh -c '. "$1"; app gh --version > /dev/null || :; app_git -C "$2" rev-parse HEAD > /dev/null' \
+    sh "$work/block.sh" "$work/remote" 2> "$work/err" || { cat "$work/err" >&2; exit 1; }
+  [ "$(cat "$work/err")" = "GitHub as today's account: the App identity is off" ]
+  dropped)
+sed -n '/^restore_today_account() {$/,/^}$/p' "$HERE/loop.sh" > "$work/restore.loop"
+sed -n '/^restore_today_account() {$/,/^}$/p' "$work/block.sh" > "$work/restore.block"
+[ -s "$work/restore.loop" ] && cmp "$work/restore.loop" "$work/restore.block"
+echo "ok   the identity block drops inherited shims with loop.sh's restore_today_account (#2843)"
+
+for at in x 01 4 ''; do
+  (inherit; export OPENWIZ_AGENT_TOKEN_GIT_AT="$at"
+    sh -c '. "$1"; restore_today_account; env' sh "$work/restore.loop" > "$work/env"
+    absent '^GIT_CONFIG_COUNT=' "$work/env"
+    absent '^OPENWIZ_AGENT_TOKEN_' "$work/env"
+    absent '^GH_TOKEN=' "$work/env")
+done
+(unset OPENWIZ_AGENT_TOKEN_RUN; export GH_TOKEN=synthetic-own-account-2843
+  sh -c '. "$1"; restore_today_account; printf "%s\n" "$GH_TOKEN"' sh "$work/restore.loop" > "$work/env"
+  [ "$(cat "$work/env")" = synthetic-own-account-2843 ])
+echo "ok   restore_today_account drops all git config on an unreadable mark and keeps an own GH_TOKEN (#2843)"
 
 # Failed refreshes and first clones must not emit work or leave runtime files.
 mv "$work/remote" "$work/offline"

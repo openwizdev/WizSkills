@@ -20,7 +20,7 @@ Expected values are literals, never computed the way the meter computes them.
 HERE = Path(__file__).resolve().parent
 METER = HERE / 'gh-meter.py'
 SHA = '0123456789abcdef0123456789abcdef01234567'
-SECRETS = ('ghs_SyntheticToken000', 'SYNTHETIC-BODY', 'SYNTHETIC-HEADER', 'SYNTHETIC-ENV', 'SYNTHETIC-OUT',
+SECRETS = ('ghs_Synth00', 'SYNTHETIC-BODY', 'SYNTHETIC-HEADER', 'SYNTHETIC-ENV', 'SYNTHETIC-OUT',
            'SYNTHETIC-RATE')
 
 FAKE_GH = r'''
@@ -149,8 +149,8 @@ class Meter(unittest.TestCase):
         self.assertEqual([c['rest_units'] for c in self.lines()], [1, 0, 3, 0, 0, 0])
 
     def test_never_logs_a_token_body_or_other_header(self):
-        self.gh('api', '-H', 'Authorization: token ghs_SyntheticToken000', '-f', 'body=SYNTHETIC-BODY',
-                'repos/synthetic-owner/synthetic-repo/issues/1/comments?access_token=ghs_SyntheticToken000')
+        self.gh('api', '-H', 'Authorization: token ghs_Synth00', '-f', 'body=SYNTHETIC-BODY',
+                'repos/synthetic-owner/synthetic-repo/issues/1/comments?access_token=ghs_Synth00')
         self.gh('api', '--include', '--input', '-', 'repos/synthetic-owner/synthetic-repo/issues',
                 stdin='{"body": "SYNTHETIC-BODY"}')
         self.gh('issue', 'comment', '1', '--body', 'SYNTHETIC-BODY')

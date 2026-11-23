@@ -638,6 +638,14 @@ class Review(unittest.TestCase):
         at_end = base.replace(probes, "") + "\n" + probes.rstrip("\n")
         out = self.builder_pass(work, at_end)
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "self-check: ok"), out.stdout + out.stderr)
+        with self.subTest("a level-one heading after the section"):
+            out = self.builder_pass(work, at_end + "\n\n# Appendix\n\nNotes for the next ticket.\n")
+            self.assertEqual((out.returncode, out.stdout.strip()), (0, "self-check: ok"), out.stdout + out.stderr)
+        marker = "thr_" + "a1b2c3d4"
+
+        def bad(line):
+            return (f"the ## Self-check line at description line {line} has neither a `command` with what it "
+                    "printed nor n/a: <why>")
         missing = "no ## Self-check section with one line per probe"
         empty = "the ## Self-check section has no probe lines"
         planted = {
@@ -647,16 +655,18 @@ class Review(unittest.TestCase):
             "a blank section at the end": (base.replace(probes, "") + "\n## Self-check\n  \n", [empty]),
             "a line with no command": (
                 base.replace("- Consumers: n/a: nothing else reads export.py.", "- Consumers: checked, all fine."),
-                ['the ## Self-check line "- Consumers: checked, all fine." has neither a `command` with what it '
-                 "printed nor n/a: <why>"]),
-            "a command with no output": (
-                base.replace(" printed `3`.", "."),
-                ['the ## Self-check line "- Error paths: `python3 export.py --to cookbook.zip; echo $?`." has '
-                 "neither a `command` with what it printed nor n/a: <why>"]),
-            "n/a with no reason": (
-                base.replace("n/a: nothing else reads export.py.", "n/a:"),
-                ['the ## Self-check line "- Consumers: n/a:" has neither a `command` with what it printed nor '
-                 "n/a: <why>"]),
+                [bad(15)]),
+            "a command with no output": (base.replace(" printed `3`.", "."), [bad(14)]),
+            "printed with only a full stop after it": (base.replace(" printed `3`.", " printed."), [bad(14)]),
+            "n/a with no reason": (base.replace("n/a: nothing else reads export.py.", "n/a:"), [bad(15)]),
+            "n/a with only a full stop": (base.replace("n/a: nothing else reads export.py.", "n/a: ."), [bad(15)]),
+            "a private value in a malformed line": (
+                base.replace("- Consumers: n/a: nothing else reads export.py.", f"- Consumers: {marker} checked"),
+                [bad(15), "private material (a token or thread id) in the description"]),
+            "a fenced template with no real section": (
+                base.replace(probes, "```markdown\n## Self-check\n- Undo: `git revert` printed `FAILED`.\n"
+                                     "## Facts\n```\n\n"),
+                [missing]),
             "no section and no Closes line": (
                 base.replace(probes, "").replace("Closes example/product#41\n", ""),
                 ["no Closes line names the ticket; the review cannot start", missing]),
@@ -665,6 +675,7 @@ class Review(unittest.TestCase):
             with self.subTest(name):
                 out = self.builder_pass(work, text)
                 self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertNotIn(marker, out.stdout + out.stderr)
                 n = len(expected)
                 self.assertEqual(out.stdout.splitlines(),
                                  [f"miss: {m}" for m in expected] + [f"self-check: {n} miss{'es' if n > 1 else ''}"])

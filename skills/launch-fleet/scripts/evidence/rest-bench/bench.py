@@ -109,7 +109,7 @@ def fleet_suite(out):
 def counts(log):
     calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
     return (len(calls), sum(c['kind'] == 'rest' for c in calls), sum(c['kind'] == 'graphql' for c in calls),
-            sum(c['rest_units'] for c in calls))
+            sum(c['rest_units'] for c in calls), sum(c['uncertain'] for c in calls))
 
 
 def fixtures(out):
@@ -128,14 +128,22 @@ def fixtures(out):
     rows = [('fleet.sh spec', 'fleet', *fleet_suite(out))]
     for script, sub, test in PYTHON:
         rows.append((script + (' ' + sub if sub else ''), 'orchestrator', *python_suite(out, script, sub, test)))
-    print('| Script | Role | Fixture runs | Calls | REST calls | GraphQL calls | REST units '
-          '| REST units per run | REST units per spec-hour (x%d wakes) |' % WAKES_PER_HOUR)
-    print('| --- | --- | --- | --- | --- | --- | --- | --- | --- |')
+    print('Fixed comparison scenario: each script runs once per wake, %d wakes an hour. Derived, not measured.'
+          % WAKES_PER_HOUR)
+    print()
+    print('| Script | Role | Fixture runs | Calls | Calls per run | REST calls | GraphQL calls | REST units '
+          '| Uncertain calls | REST units per run | REST units per spec-hour (scenario) |')
+    print('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
+    total = 0
     for name, role, log, runs, _ in rows:
-        calls, rest, graphql, units = counts(log)
+        calls, rest, graphql, units, uncertain = counts(log)
         per = units / runs if runs else 0
-        print('| %s | %s | %d | %d | %d | %d | %d | %.1f | %.0f |'
-              % (name, role, runs, calls, rest, graphql, units, per, per * WAKES_PER_HOUR))
+        total += per * WAKES_PER_HOUR
+        print('| %s | %s | %d | %d | %.1f | %d | %d | %d | %d | %.2f | %.1f |'
+              % (name, role, runs, calls, calls / runs if runs else 0, rest, graphql, units, uncertain, per,
+                 per * WAKES_PER_HOUR))
+    print()
+    print('Total in the scenario: %.1f REST units per spec-hour (summed unrounded, rounded once)' % total)
     print()
     reached = called.read_text().split() if called.exists() else []
     print('Agent-CLI stubs: %d installed; %d calls reached them%s' % (

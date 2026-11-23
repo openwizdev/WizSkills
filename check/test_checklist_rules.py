@@ -74,10 +74,13 @@ class Rules(unittest.TestCase):
                            ('clock', 'self.assertLess(' + CLOCK + ' - began, 2)'),
                            ('clock', 'assert.ok(Date.' + 'now() < deadline)'),
                            ('own-temp', "out = Path('" + TMP + "wizskills-run')"),
-                           ('own-temp', 'log=' + TMP + 'run.log')):
+                           ('own-temp', "out = open('" + TMP + "wizskills-run')")):
             with self.subTest(rule=rule, line=line):
                 self.assert_findings({'skills/a/tests/test_a.py': 'import x\n' + line + '\n'},
                                      [f'{rule} skills/a/tests/test_a.py:2'])
+        for line in ('log=' + TMP + 'run.log', 'cat ' + TMP + 'run.log', 'cp x "' + TMP + 'run.log"'):
+            with self.subTest(line=line):
+                self.assert_findings({'skills/a/scripts/test.sh': line + '\n'}, ['own-temp skills/a/scripts/test.sh:1'])
 
     def test_every_test_file_form_is_read(self):
         for rel in ('skills/a/scripts/test-host.py', 'skills/a/test/helpers.py', 'check/test_x.py',
@@ -101,6 +104,10 @@ class Rules(unittest.TestCase):
     def test_a_binary_or_non_test_change_is_never_decoded(self):
         self.assert_findings({'skills/a/references/shot.png': b'\x89PNG\r\n\x1a\n\xff\x00\xfe',
                               'skills/a/notes.txt': b'caf\xe9 ' + AT_LEAST.encode() + b'\n'}, [])
+
+    def test_test_source_git_calls_binary_is_unreadable(self):
+        code, out, _ = self.run_case({'README.md': 'x\n'}, {'check/test_x.py': b'x = 1\x00\n'})
+        self.assertEqual((code, out), (2, []))
 
     def test_patch_content_is_never_read_as_a_header(self):
         for text in ('++ counter;\n', '++ b/x\n' + AT_LEAST + '\n', '-- a/x\n', 'diff --git a/x b/x\n'):

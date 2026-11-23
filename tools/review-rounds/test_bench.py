@@ -518,5 +518,34 @@ class LateFindings(unittest.TestCase):
         self.assertNotRegex(source, r'(?i)contents|/git/trees|\btrees\b|compare|gh api (?!graphql)|\brepos/')
 
 
+class IssueTransport(unittest.TestCase):
+    def read(self, stdout, code=0):
+        calls = []
+
+        class Done:
+            returncode, stderr = code, 'synthetic failure'
+        Done.stdout = stdout
+
+        def runner(args, **kwargs):
+            calls.append(args)
+            return Done()
+        return bench.gh_issue('synthetic/late', 7, runner), calls
+
+    def test_a_missing_issue_is_none_and_any_other_error_fails_closed(self):
+        found, calls = self.read('{"data": {"repository": {"issue": {"number": 7}}}}')
+        self.assertEqual(found, {'number': 7})
+        self.assertEqual(calls[0][:4], ['gh', 'api', 'graphql', '-f'])
+        self.assertEqual(calls[0][4], 'query=' + bench.ISSUE)
+        self.assertEqual(calls[0][5:], ['-f', 'owner=synthetic', '-f', 'name=late', '-F', 'number=7'])
+        self.assertRegex(bench.ISSUE, r'^query\(')
+        self.assertIsNone(self.read('{"data": {"repository": {"issue": null}}, '
+                                    '"errors": [{"type": "NOT_FOUND", "message": "x"}]}', 1)[0])
+        for stdout, code in (('not json', 1), ('{"data": null, "errors": [{"type": "FORBIDDEN"}]}', 1),
+                             ('{"data": {"repository": null}, "errors": [{"type": "NOT_FOUND"}, {"type": "X"}]}', 1),
+                             ('{"data": {}}', 1)):
+            with self.assertRaises(bench.BenchError, msg=stdout):
+                self.read(stdout, code)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -7,7 +7,7 @@ import statistics
 import subprocess
 import sys
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 RECORD_AUTHORS = frozenset({'openwiz[bot]', 'jparker2006'})
 CHECKS = ('Spec', 'Sweep', 'Standards')
@@ -18,6 +18,11 @@ HEAD = re.compile(r'VERDICT:\s*[A-Z]+ at ([0-9a-f]{7,40})\b')
 PLACE = re.compile(r'(.+):([0-9]+)(?:-([0-9]+))?')
 HUNK = re.compile(r'^@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,([0-9]+))? @@', re.M)
 GIT_READS = ('diff', 'cat-file')
+WITHDRAWN = re.compile(r'^\s*[-*]\s+\*\*(R[0-9]+) \[blocking\]\*\* withdrawn:', re.M)
+POLISH_ISSUE = re.compile(r'^\s*[-*]\s+\*\*R[0-9]+ \[polish\]\*\*[^\n]*?\bPolish issue: #([0-9]+)\b', re.M)
+POLISH_TITLE = '(polish for #'
+TEST_PATH = re.compile(r'(?:^|/)(?:tests?|__tests__|testdata|fixtures)/|(?:^|/)test_[^/]*$|[_.](?:test|spec)\.[^/]+$')
+DUE = timedelta(days=7)
 SIZE = re.compile(r'Size: ([SML])\.')
 BANDS = (('under 300', 0, 300), ('300-599', 300, 600), ('600+', 600, None),
          ('600-999', 600, 1000), ('1000+', 1000, None))
@@ -26,9 +31,9 @@ PAGE = 100
 SEARCH_PAGE = 40
 
 COMMENT_NODE = 'author { login __typename } createdAt body'
-ISSUE_NODE = 'body'
+ISSUE_NODE = 'body repository { nameWithOwner }'
 CONNECTIONS = {'comments': COMMENT_NODE, 'closingIssuesReferences': ISSUE_NODE}
-PR_FIELDS = ('number title createdAt mergedAt additions deletions changedFiles '
+PR_FIELDS = ('number title createdAt mergedAt additions deletions changedFiles baseRefOid headRefOid '
              + ' '.join('%s(first: %d) { pageInfo { hasNextPage endCursor } nodes { %s } }' % (k, PAGE, v)
                         for k, v in CONNECTIONS.items()))
 SEARCH = ('query($q: String!, $after: String) { search(type: ISSUE, query: $q, first: %d, after: $after) '
@@ -42,7 +47,9 @@ class BenchError(Exception):
     pass
 
 
-DOCUMENTS = frozenset([SEARCH] + [MORE % (field, PAGE, shape) for field, shape in CONNECTIONS.items()])
+ISSUE = ('query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) '
+         '{ issue(number: $number) { number title state stateReason closedAt } } }')
+DOCUMENTS = frozenset([SEARCH, ISSUE] + [MORE % (field, PAGE, shape) for field, shape in CONNECTIONS.items()])
 
 
 def read_only(document):
@@ -67,6 +74,76 @@ def gh_graphql(document, variables, runner=subprocess.run):
     if not isinstance(reply, dict) or reply.get('errors') or not isinstance(reply.get('data'), dict):
         raise BenchError('GraphQL errors: ' + json.dumps(reply.get('errors') if isinstance(reply, dict) else reply))
     return reply['data']
+
+
+def gh_issue(repo, number, runner=subprocess.run):
+    """One issue's state, or None when the repository has no issue with that number."""
+    owner, name = repo.split('/')
+    done = runner(['gh', 'api', 'graphql', '-f', 'query=' + read_only(ISSUE), '-f', 'owner=' + owner,
+                   '-f', 'name=' + name, '-F', 'number=%d' % number], capture_output=True, text=True)
+    try:
+        reply = json.loads(done.stdout)
+    except ValueError:
+        raise BenchError('gh api graphql failed: ' + (done.stderr.strip() or 'exit %d' % done.returncode)) from None
+    errors = reply.get('errors') if isinstance(reply, dict) else None
+    if errors and all(isinstance(e, dict) and e.get('type') == 'NOT_FOUND' for e in errors):
+        return None
+    if done.returncode != 0 or errors or not isinstance(reply.get('data'), dict):
+        raise BenchError('GraphQL errors: ' + json.dumps(errors if errors else reply))
+    return (reply['data'].get('repository') or {}).get('issue')
+
+
+def is_test(path):
+    return bool(TEST_PATH.search(path))
+
+
+def ignored_when_due(issue, due):
+    closed = issue.get('state') == 'CLOSED' and issue.get('closedAt') and parse_time(issue['closedAt']) <= due
+    return not closed or issue.get('stateReason') == 'NOT_PLANNED'
+
+
+def polish_status(records, issue, now):
+    cache = {}
+    for r in records:
+        split = Counter(not_due=0, unknown=0, ignored=0, handled=0)
+        due = parse_time(r['merged_at']) + DUE
+        for number in r['polish_issues']:
+            if due > now:
+                split['not_due'] += 1
+                continue
+            key = (r['issue_repo'], number)
+            if key not in cache:
+                cache[key] = issue(*key)
+            found = cache[key]
+            if not found or POLISH_TITLE not in (found.get('title') or ''):
+                split['unknown'] += 1
+            else:
+                split['ignored' if ignored_when_due(found, due) else 'handled'] += 1
+        r['polish_split'] = split
+    return records
+
+
+def diff_size(records, clones, git):
+    for r in records:
+        r['diff_size'] = None
+        clone = clones.get(r['repo'].lower())
+        base, head = r['base'], r['head']
+        if not (clone and all(re.fullmatch(r'[0-9a-f]{7,40}', oid or '') for oid in (base, head))):
+            continue
+        if any(local_git(clone, ['cat-file', '-e', oid + '^{commit}'], git).returncode for oid in (base, head)):
+            continue
+        done = local_git(clone, ['diff', '--numstat', '--no-renames', '--no-ext-diff', '--no-textconv',
+                                 base + '...' + head], git)
+        if done.returncode != 0:
+            continue
+        size = Counter(code_lines=0, test_lines=0, code_files=0, test_files=0)
+        for line in done.stdout.splitlines():
+            added, deleted, path = line.split('\t', 2)
+            kind = 'test' if is_test(path) else 'code'
+            size[kind + '_files'] += 1
+            size[kind + '_lines'] += sum(int(x) for x in (added, deleted) if x != '-')
+        r['diff_size'] = size
+    return records
 
 
 def local_git(clone, args, runner=subprocess.run):
@@ -192,6 +269,11 @@ def record(repo, node):
         'recheck_findings': findings[1:],
         'first_head': heads[0] if heads else None,
         'late': [(heads[i], place) for i in range(1, len(verdicts)) for place in LATE.findall(verdicts[i]['body'])],
+        'withdrawn': len({label for c in verdicts for label in WITHDRAWN.findall(c['body'])}),
+        'polish_issues': sorted({int(n) for c in verdicts for n in POLISH_ISSUE.findall(c['body'])}),
+        'issue_repo': (lambda repos: repos.pop() if len(repos) == 1 else repo)(
+            {(i.get('repository') or {}).get('nameWithOwner') or repo for i in node['closingIssuesReferences']}),
+        'merged_at': node['mergedAt'], 'base': node.get('baseRefOid'), 'head': node.get('headRefOid'),
     }
 
 
@@ -219,6 +301,15 @@ def summarize(records):
     for r in reviewed:
         late.update(r.get('late_split', {}))
     blocking = sum(first.values()) + sum(recheck.values())
+    polish = Counter()
+    for r in reviewed:
+        polish.update(r.get('polish_split', {}))
+    withdrawn = sum(r.get('withdrawn', 0) for r in reviewed)
+    due = polish['ignored'] + polish['handled']
+    sized = [r['diff_size'] for r in reviewed if r.get('diff_size') is not None]
+
+    def median(key):
+        return statistics.median(s[key] for s in sized) if sized else None
     return {
         'merged': len(records), 'reviewed': n, 'verdicts': sum(rounds),
         'rounds': {'mean': round(sum(rounds) / n, 2) if n else None,
@@ -239,6 +330,13 @@ def summarize(records):
         },
         'late': {'blocking': blocking, 'late': sum(recheck.values()), 'pct': pct(sum(recheck.values()), blocking),
                  'changed': late['changed'], 'unchanged': late['unchanged'], 'unknown': late['unknown']},
+        'withdrawn_ignored': {'blocking': blocking, 'withdrawn': withdrawn, 'withdrawn_pct': pct(withdrawn, blocking),
+                              'polish': sum(polish.values()), 'not_due': polish['not_due'],
+                              'unknown': polish['unknown'], 'due': due, 'ignored': polish['ignored'],
+                              'ignored_pct': pct(polish['ignored'], due),
+                              'either_pct': pct(withdrawn + polish['ignored'], blocking + due)},
+        'size': dict({k: median(k) for k in ('code_lines', 'test_lines', 'code_files', 'test_files')},
+                     sized=len(sized), unknown=len(reviewed) - len(sized)),
     }
 
 
@@ -253,13 +351,15 @@ def worst(records, limit=10):
             for r in ranked[:limit]]
 
 
-def bench(repos, start, end, opened_after, graphql, clones=None, git=subprocess.run):
+def bench(repos, start, end, opened_after, graphql, clones=None, git=subprocess.run, issue=gh_issue, now=None):
+    now = now or datetime.now(timezone.utc)
     by_repo = {}
     for repo in repos:
         nodes = fetch(repo, start, end, graphql)
         if opened_after is not None:
             nodes = [n for n in nodes if parse_time(n['createdAt']) > opened_after]
-        by_repo[repo] = classify([record(repo, n) for n in nodes], clones or {}, git)
+        records = classify([record(repo, n) for n in nodes], clones or {}, git)
+        by_repo[repo] = diff_size(polish_status(records, issue, now), clones or {}, git)
     everything = [r for repo in repos for r in by_repo[repo]]
     tickets = [r for r in everything if r['ticket']]
     sizes = {}
@@ -318,6 +418,32 @@ def late_table(rows):
     return '\n'.join(lines)
 
 
+def withdrawn_table(rows):
+    lines = ['| Cohort | Merged | Reviewed | Rounds mean | Blocking findings | Withdrawn | Polish issues '
+             '| Not yet due | Unknown | Ignored when due | Withdrawn or ignored |',
+             '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |']
+    for label, s in rows.items():
+        w = s['withdrawn_ignored']
+        lines.append('| %s |' % label + ''.join(' %s |' % c for c in (
+            s['merged'], s['reviewed'], cell(s['rounds']['mean']), w['blocking'],
+            cell(w['withdrawn'], w['withdrawn_pct']) if w['blocking'] else '-', w['polish'], w['not_due'],
+            w['unknown'], '%d of %d (%d%%)' % (w['ignored'], w['due'], w['ignored_pct']) if w['due'] else '-',
+            '%d%%' % w['either_pct'] if w['either_pct'] is not None else '-')))
+    return '\n'.join(lines)
+
+
+def size_table(rows):
+    lines = ['| Cohort | Merged | Reviewed | Rounds mean | Sized | Median code lines | Median test lines '
+             '| Median code files | Median test files | Unknown |',
+             '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |']
+    for label, s in rows.items():
+        z = s['size']
+        lines.append('| %s |' % label + ''.join(' %s |' % c for c in (
+            s['merged'], s['reviewed'], cell(s['rounds']['mean']), z['sized'], cell(z['code_lines']),
+            cell(z['test_lines']), cell(z['code_files']), cell(z['test_files']), z['unknown'])))
+    return '\n'.join(lines)
+
+
 def markdown(result):
     w = result['window']
     out = ['Window: merged %s to %s%s.' % (w['merged_from'], w['merged_to'],
@@ -338,11 +464,17 @@ def markdown(result):
                                                         r['changes'], r['size'] or 'none', r['diff'], r['files']))
     out += ['', '**Late blocking findings** (new blocking findings first seen at round 2 or later, by whether '
             'the fix changed their line since the first review)', '',
-            late_table(dict(result['all'], **{'Ticket PRs': result['tickets']['All']}))]
+            late_table(dict(result['all'], **{'Ticket PRs': result['tickets']['All']})),
+            '', '**Withdrawn or ignored** (blockers withdrawn, and polish issues still open or closed as not planned '
+            '7 days after their PR merged)', '',
+            withdrawn_table(dict(result['all'], **{'Ticket PRs': result['tickets']['All']})),
+            '', '**Diff size against rounds** (reviewed PRs, from local git; tests counted apart; '
+            'ticket PRs in the diff-line bands)', '',
+            size_table(dict(result['all'], **result['ticket_bands']))]
     return '\n'.join(out)
 
 
-def main(argv=None, graphql=gh_graphql, out=sys.stdout, git=subprocess.run):
+def main(argv=None, graphql=gh_graphql, out=sys.stdout, git=subprocess.run, issue=gh_issue, now=None):
     parser = argparse.ArgumentParser(description='Read-only review-rounds bench over merged PRs.')
     parser.add_argument('--repo', action='append', required=True, help='owner/name; repeat for each repository')
     parser.add_argument('--merged-from', required=True, type=parse_time)
@@ -369,7 +501,7 @@ def main(argv=None, graphql=gh_graphql, out=sys.stdout, git=subprocess.run):
     if args.merged_from > args.merged_to:
         parser.error('--merged-from is after --merged-to')
     try:
-        result = bench(args.repo, args.merged_from, args.merged_to, args.opened_after, graphql, clones, git)
+        result = bench(args.repo, args.merged_from, args.merged_to, args.opened_after, graphql, clones, git, issue, now)
     except BenchError as error:
         print('bench: ' + str(error), file=sys.stderr)
         return 1

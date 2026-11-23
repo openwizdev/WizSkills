@@ -26,18 +26,7 @@ what `settle` reads, so it is recorded before the enqueue: a receipt it can't
 confirm prints `not queued: ...` (exit 1) and nothing is enqueued; the next run
 reuses a receipt that did land. A pull request read as queued without its
 receipt gets one then (`queued; recorded <id>`, or `queued; receipt
-unconfirmed ...`, exit 1). When a head with its receipt reads out of the
-queue after a removal, or an enqueue reads back that way, it acts on `queue.py
-read`'s verdict (FR2, #2450): a new drop posts `launch-fleet: merge dropped
-<commit>: <reason> at <time>`, read back (`dropped; recorded <id>`, exit 0);
-a standing cause prints `waiting: <cause>` (exit 0, nothing written); a cause
-gone enqueues it again at HEAD and reads it back (`re-queued; its receipt <id>
-still names <commit>`, exit 0, no second receipt), but only when every
-required check ran again after the removal and is green, since queue.py's
-cancelled-duplicate excuse is not tied to the failed merge group (#2679) and
-waits instead; a second drop, a merge conflict or a person's removal is
-`blocked: <why>; recorded <id>` (exit 1); an unreadable fact is `pending:
-...` (exit 0, nothing written). Without a merge queue it merges only
+unconfirmed ...`, exit 1). Without a merge queue it merges only
 with `--base-rule-checked`, after you applied fleet.md's base rule and
 `fleet.sh every` still prints this merge line. BODY names the APPROVE and the
 plan approval that allowed it.

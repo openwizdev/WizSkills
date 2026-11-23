@@ -1810,7 +1810,6 @@ class Drops(unittest.TestCase):
         self.assertEqual((self.enqueues(w), len(w.bodies(7))), ([], 2))
 
     def test_a_drop_right_after_the_first_enqueue_is_recorded_from_an_empty_history(self):
-        # catches: R1, a drop before any receipt left unrecorded and enqueued again on the next wake.
         again = {'createdAt': '2026-11-22T09:50:00Z', 'reason': 'failed_checks', 'actor': BOT, 'addedAt': QUEUED_AT}
         w = World(self, pr=pr(isMergeQueueEnabled=True, checks=[run_of('SUCCESS', '2026-11-22T09:40:00Z')]),
                   comments={'7': []}, faults={'enqueue': again})
@@ -1823,7 +1822,6 @@ class Drops(unittest.TestCase):
         self.assertEqual((w.bodies(7), len(self.enqueues(w))), ([drop], 1))
 
     def test_a_receipted_head_out_of_the_queue_before_its_removal_reads_is_pending(self):
-        # catches: R2, a receipted head with no visible removal enqueued again on old green checks.
         w = self.world(checks=[run_of('SUCCESS', '2026-11-22T09:43:56Z')])
         self.change(w, removals=[])
         code, out = self.merge(w)
@@ -1832,7 +1830,6 @@ class Drops(unittest.TestCase):
         self.assertEqual((w.bodies(7), w.writes()), ([self.receipt], []))
 
     def test_an_unreadable_or_inconsistent_queue_flag_is_pending_and_records_nothing(self):
-        # catches: R2, a queue flag GitHub did not answer read as a block nobody can substantiate.
         for name, changes in {'unreadable flag': dict(isInMergeQueue=None),
                               'queued at another head': dict(isInMergeQueue=True,
                                                              mergeQueueEntry={'headCommit': {'oid': OTHER}}),
@@ -1846,7 +1843,6 @@ class Drops(unittest.TestCase):
                 self.assertEqual((w.bodies(7), w.writes()), ([self.receipt], []))
 
     def test_a_re_queue_whose_read_back_is_stale_is_claimed_once(self):
-        # catches: R3, the one retry spent again because GitHub's read-back still shows the old drop.
         w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, faults={'enqueue': 'pending'})
         drop = w.bodies(7)[1]
         code, out = self.merge(w)
@@ -1865,7 +1861,6 @@ class Drops(unittest.TestCase):
         self.assertEqual((len(w.bodies(7)), len(self.enqueues(w))), (2, 1))
 
     def test_a_claim_that_never_read_back_allows_one_more_attempt_and_a_failed_claim_enqueues_nothing(self):
-        # catches: R3, an old claim that never landed held forever, or an enqueue sent without its claim.
         w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, faults={'patch': 'fail'})
         code, out = self.merge(w)
         self.assertEqual(code, 1, out)
@@ -1879,7 +1874,6 @@ class Drops(unittest.TestCase):
         self.assertNotIn('2026-11-22T10:21:00Z', w.bodies(7)[1])
 
     def test_a_re_queue_rechecks_the_late_look_first(self):
-        # catches: R4, a re-queue of a user-visible spec's final merge before its late look.
         w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, tickets=ticket(VISIBLE))
         self.assertEqual(self.merge(w), (1, 'held: ask-due: post the evidence ask on %s#40 with merge.py ask' % REPO))
         self.assertEqual(self.enqueues(w), [])
@@ -1900,7 +1894,6 @@ class Drops(unittest.TestCase):
         return sorted(r.communicate(timeout=90)[0].strip() for r in runs)
 
     def test_two_overlapping_wakes_post_one_drop_record_and_one_queue_receipt(self):
-        # catches: R6, two wakes that each saw no record posting the same drop record or receipt twice.
         w = self.world()
         drop = 'launch-fleet: merge dropped %s: branch_protection_failure at %s' % (HEAD, REMOVED_AT)
         self.assertEqual(self.side_by_side(w), ['dropped; recorded 5001'] * 2)
@@ -1912,7 +1905,6 @@ class Drops(unittest.TestCase):
         self.assertEqual(q.bodies(7), [self.receipt])
 
     def test_a_second_wake_on_the_same_machine_waits_for_the_first(self):
-        # catches: R6, two wakes on one machine deciding at once instead of one after the other.
         import fcntl
         w = self.world()
         path = Path(w.env['TMPDIR']) / ('openwiz-merge-%s-7.lock' % REPO.replace('/', '-'))

@@ -212,7 +212,7 @@ def token(flag):
 
 
 def fixer(body, problems):
-    """Each Fixer family row's spawn-flags cell is exactly `--provider` `--model` `--reasoning-level` pairs."""
+    """Each Fixer family row carries each flag exactly once, as `--flag value`."""
     rows = [line for line in body.splitlines() if line.startswith('|')
             and not re.fullmatch(r'\|[\s|:-]*', line)][1:]
     for row in rows:

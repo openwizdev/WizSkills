@@ -62,8 +62,6 @@ There is no used delta here: fixture runs set `GH_METER_RATE=0`, because the fak
 
 | Method | Endpoint | Kind | Calls | REST units |
 | --- | --- | --- | --- | --- |
-| Method | Endpoint | Kind | Calls | REST units |
-| --- | --- | --- | --- | --- |
 | GET | repos/:owner/:repo/issues/:n/comments | rest | 4423 | 3098 |
 | GET | repos/:owner/:repo/issues/:n | rest | 3111 | 1956 |
 | GET | repos/:owner/:repo/issues/:n/dependencies/blocked_by | rest | 2783 | 1830 |

@@ -33,11 +33,14 @@ When GH_METER_LOG is set, it appends one JSON line per call:
 
 Only fixed words reach the log. method is an HTTP method from GET, POST,
 PATCH, PUT, DELETE and HEAD, or a known gh subcommand; anything else is
-`other`. endpoint is a route template: known path words are kept and every
-dynamic segment becomes a placeholder named by its route (:owner, :repo, :n,
-:sha, :path, :ref, :branch, :name, ...; any other segment :x), with the query
-string dropped. A command, or an API path root, the meter does not know
-(an alias, say) is logged as endpoint `unknown`, method `other`.
+`other`. endpoint is a route template from ROUTES, matched segment by
+segment: a word is kept only where its route has that word, every dynamic
+segment becomes its route's placeholder (:owner, :repo, :team, :n for
+digits only, :sha, :path, :ref, :branch, :name, ...), so a slug that equals
+a known word is still a placeholder, and from the first segment no route
+has, that segment and every one after it is :x. The query string is
+dropped. A command, or an API path root, the meter does not know (an
+alias, say) is logged as endpoint `unknown`, method `other`.
 
 rest_used_* is REST's `used` from `gh api rate_limit`, which costs no
 allowance, read just before and after the call; null when unreadable, when
@@ -50,8 +53,10 @@ rest_units is this call's own REST requests, counted, not measured: one for
 a REST call, none for a 304, GraphQL, `rate_limit` and local commands. A
 status counts only from a verified response header block: a status line,
 header lines and a blank line, at the start of the output or, for
---paginate --include, right after a page body that parses as JSON. When the
-page count or the status can't be established (no verified block,
+--paginate --include, right after a non-empty page body that parses as
+JSON; only the last body may be empty, and the split must be the only one
+the output allows. When the page count or the status can't be established
+(no verified block, a body that isn't JSON under --paginate,
 --paginate without --include or under --jq or --template, a conditional
 header without --include, an unknown command) the call counts one and
 uncertain is true: a lower bound.
@@ -75,25 +80,73 @@ VERBS = {'view', 'list', 'create', 'edit', 'comment', 'close', 'reopen', 'merge'
          'develop', 'lock', 'unlock', 'pin', 'unpin', 'transfer', 'upload', 'archive', 'unarchive', 'rename',
          'cancel', 'issues', 'prs', 'code', 'commits', 'repos', 'item-list', 'item-add', 'field-list', 'copy',
          'update-branch', 'install', 'upgrade', 'remove', 'export', 'import', 'verify'}
-ROOTS = {'repos', 'user', 'users', 'orgs', 'search', 'rate_limit', 'graphql', 'installation', 'notifications',
-         'gists', 'app', 'meta', 'teams', 'events', 'organizations', 'repositories', 'markdown'}
-OWNER_ROOTS = {'users': ':owner', 'orgs': ':owner'}
-STATIC = {'issues', 'pulls', 'comments', 'commits', 'check-runs', 'check-suites', 'status', 'statuses', 'events',
-          'timeline', 'files', 'reviews', 'requested_reviewers', 'merge', 'labels', 'dependencies', 'blocked_by',
-          'blocking', 'sub_issues', 'sub_issue', 'parent', 'priority', 'git', 'ref', 'refs', 'matching-refs',
-          'trees', 'blobs', 'tags', 'contents', 'readme', 'branches', 'protection', 'actions', 'runs', 'jobs',
-          'logs', 'workflows', 'artifacts', 'secrets', 'variables', 'releases', 'latest', 'assets',
-          'collaborators', 'permission', 'hooks', 'deployments', 'environments', 'milestones', 'assignees',
-          'reactions', 'compare', 'forks', 'topics', 'languages', 'contributors', 'rulesets', 'rules', 'members',
-          'teams', 'repos', 'repositories', 'code', 'keys', 'emails', 'subscription', 'rerun', 'rerun-failed-jobs',
-          'cancel', 'dispatches', 'approve', 'attempts', 'annotations', 'pages', 'codeowners', 'errors', 'lock',
-          'dismissals', 'threads', 'users', 'installations', 'rate_limit', 'zipball', 'tarball', 'merges',
-          'pending_deployments', 'replies', 'branches-where-head', 'pull', 'commit', 'combined'}
-SEGMENT = {'commits': ':sha', 'statuses': ':sha', 'trees': ':sha', 'blobs': ':sha', 'labels': ':name',
-           'environments': ':name', 'secrets': ':name', 'variables': ':name', 'collaborators': ':owner',
-           'members': ':owner', 'assignees': ':owner', 'workflows': ':workflow', 'tags': ':tag'}
-REST_OF_PATH = {'contents': ':path', 'readme': ':path', 'ref': ':ref', 'refs': ':ref', 'matching-refs': ':ref',
-                'branches': ':branch', 'compare': ':range', 'tarball': ':ref', 'zipball': ':ref'}
+ROUTES = """
+repos/:owner/:repo/issues/:n/comments repos/:owner/:repo/issues/:n/events repos/:owner/:repo/issues/:n/timeline
+repos/:owner/:repo/issues/:n/labels/:name repos/:owner/:repo/issues/:n/assignees repos/:owner/:repo/issues/:n/lock
+repos/:owner/:repo/issues/:n/reactions repos/:owner/:repo/issues/:n/sub_issues/priority
+repos/:owner/:repo/issues/:n/sub_issue repos/:owner/:repo/issues/:n/parent
+repos/:owner/:repo/issues/:n/dependencies/blocked_by/:n repos/:owner/:repo/issues/:n/dependencies/blocking
+repos/:owner/:repo/issues/comments/:n/reactions repos/:owner/:repo/issues/events/:n
+repos/:owner/:repo/pulls/:n/files repos/:owner/:repo/pulls/:n/commits repos/:owner/:repo/pulls/:n/merge
+repos/:owner/:repo/pulls/:n/requested_reviewers repos/:owner/:repo/pulls/:n/update-branch
+repos/:owner/:repo/pulls/:n/reviews/:n/comments repos/:owner/:repo/pulls/:n/reviews/:n/events
+repos/:owner/:repo/pulls/:n/reviews/:n/dismissals repos/:owner/:repo/pulls/:n/comments/:n/replies
+repos/:owner/:repo/pulls/comments/:n/reactions
+repos/:owner/:repo/commits/:sha/check-runs repos/:owner/:repo/commits/:sha/check-suites
+repos/:owner/:repo/commits/:sha/status repos/:owner/:repo/commits/:sha/statuses repos/:owner/:repo/commits/:sha/pulls
+repos/:owner/:repo/commits/:sha/comments repos/:owner/:repo/commits/:sha/branches-where-head
+repos/:owner/:repo/statuses/:sha repos/:owner/:repo/check-runs/:n/annotations repos/:owner/:repo/check-runs/:n/rerun
+repos/:owner/:repo/check-suites/:n/check-runs repos/:owner/:repo/check-suites/:n/rerequest
+repos/:owner/:repo/git/ref/:ref* repos/:owner/:repo/git/refs/:ref* repos/:owner/:repo/git/matching-refs/:ref*
+repos/:owner/:repo/git/trees/:sha repos/:owner/:repo/git/blobs/:sha repos/:owner/:repo/git/commits/:sha
+repos/:owner/:repo/git/tags/:sha repos/:owner/:repo/contents/:path* repos/:owner/:repo/readme/:path*
+repos/:owner/:repo/branches/:branch/protection repos/:owner/:repo/compare/:range* repos/:owner/:repo/tarball/:ref*
+repos/:owner/:repo/zipball/:ref* repos/:owner/:repo/merges
+repos/:owner/:repo/actions/runs/:n/jobs repos/:owner/:repo/actions/runs/:n/logs
+repos/:owner/:repo/actions/runs/:n/artifacts repos/:owner/:repo/actions/runs/:n/rerun
+repos/:owner/:repo/actions/runs/:n/rerun-failed-jobs repos/:owner/:repo/actions/runs/:n/cancel
+repos/:owner/:repo/actions/runs/:n/approve repos/:owner/:repo/actions/runs/:n/attempts/:n/jobs
+repos/:owner/:repo/actions/runs/:n/pending_deployments repos/:owner/:repo/actions/jobs/:n/logs
+repos/:owner/:repo/actions/jobs/:n/rerun repos/:owner/:repo/actions/workflows/:workflow/runs
+repos/:owner/:repo/actions/workflows/:workflow/dispatches repos/:owner/:repo/actions/workflows/:workflow/enable
+repos/:owner/:repo/actions/workflows/:workflow/disable repos/:owner/:repo/actions/artifacts/:n/:format
+repos/:owner/:repo/actions/secrets/:name repos/:owner/:repo/actions/variables/:name repos/:owner/:repo/actions/caches
+repos/:owner/:repo/releases/:n/assets repos/:owner/:repo/releases/latest repos/:owner/:repo/releases/tags/:tag
+repos/:owner/:repo/releases/assets/:n repos/:owner/:repo/labels/:name repos/:owner/:repo/milestones/:n
+repos/:owner/:repo/collaborators/:owner/permission repos/:owner/:repo/assignees/:owner repos/:owner/:repo/hooks/:n
+repos/:owner/:repo/deployments/:n/statuses repos/:owner/:repo/environments/:name repos/:owner/:repo/rulesets/:n
+repos/:owner/:repo/rules/branches/:branch* repos/:owner/:repo/topics repos/:owner/:repo/languages
+repos/:owner/:repo/contributors repos/:owner/:repo/forks repos/:owner/:repo/keys/:n repos/:owner/:repo/pages
+repos/:owner/:repo/codeowners/errors repos/:owner/:repo/dispatches repos/:owner/:repo/events
+repos/:owner/:repo/teams repos/:owner/:repo/subscription
+user/repos user/orgs user/emails user/keys user/teams user/installations user/subscriptions
+users/:owner/repos users/:owner/orgs users/:owner/events users/:owner/keys
+orgs/:owner/repos orgs/:owner/members/:owner orgs/:owner/installations orgs/:owner/teams/:team/members
+orgs/:owner/teams/:team/repos orgs/:owner/teams/:team/memberships/:owner
+orgs/:owner/actions/secrets/:name orgs/:owner/actions/variables/:name
+search/issues search/code search/commits search/repositories search/users search/labels search/topics
+rate_limit graphql meta markdown events organizations repositories/:n installation/repositories
+notifications/threads/:n/subscription gists/:gist/comments/:n app/installations/:n/access_tokens teams/:n/members
+"""
+
+
+def route_tree(routes):
+    root = {}
+    for route in routes.split():
+        node = root
+        for part in route.split('/'):
+            node = node.setdefault(part, {})
+    nodes = [root]
+    while nodes:
+        node = nodes.pop()
+        names = [k for k in node if k.startswith(':')]
+        if len(names) > 1 or (names not in ([], [':n']) and len(node) > 1):
+            raise ValueError('a route position mixes a named placeholder with other words: %s' % sorted(node))
+        nodes += node.values()
+    return root
+
+
+TREE = route_tree(ROUTES)
 VALUE_FLAGS = {'-X', '--method', '-H', '--header', '-f', '--raw-field', '-F', '--field', '--input', '-q', '--jq',
                '-t', '--template', '--cache', '--hostname', '-p', '--preview'}
 BODY_FLAGS = {'-f', '--raw-field', '-F', '--field', '--input'}
@@ -110,31 +163,26 @@ def fail(message):
 
 
 def template(path):
-    path = re.sub(r'^https://api\.github\.com/', '', path.split('?', 1)[0]).strip('/')
-    parts = path.split('/')
-    if parts[0] not in ROOTS:
+    parts = re.sub(r'^https://api\.github\.com/', '', path.split('?', 1)[0]).strip('/').split('/')
+    if parts[0] not in TREE:
         return 'unknown'
-    out = [parts[0]]
-    rest = parts[1:]
-    if parts[0] == 'repos':
-        out += [':owner', ':repo'][:len(rest)]
-        rest = rest[2:]
-    elif parts[0] in OWNER_ROOTS and rest:
-        out.append(OWNER_ROOTS[parts[0]])
-        rest = rest[1:]
-    for i, part in enumerate(rest):
-        prev = rest[i - 1] if i else None
-        if prev in REST_OF_PATH:
-            out.append(REST_OF_PATH[prev])
-            break
-        if prev in SEGMENT:
-            out.append(SEGMENT[prev])
-        elif NUMBER.fullmatch(part):
-            out.append(':n')
-        elif part in STATIC:
+    node, out = TREE, []
+    for i, part in enumerate(parts):
+        names = [k for k in node if k.startswith(':')]
+        if part in node and not part.startswith(':'):
             out.append(part)
+            node = node[part]
+        elif names == [':n'] and NUMBER.fullmatch(part):
+            out.append(':n')
+            node = node[':n']
+        elif names and names != [':n']:
+            out.append(names[0].rstrip('*'))
+            if names[0].endswith('*'):
+                break
+            node = node[names[0]]
         else:
-            out.append(':x')
+            out += [':x'] * (len(parts) - i)
+            break
     return '/'.join(out)
 
 
@@ -206,10 +254,10 @@ def header_block(lines, i):
     return None
 
 
-def is_json(lines):
+def is_json(lines, empty=False):
     text = b'\n'.join(lines).strip()
     if not text:
-        return True
+        return empty
     try:
         json.loads(text)
     except ValueError:
@@ -226,13 +274,13 @@ def statuses(out, paginate):
         return [first[0]]
     found, at = [first[0]], first[1]
     while True:
-        ends = [j for j in range(at, len(lines)) if header_block(lines, j)] + [len(lines)]
-        end = next((j for j in ends if is_json(lines[at:j])), None)
-        if end is None:
+        pages = [j for j in range(at, len(lines)) if header_block(lines, j) and is_json(lines[at:j])]
+        last = is_json(lines[at:], empty=True)
+        if len(pages) + last != 1:
             return None
-        if end == len(lines):
+        if last:
             return found
-        status, at = header_block(lines, end)
+        status, at = header_block(lines, pages[0])
         found.append(status)
 
 

@@ -189,7 +189,7 @@ class Meter(unittest.TestCase):
             (['api', 'repos/o/r/commits/1234567'], 'GET', 'repos/:owner/:repo/commits/:sha', 'rest'),
             (['api', 'repos/o/r/issues/1/labels/SYNTH-LABEL'], 'GET', 'repos/:owner/:repo/issues/:n/labels/:name',
              'rest'),
-            (['api', 'repos/o/r/SYNTH-SEGMENT/1'], 'GET', 'repos/:owner/:repo/:x/:n', 'rest'),
+            (['api', 'repos/o/r/SYNTH-SEGMENT/1'], 'GET', 'repos/:owner/:repo/:x/:x', 'rest'),
             (['api', 'SYNTH-ROOT/x'], 'GET', 'unknown', 'rest'),
             (['api', '-X', 'SYNTH-METHOD', 'user'], 'other', 'user', 'rest'),
             (['synth-alias', 'SYNTH-ARG'], 'other', 'unknown', 'rest'),

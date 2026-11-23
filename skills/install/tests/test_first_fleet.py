@@ -1240,8 +1240,8 @@ class LocalSession(unittest.TestCase):
             self.assertIn(line, lines, "the session's own ticks and stop are shown in the chat")
         self.assertLess(lines.index('The plan passed its checks, so the fleet started in this chat: 2 builders, '
                                     'each on one small ticket, and each next step starts the moment a run ends. Watch '
-                                    'them here and at openwiz.dev/app; keep this chat open, nothing for you to do '
-                                    'until the first merge.'),
+                                    'them here and at openwiz.dev/app; keep this chat open: it stops here when it '
+                                    'needs you, such as an approved pull request for you to merge.'),
                         lines.index(NEEDS_YOU.splitlines()[0]))
         self.assertNotIn("launch-fleet's Launch section", yes.stdout, 'no handoff for the orchestrator to follow')
         self.assertIn('launch --spec 900 --heartbeat', yes.stdout, 'the opt-in is offered after the session')
@@ -1253,8 +1253,8 @@ class LocalSession(unittest.TestCase):
         self.assertEqual(len(self.log(road, 'session.log')), 1, 'never a second session from launch')
         watch = road.tool({'tool': ['progress', '--spec', '900'], 'progress': ['building', 'building', 'blocked']})
         self.assertEqual(watch.returncode, 0, watch.stdout)
-        self.assertIn("Spec #900's session in this chat stopped: needs you: needs-info #902: a question for the "
-                      'orchestrator', watch.stdout)
+        self.assertIn("Spec #900's session in this chat stopped: it needs you.", watch.stdout)
+        self.assertIn(NEEDS_YOU.splitlines()[1], watch.stdout.splitlines())
         self.assertIn('No heartbeat is installed', watch.stdout)
         self.assertEqual(self.installs(road), [])
 
@@ -1302,7 +1302,10 @@ class LocalSession(unittest.TestCase):
         self.assertIn('launch --spec 900 --heartbeat', yes.stdout)
         self.assertNotIn('merged', yes.stdout.replace(stop[0], ''))
         argv = road.dir / 'gh-argv.log'
-        self.assertNotIn('merge', argv.read_text() if argv.exists() else '', 'launch merges nothing itself')
+        calls = [json.loads(line) for line in argv.read_text().splitlines()]
+        self.assertGreater(len(calls), 0)
+        self.assertEqual([c for c in calls if c[:2] == ['pr', 'merge'] or any(str(w).endswith('/merge') for w in c)],
+                         [], 'launch merges nothing itself')
         watch = road.tool({'tool': ['progress', '--spec', '900'], 'progress': ['building', 'building', 'blocked']})
         self.assertEqual(watch.returncode, 0, watch.stdout)
         shown = watch.stdout.splitlines()

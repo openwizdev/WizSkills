@@ -1931,7 +1931,8 @@ def launch(got):
         if local:
             print("Ready to start the fleet for spec #%d %s through launch-fleet's session runner, in this chat: it "
                   'starts a builder (%s) for each of these tickets, up to 3 at once, and starts each next step the '
-                  'moment a run ends, with no timer:' % (spec, where, agents))
+                  'moment a run ends, with no timer. It merges nothing: at an approved, green pull request it stops '
+                  'and shows you how to merge it and carry on:' % (spec, where, agents))
         elif driver:
             print('Ready to start the fleet for spec #%d %s through launch-fleet. A local heartbeat checks GitHub '
                   'every 10 minutes and starts an orchestrator wake (%s) when work is due. '
@@ -2003,7 +2004,8 @@ def hand_over(state, spec, env, builder):
     finally:
         for s, handler in quiet.items():
             signal.signal(s, handler)
-    stop = next((line for line in reversed(lines) if line.startswith(('session: ', 'session.py: '))), '')
+    at = next((i for i in reversed(range(len(lines))) if lines[i].startswith(('session: ', 'session.py: '))), None)
+    stop = '' if at is None else lines[at]
     if code is None or code == 1 and stop.startswith('session: refused: '):
         del state.value['launch']
         state.value.pop('preview', None)
@@ -2013,7 +2015,7 @@ def hand_over(state, spec, env, builder):
                                                 + stop[len('session: refused: '):], NOTHING))
     carry = next((line[len('carry on: '):] for line in reversed(lines) if line.startswith('carry on: ')),
                  shlex.join(['python3', '-I', *argv]))
-    session = {'exit': code, 'stop': stop, 'carry_on': carry}
+    session = {'exit': code, 'said': [] if at is None else lines[at:], 'carry_on': carry}
     state.value['launch']['session'] = session
     if not state.save():
         raise Exit(10, "Could not save where the session stopped; run progress --spec %d to read the fleet." % spec)
@@ -2024,18 +2026,15 @@ def hand_over(state, spec, env, builder):
 
 
 def session_line(spec, session):
-    code, stop = session['exit'], session['stop']
+    code, said = session['exit'], session['said']
     if code == 0:
         return "Spec #%d's session in this chat ended: the session finished spec #%d." % (spec, spec)
-    if code == 3 and 'needs you: ' in stop:
-        said = 'stopped: needs you: %s. Handle that with launch-fleet, then carry on' % stop.split('needs you: ', 1)[1]
-    elif code == 130:
-        said = 'stopped on interrupt; the runs it started keep going'
-    elif code == 2:
-        said = 'stopped: a read failed (%s)' % (stop.split(': ', 1)[-1] or 'no message')
-    else:
-        said = 'stopped (exit %d: %s)' % (code, stop or 'no message')
-    return "Spec #%d's session in this chat %s.\ncarry on: %s" % (spec, said, session['carry_on'])
+    why = {3: 'it needs you', 130: 'it was interrupted; the runs it started keep going', 2: 'a read failed'}
+    lines = ["Spec #%d's session in this chat stopped: %s. What it said, to show the user as it is:"
+             % (spec, why.get(code, 'exit %d' % code)), *(said or ['(nothing)'])]
+    if not any(line.startswith('carry on: ') for line in said):
+        lines.append('carry on: ' + session['carry_on'])
+    return '\n'.join(lines)
 
 
 def opt_in(state, spec, env, host, got):

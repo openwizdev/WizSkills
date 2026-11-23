@@ -75,7 +75,7 @@ def owning_skill(path, rows):
     return None
 
 
-def select(root, shards, changed, event):
+def select(root, shards, changed, event, added=frozenset()):
     if event != 'pull_request':
         return list(shards), f'event {event}'
     if not changed:

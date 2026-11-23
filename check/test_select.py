@@ -38,8 +38,8 @@ def tree(tmp, files=None):
     return root
 
 
-def picked(root, changed, event='pull_request'):
-    return [s['name'] for s in select.select(root, SHARDS, changed, event)[0]]
+def picked(root, changed, event='pull_request', added=()):
+    return [s['name'] for s in select.select(root, SHARDS, changed, event, set(added))[0]]
 
 
 class OneSkill(unittest.TestCase):
@@ -65,12 +65,20 @@ class OneSkill(unittest.TestCase):
     def test_a_new_changeset_needs_no_shard_but_the_changeset_folder_itself_does(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = tree(tmp)
-            self.assertEqual(picked(root, ['skills/alpha/x.py', '.changeset/alpha-fix.md']),
-                             [*ALWAYS, 'alpha'])
+            note = '.changeset/alpha-fix.md'
+            self.assertEqual(picked(root, ['skills/alpha/x.py', note], added=[note]), [*ALWAYS, 'alpha'])
             for path in ('.changeset/README.md', '.changeset/config.json', '.changeset/sub/x.md',
-                         '.changeset/readme.MD', '.changeset/notes.txt'):
+                         '.changeset/readme.MD', '.changeset/notes.txt', '.changeset/.hidden-fix.md',
+                         '.changeset/AGENTS.md', '.changeset/claude.md', '.changeset/GEMINI.md'):
                 with self.subTest(path=path):
-                    self.assertEqual(picked(root, ['skills/alpha/x.py', path]), EVERY)
+                    self.assertEqual(picked(root, ['skills/alpha/x.py', path], added=[path]), EVERY)
+
+    def test_an_edited_or_deleted_changeset_note_needs_every_shard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = tree(tmp)
+            note = '.changeset/alpha-fix.md'
+            self.assertEqual(picked(root, ['skills/alpha/x.py', note]), EVERY)
+            self.assertEqual(picked(root, ['skills/alpha/x.py', note], added=['.changeset/other.md']), EVERY)
 
 
 class EveryShard(unittest.TestCase):
@@ -103,9 +111,13 @@ class CrossSkillReads(unittest.TestCase):
     def assertReads(self, files, reader='alpha', changed='skills/beta/scripts/b.py'):
         with tempfile.TemporaryDirectory() as tmp:
             root = tree(tmp, files)
-            self.assertEqual(picked(root, [changed]),
-                             [s['name'] for s in SHARDS if s['name'] in (*ALWAYS, reader, 'beta')]
-                             if reader else [*ALWAYS, 'beta'])
+            if reader is None:
+                expected = [*ALWAYS, 'beta']
+            elif reader == 'check':
+                expected = [*ALWAYS, 'beta', 'check']
+            else:
+                expected = EVERY
+            self.assertEqual(picked(root, [changed]), expected)
 
     def test_each_form_of_path_to_another_skill_is_found(self):
         forms = {
@@ -140,11 +152,13 @@ class CrossSkillReads(unittest.TestCase):
             with self.subTest(form=form):
                 self.assertReads({'skills/alpha/test/test_a.py': text}, changed='skills/beta/x.py')
 
-    def test_reads_are_transitive(self):
+    def test_a_skill_another_skills_suites_read_runs_every_shard(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = tree(tmp, {'skills/alpha/test/test_a.py': "RUN = ROOT / 'skills/gamma/run.sh'\n",
                               'skills/gamma/run.sh': 'cat "$(dirname "$0")/../beta/x"\n'})
-            self.assertEqual(picked(root, ['skills/beta/x.py']), [*ALWAYS, 'alpha', 'beta', 'gamma'])
+            self.assertEqual(picked(root, ['skills/beta/x.py']), EVERY)
+            self.assertEqual(picked(root, ['skills/gamma/x.py']), EVERY)
+            self.assertEqual(picked(root, ['skills/alpha/x.py']), [*ALWAYS, 'alpha'])
 
     def test_a_skill_joined_by_name_from_a_list_is_found(self):
         forms = {
@@ -292,7 +306,7 @@ def list_step_outputs(workflow, event, tree):
         return dict(line.split('=', 1) for line in output.read_text().splitlines())
 
 
-def one_skill_pull_request(tmp):
+def one_skill_pull_request(tmp, change=('skills/where-are-we/SKILL.md',), delete=()):
     tree = Path(tmp) / 'tree'
     files = subprocess.run(['git', '-C', str(HERE.parent), 'ls-files', '-z'], capture_output=True,
                            check=True).stdout.decode().split('\0')
@@ -305,9 +319,14 @@ def one_skill_pull_request(tmp):
     subprocess.run(['git', 'init', '-q', str(tree)], check=True)
     subprocess.run([*git, 'add', '-A'], check=True)
     subprocess.run([*git, 'commit', '-qm', 'base'], check=True)
-    with open(tree / 'skills/wayfind/SKILL.md', 'a', encoding='utf-8') as f:
-        f.write('\nA synthetic line.\n')
-    subprocess.run([*git, 'commit', '-qam', 'one skill'], check=True)
+    for rel in change:
+        (tree / rel).parent.mkdir(parents=True, exist_ok=True)
+        with open(tree / rel, 'a', encoding='utf-8') as f:
+            f.write('\nA synthetic line.\n')
+    for rel in delete:
+        (tree / rel).unlink()
+    subprocess.run([*git, 'add', '-A'], check=True)
+    subprocess.run([*git, 'commit', '-qm', 'one skill'], check=True)
     return tree
 
 
@@ -323,14 +342,39 @@ class TheWorkflow(unittest.TestCase):
             tree = one_skill_pull_request(tmp)
             pr = list_step_outputs(workflow, 'pull_request', tree)
             kept = [row['shard'] for row in json.loads(pr['shards'])]
-            self.assertIn('wayfind', kept)
-            self.assertIn('hill-climb', json.loads(pr['skipped']))
+            self.assertEqual(kept, ['rules', 'standalone', 'where-are-we', 'check'])
+            self.assertIn('launch-fleet.1', json.loads(pr['skipped']))
             self.assertEqual(sorted(kept + json.loads(pr['skipped'])), sorted(listed))
             for event in ('merge_group', 'push'):
                 with self.subTest(event=event):
                     outputs = list_step_outputs(workflow, event, tree)
                     self.assertEqual([row['shard'] for row in json.loads(outputs['shards'])], listed)
                     self.assertEqual(json.loads(outputs['skipped']), [])
+
+    def pull_request(self, **change):
+        listed = [s['name'] for s in json.loads(subprocess.run(
+            [sys.executable, '-I', str(HERE / 'run.py'), '--list'], capture_output=True, text=True,
+            check=True).stdout)]
+        workflow = (HERE.parent / '.github/workflows/ci.yml').read_text()
+        with tempfile.TemporaryDirectory() as tmp:
+            outputs = list_step_outputs(workflow, 'pull_request', one_skill_pull_request(tmp, **change))
+        return [row['shard'] for row in json.loads(outputs['shards'])], json.loads(outputs['skipped']), listed
+
+    def test_a_skill_another_skills_suite_reads_keeps_every_shard(self):
+        kept, skipped, listed = self.pull_request(change=('skills/hill-climb/SKILL.md',))
+        self.assertEqual((kept, skipped), (listed, []))
+
+    def test_only_a_new_changeset_note_keeps_the_pull_request_narrow(self):
+        notes = sorted(p.relative_to(HERE.parent).as_posix() for p in (HERE.parent / '.changeset').glob('*.md')
+                       if p.name.lower() != 'readme.md')
+        self.assertTrue(notes)
+        kept, _, _ = self.pull_request(change=('skills/where-are-we/SKILL.md', '.changeset/where-are-we-x.md'))
+        self.assertEqual(kept, ['rules', 'standalone', 'where-are-we', 'check'])
+        for case in ({'change': ('skills/where-are-we/SKILL.md', notes[0])},
+                     {'change': ('skills/where-are-we/SKILL.md',), 'delete': (notes[0],)}):
+            with self.subTest(case=case):
+                kept, skipped, listed = self.pull_request(**case)
+                self.assertEqual((kept, skipped), (listed, []))
 
 if __name__ == '__main__':
     unittest.main()

@@ -1061,17 +1061,25 @@ HELPER_WAIT = 120
 class FakeHost:
     def __init__(self, openwiz, relay, status):
         self.home = Path(tempfile.mkdtemp(prefix='write-driver-host-'))
-        for name in ('hostkey.py', 'hosts.json'):
-            src = os.open(Path(openwiz) / 'kernel' / 'driver-kit' / name, os.O_RDONLY | os.O_NOFOLLOW)
-            with os.fdopen(src, 'rb') as f:
-                if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-                    raise Refused('the probe copies only plain files: %s is not one' % name)
-                with open(os.open(self.home / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as g:
-                    shutil.copyfileobj(f, g)
-        self.p = subprocess.Popen([sys.executable, '-I', str(Path(__file__).resolve()), 'fake-host', str(status),
-                                   str(relay), str(self.home / 'hostkey.py')], env={}, stdin=subprocess.PIPE,
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=str(self.home),
-                                  preexec_fn=isolation(self.home, relay, script=True))
+        try:
+            for name in ('hostkey.py', 'hosts.json'):
+                try:
+                    src = os.open(Path(openwiz) / 'kernel' / 'driver-kit' / name, os.O_RDONLY | os.O_NOFOLLOW)
+                except OSError:
+                    raise Refused('the probe copies only plain files: %s is a link or unreadable' % name)
+                with os.fdopen(src, 'rb') as f:
+                    if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                        raise Refused('the probe copies only plain files: %s is not one' % name)
+                    with open(os.open(self.home / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as g:
+                        shutil.copyfileobj(f, g)
+            self.p = subprocess.Popen([sys.executable, '-I', str(Path(__file__).resolve()), 'fake-host',
+                                       str(status), str(relay), str(self.home / 'hostkey.py')], env={},
+                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                      cwd=str(self.home),
+                                      preexec_fn=isolation(self.home, relay, script=True))
+        except BaseException:
+            shutil.rmtree(self.home, ignore_errors=True)
+            raise
 
     def finish(self):
         try:

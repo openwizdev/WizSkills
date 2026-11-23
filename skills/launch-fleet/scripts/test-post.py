@@ -476,6 +476,23 @@ class Pacer(unittest.TestCase):
         self.assertGreaterEqual(after.split(' ')[-1], post_stamp(before + 120))
         self.assertNotIn('could not be recorded', out)
 
+    def test_a_saved_aside_wait_is_folded_into_the_state_then_removed(self):
+        for hold, answer in (('%r' % (time.time() - 1), (0, 'posted 5001')), ('[' * 1500, None), ('"soon"', None)):
+            with self.subTest(hold=hold[:20]):
+                w = paced_world(self)
+                seed(w, full([]))
+                folder = w.dir / 'state' / 'launch-fleet'
+                (folder / 'writes.json.hold.synthetic').write_text(hold)
+                code, out = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')
+                if answer:
+                    self.assertEqual((code, out), answer)
+                    self.assertEqual(state(w)['until'], float(hold))
+                    self.assertEqual(sorted(p.name for p in folder.iterdir()), ['writes.json', 'writes.json.lock'])
+                else:
+                    self.assertEqual(code, 1)
+                    self.assertTrue(out.startswith('refused: ') and str(w.dir) not in out, out)
+                    self.assertEqual(w.writes(), [])
+
     def test_a_write_refuses_when_its_window_ends_before_the_state_lock_frees(self):
         w = paced_world(self)
         seed(w, full([]))

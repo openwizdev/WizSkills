@@ -85,21 +85,33 @@ def valid(value):
             and number(value['until']))
 
 
-def save(path, value):
+def save(path, value, hold=False):
     try:
-        fd, temp = tempfile.mkstemp(prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent)
+        fd, temp = tempfile.mkstemp(prefix=f'{path.name}.hold.' if hold else f'.{path.name}.', suffix='.tmp',
+                                    dir=path.parent)
     except OSError:
         raise Stop('refused: the write pacer\'s state file cannot be saved; nothing was written')
     try:
         with os.fdopen(fd, 'w') as f:
             f.write(json.dumps(value))
-        os.replace(temp, path)
+        os.replace(temp, temp[:-len('.tmp')] if hold else path)
     except OSError:
         try:
             os.unlink(temp)
         except OSError:
             pass
         raise Stop('refused: the write pacer\'s state file cannot be saved; nothing was written')
+
+
+def holds(path):
+    return sorted(p for p in path.parent.glob(path.name + '.hold.*') if not p.name.endswith('.tmp'))
+
+
+def decode(text):
+    try:
+        return json.loads(text, object_pairs_hook=unique)
+    except (ValueError, RecursionError, MemoryError):
+        return None
 
 
 @contextmanager
@@ -119,15 +131,23 @@ def pacer_state(deadline):
                 if time.monotonic() >= deadline:
                     raise paced(time.time())
                 time.sleep(0.05)
+        waits = []
         try:
-            value = json.loads(path.read_text(), object_pairs_hook=unique) if path.exists() else \
-                {'accounts': {}, 'inflight': [], 'until': 0}
-        except (OSError, ValueError):
+            value = decode(path.read_text()) if path.exists() else {'accounts': {}, 'inflight': [], 'until': 0}
+            held = holds(path)
+            waits = [decode(p.read_text()) for p in held]
+        except OSError:
             value = None
-        if not valid(value):
+        if not valid(value) or not all(number(t) for t in waits):
             raise Stop('refused: the write pacer\'s state file is unreadable; nothing was written')
+        value['until'] = max([value['until'], *waits])
         yield value
         save(path, value)
+        for p in held:
+            try:
+                p.unlink()
+            except OSError:
+                pass
 
 
 def alive(pid):
@@ -184,6 +204,12 @@ def settle(entry, until=None):
                 s['until'] = max(s['until'], until)
             if entry in s['inflight']:
                 s['inflight'].remove(entry)
+        return True
+    except Stop:
+        if until is None:
+            return False
+    try:
+        save(state_path(), until, hold=True)
         return True
     except Stop:
         return False

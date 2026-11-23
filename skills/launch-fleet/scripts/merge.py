@@ -20,6 +20,12 @@ TICKET is `N` or `OWNER/NAME#N`, and must be one of the issues the pull
 request closes: a bare `N` names its one closing issue numbered N, in whatever
 repository; anything else is `refused: ...` before any write.
 
+PR is `N`, in OWNER/NAME, or `PR-OWNER/PR-NAME#N` as a due line names a pull
+request in another repository (#2792): then every read and write of the pull
+request is in PR-OWNER/PR-NAME, OWNER/NAME is the ticket's repository, and a
+bare TICKET `T` means OWNER/NAME#T. A pull request that reads as another
+repository's (a rename or transfer) is a `stop:` before any write.
+
 `cost`, also run by `merge` after a verified merge, runs the project's FM4
 command `tools/collector/cost_line.py --repo OWNER/NAME --pr PR [COST ARGS]`
 from the current directory and posts `launch-fleet: cost: <its line>` on the
@@ -175,9 +181,13 @@ def snapshot(repo, number):
                            '-f', f'query={QUERY}')
     try:
         r = value['data']['repository']
-        return r['defaultBranchRef']['name'], r['pullRequest']
+        main, p = r['defaultBranchRef']['name'], r['pullRequest']
     except (TypeError, KeyError):
         raise Stop('stop: the pull request could not be read')
+    found = ((p.get('repository') or {}).get('nameWithOwner') if isinstance(p, dict) else repo)
+    if not isinstance(found, str) or found.casefold() != repo.casefold():
+        raise Stop(f'stop: the pull request read as {found}#{number}, not {repo}#{number}; nothing was written')
+    return main, p
 
 
 def where(main, p, head):
@@ -1126,8 +1136,14 @@ def main(argv):
     try:
         verb, repo, number, *rest = argv
         head = None if verb == 'settle' else rest.pop(0)  # settle reads its commit from the queue receipt
-        number = int(number) if re.fullmatch(r'[1-9][0-9]{0,11}', number) else None
-        ok = post.REPO.fullmatch(repo) and number and (head is None or SHA.fullmatch(head))
+        ref = TICKET.fullmatch(number)
+        ok = post.REPO.fullmatch(repo) and ref and (head is None or SHA.fullmatch(head))
+        if ok and ref[1]:
+            at = {'cost': 0, 'settle': 0, 'look': 1, 'ask': 2, 'merge': 3}.get(verb)
+            if at is not None and at < len(rest) and re.fullmatch(r'[1-9][0-9]{0,11}', rest[at]):
+                rest[at] = f'{repo}#{rest[at]}'
+            repo = ref[1]
+        number = int(ref[2]) if ok else None
     except (ValueError, IndexError):
         ok = False
     if not ok:

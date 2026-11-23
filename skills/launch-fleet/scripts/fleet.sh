@@ -1765,6 +1765,10 @@ def clash($mine; $theirs):
     elif any($theirs[]; is_test) and any($mine[]; is_doc | not) then
       {files: [$theirs[] | select(is_test)], why: " (tests that may read its files)"}
     else null end;
+# #2792: a pull request in another repository than this one is named in full,
+# so merge.py acts on that repository; one here keeps its short name.
+def pr_ref: (.repository.nameWithOwner // "") as $o
+  | if $o == "" or ($o | ascii_downcase) == $W.repo then "#\(.number)" else "\($o)#\(.number)" end;
 def guard($p; $at; $rs; $head; $c):
   # Each required check'"'"'s latest run, as required_ci picks it (latest_check).
   [$W.checks[] as $n | [$c.statusCheckRollup.contexts.nodes[]? | select((.name // .context) == $n)] | latest_check] as $latest
@@ -1891,7 +1895,7 @@ def ticket_lines_now($s): . as $t
          else empty end),
       (open_prs | map(select(.isDraft | not)) | first // empty | . as $p | .headRefOid as $head
        | records as $rs
-       | "#\(.number) for #\($t.number) at \($head)" as $at
+       | "\(pr_ref) for #\($t.number) at \($head)" as $at
        | (.commits.nodes[0].commit // {}) as $c
        | if .baseRefName != $W.default then look(.number; $rs; "its base is \(.baseRefName), not \($W.default)")
          elif .comments.pageInfo.hasPreviousPage then look(.number; $rs; history_why)
@@ -2183,8 +2187,8 @@ def claim: $W.claim.n as $n | $W.claim.id as $id
                 else ([$x.p | records[] | select((.r | test("^(review starting|review started|re-check sent)\\b")) and (.r | names($sha)))]
                       | min_by(.id)) as $older
                   | if $older != null then "withdraw #\($n): an older review claim: \"\($older.r)\""
-                    elif any($x.t | ticket_lines($x.s); startswith("review #\($n) for #\($x.t.number) at \($sha)")
-                                                        or startswith("re-check #\($n) for #\($x.t.number) at \($sha)"))
+                    elif any($x.t | ticket_lines($x.s); startswith("review \($x.p | pr_ref) for #\($x.t.number) at \($sha)")
+                                                        or startswith("re-check \($x.p | pr_ref) for #\($x.t.number) at \($sha)"))
                     then "go #\($n)"
                     else "withdraw #\($n): it is not due a review at \($sha)" end end end end end;
 '

@@ -103,12 +103,14 @@ if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'enqueuePul
     kind = world.get('faults', {}).pop('enqueue', None)
     if kind == 'moved':
         pr['headRefOid'] = 'b' * 40
+    if isinstance(kind, dict):
+        pr.setdefault('removals', []).append(kind)
     world['writes'].append({'enqueue': got.get('id'), 'head': got.get('head')})
     running = [c for c in pr['checks'] if (c.get('name') or c.get('context')) == 'check'
                and (c.get('status', 'COMPLETED') != 'COMPLETED' or c.get('state') in ('PENDING', 'EXPECTED'))]
     refused = (kind == 'fail' or got.get('id') != 'PR_synthetic' + str(pr['number'])
                or got.get('head') != pr['headRefOid'] or running or not pr['isMergeQueueEnabled'])
-    if not refused and kind != 'pending':
+    if not refused and kind != 'pending' and not isinstance(kind, dict):
         pr.update(isInMergeQueue=True, mergeQueueEntry={'headCommit': {'oid': pr['headRefOid']}},
                   enqueued={'enqueuer': {'login': world['me']}})
     with open(path, 'w') as f:
@@ -118,6 +120,25 @@ if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'enqueuePul
     if kind == 'lost':
         sys.exit('connection reset')
     print(json.dumps({'data': {'enqueuePullRequest': {'mergeQueueEntry': {'headCommit': {'oid': got['head']}}}}}))
+    sys.exit(0)
+if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'removed: timelineItems' in a for a in args):
+    with open(path) as f:
+        world = json.load(f)
+    if world.get('faults', {}).pop('queue', None) == 'fail':
+        with open(path, 'w') as f:
+            json.dump(world, f)
+        sys.exit('HTTP 502')
+    pr = world['pr']
+    def ran(c):
+        if c['__typename'] == 'CheckRun':
+            return {k: c.get(k) for k in ('__typename', 'name', 'status', 'conclusion', 'startedAt')}
+        return {k: c.get(k) for k in ('__typename', 'context', 'state', 'createdAt')}
+    node = {k: pr[k] for k in ('state', 'headRefOid', 'isInMergeQueue', 'mergeCommit', 'mergeQueueEntry')}
+    node['added'] = {'nodes': [{'createdAt': pr['added_at']}] if pr.get('added_at') else []}
+    node['removed'] = {'pageInfo': {'hasNextPage': False, 'endCursor': None}, 'nodes': pr.get('removals', [])}
+    node['commits'] = {'nodes': [{'commit': {'oid': pr['headRefOid'], 'statusCheckRollup': {'contexts': {
+        'pageInfo': {'hasNextPage': False, 'endCursor': None}, 'nodes': [ran(c) for c in pr['checks']]}}}}]}
+    print(json.dumps({'data': {'repository': {'pullRequest': node}}}))
     sys.exit(0)
 r = subprocess.run([sys.executable, '-I', %r, *args], env=dict(os.environ, FAKE_WORLD=path),
                    capture_output=True, text=True)
@@ -132,6 +153,8 @@ if args[:2] == ['api', 'graphql'] and r.returncode == 0:
         node['repository'] = {'nameWithOwner': world['repo']}
         node['id'] = 'PR_synthetic' + str(world['pr']['number'])
         node['enqueued'] = {'nodes': [world['pr']['enqueued']] if world['pr'].get('enqueued') else []}
+        if world['pr'].get('removals'):
+            node['timelineItems'] = {'nodes': [{k: world['pr']['removals'][-1][k] for k in ('createdAt', 'reason')}]}
     out = json.dumps(value)
 sys.stdout.write(out)
 sys.stderr.write(r.stderr)
@@ -1518,6 +1541,111 @@ class WizSkillsRoute(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stderr)
         self.assertTrue(r.stdout.startswith(fallback.group(1) + ';'), r.stdout)
         self.assertEqual((w.writes(), w.others[DEST].writes()), ([], []))
+
+
+BOT = {'login': 'github-merge-queue'}
+QUEUED_AT, REMOVED_AT = '2026-11-22T09:49:14Z', '2026-11-22T10:00:03Z'
+
+
+def run_of(conclusion, at, name='check'):
+    return {'__typename': 'CheckRun', 'name': name, 'status': 'COMPLETED', 'conclusion': conclusion, 'startedAt': at}
+
+
+class Drops(unittest.TestCase):
+    """#2450: a merge-queue drop at a receipted head, read with queue.py and acted on across wakes."""
+
+    receipt = 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD
+
+    def merge(self, w):
+        return Merge.merge(self, w, '--ticket', 12)
+
+    def world(self, reason='branch_protection_failure', actor=BOT, checks=None, recorded=False, **extra):
+        receipt = dict(comment(4000, self.receipt), created_at='2026-11-22T09:49:10Z')
+        drop = 'launch-fleet: merge dropped %s: %s at %s' % (HEAD, reason, REMOVED_AT)
+        comments = [receipt] + ([comment(4001, drop)] if recorded else [])
+        runs = checks if checks is not None else [run_of('CANCELLED', '2026-11-22T09:33:53Z'),
+                                                  run_of('SUCCESS', '2026-11-22T09:43:56Z')]
+        w = World(self, pr=pr(isMergeQueueEnabled=True, added_at=QUEUED_AT, checks=runs,
+                              removals=[{'createdAt': REMOVED_AT, 'reason': reason, 'actor': actor}]),
+                  comments={'7': comments}, **extra)
+        project(w, PRINTS)
+        return w
+
+    def change(self, w, **pr_changes):
+        value = w.load()
+        value['pr'].update(pr_changes)
+        w.save(value)
+
+    def enqueues(self, w):
+        return [x for x in w.writes() if 'enqueue' in x]
+
+    def test_2253_is_recorded_once_waits_while_red_and_goes_back_in_once_when_green(self):
+        w = self.world()
+        drop = 'launch-fleet: merge dropped %s: branch_protection_failure at %s' % (HEAD, REMOVED_AT)
+        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5001'))
+        self.assertEqual(w.bodies(7), [self.receipt, drop])
+        self.assertEqual(self.merge(w), (0, 'waiting: branch_protection_failure at %s may still stand: '
+                                            'check last ran before it' % REMOVED_AT))
+        runs = w.load()['pr']['checks'] + [run_of('FAILURE', '2026-11-22T10:05:00Z')]
+        self.change(w, checks=runs)
+        self.assertEqual(self.merge(w), (0, 'waiting: not green on it: check (FAILURE)'))
+        self.assertEqual((w.bodies(7), self.enqueues(w)), ([self.receipt, drop], []))
+        self.change(w, checks=runs + [run_of('SUCCESS', '2026-11-22T10:20:00Z')])
+        self.assertEqual(self.merge(w), (0, 're-queued; its receipt 4000 still names %s' % HEAD))
+        self.assertEqual(self.enqueues(w), [{'enqueue': 'PR_synthetic7', 'head': HEAD}])
+        self.assertEqual(w.bodies(7), [self.receipt, drop])
+        self.assertEqual(self.merge(w), (0, 'queued; the queue merges it or lets it go'))
+        self.assertEqual(len(self.enqueues(w)), 1)
+
+    def test_a_second_drop_at_the_same_head_blocks_and_never_enqueues_again(self):
+        green = [run_of('SUCCESS', '2026-11-22T10:20:00Z')]
+        w = self.world(checks=green, recorded=True)
+        self.assertEqual(self.merge(w), (0, 're-queued; its receipt 4000 still names %s' % HEAD))
+        again = {'createdAt': '2026-11-22T10:40:00Z', 'reason': 'failed_checks', 'actor': BOT}
+        self.change(w, isInMergeQueue=False, mergeQueueEntry=None, removals=w.load()['pr']['removals'] + [again])
+        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5001'))
+        self.assertEqual(w.bodies(7)[-1], 'launch-fleet: merge dropped %s: failed_checks at 2026-11-22T10:40:00Z' % HEAD)
+        self.assertEqual(self.merge(w), (1, 'blocked: dropped twice at this head; recorded 5002'))
+        self.assertEqual(w.bodies(7)[-1], 'launch-fleet: merge blocked %s: dropped twice at this head' % HEAD)
+        self.assertEqual(len(self.enqueues(w)), 1)
+
+    def test_a_drop_right_after_the_re_queue_is_recorded_at_once(self):
+        again = {'createdAt': '2026-11-22T10:30:00Z', 'reason': 'failed_checks', 'actor': BOT}
+        w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, faults={'enqueue': again})
+        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5001'))
+        self.assertEqual(w.bodies(7)[-1], 'launch-fleet: merge dropped %s: failed_checks at 2026-11-22T10:30:00Z' % HEAD)
+        self.assertEqual(self.merge(w), (1, 'blocked: dropped twice at this head; recorded 5002'))
+        self.assertEqual(len(self.enqueues(w)), 1)
+
+    def test_a_merge_conflict_or_a_persons_removal_blocks_with_no_enqueue(self):
+        for reason, actor, why in [
+                ('merge_conflict', BOT, 'merge_conflict needs its builder to merge main in'),
+                ('dequeued', {'login': 'synthetic-person'}, 'a person took it out of the queue (dequeued)'),
+                ('failed_checks', {'login': 'synthetic-person'}, 'a person took it out of the queue (failed_checks)')]:
+            with self.subTest(reason=reason, actor=actor['login']):
+                w = self.world(reason, actor, checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')])
+                self.assertEqual(self.merge(w), (0, 'dropped; recorded 5001'))
+                self.assertEqual(self.merge(w), (1, 'blocked: %s; recorded 5002' % why))
+                self.assertEqual(w.bodies(7)[-1], 'launch-fleet: merge blocked %s: %s' % (HEAD, why))
+                self.assertEqual(self.enqueues(w), [])
+
+    def test_an_unreadable_queue_read_writes_nothing_and_enqueues_nothing(self):
+        for recorded in (False, True):
+            with self.subTest(recorded=recorded):
+                w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=recorded,
+                               faults={'queue': 'fail'})
+                before = w.bodies(7)
+                self.assertEqual(self.merge(w), (0, 'pending: the queue facts could not be read; read it again next wake'))
+                self.assertEqual((w.bodies(7), w.writes()), (before, []))
+
+    def test_green_reruns_on_the_head_inside_the_queue_window_never_re_queue_it(self):
+        runs = [run_of('CANCELLED', '2026-11-22T09:55:00Z'), run_of('SUCCESS', '2026-11-22T09:56:00Z')]
+        w = self.world('failed_checks', checks=runs, recorded=True)
+        code, out = self.merge(w)
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith('waiting: '), out)
+        self.assertIn('ran again after the removal', out)
+        self.assertEqual((self.enqueues(w), len(w.bodies(7))), ([], 2))
 
 
 if __name__ == '__main__':

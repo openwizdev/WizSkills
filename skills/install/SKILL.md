@@ -35,13 +35,22 @@ curl -sS --proto '=https' -o /dev/null -w '%{redirect_url}\n' https://github.com
 
 It prints `https://github.com/openwizdev/OpenWiz/releases/tag/<tag>`. Use that `<tag>` (such as `v0.1.1`) below, and `<version>` for it without the `v` (`0.1.1`). With no `/tag/` in it, GitHub has no Latest release yet: use the tag the user names, never a guess.
 
-For OpenWiz 0.1.0, offer only CloudRoom. Say:
+Use the chosen release's `<version>` for this check, on both a new install and a resume:
+
+```sh
+case '<version>' in
+  0.1.0) printf '%s\n' cloudroom-only ;;
+  *) printf '%s\n' choose-host ;;
+esac
+```
+
+For `cloudroom-only`, offer only CloudRoom. Say:
 
 > This computer and boat.dev need OpenWiz 0.1.1 or later, which isn't released yet. Today, OpenWiz 0.1.0 runs agents on CloudRoom only.
 
 Offer to follow the [0.1.0 install instructions](https://github.com/openwizdev/WizSkills/blob/maint/0.2/skills/install/SKILL.md) (WizSkills v0.2.x), with its hand-started fleets at the end, or wait for 0.1.1. In those instructions, when 0.1.0 is the release you install, always take the pinned `v0.1.0` fetch in step 2, never its `download`. Stop this skill here.
 
-For OpenWiz 0.1.1 or later, ask in these exact words, with the three as equal choices and no recommendation:
+For `choose-host` (OpenWiz 0.1.1 or later), ask in these exact words, with the three as equal choices and no recommendation:
 
 > Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom.
 
@@ -61,9 +70,11 @@ If `<root>/current` exists, read the installed build before choosing a host:
 <root>/current/openwiz --build-identity
 ```
 
-If the installed build or the release you will install is 0.1.0, follow the 0.1.0 path in **Where your agents run** before recovering or asking for a host. If neither gives a version, read Latest there before asking.
+If the continuation message has no `release <tag>`, read Latest in **Where your agents run** to get the release you will install. Run the release check there with that release's `<version>`. On `cloudroom-only`, follow that path and stop. On `choose-host`, recover or ask for the host below.
 
 Read the host from the continuation message: `local` means this computer, `boat` means boat.dev, and `cloud` means CloudRoom. Use that choice for the setup checks below and carry it to step 6.1. If the message has no host, reuse the answer from this chat or `host.agents` if it is already recorded in the owner-only first-fleet state. Ask the host question only if you have none of those.
+
+No `<root>/current`, or `--build-identity` does not read the `<version>` of the release you install: resume at step 1. For a matching installed build, run the setup checks:
 
 ```sh
 build=$(readlink <root>/current); state=${build%/service/builds/*}
@@ -74,7 +85,6 @@ grep -m1 '^version:' ~/.claude/skills/install/SKILL.md "${CODEX_HOME:-$HOME/.cod
 
 `<root>` is `$HOME/.local/lib/openwiz` unless the user chose another. Take the first that holds:
 
-- No `<root>/current`, or `--build-identity` does not read the `<version>` of the release you install: resume at step 1.
 - `status` does not read the GitHub account, or the user chose CloudRoom and `check` does not read `cloudroom_login_verified`: resume at step 3. `identity_unreadable` means GitHub gave no clear answer: wait a minute and run `status` again; it clears.
 - The running agent's `install/SKILL.md` is missing, or does not read `version: <version of this skill>`, this file's own `version:` line at the top: resume at step 4. When that agent's folder holds OpenWiz's 18 skills, run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4.
 - Otherwise resume at step 5; for a first fleet already under way, at step 6 with `first_fleet.py next`. If it prints `Next: where.`, follow step 6.1 with the recovered choice.

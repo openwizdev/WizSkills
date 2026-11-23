@@ -654,7 +654,7 @@ elif sub == 'install':
 class InstallsTheReleaseItFetches(unittest.TestCase):
 
     def run_steps(self, installer=INSTALLER_0_1_1, latest_after_preflight=SYNTHETIC_TAG,
-                  latest=SYNTHETIC_TAG, installed_version=None):
+                  latest=SYNTHETIC_TAG, installed_version=None, continuation_tag=None):
         import re
         text = SKILL.read_text()
         tmp = Path(tempfile.mkdtemp())
@@ -674,6 +674,8 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
                'FAKE_INSTALLER': str(tmp / 'installer.py'), 'FAKE_SOURCE': SYNTHETIC_SOURCE}
         found = {'<private temporary folder>': str(tmp / 'work'), '<root>': str(tmp / 'root'),
                  '"$openwiz"': str(tmp / 'work/openwiz'), '<private download folder>': str(tmp / 'download')}
+        if continuation_tag:
+            found.update({'<tag>': continuation_tag, '<version>': continuation_tag.lstrip('v')})
         (tmp / 'work').mkdir()
         runs = []
         if installed_version:
@@ -689,6 +691,8 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
         steps = text[text.index('## 1. '):text.index('## 3. ')]
         host = text[text.index('## Where your agents run'):text.index('## Resume')]
         for block in re.findall(r'```sh\n(.*?)```', host + steps, re.S):
+            if continuation_tag and '/releases/latest' in block:
+                continue
             fallback = '/releases/download/' in block
             if fallback and runs and runs[-1][1] == 0 and ' download ' in runs[-1][0]:
                 continue
@@ -777,14 +781,21 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
         self.assertIn('curl https://github.com/openwizdev/OpenWiz/releases/latest', log)
         text = SKILL.read_text()
         resume = text[text.index('## Resume'):text.index('## 1. ')]
-        self.assertNotIn('If the installed build or the release you will install is 0.1.0', resume,
-                         'Installed 0.1.0 triggers the unreleased message even with Latest v0.1.1')
+        self.assertIn('If the continuation message has no `release <tag>`, read Latest', resume)
+        self.assertIn("Run the release check there with that release's `<version>`.", resume)
+        self.assertLess(resume.index('resume at step 1'), resume.index('runtime/setup/setup.py'))
         outputs = [out for _, code, out in runs if code == 0]
         self.assertIn('choose-host\n', outputs)
         self.assertNotIn('cloudroom-only\n', outputs)
         self.assertIn('git clone --depth 1 --branch v0.1.1', log)
         self.assertIn('install preflight', log)
         self.assertEqual(json.loads(self.identity(runs))['version'], '0.1.1')
+
+    def test_continuation_tag_takes_precedence_over_latest(self):
+        _, log, runs = self.run_steps(latest='v0.1.1', installed_version='0.1.0', continuation_tag='v0.1.0')
+        self.assertNotIn('/releases/latest', log)
+        self.assertEqual(runs[-1][1:], (0, 'cloudroom-only\n'))
+        self.assertNotIn('git clone', log)
 
     def test_the_restart_message_carries_the_chosen_release(self):
         text = SKILL.read_text()
@@ -1046,7 +1057,6 @@ class InstallHostReleaseTests(unittest.TestCase):
         resume = skill.split('## Resume\n', 1)[1].split('## 1. Preflight', 1)[0]
         self.assertLess(resume.index('<root>/current/openwiz --build-identity'),
                         resume.index('Ask the host question'))
-
 
 
 if __name__ == '__main__':

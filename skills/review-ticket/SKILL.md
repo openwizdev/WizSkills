@@ -59,7 +59,7 @@ Read `git diff --find-renames origin/<base>...<head>` and the code around it. Ke
 
 **Full sweep:** read the whole diff once more for bugs, broken callers, error paths, security and privacy.
 
-**One pass:** this step is the checklist the builder also runs on its own diff (build-ticket step 4, with `review.py self-check`). A missing `## Self-check`, or one line of it that your own run plainly contradicts, is one polish finding (Standards). Report every finding, blocking and polish, in your first verdict: a held-back finding costs a round. A re-check reads only the listed findings and the code changed since, and `review.py check` refuses a new finding on unchanged code unless it is a stated `Risk:` (security, privacy or data loss).
+**One pass:** this step is the checklist the builder also runs on its own diff (build-ticket step 4, with `review.py self-check`). A missing `## Self-check`, or one line of it that your own run plainly contradicts, is one polish finding (Standards). Report every finding, blocking and polish, in your first verdict: a held-back finding costs a round. A re-check reads only the listed findings and the code changed since, and a new finding on unchanged code is late: `review.py check` accepts it only with a `Late:` line, graded `[pre-existing]` or `[blocking]` with a stated `Risk:` (security, privacy or data loss), as [re-checks](references/re-checks.md) says.
 
 Done when the three checks covered the whole diff and every finding has its file and line, its check and the exact fix, rechecked at the pinned head.
 

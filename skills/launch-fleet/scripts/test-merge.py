@@ -56,6 +56,18 @@ if race and '--method' not in args and issue and issue[0][3:] == ['issues', race
             time.sleep(0.02)
 lock = open(path + '.lock', 'a')
 fcntl.flock(lock, fcntl.LOCK_EX)
+if '--method' in args and args[args.index('--method') + 1] == 'POST' and issue and issue[0][5:] == ['comments']:
+    with open(path) as f:
+        world = json.load(f)
+    text = next((a.split('=', 1)[1] for a in args if a.startswith('body=')), '')
+    first = world.get('faults', {}).get('twin')
+    if first and text.startswith(first):
+        del world['faults']['twin']
+        world['next_id'] += 1
+        world.setdefault('comments', {}).setdefault(issue[0][4], []).append(
+            {'id': world['next_id'], 'body': text, 'user': {'login': world['me']}, 'created_at': '2026-01-01T00:00:00Z'})
+        with open(path, 'w') as f:
+            json.dump(world, f)
 if '--method' in args and args[args.index('--method') + 1] == 'DELETE':
     with open(path) as f:
         world = json.load(f)
@@ -109,10 +121,11 @@ if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'enqueuePul
         pr['headRefOid'] = 'b' * 40
     world['writes'].append({'enqueue': got.get('id'), 'head': got.get('head')})
     if isinstance(kind, dict):
-        added = kind.pop('addedAt', kind['createdAt'])
+        added, hidden = kind.pop('addedAt', kind['createdAt']), kind.pop('hidden', False)
         pr.setdefault('removals', []).append(kind)
-        pr.update(added_at=added, enqueued={'id': 'AE' + str(len(world['writes'])), 'createdAt': added,
-                                            'enqueuer': {'login': world['me']}})
+        if not hidden:
+            pr.update(added_at=added, enqueued={'id': 'AE' + str(len(world['writes'])), 'createdAt': added,
+                                                'enqueuer': {'login': world['me']}})
     running = [c for c in pr['checks'] if (c.get('name') or c.get('context')) == 'check'
                and (c.get('status', 'COMPLETED') != 'COMPLETED' or c.get('state') in ('PENDING', 'EXPECTED'))]
     refused = (kind == 'fail' or got.get('id') != 'PR_synthetic' + str(pr['number'])
@@ -122,6 +135,8 @@ if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'enqueuePul
         pr.update(isInMergeQueue=True, mergeQueueEntry={'headCommit': {'oid': pr['headRefOid']}}, added_at=added,
                   enqueued={'id': 'AE' + str(len(world['writes'])), 'createdAt': added,
                             'enqueuer': {'login': world['me']}})
+        if kind == 'half':
+            pr.update(mergeQueueEntry=None)
     with open(path, 'w') as f:
         json.dump(world, f)
     if refused:
@@ -1700,6 +1715,7 @@ class WizSkillsRoute(unittest.TestCase):
 
 BOT = {'login': 'github-merge-queue'}
 QUEUED_AT, REMOVED_AT = '2026-11-22T09:49:14Z', '2026-11-22T10:00:03Z'
+CLAIMED = 'launch-fleet: merge re-queue claimed %s: branch_protection_failure at %s' % (HEAD, REMOVED_AT)
 
 
 def run_of(conclusion, at, name='check'):
@@ -1746,8 +1762,7 @@ class Drops(unittest.TestCase):
         self.change(w, checks=runs + [run_of('SUCCESS', '2026-11-22T10:20:00Z')])
         self.assertEqual(self.merge(w), (0, 're-queued; its receipt 4000 still names %s' % HEAD))
         self.assertEqual(self.enqueues(w), [{'enqueue': 'PR_synthetic7', 'head': HEAD}])
-        self.assertEqual([b.split('\n')[0] for b in w.bodies(7)], [self.receipt, drop])
-        self.assertIn('\n\nRe-queue claimed at ', w.bodies(7)[1])
+        self.assertEqual(w.bodies(7), [self.receipt, drop, CLAIMED])
         self.assertEqual(self.merge(w), (0, 'queued; the queue merges it or lets it go'))
         self.assertEqual(len(self.enqueues(w)), 1)
 
@@ -1757,18 +1772,18 @@ class Drops(unittest.TestCase):
         self.assertEqual(self.merge(w), (0, 're-queued; its receipt 4000 still names %s' % HEAD))
         again = {'createdAt': '2026-11-22T10:40:00Z', 'reason': 'failed_checks', 'actor': BOT}
         self.change(w, isInMergeQueue=False, mergeQueueEntry=None, removals=w.load()['pr']['removals'] + [again])
-        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5001'))
+        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5002'))
         self.assertEqual(w.bodies(7)[-1], 'launch-fleet: merge dropped %s: failed_checks at 2026-11-22T10:40:00Z' % HEAD)
-        self.assertEqual(self.merge(w), (1, 'blocked: dropped twice at this head; recorded 5002'))
+        self.assertEqual(self.merge(w), (1, 'blocked: dropped twice at this head; recorded 5003'))
         self.assertEqual(w.bodies(7)[-1], 'launch-fleet: merge blocked %s: dropped twice at this head' % HEAD)
         self.assertEqual(len(self.enqueues(w)), 1)
 
     def test_a_drop_right_after_the_re_queue_is_recorded_at_once(self):
         again = {'createdAt': '2026-11-22T10:30:00Z', 'reason': 'failed_checks', 'actor': BOT}
         w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, faults={'enqueue': again})
-        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5001'))
+        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5002'))
         self.assertEqual(w.bodies(7)[-1], 'launch-fleet: merge dropped %s: failed_checks at 2026-11-22T10:30:00Z' % HEAD)
-        self.assertEqual(self.merge(w), (1, 'blocked: dropped twice at this head; recorded 5002'))
+        self.assertEqual(self.merge(w), (1, 'blocked: dropped twice at this head; recorded 5003'))
         self.assertEqual(len(self.enqueues(w)), 1)
 
     def test_a_merge_conflict_or_a_persons_removal_blocks_with_no_enqueue(self):
@@ -1842,36 +1857,124 @@ class Drops(unittest.TestCase):
                 self.assertTrue(out.startswith('pending: '), out)
                 self.assertEqual((w.bodies(7), w.writes()), ([self.receipt], []))
 
-    def test_a_re_queue_whose_read_back_is_stale_is_claimed_once(self):
+    def test_an_exact_head_removal_whose_enqueue_does_not_read_yet_stays_pending(self):
+        green = [run_of('SUCCESS', '2026-11-22T09:40:00Z')]
+        removal = {'createdAt': REMOVED_AT, 'reason': 'failed_checks', 'actor': BOT}
+        for name, enqueued in {'no enqueue reads': None,
+                               'enqueued again after it': {'id': 'AE1', 'createdAt': '2026-11-22T10:05:00Z',
+                                                           'enqueuer': {'login': 'openwiz[bot]'}},
+                               'no enqueuer reads': {'id': 'AE1', 'createdAt': QUEUED_AT, 'enqueuer': None}}.items():
+            with self.subTest(name):
+                w = World(self, pr=pr(isMergeQueueEnabled=True, checks=green, removals=[removal], enqueued=enqueued),
+                          comments={'7': []})
+                project(w, PRINTS)
+                code, out = self.merge(w)
+                self.assertEqual(code, 0, out)
+                self.assertTrue(out.startswith('pending: '), out)
+                self.assertEqual((w.bodies(7), w.writes()), ([], []))
+        hidden = dict(removal, createdAt='2026-11-22T09:50:00Z', hidden=True)
+        w = World(self, pr=pr(isMergeQueueEnabled=True, checks=green), comments={'7': []}, faults={'enqueue': hidden})
+        project(w, PRINTS)
+        for _ in range(2):
+            code, out = self.merge(w)
+            self.assertEqual(code, 0, out)
+            self.assertTrue(out.startswith('pending: '), out)
+            self.assertEqual((w.bodies(7), len(self.enqueues(w))), ([], 1))
+        self.change(w, added_at=QUEUED_AT, enqueued={'id': 'AE1', 'createdAt': QUEUED_AT,
+                                                     'enqueuer': {'login': 'openwiz[bot]'}})
+        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5001'))
+        self.assertEqual(len(self.enqueues(w)), 1)
+
+    def test_queue_facts_that_disagree_are_pending_on_the_first_read_and_the_read_back(self):
+        green = [run_of('SUCCESS', '2026-11-22T09:40:00Z')]
+        entry = {'headCommit': {'oid': HEAD}}
+        for name, changes in {'queued with the queue off': dict(isInMergeQueue=True, mergeQueueEntry=entry,
+                                                                isMergeQueueEnabled=False),
+                              'queued with the queue setting unread': dict(isInMergeQueue=True, mergeQueueEntry=entry,
+                                                                           isMergeQueueEnabled=None),
+                              'out of the queue with an entry': dict(mergeQueueEntry=entry)}.items():
+            with self.subTest(name):
+                w = World(self, pr=pr(**dict(dict(isMergeQueueEnabled=True, checks=green), **changes)),
+                          comments={'7': []})
+                project(w, PRINTS)
+                code, out = self.merge(w)
+                self.assertEqual(code, 0, out)
+                self.assertTrue(out.startswith('pending: '), out)
+                self.assertEqual((w.bodies(7), w.writes()), ([], []))
+        for name, w in {'first enqueue': World(self, pr=pr(isMergeQueueEnabled=True, checks=green), comments={'7': []},
+                                               faults={'enqueue': 'half'}),
+                        're-queue': self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True,
+                                               faults={'enqueue': 'half'})}.items():
+            with self.subTest(name):
+                if not (w.dir / 'project').exists():
+                    project(w, PRINTS)
+                before = w.bodies(7)
+                code, out = self.merge(w)
+                self.assertEqual(code, 0, out)
+                self.assertTrue(out.startswith('pending: '), out)
+                self.assertEqual(len(self.enqueues(w)), 1)
+                self.assertFalse([b for b in w.bodies(7) if b not in before and not b.startswith(CLAIMED)])
+
+    def test_a_claimed_re_queue_is_spent_and_unconfirmed_it_waits_for_a_person(self):
         w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, faults={'enqueue': 'pending'})
         drop = w.bodies(7)[1]
         code, out = self.merge(w)
         self.assertEqual(code, 0, out)
         self.assertTrue(out.startswith('pending: '), out)
-        claimed = w.bodies(7)
-        self.assertEqual(claimed[0], self.receipt)
-        self.assertEqual(claimed[1].split('\n')[0], drop)
-        self.assertRegex(claimed[1], r'\n\nRe-queue claimed at [0-9T:-]+Z\.$')
+        self.assertEqual((w.bodies(7), len(self.enqueues(w))), ([self.receipt, drop, CLAIMED], 1))
+        self.assertEqual(self.merge(w), (1, 'blocked: re-queue claimed but not confirmed; recorded 5002'))
+        self.assertEqual(w.bodies(7)[-1], 'launch-fleet: merge blocked %s: re-queue claimed but not confirmed' % HEAD)
+        self.assertEqual(len(self.enqueues(w)), 1)
+
+    def test_a_claim_is_never_acted_on_twice_however_old_it_is(self):
+        green = [run_of('SUCCESS', '2026-11-22T10:20:00Z')]
+        w = self.world(checks=green, recorded=True)
+        w.update(comments={'7': w.load()['comments']['7'] + [dict(comment(4002, CLAIMED), created_at='2026-11-01T00:00:00Z')]})
+        self.assertEqual(self.merge(w), (1, 'blocked: re-queue claimed but not confirmed; recorded 5001'))
+        self.assertEqual(self.enqueues(w), [])
+        w = self.world(checks=green, recorded=True)
+        w.update(comments={'7': w.load()['comments']['7'] + [comment(4002, CLAIMED)]})
+        self.change(w, added_at='2026-11-22T10:25:00Z', enqueued={'id': 'AE1', 'createdAt': '2026-11-22T10:25:00Z',
+                                                                  'enqueuer': {'login': 'openwiz[bot]'}})
         code, out = self.merge(w)
         self.assertEqual(code, 0, out)
-        self.assertTrue(out.startswith('pending: ') and 'claimed' in out, out)
-        self.assertEqual((w.bodies(7), len(self.enqueues(w))), (claimed, 1))
-        self.change(w, isInMergeQueue=True, mergeQueueEntry={'headCommit': {'oid': HEAD}}, added_at='2026-11-22T10:25:00Z')
-        self.assertEqual(self.merge(w), (0, 'queued; the queue merges it or lets it go'))
-        self.assertEqual((len(w.bodies(7)), len(self.enqueues(w))), (2, 1))
+        self.assertTrue(out.startswith('pending: '), out)
+        self.assertEqual(w.writes(), [])
+        again = {'createdAt': '2026-11-22T10:40:00Z', 'reason': 'failed_checks', 'actor': BOT}
+        self.change(w, removals=w.load()['pr']['removals'] + [again])
+        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5001'))
+        self.assertEqual(self.merge(w), (1, 'blocked: dropped twice at this head; recorded 5002'))
+        self.assertEqual(self.enqueues(w), [])
 
-    def test_a_claim_that_never_read_back_allows_one_more_attempt_and_a_failed_claim_enqueues_nothing(self):
-        w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, faults={'patch': 'fail'})
+    def test_two_runners_claiming_at_once_act_only_on_the_earliest_claim(self):
+        w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, faults={'twin': CLAIMED})
+        drop = w.bodies(7)[1]
+        code, out = self.merge(w)
+        self.assertEqual(code, 0, out)
+        self.assertTrue(out.startswith('pending: ') and '5001' in out, out)
+        self.assertEqual((w.bodies(7), self.enqueues(w)), ([self.receipt, drop, CLAIMED], []))
+        self.assertIn({'delete': 5002}, w.writes())
+        self.assertEqual([c['id'] for c in w.load()['comments']['7']], [4000, 4001, 5001])
+
+    def test_a_claim_that_does_not_land_enqueues_nothing(self):
+        w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, faults={'post': 'fail'})
         code, out = self.merge(w)
         self.assertEqual(code, 1, out)
-        self.assertTrue(out.startswith('not re-queued: ') and 'claim' in out, out)
+        self.assertTrue(out.startswith('not re-queued: its re-queue claim was not recorded'), out)
         self.assertEqual(self.enqueues(w), [])
-        value = w.load()
-        value['comments']['7'][1]['body'] += '\n\nRe-queue claimed at 2026-11-22T10:21:00Z.'
-        w.save(value)
-        self.assertEqual(self.merge(w), (0, 're-queued; its receipt 4000 still names %s' % HEAD))
-        self.assertEqual(len(self.enqueues(w)), 1)
-        self.assertNotIn('2026-11-22T10:21:00Z', w.bodies(7)[1])
+
+    def test_every_wake_reconciles_duplicate_records_and_retries_a_refused_delete(self):
+        w = self.world(recorded=True, faults={'delete': 'fail'})
+        receipt, drop = w.bodies(7)
+        w.update(comments={'7': w.load()['comments']['7'] + [comment(4002, receipt), comment(4003, drop),
+                                                             comment(4004, CLAIMED), comment(4005, CLAIMED)]})
+        waiting = (0, 'waiting: branch_protection_failure at %s may still stand: check last ran before it' % REMOVED_AT)
+        self.assertEqual(self.merge(w), waiting)
+        self.assertEqual([c['id'] for c in w.load()['comments']['7']], [4000, 4001, 4002, 4004])
+        self.assertEqual(self.merge(w), waiting)
+        self.assertEqual([c['id'] for c in w.load()['comments']['7']], [4000, 4001, 4004])
+        self.assertEqual(w.writes(), [{'delete': 4003}, {'delete': 4005}, {'delete': 4002}])
+        self.assertEqual(w.bodies(7), [receipt, drop, CLAIMED])
 
     def test_a_re_queue_rechecks_the_late_look_first(self):
         w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, tickets=ticket(VISIBLE))

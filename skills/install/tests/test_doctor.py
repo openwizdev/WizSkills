@@ -874,6 +874,59 @@ class StepFourTakesTheReleaseTag(unittest.TestCase):
         self.assertNotIn('WizSkills/blob/main/skills/install', text)
 
 
+class StepFourNeverDowngrades(unittest.TestCase):
+
+    def run_block(self, bundled):
+        import re, shutil
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        text = SKILL.read_text()
+        mine = re.search(r'^version: (\S+)$', text, re.M)[1]
+        old_connect = text.replace(text[text.index('3. **The App, or an explicit skip:**'):text.index('4. **The brain:**')],
+                                   '3. **The App, or an explicit skip:** recommend the App.\n')
+        sources = {tmp / 'refs' / ('v' + mine): old_connect}
+        if bundled:
+            sources[tmp / 'build/runtime'] = re.sub(r'^version: \S+$', 'version: ' + bundled, text, count=1, flags=re.M)
+        for root, body in sources.items():
+            copy = root / 'skills/install'
+            shutil.copytree(SKILL.parent, copy, ignore=shutil.ignore_patterns('tests', '__pycache__'))
+            (copy / 'SKILL.md').write_text(body)
+        bin_dir = tmp / 'bin'
+        bin_dir.mkdir()
+        write(bin_dir / 'git', '#!/bin/sh\n[ -d %s/"$5" ] || exit 128\nmkdir -p "$7" && cp -R %s/"$5"/. "$7/"\n'
+              % (shlex.quote(str(tmp / 'refs')), shlex.quote(str(tmp / 'refs'))), 0o755)
+        agent = tmp / 'home/.claude/skills/install'
+        (agent / 'scripts').mkdir(parents=True)
+        (agent / '.openwiz-skill').write_text(RECEIPT)
+        (agent / 'SKILL.md').write_text('---\nname: install\nversion: 0.2.0\n---\n')
+        block = re.findall(r'```sh\n(.*?)```', text[text.index('## 4. '):text.index('## 5. ')], re.S)[1]
+        block = (block.replace('<private temporary folder>', str(tmp / 'work')).replace('<version of this skill>', mine)
+                      .replace('<installed agent folders>', '"$HOME/.claude/skills"'))
+        (tmp / 'work').mkdir()
+        env = {'HOME': str(tmp / 'home'), 'PATH': '%s:/usr/bin:/bin' % bin_dir, 'build': str(tmp / 'build')}
+        out = subprocess.run(['sh', '-c', block], env=env, capture_output=True, text=True).stdout
+        return mine, agent, out
+
+    def newer(self, mine):
+        major, minor, patch = map(int, mine.split('.'))
+        return '%d.%d.%d' % (major, minor, patch + 1)
+
+    def test_a_newer_bundled_copy_is_kept_over_this_versions_older_tag(self):
+        mine = SKILL.read_text().split('\nversion: ', 1)[1].split('\n', 1)[0]
+        _, agent, out = self.run_block(self.newer(mine))
+        self.assertEqual(out.split('\n'), ['source ok', 'ok: %s' % agent, ''])
+        installed = (agent / 'SKILL.md').read_text()
+        self.assertEqual(installed.split('\nversion: ', 1)[1].split('\n', 1)[0], self.newer(mine), 'never downgraded')
+        self.assertIn('**With any other host:** recommend the personal GitHub login', installed)
+
+    def test_an_older_or_missing_bundled_copy_falls_back_to_this_skills_tag(self):
+        for bundled in ('0.0.1', None):
+            with self.subTest(bundled=bundled):
+                mine, agent, out = self.run_block(bundled)
+                self.assertEqual(out.split('\n'), ['source ok', 'ok: %s' % agent, ''])
+                self.assertIn('version: %s\n' % mine, (agent / 'SKILL.md').read_text())
+
+
 class RemovalStopsTheHeartbeatThenUsesTheInstaller(unittest.TestCase):
 
     def test_removal_removes_the_heartbeat_then_previews_and_confirms_install_remove(self):

@@ -999,47 +999,100 @@ class KeyHost(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get('WRITE_DRIVER_OPENWIZ'),
                          'set WRITE_DRIVER_OPENWIZ to an OpenWiz checkout with the key helper to run the real kit')
-    def test_the_sample_key_host_driver_passes_the_real_kit_on_a_fake_host(self):
+    def test_the_skills_kit_step_runs_the_real_kits_key_check_on_a_driver_in_an_openwiz_fork(self):
         import importlib.machinery
         import importlib.util
         openwiz = Path(os.environ['WRITE_DRIVER_OPENWIZ']).resolve()
         tmp = Path(tempfile.mkdtemp(prefix='write-driver-key-host-'))
         self.addCleanup(shutil.rmtree, tmp, True)
-        tree = tmp / 'openwiz'
-        shutil.copytree(openwiz / 'kernel', tree / 'kernel')
-        shutil.copytree(openwiz / 'adapters' / 'template', tree / 'adapters' / 'template')
-        shutil.copytree(FIXTURES / 'key-host', tree / 'adapters' / 'devin')
-        os.replace(tree / 'adapters' / 'devin' / 'driver.txt', tree / 'adapters' / 'devin' / 'driver')
-        (tree / 'adapters' / 'devin' / 'driver').chmod(0o755)
-        shutil.copy(tree / 'adapters' / 'template' / 'schema.json', tree / 'adapters' / 'devin' / 'schema.json')
-        state, user = tmp / 'wd-state', tmp / 'user-repo'
-        for args in (('begin',), ('host', '--host', 'devin', '--costly', 'no'),
-                     ('copy', '--openwiz', tree, '--into', user, '--login', 'host', '--key-host', 'devin')):
-            subprocess.run([sys.executable, '-I', str(SCRIPT), args[0], '--state', state, *args[1:]], check=True,
-                           capture_output=True, timeout=60)
-        shutil.copy(user / 'adapters' / 'devin' / 'README.md', tree / 'adapters' / 'devin' / 'README.md')
-        kits = tree / 'kernel' / 'driver-kit'
+        fork = tmp / 'fork'
+        shutil.copytree(openwiz / 'kernel', fork / 'kernel')
+        shutil.copytree(openwiz / 'adapters' / 'template', fork / 'adapters' / 'template')
+        state, bin_ = tmp / 'wd-state', tmp / 'bin'
+        bin_.mkdir()
+        (bin_ / 'gh').write_text(FAKE_KIT_GH)
+        (bin_ / 'gh').chmod(0o755)
+        kits = fork / 'kernel' / 'driver-kit'
 
         def module(path):
             spec = importlib.util.spec_from_loader(path.name, importlib.machinery.SourceFileLoader(path.name, str(path)))
             m = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(m)
             return m
-        tests = module(kits / 'test_kit.py')
         host = module(kits / 'kit.py').FakeHost(test_key='synthetic-canary-0123456789abcdef')
         self.addCleanup(host.close)
         env = {k: v for k, v in os.environ.items() if k not in ('OPENWIZ_GITHUB_APP_KEY', 'DEVIN_API_KEY')}
-        ticket = tests.tracker(str(tmp))
-        env.update(KIT_TRACKER=ticket, OPENWIZ_TEMPLATE_STATE=str(tmp / 'state'), PATH=str(kits / 'fixtures') + os.pathsep + env['PATH'],
+        env.update(KIT_TRACKER=module(kits / 'test_kit.py').tracker(str(tmp)), OPENWIZ_TEMPLATE_STATE=str(tmp / 'runs'),
+                   PATH=os.pathsep.join([str(bin_), str(kits / 'fixtures'), env['PATH']]),
                    OPENWIZ_HOSTKEY_TEST_ORIGIN=host.origin)
-        p = subprocess.run([sys.executable, '-I', str(kits / 'kit.py'), '--driver', str(tree / 'adapters' / 'devin' /
-                            'driver'), '--repo', 'example/site', '--ticket', '7', '--harness', 'fake-harness', '--model',
-                            'Synthetic 1', '--tracker', ticket, '--wait', '8'],
-                           env=env, capture_output=True, text=True, timeout=300)
+
+        def wd(*args):
+            return subprocess.run([sys.executable, '-I', str(SCRIPT), args[0], '--state', str(state), *map(str, args[1:])],
+                                  env=env, capture_output=True, text=True, timeout=600)
+        for args in (('begin',), ('host', '--host', 'devin', '--costly', 'no'),
+                     ('copy', '--openwiz', fork, '--into', fork, '--login', 'host', '--key-host', 'devin')):
+            self.assertEqual(wd(*args).returncode, 0, args)
+        driver = fork / 'adapters' / 'devin' / 'driver'
+        shutil.copy(FIXTURES / 'key-host' / 'driver.txt', driver)
+        driver.chmod(0o755)
+        p = wd('kit', '--openwiz', fork, '--driver', driver, '--repo', 'example/site', '--ticket', 7, '--harness',
+               'fake-harness', '--model', 'Synthetic 1', '--wait', 30)
         print(p.stdout, end='')
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn('the devin key reached its host only from the key helper, in its header', p.stdout)
         self.assertTrue(host.requests, 'the driver never reached the fake host')
+        wd('stop-all')
+
+
+FAKE_KIT_GH = r"""#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+query = next((a[len('query='):] for a in args if a.startswith('query=')), '')
+if args[:2] != ['api', 'graphql']:
+    sys.exit(9)
+with open(os.environ['KIT_TRACKER']) as f:
+    tracker = json.load(f)
+if 'object(expression' in query:
+    row = '| Record authors | %s |' % ' '.join('`%s`' % a for a in tracker['record_authors'])
+    print(json.dumps({'data': {'repository': {'object': {'text': row + '\n'}}}}))
+else:
+    nodes = [{'databaseId': c['id'], 'updatedAt': c['updated_at'], 'body': c['body'],
+              'author': {'__typename': 'Bot' if c['author'].endswith('[bot]') else 'User',
+                         'login': c['author'][:-5] if c['author'].endswith('[bot]') else c['author']}}
+             for c in tracker['comments']]
+    print(json.dumps({'data': {'repository': {'issue': {'comments': {
+        'pageInfo': {'hasNextPage': False, 'endCursor': None}, 'nodes': nodes}}}}}))
+"""
+
+RECORDING_KIT = r"""import json, os, sys
+driver = sys.argv[sys.argv.index('--driver') + 1]
+top = os.path.dirname(driver)
+seen = sorted(os.path.relpath(os.path.join(d, n), top) for d, _, names in os.walk(top) for n in names)
+with open(os.environ['RECORDING_KIT_OUT'], 'w') as f:
+    json.dump({'files': seen, 'readme': open(os.path.join(top, 'README.md')).read()}, f)
+for check in ('version', 'start', 'wake', 'stop', 'token'):
+    print('pass %s: synthetic' % check)
+"""
+
+
+class KitStaging(Base):
+    def test_the_kit_sees_the_drivers_readme_and_files_beside_what_it_runs(self):
+        self.begin()
+        openwiz = self.tmp / 'openwiz'
+        shutil.copytree(OPENWIZ, openwiz)
+        (openwiz / 'kernel' / 'driver-kit' / 'kit.py').write_text(RECORDING_KIT)
+        self.wd('copy', '--state', self.state, '--openwiz', openwiz, '--into', openwiz, '--login', 'host',
+                '--key-host', 'examplehost', check=0)
+        folder = openwiz / 'adapters' / 'examplehost'
+        (folder / 'fixtures' / 'kit-host.json').write_text('{"answers": []}')
+        self.env['RECORDING_KIT_OUT'] = str(self.tmp / 'seen.json')
+        self.wd('kit', '--state', self.state, '--openwiz', openwiz, '--driver', folder / 'driver', '--repo',
+                'example-user/examplehost-driver-kit', '--ticket', 7, '--harness', 'exampleagent', '--model',
+                'example-model', check=0)
+        seen = json.loads((self.tmp / 'seen.json').read_text())
+        self.assertEqual(seen['readme'], (folder / 'README.md').read_text())
+        for name in ('README.md', 'schema.json', os.path.join('fixtures', 'kit-host.json')):
+            self.assertIn(name, seen['files'])
 
 
 if __name__ == '__main__':

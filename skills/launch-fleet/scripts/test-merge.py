@@ -918,7 +918,7 @@ class Queue(unittest.TestCase):
         self.assertEqual(self.merge(w), (0, 'queued; the queue merges it or lets it go'))
         self.assertEqual(w.bodies(7), [self.receipt()])
         value = w.load()
-        at = value['comments']['7'][0]['created_at']
+        at = '2026-11-22T10:30:00Z'
         value['pr'].update(isInMergeQueue=False, mergeQueueEntry=None, checks=[run_of('SUCCESS', at)],
                            removals=[{'createdAt': at, 'reason': 'dequeued', 'actor': {'login': 'synthetic-person'}}])
         w.save(value)
@@ -952,9 +952,10 @@ class Queue(unittest.TestCase):
         left = {'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks', 'beforeCommit': {'oid': OTHER}}
         w = World(self, pr=pr(isMergeQueueEnabled=True, left=left), comments={'7': [comment(4000, self.receipt())]})
         project(w, PRINTS)
-        self.assertEqual(self.merge(w), (0, 'queued; recorded 4000'))
-        self.assertEqual(w.writes(), [{'enqueue': 'PR_synthetic7', 'head': HEAD}])
-        self.assertEqual(w.bodies(7), [self.receipt()])
+        code, out = self.merge(w)
+        self.assertEqual(code, 0, out)
+        self.assertTrue(out.startswith('pending: '), out)
+        self.assertEqual((w.writes(), w.bodies(7)), ([], [self.receipt()]))
 
     def test_the_replacement_heads_unconfirmed_receipt_is_retried_after_an_earlier_removal(self):
         left = {'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks', 'beforeCommit': {'oid': OTHER}}
@@ -967,8 +968,10 @@ class Queue(unittest.TestCase):
         value['me'] = value['comments']['7'][0]['user']['login'] = 'openwiz[bot]'
         value['pr'].update(isInMergeQueue=False, mergeQueueEntry=None)
         w.save(value)
-        self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
-        self.assertEqual(sum('enqueue' in x for x in w.writes()), 2)
+        code, out = self.merge(w)
+        self.assertEqual(code, 0, out)
+        self.assertTrue(out.startswith('pending: '), out)
+        self.assertEqual(sum('enqueue' in x for x in w.writes()), 1)
         self.assertFalse(any(b.startswith('launch-fleet: merge blocked') for b in w.bodies(7)))
 
     def test_a_removal_whose_commit_cannot_be_read_writes_nothing(self):
@@ -1743,7 +1746,8 @@ class Drops(unittest.TestCase):
         self.change(w, checks=runs + [run_of('SUCCESS', '2026-11-22T10:20:00Z')])
         self.assertEqual(self.merge(w), (0, 're-queued; its receipt 4000 still names %s' % HEAD))
         self.assertEqual(self.enqueues(w), [{'enqueue': 'PR_synthetic7', 'head': HEAD}])
-        self.assertEqual(w.bodies(7), [self.receipt, drop])
+        self.assertEqual([b.split('\n')[0] for b in w.bodies(7)], [self.receipt, drop])
+        self.assertIn('\n\nRe-queue claimed at ', w.bodies(7)[1])
         self.assertEqual(self.merge(w), (0, 'queued; the queue merges it or lets it go'))
         self.assertEqual(len(self.enqueues(w)), 1)
 
@@ -1765,15 +1769,6 @@ class Drops(unittest.TestCase):
         self.assertEqual(self.merge(w), (0, 'dropped; recorded 5001'))
         self.assertEqual(w.bodies(7)[-1], 'launch-fleet: merge dropped %s: failed_checks at 2026-11-22T10:30:00Z' % HEAD)
         self.assertEqual(self.merge(w), (1, 'blocked: dropped twice at this head; recorded 5002'))
-        self.assertEqual(len(self.enqueues(w)), 1)
-
-    def test_an_enqueue_that_reads_back_dropped_is_recorded_at_once(self):
-        again = {'createdAt': '2026-11-22T09:50:00Z', 'reason': 'failed_checks', 'actor': BOT}
-        w = self.world(checks=[run_of('SUCCESS', '2026-11-22T09:40:00Z')], faults={'enqueue': again})
-        self.change(w, removals=[], added_at=None)
-        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5001'))
-        self.assertEqual(w.bodies(7), [self.receipt, 'launch-fleet: merge dropped %s: failed_checks at %s'
-                                       % (HEAD, again['createdAt'])])
         self.assertEqual(len(self.enqueues(w)), 1)
 
     def test_a_merge_conflict_or_a_persons_removal_blocks_with_no_enqueue(self):

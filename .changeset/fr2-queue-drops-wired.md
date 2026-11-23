@@ -1,5 +1,5 @@
 ---
-"launch-fleet": minor
+"launch-fleet": major
 ---
 
-`merge.py merge` notices a pull request the merge queue dropped: it records `launch-fleet: merge dropped` with GitHub's reason, waits while the cause stands, queues it again once at the same head after every required check ran green after the removal, and records `merge blocked` on a second drop, a merge conflict or a person's removal.
+`merge.py merge` notices a pull request the merge queue dropped, even right after its first enqueue: it records `launch-fleet: merge dropped` with GitHub's reason once, waits while the cause stands or the queue facts can't be read, claims its one automatic re-queue at the same head on that record after every required check ran green after the removal and the late look still lets it merge, and records `merge blocked` on a second drop, a merge conflict or a person's removal, where it used to record `merge blocked` on any removal.

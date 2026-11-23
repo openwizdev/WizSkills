@@ -13,14 +13,16 @@ RECORD_AUTHORS = frozenset({'openwiz[bot]', 'jparker2006'})
 CHECKS = ('Spec', 'Sweep', 'Standards')
 FINDING = re.compile(r'^\s*[-*]\s+\*\*R[0-9]+ \[blocking\]\*\* `[^`\n]+`[^\n]*?\((Spec|Sweep|Standards)\)', re.M)
 WORD = re.compile(r'VERDICT:\s*([A-Z]+)')
-LATE = re.compile(r'^\s*[-*]\s+\*\*R[0-9]+ \[blocking\]\*\* `([^`\n]+)`[^\n]*?\((?:Spec|Sweep|Standards)\)', re.M)
+LATE = re.compile(r'^\s*[-*]\s+\*\*(R[0-9]+) \[(blocking|pre-existing)\]\*\* `([^`\n]+)`[^\n]*?\((?:Spec|Sweep|Standards)\)',
+                  re.M)
 HEAD = re.compile(r'VERDICT:\s*[A-Z]+ at ([0-9a-f]{7,40})\b')
 PLACE = re.compile(r'(.+):([0-9]+)(?:-([0-9]+))?')
 HUNK = re.compile(r'^@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,([0-9]+))? @@', re.M)
 GIT_READS = ('diff', 'cat-file')
 WITHDRAWN = re.compile(r'^\s*[-*]\s+\*\*(R[0-9]+) \[blocking\]\*\* withdrawn:', re.M)
-POLISH_ISSUE = re.compile(r'^\s*[-*]\s+\*\*R[0-9]+ \[polish\]\*\*[^\n]*?\bPolish issue: #([0-9]+)\b', re.M)
-POLISH_TITLE = '(polish for #'
+POLISH_ISSUE = re.compile(r'^\s*[-*]\s+\*\*(R[0-9]+) \[polish\]\*\*[^\n]*?\bPolish issue: #([0-9]+)\b', re.M)
+POLISH_TITLE = re.compile(r'\(polish for #([0-9]+), (R[0-9]+)\)$')
+POLISH_PR = re.compile(r'\bFound in pull request (?:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#)?([0-9]+) at ')
 TEST_PATH = re.compile(r'(?:^|/)(?:tests?|__tests__|testdata|fixtures)/|(?:^|/)test_[^/]*$|[_.](?:test|spec)\.[^/]+$')
 DUE = timedelta(days=7)
 SIZE = re.compile(r'Size: ([SML])\.')
@@ -31,7 +33,7 @@ PAGE = 100
 SEARCH_PAGE = 40
 
 COMMENT_NODE = 'author { login __typename } createdAt body'
-ISSUE_NODE = 'body repository { nameWithOwner }'
+ISSUE_NODE = 'number body repository { nameWithOwner }'
 CONNECTIONS = {'comments': COMMENT_NODE, 'closingIssuesReferences': ISSUE_NODE}
 PR_FIELDS = ('number title createdAt mergedAt additions deletions changedFiles baseRefOid headRefOid '
              + ' '.join('%s(first: %d) { pageInfo { hasNextPage endCursor } nodes { %s } }' % (k, PAGE, v)
@@ -48,7 +50,9 @@ class BenchError(Exception):
 
 
 ISSUE = ('query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) '
-         '{ issue(number: $number) { number title state stateReason closedAt } } }')
+         '{ issue(number: $number) { number title body state timelineItems(itemTypes: [CLOSED_EVENT, REOPENED_EVENT], '
+         'first: 100) { totalCount nodes { __typename ... on ClosedEvent { createdAt stateReason } '
+         '... on ReopenedEvent { createdAt } } } } } }')
 DOCUMENTS = frozenset([SEARCH, ISSUE] + [MORE % (field, PAGE, shape) for field, shape in CONNECTIONS.items()])
 
 
@@ -96,9 +100,28 @@ def is_test(path):
     return bool(TEST_PATH.search(path))
 
 
-def ignored_when_due(issue, due):
-    closed = issue.get('state') == 'CLOSED' and issue.get('closedAt') and parse_time(issue['closedAt']) <= due
-    return not closed or issue.get('stateReason') == 'NOT_PLANNED'
+def state_when_due(issue, due):
+    history = issue.get('timelineItems') or {}
+    events = sorted(history.get('nodes') or [], key=lambda e: parse_time(e['createdAt']))
+    if history.get('totalCount') != len(events) or any(
+            e.get('__typename') not in ('ClosedEvent', 'ReopenedEvent') for e in events):
+        return 'unknown'
+    if (issue.get('state') == 'CLOSED') != bool(events and events[-1]['__typename'] == 'ClosedEvent'):
+        return 'unknown'
+    before = [e for e in events if parse_time(e['createdAt']) <= due]
+    if not before or before[-1]['__typename'] == 'ReopenedEvent':
+        return 'ignored'
+    reason = before[-1].get('stateReason')
+    return 'unknown' if not reason else 'ignored' if reason == 'NOT_PLANNED' else 'handled'
+
+
+def bound(issue, r, ids):
+    title = POLISH_TITLE.search(issue.get('title') or '')
+    found = POLISH_PR.search(issue.get('body') or '')
+    return bool(title and found and title.group(2) in ids
+                and (r['issue_repo'].lower(), int(title.group(1))) in r['tickets']
+                and int(found.group(2)) == r['number']
+                and (found.group(1) is None or found.group(1).lower() == r['repo'].lower()))
 
 
 def polish_status(records, issue, now):
@@ -106,7 +129,7 @@ def polish_status(records, issue, now):
     for r in records:
         split = Counter(not_due=0, unknown=0, ignored=0, handled=0)
         due = parse_time(r['merged_at']) + DUE
-        for number in r['polish_issues']:
+        for number, ids in r['polish_issues']:
             if due > now:
                 split['not_due'] += 1
                 continue
@@ -114,10 +137,7 @@ def polish_status(records, issue, now):
             if key not in cache:
                 cache[key] = issue(*key)
             found = cache[key]
-            if not found or POLISH_TITLE not in (found.get('title') or ''):
-                split['unknown'] += 1
-            else:
-                split['ignored' if ignored_when_due(found, due) else 'handled'] += 1
+            split[state_when_due(found, due) if found and bound(found, r, ids) else 'unknown'] += 1
         r['polish_split'] = split
     return records
 
@@ -131,13 +151,17 @@ def diff_size(records, clones, git):
             continue
         if any(local_git(clone, ['cat-file', '-e', oid + '^{commit}'], git).returncode for oid in (base, head)):
             continue
-        done = local_git(clone, ['diff', '--numstat', '--no-renames', '--no-ext-diff', '--no-textconv',
+        done = local_git(clone, ['diff', '--numstat', '-z', '--find-renames', '--no-ext-diff', '--no-textconv',
                                  base + '...' + head], git)
         if done.returncode != 0:
             continue
         size = Counter(code_lines=0, test_lines=0, code_files=0, test_files=0)
-        for line in done.stdout.splitlines():
-            added, deleted, path = line.split('\t', 2)
+        fields = done.stdout.split('\0')
+        while len(fields) > 1:
+            added, deleted, path = fields.pop(0).split('\t', 2)
+            if not path:
+                fields.pop(0)
+                path = fields.pop(0)
             kind = 'test' if is_test(path) else 'code'
             size[kind + '_files'] += 1
             size[kind + '_lines'] += sum(int(x) for x in (added, deleted) if x != '-')
@@ -148,7 +172,8 @@ def diff_size(records, clones, git):
 def local_git(clone, args, runner=subprocess.run):
     if not args or args[0] not in GIT_READS:
         raise BenchError('refused: only local git diff and cat-file run')
-    return runner(['git', '-C', clone, '--no-pager'] + list(args), capture_output=True, text=True)
+    return runner(['git', '-C', clone, '--no-pager', '--literal-pathspecs', '--no-lazy-fetch'] + list(args),
+                  capture_output=True, encoding='utf-8', errors='surrogateescape')
 
 
 def added_lines(clone, first, head, path, git):
@@ -257,6 +282,14 @@ def record(repo, node):
     issues = [i['body'] or '' for i in node['closingIssuesReferences']]
     sizes = sorted({m for b in issues for m in SIZE.findall(b)})
     approved = [i for i, w in enumerate(words) if w == 'APPROVE']
+    seen, late, polish = set(), [], {}
+    for i, c in enumerate(verdicts):
+        for label, grade, place in LATE.findall(c['body']):
+            if i and label not in seen:
+                late.append((i, grade, place))
+            seen.add(label)
+        for label, number in POLISH_ISSUE.findall(c['body']):
+            polish.setdefault(int(number), set()).add(label)
     return {
         'repo': repo, 'number': node['number'], 'title': node['title'], 'created_at': node['createdAt'],
         'diff': node['additions'] + node['deletions'], 'files': node['changedFiles'],
@@ -266,9 +299,11 @@ def record(repo, node):
         'first_findings': findings[0] if findings else Counter(),
         'recheck_findings': findings[1:],
         'first_head': heads[0] if heads else None,
-        'late': [(heads[i], place) for i in range(1, len(verdicts)) for place in LATE.findall(verdicts[i]['body'])],
+        'late': [(heads[i], place) for i, _, place in late], 'late_pre_existing': sum(g == 'pre-existing' for _, g, _ in late),
         'withdrawn': len({label for c in verdicts for label in WITHDRAWN.findall(c['body'])}),
-        'polish_issues': sorted({int(n) for c in verdicts for n in POLISH_ISSUE.findall(c['body'])}),
+        'polish_issues': sorted(polish.items()),
+        'tickets': {(((i.get('repository') or {}).get('nameWithOwner') or repo).lower(), i['number'])
+                    for i in node['closingIssuesReferences'] if i.get('number')},
         'issue_repo': (lambda repos: repos.pop() if len(repos) == 1 else repo)(
             {(i.get('repository') or {}).get('nameWithOwner') or repo for i in node['closingIssuesReferences']}),
         'merged_at': node['mergedAt'], 'base': node.get('baseRefOid'), 'head': node.get('headRefOid'),
@@ -304,6 +339,8 @@ def summarize(records):
         polish.update(r.get('polish_split', {}))
     withdrawn = sum(r.get('withdrawn', 0) for r in reviewed)
     due = polish['ignored'] + polish['handled']
+    pending = ('not yet due' if polish['not_due'] else 'unknown') if sum(polish.values()) and not due else None
+    found_late = sum(len(r.get('late', ())) for r in reviewed)
     sized = [r['diff_size'] for r in reviewed if r.get('diff_size') is not None]
 
     def median(key):
@@ -326,13 +363,16 @@ def summarize(records):
             'rechecks': dict({c: recheck[c] for c in CHECKS}, total=sum(recheck.values()), count=len(rechecks),
                              with_new_blocker=sum(1 for f in rechecks if f)),
         },
-        'late': {'blocking': blocking, 'late': sum(recheck.values()), 'pct': pct(sum(recheck.values()), blocking),
+        'late': {'blocking': blocking, 'findings': sum(first.values()) + found_late, 'late': found_late,
+                 'pct': pct(found_late, sum(first.values()) + found_late),
+                 'pre_existing': sum(r.get('late_pre_existing', 0) for r in reviewed),
                  'changed': late['changed'], 'unchanged': late['unchanged'], 'unknown': late['unknown']},
         'withdrawn_ignored': {'blocking': blocking, 'withdrawn': withdrawn, 'withdrawn_pct': pct(withdrawn, blocking),
                               'polish': sum(polish.values()), 'not_due': polish['not_due'],
                               'unknown': polish['unknown'], 'due': due, 'ignored': polish['ignored'],
                               'ignored_pct': pct(polish['ignored'], due),
-                              'either_pct': pct(withdrawn + polish['ignored'], blocking + due)},
+                              'either_pct': None if pending else pct(withdrawn + polish['ignored'], blocking + due),
+                              'pending': pending},
         'size': dict({k: median(k) for k in ('code_lines', 'test_lines', 'code_files', 'test_files')},
                      sized=len(sized), unknown=len(reviewed) - len(sized)),
     }
@@ -403,14 +443,15 @@ def table(rows):
 
 
 def late_table(rows):
-    lines = ['| Cohort | Merged | Reviewed | Rounds mean | Blocking findings | First seen at round 2+ '
+    lines = ['| Cohort | Merged | Reviewed | Rounds mean | Blocking findings | First-review blockers and late findings '
+             '| First seen at round 2+ | Graded pre-existing '
              '| Changed by the fix | Unchanged since the first review | Unknown |',
-             '| --- | --- | --- | --- | --- | --- | --- | --- | --- |']
+             '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |']
     for label, s in rows.items():
         late = s['late']
         lines.append('| %s |' % label + ''.join(' %s |' % c for c in (
-            s['merged'], s['reviewed'], cell(s['rounds']['mean']), late['blocking'],
-            cell(late['late'], late['pct']) if late['blocking'] else '-',
+            s['merged'], s['reviewed'], cell(s['rounds']['mean']), late['blocking'], late['findings'],
+            cell(late['late'], late['pct']) if late['findings'] else '-', late['pre_existing'],
             *(cell(late[k], pct(late[k], late['late'])) if late['late'] else '-'
               for k in ('changed', 'unchanged', 'unknown')))))
     return '\n'.join(lines)
@@ -425,8 +466,10 @@ def withdrawn_table(rows):
         lines.append('| %s |' % label + ''.join(' %s |' % c for c in (
             s['merged'], s['reviewed'], cell(s['rounds']['mean']), w['blocking'],
             cell(w['withdrawn'], w['withdrawn_pct']) if w['blocking'] else '-', w['polish'], w['not_due'],
-            w['unknown'], '%d of %d (%d%%)' % (w['ignored'], w['due'], w['ignored_pct']) if w['due'] else '-',
-            '%d%%' % w['either_pct'] if w['either_pct'] is not None else '-')))
+            w['unknown'], '%d of %d (%d%%)' % (w['ignored'], w['due'], w['ignored_pct']) if w['due'] else w['pending'] or '-',
+            '%d%%' % w['either_pct'] if w['either_pct'] is not None else
+            '%s (withdrawn alone %d%%)' % (w['pending'], w['withdrawn_pct']) if w['pending'] and w['blocking'] else
+            w['pending'] or '-')))
     return '\n'.join(lines)
 
 
@@ -460,8 +503,8 @@ def markdown(result):
     for r in result['worst']:
         out.append('| %s#%d | %d (%d) | %s | %d | %d |' % (r['repo'].split('/')[1], r['number'], r['rounds'],
                                                         r['changes'], r['size'] or 'none', r['diff'], r['files']))
-    out += ['', '**Late blocking findings** (new blocking findings first seen at round 2 or later, by whether '
-            'the fix changed their line since the first review)', '',
+    out += ['', '**Late findings** (findings first seen at round 2 or later, graded blocking or pre-existing, by '
+            'whether the fix changed their line since the first review)', '',
             late_table(dict(result['all'], **{'Ticket PRs': result['tickets']['All']})),
             '', '**Withdrawn or ignored** (blockers withdrawn, and polish issues still open or closed as not planned '
             '7 days after their PR merged)', '',

@@ -365,10 +365,10 @@ def late_repos(base, a, b, c):
                        '- **R4 [polish]** Polish issue: #42.\n' % ('e' * 40), minute=3)]
     fixed = pr(8, rounds, ['Ticket. Size: S.'])
     fixed.update(baseRefOid=base, headRefOid=c)
-    fixed['closingIssuesReferences'][0]['repository'] = {'nameWithOwner': 'synthetic/late'}
+    fixed['closingIssuesReferences'][0].update(number=1, repository={'nameWithOwner': 'synthetic/late'})
     gone = pr(9, missing, ['Ticket. Size: M.'], diff=(400, 0))
     gone.update(baseRefOid=base, headRefOid='e' * 40)
-    gone['closingIssuesReferences'][0]['repository'] = {'nameWithOwner': 'synthetic/tickets'}
+    gone['closingIssuesReferences'][0].update(number=1, repository={'nameWithOwner': 'synthetic/tickets'})
     recent = pr(10, [comment('VERDICT: APPROVE at %s\n\n- **R1 [polish]** Polish issue: #35.\n' % c)],
                 merged='2026-01-16T00:00:00Z')
     return {'synthetic/late': [fixed, gone, recent], 'synthetic/beta': beta()}
@@ -377,20 +377,23 @@ def late_repos(base, a, b, c):
 NOW = '2026-01-20T00:00:00Z'
 
 
-def polish(number, state='OPEN', reason=None, closed=None, title=None):
-    return {'number': number, 'title': title or 'A claim (polish for #1, R%d)' % number, 'state': state,
-            'stateReason': reason, 'closedAt': closed}
+def polish(number, finding, pr_number=8, reason=None, closed=None, title=None):
+    events = [{'__typename': 'ClosedEvent', 'createdAt': closed, 'stateReason': reason}] if closed else []
+    return {'number': number, 'title': title or 'A claim (polish for #1, %s)' % finding,
+            'body': 'Follow-up of #1 (spec #2)\n\nA claim. Found in pull request #%d at %s; it is polish.\n'
+                    % (pr_number, 'a' * 40),
+            'state': 'CLOSED' if closed else 'OPEN', 'timelineItems': {'totalCount': len(events), 'nodes': events}}
 
 
 ISSUES = {
-    ('synthetic/late', 31): polish(31, 'CLOSED', 'COMPLETED', '2026-01-13T00:00:00Z'),
-    ('synthetic/late', 32): polish(32),
-    ('synthetic/late', 33): polish(33, 'CLOSED', 'NOT_PLANNED', '2026-01-13T00:00:00Z'),
-    ('synthetic/late', 34): polish(34, 'CLOSED', 'COMPLETED', '2026-01-19T12:00:00Z'),
-    ('synthetic/late', 35): polish(35),
-    ('synthetic/tickets', 40): polish(40, 'CLOSED', 'COMPLETED', '2026-01-14T00:00:00Z'),
-    ('synthetic/tickets', 42): polish(42, title='Not a polish issue'),
-    ('synthetic/late', 40): polish(40),
+    ('synthetic/late', 31): polish(31, 'R0', reason='COMPLETED', closed='2026-01-13T00:00:00Z'),
+    ('synthetic/late', 32): polish(32, 'R10'),
+    ('synthetic/late', 33): polish(33, 'R11', reason='NOT_PLANNED', closed='2026-01-13T00:00:00Z'),
+    ('synthetic/late', 34): polish(34, 'R12', reason='COMPLETED', closed='2026-01-19T12:00:00Z'),
+    ('synthetic/late', 35): polish(35, 'R1', pr_number=10),
+    ('synthetic/tickets', 40): polish(40, 'R2', pr_number=9, reason='COMPLETED', closed='2026-01-14T00:00:00Z'),
+    ('synthetic/tickets', 42): polish(42, 'R4', pr_number=9, title='Not a polish issue'),
+    ('synthetic/late', 40): polish(40, 'R2', pr_number=9),
 }
 
 
@@ -436,13 +439,16 @@ class LateFindings(unittest.TestCase):
     def test_late_counts_split_by_what_the_fix_changed(self):
         text, result = self.late_run()
         self.assertEqual(result['all']['synthetic/late']['late'],
-                         {'blocking': 10, 'late': 9, 'pct': 90, 'changed': 4, 'unchanged': 3, 'unknown': 2})
+                         {'blocking': 10, 'findings': 10, 'late': 9, 'pct': 90, 'pre_existing': 0,
+                          'changed': 4, 'unchanged': 3, 'unknown': 2})
         self.assertEqual(result['all']['synthetic/beta']['late'],
-                         {'blocking': 2, 'late': 1, 'pct': 50, 'changed': 0, 'unchanged': 0, 'unknown': 1})
+                         {'blocking': 2, 'findings': 2, 'late': 1, 'pct': 50, 'pre_existing': 0,
+                          'changed': 0, 'unchanged': 0, 'unknown': 1})
         self.assertEqual(result['all']['All']['late'],
-                         {'blocking': 12, 'late': 10, 'pct': 83, 'changed': 4, 'unchanged': 3, 'unknown': 3})
+                         {'blocking': 12, 'findings': 12, 'late': 10, 'pct': 83, 'pre_existing': 0,
+                          'changed': 4, 'unchanged': 3, 'unknown': 3})
         self.assertEqual(result['all']['All']['rounds']['mean'], 3.25)
-        self.assertIn('| All | 4 | 4 | 3.25 | 12 | 10 (83%) | 4 (40%) | 3 (30%) | 3 (30%) |', text.splitlines())
+        self.assertIn('| All | 4 | 4 | 3.25 | 12 | 12 | 10 (83%) | 0 | 4 (40%) | 3 (30%) | 3 (30%) |', text.splitlines())
 
     def test_withdrawn_blockers_and_ignored_polish_issues(self):
         lookups = []
@@ -450,10 +456,10 @@ class LateFindings(unittest.TestCase):
         self.assertEqual(result['all']['synthetic/late'].get('withdrawn_ignored'), {
             'blocking': 10, 'withdrawn': 2, 'withdrawn_pct': 20,
             'polish': 8, 'not_due': 1, 'unknown': 2, 'due': 5, 'ignored': 3, 'ignored_pct': 60,
-            'either_pct': 33})
+            'either_pct': 33, 'pending': None})
         self.assertEqual(result['all']['synthetic/beta']['withdrawn_ignored'], {
             'blocking': 2, 'withdrawn': 0, 'withdrawn_pct': 0, 'polish': 0, 'not_due': 0, 'unknown': 0, 'due': 0,
-            'ignored': 0, 'ignored_pct': None, 'either_pct': 0})
+            'ignored': 0, 'ignored_pct': None, 'either_pct': 0, 'pending': None})
         self.assertEqual(sorted(lookups), [('synthetic/late', n) for n in (31, 32, 33, 34)]
                          + [('synthetic/tickets', n) for n in (40, 41, 42)])
         self.assertIn('| synthetic/late | 3 | 3 | 3 | 10 | 2 (20%) | 8 | 1 | 2 | 3 of 5 (60%) | 33% |',
@@ -482,7 +488,8 @@ class LateFindings(unittest.TestCase):
                                    now=bench.parse_time(NOW))
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(result_of(text)['all']['All'].get('late'),
-                         {'blocking': 12, 'late': 10, 'pct': 83, 'changed': 0, 'unchanged': 0, 'unknown': 10})
+                         {'blocking': 12, 'findings': 12, 'late': 10, 'pct': 83, 'pre_existing': 0,
+                          'changed': 0, 'unchanged': 0, 'unknown': 10})
 
     def test_git_gets_only_local_diff_and_object_checks(self):
         self.assertIn('git', inspect.signature(bench.main).parameters)

@@ -1,6 +1,6 @@
 # GitHub identity
 
-**The App identity is off unless the operator turns it on:** the `App identity` row of `docs/agents/fleet.md`'s `## GitHub identity` table, on the default branch, must say `on`. With no row, any other value or an unreadable file, act as today's signed-in account: never run, try or probe `openwiz github token` or `agent-token.py`, and skip the rest of this page. The block below checks the row itself before any mint, with the setup skill's own reader (`setup/scripts/settings.py app-identity`, beside this skill's folder), which reads off for anything but one `on` row with no fence-like line before it (OpenWiz #2394).
+**The App identity is off unless the operator turns it on:** the `App identity` row of `docs/agents/fleet.md`'s `## GitHub identity` table, on the default branch, must say `on`. With no row, any other value or an unreadable file, act as today's signed-in account: never run, try or probe `openwiz github token` or `agent-token.py`, and skip the rest of this page. The block below checks the row itself before any mint, with the setup skill's own reader (its settings script's `app-identity` command), which reads off for anything but one `on` row with no fence-like line before it (OpenWiz #2394).
 
 Read this before your first push, pull request, comment, label or merge as the App.
 

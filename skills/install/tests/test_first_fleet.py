@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -324,6 +325,7 @@ class Journey:
                    FAKE_OPENWIZ_SCRIPT=str(self.script), FAKE_OPENWIZ_LOG=str(self.log),
                    FAKE_ROOM_SCRIPT=str(self.room_script), FAKE_ROOM_LOG=str(self.room_log),
                    FAKE_GH_REPOS=str(self.repos), FAKE_GH_CREATE_LOG=str(self.created_log), **self.extra_env)
+        env.update(runpy.run_path(str(SKILL_DIR.parent / 'launch-fleet/scripts/fixtures/git_origin.py'))['env'](self.dir, {self.world['repo']: self.world['files'].get('docs/agents/fleet.md')}))
         return env
 
     def save_world(self):

@@ -11,6 +11,7 @@ import time
 import unittest
 
 HERE = Path(__file__).resolve().parent
+git_origin = runpy.run_path(str(HERE / 'fixtures/git_origin.py'))['env']
 REPO = 'synthetic-owner/synthetic-repo'
 FLEET_MD = ('# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n'
             '| Record authors | `openwiz[bot]`, `synthetic-owner` |\n')
@@ -36,6 +37,7 @@ class World:
         self.save(value)
         self.env = dict(os.environ, PATH='%s:%s' % (bin_dir, os.environ['PATH']), FAKE_WORLD=str(self.path))
         self.env['XDG_STATE_HOME'] = str(self.dir / 'state')
+        self.env.update(git_origin(self.dir, {value['repo']: value['fleet_md']}))
 
     def load(self):
         return json.loads(self.path.read_text())

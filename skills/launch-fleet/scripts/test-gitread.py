@@ -247,6 +247,17 @@ class GitRead(unittest.TestCase):
                 gitread.show(REPO, 'docs/agents/fleet.md')
         self.assertFalse(self.o.cache().exists())
 
+    def test_inherited_git_storage_settings_never_move_the_cache(self):
+        outside = self.o.tmp / 'outside'
+        outside.mkdir()
+        self.o.env.update(GIT_OBJECT_DIRECTORY=str(outside / 'objects'),
+                          GIT_ALTERNATE_OBJECT_DIRECTORIES=str(outside / 'alternates'),
+                          GIT_INDEX_FILE=str(outside / 'index'), GIT_SHALLOW_FILE=str(outside / 'shallow'))
+        self.assertEqual(self.o.read(), (0, FLEET_MD, ''))
+        self.assertEqual(sorted(p.name for p in outside.rglob('*')), [], 'nothing is written outside the cache')
+        self.assertTrue((self.o.cache() / 'shallow').is_file())
+        self.assertEqual(self.o.read(), (0, FLEET_MD, ''))
+
     def test_a_signed_in_gh_lends_git_its_credential_for_this_fetch(self):
         hits = self.o.behind_http(self, gh=SIGNED_IN_GH)
         origin = self.o.env['GIT_CONFIG_KEY_0'][len('url.http://'):-len('/.insteadOf')]

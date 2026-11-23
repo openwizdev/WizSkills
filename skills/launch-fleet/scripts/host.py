@@ -506,6 +506,13 @@ def fleet():
 
 
 def reports(repo, n):
+    """#N's newest record-author fleet note is stopped, for any REASONS reason, and its uncleared failure comments."""
+    stopped, comments = stops(repo, n)
+    return stopped is not None, comments
+
+
+def stops(repo, n):
+    """reports(), with the stopped note's reason (a REASONS key) or None."""
     authors = post.authors(repo)
     items = post.thread(repo, int(n))
     if items is None:
@@ -560,7 +567,7 @@ def where(n, entry):
 def report(repo, n, host, command, entry, skill='build-ticket', effort=None):
     agent, item, named = role(skill)
     reason = CANT if effort else FAILED
-    stopped, comments = reports(repo, n)
+    stopped, comments = stops(repo, n)
     failed = [] if entry is not None else ['the driver log %s could not be written' % LOG]
     if stopped != reason:
         try:

@@ -55,7 +55,7 @@ Read `git diff --find-renames origin/<base>...<head>` and the code around it. Ke
 
 **Full sweep:** read the whole diff once more for bugs, broken callers, error paths, security and privacy.
 
-**One pass:** this step is the checklist the builder also runs on its own diff (build-ticket step 4, with `review.py self-check`). Report every finding, blocking and polish, in your first verdict: a held-back finding costs a round. A re-check reads only the listed findings and the code changed since, and `review.py check` refuses a new finding on unchanged code unless it is a stated `Risk:` (security, privacy or data loss).
+**One pass:** this step is the checklist the builder also runs on its own diff (build-ticket step 4, with `review.py self-check`). A missing `## Self-check`, or one line of it that your own run plainly contradicts, is one polish finding (Standards). Report every finding, blocking and polish, in your first verdict: a held-back finding costs a round. A re-check reads only the listed findings and the code changed since, and `review.py check` refuses a new finding on unchanged code unless it is a stated `Risk:` (security, privacy or data loss).
 
 Done when the three checks covered the whole diff and every finding has its file and line, its check and the exact fix, rechecked at the pinned head.
 
@@ -65,7 +65,7 @@ A finding **blocks** only with a line under it: `User path: <who does what ordin
 
 ## Ask, never guess
 
-When a finding turns on a fact no reading or run can settle, comment on the ticket `Reviewer question: #<PR> at <the full head>`, then the question on the next line, answerable in a word. Write your status `asking` (it adds `needs-info`), post no report for that head and end your turn. Resume on a record author's `Orchestrator answer: #<PR> at <the same head>`, and write `working` (it clears `needs-info`).
+When a finding turns on a fact no reading or run can settle, comment on the ticket `Reviewer question: #<PR> at <the full head>`, then the question on the next line, answerable in a word. Write your status `asking` (it adds `needs-info`), post no report for that head and end your turn. Resume on a record author's `Orchestrator answer: #<PR> at <the same head>`, and write `working` (it clears `needs-info` only when no live note is `asking` and your own login added it last; otherwise a person removes it).
 
 ## 4. Report
 

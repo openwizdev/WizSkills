@@ -25,14 +25,17 @@ def measure(path):
             planned.add(t['id'])
         if t['state'] == 'merged':
             done.add(t['id'])
+    every = {n: set() for n in after}
     for link in links:
         if link['blocker'] not in after or link['ticket'] not in after:
             raise ValueError(f'a link names an unknown ticket: {link["blocker"]} -> {link["ticket"]}')
+        every[link['blocker']].add(link['ticket'])
         if link['kind'] != 'file' or roles[link['ticket']] != 'builder':
             after[link['blocker']].add(link['ticket'])
-    chain, widest, unreached = approve.chain_width(after, planned, done)
+    unreached = approve.chain_width(every, planned, done)[2]
     if unreached:
         raise ValueError(f'a cycle: {" ".join(unreached)} can never start')
+    chain, widest, _ = approve.chain_width(after, planned, done)
     return chain, widest
 
 

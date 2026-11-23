@@ -5,12 +5,14 @@ The fixtures of the [plan links contract](../../../../contracts/plan-links.v1.md
 | Case | Shows | Checker |
 | --- | --- | --- |
 | `clean-wide` | A contract-first ticket and four tickets on it, all real; a fenced example heading that is not a section | pass |
+| `comment-and-fence-markers` | A comment opener inside a code block and a code fence inside a comment hide nothing; a comment opened after an inline comment on the same line hides its `## Links` | `no_reason` |
 | `real-and-file` | Real and file links; the file links reported, ordered, files joined | pass |
 | `refuse-no-reason` | A section missing a line (for an external blocker), a body with no section, `none` with a blocker | `no_reason` |
 | `refuse-not-a-blocker` | A line naming a ticket that is not a native blocker | `not_a_blocker` |
 | `refuse-duplicate` | Two lines for one blocker | `duplicate` |
 | `refuse-real-without-behaviour` | A real line that is only a path, two words, empty, or a bare path | `real_without_behaviour` |
 | `refuse-file-without-file` | A file line with no backticks, or a path leaving the repository | `file_without_file` |
+| `refuse-foreign-line-breaks` | Another repository's long form whose reason holds U+2028, U+2029 and a lone carriage return, kept in the line and named | `malformed` |
 | `refuse-malformed` | Each malformed detail, including on a ticket with no blocker | `malformed` |
 | `own-long-form` | Lines naming a blocker in this repository's long form, in its own case and in mixed case; another repository's long form refused, its line named | `malformed` |
 | `external-blockers` | Blockers outside the read, with their reasons | pass |

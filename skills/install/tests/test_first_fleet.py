@@ -1175,8 +1175,6 @@ NEEDS_YOU = ('session: tick 1: started #901, #902\n'
 
 
 class LocalSession(unittest.TestCase):
-    """TM7 (#2329): on this machine the first fleet runs in the open chat, through launch-fleet's session runner."""
-
     def road(self, session=(3, NEEDS_YOU)):
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import test_onboarding
@@ -1223,8 +1221,6 @@ class LocalSession(unittest.TestCase):
         return preview, road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest])
 
     def test_a_local_launch_starts_the_session_in_this_chat_and_installs_no_heartbeat(self):
-        # catches: the local yes still handing over to the 10-minute heartbeat, a session started with
-        # other than the user's builder, a second session on a repeat, or a heartbeat installed alongside
         road = self.road()
         preview, yes = self.launched(road)
         self.assertIn('session', preview.stdout)
@@ -1263,8 +1259,6 @@ class LocalSession(unittest.TestCase):
         self.assertEqual(self.installs(road), [])
 
     def test_each_session_stop_is_reported_and_a_refused_session_withdraws_the_yes(self):
-        # catches: a finished spec still offered a heartbeat, an interrupt or an unreadable stop reported as done,
-        # or a session refused by the shared lock counted as this launch's start
         done = 'session: done: spec #900: every ticket is closed\n'
         stops = ((0, done, 0, 'session finished spec #900', False),
                  (130, 'session: stopped on interrupt at tick 2; the runs it started keep going\ncarry on: x\n', 0,
@@ -1288,8 +1282,6 @@ class LocalSession(unittest.TestCase):
         self.assertEqual(self.installs(road), [])
 
     def test_the_heartbeat_is_installed_only_on_its_own_opt_in_yes(self):
-        # catches: the session's yes installing a heartbeat, an install without its own preview and yes,
-        # an opt-in before the session ran, or another digest standing in for the heartbeat's
         road = self.road()
         early = road.helper(['launch', '--spec', '900', '--heartbeat'])
         self.assertEqual(early.returncode, 5, early.stdout)

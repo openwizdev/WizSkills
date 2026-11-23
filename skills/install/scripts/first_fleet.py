@@ -11,7 +11,7 @@
   first_fleet.py grill --state FILE --confirmed URL
   first_fleet.py choose --state FILE --options FILE (--harness P --model M --effort E | --from-setup) [--agents HOST]
   first_fleet.py spec --state FILE --spec N --repo OWNER/NAME
-  first_fleet.py launch --state FILE --spec N [--heartbeat] [--yes --confirm DIGEST]
+  first_fleet.py launch --state FILE --spec N [--yes --confirm DIGEST]
   first_fleet.py progress --state FILE --spec N --openwiz PROGRAM
   first_fleet.py first-merge --state FILE --pr N
   first_fleet.py next --state FILE [--setup-state DIR]
@@ -1692,8 +1692,6 @@ def fleet_recorded(spec, env):
     return any(body.split('\n')[0].strip() == FLEET_RECORD + str(spec) for body in bodies)
 
 
-# This machine's first fleet runs in the open chat through launch-fleet's session runner (#2329); the heartbeat
-# is the opt-in after it, for keeping the fleet going once the chat closes.
 SESSION = LAUNCH_FLEET / 'scripts/session.py'
 OPT_IN = ('To keep the fleet going after this chat closes, the opt-in is a local heartbeat: ask the user, and only '
           'on their yes run launch --spec %d --heartbeat to preview it.')
@@ -1988,12 +1986,11 @@ def agent_words(agent):
 
 
 def hand_over(state, spec, env, builder):
-    """Run launch-fleet's session runner in the foreground, its lines shown as they come, then save where it stopped."""
     argv = [str(SESSION), 'run', state.value['repo'], '--spec', str(spec), '--harness', PROGRAMS[builder['harness']],
             '--model', builder['model']]
     sys.stdout.flush()
     lines, quiet = [], {s: signal.signal(s, lambda *_: None) for s in (signal.SIGINT, signal.SIGTERM)}
-    try:  # an interrupt is the session's to answer (it stops cleanly and says so); this command waits for that
+    try:
         child = subprocess.Popen([sys.executable, '-I', *argv], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, env=env)
         for raw in child.stdout:
@@ -2027,7 +2024,6 @@ def hand_over(state, spec, env, builder):
 
 
 def session_line(spec, session):
-    """Where this chat's session last stopped, by session.py's exit codes, and its own command to carry on."""
     code, stop = session['exit'], session['stop']
     if code == 0:
         return "Spec #%d's session in this chat ended: the session finished spec #%d." % (spec, spec)
@@ -2043,7 +2039,6 @@ def session_line(spec, session):
 
 
 def opt_in(state, spec, env, host, got):
-    """The heartbeat, the opt-in after this chat's session: its own preview, then its own yes."""
     launched = state.value.get('launch') or {}
     if host['agents'] != 'local' or launched.get('spec') != spec or not launched.get('session'):
         raise Exit(5, "The heartbeat is the opt-in after this machine's session: start the fleet in this chat first "

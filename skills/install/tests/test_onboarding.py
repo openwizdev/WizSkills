@@ -143,7 +143,7 @@ class Road(Journey):
                 f"assert sys.argv[1:] == ['status', {self.repo!r}, '900'], sys.argv[1:]\n"
                 "path = Path('heartbeat-status')\n"
                 "print(path.read_text() if path.exists() else 'heartbeat: not installed')\n")
-            (home / 'launch-fleet/scripts/session.py').write_text(  # a recorded session runner (TM3's own tests run it)
+            (home / 'launch-fleet/scripts/session.py').write_text(
                 "import json, os, sys\nfrom pathlib import Path\n"
                 f"with open({str(self.dir / 'session.log')!r}, 'a') as log:\n"
                 "    log.write(json.dumps({'argv': sys.argv[1:], 'adapters': os.environ.get('OPENWIZ_ADAPTERS')}) + '\\n')\n"

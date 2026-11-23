@@ -1,6 +1,6 @@
 # GitHub identity
 
-**The App identity is off unless the operator turns it on:** the `App identity` row of `docs/agents/fleet.md`'s `## GitHub identity` table, on the default branch, must say `on`. With no row, any other value or an unreadable file, act as today's signed-in account: never run, try or probe `openwiz github token` or `agent-token.py`, and skip the rest of this page. The block below checks the row itself before any mint (OpenWiz #2394).
+**The App identity is off unless the operator turns it on:** the `App identity` row of `docs/agents/fleet.md`'s `## GitHub identity` table, on the default branch, must say `on`. With no row, any other value or an unreadable file, act as today's signed-in account: never run, try or probe `openwiz github token` or `agent-token.py`, and skip the rest of this page. The block below checks the row itself before any mint, with the setup skill's own reader (`setup/scripts/settings.py app-identity`, beside this skill's folder), which reads off for anything but one `on` row with no fence-like line before it (OpenWiz #2394).
 
 Read this before your first push, pull request, comment, label or merge as the App.
 
@@ -12,9 +12,7 @@ With the App identity on, the agents act on GitHub as the project's OpenWiz App 
   ```sh
   app_token=
   if fleet_md=$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/<owner>/<repo>/contents/docs/agents/fleet.md" 2> /dev/null) \
-    && printf '%s\n' "$fleet_md" \
-    | awk 'BEGIN{b = "`"; b = b b b} {l = $0; sub(/^ */, "", l); l = substr(l, 1, 3)} l == b || l == "~~~"{fence = !fence; next} fence{next} /^## /{on = ($0 == "## GitHub identity"); next}
-      on && /^[|] *App identity *[|]/{n++; ok = ($0 ~ /^[|] *App identity *[|] *(on|`on`) *[|] *$/)} END{exit !(n == 1 && ok)}'; then
+    && printf '%s\n' "$fleet_md" | python3 -I "<the setup skill's folder>/scripts/settings.py" app-identity > /dev/null 2>&1; then
     app_token=$(openwiz github token --repository "<owner>/<repo>" 2> /dev/null) || app_token=
     [ -n "$app_token" ] || echo "GitHub as today's account: no App token" >&2
   else

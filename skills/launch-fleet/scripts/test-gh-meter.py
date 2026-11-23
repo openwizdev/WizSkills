@@ -226,5 +226,40 @@ class Meter(unittest.TestCase):
         self.assertEqual(reads, ['["api", "user"]'])
 
 
+    def counting_wrapper(self, name):
+        d = self.dir / name
+        d.mkdir()
+        count = self.dir / (name + '.count')
+        (d / 'gh').write_text('#!/bin/sh\necho . >> "%s"\n[ "$(wc -l < "%s")" -le 3 ] || exit 99\n'
+                              'exec "%s" "$@"\n' % (count, count, self.shim / 'gh'))
+        (d / 'gh').chmod(0o755)
+        return d, count
+
+    def test_a_wrapper_before_the_shim_that_calls_it_back_reaches_the_real_gh_once(self):
+        wrapper, count = self.counting_wrapper('before')
+        run = self.gh('api', 'user', PATH='%s:%s' % (wrapper, self.env['PATH']))
+        self.assertEqual((run.returncode, run.stdout), (0, 'fake out \n'))
+        self.assertEqual(count.read_text(), '.\n')
+        self.assertEqual((self.dir / 'calls').read_text().splitlines(),
+                         ['["api", "rate_limit"]', '["api", "user"]', '["api", "rate_limit"]'])
+        self.assertEqual([(c['endpoint'], c['exit']) for c in self.lines()], [('user', 0)])
+
+    def test_a_shim_whose_dir_is_not_on_path_refuses_and_runs_no_gh(self):
+        run = subprocess.run([str(self.shim / 'gh'), 'api', 'user'], capture_output=True, text=True,
+                             env=dict(self.env, PATH=self.env['PATH'].split(':', 1)[1]))
+        self.assertEqual((run.returncode, run.stdout), (127, ''))
+        self.assertIn("the shim's directory is not on PATH", run.stderr)
+        self.assertFalse((self.dir / 'calls').exists())
+
+    def test_a_wrapper_after_the_shim_that_calls_it_back_is_refused_at_the_second_entry(self):
+        wrapper, count = self.counting_wrapper('after')
+        shim, rest = self.env['PATH'].split(':', 1)
+        run = self.gh('api', 'user', PATH='%s:%s:%s' % (shim, wrapper, rest))
+        self.assertEqual(run.returncode, 127)
+        self.assertIn('the shim called itself', run.stderr)
+        self.assertEqual(count.read_text(), '.\n')
+        self.assertFalse((self.dir / 'calls').exists())
+
+
 if __name__ == '__main__':
     unittest.main()

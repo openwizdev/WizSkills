@@ -34,15 +34,18 @@ Once the App identity can be on, the agents act on GitHub as the project's OpenW
       GIT_CONFIG_COUNT=$restore_at
       export GIT_CONFIG_COUNT
     else
+      if [ -n "${IFS+x}" ]; then restore_ifs=1$IFS; else restore_ifs=0; fi
+      IFS=' '
       for restore_name in $(unset OPENWIZ_GITHUB_APP_KEY GH_TOKEN GITHUB_TOKEN; set | while IFS= read -r restore_line; do
         case $restore_line in GIT_CONFIG_KEY_[0-9]*=* | GIT_CONFIG_VALUE_[0-9]*=*) restore_name=${restore_line%%=*} ;; *) continue ;; esac
-        case ${restore_name##*_} in *[!0-9]*) ;; *) printf '%s\n' "$restore_name" ;; esac
+        case ${restore_name#GIT_CONFIG_*_} in *[!0-9]*) ;; *) printf '%s ' "$restore_name" ;; esac
       done); do
         unset "$restore_name"
       done
+      case $restore_ifs in 1*) IFS=${restore_ifs#1} ;; *) unset IFS ;; esac
       unset GIT_CONFIG_COUNT
     fi
-    unset GH_TOKEN OPENWIZ_AGENT_TOKEN_RUN OPENWIZ_AGENT_TOKEN_GIT_AT restore_pair restore_name restore_mark restore_value restore_at restore_count
+    unset GH_TOKEN OPENWIZ_AGENT_TOKEN_RUN OPENWIZ_AGENT_TOKEN_GIT_AT restore_pair restore_name restore_mark restore_value restore_at restore_count restore_ifs
   }
   restore_today_account
   app_token=

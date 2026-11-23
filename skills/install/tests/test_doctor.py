@@ -674,7 +674,8 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
         (tmp / 'work').mkdir()
         runs = []
         steps = text[text.index('## 1. '):text.index('## 3. ')]
-        for block in re.findall(r'```sh\n(.*?)```', steps, re.S):
+        host = text[text.index('## Where your agents run'):text.index('## Resume')]
+        for block in re.findall(r'```sh\n(.*?)```', host + steps, re.S):
             fallback = '/releases/download/' in block
             if fallback and runs and runs[-1][1] == 0 and ' download ' in runs[-1][0]:
                 continue
@@ -726,14 +727,14 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
         self.assertIn('`"version":"0.1.1"`', step2)
         self.assertNotIn('0.1.0', step2)
 
-    def test_only_the_explicit_line_names_0_1_0(self):
+    def test_010_keeps_the_pinned_install_instructions(self):
         text = SKILL.read_text()
-        named = [l for l in text[text.index('## Resume'):text.index('## 5. ')].split('\n') if '0.1.0' in l]
-        self.assertEqual(len(named), 1, named)
-        self.assertIn('To install 0.1.0, stop this skill and follow the [0.1.0 install instructions]'
-                      '(https://github.com/openwizdev/WizSkills/blob/maint/0.2/skills/install/SKILL.md)', named[0])
-        self.assertIn('hand-started fleets', named[0])
-        self.assertIn('always take its pinned `v0.1.0` fetch, never its `download`', named[0])
+        host = text[text.index('## Where your agents run'):text.index('## Resume')]
+        self.assertIn('[0.1.0 install instructions]'
+                      '(https://github.com/openwizdev/WizSkills/blob/maint/0.2/skills/install/SKILL.md)', host)
+        self.assertIn('hand-started fleets', host)
+        self.assertIn('when 0.1.0 is the release you install', host)
+        self.assertIn('the pinned `v0.1.0` fetch in step 2, never its `download`', host)
         self.assertNotIn('version: 0.2.0', text)
 
     def test_the_restart_message_carries_the_chosen_release(self):
@@ -983,6 +984,31 @@ class NoCloudRoomRequired(unittest.TestCase):
         self.assertFalse('every flag required' in connect, 'every flag required')
         for words in ('`--host local`', '`--host boat`', '`--host <its name>`', 'refuses them'):
             self.assertTrue(words in connect, words)
+
+
+class InstallHostReleaseTests(unittest.TestCase):
+    def test_latest_is_read_before_the_host_question(self):
+        skill = SKILL.read_text()
+        self.assertLess(skill.index('OpenWiz/releases/latest'),
+                        skill.index('> Where should your agents run?'))
+
+    def test_resume_checks_the_installed_build_before_asking(self):
+        skill = SKILL.read_text()
+        resume = skill.split('## Resume\n', 1)[1].split('## 1. Preflight', 1)[0]
+        self.assertLess(resume.index('<root>/current/openwiz --build-identity'),
+                        resume.index('Ask the host question'))
+
+    def test_010_offers_only_cloudroom_before_the_three_way_question(self):
+        skill = SKILL.read_text()
+        host = skill.split('## Where your agents run\n', 1)[1].split('## Resume', 1)[0]
+        old_release, version_gate, later_releases = host.partition('For OpenWiz 0.1.1 or later')
+        self.assertTrue(version_gate)
+        self.assertIn('For OpenWiz 0.1.0, offer only CloudRoom.', old_release)
+        self.assertIn("This computer and boat.dev need OpenWiz 0.1.1 or later, which isn't released yet. "
+                      "Today, OpenWiz 0.1.0 runs agents on CloudRoom only.", old_release)
+        self.assertNotIn(HOST_QUESTION, old_release)
+        self.assertIn('> ' + HOST_QUESTION, later_releases)
+        self.assertNotIn('0.1.0 is no longer Latest', skill)
 
 
 if __name__ == '__main__':

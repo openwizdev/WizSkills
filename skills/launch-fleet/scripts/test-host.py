@@ -802,6 +802,34 @@ class Effort(unittest.TestCase):
                                                                   'run': 'takes-effort-run-7'}}})
         self.assertEqual((p.fleet_notes(), self.comments(p, 7)), ([], []))
 
+    def test_the_models_row_the_caller_picked_sets_the_effort_when_two_rows_share_a_model(self):
+        p = self.project()
+        p.fleet((EFFORT / 'fleet.md').read_text().replace(
+            '| Small builder | follows Builder | | | |',
+            '| Small builder | Claude Code | Opus 5.5 | Low | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level low` |'))
+        given = {'repository': REPO, 'skill': 'build-ticket', 'harness': 'claude', 'model': 'claude-opus-5-5'}
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', '--row', 'Small builder'),
+                         (0, 'started #7 on takes-effort as Takes Effort via syn-owner, Opus 5.5 low effort', ''))
+        self.assertEqual(p.host('start', REPO, 8, 'claude', 'claude-opus-5-5', 'build-ticket', '--row', 'Builder'),
+                         (0, 'started #8 on takes-effort as Takes Effort via syn-owner, Opus 5.5 medium effort', ''))
+        self.assertEqual(p.host('start', REPO, 9, 'claude', 'claude-opus-5-5', '--row', 'Fixer'),
+                         (0, 'started #9 on takes-effort as Takes Effort via syn-owner, Opus 5.5 medium effort', ''))
+        self.assertEqual(start_inputs(p), [('takes-effort', dict(given, ticket=7, effort='low')),
+                                           ('takes-effort', dict(given, ticket=8, effort='medium')),
+                                           ('takes-effort', dict(given, ticket=9, effort='medium'))])
+        refusals = {
+            ('claude', 'claude-opus-5-5'): 'refused: the Models table rows Builder, Small builder start claude-code '
+                                           'claude-opus-5-5 at different efforts; pass --row with the one picked',
+            ('claude', 'claude-opus-5-5', '--row', 'Reviewer'): 'refused: --row Reviewer is not one of the builder '
+                                                                "role's Models rows: Builder, Small builder, Fixer",
+            ('codex', 'gpt-6.2-sol', '--row', 'Small builder'): "refused: the Models table's Small builder row does "
+                                                                'not start codex gpt-6.2-sol',
+        }
+        for args, line in refusals.items():
+            self.assertEqual(p.host('start', REPO, 10, *args), (1, line, ''), args)
+        self.assertEqual(len(start_inputs(p)), 3)
+
     def cant(self, host, harness, effort, item, agent, said):
         return (CANT, "The %s driver can't run %s at %s effort, so this %s's %s was not started%s Nothing starts it "
                       "without that effort: remove the Effort for this role in the Models table to run it at the "

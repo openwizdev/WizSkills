@@ -1137,10 +1137,7 @@ class Launch(unittest.TestCase):
         self.assertEqual([c[1] for c in j.gh_creates()].count('create'), 1, 'a repeat only reads')
 
     def test_a_lost_create_is_read_before_any_retry(self):
-        # lost: created but no answer, settled by the read-back; unread: the
-        # read-back itself fails, so it stays uncertain and the next run reads
-        # first; fail: nothing was created, so a later yes may create it.
-        for create, fails, first, second, creates in (('lost', 0, 0, 0, 1), ('lost', 2, 6, 6, 1), ('fail', 0, 5, 0, 2)):
+        for create, fails, first, second, creates in (('lost', 0, 5, 5, 1), ('lost', 2, 6, 6, 1), ('fail', 0, 5, 0, 2)):
             with self.subTest(create, fails=fails):
                 j = Journey(self)
                 j.repos.write_text(github(create=create, fail_after_create=fails))
@@ -1149,8 +1146,10 @@ class Launch(unittest.TestCase):
                     self.assertEqual(j.helper(yes).returncode, 6, j.calls[-1][1].stdout)
                     self.assertIn('uncertain', j.calls[-1][1].stdout)
                     self.assertEqual(j.helper(yes).returncode, 6, 'the next read fails too: still uncertain, no create')
-                    self.assertEqual(j.helper(yes).returncode, 0, j.calls[-1][1].stdout)
+                    self.assertEqual(j.helper(yes).returncode, 5, j.calls[-1][1].stdout)
+                    self.assertIn('uncertain', j.calls[-1][1].stdout)
                     self.assertEqual([c[1] for c in j.gh_creates()].count('create'), 1, 'read, never created twice')
+                    self.assertNotIn('seeded', json.loads(j.state.read_text())['created'])
                     continue
                 self.assertEqual(j.helper(yes).returncode, first, j.calls[-1][1].stdout)
                 state = json.loads(j.repos.read_text())
@@ -1275,13 +1274,43 @@ class DemoRepository(unittest.TestCase):
                 j.state.write_text(json.dumps({'created': {'repo': REPO, 'state': state}}))
                 j.state.chmod(0o600)
                 before = self.world(j)['repos']
-                for _ in range(2):
+                for said in ('uncertain', 'already exists'):
                     result = j.helper(YES_DEMO)
                     self.assertEqual(result.returncode, 5, result.stdout)
-                    self.assertIn('uncertain', result.stdout)
+                    self.assertIn(said, result.stdout)
                     self.assertNotIn('Created and read back', result.stdout)
                 self.assertEqual((self.world(j)['repos'], self.writes(j)), (before, []), 'neither file written')
                 self.assertNotIn('seeded', json.loads(j.state.read_text())['created'])
+
+    def test_a_lost_reply_or_another_id_writes_neither_file(self):
+        for name, switches, saved in (('lost reply', {'create': 'lost'}, None),
+                                      ('reply names another id', {'reply_id': 'R_other'}, None),
+                                      ('saved id is not the repository read', {}, 'R_other')):
+            with self.subTest(name):
+                j = Journey(self)
+                repos = [demo_repository(branches={'main': {'README.md': '# demo\n'}})] if saved else []
+                j.repos.write_text(github(repos, **switches))
+                if saved:
+                    j.state.write_text(json.dumps({'created': {'repo': REPO, 'state': 'uncertain', 'id': saved}}))
+                    j.state.chmod(0o600)
+                result = j.helper(YES_DEMO)
+                self.assertEqual(result.returncode, 5, result.stdout)
+                self.assertIn('uncertain', result.stdout)
+                self.assertEqual(self.writes(j), [] if saved else [['POST', 'user/repos']], 'neither file written')
+                self.assertEqual(j.helper(YES_DEMO).returncode, 5, 'a rerun neither creates nor seeds')
+                self.assertEqual(self.writes(j), [] if saved else [['POST', 'user/repos']])
+                self.assertNotIn('seeded', json.loads(j.state.read_text())['created'])
+
+    def test_a_verified_create_read_back_later_is_seeded_once(self):
+        j = Journey(self)
+        j.repos.write_text(github(fail_after_create=1))
+        self.assertEqual(j.helper(YES_DEMO).returncode, 6, j.calls[-1][1].stdout)
+        self.assertEqual(self.writes(j), [['POST', 'user/repos']], 'unread: nothing seeded yet')
+        done = j.helper(YES_DEMO)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn('Created and read back', done.stdout)
+        self.assertEqual(j.helper(YES_DEMO).returncode, 0)
+        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)], 'both files, once')
 
     # Catches: someone else's repository, private or public, taken as the demo
     # or written to, and a repeat that rewrites the owner's later work.

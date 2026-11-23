@@ -933,7 +933,7 @@ def look(name):
     'empty' (private, but no default branch and commit read back) or
     {'branch', 'commit'} (private, its default branch at that commit). None when
     a read failed or answered something else: unknown, never success."""
-    result = run(['gh', 'repo', 'view', name, '--json', 'nameWithOwner,isPrivate,defaultBranchRef'], gh_env())
+    result = run(['gh', 'repo', 'view', name, '--json', 'nameWithOwner,isPrivate,defaultBranchRef,id'], gh_env())
     if result is None:
         return None
     if result.returncode != 0:
@@ -941,6 +941,7 @@ def look(name):
     try:
         found = strict(result.stdout.decode('utf-8'))
         assert found['nameWithOwner'] == name and type(found['isPrivate']) is bool
+        assert isinstance(found['id'], str) and found['id']
         branch = (found['defaultBranchRef'] or {}).get('name') or ''
         assert isinstance(branch, str)
     except (UnicodeDecodeError, ValueError, KeyError, TypeError, AttributeError, AssertionError):
@@ -965,7 +966,33 @@ def look(name):
         assert isinstance(commit, str) and re.fullmatch('[0-9a-f]{40}', commit)
     except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):
         return None
-    return {'branch': branch, 'commit': commit}
+    return {'id': found['id'], 'branch': branch, 'commit': commit}
+
+
+def create(name, login):
+    owner, short = name.split('/')
+    path = 'user/repos' if owner.lower() == login.lower() else 'orgs/%s/repos' % owner
+    result = run(['gh', 'api', '-X', 'POST', path, '-f', 'name=' + short, '-F', 'private=true',
+                  '-F', 'auto_init=true'], gh_env())
+    if result is None or result.returncode != 0:
+        return None
+    try:
+        reply = strict(result.stdout.decode('utf-8'))
+        assert reply['full_name'] == name and reply['private'] is True
+        assert isinstance(reply['node_id'], str) and reply['node_id']
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):
+        return None
+    return reply['node_id']
+
+
+def unproven(state, name):
+    if state.value['created']['state'] != 'created':
+        state.value['created'] = {'repo': name, 'state': 'absent'}
+        state.save()
+    return Exit(5, 'Whether OpenWiz created %s is uncertain: no create reply of this onboarding names that '
+                   "repository, so a teammate may have made it. OpenWiz writes neither tests/test_check.py nor "
+                   '.github/workflows/check.yml into it. Choose another name, or use it as an existing '
+                   'repository; nothing written.' % name)
 
 
 def created_line(name, seen):
@@ -1066,16 +1093,19 @@ def create_repo(got):
     if seen is None:
         raise Exit(1 if not record else 6, 'Could not read whether %s exists; nothing created.' % name)
     if record and record['repo'] == name and record['state'] in ('pending', 'uncertain', 'created'):
-        if isinstance(seen, dict) and record.get('seeded') and record.get('branch') == seen['branch']:
+        if isinstance(seen, dict) and record.get('seeded') and record.get('branch') == seen['branch'] \
+                and record.get('id') in (None, seen['id']):
             print(created_line(name, seen))
             return 0
-        if isinstance(seen, dict):
+        if isinstance(seen, dict) and record.get('id') == seen['id']:
             state.value['created'] = {'repo': name, 'state': 'created', **seen}
             if not state.save():
                 raise Exit(6, 'Could not save the created repository; it exists, so never create it again.')
             seed(state, name, seen)
             print(created_line(name, seen))
             return 0
+        if isinstance(seen, dict):
+            raise unproven(state, name)
         if seen == 'public':
             raise Exit(5, '%s is not the private repository this onboarding created; nothing created.' % name)
         if seen == 'empty':
@@ -1095,10 +1125,13 @@ def create_repo(got):
     state.value['created'] = {'repo': name, 'state': 'pending'}
     if not state.save():
         raise Exit(10, 'Could not save the repository name first; nothing created.')
-    run(['gh', 'repo', 'create', name, '--private', '--add-readme'])
+    reply = create(name, login.stdout.strip().decode())
     seen = look(name)
-    ended = 'created' if isinstance(seen, dict) else 'absent' if seen == 'absent' else 'uncertain'
-    state.value['created'] = {'repo': name, 'state': ended, **(seen if ended == 'created' else {})}
+    if isinstance(seen, dict) and seen['id'] != reply:
+        raise unproven(state, name)
+    ended = 'created' if isinstance(seen, dict) else 'absent' if seen == 'absent' and reply is None else 'uncertain'
+    state.value['created'] = {'repo': name, 'state': ended, **(seen if ended == 'created' else {}),
+                              **({'id': reply} if ended == 'uncertain' and reply else {})}
     saved = state.save()
     if ended == 'created' and saved:
         seed(state, name, seen)

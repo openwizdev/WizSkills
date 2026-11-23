@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 FLEET_GH = Path(__file__).resolve().parents[3] / 'launch-fleet/scripts/fixtures/gh.py'
-FIELDS = {'nameWithOwner', 'isPrivate', 'defaultBranchRef'}
+FIELDS = {'nameWithOwner', 'isPrivate', 'defaultBranchRef', 'id'}
 
 
 def repository(owner, name, branches):
@@ -39,7 +39,7 @@ def demo(argv):
             sys.stderr.write("GraphQL: Could not resolve to a Repository with the name '%s'.\n" % name)
             return 1
         has = found['default_branch'] in found['branches']
-        known = {'nameWithOwner': found['full_name'], 'isPrivate': found['private'],
+        known = {'nameWithOwner': found['full_name'], 'isPrivate': found['private'], 'id': node_id(found),
                  'defaultBranchRef': {'name': found['default_branch'] if has else ''}}
         print(json.dumps({f: known[f] for f in fields}))
         return 0
@@ -48,14 +48,30 @@ def demo(argv):
         sys.stderr.write('synthetic create refused\n')
         return 1
     owner, short = name.split('/')
-    state['repos'][name.lower()] = repository(owner, short, {'main': {'README.md': '# %s\n' % short}} if readme else {})
+    made = repository(owner, short, {'main': {'README.md': '# %s\n' % short}} if readme else {})
+    made['node_id'] = 'R_synthetic%d' % len(state['log'])
+    state['repos'][name.lower()] = made
     state['log'].append(['POST', 'user/repos'])
     state['view_fails'] = state.get('fail_after_create', 0)
     Path(path).write_text(json.dumps(state))
     if state.get('create') == 'lost':
         return 1
-    print('https://github.com/%s' % name)
+    print(json.dumps({'node_id': state.get('reply_id', made['node_id']), 'full_name': name, 'private': True}))
     return 0
+
+
+def node_id(found):
+    return found.get('node_id') or 'R_synthetic_' + hashlib.sha256(found['full_name'].encode()).hexdigest()[:8]
+
+
+def api_create(argv):
+    state = json.loads(Path(os.environ['FAKE_GH_REPOS']).read_text())
+    short = argv[5][len('name='):]
+    owner = state['user']['login'] if argv[3] == 'user/repos' else argv[3].split('/')[1]
+    if argv[4:] != ['-f', 'name=' + short, '-F', 'private=true', '-F', 'auto_init=true'] or not short:
+        sys.stderr.write('synthetic create refused\n')
+        return 1
+    return demo(['repo', 'create', '%s/%s' % (owner, short), '--private', '--add-readme'])
 
 
 def default_ref(target, name, branch):
@@ -240,6 +256,8 @@ def main(argv):
             return 1
         print(state['user']['login'])
         return 0
+    if argv[:3] == ['api', '-X', 'POST'] and len(argv) == 10 and re.fullmatch(r'user/repos|orgs/[^/]+/repos', argv[3]):
+        return api_create(argv)
     if argv[:2] == ['repo', 'create'] or (argv[:2] == ['repo', 'view'] and len(argv) > 2 and not argv[2].startswith('-')):
         return demo(argv)
     answered = seeded_file(argv)

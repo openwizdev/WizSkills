@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=935
+CASES=936
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -4080,22 +4080,30 @@ gi1_case 'GI7: another installation gets a full read' installation
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
 gi1_case "GI7: a switch from the account to the App gets a full read" switch
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
+# gi1_tools_case NAME CHANGE [WORLD [BEFORE AFTER]]: a cross-repository PR's
+# change gets a full read; BEFORE and AFTER are lines runs 3 and 4 print.
 gi1_tools_case() {
-  name=$1 change=$2
+  name=$1 change=$2 start=${3:-"$GI1 | pull(35; .repo = \"synthetic-owner/synthetic-tools\")"} tools_before=${4:-} tools_after=${5:-}
   selected "$name" || return 0
   take heavy || return 0
   cases=$((cases + 1))
   d=$tmp/gi1-$cases gi1_why=''
-  mkdir "$d" && world check.json "$GI1 | pull(35; .repo = \"synthetic-owner/synthetic-tools\")" "$d" > "$d/world.json" \
+  mkdir "$d" && world check.json "$start" "$d" > "$d/world.json" \
     || { bad "$name" "setup"; return; }
   gi1_pair 1 0 && gi1_read 1 && gi1_pair 2 60 && gi1_read 2 && gi1_pair 3 120 && gi1_unchanged 3 \
     || { bad "$name" "$gi1_why"; return; }
+  [ -z "$tools_before" ] || grep -qxF "$tools_before" "$d/out-3" || { bad "$name" "run 3 printed $(cat "$d/out-3")"; return; }
   gi1_change "$change" || { bad "$name" "can't make the change"; return; }
   gi1_pair 4 180 && gi1_full 4 || { bad "$name" "$gi1_why"; return; }
+  [ -z "$tools_after" ] || grep -qxF "$tools_after" "$d/out-4" || { bad "$name" "run 4 printed $(cat "$d/out-4")"; return; }
   echo "ok   $name"
 }
 gi1_tools_case "cross-repository PR: its new verdict gets a full read (#2376)" 'pr_say(35; 3502; "11:59"; "VERDICT: APPROVE at \(sha(35))")'
 gi1_tools_case "cross-repository PR: its new head gets a full read (#2376)" 'pull(35; .head = sha("35f"))'
+gi1_tools_case "cross-repository PR: a same-file merge into its own repository's base gets a full read (#2376 R4)" \
+  'main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pull(24; .repo = "synthetic-owner/synthetic-tools")' \
+  "store31 | $TOOLS" "merge #31 for #12 at $S31: APPROVE and CI green" \
+  "re-test #31 for #12 at $S31: main changed src/store/store.rs in #24 after 2026-11-01T10:30:00Z, which its CI may not have tested; run its CI again on the latest main"
 if [ -s "$tmp/gi1-points.txt" ]; then cat "$tmp/gi1-points.txt"; fi
 
 ### GI2 (#2544): GitHub's messages wake a spec's fleet thread through its loop
@@ -4166,7 +4174,7 @@ case ${TEST_ONLY:-} in
   'WZ-PROBE:*') expected=3 ;;
   'GI2:*') expected=13 ;;
   'CW-G:*') expected=2 ;;
-  'cross-repository PR:*') expected=11 ;;
+  'cross-repository PR:*') expected=12 ;;
 esac
 [ "$cases" = "$expected" ] || bad 'the selected cases ran' "$cases cases ran, not $expected: is \"$TEST_ONLY\" a case's name?"
 

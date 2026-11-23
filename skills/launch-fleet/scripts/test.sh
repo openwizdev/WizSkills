@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=929
+CASES=935
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -987,6 +987,23 @@ expect 'a refused review is tried again, never with another model' 0 check.json 
 review #31 for #12 at $S31: first review (retry after "review refused $S31: model at capacity")
 EOF
 expect 'CHANGES on this head: findings to the builder' 0 check.json 'reviewing31 | pr_say(31; 3102; "11:30"; "VERDICT: CHANGES at \(sha(31))\n\nFull review by a synthetic reviewer.\n\n- **R1 [medium]** a finding")' -- check <<EOF
+findings #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+PARKED31='reviewing31 | pr_say(31; 3102; "11:30"; "VERDICT: CHANGES at \(sha(31))\n\nFinal check of R2, by a synthetic reviewer.\n\nNext: park R2 as a decision for Jake.") | pr_say(31; 3103; "11:35"; "launch-fleet: parked \(sha(31)): R2 for Jake")'
+expect 'decision: a decision on a parked head wakes the fleet' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** fix once more: R2 at \(sha(31)). Why: synthetic.")' -- check <<EOF
+decision #31 for #12 at $S31: Jake's answer in comment 3104; act on it as references/reviews.md says
+EOF
+expect 'decision: the fleet record after the decision quiets it' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** fix once more: R2 at \(sha(31)). Why: synthetic.") | pr_say(31; 3105; "11:45"; "launch-fleet: findings sent \(sha(31)): decision 3104: fix once more")' -- check < /dev/null
+expect 'decision: a wake on the parked pull request prints the decision line' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** log and merge: R2 at \(sha(31)). Polish issues: #64. Why: synthetic.")' -- wake 31 <<EOF
+decision #31 for #12 at $S31: Jake's answer in comment 3104; act on it as references/reviews.md says
+EOF
+expect 'decision: a decision naming another head wakes nothing new' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** fix once more: R2 at \(sha(99)). Why: synthetic.")' -- check <<EOF
+findings #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect 'decision: a decision for another head that mentions this head in its reason wakes nothing new' 0 check.json "$PARKED31"' | pr_say(31; 3104; "11:40"; "**Orchestrator decision:** fix once more: R2 at \(sha(99)). Why: the same finding is also open at \(sha(31)).")' -- check <<EOF
+findings #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect 'decision: an outsider decision on a parked head wakes nothing new' 0 check.json "$PARKED31"' | pr_by(31; 3104; "11:40"; outsider; "**Orchestrator decision:** fix once more: R2 at \(sha(31)). Why: synthetic.")' -- check <<EOF
 findings #31 for #12 at $S31: tell its builder, thread thr_syn12
 EOF
 expect 'findings already sent: wait for a new head' 0 check.json 'reviewing31 | pr_say(31; 3102; "11:30"; "VERDICT: CHANGES at \(sha(31))") | pr_say(31; 3103; "11:35"; "launch-fleet: findings sent \(sha(31))")' -- check < /dev/null

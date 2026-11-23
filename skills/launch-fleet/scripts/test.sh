@@ -3708,18 +3708,22 @@ EOF
 
 # skill_has NAME TEXT / skill_lacks NAME REGEX: one case on the skill's text beside this folder,
 # SKILL.md and its references (WS8 moved branch detail there, #1181).
-SKILL="$HERE/../SKILL.md $HERE/../references/*.md"
+skill_text() { cat "$HERE/../SKILL.md" "$HERE"/../references/*.md; }
 skill_has() {
   [ -z "${TEST_ONLY:-}" ] || [ "$1" = "$TEST_ONLY" ] || return 0
   cases=$((cases + 1))
-  # shellcheck disable=SC2086 # the list is the skill's own files
-  if cat $SKILL | grep -qF -- "$2"; then echo "ok   $1"; else bad "$1" "SKILL.md lacks: $2"; fi
+  text=$(skill_text) || { bad "$1" "can't read the skill text"; return; }
+  if printf '%s\n' "$text" | grep -qF -- "$2"; then echo "ok   $1"; else bad "$1" "SKILL.md lacks: $2"; fi
 }
 skill_lacks() {
   [ -z "${TEST_ONLY:-}" ] || [ "$1" = "$TEST_ONLY" ] || return 0
   cases=$((cases + 1))
-  # shellcheck disable=SC2086
-  if cat $SKILL | grep -qiE -- "$2"; then bad "$1" "SKILL.md still has: $(cat $SKILL | grep -iE -- "$2" | head -n 1)"; else echo "ok   $1"; fi
+  text=$(skill_text) || { bad "$1" "can't read the skill text"; return; }
+  if match=$(printf '%s\n' "$text" | grep -im 1 -E -- "$2"); then
+    bad "$1" "SKILL.md still has: $match"
+  else
+    echo "ok   $1"
+  fi
 }
 if take; then
   skill_lacks 'skill: no superseded base-moved merge text' 'base moved'
@@ -3877,7 +3881,7 @@ expect 'OB7a: a person'"'"'s ticket keeps a newer manual hold' 0 check.json "$OB
 expect 'OB7a: a newer live hold keeps an approved contract hold held' 0 check.json "$OB7A | edit(13; 1302; \"11:40\"; \"launch-fleet: held live: verified live check still required\")" -- check < /dev/null
 expect 'OB7a: a newer plain hold instruction keeps an approved contract hold held' 0 check.json "$OB7A | edit(13; 1302; \"11:40\"; \"Orchestrator (ops): **held for production/live: wait for the live check too.**\")" -- check < /dev/null
 expect 'OB7a: a manual hold older than the approval stays unresolved' 0 check.json "$OB7A | issue(13; .comments |= map(if .id == 1302 then .at = at(\"11:10\") else . end))" -- check < /dev/null
-expect 'OB7a: a manual hold ended before the held label went on does not block' 0 check.json "$OB7A | issue(13; .comments |= map(if .id == 1302 then .id = 1300 | .at = at(\"10:30\") else . end) | .comments |= sort_by(.id))" -- check <<EOF
+expect 'OB7a: a manual hold before the latest held label event does not block this contract release' 0 check.json "$OB7A | issue(13; .comments |= map(if .id == 1302 then .id = 1300 | .at = at(\"10:30\") else . end) | .comments |= sort_by(.id))" -- check <<EOF
 release #13: approved again since its hold; take the held label off
 EOF
 

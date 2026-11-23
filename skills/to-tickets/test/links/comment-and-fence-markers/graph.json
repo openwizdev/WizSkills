@@ -1,0 +1,83 @@
+{
+  "schema": "openwiz.plan-links.v1",
+  "kind": "graph",
+  "repo": "synthetic-owner/synthetic-repo",
+  "read_at": "2026-11-22T08:00:00Z",
+  "source": {
+    "kind": "spec",
+    "spec": 9200
+  },
+  "tickets": [
+    {
+      "number": 9201,
+      "title": "Synthetic ticket 9201",
+      "state": "OPEN",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "milestone": null,
+      "parent": 9200,
+      "blocked_by": [],
+      "body": "## Links\n\nnone\n",
+      "start_recorded": false,
+      "pull_requests": []
+    },
+    {
+      "number": 9202,
+      "title": "Synthetic ticket 9202",
+      "state": "OPEN",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "milestone": null,
+      "parent": 9200,
+      "blocked_by": [
+        {
+          "number": 9201,
+          "state": "OPEN"
+        }
+      ],
+      "body": "## What to build\n\nSynthetic work.\n\n```html\n<!--\n```\n\n## Links\n\n- #9201 real: the synthetic record shape, which the page reads\n",
+      "start_recorded": false,
+      "pull_requests": []
+    },
+    {
+      "number": 9203,
+      "title": "Synthetic ticket 9203",
+      "state": "OPEN",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "milestone": null,
+      "parent": 9200,
+      "blocked_by": [
+        {
+          "number": 9201,
+          "state": "OPEN"
+        }
+      ],
+      "body": "## What to build\n\n<!--\n```\n-->\n\n## Links\n\n- #9201 real: the synthetic record shape, which the button writes\n",
+      "start_recorded": false,
+      "pull_requests": []
+    },
+    {
+      "number": 9204,
+      "title": "Synthetic ticket 9204",
+      "state": "OPEN",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "milestone": null,
+      "parent": 9200,
+      "blocked_by": [
+        {
+          "number": 9201,
+          "state": "OPEN"
+        }
+      ],
+      "body": "## What to build\n\nSynthetic work.\n\n<!-- a note --> <!--\n## Links\n\n- #9201 real: the synthetic record shape, which the command reads\n\n## Notes\n\n-->\n",
+      "start_recorded": false,
+      "pull_requests": []
+    }
+  ]
+}

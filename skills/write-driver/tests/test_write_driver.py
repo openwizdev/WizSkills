@@ -767,6 +767,214 @@ class ExpiredLogin(Base):
         self.assertEqual(self.saved()['lessons']['expired-login'], 'not run')
 
 
+KEY_OPENWIZ = FIXTURES / 'key-openwiz'
+KEY_DRIVER = r'''#!/usr/bin/env python3
+"""A synthetic key-host driver: start sends one POST through the key helper beside it, as driver v1 N4 says."""
+import json, os, subprocess, sys
+HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'kernel', 'driver-kit', 'hostkey.py')
+HOST = 'examplehost'
+
+
+def refuse(error, next_):
+    print(json.dumps({'error': error, 'next': next_}))
+    sys.exit(1)
+
+
+def ask(method, path, body=None):
+    request = {'host': HOST, 'method': method, 'path': path}
+    if body is not None:
+        request['body'] = body
+    p = subprocess.run([sys.executable, '-I', HELPER], input=json.dumps(request), capture_output=True, text=True,
+                       timeout=120)
+    out = json.loads(p.stdout)
+    if p.returncode:
+        refuse('the key helper refused: ' + out['error'], out['next'])
+    return out
+
+
+def main():
+    cmd = sys.argv[1]
+    req = json.loads(sys.stdin.read() or '{}')
+    if cmd == 'start':
+        PROBE
+        out = ask('POST', '/v1/runs', {'ticket': req['ticket']})
+        if out['status'] == 401:
+            refuse('the host answered 401: the sign-in has ended', NEXT)
+        print(json.dumps({'run': 'run-synthetic-1'}))
+        return 0
+    print(json.dumps({'run': req.get('run'), 'stopped': True}))
+    return 0
+
+
+sys.exit(main())
+'''
+SIGN_IN_NEXT = "'sign in to %s on %s yourself, then start again' % (req['harness'], HOST)"
+
+
+class KeyHostExpiredLogin(Base):
+    """The expired-login lesson's key-host route: the driver's start against the kit's fake host answering 401."""
+
+    def key_driver(self, name, probe='pass', next_=SIGN_IN_NEXT, change=None):
+        folder = self.tmp / name / 'adapters' / 'examplehost'
+        folder.mkdir(parents=True)
+        text = KEY_DRIVER.replace('PROBE', probe).replace('NEXT', next_)
+        (folder / 'driver').write_text(change(text) if change else text)
+        (folder / 'driver').chmod(0o755)
+        (folder / 'fixtures').mkdir()
+        (folder / 'fixtures' / 'reply.json').write_text('{"run": "synthetic"}')
+        return folder / 'driver'
+
+    def lesson(self, driver, *extra, openwiz=KEY_OPENWIZ, check=None):
+        return self.wd('lesson', 'expired-login', '--state', self.state, '--driver', driver, '--harness',
+                       'exampleagent', '--key-host', 'examplehost', '--openwiz', openwiz, *extra, check=check)
+
+    def test_a_key_host_driver_that_turns_the_fake_hosts_401_into_the_sign_in_next_passes(self):
+        """catches: a key-host driver, which never runs a local harness, never reaching a passing lesson"""
+        self.begin()
+        p = self.lesson(self.key_driver('fixed'), check=0)
+        self.assertIn('expired-login pass', p.stdout)
+        self.assertEqual(self.saved()['lessons']['expired-login'], 'pass')
+
+    def test_a_key_host_driver_that_answers_a_run_after_the_401_fails_silent_start(self):
+        """catches: a driver that ignores the host's 401 and answers a run passing the lesson"""
+        self.begin()
+        driver = self.key_driver('silent', change=lambda t: t.replace('== 401', '== 999'))
+        p = self.lesson(driver, check=0)
+        self.assertIn('expired-login fail: silent-start', p.stdout)
+        self.assertEqual(self.saved()['lessons']['expired-login'], 'fail')
+
+    def test_a_key_host_driver_whose_401_error_names_another_next_fails(self):
+        """catches: a 401 turned into a retry, or into a sign-in for another harness, passing the lesson"""
+        self.begin()
+        for name, next_ in (('retry', "'check the host, then retry'"),
+                            ('other-harness', "'sign in to otheragent on examplehost yourself, then start again'")):
+            with self.subTest(name):
+                p = self.lesson(self.key_driver(name, next_=next_), check=0)
+                self.assertIn('expired-login fail: no-sign-in-next', p.stdout)
+
+    def test_a_key_host_driver_that_never_reaches_the_fake_host_proves_nothing(self):
+        """catches: a driver that prints the sign-in step without asking the host being read as passing"""
+        self.begin()
+        driver = self.key_driver('no-host', probe="refuse('the sign-in has ended', %s)" % SIGN_IN_NEXT)
+        p = self.lesson(driver, check=1)
+        self.assertIn("never reached the kit's fake host through the key helper", p.stdout)
+        self.assertNotIn('expired-login', self.saved()['lessons'])
+
+    def test_the_key_host_probe_reaches_only_the_fake_host_and_never_a_key(self):
+        """catches: the key-host route's socket opening the network, a host socket, the user's files or key"""
+        import socket
+        self.begin()
+        self.env['EXAMPLEHOST_API_KEY'] = SECRET
+        host_file = self.tmp / 'host-file'
+        host_file.write_text('synthetic host file\n')
+        tcp = socket.socket()
+        tcp.bind(('127.0.0.1', 0))
+        tcp.listen(5)
+        tcp.setblocking(False)
+        self.addCleanup(tcp.close)
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp.bind(('127.0.0.1', 0))
+        udp.setblocking(False)
+        self.addCleanup(udp.close)
+        unix = socket.socket(socket.AF_UNIX)
+        unix.bind(str(self.tmp / 'host.sock'))
+        unix.listen(5)
+        unix.setblocking(False)
+        self.addCleanup(unix.close)
+        sock = '__import__("socket")'
+        probes = {
+            'another loopback port': '%s.create_connection(("127.0.0.1", %d), 2)' % (sock, tcp.getsockname()[1]),
+            'a datagram': 's = %s.socket(2, 2); s.sendto(b"x", ("127.0.0.1", %d))'
+                          % (sock, udp.getsockname()[1]),
+            'a raw socket': '%s.socket(2, 3, 1)' % sock,
+            'SCTP': '%s.socket(2, 1, 132)' % sock,
+            'IPv6': '%s.socket(10, 1)' % sock,
+            'a host socket': 's = %s.socket(1); s.connect(%r)' % (sock, str(self.tmp / 'host.sock')),
+            'a listening port': 's = %s.socket(); s.bind(("127.0.0.1", 0)); s.listen(1)' % sock,
+            'a host file': 'open(%r).read()' % str(host_file),
+            'the real key': 'assert %r in json.dumps(dict(os.environ))' % SECRET,
+            'the parent process environment': 'open("/proc/%d/environ" % os.getppid(), "rb").read()'}
+        for n, (name, probe) in enumerate(probes.items()):
+            with self.subTest(name):
+                guarded = ('try:\n            %s\n        except Exception:\n            pass\n        else:\n'
+                           "            refuse('the probe reached it', 'nothing')" % probe)
+                p = self.lesson(self.key_driver('probe-%d' % n, probe=guarded), check=0)
+                self.assertIn('expired-login pass', p.stdout)
+        for listening in (tcp, unix):
+            with self.assertRaises(BlockingIOError):
+                listening.accept()
+        with self.assertRaises(BlockingIOError):
+            udp.recv(1)
+
+    def test_a_key_host_route_it_cannot_check_runs_nothing(self):
+        """catches: an unregistered host, a missing helper or a half-given route running the driver anyway"""
+        self.begin()
+        marker = self.tmp / 'driver-ran'
+        driver = self.key_driver('refused', probe='open(%r, "w").write("x")' % str(marker))
+        no_helper = self.tmp / 'no-helper'
+        shutil.copytree(KEY_OPENWIZ, no_helper)
+        (no_helper / 'kernel' / 'driver-kit' / 'hostkey.py').unlink()
+        base = ['lesson', 'expired-login', '--state', self.state, '--driver', driver, '--harness', 'exampleagent']
+        for name, args in (('an unregistered host', ['--key-host', 'otherhost', '--openwiz', KEY_OPENWIZ]),
+                           ('no helper', ['--key-host', 'examplehost', '--openwiz', no_helper]),
+                           ('no checkout', ['--key-host', 'examplehost']),
+                           ('no key host', ['--openwiz', KEY_OPENWIZ])):
+            with self.subTest(name):
+                p = self.wd(*base, *args)
+                self.assertIn(p.returncode, (1, 2), p.stdout + p.stderr)
+                self.assertIn('key', p.stdout + p.stderr)
+                self.assertNotIn('otherhost', p.stdout)
+        self.assertFalse(marker.exists())
+        self.assertNotIn('expired-login', self.saved()['lessons'])
+
+    def test_without_landlocks_tcp_rules_the_key_host_route_never_runs_the_driver(self):
+        """catches: a kernel whose Landlock can't limit TCP running the key-host driver with sockets open"""
+        import contextlib
+        import io
+        from unittest import mock
+        self.begin()
+        marker = self.tmp / 'driver-ran'
+        driver = self.key_driver('old-kernel', probe='open(%r, "w").write("x")' % str(marker))
+        out = io.StringIO()
+        with mock.patch.object(wd, 'landlock_abi', return_value=3), contextlib.redirect_stdout(out):
+            code = wd.main(['lesson', 'expired-login', '--state', str(self.state), '--driver', str(driver),
+                            '--harness', 'exampleagent', '--key-host', 'examplehost', '--openwiz', str(KEY_OPENWIZ)])
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertIn('cannot isolate', out.getvalue())
+        self.assertFalse(marker.exists())
+        self.assertNotIn('expired-login', self.saved()['lessons'])
+
+    def test_the_skill_teaches_the_key_host_route_in_place_of_out_of_reach(self):
+        """keeper of KY4's out-of-reach test: the key-host lines now name the working route"""
+        text = key_host_lines()
+        self.assertNotIn('out of reach', text)
+        self.assertIn('`$W lesson expired-login --state <state> --driver <driver> --harness <h> --key-host '
+                      "<the host's registered name> --openwiz <openwiz> [--asked <id>]`", text)
+        self.assertIn("the kit's fake host answering 401", text)
+        self.assertIn('no real key and no live host', text)
+        self.assertIn('fail `start` with `next` exactly the contract\'s `sign_in_next`', text)
+
+    def test_the_contract_names_the_key_host_route(self):
+        """catches: the carried contract copy losing the route the probe runs"""
+        text = ' '.join(wd.CONTRACT.read_text().split())
+        self.assertIn('**Key-host route.**', text)
+        self.assertIn("the kit's fake host answering 401", text)
+
+    @unittest.skipUnless(os.environ.get('WRITE_DRIVER_OPENWIZ'),
+                         'set WRITE_DRIVER_OPENWIZ to an OpenWiz checkout with the key helper to run the real fake host')
+    def test_the_key_host_route_runs_against_the_real_kits_fake_host_and_helper(self):
+        """catches: the route working only against write-driver's synthetic fake host and helper"""
+        openwiz = Path(os.environ['WRITE_DRIVER_OPENWIZ']).resolve()
+        self.begin()
+        for name, change, read in (('fixed', None, 'expired-login pass'),
+                                   ('silent', lambda t: t.replace('== 401', '== 999'),
+                                    'expired-login fail: silent-start')):
+            with self.subTest(name):
+                p = self.lesson(self.key_driver(name, change=change), openwiz=openwiz, check=0)
+                print(p.stdout, end='')
+                self.assertIn(read, p.stdout)
+
+
 class Share(Base):
     def offer(self):
         self.passing_report(23)

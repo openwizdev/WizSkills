@@ -77,7 +77,6 @@ def gh_graphql(document, variables, runner=subprocess.run):
 
 
 def gh_issue(repo, number, runner=subprocess.run):
-    """One issue's state, or None when the repository has no issue with that number."""
     owner, name = repo.split('/')
     done = runner(['gh', 'api', 'graphql', '-f', 'query=' + read_only(ISSUE), '-f', 'owner=' + owner,
                    '-f', 'name=' + name, '-F', 'number=%d' % number], capture_output=True, text=True)
@@ -153,7 +152,6 @@ def local_git(clone, args, runner=subprocess.run):
 
 
 def added_lines(clone, first, head, path, git):
-    """The lines of path at head that git diff first head adds, or None when git can't say."""
     for obj in (first + '^{commit}', head + '^{commit}', head + ':' + path):
         if local_git(clone, ['cat-file', '-e', obj], git).returncode != 0:
             return None

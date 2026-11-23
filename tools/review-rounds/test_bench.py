@@ -315,7 +315,6 @@ GIT_ENV = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_AUT
 
 
 def synthetic_clone(where):
-    """Three commits: A is the first verdict's head, B the fix, C a later fix."""
     def git(*args):
         return subprocess.run(['git', '-C', where] + list(args), check=True, capture_output=True, text=True,
                               env=dict(os.environ, **GIT_ENV)).stdout.strip()
@@ -342,7 +341,6 @@ def synthetic_clone(where):
 def late_repos(base, a, b, c):
     rounds = [
         comment('VERDICT: CHANGES at %s\n\n- **R1 [blocking]** `a.py:5` (Spec) First review.' % a, minute=1),
-        # At B, a.py lines 1-2 are new and line 7 is the changed a5; line 5 is the untouched a3.
         comment('VERDICT: CHANGES at %s\n\n- **R1 [blocking]** resolved at %s.\n'
                 '- **R2 [blocking]** `a.py:7` (Spec) On the fixed line.\n'
                 '- **R3 [blocking]** `a.py:5` (Sweep) On an untouched line the fix moved down.\n'
@@ -351,7 +349,6 @@ def late_repos(base, a, b, c):
                 '- **R6 [blocking]** `a.py:2-4` (Spec) A range that starts on an added line.\n'
                 '- **R7 [blocking]** `docs/x.md` (Spec) No line named.\n'
                 '- **R0 [polish]** `b.py:1` (Spec) Not blocking. Polish issue: #31.\n' % (b, b), minute=2),
-        # From A to C, line 11 is the changed a9 and line 12 the untouched a10.
         comment('VERDICT: CHANGES at %s\n\n- **R8 [blocking]** `a.py:11` (Sweep) On the later fix.\n'
                 '- **R9 [blocking]** `a.py:12` (Spec) Untouched since the first review.\n'
                 '- **R10 [polish]** `a.py:1` (Sweep) Polish issue: #32.\n' % c, minute=3),
@@ -389,7 +386,6 @@ ISSUES = {
     ('synthetic/late', 31): polish(31, 'CLOSED', 'COMPLETED', '2026-01-13T00:00:00Z'),
     ('synthetic/late', 32): polish(32),
     ('synthetic/late', 33): polish(33, 'CLOSED', 'NOT_PLANNED', '2026-01-13T00:00:00Z'),
-    # Merged 2026-01-12, so due 2026-01-19: closed after that, it was still open when due.
     ('synthetic/late', 34): polish(34, 'CLOSED', 'COMPLETED', '2026-01-19T12:00:00Z'),
     ('synthetic/late', 35): polish(35),
     ('synthetic/tickets', 40): polish(40, 'CLOSED', 'COMPLETED', '2026-01-14T00:00:00Z'),
@@ -458,7 +454,6 @@ class LateFindings(unittest.TestCase):
         self.assertEqual(result['all']['synthetic/beta']['withdrawn_ignored'], {
             'blocking': 2, 'withdrawn': 0, 'withdrawn_pct': 0, 'polish': 0, 'not_due': 0, 'unknown': 0, 'due': 0,
             'ignored': 0, 'ignored_pct': None, 'either_pct': 0})
-        # The PR merged 2026-01-16 isn't due until 2026-01-23, so its polish issue #35 is never read.
         self.assertEqual(sorted(lookups), [('synthetic/late', n) for n in (31, 32, 33, 34)]
                          + [('synthetic/tickets', n) for n in (40, 41, 42)])
         self.assertIn('| synthetic/late | 3 | 3 | 3 | 10 | 2 (20%) | 8 | 1 | 2 | 3 of 5 (60%) | 33% |',
@@ -466,7 +461,6 @@ class LateFindings(unittest.TestCase):
 
     def test_diff_size_splits_tests_from_code_in_the_bands(self):
         text, result = self.late_run()
-        # Base to C: a.py 12, b.py 5 and c.py 1 changed lines; tests/test_a.py 3.
         size = {'sized': 1, 'unknown': 2, 'code_lines': 18, 'test_lines': 3, 'code_files': 3, 'test_files': 1}
         self.assertEqual(result['all']['synthetic/late'].get('size'), size)
         self.assertEqual(result['ticket_bands']['under 300']['size'], dict(size, unknown=0))

@@ -1,0 +1,190 @@
+{
+ "about": "Synthetic, on #2253's head and runs: removed for a merge conflict.",
+ "graphql": [
+  {
+   "data": {
+    "repository": {
+     "pullRequest": {
+      "state": "OPEN",
+      "headRefOid": "0c54d3bb82cb197314d6d028ae78c4fdb5ad66c4",
+      "isInMergeQueue": false,
+      "mergeCommit": null,
+      "mergeQueueEntry": null,
+      "added": {
+       "nodes": [
+        {
+         "createdAt": "2026-11-22T09:49:14Z"
+        }
+       ]
+      },
+      "removed": {
+       "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": "Y3Vyc29yOnYyOpPPAAABmquCbCgB"
+       },
+       "nodes": [
+        {
+         "createdAt": "2026-11-22T10:00:03Z",
+         "reason": "merge_conflict",
+         "actor": {
+          "login": "github-merge-queue"
+         }
+        }
+       ]
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "oid": "0c54d3bb82cb197314d6d028ae78c4fdb5ad66c4",
+          "statusCheckRollup": {
+           "contexts": {
+            "pageInfo": {
+             "hasNextPage": false,
+             "endCursor": "MTU"
+            },
+            "nodes": [
+             {
+              "__typename": "CheckRun",
+              "name": "changelog",
+              "status": "COMPLETED",
+              "conclusion": "CANCELLED",
+              "startedAt": "2026-11-22T09:33:53Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "changelog",
+              "status": "COMPLETED",
+              "conclusion": "CANCELLED",
+              "startedAt": "2026-11-22T09:33:56Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "lint",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-11-22T09:33:55Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "changelog",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-11-22T09:34:10Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "changelog",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-11-22T09:43:56Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "privacy",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-11-22T09:33:55Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "privacy",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-11-22T09:33:56Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "privacy",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-11-22T09:34:06Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "privacy",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-11-22T09:43:57Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "rust",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-11-22T09:33:55Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "release (1)",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-11-22T09:33:55Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "release (2)",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-11-22T09:33:55Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "owned-paths",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-11-22T09:33:55Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "ci",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-11-22T09:43:07Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "name": "web-test",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-11-22T09:43:11Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      }
+     }
+    }
+   }
+  }
+ ],
+ "comments": [
+  {
+   "id": 7000000000,
+   "user": {
+    "login": "jparker2006"
+   },
+   "created_at": "2026-11-22T09:48:56Z",
+   "body": "VERDICT: APPROVE at 0c54d3bb82cb197314d6d028ae78c4fdb5ad66c4"
+  },
+  {
+   "id": 7000000001,
+   "user": {
+    "login": "jparker2006"
+   },
+   "created_at": "2026-11-22T09:49:10Z",
+   "body": "launch-fleet: merge queued 0c54d3bb82cb197314d6d028ae78c4fdb5ad66c4: APPROVE 7000000000 under the synthetic plan approval"
+  },
+  {
+   "id": 7000000002,
+   "user": {
+    "login": "jparker2006"
+   },
+   "created_at": "2026-11-22T10:05:00Z",
+   "body": "launch-fleet: merge dropped 0c54d3bb82cb197314d6d028ae78c4fdb5ad66c4: merge_conflict at 2026-11-22T10:00:03Z"
+  }
+ ]
+}

@@ -4151,6 +4151,43 @@ expect "GI2: the project check and the fleet thread's own check are unchanged" 0
 start #13: W3: widget page (spec #10)
 EOF
 
+### FR9 (#2627): the wide reads are GraphQL
+
+FR9_SINGLES='own_approval(70; 7002; "09:00") | reduce range(71; 91) as $n (.; closed_single($n; "11:00"))'
+FR9_HELD="$OWN13"' claim13 | other_spec | '"$HELD81"
+expect 'FR9: the check reads the open issues and the issues outside specs with no REST call' 0 check.json "$FR9_SINGLES" FAKE_GH_PAGE=5 FAKE_GH_FAIL=issues_page= -- check <<EOF
+start #70: Fix the broken link in the widget docs (approved on its own)
+EOF
+log_has 'FR9: the check reads the open issues and the issues outside specs with no REST call' 6 '^graphql Search cursor='
+expect 'FR9: every reads the open issues and the issues outside specs with no REST call' 0 check.json "$FR9_SINGLES" FAKE_GH_FAIL=issues_page= -- every <<EOF
+start #70: Fix the broken link in the widget docs (approved on its own)
+EOF
+expect "FR9: a fleet thread's check reads the open issues in pages with no REST call" 0 check.json 'merge12' FAKE_GH_PAGE=1 FAKE_GH_FAIL=issues_page= -- spec 10 <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'FR9: a start claim searches the open work with no REST call' 0 check.json "$FR9_HELD" FAKE_GH_FAIL=issues_page= -- claim 13 1301 <<EOF
+withdraw #13: its owned paths collide with #81, which is running or claimed first
+EOF
+log_has 'FR9: a start claim searches the open work with no REST call' 3 '^graphql Search cursor=none$'
+expect 'FR9: a partial page of the open issues is unreadable, never a shorter list' 2 check.json "$FR9_SINGLES" FAKE_GH_PAGE=5 FAKE_GH_SHORT=Specs -- check <<EOF
+the open issues list gave
+EOF
+expect 'FR9: a partial page of the issues outside specs is unreadable, never a shorter list' 2 check.json "$FR9_SINGLES" FAKE_GH_PAGE=5 FAKE_GH_SHORT=Search -- check <<EOF
+the search listed 16 of 21 issues outside specs
+EOF
+expect 'FR9: a partial page of the open work is unreadable, never a shorter list' 2 check.json "$FR9_HELD" FAKE_GH_SHORT=Search -- claim 13 1301 <<EOF
+open tickets, so a colliding start could be missed
+EOF
+expect 'FR9: a null open issue is unreadable' 2 check.json "$FR9_SINGLES" FAKE_GH_NULL=Specs -- spec 10 <<EOF
+can't read the open issues
+EOF
+expect 'FR9: a null issue outside specs is unreadable' 2 check.json "$FR9_SINGLES" FAKE_GH_NULL=Search -- every <<EOF
+can't read the issues outside specs
+EOF
+expect 'FR9: a search that fails is unreadable, never an empty list' 2 check.json "$FR9_SINGLES" FAKE_GH_ERRORS=Search -- check <<EOF
+the GitHub query Search answered with errors
+EOF
+
 ### Every case ran, and every call was a read
 
 if [ -n "$WORKER" ]; then
@@ -4173,6 +4210,7 @@ case ${TEST_ONLY:-} in
   'GI2:*') expected=13 ;;
   'CW-G:*') expected=2 ;;
   'cross-repository PR:*') expected=12 ;;
+  'FR9:*') expected=10 ;;
 esac
 [ "$cases" = "$expected" ] || bad 'the selected cases ran' "$cases cases ran, not $expected: is \"$TEST_ONLY\" a case's name?"
 

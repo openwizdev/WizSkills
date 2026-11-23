@@ -126,9 +126,37 @@ class Queue(unittest.TestCase):
     def test_2253_drop_is_told_with_githubs_reason_and_time(self):
         self.verdict('2253-dropped', f'dropped {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z', 0)
 
-    def test_2253_recorded_drop_goes_back_in_once_its_cancelled_duplicates_are_green(self):
-        self.verdict('2253-recorded', f'requeue {HEAD}: every required check is green on it, '
-                     'and its failed runs were cancelled duplicates', 0)
+    def test_2253_recorded_drop_waits_while_its_cancelled_runs_predate_the_enqueue(self):
+        self.verdict('2253-recorded', f'wait {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z may still stand: '
+                     'ci, privacy, web-test last ran before it', 0)
+
+    def test_2253_goes_back_in_once_its_checks_are_green_again(self):
+        self.verdict('2253-green-again', f'requeue {HEAD}: every required check ran again after the removal '
+                     'and is green', 0)
+
+    def test_old_cancelled_duplicates_never_excuse_a_new_failure(self):
+        self.verdict('old-duplicates', f'wait {HEAD}: failed_checks at 2026-11-22T10:00:03Z may still stand: '
+                     'ci, privacy, web-test last ran before it', 0)
+
+    def test_duplicates_cancelled_in_the_merge_group_go_back_in(self):
+        self.verdict('group-duplicates', f'requeue {HEAD}: every required check is green on it, '
+                     'and its failed runs in the merge group were cancelled duplicates', 0)
+
+    def test_a_real_failure_in_the_merge_group_beside_a_duplicate_waits(self):
+        value = fixture('group-duplicates')
+        contexts(value)['nodes'] += [
+            {'__typename': 'CheckRun', 'name': 'lint', 'status': 'COMPLETED', 'conclusion': 'FAILURE',
+             'startedAt': '2026-11-22T09:55:00Z'},
+            {'__typename': 'CheckRun', 'name': 'lint', 'status': 'COMPLETED', 'conclusion': 'SUCCESS',
+             'startedAt': '2026-11-22T09:56:00Z'}]
+        self.verdict(value, f'wait {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z may still stand: '
+                     'ci, privacy, web-test last ran before it', 0)
+
+    def test_duplicates_with_no_enqueue_read_never_go_back_in(self):
+        value = fixture('group-duplicates')
+        node(value)['added']['nodes'] = []
+        self.verdict(value, f'wait {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z may still stand: '
+                     'ci, privacy, web-test last ran before it', 0)
 
     def test_2253_re_queued_reads_queued(self):
         self.verdict('2253-requeued', 'queued', 0)
@@ -157,21 +185,21 @@ class Queue(unittest.TestCase):
                      'ci, privacy, web-test last ran before it', 0)
 
     def test_a_cancelled_run_with_no_green_run_after_it_is_no_duplicate(self):
-        value = fixture('2253-recorded')
+        value = fixture('group-duplicates')
         runs = contexts(value)['nodes']
         runs[:] = [r for r in runs if not (r['name'] == 'changelog' and r['conclusion'] == 'SUCCESS')]
         self.verdict(value, f'wait {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z may still stand: '
                      'ci, privacy, web-test last ran before it', 0)
 
     def test_a_cancelled_run_after_the_last_green_one_is_no_duplicate(self):
-        value = fixture('2253-recorded')
+        value = fixture('group-duplicates')
         contexts(value)['nodes'].append({'__typename': 'CheckRun', 'name': 'changelog', 'status': 'COMPLETED',
-                                         'conclusion': 'CANCELLED', 'startedAt': '2026-11-22T09:50:00Z'})
+                                         'conclusion': 'CANCELLED', 'startedAt': '2026-11-22T09:58:00Z'})
         self.verdict(value, f'wait {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z may still stand: '
                      'ci, privacy, web-test last ran before it', 0)
 
     def test_a_missing_required_check_waits(self):
-        value = fixture('2253-recorded')
+        value = fixture('group-duplicates')
         contexts(value)['nodes'][:] = [r for r in contexts(value)['nodes'] if r['name'] != 'web-test']
         self.verdict(value, f'wait {HEAD}: not green on it: web-test (no run)', 0)
 
@@ -202,10 +230,9 @@ class Queue(unittest.TestCase):
         self.verdict(value, f'dropped {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z', 0)
 
     def test_two_records_of_one_removal_are_one_drop(self):
-        value = fixture('2253-recorded')
+        value = fixture('2253-green-again')
         value['comments'].append(dict(value['comments'][-1], id=7000000009, created_at='2026-11-22T10:06:00Z'))
-        self.verdict(value, f'requeue {HEAD}: every required check is green on it, '
-                     'and its failed runs were cancelled duplicates', 0)
+        self.verdict(value, f'requeue {HEAD}: every required check ran again after the removal and is green', 0)
 
     def test_a_record_at_another_head_counts_for_nothing(self):
         value = fixture('2253-recorded')
@@ -213,7 +240,7 @@ class Queue(unittest.TestCase):
         self.verdict(value, f'dropped {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z', 0)
 
     def broken(self, change, why):
-        value = fixture('2253-recorded')
+        value = fixture('2253-green-again')
         change(value)
         self.unknown(value, why)
 
@@ -242,10 +269,12 @@ class Queue(unittest.TestCase):
                                  'removal'),
             'odd reason': (lambda v: node(v)['removed']['nodes'][0].update(reason='Branch protection'), 'removal'),
             'tied runs': (lambda v: contexts(v)['nodes'].append({'__typename': 'CheckRun', 'name': 'ci',
-                          'status': 'COMPLETED', 'conclusion': 'FAILURE', 'startedAt': '2026-11-22T09:43:07Z'}),
+                          'status': 'COMPLETED', 'conclusion': 'FAILURE', 'startedAt': '2026-11-22T11:40:00Z'}),
                           'ci'),
             'comments unread': (lambda v: v.update(comments='fail'), 'comments'),
             'no record authors': (lambda v: v.update(fleet=None), 'record authors'),
+            'author not an object': (lambda v: v['comments'][0].update(user='synthetic-person'), 'comment'),
+            'comment not an object': (lambda v: v['comments'].append('synthetic'), 'comment'),
             'record names no removal': (lambda v: v['comments'][-1].update(
                 body=v['comments'][-1]['body'].replace('10:00:03Z', '10:00:04Z')), 'names no removal'),
             'malformed record': (lambda v: v['comments'][-1].update(

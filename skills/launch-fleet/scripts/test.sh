@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=931
+CASES=937
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1576,6 +1576,15 @@ elif mkdir -p "$A/remote" "$A/bin" "$A/install/github-app" \
     app_off "$BACKTICK" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj
   app_case 'app identity: an on row inside a fenced example reads as off, and loop.sh mints nothing' \
     app_off "$FENCED" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj
+  FENCE4='.files["docs/agents/fleet.md"] += "\n````md\n```\n| App identity | on |\n```\n````\n"'
+  TILDE='.files["docs/agents/fleet.md"] += "\n~~~md\n```sh\n| App identity | on |\n~~~\n"'
+  TRAILING='.files["docs/agents/fleet.md"] += "\n```\n```not a closing fence\n| App identity | on |\n```\n"'
+  app_case 'app identity: an on example inside a four-backtick fence holding a three-backtick line reads as off' \
+    app_off "$FENCE4" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj
+  app_case 'app identity: an on example inside a tilde fence holding a backtick line reads as off' \
+    app_off "$TILDE" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj
+  app_case 'app identity: an on example after a fence-like line with trailing text reads as off' \
+    app_off "$TRAILING" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj
   app_partial() {
     app_world . && ! app_loop OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj FAKE_PARTIAL=1 \
       && [ ! -s "$A/openwiz.log" ] && [ -z "$(grep -vx none "$A/gh-token.log")" ] && grep -qxF "$off" "$A/err"
@@ -1591,12 +1600,12 @@ elif mkdir -p "$A/remote" "$A/bin" "$A/install/github-app" \
       && [ -n "$(sed 1d "$A/gh-token.log")" ] && [ -z "$(sed 1d "$A/gh-token.log" | grep -vx synthetic-app-token-2394)" ]
   }
   app_case 'app identity: with the row on, loop.sh reads it as the account, then mints and reads as the App (GI7)' app_on
-  python3 -I - "$HERE/../references/identity.md" > "$A/block.sh" <<'PY' || bad 'app identity: the block' "can't extract it"
+  python3 -I - "$HERE/../references/identity.md" "$(cd "$HERE/../../setup" && pwd)" > "$A/block.sh" <<'PY' || bad 'app identity: the block' "can't extract it"
 import sys
 text = open(sys.argv[1]).read()
 block = text.split('<!-- GI7 identity -->', 1)[1].split('```sh\n', 1)[1].split('```', 1)[0]
 sys.stdout.write(''.join(line[4:] if line.startswith('    ') else line.lstrip() + '\n' if not line.strip() else line
-                         for line in block.splitlines(True)).replace('<owner>/<repo>', 'synthetic-owner/synthetic-repo'))
+                         for line in block.splitlines(True)).replace('<owner>/<repo>', 'synthetic-owner/synthetic-repo').replace("<the setup skill's folder>", sys.argv[2]))
 PY
   printf '%s\nprintf "token=%%s\\n" "$app_token"\n' "$(cat "$A/block.sh")" > "$A/block-run.sh"
   app_block() {
@@ -1613,6 +1622,9 @@ PY
   app_case 'app identity: the identity block reads an unmatched backtick around on as off' block_off "$BACKTICK"
   app_case 'app identity: the identity block reads an on row inside a fenced example as off' block_off "$FENCED"
   app_case 'app identity: the identity block reads a read that prints an on row and then fails as off' block_off . FAKE_PARTIAL=1
+  app_case 'app identity: the identity block reads an on example inside a four-backtick fence as off' block_off "$FENCE4"
+  app_case 'app identity: the identity block reads an on example inside a tilde fence as off' block_off "$TILDE"
+  app_case 'app identity: the identity block reads an on example after a fence-like line with trailing text as off' block_off "$TRAILING"
   block_on() {
     app_block '.files["docs/agents/fleet.md"] += "| App identity | on |\n"' \
       && [ "$(cat "$A/openwiz.log")" = 'github token --repository synthetic-owner/synthetic-repo' ] \
@@ -1622,7 +1634,7 @@ PY
   }
   app_case 'app identity: the identity block with the row on mints as today (GI7)' block_on
 else
-  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 13))
+  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 19))
 fi
 
 expect 'claim: the only claim goes' 0 check.json 'merge12 | say(13; 1301; "11:58"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
@@ -4196,7 +4208,7 @@ only_reads "$tmp"/case-*/gh*.log "$tmp"/cache-*/gh.log "$tmp"/loop/log[0-9] "$tm
 expected=${TEST_EXPECTED:-1}
 case ${TEST_ONLY:-} in
   loop) expected=4 ;;
-  'app identity') expected=13 ;;
+  'app identity') expected=19 ;;
   fleet-loop) expected=2 ;;
   'contexts:*') expected=31 ;;
   'contexts R1:*') expected=4 ;;

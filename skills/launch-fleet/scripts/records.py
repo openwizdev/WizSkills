@@ -117,14 +117,35 @@ def builder_thread(n, branch, threads, state, runs=None):
     return found, error
 
 
-def reviewer_thread(n, commit, threads, state, claim=None, retired=()):
-    saved = state.get(f'review:{n}:claim:{claim}')
+def pull_key(repo, obj):
+    other = obj.get('repository')
+    other = other.get('nameWithOwner') if isinstance(other, dict) else None
+    if isinstance(other, str) and other.lower() != repo.lower():
+        return f'{other.lower()}#{obj["number"]}'
+    return str(obj['number'])
+
+
+def review_keys(state):
+    keys = {}
+    for key, value in state.items():
+        qualified = re.fullmatch(r'(review:)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(#[0-9]+:.+)', key)
+        key = qualified[1] + qualified[2].lower() + qualified[3] if qualified else key
+        if keys.get(key, value) != value:
+            raise ValueError('two review keys differ only in case')
+        keys[key] = value
+    return keys
+
+
+def reviewer_thread(n, commit, threads, state, claim=None, retired=(), key=None):
+    key = key or str(n)
+    saved = state.get(f'review:{key}:claim:{claim}')
     if saved:
-        state = {**state, f'review:{n}:{commit}': saved}
+        state = {**state, f'review:{key}:{commit}': saved}
     threads = [t for t in threads if t['id'] not in retired] if threads is not None else None
-    pattern = re.compile(rf'Review #{n} at ([0-9a-f]{{1,40}})')
+    pull = f'(?i:{re.escape(key)})' if '#' in key else f'#{n}'
+    pattern = re.compile(rf'Review {pull} at ([0-9a-f]{{1,40}})')
     matches = [t for t in threads or [] if (m := pattern.fullmatch(t.get('title') or '')) and commit.startswith(m[1])]
-    return choose(f'review:{n}:{commit}', matches, state, threads)
+    return choose(f'review:{key}:{commit}', matches, state, threads)
 
 
 def reviewer_run(n, runs):
@@ -136,6 +157,7 @@ def reviewer_run(n, runs):
 
 def annotate(world, repo, private, threads, state):
     runs = driver_runs(repo)
+    state = review_keys(state)
 
     def item(obj):
         span = []
@@ -144,6 +166,7 @@ def annotate(world, repo, private, threads, state):
         start_claim = None
         driver_review = False
         routes = dict(state)
+        key = pull_key(repo, obj)
         comments = sorted(obj.get('comments', {}).get('nodes', []), key=lambda c: (c['createdAt'], c['databaseId']))
         for c in comments:
             line = first(c['body']).removeprefix('launch-fleet: ')
@@ -169,24 +192,24 @@ def annotate(world, repo, private, threads, state):
                 kind, commit = review.groups()
                 if kind == 'review given up' and start is None and legacy:
                     start = commit
-                edited_start = kind == 'review given up' and f'review:{obj["number"]}:claim:{c["databaseId"]}' in state
+                edited_start = kind == 'review given up' and f'review:{key}:claim:{c["databaseId"]}' in state
                 marked_driver_start = not legacy and c['body'].splitlines()[1:2] in (
                     ['Driver review: other-family'], ['Driver review: same-family'])
                 if kind == 'review started' or edited_start or (kind == 'review given up' and marked_driver_start):
                     span, start, start_claim = [], commit, c['databaseId']
                     driver_review = marked_driver_start
                     if legacy and c.get('resolvedThread'):
-                        routes[f'review:{obj["number"]}:{commit}'] = c['resolvedThread']
+                        routes[f'review:{key}:{commit}'] = c['resolvedThread']
                 span.append(c)
                 if kind == 'review given up':
-                    identity = state.get(f'review:{obj["number"]}:claim:{c["databaseId"]}')
-                    identity = identity or state.get(f'review:{obj["number"]}:claim:{start_claim}')
+                    identity = state.get(f'review:{key}:claim:{c["databaseId"]}')
+                    identity = identity or state.get(f'review:{key}:claim:{start_claim}')
                     identity = identity or next((r.get('archiveThread') or r.get('resolvedThread')
                                                  for r in span if r.get('archiveThread') or r.get('resolvedThread')), None)
                     if driver_review:
                         identity = None
                     elif identity is None:
-                        identity, _ = reviewer_thread(obj['number'], start or commit, threads, routes, start_claim, retired)
+                        identity, _ = reviewer_thread(obj['number'], start or commit, threads, routes, start_claim, retired, key)
                     c['archiveThread'] = identity
                     if identity:
                         retired.add(identity)
@@ -203,7 +226,7 @@ def annotate(world, repo, private, threads, state):
                 elif driver_review and not legacy and not any(record.get('givenUp') for record in span):
                     c['resolvedThread'], c['recordError'] = reviewer_run(obj['number'], runs)
                 elif not legacy and not driver_review:
-                    c['resolvedThread'], c['recordError'] = reviewer_thread(obj['number'], start, threads, routes, start_claim, retired)
+                    c['resolvedThread'], c['recordError'] = reviewer_thread(obj['number'], start, threads, routes, start_claim, retired, key)
                 if c.get('resolvedThread') in retired:
                     c['recordError'] = 'reviewer was already given up on this pull request'
                 if any(record.get('givenUp') for record in span):

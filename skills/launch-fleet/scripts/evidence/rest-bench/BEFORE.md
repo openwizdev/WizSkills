@@ -22,7 +22,7 @@ So, measured: the account spent at least **2,303 REST units in one hour**, 77% o
 
 ## Fixtures times cadence: calls per run
 
-`env -u OPENWIZ_GITHUB_APP_KEY TEST_JOBS=3 python3 -I bench.py fixtures OUT` ([fixtures-bench.txt](fixtures-bench.txt)), at this branch's head on 2026-11-23: every suite passed under the meter (`test.sh`: 918 cases, 0 failed), and none of the 25 stubbed agent, harness and host CLIs was called.
+`env -u OPENWIZ_GITHUB_APP_KEY TEST_JOBS=3 python3 -I bench.py fixtures OUT` ([fixtures-bench.txt](fixtures-bench.txt)), at this branch's commit 5ffd8c9 on 2026-11-23, whose wake scripts, suites and fixtures are main's at 32a94a6 (main has since changed `fleet.sh` and `merge.py`; the AFTER bench reruns both benches at its own head): every suite passed under the meter (`test.sh`: 918 cases, 0 failed), and none of the 25 stubbed agent, harness and host CLIs was called.
 
 | Script | Role | Fixture runs | Calls | REST calls | GraphQL calls | REST units | REST units per run | REST units per spec-hour (x6 wakes) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |

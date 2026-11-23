@@ -13,6 +13,11 @@ RECORD_AUTHORS = frozenset({'openwiz[bot]', 'jparker2006'})
 CHECKS = ('Spec', 'Sweep', 'Standards')
 FINDING = re.compile(r'^\s*[-*]\s+\*\*R[0-9]+ \[blocking\]\*\* `[^`\n]+`[^\n]*?\((Spec|Sweep|Standards)\)', re.M)
 WORD = re.compile(r'VERDICT:\s*([A-Z]+)')
+LATE = re.compile(r'^\s*[-*]\s+\*\*R[0-9]+ \[blocking\]\*\* `([^`\n]+)`[^\n]*?\((?:Spec|Sweep|Standards)\)', re.M)
+HEAD = re.compile(r'VERDICT:\s*[A-Z]+ at ([0-9a-f]{7,40})\b')
+PLACE = re.compile(r'(.+):([0-9]+)(?:-([0-9]+))?')
+HUNK = re.compile(r'^@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,([0-9]+))? @@', re.M)
+GIT_READS = ('diff', 'cat-file')
 SIZE = re.compile(r'Size: ([SML])\.')
 BANDS = (('under 300', 0, 300), ('300-599', 300, 600), ('600+', 600, None),
          ('600-999', 600, 1000), ('1000+', 1000, None))
@@ -62,6 +67,52 @@ def gh_graphql(document, variables, runner=subprocess.run):
     if not isinstance(reply, dict) or reply.get('errors') or not isinstance(reply.get('data'), dict):
         raise BenchError('GraphQL errors: ' + json.dumps(reply.get('errors') if isinstance(reply, dict) else reply))
     return reply['data']
+
+
+def local_git(clone, args, runner=subprocess.run):
+    if not args or args[0] not in GIT_READS:
+        raise BenchError('refused: only local git diff and cat-file run')
+    return runner(['git', '-C', clone, '--no-pager'] + list(args), capture_output=True, text=True)
+
+
+def added_lines(clone, first, head, path, git):
+    """The lines of path at head that git diff first head adds, or None when git can't say."""
+    for obj in (first + '^{commit}', head + '^{commit}', head + ':' + path):
+        if local_git(clone, ['cat-file', '-e', obj], git).returncode != 0:
+            return None
+    done = local_git(clone, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', '--text', '-U0',
+                             first, head, '--', path], git)
+    if done.returncode != 0:
+        return None
+    lines = set()
+    for start, count in HUNK.findall(done.stdout):
+        lines.update(range(int(start), int(start) + (int(count) if count else 1)))
+    return lines
+
+
+def classify(records, clones, git):
+    cache = {}
+    for r in records:
+        split = Counter(changed=0, unchanged=0, unknown=0)
+        clone = clones.get(r['repo'].lower())
+        for head, place in r['late']:
+            found = PLACE.fullmatch(place)
+            if not (clone and r['first_head'] and head and found):
+                split['unknown'] += 1
+                continue
+            path, low = found.group(1), int(found.group(2))
+            key = (clone, r['first_head'], head, path)
+            if key not in cache:
+                cache[key] = added_lines(clone, r['first_head'], head, path, git)
+            touched = cache[key]
+            if touched is None:
+                split['unknown'] += 1
+            elif touched & set(range(low, int(found.group(3) or low) + 1)):
+                split['changed'] += 1
+            else:
+                split['unchanged'] += 1
+        r['late_split'] = split
+    return records
 
 
 def parse_time(text):
@@ -127,6 +178,7 @@ def record(repo, node):
                       key=lambda c: parse_time(c['createdAt']))
     words = [(WORD.match(c['body']) or [None, None])[1] for c in verdicts]
     findings = [Counter(FINDING.findall(c['body'])) for c in verdicts]
+    heads = [(HEAD.match(c['body']) or [None, None])[1] for c in verdicts]
     issues = [i['body'] or '' for i in node['closingIssuesReferences']]
     sizes = sorted({m for b in issues for m in SIZE.findall(b)})
     approved = [i for i, w in enumerate(words) if w == 'APPROVE']
@@ -138,6 +190,8 @@ def record(repo, node):
         'reapprovals': len(approved) - 1 if approved else 0,
         'first_findings': findings[0] if findings else Counter(),
         'recheck_findings': findings[1:],
+        'first_head': heads[0] if heads else None,
+        'late': [(heads[i], place) for i in range(1, len(verdicts)) for place in LATE.findall(verdicts[i]['body'])],
     }
 
 
@@ -161,6 +215,10 @@ def summarize(records):
             recheck.update(found)
     rechecks = [f for r in reviewed for f in r['recheck_findings']]
     n = len(reviewed)
+    late = Counter()
+    for r in reviewed:
+        late.update(r.get('late_split', {}))
+    blocking = sum(first.values()) + sum(recheck.values())
     return {
         'merged': len(records), 'reviewed': n, 'verdicts': sum(rounds),
         'rounds': {'mean': round(sum(rounds) / n, 2) if n else None,
@@ -179,6 +237,8 @@ def summarize(records):
             'rechecks': dict({c: recheck[c] for c in CHECKS}, total=sum(recheck.values()), count=len(rechecks),
                              with_new_blocker=sum(1 for f in rechecks if f)),
         },
+        'late': {'blocking': blocking, 'late': sum(recheck.values()), 'pct': pct(sum(recheck.values()), blocking),
+                 'changed': late['changed'], 'unchanged': late['unchanged'], 'unknown': late['unknown']},
     }
 
 
@@ -193,13 +253,13 @@ def worst(records, limit=10):
             for r in ranked[:limit]]
 
 
-def bench(repos, start, end, opened_after, graphql):
+def bench(repos, start, end, opened_after, graphql, clones=None, git=subprocess.run):
     by_repo = {}
     for repo in repos:
         nodes = fetch(repo, start, end, graphql)
         if opened_after is not None:
             nodes = [n for n in nodes if parse_time(n['createdAt']) > opened_after]
-        by_repo[repo] = [record(repo, n) for n in nodes]
+        by_repo[repo] = classify([record(repo, n) for n in nodes], clones or {}, git)
     everything = [r for repo in repos for r in by_repo[repo]]
     tickets = [r for r in everything if r['ticket']]
     sizes = {}
@@ -244,6 +304,20 @@ def table(rows):
     return '\n'.join(lines)
 
 
+def late_table(rows):
+    lines = ['| Cohort | Merged | Reviewed | Rounds mean | Blocking findings | First seen at round 2+ '
+             '| Changed by the fix | Unchanged since the first review | Unknown |',
+             '| --- | --- | --- | --- | --- | --- | --- | --- | --- |']
+    for label, s in rows.items():
+        late = s['late']
+        lines.append('| %s |' % label + ''.join(' %s |' % c for c in (
+            s['merged'], s['reviewed'], cell(s['rounds']['mean']), late['blocking'],
+            cell(late['late'], late['pct']) if late['blocking'] else '-',
+            *(cell(late[k], pct(late[k], late['late'])) if late['late'] else '-'
+              for k in ('changed', 'unchanged', 'unknown')))))
+    return '\n'.join(lines)
+
+
 def markdown(result):
     w = result['window']
     out = ['Window: merged %s to %s%s.' % (w['merged_from'], w['merged_to'],
@@ -262,15 +336,20 @@ def markdown(result):
     for r in result['worst']:
         out.append('| %s#%d | %d (%d) | %s | %d | %d |' % (r['repo'].split('/')[1], r['number'], r['rounds'],
                                                         r['changes'], r['size'] or 'none', r['diff'], r['files']))
+    out += ['', '**Late blocking findings** (new blocking findings first seen at round 2 or later, by whether '
+            'the fix changed their line since the first review)', '',
+            late_table(dict(result['all'], **{'Ticket PRs': result['tickets']['All']}))]
     return '\n'.join(out)
 
 
-def main(argv=None, graphql=gh_graphql, out=sys.stdout):
+def main(argv=None, graphql=gh_graphql, out=sys.stdout, git=subprocess.run):
     parser = argparse.ArgumentParser(description='Read-only review-rounds bench over merged PRs.')
     parser.add_argument('--repo', action='append', required=True, help='owner/name; repeat for each repository')
     parser.add_argument('--merged-from', required=True, type=parse_time)
     parser.add_argument('--merged-to', required=True, type=parse_time)
     parser.add_argument('--opened-after', type=parse_time)
+    parser.add_argument('--clone', action='append', default=[],
+                        help='owner/name=path of a local git clone holding the verdict heads; repeat per repository')
     args = parser.parse_args(argv)
     seen = {}
     for repo in args.repo:
@@ -279,10 +358,18 @@ def main(argv=None, graphql=gh_graphql, out=sys.stdout):
         if repo.lower() in seen:
             parser.error('--repo repeated: %s and %s name one repository' % (seen[repo.lower()], repo))
         seen[repo.lower()] = repo
+    clones = {}
+    for pair in args.clone:
+        repo, _, path = pair.partition('=')
+        if repo.lower() not in seen or not path:
+            parser.error('--clone must be owner/name=path for a --repo: ' + pair)
+        if repo.lower() in clones:
+            parser.error('--clone repeated: ' + repo)
+        clones[repo.lower()] = path
     if args.merged_from > args.merged_to:
         parser.error('--merged-from is after --merged-to')
     try:
-        result = bench(args.repo, args.merged_from, args.merged_to, args.opened_after, graphql)
+        result = bench(args.repo, args.merged_from, args.merged_to, args.opened_after, graphql, clones, git)
     except BenchError as error:
         print('bench: ' + str(error), file=sys.stderr)
         return 1

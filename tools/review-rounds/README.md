@@ -6,8 +6,11 @@
 python3 -I tools/review-rounds/bench.py \
   --repo openwizdev/OpenWiz --repo openwizdev/WizSkills --repo openwizdev/WizSite \
   --repo openwizdev/WizRoom --repo openwizdev/WizMarket \
-  --merged-from 2026-11-15T23:00Z --merged-to 2026-11-22T22:58Z [--opened-after <time>]
+  --merged-from 2026-11-15T23:00Z --merged-to 2026-11-22T22:58Z [--opened-after <time>] \
+  [--clone openwizdev/OpenWiz=<local clone> ...]
 ```
+
+`--clone` names a local git clone for one `--repo`, used only for the late measure. The bench runs only `git diff` and `git cat-file -e` in it, never a fetch. The clone must already hold every verdict head, for example after `git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*'`.
 
 It prints Markdown tables, then the same numbers as a fenced JSON block. It exits 1 with a `bench:` line when a read fails or a search can't be trusted, and 2 for bad arguments. Naming one repository twice, in any letter case (GitHub names are case-insensitive), is a bad argument.
 
@@ -20,6 +23,8 @@ It prints Markdown tables, then the same numbers as a fenced JSON block. It exit
 - **New blocking finding:** a line `- **R<n> [blocking]** `<path>` ... (<Check>)`, where the check is Spec, Sweep or Standards. A finding carried over as `resolved` or `still open` has no path after its label, so it isn't counted again. The first round's findings are counted under the first review, and every later round's under re-checks.
 - **Ticket PR:** a PR with a closing issue whose body has `Size: S.`, `Size: M.` or `Size: L.`. Every closing issue is read. A PR whose closing issues carry two sizes shows both (for example `LS`) and isn't in any single size's median.
 - **Diff lines:** additions plus deletions. The bands are under 300, 300-599 and 600+, with 600+ also split into 600-999 and 1000+, to line up with the spec's BEFORE table.
+- **Late blocking finding:** a new blocking finding (as above) first seen at round 2 or later, that is, a re-check's. The late share is late findings over all new blocking findings. A verdict's head is the commit its `VERDICT: <word> at <commit>` header names.
+- **Changed by the fix / unchanged since the first review:** for a late finding at `<file>:<line>` (or `<file>:<line>-<line>`), the bench runs `git diff <first verdict head> <its verdict head> -- <file>` in the local clone. The finding is **changed** when that diff adds or rewrites any of its lines at its own head, so a file new since the first review counts as changed. It is **unchanged** when the diff leaves every one of its lines alone, even when the lines moved. It is **unknown** when no `--clone` is given, a finding names no line, a head is missing from the clone or the file is missing at its head. The diff is always read from the clone, never through GitHub.
 - **Worst PRs:** the 10 reviewed PRs with the most `CHANGES` rounds, then the most rounds.
 
 A repository search is capped at 1,000 results. Over the cap, the bench stops and asks for a shorter window. It also stops if the search returns a PR twice or returns fewer PRs than it reported.

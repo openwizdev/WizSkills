@@ -201,19 +201,22 @@ class StopAll(unittest.TestCase):
         self.assertEqual([c['input']['run'] for c in home.calls()], ['local-run-11', 'cloudroom-run-12', 'local-run-14'])
         home.no_agent_cli()
 
-    def test_a_tick_that_keeps_the_lock_past_the_wait_fails_the_command_but_the_runs_still_stop(self):
-        home = Home(self, LIVE)
-        home.install_heartbeat()
-        self.hold_tick_lock(home)
-        out = home.stop_all('--wait', '1', expected=1)
-        self.assertEqual(out, ['heartbeat: a tick holds the heartbeat lock; waiting up to 1 seconds for it',
-                               'heartbeat: not paused (a tick still held the heartbeat lock after 1 seconds); the '
-                               'next tick can start runs: run stop-all again when it ends',
-                               '#11 on local: stopped', '#12 on cloudroom: stopped',
-                               'stop-all: 2 stopped, 0 not stopped'])
-        self.assertEqual(home.heartbeat(), 'heartbeat: active (cron)')
-        self.assertEqual(len(home.calls()), 2)
-        home.no_agent_cli()
+    def test_a_tick_that_keeps_the_lock_past_the_wait_fails_before_any_run_is_read_or_stopped(self):
+        for runs in (json.dumps({'repo': REPO, 'runs': LIVE}), 'not json'):
+            with self.subTest(runs=runs):
+                home = Home(self, {})
+                home.install_heartbeat()
+                home.runs.write_text(runs)
+                self.hold_tick_lock(home)
+                out = home.stop_all('--wait', '1', expected=1)
+                self.assertEqual(out, ['heartbeat: a tick holds the heartbeat lock; waiting up to 1 seconds for it',
+                                       'heartbeat: not paused (a tick still held the heartbeat lock after 1 seconds)',
+                                       'stop-all: nothing stopped, since the next tick could start runs again: run '
+                                       'stop-all again when the tick ends'])
+                self.assertEqual(home.heartbeat(), 'heartbeat: active (cron)')
+                self.assertEqual(home.calls(), [])
+                self.assertEqual(home.runs.read_text(), runs)
+                home.no_agent_cli()
 
     def test_an_unreadable_runs_file_still_pauses_the_heartbeat_and_stops_nothing(self):
         for text in ('{"repo": "someone/else", "runs": {}}', 'not json',

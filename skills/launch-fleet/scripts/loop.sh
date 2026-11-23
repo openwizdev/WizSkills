@@ -9,7 +9,8 @@
 # the spec's number after --bundle OWNER/REPO): then it runs that spec's check
 # alone (`fleet.sh spec <FLEET_SPEC>`).
 # Exit as the check exits; 2 when the clone can't be made or updated.
-[ -z "${OPENWIZ_TOKEN_SERVICE:-}" ] || unset OPENWIZ_GITHUB_APP_KEY
+app_key_set=${OPENWIZ_GITHUB_APP_KEY+set}
+unset OPENWIZ_GITHUB_APP_KEY
 die() { printf 'loop.sh: %s\n' "$*" >&2; exit 2; }
 repository() {
   case $1 in
@@ -34,18 +35,25 @@ restore_today_account() {
   restore_at=${OPENWIZ_AGENT_TOKEN_GIT_AT-}
   restore_count=${GIT_CONFIG_COUNT-}
   case $restore_at in '' | *[!0-9]* | 0?* | ??????????*) restore_at= ;; esac
-  case $restore_count in '' | *[!0-9]* | 0?* | ??????????*) restore_at= ;; esac
-  if [ -z "$restore_at" ] || [ "$restore_at" -gt "$restore_count" ]; then
-    unset GIT_CONFIG_COUNT
-  else
+  case $restore_count in '' | *[!0-9]* | 0?* | ??????????*) restore_count= ;; esac
+  if [ -n "$restore_at" ] && [ -n "$restore_count" ] && [ "$restore_at" -le "$restore_count" ]; then
     while [ "$restore_count" -gt "$restore_at" ]; do
       restore_count=$((restore_count - 1))
       unset "GIT_CONFIG_KEY_$restore_count" "GIT_CONFIG_VALUE_$restore_count"
     done
     GIT_CONFIG_COUNT=$restore_at
     export GIT_CONFIG_COUNT
+  else
+    restore_end=${restore_count:-0}
+    [ -z "$restore_at" ] || [ $((restore_at + 2)) -le "$restore_end" ] || restore_end=$((restore_at + 2))
+    restore_index=0
+    while [ "$restore_index" -lt "$restore_end" ] || eval "[ -n \"\${GIT_CONFIG_KEY_$restore_index+x}\${GIT_CONFIG_VALUE_$restore_index+x}\" ]"; do
+      unset "GIT_CONFIG_KEY_$restore_index" "GIT_CONFIG_VALUE_$restore_index"
+      restore_index=$((restore_index + 1))
+    done
+    unset GIT_CONFIG_COUNT
   fi
-  unset GH_TOKEN OPENWIZ_AGENT_TOKEN_RUN OPENWIZ_AGENT_TOKEN_GIT_AT restore_pair restore_name restore_mark restore_value restore_at restore_count
+  unset GH_TOKEN OPENWIZ_AGENT_TOKEN_RUN OPENWIZ_AGENT_TOKEN_GIT_AT restore_pair restore_name restore_mark restore_value restore_at restore_count restore_end restore_index
 }
 
 spec_number() { case $1 in '' | 0* | *[!0-9]* | ??????????*) return 1 ;; esac; }
@@ -98,9 +106,8 @@ inside=
 case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
 unset LAUNCH_FLEET_TOKEN_STEP
 identity_off=
-if [ -n "$inside" ] || [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] || [ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ]; then
+if [ -n "$inside" ] || [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] || [ -n "$app_key_set" ]; then
   identity_off=1
-  unset OPENWIZ_GITHUB_APP_KEY
 fi
 if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ] && [ -z "$identity_off" ]; then
   helper=$(cd -P "$(dirname "$0")" && pwd)/github-app/agent-token.py
@@ -127,7 +134,7 @@ elif [ -n "$inside" ]; then
     LAUNCH_FLEET_GITHUB_AUTH=installation
     export LAUNCH_FLEET_GITHUB_AUTH
   fi
-elif [ -z "${OPENWIZ_GITHUB_APP_KEY+set}" ]; then
+elif [ -z "$app_key_set" ]; then
   echo "loop.sh: no OPENWIZ_GITHUB_APP_KEY secret; GitHub as today's account" >&2
 elif ! command -v openwiz > /dev/null; then
   echo "loop.sh: no openwiz to mint the App token; GitHub as today's account" >&2

@@ -25,18 +25,25 @@ Once the App identity can be on, the agents act on GitHub as the project's OpenW
     restore_at=${OPENWIZ_AGENT_TOKEN_GIT_AT-}
     restore_count=${GIT_CONFIG_COUNT-}
     case $restore_at in '' | *[!0-9]* | 0?* | ??????????*) restore_at= ;; esac
-    case $restore_count in '' | *[!0-9]* | 0?* | ??????????*) restore_at= ;; esac
-    if [ -z "$restore_at" ] || [ "$restore_at" -gt "$restore_count" ]; then
-      unset GIT_CONFIG_COUNT
-    else
+    case $restore_count in '' | *[!0-9]* | 0?* | ??????????*) restore_count= ;; esac
+    if [ -n "$restore_at" ] && [ -n "$restore_count" ] && [ "$restore_at" -le "$restore_count" ]; then
       while [ "$restore_count" -gt "$restore_at" ]; do
         restore_count=$((restore_count - 1))
         unset "GIT_CONFIG_KEY_$restore_count" "GIT_CONFIG_VALUE_$restore_count"
       done
       GIT_CONFIG_COUNT=$restore_at
       export GIT_CONFIG_COUNT
+    else
+      restore_end=${restore_count:-0}
+      [ -z "$restore_at" ] || [ $((restore_at + 2)) -le "$restore_end" ] || restore_end=$((restore_at + 2))
+      restore_index=0
+      while [ "$restore_index" -lt "$restore_end" ] || eval "[ -n \"\${GIT_CONFIG_KEY_$restore_index+x}\${GIT_CONFIG_VALUE_$restore_index+x}\" ]"; do
+        unset "GIT_CONFIG_KEY_$restore_index" "GIT_CONFIG_VALUE_$restore_index"
+        restore_index=$((restore_index + 1))
+      done
+      unset GIT_CONFIG_COUNT
     fi
-    unset GH_TOKEN OPENWIZ_AGENT_TOKEN_RUN OPENWIZ_AGENT_TOKEN_GIT_AT restore_pair restore_name restore_mark restore_value restore_at restore_count
+    unset GH_TOKEN OPENWIZ_AGENT_TOKEN_RUN OPENWIZ_AGENT_TOKEN_GIT_AT restore_pair restore_name restore_mark restore_value restore_at restore_count restore_end restore_index
   }
   restore_today_account
   app_token=
@@ -45,7 +52,7 @@ Once the App identity can be on, the agents act on GitHub as the project's OpenW
   app_git() { git "$@"; }
   # For example: app_git push origin HEAD; app gh pr create ...; app gh pr comment ...
   ```
-- **Today's account, restored:** `restore_today_account` is the one step that returns a shell to today's account; `loop.sh` defines the same function, byte for byte, and runs it whenever the App identity is off or no token step is its own, before any other command. It acts only when an inherited token step's marks are present (`OPENWIZ_AGENT_TOKEN_RUN`, `OPENWIZ_AGENT_TOKEN_GIT_AT` or any `OPENWIZ_AGENT_TOKEN_*_WAS`), and then: it restores `PATH`, `GIT_EXEC_PATH`, `GIT_SSH_COMMAND`, `GIT_ALLOW_PROTOCOL` and `GH_CONFIG_DIR` from each `OPENWIZ_AGENT_TOKEN_*_WAS` (`1<value>` sets the value; anything else, `0` included, unsets the variable), drops every `GIT_CONFIG_KEY_<i>`/`GIT_CONFIG_VALUE_<i>` entry from `OPENWIZ_AGENT_TOKEN_GIT_AT` onward (an unreadable or out-of-range mark drops `GIT_CONFIG_COUNT` entirely), and unsets `GH_TOKEN` and every mark. So no `gh` or `git` shim, credential helper or installation token stays reachable. Without marks it changes nothing, so your own `GH_TOKEN` stays. It never reads `OPENWIZ_GITHUB_APP_KEY`; `loop.sh` decides off by testing only whether the key is set (`${OPENWIZ_GITHUB_APP_KEY+set}`), then unsets it, so no command it runs inherits the key. Call it as is from any caller that falls back to today's account.
+- **Today's account, restored:** `restore_today_account` is the one step that returns a shell to today's account; `loop.sh` defines the same function, byte for byte, and runs it whenever the App identity is off or no token step is its own, before any other command. It acts only when an inherited token step's marks are present (`OPENWIZ_AGENT_TOKEN_RUN`, `OPENWIZ_AGENT_TOKEN_GIT_AT` or any `OPENWIZ_AGENT_TOKEN_*_WAS`), and then: it restores `PATH`, `GIT_EXEC_PATH`, `GIT_SSH_COMMAND`, `GIT_ALLOW_PROTOCOL` and `GH_CONFIG_DIR` from each `OPENWIZ_AGENT_TOKEN_*_WAS` (`1<value>` sets the value; anything else, `0` included, unsets the variable), drops every `GIT_CONFIG_KEY_<i>`/`GIT_CONFIG_VALUE_<i>` entry from `OPENWIZ_AGENT_TOKEN_GIT_AT` onward (when that mark or `GIT_CONFIG_COUNT` is not a plain number of at most nine digits, or the mark is above the count, it unsets `GIT_CONFIG_COUNT` and every indexed entry from 0 up to the larger of a readable count and a readable mark plus 2, then each further index while an entry with that index is set), and unsets `GH_TOKEN` and every mark. So no `gh` or `git` shim, credential helper or installation token stays reachable. Without marks it changes nothing, so your own `GH_TOKEN` stays. It never reads `OPENWIZ_GITHUB_APP_KEY`; `loop.sh` records only whether the key is set (`${OPENWIZ_GITHUB_APP_KEY+set}`) and unsets it as its first command, so no command it runs, bundle generation included, inherits the key. Call it as is from any caller that falls back to today's account.
 - **The author:** before your first commit, read the user from GitHub on today's account (plain `gh`, not through `app`): `gh api user --jq '"\(.login) \(.id)"'`. Then `git config user.name <login>` and `git config user.email <id>+<login>@users.noreply.github.com`. Never guess them.
 - **The fallback:** with the App identity off, no `OPENWIZ_GITHUB_APP_KEY` secret, no `openwiz`, or a failed mint, the block above says on stderr that you act as today's account, and `app` and `app_git` run the commands with your own credential untouched. Go on: the fleet never stops for it. The commit author rule still holds.
 - **Workflows stay on today's path.** The App has no Workflows permission, so push a branch whose diff changes `.github/workflows/` as today's account.

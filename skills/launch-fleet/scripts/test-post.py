@@ -25,6 +25,9 @@ class World:
         gh = bin_dir / 'gh'
         gh.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, HERE / 'fixtures/fake_github.py'))
         gh.chmod(0o755)
+        for name in ('room-cli', 'claude', 'codex', 'boat'):  # never a real agent or host CLI from PATH
+            (bin_dir / name).write_text('#!/bin/sh\necho "stub: no %s in tests" >&2\nexit 1\n' % name)
+            (bin_dir / name).chmod(0o755)
         self.path = self.dir / 'world.json'
         value = {'repo': REPO, 'me': 'openwiz[bot]', 'fleet_md': FLEET_MD, 'next_id': 5000,
                  'comments': {}, 'writes': [], 'faults': {}}

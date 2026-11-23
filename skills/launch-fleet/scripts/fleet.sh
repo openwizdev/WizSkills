@@ -2584,8 +2584,7 @@ foreign_merges() {
 # (the repository, the account, the spec's sub-issues, each ticket's and each
 # closed blocker's timeline, each linked pull request and the checks and
 # statuses on its head, the waited issues, and the default branch when merges
-# were read, and each base of a pull request in another repository whose
-# merges were read), each with the ETags it had before that full read's first
+# were read), each with the ETags it had before that full read's first
 # GraphQL read. When every probe page answers 304 with those ETags and that
 # full read is under 30 minutes old, a second process replays the check:
 # every GraphQL answer from the entry, every REST read revalidated (the
@@ -2727,8 +2726,6 @@ keep_read() {
        else "repos/\($r)/issues/\(.key)", "repos/\($r)/issues/\(.key)/timeline?per_page=100",
          (.value // {} | prs | pull) end),
      (if $merged then "repos/\($r)/git/ref/heads/\($d | @uri)" else empty end),
-     # The re-test guard of a PR in another repository reads the merges
-     # into its base there (#2376 R4).
      (. as $w | .mergedIn // {} | keys[] as $h
        | [$w | .. | objects | select(has("headRefOid") and (.baseRefName | type) == "string"
            and .repository.nameWithOwner? == $h) | .baseRefName] | unique[]

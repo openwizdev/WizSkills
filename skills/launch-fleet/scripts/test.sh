@@ -4080,8 +4080,6 @@ gi1_case 'GI7: another installation gets a full read' installation
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
 gi1_case "GI7: a switch from the account to the App gets a full read" switch
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
-# gi1_tools_case NAME CHANGE [WORLD [BEFORE AFTER]]: a cross-repository PR's
-# change gets a full read; BEFORE and AFTER are lines runs 3 and 4 print.
 gi1_tools_case() {
   name=$1 change=$2 start=${3:-"$GI1 | pull(35; .repo = \"synthetic-owner/synthetic-tools\")"} tools_before=${4:-} tools_after=${5:-}
   selected "$name" || return 0

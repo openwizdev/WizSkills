@@ -4013,7 +4013,8 @@ if [ -z "${TEST_ONLY:-}" ] || [ "$TEST_ONLY" = focused-again ]; then
   if take; then
     cases=$((cases + 1))
     only='long form: prose after a wait naming another repository refuses nothing (#2096)'
-    (env -u TEST_WORKER -u TEST_SHARED -u TEST_PASS -u TEST_EXPECTED TEST_ONLY="$only" /bin/sh "$HERE/${0##*/}") \
+    env -u TEST_WORKER -u TEST_SHARED -u TEST_PASS -u TEST_EXPECTED \
+      -u TEST_SHARD -u TEST_SHARD_MAP -u TEST_SHARD_RAN TEST_ONLY="$only" /bin/sh "$HERE/${0##*/}" \
       > "$tmp/focused.out" 2> "$tmp/focused.err"
     got=$?
     printf '%s\n' 'ok   R1: a plain bold wait without a period resumes' \

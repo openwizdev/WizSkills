@@ -1,6 +1,6 @@
 {
   "name": "openwiz",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "OpenWiz's skills: plan, build, review and run work with a fleet of coding agents.",
   "author": {
     "name": "OpenWiz"

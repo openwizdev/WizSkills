@@ -1,4 +1,5 @@
 ---
+"install": patch
 "launch-fleet": minor
 ---
 

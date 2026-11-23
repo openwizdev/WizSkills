@@ -8,7 +8,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / '.github' / 'workflows' / 'ci.yml'
-JOB = 'check'
+JOB = 'gates'
 STEP_NAME = 'Comment check'
 SYNTHETIC = ['-c', 'user.name=synthetic', '-c', 'user.email=synthetic@example.com']
 OLD = '# an old note nobody added in this pull request\nx = 1\n'
@@ -76,7 +76,7 @@ class CommentCheckStep(unittest.TestCase):
         (self.repo / 'skills' / 'area.py').write_text(OLD + added)
         git(self.repo, *SYNTHETIC, 'commit', '-qam', 'head')
         step = the_step()
-        self.assertEqual(step.get('if'), "github.event_name == 'pull_request'")
+        self.assertEqual(step.get('if'), "github.event_name != 'push'")
         checks = [line for line in step['run'].split('\n') if 'check.py diff' in line]
         self.assertEqual(len(checks), 1, step['run'])
         return subprocess.run(['bash', '-euo', 'pipefail', '-c', checks[0]], cwd=self.repo,

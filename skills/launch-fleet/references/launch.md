@@ -28,7 +28,7 @@ Read this when a plan graph is approved, when a spec moves to fresh wakes, or wh
    **The brief is only the prompt above.** Never add merge, base or workaround rules to a loop's prompt: they live in this skill, its references and `fleet.md` (M1, the base rule, and its checks), and a copy goes stale. A loop whose prompt still carries an old rule, such as closing and reopening a pull request because `main` moved, gets the prompt above again: `room-cli loop update <id> --prompt "..."`.
 
    It prints its id and its secret address (`url`); `jq` keeps only the id, and that first address is dropped unseen. Anyone with the address can wake the fleet, so it never goes into a file, a variable, a command's arguments, a terminal, a comment, the handoff file or a message: `room-cli loop hook <id>` issues a fresh one straight into the repository's webhook through a pipe (step 3), which also retires every earlier address. If one ever leaks, rotate it with step 3's rotation pipe. Each run gets the messages that arrived since the last as data, and starts a fresh thread. Write both loops' ids in the handoff file (the `handoff` skill). When a new orchestrator takes over, it updates the thread id in both prompts: `room-cli loop update <id> --prompt "..."`.
-3. **GitHub's messages are the user's setup.** The repository's webhook is a repository setting the user owns: ask the user ([user.md](user.md)) before it exists, and add it only on their yes, in their words in the handoff file. On that yes, the address goes from Cloudroom to GitHub in one pipe, held in memory only (the user can run it themselves, or let you run it):
+3. **GitHub's messages need their approver's yes.** The repository's webhook is a repository setting: ask the approver of `fleet.md`'s Approval rules row for installing the repository webhook (the user, [user.md](user.md), when that section is absent) before it exists, and add it only on their yes, in their words in the handoff file. On that yes, the address goes from Cloudroom to GitHub in one pipe, held in memory only (the user can run it themselves, or let you run it):
 
    ```sh
    room-cli loop hook <wake loop id> \
@@ -46,10 +46,10 @@ Read this when a plan graph is approved, when a spec moves to fresh wakes, or wh
      | python3 -I "<this skill's folder>/scripts/route.py" gh api --method PATCH 'repos/{owner}/{repo}/hooks/<webhook id>' --input - --jq '{id, events, active}'
    ```
 
-   It needs owner or admin access to the repository. GitHub sends a `ping` when a webhook is added (its documentation), which wakes one tick with nothing to read. Write the webhook's id in the handoff file. Then slow the safety net and every fleet thread's loop to every 30 minutes, as messages now wake them: `room-cli loop update <id> --cron '*/30 * * * *'`, for the safety net and for each open spec's fleet loop (the real loop id under its `S` key in the private loop file; the public record names only `fleet-<S>`), and read them back with `room-cli loop list`. If the user says no, the safety net and the fleet loops stay at every 10 minutes, and the wake loop, which nothing calls, can be deleted.
+   It needs owner or admin access to the repository. GitHub sends a `ping` when a webhook is added (its documentation), which wakes one tick with nothing to read. Write the webhook's id in the handoff file. Then slow the safety net and every fleet thread's loop to every 30 minutes, as messages now wake them: `room-cli loop update <id> --cron '*/30 * * * *'`, for the safety net and for each open spec's fleet loop (the real loop id under its `S` key in the private loop file; the public record names only `fleet-<S>`), and read them back with `room-cli loop list`. If that approver says no, the safety net and the fleet loops stay at every 10 minutes, and the wake loop, which nothing calls, can be deleted.
 4. **Start the spec's fleet loop** ("Starting one", below). Run it once after publishing its record. If a fresh loop cannot be set up, record the reason on the spec and keep its existing routing. For a spec with no loop record, run the project's safety net once.
 
-Done when both loops exist, the user has said yes or no to GitHub's messages, and the spec has a verified fleet loop record (or a look record explains why it could not be set up).
+Done when both loops exist, step 3's approver (the user when the Approval rules section is absent) has said yes or no to GitHub's messages, and the spec has a verified fleet loop record (or a look record explains why it could not be set up).
 
 **Turning GitHub's messages off** (the user asks, or they misbehave): delete the webhook (`python3 -I "<this skill's folder>/scripts/route.py" gh api 'repos/{owner}/{repo}/hooks' --jq '.[] | {id, events, active}'` lists them without their addresses, with tracing dropped as in step 3; `python3 -I "<this skill's folder>/scripts/route.py" gh api --method DELETE 'repos/{owner}/{repo}/hooks/<id>'`), delete the wake loop (`room-cli loop delete <id>`), and set the safety net and every open spec's fleet loop back to every 10 minutes (`room-cli loop update <id> --cron '*/10 * * * *'` for each, the same loops as step 3; read them back with `room-cli loop list`). Nothing else changes, and nothing else needs undoing: with no messages, no tick runs a fleet loop early; the fleet's records are all on GitHub, so the check finds where everything stands. Record it in the handoff file.
 
@@ -100,7 +100,29 @@ Legacy records keep their existing takeover semantics during rollout.
 
 ## Hosts without CloudRoom
 
-After checking the spec's recorded approval, install one local heartbeat for that spec. Run the commands from a checkout of the project with `origin` set. Use the installed launch-fleet skill's absolute folder, the approved orchestrator harness and model IDs, and the absolute `OPENWIZ_ADAPTERS` folder from host setup. GitHub CLI, Git, jq, Python 3 and the harness must be available to the signed-in user. The scheduled command uses the tool paths from installation.
+After checking the spec's recorded approval, run the fleet in the open chat with the session runner. This is the default local launch. Run the commands from a checkout of the project with `origin` set. Use the installed launch-fleet skill's absolute folder, the approved harness and model IDs, and the absolute `OPENWIZ_ADAPTERS` folder from host setup. GitHub CLI, Git, jq, Python 3 and the harness must be available to the signed-in user.
+
+```sh
+python3 -I "<this skill's folder>/scripts/session.py" run "<owner>/<repo>" --spec "<S>" --harness "<builder harness>" \
+  --model "<builder model>"
+```
+
+It runs in the foreground, one tick after another, with no timer. Each tick reads `fleet.sh spec <S>` and does the lines a script can do alone, by this skill's own claims and records:
+- a `start` line starts that ticket's builder through `host.py`, at most `--max` (default 3) at once;
+- a `check start` line records `start checked`;
+- a `review` line starts the reviewer the models rule picks for the builder recorded on the ticket (its status note's harness). With both `claude` and `codex` installed, that is the other-family row `ops-starts.py flags` prints, and no row means the review waits. With only the builder's harness, it is the same family with the CLI id the models table gives the builder's recorded model (its status note's `model`, matched to a row's model name, model name and effort, or id). No single match means the review waits;
+- a `merge` line stops the session once the tick's other lines are done. The session merges nothing: merge that pull request with "Merging" in this skill (verdict check, overload admission, `merge.py`), then run the `carry on:` command.
+
+After a tick that did something, it ticks again at once. Otherwise it waits for a run to end (that agent's status note on the ticket leaves `working`; a reviewer's note is on its pull request's ticket), or, with no run going, for a known pull request's checks. On start, and so on `carry on`, it rebuilds the spec's running builders and reviewers from their GitHub records, so `--max` counts builders still running from an earlier session.
+
+It stops in three cases, and prints where it stopped and a `carry on:` command:
+- **Done (exit 0):** the check prints `spec done` or `close spec` for the spec, or the spec is no longer open and every ticket of it is closed. The spec summary, closing the spec and `archive` lines stay with this skill.
+- **Needs you (exit 3):** a line it doesn't do (a question, findings, a red check, a look, an approved pull request to merge), a refused start, or nothing moving for `--idle` seconds. Handle that line with this skill, then run the `carry on:` command.
+- **Interrupt (exit 130):** it stops at once. A start still answering keeps going on its own, and its record stays for this skill to reconcile.
+
+Builders and reviewers it started keep running after it stops. It holds the spec's heartbeat lock, so a session and a heartbeat tick never run together: a second session, or a heartbeat tick during one, is refused (exit 1).
+
+**The heartbeat is the opt-in,** for keeping the fleet going after the chat closes. Install one local heartbeat for the spec only when the user asks for that. Its scheduled command uses the tool paths from installation.
 
 ```sh
 python3 -I "<this skill's folder>/scripts/heartbeat.py" install "<owner>/<repo>" "<S>" "<harness>" "<model>"

@@ -144,8 +144,9 @@ MERGE_HELP = (
     'second drop, a merge conflict or a person\'s removal is `blocked: ...`, and once every required check ran '
     'green after the removal it passes the late look again, claims its one retry on the drop record (`Re-queue '
     'claimed at <time>.`, held 15 minutes while it does not read back) and prints `re-queued; ...`. Queue facts it '
-    'cannot read or that disagree are `pending: ...`. Two runs on one machine take turns, and a drop record or receipt '
-    'two runs posted at once is kept once. Without a merge queue it merges with `gh pr merge --merge --match-head-commit` only with '
+    'cannot read or that disagree are `pending: ...`. Two runs on one machine take turns, and a drop record or '
+    'receipt two runs posted at once is kept once. Without a merge queue it merges with `gh pr merge --merge '
+    '--match-head-commit` only with '
     "`--base-rule-checked`, after you applied fleet.md's base rule and `fleet.sh every` still prints this merge line, "
     'and reads it back: `merged <commit>; cost ...` (exit 0). Anything else is `blocked: <why>; recorded <id>` '
     '(exit 1). TICKET is checked before any write. BODY names the APPROVE and the plan approval that allowed it.')
@@ -775,8 +776,12 @@ def ask(repo, number, head, checks, ticket, path):
 
 
 def serial(repo, number):
-    handle = open(Path(tempfile.gettempdir()) / f"openwiz-merge-{repo.replace('/', '-')}-{number}.lock", 'a')
-    fcntl.flock(handle, fcntl.LOCK_EX)
+    path = Path(tempfile.gettempdir()) / f"openwiz-merge-{repo.replace('/', '-')}-{number}.lock"
+    try:
+        handle = open(path, 'a')
+        fcntl.flock(handle, fcntl.LOCK_EX)
+    except OSError as why:
+        raise Stop(f'unknown: the merge lock {path} could not be taken ({why}); nothing was read or written')
     return handle
 
 
@@ -800,7 +805,8 @@ def once(repo, number, made, same):
     twins = sorted(c['id'] for c in items or [] if post.ours(c, auth) and type(c.get('id')) is int
                    and same(first_line(c)))
     if not twins:
-        raise Stop(f'unknown: #{number} could not be read back after {made} was posted; read #{number} before any retry')
+        raise Stop(f'unknown: #{number} could not be read back after {made} was posted; '
+                   f'read #{number} before any retry')
     if twins[0] == made:
         return made
     post.gh('api', '--method', 'DELETE', f'repos/{repo}/issues/comments/{made}')
@@ -918,7 +924,8 @@ def requeue(repo, number, head, checks, ticket, p, kept, since, blocked, receipt
         if told:
             return told
     if refused is None:
-        return 'pending: the enqueue call succeeded but it still reads open; its claim holds, so read it again next wake'
+        return ('pending: the enqueue call succeeded but it still reads open; its claim holds, '
+                'so read it again next wake')
     raise Stop(f'not re-queued: {refused}; its claim holds 15 minutes, so run it again next wake')
 
 

@@ -4,10 +4,10 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
 import subprocess
 import sys
-import tempfile
 from urllib.parse import urlsplit
 
 ETAG = re.compile(r'(W/)?"[!#-~]{1,250}"')
@@ -29,7 +29,7 @@ def _label(endpoint):
     try:
         path = urlsplit(endpoint).path
     except ValueError:
-        path = endpoint.partition('?')[0]
+        return '(an endpoint that cannot be parsed)'
     return UNSAFE.sub('?', path)[:200] or '(no path)'
 
 
@@ -37,20 +37,43 @@ def _owned(info):
     return info.st_uid == os.getuid()
 
 
+def _trusted(info, own):
+    if not stat.S_ISDIR(info.st_mode):
+        return False
+    if own:
+        return _owned(info) and not info.st_mode & 0o022
+    return info.st_uid in (0, os.getuid()) and (not info.st_mode & 0o022 or info.st_mode & stat.S_ISVTX)
+
+
 def _root():
-    root = cache_dir()
+    base = Path(os.path.realpath(cache_dir().parent.parent))
+    names = list(base.parts[1:]) + ['launch-fleet', 'rest']
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = None
     try:
-        root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        for folder in (root.parent, root):
-            info = os.lstat(folder)
-            if (not stat.S_ISDIR(info.st_mode) or not _owned(info)
-                    or folder != root and info.st_mode & 0o022):
-                raise Error('ghcache: unsafe cache folder %s, refused' % folder.name)
+        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+        if not _trusted(os.fstat(fd), False):
+            raise Error('ghcache: unsafe cache folder, refused')
+        for number, name in enumerate(names):
+            try:
+                child = os.open(name, flags, dir_fd=fd)
+            except FileNotFoundError:
+                os.mkdir(name, 0o700, dir_fd=fd)
+                child = os.open(name, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+            info = os.fstat(fd)
+            if not _trusted(info, number >= len(names) - 2):
+                raise Error('ghcache: unsafe cache folder, refused')
         if stat.S_IMODE(info.st_mode) != 0o700:
-            os.chmod(root, 0o700)
-    except OSError:
-        raise Error('ghcache: cannot use the cache folder') from None
-    return root
+            os.fchmod(fd, 0o700)
+    except BaseException as error:
+        if fd is not None:
+            os.close(fd)
+        if isinstance(error, OSError):
+            raise Error('ghcache: cannot use the cache folder') from None
+        raise
+    return fd
 
 
 def _digest(request, etag, link, body):
@@ -73,9 +96,9 @@ def _once(pairs):
     return dict(pairs)
 
 
-def _load(path, request, label):
+def _load(root, name, request, label):
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root)
     except FileNotFoundError:
         return None
     except OSError:
@@ -99,24 +122,26 @@ def _load(path, request, label):
         return entry
     except (ValueError, UnicodeError):
         try:
-            path.unlink()
+            os.unlink(name, dir_fd=root)
         except OSError:
             pass
         raise Error('ghcache: damaged cache entry for %s, removed; read again' % label) from None
 
 
-def _save(path, entry):
+def _save(root, name, entry):
+    pending = '.rest.%s' % secrets.token_hex(16)
     try:
-        fd, pending = tempfile.mkstemp(dir=path.parent, prefix='.rest.')
+        fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=root)
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as out:
                 json.dump(entry, out)
-            os.replace(pending, path)
+            os.replace(pending, name, src_dir_fd=root, dst_dir_fd=root)
         except BaseException:
-            os.unlink(pending)
+            os.unlink(pending, dir_fd=root)
             raise
     except OSError:
-        pass
+        return False
+    return True
 
 
 def _parse(raw, label):
@@ -141,8 +166,16 @@ def _read(endpoint, accept=None):
     label = _label(endpoint)
     accept = accept or MEDIA
     request = _request(endpoint, accept)
-    path = _root() / ('%s.json' % request)
-    entry = _load(path, request, label)
+    root = _root()
+    try:
+        return _cached(root, endpoint, accept, label, request)
+    finally:
+        os.close(root)
+
+
+def _cached(root, endpoint, accept, label, request):
+    name = '%s.json' % request
+    entry = _load(root, name, request, label)
     command = ['gh', 'api', '--include', '--method', 'GET', '-H', 'Accept: %s' % accept]
     if entry:
         command += ['-H', 'If-None-Match: %s' % entry['etag']]
@@ -155,8 +188,12 @@ def _read(endpoint, accept=None):
         if not entry:
             raise Error('ghcache: 304 for %s with no saved answer' % label)
         link = headers.get('link', entry['link'])
-        if link != entry['link']:
-            _save(path, _entry(request, entry['etag'], link, entry['body']))
+        if link != entry['link'] and not _save(root, name, _entry(request, entry['etag'], link, entry['body'])):
+            try:
+                os.unlink(name, dir_fd=root)
+            except OSError:
+                pass
+            raise Error('ghcache: cannot save the new Link for %s in the cache; read again' % label)
         return entry['body'], link
     if status != 200:
         raise Error('ghcache: HTTP %d for %s' % (status, label))
@@ -168,7 +205,7 @@ def _read(endpoint, accept=None):
         raise Error('ghcache: an answer for %s that is not UTF-8' % label) from None
     link, etag = headers.get('link', ''), headers.get('etag', '')
     if ETAG.fullmatch(etag):
-        _save(path, _entry(request, etag, link, text))
+        _save(root, name, _entry(request, etag, link, text))
     return text, link
 
 

@@ -292,6 +292,11 @@ class GitRead(unittest.TestCase):
         code, out, err = self.o.read()
         self.assertEqual((code, out, hits), (2, '', []), err)
         self.assertEqual(err, f'gitread: could not fetch the default branch of {REPO}\n')
+        self.o.env.update(GIT_ALLOW_PROTOCOL='http:file', GIT_CONFIG_COUNT='2',
+                          GIT_CONFIG_KEY_1='protocol.http.allow', GIT_CONFIG_VALUE_1='always')
+        (self.o.tmp / 'gitconfig').write_text('[protocol "http"]\n\tallow = always\n[protocol]\n\tallow = always\n')
+        code, out, err = self.o.read('docs/agents/fleet.md', '--max-age', '0')
+        self.assertEqual((code, out, hits), (2, '', []), 'an inherited protocol setting never opens the guard')
         self.o.env['GIT_CONFIG_KEY_0'] = f'url.file://{self.o.tmp / "origins"}/.insteadOf'
         self.assertEqual(self.o.read('docs/agents/fleet.md', '--max-age', '0'), (0, FLEET_MD, ''))
 

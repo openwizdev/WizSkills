@@ -512,6 +512,190 @@ class LateFindings(unittest.TestCase):
         self.assertNotRegex(source, r'(?i)contents|/git/trees|\btrees\b|compare|gh api (?!graphql)|\brepos/')
 
 
+def git_in(where, *args, env=None):
+    return subprocess.run(['git', '-C', where] + list(args), check=True, capture_output=True,
+                          env=dict(os.environ, **GIT_ENV, **(env or {}))).stdout.decode('utf-8', 'replace').strip()
+
+
+def write_commit(where, files, message, remove=()):
+    for name in remove:
+        git_in(where, 'rm', '-q', name)
+    for name, data in files.items():
+        os.makedirs(os.path.dirname(os.path.join(where, name)) or where, exist_ok=True)
+        with open(os.path.join(where, name), 'wb') as handle:
+            handle.write(data if isinstance(data, bytes) else data.encode('utf-8'))
+    git_in(where, 'add', '-A')
+    git_in(where, 'commit', '-q', '--no-gpg-sign', '-m', message)
+    return git_in(where, 'rev-parse', 'HEAD')
+
+
+def new_repo(where):
+    git_in(where, 'init', '-q')
+    return write_commit(where, {'README.md': 'base\n'}, 'O')
+
+
+def node_with(rounds, issues=()):
+    return {'number': 8, 'title': 'Synthetic PR 8', 'createdAt': '2026-01-09T00:00:00Z', 'mergedAt': INSIDE,
+            'additions': 1, 'deletions': 0, 'changedFiles': 1, 'baseRefOid': None, 'headRefOid': None,
+            'comments': [comment(body, minute=i) for i, body in enumerate(rounds)],
+            'closingIssuesReferences': list(issues)}
+
+
+def closed(at, reason='COMPLETED'):
+    return {'__typename': 'ClosedEvent', 'createdAt': at, 'stateReason': reason}
+
+
+def reopened(at):
+    return {'__typename': 'ReopenedEvent', 'createdAt': at}
+
+
+def follow_up(number, finding, ticket=1, pr_ref='#8', state='OPEN', events=(), total=None, title=None):
+    return {'number': number, 'title': title or 'A claim (polish for #%d, %s)' % (ticket, finding),
+            'body': 'Follow-up of #%d (spec #2)\n\nA claim. Found in pull request %s at %s; it is polish and did '
+                    'not block the merge.\n' % (ticket, pr_ref, 'a' * 40),
+            'state': state, 'timelineItems': {'totalCount': len(events) if total is None else total,
+                                              'nodes': list(events)}}
+
+
+TICKET_ONE = {'number': 1, 'body': 'Ticket. Size: S.', 'repository': {'nameWithOwner': 'synthetic/tickets'}}
+POLISHED = node_with(['VERDICT: CHANGES at %s\n\n- **R1 [blocking]** `a.py:1` (Spec) First.\n'
+                      '- **R2 [polish]** `a.py:2` (Sweep) Small. Polish issue: #50.\n' % ('a' * 40),
+                      'VERDICT: APPROVE at %s\n\n- **R1 [blocking]** resolved at %s.\n'
+                      '- **R2 [polish]** Polish issue: #50.\n- **R3 [polish]** Polish issue: #51.\n'
+                      % ('b' * 40, 'b' * 40)], [TICKET_ONE])
+
+
+def polish_split(issues, node=POLISHED, now='2026-01-30T00:00:00Z'):
+    records = bench.polish_status([bench.record('synthetic/late', node)], lambda repo, n: issues.get((repo, n)),
+                                  bench.parse_time(now))
+    return dict(records[0]['polish_split'])
+
+
+class ReviewFixes(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.where = self.temp.name
+
+    def test_a_late_pre_existing_finding_counts_once_beside_the_blocker_totals(self):
+        node = node_with(['VERDICT: CHANGES at %s\n\n- **R1 [blocking]** `a.py:1` (Spec) First.\n' % ('a' * 40),
+                          'VERDICT: CHANGES at %s\n\n- **R2 [pre-existing]** `a.py:9` (Sweep) Late, unchanged.\n'
+                          '- **R3 [blocking]** `b.py:2` (Spec) Late, changed.\n' % ('b' * 40),
+                          'VERDICT: CHANGES at %s\n\n- **R2 [blocking]** `a.py:9` (Sweep) Seen again.\n'
+                          '- **R3 [pre-existing]** still open after the re-check.\n' % ('c' * 40)])
+        r = bench.record('synthetic/late', node)
+        self.assertEqual(r['late'], [('b' * 40, 'a.py:9'), ('b' * 40, 'b.py:2')])
+        late = bench.summarize(bench.classify([r], {}, None))['late']
+        self.assertEqual(late, {'blocking': 3, 'findings': 3, 'late': 2, 'pct': 67, 'pre_existing': 1,
+                                'changed': 0, 'unchanged': 0, 'unknown': 2})
+
+    def test_a_verdict_path_is_literal_not_a_pathspec(self):
+        new_repo(self.where)
+        first = write_commit(self.where, {'src/[id].py': 'one\ntwo\n'}, 'A')
+        head = write_commit(self.where, {'src/i.py': 'sibling\n'}, 'B')
+        self.assertEqual(bench.added_lines(self.where, first, head, 'src/[id].py', subprocess.run), set())
+
+    def test_a_polish_issue_state_comes_from_its_history_at_the_deadline(self):
+        due_closed = closed('2026-01-15T00:00:00Z')
+        self.assertEqual(polish_split({('synthetic/tickets', 50): follow_up(
+            50, 'R2', events=[due_closed, reopened('2026-01-25T00:00:00Z')])}),
+            {'not_due': 0, 'unknown': 1, 'ignored': 0, 'handled': 1})
+        self.assertEqual(polish_split({('synthetic/tickets', 50): follow_up(
+            50, 'R2', events=[closed('2026-01-14T00:00:00Z', 'NOT_PLANNED'), reopened('2026-01-15T00:00:00Z'),
+                              closed('2026-01-25T00:00:00Z')], state='CLOSED')}),
+            {'not_due': 0, 'unknown': 1, 'ignored': 1, 'handled': 0})
+        self.assertEqual(polish_split({('synthetic/tickets', 50): follow_up(
+            50, 'R2', events=[closed('2026-01-14T00:00:00Z', 'NOT_PLANNED')], state='CLOSED')}),
+            {'not_due': 0, 'unknown': 1, 'ignored': 1, 'handled': 0})
+        for broken in (follow_up(50, 'R2', events=[due_closed], total=3, state='CLOSED'),
+                       follow_up(50, 'R2', events=[], state='CLOSED'),
+                       follow_up(50, 'R2', events=[due_closed], state='OPEN'),
+                       follow_up(50, 'R2', events=[closed('2026-01-14T00:00:00Z', None)], state='CLOSED')):
+            self.assertEqual(polish_split({('synthetic/tickets', 50): broken}),
+                             {'not_due': 0, 'unknown': 2, 'ignored': 0, 'handled': 0}, broken)
+
+    def test_a_polish_issue_counts_only_when_bound_to_this_pr_and_finding(self):
+        done = [closed('2026-01-14T00:00:00Z')]
+        bound = follow_up(50, 'R2', state='CLOSED', events=done)
+        for other in (follow_up(50, 'R9', title='Unrelated (polish for #999, R9)', state='CLOSED', events=done),
+                      follow_up(50, 'R3', state='CLOSED', events=done),
+                      follow_up(50, 'R2', ticket=7, state='CLOSED', events=done),
+                      follow_up(50, 'R2', pr_ref='#9', state='CLOSED', events=done),
+                      follow_up(50, 'R2', pr_ref='synthetic/other#8', state='CLOSED', events=done)):
+            self.assertEqual(polish_split({('synthetic/tickets', 50): other}),
+                             {'not_due': 0, 'unknown': 2, 'ignored': 0, 'handled': 0}, other['title'])
+        self.assertEqual(polish_split({('synthetic/tickets', 50): bound}),
+                         {'not_due': 0, 'unknown': 1, 'ignored': 0, 'handled': 1})
+        self.assertEqual(polish_split({('synthetic/tickets', 50): follow_up(
+            50, 'R2', pr_ref='synthetic/late#8', state='CLOSED', events=done)}),
+            {'not_due': 0, 'unknown': 1, 'ignored': 0, 'handled': 1})
+        split = dict(TICKET_ONE, repository={'nameWithOwner': 'synthetic/elsewhere'})
+        self.assertEqual(polish_split({('synthetic/late', 50): bound},
+                                      node=dict(POLISHED, closingIssuesReferences=[TICKET_ONE, split])),
+                         {'not_due': 0, 'unknown': 2, 'ignored': 0, 'handled': 0})
+
+    def test_the_combined_share_is_unavailable_while_no_polish_issue_is_due(self):
+        r = bench.polish_status([bench.record('synthetic/late', POLISHED)], None, bench.parse_time(INSIDE))[0]
+        r['withdrawn'] = 1
+        w = bench.summarize([r])['withdrawn_ignored']
+        self.assertEqual((w['not_due'], w['due'], w['ignored_pct'], w['withdrawn_pct'], w['either_pct']),
+                         (2, 0, None, 100, None))
+        self.assertEqual(w['pending'], 'not yet due')
+        row = bench.withdrawn_table({'x': bench.summarize([r])}).splitlines()[2]
+        self.assertTrue(row.endswith('| not yet due | not yet due (withdrawn alone 100%) |'), row)
+        r['polish_split'] = {'not_due': 0, 'unknown': 2, 'ignored': 0, 'handled': 0}
+        w = bench.summarize([r])['withdrawn_ignored']
+        self.assertEqual((w['either_pct'], w['pending']), (None, 'unknown'))
+        r['polish_split'] = {'not_due': 0, 'unknown': 0, 'ignored': 0, 'handled': 0}
+        w = bench.summarize([r])['withdrawn_ignored']
+        self.assertEqual((w['either_pct'], w['pending']), (100, None))
+
+    def size_of(self, base, head):
+        r = {'repo': 'synthetic/late', 'base': base, 'head': head}
+        return dict(bench.diff_size([r], {'synthetic/late': self.where}, subprocess.run)[0]['diff_size'])
+
+    def test_a_pure_move_is_one_file_and_no_lines(self):
+        new_repo(self.where)
+        first = write_commit(self.where, {'src/old.py': ''.join('line %d\n' % i for i in range(100))}, 'A')
+        moved = write_commit(self.where, {'src/new.py': ''.join('line %d\n' % i for i in range(100))}, 'B',
+                             remove=['src/old.py'])
+        self.assertEqual(self.size_of(first, moved), {'code_lines': 0, 'test_lines': 0, 'code_files': 1,
+                                                      'test_files': 0})
+        into_tests = write_commit(self.where, {'tests/new.py': ''.join('line %d\n' % i for i in range(100))}, 'C',
+                                  remove=['src/new.py'])
+        self.assertEqual(self.size_of(moved, into_tests), {'code_lines': 0, 'test_lines': 0, 'code_files': 0,
+                                                           'test_files': 1})
+
+    def test_a_non_ascii_test_path_is_still_a_test(self):
+        base = new_repo(self.where)
+        head = write_commit(self.where, {'tests/café.py': 'one\ntwo\n'}, 'A')
+        self.assertEqual(self.size_of(base, head), {'code_lines': 0, 'test_lines': 2, 'code_files': 0,
+                                                    'test_files': 1})
+
+    def test_a_partial_clone_is_never_fetched_into(self):
+        origin = os.path.join(self.where, 'origin')
+        os.mkdir(origin)
+        new_repo(origin)
+        first = write_commit(origin, {'a.py': 'one\n'}, 'A')
+        head = write_commit(origin, {'a.py': 'one\ntwo\n'}, 'B')
+        git_in(origin, 'config', 'uploadpack.allowFilter', 'true')
+        partial = os.path.join(self.where, 'partial')
+        subprocess.run(['git', 'clone', '-q', '--bare', '--filter=blob:none', 'file://' + origin, partial],
+                       check=True, capture_output=True, env=dict(os.environ, **GIT_ENV))
+        packs = sorted(os.listdir(os.path.join(partial, 'objects', 'pack')))
+        self.assertIsNone(bench.added_lines(partial, first, head, 'a.py', subprocess.run))
+        self.assertEqual(sorted(os.listdir(os.path.join(partial, 'objects', 'pack'))), packs)
+
+    def test_a_non_utf8_source_file_is_still_classified(self):
+        new_repo(self.where)
+        first = write_commit(self.where, {'legacy.py': b'a = 1\nb = "caf\xe9"\n'}, 'A')
+        head = write_commit(self.where, {'legacy.py': b'a = 1\nb = "th\xe9"\n'}, 'B')
+        self.assertEqual(bench.added_lines(self.where, first, head, 'legacy.py', subprocess.run), {2})
+        r = {'repo': 'synthetic/late', 'first_head': first, 'late': [(head, 'legacy.py:2'), (head, 'legacy.py:1')]}
+        self.assertEqual(dict(bench.classify([r], {'synthetic/late': self.where}, subprocess.run)[0]['late_split']),
+                         {'changed': 1, 'unchanged': 1, 'unknown': 0})
+
+
 class IssueTransport(unittest.TestCase):
     def read(self, stdout, code=0):
         calls = []

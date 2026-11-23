@@ -85,7 +85,8 @@ SUITES = {
               ['python3', '-I', 'check/test_changesets.py'],
               ['python3', '-I', 'check/test_suites.py'],
               ['python3', '-I', 'check/test_bench.py'],
-              ['python3', '-I', 'check/test_select.py']],
+              ['python3', '-I', 'check/test_select.py'],
+              ['python3', '-I', 'check/test_checklist_rules.py']],
 }
 
 PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}

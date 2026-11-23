@@ -1975,6 +1975,12 @@ class Drops(unittest.TestCase):
         self.assertEqual([c['id'] for c in w.load()['comments']['7']], [4000, 4001, 4004])
         self.assertEqual(w.writes(), [{'delete': 4003}, {'delete': 4005}, {'delete': 4002}])
         self.assertEqual(w.bodies(7), [receipt, drop, CLAIMED])
+        q = World(self, pr=pr(isMergeQueueEnabled=True, isInMergeQueue=True, mergeQueueEntry={'headCommit': {'oid': HEAD}}),
+                  comments={'7': [comment(4000, receipt), comment(4002, receipt)]}, faults={'delete': 'fail'})
+        project(q, PRINTS)
+        for _ in range(2):
+            self.assertEqual(self.merge(q), (0, 'queued; the queue merges it or lets it go'))
+        self.assertEqual((q.writes(), q.bodies(7)), ([{'delete': 4002}], [receipt]))
 
     def test_a_re_queue_rechecks_the_late_look_first(self):
         w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, tickets=ticket(VISIBLE))

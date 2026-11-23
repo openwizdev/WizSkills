@@ -11,8 +11,8 @@
   merge.py ask    OWNER/NAME PR HEAD CHECKS --ticket TICKET EVIDENCE-FILE
 
 `read` prints where the pull request stands: `merged <commit>`, `queued`,
-`open, the merge queue is on|off[; it left the queue at <time>: <reason>]`,
-`pending: <why>` when its queue facts disagree, or `stop: <why>`. `admit` prints `admit: ...`, `base rule: no merge queue;
+`open, the merge queue is on|off[; it left the queue at <time>: <reason>]` or
+`stop: <why>`. `admit` prints `admit: ...`, `base rule: no merge queue;
 mergeable: <state>` or `wait: <why>`; CHECKS are fleet.md's required checks,
 comma-separated. Both only read.
 

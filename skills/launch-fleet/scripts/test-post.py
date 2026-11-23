@@ -273,6 +273,16 @@ def full(times, account='synthetic-owner', inflight=(), until=0):
 
 class Pacer(unittest.TestCase):
 
+    def test_agent_and_host_clis_resolve_to_stubs_inside_the_world(self):
+        # catches: a World whose PATH falls through to a real agent or host CLI (merge.py runs room-cli).
+        w = World(self)
+        for name in ('room-cli', 'claude', 'codex', 'boat'):
+            found = subprocess.run(['sh', '-c', 'command -v "$1"', 'sh', name], env=w.env, capture_output=True,
+                                   text=True).stdout.strip()
+            self.assertEqual(found, str(w.dir / 'bin' / name))
+            run = subprocess.run([found or name, 'start'], env=w.env, capture_output=True, text=True)
+            self.assertEqual((run.returncode, run.stdout), (1, ''))
+
     def test_a_full_minute_bucket_refuses_without_writing(self):
         w = paced_world(self)
         now = time.time()

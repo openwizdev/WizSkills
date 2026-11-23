@@ -96,7 +96,7 @@ OPTIONS = {
     'select': ({'--state', '--repo'}, set(), set()),
     'choose': ({'--state', '--options'}, {'--from-setup'}, {'--harness', '--model', '--effort', '--agents'}),
     'spec': ({'--state', '--spec', '--repo'}, set(), set()),
-    'launch': ({'--state', '--spec'}, {'--yes', '--heartbeat'}, {'--confirm'}),
+    'launch': ({'--state', '--spec'}, {'--yes', '--heartbeat', '--carry-on'}, {'--confirm'}),
     'progress': ({'--state', '--spec', '--openwiz'}, set(), set()),
     'next': ({'--state'}, set(), {'--setup-state'}),
 }
@@ -194,6 +194,8 @@ def parse(argv):
         raise Exit(2, 'usage: --spec takes an issue number')
     if argv[0] == 'launch' and ('--confirm' in got) != bool(got.get('--yes')) or not re.fullmatch(r'[0-9a-f]{64}', got.get('--confirm', '0' * 64)):
         raise Exit(2, 'usage: --yes takes --confirm with the digest of the preview the user said yes to')
+    if argv[0] == 'launch' and got.get('--carry-on') and len(got) > 3:
+        raise Exit(2, 'usage: launch --carry-on takes only --state and --spec')
     if '--build' in got and not os.path.isabs(got['--build']):
         raise Exit(2, 'usage: --build takes the verified install\'s build folder by absolute path')
     if '--pr' in got and not re.fullmatch(r'[1-9][0-9]{0,9}', got['--pr']):
@@ -1693,6 +1695,8 @@ def fleet_recorded(spec, env):
 
 
 SESSION = LAUNCH_FLEET / 'scripts/session.py'
+CARRY_ON = ("Onboarding's carry on: run launch --spec %d --carry-on. It runs that same session again in this chat, "
+            "with this fleet's saved driver folder and GitHub-only, and saves where it stops.")
 OPT_IN = ('To keep the fleet going after this chat closes, the opt-in is a local heartbeat: ask the user, and only '
           'on their yes run launch --spec %d --heartbeat to preview it.')
 
@@ -1799,19 +1803,32 @@ def launch(got):
     previous = state.value.get('launch')
     if got.get('--heartbeat'):
         return opt_in(state, spec, env, host, got)
-    if local and previous and previous['spec'] == spec and previous['state'] == 'started':
+    if got.get('--carry-on'):
+        return carry_session(state, spec, env, local, previous)
+    if local and previous and previous['spec'] == spec and previous.get('session') and previous['state'] == 'started':
         print('Spec #%d already started once; not starting again.' % spec)
-        if previous.get('session'):
-            print(session_line(spec, previous['session']))
+        print(session_line(spec, previous['session']))
         print(record_line(spec, activation(spec, agents_host, env), agents_host))
         return 0
     if local and previous and previous['spec'] == spec and previous['state'] != 'refused':
+        recorded = activation(spec, agents_host, env)
+        print(record_line(spec, recorded, agents_host))
+        if recorded is None:
+            raise Exit(6, 'The saved yes was for the heartbeat handoff, and whether that heartbeat is installed is '
+                          'unknown, so the yes is kept: run this again; ' + NOTHING)
+        if recorded:
+            if previous['state'] != 'started':
+                previous['state'] = 'started'
+                if not state.save():
+                    raise Exit(10, "Could not save the fleet's start; run this again to read it.")
+            print('Spec #%d already started once, through its heartbeat; not starting again.' % spec)
+            return 0
         del state.value['launch']
         state.value.pop('preview', None)
         if not state.save():
             raise Exit(10, 'Could not withdraw the yes; run this again; ' + NOTHING)
-        raise Exit(5, 'The saved yes was for the heartbeat handoff; the fleet now runs in this chat: preview again '
-                      'and ask again; ' + NOTHING)
+        raise Exit(5, 'The saved yes was for the heartbeat handoff, and no heartbeat is installed; the fleet now '
+                      'runs in this chat: preview again and ask again; ' + NOTHING)
     if previous and previous['spec'] == spec and previous['state'] != 'refused':
         recorded = activation(spec, agents_host, env)
         if previous['state'] != 'started' and recorded:
@@ -1964,13 +1981,17 @@ def launch(got):
                              'tickets': starts, 'orchestrator': orchestrator}
     if driver:
         state.value['launch']['adapters'] = adapters
+    if local:
+        state.value['launch']['runner'] = {'harness': PROGRAMS[builder['harness']], 'model': builder['model']}
+        state.value['launch']['session'] = {'exit': None, 'said': [], 'carry_on': shlex.join(
+            ['python3', '-I', *session_argv(state, spec)])}
     if not state.save():
         raise Exit(10, 'Could not save the start the user said yes to; ' + NOTHING)
     if local:
         print("The user said yes to starting spec #%d's fleet %s: launch-fleet's session runner runs it in this chat "
               'now.' % (spec, where))
         print(starting)
-        return hand_over(state, spec, env, builder)
+        return hand_over(state, spec, env)
     if driver:
         print("The user said yes to starting spec #%d's fleet %s. Follow the heartbeat handoff for the scheduled job."
               % (spec, where))
@@ -1986,9 +2007,33 @@ def agent_words(agent):
     return ' '.join(agent[k] for k in ('harness', 'model', 'effort'))
 
 
-def hand_over(state, spec, env, builder):
-    argv = [str(SESSION), 'run', state.value['repo'], '--spec', str(spec), '--harness', PROGRAMS[builder['harness']],
-            '--model', builder['model']]
+def session_argv(state, spec):
+    runner = state.value['launch'].get('runner') or {}
+    if runner.get('harness') not in PROGRAMS.values() or not isinstance(runner.get('model'), str):
+        return None
+    return [str(SESSION), 'run', state.value['repo'], '--spec', str(spec), '--harness', runner['harness'],
+            '--model', runner['model']]
+
+
+def carry_session(state, spec, env, local, launched):
+    if not local or not launched or launched.get('spec') != spec or launched.get('state') != 'started' or \
+            not launched.get('session'):
+        raise Exit(5, 'Carry on continues the session this onboarding started in this chat, and spec #%d has none '
+                      'yet: launch --spec %d first; %s' % (spec, spec, NOTHING))
+    if launched['session'].get('exit') == 0:
+        print(session_line(spec, launched['session']))
+        print('Nothing to carry on: the session already finished spec #%d.' % spec)
+        return 0
+    if not session_argv(state, spec) or not launched.get('adapters'):
+        raise Exit(5, "This onboarding's saved start names no session command or driver folder to carry on with; "
+                      + NOTHING)
+    env.update(OPENWIZ_ADAPTERS=launched['adapters'], LAUNCH_FLEET_GITHUB_ONLY='1')
+    print("Carrying on spec #%d's session in this chat." % spec)
+    return hand_over(state, spec, env, carried=True)
+
+
+def hand_over(state, spec, env, carried=False):
+    argv = session_argv(state, spec)
     sys.stdout.flush()
     lines, quiet = [], {s: signal.signal(s, lambda *_: None) for s in (signal.SIGINT, signal.SIGTERM)}
     try:
@@ -2006,6 +2051,11 @@ def hand_over(state, spec, env, builder):
             signal.signal(s, handler)
     at = next((i for i in reversed(range(len(lines))) if lines[i].startswith(('session: ', 'session.py: '))), None)
     stop = '' if at is None else lines[at]
+    if carried and (code is None or code == 1 and stop.startswith('session: refused: ')):
+        raise Exit(5, 'The session %s, so this carry-on ran nothing; the fleet keeps its start and its last saved '
+                   'stop: run launch --spec %d --carry-on again once that clears; %s' % (
+                       'did not run' if code is None else 'was refused: ' + stop[len('session: refused: '):], spec,
+                       NOTHING))
     if code is None or code == 1 and stop.startswith('session: refused: '):
         del state.value['launch']
         state.value.pop('preview', None)
@@ -2029,11 +2079,14 @@ def session_line(spec, session):
     code, said = session['exit'], session['said']
     if code == 0:
         return "Spec #%d's session in this chat ended: the session finished spec #%d." % (spec, spec)
+    if code is None:
+        return "Spec #%d's session in this chat started; where it stopped was not saved.\n%s" % (spec, CARRY_ON % spec)
     why = {3: 'it needs you', 130: 'it was interrupted; the runs it started keep going', 2: 'a read failed'}
     lines = ["Spec #%d's session in this chat stopped: %s. What it said, to show the user as it is:"
              % (spec, why.get(code, 'exit %d' % code)), *(said or ['(nothing)'])]
     if not any(line.startswith('carry on: ') for line in said):
         lines.append('carry on: ' + session['carry_on'])
+    lines.append(CARRY_ON % spec)
     return '\n'.join(lines)
 
 

@@ -96,6 +96,7 @@ EFFORT_NEXT = ("this host can't set effort: remove the effort for this harness i
 CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox', 'effort')
 ROLE_ROWS = {'builder': ('Builder', 'Small builder', 'Fixer'), 'reviewer': ('Reviewer',),
              'orchestrator': ('Orchestrator',)}
+RECORDS = re.compile(r'openwiz:records v[1-9][0-9]{0,2}')     # driver v1's version records item
 MODELS_ROWS = tuple(r for rows in ROLE_ROWS.values() for r in rows)
 FLEET = ('LAUNCH_FLEET_HARNESS', 'LAUNCH_FLEET_MODEL', 'LAUNCH_FLEET_SKILLS')
 WITHHELD = 'withheld, as it held a credential, a private id or a machine path; run the driver by hand'
@@ -373,11 +374,15 @@ def can(host):
     except (OSError, subprocess.TimeoutExpired) as e:
         raise Unreadable('the %s driver did not answer version (%s); nothing was started' % (host, type(e).__name__))
     answer = strict(r.stdout)
-    listed = answer.get('can') if isinstance(answer, dict) else None
-    if r.returncode != 0 or set(answer or ()) != {'driver', 'records', 'can'} \
-            or not (isinstance(answer['driver'], str) and NAME.fullmatch(answer['driver'])) \
-            or not (isinstance(answer['records'], list) and answer['records']
-                    and all(isinstance(v, str) for v in answer['records'])) \
+    if not isinstance(answer, dict):
+        answer = {}
+    listed, records = answer.get('can'), answer.get('records')
+    if r.returncode != 0 or set(answer) != {'driver', 'records', 'can'} \
+            or not (isinstance(answer['driver'], str) and len(answer['driver']) <= 40
+                    and NAME.fullmatch(answer['driver'])) \
+            or not (isinstance(records, list) and records and all(isinstance(v, str) and RECORDS.fullmatch(v)
+                                                                  for v in records)
+                    and len(set(records)) == len(records)) \
             or not (isinstance(listed, list) and all(isinstance(v, str) and v in CAN for v in listed)
                     and len(set(listed)) == len(listed) and {'start', 'wake', 'stop'} <= set(listed)):
         raise Unreadable("the %s driver's version answer is not driver v1's; nothing was started" % host)

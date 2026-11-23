@@ -64,7 +64,7 @@ class Project:
         bin_dir.mkdir()
         (bin_dir / 'gh').write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, HERE / 'fixtures/fake_github.py'))
         (bin_dir / 'gh').chmod(0o755)
-        (self.dir / 'stubs').mkdir()  # after bin on PATH: never a real agent or host CLI, and a bin-only PATH has none
+        (self.dir / 'stubs').mkdir()
         for name in ('room-cli', 'claude', 'codex', 'boat'):
             (self.dir / 'stubs' / name).write_text('#!/bin/sh\necho "stub: no %s in tests" >&2\nexit 1\n' % name)
             (self.dir / 'stubs' / name).chmod(0o755)

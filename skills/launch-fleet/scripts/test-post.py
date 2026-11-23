@@ -26,7 +26,7 @@ class World:
         gh = bin_dir / 'gh'
         gh.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, HERE / 'fixtures/fake_github.py'))
         gh.chmod(0o755)
-        for name in ('room-cli', 'claude', 'codex', 'boat'):  # never a real agent or host CLI from PATH
+        for name in ('room-cli', 'claude', 'codex', 'boat'):
             (bin_dir / name).write_text('#!/bin/sh\necho "stub: no %s in tests" >&2\nexit 1\n' % name)
             (bin_dir / name).chmod(0o755)
         self.path = self.dir / 'world.json'
@@ -240,8 +240,6 @@ SECONDARY = ('{"message": "You have exceeded a secondary rate limit and have bee
 
 
 def paced_world(test, login='synthetic-owner', post_answer=None):
-    """A World whose writes pace in its own state folder, whose gh hosts file names `login` as the signed-in account and,
-    with post_answer=(status line, headers), answers the next comment POST with that GitHub refusal."""
     w = World(test)
     gh = w.dir / 'bin' / 'gh'
     fake = gh.read_text().split('\n', 1)[1]
@@ -278,7 +276,6 @@ def full(times, account='synthetic-owner', inflight=(), until=0):
 class Pacer(unittest.TestCase):
 
     def test_host_projects_keep_writer_state_and_clis_inside_the_project(self):
-        # catches: test-host.py's Project letting post.py write the real ~/.local/state bucket, or reach a real CLI.
         p = runpy.run_path(str(HERE / 'test-host.py'))['Project'](self, hosts=('local',))
         self.assertEqual(p.env.get('XDG_STATE_HOME'), str(p.dir / 'state'))
         for name in ('room-cli', 'claude', 'codex', 'boat'):
@@ -289,7 +286,6 @@ class Pacer(unittest.TestCase):
             self.assertEqual((run.returncode, run.stdout), (1, ''))
 
     def test_agent_and_host_clis_resolve_to_stubs_inside_the_world(self):
-        # catches: a World whose PATH falls through to a real agent or host CLI (merge.py runs room-cli).
         w = World(self)
         for name in ('room-cli', 'claude', 'codex', 'boat'):
             found = subprocess.run(['sh', '-c', 'command -v "$1"', 'sh', name], env=w.env, capture_output=True,

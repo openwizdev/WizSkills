@@ -36,12 +36,10 @@ def gh(*args):
     return r.stdout if r.returncode == 0 else None
 
 
-# The write pacer (FR10): every content-creating write takes a slot from its account's bucket, below GitHub's
-# secondary limits (about 80 a minute, 500 an hour, 100 concurrent); edits only count toward the in-flight cap.
 PER_MINUTE, PER_HOUR, IN_FLIGHT = 60, 400, 20
-WINDOW = 30      # seconds a write waits for a slot before it refuses
-STALE = 90       # seconds after which an in-flight entry is over (gh's own timeout is 60)
-SECONDARY_WAIT = 60  # GitHub's advice when a secondary limit names no time
+SLOT_WAIT_SECONDS = 30
+IN_FLIGHT_STALE_SECONDS = 90
+SECONDARY_WAIT_DEFAULT_SECONDS = 60
 
 
 def stamp(at):
@@ -70,7 +68,6 @@ def valid(value):
 
 @contextmanager
 def pacer_state():
-    """The machine's write state under its lock; saved (atomically) only when the block ends without an error."""
     path = state_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -105,7 +102,6 @@ def alive(pid):
 
 
 def account():
-    """The signed-in github.com login from gh's own hosts file (no API call), else one shared 'unknown' bucket."""
     base = os.environ.get('GH_CONFIG_DIR') or os.path.join(
         os.environ.get('XDG_CONFIG_HOME') or os.path.join(os.path.expanduser('~'), '.config'), 'gh')
     try:
@@ -118,13 +114,12 @@ def account():
 
 
 def take(paced):
-    """Take a write slot (and, when paced, a bucket token), waiting up to WINDOW seconds; refuse with no slot."""
     key = account() if paced else None
-    deadline = time.time() + WINDOW
+    deadline = time.time() + SLOT_WAIT_SECONDS
     while True:
         with pacer_state() as s:
             now = time.time()
-            s['inflight'] = [e for e in s['inflight'] if now - e[1] < STALE and alive(e[0])]
+            s['inflight'] = [e for e in s['inflight'] if now - e[1] < IN_FLIGHT_STALE_SECONDS and alive(e[0])]
             s['accounts'] = {k: kept for k, v in s['accounts'].items() if (kept := [t for t in v if now - t < 3600])}
             free = s['until']
             times = sorted(s['accounts'].get(key, [])) if paced else []
@@ -141,7 +136,7 @@ def take(paced):
                 s['inflight'].append(entry)
                 return entry
             if busy:
-                free = max(free, sorted(e[1] for e in s['inflight'])[-IN_FLIGHT] + STALE)
+                free = max(free, sorted(e[1] for e in s['inflight'])[-IN_FLIGHT] + IN_FLIGHT_STALE_SECONDS)
             if free > deadline and (not busy or now >= deadline):
                 raise Stop(f'refused: write paced, retry after {stamp(free)}')
         time.sleep(max(0.05, min(0.5 if busy else free - now, deadline - now)))
@@ -153,11 +148,10 @@ def release(entry):
             if entry in s['inflight']:
                 s['inflight'].remove(entry)
     except Stop:
-        pass  # the entry goes stale and is dropped then
+        pass
 
 
 def answer(text):
-    """gh api --include output as (status, lowercased headers, body); status None when no head came."""
     head = re.match(r'HTTP/\S+ (\d{3})[^\n]*\n(.*?)\r?\n\r?\n', text, re.S)
     if head is None:
         return None, {}, text
@@ -170,7 +164,6 @@ def answer(text):
 
 
 def secondary_wait(status, headers, said):
-    """Seconds GitHub asks every writer to wait, or None when this answer is no secondary limit."""
     after = headers.get('retry-after', '')
     named = 'secondary rate limit' in said.lower()
     if status not in (403, 429) or not (after or named):
@@ -181,17 +174,14 @@ def secondary_wait(status, headers, said):
         try:
             return max(0, parsedate_to_datetime(after).timestamp() - time.time())
         except (TypeError, ValueError):
-            return SECONDARY_WAIT
+            return SECONDARY_WAIT_DEFAULT_SECONDS
     reset = headers.get('x-ratelimit-reset', '')
     if headers.get('x-ratelimit-remaining') == '0' and re.fullmatch(r'[0-9]{1,12}', reset):
         return max(0, int(reset) - time.time())
-    return SECONDARY_WAIT
+    return SECONDARY_WAIT_DEFAULT_SECONDS
 
 
 def write(where, *args, paced=True):
-    """One GitHub write through the pacer: its answer's body, or None when it failed.
-
-    A secondary-limit answer records its wait for every writer on this machine and stops, never retried."""
     entry = take(paced)
     try:
         r = subprocess.run(['gh', 'api', '--include', *args], capture_output=True, text=True, timeout=60,

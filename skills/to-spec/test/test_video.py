@@ -64,6 +64,15 @@ class SpecVideo(unittest.TestCase):
         self.assertEqual(result.stdout,
                          '[Watch the narrated spec](https://example.com/videos/synthetic.mp4?lang=en)\n')
 
+    def test_a_nonlocal_voice_needs_authorization_and_public_safe_input(self):
+        video = (HERE.parent / 'video.md').read_text()
+        lower = video.lower()
+        self.assertIn('default', lower)
+        self.assertIn('--tts-command', video)
+        self.assertIn('authorized provider', lower)
+        self.assertIn('public-safe', lower)
+        self.assertIn('nonlocal', lower.replace('non-local', 'nonlocal'))
+
     def test_link_refuses_unsafe_or_ambiguous_destinations(self):
         for url in ['file:///tmp/video.mp4', 'https://user:secret@example.com/video.mp4',
                     'https://example.com/clip)\n[extra](https://example.org',

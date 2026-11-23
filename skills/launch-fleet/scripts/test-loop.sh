@@ -179,7 +179,8 @@ echo "ok   a service that would refuse is never asked (#1846, #2394)"
 (service; export OPENWIZ_TOKEN_SERVICE= PATH="$work/probe:$work/bin:/usr/bin:/bin"; : > "$work/probe.log"
   identity 'none account' "$off")
 [ ! -s "$work/service.log" ]
-[ -s "$work/probe.log" ] && [ -z "$(grep -vx no-key "$work/probe.log")" ]
+[ -s "$work/probe.log" ]
+[ -z "$(grep -vx no-key "$work/probe.log")" ]
 echo 'ok   with no service configured the wake drops the key and still never mints (#1846, #2394, #2843)'
 
 absent() {
@@ -195,8 +196,10 @@ sentinel=synthetic-key-sentinel-2843
     grep -qxF "$off" "$work/trace"
     absent -F "$sentinel" "$work/trace"
   done
-  [ -s "$work/probe.log" ] && [ -z "$(grep -vx no-key "$work/probe.log")" ]
-  [ -s "$work/gh-key.log" ] && [ -z "$(grep -vx no-key "$work/gh-key.log")" ])
+  [ -s "$work/probe.log" ]
+  [ -z "$(grep -vx no-key "$work/probe.log")" ]
+  [ -s "$work/gh-key.log" ]
+  [ -z "$(grep -vx no-key "$work/gh-key.log")" ])
 echo "ok   the off decision never expands the key and no child gets it (#2843)"
 
 mkdir "$work/shim" "$work/was"
@@ -224,15 +227,18 @@ inherit() {
 }
 dropped() {
   [ ! -s "$work/shim.log" ]
-  [ -s "$work/git-env.log" ] && sort -u "$work/git-env.log" | cmp - "$work/git-env.want"
-  [ -s "$work/gh-token.log" ] && [ -z "$(grep -vx 'none account' "$work/gh-token.log")" ]
+  [ -s "$work/git-env.log" ]
+  sort -u "$work/git-env.log" | cmp - "$work/git-env.want"
+  [ -s "$work/gh-token.log" ]
+  [ -z "$(grep -vx 'none account' "$work/gh-token.log")" ]
 }
 for marker in '$$' ''; do
   (line=$fallback; if [ -n "$marker" ]; then service; line=$off; fi; inherit; rm -rf "$work/cache"
     sh -c "LAUNCH_FLEET_TOKEN_STEP=$marker; export LAUNCH_FLEET_TOKEN_STEP; exec sh \"\$1\"" sh "$work/loop.sh" \
       > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; exit 1; }
     cmp "$work/want" "$work/out"
-    [ "$(head -n 1 "$work/err")" = "$line" ] && [ "$(wc -l < "$work/err" | tr -d ' ')" = 2 ]
+    [ "$(head -n 1 "$work/err")" = "$line" ]
+    [ "$(wc -l < "$work/err" | tr -d ' ')" = 2 ]
     dropped
     [ ! -s "$work/service.log" ])
 done
@@ -240,13 +246,14 @@ echo "ok   a matching step marker with inherited shims runs every command as tod
 
 sed -n '/<!-- GI7 identity -->/,/^  ```$/p' "$HERE/../references/identity.md" | sed '1,2d;$d;s/^  //' > "$work/block.sh"
 (inherit
-  sh -c '. "$1"; app gh --version > /dev/null || :; app_git -C "$2" rev-parse HEAD > /dev/null' \
+  sh -c '. "$1"; app gh --version > /dev/null 2>&1 || :; app_git -C "$2" rev-parse HEAD > /dev/null' \
     sh "$work/block.sh" "$work/remote" 2> "$work/err" || { cat "$work/err" >&2; exit 1; }
   [ "$(cat "$work/err")" = "GitHub as today's account: the App identity is off" ]
   dropped)
 sed -n '/^restore_today_account() {$/,/^}$/p' "$HERE/loop.sh" > "$work/restore.loop"
 sed -n '/^restore_today_account() {$/,/^}$/p' "$work/block.sh" > "$work/restore.block"
-[ -s "$work/restore.loop" ] && cmp "$work/restore.loop" "$work/restore.block"
+[ -s "$work/restore.loop" ]
+cmp "$work/restore.loop" "$work/restore.block"
 echo "ok   the identity block drops inherited shims with loop.sh's restore_today_account (#2843)"
 
 for at in x 01 4 ''; do

@@ -561,7 +561,7 @@ class HostAwareSetup(unittest.TestCase):
         self.assertEqual(json.loads(j.state.read_text())['host']['agents'], 'local')
 
     def test_driver_capability_fallback_matches_the_pinned_schema_enum(self):
-        # External: version.output.properties.can.items.enum from OpenWiz main.
+        # comment-ok: The source pin makes this offline schema excerpt reproducible.
         # https://github.com/openwizdev/OpenWiz/blob/df714db0e44247499b5d54f7d0f41b7d0bde2a3c/kernel/driver-kit/schema.json
         schema_enum = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox', 'effort')
         self.assertEqual(runpy.run_path(str(HELPER))['CAN'], schema_enum)

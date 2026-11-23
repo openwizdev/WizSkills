@@ -324,7 +324,6 @@ def adapters_of(got, env):
 
 
 def driver_capabilities(adapters):
-    """Read the kit shipped beside the adapters, with CAN for builds without the kit."""
     schema = Path(adapters).parent / 'kernel/driver-kit/schema.json'
     try:
         text = schema.read_text(encoding='utf-8')

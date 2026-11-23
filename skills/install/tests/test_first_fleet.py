@@ -1762,7 +1762,10 @@ class OneSetupPullRequest(unittest.TestCase):
         j = Journey(self)
         (j.dir / 'bin/room-cli').unlink()
         j.extra_env['OPENWIZ_LOCAL_STATE'] = str(j.dir / 'host-state')
-        j.state.write_text(json.dumps({'repo': REPO, 'host': {'agents': 'local', 'harnesses': ['claude-code', 'codex']}}))
+        value = {'repo': REPO, 'host': {'agents': 'local', 'harnesses': ['claude-code', 'codex']}}
+        if setup:
+            value['service'] = {'repo': REPO, 'state': 'opened', 'number': 7}
+        j.state.write_text(json.dumps(value))
         j.state.chmod(0o600)
         options = offering(OPUS, SOL)
         options['source'] = 'local'
@@ -1995,9 +1998,14 @@ class OneSetupPullRequest(unittest.TestCase):
         first = j.helper(['next', '--setup-state', str(j.setup_dir)])
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
         self.assertEqual(first.stdout.splitlines()[0], 'Next: connect.', first.stdout)
-        self.assertIn('setup.py prepare', first.stdout)
+        self.assertIn('service-issue --yes', first.stdout)
         refused = self.setting(j, '--yes')
         self.assertEqual(refused.returncode, 5, refused.stdout + refused.stderr)
+        self.issues(j, existing=[{'number': 7, 'title': 'OpenWiz service records'}])
+        self.assertEqual(j.helper(['service-issue', '--yes']).returncode, 0)
+        second = j.helper(['next', '--setup-state', str(j.setup_dir)]).stdout
+        self.assertIn('setup.py prepare', second)
+        self.assertIn('--service-issue 7 ', second)
         state = self.applied(j, brain=None)
         resumed = j.helper(['next', '--setup-state', str(j.setup_dir)]).stdout
         self.assertEqual(resumed.splitlines()[0], 'Next: connect.', resumed)
@@ -2020,6 +2028,10 @@ class OneSetupPullRequest(unittest.TestCase):
         resumed = j.helper(['next', '--setup-state', str(j.setup_dir)])
         self.assertEqual(resumed.stdout.splitlines()[0], 'Next: connect.', resumed.stdout)
         self.assertIn('--service-issue 31', resumed.stdout, 'resume names the issue already opened')
+        self.applied(j)
+        earlier = j.helper(['next', '--setup-state', str(j.setup_dir)]).stdout
+        self.assertIn('setup.py prepare', earlier, 'an earlier prepare for issue 7 is not taken as issue 31')
+        self.assertIn('--service-issue 31', earlier)
         again = j.helper(['service-issue', '--yes'])
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertEqual([i['number'] for i in self.opened(j)], [31], 'a resumed step 1 opens no second issue')

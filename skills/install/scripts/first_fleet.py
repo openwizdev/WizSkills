@@ -6,6 +6,7 @@
   first_fleet.py decisions --state FILE --setup-state DIR [--yes]
   first_fleet.py create-repo --state FILE --repo OWNER/NAME [--yes]
   first_fleet.py select --state FILE --repo OWNER/NAME
+  first_fleet.py service-issue --state FILE [--yes]
   first_fleet.py mode --state FILE [--mode MODE]
   first_fleet.py setting --state FILE [--yes]
   first_fleet.py grill --state FILE --confirmed URL
@@ -86,6 +87,7 @@ HEARTBEAT = LAUNCH_FLEET / 'scripts/heartbeat.py'
 OPTIONS = {
     'where': ({'--state'}, {'--yes'}, {'--build', '--agents'}),
     'mode': ({'--state'}, set(), {'--mode', '--claude-mode', '--codex-mode'}),
+    'service-issue': ({'--state'}, {'--yes'}, set()),
     'setting': ({'--state'}, {'--yes'}, {'--setup-state', '--build'}),
     'grill': ({'--state', '--confirmed'}, set(), set()),
     'first-merge': ({'--state', '--pr'}, set(), set()),
@@ -173,7 +175,8 @@ def strict(text):
 
 def parse(argv):
     if not argv or argv[0] not in OPTIONS:
-        raise Exit(2, 'usage: first_fleet.py where|continue|decisions|create-repo|select|defaults|mode|setting|grill|choose|spec|launch|'
+        raise Exit(2, 'usage: first_fleet.py where|continue|decisions|create-repo|select|defaults|service-issue|mode|setting|grill|'
+                      'choose|spec|launch|'
                       'progress|first-merge|next ... (see its header)')
     values, switches, optional = OPTIONS[argv[0]]
     got, rest = {}, argv[1:]
@@ -263,7 +266,7 @@ class State:
         except (OSError, ValueError):
             raise Exit(10, 'The onboarding state is unreadable; ' + NOTHING)
         known = {'created', 'choices', 'repo', 'spec', 'launch', 'setup', 'host', 'setting', 'grill', 'merge', 'preview', 'mode',
-                 'defaults'}
+                 'defaults', 'service'}
         if not isinstance(value, dict) or set(value) - known:
             raise Exit(10, 'The onboarding state has an unknown shape; ' + NOTHING)
         return value
@@ -1632,7 +1635,8 @@ def defaults(got):
              'domain.md) with the Models table above' if fleet is None else
              'the Models table above in docs/agents/fleet.md')
     effects = [
-        '1. %s' % ('Open a new issue titled "OpenWiz service records" in %s.' % repo if issue == 'new'
+        '1. %s' % ('service-issue: use your open issue titled "OpenWiz service records" in %s, or open one.' % repo
+                   if issue == 'new'
                    else 'Use issue #%d in %s for the service records; nothing is opened.' % (issue, repo)),
         "2. setup.py prepare: save these values as %s's project in this computer's private OpenWiz setup state."
         % repo,
@@ -1664,6 +1668,78 @@ def defaults(got):
         raise Exit(10, 'Could not save the setup; nothing recorded.')
     print('Recorded this setup, as the user said yes to it. Next, on that same yes, run steps 1 to 4 in order; then '
           'the permission mode (mode, this machine only) and step 5, setting.')
+    return 0
+
+
+SERVICE_TITLE = 'OpenWiz service records'
+
+
+def service_number(value):
+    chosen, service = value.get('defaults') or {}, value.get('service') or {}
+    if isinstance(chosen.get('service_issue'), int):
+        return chosen['service_issue']
+    if service.get('repo') == value.get('repo') and service.get('state') == 'opened':
+        return service['number']
+    return None
+
+
+def service_found(repo, login, env):
+    result = run(['gh', 'api', 'repos/%s/issues?state=open&creator=%s&per_page=100' % (repo, login)], env)
+    try:
+        assert result is not None and result.returncode == 0
+        issues = strict(result.stdout.decode('utf-8'))
+        assert isinstance(issues, list)
+        found = [i['number'] for i in issues if i.get('title') == SERVICE_TITLE and 'pull_request' not in i
+                 and (i.get('user') or {}).get('login') == login]
+        assert all(type(n) is int and n > 0 for n in found)
+        return min(found) if found else None
+    except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError, AttributeError):
+        raise Exit(6, 'Could not read whether %s already has an open "%s" issue; nothing opened. Run this again '
+                      'to read it.' % (repo, SERVICE_TITLE))
+
+
+def service_issue(got):
+    state = State(got['--state'])
+    repo, chosen = state.value.get('repo'), state.value.get('defaults')
+    if not repo or not chosen:
+        raise Exit(5, 'Take the yes to the recommended setup (defaults) first; nothing opened.')
+    number = service_number(state.value)
+    if number is not None:
+        print('Service issue: #%d in %s. Next, the block\'s step 2: setup.py prepare with --service-issue %d.'
+              % (number, repo, number))
+        return 0
+    print('Effect: in %s, use your open issue titled "%s" when there is one, or else open one new issue with that '
+          'title, with your gh identity, for OpenWiz\'s service records. Nothing else is written.'
+          % (repo, SERVICE_TITLE))
+    if not got.get('--yes'):
+        print("Nothing opened. On the user's yes to the recommended setup, run again with --yes.")
+        return 12
+    env = repository(repo)
+    login = run(['gh', 'api', 'user', '--jq', '.login'], gh_env())
+    login = login.stdout.decode('utf-8', 'replace').strip() if login is not None and login.returncode == 0 else ''
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,38}', login):
+        raise Exit(1, 'Could not read your GitHub login; nothing opened.')
+    number = service_found(repo, login, env)
+    if number is None:
+        state.value['service'] = {'repo': repo, 'state': 'pending'}
+        if not state.save():
+            raise Exit(10, 'Could not save the service issue first; nothing opened.')
+        made = run(['gh', 'api', '-X', 'POST', 'repos/%s/issues' % repo, '-f', 'title=' + SERVICE_TITLE, '-f',
+                    'body=OpenWiz keeps its service records for %s here.' % repo], env)
+        try:
+            assert made is not None and made.returncode == 0
+            reply = strict(made.stdout.decode('utf-8'))
+            assert reply.get('title') == SERVICE_TITLE and type(reply.get('number')) is int and reply['number'] > 0
+            number = reply['number']
+        except (AssertionError, UnicodeDecodeError, ValueError, AttributeError):
+            raise Exit(6, 'Whether the "%s" issue was opened in %s is uncertain; run this again: it reads the open '
+                          'issues before it opens one.' % (SERVICE_TITLE, repo))
+    state.value['service'] = {'repo': repo, 'state': 'opened', 'number': number}
+    if not state.save():
+        raise Exit(6, 'Issue #%d in %s holds the service records, but that could not be saved; run this again to '
+                      'read it back.' % (number, repo))
+    print('Service issue: #%d in %s. Next, the block\'s step 2: setup.py prepare with --service-issue %d.'
+          % (number, repo, number))
     return 0
 
 
@@ -2493,8 +2569,10 @@ def init_pull(folder, value):
 
 
 CONNECT_STEPS = {
-    'prepare': "Run the block's steps 1 and 2: the service issue, then setup.py prepare --state-dir <state> "
-               '--repository %(repo)s --operator %(operator)s --service-issue <N> --harness %(harness)s --model '
+    'service': "Run the block's step 1: service-issue --yes. It reuses the open \"OpenWiz service records\" "
+               'issue or opens one, and reads a lost reply back before any second try.',
+    'prepare': "Run the block's step 2: setup.py prepare --state-dir <state> "
+               '--repository %(repo)s --operator %(operator)s --service-issue %(issue)s --harness %(harness)s --model '
                '%(model)s --effort %(effort)s%(host)s, its preview then --yes --operation <id>.',
     'identity': "Run the block's step 3: %(identity)s, its preview then --yes --operation <id>.",
     'init': "Run the block's step 4: openwiz init --repository %(repo)s --state-dir <state> --json, then "
@@ -2506,13 +2584,16 @@ def connect_pending(folder, onboarding):
     repo, chosen, host = onboarding['repo'], onboarding['defaults'], onboarding['host']
     value = setup_value(folder)
     project, identity, brain = value.get('project'), value.get('identity'), value.get('brain')
+    issue = service_number(onboarding)
+    if issue is None:
+        return 'service', None
     same = lambda name: isinstance(name, str) and name.lower() == repo.lower()
     if not (isinstance(project, dict) and same(project.get('repository'))
             and project.get('operator') == chosen['operator']
             and tuple(project.get(k) for k in ('harness', 'model', 'effort')) == (
                 chosen['harness'], chosen['model'], chosen['effort'])
             and project.get('host', 'cloud') == host['agents']
-            and chosen['service_issue'] in ('new', project.get('service_issue'))):
+            and issue == project.get('service_issue')):
         return 'prepare', None
     if not (isinstance(identity, dict) and same(identity.get('repository'))
             and identity.get('selected') == chosen['identity']):
@@ -2529,6 +2610,7 @@ def connect_step(pending, onboarding):
     chosen, agents = onboarding['defaults'], onboarding['host']['agents']
     return CONNECT_STEPS[pending] % dict(
         chosen, repo=onboarding['repo'], host='' if agents == 'cloud' else ' --host %s' % agents,
+        issue=service_number(onboarding),
         identity='the OpenWiz GitHub App setup' if chosen['identity'] == 'app' else 'github_login.py skip-app')
 
 
@@ -2666,6 +2748,8 @@ def main(argv):
             return select(got)
         if command == 'defaults':
             return defaults(got)
+        if command == 'service-issue':
+            return service_issue(got)
         if command == 'choose':
             return choose(got)
         if command == 'spec':

@@ -302,6 +302,27 @@ done
   [ "$(cat "$work/env")" = synthetic-own-account-2843 ])
 echo "ok   restore_today_account drops every git config entry, sparse indexes included, on an unreadable mark and keeps an own GH_TOKEN (#2843)"
 
+# catches: with both rollback marks unreadable, the entry names were split on the caller's IFS, so under
+# IFS=: (or an empty IFS, or one made of name characters) nothing was unset and the helpers stayed exported.
+for shell in bash dash; do
+  command -v "$shell" > /dev/null
+  for ifs in : '' _ 5 G -; do
+    (inherit; export OPENWIZ_AGENT_TOKEN_GIT_AT=x GIT_CONFIG_COUNT=x
+      unset GIT_CONFIG_KEY_2 GIT_CONFIG_VALUE_2
+      export GIT_CONFIG_KEY_5=synthetic.sparse GIT_CONFIG_VALUE_5=five GIT_CONFIG_KEY_12=synthetic.sparse \
+        GIT_CONFIG_VALUE_40=forty
+      for copy in loop block; do
+        if [ "$ifs" = - ]; then set -- 'unset IFS' '[ -z "${IFS+x}" ]'; else set -- 'IFS=$3' '[ "${IFS-unset}" = "$3" ]'; fi
+        "$shell" -c "$1"'; . "$1"; restore_today_account; '"$2"' || exit 1; "$2"' \
+          sh "$work/restore.$copy" "$(command -v env)" "$ifs" > "$work/env"
+        [ -s "$work/env" ]
+        absent -E '^GIT_CONFIG_(COUNT|KEY_[0-9]+|VALUE_[0-9]+)=' "$work/env"
+        absent -E '^(OPENWIZ_AGENT_TOKEN_|GH_TOKEN=|restore_)' "$work/env"
+      done)
+  done
+done
+echo "ok   restore_today_account drops every git config entry under any caller IFS, in bash and dash, and leaves IFS as it was (#2875)"
+
 # Failed refreshes and first clones must not emit work or leave runtime files.
 mv "$work/remote" "$work/offline"
 status=0

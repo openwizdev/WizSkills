@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=945
+CASES=947
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -3452,7 +3452,8 @@ FINDINGS31='pr31 | pr_say(31; 3101; "11:10"; "launch-fleet: review started \(sha
 # CW-G: independent processes with cold caches share only the durable routing
 # and GitHub fixtures. The first wake must keep the recorded builder, then the
 # next must honour the delivery record without taking over or sending again.
-if selected 'CW-G: route findings to the existing builder' || selected 'CW-G: resume from the recorded delivery'; then
+if selected 'CW-G: route findings to the existing builder' || selected 'CW-G: resume from the recorded delivery' \
+  || selected 'CW-G: route findings with a CRLF fleet record' || selected 'CW-G: route findings with trailing spaces'; then
   printf '%s\n' '{"repo":"synthetic-owner/synthetic-repo","threads":{"builder:12":"thr_syn12","review:31:claim:3101":"thr_synrev31"}}' > "$tmp/fresh-routes.json" || exit 1
 fi
 FRESH_FINDINGS="pr31 | .private = false
@@ -3461,6 +3462,16 @@ FRESH_FINDINGS="pr31 | .private = false
   | say(10; 1090; \"10:00\"; \"launch-fleet: fleet active, loop fleet-10\\n\\nWake mode: fresh\")
   | pr_say(31; 3102; \"11:20\"; \"VERDICT: CHANGES at \(sha(31))\")"
 expect 'CW-G: route findings to the existing builder' 0 check.json "$FRESH_FINDINGS" \
+  LAUNCH_FLEET_STATE="$tmp/fresh-routes.json" -- spec 10 <<EOF
+findings #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect 'CW-G: route findings with a CRLF fleet record' 0 check.json \
+  "$FRESH_FINDINGS | issue(10; .comments[-1].body |= (gsub(\"\\n\"; \"\\r\\n\") + \"\\r\\n\"))" \
+  LAUNCH_FLEET_STATE="$tmp/fresh-routes.json" -- spec 10 <<EOF
+findings #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect 'CW-G: route findings with trailing spaces' 0 check.json \
+  "$FRESH_FINDINGS | issue(10; .comments[-1].body += \"  \")" \
   LAUNCH_FLEET_STATE="$tmp/fresh-routes.json" -- spec 10 <<EOF
 findings #31 for #12 at $S31: tell its builder, thread thr_syn12
 EOF

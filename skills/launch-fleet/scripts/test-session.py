@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -73,38 +72,12 @@ with world() as w:
     if args[:2] == ['pr', 'view']:
         pr = w['prs'][args[2]]
         out({'state': pr['state'], 'statusCheckRollup': pr['checks']})
-    if args[:2] == ['api', '-i']:
-        pool = 'graphql' if args[2] == 'graphql' else 'core'
-        wait = w['backoff'].get(pool)
-        if w['budget'] is None:
-            sys.stdout.write('HTTP/2.0 502 Bad Gateway\r\n\r\n'); sys.exit(1)
-        reset = int(datetime.now(timezone.utc).timestamp()) + 3600
-        heads = '' if w['bare'] else ('X-Ratelimit-Limit: 5000\r\nX-Ratelimit-Remaining: %d\r\nX-Ratelimit-Reset: %d\r\n'
-                                      'X-Ratelimit-Resource: %s\r\n' % (w['budget'], reset, pool))
-        if wait:
-            sys.stdout.write('HTTP/2.0 403 Forbidden\r\n%sRetry-After: %d\r\n\r\n{"message": "secondary rate limit"}'
-                             % (heads, wait))
-            sys.exit(1)
-        sys.stdout.write('HTTP/2.0 200 OK\r\n%s\r\n{}' % heads); sys.exit(0)
-    if args[:2] == ['api', 'rate_limit']:
-        if w['budget'] is None:
-            sys.exit(1)
-        reset = int(datetime.now(timezone.utc).timestamp()) + 3600
-        pool = {'limit': 5000, 'remaining': w['budget'], 'reset': reset, 'used': 5000 - w['budget']}
-        out({'resources': {'core': pool, 'graphql': pool}})
     path = next(a for a in args if a.startswith('repos/'))
     rest, method = path[len(base):].split('?')[0].split('/'), 'GET'
     if '--method' in args:
         method = args[args.index('--method') + 1]
     if rest == ['contents', 'docs', 'agents', 'fleet.md']:
         sys.stdout.write(w['fleet_md']); sys.exit(0)
-    if rest == ['actions', 'runs']:
-        wanted = path.split('status=')[1].split('&')[0]
-        runs = [{'id': 900 + i} for i, job in enumerate(w['jobs']) if job['run_status'] == wanted]
-        out([{'total_count': len(runs), 'workflow_runs': runs}])
-    if rest[:2] == ['actions', 'runs'] and rest[3:] == ['jobs']:
-        job = w['jobs'][int(rest[2]) - 900]
-        out([{'total_count': 1, 'jobs': [{k: v for k, v in job.items() if k != 'run_status'}]}])
     if rest[0] == 'issues' and rest[2:] == ['sub_issues']:
         page = [{'number': int(n), 'state': t['state'].lower()} for n, t in sorted(w['tickets'].items())]
         out([page] if '--slurp' in args else page)
@@ -131,8 +104,6 @@ args = sys.argv[1:]
 if args[0] == 'claim':
     print('go #%s' % args[1]); sys.exit(0)
 with world() as w:
-    if args[0] == 'overload':
-        os.execvp('sh', ['sh', os.environ['FAKE_REAL_FLEET'], *args])
     if not w['spec_open']:
         print('fleet done #%s: it is not an open spec; delete this fleet thread\'s loop and archive the thread'
               % w['spec'])
@@ -144,8 +115,7 @@ with world() as w:
         if int(n) in w['questions']:
             print('needs-info #%s: a question for the orchestrator' % n)
         elif not starts:
-            if w['tickets'].get(w['blocked'].get(n, ''), {}).get('state', 'CLOSED') == 'CLOSED':
-                print('start #%s: %s (spec #%s)' % (n, t['title'], w['spec']))
+            print('start #%s: %s (spec #%s)' % (n, t['title'], w['spec']))
         elif starts[-1] == 'launch-fleet: started' and n in w['branches']:
             print('check start #%s: thread run:%s, branch %s' % (n, n, w['branches'][n]))
         for p, pr in sorted(w['prs'].items()):
@@ -153,34 +123,18 @@ with world() as w:
                 continue
             at = '#%s for #%s at %s' % (p, n, pr['head'])
             if records(w, p, 'VERDICT: APPROVE at ' + pr['head']):
-                if not (args[0] == 'every' and p in w['every_hide']):
-                    print('merge %s: APPROVE and CI green' % at)
+                print('merge %s: APPROVE and CI green' % at)
             elif not records(w, p, 'launch-fleet: review start'):
                 print('review %s: first review' % at)
     if w['tickets'] and all(t['state'] == 'CLOSED' for t in w['tickets'].values()):
         print('spec done #%s: every planned ticket is done; no follow-ups' % w['spec'])
 '''
 
-FAKE_MERGE = WORLD + r'''
-args = sys.argv[1:]
+FAKE_MERGE = r'''
+import json, os, sys
 with open(os.path.join(os.environ['HOME'], 'merge.log'), 'a') as log:
-    log.write(json.dumps(args) + '\n')
-with world() as w:
-    pr = w['prs'][args[2]]
-    if args[0] == 'admit':
-        print('admit: the merge queue re-tests it' if w['queue'] else 'base rule: no merge queue; mergeable: MERGEABLE')
-    elif args[0] == 'read' and args[3] != pr['head']:
-        print('stop: #%s is at %s, not %s' % (args[2], pr['head'], args[3]))
-    elif args[0] == 'read':
-        print('merged ' + 'f' * 40 if pr['state'] == 'MERGED' else 'queued' if pr.get('queued') else
-              'open, the merge queue is on; it left the queue at 2026-01-01T00:00:00Z: synthetic')
-    elif w['queue']:
-        pr['queued'] = True
-        print('queued; recorded 1')
-    else:
-        pr['state'] = 'MERGED'
-        w['tickets'][str(pr['ticket'])]['state'] = 'CLOSED'
-        print('merged %s; cost posted 1' % ('f' * 40))
+    log.write(json.dumps(sys.argv[1:]) + '\n')
+sys.exit(1)
 '''
 
 HOLDER = r'''
@@ -238,14 +192,11 @@ class Session(unittest.TestCase):
         self.world = self.home / 'world.json'
         self.world.write_text(json.dumps({'repo': REPO, 'me': 'synthetic-owner', 'fleet_md': FLEET_MD,
                                           'next_id': 100, 'comments': {}, 'tickets': {}, 'prs': {},
-                                          'branches': {}, 'questions': [], 'spec': SPEC, 'spec_open': True,
-                                          'queue': False, 'every_hide': [], 'blocked': {}, 'budget': 5000,
-                                          'jobs': [], 'backoff': {}, 'bare': False}))
+                                          'branches': {}, 'questions': [], 'spec': SPEC, 'spec_open': True}))
         self.log = self.home / 'driver.log'
         path = [d for d in os.environ['PATH'].split(os.pathsep)
                 if not any(os.path.exists(os.path.join(d, name)) for name in ('claude', 'codex'))]
         self.env = dict(git_env, HOME=str(self.home), PATH=os.pathsep.join([str(self.home / 'bin'), *path]),
-                        FAKE_REAL_FLEET=str(HERE / 'fleet.sh'),
                         OPENWIZ_ADAPTERS=str(self.home / 'adapters'), FAKE_DRIVER_LOG=str(self.log),
                         FAKE_WORLD=str(self.world), LC_ALL='C')
         key = hashlib.sha256(('%s#%s' % (REPO.lower(), SPEC)).encode()).hexdigest()[:20]
@@ -296,15 +247,6 @@ class Session(unittest.TestCase):
         for body in reversed(records) if verdict_first else records:
             self.comment(12, body)
         self.note(5, 'reviewer', pr=reviewed, harness=reviewer)
-
-    def guard(self):
-        now = int(time.time())
-        pool = {'remaining': 1000, 'limit': 1000, 'reset_at': now + 3600, 'retry_after': 0}
-        seen = self.home / 'observation.json'
-        seen.write_text(json.dumps({'repository': REPO, 'observed_at': now, 'complete': True,
-                                    'queue': {'complete': True, 'jobs': []},
-                                    'budgets': {'rest': pool, 'graphql': pool}}))
-        return {'LAUNCH_FLEET_OVERLOAD_INPUT': str(seen), 'LAUNCH_FLEET_OVERLOAD_STATE': str(self.home / 'pause.json')}
 
     def merges(self):
         path = self.home / 'merge.log'
@@ -386,7 +328,7 @@ class Session(unittest.TestCase):
         out = self.ended(process, 3)
         self.assertIn(': needs you: merge #12 for #5 at %s: APPROVE and CI green: merge '
                       "it with launch-fleet's Merging steps, then carry on\n" % HEAD, out)
-        self.assertIn(self.carry_on() + '\n', out)
+        self.assertIn(self.carry_on() + ' --idle 10\n', out)
         self.assertEqual(self.merges(), [])
 
     def test_an_approved_pull_request_stops_the_session_after_the_ticks_other_work(self):

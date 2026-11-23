@@ -32,13 +32,11 @@ LEFT = re.compile(r'archive #[1-9][0-9]*: ')
 FINISHED = re.compile(r'(?:spec done|close spec) #([1-9][0-9]*): ')
 ASSIGNED = ('launch-fleet: review started ', 'launch-fleet: re-check sent ')
 BUILT = ('launch-fleet: starting', 'launch-fleet: started', 'launch-fleet: start checked, branch ')
-QUEUED = 'launch-fleet: merge queued '
 DRIVERS = {'Claude Code': 'claude', 'Codex': 'codex'}
 OTHER = {'claude': 'codex', 'codex': 'claude'}
 PROVIDERS = {'claude-code': 'claude', 'codex': 'codex'}
 REVIEWS = {'claude': 'review_of_claude_built', 'codex': 'review_of_gpt_built'}
 FLAGS = re.compile(r'--provider (\S+) --model (\S+) --reasoning-level \S+')
-WAITING = ('queued', 'waiting', 'requested', 'pending')
 PR = re.compile(r'https://github\.com/[^/]+/[^/]+/pull/([1-9][0-9]*)')
 STATE = Path.home() / '.local/state/openwiz-heartbeat'
 TIMEOUT = 1000
@@ -143,16 +141,12 @@ class Session:
     def __init__(self, args, command):
         self.a, self.command = args, command
         self.repo, self.spec = args.repo, args.spec
-        self.key = hashlib.sha256(args.repo.lower().encode()).hexdigest()[:20]
         self.live = {}
         self.prs = {}
-        self.queued = {}
         self.acted = set()
         self.pending = []
         self.tick_no = 0
         self.authors = None
-        self.landings = []
-        self.queue_read = 0
 
 
     def thread(self, number):
@@ -223,11 +217,6 @@ class Session:
                 notes = self.notes('reviewer', n, since)
                 if not notes or notes[-1]['state'] == 'working':
                     self.live[('reviewer', p)] = (since, n)
-            receipts = [c for c in comments if first(c).startswith(QUEUED)]
-            if receipts:
-                head = first(max(receipts, key=lambda c: c['id']))[len(QUEUED):][:40]
-                if script('merge.py', 'read', self.repo, p, head).stdout.strip() == 'queued':
-                    self.queued[p] = head
 
     def state(self, p):
         text = post.gh('pr', 'view', p, '--repo', self.repo, '--json', 'state,statusCheckRollup')
@@ -414,190 +403,13 @@ class Session:
         self.edit(claim, 'launch-fleet: review started %s%s' % (head, rest))
         return True
 
-    def verdict(self, p, n, head):
-        comments = self.thread(p)
-        verdicts = [c for c in comments if c['body'].startswith('VERDICT:')]
-        assigned = [c for c in comments if first(c).startswith(ASSIGNED)]
-        if not verdicts or not first(max(verdicts, key=lambda c: c['id'])).startswith('VERDICT: APPROVE at ' + head):
-            raise NeedsYou('#%s was not merged: its newest VERDICT is not an APPROVE at %s' % (p, head))
-        if not assigned:
-            raise NeedsYou('#%s was not merged: it has no review assignment for its VERDICT to belong to' % p)
-        current = max(assigned, key=lambda c: c['id'])
-        if not first(current).endswith(' ' + head):
-            raise NeedsYou('#%s was not merged: its current review assignment is not for %s' % (p, head))
-        if max(c['id'] for c in verdicts) < current['id']:
-            raise NeedsYou('#%s was not merged: its newest VERDICT is older than its current review assignment' % p)
-        family = re.search(r'^Driver (?:review|re-check): (other-family|same-family)$', current['body'], re.M)
-        if not family:
-            raise NeedsYou("#%s was not merged: its review assignment names no reviewer family" % p)
-        built = self.built(n)
-        selected = OTHER[built] if family[1] == 'other-family' else built
-        newest = max(verdicts, key=lambda c: c['id'])
-        notes = self.notes('reviewer', n, stamp(current.get('created_at')))
-        url = 'https://github.com/%s/pull/%s' % (self.repo, p)
-        if (not notes or notes[-1]['state'] != 'done' or DRIVERS.get(notes[-1]['harness']) != selected
-                or notes[-1].get('pr', '').lower() != url.lower()
-                or stamp(notes[-1]['time']) < stamp(newest.get('created_at'))):
-            raise NeedsYou('#%s was not merged: no done note from its selected %s reviewer for #%s after its VERDICT '
-                           'and review assignment' % (p, selected, p))
-
-    def observe(self):
-        names = set(self.checks().split(','))
-        complete, jobs = True, []
-        for wanted in ('queued', 'in_progress', 'waiting', 'requested', 'pending'):
-            pages = post.read_json('api', '--paginate', '--slurp',
-                                   'repos/%s/actions/runs?status=%s&per_page=100' % (self.repo, wanted))
-            runs = [r for page in pages for r in page.get('workflow_runs', [])] if isinstance(pages, list) else None
-            if runs is None or len(runs) != (pages[0].get('total_count') if pages else 0):
-                complete = False
-                continue
-            for item in runs:
-                pages = post.read_json('api', '--paginate', '--slurp',
-                                       'repos/%s/actions/runs/%s/jobs?per_page=100' % (self.repo, item.get('id')))
-                found = [j for page in pages for j in page.get('jobs', [])] if isinstance(pages, list) else None
-                if found is None or len(found) != (pages[0].get('total_count') if pages else 0):
-                    complete = False
-                    continue
-                jobs.extend(found)
-        seen, observed = [], []
-        for job in jobs:
-            try:
-                queued = job['status'] in WAITING
-                observed.append({'id': str(job['id']), 'required': job['name'] in names,
-                                 'status': 'queued' if queued else job['status'],
-                                 'queued_at': int(stamp(job['created_at'])),
-                                 'started_at': None if queued or not job.get('started_at')
-                                 else int(stamp(job['started_at']))})
-                seen.append(str(job['id']))
-            except (KeyError, TypeError, Unreadable):
-                complete = False
-        budgets = {}
-        for pool, argv in (('rest', ['repos/%s/actions/runs?per_page=1' % self.repo]),
-                           ('graphql', ['graphql', '-f', 'query=query{rateLimit{remaining}}'])):
-            budget = self.budget(pool, argv)
-            if budget is None:
-                complete = False
-            else:
-                budgets[pool] = budget
-        observed = list({job['id']: job for job in observed}.values())
-        return {'repository': self.repo, 'observed_at': int(time.time()), 'complete': complete,
-                'queue': {'complete': complete and len(observed) <= 10000, 'jobs': observed[:10000]},
-                'budgets': budgets}
-
-    def budget(self, pool, argv):
-        r = run(['gh', 'api', '-i', *argv])
-        lines = r.stdout.replace('\r\n', '\n').split('\n\n', 1)[0].split('\n')
-        code = re.fullmatch(r'HTTP/[0-9.]+ ([0-9]{3})(?: .*)?', lines[0])
-        heads = {k.strip().lower(): v.strip() for k, _, v in (line.partition(':') for line in lines[1:])}
-        try:
-            numbers = [int(heads['x-ratelimit-' + k]) for k in ('remaining', 'limit', 'reset')]
-        except (KeyError, ValueError):
-            return None
-        wait = heads.get('retry-after')
-        if not code or heads.get('x-ratelimit-resource') != ('core' if pool == 'rest' else 'graphql'):
-            return None
-        if wait is not None and not wait.isdigit():
-            return None
-        if code[1] != '200' and wait is None:
-            return None
-        return {'remaining': numbers[0], 'limit': numbers[1], 'reset_at': numbers[2],
-                'retry_after': int(time.time()) + int(wait) if wait else 0}
-
-    def batch(self):
-        env, own = dict(os.environ), None
-        if not (env.get('LAUNCH_FLEET_OVERLOAD_SUPPLY') or env.get('LAUNCH_FLEET_OVERLOAD_INPUT')):
-            try:
-                STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
-                fd, own = tempfile.mkstemp(prefix='overload-input-%s-' % self.key, suffix='.json', dir=STATE)
-                with os.fdopen(fd, 'w') as out:
-                    json.dump(self.observe(), out)
-            except OSError as e:
-                raise Unreadable("can't write the overload observation (%s)" % type(e).__name__)
-            env['LAUNCH_FLEET_OVERLOAD_INPUT'] = own
-        try:
-            r = run(['sh', str(HERE / 'fleet.sh'), 'overload', 'merge-batch'], env)
-        finally:
-            if own:
-                os.unlink(own)
-        try:
-            answer = json.loads(r.stdout)
-        except ValueError:
-            answer = None
-        if r.returncode == 0 and isinstance(answer, dict) and answer.get('allowed') is True:
-            return
-        pause = answer.get('pause') if isinstance(answer, dict) else None
-        if isinstance(pause, dict):
-            why = 'paused: %s (%s)' % (pause.get('level'), ', '.join(map(str, pause.get('causes') or [])))
-        elif isinstance(answer, dict):
-            why = '%s (%s)' % (answer.get('level'), ', '.join(map(str, answer.get('causes') or [])))
-        else:
-            why = (r.stderr.strip().split('\n') or [''])[-1] or 'exit %d' % r.returncode
-        raise NeedsYou('fleet.sh overload merge-batch did not admit a merge batch: %s' % why)
-
-    def merge(self, line, p, n, head):
-        checks = self.checks()
-        admit = script('merge.py', 'admit', self.repo, p, head, checks).stdout.strip()
-        if admit.startswith('wait:'):
-            return False
-        flags = []
-        if admit == 'base rule: no merge queue; mergeable: MERGEABLE':
-            every = run(['sh', str(HERE / 'fleet.sh'), 'every'])
-            if every.returncode:
-                raise Unreadable('fleet.sh every failed (exit %d)' % every.returncode)
-            if line not in every.stdout.splitlines():
-                raise NeedsYou('#%s was not merged: fleet.sh every no longer prints its merge line, so another '
-                               'pull request merges first or it needs a re-test' % p)
-            flags = ['--base-rule-checked']
-        elif not admit.startswith('admit:'):
-            raise NeedsYou('#%s was not admitted: %s' % (p, admit or 'merge.py admit said nothing'))
-        body = ('VERDICT: APPROVE at %s on #%s, and the recorded plan approval of spec #%s; merged by the '
-                'session runner' % (head, p, self.spec))
-        r, = self.answers([self.detached("#%s's merge" % p, 'merge.py', 'merge', self.repo, p, head, checks, body,
-                                         '--ticket', n, *flags)])
-        out = r.stdout.strip()
-        if r.returncode == 0 and out.startswith('merged '):
-            return '#%s merged' % p
-        if r.returncode == 0 and out.startswith('queued'):
-            self.queued[p] = head
-            return '#%s queued' % p
-        if r.returncode == 0 and out.startswith('pending:'):
-            return False
-        raise NeedsYou('#%s did not merge: %s' % (p, out or 'merge.py exit %d' % r.returncode))
-
-    def landed(self):
-        did, self.landings = self.landings, []
-        self.queue_read = time.monotonic()
-        for p, head in sorted(self.queued.items()):
-            out = script('merge.py', 'read', self.repo, p, head).stdout.strip()
-            if out.startswith('merged '):
-                del self.queued[p]
-                did.append('#%s merged' % p)
-            elif out != 'queued':
-                raise NeedsYou('#%s left the merge queue: %s' % (p, out or 'merge.py read said nothing'))
-        return did
-
     def fleet(self):
         return post.gh('api', 'repos/%s/contents/docs/agents/fleet.md' % self.repo,
                        '-H', 'Accept: application/vnd.github.raw+json') or ''
 
-    def checks(self):
-        text = self.fleet()
-        section, names = None, []
-        for row in text.splitlines():
-            if row.startswith('## '):
-                section = row
-            elif section == '## CI checks':
-                found = re.match(r'\| *`([^`]+)` *\|', row)
-                if found:
-                    names.append(found[1])
-        if not names:
-            raise NeedsYou('docs/agents/fleet.md lists no CI checks, so nothing can merge')
-        return ','.join(names)
-
-
     def tick(self):
         self.tick_no += 1
-        did = self.landed()
+        did = []
         lines = self.due()
         if lines and lines[0].startswith('fleet done #%s:' % self.spec):
             if self.closed():
@@ -605,13 +417,8 @@ class Session:
             raise NeedsYou('spec #%s is not an open spec, but its tickets are not all closed: %s'
                            % (self.spec, lines[0]))
         finished = [line for line in lines if FINISHED.match(line) and FINISHED.match(line)[1] == self.spec]
-        todo = [line for line in lines if not LEFT.match(line) and line not in finished
-                and not (MERGE.fullmatch(line) and (MERGE.fullmatch(line)[1] in self.queued
-                                                    or ('reviewer', MERGE.fullmatch(line)[1]) in self.live))]
+        todo = [line for line in lines if not LEFT.match(line) and line not in finished]
         if finished and not todo:
-            did += self.landed()
-            if did:
-                print('session: tick %d: %s' % (self.tick_no, '; '.join(did)), flush=True)
             raise Done(finished[0])
         for line in todo:
             if not (START.match(line) or CHECKED.fullmatch(line) or REVIEW.fullmatch(line) or MERGE.fullmatch(line)):
@@ -637,21 +444,17 @@ class Session:
         if ready[room:]:
             did.append('%s wait%s for the cap (%d)' % (', '.join('#' + n for n in ready[room:]),
                                                        's' if len(ready) - room == 1 else '', self.a.max))
-        merges = [MERGE.fullmatch(line) for line in todo if MERGE.fullmatch(line)]
-        for found in merges:
-            self.verdict(found[1], found[2], found[3])
-        if merges:
-            self.batch()
         for line in todo:
-            review, merge = REVIEW.fullmatch(line), MERGE.fullmatch(line)
-            done = review and self.review(*review.groups()) and 'review of #%s started' % review[1]
-            done = done or (merge and self.merge(line, *merge.groups()))
-            if done:
+            review = REVIEW.fullmatch(line)
+            if review and self.review(*review.groups()):
                 self.acted.add(line)
-                did.append(done)
+                did.append('review of #%s started' % review[1])
                 acted = True
         if did:
             print('session: tick %d: %s' % (self.tick_no, '; '.join(did)), flush=True)
+        merges = [line for line in todo if MERGE.fullmatch(line)]
+        if merges:
+            raise NeedsYou("%s: merge it with launch-fleet's Merging steps, then carry on" % merges[0])
         return acted
 
     def wait(self):
@@ -662,14 +465,9 @@ class Session:
                         del self.live[key]
                         self.moved = time.monotonic()
                         return
-                if self.queued and time.monotonic() - self.queue_read >= self.a.ci_poll:
-                    self.landings = self.landed()
-                    if self.landings:
-                        self.moved = time.monotonic()
-                        return
                 time.sleep(self.a.poll)
                 continue
-            if not (self.queued or self.closed() or self.checks_running()):
+            if not (self.closed() or self.checks_running()):
                 raise NeedsYou('nothing is due on spec #%s and no run or check is going' % self.spec)
             time.sleep(self.a.ci_poll)
             return
@@ -713,7 +511,6 @@ def main(argv):
     os.environ.setdefault('GH_REPO', args.repo)
     key = hashlib.sha256(args.repo.lower().encode()).hexdigest()[:20]
     os.environ.setdefault('LAUNCH_FLEET_RUNS', str(STATE / ('runs-%s.json' % key)))
-    os.environ.setdefault('LAUNCH_FLEET_OVERLOAD_STATE', str(STATE / ('overload-%s.json' % key)))
     signal.signal(signal.SIGINT, signal.default_int_handler)
     signal.signal(signal.SIGTERM, signal.default_int_handler)
     session = Session(args, command)

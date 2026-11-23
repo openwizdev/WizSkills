@@ -212,19 +212,30 @@ def token(flag):
 
 
 def fixer(body, problems):
-    """Each Fixer family row carries each flag exactly once, as `--flag value`."""
+    """Each Fixer family row's spawn-flags cell is exactly `--provider` `--model` `--reasoning-level` pairs."""
     rows = [line for line in body.splitlines() if line.startswith('|')
             and not re.fullmatch(r'\|[\s|:-]*', line)][1:]
     for row in rows:
-        family = row.split('|')[1].strip()
+        parsed = cells(row)
+        if not parsed or len(parsed) != 5:
+            problems.append('fleet.md: Fixer: row has %d cells, not 5' % (len(parsed or [])))
+            continue
+        family, _, _, _, flags = parsed
+        if FLAGS_CELL.fullmatch(flags):
+            continue
+        broken = []
         for flag in FLAGS:
             found = list(re.finditer(token(flag), row))
             if not found:
-                problems.append('fleet.md: Fixer: %s: no --%s' % (family, flag))
+                broken.append('fleet.md: Fixer: %s: no --%s' % (family, flag))
             elif len(found) > 1:
-                problems.append('fleet.md: Fixer: %s: --%s appears %d times' % (family, flag, len(found)))
+                broken.append('fleet.md: Fixer: %s: --%s appears %d times' % (family, flag, len(found)))
             elif not re.match(r' (?!--)[^\s`|]+(?=[ `|])', row[found[0].end():]):
-                problems.append('fleet.md: Fixer: %s: malformed --%s' % (family, flag))
+                broken.append('fleet.md: Fixer: %s: malformed --%s' % (family, flag))
+        if broken:
+            problems.extend(broken)
+        else:
+            problems.append('fleet.md: Fixer: %s: malformed %s' % (family, flags))
 
 
 def fleet(text, problems):

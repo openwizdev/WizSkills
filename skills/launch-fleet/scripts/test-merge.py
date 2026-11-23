@@ -131,7 +131,9 @@ if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'enqueuePul
                and (c.get('status', 'COMPLETED') != 'COMPLETED' or c.get('state') in ('PENDING', 'EXPECTED'))]
     refused = (kind == 'fail' or got.get('id') != 'PR_synthetic' + str(pr['number'])
                or got.get('head') != pr['headRefOid'] or running or not pr['isMergeQueueEnabled'])
-    if not refused and kind != 'pending' and not isinstance(kind, dict):
+    if kind == 'blind':
+        world['faults']['queue'] = 'fail'
+    if not refused and kind not in ('pending', 'blind') and not isinstance(kind, dict):
         added = pr.get('enqueue_at', '2026-11-22T10:25:00Z')
         pr.update(isInMergeQueue=True, mergeQueueEntry={'headCommit': {'oid': pr['headRefOid']}}, added_at=added,
                   enqueued={'id': 'AE' + str(len(world['writes'])), 'createdAt': added,
@@ -142,7 +144,7 @@ if args[:2] == ['api', 'graphql'] and any(a.startswith('query=') and 'enqueuePul
         json.dump(world, f)
     if refused:
         sys.exit('GraphQL: Pull request is not ready to be enqueued')
-    if kind in ('lost', 'half lost'):
+    if kind in ('lost', 'half lost', 'blind'):
         sys.exit('connection reset')
     print(json.dumps({'data': {'enqueuePullRequest': {'mergeQueueEntry': {'headCommit': {'oid': got['head']}}}}}))
     sys.exit(0)
@@ -2030,6 +2032,45 @@ class Drops(unittest.TestCase):
                                             'check last ran before it' % REMOVED_AT))
         self.assertEqual((w.bodies(7), w.writes()), ([receipt, drop], [{'delete': 4002}]))
 
+    def test_r1_a_drop_is_recorded_only_once_its_retry_enqueue_reads(self):
+        again = {'createdAt': '2026-11-22T10:30:00Z', 'reason': 'failed_checks', 'actor': BOT, 'hidden': True}
+        w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, faults={'enqueue': again})
+        receipt, drop = w.bodies(7)
+        self.add(w, comment(4002, drop))
+        code, out = self.merge(w)
+        self.assertEqual((code, out), (0, 'pending: its removal at 2026-11-22T10:30:00Z does not read as its '
+                                          're-queue yet; its claim and then its enqueue were written, so its one '
+                                          're-queue is spent, and nothing more is written until it reads, so read '
+                                          'it again next wake'))
+        self.assertEqual(w.writes(), [{'post': 7, 'body': CLAIMED}, {'enqueue': 'PR_synthetic7', 'head': HEAD}])
+        self.assertEqual([c['id'] for c in w.load()['comments']['7']], [4000, 4001, 4002, 5001])
+        value = w.load()
+        value['comments']['7'][-1]['created_at'] = '2026-11-22T10:24:00Z'
+        w.save(value)
+        code, out = self.merge(w)
+        self.assertEqual((code, out), (0, 'pending: its removal at 2026-11-22T10:30:00Z does not read as a re-queue '
+                                          'after its claim yet; nothing was written, so read it again next wake'))
+        self.assertEqual(len(w.writes()), 2)
+        self.change(w, enqueued={'id': 'AE9', 'createdAt': '2026-11-22T10:25:00Z', 'enqueuer': {'login': 'openwiz[bot]'}},
+                    added_at='2026-11-22T10:25:00Z')
+        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5002'))
+        self.assertEqual(w.bodies(7), [receipt, drop, CLAIMED,
+                                       'launch-fleet: merge dropped %s: failed_checks at 2026-11-22T10:30:00Z' % HEAD])
+        self.assertEqual(w.writes()[-1], {'delete': 4002})
+        self.assertEqual(self.merge(w), (1, 'blocked: dropped twice at this head; recorded 5003'))
+        self.assertEqual(len(self.enqueues(w)), 1)
+
+    def test_r2_a_retry_transport_error_with_an_unreadable_verdict_is_pending_and_keeps_the_records(self):
+        w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, faults={'enqueue': 'blind'})
+        receipt, drop = w.bodies(7)
+        self.add(w, comment(4002, drop))
+        code, out = self.merge(w)
+        self.assertEqual((code, out), (0, 'pending: the queue facts could not be read; its claim and then its enqueue '
+                                          'were written, so its one re-queue is spent, and nothing more is written '
+                                          'until it reads, so read it again next wake'))
+        self.assertEqual(w.writes(), [{'post': 7, 'body': CLAIMED}, {'enqueue': 'PR_synthetic7', 'head': HEAD}])
+        self.assertEqual([c['id'] for c in w.load()['comments']['7']], [4000, 4001, 4002, 5001])
+
     def pending_templates_merge_returns(self):
         found = set()
         for node in ast.walk(ast.parse((HERE / 'merge.py').read_text())):
@@ -2074,6 +2115,13 @@ class Drops(unittest.TestCase):
             self.change(w, enqueued=dict(ENQUEUED, enqueuer={'login': 'synthetic-person'}))
             return w
 
+        def claimed_before_its_enqueue_reads():
+            w = records(dict(removals=[removal, again]))
+            self.add(w, dict(comment(4006, CLAIMED), created_at='2026-11-22T10:24:00Z'))
+            return w
+
+        again = {'createdAt': '2026-11-22T10:30:00Z', 'reason': 'failed_checks', 'actor': BOT}
+        written = 'pending: {}; {}, and nothing more is written until it reads, so read it again next wake'
         disagree = ('pending: its queue facts disagree (in the merge queue: {}, merge queue on: {}, queue entry: {}); '
                     'nothing was written, so read it again next wake')
         unread = ('pending: {} left the merge queue at {}, and the enqueue it left does not read yet; '
@@ -2081,14 +2129,22 @@ class Drops(unittest.TestCase):
         cases = [
             (disagree, 'first read, no records', lambda: fresh(mergeQueueEntry=entry), (), None),
             (disagree, 'first read, duplicate records', lambda: records(dict(mergeQueueEntry=entry)), (), None),
-            (disagree, 'first enqueue read back', lambda: fresh(faults={'enqueue': 'half'}), (), 'enqueue'),
-            (disagree, 'refused re-queue read back', lambda: records(faults={'enqueue': 'half lost'}), (), 'enqueue'),
+            (written, 'first enqueue read back', lambda: fresh(faults={'enqueue': 'half'}), (), 'enqueue'),
+            (written, 'refused re-queue read back', lambda: records(faults={'enqueue': 'half lost'}), (), 'enqueue'),
+            (written, 'R1: re-queue read back, a removal its enqueue does not explain',
+             lambda: records(faults={'enqueue': dict(again, hidden=True)}), (), 'enqueue'),
+            ('pending: its removal at {} does not read as a re-queue after its claim yet; nothing was written, '
+             'so read it again next wake', 'R1: a later wake, claimed after the enqueue that reads',
+             claimed_before_its_enqueue_reads, (), None),
+            (written, 'R2: re-queue transport error, queue verdict unreadable',
+             lambda: records(faults={'enqueue': 'blind'}), (), 'enqueue'),
             ('pending: the commit that last left the merge queue does not read; nothing was written, '
              'so read it again next wake', 'unreadable removed commit',
              lambda: fresh(removals=[dict(removal, beforeCommit={'oid': None})]), (), None),
             (unread, 'receipt, drop record, claim and duplicate',
              lambda: records(dict(enqueued=None), [comment(4006, CLAIMED)]), (), None),
-            (unread, 'first enqueue read back', lambda: fresh(faults={'enqueue': dict(removal, hidden=True)}), (),
+            (written, 'first enqueue read back, its removal before its enqueue reads',
+             lambda: fresh(faults={'enqueue': dict(removal, hidden=True)}), (),
              'enqueue'),
             ('pending: its removal at {} does not read on the pull request yet; read it again next wake',
              'removal not on the timeline',
@@ -2106,9 +2162,7 @@ class Drops(unittest.TestCase):
              (), None),
             ('pending: the queue reads {}; read it again next wake', 'enqueued by a person', unrecorded_enqueue, (),
              None),
-            ('pending: the enqueue call succeeded but it does not read queued yet; its claim is spent, '
-             'so read it again next wake', 'accepted re-queue', lambda: records(faults={'enqueue': 'pending'}), (),
-             'enqueue'),
+            (written, 'accepted re-queue', lambda: records(faults={'enqueue': 'pending'}), (), 'enqueue'),
             ('pending: {}; nothing was recorded, so read it again next wake', 'first enqueue, queue unreadable',
              lambda: fresh(faults={'enqueue': 'pending', 'queue': 'fail'}), (), 'enqueue'),
             ('pending: the merge command succeeded but it still reads open; read it again next wake',
@@ -2130,6 +2184,10 @@ class Drops(unittest.TestCase):
                     continue
                 claims = [x for x in writes if x.get('body') == CLAIMED]
                 self.assertEqual(writes[:len(claims)], claims, 'its claim is the first write')
+                if template == written:
+                    told = ('its claim and then its enqueue were written, so its one re-queue is spent' if claims
+                            else 'its enqueue was written')
+                    self.assertIn('; %s, and nothing more is written' % told, out)
                 rest = writes[len(claims):]
                 if mutation == 'claim':
                     self.assertEqual(len(claims), 1)

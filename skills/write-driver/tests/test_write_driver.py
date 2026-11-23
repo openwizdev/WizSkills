@@ -967,10 +967,14 @@ class KeyHost(unittest.TestCase):
             self.assertIn(words, text)
         self.assertNotIn('a method and a path only', text)
 
-    def test_a_key_host_driver_is_written_and_proved_in_the_users_openwiz_fork(self):
+    def test_a_key_host_driver_is_written_proved_and_proposed_in_openwiz(self):
         text = key_host_lines()
-        self.assertIn("write the driver in the user's fork of openwizdev/OpenWiz", text)
-        self.assertIn("`<openwiz>` and `<the user's repository>` in every step are the same folder", text)
+        for words in ('write the driver in an OpenWiz checkout at `adapters/<host>/`',
+                      'add its row to `kernel/driver-kit/hosts.json` there',
+                      'run the kit there',
+                      'open the pull request to openwizdev/OpenWiz',
+                      "Every other host's driver stays in the user's own repository"):
+            self.assertIn(words, text)
         self.assertNotIn('Run the kit on a copy of the driver', text)
 
     def test_a_key_hosts_live_shape_goes_through_the_helper_with_a_yes_first(self):
@@ -986,7 +990,7 @@ class KeyHost(unittest.TestCase):
     def test_adding_a_key_host_is_one_reviewed_row_in_the_registry(self):
         text = key_host_lines()
         self.assertIn('one reviewed row in `kernel/driver-kit/hosts.json`', text)
-        self.assertIn('through an issue or pull request on openwizdev/OpenWiz', text)
+        self.assertIn('reviewed in that same pull request to openwizdev/OpenWiz', text)
 
     def test_the_key_stays_with_the_user_and_the_driver_never_sees_it(self):
         text = key_host_lines()

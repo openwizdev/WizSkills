@@ -443,7 +443,8 @@ def graphql(w, repo, o, ids, page, answer):
         answer('graphql Writer login=%s' % o['login'])
     else:
         fail('unknown query: ' + query.split('\n')[0])
-    if env.get('FAKE_GH_ERRORS', '') == op:
+    error = env.get('FAKE_GH_ERRORS', '')
+    if error == op or (op == 'Spec' and error == f'Spec:{number}'):
         return '{"data":null,"errors":[{"message":"planted GraphQL error"}]}\n'
     if env.get('FAKE_GH_RATE_LIMITED', '') == op:
         sys.stdout.write(compact({'errors': [{'type': env.get('FAKE_GH_RATE_TYPE') or 'RATE_LIMIT',

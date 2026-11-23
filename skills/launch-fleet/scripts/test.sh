@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=947
+CASES=954
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -643,6 +643,23 @@ expect 'KN13: labelled by a collaborator with write access: starts' 0 check.json
 start #13: W3: widget page (spec #10)
 EOF
 log_has 'KN13: labelled by a collaborator with write access: starts' 1 '^graphql Writer login=synthetic-writer$'
+WRITER13='merge12 | labelled(13; "09:00"; "synthetic-writer") | .collaborators = {"synthetic-writer": "WRITE"}'
+expect 'B24: a queued start in cooldown reads no collaborator permission' 0 check.json \
+  "$WRITER13"' | issue(14; .blockedBy = []) | say(13; 1301; "11:51"; "launch-fleet: start refused: synthetic")' -- check <<EOF
+start #14: W4: widget docs (spec #10)
+EOF
+log_has 'B24: a queued start in cooldown reads no collaborator permission' 0 '^graphql Writer'
+expect 'B24: a queued start reads collaborator permission at the cooldown boundary' 0 check.json \
+  "$WRITER13"' | say(13; 1301; "11:50"; "launch-fleet: start refused: synthetic")' -- check <<EOF
+start #13: W3: widget page (spec #10; retry after "start refused: synthetic")
+EOF
+log_has 'B24: a queued start reads collaborator permission at the cooldown boundary' 1 '^graphql Writer login=synthetic-writer$'
+expect 'B24: a claim checks only the claimed ticket collaborator' 0 check.json \
+  "$WRITER13"' | issue(14; .blockedBy = []) | labelled(14; "09:00"; outsider)
+  | say(13; 1301; "11:55"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
+go #13
+EOF
+log_has 'B24: a claim checks only the claimed ticket collaborator' 1 '^graphql Writer'
 expect 'KN13: labelled by a collaborator with triage access only: refused' 0 check.json 'merge12 | labelled(13; "09:00"; "synthetic-writer") | .collaborators = {"synthetic-writer": "TRIAGE"}' -- check <<EOF
 look #13: start refused: ready-for-agent was last added at 2026-11-01T09:00:00Z by someone who is not a maintainer; a maintainer must add it again
 EOF
@@ -2165,6 +2182,11 @@ EOF
 expect 'GraphQL errors' 2 check.json . FAKE_GH_ERRORS=Specs -- check <<EOF
 the GitHub query Specs answered with errors
 EOF
+for spec in 10 40; do
+  expect "B24: a GraphQL error names failed spec #$spec" 2 check.json "$TWO_SPECS31" FAKE_GH_ERRORS="Spec:$spec" -- check <<EOF
+the GitHub query Spec #$spec answered with errors
+EOF
+done
 expect 'no fleet settings' 2 check.json 'del(.files["docs/agents/fleet.md"])' -- check <<EOF
 can't read docs/agents/fleet.md
 EOF
@@ -4014,7 +4036,10 @@ fi
 GI1=$(cat "$FIX/unchanged/spec.jq") || { echo "FAIL setup: the GI1 fixture"; exit 1; }
 GI1_SECRET=synthetic-token-gi1-0000
 gi1_run() { # N DIR CACHE SECONDS: run N of spec 10 on DIR/world.json, SECONDS after NOW
-  (cd "$2" && env PATH="$tmp/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo GH_TOKEN=$GI1_SECRET \
+  (
+    if [ "${5:-}" = discovery ]; then unset GH_REPO
+    else export GH_REPO=synthetic-owner/synthetic-repo; fi
+    cd "$2" && env PATH="$tmp/bin:$PATH" GH_TOKEN=$GI1_SECRET \
     FAKE_GH_WORLD="$2/world.json" FAKE_GH_LOG="$2/gh-$1.log" FAKE_GH_HTTP_LOG="$2/http-$1.log" \
     LAUNCH_FLEET_NOW=$((NOW + $4)) LAUNCH_FLEET_CACHE="$3" LAUNCH_FLEET_REVISION="$FIX/revision.sh" \
     /bin/sh "$FLEET" spec 10 > "$2/out-$1" 2> "$2/err-$1")
@@ -4023,7 +4048,7 @@ gi1_run() { # N DIR CACHE SECONDS: run N of spec 10 on DIR/world.json, SECONDS a
 # the same exit 0 and the same lines.
 gi1_pair() {
   : > "$d/gh-$1.log" && : > "$d/http-$1.log" || return 1
-  gi1_run "$1" "$d" "$d/cache" "$2" || { gi1_why="run $1 failed: $(head -c 300 "$d/err-$1")"; return 1; }
+  gi1_run "$1" "$d" "$d/cache" "$2" "${3:-}" || { gi1_why="run $1 failed: $(head -c 300 "$d/err-$1")"; return 1; }
   rm -rf "$d/ref" && mkdir "$d/ref" && cp "$d/world.json" "$d/ref/world.json" || return 1
   gi1_run "$1" "$d/ref" "$d/ref/cache" "$2" || { gi1_why="reference $1 failed"; return 1; }
   cmp -s "$d/out-$1" "$d/ref/out-$1" || { gi1_why="run $1 printed $(diff "$d/ref/out-$1" "$d/out-$1" | head -c 400)"; return 1; }
@@ -4051,7 +4076,11 @@ gi1_case() {
   take heavy || return 0
   cases=$((cases + 1))
   d=$tmp/gi1-$cases gi1_why=''
-  mkdir "$d" && world check.json "$GI1" "$d" > "$d/world.json" || { bad "$name" "setup"; return; }
+  setup=$GI1
+  if [ "$mode" = writer ]; then
+    setup="$setup"' | labelled(13; "09:00"; "synthetic-writer") | .collaborators = {"synthetic-writer": "WRITE"}'
+  fi
+  mkdir "$d" && world check.json "$setup" "$d" > "$d/world.json" || { bad "$name" "setup"; return; }
   # Runs 1 and 2 are full reads; run 2 also learns what the probe asks.
   gi1_pair 1 0 && gi1_read 1 && gi1_pair 2 60 && gi1_read 2 || { bad "$name" "$gi1_why"; return; }
   case $mode in
@@ -4067,6 +4096,26 @@ gi1_case() {
           bad "$name" "a token or ETag in $(basename "$f")"; return
         fi
       done ;;
+    discovery)
+      gi1_pair 3 120 discovery || { bad "$name" "$gi1_why"; return; }
+      discoveries=$(grep -c '^repo view$' "$d/gh-3.log")
+      [ "$discoveries" = 1 ] || { bad "$name" "warm replay made $discoveries discovery calls"; return; }
+      grep -qxE 'fleet\.sh: used 0 GitHub points in [0-9]+ questions, [1-9][0-9]* unchanged; repository discovery cost unmeasured' "$d/err-3" \
+        || { bad "$name" "warm replay points: $(cat "$d/err-3")"; return; } ;;
+    writer)
+      grep -q '^start #13:' "$d/out-2" || { bad "$name" "initial write access did not permit a start"; return; }
+      gi1_change '.collaborators["synthetic-writer"] = "TRIAGE"' || { bad "$name" "change failed"; return; }
+      gi1_pair 3 120 || { bad "$name" "$gi1_why"; return; }
+      grep -q '^look #13: start refused:' "$d/out-3" && [ "$(gi1_graphql 3)" = 1 ] \
+        && grep -qx 'graphql Writer login=synthetic-writer' "$d/gh-3.log" \
+        || { bad "$name" "warm replay did not read the downgraded permission once"; return; }
+      gi1_change '.collaborators["synthetic-writer"] = "WRITE"' || { bad "$name" "change failed"; return; }
+      gi1_pair 4 180 || { bad "$name" "$gi1_why"; return; }
+      grep -q '^start #13:' "$d/out-4" && [ "$(gi1_graphql 4)" = 1 ] \
+        && grep -qx 'graphql Writer login=synthetic-writer' "$d/gh-4.log" \
+        || { bad "$name" "warm replay did not read the restored permission once"; return; }
+      jq -e '.body | fromjson | .graphql | all(.[]; .data.repository.collaborators? == null)' "$(gi1_snapshot)" >/dev/null \
+        || { bad "$name" "the snapshot saved a Writer answer"; return; } ;;
     changed-probes | expired-probes)
       gi1_pair 3 120 && gi1_unchanged 3 || { bad "$name" "$gi1_why"; return; }
       if [ "$mode" = changed-probes ]; then
@@ -4122,7 +4171,7 @@ gi1_case() {
         link) gi1_change 'open_pr(37; 62; "#62: widget cleanup")' ;;
         merge) gi1_change 'm23([changed("contracts/widget.v1.md"; "modified")]) | .pulls[-1].mergedAt = at("11:59")' ;;
         auth) gi1_change '.login = "synthetic-other-user"' ;;
-        installation) gi1_change '.installation = "synthetic-other-installation"' ;;
+        installation) gi1_change '.installation_repository_description = "Synthetic updated description"' ;;
         switch) LAUNCH_FLEET_GITHUB_AUTH=installation FAKE_GH_FAIL=user && export LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL ;;
         lost) [ -n "$snap" ] && rm "$snap" ;;
         damaged) [ -n "$snap" ] && printf 'x' >> "$snap" ;;
@@ -4132,7 +4181,11 @@ gi1_case() {
             && jq -c --arg h "$(jq -j .body "$d/snap" | sha256sum | cut -c1-64)" '.sha256 = $h' "$d/snap" > "$snap" ;;
         rest) find "$d/cache" -name 'rest-*.json' -exec sh -c 'printf x >> "$1"' sh {} \; ;;
       esac || { bad "$name" "can't make the change"; return; }
-      gi1_pair 4 180 && gi1_full 4 || { bad "$name" "$gi1_why"; return; } ;;
+      gi1_pair 4 180 && gi1_full 4 || { bad "$name" "$gi1_why"; return; }
+      if [ "$mode" = check ]; then
+        grep -qE "/commits/$(sha 36)/status.* 304$" "$d/http-4.log" \
+          || { bad "$name" "a CheckRun changed the legacy combined status"; return; }
+      fi ;;
   esac
   echo "ok   $name"
 }
@@ -4145,7 +4198,9 @@ gi1_case 'GI1: a full read 30 minutes old is read again' age
 gi1_case 'GI1: a changed ticket gets a full read' issue
 gi1_case 'GI1: a changed label event gets a full read' label
 gi1_case "GI1: a pull request's new head gets a full read" pr
-gi1_case 'GI1: a changed check gets a full read' check
+gi1_case 'B24: a changed CheckRun gets a full read through its own probe' check
+gi1_case 'B24: a warm ad hoc spec discovers the repository once' discovery
+gi1_case 'B24: a warm spec reads collaborator access afresh' writer
 gi1_case 'GI1: a new review verdict gets a full read' review
 gi1_case 'GI1: a newly linked pull request gets a full read' link
 gi1_case 'GI1: a merge to main gets a full read' merge
@@ -4159,7 +4214,7 @@ gi1_case 'GI1: damaged probe answers get a full read' rest
 # failure); the check probes what the installation covers instead.
 export LAUNCH_FLEET_GITHUB_AUTH=installation FAKE_GH_FAIL=user
 gi1_case 'GI7: an unchanged spec read with an App token reads no GraphQL' unchanged
-gi1_case 'GI7: another installation gets a full read' installation
+gi1_case 'B24: a changed installation-repository representation gets a full read' installation
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
 gi1_case "GI7: a switch from the account to the App gets a full read" switch
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL

@@ -1655,12 +1655,13 @@ mint' ] && [ "$(cat "$A/openwiz.log")" = 'github token --repository synthetic-ow
   }
   cases=$((cases + 1)) step=world
   name="app identity: with a canonical on row and a restore of today's account that fails, nothing reads fleet.md or mints"
-  cp "$A/on.json" "$A/world.json" && for shell in sh bash; do
-    step="loop.sh under $shell" && restore_fails "$shell" "$A/install/loop.sh" \
-      && step="block under $shell" && restore_fails "$shell" "$A/block-run.sh" || break
-  done; report $?
+  cp "$A/on.json" "$A/world.json" \
+    && step='loop.sh under sh' && restore_fails sh "$A/install/loop.sh" \
+    && step='block under sh' && restore_fails sh "$A/block-run.sh" \
+    && step='loop.sh under bash' && restore_fails bash "$A/install/loop.sh" \
+    && step='block under bash' && restore_fails bash "$A/block-run.sh"; report $?
 else
-  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 1))
+  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 72))
 fi
 
 expect 'claim: the only claim goes' 0 check.json 'merge12 | say(13; 1301; "11:58"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
@@ -4234,7 +4235,7 @@ only_reads "$tmp"/case-*/gh*.log "$tmp"/cache-*/gh.log "$tmp"/loop/log[0-9] "$tm
 expected=${TEST_EXPECTED:-1}
 case ${TEST_ONLY:-} in
   loop) expected=4 ;;
-  'app identity') expected=9 ;;
+  'app identity') expected=72 ;;
   fleet-loop) expected=2 ;;
   'contexts:*') expected=31 ;;
   'contexts R1:*') expected=4 ;;

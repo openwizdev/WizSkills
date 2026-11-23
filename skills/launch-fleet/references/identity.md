@@ -1,12 +1,12 @@
 # GitHub identity
 
-**The App identity is off for everyone:** nothing turns it on yet (OpenWiz #2394; its opt-in reader is a later ticket), so act as today's signed-in account: never run, try or probe `openwiz github token` or `agent-token.py`, and skip the rest of this page. The block below never mints: it only defines `app` and `app_git` to run your commands as today's account.
+**The App identity is off unless the project turns it on:** it is on only when the default branch's `docs/agents/fleet.md` has exactly one `App identity` row, a bare `on`, in its one `## GitHub identity` table, read whole on today's account (OpenWiz #2835). Never decide it yourself and never run, try or probe `openwiz github token` or `agent-token.py` outside the block below: the block restores today's account, reads the row with the setup skill's own reader (its settings script's `app-identity` command, the same reading its `check` uses), and mints only when that reader says on. Anything else, a failed restore or read included, is off: act as today's signed-in account, and `app` and `app_git` run your commands as it.
 
 Read this before your first push, pull request, comment, label or merge as the App.
 
-Once the App identity can be on, the agents act on GitHub as the project's OpenWiz App ([`openwiz.github-identity.v1`](../../../contracts/github-identity.v1.md); GI7, #2549), so they spend the App's installation budget, not the user's account. **Builders** push their branch and open its pull request, **reviewers** comment, and **managers** (the ticks, fleet threads and orchestrator) comment, label and merge, each as the App. Every commit stays **authored and committed as the user**, so the credit stays theirs. The App only carries the push. The user keeps their own account for their own actions (approvals, settings).
+With the App identity on, the agents act on GitHub as the project's OpenWiz App ([`openwiz.github-identity.v1`](../../../contracts/github-identity.v1.md); GI7, #2549), so they spend the App's installation budget, not the user's account. **Builders** push their branch and open its pull request, **reviewers** comment, and **managers** (the ticks, fleet threads and orchestrator) comment, label and merge, each as the App. Every commit stays **authored and committed as the user**, so the credit stays theirs. The App only carries the push. The user keeps their own account for their own actions (approvals, settings).
 
-- **The token** (only once the App identity can be on): mint one into its own variable when you need it, in the shell that runs the commands, and never store it. Never mint into `GH_TOKEN`: your own account's credential stays as it is, set or not. Only the commands you run through `app` and `app_git` see the App token: `gh` reads it from `GH_TOKEN`, and git gets it only through a credential helper that reads the environment, never in a URL or an argument. Add `--read` for a use that only reads (the check: with the App identity on, `loop.sh` mints a `--read` token for it). Tokens last an hour; mint again for later work.
+- **The token** (only with the App identity on, as the block decides): mint one into its own variable when you need it, in the shell that runs the commands, and never store it. Never mint into `GH_TOKEN`: your own account's credential stays as it is, set or not. Only the commands you run through `app` and `app_git` see the App token: `gh` reads it from `GH_TOKEN`, and git gets it only through a credential helper that reads the environment, never in a URL or an argument. Add `--read` for a use that only reads (the check: with the App identity on, `loop.sh` mints a `--read` token for it). Tokens last an hour; mint again for later work.
 
   <!-- GI7 identity -->
   ```sh
@@ -44,17 +44,31 @@ Once the App identity can be on, the agents act on GitHub as the project's OpenW
     fi
     unset GH_TOKEN OPENWIZ_AGENT_TOKEN_RUN OPENWIZ_AGENT_TOKEN_GIT_AT restore_pair restore_name restore_mark restore_value restore_at restore_count
   }
-  restore_today_account
   app_token=
-  echo "GitHub as today's account: the App identity is off" >&2
-  app() { "$@"; }
-  app_git() { git "$@"; }
+  if restore_today_account \
+    && fleet_md=$(gh api "repos/<owner>/<repo>/contents/docs/agents/fleet.md" 2> /dev/null < /dev/null) \
+    && printf '%s' "$fleet_md" | python3 -I "<the setup skill's folder>/scripts/settings.py" app-identity > /dev/null 2>&1; then
+    app_token=$(openwiz github token --repository "<owner>/<repo>" 2> /dev/null < /dev/null) || app_token=
+    [ -n "$app_token" ] || echo "GitHub as today's account: no App token" >&2
+  else
+    echo "GitHub as today's account: the App identity is off" >&2
+  fi
+  if [ -n "$app_token" ]; then
+    app() { GH_TOKEN=$app_token "$@"; }
+    app_git() {
+      GH_TOKEN=$app_token git -c credential.helper= \
+        -c 'credential.helper=!f() { [ "$1" = get ] && printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' "$@"
+    }
+  else
+    app() { "$@"; }
+    app_git() { git "$@"; }
+  fi
   # For example: app_git push origin HEAD; app gh pr create ...; app gh pr comment ...
   ```
-- **Today's account, restored:** `restore_today_account` is the one step that returns a shell to today's account; `loop.sh` defines the same function, byte for byte, and runs it whenever the App identity is off or no token step is its own, before any other command. It acts only when an inherited token step's marks are present (`OPENWIZ_AGENT_TOKEN_RUN`, `OPENWIZ_AGENT_TOKEN_GIT_AT` or any `OPENWIZ_AGENT_TOKEN_*_WAS`), and then: it restores `PATH`, `GIT_EXEC_PATH`, `GIT_SSH_COMMAND`, `GIT_ALLOW_PROTOCOL` and `GH_CONFIG_DIR` from each `OPENWIZ_AGENT_TOKEN_*_WAS` (`1<value>` sets the value; anything else, `0` included, unsets the variable), drops every `GIT_CONFIG_KEY_<i>`/`GIT_CONFIG_VALUE_<i>` entry from `OPENWIZ_AGENT_TOKEN_GIT_AT` onward (when that mark or `GIT_CONFIG_COUNT` is not a plain number of at most nine digits, or the mark is above the count, it unsets `GIT_CONFIG_COUNT` and every set `GIT_CONFIG_KEY_<i>`/`GIT_CONFIG_VALUE_<i>`, gaps included, found from `set`'s listing in a subshell that first unsets `OPENWIZ_GITHUB_APP_KEY`, `GH_TOKEN` and `GITHUB_TOKEN`, so their values are never read), and unsets `GH_TOKEN` and every mark. So no `gh` or `git` shim, credential helper or installation token stays reachable. Without marks it changes nothing, so your own `GH_TOKEN` stays. It never reads `OPENWIZ_GITHUB_APP_KEY`; `loop.sh` records only whether the key is set (`${OPENWIZ_GITHUB_APP_KEY+set}`) and unsets it as its first command, so no command it runs, bundle generation included, inherits the key. Call it as is from any caller that falls back to today's account.
+- **Today's account, restored:** `restore_today_account` is the one step that returns a shell to today's account; `loop.sh` defines the same function, byte for byte, and runs it before it reads the App identity row and whenever the App identity is off or no token step is its own, before any other command; both read the row only after it succeeds. It acts only when an inherited token step's marks are present (`OPENWIZ_AGENT_TOKEN_RUN`, `OPENWIZ_AGENT_TOKEN_GIT_AT` or any `OPENWIZ_AGENT_TOKEN_*_WAS`), and then: it restores `PATH`, `GIT_EXEC_PATH`, `GIT_SSH_COMMAND`, `GIT_ALLOW_PROTOCOL` and `GH_CONFIG_DIR` from each `OPENWIZ_AGENT_TOKEN_*_WAS` (`1<value>` sets the value; anything else, `0` included, unsets the variable), drops every `GIT_CONFIG_KEY_<i>`/`GIT_CONFIG_VALUE_<i>` entry from `OPENWIZ_AGENT_TOKEN_GIT_AT` onward (when that mark or `GIT_CONFIG_COUNT` is not a plain number of at most nine digits, or the mark is above the count, it unsets `GIT_CONFIG_COUNT` and every set `GIT_CONFIG_KEY_<i>`/`GIT_CONFIG_VALUE_<i>`, gaps included, found from `set`'s listing in a subshell that first unsets `OPENWIZ_GITHUB_APP_KEY`, `GH_TOKEN` and `GITHUB_TOKEN`, so their values are never read), and unsets `GH_TOKEN` and every mark. So no `gh` or `git` shim, credential helper or installation token stays reachable. Without marks it changes nothing, so your own `GH_TOKEN` stays. It never reads `OPENWIZ_GITHUB_APP_KEY`; `loop.sh` records only whether the key is set (`${OPENWIZ_GITHUB_APP_KEY+set}`) and unsets it as its first command, so no command it runs, bundle generation included, inherits the key. Call it as is from any caller that falls back to today's account.
 - **The author:** before your first commit, read the user from GitHub on today's account (plain `gh`, not through `app`): `gh api user --jq '"\(.login) \(.id)"'`. Then `git config user.name <login>` and `git config user.email <id>+<login>@users.noreply.github.com`. Never guess them.
 - **The fallback:** with the App identity off, no `OPENWIZ_GITHUB_APP_KEY` secret, no `openwiz`, or a failed mint, the block above says on stderr that you act as today's account, and `app` and `app_git` run the commands with your own credential untouched. Go on: the fleet never stops for it. The commit author rule still holds.
 - **Workflows stay on today's path.** The App has no Workflows permission, so push a branch whose diff changes `.github/workflows/` as today's account.
 - **A refused merge stops for the user.** The App merges only under `fleet.md`'s standing merge rules. If a repository rule refuses the App's merge, record `launch-fleet: merge blocked <commit>: a repository rule refused the App's merge` and tell the user ([user.md](user.md)). Never retry it as another account and never bypass the rule.
 
-Until a later ticket adds the App identity's opt-in reader, and the user installs the App and gives its key (#2548), nothing mints and everything runs as today's account, as the fallback says.
+Until the user sets the `App identity` row to `on`, installs the App and gives its key (#2548), nothing mints and everything runs as today's account, as the fallback says.

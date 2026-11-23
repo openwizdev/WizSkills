@@ -536,6 +536,25 @@ class RecordedJourney(unittest.TestCase):
 
 
 class HostAwareSetup(unittest.TestCase):
+    def test_where_accepts_a_local_driver_that_lists_effort(self):
+        j = Journey(self)
+        driver = j.dir / 'runtime/adapters/local/driver'
+        driver.parent.mkdir(parents=True)
+        driver.write_text(
+            "#!/bin/sh\n"
+            '[ "$#" -eq 1 ] && [ "$1" = version ] || exit 97\n'
+            "printf '%s\\n' "
+            """'{"driver":"local","records":["openwiz:records v1"],"can":["start","wake","stop","effort"]}'\n"""
+        )
+        driver.chmod(0o755)
+        (j.dir / 'bin/codex').symlink_to('/usr/bin/false')
+
+        result = j.helper(['where', '--build', str(j.dir), '--agents', 'local', '--yes'])
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('- local: this machine\n', result.stdout)
+        self.assertEqual(json.loads(j.state.read_text())['host']['agents'], 'local')
+
     def test_driver_setup_carries_without_cloudroom_and_keeps_github_and_harness_gates(self):
         cases = (
             ('local', 'local', 'harness_listed', 'project_verified', 0, 'agents on local'),

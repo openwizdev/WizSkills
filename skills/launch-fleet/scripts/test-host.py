@@ -107,6 +107,10 @@ class Project:
     def saved(self):
         return json.loads(self.runs.read_text()) if self.runs.exists() else None
 
+    def labels(self):
+        path = Path(str(self.runs) + '.requesters')
+        return json.loads(path.read_text()) if path.exists() else None
+
     def github(self):
         return json.loads(self.world.read_text())
 
@@ -240,8 +244,9 @@ class Host(unittest.TestCase):
                                  (0, 'started #7 on local', ''))
                 self.assertEqual(p.calls(), [{'host': 'local', 'command': 'start', 'input': {
                     'repository': REPO, 'ticket': 7, 'skill': skill, 'harness': 'claude', 'model': 'claude-opus-5-5'}}])
-                self.assertEqual(p.saved(), {'repo': REPO, 'runs': {'7': {'host': 'local', 'requester': who,
-                                                                          'run': 'local-run-7'}}})
+                self.assertEqual(p.saved(), {'repo': REPO, 'runs': {'7': {'host': 'local', 'run': 'local-run-7'}}})
+                self.assertEqual(p.labels(), {'repo': REPO, 'requesters': {'7': {
+                    'host': 'local', 'requester': who, 'run': 'local-run-7'}}})
 
     def test_start_without_a_skill_sends_todays_exact_bytes(self):
         p = Project(self)
@@ -453,16 +458,42 @@ class Token(unittest.TestCase):
                           for name in ('gh', 'git')})
 
 
-    def test_a_saved_requester_for_another_ticket_or_beside_a_role_is_an_unreadable_runs_file(self):
-        for run in ({'requester': 'fleet-8'}, {'requester': 'builder-7'}, {'requester': 'reviewer-7', 'role': 'reviewer'}):
-            with self.subTest(run):
+    def test_the_run_map_keeps_the_shape_an_older_host_reads_beside_a_reviewer_and_a_fleet(self):
+        p = Project(self)
+        env = self.service(p)
+        for n, skill in ((7, 'build-ticket'), (8, 'review-ticket'), (9, 'launch-fleet')):
+            self.assertEqual(p.host('start', REPO, n, 'claude', 'claude-opus-5-5', skill, **env),
+                             (0, 'started #%s on local' % n, ''))
+        runs = p.saved()['runs']
+        self.assertEqual(runs, {n: {'host': 'local', 'run': 'local-run-%s' % n} for n in ('7', '8', '9')})
+        older = {'host', 'run'}, {'host', 'run', 'stopped'}
+        self.assertTrue(all(set(v) in older for v in runs.values()))
+        self.assertEqual(p.host('stop', REPO, 7, **env), (0, 'stopped #7 on local', ''))
+        self.assertEqual(p.saved()['runs']['7'], {'host': 'local', 'run': 'local-run-7', 'stopped': True})
+        self.assertEqual(sorted(p.labels()['requesters']), ['8', '9'])
+
+    def test_a_label_for_another_run_is_ignored_and_a_restart_as_a_builder_drops_it(self):
+        p = Project(self)
+        env = self.service(p)
+        self.assertEqual(p.host('start', REPO, 8, 'claude', 'claude-opus-5-5', 'review-ticket', **env),
+                         (0, 'started #8 on local', ''))
+        p.runs.write_text(json.dumps({'repo': REPO, 'runs': {'8': {'host': 'local', 'run': 'older-host-run'}}}))
+        self.assertEqual(p.host('wake', REPO, 8, **env), (0, 'woke #8 on local', ''))
+        self.assertEqual(self.requests(p)[-1]['request']['requester'], 'builder-8')
+        self.assertEqual(p.host('stop', REPO, 8, **env), (0, 'stopped #8 on local', ''))
+        self.assertEqual(p.host('start', REPO, 8, 'claude', 'claude-opus-5-5', **env), (0, 'started #8 on local', ''))
+        self.assertEqual(p.labels(), {'repo': REPO, 'requesters': {}})
+
+    def test_a_label_for_another_ticket_or_role_is_an_unreadable_requesters_file(self):
+        for label in ({'requester': 'fleet-8'}, {'requester': 'builder-7'}, {'requester': 'reviewer-7', 'role': 'x'}):
+            with self.subTest(label):
                 p = Project(self)
-                p.runs.parent.mkdir(parents=True, exist_ok=True)
-                p.runs.write_text(json.dumps({'repo': REPO, 'runs': {'7': dict({'host': 'local', 'run': 'local-run-7'},
-                                                                               **run)}}))
+                p.runs.write_text(json.dumps({'repo': REPO, 'runs': {'7': {'host': 'local', 'run': 'local-run-7'}}}))
+                Path(str(p.runs) + '.requesters').write_text(json.dumps({'repo': REPO, 'requesters': {
+                    '7': dict({'host': 'local', 'run': 'local-run-7'}, **label)}}))
                 code, out, err = p.host('wake', REPO, 7, **self.service(p))
                 self.assertEqual((code, out, p.calls(), self.requests(p)), (2, '', [], []))
-                self.assertIn('is not a runs file for %s' % REPO, err)
+                self.assertIn('is not a requesters file for %s' % REPO, err)
 
 
 class Version(unittest.TestCase):
@@ -494,6 +525,21 @@ class Failures(unittest.TestCase):
         self.assertEqual(len(p.calls()), 6)
         self.assertEqual(len(p.github()['writes']), writes)
         self.assertEqual((p.fleet_notes(), len(p.failures())), ([STOPPED], 1))
+
+    def test_a_refused_reviewer_start_is_reported_as_the_reviewers(self):
+        p = Project(self)
+        self.assertEqual(p.host('start', REPO, 31, 'claude', 'm', 'review-ticket', FAKE_DRIVER_MODE='refuse')[0], 1)
+        steps = lambda: [next(line[len('step: '):] for line in body.split('\n') if line.startswith('step: '))
+                         for first, body in p.ticket(31) if first == '<!-- openwiz:status v1 -->']
+        self.assertEqual(steps(), ["the local driver refused this pull request's reviewer's start 3 times; the "
+                                   "reason is in a comment here"])
+        self.assertEqual(p.failures(31), [(MARK, "The local driver refused to start this pull request's reviewer 3 "
+                                                 "times (exit 1: refused). Its own words are kept off this public pull "
+                                                 "request: the fleet's owner can read them in the private driver log, "
+                                                 "`driver-failures.log` beside `LAUNCH_FLEET_RUNS`, entry %s for #31."
+                                           % p.driver_log()[0]['time'])])
+        self.assertEqual(p.host('start', REPO, 31, 'claude', 'm', 'review-ticket'), (0, 'started #31 on local', ''))
+        self.assertEqual(steps()[1:], ["the local driver started this pull request's reviewer on a later try"])
 
     def test_the_drivers_own_words_stay_in_the_owners_log_never_on_the_ticket(self):
         # The orchestrator's decision on R3 at 90aed73: no free text of the driver's ever reaches the ticket.
@@ -762,9 +808,8 @@ class Roster(unittest.TestCase):
                          (0, 'started #7 on local', ''))
         self.assertEqual(p.host('start', REPO, 8, 'codex', 'vendor/demo', 'grill', **env),
                          (0, 'started #8 on local', ''))
-        self.assertEqual(p.saved(), {'repo': REPO, 'runs': {
-            '7': {'host': 'local', 'requester': 'reviewer-7', 'run': 'local-run-7'},
-            '8': {'host': 'local', 'run': 'local-run-8'}}})
+        self.assertEqual(p.saved(), {'repo': REPO, 'runs': {'7': {'host': 'local', 'run': 'local-run-7'},
+                                                            '8': {'host': 'local', 'run': 'local-run-8'}}})
         self.assertEqual([r['request']['requester'] for r in Token().requests(p)], ['reviewer-7', 'builder-8'])
         for held in (p.dir / 'token-private').iterdir():
             held.unlink()

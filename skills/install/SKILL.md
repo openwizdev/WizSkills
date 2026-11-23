@@ -1,7 +1,7 @@
 ---
 name: install
 description: Install OpenWiz from its one line, "Install OpenWiz from github.com/openwizdev/OpenWiz", then optionally walk the resumable onboarding road to a first merged pull request. Checks the machine, installs the verified prebuilt release (no Rust or Node), checks setup's connections, asks where agents run, offers three ways to start, runs a short grill, and starts the fleet through launch-fleet once the plan passes its checks. Use to install, repair, update or remove OpenWiz, or to start or resume a first fleet. For a project's docs/agents/ settings alone, use setup.
-version: 0.3.1
+version: 0.4.0
 ---
 
 # Install OpenWiz
@@ -39,7 +39,7 @@ Keep `<root>` (default `$HOME/.local/lib/openwiz`), and the `build` and `state_r
 
 A new session, whatever the user said ("continue", or the one line again), starts here: find the first unfinished step and resume there. Use only the installed files, never a temporary clone: a restart loses it.
 
-Read the host from the continuation message: `local` means this computer, `boat` means boat.dev, and `cloud` means CloudRoom. Use that choice for the setup checks below and carry it to step 6.1. If the message has no host, reuse the answer from this chat or `host.agents` if it is already recorded in the owner-only first-fleet state. Ask the host question only if you have none of those.
+Read the host from the continuation message: `local` means this computer, `boat` means boat.dev, and `cloud` means CloudRoom. Read the release from it too: `release <tag>` names the release step 1 chose (its `<tag>`, and `<version>` without the `v`); use that release, never GitHub's Latest again, everywhere below. Use that choice for the setup checks below and carry it to step 6.1. If the message has no host, reuse the answer from this chat or `host.agents` if it is already recorded in the owner-only first-fleet state. Ask the host question only if you have none of those.
 
 ```sh
 <root>/current/openwiz --build-identity
@@ -51,37 +51,58 @@ grep -m1 '^version:' ~/.claude/skills/install/SKILL.md "${CODEX_HOME:-$HOME/.cod
 
 `<root>` is `$HOME/.local/lib/openwiz` unless the user chose another. Take the first that holds:
 
-- No `<root>/current`, or `--build-identity` does not read 0.1.0: resume at step 1.
+- No `<root>/current`, or `--build-identity` does not read the `<version>` of the release you install (step 1 reads it): resume at step 1.
 - `status` does not read the GitHub account, or the user chose CloudRoom and `check` does not read `cloudroom_login_verified`: resume at step 3. `identity_unreadable` means GitHub gave no clear answer: wait a minute and run `status` again; it clears.
-- The running agent's `install/SKILL.md` is missing, or does not read `version: 0.3.1`: resume at step 4. When that agent's folder holds OpenWiz's 18 skills, run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4.
+- The running agent's `install/SKILL.md` is missing, or does not read `version: <version of this skill>`, this file's own `version:` line at the top: resume at step 4. When that agent's folder holds OpenWiz's 18 skills, run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4.
 - Otherwise resume at step 5; for a first fleet already under way, at step 6 with `first_fleet.py next`. If it prints `Next: where.`, follow step 6.1 with the recovered choice.
 
 ## 1. Preflight
 
+First read the release you install, GitHub's Latest:
+
+```sh
+curl -sS --proto '=https' -o /dev/null -w '%{redirect_url}\n' https://github.com/openwizdev/OpenWiz/releases/latest
+```
+
+It prints `https://github.com/openwizdev/OpenWiz/releases/tag/<tag>`. Use that `<tag>` (such as `v0.1.1`) below, and `<version>` for it without the `v` (`0.1.1`). To install 0.1.0, stop this skill and follow the [0.1.0 install instructions](https://github.com/openwizdev/WizSkills/blob/maint/0.2/skills/install/SKILL.md) (WizSkills v0.2.x) instead, with its hand-started fleets at the end. 0.1.0 is no longer Latest, so in its step 2 always take its pinned `v0.1.0` fetch, never its `download`. With no `/tag/` in it, GitHub has no Latest release yet: use the tag the user names, never a guess.
+
 ```sh
 openwiz=<private temporary folder>/openwiz
-git clone --depth 1 --branch v0.1.0 https://github.com/openwizdev/OpenWiz "$openwiz"
+git clone --depth 1 --branch <tag> https://github.com/openwizdev/OpenWiz "$openwiz"
 python3 -I "$openwiz"/tools/install/install preflight
 ```
 
-`git clone` may warn that `refs/tags/v0.1.0` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. For 0.1.0, supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) has a build, but CloudRoom offers no Intel Mac build today: if the user chose CloudRoom, say so plainly, offer this computer or boat.dev instead, and stop before installing if they keep CloudRoom. Exit 5 names each missing item and its `next` step: tell the user plainly what they do themselves (`gh`: install it and run `gh auth login` in their own terminal). `room-cli` reading `missing` never stops preflight; it matters only if the user chose CloudRoom, and step 3 installs CloudRoom then. Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`). Read its `checks` even on exit 0: `gh` reading `missing` does not stop preflight, but setup needs it. Then the user installs GitHub CLI first, from https://cli.github.com, and `gh --version` shows it is there; then continue.
+`git clone` may warn that `refs/tags/<tag>` is not a commit (it is an annotated tag) and print detached-HEAD advice: both are harmless. Preflight reads Python, the target, disk space and whether `room-cli`, `gh` and `git` are on `PATH`; it runs none of them. It prints `target` for the next step. Today supported means a Mac with Apple silicon (`aarch64-apple-darwin`) or Linux on x86_64 (`x86_64-unknown-linux-gnu`). An Intel Mac (`x86_64-apple-darwin`) has a build, but CloudRoom offers no Intel Mac build today: if the user chose CloudRoom, say so plainly, offer this computer or boat.dev instead, and stop before installing if they keep CloudRoom. Exit 5 names each missing item and its `next` step: tell the user plainly what they do themselves (`gh`: install it and run `gh auth login` in their own terminal). `room-cli` reading `missing` never stops preflight; it matters only if the user chose CloudRoom, and step 3 installs CloudRoom then. Linux on ARM is refused. On Linux the build needs glibc 2.34 or later (`ldd --version`). Read its `checks` even on exit 0: `gh` reading `missing` does not stop preflight, but setup needs it. Then the user installs GitHub CLI first, from https://cli.github.com, and `gh --version` shows it is there; then continue.
 
 Done when preflight passes, or the user has each next step.
 
 ## 2. Verified install
 
+Download exactly the release step 1 chose, even if GitHub's Latest has moved since:
+
 ```sh
-python3 -I "$openwiz"/tools/install/install download --target <target> --dir <private download folder>
-python3 -I "$openwiz"/tools/install/install install --assets <private download folder> --target <target> --root <root>
+python3 -I "$openwiz"/tools/install/install download --target <target> --dir <private download folder> --version <tag>
 ```
 
-**While 0.1.0 is not yet GitHub's Latest release,** `download` refuses ("the step could not be completed safely") because `releases/latest/download/...` answers 404. Check that with `curl -sI https://github.com/openwizdev/OpenWiz/releases/latest/download/openwiz-<target>.sha256`. On a 404, and only then, fetch the same three files from the pinned tag into a new owner-only folder, then run the same `install` above:
+If that installer answers `usage` for `--version` (an older one), and only then, fetch the same three files from the pinned tag into a new owner-only folder:
 
 ```sh
 umask 077; mkdir <private download folder>
-for f in openwiz-<target>.sha256 openwiz-<target>.manifest.json openwiz-0.1.0-<target>.tar.gz; do
-  curl -fsSL --proto '=https' -o <private download folder>/"$f" https://github.com/openwizdev/OpenWiz/releases/download/v0.1.0/"$f"
+for f in openwiz-<target>.sha256 openwiz-<target>.manifest.json openwiz-<version>-<target>.tar.gz; do
+  curl -fsSL --proto '=https' -o <private download folder>/"$f" https://github.com/openwizdev/OpenWiz/releases/download/<tag>/"$f"
 done
+```
+
+Before activating anything, check the downloaded release is the chosen one:
+
+```sh
+grep -o '"version": *"[^"]*"' <private download folder>/openwiz-<target>.manifest.json
+```
+
+It must print `"version"` with `<version>`. Anything else: stop, install nothing, and say so. Then activate it:
+
+```sh
+python3 -I "$openwiz"/tools/install/install install --assets <private download folder> --target <target> --root <root>
 ```
 
 `install` checks the manifest against its checksum and every file against the manifest, as `download` would. Any other refusal leaves the previous build selected: report it, never work around it. A checksum proves the files are the release's, not who published them.
@@ -92,9 +113,9 @@ Then prove the build:
 <root>/current/openwiz --build-identity
 ```
 
-It prints `"version":"0.1.0"` and the release's `source` commit. On Linux, a `weak version 'GLIBC_2.39' not found` line on stderr is harmless. OpenWiz's skills go into the user's agents at step 4, after setup.
+It prints `"version":"<version>"` and the release's `source` commit. On Linux, a `weak version 'GLIBC_2.39' not found` line on stderr is harmless. OpenWiz's skills go into the user's agents at step 4, after setup.
 
-Done when `install` printed `"activated": true` with the version, target, `build` and `state_root`, and `--build-identity` read 0.1.0.
+Done when `install` printed `"activated": true` with the version, target, `build` and `state_root`, and `--build-identity` read `<version>`.
 
 ## 3. Setup and connections
 
@@ -138,31 +159,34 @@ python3 -I "$openwiz"/tools/install/install skills --root <root>
 
 It copies the 18 skills into `<root>/skills` and into each agent folder present here: `~/.claude/skills` (Claude Code), `${CODEX_HOME:-$HOME/.codex}/skills` (Codex: `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise `~/.codex/skills`), `~/.cursor/skills`, `~/.config/opencode/skills` and `~/.grok/skills`. It prints `"outcome": "installed"` even when it copied nothing, so check two things: its `harnesses` entry for the agent you are running in reads `installed`, and that agent's folder, the entry's `path` (`ls ~/.claude/skills`, or for Codex `ls "${CODEX_HOME:-$HOME/.codex}/skills"`), now holds all 18 by name: `ask-wiz`, `build-ticket`, `diagnose`, `grill`, `handoff`, `hill-climb`, `huntr`, `image`, `install`, `launch-fleet`, `research`, `review-ticket`, `setup`, `to-spec`, `to-tickets`, `triage`, `wayfind` and `where-are-we`. If the entry reads `absent`, that agent's folder (`~/.claude`, or for Codex `$CODEX_HOME` when set, otherwise `~/.codex`) is missing on this computer: tell the user which folder, that their agent has no OpenWiz skills, and its `next` step; never create the folder yourself. A skill of the user's own with the same name refuses the whole step: report it.
 
-Then make every installed copy of this skill this one, the whole folder. The copy `install skills` just wrote comes from the 0.1.0 package: it is older (`version: 0.2.0`), its `SKILL.md` and scripts still name a setup page and a server 0.1.0 removed, and a new session loads it whatever the user says. Take this skill's own folder: the one you read it from when it is on this computer (a WizSkills clone or plugin: set `src` to it and skip the clone), otherwise a fresh clone of WizSkills (it installs nothing). Then overwrite each agent folder that holds OpenWiz's copy (marked by `.openwiz-skill`), and check every file by content:
+Then make every installed copy of this skill this one, the whole folder. The copy `install skills` just wrote comes from the release's package and can be older: `grep -m1 '^version:' "$build"/runtime/skills/install/SKILL.md` prints its real version from the verified build, an older copy's `SKILL.md` and scripts can still name a setup page and a server OpenWiz removed, and a new session loads it whatever the user says. Take this skill's own folder: the one you read it from when it is on this computer (a WizSkills clone or plugin: set `src` to it and skip the clone), otherwise a fresh clone of WizSkills (it installs nothing). Then overwrite only the agent folders the installer reported as taking OpenWiz's copy, and check every file by content. `<installed agent folders>` is the quoted `path` of each `harnesses` entry from `install skills` that reads `installed`, or `partial` with no `skipped` entry for `install`. Without this session's `install skills` output (a resumed session), run `install skills` again from a fresh clone of the chosen `<tag>` and use its rows; if you can't, copy nothing and tell the user. Never guess a folder. A folder is copied over only when no part of its path is a link (the installer refuses those too) and while its `install/.openwiz-skill` is the installer's own receipt, never a user's skill. `<version of this skill>` is the `version:` at the top of this file, such as `0.4.0`:
 
 ```sh
 wizskills=<private temporary folder>/WizSkills
 git clone --depth 1 --branch main https://github.com/openwizdev/WizSkills "$wizskills"
 src="$wizskills"/skills/install
-fixed() { grep -q '^version: 0.3.1$' "$1/SKILL.md" && ! grep -q -e 'install ope[n] ' -e 'from the setup pag[e]' -e 'Restart the OpenWiz serve[r]' "$1/SKILL.md" "$1"/scripts/*.py; }
+want='version: <version of this skill>'
+fixed() { grep -qxF "$want" "$1/SKILL.md" && ! grep -q -e 'install ope[n] ' -e 'from the setup pag[e]' -e 'Restart the OpenWiz serve[r]' "$1/SKILL.md" "$1"/scripts/*.py; }
 if fixed "$src"; then echo "source ok"; else echo "NOT THIS SKILL: $src"; fi
-fixed "$src" && for d in "$HOME/.claude/skills" "$HOME/.codex/skills" ${CODEX_HOME:+"$CODEX_HOME/skills"} "$HOME/.cursor/skills" "$HOME/.config/opencode/skills" "$HOME/.grok/skills"; do
-  [ -f "$d/install/.openwiz-skill" ] || continue
+ours() { [ "$(cd "$1" 2>/dev/null && pwd -P)" = "$1" ] && [ -d "$1/install" ] && [ ! -L "$1/install" ] && [ -f "$1/install/.openwiz-skill" ] && [ ! -L "$1/install/.openwiz-skill" ] && python3 -I -c 'import re, sys; sys.exit(not re.fullmatch(rb"openwiz\.skill-copy\.v1\n[0-9a-f]{40}\n", open(sys.argv[1], "rb").read(65)))' "$1/install/.openwiz-skill"; }
+fixed "$src" && for d in <installed agent folders>; do
+  [ -e "$d/install" ] || continue
+  ours "$d" || { echo "not OpenWiz's, left alone: $d/install"; continue; }
   cp -R "$src"/. "$d/install/"
   same=yes; for f in $(cd "$src" && find . -type f); do cmp -s "$src/$f" "$d/install/$f" || same=no; done
   if [ "$same" = yes ] && fixed "$d/install"; then echo "ok: $d/install"; else echo "STILL OLD: $d/install"; fi
 done
 ```
 
-If it prints `NOT THIS SKILL` (the clone failed, or the branch still serves an older copy), nothing was copied: stop before the restart, say so, and try again shortly. A `STILL OLD` line means that folder's copy did not take (it may not be writable): report it and fix it before the restart; never restart onto an old copy. A later `install skills` run, such as a repair, writes the old copy again: repeat this block after it.
+If it prints `NOT THIS SKILL` (the clone failed, or the branch still serves an older copy), nothing was copied: stop before the restart, say so, and try again shortly. A `not OpenWiz's, left alone` line is the user's own skill: never copy over it, and say so if it is the running agent's. A `STILL OLD` line means that folder's copy did not take (it may not be writable): report it and fix it before the restart; never restart onto an old copy. A later `install skills` run, such as a repair, writes the old copy again: repeat this block after it.
 
 An agent finds new skills only when it starts, so the user restarts it now. Give them the one message for their chosen host to paste into the new session:
 
-- This computer: `continue the OpenWiz install with host local`
-- boat.dev: `continue the OpenWiz install with host boat`
-- CloudRoom: `continue the OpenWiz install with host cloud`
+- This computer: `continue the OpenWiz install with host local and release <tag>`
+- boat.dev: `continue the OpenWiz install with host boat and release <tag>`
+- CloudRoom: `continue the OpenWiz install with host cloud and release <tag>`
 
-Keep the full message. "continue the OpenWiz install" names the skill, and the host at the end carries the user's answer into Resume. Any installed copy that does not read `version: 0.3.1` is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md) and resume at the first unfinished step, as Resume says.
+Keep the full message. "continue the OpenWiz install" names the skill, the host carries the user's answer into Resume, and `release <tag>` (step 1's, filled in) keeps the chosen release after GitHub's Latest moves. Any installed copy whose `version:` line is older than this file's is older than this one; if you are told to install again, follow this skill (https://github.com/openwizdev/WizSkills/blob/main/skills/install/SKILL.md) and resume at the first unfinished step, as Resume says.
 
 Done when the running agent's folder holds the 18 skills by name and every `ok:` line printed with no `STILL OLD`, or the user knows which folder is missing, and the user has the restart message with their chosen host.
 
@@ -266,7 +290,21 @@ Done when it prints all clear, or the user has each fix.
 
 If something seems wrong, verify the build with a fresh clone (it installs nothing): `openwiz=<new temporary folder>/openwiz`, step 1's `git clone`, then `python3 -I "$openwiz"/tools/install/install status --root <root>`. It verifies the selected build and changes nothing. A changed file reads `installed asset mismatch`, and `install` refuses the same way. To repair it and keep the settings, delete only the `<root>/current` link and the one build folder it points to (`<build>`, inside `<state>/service/builds/`), nothing else in `<state>/service/`, then run step 2's `install install` again.
 
-To remove OpenWiz, on the user's yes: there is no remove command and no server to stop. Never remove `<root>` or `<state>` as a whole: the installer accepts folders that already hold other files, so either may hold the user's own.
+To remove OpenWiz, on the user's yes, in this order. Never remove `<root>` or `<state>` as a whole: the installer accepts folders that already hold other files, so either may hold the user's own.
+
+1. **Heartbeat first.** A local fleet's heartbeat is a per-user scheduled job outside `<root>`, and it keeps waking after the build is gone. Other installs' jobs share its folder, so list them by owner (it only reads):
+
+   ```sh
+   for c in ~/.local/state/openwiz-heartbeat/*/config.json; do
+     [ -f "$c" ] && python3 -I -c 'import json, os, sys; c = json.load(open(sys.argv[1])); a = c.get("environment", {}).get("OPENWIZ_ADAPTERS", ""); s = os.path.realpath(sys.argv[2]); print("this install:" if a and os.path.realpath(a).startswith(s + os.sep) else "ask first:", *c["argv"][-2:], "(adapters: %s)" % (a or "none"))' "$c" "<state>"
+   done
+   ```
+
+   A `this install:` job runs on this install's build (its `OPENWIZ_ADAPTERS` is inside `<state>`); an `ask first:` job may be another install's. Remove only the `this install:` jobs; show every `ask first:` line and touch an `ask first:` job only after the user names it as part of this uninstall. Set `launch_fleet` to the installed launch-fleet skill's folder and, for each job you remove, run `python3 -I "$launch_fleet"/scripts/heartbeat.py remove "<owner>/<repo>" "<S>"`: it takes down the schedule, stops the saved orchestrator and removes its state. `heartbeat: not installed` means there was none.
+2. **Then the installer's remove,** from step 1's clone of the chosen release (`git clone --depth 1 --branch <tag>` into a new temporary folder; it installs nothing). Preview with `python3 -I "$openwiz"/tools/install/install remove --root <root>`, adding `--state-root <state>` when the install chose a separate one. Show the user its `delete` list: it deletes exactly those and keeps everything else, and refuses while an install or update runs. On their yes, run the same command with `--yes`.
+3. **The agents' copies:** `remove` never deletes them. Its `skills` rows give each agent folder's `path` and the OpenWiz skill `names` in it. Show those names only; the user deletes those folders themselves, or keeps them.
+
+Only for 0.1.0's installer, which has no `remove` (its `remove` answers `usage`), remove it by hand instead of steps 2 and 3:
 
 1. `ls -A <root>`. A fresh install puts exactly `current`, `channel.json`, `install.lock`, `skills/` and, without a separate `--state-root`, `state/` (the `<state>`) there. Delete only `current`, `channel.json`, `install.lock` and `skills/`, and keep any of those names that was there before the install.
 2. `ls -A <state>`. OpenWiz's builds are the folders in `<state>/service/builds/`, each named by a 40-character source commit and holding an `install-manifest.json` whose `"source"` is that same name. Delete those folders. `<state>/service/` is never deleted as a whole.

@@ -65,7 +65,7 @@ Done when the three checks covered the whole diff and every finding has its file
 
 ## 3. Grade
 
-A finding **blocks** only with a line under it: `User path: <who does what ordinary thing, and what visibly breaks>` or `Risk: <security|privacy|data loss>: <what is at risk>`, then `Shows the break: <command> printed <output>` when a run shows it, rerun at the head just before posting. Everything else is **polish**: filed as an issue, never holding the verdict. First write each candidate's trigger, broken contract, causal path and evidence; name an unsupported hypothesis as uncertainty, not a finding. One cause is one finding; accept any equivalent safe fix. Blocking should be rare.
+A finding **blocks** only with a line under it: `User path: <who does what ordinary thing, and what visibly breaks>` or `Risk: <security|privacy|data loss>: <what is at risk>`, then `Shows the break: <command> printed <output>` when a run shows it, rerun at the head just before posting. A blocker also names its class: exactly one `Class: <word>` line, a word from the [verdict format](references/verdict.md#class)'s list or `Class: other: <word>` when none fits, naming what every instance of the cause shares so the builder fixes the whole class. Everything else is **polish**: filed as an issue, never holding the verdict. First write each candidate's trigger, broken contract, causal path and evidence; name an unsupported hypothesis as uncertainty, not a finding. One cause is one finding, whatever the number of places it shows, and two causes are two findings, each with its class; accept any equivalent safe fix. Blocking should be rare.
 
 ## Ask, never guess
 
@@ -89,6 +89,7 @@ Full review by Codex, Sol 6.2, Medium. CI green on this commit: build, test.
 Intent: `pantry export` writes the whole cookbook to one zip and refuses to overwrite an existing file.
 
 - **R1 [blocking]** `src/export.rs:48` (Spec) An existing `cookbook.zip` is overwritten. Fix: open it with `create_new(true)` and exit 3.
+  Class: files
   User path: a cook exports twice in one day; the second export silently replaces the first.
   Shows the break: `touch cookbook.zip && pantry export; echo $?` printed `0`; the ticket needs `3`. Rerun at this commit: same.
 - **R2 [polish]** `src/cli.rs:30` (Sweep) The help says "zip archive file"; the glossary's word is "export". Fix: "Write the cookbook as one export." Polish issue: #58.
@@ -100,6 +101,6 @@ Checked: Standards (`AGENTS.md`, `docs/agents/`, ADR 0002), Spec (#41, spec #38)
 Next: the builder fixes or disputes R1 once, then one re-check.
 ```
 
-`VERDICT` is `CHANGES` while a blocker is open, otherwise `APPROVE`. Ids run R1, R2, … in the order found, never renumbered or reused. Each numbered line of the description's `## Rulings` gets one mark, `upheld` or `overturned as R<n>` (a new finding, graded like any other); with none, write `Rulings: none.`, and a description with no `## Rulings` section is a polish finding. With no findings, write `No findings.` A full review ends with the builder line above or `Next: none open. It merges by the project's merge rules.`
+`VERDICT` is `CHANGES` while a blocker is open, otherwise `APPROVE`. A blocker keeps its `Class:` line, word unchanged, in every later report that gives it a status. `check` refuses a `[blocking]` finding with no `Class:` line, with two, or with a word outside the list, and a blocker that changes the class an earlier report gave it; it asks no class of a `[polish]` finding. Ids run R1, R2, … in the order found, never renumbered or reused. Each numbered line of the description's `## Rulings` gets one mark, `upheld` or `overturned as R<n>` (a new finding, graded like any other); with none, write `Rulings: none.`, and a description with no `## Rulings` section is a polish finding. With no findings, write `No findings.` A full review ends with the builder line above or `Next: none open. It merges by the project's merge rules.`
 
 Credit: adapted from Matt Pocock's, Theo Browne's and Lauren Tan's skills; the notices and sources are in [NOTICE.md](NOTICE.md) and [NOTICES.md](NOTICES.md).

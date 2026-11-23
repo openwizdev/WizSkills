@@ -16,6 +16,8 @@ BLOCKER_STATUSES = ("resolved at ", "withdrawn: ", "still open after the ", "dis
 POLISH_STATUSES = ("Polish issue: #", "withdrawn: ")
 OPEN = ("still open after the ", "disputed, kept: ")
 USER = re.compile(r"User path: \S.*")
+CLASS = re.compile(r"Class: (.*)")
+CLASS_WORD = re.compile(r"input|error-path|guard|output|state|files|process|credential|other: [a-z]+(?:-[a-z]+)*")
 RISK = re.compile(r"Risk: (?:security|privacy|data loss): \S.*")
 POLISH = re.compile(r"Polish issue: #[1-9][0-9]*\.?$")
 LOGGED = re.compile(r".*\bLogged as follow-up #[1-9][0-9]*\.$")
@@ -141,7 +143,8 @@ def parse(text):
         findings.append({"id": m[1], "grade": m[2], "new": bool(NEW.match(rest)), "text": rest,
                          "status": next((s for s in STATUSES if rest.startswith(s)), None),
                          "user": any(USER.fullmatch(x) for x in more), "risk": any(RISK.fullmatch(x) for x in more),
-                         "polish": bool(POLISH.search(rest)), "logged": bool(LOGGED.fullmatch(rest))})
+                         "polish": bool(POLISH.search(rest)), "logged": bool(LOGGED.fullmatch(rest)),
+                         "classes": [c[1] for x in more if (c := CLASS.fullmatch(x))]})
     nxt = paras[-1] if paras and paras[-1].startswith("Next:") else None
     state = next((s for s, p in NEXT.items() if nxt and re.fullmatch(p, nxt)), None)
     named = re.findall(r"R[1-9][0-9]*", nxt or "") if state != "merge" else []
@@ -215,6 +218,16 @@ def check(text, description, mode, head, earlier, decision=None, changed=None):
             problems.append(f"{i}: a new blocking finding needs its User path: or Risk: line")
         elif f["new"] and not blocking and not f["polish"]:
             problems.append(f"{i}: a new polish finding ends with Polish issue: #<n>")
+        words, kept = f["classes"], (before.get(i) or {}).get("classes", [])
+        if blocking and not words:
+            problems.append(f"{i}: a blocker names its class: one Class: line from references/verdict.md")
+        elif blocking and len(words) > 1:
+            problems.append(f"{i}: a blocker carries exactly one Class: line")
+        elif blocking and not CLASS_WORD.fullmatch(words[0]):
+            problems.append(f"{i}: Class: {words[0]} is not a word from references/verdict.md; "
+                            "use Class: other: <word> when none fits")
+        elif blocking and len(kept) == 1 and before[i]["grade"] == "blocking" and words != kept:
+            problems.append(f"{i}: keeps its earlier class, {kept[0]}")
         where = re.match(r"`([^`\s]+):[1-9][0-9]*`", f["text"]) if f["new"] and i not in before else None
         if where and changed is not None and where[1] not in changed and not f["risk"]:
             problems.append(f"{i}: `{where[1]}` is unchanged since {earlier['head'][:7]}; a re-check raises a new "

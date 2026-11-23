@@ -477,7 +477,7 @@ class Review(unittest.TestCase):
         self.world({}, comments=[report(FULL)])
         unchanged = "- **R4 [polish]** `src/cli.rs:12` (Sweep) Typo. Fix: file exists. Polish issue: #60."
         risk = ("- **R4 [blocking]** `src/cli.rs:12` (Sweep) The sync token is printed. Fix: redact it.\n"
-                "  Risk: privacy: a cook's sync token reaches the terminal log.")
+                "  Class: credential\n  Risk: privacy: a cook's sync token reaches the terminal log.")
         fresh = ("VERDICT: CHANGES", "Next: a fresh, stronger builder fixes R4 once, then one final check.")
         old_r4 = "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60."
         merge = ("VERDICT: APPROVE", "Next: none open. It merges by the project's merge rules.")
@@ -948,6 +948,13 @@ class Review(unittest.TestCase):
                               "--repo", SKILLS, "--pr", "7")
         self.assertEqual(out.stdout.splitlines(),
                          ["R1: a blocker names its class: one Class: line from references/verdict.md"])
+
+    def test_the_skills_own_example_names_its_blockers_class(self):
+        page = (HELPER.parent.parent / "SKILL.md").read_text()
+        example = re.search(r"```md\n(VERDICT: CHANGES at ([0-9a-f]{40})\n.*?)```", page, re.S)
+        self.world({"checks": green(example[2])}, pr={"head": {"sha": example[2]}})
+        out = self.run_helper("check", self.file("r.md", example[1]), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
 
     def test_record_author_row_is_parsed_whole(self):
         row = "| Record authors | `example[bot]`, `owner` |\n"

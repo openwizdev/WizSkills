@@ -7,8 +7,9 @@ versions when needed. Releases and live checks stay in version order.
 
 Write the issue body with Parent, What to build, Owned paths, Links, Acceptance
 criteria and Proof. Parent ends with the size, exactly once: `Size: S.`, `Size: M.`
-or `Size: L.`. S is an expected diff of about 400 changed lines and 10 files or
-fewer. An M adds its own `Why M: <reason it can't split>` line to Parent, after
+or `Size: L.`. S is an expected diff of about 200 changed lines and 10 files or
+fewer (revising openwizdev/OpenWiz#2484's RR2, which set about 400); M is about
+400. An M adds its own `Why M: <reason it can't split>` line to Parent, after
 the size. A ticket of size L is split, never cut. In Owned paths give each exact
 file or folder in backticks, with
 `in \`owner/repo\`` when it is another repository's.

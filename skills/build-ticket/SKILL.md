@@ -61,6 +61,7 @@ Done when every proof passes and every red run is kept.
 2. Run the scoped local checks `docs/agents/fleet.md` names for what you touched; CI runs the full set.
 3. **Review yourself first.** Run review-ticket's step 2 checklist (Standards, Spec, Changelog, Full sweep) and every item of [checklist.md](checklist.md) that applies on your own diff (`git diff origin/main...HEAD`) and the drafted description, as the reviewer would; then `python3 -I <this skill's folder>/../review-ticket/scripts/review.py self-check <description file>` must end `self-check: ok` at the head you hand back. Fix every finding before the hand-back, red first: each one left costs a review round.
 4. `$T scope` must end `scope: ok` at the hand-back commit; then read the complete diff, both rename sides and every executable fixture for secrets, real identifiers, weakened assertions and unapproved dependencies.
+5. **Size.** `$T size <repo> <N>` prints the lines and files changed since `origin/main`, tests counted apart, against the ticket's `Size:` (S about 200 lines and 10 files; M about 400 with its `Why M:` line), and ends `size: ok` or `size: over (...)`. When it's over, either ask on the ticket to split it, or write `Why big: <reason it can't split>` under Merge danger. Facts record the size line.
 5. Commit the hand-back with **green** in its subject: the commit the checks passed on, or a logs-only commit on top. No other subject says green. Push it through `$T push` as in step 3. If `openwiz github token` mints for the repository, push and open the pull request as the App with the token block of [launch-fleet's App push instructions](../launch-fleet/references/identity.md), passing its push written out as one command after `--`; otherwise act as today's account. Take only the token and push from that page: your commit identity stays the one `$T author` set in section 3's step 1, never that page's `git config` lines.
 6. Open the pull request ready, titled `#<N>: <ticket title>`, in the format below, then `$T post-receipt <repo> <PR> <receipt file>`; on exit 1 keep the file, and read the pull request's comments before running it again. End your turn: the fleet starts the review once CI passes at your exact head.
 
@@ -70,7 +71,7 @@ Closes #<N>       fully qualified (owner/repo#<N>) when the ticket lives in anot
 ## Evidence       Before: the failing-first run. After: the same proof passing
 ## Merge danger   Door: one-way or two-way. Blast radius: one word
 ## Rulings        numbered ruling lines, or exactly `none`
-## Facts          Branch, Head, Tree; Changed paths (and covered supporting edits); Tests;
+## Facts          Branch, Head, Tree; Size line; Changed paths (and covered supporting edits); Tests;
                   Red run; Claims; Seams (with each later ticket); CI at this head; Gaps
 ```
 

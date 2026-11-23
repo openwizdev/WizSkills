@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=945
+CASES=949
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -4217,6 +4217,20 @@ look #10: comment history could not be read in full: repos/synthetic-owner/synth
 EOF
 expect "GI2: the project check and the fleet thread's own check are unchanged" 0 check.json "merge12 | $GI2_FLEET10" -- spec 10 <<EOF
 start #13: W3: widget page (spec #10)
+EOF
+
+expect 'FR9: spec reads the open-issue list without REST' 0 check.json . FAKE_GH_FAIL=issues_page= -- spec 10 < /dev/null
+
+expect 'FR9: spec reads its comments without REST' 0 check.json 'all_closed | say(10; 1002; "11:30"; "launch-fleet: spec summary")' FAKE_GH_FAIL=issue_comments_10_page= -- spec 10 <<EOF
+close spec #10: every planned ticket is done; follow-ups go to polish
+EOF
+
+expect 'FR9: every finds standalone work without a REST search' 0 check.json 'own_approval(70; 7002; "09:00")' FAKE_GH_FAIL=search_issues -- every <<EOF
+start #70: Fix the broken link in the widget docs (approved on its own)
+EOF
+
+expect 'FR9: a claim reads open work without a REST search' 0 check.json . FAKE_GH_FAIL=search_issues -- claim 13 1301 <<EOF
+withdraw #13: its blockers are not all done
 EOF
 
 ### Every case ran, and every call was a read

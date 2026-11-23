@@ -76,6 +76,7 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-heartbeat.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-ledger.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-host.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-session.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-stop-all.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-budget.py'],

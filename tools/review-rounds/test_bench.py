@@ -224,6 +224,21 @@ class Cohorts(unittest.TestCase):
         self.assertEqual((code, text), (1, ''))
         self.assertIn('synthetic/alpha: search returned PR 1 twice', err)
 
+    def test_a_repository_named_twice_in_any_case_is_refused(self):
+        fake = FakeGitHub({'synthetic/alpha': alpha(), 'Synthetic/Alpha': alpha()})
+        for second in ('Synthetic/Alpha', 'SYNTHETIC/alpha', 'synthetic/alpha'):
+            stderr, sys.stderr = sys.stderr, io.StringIO()
+            try:
+                with self.assertRaises(SystemExit) as raised:
+                    bench.main(['--repo', 'synthetic/alpha', '--repo', second, '--merged-from', START, '--merged-to', END],
+                               graphql=fake.graphql, out=io.StringIO())
+                message = sys.stderr.getvalue()
+            finally:
+                sys.stderr = stderr
+            self.assertEqual(raised.exception.code, 2, second)
+            self.assertIn('--repo repeated: synthetic/alpha and ' + second, message)
+        self.assertEqual(fake.documents, [])
+
     def test_bad_arguments_exit_2(self):
         for argv in (ARGS[:-1] + ['2026-01-17T00:00:00'], ARGS[:-1] + ['soon'], ['--repo', 'no-slash'] + ARGS[6:],
                      ARGS + ['--repo', 'synthetic/alpha'], ARGS[:-3] + [END, '--merged-to', START]):

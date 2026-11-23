@@ -127,7 +127,9 @@ class Rules(unittest.TestCase):
                 "root = tempfile.mkdtemp(dir='/' + 'tmp')",
                 'work=$(mktemp -d ' + TMP + 'run.XXXXXX)',
                 'x = 1  # asse' + 'rt le' + 'n(rows) > 0',
-                "self.assertEqual(le" + "n(rows), 2)  # " + CLOCK)
+                "self.assertEqual(le" + "n(rows), 2)  # " + CLOCK,
+                "self.assertTrue(4 <= le" + "n(rows) <= 7)",
+                "redact('logs in " + TMP + "synthetic-run')")
         for line in good:
             with self.subTest(line=line):
                 self.assert_findings({'check/test_x.py': line + '\n'}, [])

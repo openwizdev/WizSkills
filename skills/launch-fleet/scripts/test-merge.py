@@ -2186,7 +2186,7 @@ class Drops(unittest.TestCase):
                 self.assertEqual(writes[:len(claims)], claims, 'its claim is the first write')
                 if template == written:
                     told = ('its claim and then its enqueue were written, so its one re-queue is spent' if claims
-                            else 'its enqueue was written')
+                            else 'its enqueue was sent')
                     self.assertIn('; %s, and nothing more is written' % told, out)
                 rest = writes[len(claims):]
                 if mutation == 'claim':

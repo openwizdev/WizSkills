@@ -13,6 +13,8 @@ cp "$HERE/../../to-tickets/revision.sh" "$HERE/../../to-tickets/check-links.sh" 
 cp "$HERE/carried/alarm.py" "$work/plugin cache/skills/launch-fleet/scripts/carried/"
 mkdir "$work/plugin cache/skills/launch-fleet/scripts/github-app"
 cp "$HERE/github-app/agent-token.py" "$work/plugin cache/skills/launch-fleet/scripts/github-app/"
+mkdir -p "$work/plugin cache/skills/setup/scripts"
+cp "$HERE/../../setup/scripts/settings.py" "$work/plugin cache/skills/setup/scripts/"
 mkdir "$work/linked skills"
 ln -s "$work/plugin cache/skills/launch-fleet" "$work/linked skills/launch-fleet"
 # GI7 (#2549): the fake gh also records the token each call gets (synthetic).
@@ -104,6 +106,8 @@ cp "$HERE/../../to-tickets/revision.sh" "$HERE/../../to-tickets/check-links.sh" 
 cp "$HERE/carried/alarm.py" "$work/installed/skills/launch-fleet/scripts/carried/"
 mkdir "$work/installed/skills/launch-fleet/scripts/github-app"
 cp "$HERE/github-app/agent-token.py" "$work/installed/skills/launch-fleet/scripts/github-app/"
+mkdir -p "$work/installed/skills/setup/scripts"
+cp "$HERE/../../setup/scripts/settings.py" "$work/installed/skills/setup/scripts/"
 rm -rf "$work/cache"
 status=0
 sh "$work/installed/skills/launch-fleet/scripts/loop.sh" > "$work/out" 2> "$work/err" || status=$?

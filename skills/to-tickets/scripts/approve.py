@@ -88,9 +88,27 @@ def contains(own, path):
     return len(x) <= longest and all(fnmatch.fnmatchcase(q, p) for p, q in zip(x, y))
 
 
-def relies_paths(body):
+def relies_items(body):
     lines = [line for line in body.split('\n') if line.startswith('**Relies on:**')]
-    return re.findall(r'`([^`]+)`', lines[0]) if len(lines) == 1 else []
+    found = re.findall(r'`([^`]+)`(?: in `([^`]+)`)?', lines[0]) if len(lines) == 1 else []
+    return [(repo.lower() or None, path) for path, repo in found]
+
+
+def relies_paths(body):
+    return [path for _, path in relies_items(body)]
+
+
+LEXICAL = re.compile(r'[A-Za-z0-9_-][A-Za-z0-9_.-]*(/[A-Za-z0-9_.-]+)*')
+
+
+def on_default_branch(repo, path):
+    out = subprocess.run(['gh', 'api', f'repos/{repo}/contents/{path}',
+                          '--jq', 'if type == "object" then .type else "folder" end'], capture_output=True, text=True)
+    if out.returncode == 0:
+        return out.stdout == 'file\n'
+    if '(HTTP 404)' in out.stderr:
+        return False
+    raise Unreadable(f'cannot read `{path}` in `{repo}` from its default branch')
 
 
 def read_revision(text, graph):
@@ -153,7 +171,14 @@ def check_relies(tickets, owners, root, root_repo):
         blockers = [b['number'] for b in t['blocked_by']]
         repos = {repo for repo, _, _ in owners.get(t['number'], [])}
         planned, unplanned = [], []
-        for path in relies_paths(t['body']):
+        for elsewhere, path in relies_items(t['body']):
+            if elsewhere is not None:
+                if (any(repo == elsewhere and contains(own, path) for b in blockers for repo, own, _ in owners.get(b, []))
+                        or (REPO.fullmatch(elsewhere) and LEXICAL.fullmatch(path)
+                            and not any(part in ('.', '..') for part in path.split('/'))
+                            and on_default_branch(elsewhere, path))):
+                    planned += ['--elsewhere', elsewhere, path]
+                continue
             if len(repos) == 1 and any(repo in repos and contains(own, path)
                                        for b in blockers for repo, own, _ in owners.get(b, [])):
                 planned += ['--planned', path]

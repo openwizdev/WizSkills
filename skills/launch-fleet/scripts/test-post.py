@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -225,6 +226,174 @@ class SelfGrant(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertTrue(out.startswith('unknown: '), out)
         self.assertEqual(w.bodies(12), [])
+
+
+STATE = 'launch-fleet/writes.json'
+SECONDARY = ('{"message": "You have exceeded a secondary rate limit and have been temporarily blocked from '
+             'content creation. Please retry your request again later."}')
+
+
+def paced_world(test, login='synthetic-owner', post_answer=None):
+    """A World whose writes pace in its own state folder, whose gh names `login` as the signed-in account and,
+    with post_answer=(status line, headers), answers the next comment POST with that GitHub refusal."""
+    w = World(test)
+    w.env['XDG_STATE_HOME'] = str(w.dir / 'state')
+    gh = w.dir / 'bin' / 'gh'
+    fake = gh.read_text().split('\n', 1)[1]
+    answer = ''
+    if post_answer is not None:
+        status, headers = post_answer
+        reply = w.dir / 'reply.txt'
+        reply.write_text('%s\r\n%s\r\n\r\n%s' % (status, ''.join(h + '\r\n' for h in headers), SECONDARY))
+        answer = ('case " $* " in *" POST "*) if [ ! -e "%s.used" ]; then : > "%s.used"; cat "%s"; '
+                  'echo "gh: secondary rate limit (HTTP 403)" >&2; exit 1; fi;; esac\n' % (reply, reply, reply))
+    gh.write_text('#!/bin/sh\nif [ "$*" = "config get -h github.com user" ]; then echo %s; exit 0; fi\n%s%s'
+                  % (login, answer, fake))
+    return w
+
+
+def state(w):
+    path = w.dir / 'state' / STATE
+    return json.loads(path.read_text()) if path.exists() else {'accounts': {}, 'inflight': [], 'until': 0}
+
+
+def seed(w, value):
+    path = w.dir / 'state' / STATE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value))
+
+
+def full(times, account='synthetic-owner', inflight=(), until=0):
+    return {'accounts': {account: list(times)}, 'inflight': [list(e) for e in inflight], 'until': until}
+
+
+class Pacer(unittest.TestCase):
+
+    def test_a_full_minute_bucket_refuses_without_writing(self):
+        w = paced_world(self)
+        now = time.time()
+        seed(w, full(now - 1 - i * 0.1 for i in range(60)))
+        code, out = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')
+        self.assertEqual(code, 1)
+        self.assertRegex(out, r'^refused: write paced, retry after \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
+        self.assertEqual(w.writes(), [])
+        self.assertEqual(len(state(w)['accounts'].get('synthetic-owner', [])), 60)
+
+    def test_a_full_hour_bucket_refuses_without_writing(self):
+        w = paced_world(self)
+        now = time.time()
+        seed(w, full(now - 120 - i for i in range(400)))
+        code, out = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith('refused: write paced, retry after '), out)
+        self.assertEqual(w.writes(), [])
+
+    def test_another_accounts_full_bucket_does_not_pace_this_one(self):
+        w = paced_world(self)
+        now = time.time()
+        seed(w, full((now - 1 for _ in range(60)), account='other-login'))
+        self.assertEqual(w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting'), (0, 'posted 5001'))
+        self.assertEqual(len(state(w)['accounts'].get('synthetic-owner', [])), 1)
+        self.assertEqual(len(state(w)['accounts'].get('other-login', [])), 60)
+
+    def test_a_slot_freeing_inside_the_window_is_waited_for_then_written(self):
+        w = paced_world(self)
+        now = time.time()
+        oldest = now - 58
+        seed(w, full([oldest] + [now - 1] * 59))
+        self.assertEqual(w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting'), (0, 'posted 5001'))
+        times = state(w)['accounts'].get('synthetic-owner', [])
+        self.assertEqual(len(times), 60)
+        self.assertGreaterEqual(max(times), oldest + 60)
+        self.assertEqual(len(w.writes()), 1)
+        self.assertEqual(state(w)['inflight'], [])
+
+    def test_a_secondary_limit_retry_after_is_waited_out_by_the_next_process(self):
+        w = paced_world(self, post_answer=('HTTP/2.0 403 Forbidden', ['Retry-After: 2', 'X-Ratelimit-Remaining: 4000']))
+        before = time.time()
+        code, out = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')
+        self.assertEqual((code, out.split(' ')[0]), (1, 'unknown:'), out)
+        self.assertIn('secondary', out)
+        self.assertEqual(w.writes(), [])
+        until = state(w)['until']
+        self.assertGreaterEqual(until, before + 2)
+        self.assertEqual(w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting'), (0, 'posted 5001'))
+        self.assertGreaterEqual(max(state(w)['accounts'].get('synthetic-owner', [])), until)
+        self.assertEqual(len(w.writes()), 1)
+
+    def test_a_long_secondary_wait_refuses_every_write_without_writing(self):
+        for status, headers in (('HTTP/2.0 403 Forbidden', ['Retry-After: 120']),
+                                ('HTTP/2.0 429 Too Many Requests', [])):
+            with self.subTest(status=status):
+                w = paced_world(self, post_answer=(status, headers))
+                w.update(comments={'12': [comment(4000, 'launch-fleet: starting')]})
+                before = time.time()
+                self.assertEqual(w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')[0], 1)
+                self.assertGreaterEqual(state(w)['until'], before + 60)
+                code, out = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: started')
+                self.assertEqual(code, 1)
+                self.assertTrue(out.startswith('refused: write paced, retry after '), out)
+                code, out = w.run('post.py', 'edit', REPO, 4000, 'launch-fleet: started')
+                self.assertEqual(code, 1)
+                self.assertTrue(out.startswith('refused: write paced, retry after '), out)
+                self.assertEqual(w.writes(), [])
+
+    def test_a_plain_403_records_no_wait(self):
+        w = paced_world(self, post_answer=('HTTP/2.0 403 Forbidden', []))
+        (w.dir / 'reply.txt').write_text('HTTP/2.0 403 Forbidden\r\n\r\n{"message": "Resource not accessible"}')
+        self.assertEqual(w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')[0], 1)
+        self.assertEqual(state(w)['until'], 0)
+        self.assertEqual(w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting'), (0, 'posted 5001'))
+
+    def test_two_processes_racing_for_the_last_slot_get_one_write(self):
+        w = paced_world(self)
+        now = time.time()
+        seed(w, full([now - 1] * 59))
+        runs = [subprocess.Popen([sys.executable, '-I', str(HERE / 'post.py'), 'comment', REPO, '12',
+                                  'launch-fleet: starting'], stdout=subprocess.PIPE, text=True, env=w.env, cwd=w.dir)
+                for _ in range(2)]
+        outs = sorted((r.communicate(timeout=60)[0].strip(), r.returncode) for r in runs)
+        self.assertEqual([code for _, code in outs], [0, 1] if outs[0][0].startswith('posted') else [1, 0])
+        self.assertEqual(sorted(out.split(' ')[0] for out, _ in outs), ['posted', 'refused:'])
+        self.assertEqual(len(w.writes()), 1)
+        self.assertEqual(len(state(w)['accounts'].get('synthetic-owner', [])), 60)
+
+    def test_an_edit_is_unpaced_but_waits_for_the_in_flight_cap(self):
+        w = paced_world(self)
+        w.update(comments={'12': [comment(4000, 'launch-fleet: starting')]})
+        holder = subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(60)'])
+        self.addCleanup(holder.kill)
+        now = time.time()
+        seed(w, full((now - 1 for _ in range(60)), inflight=[(holder.pid, now)] * 20))
+        edit = subprocess.Popen([sys.executable, '-I', str(HERE / 'post.py'), 'edit', REPO, '4000',
+                                 'launch-fleet: started'], stdout=subprocess.PIPE, text=True, env=w.env, cwd=w.dir)
+        try:
+            edit.wait(timeout=1.5)
+        except subprocess.TimeoutExpired:
+            pass
+        self.assertIsNone(edit.returncode)
+        self.assertEqual(w.writes(), [])
+        holder.kill()
+        holder.wait()
+        self.assertEqual((edit.communicate(timeout=60)[0].strip(), edit.returncode), ('edited 4000', 0))
+        self.assertEqual(w.writes(), [{'patch': 4000, 'body': 'launch-fleet: started'}])
+        self.assertEqual(len(state(w)['accounts'].get('synthetic-owner', [])), 60)
+        self.assertEqual(state(w)['inflight'], [])
+
+    def test_an_unreadable_state_file_refuses_without_writing(self):
+        for text in ('{', '[]', '{"accounts": {}, "inflight": [], "until": "soon"}',
+                     '{"accounts": {"a": ["x"]}, "inflight": [], "until": 0}',
+                     '{"accounts": {}, "inflight": [], "until": 0, "extra": 1}'):
+            with self.subTest(text=text):
+                w = paced_world(self)
+                path = w.dir / 'state' / STATE
+                path.parent.mkdir(parents=True)
+                path.write_text(text)
+                code, out = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')
+                self.assertEqual(code, 1)
+                self.assertTrue(out.startswith('refused: '), out)
+                self.assertEqual(w.writes(), [])
+                self.assertEqual(path.read_text(), text)
 
 if __name__ == '__main__':
     unittest.main()

@@ -283,7 +283,7 @@ class Kit(Base):
         argv = (self.tmp / 'kit.argv').read_text().split('\n')
         proxy = argv[argv.index('--driver') + 1]
         self.assertTrue(proxy.startswith(str(self.state) + '/'), proxy)
-        self.assertIn(str(self.tmp / 'driver'), Path(proxy).read_text())
+        self.assertFalse(Path(proxy).exists(), 'the proxy outlived the kit run')  # it calls the driver: R9's test
         for pair in (['--repo', 'example-user/examplehost-driver-kit'],
                      ['--ticket', '7'], ['--harness', 'exampleagent'], ['--model', 'example-model']):
             i = argv.index(pair[0])
@@ -1064,13 +1064,25 @@ class KeyHost(unittest.TestCase):
         driver = fork / 'adapters' / 'devin' / 'driver'
         shutil.copy(FIXTURES / 'key-host' / 'driver.txt', driver)
         driver.chmod(0o755)
-        p = wd('kit', '--openwiz', fork, '--driver', driver, '--repo', 'example/site', '--ticket', 7, '--harness',
-               'fake-harness', '--model', 'Synthetic 1', '--wait', 30)
-        print(p.stdout, end='')
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn('the devin key reached its host only from the key helper, in its header', p.stdout)
-        self.assertTrue(host.requests, 'the driver never reached the fake host')
-        wd('stop-all')
+        readme = fork / 'adapters' / 'devin' / 'README.md'
+        for runs, linked in enumerate((False, True), 1):
+            with self.subTest(readme='a relative link' if linked else 'a file'):
+                if linked:  # catches (R1): a relative README link the kit's stage no longer resolves
+                    (fork / 'docs').mkdir()
+                    readme.rename(fork / 'docs' / 'devin-README.md')
+                    readme.symlink_to(os.path.join('..', '..', 'docs', 'devin-README.md'))
+                p = wd('kit', '--openwiz', fork, '--driver', driver, '--repo', 'example/site', '--ticket', 7,
+                       '--harness', 'fake-harness', '--model', 'Synthetic 1', '--wait', 30)
+                print(p.stdout, end='')
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn('the devin key reached its host only from the key helper, in its header', p.stdout)
+                self.assertTrue(host.requests, 'the driver never reached the fake host')
+                # catches (R9): the key check's start on the kit's own fake host saved for stop-all; (R8) a stage
+                # left in state
+                saved = json.loads((state / 'run.json').read_text())
+                self.assertEqual([x['stopped'] for x in saved['started']], [True] * (runs - 1) + [False])
+                self.assertEqual(sorted(x.name for x in state.iterdir()), ['run.json'])
+                wd('stop-all')
 
 
 FAKE_KIT_GH = r"""#!/usr/bin/env python3
@@ -1096,7 +1108,8 @@ else:
 RECORDING_KIT = r"""import json, os, sys
 driver = sys.argv[sys.argv.index('--driver') + 1]
 top = os.path.dirname(driver)
-seen = sorted(os.path.relpath(os.path.join(d, n), top) for d, _, names in os.walk(top) for n in names)
+seen = sorted(os.path.relpath(os.path.join(d, n), top) for d, _, names in os.walk(top, followlinks=True)
+              for n in names)
 with open(os.environ['RECORDING_KIT_OUT'], 'w') as f:
     json.dump({'files': seen, 'readme': open(os.path.join(top, 'README.md')).read()}, f)
 for check in ('version', 'start', 'wake', 'stop', 'token'):

@@ -380,7 +380,7 @@ def _cost(repo, number, home, ticket, extra):
             return f"cost already posted {c['id']}"
     body = f'launch-fleet: cost unknown {ref}: '
     if not Path(COST).is_file():
-        body = 'launch-fleet: cost: ' + _agents_line(home, ref, number, ticket)
+        body = 'launch-fleet: cost: ' + _agents_line(repo, home, ref, number, ticket)
     elif not same:
         body += "the cost command costs only tickets in the pull request's repository"
     else:
@@ -441,12 +441,59 @@ def _usage(thread):
         return None
 
 
-def _driven(number, threads, runs):
+def _driven(number, threads, runs, here=True):
     return (f'run:{number}' in threads or runs in (records.UNREADABLE, records.MISSING, None)
-            or (isinstance(runs, dict) and str(number) in runs))
+            or (here and isinstance(runs, dict) and str(number) in runs))
 
 
-def _agents_line(home, ref, number, ticket):
+REVIEW_RECORD = re.compile(rf'launch-fleet: (?:review [a-z]+(?: [a-z]+)?|re-check sent) ({records.SHA})\b')
+DRIVER_LINE = ('Driver review:', 'Driver re-check:')
+
+
+def _elsewhere(claim, places, repo, number):
+    for place in places:
+        found = post.read_json('api', f'repos/{place}/issues/comments/{claim}')
+        url = found.get('issue_url') if isinstance(found, dict) else None
+        if isinstance(url, str) and not url.casefold().endswith(f'/repos/{repo}/issues/{number}'.casefold()):
+            return True
+    return False
+
+
+def _reviewers(repo, home, number, threads):
+    try:
+        auth, items = post.authors(repo), post.thread(repo, number)
+    except Stop:
+        return None
+    if items is None:
+        return None
+    claims = set()
+    for c in items:
+        lines = (c.get('body') or '').splitlines() if post.ours(c, auth) else []
+        if not lines or not REVIEW_RECORD.match(lines[0]):
+            continue
+        if lines[1:2] and lines[1].startswith(DRIVER_LINE):
+            return None
+        claims.add(str(c.get('id')))
+    prefix, held = f'review:{number}:', {}
+    for key, thread in threads.items():
+        if not key.startswith(prefix):
+            continue
+        rest = key[len(prefix):]
+        claim = re.fullmatch(r'claim:([0-9]+)', rest)
+        if not (claim or re.fullmatch(records.SHA, rest)):
+            return None
+        held.setdefault(thread, set()).update([claim[1]] if claim else [])
+    places = list(dict.fromkeys([repo, home]))
+    mine = set()
+    for thread, ids in held.items():
+        if ids and ids <= claims:
+            mine.add(thread)
+        elif not ids or ids & claims or not all(_elsewhere(i, places, repo, number) for i in ids):
+            return None
+    return mine
+
+
+def _agents_line(repo, home, ref, number, ticket):
     try:
         threads = records.private_state(home) if os.environ.get('LAUNCH_FLEET_STATE') else None
         runs = records.driver_runs(home)
@@ -455,9 +502,9 @@ def _agents_line(home, ref, number, ticket):
     if not threads:
         return _cost_line(ref, ticket, None, None)
     builder = None if _driven(ticket, threads, runs) else threads.get(f'builder:{ticket}')
-    reviewers = (set() if _driven(number, threads, runs)
-                 else {v for k, v in threads.items() if k.startswith(f'review:{number}:')})
-    read = {t: _usage(t) for t in sorted(reviewers | ({builder} if builder else set()))}
+    here = home.casefold() == repo.casefold()
+    reviewers = None if _driven(number, threads, runs, here) else _reviewers(repo, home, number, threads)
+    read = {t: _usage(t) for t in sorted((reviewers or set()) | ({builder} if builder else set()))}
     builder_credits = read[builder] if builder else None
     reviewer_credits = (None if not reviewers or threads.get(f'builder:{ticket}') in reviewers
                         or None in (read[t] for t in reviewers) else sum(read[t] for t in sorted(reviewers)))

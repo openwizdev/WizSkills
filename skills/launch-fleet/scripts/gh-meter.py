@@ -39,6 +39,8 @@ GraphQL, `rate_limit` and local commands. A --paginate read without
 The log never holds a token, a body, an argument value or any response
 header: only the fields above. Exit 2 on bad arguments or an unreadable log.
 """
+FIELDS = ('time', 'role', 'method', 'endpoint', 'kind', 'exit', 'rest_units', 'rest_used_before',
+          'rest_used_after')
 ROLES = ('fleet', 'builder', 'reviewer', 'orchestrator', 'heartbeat', 'other')
 LOCAL = {'auth', 'config', 'alias', 'help', 'version', 'completion', 'extension', '--version', '--help'}
 GRAPHQL = {'issue', 'pr', 'repo', 'project'}
@@ -176,14 +178,37 @@ def install(d):
     (d / 'gh').chmod(0o755)
 
 
+def unique(pairs):
+    keys = [k for k, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise ValueError('a repeated key')
+    return dict(pairs)
+
+
+def whole(value, nullable=False):
+    if value is None:
+        return nullable
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def meter_line(call):
+    if not isinstance(call, dict) or not set(FIELDS) <= set(call) <= set(FIELDS) | {'status'}:
+        return False
+    return (call['role'] in ROLES and call['kind'] in ('rest', 'graphql', 'none')
+            and all(isinstance(call[k], str) for k in ('time', 'method', 'endpoint'))
+            and isinstance(call['exit'], int) and not isinstance(call['exit'], bool) and whole(call['rest_units'])
+            and whole(call['rest_used_before'], True) and whole(call['rest_used_after'], True)
+            and whole(call.get('status'), 'status' not in call))
+
+
 def read(paths):
     calls = []
     for path in paths:
         try:
             with open(path) as f:
                 for n, text in enumerate(f, 1):
-                    call = json.loads(text)
-                    if not isinstance(call, dict) or not {'role', 'method', 'endpoint', 'kind'} <= set(call):
+                    call = json.loads(text, object_pairs_hook=unique)
+                    if not meter_line(call):
                         raise ValueError('line %d is not a meter line' % n)
                     calls.append(call)
         except (OSError, ValueError) as e:

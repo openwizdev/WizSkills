@@ -55,14 +55,15 @@ def python_suite(out, script, sub, test):
 
     subprocess.Popen.__init__ = init
     argv, sys.argv = sys.argv, [str(SCRIPTS / test)]
+    status = 0
     try:
         runpy.run_path(str(SCRIPTS / test), run_name='__main__')
-    except SystemExit:
-        pass
+    except SystemExit as e:
+        status = e.code if isinstance(e.code, int) else 1
     finally:
         subprocess.Popen.__init__ = original
         sys.argv = argv
-    return log, runs[0]
+    return log, runs[0], status
 
 
 def fleet_suite(out):
@@ -73,8 +74,9 @@ def fleet_suite(out):
         '  PATH=\'%s\':"$PATH" GH_METER_LOG=\'%s\' GH_METER_ROLE=fleet GH_METER_RATE=0 exec /bin/sh \'%s\' "$@"\n'
         'fi\nexec /bin/sh \'%s\' "$@"\n' % (runs, SHIM, log, SCRIPTS / 'fleet.sh', SCRIPTS / 'fleet.sh'))
     env = dict(os.environ, FLEET_SH=str(wrapper), TEST_JOBS=os.environ.get('TEST_JOBS', '2'))
-    subprocess.run(['sh', str(SCRIPTS / 'test.sh')], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return log, len(runs.read_text().splitlines()) if runs.exists() else 0
+    run = subprocess.run(['sh', str(SCRIPTS / 'test.sh')], env=env, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    return log, len(runs.read_text().splitlines()) if runs.exists() else 0, run.returncode
 
 
 def counts(log):
@@ -88,20 +90,24 @@ def fixtures(out):
     out = Path(out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     SHIM = out / 'shim'
-    subprocess.run([sys.executable, '-I', str(METER), 'install', str(SHIM)], check=True)
+    if subprocess.run([sys.executable, '-I', str(METER), 'install', str(SHIM)]).returncode:
+        sys.exit('bench: the shim did not install')
     rows = [('fleet.sh spec', 'fleet', *fleet_suite(out))]
     for script, sub, test in PYTHON:
         rows.append((script + (' ' + sub if sub else ''), 'orchestrator', *python_suite(out, script, sub, test)))
     print('| Script | Role | Fixture runs | Calls | REST calls | GraphQL calls | REST units '
           '| REST units per run | REST units per spec-hour (x%d wakes) |' % WAKES_PER_HOUR)
     print('| --- | --- | --- | --- | --- | --- | --- | --- | --- |')
-    for name, role, log, runs in rows:
+    for name, role, log, runs, _ in rows:
         calls, rest, graphql, units = counts(log)
         per = units / runs if runs else 0
         print('| %s | %s | %d | %d | %d | %d | %d | %.1f | %.0f |'
               % (name, role, runs, calls, rest, graphql, units, per, per * WAKES_PER_HOUR))
     print()
-    subprocess.run([sys.executable, '-I', str(METER), 'report', *[str(r[2]) for r in rows if r[2].exists()]])
+    report = subprocess.run([sys.executable, '-I', str(METER), 'report', *[str(r[2]) for r in rows if r[2].exists()]])
+    broken = [r[0] for r in rows if r[4] != 0 or r[3] == 0]
+    if broken or report.returncode:
+        sys.exit('bench: a suite failed under the meter, or ran its script no times: %s' % ', '.join(broken))
 
 
 def live(path):

@@ -419,7 +419,7 @@ def graphql(w, repo, o, ids, page, answer):
     if op in ('Singles', 'Nodes', 'Blockers'):
         if owner + name:
             fail(op + ' takes no owner or name')
-    elif owner + '/' + name != repo and not (op == 'Checks' and owner + '/' + name in foreign_repos(w)):
+    elif owner + '/' + name != repo and not (op in ('Checks', 'Merged') and owner + '/' + name in foreign_repos(w)):
         fail('graphql for %s/%s, not %s' % (owner, name, repo))
     label = ''
     if op == 'Singles':
@@ -682,7 +682,7 @@ def graphql(w, repo, o, ids, page, answer):
                 'subIssues': {'pageInfo': {'hasNextPage': truthy(alt(get(s, 'subIssuesTruncated'), False)) or len(subs) > tickets},
                               'nodes': [ticket(t) for t in subs[:tickets]]}}}}}
     else:
-        merged = sort_by([p for p in own_pulls if get(p, 'state') == 'MERGED'], lambda p: get(p, 'updatedAt'))[::-1]
+        merged = sort_by([p for p in view(w, owner + '/' + name)['pulls'] if get(p, 'state') == 'MERGED'], lambda p: get(p, 'updatedAt'))[::-1]
         out = {'data': {'repository': {'pullRequests': window([
             {'number': get(p, 'number'), 'mergedAt': get(p, 'mergedAt'), 'updatedAt': get(p, 'updatedAt'),
              'baseRefName': get(p, 'base'),

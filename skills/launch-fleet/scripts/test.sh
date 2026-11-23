@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=916
+CASES=920
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1678,6 +1678,19 @@ merge #31 for #12 at $S31: APPROVE and CI green
 EOF
 expect "cross-repository PR: a claim beside one with more than 20 checks succeeds (#2376)" 0 check.json "merge12 | open_pr(31; 14; \"#14: synthetic tools\") | pull(31; .checks = ([range(40) | {name: \"optional-\(.)\", status: \"COMPLETED\", conclusion: \"SUCCESS\"}] + .checks)) | $TOOLS | say(13; 1301; \"11:55\"; \"launch-fleet: starting\")" -- claim 13 1301 <<EOF
 go #13
+EOF
+expect "cross-repository PR: a failed comment page is reported with its request and error (#2376 R1)" 0 check.json "store31 | $TOOLS | pull(31; .comments = discussion(119) + .comments)" FAKE_GH_FAIL=issue_comments_31_page=2 -- check <<EOF
+look #31: comment history could not be read in full: repositories/2/issues/31/comments?per_page=100&page=2 failed: fake gh: planted failure: issue comments 31 page=2
+EOF
+TOOLS31D='.pulls += [.pulls[] | select(.number == 31) | .repo = "synthetic-owner/synthetic-tools" | .id = "PR_tools_31" | .head = sha("31d") | .draft = true | .closes = [14] | .comments = []]'
+expect "cross-repository PR: a same-numbered PR in another repository leaves the re-test guard alone (#2376 R2)" 0 check.json "store31 | $TOOLS31D" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect "cross-repository PR: a merge in this repository is no clash for it (#2376 R3)" 0 check.json "store31 | $TOOLS | main24(\"11:15\"; [changed(\"src/store/store.rs\"; \"modified\")])" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect "cross-repository PR: a merge in its own repository is its clash (#2376 R3)" 0 check.json "store31 | $TOOLS | main24(\"11:15\"; [changed(\"src/store/store.rs\"; \"modified\")]) | pull(24; .repo = \"synthetic-owner/synthetic-tools\")" -- check <<EOF
+re-test #31 for #12 at $S31: main changed src/store/store.rs in #24 after 2026-11-01T10:30:00Z, which its CI may not have tested; run its CI again on the latest main
 EOF
 
 ### #1340: a machine plan approval starts the fleet; the video's comments steer it
@@ -4105,7 +4118,7 @@ case ${TEST_ONLY:-} in
   'WZ-PROBE:*') expected=3 ;;
   'GI2:*') expected=13 ;;
   'CW-G:*') expected=2 ;;
-  'cross-repository PR:*') expected=7 ;;
+  'cross-repository PR:*') expected=11 ;;
 esac
 [ "$cases" = "$expected" ] || bad 'the selected cases ran' "$cases cases ran, not $expected: is \"$TEST_ONLY\" a case's name?"
 

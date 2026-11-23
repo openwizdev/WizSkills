@@ -3474,9 +3474,11 @@ FINDINGS31='pr31 | pr_say(31; 3101; "11:10"; "launch-fleet: review started \(sha
 # CW-G: independent processes with cold caches share only the durable routing
 # and GitHub fixtures. The first wake must keep the recorded builder, then the
 # next must honour the delivery record without taking over or sending again.
+fresh_builder=''
 if selected 'CW-G: route findings to the existing builder' || selected 'CW-G: resume from the recorded delivery' \
   || selected 'CW-G: route findings with a CRLF fleet record' || selected 'CW-G: route findings with trailing spaces'; then
   printf '%s\n' '{"repo":"synthetic-owner/synthetic-repo","threads":{"builder:12":"thr_syn12","review:31:claim:3101":"thr_synrev31"}}' > "$tmp/fresh-routes.json" || exit 1
+  fresh_builder=$(jq -er '.threads["builder:12"]' "$tmp/fresh-routes.json") || exit 1
 fi
 FRESH_FINDINGS="pr31 | .private = false
   | edit(12; 1201; \"09:40\"; \"launch-fleet: start checked, branch room/12-w2-widget-store-bbbb\")
@@ -3490,12 +3492,12 @@ EOF
 expect 'CW-G: route findings with a CRLF fleet record' 0 check.json \
   "$FRESH_FINDINGS | issue(10; .comments[-1].body |= (gsub(\"\\n\"; \"\\r\\n\") + \"\\r\\n\"))" \
   LAUNCH_FLEET_STATE="$tmp/fresh-routes.json" -- spec 10 <<EOF
-findings #31 for #12 at $S31: tell its builder, thread thr_syn12
+findings #31 for #12 at $S31: tell its builder, thread $fresh_builder
 EOF
 expect 'CW-G: route findings with trailing spaces' 0 check.json \
   "$FRESH_FINDINGS | issue(10; .comments[-1].body += \"  \")" \
   LAUNCH_FLEET_STATE="$tmp/fresh-routes.json" -- spec 10 <<EOF
-findings #31 for #12 at $S31: tell its builder, thread thr_syn12
+findings #31 for #12 at $S31: tell its builder, thread $fresh_builder
 EOF
 expect 'CW-G: resume from the recorded delivery' 0 check.json \
   "$FRESH_FINDINGS | pr_say(31; 3103; \"11:21\"; \"launch-fleet: findings sent \(sha(31))\")" \
@@ -4109,6 +4111,8 @@ gi1_case() {
       grep -q '^look #13: start refused:' "$d/out-3" && [ "$(gi1_graphql 3)" = 1 ] \
         && grep -qx 'graphql Writer login=synthetic-writer' "$d/gh-3.log" \
         || { bad "$name" "warm replay did not read the downgraded permission once"; return; }
+      grep -qxE 'fleet\.sh: used 1 GitHub points in [0-9]+ questions, [1-9][0-9]* unchanged; 5000 of 5000 left' "$d/err-3" \
+        || { bad "$name" "warm Writer points: $(cat "$d/err-3")"; return; }
       gi1_change '.collaborators["synthetic-writer"] = "WRITE"' || { bad "$name" "change failed"; return; }
       gi1_pair 4 180 || { bad "$name" "$gi1_why"; return; }
       grep -q '^start #13:' "$d/out-4" && [ "$(gi1_graphql 4)" = 1 ] \

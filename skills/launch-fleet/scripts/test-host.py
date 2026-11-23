@@ -757,9 +757,27 @@ class Roster(unittest.TestCase):
     def shims(self, p):
         folder = p.runs.parent / 'agent-token-bin'
         found = {}
-        for path in sorted(folder.glob('*/*')) if folder.exists() else []:
+        for path in sorted(p for p in folder.rglob('*') if p.is_file()) if folder.exists() else []:
             found[path.relative_to(folder).as_posix()] = re.findall(r'--requester (\S+)', path.read_text())
         return found
+
+    def test_a_reviewers_shims_never_share_a_folder_with_another_repositorys_builder(self):
+        p, repo = self.project('mixed', ('local', 'cloudroom', 'demo-bot'))
+        env = Token().service(p)
+        owner = repo.split('/')[0]
+        self.assertEqual(p.host('start', owner + '/site', 9, 'codex', 'gpt-6.2-sol', 'review-ticket', '--row',
+                                'Reviewer', **env)[0], 0)
+        folder = p.runs.parent / 'agent-token-bin'
+        running = {path: path.read_text() for path in folder.rglob('*') if path.is_file()}
+        self.assertEqual(len(running), 2)
+        self.assertTrue(all('--requester reviewer-9 --repository %s/site ' % owner in text
+                            for text in running.values()))
+        other = dict(env, LAUNCH_FLEET_RUNS=str(p.runs.with_name('runs-other.json')))
+        self.assertEqual(p.host('start', owner + '/site-reviewer', 9, 'claude', 'claude-opus-5-5', '--row',
+                                'Builder', **other)[0], 0)
+        after = {path: path.read_text() for path in folder.rglob('*') if path.is_file()}
+        self.assertEqual({path: after.get(path) for path in running}, running)
+        self.assertEqual(len(after), 4)
 
     def test_a_refused_start_never_changes_a_running_agents_shims_and_each_role_keeps_its_own(self):
         p, repo = self.project('mixed', ('local', 'cloudroom', 'demo-bot'))
@@ -960,6 +978,66 @@ class Effort(unittest.TestCase):
             self.assertEqual(p.host('start', REPO, n, 'claude', 'claude-opus-5-5', FAKE_VERSION=json.dumps(answer))[0],
                              0, answer)
         self.assertEqual([given['effort'] for _, given in start_inputs(p)], ['medium', 'medium'])
+
+
+ROWLESS = 'refused: a Roster start needs --row, naming the Models row its harness and model were picked from'
+
+
+class SelectedRow(unittest.TestCase):
+
+    def project(self):
+        p = Project(self, hosts=())
+        effort_drivers(p, **{'takes-effort': 'takes'})
+        text = (EFFORT / 'cross-family.md').read_text()
+        p.fleet(text)
+        world = p.github()
+        world['fleet_md'] = text
+        p.world.write_text(json.dumps(world))
+        return p
+
+    def picked(self, p, start):
+        r = subprocess.run([sys.executable, '-I', str(HERE / 'ops-starts.py'), 'host', '--repo', REPO, start],
+                           cwd=p.dir / 'repo', env=p.env, capture_output=True, text=True, timeout=60)
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+    def test_each_start_sends_the_effort_of_the_row_its_selector_picked(self):
+        p = self.project()
+        cases = [('fleet_thread', 'launch-fleet', 'claude claude-opus-5-5 Orchestrator', 'high'),
+                 ('builder', 'build-ticket', 'claude claude-opus-5-5 Builder', 'medium'),
+                 ('small_builder', 'build-ticket', 'codex gpt-6.2-sol Small builder', 'low'),
+                 ('review_of_gpt_built', 'review-ticket', 'claude claude-opus-5-5 Builder', 'medium'),
+                 ('review_of_claude_built', 'review-ticket', 'codex gpt-6.2-sol Reviewer', 'medium'),
+                 ('fix_round_for_gpt_builder', 'build-ticket', 'codex gpt-6.2-sol Reviewer', 'medium'),
+                 ('fix_round_for_claude_builder', 'build-ticket', 'claude claude-opus-5-5 Fixer', 'medium')]
+        for n, (start, skill, line, effort) in enumerate(cases, 20):
+            with self.subTest(start):
+                self.assertEqual(self.picked(p, start), (0, line, ''))
+                harness, model, row = line.split(' ', 2)
+                code, out, err = p.host('start', REPO, n, harness, model, skill, '--row', row)
+                self.assertEqual((code, err), (0, ''), out)
+                self.assertTrue(out.endswith(' %s effort' % effort), out)
+                self.assertEqual(start_inputs(p)[-1][1], {'repository': REPO, 'ticket': n, 'skill': skill,
+                                                          'harness': harness, 'model': model, 'effort': effort})
+        self.assertEqual(len(start_inputs(p)), len(cases))
+
+    def test_a_start_not_tied_to_one_row_starts_nothing(self):
+        p = self.project()
+        refusals = {
+            ('claude', 'claude-opus-5-5', 'review-ticket'): ROWLESS,
+            ('codex', 'gpt-6.2-sol', 'build-ticket'): ROWLESS,
+            ('claude', 'claude-opus-5-5', 'launch-fleet'): ROWLESS,
+            ('codex', 'gpt-6.2-sol', 'launch-fleet', '--row', 'Orchestrator'):
+                "refused: the Models table's Orchestrator row does not start codex gpt-6.2-sol",
+            ('claude', 'claude-opus-5-5', 'review-ticket', '--row', 'Orchestrator'):
+                "refused: --row Orchestrator is not one of the reviewer role's Models rows: Builder, Small builder, "
+                "Fixer, Reviewer",
+            ('claude', 'claude-opus-5-5', 'launch-fleet', '--row', 'Builder'):
+                "refused: --row Builder is not one of the orchestrator role's Models rows: Orchestrator",
+        }
+        for n, (args, line) in enumerate(refusals.items(), 30):
+            with self.subTest(args):
+                self.assertEqual(p.host('start', REPO, n, *args), (1, line, ''))
+        self.assertEqual((p.calls(), p.saved()), ([], None))
 
 
 if __name__ == '__main__':

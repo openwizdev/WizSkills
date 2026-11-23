@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -25,6 +26,8 @@ if world.get('swap'):
     root = os.path.join(os.environ['XDG_CACHE_HOME'], 'launch-fleet')
     os.rename(os.path.join(root, 'rest'), os.path.join(root, 'moved'))
     os.symlink(world['swap'], os.path.join(root, 'rest'))
+if world.get('lock'):
+    os.chmod(os.path.join(os.environ['XDG_CACHE_HOME'], 'launch-fleet', 'rest'), 0o500)
 if args[0] != 'api' or '--include' not in args or answer is None:
     print('gh: synthetic failure', file=sys.stderr)
     sys.exit(1)
@@ -334,6 +337,67 @@ class GhCache(unittest.TestCase):
         self.assertNotIn(secret, run.stderr)
         self.assertNotIn('synthetic-user', run.stderr)
         self.assertNotEqual(run.stderr, '')
+
+    def test_a_stale_link_that_cannot_be_removed_is_never_reused(self):
+        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]'}})
+        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}])
+        fresh = {COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]', 'link': '<%s>; rel="next"' % PAGE2},
+                 PAGE2: {'etag': '"p2"', 'body': '[{"id": 3}]'}}
+        self.world(dict(fresh, lock=True))
+        with self.assertRaises(self.ghcache.Error):
+            self.ghcache.pages(COMMENTS)
+        self.rest().chmod(0o700)
+        fresh[COMMENTS]['no_link_on_304'] = True
+        self.world(fresh)
+        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}, {'id': 3}])
+        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}, {'id': 3}])
+
+    def test_a_symlinked_cache_home_in_a_shared_folder_is_refused(self):
+        shared, other = self.tmp / 'shared', self.tmp / 'other'
+        shared.mkdir()
+        shared.chmod(0o1777)
+        other.mkdir(mode=0o700)
+        (shared / 'xdg').symlink_to(other)
+        os.environ['XDG_CACHE_HOME'] = str(shared / 'xdg')
+        with self.assertRaises(self.ghcache.Error):
+            self.ghcache.get(ISSUE)
+        self.assertEqual(list(other.iterdir()), [])
+        self.assertEqual(self.calls(), [])
+        private = self.tmp / 'private'
+        private.mkdir(mode=0o700)
+        (private / 'xdg').symlink_to('../other')
+        os.environ['XDG_CACHE_HOME'] = str(private / 'xdg')
+        self.assertEqual(self.ghcache.get(ISSUE), {'number': 7, 'title': 'first'})
+        self.assertTrue((other / 'launch-fleet' / 'rest').is_dir())
+        os.environ.update(XDG_CACHE_HOME='relative/xdg', HOME=str(self.tmp / 'home'))
+        self.assertEqual(self.ghcache.get(ISSUE), {'number': 7, 'title': 'first'})
+        self.assertTrue((self.tmp / 'home' / '.cache' / 'launch-fleet' / 'rest').is_dir())
+
+    def test_two_pollers_creating_a_fresh_cache_together_both_succeed(self):
+        self.cache.mkdir(mode=0o700)
+        both = threading.Barrier(2, timeout=10)
+        real_mkdir = os.mkdir
+
+        def mkdir(name, *args, **kwargs):
+            if name == 'launch-fleet':
+                both.wait()
+            return real_mkdir(name, *args, **kwargs)
+
+        results = []
+
+        def poll():
+            try:
+                results.append(self.ghcache.get(ISSUE))
+            except Exception as error:
+                results.append(error)
+
+        with mock.patch('os.mkdir', side_effect=mkdir):
+            threads = [threading.Thread(target=poll) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(30)
+        self.assertEqual(results, [{'number': 7, 'title': 'first'}] * 2)
 
 
 if __name__ == '__main__':

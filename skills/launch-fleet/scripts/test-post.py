@@ -405,7 +405,8 @@ class Pacer(unittest.TestCase):
     def test_an_unreadable_state_file_refuses_without_writing(self):
         for text in ('{', '[]', '{"accounts": {}, "inflight": [], "until": "soon"}',
                      '{"accounts": {"a": ["x"]}, "inflight": [], "until": 0}',
-                     '{"accounts": {}, "inflight": [], "until": 0, "extra": 1}'):
+                     '{"accounts": {}, "inflight": [], "until": 0, "extra": 1}',
+                     '{"accounts": {}, "inflight": [], "until": Infinity}'):
             with self.subTest(text=text):
                 w = paced_world(self)
                 path = w.dir / 'state' / STATE
@@ -414,6 +415,7 @@ class Pacer(unittest.TestCase):
                 code, out = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')
                 self.assertEqual(code, 1)
                 self.assertTrue(out.startswith('refused: '), out)
+                self.assertNotIn(str(w.dir), out)
                 self.assertEqual(w.writes(), [])
                 self.assertEqual(path.read_text(), text)
 

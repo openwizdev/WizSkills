@@ -148,7 +148,7 @@ def fixtures(out):
     reached = called.read_text().split() if called.exists() else []
     print('Agent-CLI stubs: %d installed; %d calls reached them%s' % (
         len(AGENT_CLIS), len(reached), ''.join(' (%s x%d)' % (n, reached.count(n)) for n in sorted(set(reached)))))
-    print()
+    print(flush=True)
     report = subprocess.run([sys.executable, '-I', str(METER), 'report', *[str(r[2]) for r in rows if r[2].exists()]])
     broken = [r[0] for r in rows if r[4] != 0 or r[3] == 0]
     if broken or report.returncode:

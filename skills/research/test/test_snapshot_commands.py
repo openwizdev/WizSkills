@@ -10,7 +10,20 @@ SKILL = Path(__file__).resolve().parents[1] / 'SKILL.md'
 
 class SnapshotTest(unittest.TestCase):
     def test_snapshot_path_survives_fresh_shells(self):
+        self.check_snapshot_commands(SKILL.read_text())
+
+    def test_snapshot_commands_reject_broken_dispatch(self):
         skill = SKILL.read_text()
+        cases = [
+            (skill.replace('\nmktemp\n', '\n', 1), 'missing standalone mktemp'),
+            (skill.replace('## Worker:', '```sh\nprintf broken\n\n## Worker:', 1),
+             'unclosed dispatch sh block'),
+        ]
+        for broken_skill, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(AssertionError, message):
+                self.check_snapshot_commands(broken_skill)
+
+    def check_snapshot_commands(self, skill):
         dispatch = skill.split('## 2. Dispatch fresh workers\n', 1)[1].split('## Worker:', 1)[0]
         blocks = re.findall(r'```sh\n(.*?)\n```', dispatch, re.S)
         self.assertTrue(blocks)

@@ -352,6 +352,30 @@ class Size(Case):
         self.assertEqual(code, 0, out + err)
         self.assertIn('changed: 0 lines in 1 files; tests apart: 0 lines in 0 files', out.splitlines())
 
+    def test_size_counts_a_rename_by_both_paths_across_production_and_tests(self):
+        self.set_issue(41, issue(body=SIZED))
+        self.git('checkout', '-q', 'main')
+        self.write('src/export/legacy.py', lines(600))
+        self.write('tests/fixtures/sample.py', lines(300, 'y'))
+        self.commit('main grows')
+        self.git('push', '-q', 'origin', 'main')
+        self.git('fetch', '-q', 'origin')
+        self.git('checkout', '-q', 'work')
+        self.git('merge', '-q', '--ff-only', 'origin/main')
+        self.git('mv', 'src/export/legacy.py', 'tests/fixtures/legacy.py')
+        self.write('tests/fixtures/legacy.py', lines(390))
+        self.commit()
+        self.assertIn('R', self.git('diff', '--name-status', '--find-renames', 'origin/main...HEAD'))
+        code, out, _ = self.run_ticket('size', REPO, '41')
+        self.assertEqual(code, 1, out)
+        self.assertIn('changed: 210 lines in 1 files; tests apart: 0 lines in 1 files', out.splitlines())
+        self.assertEqual(last(out), f'size: over (210 lines, 1 files against {S_PLAN})')
+        self.git('mv', 'tests/fixtures/sample.py', 'src/export/sample.py')
+        self.write('src/export/sample.py', lines(200, 'y') + lines(50, 'z'))
+        self.commit()
+        code, out, _ = self.run_ticket('size', REPO, '41')
+        self.assertIn('changed: 260 lines in 2 files; tests apart: 100 lines in 2 files', out.splitlines())
+
     def test_size_refuses_a_ticket_without_one_s_or_m_size(self):
         for body in (BODY, SIZED.replace('Size: S.', 'Size: L.'), SIZED.replace('Size: S.', 'Size: S. Size: M.')):
             self.set_issue(41, issue(body=body))

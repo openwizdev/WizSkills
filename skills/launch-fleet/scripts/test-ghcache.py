@@ -207,17 +207,34 @@ class GhCache(unittest.TestCase):
                 self.ghcache.get(ISSUE)
         self.assertEqual(self.sent_tags(), [[]])
 
-    def test_a_fresh_link_on_a_304_is_saved_and_reused(self):
-        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]'}})
-        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}])
-        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]', 'link': '<%s>; rel="next"' % PAGE2},
-                    PAGE2: {'etag': '"p2"', 'body': '[{"id": 3}]'}})
-        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}, {'id': 3}])
-        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]', 'link': '<%s>; rel="next"' % PAGE2,
-                               'no_link_on_304': True},
-                    PAGE2: {'etag': '"p2"', 'body': '[{"id": 3}]'}})
-        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}, {'id': 3}])
-        self.assertEqual(self.sent_tags(), [[], ['"p1"'], [], ['"p1"'], ['"p2"']])
+    def test_a_304_trusts_only_a_fresh_link_and_otherwise_reads_until_a_short_page(self):
+        self.world(self.full_first_page(False))
+        self.assertEqual(self.ghcache.pages(FULL), [{'id': 1}, {'id': 2}])
+        world = self.full_first_page(True)
+        world[FULL].pop('no_link_on_304')
+        self.world(world)
+        self.assertEqual(self.ghcache.pages(FULL), [{'id': 1}, {'id': 2}, {'id': 3}])
+        self.world(self.full_first_page(True))
+        self.assertEqual(self.ghcache.pages(FULL), [{'id': 1}, {'id': 2}, {'id': 3}])
+        self.assertEqual(self.ghcache.pages(FULL), [{'id': 1}, {'id': 2}, {'id': 3}])
+        self.assertEqual([c[-1] for c in self.calls()], [FULL, FULL, FULL_NEXT, FULL, FULL2, FULL, FULL2])
+        self.assertEqual(self.sent_tags(), [[], ['"f1"'], [], ['"f1"'], [], ['"f1"'], ['"f2"']])
+        world = self.full_first_page(True)
+        world[FULL]['link'] = '<%s>; rel="prev"' % FULL_NEXT
+        world[FULL].pop('no_link_on_304')
+        self.world(world)
+        self.assertEqual(self.ghcache.pages(FULL), [{'id': 1}, {'id': 2}])
+        odd = 'repos/synthetic-org/project/issues/7/comments?per_page=many'
+        self.world({odd: {'etag': '"o1"', 'body': '[{"id": 1}]', 'link': '<%s>; rel="next"' % FULL_NEXT,
+                          'no_link_on_304': True}, FULL_NEXT: {'etag': '"f2"', 'body': '[{"id": 3}]'}})
+        self.assertEqual(self.ghcache.pages(odd), [{'id': 1}, {'id': 3}])
+        with self.assertRaises(self.ghcache.Error) as raised:
+            self.ghcache.pages(odd)
+        self.assertIn('page size', str(raised.exception))
+        before = sorted((p.name, p.stat().st_mtime_ns) for p in self.entries())
+        self.world(self.full_first_page(True))
+        self.ghcache.pages(FULL)
+        self.assertEqual(sorted((p.name, p.stat().st_mtime_ns) for p in self.entries()), before)
 
     def rest(self):
         return self.cache / 'launch-fleet' / 'rest'
@@ -285,21 +302,6 @@ class GhCache(unittest.TestCase):
         with self.assertRaises(self.ghcache.Error) as raised:
             self.ghcache.get(risky)
         self.assertNotIn(secret, str(raised.exception))
-
-    def test_a_link_that_cannot_be_saved_is_an_error_and_never_a_lost_page(self):
-        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]'}})
-        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}])
-        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]', 'link': '<%s>; rel="next"' % PAGE2},
-                    PAGE2: {'etag': '"p2"', 'body': '[{"id": 3}]'}})
-        with mock.patch('os.replace', side_effect=OSError(28, 'synthetic no space')):
-            with self.assertRaises(self.ghcache.Error) as raised:
-                self.ghcache.pages(COMMENTS)
-        self.assertIn('cache', str(raised.exception))
-        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]', 'link': '<%s>; rel="next"' % PAGE2,
-                               'no_link_on_304': True},
-                    PAGE2: {'etag': '"p2"', 'body': '[{"id": 3}]'}})
-        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}, {'id': 3}])
-        self.assertEqual(self.sent_tags(), [[], ['"p1"'], [], []])
 
     def test_a_replaceable_ancestor_is_refused_before_anything_is_created(self):
         for layout in ('open', 'open/cache'):

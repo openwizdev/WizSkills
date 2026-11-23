@@ -8,7 +8,7 @@ import secrets
 import stat
 import subprocess
 import sys
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 ETAG = re.compile(r'(W/)?"[!#-~]{1,250}"')
 NEXT = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
@@ -132,8 +132,6 @@ def _load(root, name, request, label):
             raw = handle.read()
         except OSError:
             raw = b''
-    if not raw:
-        return None
     try:
         entry = json.loads(raw.decode('utf-8'), object_pairs_hook=_once)
         if (not isinstance(entry, dict) or set(entry) != {'request', 'etag', 'link', 'body', 'sha256'}
@@ -144,30 +142,11 @@ def _load(root, name, request, label):
             raise ValueError
         return entry
     except (ValueError, UnicodeError):
-        _drop(root, name)
+        try:
+            os.unlink(name, dir_fd=root)
+        except OSError:
+            pass
         raise Error('ghcache: damaged cache entry for %s, removed; read again' % label) from None
-
-
-def _drop(root, name):
-    try:
-        os.unlink(name, dir_fd=root)
-        return
-    except FileNotFoundError:
-        return
-    except OSError:
-        pass
-    try:
-        fd = os.open(name, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root)
-    except OSError:
-        return
-    try:
-        info = os.fstat(fd)
-        if stat.S_ISREG(info.st_mode) and _owned(info):
-            os.ftruncate(fd, 0)
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
 
 
 def _save(root, name, entry):
@@ -229,11 +208,7 @@ def _cached(root, endpoint, accept, label, request):
     if status == 304:
         if not entry:
             raise Error('ghcache: 304 for %s with no saved answer' % label)
-        link = headers.get('link', entry['link'])
-        if link != entry['link'] and not _save(root, name, _entry(request, entry['etag'], link, entry['body'])):
-            _drop(root, name)
-            raise Error('ghcache: cannot save the new Link for %s in the cache; read again' % label)
-        return entry['body'], link
+        return entry['body'], headers.get('link')
     if status != 200:
         raise Error('ghcache: HTTP %d for %s' % (status, label))
     if run.returncode != 0:
@@ -259,6 +234,21 @@ def get(endpoint, accept=None):
     return _json(_read(endpoint, accept)[0], endpoint)
 
 
+def _counted(endpoint, count):
+    parts = urlsplit(endpoint)
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    keys = [key for key, _ in query]
+    found = dict(query)
+    size, page = found.get('per_page', '30'), found.get('page', '1')
+    if (keys.count('per_page') > 1 or keys.count('page') > 1 or not size.isdigit() or not page.isdigit()
+            or int(size) < 1 or int(page) < 1):
+        raise Error('ghcache: a 304 without a Link for %s, and its page size is unknown' % _label(endpoint))
+    if count < min(int(size), 100):
+        return None
+    query = [(key, value) for key, value in query if key != 'page'] + [('page', str(int(page) + 1))]
+    return urlunsplit(parts._replace(query=urlencode(query, safe='/:,')))
+
+
 def pages(endpoint):
     items, seen = [], set()
     while endpoint:
@@ -270,6 +260,9 @@ def pages(endpoint):
         if not isinstance(page, list):
             raise Error('ghcache: a page of %s that is not a list' % _label(endpoint))
         items += page
+        if link is None:
+            endpoint = _counted(endpoint, len(page))
+            continue
         found = NEXT.search(link)
         endpoint = found.group(1) if found else None
     return items

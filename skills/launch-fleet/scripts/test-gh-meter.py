@@ -205,6 +205,34 @@ class Meter(unittest.TestCase):
         got = [(c['method'], c['endpoint'], c['kind']) for c in self.lines()]
         self.assertEqual(got, [tuple(c[1:]) for c in cases])
 
+    def test_a_slug_that_matches_a_known_word_is_placed_by_route_position(self):
+        cases = [
+            (['api', 'orgs/synthetic-org/teams/deployments/members'], 'orgs/:owner/teams/:team/members'),
+            (['api', 'orgs/synthetic-org/teams/deployments/repos'], 'orgs/:owner/teams/:team/repos'),
+            (['api', 'repos/o/r/actions/runs/merge'], 'repos/:owner/:repo/actions/runs/:x'),
+            (['api', 'repos/o/r/teams/deployments'], 'repos/:owner/:repo/teams/:x'),
+            (['api', 'teams/pulls/members'], 'teams/:x/:x'),
+            (['api', 'repos/o/r/SYNTH-SEGMENT/issues/1'], 'repos/:owner/:repo/:x/:x/:x'),
+            (['api', 'repos/o/r/releases/tags/latest'], 'repos/:owner/:repo/releases/tags/:tag'),
+            (['api', 'repos/o/r/collaborators/members/permission'],
+             'repos/:owner/:repo/collaborators/:owner/permission'),
+            (['api', 'repos/o/r/branches/protection/protection'], 'repos/:owner/:repo/branches/:branch/protection'),
+            (['api', 'repos/o/r/issues/comments/1'], 'repos/:owner/:repo/issues/comments/:n'),
+        ]
+        for args, _ in cases:
+            self.gh(*args)
+        self.assertEqual([c['endpoint'] for c in self.lines()], [c[1] for c in cases])
+        self.assertNotIn('deployments', self.log.read_text())
+
+    def test_a_page_boundary_needs_a_header_block_then_a_json_body(self):
+        teapot = 'HTTP/1.1 418 I am a teapot\nX-Synthetic: 1\n\n{"synthetic": true}'
+        self.gh('api', '-i', '--paginate', 'repos/o/r/contents/a.txt', FAKE_BODY=teapot)
+        self.gh('api', '-i', 'repos/o/r/contents/a.txt', FAKE_BODY=teapot)
+        self.gh('api', '-i', '--paginate', 'repos/o/r/issues', FAKE_BODY='', FAKE_STATUS='304 Not Modified')
+        self.gh('api', '-i', '--paginate', 'repos/o/r/issues', FAKE_BODY='[]', FAKE_PAGES='2')
+        self.assertEqual([(c['rest_units'], c['uncertain'], c.get('status')) for c in self.lines()],
+                         [(1, True, None), (1, False, 200), (0, False, 304), (2, False, 200)])
+
     def test_report_per_role_per_endpoint_and_top_five(self):
         calls = [('fleet', 'repos/o/r/issues/1/comments', 6), ('fleet', 'repos/o/r/issues/2', 5),
                  ('builder', 'repos/o/r/pulls/3', 4), ('reviewer', 'repos/o/r/commits/%s/status' % SHA, 3),

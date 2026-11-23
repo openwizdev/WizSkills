@@ -51,6 +51,9 @@ sys.exit(0 if status == 200 else 1)
 ISSUE = 'repos/synthetic-org/project/issues/7'
 COMMENTS = 'repos/synthetic-org/project/issues/7/comments?per_page=100'
 PAGE2 = 'https://api.github.com/repositories/1/issues/7/comments?per_page=100&page=2'
+FULL = 'repos/synthetic-org/project/issues/7/comments?per_page=2'
+FULL2 = FULL + '&page=2'
+FULL_NEXT = 'https://api.github.com/repositories/1/issues/7/comments?per_page=2&page=2'
 
 
 class GhCache(unittest.TestCase):
@@ -338,19 +341,55 @@ class GhCache(unittest.TestCase):
         self.assertNotIn('synthetic-user', run.stderr)
         self.assertNotEqual(run.stderr, '')
 
-    def test_a_stale_link_that_cannot_be_removed_is_never_reused(self):
-        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]'}})
-        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}])
-        fresh = {COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]', 'link': '<%s>; rel="next"' % PAGE2},
-                 PAGE2: {'etag': '"p2"', 'body': '[{"id": 3}]'}}
-        self.world(dict(fresh, lock=True))
-        with self.assertRaises(self.ghcache.Error):
-            self.ghcache.pages(COMMENTS)
-        self.rest().chmod(0o700)
-        fresh[COMMENTS]['no_link_on_304'] = True
-        self.world(fresh)
-        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}, {'id': 3}])
-        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}, {'id': 3}])
+    def full_first_page(self, link):
+        first = {'etag': '"f1"', 'body': '[{"id": 1}, {"id": 2}]'}
+        if link:
+            first.update(link='<%s>; rel="next"' % FULL_NEXT, no_link_on_304=True)
+        return {FULL: first, FULL_NEXT: {'etag': '"f2"', 'body': '[{"id": 3}]'},
+                FULL2: {'etag': '"f2"', 'body': '[{"id": 3}]'}}
+
+    def test_no_failed_cache_write_can_hide_a_page(self):
+        self.world(self.full_first_page(False))
+        self.assertEqual(self.ghcache.pages(FULL), [{'id': 1}, {'id': 2}])
+        world = self.full_first_page(True)
+        world[FULL].pop('no_link_on_304')
+        self.world(world)
+        failed = OSError(30, 'synthetic read-only')
+        with mock.patch('os.replace', side_effect=failed), mock.patch('os.unlink', side_effect=failed), \
+                mock.patch('os.ftruncate', side_effect=failed):
+            try:
+                first = self.ghcache.pages(FULL)
+            except self.ghcache.Error:
+                first = None
+        self.assertIn(first, (None, [{'id': 1}, {'id': 2}, {'id': 3}]))
+        self.world(self.full_first_page(True))
+        self.assertEqual(self.ghcache.pages(FULL), [{'id': 1}, {'id': 2}, {'id': 3}])
+        self.assertEqual(self.sent_tags()[-2:], [['"f1"'], []])
+
+    def test_a_hard_linked_snapshot_keeps_its_bytes(self):
+        self.world(self.full_first_page(False))
+        self.ghcache.pages(FULL)
+        entry = self.entries()[0]
+        snapshot = self.tmp / 'snapshot'
+        os.link(entry, snapshot)
+        kept = snapshot.read_bytes()
+        world = self.full_first_page(True)
+        world[FULL].pop('no_link_on_304')
+        self.world(world)
+        failed = OSError(30, 'synthetic read-only')
+        with mock.patch('os.replace', side_effect=failed), mock.patch('os.unlink', side_effect=failed):
+            try:
+                self.ghcache.pages(FULL)
+            except self.ghcache.Error:
+                pass
+        self.assertEqual(snapshot.read_bytes(), kept)
+        entry.write_text('{not json')
+        snapshot.unlink()
+        os.link(entry, snapshot)
+        with mock.patch('os.unlink', side_effect=failed):
+            with self.assertRaises(self.ghcache.Error):
+                self.ghcache.get(FULL)
+        self.assertEqual(snapshot.read_bytes(), b'{not json')
 
     def test_a_symlinked_cache_home_in_a_shared_folder_is_refused(self):
         shared, other = self.tmp / 'shared', self.tmp / 'other'

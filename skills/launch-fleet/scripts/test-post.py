@@ -2,6 +2,7 @@
 import fcntl
 import json
 import os
+import runpy
 from pathlib import Path
 import subprocess
 import sys
@@ -275,6 +276,17 @@ def full(times, account='synthetic-owner', inflight=(), until=0):
 
 
 class Pacer(unittest.TestCase):
+
+    def test_host_projects_keep_writer_state_and_clis_inside_the_project(self):
+        # catches: test-host.py's Project letting post.py write the real ~/.local/state bucket, or reach a real CLI.
+        p = runpy.run_path(str(HERE / 'test-host.py'))['Project'](self, hosts=('local',))
+        self.assertEqual(p.env.get('XDG_STATE_HOME'), str(p.dir / 'state'))
+        for name in ('room-cli', 'claude', 'codex', 'boat'):
+            found = subprocess.run(['sh', '-c', 'command -v "$1"', 'sh', name], env=p.env, capture_output=True,
+                                   text=True).stdout.strip()
+            self.assertEqual(found, str(p.dir / 'bin' / name))
+            run = subprocess.run([found or name, 'start'], env=p.env, capture_output=True, text=True)
+            self.assertEqual((run.returncode, run.stdout), (1, ''))
 
     def test_agent_and_host_clis_resolve_to_stubs_inside_the_world(self):
         # catches: a World whose PATH falls through to a real agent or host CLI (merge.py runs room-cli).

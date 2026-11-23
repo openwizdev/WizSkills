@@ -1281,6 +1281,35 @@ class LocalSession(unittest.TestCase):
         self.assertNotIn('launch', road.saved(), 'the yes is withdrawn: preview again and ask again')
         self.assertEqual(self.installs(road), [])
 
+    def test_a_stop_at_an_approved_pull_request_shows_its_own_merge_lines_and_launch_merges_nothing(self):
+        head = 'a' * 40
+        stop = ['session: stopped at tick 4: needs you: merge #911 for #901 at %s: APPROVE and CI green: merge it '
+                "with launch-fleet's Merging steps, then carry on" % head,
+                'synthetic copyable line: gh pr merge 911 --match-head-commit %s && carry on' % head,
+                'carry on: python3 -I /synthetic/launch-fleet/scripts/session.py run synthetic-owner/synthetic-notes '
+                '--spec 900 --harness claude --model syn-claude-model-01']
+        road = self.road(session=(3, 'session: tick 1: started #901, #902\n' + '\n'.join(stop) + '\n'))
+        preview, yes = self.launched(road)
+        self.assertIn('merges nothing', preview.stdout)
+        self.assertIn('approved, green pull request', preview.stdout)
+        self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
+        lines = yes.stdout.splitlines()
+        teach_line = next(line for line in lines if line.startswith('The plan passed its checks'))
+        self.assertNotIn('nothing for you to do until the first merge', teach_line)
+        said = lines[lines.index("Spec #900's session in this chat stopped: it needs you. What it said, to show the "
+                                 'user as it is:') + 1:]
+        self.assertEqual(said[:3], stop, "the session's own stop lines, every one, verbatim and in order")
+        self.assertIn('launch --spec 900 --heartbeat', yes.stdout)
+        self.assertNotIn('merged', yes.stdout.replace(stop[0], ''))
+        argv = road.dir / 'gh-argv.log'
+        self.assertNotIn('merge', argv.read_text() if argv.exists() else '', 'launch merges nothing itself')
+        watch = road.tool({'tool': ['progress', '--spec', '900'], 'progress': ['building', 'building', 'blocked']})
+        self.assertEqual(watch.returncode, 0, watch.stdout)
+        shown = watch.stdout.splitlines()
+        at = shown.index("Spec #900's session in this chat stopped: it needs you. What it said, to show the user as "
+                         'it is:')
+        self.assertEqual(shown[at + 1:at + 4], stop, 'progress shows the same saved lines')
+
     def test_the_heartbeat_is_installed_only_on_its_own_opt_in_yes(self):
         road = self.road()
         early = road.helper(['launch', '--spec', '900', '--heartbeat'])

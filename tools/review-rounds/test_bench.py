@@ -503,7 +503,7 @@ class LateFindings(unittest.TestCase):
         calls = []
         for args in (['push', 'origin'], ['fetch'], ['-c', 'x=y', 'diff'], ['config', 'x']):
             with self.assertRaises(bench.BenchError, msg=args):
-                bench.local_git(self.clone, args, runner=calls.append)
+                bench.local_git(self.clone, args, runner=lambda argv, **_: calls.append(argv))
         self.assertEqual(calls, [])
 
     def test_source_names_no_contents_trees_or_diff_api(self):

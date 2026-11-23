@@ -33,29 +33,33 @@ SWITCHES = ('--paginate', '--slurp', '-i', '--include', '--silent', '--verbose')
 def operation(args):
     if args[:1] != ['api']:
         return 'gh ' + ' '.join(args[:2])
-    method, endpoint, body, query, rest = None, None, False, None, list(args[1:])
+    method, endpoint, body, opaque, queries, rest = None, None, False, False, [], list(args[1:])
     while rest:
         a = rest.pop(0)
         name, eq, value = a.partition('=') if a.startswith('--') else (a, '', '')
         if a[:2] in ('-X', '-f', '-F') and len(a) > 2:
-            name, eq, value = a[:2], '=', a[2:]
+            name, eq, value = a[:2], '=', a[2:].removeprefix('=')
         if name in VALUED:
             value = value if eq else (rest.pop(0) if rest else '')
             if name in ('-X', '--method'):
                 method = value.upper()
             elif name in BODY:
                 body = True
+                opaque = opaque or name == '--input'
                 if value.startswith('query='):
-                    query = value[len('query='):]
+                    queries.append(value[len('query='):])
         elif a in SWITCHES:
             pass
         elif a.startswith('-') or endpoint is not None:
             return 'unknown'
         else:
             endpoint = a
+    if endpoint is None:
+        return 'unknown'
     if endpoint == 'graphql':
-        if query is None or query.startswith('@'):
+        if opaque or len(queries) != 1 or queries[0].startswith('@'):
             return 'unknown'
+        query = queries[0]
         if re.search(r'\b(mutation|subscription)\b', query):
             return 'mutation'
         return 'query' if re.match(r'\s*(query\b|\{)', query) else 'unknown'
@@ -262,13 +266,20 @@ class Ledger(unittest.TestCase):
                   'a gh command that writes': ['issue', 'comment', '10', '--body', 'x'],
                   'a flag it does not know': ['api', '--synthetic-flag', 'POST', path + '/comments'],
                   'a second endpoint': ['api', f'repos/{REPO}/issues', 'POST', path + '/comments'],
-                  'a query it cannot read': ['api', 'graphql', '-F', 'query=@synthetic.graphql']}
+                  'a query it cannot read': ['api', 'graphql', '-F', 'query=@synthetic.graphql'],
+                  'an inline read beside an opaque --input body': ['api', 'graphql', '--input', '-', '-f',
+                                                                    'query=query { viewer { login } }'],
+                  'no endpoint': ['api', '--method', 'GET'],
+                  'a mutation field then a read field': ['api', 'graphql', '-f', 'query=mutation { a { b } }',
+                                                         '-f', 'query=query { viewer { login } }']}
         reads = {'a GraphQL query sent with an explicit POST': ['api', 'graphql', '--method', 'POST', '-f',
                                                                 'query=query { viewer { login } }'],
                  'a shorthand GraphQL query': ['api', 'graphql', '-f', 'query={ viewer { login } }'],
                  'a REST GET with query fields': ['api', '-X', 'GET', f'repos/{REPO}/issues', '-f', 'state=closed'],
                  'a plain REST read': ['api', f'repos/{REPO}/contents/docs/agents/fleet.md', '-H', 'Accept: x'],
-                 'a paginated REST read': ['api', '--paginate', '--slurp', f'repos/{REPO}/issues']}
+                 'a paginated REST read': ['api', '--paginate', '--slurp', f'repos/{REPO}/issues'],
+                 'a short -X=GET': ['api', '-X=GET', f'repos/{REPO}/issues'],
+                 'a short -f= query': ['api', 'graphql', '-f=query=query { viewer { login } }']}
         for name, args in {**writes, **reads}.items():
             with self.subTest(name):
                 w = World(self, MIXED)

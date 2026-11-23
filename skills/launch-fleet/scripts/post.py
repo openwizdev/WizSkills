@@ -11,6 +11,9 @@ HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location('launch_fleet_grants', HERE / 'grants.py')
 grants = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(grants)
+_spec = importlib.util.spec_from_file_location('launch_fleet_gitread', HERE / 'gitread.py')
+gitread = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(gitread)
 
 REPO = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
 PRIVATE = re.compile(r'\b(?:thr|loop)_[A-Za-z0-9]|\b(?:gh[opsur]_|github_pat_)[A-Za-z0-9_]')
@@ -38,7 +41,10 @@ def read_json(*args):
 
 
 def authors(repo):
-    text = gh('api', f'repos/{repo}/contents/docs/agents/fleet.md', '-H', 'Accept: application/vnd.github.raw+json')
+    try:
+        text = gitread.show(repo, 'docs/agents/fleet.md')
+    except gitread.Error:
+        text = None  # unread is never authors: the refusal below
     try:
         return grants.record_authors(text or '')
     except ValueError:

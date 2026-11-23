@@ -19,16 +19,32 @@ FIX = HERE.parent / 'test/ops-starts'
 PROJECT = FIX / 'project'
 
 
+# Any gh call fails and is logged: fleet.md comes from git (gitread.py), never a `contents` read.
 FAKE_GH = """import os, sys
 with open(os.environ['FAKE_GH_LOG'], 'a') as log:
     log.write(' '.join(sys.argv[1:]) + '\\n')
-path = os.environ.get('FAKE_FLEET', '')
-if sys.argv[1:3] != ['api', 'repos/' + os.environ['FAKE_REPO'] + '/contents/docs/agents/fleet.md'] or not os.path.isfile(path):
-    sys.stderr.write('gh: Not Found (HTTP 404)\\n')
-    sys.exit(1)
-sys.stdout.write(open(path).read())
+sys.stderr.write('gh: refused: this test serves fleet.md only through git\\n')
+sys.exit(1)
 """
 STALE = 'This checkout is stale: never read it.\n'
+
+
+def serve(tmp, env, repo, default_branch):
+    """A synthetic GitHub origin for repo whose default branch holds default_branch as fleet.md (absent on None)."""
+    import shutil
+    import subprocess
+    origins = tmp / 'origins'
+    shutil.rmtree(origins, ignore_errors=True)
+    shutil.rmtree(tmp / 'cache', ignore_errors=True)
+    work = origins / 'work'
+    (work / 'docs/agents').mkdir(parents=True)
+    (work / 'README.md').write_text('synthetic\n')
+    if default_branch is not None:
+        (work / 'docs/agents/fleet.md').write_text(default_branch)
+    for args in (('init', '--quiet', '--initial-branch=main'), ('add', '-A'), ('commit', '--quiet', '-m', 'synthetic'),
+                 ('clone', '--quiet', '--bare', '.', str(origins / f'{repo}.git'))):
+        subprocess.run(['git', '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', *args],
+                       cwd=work, env=env, check=True, capture_output=True, timeout=60)
 
 
 def run_cli(tmp, default_branch, *args, repo='synthetic/ops', checkout=STALE, stdin=None):
@@ -42,14 +58,13 @@ def run_cli(tmp, default_branch, *args, repo='synthetic/ops', checkout=STALE, st
     gh.chmod(0o755)
     (tmp / 'docs/agents').mkdir(parents=True, exist_ok=True)
     (tmp / 'docs/agents/fleet.md').write_text(checkout)
-    served = tmp / 'default-branch-fleet.md'
-    served.unlink(missing_ok=True)
-    if default_branch is not None:
-        served.write_text(default_branch)
     log = tmp / 'gh.log'
     log.unlink(missing_ok=True)
-    env = dict(os.environ, PATH=f'{tmp / "bin"}:{os.environ["PATH"]}', FAKE_FLEET=str(served),
-               FAKE_GH_LOG=str(log), FAKE_REPO=repo)
+    env = dict(os.environ, PATH=f'{tmp / "bin"}:{os.environ["PATH"]}', FAKE_GH_LOG=str(log),
+               XDG_CACHE_HOME=str(tmp / 'cache'), GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=str(tmp / 'gitconfig'),
+               GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0=f'url.file://{tmp / "origins"}/.insteadOf',
+               GIT_CONFIG_VALUE_0='https://github.com/')
+    serve(tmp, env, repo, default_branch)
     run = subprocess.run([sys.executable, '-I', str(HERE / 'ops-starts.py'), *args], cwd=tmp, env=env,
                          capture_output=True, text=True, timeout=60, input=stdin)
     return run, (log.read_text().splitlines() if log.exists() else [])
@@ -680,7 +695,7 @@ class ModelsTable(unittest.TestCase):
                                    '| Reviewer', '`--provider claude-code --model claude-sonnet-5-5 '
                                    '--reasoning-level low` |\n| Reviewer', 1)
         self.assertNotEqual(changed, self.one)
-        read = ['api repos/synthetic/ops/contents/docs/agents/fleet.md -H Accept: application/vnd.github.raw+json']
+        read = []  # no gh call at all: fleet.md comes from git
         with tempfile.TemporaryDirectory() as tmp:
             run, calls = run_cli(tmp, changed, 'flags', '--repo', 'synthetic/ops', 'builder', checkout=self.one)
             self.assertEqual((run.returncode, run.stdout, calls),

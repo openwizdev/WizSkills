@@ -306,7 +306,7 @@ def list_step_outputs(workflow, event, tree):
         return dict(line.split('=', 1) for line in output.read_text().splitlines())
 
 
-def one_skill_pull_request(tmp, change=('skills/where-are-we/SKILL.md',), delete=()):
+def one_skill_pull_request(tmp, change=('skills/where-are-we/SKILL.md',), delete=(), seed=()):
     tree = Path(tmp) / 'tree'
     files = subprocess.run(['git', '-C', str(HERE.parent), 'ls-files', '-z'], capture_output=True,
                            check=True).stdout.decode().split('\0')
@@ -315,6 +315,8 @@ def one_skill_pull_request(tmp, change=('skills/where-are-we/SKILL.md',), delete
         if source.is_file() and not source.is_symlink():
             (tree / rel).parent.mkdir(parents=True, exist_ok=True)
             (tree / rel).write_bytes(source.read_bytes())
+    for rel in seed:
+        (tree / rel).write_text('---\n"where-are-we": patch\n---\n\nA synthetic pending note.\n', encoding='utf-8')
     git = ['git', '-C', str(tree), '-c', 'user.name=synthetic', '-c', 'user.email=synthetic@example.com']
     subprocess.run(['git', 'init', '-q', str(tree)], check=True)
     subprocess.run([*git, 'add', '-A'], check=True)
@@ -365,15 +367,13 @@ class TheWorkflow(unittest.TestCase):
         self.assertEqual((kept, skipped), (listed, []))
 
     def test_only_a_new_changeset_note_keeps_the_pull_request_narrow(self):
-        notes = sorted(p.relative_to(HERE.parent).as_posix() for p in (HERE.parent / '.changeset').glob('*.md')
-                       if p.name.lower() != 'readme.md')
-        self.assertTrue(notes)
         kept, _, _ = self.pull_request(change=('skills/where-are-we/SKILL.md', '.changeset/where-are-we-x.md'))
         self.assertEqual(kept, ['rules', 'standalone', 'where-are-we', 'check'])
-        for case in ({'change': ('skills/where-are-we/SKILL.md', notes[0])},
-                     {'change': ('skills/where-are-we/SKILL.md',), 'delete': (notes[0],)}):
+        note = '.changeset/synthetic-pending-note.md'
+        for case in ({'change': ('skills/where-are-we/SKILL.md', note)},
+                     {'change': ('skills/where-are-we/SKILL.md',), 'delete': (note,)}):
             with self.subTest(case=case):
-                kept, skipped, listed = self.pull_request(**case)
+                kept, skipped, listed = self.pull_request(seed=(note,), **case)
                 self.assertEqual((kept, skipped), (listed, []))
 
 if __name__ == '__main__':

@@ -264,6 +264,12 @@ class Check(unittest.TestCase):
         self.assertIn(
             'fleet.md: Fixer: Claude: malformed `--provider claude-code --model syn-claude-1 --reasoning-level high extra`',
             out)
+        option_value = valid.replace(
+            '| Claude | Claude Code | Syn | High | `--provider claude-code --model syn-claude-1 --reasoning-level high` |',
+            '| Claude | Claude Code | Syn | High | `--provider --missing --model syn-claude-1 --reasoning-level high` |')
+        code, out = self.check(self.project(**{'fleet.md': option_value}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Fixer: Claude: malformed --provider value --missing', out)
 
     def test_a_malformed_flag_is_counted_beside_an_old_note(self):
         # catches: a tab-separated new flag skipped, so an old well-formed flag

@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=945
+CASES=947
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1781,16 +1781,16 @@ expect 'long form: a raised refusal is not raised again' 0 check.json 'say(12; 1
 TOOLS='pull(31; .repo = "synthetic-owner/synthetic-tools")'
 UNRELATED31='.issues += [{number: 31, title: "Synthetic unrelated issue", state: "CLOSED", parent: null, labels: [], blockedBy: [], body: "", comments: [{id: 3199, at: at("11:40"), body: "Synthetic unrelated comment"}]}]'
 expect "cross-repository PR: its comments are its own repository's when this one has no #31 (#2376)" 0 check.json "store31 | $TOOLS" -- check <<EOF
-merge #31 for #12 at $S31: APPROVE and CI green
+merge synthetic-owner/synthetic-tools#31 for #12 at $S31: APPROVE and CI green
 EOF
 expect "cross-repository PR: its comments are its own repository's when this one's #31 is another issue (#2376)" 0 check.json "store31 | $TOOLS | $UNRELATED31" -- check <<EOF
-merge #31 for #12 at $S31: APPROVE and CI green
+merge synthetic-owner/synthetic-tools#31 for #12 at $S31: APPROVE and CI green
 EOF
 expect "cross-repository PR: a second comment page is read from its own repository (#2376)" 0 check.json "store31 | $TOOLS | pull(31; .comments = discussion(119) + .comments)" -- check <<EOF
-merge #31 for #12 at $S31: APPROVE and CI green
+merge synthetic-owner/synthetic-tools#31 for #12 at $S31: APPROVE and CI green
 EOF
 expect "cross-repository PR: more than 20 checks are read page by page from its own repository (#2376)" 0 check.json "$MANY31 | pr_say(31; 3102; \"11:30\"; \"VERDICT: APPROVE at \(sha(31))\") | $TOOLS" -- check <<EOF
-merge #31 for #12 at $S31: APPROVE and CI green
+merge synthetic-owner/synthetic-tools#31 for #12 at $S31: APPROVE and CI green
 EOF
 expect "cross-repository PR: a claim beside one with more than 20 checks succeeds (#2376)" 0 check.json "merge12 | open_pr(31; 14; \"#14: synthetic tools\") | pull(31; .checks = ([range(40) | {name: \"optional-\(.)\", status: \"COMPLETED\", conclusion: \"SUCCESS\"}] + .checks)) | $TOOLS | say(13; 1301; \"11:55\"; \"launch-fleet: starting\")" -- claim 13 1301 <<EOF
 go #13
@@ -1803,10 +1803,17 @@ expect "cross-repository PR: a same-numbered PR in another repository leaves the
 merge #31 for #12 at $S31: APPROVE and CI green
 EOF
 expect "cross-repository PR: a merge in this repository is no clash for it (#2376 R3)" 0 check.json "store31 | $TOOLS | main24(\"11:15\"; [changed(\"src/store/store.rs\"; \"modified\")])" -- check <<EOF
-merge #31 for #12 at $S31: APPROVE and CI green
+merge synthetic-owner/synthetic-tools#31 for #12 at $S31: APPROVE and CI green
 EOF
 expect "cross-repository PR: a merge in its own repository is its clash (#2376 R3)" 0 check.json "store31 | $TOOLS | main24(\"11:15\"; [changed(\"src/store/store.rs\"; \"modified\")]) | pull(24; .repo = \"synthetic-owner/synthetic-tools\")" -- check <<EOF
-re-test #31 for #12 at $S31: main changed src/store/store.rs in #24 after 2026-11-01T10:30:00Z, which its CI may not have tested; run its CI again on the latest main
+re-test synthetic-owner/synthetic-tools#31 for #12 at $S31: main changed src/store/store.rs in #24 after 2026-11-01T10:30:00Z, which its CI may not have tested; run its CI again on the latest main
+EOF
+
+expect "cross-repository PR: its review line names its own repository (#2792)" 0 check.json "pr31 | $TOOLS" -- check <<EOF
+review synthetic-owner/synthetic-tools#31 for #12 at $S31: first review
+EOF
+expect "cross-repository PR: its CI failed line names its own repository (#2792)" 0 check.json "pr31 | pull(31; .rollup = \"FAILURE\" | .checks[1].conclusion = \"FAILURE\") | $TOOLS" -- check <<EOF
+CI failed synthetic-owner/synthetic-tools#31 for #12 at $S31: tell its builder, thread thr_syn12
 EOF
 
 ### #1340: a machine plan approval starts the fleet; the video's comments steer it
@@ -4168,8 +4175,8 @@ gi1_tools_case "cross-repository PR: its new verdict gets a full read (#2376)" '
 gi1_tools_case "cross-repository PR: its new head gets a full read (#2376)" 'pull(35; .head = sha("35f"))'
 gi1_tools_case "cross-repository PR: a same-file merge into its own repository's base gets a full read (#2376 R4)" \
   'main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pull(24; .repo = "synthetic-owner/synthetic-tools")' \
-  "store31 | $TOOLS" "merge #31 for #12 at $S31: APPROVE and CI green" \
-  "re-test #31 for #12 at $S31: main changed src/store/store.rs in #24 after 2026-11-01T10:30:00Z, which its CI may not have tested; run its CI again on the latest main"
+  "store31 | $TOOLS" "merge synthetic-owner/synthetic-tools#31 for #12 at $S31: APPROVE and CI green" \
+  "re-test synthetic-owner/synthetic-tools#31 for #12 at $S31: main changed src/store/store.rs in #24 after 2026-11-01T10:30:00Z, which its CI may not have tested; run its CI again on the latest main"
 if [ -s "$tmp/gi1-points.txt" ]; then cat "$tmp/gi1-points.txt"; fi
 
 ### GI2 (#2544): GitHub's messages wake a spec's fleet thread through its loop

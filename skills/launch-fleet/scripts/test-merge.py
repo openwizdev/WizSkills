@@ -816,6 +816,74 @@ class CrossRepository(unittest.TestCase):
         self.assertEqual(len(w.others[TICKETS].bodies(12)), 1)
 
 
+class PullRequestElsewhere(unittest.TestCase):
+    """#2792: the PR argument `OWNER/NAME#N` names a pull request in another repository than the ticket's."""
+
+    def world(self, closing=((TICKETS, 12),), queue=True, **pr_changes):
+        # The ticket's repository has its own open #7 too: a decoy at another head, queue on.
+        decoy = pr(headRefOid=OTHER, isMergeQueueEnabled=True, closes=closes((TICKETS, 12)))
+        w = World(self, pr=pr(isMergeQueueEnabled=queue, closes=closes(*closing), **pr_changes),
+                  comments={'7': [], '12': []}, others={TICKETS: {'pr': decoy, 'comments': {'7': [], '12': []}}})
+        project(w, PRINTS)
+        return w
+
+    def merge(self, w, ticket='12', *extra):
+        return w.run('merge.py', 'merge', TICKETS, REPO + '#7', HEAD, 'check', 'APPROVE 1 and plan approval 2',
+                     '--ticket', ticket, *extra, cwd=w.dir / 'project')
+
+    def test_the_enqueue_targets_the_pull_requests_own_repository_at_its_head(self):
+        # catches: B#7's merge or enqueue resolved as the ticket repository's #7 (A#7), an open PR at another head.
+        w = self.world()
+        receipt = 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD
+        self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
+        self.assertEqual(w.writes(), [{'enqueue': 'PR_synthetic7', 'head': HEAD}, {'post': 7, 'body': receipt}])
+        self.assertEqual(w.others[TICKETS].writes(), [])
+        self.assertEqual(w.others[TICKETS].load()['pr']['isInMergeQueue'], False)
+
+    def test_a_direct_merge_lands_on_its_own_repository_and_the_cost_on_the_ticket(self):
+        # catches: the direct merge sent to A#7, or the cost posted on B's own #12.
+        w = self.world(queue=False)
+        code, out = self.merge(w, '12', '--base-rule-checked')
+        self.assertEqual((code, out), (0, 'merged %s; cost posted 5001' % ('f' * 40)))
+        self.assertEqual(w.load()['pr']['state'], 'MERGED')
+        self.assertEqual(w.others[TICKETS].load()['pr']['state'], 'OPEN')
+        self.assertEqual(w.bodies(12), [])
+        self.assertEqual(len(w.others[TICKETS].bodies(12)), 1)
+        self.assertEqual(w.others[TICKETS].bodies(7), [])
+
+    def test_a_bare_ticket_means_the_ticket_repositorys_issue(self):
+        # catches: a bare --ticket matched against B's own same-numbered issue the PR closes.
+        w = self.world(closing=((REPO, 12),))
+        self.assertEqual(self.merge(w), (1, 'refused: PR #7 does not close %s#12' % TICKETS))
+        self.assertEqual((w.writes(), w.others[TICKETS].writes()), ([], []))
+
+    def test_read_and_admit_read_its_own_repository(self):
+        # catches: read or admit answering for A#7, whose head is OTHER.
+        w = self.world()
+        self.assertEqual(w.run('merge.py', 'read', TICKETS, REPO + '#7', HEAD),
+                         (0, 'open, the merge queue is on'))
+        self.assertEqual(w.run('merge.py', 'admit', TICKETS, REPO + '#7', HEAD, 'check'),
+                         (0, 'admit: the merge queue re-tests it on the latest main'))
+
+    def test_a_pull_request_read_from_another_repository_writes_nothing(self):
+        # catches: a renamed or redirected repository answering, and the merge acting on what it returned.
+        w = self.world()
+        w.update(repo='synthetic-owner/synthetic-elsewhere')
+        code, out = self.merge(w)
+        self.assertEqual((code, out), (1, 'stop: the pull request read as synthetic-owner/synthetic-elsewhere#7, '
+                                          'not %s#7; nothing was written' % REPO))
+        self.assertEqual((w.writes(), w.others[TICKETS].writes()), ([], []))
+
+    def test_a_malformed_reference_is_a_usage_error_before_any_read(self):
+        # catches: a reference that fails open to a bare number in the ticket's repository.
+        w = self.world()
+        for ref in ('%s#0' % REPO, '%s#' % REPO, 'synthetic-owner#7', 'a/b/c#7', '#7', '%s#7#7' % REPO):
+            with self.subTest(ref=ref):
+                code, _ = w.run('merge.py', 'read', TICKETS, ref, HEAD)
+                self.assertEqual(code, 2)
+        self.assertEqual((w.writes(), w.others[TICKETS].writes()), ([], []))
+
+
 class Enqueue(unittest.TestCase):
     def merge(self, w):
         return Merge.merge(self, w, '--ticket', 12)

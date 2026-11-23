@@ -1,0 +1,27 @@
+Checks at 70684ea (2026-11-23), every suite run as env -u OPENWIZ_GITHUB_APP_KEY:
+
+test-gh-meter.py: Ran 13 tests, OK
+
+check/run.py --shard rules:
+rules: pass
+check: pass
+rc=0
+
+check/run.py --shard standalone:
+standalone: pass
+check: pass
+rc=0
+
+check/run.py --shard check:
+suite check: python3 -I check/test_notice.py: pass in 0.1s
+suite check: python3 -I check/test_versions.py: pass in 0.0s
+suite check: python3 -I check/test_changesets.py: fail (1) in 3.7s
+suite check: python3 -I check/test_suites.py: pass in 227.8s
+suite check: python3 -I check/test_bench.py: pass in 0.5s
+suite check: python3 -I check/test_select.py: pass in 8.6s
+suite check: python3 -I check/test_checklist_rules.py: pass in 2.7s
+rc=1
+
+check/test_changesets.py fails the same 9 release cases on main at 11b021f in this sandbox (environmental).
+check/changesets.py check --base origin/main: changeset check: pass (launch-fleet)
+tools/comment-check/check.py diff --base origin/main: comment-check: ok

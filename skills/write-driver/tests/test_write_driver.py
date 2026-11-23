@@ -876,6 +876,19 @@ class Share(Base):
         self.assertTrue(p.stdout.startswith('Your examplehost driver reached 0 of 5 after'), p.stdout)
         self.wd('share', 'offer', '--state', self.state, check=1)
 
+    def test_a_refused_expired_login_rerun_voids_the_passing_lesson_and_the_pending_share(self):
+        self.offer()
+        driver = self.fixed_driver('no-harness', change=lambda t: t.replace(
+            "    if cmd == 'start':\n", "    if cmd == 'start':\n        refuse('the harness is not signed in', "
+            "'sign in to exampleagent on examplehost yourself, then start again')\n"))
+        p = self.wd('lesson', 'expired-login', '--state', self.state, '--driver', driver, '--harness', 'exampleagent',
+                    check=1)
+        self.assertIn('never ran the stand-in', p.stdout)
+        self.assertNotIn('expired-login', self.saved()['lessons'])
+        self.reply('yes', 'share', 'reply', '--state', self.state, check=1)
+        self.assertFalse([c for c in self.gh_calls() if c['argv'][:2] == ['issue', 'comment']])
+        self.wd('share', 'offer', '--state', self.state, check=1)
+
     def test_no_offer_unless_passing_and_stopped(self):
         # catches: a share offered for a run that did not pass, or that left something running
         self.begin()

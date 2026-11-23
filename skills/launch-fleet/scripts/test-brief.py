@@ -163,17 +163,12 @@ class Repository(unittest.TestCase):
             with self.subTest(args=args):
                 self.assertEqual(brief(*args), (2, ''))
 
-    def test_a_sessions_bare_pull_request_is_named_in_the_sessions_repository(self):
-        there = {'GH_REPO': 'synthetic-owner/synthetic-code'}
-        for extra in ((), ('same-family',)):
-            for env in (there, dict(there, OPENWIZ_TOKEN_SERVICE=SERVICE)):
-                with self.subTest(extra=extra, env=env):
-                    code, text = brief('reviewer', 31, HEAD, *extra, **env)
-                    self.assertEqual((code, text), brief('reviewer', PR, HEAD, *extra, **env))
-                    self.assertEqual(code, 0)
-                    self.assertIn('reviewer for pull request %s at %s.' % (PR, HEAD), text)
-                    self.assertIsNone(re.search(r'(?<![A-Za-z0-9_.-])#[0-9]', text), text)
-                    self.assertIn(PASS_REPO, text)
+    def test_a_bare_reviewer_number_prints_no_brief_even_with_an_inherited_gh_repo(self):
+        for repo in ('synthetic-owner/synthetic-private', 'synthetic-owner/synthetic-code'):
+            for extra in ((), ('same-family',)):
+                for env in ({'GH_REPO': repo}, {'GH_REPO': repo, 'OPENWIZ_TOKEN_SERVICE': SERVICE}):
+                    with self.subTest(env=env, extra=extra):
+                        self.assertEqual(brief('reviewer', 31, HEAD, *extra, **env), (2, ''))
 
     def test_a_bare_number_with_no_usable_repository_prints_no_brief(self):
         for repo in (None, '', 'synthetic-code', 'not a repo', 'synthetic-owner/synthetic-code#31',

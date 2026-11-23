@@ -866,8 +866,8 @@ class StepFourTakesTheReleaseTag(unittest.TestCase):
         step4 = text[text.index('## 4. '):text.index('## 5. ')]
         self.assertIn('git clone --depth 1 --branch v<version of this skill> https://github.com/openwizdev/WizSkills',
                       step4)
-        self.assertIn('`"$build"/runtime/skills/install` when it already reads `version: <version of this skill>`',
-                      step4)
+        self.assertIn('Never downgrade it: when the verified build\'s copy, `"$build"/runtime/skills/install`, reads this '
+                      'skill\'s version or a newer one, the block below takes it and skips the clone.', step4)
         self.assertIn('https://github.com/openwizdev/WizSkills/blob/v<version of this skill>/skills/install/SKILL.md',
                       step4)
         self.assertNotIn('--branch main', text)

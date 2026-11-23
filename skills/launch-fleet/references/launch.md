@@ -112,7 +112,7 @@ Use the same script with `status|pause|resume|remove|run "<owner>/<repo>" "<S>"`
 
 ### Running a local wake
 
-`host.py start OWNER/NAME N HARNESS MODEL [SKILL]` sends the named skill to the selected host driver. Leaving off `SKILL` starts `build-ticket`. The heartbeat uses `host.py start <owner>/<repo> <S> <harness> <model> launch-fleet` so the wake starts on the spec.
+`host.py start OWNER/NAME N HARNESS MODEL [SKILL]` sends the named skill to the selected host driver. Leaving off `SKILL` starts `build-ticket`. The heartbeat uses `host.py start <owner>/<repo> <S> <harness> <model> launch-fleet --row Orchestrator` so the wake starts on the spec, and with a Roster only on the Orchestrator row's model and effort.
 
 A driver-started `launch-fleet` wake on a non-CloudRoom host takes up that spec. Set `LAUNCH_FLEET_RUNS` to the absolute path in `LAUNCH_FLEET_HEARTBEAT_RUNS` before reading or changing project runs. The heartbeat keeps that shared project map separate from the spec's private orchestrator map. Read the project's current settings and recheck the spec with `fleet.sh spec <S>` from the wake's project checkout. Handle the due lines with the skill's claim, verification and merge gates, then record the outcomes on GitHub.
 

@@ -14,38 +14,49 @@ A pull request is the loop's when it closes an approved ticket (its description 
 
 Use the driver for new reviews when `host.py which` reports a chosen host other than CloudRoom. For `host: none` or `host: cloudroom`, use the CloudRoom start above. An unreadable host setting leaves the review pending. A reviewer already running keeps its original route.
 
-After the review claim returns `go`, run the following shell block from the fleet project checkout. Supply the launch-fleet scripts directory, the pull request's repository and number, the full head, the claim comment id, the checked builder's driver harness and model id, and the other family's configured reviewer model id, in that order. For a driver builder, use its checked private run and record-author builder status on the ticket to verify the family and match the recorded model to its configured CLI id. Use `claude` for Claude Code and `codex` for Codex. With both programs on PATH, get the reviewer model from the corresponding `ops-starts.py flags` reviewer row described above and check its provider. An unreadable or conflicting builder assignment or required reviewer row leaves the review pending. With just the builder's harness installed, pass an empty last argument. Use the pull request number for the reviewer run and the issue number for the builder run.
+After the review claim returns `go`, run the following shell block from the fleet project checkout. Supply the launch-fleet scripts directory, the pull request's repository and number, the full head, the claim comment id, the checked builder's driver harness and model id, and the Models row that builder's start was picked from, in that order. For a driver builder, use its checked private run and record-author builder status on the ticket to verify the family and match the recorded model to its configured CLI id. Use `claude` for Claude Code and `codex` for Codex. The builder's row is the one its start passed as `--row` (`Builder`, `Small builder`, `Fixer`, or `Reviewer` for a fixer on that fallback; keep it in private state with the run). With both programs on PATH, the block reads the other-family reviewer from `ops-starts.py host --repo <owner>/<repo> review_of_claude_built` or `review_of_gpt_built`, which prints its harness, model and the Models row the cross-family rule picked (`Reviewer`, or `Builder` when the Reviewer row is the builder's family), and starts it on that row. With just the builder's harness installed, it starts the same-family reviewer on the builder's own model and row. An unreadable or conflicting builder assignment, an unknown builder row or a review that waits leaves the review pending. Use the pull request number for the reviewer run and the issue number for the builder run.
 
 ```sh
 set -eu
-scripts=$1 repo=$2 pr=$3 head=$4 claim=$5 builder=$6 builder_model=$7 reviewer_model=$8
+scripts=$1 repo=$2 pr=$3 head=$4 claim=$5 builder=$6 builder_model=$7 builder_row=$8
 case "$builder" in
-  claude) other=codex ;;
-  codex) other=claude ;;
+  claude) other=codex start=review_of_claude_built ;;
+  codex) other=claude start=review_of_gpt_built ;;
   *) printf '%s\n' 'refused: unknown builder harness'; exit 1 ;;
 esac
 set -- reviewer "$pr" "$head"
 if command -v claude >/dev/null 2>&1 && command -v codex >/dev/null 2>&1; then
-  harness=$other
-  model=$reviewer_model
+  picked=$(python3 -I "$scripts/ops-starts.py" host --repo "$repo" "$start") || {
+    printf '%s\n' 'refused: the review waits for its reviewer row'
+    exit 1
+  }
+  harness=${picked%% *}
+  rest=${picked#* }
+  model=${rest%% *}
+  row=${rest#* }
+  if [ "$harness" != "$other" ]; then
+    printf '%s\n' 'refused: the selected reviewer is not the other family'
+    exit 1
+  fi
   family=other-family
 elif command -v "$builder" >/dev/null 2>&1; then
   harness=$builder
   model=$builder_model
+  row=$builder_row
   family=same-family
   set -- "$@" same-family
 else
   printf '%s\n' 'refused: the builder harness is unavailable'
   exit 1
 fi
-if [ -z "$model" ]; then
-  printf '%s\n' 'refused: the review model is unavailable'
+if [ -z "$model" ] || [ -z "$row" ]; then
+  printf '%s\n' 'refused: the review model or its Models row is unavailable'
   exit 1
 fi
 brief=$(python3 -I "$scripts/brief.py" "$@")
 assignment=$(printf 'launch-fleet: review starting %s\nDriver review: %s\n\n%s' "$head" "$family" "$brief")
 python3 -I "$scripts/post.py" edit "$repo" "$claim" "$assignment"
-python3 -I "$scripts/host.py" start "$repo" "$pr" "$harness" "$model" review-ticket
+python3 -I "$scripts/host.py" start "$repo" "$pr" "$harness" "$model" review-ticket --row "$row"
 ```
 
 The trusted claim supplies the brief to the reviewer. After `started`, save and read back the private run map as in [builders.md](builders.md), then change only the claim's first line to `launch-fleet: review started <commit>`. For a definite refusal, record `review refused` as above. For an unknown start, keep the claim pending and reconcile from the private run map and the reviewer's GitHub status or verdict before retrying. Fresh driver reviews follow the same start steps.
@@ -76,7 +87,7 @@ For an existing reviewer named `run:<P>`, deliver a re-check with `host.py wake 
 
 1. **Once per pull request.** If the oldest fresh record on it is your own `launch-fleet: fresh starting <commit>` for this head, carry on at its first step not yet done. If any other record starts `launch-fleet: fresh starting` or names a `fresh round`, never start another: tell the orchestrator, as for an unknown line. Otherwise comment `launch-fleet: fresh starting <commit>`, then read the pull request's comments again: go on only if your claim is the oldest such record.
 2. **Retire, then archive, the original builder first,** resolved from private state as [builders.md](builders.md) does, so two builders never push one branch and the ticket's title finds only the fresh one. Tell it `room-cli thread tell <its thread> "A fresh builder takes over pull request #<P> for one round. Commit and push nothing more, run room-cli thread update --self --title 'Retired #<N>: <ticket title>', and end your turn."`, and end yours. On a later tick, once `room-cli thread list --include-archived --json` shows its new title, archive it (`room-cli thread archive <its thread>`) and read it back archived; keep its identity in private state. If it is out of reach, isn't retitled 30 minutes after it was told, the archive fails or you can't tell, start nothing: edit the claim to `launch-fleet: findings sent <commit>: fresh round failed: <why>`, and tell the orchestrator.
-3. **Then start the fresh builder** on `ops-starts.py flags --repo <owner>/<repo> fix_round_for_claude_builder` or `fix_round_for_gpt_builder`, for the original builder's family (the models contract's fixer rule), read as for a reviewer (unknown or conflicting family, or exit 1, waits), titled `#<N>: <ticket title>`, with the brief `python3 -I "<this skill's folder>/scripts/brief.py" fresh <N> <P> <branch> <commit>` prints A fleet thread starts it as its own child, as in [builders.md](builders.md).
+3. **Then start the fresh builder** on `ops-starts.py flags --repo <owner>/<repo> fix_round_for_claude_builder` or `fix_round_for_gpt_builder`, for the original builder's family (the models contract's fixer rule), read as for a reviewer (unknown or conflicting family, or exit 1, waits), titled `#<N>: <ticket title>`, with the brief `python3 -I "<this skill's folder>/scripts/brief.py" fresh <N> <P> <branch> <commit>` prints A fleet thread starts it as its own child, as in [builders.md](builders.md); through a driver, start it on the harness, model and row `ops-starts.py host` prints for that same start ("Hosts" there), so a fixer on the Reviewer fallback runs at the Reviewer row's effort.
 4. **Record it:** point the private builder mapping at the fresh builder once its start is confirmed, and check that exactly one thread titled `#<N>: ` on `<branch>` is listed, the fresh one, matching that mapping. Only then edit the claim to `launch-fleet: findings sent <commit>: fresh round started, branch <branch>`; otherwise edit it to `launch-fleet: findings sent <commit>: fresh round failed: <why>`, and tell the orchestrator. Keep both identities in private state; the ticket's `start checked` record keeps its branch, and its family is unchanged. Its green head goes to the same reviewer for the final check, as a re-check does.
 
 **An overturned ruling whose stated cost is high:** read every new report for one, before its `findings` or `merge` line: a `- **Ruling <n>** overturned as R<m>` mark where the description's ruling `<n>` says `Cost if wrong: high`. It goes to Needs you ([user.md](user.md)), once per ruling, recorded as `launch-fleet: ruling sent to Jake <commit>: Ruling <n> as R<m>`. It does not hold the merge: the report's own line still applies.

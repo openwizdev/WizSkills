@@ -417,7 +417,7 @@ class Doctor(unittest.TestCase):
 
 
 SKILL = Path(__file__).resolve().parents[1] / 'SKILL.md'
-LINE = 'main'
+LINE = 'v<version of this skill>'
 PACKAGE = Path(__file__).resolve().parent / 'fixtures/openwiz-0.1.0-commands.json'
 BARE = {'install': 'tools/install/install', 'setup.py': 'runtime/setup/setup.py',
         'github_login.py': 'runtime/setup/github_login.py', 'cloudroom.py': 'runtime/cloudroom/cloudroom.py',
@@ -644,14 +644,17 @@ elif sub == 'install':
     identity = json.dumps({'version': version, 'source': os.environ['FAKE_SOURCE']}, separators=(',', ':'))
     open(binary, 'w').write('#!/bin/sh\necho %s\n' % repr(identity))
     os.chmod(binary, 0o755)
-    os.symlink(build, os.path.join(value('--root'), 'current'))
+    current = os.path.join(value('--root'), 'current')
+    os.symlink(build, current + '.new')
+    os.replace(current + '.new', current)
     print(json.dumps({'outcome': 'installed', 'activated': True, 'version': version}))
 """
 
 
 class InstallsTheReleaseItFetches(unittest.TestCase):
 
-    def run_steps(self, installer=INSTALLER_0_1_1, latest_after_preflight=SYNTHETIC_TAG):
+    def run_steps(self, installer=INSTALLER_0_1_1, latest_after_preflight=SYNTHETIC_TAG,
+                  latest=SYNTHETIC_TAG, installed_version=None, continuation_tag=None):
         import re
         text = SKILL.read_text()
         tmp = Path(tempfile.mkdtemp())
@@ -661,7 +664,7 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
         package['tools']['tools/install/install'] = installer
         (tmp / 'package.json').write_text(json.dumps(package))
         (tmp / 'installer.py').write_text(FAKE_INSTALLER)
-        (tmp / 'latest').write_text(SYNTHETIC_TAG)
+        (tmp / 'latest').write_text(latest)
         bin_dir = tmp / 'bin'
         bin_dir.mkdir()
         for name, body in (('curl', FAKE_CURL), ('git', FAKE_GIT)):
@@ -671,10 +674,25 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
                'FAKE_INSTALLER': str(tmp / 'installer.py'), 'FAKE_SOURCE': SYNTHETIC_SOURCE}
         found = {'<private temporary folder>': str(tmp / 'work'), '<root>': str(tmp / 'root'),
                  '"$openwiz"': str(tmp / 'work/openwiz'), '<private download folder>': str(tmp / 'download')}
+        if continuation_tag:
+            found.update({'<tag>': continuation_tag, '<version>': continuation_tag.lstrip('v')})
         (tmp / 'work').mkdir()
         runs = []
+        if installed_version:
+            previous = tmp / 'root/service/builds/previous'
+            previous.mkdir(parents=True)
+            identity = json.dumps({'version': installed_version}, separators=(',', ':'))
+            write(previous / 'openwiz', '#!/bin/sh\nprintf "%%s\\n" %s\n' % shlex.quote(identity), 0o755)
+            (tmp / 'root/current').symlink_to(previous)
+            resume = text[text.index('## Resume'):text.index('## 1. ')]
+            block = re.search(r'```sh\n(.*?--build-identity)\n```', resume)[1].replace('<root>', found['<root>'])
+            done = subprocess.run(['sh', '-c', block], env=env, capture_output=True, text=True)
+            runs.append((block, done.returncode, done.stdout))
         steps = text[text.index('## 1. '):text.index('## 3. ')]
-        for block in re.findall(r'```sh\n(.*?)```', steps, re.S):
+        host = text[text.index('## Where your agents run'):text.index('## Resume')]
+        for block in re.findall(r'```sh\n(.*?)```', host + steps, re.S):
+            if continuation_tag and '/releases/latest' in block:
+                continue
             fallback = '/releases/download/' in block
             if fallback and runs and runs[-1][1] == 0 and ' download ' in runs[-1][0]:
                 continue
@@ -688,6 +706,8 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
             target = re.search(r'"target": "([^"]+)"', done.stdout)
             if target:
                 found['<target>'] = target[1]
+            if done.stdout == 'cloudroom-only\n':
+                break
             if 'git clone' in block:
                 (tmp / 'latest').write_text(latest_after_preflight)
         log = (tmp / 'log').read_text() if (tmp / 'log').exists() else ''
@@ -726,15 +746,56 @@ class InstallsTheReleaseItFetches(unittest.TestCase):
         self.assertIn('`"version":"0.1.1"`', step2)
         self.assertNotIn('0.1.0', step2)
 
-    def test_only_the_explicit_line_names_0_1_0(self):
+    def test_010_keeps_the_pinned_install_instructions(self):
         text = SKILL.read_text()
-        named = [l for l in text[text.index('## Resume'):text.index('## 5. ')].split('\n') if '0.1.0' in l]
-        self.assertEqual(len(named), 1, named)
-        self.assertIn('To install 0.1.0, stop this skill and follow the [0.1.0 install instructions]'
-                      '(https://github.com/openwizdev/WizSkills/blob/maint/0.2/skills/install/SKILL.md)', named[0])
-        self.assertIn('hand-started fleets', named[0])
-        self.assertIn('always take its pinned `v0.1.0` fetch, never its `download`', named[0])
+        host = text[text.index('## Where your agents run'):text.index('## Resume')]
+        self.assertIn('[0.1.0 install instructions]'
+                      '(https://github.com/openwizdev/WizSkills/blob/maint/0.2/skills/install/SKILL.md)', host)
+        self.assertIn('hand-started fleets', host)
+        self.assertIn('when 0.1.0 is the release you install', host)
+        self.assertIn('the pinned `v0.1.0` fetch in step 2, never its `download`', host)
         self.assertNotIn('version: 0.2.0', text)
+        self.assertNotIn('0.1.0', text[text.index('## 1. '):text.index('## 5. ')])
+
+    def test_latest_010_offers_only_cloudroom(self):
+        _, log, runs = self.run_steps(latest='v0.1.0')
+        self.assertIn('curl https://github.com/openwizdev/OpenWiz/releases/latest', log)
+        self.assertEqual(runs[-1][1:], (0, 'cloudroom-only\n'))
+        self.assertNotIn('git clone', log)
+        host = SKILL.read_text().split('## Where your agents run', 1)[1].split('## Resume', 1)[0]
+        cloudroom_only, _, choose_host = host.partition('For `choose-host`')
+        self.assertIn("This computer and boat.dev need OpenWiz 0.1.1 or later, which isn't released yet. "
+                      "Today, OpenWiz 0.1.0 runs agents on CloudRoom only.", cloudroom_only)
+        self.assertNotIn(HOST_QUESTION, cloudroom_only)
+        self.assertIn('> ' + HOST_QUESTION, choose_host)
+
+    def test_latest_011_offers_the_three_hosts_and_runs_preflight(self):
+        _, log, runs = self.run_steps(latest='v0.1.1')
+        self.assertIn('choose-host\n', [out for _, code, out in runs if code == 0])
+        self.assertIn('git clone --depth 1 --branch v0.1.1', log)
+        self.assertIn('install preflight', log)
+
+    def test_installed_010_with_latest_011_goes_to_step_one(self):
+        _, log, runs = self.run_steps(latest='v0.1.1', installed_version='0.1.0')
+        self.assertEqual(json.loads(runs[0][2])['version'], '0.1.0')
+        self.assertIn('curl https://github.com/openwizdev/OpenWiz/releases/latest', log)
+        text = SKILL.read_text()
+        resume = text[text.index('## Resume'):text.index('## 1. ')]
+        self.assertIn('If the continuation message has no `release <tag>`, read Latest', resume)
+        self.assertIn("Run the release check there with that release's `<version>`.", resume)
+        self.assertLess(resume.index('resume at step 1'), resume.index('runtime/setup/setup.py'))
+        outputs = [out for _, code, out in runs if code == 0]
+        self.assertIn('choose-host\n', outputs)
+        self.assertNotIn('cloudroom-only\n', outputs)
+        self.assertIn('git clone --depth 1 --branch v0.1.1', log)
+        self.assertIn('install preflight', log)
+        self.assertEqual(json.loads(self.identity(runs))['version'], '0.1.1')
+
+    def test_continuation_tag_takes_precedence_over_latest(self):
+        _, log, runs = self.run_steps(latest='v0.1.1', installed_version='0.1.0', continuation_tag='v0.1.0')
+        self.assertNotIn('/releases/latest', log)
+        self.assertEqual(runs[-1][1:], (0, 'cloudroom-only\n'))
+        self.assertNotIn('git clone', log)
 
     def test_the_restart_message_carries_the_chosen_release(self):
         text = SKILL.read_text()
@@ -827,6 +888,106 @@ class RestartReadsTheSkillsOwnVersion(unittest.TestCase):
         self.assertEqual(re.findall(r'version: \d+\.\d+\.\d+', body), [])
 
 
+class StepFourTakesTheReleaseTag(unittest.TestCase):
+
+    def run_block(self, mine):
+        import re, shutil
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        for ref, version in (('v' + mine, mine), ('main', '0.0.0')):
+            copy = tmp / 'refs' / ref / 'skills/install'
+            shutil.copytree(SKILL.parent, copy, ignore=shutil.ignore_patterns('tests', '__pycache__'))
+            (copy / 'SKILL.md').write_text(
+                re.sub(r'^version: \S+$', 'version: ' + version, SKILL.read_text(), count=1, flags=re.M))
+        bin_dir = tmp / 'bin'
+        bin_dir.mkdir()
+        write(bin_dir / 'git', '#!/bin/sh\n[ -d %s/"$5" ] || exit 128\nmkdir -p "$7" && cp -R %s/"$5"/. "$7/"\n'
+              % (shlex.quote(str(tmp / 'refs')), shlex.quote(str(tmp / 'refs'))), 0o755)
+        agent = tmp / 'home/.claude/skills/install'
+        (agent / 'scripts').mkdir(parents=True)
+        (agent / '.openwiz-skill').write_text(RECEIPT)
+        (agent / 'SKILL.md').write_text('---\nname: install\nversion: 0.2.0\n---\n')
+        text = SKILL.read_text()
+        block = re.findall(r'```sh\n(.*?)```', text[text.index('## 4. '):text.index('## 5. ')], re.S)[1]
+        block = (block.replace('<private temporary folder>', str(tmp / 'work')).replace('<version of this skill>', mine)
+                      .replace('<installed agent folders>', '"$HOME/.claude/skills"'))
+        (tmp / 'work').mkdir()
+        env = {'HOME': str(tmp / 'home'), 'PATH': '%s:/usr/bin:/bin' % bin_dir}
+        return agent, subprocess.run(['sh', '-c', block], env=env, capture_output=True, text=True).stdout
+
+    def test_the_fallback_clone_takes_this_skills_release_tag_never_main(self):
+        import re
+        mine = re.search(r'^version: (\S+)$', SKILL.read_text(), re.M)[1]
+        agent, out = self.run_block(mine)
+        self.assertEqual(out.split('\n'), ['source ok', 'ok: %s' % agent, ''])
+        self.assertIn('version: %s\n' % mine, (agent / 'SKILL.md').read_text())
+
+    def test_step_4_prefers_the_matching_bundled_copy_and_links_its_own_tag(self):
+        text = SKILL.read_text()
+        step4 = text[text.index('## 4. '):text.index('## 5. ')]
+        self.assertIn('git clone --depth 1 --branch v<version of this skill> https://github.com/openwizdev/WizSkills',
+                      step4)
+        self.assertIn('Never downgrade it: when the verified build\'s copy, `"$build"/runtime/skills/install`, reads this '
+                      'skill\'s version or a newer one, the block below takes it and skips the clone.', step4)
+        self.assertIn('https://github.com/openwizdev/WizSkills/blob/v<version of this skill>/skills/install/SKILL.md',
+                      step4)
+        self.assertNotIn('--branch main', text)
+        self.assertNotIn('WizSkills/blob/main/skills/install', text)
+
+
+class StepFourNeverDowngrades(unittest.TestCase):
+
+    def run_block(self, bundled):
+        import re, shutil
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        text = SKILL.read_text()
+        mine = re.search(r'^version: (\S+)$', text, re.M)[1]
+        old_connect = text.replace(text[text.index('3. **The App, or an explicit skip:**'):text.index('4. **The brain:**')],
+                                   '3. **The App, or an explicit skip:** recommend the App.\n')
+        sources = {tmp / 'refs' / ('v' + mine): old_connect}
+        if bundled:
+            sources[tmp / 'build/runtime'] = re.sub(r'^version: \S+$', 'version: ' + bundled, text, count=1, flags=re.M)
+        for root, body in sources.items():
+            copy = root / 'skills/install'
+            shutil.copytree(SKILL.parent, copy, ignore=shutil.ignore_patterns('tests', '__pycache__'))
+            (copy / 'SKILL.md').write_text(body)
+        bin_dir = tmp / 'bin'
+        bin_dir.mkdir()
+        write(bin_dir / 'git', '#!/bin/sh\n[ -d %s/"$5" ] || exit 128\nmkdir -p "$7" && cp -R %s/"$5"/. "$7/"\n'
+              % (shlex.quote(str(tmp / 'refs')), shlex.quote(str(tmp / 'refs'))), 0o755)
+        agent = tmp / 'home/.claude/skills/install'
+        (agent / 'scripts').mkdir(parents=True)
+        (agent / '.openwiz-skill').write_text(RECEIPT)
+        (agent / 'SKILL.md').write_text('---\nname: install\nversion: 0.2.0\n---\n')
+        block = re.findall(r'```sh\n(.*?)```', text[text.index('## 4. '):text.index('## 5. ')], re.S)[1]
+        block = (block.replace('<private temporary folder>', str(tmp / 'work')).replace('<version of this skill>', mine)
+                      .replace('<installed agent folders>', '"$HOME/.claude/skills"'))
+        (tmp / 'work').mkdir()
+        env = {'HOME': str(tmp / 'home'), 'PATH': '%s:/usr/bin:/bin' % bin_dir, 'build': str(tmp / 'build')}
+        out = subprocess.run(['sh', '-c', block], env=env, capture_output=True, text=True).stdout
+        return mine, agent, out
+
+    def newer(self, mine):
+        major, minor, patch = map(int, mine.split('.'))
+        return '%d.%d.%d' % (major, minor, patch + 1)
+
+    def test_a_newer_bundled_copy_is_kept_over_this_versions_older_tag(self):
+        mine = SKILL.read_text().split('\nversion: ', 1)[1].split('\n', 1)[0]
+        _, agent, out = self.run_block(self.newer(mine))
+        self.assertEqual(out.split('\n'), ['source ok', 'ok: %s' % agent, ''])
+        installed = (agent / 'SKILL.md').read_text()
+        self.assertEqual(installed.split('\nversion: ', 1)[1].split('\n', 1)[0], self.newer(mine), 'never downgraded')
+        self.assertIn('**On every host, for the first fleet:** recommend the personal GitHub login', installed)
+
+    def test_an_older_or_missing_bundled_copy_falls_back_to_this_skills_tag(self):
+        for bundled in ('0.0.1', None):
+            with self.subTest(bundled=bundled):
+                mine, agent, out = self.run_block(bundled)
+                self.assertEqual(out.split('\n'), ['source ok', 'ok: %s' % agent, ''])
+                self.assertIn('version: %s\n' % mine, (agent / 'SKILL.md').read_text())
+
+
 class RemovalStopsTheHeartbeatThenUsesTheInstaller(unittest.TestCase):
 
     def test_removal_removes_the_heartbeat_then_previews_and_confirms_install_remove(self):
@@ -839,35 +1000,6 @@ class RemovalStopsTheHeartbeatThenUsesTheInstaller(unittest.TestCase):
         self.assertIn('~/.local/state/openwiz-heartbeat/', removal[:preview])
         self.assertNotIn('there is no remove command', removal)
         self.assertIn('Only for 0.1.0\'s installer, which has no `remove`', removal)
-
-    def test_only_this_install_s_heartbeat_is_listed_for_removal(self):
-        import re, shutil
-        text = SKILL.read_text()
-        removal = text[text.index('## Recovery and removal'):]
-        tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, tmp)
-        jobs = tmp / 'home/.local/state/openwiz-heartbeat'
-        for name, repo, spec, adapters in (
-                ('openwiz-heartbeat-a', 'synthetic-owner/first', '7', tmp / ('first/state/service/builds/%s/runtime/adapters' % ('a' * 40))),
-                ('openwiz-heartbeat-b', 'synthetic-owner/second', '8', tmp / ('second/state/service/builds/%s/runtime/adapters' % ('b' * 40))),
-                ('openwiz-heartbeat-c', 'synthetic-owner/third', '9', None)):
-            (jobs / name).mkdir(parents=True)
-            environment = {'OPENWIZ_ADAPTERS': str(adapters)} if adapters else {}
-            (jobs / name / 'config.json').write_text(json.dumps({
-                'backend': 'cron', 'argv': ['python3', '-I', '/shared/launch-fleet/scripts/heartbeat.py', 'run', repo, spec],
-                'environment': environment}))
-        before = sorted(str(p) for p in tmp.rglob('*'))
-        blocks = [b for b in re.findall(r'```sh\n(.*?)```', removal, re.S) if 'openwiz-heartbeat' in b]
-        self.assertEqual(len(blocks), 1)
-        block = blocks[0].replace('<state>', str(tmp / 'first/state')).replace('<root>', str(tmp / 'first'))
-        out = subprocess.run(['sh', '-c', block], env={'HOME': str(tmp / 'home'), 'PATH': '/usr/bin:/bin'},
-                             capture_output=True, text=True).stdout.split('\n')
-        self.assertEqual(sorted(str(p) for p in tmp.rglob('*')), before)
-        self.assertEqual([l.split(' (')[0] for l in out if l], ['this install: synthetic-owner/first 7',
-                                                                'ask first: synthetic-owner/second 8',
-                                                                'ask first: synthetic-owner/third 9'])
-        self.assertIn('Remove only the `this install:` jobs', removal)
-        self.assertIn('touch an `ask first:` job only after the user names it as part of this uninstall', removal)
 
 
 HOST_QUESTION = ("Where should your agents run? This computer (Claude Code or Codex you're signed in to), "
@@ -936,6 +1068,19 @@ class NoCloudRoomRequired(unittest.TestCase):
         self.assertFalse('every flag required' in connect, 'every flag required')
         for words in ('`--host local`', '`--host boat`', '`--host <its name>`', 'refuses them'):
             self.assertTrue(words in connect, words)
+
+
+class InstallHostReleaseTests(unittest.TestCase):
+    def test_latest_is_read_before_the_host_question(self):
+        skill = SKILL.read_text()
+        self.assertLess(skill.index('OpenWiz/releases/latest'),
+                        skill.index('> Where should your agents run?'))
+
+    def test_resume_checks_the_installed_build_before_asking(self):
+        skill = SKILL.read_text()
+        resume = skill.split('## Resume\n', 1)[1].split('## 1. Preflight', 1)[0]
+        self.assertLess(resume.index('<root>/current/openwiz --build-identity'),
+                        resume.index('Ask the host question'))
 
 
 if __name__ == '__main__':

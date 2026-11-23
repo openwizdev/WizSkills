@@ -15,7 +15,6 @@ import json
 import math
 from pathlib import Path
 import re
-import subprocess
 import sys
 
 HERE = Path(__file__).resolve().parent
@@ -31,6 +30,7 @@ def _load(path, name):
 
 effects = _load(HERE / 'effects.py', 'ops_effects')
 records = _load(HERE / 'records.py', 'fleet_records')
+gitread = _load(HERE / 'gitread.py', 'launch_fleet_gitread')
 
 SMALL = {'polish', 'huntr', 'proposal'}
 NOT_READY = {'needs-info', 'needs-triage', 'ready-for-human', 'wontfix', 'held'}
@@ -239,14 +239,9 @@ def read_fleet(repo):
     if type(repo) is not str or not REPO.fullmatch(repo) or repo.split('/')[1] in ('.', '..'):
         raise ValueError(f'not a repository: {repo!r}')
     try:
-        run = subprocess.run(['gh', 'api', f'repos/{repo}/contents/docs/agents/fleet.md', '-H',
-                              'Accept: application/vnd.github.raw+json'], capture_output=True, text=True,
-                             timeout=60, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise ValueError(f'could not read docs/agents/fleet.md from {repo}: {error}')
-    if run.returncode != 0:
-        raise ValueError(f'could not read docs/agents/fleet.md from the default branch of {repo}')
-    return run.stdout
+        return gitread.show(repo, 'docs/agents/fleet.md')
+    except gitread.Error as error:
+        raise ValueError(f'could not read docs/agents/fleet.md from the default branch of {repo}: {error}')
 
 
 def loop_agent(models, listing, loop):

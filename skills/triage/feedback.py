@@ -22,7 +22,7 @@ INSTRUCTION = re.compile(
     re.I | re.M)
 PRIVATE = re.compile(
     r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[abpr]-[\w-]{10,})"
-    r"|(?:^|[\s(\"'])(?:/" r"Users/|/" r"home/|/root/|~/|[A-Za-z]:\\)"
+    r"|(?:^|[\s(\"'])(?:/" r"Users/|/" r"home/|/" r"root/|~/|[A-Za-z]:\\)"
     r"|\bthr_[A-Za-z0-9]+|\b[\w.+-]+@[\w-]+\.[\w.-]+\b|-----BEGIN [A-Z ]*PRIVATE KEY-----",
     re.M)
 

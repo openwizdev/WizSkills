@@ -1887,8 +1887,12 @@ def ticket_lines_now($s): . as $t
                   | (if $block != null and (($block.r | test("^merge blocked \($head): base moved, reopened for fresh CI(?:[.;](?:\\s|$)|$)")) | not) then empty
                      else guard($p; $at; $rs; $head; $c) end)
                 else
-                  (if any($rs[]; (.r | test("^findings sent\\b")) and (.r | names($head))) then empty
-                   else "findings \($at): tell its builder\($t | bthread)" end) end)
+                  ([$p.comments.nodes[] | select([.body | first_line | capture("^\\*\\*Orchestrator decision:\\*\\* (?:fix once more|log and merge): R[0-9]+(?:(?:, R[0-9]+)* and R[0-9]+)? at (?<c>[0-9a-f]{40})\\. ") | .c] == [$head])] | max_by(.databaseId)) as $d
+                  | (if $d != null and $d.databaseId > $v.databaseId and all($rs[]; .id < $d.databaseId)
+                        and ($v.body | test("(^|\n)Next: park [^\n]* as a decision for Jake\\.\\s*$")) then
+                       "decision \($at): Jake'"'"'s answer in comment \($d.databaseId); act on it as references/reviews.md says"
+                     elif any($rs[]; (.r | test("^findings sent\\b")) and (.r | names($head))) then empty
+                     else "findings \($at): tell its builder\($t | bthread)" end) end)
              else
                [$rs[] | select(.r | names($head))] as $here
                | ([$here[] | kind("review started|re-check sent") | select(.closed | not)] | max_by(.id)) as $live

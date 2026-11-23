@@ -556,20 +556,60 @@ def cmd_kit(a):
     stage = Path(a.state) / 'kit'
     shutil.rmtree(stage, ignore_errors=True)
     try:
-        shutil.copytree(os.path.dirname(os.path.abspath(a.driver)), stage, symlinks=True,
-                        ignore=lambda folder, names: [n for n in names if n == '__pycache__' or os.path.realpath(
-                            os.path.join(folder, n)) == os.path.realpath(a.state)])
+        return kit_in_stage(a, stage)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+PROXY = '.write-driver-proxy'
+TEST_ORIGIN = 'OPENWIZ_HOSTKEY_TEST_ORIGIN'
+
+
+def kit_view(folder, view, state):
+    """The kit reads the driver's folder beside its proxy: each entry is linked here to the real file it names, so
+    a relative link resolves as in the folder and nothing is copied. The run's own state stays out of view."""
+    for name in sorted(os.listdir(folder)):
+        source = os.path.realpath(os.path.join(folder, name))
+        if name == '__pycache__' or source == state:
+            continue
+        if state.startswith(source + os.sep) and os.path.isdir(source):
+            os.mkdir(os.path.join(view, name), 0o700)
+            kit_view(source, os.path.join(view, name), state)
+        else:
+            os.symlink(source, os.path.join(view, name))
+
+
+def kit_in_stage(a, stage):
+    checks = forms()['checks']
+    folder = os.path.dirname(os.path.abspath(a.driver))
+    if os.path.lexists(os.path.join(folder, PROXY)):
+        print("the kit could not run: the driver's folder holds %s, the name its proxy takes: rename it" % PROXY)
+        return 2
+    view, synthetic = stage / 'view', stage / 'synthetic'
+    # A start under a test origin the kit sets itself, as its key check's fake host, is recorded only in this
+    # throwaway state: stop-all never replays it on the live route.
+    launch = shlex.quote('x' + os.environ[TEST_ORIGIN]) if TEST_ORIGIN in os.environ else "''"
+    proxy = ('#!/bin/sh\ncase "${%s+x}${%s-}" in %s) state=%s ;; *) state=%s ;; esac\n'
+             'exec %s -I %s proxy --state "$state" --openwiz %s --driver %s "$@"\n' % (
+                 TEST_ORIGIN, TEST_ORIGIN, launch, *(shlex.quote(os.path.abspath(x)) for x in (
+                     a.state, synthetic, sys.executable, __file__, a.openwiz, a.driver))))
+    try:
+        os.mkdir(stage, 0o700)
+        os.mkdir(view, 0o700)
+        with os.fdopen(os.open(view / PROXY, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o700), 'w') as f:
+            f.write(proxy)
+        kit_view(folder, str(view), os.path.realpath(a.state))
+        save(synthetic, load(a.state))
     except OSError as e:
         print("the kit could not run: the driver's folder could not be staged for it (%s)" % type(e).__name__)
         return 2
-    proxy = stage / '.write-driver-proxy'
-    proxy.write_text('#!/bin/sh\nexec %s -I %s proxy --state %s --openwiz %s --driver %s "$@"\n' % tuple(
-        shlex.quote(x) for x in (sys.executable, os.path.abspath(__file__), os.path.abspath(a.state),
-                                 os.path.abspath(a.openwiz), os.path.abspath(a.driver))))
-    proxy.chmod(0o700)
+    for name in ('README.md', os.path.join('fixtures', 'kit-host.json')):
+        if os.path.exists(os.path.join(folder, name)) != os.path.exists(view / name):
+            print("the kit could not run: its view of the driver's folder does not read %s as the folder does" % name)
+            return 2
     argv = [sys.executable, '-I', str(Path(a.openwiz) / 'kernel' / 'driver-kit' / 'kit.py'), '--driver',
-            str(proxy), '--repo', a.repo, '--ticket', str(a.ticket), '--harness', a.harness, '--model', a.model,
-            '--skill', a.skill, '--wait', str(a.wait)]
+            str(view / PROXY), '--repo', a.repo, '--ticket', str(a.ticket), '--harness', a.harness, '--model',
+            a.model, '--skill', a.skill, '--wait', str(a.wait)]
     try:
         p = subprocess.run(argv, capture_output=True, text=True)
     except OSError as e:

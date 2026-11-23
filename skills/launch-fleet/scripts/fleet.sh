@@ -1541,26 +1541,25 @@ def release_due($s): release_candidate($s)
 # nor the line'"'"'s files hold an input the ticket relies on, and the two
 # tickets'"'"' owned paths don'"'"'t clash. Anything else is hard.
 def scope_tickets: [$W.specs[].subIssues.nodes[], $W.singles[], ($W.active // [])[]];
-# Owned paths exactly as to-tickets'"'"' approve.py reads them: the lines under
-# `## Owned paths` to the next `## `, each `- ` bullet'"'"'s backticked paths, in
-# its one `in \`owner/repo\`` repository or this one, shared when the bullet
-# says `(shared`. [] when the ticket has no such section (a legacy ticket
-# claims no path); null when the section can'"'"'t be read as approval reads it.
-def owned_paths: ((.body // "") | split("\n")) as $l
+def owned_read: ((.body // "") | split("\n")) as $l
   | ([range(0; $l | length) | select($l[.] | rtrimstr("\r") | test("^## Owned paths\\s*$"))] | first) as $h
   | if $h == null then [] else
       ([$l[$h + 1:][] | rtrimstr("\r")] | (([to_entries[] | select(.value | startswith("## ")) | .key] | first) // length) as $e | .[:$e]
        | map(select(startswith("- ")) | .[2:])) as $bullets
-      | if ($bullets | length) == 0 then null else
-          [$bullets[] | . as $b | [scan("\\bin `([^`]+)`") | .[0]] as $repos
-           | if ($repos | length) > 1 or any($repos[]; test("^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$") | not) then {bad: true}
-             else ([scan("`([^`]+)`") | .[0] | select(. as $p | any($repos[]; . == $p) | not)]) as $ps
-               | if ($ps | length) == 0 then {bad: true}
+      | if ($bullets | length) == 0 then [{bad: true}] else
+          [$bullets[] | . as $b | [scan("\\bin `([^`]+)`") | .[0]] as $ins
+           | ([$ins[] | select(test("^[A-Za-z0-9-]+/[A-Za-z0-9_-]+$"))] | unique_by(ascii_downcase)) as $named
+           | (if ($ins | length) > 0 and ($ins | last | test("^[A-Za-z0-9-]+/[A-Za-z0-9_-]+$")) then $ins | last
+              elif ($named | length) == 1 then $named[0] else null end) as $repo
+           | if $repo == null and ($named | length) > 1 then {bad: $b}
+             else ([scan("`([^`]+)`") | .[0] | select(. != $repo)]) as $ps
+               | if ($ps | length) == 0 then {bad: $b}
                  else $ps[] | (rtrimstr("/") | split("/")) as $parts
-                   | if startswith("/") or any($parts[]; . == "" or . == "." or . == "..") or contains(" ") then {bad: true}
-                     else {repo: (if ($repos | length) == 1 then $repos[0] | ascii_downcase else $W.repo end),
-                           path: ., shared: ($b | contains("(shared"))} end end end]
-          | if any(.[]; .bad) then null else . end end end;
+                   | if startswith("/") or any($parts[]; . == "" or . == "." or . == "..") or contains(" ") then {bad: $b}
+                     else {repo: (if $repo != null then $repo | ascii_downcase else $W.repo end),
+                           path: ., shared: ($b | contains("(shared"))} end end end] end end;
+def owned_paths: owned_read | if any(.[]; has("bad")) then null else . end;
+def owned_unread: [owned_read[] | .bad // empty] | first;
 # fnmatch.fnmatchcase, as approve.py matches a path segment: * ? [seq] [!seq].
 def glob_re: explode as $c | ($c | length) as $n
   | {i: 0, out: "^"} | until(.i >= $n;
@@ -1888,8 +1887,12 @@ def ticket_lines_now($s): . as $t
                   | (if $block != null and (($block.r | test("^merge blocked \($head): base moved, reopened for fresh CI(?:[.;](?:\\s|$)|$)")) | not) then empty
                      else guard($p; $at; $rs; $head; $c) end)
                 else
-                  (if any($rs[]; (.r | test("^findings sent\\b")) and (.r | names($head))) then empty
-                   else "findings \($at): tell its builder\($t | bthread)" end) end)
+                  ([$p.comments.nodes[] | select([.body | first_line | capture("^\\*\\*Orchestrator decision:\\*\\* (?:fix once more|log and merge): R[0-9]+(?:(?:, R[0-9]+)* and R[0-9]+)? at (?<c>[0-9a-f]{40})\\. ") | .c] == [$head])] | max_by(.databaseId)) as $d
+                  | (if $d != null and $d.databaseId > $v.databaseId and all($rs[]; .id < $d.databaseId)
+                        and ($v.body | test("(^|\n)Next: park [^\n]* as a decision for Jake\\.\\s*$")) then
+                       "decision \($at): Jake'"'"'s answer in comment \($d.databaseId); act on it as references/reviews.md says"
+                     elif any($rs[]; (.r | test("^findings sent\\b")) and (.r | names($head))) then empty
+                     else "findings \($at): tell its builder\($t | bthread)" end) end)
              else
                [$rs[] | select(.r | names($head))] as $here
                | ([$here[] | kind("review started|re-check sent") | select(.closed | not)] | max_by(.id)) as $live
@@ -2127,9 +2130,13 @@ def claim: $W.claim.n as $n | $W.claim.id as $id
               | ([$near[] | select(history_unread) | .number] | unique | first) as $u
               | ([$near[] | select((open_prs | length) > 0 or (start | .state != "queued" and (.state != "claimed" or .rec.id < $id)))
                   | .number] | unique | first) as $m
-              | if $mine == null then "withdraw #\($n): its owned paths can'"'"'t be read as the plan approval reads them"
+              | if $mine == null then (owned_unread as $b | if $b == true then "withdraw #\($n): its Owned paths section has no bullet"
+                  else "withdraw #\($n): its owned-path bullet \"\($b)\" can'"'"'t be read" end)
                 elif $u != null then "withdraw #\($n): its owned paths collide with #\($u), whose start history can'"'"'t be read"
-                elif $m != null then "withdraw #\($n): its owned paths collide with #\($m), which is running or claimed first"
+                elif $m != null then ([$near[] | select(.number == $m) | owned_unread] | first) as $b
+                  | if $b == null then "withdraw #\($n): its owned paths collide with #\($m), which is running or claimed first"
+                    elif $b == true then "withdraw #\($n): #\($m)'"'"'s Owned paths section has no bullet, and #\($m) is running or claimed first"
+                    else "withdraw #\($n): #\($m)'"'"'s owned-path bullet \"\($b)\" can'"'"'t be read, and #\($m) is running or claimed first" end
                 else "go #\($n)" end
             else "withdraw #\($n): it is not on the frontier now" end end
     else

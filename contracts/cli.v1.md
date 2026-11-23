@@ -165,7 +165,7 @@ Accepted/sent never means work completed; created never means started.
 | Attachment add/list/remove, failed `--attach` preparation | `attachment.v1.schema.json#/$defs/add_report`, `list_report`, `remove_report` |
 | `fleets`, `fleet` | `fleet.v1.schema.json#/$defs/envelope` |
 | `fleet.tick.preview` | `fleet-tick.v1.schema.json#/$defs/envelope` |
-| `fleet.due` | Currently human candidate lines only; no shipped JSON flag |
+| `fleet.due` | `cli.v1.schema.json#/$defs/fleet_due` (`--json`) |
 | `loop off/on` | This schema's `loop_switch`: existing unwrapped event, **no schema field** |
 | `loop validate` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/validate_report` |
 | `loop export` | [loop-cli.v1](loop-cli.v1.md): `loop-cli.v1.schema.json#/$defs/export_report` (LC3, #791) |
@@ -178,10 +178,10 @@ read, setup, planning or output failure, and 2 for invalid options, including
 exits 0 for candidate lines or quiet empty output, 1 on a failed global
 read/output, and 2 for invalid options. Neither accepts repeated options,
 `=value`, operands or a `--` delimiter.
-T2's additive JSON form for due uses `openwiz.fleet-due.v1` (`fleet_due` here):
-`candidates` is the same ordered list as the current text, each with positive
-`spec` and positive `ticket` or null for a spec-level candidate. Empty is `[]`;
-it grants no action authority. This schema does not advertise JSON as shipped.
+`fleet due --github-only --json` ships and prints `openwiz.fleet-due.v1`
+(`fleet_due` here): `candidates` is the same ordered list as the text, each
+with positive `spec` and positive `ticket` or null for a spec-level candidate.
+Empty is `[]`; it grants no action authority.
 
 The local switch event has exactly `loop_id`, `definition_revision`,
 `repository`, `project`, `enabled`, `actor`, `at_ms`. IDs, revision, repository,
@@ -260,7 +260,8 @@ openwiz init --help [--json]
   repository identity and visibility, existing companions, links and pull
   requests), `state_read`, `state_write`, and only with `--yes`, the disclosed
   GitHub writes of setup-onboard.v1: create the private companion, link it,
-  open the brain's pull request, create the factory label.
+  open the brain's pull request, create the `openwiz` label and records v1's
+  five workflow labels.
 - **Exits**, with the fixed values above: 0 proposal printed or applied; 1
   read, context or output failure; 2 usage; 5 refused (visibility unknown or
   ambiguous, denied or conflicting companion, unauthorized apply); 6 uncertain,

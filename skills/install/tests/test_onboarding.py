@@ -1114,5 +1114,153 @@ class FirstMerge(unittest.TestCase):
         self.assertTrue(says(result.stdout.splitlines()[-1], 'offer'), result.stdout)
 
 
+def step_block(heading, end, keep, listed=False):
+    text = (SKILL_DIR / 'SKILL.md').read_text()
+    part = text[text.index(heading):text.index(end, text.index(heading))]
+    if listed:
+        part = '\n'.join(l[3:] if l.startswith('   ') else l for l in part.split('\n'))
+    return part, next(b for b in re.findall(r'```sh\n(.*?)```', part, re.S) if keep in b)
+
+
+class StepFourReadsTheInstallerOutput(unittest.TestCase):
+
+    def run_step(self, output, code):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        home = tmp / 'home'
+        rows = json.loads(json.dumps(output).replace('HOME', str(home)))
+        for row in rows['harnesses']:
+            on_disk = row.pop('on_disk', [])
+            for name in on_disk:
+                (Path(row['path']) / name).mkdir(parents=True)
+                source = on_disk[name] if isinstance(on_disk, dict) else rows['source']
+                (Path(row['path']) / name / '.openwiz-skill').write_text('openwiz.skill-copy.v1\n%s\n' % source)
+        fake = tmp / 'openwiz/tools/install/install'
+        fake.parent.mkdir(parents=True)
+        (tmp / 'output.json').write_text(json.dumps(rows))
+        fake.write_text('import sys\nsys.stdout.write(open(%r).read())\nsys.exit(%d)\n' % (str(tmp / 'output.json'), code))
+        step4, block = step_block('## 4. ', '## 5. ', 'install skills')
+        block = (block.replace('"$openwiz"', shlex.quote(str(tmp / 'openwiz'))).replace('<root>', str(tmp / 'root'))
+                 .replace('<private file>', str(tmp / 'skills.json')))
+        out = subprocess.run(['sh', '-c', block], env={'HOME': str(home), 'PATH': os.environ['PATH']},
+                             capture_output=True, text=True)
+        return step4, [l.replace(str(home), '~') for l in out.stdout.split('\n') if l]
+
+    def test_partial_counts_as_done_and_each_skip_and_missing_skill_is_named(self):
+        skip = 'Move or rename your own grill, then run this again.'
+        step4, lines = self.run_step({
+            'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'partial',
+            'canonical': 'HOME/root/skills', 'skills': ['grill', 'install', 'write-driver'],
+            'harnesses': [
+                {'id': 'claude-code', 'path': 'HOME/.claude/skills', 'state': 'partial', 'next': 'see below',
+                 'skipped': [{'skill': 'grill', 'path': 'HOME/.claude/skills/grill', 'next': skip}],
+                 'on_disk': ['grill', 'install', 'write-driver']},
+                {'id': 'codex', 'path': 'HOME/.codex/skills', 'state': 'installed', 'next': 'ok',
+                 'on_disk': ['grill', 'install']},
+                {'id': 'cursor', 'path': 'HOME/.cursor/skills', 'state': 'absent', 'next': 'Install Cursor first.'}]}, 0)
+        self.assertEqual(lines, ['exit: 0',
+                                 'partial: claude-code ~/.claude/skills (next: see below)',
+                                 'skipped: grill in claude-code (next: %s)' % skip,
+                                 'installed: codex ~/.codex/skills',
+                                 'missing: write-driver in codex',
+                                 'absent: cursor ~/.cursor/skills (next: Install Cursor first.)',
+                                 'outcome: partial, 3 skills'])
+        self.assertNotIn('refuses the whole step', step4)
+        self.assertNotRegex(step4 + step_block('## Resume', '## 1. ', '')[0], r'\b1[0-9] skills|ask-wiz')
+        for words in ('`installed` or `partial`', 'each `skipped:` line', 'never delete or overwrite it',
+                      'A `missing:` line'):
+            self.assertIn(words, step4)
+
+    def test_an_older_copy_left_by_a_failed_write_is_not_done(self):
+        failed = ('OpenWiz could not write HOME/.codex/skills (File too large), so Codex got 1 of 2 skills. '
+                  'Make it writable, then run this again.')
+        step4, lines = self.run_step({
+            'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'partial',
+            'canonical': 'HOME/root/skills', 'skills': ['install', 'review-ticket'],
+            'harnesses': [{'id': 'codex', 'path': 'HOME/.codex/skills', 'state': 'partial', 'next': failed,
+                           'on_disk': {'install': 'f' * 40, 'review-ticket': 'e' * 40}}]}, 0)
+        self.assertEqual(lines, ['exit: 0', 'partial: codex ~/.codex/skills (next: %s)' % failed.replace('HOME', '~'),
+                                 "missing: review-ticket in codex (not this release's copy)",
+                                 'outcome: partial, 2 skills'])
+
+    def test_refused_means_nothing_was_installed(self):
+        step4, lines = self.run_step({
+            'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'refused',
+            'canonical': 'HOME/root/skills', 'skills': ['install'],
+            'harnesses': [{'id': 'claude-code', 'path': 'HOME/.claude/skills', 'state': 'absent', 'next': 'No ~/.claude.'},
+                          {'id': 'codex', 'path': 'HOME/.codex/skills', 'state': 'absent', 'next': 'No ~/.codex.'}]}, 5)
+        self.assertEqual(lines, ['exit: 5', 'absent: claude-code ~/.claude/skills (next: No ~/.claude.)',
+                                 'absent: codex ~/.codex/skills (next: No ~/.codex.)', 'outcome: refused, 1 skills'])
+        self.assertIn('`outcome: refused` (exit 5) means nothing was installed', step4)
+
+
+class UninstallListsEveryHeartbeatJob(unittest.TestCase):
+
+    def test_a_nested_second_install_is_listed_like_any_job_and_nothing_is_touched(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        jobs = tmp / 'home/.local/state/openwiz-heartbeat'
+        first = tmp / ('first/state/service/builds/%s/runtime/adapters' % ('a' * 40))
+        nested = tmp / ('first/state/second/state/service/builds/%s/runtime/adapters' % ('b' * 40))
+        for name, repo, spec, adapters in (('openwiz-heartbeat-a', 'synthetic-owner/first', '7', first),
+                                           ('openwiz-heartbeat-b', 'synthetic-owner/second', '8', nested),
+                                           ('openwiz-heartbeat-c', 'synthetic-owner/third', '9', None)):
+            (jobs / name).mkdir(parents=True)
+            (jobs / name / 'config.json').write_text(json.dumps({
+                'backend': 'cron', 'argv': ['python3', '-I', '/shared/heartbeat.py', 'run', repo, spec],
+                'environment': {'OPENWIZ_ADAPTERS': str(adapters)} if adapters else {}}))
+        before = sorted(str(p) for p in tmp.rglob('*'))
+        removal, block = step_block('## Recovery and removal', '\nRemoval revokes', 'openwiz-heartbeat', listed=True)
+        block = block.replace('<state>', str(tmp / 'first/state')).replace('<root>', str(tmp / 'first'))
+        out = subprocess.run(['sh', '-c', block], env={'HOME': str(tmp / 'home'), 'PATH': '/usr/bin:/bin'},
+                             capture_output=True, text=True).stdout.split('\n')
+        self.assertEqual(sorted(str(p) for p in tmp.rglob('*')), before)
+        self.assertEqual([l for l in out if l], ['job: synthetic-owner/first 7 (adapters: %s)' % first,
+                                                 'job: synthetic-owner/second 8 (adapters: %s)' % nested,
+                                                 'job: synthetic-owner/third 9 (adapters: none)'])
+        self.assertNotIn('this install:', removal)
+        self.assertIn('remove only the jobs the user names', removal)
+        self.assertIn('Never decide which jobs are this install\'s', removal)
+
+
+class ExpressFirstFleet(unittest.TestCase):
+
+    def section(self, text, heading):
+        return text.split(heading + '\n', 1)[1].split('\n#', 1)[0]
+
+    def test_the_first_fleet_is_one_grill_round_of_about_three_parallel_tickets_and_no_video(self):
+        skill = (SKILL_DIR / 'SKILL.md').read_text()
+        with self.subTest('6.4 Grill'):
+            grill = self.section(skill, '### 4. Grill')
+            self.assertRegex(grill, r'\bone short round\b')
+            self.assertRegex(grill, r'about three small tickets[^.]*no blockers between them[^.]*no shared owned paths'
+                                    r'[^.]*all three build in parallel')
+            self.assertNotRegex(grill, r'(?i)\btwo rounds\b|\b4 to 7\b')
+            start = teach_lines()['The grill'][0]
+            self.assertRegex(start, r'\bone round\b')
+            self.assertRegex(start, r'\babout three\b')
+        with self.subTest('6.7 Plan'):
+            plan = self.section(skill, '### 7. Plan')
+            self.assertRegex(plan, r"install's first fleet[^.]*straight to the launch with no video")
+            self.assertRegex(plan, r'for this fleet only; a later spec[^.]*gets its video')
+            self.assertRegex(plan, r'reset or change of this spec or plan[^.]*no video')
+            self.assertNotIn('video link', plan)
+        with self.subTest('The spec and its video'):
+            spec = teach_lines()['The spec and its video']
+            self.assertEqual(len(spec), 1)
+            self.assertNotIn('<video link>', spec[0])
+            self.assertRegex(spec[0], r'first fleet has no video')
+            self.assertNotRegex(spec[0], r'(?i)starts as soon as|nothing for you to do')
+            self.assertRegex(spec[0], r'ask for your yes')
+        with self.subTest('to-spec step 4'):
+            step = self.section((SKILL_DIR.parent / 'to-spec' / 'SKILL.md').read_text(),
+                                '## 4. Make the steering video')
+            first = step.strip().split('\n\n', 1)[0].replace('\n', ' ')
+            self.assertRegex(first, r"^Skip this step for the install's first fleet, and only for it:")
+            self.assertRegex(first, r'reset or change of that spec or plan[^.]*new machine approval[^.]*no video'
+                                    r"[^.]*step 5's new video")
+            self.assertRegex(first, r'Every other spec gets its video\.$')
+
+
 if __name__ == '__main__':
     unittest.main()

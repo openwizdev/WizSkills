@@ -488,6 +488,56 @@ class Check(unittest.TestCase):
                 self.assertEqual(code, 5, out)
                 self.assertIn(here + line, out.splitlines())
 
+    def test_an_indented_code_block_is_not_the_approval_rules_table(self):
+        valid = rules(*[(rule, 'syn-owner') for rule in DEFAULT_RULES])
+        table = re.compile(r'^(?=\|)', re.M)
+        for name, indent in (('four spaces', '    '), ('tab', '\t'), ('space and tab', ' \t')):
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': with_rules(table.sub(indent, valid))}))
+                self.assertEqual(code, 5, out)
+                self.assertIn('fleet.md: Approval rules: the table is not | Rule | Approver |', out.splitlines())
+        with self.subTest('indented delimiter row'):
+            code, out = self.check(self.project(**{'fleet.md': with_rules(valid.replace('\n| --- |', '\n    | --- |'))}))
+            self.assertEqual(code, 5, out)
+            self.assertIn('fleet.md: Approval rules: the table is not | Rule | Approver |', out.splitlines())
+        for name, indent in (('one space', ' '), ('three spaces', '   ')):
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': with_rules(table.sub(indent, valid))}))
+                self.assertEqual(code, 0, out)
+
+    def test_only_a_rendered_table_is_the_approval_rules(self):
+        valid = rules(*[(rule, 'syn-owner') for rule in DEFAULT_RULES])
+        here = 'fleet.md: Approval rules: '
+        second = '| %s | syn-owner |' % DEFAULT_RULES[1]
+        refused = {
+            'second delimiter under an indented one': (valid.replace('| --- | --- |\n', '    | --- | --- |\n| --- | --- |\n'),
+                                                       'a row indented as code ends the table: | --- | --- |'),
+            'indented rule row': (valid.replace('\n' + second, '\n    ' + second),
+                                  'a row indented as code ends the table: ' + second),
+            'tab indented rule row': (valid.replace('\n' + second, '\n\t' + second),
+                                      'a row indented as code ends the table: ' + second),
+            'backtick fence': (valid.replace('| Rule |', '```\n| Rule |').replace('\nSource:', '```\nSource:'),
+                               'the table is not | Rule | Approver |'),
+            'tilde fence': (valid.replace('| Rule |', '~~~~ md\n| Rule |').replace('\nSource:', '~~~~\nSource:'),
+                            'the table is not | Rule | Approver |'),
+            'unclosed fence': (valid.replace('| Rule |', '```\n| Rule |'), 'the table is not | Rule | Approver |'),
+        }
+        for name, (text, line) in refused.items():
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': with_rules(text)}))
+                self.assertEqual(code, 5, out)
+                self.assertIn(here + line, out.splitlines())
+        example = '```\n| Rule | Approver |\n| --- | --- |\n| Ask before x | the user |\n```\n\n'
+        passes = {
+            'a fenced example before the table': valid.replace('| Rule |', example + '| Rule |', 1),
+            'a fence closed by a longer one': valid.replace('| Rule |', example.replace('```\n\n', '````\n\n') + '| Rule |', 1),
+            'three spaces on every row': re.sub(r'^(?=\|)', '   ', valid, flags=re.M),
+        }
+        for name, text in passes.items():
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': with_rules(text)}))
+                self.assertEqual(code, 0, out)
+
     def test_the_template_writes_the_six_default_rules_and_a_filled_copy_passes(self):
         template = TEMPLATE.read_text()
         self.assertEqual(template.count('\n## Approval rules\n'), 1)

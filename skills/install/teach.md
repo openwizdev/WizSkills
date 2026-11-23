@@ -30,7 +30,7 @@ When something is missing, such as a GitHub account or a sign-in:
 
 When the grill starts:
 
-> Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app.
+> Now a short grill: one round of a few questions, one at a time, so your first fleet is about three small changes that build side by side, and what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app.
 
 When its summary is ready:
 
@@ -38,7 +38,7 @@ When its summary is ready:
 
 ## The spec and its video
 
-> Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. Watch its short video at `<video link>` or see it at openwiz.dev/app; nothing for you to do while the plan checks itself.
+> Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. See it at `<spec link>` or at openwiz.dev/app; your first fleet has no video, so once the plan checks itself I'll show what starting it does and ask for your yes.
 
 ## The fleet starting
 

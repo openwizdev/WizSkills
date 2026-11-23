@@ -66,8 +66,8 @@ class Rules(unittest.TestCase):
 
     def test_each_rule_refuses_its_planted_break(self):
         for rule, line in (('exact-counts', AT_LEAST),
-                           ('exact-counts', 'assert len(rows) ' + '> 0'),
-                           ('exact-counts', "assert.ok(rows.length " + ">= 1, 'rows')"),
+                           ('exact-counts', 'assert le' + 'n(rows) > 0'),
+                           ('exact-counts', "assert.ok(rows.leng" + "th >= 1, 'rows')"),
                            ('clock', 'self.assertLess(' + CLOCK + ' - began, 2)'),
                            ('clock', 'assert.ok(Date.' + 'now() < deadline)'),
                            ('own-temp', "out = Path('" + TMP + "wizskills-run')"),
@@ -96,7 +96,7 @@ class Rules(unittest.TestCase):
         self.assert_findings({'check/test_x.py': '\n'.join(good) + '\n'}, [])
 
     def test_an_unreadable_diff_never_passes(self):
-        for args in (('diff', '--base', 'no-such-rev'), ('diff',), ('tree',), ()):
+        for args in (('diff', '--base', 'no-such-rev'), ('diff',), ('tree',), ('diff', '--base', 'main', 'x')):
             with self.subTest(args=args):
                 code, out, _ = self.run_case({'README.md': 'x\n'}, {'check/test_x.py': 'x = 1\n'}, *args)
                 self.assertEqual(code, 2, out)

@@ -221,7 +221,13 @@ def fixer(body, problems):
             problems.append('fleet.md: Fixer: row has %d cells, not 5' % (len(parsed or [])))
             continue
         family, _, _, _, flags = parsed
-        if FLAGS_CELL.fullmatch(flags):
+        matched = FLAGS_CELL.fullmatch(flags)
+        if matched:
+            bad = [(flag, value) for flag, value in zip(FLAGS, matched.groups()) if value.startswith('--')]
+            if bad:
+                for flag, value in bad:
+                    problems.append('fleet.md: Fixer: %s: malformed --%s value %s' % (family, flag, value))
+                continue
             continue
         broken = []
         for flag in FLAGS:
@@ -231,7 +237,12 @@ def fixer(body, problems):
             elif len(found) > 1:
                 broken.append('fleet.md: Fixer: %s: --%s appears %d times' % (family, flag, len(found)))
             elif not re.match(r' (?!--)[^\s`|]+(?=[ `|])', row[found[0].end():]):
-                broken.append('fleet.md: Fixer: %s: malformed --%s' % (family, flag))
+                tail = row[found[0].end():].lstrip()
+                value = tail.split(None, 1)[0] if tail else ''
+                if value.startswith('--'):
+                    broken.append('fleet.md: Fixer: %s: malformed --%s value %s' % (family, flag, value))
+                else:
+                    broken.append('fleet.md: Fixer: %s: malformed --%s' % (family, flag))
         if broken:
             problems.extend(broken)
         else:

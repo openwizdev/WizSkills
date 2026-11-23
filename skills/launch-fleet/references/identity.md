@@ -11,9 +11,10 @@ With the App identity on, the agents act on GitHub as the project's OpenWiz App 
   <!-- GI7 identity -->
   ```sh
   app_token=
-  if gh api -H 'Accept: application/vnd.github.raw+json' "repos/<owner>/<repo>/contents/docs/agents/fleet.md" 2> /dev/null \
-    | awk '/^## /{on = ($0 == "## GitHub identity")} on && /^[|] *App identity *[|]/{n++; ok = ($0 ~ /^[|] *App identity *[|] *`?on`? *[|] *$/)}
-      END{exit !(n == 1 && ok)}'; then
+  if fleet_md=$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/<owner>/<repo>/contents/docs/agents/fleet.md" 2> /dev/null) \
+    && printf '%s\n' "$fleet_md" \
+    | awk 'BEGIN{b = "`"; b = b b b} {l = $0; sub(/^ */, "", l); l = substr(l, 1, 3)} l == b || l == "~~~"{fence = !fence; next} fence{next} /^## /{on = ($0 == "## GitHub identity"); next}
+      on && /^[|] *App identity *[|]/{n++; ok = ($0 ~ /^[|] *App identity *[|] *(on|`on`) *[|] *$/)} END{exit !(n == 1 && ok)}'; then
     app_token=$(openwiz github token --repository "<owner>/<repo>" 2> /dev/null) || app_token=
     [ -n "$app_token" ] || echo "GitHub as today's account: no App token" >&2
   else

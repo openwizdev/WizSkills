@@ -129,11 +129,14 @@ identity() { # "token identity" every gh call gets; the stderr line expected, or
   sh "$work/loop.sh" > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; return 1; }
   cmp "$work/want" "$work/out"
   [ -s "$work/gh-token.log" ]
-  first=0
   if [ -n "${OPENWIZ_GITHUB_APP_KEY:-}${OPENWIZ_TOKEN_SERVICE:-}" ]; then
-    [ "$(head -n 1 "$work/gh-token.log")" = 'none account' ]; first=1
+    [ "$(head -n 1 "$work/gh-token.log")" = 'none account' ]
+    sed 1d "$work/gh-token.log" > "$work/gh-token.rest"
+  else
+    cp "$work/gh-token.log" "$work/gh-token.rest"
   fi
-  [ -z "$(sed "1,${first}d" "$work/gh-token.log" | grep -vx "$1")" ]
+  [ -s "$work/gh-token.rest" ]
+  [ -z "$(grep -vx "$1" "$work/gh-token.rest")" ]
   [ "$(grep -c '^fleet.sh: used ' "$work/err")" = 1 ]
   lines=1
   [ -z "$2" ] || { grep -qxF "$2" "$work/err"; lines=2; }

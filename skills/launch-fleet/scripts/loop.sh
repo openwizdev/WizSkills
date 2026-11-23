@@ -67,9 +67,11 @@ inside=
 case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
 unset LAUNCH_FLEET_TOKEN_STEP
 app_identity() {
-  gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GH_REPO/contents/docs/agents/fleet.md" 2> /dev/null < /dev/null \
-    | awk '/^## /{on = ($0 == "## GitHub identity")} on && /^[|] *App identity *[|]/{n++; ok = ($0 ~ /^[|] *App identity *[|] *`?on`? *[|] *$/)}
-      END{exit !(n == 1 && ok)}'
+  settings=$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GH_REPO/contents/docs/agents/fleet.md" 2> /dev/null < /dev/null) \
+    || return 1
+  printf '%s\n' "$settings" \
+    | awk 'BEGIN{b = "`"; b = b b b} {l = $0; sub(/^ */, "", l); l = substr(l, 1, 3)} l == b || l == "~~~"{fence = !fence; next} fence{next} /^## /{on = ($0 == "## GitHub identity"); next}
+      on && /^[|] *App identity *[|]/{n++; ok = ($0 ~ /^[|] *App identity *[|] *(on|`on`) *[|] *$/)} END{exit !(n == 1 && ok)}'
 }
 identity_off=
 if [ -z "$inside" ] && { [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] || [ -n "${OPENWIZ_GITHUB_APP_KEY:-}" ]; } && ! app_identity; then

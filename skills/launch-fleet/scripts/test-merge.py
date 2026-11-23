@@ -1628,6 +1628,14 @@ class Drops(unittest.TestCase):
                 self.assertEqual(self.merge(w), (0, 'pending: the queue facts could not be read; read it again next wake'))
                 self.assertEqual((w.bodies(7), w.writes()), (before, []))
 
+    def test_a_drop_record_that_does_not_land_enqueues_nothing_and_is_tried_next_wake(self):
+        w = self.world(faults={'post': 'fail'})
+        code, out = self.merge(w)
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith('dropped; not recorded (') and out.endswith('; run it again next wake'), out)
+        self.assertEqual((w.bodies(7), self.enqueues(w)), ([self.receipt], []))
+        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5001'))
+
     def test_green_reruns_on_the_head_inside_the_queue_window_never_re_queue_it(self):
         runs = [run_of('CANCELLED', '2026-11-22T09:55:00Z'), run_of('SUCCESS', '2026-11-22T09:56:00Z')]
         w = self.world('failed_checks', checks=runs, recorded=True)

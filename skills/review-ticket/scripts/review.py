@@ -33,7 +33,7 @@ DECISION = re.compile(rf"\*\*Orchestrator decision:\*\* (fix once more|log and m
                       r"(?: Polish issues: (#[1-9][0-9]*(?:, #[1-9][0-9]*)*)\.)? Why: \S.*", re.S)
 ADDITIONAL = re.compile(r"\*\*Additional\b[^*\n]*? check: `([^`]+)`")
 CLOSES = re.compile(r"(?im)^\s*(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+((?:[\w.-]+/[\w.-]+)?#[1-9][0-9]*)\b")
-TICKET = re.compile(r"[\w.-]+/[\w.-]+#[1-9][0-9]*")
+TICKET = re.compile(r"[A-Za-z0-9](?:-?[A-Za-z0-9])*/[A-Za-z0-9._-]+#[1-9][0-9]*")
 LOGIN = r"`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`"
 AUTHORS_CELL = re.compile(rf"\s*{LOGIN}(?:\s*,\s*{LOGIN})*\s*")
 TEST_RULE = re.compile(r"\b(?:catches|no new test): \S")

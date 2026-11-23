@@ -307,13 +307,33 @@ class Review(unittest.TestCase):
                 self.world({}, pr={"body": body})
                 out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#41")
                 self.assertEqual((out.returncode, out.stdout.strip()), (1, stop))
-        for bad in ("#41", "example/product", "example/product#0", "example/product#41 "):
+        for bad in ("#41", "example/product", "example/product#0", "example/product#41 ", "example_org/product#41",
+                    "ex\u00e4mple/product#41", "-example/product#41", "example-/product#41", "exa--mple/product#41",
+                    "example/prod\u00fcct#41"):
             with self.subTest(bad):
-                self.world({}, pr={"body": refs})
-                out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", "--ticket", bad)
+                self.world({}, pr={"body": refs.replace(f"{PRODUCT}#41", bad)})
+                out = self.run_helper("pin", "--repo", SKILLS, "--pr", "7", f"--ticket={bad}")
                 self.assertEqual((out.returncode, out.stdout), (2, ""))
                 self.assertIn("--ticket must be OWNER/NAME#N", out.stderr)
                 self.assertEqual(self.state()["calls"], [])
+
+    def test_check_and_post_take_the_assigned_ticket_from_its_refs_line(self):
+        refs = DESCRIPTION.replace("Closes example/product#41", "Refs example/product#41")
+        self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}, "body": refs})
+        path = self.file("r.md", FULL)
+        for command in ("check", "post"):
+            with self.subTest(command):
+                out = self.run_helper(command, path, "--repo", SKILLS, "--pr", "7")
+                self.assertEqual((out.returncode, out.stdout.strip()), (1, "stop: no Closes line names a ticket"))
+        out = self.run_helper("post", path, "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#42")
+        self.assertEqual((out.returncode, out.stdout.strip()),
+                         (1, f"stop: no Refs {PRODUCT}#42 line names the assigned ticket"))
+        self.assertEqual(self.state()["writes"], 0)
+        out = self.run_helper("check", path, "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#41")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+        out = self.run_helper("post", path, "--repo", SKILLS, "--pr", "7", "--ticket", f"{PRODUCT}#41")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "posted 900"), out.stdout + out.stderr)
+        self.assertEqual(self.state()["writes"], 1)
 
     def test_missing_or_malformed_record_authors_trust_nobody(self):
         for name, row in {"absent": "", "empty": "| Record authors | |\n",

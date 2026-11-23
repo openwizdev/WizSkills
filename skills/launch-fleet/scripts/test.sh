@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=936
+CASES=947
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -4180,6 +4180,20 @@ expect 'FR9: a search that fails is unreadable, never an empty list' 2 check.jso
 the GitHub query Search answered with errors
 EOF
 
+if selected 'FR9: a saved full read never replays a spec done line, so a new follow-up is named' && take heavy; then
+  name='FR9: a saved full read never replays a spec done line, so a new follow-up is named'
+  cases=$((cases + 1))
+  d=$tmp/fr9-replay gi1_why=''
+  if mkdir "$d" && world check.json 'all_closed' "$d" > "$d/world.json" \
+    && gi1_pair 1 0 && gi1_pair 2 60 \
+    && gi1_change 'followup(16; "OPEN"; "Follow-up of #12 (spec #10): a synthetic nit.")' \
+    && gi1_pair 3 120 && gi1_full 3; then
+    if grep -qx 'spec done #10: every planned ticket is done; open polish follow-ups: #16' "$d/out-3"; then
+      echo "ok   $name"
+    else bad "$name" "run 3 printed $(head -c 300 "$d/out-3")"; fi
+  else bad "$name" "${gi1_why:-setup}"; fi
+fi
+
 ### Every case ran, and every call was a read
 
 if [ -n "$WORKER" ]; then
@@ -4202,7 +4216,7 @@ case ${TEST_ONLY:-} in
   'GI2:*') expected=13 ;;
   'CW-G:*') expected=2 ;;
   'cross-repository PR:*') expected=12 ;;
-  'FR9:*') expected=10 ;;
+  'FR9:*') expected=11 ;;
 esac
 [ "$cases" = "$expected" ] || bad 'the selected cases ran' "$cases cases ran, not $expected: is \"$TEST_ONLY\" a case's name?"
 

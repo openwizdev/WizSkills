@@ -505,9 +505,6 @@ http_get() (
   fi
   cp "$work/http" "$destination" || exit 1
   if [ "$ok" != yes ] || [ "$status" != 200 ]; then cat "$work/error" >&2; exit 1; fi
-  # A replay stands only on unchanged answers. The open issues list is the
-  # whole repository's; the replay reads it afresh, as a full read does, and
-  # the spec's own changes show in its own issue's answers.
   changed=no
   [ -z "$REPLAY" ] || [ -f "$destination.304" ] || changed=yes
   tag=$(http_etag "$work/http")

@@ -812,7 +812,6 @@ SIGN_IN_NEXT = "'sign in to %s on %s yourself, then start again' % (req['harness
 
 
 class KeyHostExpiredLogin(Base):
-    """The expired-login lesson's key-host route: the driver's start against the kit's fake host answering 401."""
 
     def key_driver(self, name, probe='pass', next_=SIGN_IN_NEXT, change=None):
         folder = self.tmp / name / 'adapters' / 'examplehost'
@@ -829,14 +828,12 @@ class KeyHostExpiredLogin(Base):
                        'exampleagent', '--key-host', 'examplehost', '--openwiz', openwiz, *extra, check=check)
 
     def test_a_key_host_driver_that_turns_the_fake_hosts_401_into_the_sign_in_next_passes(self):
-        """catches: a key-host driver, which never runs a local harness, never reaching a passing lesson"""
         self.begin()
         p = self.lesson(self.key_driver('fixed'), check=0)
         self.assertIn('expired-login pass', p.stdout)
         self.assertEqual(self.saved()['lessons']['expired-login'], 'pass')
 
     def test_a_key_host_driver_that_answers_a_run_after_the_401_fails_silent_start(self):
-        """catches: a driver that ignores the host's 401 and answers a run passing the lesson"""
         self.begin()
         driver = self.key_driver('silent', change=lambda t: t.replace('== 401', '== 999'))
         p = self.lesson(driver, check=0)
@@ -844,7 +841,6 @@ class KeyHostExpiredLogin(Base):
         self.assertEqual(self.saved()['lessons']['expired-login'], 'fail')
 
     def test_a_key_host_driver_whose_401_error_names_another_next_fails(self):
-        """catches: a 401 turned into a retry, or into a sign-in for another harness, passing the lesson"""
         self.begin()
         for name, next_ in (('retry', "'check the host, then retry'"),
                             ('other-harness', "'sign in to otheragent on examplehost yourself, then start again'")):
@@ -853,7 +849,6 @@ class KeyHostExpiredLogin(Base):
                 self.assertIn('expired-login fail: no-sign-in-next', p.stdout)
 
     def test_a_key_host_driver_that_never_reaches_the_fake_host_proves_nothing(self):
-        """catches: a driver that prints the sign-in step without asking the host being read as passing"""
         self.begin()
         driver = self.key_driver('no-host', probe="refuse('the sign-in has ended', %s)" % SIGN_IN_NEXT)
         p = self.lesson(driver, check=1)
@@ -861,7 +856,6 @@ class KeyHostExpiredLogin(Base):
         self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_the_key_host_probe_reaches_only_the_fake_host_and_never_a_key(self):
-        """catches: the key-host route's socket opening the network, a host socket, the user's files or key"""
         import socket
         self.begin()
         self.env['EXAMPLEHOST_API_KEY'] = SECRET
@@ -907,7 +901,6 @@ class KeyHostExpiredLogin(Base):
             udp.recv(1)
 
     def test_a_key_host_route_it_cannot_check_runs_nothing(self):
-        """catches: an unregistered host, a missing helper or a half-given route running the driver anyway"""
         self.begin()
         marker = self.tmp / 'driver-ran'
         driver = self.key_driver('refused', probe='open(%r, "w").write("x")' % str(marker))
@@ -928,7 +921,6 @@ class KeyHostExpiredLogin(Base):
         self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_without_landlocks_tcp_rules_the_key_host_route_never_runs_the_driver(self):
-        """catches: a kernel whose Landlock can't limit TCP running the key-host driver with sockets open"""
         import contextlib
         import io
         from unittest import mock
@@ -945,7 +937,6 @@ class KeyHostExpiredLogin(Base):
         self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_the_skill_teaches_the_key_host_route_in_place_of_out_of_reach(self):
-        """keeper of KY4's out-of-reach test: the key-host lines now name the working route"""
         text = key_host_lines()
         self.assertNotIn('out of reach', text)
         self.assertIn('`$W lesson expired-login --state <state> --driver <driver> --harness <h> --key-host '
@@ -955,7 +946,6 @@ class KeyHostExpiredLogin(Base):
         self.assertIn('fail `start` with `next` exactly the contract\'s `sign_in_next`', text)
 
     def test_the_contract_names_the_key_host_route(self):
-        """catches: the carried contract copy losing the route the probe runs"""
         text = ' '.join(wd.CONTRACT.read_text().split())
         self.assertIn('**Key-host route.**', text)
         self.assertIn("the kit's fake host answering 401", text)
@@ -963,7 +953,6 @@ class KeyHostExpiredLogin(Base):
     @unittest.skipUnless(os.environ.get('WRITE_DRIVER_OPENWIZ'),
                          'set WRITE_DRIVER_OPENWIZ to an OpenWiz checkout with the key helper to run the real fake host')
     def test_the_key_host_route_runs_against_the_real_kits_fake_host_and_helper(self):
-        """catches: the route working only against write-driver's synthetic fake host and helper"""
         openwiz = Path(os.environ['WRITE_DRIVER_OPENWIZ']).resolve()
         self.begin()
         for name, change, read in (('fixed', None, 'expired-login pass'),

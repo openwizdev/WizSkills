@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""A synthetic stand-in for OpenWiz's kernel/driver-kit/hostkey.py, for write-driver's own tests only.
-
-It reads one request (host, method, path and an optional body) on stdin and works only under the kit's loopback
-override, OPENWIZ_HOSTKEY_TEST_ORIGIN: it asks that fake host for its test key, sends the request there with the
-key in an Authorization: Bearer header, and prints exactly status and body. Without the override it refuses and
-reads no key at all. The real helper is OpenWiz's.
-"""
 import http.client
 import json
 import os

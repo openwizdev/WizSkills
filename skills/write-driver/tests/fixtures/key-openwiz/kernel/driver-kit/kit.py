@@ -1,10 +1,3 @@
-"""A synthetic stand-in for the fake host in OpenWiz's kernel/driver-kit/kit.py, for write-driver's own tests only.
-
-FakeHost takes the real one's arguments that write-driver's expired-login probe passes (status, body, test_key) and
-keeps the same records: requests, each as its request line, its headers and its body, and fetches, one flag per
-test-key request. It gives its test key at /.openwiz/hostkey-test-key and answers everything else with status.
-The real fake host is OpenWiz's; its own tests and write-driver's WRITE_DRIVER_OPENWIZ test run it.
-"""
 import http.server
 import json
 import threading

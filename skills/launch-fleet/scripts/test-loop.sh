@@ -111,9 +111,7 @@ cmp "$work/want" "$work/out"
 [ -z "$(ls -A "$work/runtime")" ]
 echo 'ok   a direct installed loop runs its installed helpers, not the consumer skills/'
 
-# GI7 (#2549): the check reads GitHub as the App when the loop has the key's
-# secret, and as today's account, saying so, when it is missing or the mint
-# fails. No token reaches the output or a process argument.
+off="loop.sh: the App identity is off; GitHub as today's account"
 token=synthetic-app-token-2549
 {
   printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n' "$work/openwiz.log"
@@ -135,17 +133,16 @@ identity() { # "token identity" every gh call gets; the stderr line expected, or
   [ "$(wc -l < "$work/err" | tr -d ' ')" = "$lines" ]
   ! grep -q "$token" "$work/out" "$work/err" "$work/openwiz.log"
 }
-(OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj identity "$token installation" '')
-[ "$(cat "$work/openwiz.log")" = 'github token --repository synthetic-owner/synthetic-repo --read' ]
-echo 'ok   with the key secret the check reads GitHub with a read-only App token and prints none (#2549)'
+(OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj identity 'none account' "$off")
+[ ! -s "$work/openwiz.log" ]
+echo "ok   with the key secret the check never mints and reads GitHub as today's account (#2394)"
 (LAUNCH_FLEET_GITHUB_AUTH=installation identity 'none account' "$fallback")
 [ ! -s "$work/openwiz.log" ]
-(OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj FAKE_OPENWIZ_FAIL=1 identity 'none account' \
-  "loop.sh: the App token mint failed; GitHub as today's account")
+(OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj FAKE_OPENWIZ_FAIL=1 identity 'none account' "$off")
+[ ! -s "$work/openwiz.log" ]
 rm "$work/bin/openwiz"
 # The fake gh stays first; no installed openwiz is in these system folders.
-(PATH="$work/bin:/usr/bin:/bin" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj identity 'none account' \
-  "loop.sh: no openwiz to mint the App token; GitHub as today's account")
+(PATH="$work/bin:/usr/bin:/bin" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj identity 'none account' "$off")
 echo "ok   without the secret, openwiz or a token, the check runs as today's account and says so (#2549)"
 
 ga4=synthetic-ga4-token-0123456789
@@ -157,36 +154,33 @@ service() {
   : > "$work/service.log"
   rm -f "$work/token-private/"*
 }
-(service; : > "$work/gh-key.log"; identity "$ga4 installation" '')
+(service; : > "$work/gh-key.log"; identity 'none account' "$off")
 [ -s "$work/gh-key.log" ] && [ -z "$(grep -vx no-key "$work/gh-key.log")" ]
-[ "$(jq -c .legacy_key "$work/service.log")" = false ]
-[ "$(jq -c .request "$work/service.log")" = '{"schema":"openwiz.token-service.v1","kind":"request","requester":"fleet-check","repositories":["synthetic-owner/synthetic-repo"],"permissions":{"metadata":"read","contents":"read","issues":"read","pull_requests":"read","checks":"read","actions":"read"}}' ]
-[ "$(jq -c .argv "$work/service.log")" = '["mint"]' ]
+[ ! -s "$work/service.log" ]
 ! grep -q "$ga4" "$work/out" "$work/err" "$work/gh.log"
-echo 'ok   with a token service the wake reads GitHub with the helper'"'"'s read-only token and prints none (#1846)'
+echo "ok   with a token service the wake never runs the helper and reads GitHub as today's account (#2394)"
 mkdir "$work/probe"
 for tool in mktemp mkdir cat; do
   printf '#!/bin/sh\n[ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && echo key >> "%s" || echo no-key >> "%s"\nexec %s "$@"\n' \
     "$work/probe.log" "$work/probe.log" "$(command -v "$tool")" > "$work/probe/$tool"
   chmod +x "$work/probe/$tool"
 done
-(service; export PATH="$work/probe:$PATH"; : > "$work/probe.log"; identity "$ga4 installation" '')
+(service; export PATH="$work/probe:$PATH"; : > "$work/probe.log"; identity 'none account' "$off")
 [ -s "$work/probe.log" ] && [ -z "$(grep -vx no-key "$work/probe.log")" ]
 echo 'ok   with a token service no bundled bootstrap command gets the legacy key (#1846)'
-(service; export LAUNCH_FLEET_TOKEN_STEP=1; identity "$ga4 installation" '')
-[ "$(wc -l < "$work/service.log" | tr -d ' ')" = 1 ]
-echo 'ok   an inherited step marker never skips the helper (#1846)'
-(service; : > "$work/gh-key.log"; export FAKE_SERVICE_REFUSE=1; identity 'none account' \
-  "openwiz: no openwiz[bot] token (unavailable); using the owner's GitHub account")
+(service; export LAUNCH_FLEET_TOKEN_STEP=1; identity 'none account' "$off")
+[ ! -s "$work/service.log" ]
+echo 'ok   an inherited step marker never turns the App identity on (#1846, #2394)'
+(service; : > "$work/gh-key.log"; export FAKE_SERVICE_REFUSE=1; identity 'none account' "$off")
 [ -s "$work/gh-key.log" ] && [ -z "$(grep -vx no-key "$work/gh-key.log")" ]
-[ "$(wc -l < "$work/service.log" | tr -d ' ')" = 1 ]
+[ ! -s "$work/service.log" ]
 [ -z "$(ls -A "$work/token-private")" ]
-echo "ok   a refused mint runs the wake as today's account with the contract's one note (#1846)"
+echo "ok   a service that would refuse is never asked (#1846, #2394)"
 (service; export OPENWIZ_TOKEN_SERVICE= PATH="$work/probe:$work/bin:/usr/bin:/bin"; : > "$work/probe.log"
-  identity 'none account' "loop.sh: no openwiz to mint the App token; GitHub as today's account")
+  identity 'none account' "$off")
 [ ! -s "$work/service.log" ]
 [ -s "$work/probe.log" ] && [ -z "$(grep -vx key "$work/probe.log")" ]
-echo 'ok   with no service configured the wake is exactly as today (#1846)'
+echo 'ok   with no service configured the wake keeps the key and still never mints (#1846, #2394)'
 
 # Failed refreshes and first clones must not emit work or leave runtime files.
 mv "$work/remote" "$work/offline"

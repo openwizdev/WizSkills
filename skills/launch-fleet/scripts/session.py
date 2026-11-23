@@ -40,6 +40,10 @@ FLAGS = re.compile(r'--provider (\S+) --model (\S+) --reasoning-level \S+')
 PR = re.compile(r'https://github\.com/[^/]+/[^/]+/pull/([1-9][0-9]*)')
 STATE = Path.home() / '.local/state/openwiz-heartbeat'
 TIMEOUT = 1000
+VERDICT = re.compile(r'VERDICT: (APPROVE|CHANGES) at ([0-9a-f]{40})')
+FAMILY = re.compile(r'Driver review: (other-family|same-family)')
+GREEN = ('SUCCESS', 'NEUTRAL', 'SKIPPED')
+RUNS = ('queued', 'in_progress', 'waiting', 'pending', 'requested')
 
 
 def sibling(name):
@@ -147,7 +151,13 @@ class Session:
         self.pending = []
         self.tick_no = 0
         self.authors = None
-
+        self.queued = {}
+        self.landed = []
+        self.held = set()
+        self.again = False
+        self.ci = None
+        self.shut = set()
+        self.next_ci = 0
 
     def thread(self, number):
         if self.authors is None:
@@ -410,6 +420,14 @@ class Session:
     def tick(self):
         self.tick_no += 1
         did = []
+        try:
+            return self.steps(did)
+        finally:
+            if did:
+                print('session: tick %d: %s' % (self.tick_no, '; '.join(did)), flush=True)
+
+    def steps(self, did):
+        self.landings(did)
         lines = self.due()
         if lines and lines[0].startswith('fleet done #%s:' % self.spec):
             if self.closed():
@@ -450,22 +468,237 @@ class Session:
                 self.acted.add(line)
                 did.append('review of #%s started' % review[1])
                 acted = True
-        if did:
-            print('session: tick %d: %s' % (self.tick_no, '; '.join(did)), flush=True)
-        merges = [line for line in todo if MERGE.fullmatch(line)]
-        if merges:
-            raise NeedsYou("%s: merge it with launch-fleet's Merging steps, then carry on" % merges[0])
-        return acted
+        merges = [MERGE.fullmatch(line) for line in todo if MERGE.fullmatch(line)]
+        return self.merge(merges, did) or acted
+
+    def checks(self):
+        text = self.fleet()
+        found, on = [], False
+        for row in text.splitlines():
+            if row.startswith('## '):
+                on = row == '## CI checks'
+            elif on:
+                cell = re.match(r'\| *`([^`]+)` *\|', row)
+                if cell:
+                    found.append(cell[1])
+        if not found:
+            raise NeedsYou('docs/agents/fleet.md lists no CI checks, so nothing is merged')
+        return found
+
+    def green(self, p, checks):
+        if self.state(p) != 'OPEN':
+            return False
+        seen = {}
+        for c in self.rollup:
+            name = c.get('name') or c.get('context')
+            done = c.get('conclusion') if 'conclusion' in c else c.get('state')
+            if c.get('status', 'COMPLETED') == 'COMPLETED' and done in GREEN:
+                seen.setdefault(name, True)
+            else:
+                seen[name] = False
+        return all(seen.get(name) for name in checks)
+
+    def approval(self, p, n, head):
+        comments = sorted(self.thread(p), key=lambda c: c['id'])
+        assigned = [c for c in comments if first(c).startswith(ASSIGNED)]
+        started = [c for c in assigned if first(c).startswith(ASSIGNED[0])]
+        if not assigned or not started:
+            return 'it has no review assignment'
+        if first(assigned[-1]).split(' ')[3:4] != [head]:
+            return 'its current review assignment is not for ' + head
+        verdicts = [(c, VERDICT.fullmatch(first(c))) for c in comments if first(c).startswith('VERDICT: ')]
+        since = [(c, v) for c, v in verdicts if c['id'] > assigned[-1]['id']]
+        if not since:
+            return ('its newest VERDICT is older than its current review assignment' if verdicts
+                    else 'it has no VERDICT')
+        approve, ok = since[-1]
+        if not (ok and ok.groups() == ('APPROVE', head)):
+            return 'its newest VERDICT is not an APPROVE at ' + head
+        others = [c for c, v in since[:-1] if not (v and v.groups() == ('APPROVE', head))]
+        if others and not any(others[-1]['id'] < c['id'] < approve['id'] and
+                              c['body'].startswith('**Orchestrator decision:** log and merge') and head in c['body']
+                              for c in comments):
+            return ('a VERDICT since its review assignment is not an APPROVE at %s, and no log and merge decision '
+                    'for that head follows it' % head)
+        family = FAMILY.search(started[-1]['body'])
+        if not family:
+            return 'its review assignment names no reviewer family'
+        built = self.built(n)
+        selected = built if family[1] == 'same-family' else OTHER[built]
+        notes = [(c, f) for c in self.thread(n) for f in [status.parse(c['body'])]
+                 if f and f['agent'] == 'reviewer' and c['id'] > started[-1]['id']]
+        if len(notes) > 1:
+            return ("%d reviewer notes were posted on #%s since its reviewer started, so its selected reviewer can't "
+                    'be told apart' % (len(notes), n))
+        url = 'https://github.com/%s/pull/%s' % (self.repo, p)
+        if not (notes and notes[0][1]['state'] == 'done' and DRIVERS.get(notes[0][1]['harness']) == selected
+                and notes[0][1].get('pr', '').lower() == url.lower()
+                and stamp(notes[0][0].get('updated_at')) >= stamp(approve.get('created_at'))):
+            return ('no done note from its selected %s reviewer for #%s, posted since that reviewer started and '
+                    'edited at or after its APPROVE' % (selected, p))
+        return None
+
+    def observe(self, checks):
+        def probe(pool, *args):
+            text = post.gh('api', '-i', *args)
+            if text is None:
+                return None
+            top, _, body = text.replace('\r\n', '\n').partition('\n\n')
+            lines = top.split('\n')
+            if not re.fullmatch(r'HTTP/[0-9.]+ 200( .*)?', lines[0]):
+                return None
+            heads = {k.strip().lower(): v.strip() for k, _, v in (h.partition(':') for h in lines[1:])}
+            try:
+                found = {'remaining': int(heads['x-ratelimit-remaining']), 'limit': int(heads['x-ratelimit-limit']),
+                         'reset_at': int(heads['x-ratelimit-reset']), 'retry_after': 0}
+                answer = json.loads(body)
+            except (KeyError, ValueError):
+                return None
+            if heads.get('x-ratelimit-resource') != pool or found['reset_at'] <= time.time() or \
+                    not isinstance(answer, dict) or 'errors' in answer:
+                return None
+            return found
+
+        budgets = {'rest': probe('core', 'repos/%s/actions/runs?per_page=1' % self.repo),
+                   'graphql': probe('graphql', 'graphql', '-f', 'query=query{rateLimit{remaining}}')}
+        jobs, complete = {}, all(budgets.values())
+        try:
+            for wanted in RUNS:
+                pages = post.read_json('api', '--paginate', '--slurp',
+                                       'repos/%s/actions/runs?status=%s&per_page=100' % (self.repo, wanted))
+                for run in [r for page in pages for r in page['workflow_runs']]:
+                    for page in post.read_json('api', '--paginate', '--slurp',
+                                               'repos/%s/actions/runs/%d/jobs?per_page=100' % (self.repo, run['id'])):
+                        for job in page['jobs']:
+                            queued = job['status'] not in ('in_progress', 'completed')
+                            jobs[str(job['id'])] = {
+                                'id': str(job['id']), 'required': job['name'] in checks,
+                                'status': 'queued' if queued else job['status'],
+                                'queued_at': int(stamp(job['created_at'])),
+                                'started_at': None if queued or not job.get('started_at') else
+                                int(stamp(job['started_at']))}
+        except (TypeError, KeyError, ValueError, Unreadable):
+            complete = False
+        return {'repository': self.repo, 'observed_at': int(time.time()), 'complete': complete,
+                'queue': {'complete': complete, 'jobs': list(jobs.values())},
+                'budgets': {k: v for k, v in budgets.items() if v}}
+
+    def batch(self, checks=None):
+        seen = self.observe(checks if checks is not None else self.checks())
+        try:
+            STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+            fd, path = tempfile.mkstemp(prefix='overload-', suffix='.json', dir=STATE)
+        except OSError as e:
+            raise Unreadable("can't write the overload observation (%s)" % type(e).__name__)
+        try:
+            with os.fdopen(fd, 'w') as out:
+                json.dump(seen, out)
+            r = run(['sh', str(HERE / 'fleet.sh'), 'overload', 'merge-batch'],
+                    env=dict(os.environ, LAUNCH_FLEET_OVERLOAD_INPUT=path))
+        finally:
+            os.unlink(path)
+        try:
+            said = json.loads(r.stdout)
+        except ValueError:
+            said = None
+        if r.returncode == 0 and isinstance(said, dict) and said.get('allowed') is True:
+            return
+        why = 'exit %d' % r.returncode
+        if isinstance(said, dict):
+            pause = said.get('pause') or said
+            why = 'paused: %s (%s)' % (pause.get('level'), ', '.join(map(str, pause.get('causes') or [])))
+        raise NeedsYou('fleet.sh overload merge-batch did not admit a merge batch: ' + why)
+
+    def landings(self, did):
+        for p, (n, head) in sorted(self.queued.items()):
+            line = script('merge.py', 'read', self.repo, p, head).stdout.strip().split('\n')[0]
+            if line.startswith('merged '):
+                del self.queued[p]
+                self.landed.append('merged: #%s for #%s at %s' % (p, n, head))
+                did.append('#%s merged' % p)
+            elif line.startswith('open'):
+                del self.queued[p]
+            elif line != 'queued':
+                raise NeedsYou('#%s did not merge: %s' % (p, line or 'merge.py read gave no answer'))
+
+    def merge(self, merges, did):
+        moved, self.held = False, set()
+        merges = [m for m in merges if self.queued.get(m[1]) != (m[2], m[3])]
+        if not merges:
+            return moved
+        checks = self.checks()
+        ready = []
+        for found in merges:
+            p, n, head = found.groups()
+            why = self.approval(p, n, head)
+            if why:
+                raise NeedsYou('#%s was not merged: %s' % (p, why))
+            if self.green(p, checks):
+                ready.append(found)
+            else:
+                self.held.add(p)
+        if not ready:
+            return moved
+        self.batch(checks)
+        for found in ready:
+            p, n, head = found.groups()
+            admit = script('merge.py', 'admit', self.repo, p, head, ','.join(checks)).stdout.strip().split('\n')[0]
+            extra = []
+            if admit.startswith('base rule: '):
+                every = run(['sh', str(HERE / 'fleet.sh'), 'every'])
+                if every.returncode or found[0] not in every.stdout.splitlines():
+                    raise NeedsYou('#%s was not merged: fleet.sh every no longer prints its merge line' % p)
+                extra = ['--base-rule-checked']
+            elif not admit.startswith('admit: '):
+                raise NeedsYou('#%s was not merged: %s' % (p, admit or 'merge.py admit gave no answer'))
+            body = 'VERDICT: APPROVE at %s from the selected reviewer, after the plan approval of spec #%s' % (
+                head, self.spec)
+            r = script('merge.py', 'merge', self.repo, p, head, ','.join(checks), body, '--ticket', n, *extra)
+            line = r.stdout.strip().split('\n')[0]
+            if r.returncode == 0 and line.startswith('merged '):
+                self.landed.append('merged: #%s for #%s at %s' % (p, n, head))
+                self.acted.add(found[0])
+                did.append('#%s merged' % p)
+                moved = True
+            elif r.returncode == 0 and line.startswith('queued'):
+                self.queued[p] = (n, head)
+                did.append('#%s queued' % p)
+            elif r.returncode == 0 and line.startswith('pending: '):
+                self.again = True
+                did.append('#%s merge pending' % p)
+            else:
+                raise NeedsYou('#%s did not merge: %s' % (p, line or 'merge.py exit %d' % r.returncode))
+        return moved
+
+    def ci_moved(self):
+        now = {}
+        for p in sorted(set(self.prs) | set(self.queued) | self.held):
+            if p in self.shut:
+                continue
+            state = self.state(p)
+            if state != 'OPEN':
+                self.shut.add(p)
+            now[p] = (state, sorted(json.dumps(c, sort_keys=True) for c in self.rollup))
+        before, self.ci = self.ci, now
+        return before != now if before is not None else bool(self.held)
 
     def wait(self):
+        if self.again:
+            self.again = False
+            time.sleep(self.a.ci_poll)
+            return
         while time.monotonic() - self.moved < self.a.idle:
-            if self.live:
+            if self.live or self.queued or self.held:
                 for key, (since, number) in sorted(self.live.items()):
                     if self.ended(*key, since, number):
                         del self.live[key]
                         self.moved = time.monotonic()
                         return
-                time.sleep(self.a.poll)
+                if time.monotonic() >= self.next_ci:
+                    self.next_ci = time.monotonic() + self.a.ci_poll
+                    if self.ci_moved():
+                        return
+                time.sleep(max(0.01, min(self.a.poll, self.next_ci - time.monotonic())))
                 continue
             if not (self.closed() or self.checks_running()):
                 raise NeedsYou('nothing is due on spec #%s and no run or check is going' % self.spec)
@@ -511,6 +744,7 @@ def main(argv):
     os.environ.setdefault('GH_REPO', args.repo)
     key = hashlib.sha256(args.repo.lower().encode()).hexdigest()[:20]
     os.environ.setdefault('LAUNCH_FLEET_RUNS', str(STATE / ('runs-%s.json' % key)))
+    os.environ.setdefault('LAUNCH_FLEET_OVERLOAD_STATE', str(STATE / ('overload-%s.json' % key)))
     signal.signal(signal.SIGINT, signal.default_int_handler)
     signal.signal(signal.SIGTERM, signal.default_int_handler)
     session = Session(args, command)
@@ -520,9 +754,11 @@ def main(argv):
                 session.loop()
             except Done as e:
                 print('session: done: %s' % e)
+                print(''.join(line + '\n' for line in session.landed), end='')
                 return 0
             except NeedsYou as e:
                 print('session: stopped at tick %d: needs you: %s' % (session.tick_no, e))
+                print(''.join(line + '\n' for line in session.landed), end='')
                 print('carry on: ' + command)
                 return 3
             except KeyboardInterrupt:
@@ -530,6 +766,7 @@ def main(argv):
                                for job in session.pending)
                 print('session: stopped on interrupt at tick %d; the runs it started keep going%s'
                       % (session.tick_no, left))
+                print(''.join(line + '\n' for line in session.landed), end='')
                 print('carry on: ' + command)
                 return 130
     except Refused as e:
@@ -537,6 +774,7 @@ def main(argv):
         return 1
     except Unreadable as e:
         print('session.py: %s' % e, file=sys.stderr)
+        print(''.join(line + '\n' for line in session.landed), end='', file=sys.stderr)
         print('carry on: ' + command, file=sys.stderr)
         return 2
 

@@ -75,7 +75,7 @@ def graphql():
     if W.get('graphql_error'):
         print(json.dumps({'data': None, 'errors': [{'message': 'synthetic failure'}]}))
         return 0
-    rate = {'remaining': W['rate']['graphql'], 'limit': 5000}
+    rate = {'remaining': W.get('mid', W['rate'])['graphql'], 'limit': 5000}
     if op == 'SnapshotComments':
         item = next(i for i in W['items'] if i['number'] == int(v['number']))
         conn = gql_comments(item, v.get('after'), int(v['first']))
@@ -149,7 +149,7 @@ def rest(path, headers):
             nxt = path.replace('page=%d' % page, 'page=%d' % (page + 1))
             link = 'Link: <https://api.github.com/%s>; rel="next"\r\n' % nxt
     etag = 'W/"%s"' % hashlib.sha256(body.encode()).hexdigest()[:20]
-    remaining = 'X-Ratelimit-Remaining: %d\r\n' % W['rate']['core']
+    remaining = 'X-Ratelimit-Remaining: %d\r\n' % W.get('mid', W['rate'])['core']
     if headers.get('if-none-match') == etag:
         log('rest 304 ' + path)
         sys.stdout.write('HTTP/2.0 304 Not Modified\r\nEtag: %s\r\n%s\r\n' % (etag, remaining))
@@ -281,7 +281,6 @@ class GraphqlWrite(unittest.TestCase):
         self.assertEqual(items[3]['updated_at'], '2026-01-01T00:00:00Z')
         calls = w.calls()
         self.assertEqual(calls[0], 'rate_limit')
-        # issues in 2 pages, pulls in 1, issue 7's comments 100 inline + 2 more pages
         self.assertEqual(sorted(calls[1:]), sorted(['graphql SnapshotIssues'] * 2 + ['graphql SnapshotPulls']
                                                    + ['graphql SnapshotComments'] * 2))
 
@@ -307,6 +306,13 @@ class GraphqlWrite(unittest.TestCase):
         self.assertEqual(w.write()[0], 2)
         self.assertFalse(w.out.exists())
 
+    def test_graphql_allowance_falling_under_1500_mid_read_writes_nothing(self):
+        w = World(self, busy_world(), mid={'core': 5000, 'graphql': 1499})
+        code, out, err = w.write()
+        self.assertEqual(code, 2)
+        self.assertIn('1,500', err)
+        self.assertFalse(w.out.exists())
+
     def test_graphql_error_writes_nothing(self):
         w = World(self, busy_world(), graphql_error=True)
         self.assertEqual(w.write()[0], 2)
@@ -316,7 +322,7 @@ class GraphqlWrite(unittest.TestCase):
 class RestWrite(unittest.TestCase):
 
     def rest_world(self, **extra):
-        items = [item(n) for n in range(1, 121)]       # two REST pages of 100
+        items = [item(n) for n in range(1, 121)]
         items[4]['comments'] = [comment(20000 + k, 'synthetic-owner', 'c%d' % k, k) for k in range(130)]
         items += [item(121, 'pull', comments=[comment(30000, 'openwiz[bot]', 'launch-fleet: merge queued')])]
         return World(self, items, core=4000, graphql=2000, **extra)
@@ -339,8 +345,8 @@ class RestWrite(unittest.TestCase):
         self.assertEqual(code, 0, err)
         calls = w.calls()
         rest = [c for c in calls if c.startswith('rest')]
-        self.assertTrue(rest)
-        self.assertTrue(all(c.startswith('rest 304 ') for c in rest), calls)
+        self.assertEqual(len(rest), 7, calls)
+        self.assertEqual([c for c in rest if not c.startswith('rest 304 ')], [])
         second = w.snapshot()
         self.assertEqual(second['items'], first['items'])
 
@@ -351,7 +357,7 @@ class RestWrite(unittest.TestCase):
         world = json.loads(w.path.read_text())
         world['items'][119]['title'] = 'Renamed'
         w.save(world)
-        self.assertEqual(w.write()[0], 0, )
+        self.assertEqual(w.write()[0], 0)
         calls = w.calls()
         fresh = [c for c in calls if c.startswith('rest 200 ')]
         self.assertEqual(fresh, ['rest 200 repos/%s/issues?state=open&per_page=100&page=2 conditional' % REPO])
@@ -365,6 +371,13 @@ class RestWrite(unittest.TestCase):
     def test_null_rest_comment_writes_nothing(self):
         w = self.rest_world(faults=[{'kind': 'rest-comments', 'page': 2, 'at': 0}])
         self.assertEqual(w.write()[0], 2)
+        self.assertFalse(w.out.exists())
+
+    def test_rest_allowance_falling_under_1500_mid_read_writes_nothing(self):
+        w = self.rest_world(mid={'core': 1499, 'graphql': 2000})
+        code, out, err = w.write()
+        self.assertEqual(code, 2)
+        self.assertIn('1,500', err)
         self.assertFalse(w.out.exists())
 
     def test_both_allowances_under_1500_write_nothing(self):
@@ -404,6 +417,7 @@ class Facts(unittest.TestCase):
         self.assertIn('Body of 9.', out)
         self.assertNotIn('not a record', out)
         self.assertNotIn('a user named like the bot', out)
+        self.assertIn('launch-fleet: started', out)
         self.assertLess(out.index('launch-fleet: started'), out.index('owner record'))
         self.assertIn('2 of 4 comments', out)
 

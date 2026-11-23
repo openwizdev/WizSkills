@@ -268,6 +268,23 @@ class GitRead(unittest.TestCase):
         self.assertEqual(hits[0], f'/{REPO}.git/info/refs?service=git-upload-pack')
         self.assertEqual(self.o.read('docs/agents/fleet.md', '--max-age', '0'), (0, FLEET_MD, ''))
 
+    def test_the_credential_never_reaches_a_trace_or_an_error(self):
+        hits = self.o.behind_http(self, gh=SIGNED_IN_GH)
+        traces = self.o.tmp / 'traces'
+        traces.mkdir()
+        self.o.env.update(GIT_TRACE_REDACT='0', GIT_CURL_VERBOSE='1', GIT_TRACE_CURL=str(traces / 'curl'),
+                          GIT_TRACE=str(traces / 'trace'), GIT_TRACE_PACKET=str(traces / 'packet'),
+                          GIT_TRACE2_EVENT=str(traces / 'event'), GIT_CONFIG_COUNT='2',
+                          GIT_CONFIG_KEY_1='trace2.normalTarget', GIT_CONFIG_VALUE_1=str(traces / 'normal'))
+        secret = BASIC.split()[1]
+        self.assertEqual(self.o.read(), (0, FLEET_MD, ''))
+        self.assertTrue(hits)
+        code, out, err = self.o.read(repo='synthetic-owner/never-created')
+        self.assertEqual((code, out), (2, ''))
+        self.assertEqual(err, 'gitread: could not fetch the default branch of synthetic-owner/never-created\n')
+        self.assertEqual(sorted(p.name for p in traces.iterdir()), [], 'git writes no trace')
+        self.assertNotIn(secret, err)
+
     def test_local_only_refuses_any_origin_that_is_not_a_local_folder(self):
         hits = self.o.behind_http(self, gh=SIGNED_IN_GH)
         self.o.env['GITREAD_LOCAL_ONLY'] = '1'

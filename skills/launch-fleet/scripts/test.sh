@@ -2171,7 +2171,7 @@ expect 'a spec look already raised is not raised again' 0 check.json 'issue(10; 
 ### Errors: exit 2, the reason on stderr, nothing on stdout
 
 expect 'a failed GitHub read' 2 check.json . FAKE_GH_FAIL=graphql_Spec_ -- check <<EOF
-the GitHub query Spec failed
+the GitHub query Spec #10 failed
 EOF
 expect 'a failed first read fails loudly: an empty answer is not a spent allowance' 2 check.json . FAKE_GH_FAIL=graphql_Specs -- check <<EOF
 the GitHub query Specs failed
@@ -2594,7 +2594,7 @@ ERR="fleet.sh: backing off: GitHub's allowance has run out, until it resets"
 expect 'budget: a spent allowance spelled RATE_LIMITED backs off too' 0 check.json 'merge12' FAKE_GH_RATE_LIMITED=Specs FAKE_GH_RATE_TYPE=RATE_LIMITED -- check < /dev/null
 log_has 'budget: a spent allowance spelled RATE_LIMITED backs off too' 1 '.'
 expect 'budget: an allowance that runs out part-way still fails loudly' 2 check.json 'merge12' FAKE_GH_RATE_LIMITED=Spec -- check <<EOF
-the GitHub query Spec failed
+the GitHub query Spec #10 failed
 EOF
 expect 'budget: an allowance GitHub does not give as a number fails loudly' 2 check.json . FAKE_GH_REMAINING=lots -- check <<EOF
 the GitHub query Specs did not say what it cost and what is left
@@ -4100,7 +4100,7 @@ gi1_case() {
       gi1_pair 3 120 discovery || { bad "$name" "$gi1_why"; return; }
       discoveries=$(grep -c '^repo view$' "$d/gh-3.log")
       [ "$discoveries" = 1 ] || { bad "$name" "warm replay made $discoveries discovery calls"; return; }
-      grep -qxE 'fleet\.sh: used 0 GitHub points in [0-9]+ questions, [1-9][0-9]* unchanged; repository discovery cost unmeasured' "$d/err-3" \
+      grep -qxE 'fleet\.sh: used 0 measured GitHub points in [0-9]+ questions, [1-9][0-9]* unchanged; repository discovery GraphQL cost unmeasured' "$d/err-3" \
         || { bad "$name" "warm replay points: $(cat "$d/err-3")"; return; } ;;
     writer)
       grep -q '^start #13:' "$d/out-2" || { bad "$name" "initial write access did not permit a start"; return; }

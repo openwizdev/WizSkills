@@ -337,13 +337,18 @@ class Fleet(unittest.TestCase):
         self.say(f'findings sent {SHA}: decision 3103: log and merge', 3104, '11:40')
         self.assertEqual(self.run_fleet('wake', '31'), '')
         self.env['LAUNCH_FLEET_NOW'] = str(1793534400 + 600)
-        self.assertEqual(self.run_fleet('wake', '31'), due + '; claim one retry as references/reviews.md says\n')
+        self.assertEqual(self.run_fleet('wake', '31'),
+                         f're-check #31 for #12 at {SHA}: parked decision 3103 still needs a replacement report\n')
 
-        self.say(f'decision retry {SHA}: 3103', 3105, '12:10')
+        self.say(f'review starting {SHA}\nDecision retry: 3103', 3105, '12:10')
         self.assertEqual(self.run_fleet('claim', '31', '3105'), 'go #31\n')
-        self.say(f'decision retry {SHA}: 3103', 3106, '12:11')
+        self.say(f'review starting {SHA}\nDecision retry: 3103', 3106, '12:11')
         self.assertIn('withdraw #31:', self.run_fleet('claim', '31', '3106'))
         self.assertEqual(self.run_fleet('wake', '31'), '')
+
+        self.env['LAUNCH_FLEET_NOW'] = str(1793534400 + 2400)
+        self.assertEqual(self.run_fleet('wake', '31'),
+                         f'look #31: decision 3103 still needs a replacement review at {SHA} after its retry\n')
 
         self.pr['comments'] = self.pr['comments'][:4]
         self.pr['comments'].append(dict(id=3107, at='2026-11-01T12:11:00Z',

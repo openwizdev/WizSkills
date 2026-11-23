@@ -59,6 +59,10 @@ import sys
 
 home = Path.home()
 action = sys.argv[1]
+if action == 'version':
+    can = ['start', 'wake', 'stop'] + (['effort'] if (home / 'takes-effort').exists() else [])
+    print(json.dumps({'driver': 'local', 'records': ['openwiz:records v1'], 'can': can}))
+    sys.exit(0)
 request = json.load(sys.stdin)
 log = home / 'driver.log'
 previous = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
@@ -80,6 +84,24 @@ elif action in ('wake', 'stop'):
     print(json.dumps(dict(request, **{'woke' if action == 'wake' else 'stopped': True})))
 else:
     sys.exit(2)
+"""
+
+
+ROSTER = """# Fleet settings
+
+## Models
+
+| Role | Harness | Model | Effort | `room-cli thread spawn` flags |
+| --- | --- | --- | --- | --- |
+| Orchestrator | Codex | Synthetic | High | `--provider codex --model synthetic-model --reasoning-level high` |
+| Builder | Codex | Synthetic | Medium | `--provider codex --model synthetic-model --reasoning-level medium` |
+| Reviewer | Codex | Synthetic | Medium | `--provider codex --model synthetic-model --reasoning-level medium` |
+
+## Roster
+
+| Name | Kind | Driver | Roles | Writes as |
+| --- | --- | --- | --- | --- |
+| Local | host | local | orchestrator | synthetic-owner's App |
 """
 
 
@@ -211,7 +233,7 @@ class Heartbeat(unittest.TestCase):
         self.heartbeat('remove')
         self.assertEqual((self.home / 'crontab').read_text(), original)
 
-    def setup_driver(self):
+    def setup_driver(self, fleet=None):
         real_git = shutil.which('git')
         git_env = dict(self.env, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1',
                        GIT_AUTHOR_NAME='Synthetic', GIT_AUTHOR_EMAIL='tests@example.invalid',
@@ -224,6 +246,8 @@ class Heartbeat(unittest.TestCase):
         settings = self.checkout / 'docs/agents'
         settings.mkdir(parents=True)
         (settings / 'host.md').write_text('Host: local\n')
+        if fleet:
+            (settings / 'fleet.md').write_text(fleet)
         for args in [('add', '.'), ('commit', '-qm', 'fixture')]:
             subprocess.run([real_git, *args], cwd=self.checkout, env=git_env, check=True, capture_output=True)
         shutil.copyfile(HERE / 'fixtures/fake_github.py', self.scripts / 'fake_github.py')
@@ -349,6 +373,21 @@ class Heartbeat(unittest.TestCase):
         calls = self.driver_calls()
         self.assertEqual([kind for kind, _ in calls], ['start', 'wake', 'wake'])
         self.assertEqual([record['run'] for kind, record in calls if kind == 'wake'], ['synthetic-run-1'] * 2)
+
+    def test_an_effort_refusal_leaves_no_start_marker_and_the_next_tick_starts_with_the_effort(self):
+        self.setup_driver(fleet=ROSTER)
+        self.install()
+        (self.home / 'due').write_text(DUE)
+        self.heartbeat('run', expected=1)
+        state, = self.files('.local/state/openwiz-heartbeat/openwiz-heartbeat-*')
+        self.assertFalse((state / 'starting').exists())
+        self.assertFalse((self.home / 'driver.log').exists())
+        (self.home / 'takes-effort').touch()
+        self.heartbeat('run')
+        self.assertEqual(self.driver_calls(), [['start', {'repository': REPO, 'ticket': 7, 'skill': 'launch-fleet',
+                                                          'harness': 'codex', 'model': 'synthetic-model',
+                                                          'effort': 'high'}]])
+        self.assertEqual(self.ticks(), ['start refused', 'started'])
 
     def test_check_uses_driver_routes_without_cloudroom_probe(self):
         self.program(self.bin / 'room-cli', """printf '%s\n' "$*" >> "$HOME/room-cli.log"

@@ -1370,7 +1370,7 @@ def spec_rec($s; $re): any($s | records[]; .r | test($re));
 def fleet($s): [($s.comments.nodes // [])[] | {id: .databaseId, at: .createdAt, body, error: .recordError} | select(.error == null) | . as $c
   | ((.body | rec) // "" | capture("^(?:fleet active, loop (?<loop>[A-Za-z0-9_-]+)|fleet thread (?<t>[A-Za-z0-9_][A-Za-z0-9_-]{0,127})(, loop (?<l>[A-Za-z0-9_][A-Za-z0-9_-]{0,127}))?)$"))
   | {id: $c.id, at: $c.at, thread: (.t // "private fleet"), loop: (.loop // .l),
-     fresh: (.loop != null and ($c.body | split("\n") | index("Wake mode: fresh") != null))}] | max_by(.id);
+     fresh: (.loop != null and ($c.body | lines | any(.[]; sub("\\s+$"; "") == "Wake mode: fresh")))}] | max_by(.id);
 # Only a legacy retained fleet thread uses the takeover cutoff.
 def fleet_of($s): if $s != null and $W.spec == $s.number then (fleet($s) | if .fresh then null else . end) else null end;
 # A record last edited before the fleet thread'"'"'s record, or in the same

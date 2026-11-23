@@ -254,7 +254,7 @@ class Meter(unittest.TestCase):
     def test_a_wrapper_after_the_shim_that_calls_it_back_is_refused_at_the_second_entry(self):
         wrapper, count = self.counting_wrapper('after')
         shim, rest = self.env['PATH'].split(':', 1)
-        run = self.gh('api', 'user', PATH='%s:%s:%s' % (shim, wrapper, rest))
+        run = self.gh('api', 'user', PATH='%s:%s:%s' % (shim, wrapper, rest), GH_METER_RATE='0')
         self.assertEqual(run.returncode, 127)
         self.assertIn('the shim called itself', run.stderr)
         self.assertEqual(count.read_text(), '.\n')

@@ -15,7 +15,10 @@ gh-meter.py report LOG...  calls and REST units per role and per endpoint,
                            and the top five endpoints by REST units
 
 Put DIR first on PATH. The shim runs the next `gh` on PATH after DIR (or
-GH_METER_REAL) with the caller's arguments, input, output and exit status.
+GH_METER_REAL) with the caller's arguments, input, output and exit status;
+a `gh` before DIR (a caller's own wrapper that runs the shim) is never it.
+It exits 127, running nothing, when DIR is not on PATH, when no `gh` follows
+it, or when it is entered again from its own real `gh`'s run.
 When GH_METER_LOG is set, it appends one JSON line per call:
 
   time, role (GH_METER_ROLE: fleet, builder, reviewer, orchestrator,
@@ -110,16 +113,25 @@ def parse(args):
 
 
 def real_gh():
+    if os.environ.get('GH_METER_ACTIVE'):
+        refuse('the shim called itself: a gh after it on PATH runs the shim again')
+    os.environ['GH_METER_ACTIVE'] = '1'
     if os.environ.get('GH_METER_REAL'):
         return os.environ['GH_METER_REAL']
     shim = os.path.realpath(os.environ.get('GH_METER_SHIM_DIR', ''))
-    for d in os.environ.get('PATH', '').split(os.pathsep):
-        if not d or os.path.realpath(d) == shim:
-            continue
+    dirs = os.environ.get('PATH', '').split(os.pathsep)
+    at = [i for i, d in enumerate(dirs) if d and os.path.realpath(d) == shim]
+    if not at:
+        refuse("the shim's directory is not on PATH")
+    for d in dirs[at[-1] + 1:]:
         candidate = os.path.join(d, 'gh')
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        if d and os.path.realpath(d) != shim and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
-    print('gh-meter: no real gh on PATH after the shim', file=sys.stderr)
+    refuse('no real gh on PATH after the shim')
+
+
+def refuse(message):
+    print('gh-meter: %s' % message, file=sys.stderr)
     sys.exit(127)
 
 

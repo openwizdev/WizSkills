@@ -14,6 +14,7 @@ SHA = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
 MAX_AGE = 60
 STAMP = 'gitread-fetched'
 FAILED = 'gitread-failed'
+KEEP = re.compile(r'GIT_CONFIG_(GLOBAL|SYSTEM|NOSYSTEM|PARAMETERS|COUNT|KEY_[0-9]+|VALUE_[0-9]+)')
 USAGE = 'gitread: usage: gitread.py show OWNER/NAME PATH [--max-age SECONDS]'
 
 
@@ -53,7 +54,8 @@ def private_root():
 
 
 def git(cache, *args):
-    env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GIT_DIR=str(cache))
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_') or KEEP.fullmatch(key)}
+    env.update(GIT_TERMINAL_PROMPT='0', GIT_DIR=str(cache))
     try:
         run = subprocess.run(['git', *args], capture_output=True, env=env, timeout=60, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as error:

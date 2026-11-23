@@ -486,7 +486,8 @@ class Review(unittest.TestCase):
             "user path on unchanged code": (risk.replace("Risk: privacy: a cook's sync token reaches the terminal log.",
                                                          "User path: a cook sees the token in the terminal."),
                                             fresh, 1, refused),
-            "stated risk on unchanged code": (risk, fresh, 0, "report ok"),
+            "stated risk on unchanged code": (risk + "\n  Late: the first review never opened the CLI.", fresh, 0,
+                                              "report ok; late: 1; held back: 0"),
             "polish on changed code": (old_r4, merge, 0, "report ok"),
         }
         for name, (line, (verdict, nxt), code, expected) in cases.items():

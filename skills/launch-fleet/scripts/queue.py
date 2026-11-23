@@ -66,8 +66,9 @@ the queue receipt `launch-fleet: merge queued <commit>` and the drop record
 A drop's cause is gone only for GitHub's reasons `branch_protection_failure` and
 `failed_checks`, removed by `github-merge-queue`, when nothing on HEAD is running,
 every required check's latest run on HEAD is green, and either each of those runs
-started after the removal or every failed run on HEAD was a cancelled duplicate (a
-CANCELLED run followed by a green run of the same check, as on #2253). A merge
+started after the removal or every failed run of the merge group was a cancelled
+duplicate: each run on HEAD that started between the latest enqueue and the removal
+and failed was CANCELLED, followed by a green run of the same check. A merge
 conflict, a person's removal and any other reason are blocked. Bad arguments
 print this usage on stderr and exit 2, reading nothing.
 '''
@@ -200,6 +201,8 @@ def fleet_records(repo, number, head):
     need(isinstance(items, list), f'the comments on #{number} could not be read')
     receipts, drops = [], set()
     for c in items:
+        need(isinstance(c, dict) and (c.get('user') is None or isinstance(c['user'], dict)),
+             f'a comment on #{number} could not be read')
         if not post.ours(c, auth):
             continue
         body = c.get('body')
@@ -216,7 +219,7 @@ def fleet_records(repo, number, head):
     return receipts, drops
 
 
-def cause(head, removal, runs, checks):
+def cause(head, removal, enqueued, runs, checks):
     at, reason = removal['createdAt'], removal['reason']
     busy = sorted({name for name, state, _, _ in runs if state == 'running'})
     if busy:
@@ -236,11 +239,12 @@ def cause(head, removal, runs, checks):
         return f"wait {head}: not green on it: {', '.join(red)}"
     if all(latest[c][3] > at for c in checks):
         return f'requeue {head}: every required check ran again after the removal and is green'
-    failed = [r for r in runs if r[2] not in NOT_FAILED]
+    group = [r for r in runs if enqueued is not None and enqueued <= r[3] <= at]
+    failed = [r for r in group if r[2] not in NOT_FAILED]
     duplicates = failed and all(r[2] == 'CANCELLED' and any(o[0] == r[0] and o[3] > r[3] and o[2] == 'SUCCESS'
                                                             for o in runs) for r in failed)
     if duplicates:
-        return f'requeue {head}: every required check is green on it, and its failed runs were cancelled duplicates'
+        return f'requeue {head}: every required check is green on it, and its failed runs in the merge group were cancelled duplicates'
     stale = [c for c in checks if latest[c][3] <= at]
     return f"wait {head}: {reason} at {at} may still stand: {', '.join(stale)} last ran before it"
 
@@ -282,7 +286,7 @@ def read(repo, number, head, checks):
         return f'blocked {head}: merge_conflict needs its builder to merge main in', 1
     if reason not in CHECK_CAUSES:
         return f'blocked {head}: {reason} is never re-queued automatically', 1
-    return cause(head, removal, runs, checks), 0
+    return cause(head, removal, added[0] if added else None, runs, checks), 0
 
 
 def main(argv):

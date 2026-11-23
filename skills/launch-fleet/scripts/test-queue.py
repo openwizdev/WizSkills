@@ -152,6 +152,16 @@ class Queue(unittest.TestCase):
         self.verdict(value, f'wait {HEAD}: branch_protection_failure at 2026-11-22T10:00:03Z may still stand: '
                      'ci, privacy, web-test last ran before it', 0)
 
+    def test_a_failure_after_the_removal_is_not_the_merge_groups(self):
+        value = fixture('group-duplicates')
+        contexts(value)['nodes'] += [
+            {'__typename': 'CheckRun', 'name': 'lint', 'status': 'COMPLETED', 'conclusion': 'FAILURE',
+             'startedAt': '2026-11-22T10:30:00Z'},
+            {'__typename': 'CheckRun', 'name': 'lint', 'status': 'COMPLETED', 'conclusion': 'SUCCESS',
+             'startedAt': '2026-11-22T10:31:00Z'}]
+        self.verdict(value, f'requeue {HEAD}: every required check is green on it, '
+                     'and its failed runs in the merge group were cancelled duplicates', 0)
+
     def test_duplicates_with_no_enqueue_read_never_go_back_in(self):
         value = fixture('group-duplicates')
         node(value)['added']['nodes'] = []

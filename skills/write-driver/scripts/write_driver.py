@@ -553,7 +553,16 @@ def cmd_kit(a):
     save(a.state, state)
     # The kit calls the driver through this proxy, so every run its `start` answers is recorded for stop-all,
     # even when the kit's start check then fails and it never stops that run itself.
-    proxy = Path(a.state) / 'kit-driver'
+    stage = Path(a.state) / 'kit'
+    shutil.rmtree(stage, ignore_errors=True)
+    try:
+        shutil.copytree(os.path.dirname(os.path.abspath(a.driver)), stage, symlinks=True,
+                        ignore=lambda folder, names: [n for n in names if n == '__pycache__' or os.path.realpath(
+                            os.path.join(folder, n)) == os.path.realpath(a.state)])
+    except OSError as e:
+        print("the kit could not run: the driver's folder could not be staged for it (%s)" % type(e).__name__)
+        return 2
+    proxy = stage / '.write-driver-proxy'
     proxy.write_text('#!/bin/sh\nexec %s -I %s proxy --state %s --openwiz %s --driver %s "$@"\n' % tuple(
         shlex.quote(x) for x in (sys.executable, os.path.abspath(__file__), os.path.abspath(a.state),
                                  os.path.abspath(a.openwiz), os.path.abspath(a.driver))))

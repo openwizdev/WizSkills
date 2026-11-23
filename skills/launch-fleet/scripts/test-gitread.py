@@ -274,8 +274,9 @@ class GitRead(unittest.TestCase):
         traces.mkdir()
         self.o.env.update(GIT_TRACE_REDACT='0', GIT_CURL_VERBOSE='1', GIT_TRACE_CURL=str(traces / 'curl'),
                           GIT_TRACE=str(traces / 'trace'), GIT_TRACE_PACKET=str(traces / 'packet'),
-                          GIT_TRACE2_EVENT=str(traces / 'event'), GIT_CONFIG_COUNT='2',
-                          GIT_CONFIG_KEY_1='trace2.normalTarget', GIT_CONFIG_VALUE_1=str(traces / 'normal'))
+                          GIT_TRACE2_EVENT=str(traces / 'event'))
+        (self.o.tmp / 'gitconfig').write_text(f'[trace2]\n\tnormalTarget = {traces}/normal\n'
+                                              f'\tperfTarget = {traces}/perf\n')
         secret = BASIC.split()[1]
         self.assertEqual(self.o.read(), (0, FLEET_MD, ''))
         self.assertTrue(hits)

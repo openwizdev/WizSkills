@@ -104,8 +104,7 @@ def fetch(cache, repo):
     run = git(cache, *local, '-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential',
               'fetch', '--quiet', '--depth', '1', '--no-tags', f'https://github.com/{repo}.git', 'HEAD')
     if run.returncode != 0:
-        raise Error(f'could not fetch the default branch of {repo}: '
-                    f'{run.stderr.decode(errors="replace").strip() or "git fetch exit %d" % run.returncode}')
+        raise Error(f'could not fetch the default branch of {repo}')
     run = git(cache, 'rev-parse', '--verify', '--quiet', 'FETCH_HEAD^{commit}')
     commit = run.stdout.decode(errors='replace').strip()
     if run.returncode != 0 or not SHA.fullmatch(commit):

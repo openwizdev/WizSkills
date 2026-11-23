@@ -626,20 +626,21 @@ class ConnectIdentity(unittest.TestCase):
         self.assertIsNotNone(found, 'step 3 has a %r branch' % label)
         return found[1]
 
-    def test_other_hosts_get_the_personal_login_and_no_cloudroom_step(self):
-        other = self.branch(self.step(), 'With any other host')
+    def test_every_host_gets_the_personal_login_and_no_cloudroom_step(self):
+        other = self.branch(self.step(), 'On every host, for the first fleet')
         self.assertRegex(other, r'^recommend the personal GitHub login')
         self.assertIn('`github_login.py skip-app`', other)
-        self.assertIn('the App needs CloudRoom today', other)
-        self.assertIn('only if the user asks for it', other)
         for cloudroom_step in ('--agent-for', 'secret', '"The App"', 'runtime/github-app/setup.py'):
             self.assertNotIn(cloudroom_step, other)
 
-    def test_cloudroom_keeps_the_app_and_only_an_answer_selects_the_skip(self):
+    def test_the_app_is_offered_and_only_an_answer_selects_the_skip(self):
         step = self.step()
-        cloud = self.branch(step, 'With CloudRoom (`cloud`)')
-        self.assertIn('recommend the App, set up with the installed `"$build"/runtime/github-app/setup.py` as the '
-                      '`setup` skill\'s "The App" says', cloud)
+        offered = self.branch(step, 'The App, offered instead')
+        self.assertIn('`--app`', offered)
+        self.assertIn('set up with the installed `"$build"/runtime/github-app/setup.py` as the `setup` skill\'s '
+                      '"The App" says', offered)
+        self.assertIn('the App needs CloudRoom today', offered)
+        self.assertNotIn('recommend the App', step)
         self.assertIn("Only the user's answer selects `github_login.py skip-app`; an App failure never becomes a skip.",
                       step)
 
@@ -1926,22 +1927,24 @@ class OneSetupPullRequest(unittest.TestCase):
             'operator': 'synthetic-other', 'service_issue': 7, 'harness': SOL[0], 'model': SOL[1], 'effort': SOL[2],
             'reviewer': list(CLAUDE), 'identity': 'app'}, 'any line the user changes, and the reviewer follows')
 
-    def test_the_acting_identity_line_follows_the_host(self):
+    def test_the_first_fleet_recommends_the_own_login_on_every_host(self):
         j = self.road()
         value = self.saved(j)
         value['host'] = {'agents': 'cloud'}
         j.state.write_text(json.dumps(value))
         cloud = j.helper(['defaults', '--options', str(j.options)])
         self.assertEqual(cloud.returncode, 12, cloud.stdout + cloud.stderr)
-        self.assertIn('- Acting identity: the OpenWiz GitHub App, recommended with CloudRoom', cloud.stdout)
+        self.assertIn('- Acting identity: your own GitHub login, synthetic-owner, instead of the OpenWiz GitHub App, '
+                      'for the first fleet', cloud.stdout)
         self.yes(j)
-        self.assertEqual(self.saved(j)['defaults']['identity'], 'app')
-        self.yes(j, '--login')
-        self.assertEqual(self.saved(j)['defaults']['identity'], 'personal_login', '--login picks the own login')
-        self.assertEqual(j.helper(['defaults', '--options', str(j.options), '--app', '--login']).returncode, 2)
+        self.assertEqual(self.saved(j)['defaults']['identity'], 'personal_login', 'CloudRoom too: own login')
+        self.yes(j, '--app')
+        self.assertEqual(self.saved(j)['defaults']['identity'], 'app', '--app picks the App')
+        self.assertEqual(j.helper(['defaults', '--options', str(j.options), '--login']).returncode, 2,
+                         'no flag for what is already the default')
         local = self.road()
         self.yes(local)
-        self.assertEqual(self.saved(local)['defaults']['identity'], 'personal_login', 'any other host: own login')
+        self.assertEqual(self.saved(local)['defaults']['identity'], 'personal_login')
 
     def test_the_block_discloses_every_effect_its_one_yes_covers(self):
         j = self.road()

@@ -257,6 +257,15 @@ class GitRead(unittest.TestCase):
         self.assertEqual(hits[0], f'/{REPO}.git/info/refs?service=git-upload-pack')
         self.assertEqual(self.o.read('docs/agents/fleet.md', '--max-age', '0'), (0, FLEET_MD, ''))
 
+    def test_local_only_refuses_any_origin_that_is_not_a_local_folder(self):
+        hits = self.o.behind_http(self, gh=SIGNED_IN_GH)
+        self.o.env['GITREAD_LOCAL_ONLY'] = '1'
+        code, out, err = self.o.read()
+        self.assertEqual((code, out, hits), (2, '', []), err)
+        self.assertIn("transport 'http' not allowed", err)
+        self.o.env['GIT_CONFIG_KEY_0'] = f'url.file://{self.o.tmp / "origins"}/.insteadOf'
+        self.assertEqual(self.o.read('docs/agents/fleet.md', '--max-age', '0'), (0, FLEET_MD, ''))
+
     def test_a_failed_fetch_holds_its_cooldown_under_the_lock(self):
         hits = self.o.behind_http(self)
         code, out, err = self.o.read()

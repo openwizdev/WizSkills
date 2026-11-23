@@ -15,7 +15,6 @@
     write_driver.py lesson wake-after-turn --state <dir> --turn-ended yes|no --wake answered|error
                         --note-edited yes|no --second-note yes|no
     write_driver.py lesson expired-login --state <dir> --driver <program> --harness <h> [--asked <ask id>]
-                        [--key-host <registered host> --openwiz <checkout>]
     write_driver.py started run --state <dir> --driver <program> --run <run id>
     write_driver.py started add --state <dir> --what <what> -- <its stop command...>
     write_driver.py stop-all --state <dir>
@@ -28,8 +27,7 @@ JSON file, <dir>/run.json. Exit 0: done; 1: refused (the last line says why), or
 2: the kit could not run; 3: skipped on the user's no. It never reads, asks for, prints or stores a login, token or key: GitHub is
 reached only through the user's own signed-in `gh`. The kit reaches the driver through `proxy`, which
 records each run its `start` answers, once the kit's own checks accept that answer, for stop-all. The
-expired-login probe runs the driver under Landlock and seccomp, or not at all, so on macOS it alone is skipped;
-a key-host driver's probe runs against the kit's fake host answering 401, with only that one TCP port open.
+expired-login probe runs the driver under Landlock and seccomp, or not at all, so on macOS it alone is skipped.
 Python 3.9+, standard library, Linux or macOS.
 """
 import argparse
@@ -930,7 +928,7 @@ def cmd_lesson(a):
             fd = os.open(box / 'bin' / a.harness, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
             with os.fdopen(fd, 'w') as f:
                 f.write(STAND_IN % shlex.quote(str(ran)))
-        driver = stage(driver, box / 'driver', openwiz)  # it runs from here: nothing else beside it is in reach
+        driver = stage(driver, box / 'driver', openwiz)
         env = {'PATH': os.pathsep.join([str(box / 'bin'), os.path.join(os.path.dirname(driver), 'fixtures'),
                                         '/usr/local/bin', '/usr/bin', '/bin']),
                'HOME': str(box / 'home'), 'LANG': 'C.UTF-8',

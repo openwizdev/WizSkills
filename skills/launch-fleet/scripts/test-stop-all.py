@@ -3,11 +3,13 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import queue
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -164,17 +166,52 @@ class StopAll(unittest.TestCase):
                 self.assertEqual(home.calls(), [])
                 home.no_agent_cli()
 
-    def test_a_heartbeat_that_will_not_pause_fails_the_command_but_the_runs_still_stop(self):
-        home = Home(self, LIVE)
-        home.install_heartbeat()
+    def hold_tick_lock(self, home):
         state = next((home.dir / '.local/state/openwiz-heartbeat').glob('openwiz-heartbeat-*'))
         running_tick = os.open(state, os.O_RDONLY | os.O_DIRECTORY)
         self.addCleanup(os.close, running_tick)
         fcntl.flock(running_tick, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        out = home.stop_all(expected=1)
-        self.assertEqual(out, ['heartbeat: not paused (heartbeat: a heartbeat operation is already running)',
+        return running_tick
+
+    def test_a_tick_holding_the_lock_is_waited_for_and_the_run_it_started_is_stopped_too(self):
+        home = Home(self, LIVE)
+        home.install_heartbeat()
+        running_tick = self.hold_tick_lock(home)
+        process = subprocess.Popen([sys.executable, '-I', str(HERE / 'stop-all.py'), REPO, SPEC],
+                                   cwd=home.dir / 'checkout', env=home.env, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True)
+        self.addCleanup(process.kill)
+        lines = queue.Queue()
+        threading.Thread(target=lambda: [lines.put(line.rstrip('\n')) for line in process.stdout] + [lines.put(None)],
+                         daemon=True).start()
+        first = lines.get(timeout=30)
+        self.assertEqual(first, 'heartbeat: a tick holds the heartbeat lock; waiting up to 600 seconds for it')
+        self.assertEqual(home.heartbeat(), 'heartbeat: active (cron)')
+        self.assertEqual(home.calls(), [])
+        home.runs.write_text(json.dumps({'repo': REPO, 'runs': dict(LIVE, **{'14': {'host': 'local',
+                                                                                     'run': 'local-run-14'}})}))
+        fcntl.flock(running_tick, fcntl.LOCK_UN)
+        rest = []
+        while (line := lines.get(timeout=60)) is not None:
+            rest.append(line)
+        self.assertEqual(process.wait(timeout=30), 0, process.stderr.read())
+        self.assertEqual(rest, ['heartbeat: paused', '#11 on local: stopped', '#12 on cloudroom: stopped',
+                                '#14 on local: stopped', 'stop-all: 3 stopped, 0 not stopped'])
+        self.assertEqual(home.heartbeat(), 'heartbeat: paused (cron)')
+        self.assertEqual([c['input']['run'] for c in home.calls()], ['local-run-11', 'cloudroom-run-12', 'local-run-14'])
+        home.no_agent_cli()
+
+    def test_a_tick_that_keeps_the_lock_past_the_wait_fails_the_command_but_the_runs_still_stop(self):
+        home = Home(self, LIVE)
+        home.install_heartbeat()
+        self.hold_tick_lock(home)
+        out = home.stop_all('--wait', '1', expected=1)
+        self.assertEqual(out, ['heartbeat: a tick holds the heartbeat lock; waiting up to 1 seconds for it',
+                               'heartbeat: not paused (a tick still held the heartbeat lock after 1 seconds); the '
+                               'next tick can start runs: run stop-all again when it ends',
                                '#11 on local: stopped', '#12 on cloudroom: stopped',
                                'stop-all: 2 stopped, 0 not stopped'])
+        self.assertEqual(home.heartbeat(), 'heartbeat: active (cron)')
         self.assertEqual(len(home.calls()), 2)
         home.no_agent_cli()
 
@@ -206,7 +243,8 @@ class StopAll(unittest.TestCase):
 
     def test_usage(self):
         home = Home(self, {})
-        for args in ([], [REPO], ['not-a-repo', SPEC], [REPO, '0'], [REPO, SPEC, '--now']):
+        for args in ([], [REPO], ['not-a-repo', SPEC], [REPO, '0'], [REPO, SPEC, '--now'], [REPO, SPEC, '--wait', '-1'],
+                     [REPO, SPEC, '--wait', 'soon'], [REPO, SPEC, '--wait', '3601']):
             with self.subTest(args=args):
                 r = home.run('stop-all.py', *args)
                 self.assertEqual(r.returncode, 2, r.stdout + r.stderr)

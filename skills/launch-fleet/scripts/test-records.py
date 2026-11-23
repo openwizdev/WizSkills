@@ -603,6 +603,17 @@ class CrossRepositoryReviews(unittest.TestCase):
         self.assertEqual(self.routes({f'review:31:{SHA}': self.LOCAL}, self.pull('Example/Public', started)),
                          [[(self.LOCAL, None)]])
 
+    def test_discovery_never_gives_another_repositorys_pull_request_this_repositorys_reviewer(self):
+        started = [(3101, 'launch-fleet: review started ' + SHA), (3102, 'launch-fleet: re-check sent ' + NEW)]
+        local = dict(id=self.LOCAL, title='Review #31 at ' + SHA[:8], branch=None)
+        tools = dict(id=self.TOOLS, title='Review Example/Tools#31 at ' + SHA[:8], branch=None)
+        self.assertEqual(self.routes({}, self.pull('example/public', started), self.pull('example/tools', started),
+                                     threads=[local]),
+                         [[(self.LOCAL, None)], [(None, f'no thread matches review:example/tools#31:{SHA}')]])
+        self.assertEqual(self.routes({}, self.pull('example/public', started), self.pull('example/tools', started),
+                                     threads=[local, tools]),
+                         [[(self.LOCAL, None)], [(self.TOOLS, None)]])
+
     def test_another_repositorys_edited_give_up_archives_from_its_own_claim_key(self):
         gave_up = [(3101, f'launch-fleet: review given up {SHA}: no verdict'),
                    (3102, f'launch-fleet: review told again {SHA}')]

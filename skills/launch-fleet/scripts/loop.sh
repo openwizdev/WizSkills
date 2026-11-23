@@ -66,11 +66,6 @@ export GH_REPO
 inside=
 case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
 unset LAUNCH_FLEET_TOKEN_STEP
-# The App identity is off for everyone (OpenWiz #2394): nothing reads an opt-in
-# yet, so with the key's secret, a token service or an inherited token step,
-# loop.sh mints nothing, never runs the agent helper, and reads GitHub as
-# today's account. The opt-in reader's ticket is the only change that may set
-# identity_off from fleet.md.
 identity_off=
 if [ -n "$inside" ] || [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] || [ -n "${OPENWIZ_GITHUB_APP_KEY:-}" ]; then
   identity_off=1
@@ -81,8 +76,7 @@ if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ] && [ -z "$identity_of
   export LAUNCH_FLEET_TOKEN_STEP
   exec python3 -I "$helper" run --requester fleet-check --repository "$GH_REPO" --read -- sh "$0"
 fi
-# With the App identity on (not yet possible, above), the check reads GitHub as
-# the OpenWiz App (GI7, #2549; the identity contract
+# The check reads GitHub as the OpenWiz App (GI7, #2549; the identity contract
 # `openwiz.github-identity.v1`): with the loop's OPENWIZ_GITHUB_APP_KEY secret,
 # `openwiz github token --read` mints a read-only installation token for gh
 # (GH_TOKEN) and git (its credential helper reads GH_TOKEN from the

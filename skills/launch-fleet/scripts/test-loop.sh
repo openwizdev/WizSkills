@@ -111,10 +111,6 @@ cmp "$work/want" "$work/out"
 [ -z "$(ls -A "$work/runtime")" ]
 echo 'ok   a direct installed loop runs its installed helpers, not the consumer skills/'
 
-# GI7 (#2549) with the App identity off for everyone (#2394): with the key's
-# secret or a token service, the check never mints or runs the helper, reads
-# GitHub as today's account and says so once. No token reaches the output or a
-# process argument.
 off="loop.sh: the App identity is off; GitHub as today's account"
 token=synthetic-app-token-2549
 {

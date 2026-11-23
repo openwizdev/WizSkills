@@ -16,11 +16,13 @@ USAGE = """One read of a repository's open work per wake (#2625, spec #2428 FR8)
   snapshot.py facts OUT N            print issue or pull request N's bounded facts
 
 `write` checks `gh api rate_limit` (free) first and reads through whichever of
-GraphQL or REST has more left, refusing any read that would leave under 1,500. REST pages go
-out with `If-None-Match` and the ETags saved beside OUT (`OUT.etags`), so an
-unchanged page is a free 304. Any partial page, null node, count mismatch or
-error writes nothing. `facts` refuses a snapshot that is incomplete, older than
-30 minutes or has no N. It shows only record authors' comments, read from the
+GraphQL or REST has more left, refusing any read that would leave under 1,500.
+REST pages go out with `If-None-Match` and the ETags saved beside OUT
+(`OUT.etags`), so an unchanged page is a free 304. Any partial page, null node,
+count mismatch or error writes nothing. A pull request's `closing_issues` is
+GitHub's own list by GraphQL, and null (unavailable) by REST, never a guess
+from its body. `facts` refuses a snapshot that is incomplete, older than 30
+minutes or has no N. It shows only record authors' comments, read from the
 repository's `docs/agents/fleet.md` at write time the way post.py reads them.
 
 Exit 0 done, 2 refused or unreadable (the reason on stderr). Python 3.11+
@@ -41,8 +43,6 @@ CAP, CUT_ROOM = 60 * 1024, 1024
 DELETED_ACCOUNT = 'ghost'
 PAGE, COMMENTS, REST_PAGE = 50, 100, 100
 STAMP = '%Y-%m-%dT%H:%M:%SZ'
-CLOSES = re.compile(r'\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)?#(\d+)\b',
-                    re.I)
 
 
 class Stop(Exception):
@@ -259,11 +259,6 @@ def unique_ids(comments, number):
     return comments
 
 
-def outside_code(markdown):
-    text = re.sub(r'(?ms)^ {0,3}(```|~~~).*?(?:^ {0,3}\1[^\n]*$|\Z)', '', markdown)
-    return re.sub(r'(`+).+?\1', '', text, flags=re.S)
-
-
 def rest_login(user):
     need(user is None or (isinstance(user, dict) and type(user.get('login')) is str), 'null node: comment author')
     return DELETED_ACCOUNT if user is None else user['login']
@@ -293,17 +288,12 @@ def read_rest(repo, cache):
         kind = 'pull' if number in pulls else 'issue'
         need(i.get('body') is None or type(i['body']) is str, f'null node: #{number} body')
         body = i.get('body') or ''
-        closing = []
         if kind == 'pull':
             need(type(heads[number]) is str, f'null node: #{number} head')
-            for other, n in CLOSES.findall(outside_code(body)):
-                ref = '%s#%s' % (other or repo, n)
-                if ref not in closing:
-                    closing.append(ref)
         items.append({'number': number, 'kind': kind, 'title': i['title'], 'state': 'OPEN',
                       'labels': names(i['labels'], number), 'body': body,
                       'updated_at': stamp(i.get('updated_at'), number), 'head': heads.get(number) if kind == 'pull' else None,
-                      'closing_issues': closing, 'comments': unique_ids(comments, number)})
+                      'closing_issues': None if kind == 'pull' else [], 'comments': unique_ids(comments, number)})
     return items, fleet_md
 
 
@@ -383,7 +373,9 @@ def facts(out, number):
             f"{kind}, {item.get('state')}; labels: {', '.join(item.get('labels') or []) or 'none'}; "
             f"updated {item.get('updated_at')}"]
     if item.get('kind') == 'pull':
-        head.append(f"head {item.get('head')}; closes {', '.join(item.get('closing_issues') or []) or 'none'}")
+        refs = item.get('closing_issues')
+        closes = 'closing issues unavailable (read by REST)' if refs is None else f"closes {', '.join(refs) or 'none'}"
+        head.append(f"head {item.get('head')}; {closes}")
     head.append('')
     parts = ['\n'.join(head) + '\n', '### Body\n\n' + (item.get('body') or '') + '\n\n',
              f'### Record-author comments, newest first ({len(records)} of {len(every)} comments)\n\n']

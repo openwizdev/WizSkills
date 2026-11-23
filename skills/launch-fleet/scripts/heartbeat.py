@@ -332,7 +332,8 @@ def wake_or_start(state, config, env, repo, spec):
     path.parent.mkdir(mode=0o700, exist_ok=True)
     starting = state / 'starting'
     starting.mkdir(mode=0o700)
-    result = host_call(config, env, 'start', config['harness'], config['model'], 'launch-fleet')
+    result = host_call(config, env, 'start', config['harness'], config['model'], 'launch-fleet', '--row',
+                       'Orchestrator')
     if result.returncode == 0:
         starting.rmdir()
         return 0, 'started'

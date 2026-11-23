@@ -253,14 +253,12 @@ def paced_world(test, login='synthetic-owner', post_answer=None):
         reply.write_text('%s\r\n%s\r\n%s' % (status, ''.join(h + '\r\n' for h in headers), said))
         answer = ('case " $* " in *" POST "*) if [ ! -e "%s.used" ]; then : > "%s.used"; cat "%s"; '
                   'echo "gh: request failed (%s)" >&2; exit 1; fi;; esac\n' % (reply, reply, reply, status.split()[1]))
-    stored = ('if [ "$1 $2" = "auth token" ]; then [ -n "$FAKE_STORED_TOKEN" ] || exit 1; '
-              'echo "$FAKE_STORED_TOKEN"; exit 0; fi\n')
-    gh.write_text('#!/bin/sh\n%s%s%s' % (stored, answer, fake))
+    gh.write_text('#!/bin/sh\n%s%s' % (answer, fake))
     (w.dir / 'gh').mkdir()
     (w.dir / 'gh' / 'hosts.yml').write_text('github.com:\n    git_protocol: https\n    users:\n        %s:\n'
                                             '    user: %s\n' % (login, login))
     w.env['GH_CONFIG_DIR'] = str(w.dir / 'gh')
-    for name in ('GH_TOKEN', 'GITHUB_TOKEN', 'FAKE_STORED_TOKEN'):
+    for name in ('GH_TOKEN', 'GITHUB_TOKEN'):
         w.env.pop(name, None)
     return w
 
@@ -346,15 +344,14 @@ class Pacer(unittest.TestCase):
         refused = []
         for env in ({'GH_TOKEN': 'synthetic-credential-a'},
                     {'GH_TOKEN': 'synthetic-credential-a', 'GITHUB_TOKEN': 'synthetic-credential-b'},
-                    {'GITHUB_TOKEN': 'synthetic-credential-a'},
-                    {'FAKE_STORED_TOKEN': 'synthetic-credential-a'}):
-            for name in ('GH_TOKEN', 'GITHUB_TOKEN', 'FAKE_STORED_TOKEN'):
+                    {'GITHUB_TOKEN': 'synthetic-credential-a'}):
+            for name in ('GH_TOKEN', 'GITHUB_TOKEN'):
                 w.env.pop(name, None)
             w.env.update(env)
             code, out = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: started')
             refused.append((code, out.split(' ')[0]))
             self.assertNotIn('synthetic-credential', out)
-        self.assertEqual(refused, [(1, 'refused:')] * 4)
+        self.assertEqual(refused, [(1, 'refused:')] * 3)
         self.assertEqual(len(w.writes()), 2)
         text = (w.dir / 'state' / STATE).read_text()
         self.assertNotIn('synthetic-credential', text)
@@ -469,6 +466,21 @@ class Pacer(unittest.TestCase):
         fcntl.flock(lock, fcntl.LOCK_UN)
         self.assertEqual((w.writes(), state(w)), ([], full([])))
 
+    def test_a_write_refuses_when_its_window_ends_with_the_in_flight_cap_still_full(self):
+        w = paced_world(self)
+        w.update(comments={'12': [comment(4000, 'launch-fleet: starting')]})
+        holder = subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(60)'])
+        self.addCleanup(holder.kill)
+        seed(w, full([], inflight=[(holder.pid, time.time())] * 20))
+        run = patched(w, 'post.SLOT_WAIT_SECONDS = 1', 'edit', REPO, 4000, 'launch-fleet: started')
+        try:
+            out, err = run.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            holder.kill()
+            out, err = run.communicate(timeout=60)
+        self.assertTrue(out.startswith('refused: write paced, retry after '), out)
+        self.assertEqual((run.returncode, err, w.writes()), (1, '', []))
+
     def test_a_planted_temp_file_link_is_never_followed(self):
         w = paced_world(self)
         victim = w.dir / 'victim.txt'
@@ -507,9 +519,20 @@ class Pacer(unittest.TestCase):
         w = paced_world(self)
         now = time.time()
         seed(w, full([now - 1] * 59))
+        reads = w.dir / 'reads'
+        gh = w.dir / 'bin' / 'gh'
+        gh.write_text(gh.read_text().replace('#!/bin/sh\n', '#!/bin/sh\ncase " $* " in *" --paginate "*) '
+                                             'printf x >> "%s";; esac\n' % reads, 1))
+        lock = open(w.dir / 'state' / (STATE + '.lock'), 'a')
+        self.addCleanup(lock.close)
+        fcntl.flock(lock, fcntl.LOCK_EX)
         runs = [subprocess.Popen([sys.executable, '-I', str(HERE / 'post.py'), 'comment', REPO, '12',
                                   'launch-fleet: starting'], stdout=subprocess.PIPE, text=True, env=w.env, cwd=w.dir)
                 for _ in range(8)]
+        waited = time.monotonic() + 20
+        while time.monotonic() < waited and (not reads.exists() or len(reads.read_text()) < 8):
+            time.sleep(0.05)
+        fcntl.flock(lock, fcntl.LOCK_UN)
         outs = [(r.communicate(timeout=60)[0].strip(), r.returncode) for r in runs]
         self.assertEqual(sorted((out.split(' ')[0], code) for out, code in outs),
                          [('posted', 0)] + [('refused:', 1)] * 7, outs)

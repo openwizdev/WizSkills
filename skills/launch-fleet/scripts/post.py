@@ -3,14 +3,15 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import fcntl
+import hashlib
 import importlib.util
 import json
-import math
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.dont_write_bytecode = True
@@ -43,10 +44,17 @@ PER_MINUTE, PER_HOUR, IN_FLIGHT = 60, 400, 20
 SLOT_WAIT_SECONDS = 30
 IN_FLIGHT_STALE_SECONDS = 90
 SECONDARY_WAIT_DEFAULT_SECONDS = 60
+LATEST_TIME = 32503680000
+PID_LIMIT = 2 ** 31
+SHARED = 'shared'
 
 
 def stamp(at):
     return datetime.fromtimestamp(at, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def paced(at):
+    return Stop(f'refused: write paced, retry after {stamp(at)}')
 
 
 def state_path():
@@ -55,22 +63,47 @@ def state_path():
 
 
 def number(value):
-    return type(value) in (int, float) and math.isfinite(value) and value >= 0
+    return type(value) in (int, float) and 0 <= value <= LATEST_TIME
+
+
+def unique(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError('duplicate key')
+        value[key] = item
+    return value
 
 
 def valid(value):
     return (isinstance(value, dict) and set(value) == {'accounts', 'inflight', 'until'}
             and isinstance(value['accounts'], dict)
-            and all(isinstance(k, str) and isinstance(v, list) and all(number(t) for t in v)
-                    for k, v in value['accounts'].items())
+            and all(isinstance(v, list) and all(number(t) for t in v) for v in value['accounts'].values())
             and isinstance(value['inflight'], list)
-            and all(isinstance(e, list) and len(e) == 2 and type(e[0]) is int and e[0] > 0 and number(e[1])
-                    for e in value['inflight'])
+            and all(isinstance(e, list) and len(e) == 2 and type(e[0]) is int and 0 < e[0] < PID_LIMIT
+                    and number(e[1]) for e in value['inflight'])
             and number(value['until']))
 
 
+def save(path, value):
+    try:
+        fd, temp = tempfile.mkstemp(prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent)
+    except OSError:
+        raise Stop('refused: the write pacer\'s state file cannot be saved; nothing was written')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            f.write(json.dumps(value))
+        os.replace(temp, path)
+    except OSError:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+        raise Stop('refused: the write pacer\'s state file cannot be saved; nothing was written')
+
+
 @contextmanager
-def pacer_state():
+def pacer_state(deadline):
     path = state_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,20 +111,23 @@ def pacer_state():
     except OSError:
         raise Stop('refused: the write pacer\'s state folder cannot be used; nothing was written')
     with lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise paced(time.time())
+                time.sleep(0.05)
         try:
-            value = json.loads(path.read_text()) if path.exists() else {'accounts': {}, 'inflight': [], 'until': 0}
+            value = json.loads(path.read_text(), object_pairs_hook=unique) if path.exists() else \
+                {'accounts': {}, 'inflight': [], 'until': 0}
         except (OSError, ValueError):
             value = None
         if not valid(value):
             raise Stop('refused: the write pacer\'s state file is unreadable; nothing was written')
         yield value
-        temp = path.with_name(f'{path.name}.{os.getpid()}.tmp')
-        try:
-            temp.write_text(json.dumps(value))
-            os.replace(temp, path)
-        except OSError:
-            raise Stop('refused: the write pacer\'s state file cannot be saved; nothing was written')
+        save(path, value)
 
 
 def alive(pid):
@@ -99,63 +135,62 @@ def alive(pid):
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    except OSError:
+    except (OSError, OverflowError):
         return True
     return True
 
 
-def account():
-    base = os.environ.get('GH_CONFIG_DIR') or os.path.join(
-        os.environ.get('XDG_CONFIG_HOME') or os.path.join(os.path.expanduser('~'), '.config'), 'gh')
-    try:
-        text = Path(base, 'hosts.yml').read_text()
-    except (OSError, UnicodeError):
-        return 'unknown'
-    block = re.search(r'^github\.com:[ \t]*\n((?:[ \t]+.*\n?|\n)*)', text, re.M)
-    login = re.search(r'^[ \t]+user:[ \t]*([A-Za-z0-9-]+)[ \t]*$', block.group(1), re.M) if block else None
-    return login.group(1) if login else 'unknown'
+def credential():
+    token = (os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN') or '').strip()
+    if not token:
+        return SHARED
+    return 'sha256:' + hashlib.sha256(token.encode()).hexdigest()[:16]
 
 
-def take(paced):
-    key = account() if paced else None
-    deadline = time.time() + SLOT_WAIT_SECONDS
+def take(paced_write):
+    key = credential() if paced_write else None
+    deadline = time.monotonic() + SLOT_WAIT_SECONDS
     while True:
-        with pacer_state() as s:
+        with pacer_state(deadline) as s:
             now = time.time()
             s['inflight'] = [e for e in s['inflight'] if now - e[1] < IN_FLIGHT_STALE_SECONDS and alive(e[0])]
             s['accounts'] = {k: kept for k, v in s['accounts'].items() if (kept := [t for t in v if now - t < 3600])}
             free = s['until']
-            times = sorted(s['accounts'].get(key, [])) if paced else []
+            times = sorted(s['accounts'].get(key, [])) if paced_write else []
             recent = [t for t in times if now - t < 60]
             if len(recent) >= PER_MINUTE:
                 free = max(free, recent[-PER_MINUTE] + 60)
             if len(times) >= PER_HOUR:
                 free = max(free, times[-PER_HOUR] + 3600)
             busy = len(s['inflight']) >= IN_FLIGHT
+            if busy:
+                free = max(free, sorted(e[1] for e in s['inflight'])[-IN_FLIGHT] + IN_FLIGHT_STALE_SECONDS)
+            left = deadline - time.monotonic()
+            if left <= 0 or (free > now + left and not busy):
+                raise paced(max(free, now))
             if free <= now and not busy:
-                if paced:
+                if paced_write:
                     s['accounts'][key] = times + [now]
                 entry = [os.getpid(), now]
                 s['inflight'].append(entry)
                 return entry
-            if busy:
-                free = max(free, sorted(e[1] for e in s['inflight'])[-IN_FLIGHT] + IN_FLIGHT_STALE_SECONDS)
-            if free > deadline and (not busy or now >= deadline):
-                raise Stop(f'refused: write paced, retry after {stamp(free)}')
-        time.sleep(max(0.05, min(0.5 if busy else free - now, deadline - now)))
+        time.sleep(max(0.05, min(0.5 if busy else free - now, left)))
 
 
-def release(entry):
+def settle(entry, until=None):
     try:
-        with pacer_state() as s:
+        with pacer_state(time.monotonic() + SLOT_WAIT_SECONDS) as s:
+            if until is not None:
+                s['until'] = max(s['until'], until)
             if entry in s['inflight']:
                 s['inflight'].remove(entry)
+        return True
     except Stop:
-        pass
+        return False
 
 
 def answer(text):
-    head = re.match(r'HTTP/\S+ (\d{3})[^\n]*\n(.*?)\r?\n\r?\n', text, re.S)
+    head = re.match(r'HTTP/\S+ (\d{3})[^\n]*\n((?:[^\r\n][^\n]*\n)*)\r?\n', text)
     if head is None:
         return None, {}, text
     headers = {}
@@ -176,10 +211,10 @@ def secondary_wait(status, headers, said):
     if after:
         try:
             return max(0, parsedate_to_datetime(after).timestamp() - time.time())
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return SECONDARY_WAIT_DEFAULT_SECONDS
     reset = headers.get('x-ratelimit-reset', '')
-    if headers.get('x-ratelimit-remaining') == '0' and re.fullmatch(r'[0-9]{1,12}', reset):
+    if headers.get('x-ratelimit-remaining') == '0' and re.fullmatch(r'[0-9]{1,10}', reset):
         return max(0, int(reset) - time.time())
     return SECONDARY_WAIT_DEFAULT_SECONDS
 
@@ -189,19 +224,18 @@ def write(where, *args, paced=True):
     try:
         r = subprocess.run(['gh', 'api', '--include', *args], capture_output=True, text=True, timeout=60,
                            stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        settle(entry)
         return None
-    finally:
-        release(entry)
     status, headers, body = answer(r.stdout)
     wait = secondary_wait(status, headers, body + r.stderr)
-    if wait is not None:
-        until = time.time() + wait
-        with pacer_state() as s:
-            s['until'] = max(s['until'], until)
-        raise Stop(f'unknown: GitHub refused the write on {where} under its secondary rate limit; '
-                   f'no write leaves this machine before {stamp(until)}; reconcile {where} before any retry')
-    return body if r.returncode == 0 else None
+    if wait is None:
+        settle(entry)
+        return body if r.returncode == 0 else None
+    until = min(time.time() + wait, LATEST_TIME)
+    held = '' if settle(entry, until) else ', but the wait could not be recorded'
+    raise Stop(f'unknown: GitHub refused the write on {where} under its secondary rate limit{held}; '
+               f'no write should leave this machine before {stamp(until)}; reconcile {where} before any retry')
 
 
 def read_json(*args):

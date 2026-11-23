@@ -166,7 +166,9 @@ The fingerprint is the plan revision-v2 SHA-256 above, of the same graph read
 the checks ran on: the script refuses revision text that names other tickets,
 titles, blockers or bodies. The checks are links (`check-links.sh`), relies
 (`check-relies.sh`, a path a direct blocker owns counting as planned), sizes
-(exactly one `Size: S`, `M` or `L` per open ticket), width (no cycle, and no
+(exactly one `Size: S`, `M` or `L` per open ticket; for a spec created on or
+after approve.py's `SIZES_SINCE`, no L ticket, and every M ticket has its
+`Why M:` line in Parent), width (no cycle, and no
 arrow another chain implies) and owned paths (exact repository paths, and no
 two tickets that can run at once owning the same path unless both bullets say
 `(shared`). A plan that fails any check gets no record. The header differs from

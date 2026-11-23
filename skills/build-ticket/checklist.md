@@ -14,6 +14,7 @@ Before you hand back, check your work against every item here that applies to yo
 - **A guard fails closed.** A detector, scanner, allowlist or default refuses what it can't positively recognise: an unknown form, a partial value, a non-ASCII string. Prefer a type that can't hold a bad value to a check someone must remember. (#88 finding 2; #135 R1; #91 S2)
 - **Prove each guard catches a real break.** Plant the violation the guard exists for and show it is refused; a test of clean input alone passes with a broken guard. (#135 R1; #141 R2)
 - **A check reads the rule itself.** Match the operative line or row, never a word anywhere in the section: a citation or a comment can hold the same word. (#141 R2)
+- **A failure never reports success.** Check the exit status of every step you rely on, and treat an empty or partial result as unknown, never as done: a skipped copy or an empty process list must not print `ok`. (#2146 R5; #2028 R1)
 
 ## Tests
 
@@ -58,6 +59,14 @@ Before you hand back, check your work against every item here that applies to yo
 - **Claim only what was observed.** A doc or a pull request promises nothing its evidence doesn't show; a branch or a pull request doesn't show an agent is running; anything unchecked says "unverified". (#131 R1; #136 R2; #135 R2; #141 R3)
 - **Build the grill exactly.** No condition the user didn't decide (even one an adapted source had), no limit nobody asked for, and every path the decision allows. (#138 R1; #136 R1; #138 R4)
 - **Every acceptance criterion, or a question.** Meet each one; if one can't be met, ask on the ticket instead of substituting or deferring it yourself. (#131 R1)
+- **Change a producer, update its consumers.** When you change what a function, record or contract produces or accepts, find every reader and caller and check each against the new shape, in this repository and in the tickets it serves. (#1944 R1; #1654 R4; WizSkills#233 R2)
+- **Only your owned lines, even to delete.** Removing or rewriting code another open ticket reserves is out of scope, however dead it looks; ask first. (#1791 R1)
+- **A changelog line needs its release.** A new `changes/<N>.md` line only ships when its ticket is in a version milestone; otherwise use the `no-changelog` label with its reason. (#1765 R1; #1654 R5)
+
+## Output and user data
+
+- **Show fixed text, never raw output.** Messages, JSON and logs a caller sees carry fixed diagnostics; raw tool or child output stays in a private log, because a pattern-based redactor misses a token split across words or lines. (#1455 R5; #2253 R1)
+- **Never overwrite or delete what you didn't make.** Before a write, a retry or a cleanup, prove the target is yours (a validated marker, a fresh name per attempt) and keep the user's files and earlier evidence. (#2153 R1; #1607 R1; #2146 R1)
 
 ## Contracted grants and finite messages
 

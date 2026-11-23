@@ -80,7 +80,7 @@ A note counts only when its author is one of the project's record authors: the `
 The status note is public. It never holds:
 
 - **thread ids:** any `thr_` token, synthetic or not;
-- **machine details:** any machine path. That means any absolute path of two or more parts (`/etc/openwiz/config.toml`, `/home/…`), and a home folder by any name (`~/…`, `$HOME`, `${HOME}`, `%USERPROFILE%`). It also means a Windows drive or share path (`C:\…`, `\\server\…`), a `file:` link, or a CloudRoom id (`proj_`, `prj_`, `mch_`, `usr_`, `acct_`, `auto_`, `cr_`). A repository path such as `skills/launch-fleet/scripts/status.py` is not absolute, and a URL's own path is not a machine path;
+- **machine details:** any machine path. That means any absolute path of two or more parts (`/etc/openwiz/config.toml`, or any path inside a user's home folder on Linux), and a home folder by any name (`~/…`, `$HOME`, `${HOME}`, `%USERPROFILE%`). It also means a Windows drive or share path (`C:\…`, `\\server\…`), a `file:` link, or a CloudRoom id (`proj_`, `prj_`, `mch_`, `usr_`, `acct_`, `auto_`, `cr_`). A repository path such as `skills/launch-fleet/scripts/status.py` is not absolute, and a URL's own path is not a machine path;
 - **credentials:** a `token=`, `key=`, `secret=`, `password=`, `sig=` or similar assignment, a `password:` or `Bearer` value, or a known key shape (`gh?_…`, `github_pat_…`, `AKIA…`, `xox?-…`, `sk-…`);
 - **private words:** anyone's exact words. A writer refuses any double quote mark (`"`, `“`, `”`) and any value that starts with `>`.
 

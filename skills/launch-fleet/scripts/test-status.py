@@ -253,6 +253,11 @@ def contract_example():
     return re.sub(r'(?m)^skills: build-ticket@[0-9.]+$', 'skills: ' + SKILLS, section.split('\n```', 1)[0])
 
 
+class ContractText(unittest.TestCase):
+    def test_contract_spells_no_home_path(self):
+        self.assertFalse('/' + 'home' + '/' in CONTRACT.read_text(), 'the contract spells a home path')
+
+
 class Tracker(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()

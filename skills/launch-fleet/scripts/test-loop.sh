@@ -62,6 +62,20 @@ setup = setup.replace("/tmp/launch-fleet-loop.sh", sys.argv[3])
 subprocess.run(["sh", "-c", setup], check=True)
 PY
 sh -n "$work/loop.sh"
+mkdir "$work/gen-probe"
+for tool in dirname mktemp grep cat rm; do
+  printf '#!/bin/sh\n[ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && echo "%s key" >> "%s" || echo "%s no-key" >> "%s"\nexec %s "$@"\n' \
+    "$tool" "$work/gen-probe.log" "$tool" "$work/gen-probe.log" "$(command -v "$tool")" > "$work/gen-probe/$tool"
+  chmod +x "$work/gen-probe/$tool"
+done
+(export OPENWIZ_GITHUB_APP_KEY=synthetic-key-sentinel-2843 PATH="$work/gen-probe:$PATH"
+  sh "$work/linked skills/launch-fleet/scripts/loop.sh" --bundle synthetic-owner/synthetic-repo > "$work/loop-key.sh")
+cmp "$work/loop.sh" "$work/loop-key.sh"
+if grep -v ' no-key$' "$work/gen-probe.log"; then echo 'the generator handed the key to a child' >&2; exit 1; fi
+for tool in dirname mktemp grep cat rm; do
+  if ! grep -qx "$tool no-key" "$work/gen-probe.log"; then echo "unprobed: $tool" >&2; exit 1; fi
+done
+echo 'ok   generating the bundle with the key set hands it to no child (#2843)'
 rm -rf "$work/plugin cache"
 cd "$work"
 printf 'start #13: W3: widget page (spec #10)\n' > "$work/want"
@@ -256,17 +270,22 @@ sed -n '/^restore_today_account() {$/,/^}$/p' "$work/block.sh" > "$work/restore.
 cmp "$work/restore.loop" "$work/restore.block"
 echo "ok   the identity block drops inherited shims with loop.sh's restore_today_account (#2843)"
 
-for at in x 01 4 ''; do
-  (inherit; export OPENWIZ_AGENT_TOKEN_GIT_AT="$at"
-    sh -c '. "$1"; restore_today_account; env' sh "$work/restore.loop" > "$work/env"
-    absent '^GIT_CONFIG_COUNT=' "$work/env"
+for marks in x:3 01:3 4:3 :3 -:3 1:x 1:01 1: 1:- 1:1234567890 x:- -:-; do
+  (inherit; at=${marks%%:*} count=${marks#*:}
+    if [ "$at" = - ]; then unset OPENWIZ_AGENT_TOKEN_GIT_AT; else export OPENWIZ_AGENT_TOKEN_GIT_AT="$at"; fi
+    if [ "$count" = - ]; then unset GIT_CONFIG_COUNT; else export GIT_CONFIG_COUNT="$count"; fi
+    for copy in loop block; do
+      sh -c '. "$1"; restore_today_account; env' sh "$work/restore.$copy" > "$work/env"
+      absent '^GIT_CONFIG_COUNT=' "$work/env"
+      absent -E '^GIT_CONFIG_(KEY|VALUE)_' "$work/env"
+    done
     absent '^OPENWIZ_AGENT_TOKEN_' "$work/env"
     absent '^GH_TOKEN=' "$work/env")
 done
 (unset OPENWIZ_AGENT_TOKEN_RUN; export GH_TOKEN=synthetic-own-account-2843
   sh -c '. "$1"; restore_today_account; printf "%s\n" "$GH_TOKEN"' sh "$work/restore.loop" > "$work/env"
   [ "$(cat "$work/env")" = synthetic-own-account-2843 ])
-echo "ok   restore_today_account drops all git config on an unreadable mark and keeps an own GH_TOKEN (#2843)"
+echo "ok   restore_today_account drops every git config entry on an unreadable mark and keeps an own GH_TOKEN (#2843)"
 
 # Failed refreshes and first clones must not emit work or leave runtime files.
 mv "$work/remote" "$work/offline"

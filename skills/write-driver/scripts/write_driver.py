@@ -566,8 +566,6 @@ TEST_ORIGIN = 'OPENWIZ_HOSTKEY_TEST_ORIGIN'
 
 
 def kit_view(folder, view, state):
-    """The kit reads the driver's folder beside its proxy: each entry is linked here to the real file it names, so
-    a relative link resolves as in the folder and nothing is copied. The run's own state stays out of view."""
     for name in sorted(os.listdir(folder)):
         source = os.path.realpath(os.path.join(folder, name))
         if name == '__pycache__' or source == state:
@@ -586,8 +584,8 @@ def kit_in_stage(a, stage):
         print("the kit could not run: the driver's folder holds %s, the name its proxy takes: rename it" % PROXY)
         return 2
     view, synthetic = stage / 'view', stage / 'synthetic'
-    # A start under a test origin the kit sets itself, as its key check's fake host, is recorded only in this
-    # throwaway state: stop-all never replays it on the live route.
+    # SECURITY: a start under a test origin the kit sets itself, its key check's fake host, is recorded only in
+    # throwaway state, so stop-all never replays it on the live route.
     launch = shlex.quote('x' + os.environ[TEST_ORIGIN]) if TEST_ORIGIN in os.environ else "''"
     proxy = ('#!/bin/sh\ncase "${%s+x}${%s-}" in %s) state=%s ;; *) state=%s ;; esac\n'
              'exec %s -I %s proxy --state "$state" --openwiz %s --driver %s "$@"\n' % (

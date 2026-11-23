@@ -987,7 +987,7 @@ def create(name, login):
 
 def unproven(state, name):
     if state.value['created']['state'] != 'created':
-        state.value['created'] = {'repo': name, 'state': 'absent'}
+        state.value['created'] = {'repo': name, 'state': 'unproven'}
         state.save()
     return Exit(5, 'Whether OpenWiz created %s is uncertain: no create reply of this onboarding names that '
                    "repository, so a teammate may have made it. OpenWiz writes neither tests/test_check.py nor "

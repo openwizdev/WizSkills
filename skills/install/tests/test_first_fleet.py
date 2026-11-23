@@ -1280,7 +1280,10 @@ class DemoRepository(unittest.TestCase):
                     self.assertIn(said, result.stdout)
                     self.assertNotIn('Created and read back', result.stdout)
                 self.assertEqual((self.world(j)['repos'], self.writes(j)), (before, []), 'neither file written')
-                self.assertNotIn('seeded', json.loads(j.state.read_text())['created'])
+                self.assertEqual(json.loads(j.state.read_text())['created'], {'repo': REPO, 'state': 'unproven'})
+                other = j.helper(['create-repo', '--repo', 'synthetic-owner/second-demo', '--yes'])
+                self.assertEqual(other.returncode, 5, other.stdout)
+                self.assertEqual(self.writes(j), [], 'still uncertain: no second repository')
 
     def test_a_lost_reply_or_another_id_writes_neither_file(self):
         for name, switches, saved in (('lost reply', {'create': 'lost'}, None),

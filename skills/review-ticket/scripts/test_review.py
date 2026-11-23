@@ -627,6 +627,8 @@ class Review(unittest.TestCase):
                                                               held=None),
                                              "R5: Late: and [pre-existing] are only for a re-check's new finding "
                                              "on unchanged code"),
+            "unknown hyphenated grade": (self.late_report(LATE_PRE.replace("[pre-existing]", "[pre-exist-ing]"),
+                                                          held=None), "R5: the grade is blocking, polish or pre-existing"),
             "held-back line missing": (self.late_report(LATE_PRE, held=None),
                                        "the report says `1 findings on unchanged code held back as pre-existing.`"),
             "held-back count wrong": (self.late_report(LATE_PRE, held=2),

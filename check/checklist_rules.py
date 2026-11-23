@@ -18,17 +18,20 @@ CHECKS = {
         r'\bassert(?:Greater|GreaterEqual)\(\s*' + COUNT + r'\s*,',
         r'\bassertNotEqual\(\s*' + COUNT + r'\s*,\s*0\s*\)',
         r'\bassert.*' + COUNT + r'\s*(?:>=?\s*\d|!=\s*0\b)',
-        r'\bassert.*\b\d+\s*<=?\s*' + COUNT,
+        r'\bassert.*\b\d+\s*<=?\s*' + COUNT + r'(?!\s*<)',
         r'\[\s+' + SHELL_COUNT + r'\s+-g[te]\s+\d'))),
         'assert the exact number, never "at least"'),
     'clock': (re.compile(r'\bassert.*' + CLOCK + r'|\[\s+.*(?:\$SECONDS\b|\$\(date\b)'),
               'compare only what the test controls, never a measured time'),
 }
-FIXED_TEMP = re.compile(r'''(?:^|[\s'"`=(:,])/(?:var/)?tmp/([\w.$-][^\s'"`),;]*)''')
+TEMP_PATH = r'''/(?:var/)?tmp/([\w.$-][^\s'"`),;]*)'''
+FIXED_TEMP = {'python': re.compile(r'''['"]''' + TEMP_PATH), 'js': re.compile(r'''['"`]''' + TEMP_PATH),
+              'shell': re.compile(r'''(?:^|[\s'"=])''' + TEMP_PATH)}
 TEMP_MESSAGE = 'use a fresh temporary folder of its own, never a fixed path under /tmp'
 STRINGS = {'python': r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|#.*''',
            'js': r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|//.*''',
            'shell': r"""'[^']*'|(?:^|\s)#.*"""}
+BINARY = re.compile(rb'^Binary files .* and ("?b/.*) differ$')
 HUNK = re.compile(rb'^@@ -[0-9]+(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@')
 
 
@@ -57,6 +60,8 @@ def added(patch):
                 raise ValueError('a hunk ends early')
         elif raw.startswith(b'diff --git '):
             path = None
+        elif BINARY.match(raw) and language(path_of(BINARY.match(raw)[1])):
+            raise ValueError('a test source git calls binary')
         elif raw.startswith(b'+++ '):
             path = None if raw == b'+++ /dev/null' else path_of(raw[4:])
         elif raw.startswith(b'@@'):
@@ -79,7 +84,7 @@ def findings(patch):
         for rule, (pattern, message) in CHECKS.items():
             if pattern.search(code):
                 yield f'{rule} {path}:{number}: {message}'
-        if any('XXX' not in name for name in FIXED_TEMP.findall(text)):
+        if any('XXX' not in name for name in FIXED_TEMP[kind].findall(text)):
             yield f'own-temp {path}:{number}: {TEMP_MESSAGE}'
 
 

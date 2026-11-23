@@ -46,7 +46,7 @@ Evidence (red and green runs, logs, screenshots, review captures) goes in the pu
 
 | Check | Runs | Required by fleet on |
 | --- | --- | --- |
-| `check` | Passes only when every job passed: one job per shard from `run.py --list` (skill rules, standalone check and every skill suite) and the gates job; on pull requests, merge groups and pushes to `main` | Pull requests and merge groups to `main` at the exact proposed head |
+| `check` | Passes only when every job passed: one job per shard from `run.py --list` (skill rules, standalone check and every skill suite; on a pull request, every shard `check/select.py` selects) and the gates job; on pull requests, merge groups and pushes to `main` | Pull requests and merge groups to `main` at the exact proposed head |
 
 ## Standing merge rules
 

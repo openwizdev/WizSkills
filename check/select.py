@@ -17,7 +17,8 @@ QUOTED_SKILL = r'''['"]({names})['"]'''
 LISTS_EVERY_SKILL = re.compile(r'''['"]skills['"]\s*\)\s*\.\s*(?:iterdir|r?glob)\(|skills/\*|(?:\.\.|\$\{?\w+\}?"?)/\.\./\*''')
 CODE_SUFFIXES = {'.py', '.sh', '.mjs', '.js', '.cjs', '.ts'}
 NEW_CHANGESET = re.compile(r'\.changeset/[^/]+\.md')
-CHANGESET_FOLDER_FILES = {'readme.md'}
+NOT_CHANGESET_NOTES = {'readme.md', 'agents.md', 'claude.md', 'gemini.md'}
+CHECK = 'check'
 
 
 def suite_folders(shards):
@@ -25,7 +26,7 @@ def suite_folders(shards):
     for shard in shards:
         skill = shard['skill']
         if skill is not None:
-            rows[skill] = Path('skills', skill) if skill != 'check' else Path('check')
+            rows[skill] = Path('skills', skill) if skill != CHECK else Path(CHECK)
     return rows
 
 
@@ -65,11 +66,17 @@ def reads(root, shards):
     return found
 
 
-def owning_skill(path, rows):
-    if NEW_CHANGESET.fullmatch(path) and path.split('/')[1].lower() not in CHANGESET_FOLDER_FILES:
+def new_changeset_note(path, added):
+    name = path.split('/')[-1]
+    return path in added and bool(NEW_CHANGESET.fullmatch(path)) and not name.startswith('.') \
+        and name.lower() not in NOT_CHANGESET_NOTES
+
+
+def owning_skill(path, rows, added):
+    if new_changeset_note(path, added):
         return ''
     parts = path.split('/')
-    if len(parts) >= 3 and parts[0] == 'skills' and parts[1] in rows and parts[1] != 'check' \
+    if len(parts) >= 3 and parts[0] == 'skills' and parts[1] in rows and parts[1] != CHECK \
             and all(part not in ('', '.', '..') for part in parts) and '\\' not in path:
         return parts[1]
     return None
@@ -83,14 +90,18 @@ def select(root, shards, changed, event, added=frozenset()):
     rows = suite_folders(shards)
     picked = set()
     for path in changed:
-        skill = owning_skill(path, rows)
+        skill = owning_skill(path, rows, added)
         if skill is None:
             return list(shards), f'{path or "(empty path)"} needs every shard'
         if skill:
             picked.add(skill)
     if picked:
         found = reads(root, shards)
-        picked |= {row for row, read in found.items() if read & picked}
+        readers = sorted(row for row, read in found.items() if row != CHECK and read & picked)
+        if readers:
+            return list(shards), f"{', '.join(sorted(picked))} read by {', '.join(readers)}'s suites"
+        if found.get(CHECK, set()) & picked:
+            picked.add(CHECK)
     return [s for s in shards if s['name'] in ALWAYS or s['skill'] in picked], None
 
 
@@ -123,18 +134,21 @@ def main(argv):
     except ValueError as e:
         print(f'select: bad shard list: {e}', file=sys.stderr)
         return 2
-    changed = []
+    changed, added = [], set()
     if event == 'pull_request':
-        git = subprocess.run(['git', '-C', str(ROOT), 'diff', '--name-only', '--no-renames', '-z',
+        git = subprocess.run(['git', '-C', str(ROOT), 'diff', '--name-status', '--no-renames', '-z',
                               base, 'HEAD', '--'], capture_output=True)
         if git.returncode != 0:
             print(f'select: cannot diff {base}: {git.stderr.decode(errors="replace").strip()}',
                   file=sys.stderr)
             return 1
-        changed = [p for p in git.stdout.decode('utf-8', errors='replace').split('\0') if p]
+        fields = git.stdout.decode('utf-8', errors='replace').split('\0')[:-1]
+        statuses = dict(zip(fields[1::2], fields[0::2]))
+        changed = list(statuses)
+        added = {path for path, status in statuses.items() if status == 'A'}
     for path in changed:
         print(f'select: changed: {path}', file=sys.stderr)
-    chosen, every = select(ROOT, shards, changed, event)
+    chosen, every = select(ROOT, shards, changed, event, added)
     if every:
         print(f'select: every shard: {every}', file=sys.stderr)
     names = {s['name'] for s in chosen}

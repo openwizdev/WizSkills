@@ -21,6 +21,10 @@ world = json.load(open(os.environ['FAKE_WORLD']))
 headers = [args[i + 1] for i, a in enumerate(args) if a == '-H']
 sent = [h.split(':', 1)[1].strip() for h in headers if h.lower().startswith('if-none-match:')]
 answer = world.get(args[-1])
+if world.get('swap'):
+    root = os.path.join(os.environ['XDG_CACHE_HOME'], 'launch-fleet')
+    os.rename(os.path.join(root, 'rest'), os.path.join(root, 'moved'))
+    os.symlink(world['swap'], os.path.join(root, 'rest'))
 if args[0] != 'api' or '--include' not in args or answer is None:
     print('gh: synthetic failure', file=sys.stderr)
     sys.exit(1)
@@ -275,6 +279,61 @@ class GhCache(unittest.TestCase):
         with self.assertRaises(self.ghcache.Error) as raised:
             self.ghcache.get(risky)
         self.assertNotIn(secret, str(raised.exception))
+
+    def test_a_link_that_cannot_be_saved_is_an_error_and_never_a_lost_page(self):
+        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]'}})
+        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}])
+        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]', 'link': '<%s>; rel="next"' % PAGE2},
+                    PAGE2: {'etag': '"p2"', 'body': '[{"id": 3}]'}})
+        with mock.patch('os.replace', side_effect=OSError(28, 'synthetic no space')):
+            with self.assertRaises(self.ghcache.Error) as raised:
+                self.ghcache.pages(COMMENTS)
+        self.assertIn('cache', str(raised.exception))
+        self.world({COMMENTS: {'etag': '"p1"', 'body': '[{"id": 1}]', 'link': '<%s>; rel="next"' % PAGE2,
+                               'no_link_on_304': True},
+                    PAGE2: {'etag': '"p2"', 'body': '[{"id": 3}]'}})
+        self.assertEqual(self.ghcache.pages(COMMENTS), [{'id': 1}, {'id': 3}])
+        self.assertEqual(self.sent_tags(), [[], ['"p1"'], [], []])
+
+    def test_a_replaceable_ancestor_is_refused_before_anything_is_created(self):
+        for layout in ('open', 'open/cache'):
+            os.environ['XDG_CACHE_HOME'] = str(self.tmp / layout / 'xdg')
+            (self.tmp / layout / 'xdg').mkdir(parents=True)
+            (self.tmp / layout).chmod(0o777)
+            with self.assertRaises(self.ghcache.Error):
+                self.ghcache.get(ISSUE)
+            self.assertEqual(list((self.tmp / layout / 'xdg').iterdir()), [])
+            (self.tmp / layout).chmod(0o700)
+        self.assertEqual(self.calls(), [])
+        sticky = self.tmp / 'sticky'
+        sticky.mkdir()
+        sticky.chmod(0o1777)
+        os.environ['XDG_CACHE_HOME'] = str(sticky / 'xdg')
+        self.assertEqual(self.ghcache.get(ISSUE), {'number': 7, 'title': 'first'})
+        self.assertEqual(stat.S_IMODE((sticky / 'xdg' / 'launch-fleet' / 'rest').stat().st_mode), 0o700)
+
+    def test_entry_writes_stay_in_the_checked_folder_when_it_is_swapped(self):
+        attacker = self.tmp / 'attacker'
+        attacker.mkdir()
+        self.world({ISSUE: {'etag': '"a1"', 'body': '{"number": 7}'}, 'swap': str(attacker)})
+        self.ghcache.get(ISSUE)
+        self.assertEqual(list(attacker.iterdir()), [])
+        moved = self.cache / 'launch-fleet' / 'moved'
+        self.assertEqual(len([p for p in moved.iterdir() if p.name.endswith('.json')]), 1)
+
+    def test_an_unparsable_endpoint_has_a_constant_label(self):
+        secret = 'synthetic-credential'
+        bad = 'https://synthetic-user:%s@[api.github.com/repos/x' % secret
+        with self.assertRaises(self.ghcache.Error) as raised:
+            self.ghcache.get(bad)
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertNotIn('synthetic-user', str(raised.exception))
+        run = subprocess.run([sys.executable, '-I', str(HERE / 'ghcache.py'), 'get', bad],
+                             capture_output=True, text=True)
+        self.assertEqual((run.returncode, run.stdout), (1, ''))
+        self.assertNotIn(secret, run.stderr)
+        self.assertNotIn('synthetic-user', run.stderr)
+        self.assertNotEqual(run.stderr, '')
 
 
 if __name__ == '__main__':

@@ -332,7 +332,7 @@ class RestWrite(unittest.TestCase):
         self.assertEqual(sorted(items), list(range(1, 122)))
         self.assertEqual([c['id'] for c in items[5]['comments']], [20000 + k for k in range(130)])
         self.assertEqual((items[121]['kind'], items[121]['head'], items[121]['closing_issues']),
-                         ('pull', '%040x' % 121, [REPO + '#1']))
+                         ('pull', '%040x' % 121, None))
         calls = w.calls()
         self.assertFalse([c for c in calls if c.startswith('graphql')], calls)
         self.assertTrue(all(c.startswith('rest 200 ') and not c.endswith('conditional') for c in calls[1:]), calls)
@@ -488,11 +488,37 @@ class ReviewFindings(unittest.TestCase):
                 self.assertEqual(code, 2, err)
                 self.assertFalse(w.out.exists())
 
-    def test_rest_closing_links_skip_code(self):
-        body = 'Closes #1\n\n```\nCloses #5\n```\n\n~~~\nfixes #6\n~~~\n\nSay `resolves #7` to close.\n'
+    def rest_closing(self, body):
         w = World(self, [item(1), item(40, 'pull', body=body)], core=4000, graphql=2000)
         self.assertEqual(w.write()[0], 0)
-        self.assertEqual(by_number(w.snapshot())[40]['closing_issues'], [REPO + '#1'])
+        return w, by_number(w.snapshot())[40]['closing_issues']
+
+    def test_rest_closing_links_are_unavailable_not_guessed_from_code(self):
+        body = 'Closes #1\n\n```\nCloses #5\n```\n\n~~~\nfixes #6\n~~~\n\nSay `resolves #7` to close.\n'
+        self.assertIsNone(self.rest_closing(body)[1])
+
+    def test_rest_closing_links_unavailable_for_an_indented_example(self):
+        self.assertIsNone(self.rest_closing('How to close:\n\n    Closes #5\n')[1])
+
+    def test_rest_closing_links_unavailable_for_a_nonexistent_issue(self):
+        self.assertIsNone(self.rest_closing('Closes #999\n')[1])
+
+    def test_rest_closing_links_unavailable_for_a_pull_into_a_non_default_branch(self):
+        self.assertIsNone(self.rest_closing('Base: release-synthetic.\n\nCloses #1\n')[1])
+
+    def test_rest_facts_say_closing_links_are_unavailable(self):
+        w, _ = self.rest_closing('Closes #1\n')
+        code, out, err = w.run('facts', w.out, 40)
+        self.assertEqual(code, 0, err)
+        self.assertIn('closing issues unavailable', out)
+        self.assertNotIn('#1', out.split('### Body')[0].replace('synthetic-repo#40', ''))
+
+    def test_graphql_keeps_githubs_closing_references_over_the_body(self):
+        pull = item(40, 'pull', body='Closes #1\n\n    Closes #5\n\nCloses #999\n', closes=[])
+        w = World(self, [item(1), pull, item(41, 'pull', closes=[1])])
+        self.assertEqual(w.write()[0], 0)
+        items = by_number(w.snapshot())
+        self.assertEqual((items[40]['closing_issues'], items[41]['closing_issues']), ([], [REPO + '#1']))
 
     def test_a_failed_cache_write_keeps_the_old_snapshot_and_exits_2(self):
         w = World(self, [item(1)], core=4000, graphql=2000)

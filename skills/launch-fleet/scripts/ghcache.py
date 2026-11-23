@@ -21,7 +21,9 @@ class Error(Exception):
 
 
 def cache_dir():
-    base = os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache')
+    base = os.environ.get('XDG_CACHE_HOME')
+    if not base or not os.path.isabs(base):
+        base = os.path.join(os.path.expanduser('~'), '.cache')
     return Path(base) / 'launch-fleet' / 'rest'
 
 
@@ -45,27 +47,46 @@ def _trusted(info, own):
     return info.st_uid in (0, os.getuid()) and (not info.st_mode & 0o022 or info.st_mode & stat.S_ISVTX)
 
 
-def _root():
-    base = Path(os.path.realpath(cache_dir().parent.parent))
-    names = list(base.parts[1:]) + ['launch-fleet', 'rest']
+def _step(fd, name, own):
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    fd = None
     try:
-        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
-        if not _trusted(os.fstat(fd), False):
-            raise Error('ghcache: unsafe cache folder, refused')
-        for number, name in enumerate(names):
+        child = os.open(name, flags, dir_fd=fd)
+    except FileNotFoundError:
+        try:
+            os.mkdir(name, 0o700, dir_fd=fd)
+        except FileExistsError:
+            pass
+        child = os.open(name, flags, dir_fd=fd)
+    if not _trusted(os.fstat(child), own):
+        os.close(child)
+        raise Error('ghcache: unsafe cache folder, refused')
+    if fd is not None:
+        os.close(fd)
+    return child
+
+
+def _root():
+    base = cache_dir().parent.parent
+    if not base.is_absolute():
+        raise Error('ghcache: unsafe cache folder, refused')
+    names, fd, links = list(base.parts), None, 0
+    try:
+        while names:
+            name = names.pop(0)
             try:
-                child = os.open(name, flags, dir_fd=fd)
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
             except FileNotFoundError:
-                os.mkdir(name, 0o700, dir_fd=fd)
-                child = os.open(name, flags, dir_fd=fd)
-            os.close(fd)
-            fd = child
-            info = os.fstat(fd)
-            if not _trusted(info, number >= len(names) - 2):
-                raise Error('ghcache: unsafe cache folder, refused')
-        if stat.S_IMODE(info.st_mode) != 0o700:
+                info = None
+            if info and stat.S_ISLNK(info.st_mode):
+                links += 1
+                if links > 40 or info.st_uid not in (0, os.getuid()) or os.fstat(fd).st_mode & 0o022:
+                    raise Error('ghcache: unsafe cache folder, refused')
+                names[:0] = Path(os.readlink(name, dir_fd=fd)).parts
+                continue
+            fd = _step(fd, name, False)
+        for name in ('launch-fleet', 'rest'):
+            fd = _step(fd, name, True)
+        if stat.S_IMODE(os.fstat(fd).st_mode) != 0o700:
             os.fchmod(fd, 0o700)
     except BaseException as error:
         if fd is not None:
@@ -111,6 +132,8 @@ def _load(root, name, request, label):
             raw = handle.read()
         except OSError:
             raw = b''
+    if not raw:
+        return None
     try:
         entry = json.loads(raw.decode('utf-8'), object_pairs_hook=_once)
         if (not isinstance(entry, dict) or set(entry) != {'request', 'etag', 'link', 'body', 'sha256'}
@@ -121,11 +144,30 @@ def _load(root, name, request, label):
             raise ValueError
         return entry
     except (ValueError, UnicodeError):
-        try:
-            os.unlink(name, dir_fd=root)
-        except OSError:
-            pass
+        _drop(root, name)
         raise Error('ghcache: damaged cache entry for %s, removed; read again' % label) from None
+
+
+def _drop(root, name):
+    try:
+        os.unlink(name, dir_fd=root)
+        return
+    except FileNotFoundError:
+        return
+    except OSError:
+        pass
+    try:
+        fd = os.open(name, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root)
+    except OSError:
+        return
+    try:
+        info = os.fstat(fd)
+        if stat.S_ISREG(info.st_mode) and _owned(info):
+            os.ftruncate(fd, 0)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def _save(root, name, entry):
@@ -189,10 +231,7 @@ def _cached(root, endpoint, accept, label, request):
             raise Error('ghcache: 304 for %s with no saved answer' % label)
         link = headers.get('link', entry['link'])
         if link != entry['link'] and not _save(root, name, _entry(request, entry['etag'], link, entry['body'])):
-            try:
-                os.unlink(name, dir_fd=root)
-            except OSError:
-                pass
+            _drop(root, name)
             raise Error('ghcache: cannot save the new Link for %s in the cache; read again' % label)
         return entry['body'], link
     if status != 200:

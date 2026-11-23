@@ -66,17 +66,19 @@ def valid_graph:
 # A body'"'"'s `## Links` section: null (none), {malformed: detail},
 # or {lines: [...]}, by the contract'"'"'s "Reading a section".
 def long_form: capture("^- (?<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(?<n>[1-9][0-9]*) (?<kind>real|file):(?<reason>.*)$");
+def comment_after($open):
+  ([capture(if $open then "^.*?-->(?<rest>.*)$" else "^.*?<!--(?<rest>.*)$" end)][0]) as $m
+  | if $m == null then $open else $m.rest | comment_after($open | not) end;
 def section($repo):
   (split("\r\n") | join("\n") | split("\n") | map(sub("[ \t]+$"; ""))) as $l
   | (reduce range(0; $l | length) as $i ({fence: null, comment: false, heads: []};
       $l[$i] as $line | ($line | sub("^\\s+"; "")) as $trim
       | (if $line == "## Links" and (.comment | not) and .fence == null then .heads += [$i] else . end)
-      | (if .fence != null then
+      | if .fence != null then
           .fence as $open
           | if ($trim | test("^" + $open[0:1] + "{" + ($open | length | tostring) + ",}\\s*$")) then .fence = null else . end
-        else .fence = ([$trim | match("^(`{3,}|~{3,})") | .string][0] // null) end)
-      | (if ($line | contains("<!--")) then .comment = true else . end)
-      | (if ($line | contains("-->")) then .comment = false else . end)
+        elif (.comment | not) and ($trim | test("^(`{3,}|~{3,})")) then .fence = ($trim | match("^(`{3,}|~{3,})") | .string)
+        else .comment as $open | .comment = ($line | comment_after($open)) end
     ) | .heads) as $heads
   | if ($heads | length) == 0 then null
     elif ($heads | length) > 1 then {malformed: "more than one ## Links section"}

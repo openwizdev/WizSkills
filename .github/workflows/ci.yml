@@ -29,17 +29,24 @@ jobs:
     timeout-minutes: 10
     outputs:
       shards: ${{ steps.list.outputs.shards }}
+      skipped: ${{ steps.list.outputs.skipped }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: List the shards; a shard needs the browser when its skill's folder names playwright-core (the inventory guard fails this job on an unlisted test)
+          fetch-depth: 2
+      - name: List the shards; a pull request keeps only those its changes need (check/select.py), a merge group or push keeps every one; a shard needs the browser when its skill's folder names playwright-core (the inventory guard fails this job on an unlisted test)
         id: list
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
-          python3 check/run.py --list > "$RUNNER_TEMP/shards.json"
-          python3 -I - "$RUNNER_TEMP/shards.json" >> "$GITHUB_OUTPUT" <<'PY'
+          python3 check/run.py --list > "$RUNNER_TEMP/all.json"
+          python3 -I check/select.py --event "$EVENT" --base HEAD^1 < "$RUNNER_TEMP/all.json" > "$RUNNER_TEMP/shards.json"
+          python3 -I - "$RUNNER_TEMP/shards.json" "$RUNNER_TEMP/all.json" >> "$GITHUB_OUTPUT" <<'PY'
           import json, pathlib, sys
           shards = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          kept = {s['name'] for s in shards}
+          skipped = [s['name'] for s in json.loads(pathlib.Path(sys.argv[2]).read_text()) if s['name'] not in kept]
           def browser(skill):
               folder = pathlib.Path('skills', skill or '')
               return bool(skill) and folder.is_dir() and any(
@@ -49,6 +56,7 @@ jobs:
           for row in matrix:
               print(f"shard {row['shard']}: browser {'yes' if row['browser'] else 'no'}", file=sys.stderr)
           print('shards=' + json.dumps(matrix))
+          print('skipped=' + json.dumps(skipped))
           PY
   gates:
     name: gates
@@ -125,11 +133,18 @@ jobs:
       - name: Every job passed
         env:
           RESULTS: ${{ toJSON(needs) }}
+          SKIPPED: ${{ needs.list.outputs.skipped || '[]' }}
         run: |
           python3 -I - <<'PY'
           import json, os, sys
           results = {job: need['result'] for job, need in json.loads(os.environ['RESULTS']).items()}
           for job, result in results.items():
               print(f'{job}: {result}')
+          skipped = [f"shard {name}: skipped (this pull request's changes don't need it)"
+                     for name in json.loads(os.environ['SKIPPED'])]
+          for line in skipped:
+              print(line)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(''.join(f'- {line}\n' for line in skipped))
           sys.exit(0 if all(result == 'success' for result in results.values()) else 1)
           PY

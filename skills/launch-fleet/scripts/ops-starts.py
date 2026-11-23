@@ -214,8 +214,8 @@ def _older_tables(text):
                 roles=dict(orchestrator=dict(older, follows='builder', choice=builder),
                            builder=dict(older, choice=builder), reviewer=dict(older, choice=tables[2 + own]),
                            small_builder=dict(older, choice=small), fixer=dict(older, choice=fixers[own])),
-                reviews=dict(claude=dict(choice=for_claude), gpt=dict(choice=for_gpt)),
-                fixers=dict(claude=dict(choice=fixers[0]), gpt=dict(choice=fixers[1])))
+                reviews=dict(claude=dict(choice=for_claude, row='Reviewer'), gpt=dict(choice=for_gpt, row='Reviewer')),
+                fixers=dict(claude=dict(choice=fixers[0], row='Fixer'), gpt=dict(choice=fixers[1], row='Fixer')))
 
 
 def read_models(text):
@@ -228,10 +228,10 @@ def read_models(text):
     builder, reviewer, fixer = (roles[k]['choice'] for k in ('builder', 'reviewer', 'fixer'))
     reviews, fixers = {}, {}
     for family in ('claude', 'gpt'):
-        reviews[family] = next((dict(choice=c) for c in (reviewer, builder)
-                                if FAMILY.get(c['provider']) not in (None, family)), dict(choice=None))
-        fixers[family] = next((dict(choice=c) for c in (fixer, reviewer)
-                               if FAMILY.get(c['provider']) == family), dict(choice=None))
+        reviews[family] = next((dict(choice=c, row=row) for c, row in ((reviewer, 'Reviewer'), (builder, 'Builder'))
+                                if FAMILY.get(c['provider']) not in (None, family)), dict(choice=None, row=None))
+        fixers[family] = next((dict(choice=c, row=row) for c, row in ((fixer, 'Fixer'), (reviewer, 'Reviewer'))
+                               if FAMILY.get(c['provider']) == family), dict(choice=None, row=None))
     return dict(read='models_table', roles=roles, reviews=reviews, fixers=fixers)
 
 
@@ -271,6 +271,17 @@ def spawn_flags(models):
         c = models[kind][key]['choice']
         out[start] = None if c is None else (f'--provider {c["provider"]} --model {c["model"]} '
                                              f'--reasoning-level {c["effort"]}')
+    return out
+
+
+def host_args(models):
+    """Each start's `host.py start` harness, model and the Models row it was picked from, fallbacks included."""
+    out = {}
+    for start, (kind, key) in STARTS.items():
+        c = models[kind][key]['choice']
+        row = dict((k, name) for name, k in ROLES)[key] if kind == 'roles' else models[kind][key]['row']
+        out[start] = None if c is None else '%s %s %s' % (
+            'claude' if c['provider'] == 'claude-code' else c['provider'], c['model'], row)
     return out
 
 
@@ -521,8 +532,9 @@ def main():
                 raise RuntimeError('OB-A1: starts are disabled')
             out = plan(world, read_fleet(world.get('repository') if type(world) is dict else None), refuse,
                        bench, limits)
-        elif len(args) in (3, 4) and args[:2] == ['flags', '--repo'] and (len(args) == 3 or args[3] in STARTS):
-            flags = spawn_flags(read_models(read_fleet(args[2])))
+        elif len(args) == 4 and args[:2] == ['host', '--repo'] and args[3] in STARTS or (
+                len(args) in (3, 4) and args[:2] == ['flags', '--repo'] and (len(args) == 3 or args[3] in STARTS)):
+            flags = (host_args if args[0] == 'host' else spawn_flags)(read_models(read_fleet(args[2])))
             if len(args) == 3:
                 out = [flags]
             elif flags[args[3]] is None:
@@ -544,6 +556,7 @@ def main():
             out = [report(json.loads(Path(args[1]).read_text(), object_pairs_hook=records.unique))]
         else:
             print('usage: ops-starts.py pass WORLD.json [--bench BENCH.json] | flags --repo OWNER/REPO [START] | '
+                  'host --repo OWNER/REPO START | '
                   'loop-agent --repo OWNER/REPO LOOP_ID LIST.json|- | report BENCH.json', file=sys.stderr)
             return 2
     except (OSError, ValueError, KeyError, TypeError) as error:

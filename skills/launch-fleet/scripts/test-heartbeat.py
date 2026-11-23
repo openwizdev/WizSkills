@@ -389,6 +389,17 @@ class Heartbeat(unittest.TestCase):
                                                           'effort': 'high'}]])
         self.assertEqual(self.ticks(), ['start refused', 'started'])
 
+    def test_a_tick_starts_only_on_the_orchestrator_row_never_on_another_row_naming_its_model(self):
+        moved = ROSTER.replace('| Orchestrator | Codex | Synthetic | High | `--provider codex --model synthetic-model',
+                               '| Orchestrator | Codex | Other | High | `--provider codex --model other-model')
+        self.setup_driver(fleet=moved)
+        (self.home / 'takes-effort').touch()
+        self.install()
+        (self.home / 'due').write_text(DUE)
+        self.heartbeat('run', expected=1)
+        self.assertFalse((self.home / 'driver.log').exists())
+        self.assertEqual(self.ticks(), ['start refused'])
+
     def test_check_uses_driver_routes_without_cloudroom_probe(self):
         self.program(self.bin / 'room-cli', """printf '%s\n' "$*" >> "$HOME/room-cli.log"
 printf '[]\n'""")

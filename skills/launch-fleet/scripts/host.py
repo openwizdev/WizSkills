@@ -94,10 +94,11 @@ EFFORT = re.compile(r'[a-z][a-z0-9-]{0,19}')
 EFFORT_NEXT = ("this host can't set effort: remove the effort for this harness in your Models table or Roster to "
                "run it at the host's default")
 CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox', 'effort')
-ROLE_ROWS = {'builder': ('Builder', 'Small builder', 'Fixer'), 'reviewer': ('Reviewer',),
-             'orchestrator': ('Orchestrator',)}
+WORKER_ROWS = ('Builder', 'Small builder', 'Fixer', 'Reviewer')  # ops-starts.py's picks, fallbacks included
+ROLE_ROWS = {'builder': WORKER_ROWS, 'reviewer': WORKER_ROWS, 'orchestrator': ('Orchestrator',)}
 RECORDS = re.compile(r'openwiz:records v[1-9][0-9]{0,2}')
-MODELS_ROWS = tuple(r for rows in ROLE_ROWS.values() for r in rows)
+MODELS_ROWS = WORKER_ROWS + ('Orchestrator',)
+ROWLESS = 'refused: a Roster start needs --row, naming the Models row its harness and model were picked from'
 FLEET = ('LAUNCH_FLEET_HARNESS', 'LAUNCH_FLEET_MODEL', 'LAUNCH_FLEET_SKILLS')
 WITHHELD = 'withheld, as it held a credential, a private id or a machine path; run the driver by hand'
 SECRET_NAME = re.compile(r'TOKEN|SECRET|PASSWORD|CREDENTIAL|_KEY$|^KEY')  # the driver kit's rule
@@ -309,11 +310,11 @@ def pick(entries, repo, ticket, role, choice):
             'waits': None, 'look': None}
 
 
-def models_row(text, provider, model, taking, picked=None):
+def models_row(text, provider, model, taking, picked):
     rows = [row for row in (roster_cells(line) for line in ops._section(text, 'Models') or []) if row]
     header = rows[0] if rows else []
     own = ROLE_ROWS.get(taking, ())
-    if picked is not None and picked not in own:
+    if picked not in own:
         raise Outcome("refused: --row %s is not one of the %s role's Models rows: %s" % (picked, taking, ', '.join(own)))
     if not ('Role' in header and 'Model' in header and len(rows) > 2):
         return None
@@ -330,24 +331,17 @@ def models_row(text, provider, model, taking, picked=None):
             len(words) == 4 or (len(words) == 6 and words[4] == '--reasoning-level'))
         effort = row[header.index('Effort')].lower() if 'Effort' in header else ''
         found.setdefault(role, (starts, row[header.index('Model')], effort or None))
-    if picked is not None:
-        chosen = found.get(picked, 'Builder' if picked != 'Builder' else None)
-        chosen = found.get(chosen) if isinstance(chosen, str) else chosen
-        if not (chosen and chosen[0]):
-            raise Outcome("refused: the Models table's %s row does not start %s %s" % (picked, provider, model))
-        return chosen[1:]
-    mine = [r for r in own if isinstance(found.get(r), tuple) and found[r][0]]
-    if len({found[r][2] for r in mine}) > 1:
-        raise Outcome('refused: the Models table rows %s start %s %s at different efforts; pass --row with the one '
-                      'picked' % (', '.join(mine), provider, model))
-    rest = [r for r in found if isinstance(found[r], tuple) and found[r][0] and r not in mine]
-    return next((found[r][1:] for r in mine + rest), None)
+    chosen = found.get(picked, 'Builder' if picked in ('Small builder', 'Fixer') else None)
+    chosen = found.get(chosen) if isinstance(chosen, str) else chosen
+    return chosen[1:] if chosen and chosen[0] else None
 
 
-def roster_start(text, entries, repo, n, harness, model, skill, picked=None):
+def roster_start(text, entries, repo, n, harness, model, skill, picked):
     taking = SKILL_ROLES.get(skill)
     if taking is None:
         raise Outcome('refused: the Roster gives no role to the %s skill' % skill)
+    if picked is None:
+        raise Outcome(ROWLESS)
     provider = 'claude-code' if harness == 'claude' else harness
     row = models_row(text, provider, model, taking, picked)
     chosen = pick(entries, repo, int(n), taking, {'provider': provider, 'model': model,
@@ -355,7 +349,7 @@ def roster_start(text, entries, repo, n, harness, model, skill, picked=None):
     if chosen['look']:
         raise Outcome(chosen['look'])
     if row is None:
-        raise Outcome('refused: no Models table row starts %s %s' % (provider, model))
+        raise Outcome("refused: the Models table's %s row does not start %s %s" % (picked, provider, model))
     if row[1] is not None and not EFFORT.fullmatch(row[1]):
         raise Outcome("refused: the Models table's Effort for %s %s is not one plain word driver v1 takes: %s"
                       % (provider, model, row[1]))
@@ -435,12 +429,13 @@ def configured():
 
 
 def builder_env(repo, n, requester):
-    own = n if requester == 'builder-%s' % n else requester
-    folder = runs_path().parent / 'agent-token-bin' / ('%s-%s' % (repo.replace('/', '--'), own))
+    role, owner, name = requester.rsplit('-', 1)[0], *repo.split('/')
+    top = runs_path().parent / 'agent-token-bin'
+    folder = top / role / owner / ('%s-%s' % (name, n))
     try:
-        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(folder.parent, 0o700)
-        os.chmod(folder, 0o700)
+        for level in (top, top / role, top / role / owner, folder):
+            level.mkdir(mode=0o700, exist_ok=True)
+            os.chmod(level, 0o700)
         for name in ('gh', 'git'):
             fd, tmp = tempfile.mkstemp(dir=folder, prefix='.shim-')
             with os.fdopen(fd, 'w') as f:

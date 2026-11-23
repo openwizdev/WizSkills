@@ -33,7 +33,9 @@ with open(os.environ['FAKE_CALLS'], 'a') as f:
 if args == ['api', 'rate_limit']:
     if os.environ.get('FAKE_NO_RATE'):
         sys.exit(1)
-    print(json.dumps({'resources': {'core': {'used': used, 'remaining': 5000 - used, 'note': 'SYNTHETIC-RATE'},
+    reset = 2000000000 + (used if os.environ.get('FAKE_RESET_MOVES') else 0)
+    print(json.dumps({'resources': {'core': {'used': used, 'remaining': 5000 - used, 'reset': reset,
+                                             'note': 'SYNTHETIC-RATE'},
                                     'graphql': {'used': 7, 'remaining': 4993}}}))
     sys.exit(0)
 open(state, 'w').write(str(used + 1))
@@ -41,11 +43,12 @@ data = sys.stdin.read() if '--input' in args else ''
 if '--include' in args or '-i' in args:
     status = os.environ.get('FAKE_STATUS', '200 OK')
     for page in range(int(os.environ.get('FAKE_PAGES', '1'))):
-        print('HTTP/2.0 %s' % status)
-        print('X-Oauth-Scopes: repo SYNTHETIC-HEADER')
-        print('X-Ratelimit-Used: %d' % used)
-        print()
-        print('{"out": "SYNTHETIC-OUT"}')
+        if not os.environ.get('FAKE_NO_HEAD'):
+            print('HTTP/2.0 %s' % status)
+            print('X-Oauth-Scopes: repo SYNTHETIC-HEADER')
+            print('X-Ratelimit-Used: %d' % used)
+            print()
+        print(os.environ.get('FAKE_BODY', '{"out": "SYNTHETIC-OUT"}'))
 else:
     print('fake out ' + data.strip())
 sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
@@ -86,19 +89,19 @@ class Meter(unittest.TestCase):
     def test_endpoint_templates(self):
         cases = [
             (['api', 'repos/synthetic-owner/synthetic-repo/issues/123/comments?per_page=100&page=2'],
-             'GET', 'repos/synthetic-owner/synthetic-repo/issues/:n/comments', 'rest'),
+             'GET', 'repos/:owner/:repo/issues/:n/comments', 'rest'),
             (['api', '-X', 'PATCH', 'repos/synthetic-owner/synthetic-repo/pulls/45'],
-             'PATCH', 'repos/synthetic-owner/synthetic-repo/pulls/:n', 'rest'),
+             'PATCH', 'repos/:owner/:repo/pulls/:n', 'rest'),
             (['api', '--method=DELETE', '/repos/synthetic-owner/synthetic-repo/issues/comments/9876543210'],
-             'DELETE', 'repos/synthetic-owner/synthetic-repo/issues/comments/:n', 'rest'),
+             'DELETE', 'repos/:owner/:repo/issues/comments/:n', 'rest'),
             (['api', 'repos/{owner}/{repo}/commits/%s/check-runs' % SHA, '--jq', '.total_count'],
-             'GET', 'repos/{owner}/{repo}/commits/:sha/check-runs', 'rest'),
+             'GET', 'repos/:owner/:repo/commits/:sha/check-runs', 'rest'),
             (['api', 'repos/synthetic-owner/synthetic-repo/commits/0123abc/status'],
-             'GET', 'repos/synthetic-owner/synthetic-repo/commits/:sha/status', 'rest'),
+             'GET', 'repos/:owner/:repo/commits/:sha/status', 'rest'),
             (['api', '-f', 'body=x', 'repos/synthetic-owner/synthetic-repo/issues/7/comments'],
-             'POST', 'repos/synthetic-owner/synthetic-repo/issues/:n/comments', 'rest'),
+             'POST', 'repos/:owner/:repo/issues/:n/comments', 'rest'),
             (['api', '-H', 'Accept: application/json', '--paginate', 'repos/synthetic-owner/synthetic-repo/issues'],
-             'GET', 'repos/synthetic-owner/synthetic-repo/issues', 'rest'),
+             'GET', 'repos/:owner/:repo/issues', 'rest'),
             (['api', 'graphql', '-f', 'query=query { viewer { login } }', '-F', 'n=12'],
              'POST', 'graphql', 'graphql'),
             (['issue', 'view', '12', '--json', 'body'], 'view', 'issue view', 'graphql'),
@@ -147,6 +150,18 @@ class Meter(unittest.TestCase):
         self.gh('api', 'rate_limit')
         self.gh('auth', 'token')
         self.assertEqual([c['rest_units'] for c in self.lines()], [1, 0, 3, 0, 0, 0])
+        self.assertEqual([c['uncertain'] for c in self.lines()], [False] * 6)
+
+    def test_rest_units_come_only_from_verified_header_blocks(self):
+        lookalike = 'line one\nHTTP/2.0 200 OK\nX-Fake: 1\n\nHTTP/2.0 200 OK'
+        self.gh('api', '-i', 'repos/o/r/contents/a.txt', FAKE_BODY=lookalike)
+        self.gh('api', '-i', '--paginate', 'repos/o/r/issues', FAKE_BODY=lookalike, FAKE_PAGES='2')
+        self.gh('api', '-i', 'user', FAKE_NO_HEAD='1', FAKE_BODY='HTTP/2.0 304 Not Modified')
+        self.gh('api', '--paginate', 'repos/o/r/issues', FAKE_PAGES='3')
+        self.gh('api', '-i', '--paginate', 'repos/o/r/issues', '--jq', '.[]', FAKE_PAGES='2')
+        self.assertEqual([(c['rest_units'], c['uncertain']) for c in self.lines()],
+                         [(1, False), (1, True), (1, True), (1, True), (1, True)])
+        self.assertEqual([c.get('status') for c in self.lines()], [200, None, None, None, None])
 
     def test_never_logs_a_token_body_or_other_header(self):
         self.gh('api', '-H', 'Authorization: token ghs_Synth00', '-f', 'body=SYNTHETIC-BODY',
@@ -159,9 +174,36 @@ class Meter(unittest.TestCase):
         for secret in SECRETS:
             self.assertNotIn(secret, text)
         allowed = {'time', 'role', 'method', 'endpoint', 'kind', 'rest_used_before', 'rest_used_after',
-                   'rest_units', 'exit'}
+                   'rest_units', 'uncertain', 'exit'}
         for line in self.lines():
             self.assertLessEqual(set(line), allowed | {'status'})
+
+    def test_log_holds_no_dynamic_path_segment_method_or_argument(self):
+        cases = [
+            (['api', 'repos/SYNTH-OWNER/SYNTH-REPO/contents/docs/SYNTH-FILE.md'], 'GET',
+             'repos/:owner/:repo/contents/:path', 'rest'),
+            (['api', 'repos/o/r/git/ref/heads/SYNTH-REF'], 'GET', 'repos/:owner/:repo/git/ref/:ref', 'rest'),
+            (['api', 'repos/o/r/git/matching-refs/heads/room/SYNTH-REF-'], 'GET',
+             'repos/:owner/:repo/git/matching-refs/:ref', 'rest'),
+            (['api', 'repos/o/r/commits/abcdefabcdef/status'], 'GET', 'repos/:owner/:repo/commits/:sha/status', 'rest'),
+            (['api', 'repos/o/r/commits/1234567'], 'GET', 'repos/:owner/:repo/commits/:sha', 'rest'),
+            (['api', 'repos/o/r/issues/1/labels/SYNTH-LABEL'], 'GET', 'repos/:owner/:repo/issues/:n/labels/:name',
+             'rest'),
+            (['api', 'repos/o/r/SYNTH-SEGMENT/1'], 'GET', 'repos/:owner/:repo/:x/:n', 'rest'),
+            (['api', 'SYNTH-ROOT/x'], 'GET', 'unknown', 'rest'),
+            (['api', '-X', 'SYNTH-METHOD', 'user'], 'other', 'user', 'rest'),
+            (['synth-alias', 'SYNTH-ARG'], 'other', 'unknown', 'rest'),
+            (['issue', 'SYNTH-VERB', '1'], 'other', 'issue other', 'graphql'),
+            (['repo', 'view', 'SYNTH-OWNER/SYNTH-REPO'], 'view', 'repo view', 'graphql'),
+        ]
+        for args, *_ in cases:
+            self.gh(*args)
+        text = self.log.read_text()
+        self.assertNotIn('SYNTH-', text)
+        self.assertNotIn('abcdefabcdef', text)
+        self.assertNotIn('1234567', text)
+        got = [(c['method'], c['endpoint'], c['kind']) for c in self.lines()]
+        self.assertEqual(got, [tuple(c[1:]) for c in cases])
 
     def test_report_per_role_per_endpoint_and_top_five(self):
         calls = [('fleet', 'repos/o/r/issues/1/comments', 6), ('fleet', 'repos/o/r/issues/2', 5),
@@ -181,20 +223,21 @@ class Meter(unittest.TestCase):
         out = run.stdout
         top = out[out.index('Top five endpoints by REST units'):].splitlines()[1:6]
         self.assertEqual(top, [
-            '1. GET repos/o/r/issues/:n/comments: 6 units, 6 calls',
-            '2. GET repos/o/r/issues/:n: 5 units, 5 calls',
-            '3. GET repos/o/r/pulls/:n: 4 units, 4 calls',
-            '4. GET repos/o/r/commits/:sha/status: 3 units, 3 calls',
-            '5. GET repos/o/r/git/ref/heads/main: 2 units, 2 calls',
+            '1. GET repos/:owner/:repo/issues/:n/comments: 6 units, 6 calls',
+            '2. GET repos/:owner/:repo/issues/:n: 5 units, 5 calls',
+            '3. GET repos/:owner/:repo/pulls/:n: 4 units, 4 calls',
+            '4. GET repos/:owner/:repo/commits/:sha/status: 3 units, 3 calls',
+            '5. GET repos/:owner/:repo/git/ref/:ref: 2 units, 2 calls',
         ])
-        self.assertIn('| fleet | 20 | 11 | 9 | 11 | 20 |', out)
-        self.assertIn('| heartbeat | 1 | 1 | 0 | 1 | 1 |', out)
+        self.assertIn('| fleet | 20 | 11 | 9 | 11 | 0 | 20 |', out)
+        self.assertIn('| heartbeat | 1 | 1 | 0 | 1 | 0 | 1 |', out)
         self.assertIn('| POST | graphql | graphql | 9 | 0 |', out)
         self.assertIn('Total: 30 calls, 21 REST units, 9 GraphQL calls', out)
 
     def test_report_refuses_a_bad_log(self):
         good = {'time': '2026-01-01T00:00:00Z', 'role': 'fleet', 'method': 'GET', 'endpoint': 'user',
-                'kind': 'rest', 'exit': 0, 'rest_units': 1, 'rest_used_before': None, 'rest_used_after': None}
+                'kind': 'rest', 'exit': 0, 'rest_units': 1, 'uncertain': False, 'rest_used_before': None,
+                'rest_used_after': None}
         ok = self.dir / 'ok.jsonl'
         ok.write_text(json.dumps(good) + '\n')
         self.assertEqual(self.report(ok).returncode, 0)
@@ -202,6 +245,7 @@ class Meter(unittest.TestCase):
                json.dumps(dict(good, rest_units='1')), json.dumps(dict(good, rest_units=True)),
                json.dumps(dict(good, rest_units=-1)), json.dumps(dict(good, rest_used_before='5')),
                json.dumps(dict(good, endpoint=7)), json.dumps(dict(good, extra=1)),
+               json.dumps(dict(good, uncertain=0)), json.dumps({k: v for k, v in good.items() if k != 'uncertain'}),
                json.dumps({k: v for k, v in good.items() if k != 'method'}),
                json.dumps(good)[:-1] + ', "role": "builder"}']
         for i, text in enumerate(bad):
@@ -210,6 +254,52 @@ class Meter(unittest.TestCase):
             run = self.report(path)
             self.assertEqual((run.returncode, run.stdout), (2, ''), text)
         self.assertEqual(self.report(self.dir / 'missing.jsonl').returncode, 2)
+
+    def test_used_delta_that_spans_a_reset_is_left_out(self):
+        self.gh('api', 'user', GH_METER_ROLE='builder')
+        self.gh('api', 'user', GH_METER_ROLE='builder', FAKE_RESET_MOVES='1')
+        self.assertEqual([(c['rest_used_before'], c['rest_used_after']) for c in self.lines()],
+                         [(100, 101), (101, None)])
+        line = dict(self.lines()[0], role='reviewer', rest_used_before=4990, rest_used_after=3)
+        log = self.dir / 'reset.jsonl'
+        log.write_text(self.log.read_text() + json.dumps(line) + '\n')
+        out = self.report(log).stdout
+        self.assertIn('shared-account observation', out)
+        self.assertIn('| builder | 2 | 2 | 0 | 2 | 0 | 1 |', out)
+        self.assertIn('| reviewer | 1 | 1 | 0 | 1 | 0 | - |', out)
+
+    def test_install_refuses_any_existing_destination(self):
+        for kind in ('file', 'symlink', 'dangling'):
+            d = self.dir / ('dest-' + kind)
+            d.mkdir()
+            target = self.dir / ('target-' + kind)
+            if kind == 'file':
+                (d / 'gh').write_text('SYNTHETIC-USER-DATA')
+            else:
+                if kind == 'symlink':
+                    target.write_text('SYNTHETIC-USER-DATA')
+                (d / 'gh').symlink_to(target)
+            run = subprocess.run([sys.executable, '-I', str(METER), 'install', str(d)],
+                                 capture_output=True, text=True)
+            self.assertEqual(run.returncode, 2, kind)
+            self.assertIn('exists', run.stderr, kind)
+            if kind == 'file':
+                self.assertEqual((d / 'gh').read_text(), 'SYNTHETIC-USER-DATA')
+            elif kind == 'symlink':
+                self.assertEqual(target.read_text(), 'SYNTHETIC-USER-DATA')
+            else:
+                self.assertFalse(target.exists())
+
+    def test_an_unwritable_log_is_refused_before_gh_runs(self):
+        run = self.gh('api', 'user', GH_METER_LOG=str(self.dir / 'missing' / 'meter.jsonl'))
+        self.assertEqual((run.returncode, run.stdout), (127, ''))
+        self.assertIn('the log', run.stderr)
+        self.assertFalse((self.dir / 'calls').exists())
+
+    def test_a_log_write_that_fails_after_the_call_keeps_its_exit_status(self):
+        run = self.gh('api', 'user', GH_METER_LOG='/dev/full', FAKE_EXIT='3')
+        self.assertEqual((run.returncode, run.stdout), (3, 'fake out \n'))
+        self.assertIn('gh-meter: warning', run.stderr)
 
     def test_install_refuses_a_quote_in_the_path(self):
         run = subprocess.run([sys.executable, '-I', str(METER), 'install', str(self.dir / "it's")],

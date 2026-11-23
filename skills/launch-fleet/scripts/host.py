@@ -472,7 +472,6 @@ DOOR = ("refused: one-way door under a host driver: #%s's approach note needs it
 
 
 def one_way(repo, n):
-    """Whether #N's Parent section has the standalone line `One-way door: yes` (#2838), as fleet.sh reads it."""
     issue = post.read_json('api', 'repos/%s/issues/%s' % (repo, n))
     body = issue.get('body', 0) if isinstance(issue, dict) else 0
     if not isinstance(body, (str, type(None))):

@@ -6,7 +6,6 @@
   first_fleet.py decisions --state FILE --setup-state DIR [--yes]
   first_fleet.py create-repo --state FILE --repo OWNER/NAME [--yes]
   first_fleet.py select --state FILE --repo OWNER/NAME
-  first_fleet.py service-issue --state FILE [--yes]
   first_fleet.py mode --state FILE [--mode MODE]
   first_fleet.py setting --state FILE [--yes]
   first_fleet.py grill --state FILE --confirmed URL
@@ -970,16 +969,82 @@ def look(name):
 
 
 def created_line(name, seen):
-    return 'Created and read back: %s, private, default branch %s at commit %s.' % (
-        name, seen['branch'], seen['commit'])
+    return ('Created and read back: %s, private, default branch %s at commit %s, with its passing test and its CI '
+            'check, check.' % (name, seen['branch'], seen['commit']))
+
+
+SEED_COMMAND = 'python3 -m unittest discover -s tests'
+SEED = {
+    'tests/test_check.py': 'import unittest\n\n\nclass Check(unittest.TestCase):\n    def test_runs(self):\n'
+                           '        self.assertTrue(True)\n\n\nif __name__ == \'__main__\':\n    unittest.main()\n',
+    '.github/workflows/check.yml': (
+        'name: check\non:\n  push:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  check:\n'
+        '    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
+        ' # v7.0.1\n        with:\n          persist-credentials: false\n      - run: %s\n' % SEED_COMMAND),
+}
+
+
+def seeded(value, repo):
+    created = value.get('created') or {}
+    return created.get('state') == 'created' and created.get('seeded') is True and \
+        str(created.get('repo', '')).lower() == repo.lower()
+
+
+def untested(repo):
+    return Exit(5, "%s has no docs/agents/fleet.md yet, so OpenWiz has no test command or CI check to name in it, "
+                   "and OpenWiz's setup check needs one of each; OpenWiz adds no test or workflow to a repository "
+                   'it did not create. One line fixes it: ask your agent to "add one passing test and a CI '
+                   'workflow with a job named check, then run the setup skill", and merge what it opens; then run '
+                   'this again. Nothing recorded.' % repo)
+
+
+def seed_file(name, path, branch):
+    result = run(['gh', 'api', '--include', '-X', 'GET', 'repos/%s/contents/%s?ref=%s' % (
+        name, path, urllib.parse.quote(branch, safe=''))], gh_env())
+    text = result.stdout.decode('utf-8', 'replace').replace('\r\n', '\n') if result is not None else ''
+    head, _, body = text.partition('\n\n')
+    status = re.match(r'HTTP/[0-9.]+ ([0-9]{3})', head)
+    if status and status[1] == '404':
+        return None
+    try:
+        assert status and status[1] == '200'
+        found = strict(body)
+        assert found['type'] == 'file' and found['encoding'] == 'base64'
+        return base64.b64decode(found['content'], validate=False).decode('utf-8', 'replace')
+    except (AssertionError, ValueError, KeyError, TypeError):
+        raise Exit(6, 'Could not read %s on %s; run this again to read it before anything else.' % (path, name))
+
+
+def seed(state, name, seen):
+    for path, text in SEED.items():
+        have = seed_file(name, path, seen['branch'])
+        if have == text:
+            continue
+        if have is not None:
+            raise Exit(5, '%s already holds another %s; OpenWiz never writes over it. Nothing more written.'
+                       % (name, path))
+        run(['gh', 'api', '-X', 'PUT', 'repos/%s/contents/%s' % (name, path), '-f',
+             'message=OpenWiz: a passing test and its CI check', '-f',
+             'content=' + base64.b64encode(text.encode()).decode(), '-f', 'branch=' + seen['branch']], gh_env())
+        if seed_file(name, path, seen['branch']) != text:
+            raise Exit(6, 'Whether %s was written to %s is uncertain; run this again: it reads the file back before '
+                          'any write. If GitHub refused the workflow, run gh auth refresh -s workflow first.'
+                       % (path, name))
+    state.value['created'] = {'repo': name, 'state': 'created', **seen, 'seeded': True}
+    if not state.save():
+        raise Exit(6, '%s has its test and CI check, but that could not be saved; run this again to read them '
+                      'back.' % name)
 
 
 def create_repo(got):
     name = got['--repo']
     print('Effect: create one new private GitHub repository, %s, with your gh identity, in one GitHub create with '
           'its initial commit: a README.md holding only the title "# %s" on its default branch, which OpenWiz '
-          'init needs to propose the brain. Nothing else is created or pushed; its CloudRoom project stays yours '
-          'to make or pick.' % (name, name.split('/')[1]))
+          'init needs to propose the brain. Then add two files there, one commit each: tests/test_check.py, one '
+          'test that passes, and .github/workflows/check.yml, a CI workflow whose one job named check runs %s on '
+          "each push and pull request; OpenWiz's setup check needs a test command and a CI check to name. Nothing "
+          'else is created or pushed; its CloudRoom project stays yours to make or pick.' % (
+              name, name.split('/')[1], SEED_COMMAND))
     if not got.get('--yes'):
         print("Nothing created. On the user's yes to exactly this, run again with --yes.")
         return 12
@@ -1001,10 +1066,14 @@ def create_repo(got):
     if seen is None:
         raise Exit(1 if not record else 6, 'Could not read whether %s exists; nothing created.' % name)
     if record and record['repo'] == name and record['state'] in ('pending', 'uncertain', 'created'):
+        if isinstance(seen, dict) and record.get('seeded') and record.get('branch') == seen['branch']:
+            print(created_line(name, seen))
+            return 0
         if isinstance(seen, dict):
             state.value['created'] = {'repo': name, 'state': 'created', **seen}
             if not state.save():
                 raise Exit(6, 'Could not save the created repository; it exists, so never create it again.')
+            seed(state, name, seen)
             print(created_line(name, seen))
             return 0
         if seen == 'public':
@@ -1032,6 +1101,7 @@ def create_repo(got):
     state.value['created'] = {'repo': name, 'state': ended, **(seen if ended == 'created' else {})}
     saved = state.save()
     if ended == 'created' and saved:
+        seed(state, name, seen)
         print(created_line(name, seen))
         return 0
     if ended == 'absent' and saved:
@@ -1184,6 +1254,8 @@ def setting(got):
                           'nothing written.' % MODE_FILE)
     if chosen:
         choice = (chosen['harness'], chosen['model'], chosen['effort'])
+    if chosen and fleet is None and not seeded(state.value, repo):
+        raise untested(repo)
     if chosen and fleet is None:
         fresh = new_settings(repo, env, choice, tuple(chosen['reviewer']), host['agents'])
         fleet = models = fresh[MODE_FILE]
@@ -1370,6 +1442,8 @@ def setting(got):
 SETUP_TEMPLATES = Path(__file__).resolve().parents[2] / 'setup/templates'
 COMPARE_LIMIT = 300
 FRESH_SOURCE = "Source: install's `setting`, from the owner's yes to Connect's block of defaults."
+SEED_SOURCE = ("Source: `tests/test_check.py` and `.github/workflows/check.yml`, which install's `create-repo` added "
+               "on the owner's yes when it created this repository.")
 
 
 def new_settings(repo, env, choice, reviewer, agents):
@@ -1394,10 +1468,11 @@ def new_settings(repo, env, choice, reviewer, agents):
             'Roster': intro('Roster') + '| Name | Kind | Driver | Roles | Writes as |\n| --- | --- | --- | --- | --- |\n'
             "| %s | harness | %s | orchestrator, builder, reviewer, helper | %s's App |\n\n" % (
                 WRITTEN_NAMES.get(choice[0], choice[0]), 'cloudroom' if agents == 'cloud' else agents, login),
-            'Test commands': '## Test commands\n\nNone recorded yet: this new repository has no test command. Run the '
-            '`setup` skill again once it has one.\n\n%s\n\n' % FRESH_SOURCE,
-            'CI checks': '## CI checks\n\nNone recorded yet: this new repository has no CI workflow.\n\n%s\n\n'
-            % FRESH_SOURCE,
+            'Test commands': '## Test commands\n\nThe full set, in this order. A builder runs all of it locally, and '
+            'opens its pull request only when every command passes.\n\n| # | Folder | Command | CI check |\n'
+            '| --- | --- | --- | --- |\n| 1 | root | `%s` | `check` |\n\n%s\n\n' % (SEED_COMMAND, SEED_SOURCE),
+            'CI checks': '## CI checks\n\n| Check | Runs | Required on |\n| --- | --- | --- |\n'
+            '| `check` | 1 | none yet: no branch rule |\n\n%s\n\n' % SEED_SOURCE,
             'Standing merge rules': '## Standing merge rules\n\nNone yet: every merge waits for the user.\n\n%s\n\n'
             % FRESH_SOURCE,
             'Approval rules': re.sub(r'^Source: <.*$', FRESH_SOURCE, re.sub(
@@ -1608,6 +1683,8 @@ def defaults(got):
         raise Exit(5, '%s is not on this machine, so its reviews cannot run here; nothing recorded.' % override[0])
     env = repository(repo)
     fleet = raw(repo, MODE_FILE, env)
+    if fleet is None and not seeded(state.value, repo):
+        raise untested(repo)
     if fleet is None:
         reviewer, alone = (override, None) if override else reviewer_of(None, choice, offered, driver)
         alone = alone and ALONE % alone

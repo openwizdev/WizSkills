@@ -1295,8 +1295,6 @@ class DemoRepository(unittest.TestCase):
         self.assertEqual(self.world(j)['repos'], world['repos'], 'a repeat only reads')
         self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)])
 
-    # Catches #2325 R1: a repository OpenWiz creates with no test or CI check, whose setup files OpenWiz's
-    # runtime setup check then refuses; a seed the preview never named; a lost seed reply written twice.
     def test_the_new_repository_gets_the_disclosed_passing_test_and_check_workflow(self):
         j = Journey(self)
         preview = j.helper(['create-repo', '--repo', REPO])
@@ -1308,11 +1306,9 @@ class DemoRepository(unittest.TestCase):
         world = self.world(j)
         world['seed_lost'] = 1
         j.repos.write_text(json.dumps(world))
-        lost = j.helper(YES_DEMO)
-        self.assertEqual(lost.returncode, 6, lost.stdout)
-        self.assertIn('run this again', lost.stdout)
         done = j.helper(YES_DEMO)
         self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn('passing test', done.stdout)
         self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)], 'a lost reply is read back')
         self.assertTrue(json.loads(j.state.read_text())['created']['seeded'])
         main = self.world(j)['repos'][REPO.lower()]['branches']['main']
@@ -2046,15 +2042,13 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertNotRegex(''.join(branch[n] for n in SETUP_FILES), r'<[^>\n]*>', 'no template placeholder left')
         self.assertIn('\nHost: local\n', branch['docs/agents/host.md'])
 
-    # Catches #2325 R1: an existing repository without tests or CI given setup files OpenWiz's setup check
-    # refuses, or a workflow added to it silently.
     def test_an_existing_repository_without_tests_or_ci_is_named_never_seeded(self):
         j = self.road(files={'README.md': '# synthetic\n'})
         before = self.world(j)
         shown = j.helper(['defaults', '--options', str(j.options)])
         self.assertEqual(shown.returncode, 5, shown.stdout)
         for words in ('no test command or CI check', 'one passing test and a CI workflow with a job named check',
-                      'setup skill', 'nothing recorded'):
+                      'setup skill', 'Nothing recorded'):
             self.assertIn(words, shown.stdout)
         self.assertNotIn('defaults', self.saved(j))
         self.assertEqual(self.world(j), before, 'nothing written to the repository')

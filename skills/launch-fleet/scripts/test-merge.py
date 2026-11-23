@@ -1607,6 +1607,15 @@ class Drops(unittest.TestCase):
         self.assertEqual(self.merge(w), (1, 'blocked: dropped twice at this head; recorded 5002'))
         self.assertEqual(len(self.enqueues(w)), 1)
 
+    def test_an_enqueue_that_reads_back_dropped_is_recorded_at_once(self):
+        again = {'createdAt': '2026-11-22T09:50:00Z', 'reason': 'failed_checks', 'actor': BOT}
+        w = self.world(checks=[run_of('SUCCESS', '2026-11-22T09:40:00Z')], faults={'enqueue': again})
+        self.change(w, removals=[], added_at=None)
+        self.assertEqual(self.merge(w), (0, 'dropped; recorded 5001'))
+        self.assertEqual(w.bodies(7), [self.receipt, 'launch-fleet: merge dropped %s: failed_checks at %s'
+                                       % (HEAD, again['createdAt'])])
+        self.assertEqual(len(self.enqueues(w)), 1)
+
     def test_a_merge_conflict_or_a_persons_removal_blocks_with_no_enqueue(self):
         for reason, actor, why in [
                 ('merge_conflict', BOT, 'merge_conflict needs its builder to merge main in'),

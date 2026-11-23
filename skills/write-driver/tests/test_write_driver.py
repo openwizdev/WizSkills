@@ -1113,11 +1113,13 @@ class KeyHostExpiredLogin(Base):
         hosts['examplehost'] = json.loads((KEY_OPENWIZ / 'kernel' / 'driver-kit' / 'hosts.json').read_text())['examplehost']
         registry.write_text(json.dumps(hosts, indent=2))
         self.begin()
-        for name, change, read in (('fixed', None, 'expired-login pass'),
-                                   ('silent', lambda t: t.replace('== 401', '== 999'),
-                                    'expired-login fail: silent-start')):
+        for name, change, read, code in (('fixed', None, 'expired-login pass', 0),
+                                         ('silent', lambda t: t.replace('== 401', '== 999'),
+                                          'expired-login fail: silent-start', 0),
+                                         ('always', lambda t: t.replace("out['status'] == 401", 'True'),
+                                          'names the sign-in step even when the host answers 500', 1)):
             with self.subTest(name):
-                p = self.lesson(self.key_driver(name, change=change), openwiz=fork, check=0)
+                p = self.lesson(self.key_driver(name, change=change), openwiz=fork, check=code)
                 print(p.stdout, end='')
                 self.assertIn(read, p.stdout)
 

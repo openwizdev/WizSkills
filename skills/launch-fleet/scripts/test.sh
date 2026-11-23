@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=945
+CASES=965
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -3673,6 +3673,57 @@ expect 'scope blocker: an edit to its own records stays quiet' 0 check.json "$BL
 expect 'scope blocker: the needs-info label off, the start is checked again' 0 check.json "$BLOCK13 | $LOOK13"' | issue(13; .labels -= ["needs-answer"])' -- check <<EOF
 check start #13: thread thr_syn13, no branch 30 minutes after the start
 EOF
+
+### The approach note (#2838): a one-way-door ticket's reviewer and builder agree first
+
+# #13 is marked one-way, its builder started at 11:50 with no branch yet, and
+# its note 1302 waits. Every comment is a record author's, as the fixture's are.
+DOOR13='merge12 | issue(13; .body = "## Parent\n\nTicket of spec #10.\nOne-way door: yes\n\n## What to build\n\n" + .body) | say(13; 1301; "11:50"; "launch-fleet: started, thread thr_syn13") | say(13; 1302; "11:52"; "Approach note: synthetic plan.")'
+OK13='say(13; 1303; "11:53"; "launch-fleet: approach review started 1302")'
+expect 'approach: a new note starts its reviewer' 0 check.json "$DOOR13" -- check <<EOF
+approach review #13: note 1302; start its other-family reviewer
+EOF
+expect 'approach: an unmarked ticket keeps its note as discussion' 0 check.json "$DOOR13"' | issue(13; .body |= sub("One-way door: yes"; "One-way door: no"))' -- check < /dev/null
+expect 'approach: a marker outside Parent is no marker' 0 check.json "$DOOR13"' | issue(13; .body |= sub("One-way door: yes\n\n## What to build"; "\n## What to build\n\nOne-way door: yes"))' -- check < /dev/null
+expect 'approach: a claim admits the oldest live claim' 0 check.json "$DOOR13"' | say(13; 1303; "11:55"; "launch-fleet: approach review starting 1302")' -- claim 13 1303 <<EOF
+go #13
+EOF
+expect 'approach: a second claim on the note withdraws' 0 check.json "$DOOR13"' | say(13; 1303; "11:55"; "launch-fleet: approach review starting 1302") | say(13; 1304; "11:56"; "launch-fleet: approach review starting 1302")' -- claim 13 1304 <<EOF
+withdraw #13: that approach line is not due or an older claim holds it
+EOF
+expect 'approach: a claim after its reviewer started withdraws' 0 check.json "$DOOR13 | $OK13"' | say(13; 1304; "11:56"; "launch-fleet: approach review starting 1302")' -- claim 13 1304 <<EOF
+withdraw #13: that approach line is not due or an older claim holds it
+EOF
+expect 'approach: a claim with no outcome after 10 minutes is reconciled' 0 check.json "$DOOR13"' | say(13; 1303; "11:45"; "launch-fleet: approach review starting 1302")' -- check <<EOF
+reconcile approach #13: claim 1303 for note 1302, no outcome after 10 minutes
+EOF
+expect 'approach: a refused start waits 10 minutes, then retries' 0 check.json "$DOOR13"' | say(13; 1303; "11:53"; "launch-fleet: approach review starting 1302") | edit(13; 1303; "11:54"; "launch-fleet: approach review refused 1302: synthetic")' -- check < /dev/null
+again 'approach: 10 minutes after the refusal, it retries' 'edit(13; 1303; "11:49"; "launch-fleet: approach review refused 1302: synthetic")' -- check <<EOF
+approach review #13: note 1302; start its other-family reviewer
+EOF
+expect 'approach: a note under review waits quietly, its needs-info too' 0 check.json "$DOOR13 | $OK13"' | issue(13; .labels += ["needs-answer"]) | edit(13; 1301; "11:20"; "launch-fleet: started, thread thr_syn13")' -- check < /dev/null
+expect 'approach: OK for the current note resumes the builder' 0 check.json "$DOOR13 | $OK13"' | say(13; 1304; "11:58"; "Approach OK: 1302")' -- check <<EOF
+approach resume #13: Approach OK: 1302 in comment 1304; tell its builder, thread thr_syn13
+EOF
+expect 'approach: a resume claim admits the oldest live one' 0 check.json "$DOOR13 | $OK13"' | say(13; 1304; "11:58"; "Approach OK: 1302") | say(13; 1305; "11:59"; "launch-fleet: approach resume starting 1304")' -- claim 13 1305 <<EOF
+go #13
+EOF
+expect 'approach: a second resume claim withdraws' 0 check.json "$DOOR13 | $OK13"' | say(13; 1304; "11:58"; "Approach OK: 1302") | say(13; 1305; "11:59"; "launch-fleet: approach resume starting 1304") | say(13; 1306; "11:59"; "launch-fleet: approach resume starting 1304")' -- claim 13 1306 <<EOF
+withdraw #13: that approach line is not due or an older claim holds it
+EOF
+expect 'approach: a sent resume is quiet' 0 check.json "$DOOR13 | $OK13"' | say(13; 1304; "11:58"; "Approach OK: 1302") | say(13; 1305; "11:59"; "launch-fleet: approach resume sent 1304")' -- check < /dev/null
+expect 'approach: changes for the current note reach the builder' 0 check.json "$DOOR13 | $OK13"' | say(13; 1304; "11:58"; "Approach changes: 1302\nSynthetic change.")' -- check <<EOF
+approach resume #13: Approach changes: 1302 in comment 1304; tell its builder, thread thr_syn13
+EOF
+expect 'approach: OK for an older note is ignored, the revised note goes to its reviewer' 0 check.json "$DOOR13 | $OK13"' | say(13; 1304; "11:54"; "Approach changes: 1302") | say(13; 1305; "11:55"; "launch-fleet: approach resume sent 1304") | say(13; 1306; "11:56"; "Approach note: synthetic revised plan.") | say(13; 1307; "11:57"; "Approach OK: 1302")' -- check <<EOF
+approach re-check #13: note 1306; tell its approach reviewer
+EOF
+expect 'approach: a reply not exactly naming the note is ignored' 0 check.json "$DOOR13 | $OK13"' | issue(13; .labels += ["needs-answer"]) | say(13; 1304; "11:58"; "Approach OK: 1302, thanks") | say(13; 1305; "11:58"; "Approach OK") | say(13; 1306; "11:58"; "approach ok: 1302")' -- check < /dev/null
+expect 'approach: an OK older than the note'"'"'s last edit is ignored' 0 check.json "$DOOR13 | $OK13"' | issue(13; .labels += ["needs-answer"]) | say(13; 1304; "11:54"; "Approach OK: 1302") | edit(13; 1302; "11:55"; "Approach note: synthetic plan, edited.")' -- check < /dev/null
+expect 'approach: a host driver'"'"'s refusal asks the orchestrator once, never retries' 0 check.json 'merge12 | say(13; 1301; "11:30"; "launch-fleet: start refused: one-way door under a host driver: synthetic")' -- check <<EOF
+look #13: start refused: one-way door under a host driver; the orchestrator decides how #13 is built
+EOF
+again 'approach: a host driver'"'"'s refusal, once looked at, is quiet' 'say(13; 1302; "11:40"; "launch-fleet: look: start refused: one-way door under a host driver; the orchestrator decides how #13 is built")' -- check < /dev/null
 
 # Two starts due in one batch: #13 (spec #10) and #70 (approved on its own).
 BATCH='merge12 | own_approval(70; 7002; "10:00")'

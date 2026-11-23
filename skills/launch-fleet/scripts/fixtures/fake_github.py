@@ -133,7 +133,8 @@ if args[:2] != ['api', 'graphql'] and args[0] == 'api':
                 fail('connection reset')
         out(c)
     if method == 'GET' and parts[0] == 'issues' and len(parts) == 2:
-        out({'number': int(parts[1]), 'labels': [{'name': n} for n in world.get('labels', [])]})
+        out({'number': int(parts[1]), 'labels': [{'name': n} for n in world.get('labels', [])],
+             'body': world.get('body', '')})
     if method == 'GET' and parts[0] == 'issues' and parts[2:] == ['comments']:
         query = dict(x.split('=', 1) for x in endpoint.partition('?')[2].split('&') if '=' in x)
         later = query.get('page', '1') != '1'

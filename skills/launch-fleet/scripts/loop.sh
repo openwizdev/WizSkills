@@ -44,16 +44,15 @@ restore_today_account() {
     GIT_CONFIG_COUNT=$restore_at
     export GIT_CONFIG_COUNT
   else
-    restore_end=${restore_count:-0}
-    [ -z "$restore_at" ] || [ $((restore_at + 2)) -le "$restore_end" ] || restore_end=$((restore_at + 2))
-    restore_index=0
-    while [ "$restore_index" -lt "$restore_end" ] || eval "[ -n \"\${GIT_CONFIG_KEY_$restore_index+x}\${GIT_CONFIG_VALUE_$restore_index+x}\" ]"; do
-      unset "GIT_CONFIG_KEY_$restore_index" "GIT_CONFIG_VALUE_$restore_index"
-      restore_index=$((restore_index + 1))
+    for restore_name in $(set | while IFS= read -r restore_line; do
+      case $restore_line in GIT_CONFIG_KEY_[0-9]*=* | GIT_CONFIG_VALUE_[0-9]*=*) restore_name=${restore_line%%=*} ;; *) continue ;; esac
+      case ${restore_name##*_} in *[!0-9]*) ;; *) printf '%s\n' "$restore_name" ;; esac
+    done); do
+      unset "$restore_name"
     done
     unset GIT_CONFIG_COUNT
   fi
-  unset GH_TOKEN OPENWIZ_AGENT_TOKEN_RUN OPENWIZ_AGENT_TOKEN_GIT_AT restore_pair restore_name restore_mark restore_value restore_at restore_count restore_end restore_index
+  unset GH_TOKEN OPENWIZ_AGENT_TOKEN_RUN OPENWIZ_AGENT_TOKEN_GIT_AT restore_pair restore_name restore_mark restore_value restore_at restore_count
 }
 
 spec_number() { case $1 in '' | 0* | *[!0-9]* | ??????????*) return 1 ;; esac; }

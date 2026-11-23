@@ -289,8 +289,9 @@ for marks in x:- -:- x:x -:01; do
     unset GIT_CONFIG_KEY_2 GIT_CONFIG_VALUE_2
     export GIT_CONFIG_KEY_5=synthetic.sparse GIT_CONFIG_VALUE_5=five GIT_CONFIG_KEY_12=synthetic.sparse \
       GIT_CONFIG_VALUE_40=forty
+    [ "$marks" != -:01 ] || unset OPENWIZ_AGENT_TOKEN_PATH_WAS
     for copy in loop block; do
-      sh -c '. "$1"; restore_today_account; env' sh "$work/restore.$copy" > "$work/env"
+      sh -c '. "$1"; restore_today_account; "$2"' sh "$work/restore.$copy" "$(command -v env)" > "$work/env"
       absent -E '^GIT_CONFIG_(COUNT|KEY_[0-9]+|VALUE_[0-9]+)=' "$work/env"
       sh -x -c '. "$1"; restore_today_account' sh "$work/restore.$copy" 2> "$work/trace"
       absent -E 'synthetic-installation-token-2843|synthetic.sparse|forty' "$work/trace"
@@ -299,7 +300,7 @@ done
 (unset OPENWIZ_AGENT_TOKEN_RUN; export GH_TOKEN=synthetic-own-account-2843
   sh -c '. "$1"; restore_today_account; printf "%s\n" "$GH_TOKEN"' sh "$work/restore.loop" > "$work/env"
   [ "$(cat "$work/env")" = synthetic-own-account-2843 ])
-echo "ok   restore_today_account drops every git config entry on an unreadable mark and keeps an own GH_TOKEN (#2843)"
+echo "ok   restore_today_account drops every git config entry, sparse indexes included, on an unreadable mark and keeps an own GH_TOKEN (#2843)"
 
 # Failed refreshes and first clones must not emit work or leave runtime files.
 mv "$work/remote" "$work/offline"

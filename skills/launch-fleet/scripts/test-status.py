@@ -374,18 +374,6 @@ class Write(Tracker):
         self.assertRegex(back.stdout, r'^#12: builder working, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
         self.assertEqual(self.writes(), [('PATCH', 'repos/example/tracker/issues/comments/104')] * 2)
 
-    def test_with_a_shared_login_a_hold_added_just_before_the_write_post_stays(self):
-        self.world['login'] = 'synthetic-owner'
-        self.ticket(self.world)['comments'].append(comment(104, 'synthetic-owner', note()))
-        self.world['race_label'] = [{'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}]
-        self.save()
-        asking = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
-        self.assertEqual(asking.returncode, 0, asking.stderr)
-        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
-        self.assertEqual(back.returncode, 0, back.stderr)
-        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
-        self.assertRegex(back.stdout, r'(?m)^#12: needs-info left on: ')
-
     def test_a_hold_reapplied_as_the_write_clears_its_label_survives_a_failed_read(self):
         self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
         self.save()
@@ -402,6 +390,47 @@ class Write(Tracker):
         self.assertEqual(retry.returncode, 0, retry.stderr)
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
         self.assertRegex(retry.stdout, r'(?m)^#12: needs-info put back: synthetic-owner ')
+
+    def test_a_same_app_hold_replaced_just_before_the_resume_s_delete_is_put_back(self):
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+        self.save()
+        asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual(asked.returncode, 0, asked.stderr)
+        self.world = self.load()
+        self.world['race_delete'] = [{'issue': 12, 'unlabel': 'needs-info', 'by': BOT},
+                                     {'issue': 12, 'label': 'needs-info', 'by': BOT}]
+        self.save()
+        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertRegex(back.stdout, r'(?m)^#12: needs-info put back: openwiz\[bot\] applied it as this write ')
+        self.assertEqual([(e['event'], e['actor']['login']) for e in self.ticket()['events']],
+                         [('labeled', BOT), ('unlabeled', BOT), ('labeled', BOT), ('unlabeled', BOT), ('labeled', BOT)])
+
+    def test_a_write_that_cannot_take_the_lock_never_touches_the_proof_and_reports_the_hold(self):
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+        self.save()
+        asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual(asked.returncode, 0, asked.stderr)
+        [kept] = (self.dir / 'state').rglob('*.json')
+        recorded = kept.read_text()
+        lock = kept.with_suffix('.lock')
+        lock.unlink()
+        lock.mkdir()
+        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(back.returncode, 0, back.stderr)
+        self.assertRegex(back.stdout, r'^#12: builder working, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual(kept.read_text(), recorded)
+        self.world = self.load()
+        self.ticket(self.world)['labels'].remove('needs-info')
+        self.ticket(self.world)['events'].append({'event': 'unlabeled', 'label': {'name': 'needs-info'},
+                                                  'actor': {'login': 'synthetic-owner'}, 'created_at': ago(0)})
+        self.save()
+        again = self.write('asking', 'asked again', '2030-01-02T06:00:00Z', '--note', '104')
+        self.assertEqual((again.returncode, again.stdout), (0, '#12: builder asking, status note 104 edited\n'))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual(kept.read_text(), recorded)
 
     def test_only_an_exact_record_of_this_login_s_application_takes_the_label_off(self):
         good = '{"login": "openwiz[bot]", "event": 0}'
@@ -453,6 +482,116 @@ class Write(Tracker):
         resumed = self.write('working', 'got the fixture', '2030-01-02T06:00:00Z', '--note', '105', agent='reviewer')
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
         self.assertEqual((resumed.returncode, resumed.stdout), (0, '#12: reviewer working, status note 105 edited\n'))
+
+    def person_asks(self, events=(), race=()):
+        self.world['login'] = 'synthetic-owner'
+        ticket = self.ticket(self.world)
+        ticket['comments'].append(comment(104, 'synthetic-owner', note()))
+        if events:
+            ticket['labels'].append('needs-info')
+            ticket['events'] = list(events)
+        self.world['race_after_label'] = list(race)
+        self.save()
+        asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual((asked.returncode, asked.stdout), (0, '#12: builder asking, status note 104 edited\n'))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
+    def test_a_person_account_s_own_asking_label_comes_off_when_the_note_is_done(self):
+        self.person_asks()
+        done = self.write('done', 'handed back', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual((done.returncode, done.stdout, done.stderr),
+                         (0, '#12: builder done, status note 104 edited\n', ''))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+        self.assertEqual(self.writes(), [
+            ('PATCH', 'repos/example/tracker/issues/comments/104'),
+            ('POST', 'repos/example/tracker/issues/12/labels'),
+            ('PATCH', 'repos/example/tracker/issues/comments/104'),
+            ('DELETE', 'repos/example/tracker/issues/12/labels/needs-info'),
+        ])
+
+    def test_a_person_account_s_own_asking_label_comes_off_when_the_note_resumes(self):
+        self.person_asks()
+        back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual((back.returncode, back.stdout), (0, '#12: builder working, status note 104 edited\n'))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+
+    def test_a_person_account_s_label_stays_and_is_reported_when_the_note_s_history_is_unreadable(self):
+        for state in ('working', 'done'):
+            with self.subTest(state):
+                self.setUp()
+                self.person_asks()
+                self.world = self.load()
+                self.world['history_fails'] = True
+                self.save()
+                moved = self.write(state, 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+                self.assertEqual(moved.returncode, 2 if state == 'working' else 0, moved.stderr)
+                self.assertRegex(moved.stdout, r'(?m)^#12: needs-info left on: ')
+                self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+                self.assertNotIn('DELETE', [method for method, _ in self.writes()])
+
+    def test_a_same_login_re_add_after_the_ask_s_own_add_stays(self):
+        self.person_asks(race=[{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-owner'},
+                               {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-owner'}])
+        self.assertEqual([e['event'] for e in self.ticket()['events']], ['labeled', 'unlabeled', 'labeled'])
+        for state in ('working', 'done'):
+            moved = self.write(state, 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
+            self.assertEqual(moved.returncode, 0, moved.stderr)
+            self.assertRegex(moved.stdout, r'(?m)^#12: needs-info left on: ')
+            self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertNotIn('DELETE', [method for method, _ in self.writes()])
+
+    def test_a_hold_already_on_at_the_ask_and_replaced_after_it_stays(self):
+        for by in ('synthetic-owner', 'synthetic-maintainer'):
+            with self.subTest(by):
+                self.setUp()
+                self.person_asks([{'event': 'labeled', 'label': {'name': 'needs-info'}, 'actor': {'login': by},
+                                   'created_at': ago(60)}])
+                self.assertNotIn('POST', [method for method, _ in self.writes()][1:])
+                self.world = self.load()
+                stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                self.ticket(self.world)['events'] += [
+                    {'event': kind, 'label': {'name': 'needs-info'}, 'actor': {'login': 'synthetic-owner'},
+                     'created_at': stamp} for kind in ('unlabeled', 'labeled')]
+                self.save()
+                done = self.write('done', 'handed back', '2030-01-02T05:00:00Z', '--note', '104')
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertRegex(done.stdout, r'^#12: builder done, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
+                self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+                self.assertNotIn('DELETE', [method for method, _ in self.writes()])
+
+    def test_a_maintainer_s_hold_reapplied_as_a_person_account_clears_survives_a_failed_read(self):
+        self.person_asks()
+        self.world = self.load()
+        self.world['race_delete'] = [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-maintainer'},
+                                     {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-maintainer'},
+                                     {'fail_once': f'GET repos/{REPO}/issues/12/events?per_page=100&page=1'}]
+        self.save()
+        failed = self.write('done', 'handed back', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(failed.returncode, 2, failed.stdout)
+        retry = self.write('done', 'handed back', '2030-01-02T05:00:00Z', '--note', '104')
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertRegex(retry.stdout, r'(?m)^#12: needs-info put back: synthetic-maintainer ')
+
+    def test_a_maintainer_s_needs_info_stays_when_the_note_is_done(self):
+        cases = {'added after the ask': ((), [{'issue': 12, 'unlabel': 'needs-info', 'by': 'synthetic-maintainer'},
+                                               {'issue': 12, 'label': 'needs-info', 'by': 'synthetic-maintainer'}]),
+                 'added before the ask': ([{'event': 'labeled', 'label': {'name': 'needs-info'},
+                                            'actor': {'login': 'synthetic-maintainer'}, 'created_at': ago(1)}], ()),
+                 'same login, an hour before the ask': ([{'event': 'labeled', 'label': {'name': 'needs-info'},
+                                                          'actor': {'login': 'synthetic-owner'},
+                                                          'created_at': ago(60)}], ()),
+                 'same login, no time': ([{'event': 'labeled', 'label': {'name': 'needs-info'},
+                                           'actor': {'login': 'synthetic-owner'}}], ())}
+        for name, (events, race) in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                self.person_asks(events, race)
+                done = self.write('done', 'handed back', '2030-01-02T05:00:00Z', '--note', '104')
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertRegex(done.stdout, r'^#12: builder done, status note 104 edited\n#12: needs-info left on: [^\n]+\n$')
+                self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+                self.assertNotIn('DELETE', [method for method, _ in self.writes()])
 
     def test_needs_info_stays_while_any_agent_asks_and_a_failed_clear_recovers(self):
         self.ticket(self.world)['comments'] += [comment(104, BOT, note()),
@@ -1680,6 +1819,110 @@ class WakeRepair(Tracker):
         self.assertEqual(self.timeline(), [('labeled', BOT)])
         self.assertEqual(self.wake(), (0, []))
         self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
+    def test_a_needs_info_whose_application_has_no_actor_stays_and_is_reported(self):
+        for actor in ('null', 'absent'):
+            with self.subTest(actor):
+                self.setUp()
+                self.asking_on_12(fail_once=[f'POST repos/{REPO}/issues/12/labels'])
+                self.assertEqual(self.wake()[0], 2)
+                self.world = self.load()
+                it = self.ticket(self.world)
+                it['labels'].append('needs-info')
+                event = {'event': 'labeled', 'label': {'name': 'needs-info'}, 'created_at': ago(0)}
+                if actor == 'null':
+                    event['actor'] = None
+                it.setdefault('events', []).append(event)
+                resumed = next(c for c in it['comments'] if c['id'] == 104)
+                resumed.update(body=note(state='working', step='got the answer'), updated=ago(1))
+                self.save()
+                code, report = self.wake()
+                self.assertEqual((code, len(report)), (1, 1), report)
+                self.assertRegex(report[0], r'^#12: needs-info left on: ')
+                self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+
+    def host(self):
+        spec = importlib.util.spec_from_file_location('test_status_host', HERE / 'host.py')
+        host = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(host)
+        return host
+
+    @contextlib.contextmanager
+    def host_on_tracker(self, host):
+        def thread(repo, n):
+            return [{'id': c['id'], 'user': {'login': c['author']} if c['author'] else None, 'body': c['body']}
+                    for c in self.ticket()['comments']]
+
+        def edit(repo, cid, text):
+            world = self.load()
+            next(c for c in self.ticket(world)['comments'] if c['id'] == cid).update(body=text, updated=ago(0))
+            (self.dir / 'world.json').write_text(json.dumps(world))
+
+        def note(repo, n, state, step):
+            why = ['--why', host.FAILED] if state == 'stopped' else []
+            wrote = self.run_status('write', '--repo', repo, '--ticket', n, '--agent', 'fleet', '--state', state,
+                                    *why, '--harness', 'Codex', '--model', 'Sol 6.1 High',
+                                    '--skills', at('launch-fleet'), '--step', step)
+            self.assertEqual(wrote.returncode, 0, wrote.stderr)
+
+        with mock.patch.object(host.post, 'authors', lambda repo: host.post.grants.record_authors(FLEET_MD)), \
+                mock.patch.object(host.post, 'thread', thread), mock.patch.object(host.post, 'edit', edit), \
+                mock.patch.object(host, 'note', note):
+            yield
+
+    def host_reads(self):
+        host = self.host()
+        with self.host_on_tracker(host):
+            stopped, failures = host.reports(REPO, '12')
+        return stopped, [c['id'] for c in failures]
+
+    def stopped_by_the_driver(self, **race):
+        stopped = note(agent='fleet', state='stopped (driver start failed)', harness='Codex', model='Sol 6.1 High',
+                       skills=at('launch-fleet'), step="the driver refused this ticket's start 3 times")
+        failure = 'launch-fleet: driver start failed\n\nexit 1: refused; see the owner-only driver log.'
+        self.ticket(self.world)['comments'] += [comment(105, BOT, stopped), comment(106, BOT, failure)]
+        self.asking_on_12(**race)
+        self.assertEqual(self.host_reads(), (True, [106]))
+
+    def test_a_repair_beside_a_driver_failure_keeps_the_stopped_fleet_note(self):
+        for interrupted in (False, True):
+            with self.subTest(interrupted=interrupted):
+                self.setUp()
+                self.stopped_by_the_driver(**({'fail_once': [f'POST repos/{REPO}/issues/12/labels']}
+                                              if interrupted else {}))
+                before = {c['id']: c['body'] for c in self.ticket()['comments']}
+                if interrupted:
+                    self.assertEqual(self.wake()[0], 2)
+                    self.assertEqual(self.host_reads(), (True, [106]))
+                code, report = self.wake()
+                self.assertEqual((code, report), (1, ['#12 note 104 builder asking: needs-info added']))
+                self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+                self.assertEqual({c['id']: c['body'] for c in self.ticket()['comments']}, before)
+                self.assertEqual(self.host_reads(), (True, [106]))
+                self.assertEqual(self.wake(), (0, []))
+
+    def test_a_driver_success_during_an_interrupted_repair_beside_its_failure_stays_current(self):
+        self.stopped_by_the_driver(fail_once=[f'POST repos/{REPO}/issues/12/labels'])
+        self.assertEqual(self.wake()[0], 2)
+        host = self.host()
+        with self.host_on_tracker(host):
+            host.clear(REPO, '12', 'synthetic-host', 'started')
+        fleet = [c['body'] for c in self.ticket()['comments'] if c['body'].startswith(MARKER + '\nagent: fleet\n')]
+        self.assertEqual(fleet[-1].split('\n')[2], 'state: done')
+        self.assertEqual(self.host_reads(), (False, []))
+        self.assertEqual(self.wake(), (0, []))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual(self.host_reads(), (False, []))
+        self.assertEqual([c['id'] for c in self.ticket()['comments'] if 'needs-info-repair' in c['body']], [])
+        self.assertEqual(self.wake(), (0, []))
+
+    def test_the_repair_keeps_its_own_rule_for_a_same_app_reapplication_at_its_delete(self):
+        resume = {'issue': 12, 'edit': 104, 'body': note(state='working', step='got the answer')}
+        again = [{'issue': 12, 'unlabel': 'needs-info', 'by': BOT}, {'issue': 12, 'label': 'needs-info', 'by': BOT}]
+        self.asking_on_12(race_label=[resume], race_delete=again)
+        self.assertEqual(self.wake(), (0, []))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+        self.assertEqual(self.timeline(), [('labeled', BOT), ('unlabeled', BOT), ('labeled', BOT), ('unlabeled', BOT)])
 
     def test_a_needs_info_whose_application_is_not_listed_yet_stays_and_is_reported(self):
         self.asking_on_12(fail_once=[f'POST repos/{REPO}/issues/12/labels'])

@@ -336,7 +336,7 @@ class Cost(unittest.TestCase):
                 self.assertEqual(w.writes(), [])
 
     def test_an_unavailable_cost_is_posted_unknown_never_zero(self):
-        for script, reason in ((REFUSES, 'PR #7 closes more than one ticket'), (None, 'no cost command'),
+        for script, reason in ((REFUSES, 'PR #7 closes more than one ticket'),
                                ('print("Ticket #13 cost (PR #7): builder 0 credits")\n', 'unexpected cost output'),
                                ('import sys\nprint("oops thr' + '_synx", file=sys.stderr)\nsys.exit(1)\n',
                                 'the cost command failed')):
@@ -353,6 +353,251 @@ class Cost(unittest.TestCase):
         self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
         self.assertEqual(w.bodies(12)[-1], 'launch-fleet: cost: ' + LINE)
 
+
+
+ROOM_CLI = r"""import datetime, json, os, sys
+args = sys.argv[1:]
+with open(os.environ['FAKE_USAGE_LOG'], 'a') as f:
+    f.write(json.dumps(args) + '\n')
+usage = json.loads(os.environ['FAKE_USAGE'])
+if len(args) != 3 or args[0] != 'usage' or args[2] != '--json' or args[1] not in usage:
+    sys.exit(2)
+got = usage[args[1]]
+if 'fail' in got:
+    sys.exit(1)
+if 'raw' in got:
+    print(got['raw'])
+    sys.exit(0)
+if 'json' in got:
+    print(json.dumps(got['json']))
+    sys.exit(0)
+now = datetime.datetime.now(datetime.timezone.utc).replace(minute=0, second=0, microsecond=0)
+day = now.replace(hour=0) - datetime.timedelta(days=6)
+first = got.get('first', 2)
+stamp = lambda t: t.strftime('%Y-%m-%dT%H:00:00.000Z')
+if first == 'none':
+    hours = []
+else:
+    start = day if first == 'window' else now - datetime.timedelta(hours=first)
+    hours = [{'credits': 0, 'hour': stamp(start), 'threads': 1}, {'credits': got['credits'], 'hour': stamp(now), 'threads': 1}]
+print(json.dumps({'credits': 50000, 'history': {'credits': got['credits'], 'hours': hours, 'id': args[1],
+                  'own': got['credits'], 'subagents': [], 'title': '#12: synthetic ' + args[1]}, 'plan': 'pro',
+                  'text': 'synthetic ' + args[1]}))
+"""
+TH = 'thr' + '_'
+BUILDER, REVIEWER, SECOND, ELSEWHERE = TH + 'synbuild', TH + 'synreview1', TH + 'synreview2', TH + 'synother'
+THREADS = {'builder:12': BUILDER, 'review:7:' + HEAD: REVIEWER, 'review:7:claim:9001': REVIEWER,
+           'review:7:' + OTHER: SECOND, 'review:7:claim:9002': SECOND, 'builder:13': ELSEWHERE, 'review:8:' + HEAD: ELSEWHERE,
+           'comment:9001': TH + 'synsender', 'fleet:3': TH + 'synfleet'}
+THIRD = 'd' * 40
+RECORDS = [comment(9001, 'launch-fleet: review started ' + HEAD), comment(9002, 'launch-fleet: review started ' + OTHER)]
+
+
+def on(repo, number, c):
+    return dict(c, issue_url='https://api.github.com/repos/%s/issues/%s' % (repo, number))
+USAGE = {BUILDER: {'credits': 3.5}, REVIEWER: {'credits': 2}, SECOND: {'credits': 1.25}, ELSEWHERE: {'credits': 99}}
+KNOWN = 'Ticket #12 cost (PR %s): builder %s; reviewer %s; CI unknown; total %s'
+
+
+def known(builder, reviewer, total, ref='#7'):
+    return 'launch-fleet: cost: ' + KNOWN % (ref,
+        builder if builder == 'unknown' else builder + ' credits, unknown tokens',
+        reviewer if reviewer == 'unknown' else reviewer + ' credits, unknown tokens',
+        total if total == 'unknown' else total + ' credits, unknown tokens, unknown runner minutes')
+
+
+class CostFromAgents(unittest.TestCase):
+    def world(self, threads=THREADS, usage=USAGE, runs=None, state='file', home=REPO, owner=None, records=RECORDS,
+              home_7=()):
+        merged = dict(state='MERGED', mergeCommit={'oid': 'c' * 40})
+        on_pr = {'7': records} if records is not None else {}
+        if home == REPO:
+            w = World(self, pr=pr(**merged), comments=on_pr)
+        else:
+            w = World(self, pr=pr(closes=closes((home, 12)), **merged), comments={'12': [], **on_pr},
+                      others={home: {'comments': {'12': [], '7': list(home_7)}}})
+        project(w, None)
+        (w.dir / 'room-cli.py').write_text(ROOM_CLI)
+        cli = w.dir / 'bin/room-cli'
+        cli.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, w.dir / 'room-cli.py'))
+        cli.chmod(0o755)
+        w.env.pop('LAUNCH_FLEET_STATE', None)
+        w.env.pop('LAUNCH_FLEET_RUNS', None)
+        w.env.update(FAKE_USAGE=json.dumps(usage), FAKE_USAGE_LOG=str(w.dir / 'usage.log'))
+        if state == 'file':
+            (w.dir / 'state.json').write_text(json.dumps({'repo': owner or home, 'threads': threads}))
+            w.env['LAUNCH_FLEET_STATE'] = str(w.dir / 'state.json')
+        elif state is not None:
+            w.env['LAUNCH_FLEET_STATE'] = state
+        if runs is not None:
+            (w.dir / 'runs.json').write_text(json.dumps(runs) if isinstance(runs, dict) else runs)
+            w.env['LAUNCH_FLEET_RUNS'] = str(w.dir / 'runs.json')
+        return w
+
+    def cost(self, w):
+        return w.run('merge.py', 'cost', REPO, 7, HEAD, 12, cwd=w.dir / 'project')
+
+    def reads(self, w):
+        log = w.dir / 'usage.log'
+        return sorted(json.loads(x)[1] for x in log.read_text().splitlines()) if log.exists() else []
+
+    def no_id(self, w, out):
+        self.assertNotIn(TH, out)
+        for body in w.bodies(12) + [json.dumps(x) for x in w.writes()]:
+            self.assertNotIn(TH, body)
+
+    def test_the_line_carries_the_builders_credits_and_the_reviewers_summed(self):
+        w = self.world()
+        self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+        self.assertEqual(w.bodies(12), [known('3.5', '3.25', '6.75')])
+        self.assertEqual(self.reads(w), sorted([BUILDER, REVIEWER, SECOND]))
+        self.no_id(w, '')
+        self.assertEqual(self.cost(w), (0, 'cost already posted 5001'))
+        self.assertEqual(len(w.bodies(12)), 1)
+
+    def test_no_command_and_no_state_posts_the_all_unknown_line(self):
+        w = self.world(state=None)
+        self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+        self.assertEqual(w.bodies(12), [known('unknown', 'unknown', 'unknown')])
+        self.assertEqual(self.reads(w), [])
+
+    def test_each_unknown_role_makes_the_total_unknown_never_zero(self):
+        no_builder = {k: v for k, v in THREADS.items() if k != 'builder:12'}
+        no_reviewer = {k: v for k, v in THREADS.items() if not k.startswith('review:7:')}
+        bad = lambda answer: dict(USAGE, **{BUILDER: answer})
+        bad_reviewer = lambda answer: dict(USAGE, **{SECOND: answer})
+        driver = {'repo': REPO, 'runs': {'12': {'host': 'synthetic', 'run': 'run-1'}}}
+        driver_review = {'repo': REPO, 'runs': {'7': {'host': 'synthetic', 'run': 'run-2'}}}
+        cases = {
+            'state file missing': (dict(state=str(Path('/nonexistent-synthetic/state.json'))), 'unknown', 'unknown'),
+            'state path relative': (dict(state='state.json'), 'unknown', 'unknown'),
+            'missing builder': (dict(threads=no_builder), 'unknown', '3.25'),
+            'no reviewer': (dict(threads=no_reviewer), '3.5', 'unknown'),
+            'driver run in state': (dict(threads=dict(THREADS, **{'run:12': TH + 'synrun'})), 'unknown', '3.25'),
+            'driver run in the run map': (dict(runs=driver), 'unknown', '3.25'),
+            'driver reviewer in the run map': (dict(runs=driver_review), '3.5', 'unknown'),
+            'driver reviewer in state': (dict(threads=dict(THREADS, **{'run:7': TH + 'synrun'})), '3.5', 'unknown'),
+            'driver reviewer and no CloudRoom reviewer': (dict(threads=no_reviewer, runs=driver_review),
+                                                          '3.5', 'unknown'),
+            'run map unreadable': (dict(runs='{"repo": "x"'), 'unknown', 'unknown'),
+            'failed read': (dict(usage=bad({'fail': 1})), 'unknown', '3.25'),
+            'not JSON': (dict(usage=bad({'raw': 'credits: 4'})), 'unknown', '3.25'),
+            'credits missing': (dict(usage=bad({'json': {'history': {'hours': []}}})), 'unknown', '3.25'),
+            'credits not a number': (dict(usage=bad({'credits': '4'})), 'unknown', '3.25'),
+            'credits negative': (dict(usage=bad({'credits': -1})), 'unknown', '3.25'),
+            'credits a boolean': (dict(usage=bad({'credits': True})), 'unknown', '3.25'),
+            'another thread answered': (dict(usage=bad({'json': {'history': {
+                'credits': 4, 'id': TH + 'synelse', 'hours': [{'credits': 4, 'hour': '2099-01-01T00:00:00.000Z'}]}}})),
+                'unknown', '3.25'),
+            'an hour without a zone': (dict(usage=bad({'json': {'history': {
+                'credits': 4, 'id': BUILDER, 'hours': [{'credits': 4, 'hour': '2099-01-01T00:00:00'}]}}})),
+                'unknown', '3.25'),
+            'no hours in the window': (dict(usage=bad({'credits': 0, 'first': 'none'})), 'unknown', '3.25'),
+            'short window': (dict(usage=bad({'credits': 3.5, 'first': 'window'})), 'unknown', '3.25'),
+            'one reviewer unread': (dict(usage=bad_reviewer({'fail': 1})), '3.5', 'unknown'),
+            'one reviewer in a short window': (dict(usage=bad_reviewer({'credits': 1, 'first': 'window'})),
+                                               '3.5', 'unknown'),
+        }
+        for name, (setup, builder, reviewer) in cases.items():
+            with self.subTest(case=name):
+                w = self.world(**setup)
+                self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+                self.assertEqual(w.bodies(12), [known(builder, reviewer, 'unknown')])
+                self.no_id(w, '')
+
+    def test_a_cross_repository_ticket_gets_its_agents_line_once(self):
+        w = self.world(home=TICKETS)
+        self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+        line = known('3.5', '3.25', '6.75', ref='%s#7' % REPO)
+        self.assertEqual(w.others[TICKETS].bodies(12), [line])
+        self.assertEqual(w.bodies(12), [])
+        self.assertEqual(self.reads(w), sorted([BUILDER, REVIEWER, SECOND]))
+        self.no_id(w, '')
+        self.assertEqual(self.cost(w), (0, 'cost already posted 5001'))
+        self.assertEqual(w.others[TICKETS].bodies(12), [line])
+        self.assertEqual(len(self.reads(w)), 3)
+
+    def test_a_same_numbered_pull_request_elsewhere_adds_no_reviewer(self):
+        theirs = [on(TICKETS, 7, comment(8001, 'launch-fleet: review started ' + THIRD))]
+        mine = {'builder:12': BUILDER, 'review:7:' + HEAD: REVIEWER, 'review:7:claim:9001': REVIEWER}
+        for name, commit in (('another head', THIRD), ('the same head', HEAD)):
+            with self.subTest(case=name):
+                same = dict(mine, **{'review:7:claim:8001': ELSEWHERE, 'review:7:' + commit: ELSEWHERE})
+                w = self.world(home=TICKETS, threads=same, records=RECORDS[:1], home_7=theirs)
+                self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+                self.assertEqual(w.others[TICKETS].bodies(12), [known('3.5', '2', '5.5', ref='%s#7' % REPO)])
+                self.assertEqual(self.reads(w), sorted([BUILDER, REVIEWER]))
+
+    def test_a_reviewer_bound_to_no_claim_on_either_pull_request_is_unknown(self):
+        mine = {'builder:12': BUILDER, 'review:7:claim:9001': REVIEWER}
+        cases = {
+            'a shared head with no claim': (TICKETS, dict(mine, **{'review:7:' + HEAD: ELSEWHERE}), RECORDS[:1]),
+            'a claim whose record is gone': (REPO, THREADS, RECORDS[:1]),
+            'a claim whose record is gone, elsewhere': (TICKETS, THREADS, RECORDS[:1]),
+        }
+        for name, (home, threads, records) in cases.items():
+            with self.subTest(case=name):
+                w = self.world(home=home, threads=threads, records=records)
+                self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+                ref = '#7' if home == REPO else '%s#7' % REPO
+                target = w if home == REPO else w.others[TICKETS]
+                self.assertEqual(target.bodies(12), [known('3.5', 'unknown', 'unknown', ref=ref)])
+
+    def test_a_reviewer_the_pull_requests_records_cannot_vouch_for_is_unknown(self):
+        driver = comment(9001, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        recheck = comment(9002, 'launch-fleet: re-check sent %s\nDriver re-check: other-family' % OTHER)
+        cases = {
+            'a short legacy commit key': dict(threads=dict(THREADS, **{'review:7:aaaaaaa': REVIEWER})),
+            'a key of no known form': dict(threads=dict(THREADS, **{'review:7:synthetic': REVIEWER})),
+            'no records on the pull request': dict(records=[]),
+            "the pull request's records unreadable": dict(faults={'read_of': '7'}),
+            "only another author's records": dict(records=[dict(c, user={'login': 'someone-else'}) for c in RECORDS]),
+            'a driver review on the pull request': dict(records=[driver, RECORDS[1]]),
+            'a driver re-check on the pull request': dict(records=[RECORDS[0], recheck]),
+            'a pending driver start after a given-up reviewer': dict(records=[
+                comment(9001, 'launch-fleet: review given up %s: synthetic quiet reviewer' % HEAD),
+                RECORDS[1], comment(9003, 'launch-fleet: review starting %s\nDriver review: other-family' % HEAD),
+                comment(9004, 'VERDICT: APPROVE at ' + HEAD)]),
+        }
+        for name, setup in cases.items():
+            for home in (REPO, TICKETS):
+                with self.subTest(case=name, home=home):
+                    w = self.world(home=home, **{k: v for k, v in setup.items() if k != 'faults'})
+                    if 'faults' in setup:
+                        w.update(faults=setup['faults'])
+                    self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+                    ref = '#7' if home == REPO else '%s#7' % REPO
+                    target = w if home == REPO else w.others[TICKETS]
+                    self.assertEqual(target.bodies(12), [known('3.5', 'unknown', 'unknown', ref=ref)])
+                    self.no_id(w, '')
+
+    def test_the_tickets_run_map_names_no_driver_for_a_pull_request_elsewhere(self):
+        runs = {'repo': TICKETS, 'runs': {'7': {'host': 'synthetic', 'run': 'run-2'}}}
+        w = self.world(home=TICKETS, runs=runs)
+        self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+        self.assertEqual(w.others[TICKETS].bodies(12), [known('3.5', '3.25', '6.75', ref='%s#7' % REPO)])
+
+    def test_a_cross_repository_state_must_be_the_tickets_fleet(self):
+        w = self.world(home=TICKETS, owner=REPO)
+        self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+        self.assertEqual(w.others[TICKETS].bodies(12), [known('unknown', 'unknown', 'unknown', ref='%s#7' % REPO)])
+        self.assertEqual(self.reads(w), [])
+
+    def test_a_cross_repository_project_command_is_still_refused(self):
+        w = self.world(home=TICKETS)
+        (w.dir / 'project/tools/collector/cost_line.py').write_text(PRINTS)
+        self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+        self.assertEqual(w.others[TICKETS].bodies(12), [
+            'launch-fleet: cost unknown (PR %s#7): the cost command costs only tickets in the pull '
+            "request's repository" % REPO])
+        self.assertEqual(self.reads(w), [])
+
+    def test_the_projects_own_command_still_wins(self):
+        w = self.world()
+        (w.dir / 'project/tools/collector/cost_line.py').write_text(PRINTS)
+        self.assertEqual(self.cost(w), (0, 'cost posted 5001'))
+        self.assertEqual(w.bodies(12), ['launch-fleet: cost: ' + LINE])
+        self.assertEqual(self.reads(w), [])
 
 class Documented(unittest.TestCase):
     """#1622: SKILL.md's two merge commands, run as written from a consuming project's checkout
@@ -1032,7 +1277,7 @@ class Landed(unittest.TestCase):
         self.assertEqual(w.run('merge.py', 'settle', DEST, 9201, 9106, cwd=w.dir / 'project'),
                          (0, 'no queued merge; landed already posted 5001'))
         self.assertEqual(self.posts(w), [(9101, LANDED)])
-        self.assertEqual(w.bodies(9106), ['launch-fleet: cost unknown (PR #9201): no cost command'])
+        self.assertEqual(w.bodies(9106), ['launch-fleet: cost: Ticket #9106 cost (PR #9201): builder unknown; reviewer unknown; CI unknown; total unknown'])
 
     def test_a_held_final_merge_tells_no_report_it_landed(self):
         # catches (RC3 #1831 with FL4 #1848): a user-visible spec's final merge posting its landed
@@ -1231,6 +1476,48 @@ class Landed(unittest.TestCase):
         deleted = [x['delete'] for x in w.writes() if 'delete' in x]
         self.assertEqual((len(posted), len(deleted)), (2, 1))
         self.assertGreater(deleted[0], kept[0]['id'])
+
+
+class WizSkillsRoute(unittest.TestCase):
+    def route(self):
+        text = (HERE.parents[2] / 'docs/agents/fleet.md').read_text()
+        section = lambda name: text.split('\n## %s\n' % name, 1)[1].split('\n## ', 1)[0]
+        checks = re.findall(r'^\| `([^`]+)` \|', section('CI checks'), re.M)
+        found = re.findall(r'`(python3 -I [^`]*merge\.py"? merge [^`]*)`', section('Standing merge rules'))
+        self.assertEqual(len(found), 1, "WizSkills' merge rule names no merge.py merge command: %r" % found)
+        values = {"<launch-fleet's folder>": str(HERE.parent), '<P>': '7', '<commit>': HEAD,
+                  '<checks>': ','.join(checks), '<the APPROVE and the plan approval it relies on>':
+                  'APPROVE 1 and plan approval 2', '<N>': '12'}
+        command = found[0]
+        for name, value in values.items():
+            command = command.replace(name, value)
+        argv = shlex.split(command)
+        self.assertNotRegex(' '.join(argv), r'<[^>]+>', 'a placeholder left unfilled')
+        self.assertEqual(argv[3:6], ['merge', SKILLS, '7'])
+        return [sys.executable] + argv[1:], text
+
+    def test_an_approved_head_is_enqueued_pinned_and_recorded_only_after_the_read_back(self):
+        argv, text = self.route()
+        w = World(self, repo=SKILLS, fleet_md=text, comments={'7': []},
+                  pr=pr(isMergeQueueEnabled=True, closes=closes((DEST, 12))), others={DEST: {'comments': {'12': []}}})
+        root = project(w, PRINTS)
+        r = subprocess.run(argv, capture_output=True, text=True, env=w.env, cwd=root, timeout=60)
+        receipt = 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, 'queued; recorded 5001'), r.stderr)
+        self.assertEqual(w.writes(), [{'enqueue': 'PR_synthetic7', 'head': HEAD}, {'post': 7, 'body': receipt}])
+        self.assertEqual((w.bodies(7), w.others[DEST].writes()), ([receipt], []))
+
+    def test_before_the_queue_is_on_it_prints_the_fallback_line_and_writes_nothing(self):
+        argv, text = self.route()
+        fallback = re.search(r'While `merge\.py` prints `([^`]+)`', text)
+        self.assertIsNotNone(fallback, "WizSkills' merge rule names no fallback for a repository without the queue")
+        w = World(self, repo=SKILLS, fleet_md=text, comments={'7': []},
+                  pr=pr(closes=closes((DEST, 12))), others={DEST: {'comments': {'12': []}}})
+        root = project(w, PRINTS)
+        r = subprocess.run(argv, capture_output=True, text=True, env=w.env, cwd=root, timeout=60)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertTrue(r.stdout.startswith(fallback.group(1) + ';'), r.stdout)
+        self.assertEqual((w.writes(), w.others[DEST].writes()), ([], []))
 
 
 if __name__ == '__main__':

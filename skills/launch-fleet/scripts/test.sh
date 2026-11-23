@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=903
+CASES=918
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -52,10 +52,10 @@ if [ -n "${TEST_SHARD:-}" ]; then
   case $SHARD_K$SHARD_N in *[!0-9]*) echo "FAIL TEST_SHARD is not K/N: $TEST_SHARD"; exit 1 ;; esac
   [ "$SHARD_K" -le "$SHARD_N" ] || { echo "FAIL TEST_SHARD is not K/N: $TEST_SHARD"; exit 1; }
   [ -z "${TEST_ONLY:-}" ] || { echo "FAIL TEST_SHARD runs a whole run's share, not TEST_ONLY"; exit 1; }
-  [ -r "${TEST_SHARD_MAP:-}" ] && [ -n "${TEST_SHARD_RAN:-}" ] \
-    || { echo "FAIL TEST_SHARD needs TEST_SHARD_MAP and TEST_SHARD_RAN"; exit 1; }
+  [ -z "${TEST_SHARD_MAP:-}" ] || [ -r "$TEST_SHARD_MAP" ] \
+    || { echo "FAIL TEST_SHARD_MAP is not readable: $TEST_SHARD_MAP"; exit 1; }
   # Every line "GROUP SHARD", each group once, each shard 1 to N: the last group mapped.
-  SHARD_MAPPED=$(awk -v n="$SHARD_N" 'NF != 2 || $1 !~ /^[1-9][0-9]*$/ || $2 !~ /^[1-9][0-9]*$/ || $2 > n || seen[$1]++ { bad = 1 }
+  [ -z "${TEST_SHARD_MAP:-}" ] || SHARD_MAPPED=$(awk -v n="$SHARD_N" 'NF != 2 || $1 !~ /^[1-9][0-9]*$/ || $2 !~ /^[1-9][0-9]*$/ || $2 > n || seen[$1]++ { bad = 1 }
     $1 > max { max = $1 } END { if (bad) exit 1; print max + 0 }' "$TEST_SHARD_MAP") \
     || { echo "FAIL TEST_SHARD_MAP is not one \"GROUP SHARD\" line a group: $TEST_SHARD_MAP"; exit 1; }
 fi
@@ -69,7 +69,7 @@ else
   trap 'rm -rf "$tmp"' EXIT
   SHARED=$tmp
   if [ -n "$SHARD_K" ]; then
-    mkdir "$tmp/mine" && awk -v k="$SHARD_K" '$2 == k { print $1 }' "$TEST_SHARD_MAP" | while read -r g; do : > "$tmp/mine/$g"; done \
+    mkdir "$tmp/mine" && awk -v k="$SHARD_K" '$2 == k { print $1 }' "${TEST_SHARD_MAP:-/dev/null}" | while read -r g; do : > "$tmp/mine/$g"; done \
       || { echo "FAIL setup: the shard's groups"; exit 1; }
   fi
 fi
@@ -87,7 +87,7 @@ done
 
 # A 40-character commit made of TEXT repeated, as the jq `sha` below makes it.
 sha() { s=''; while [ ${#s} -lt 40 ]; do s=$s$1; done; printf '%.40s' "$s"; }
-S31=$(sha 31) S31F=$(sha 31f) S31E=$(sha 31e) S99=$(sha 99)
+S31=$(sha 31) S31F=$(sha 31f) S31E=$(sha 31e) S31B=$(sha 31b) S99=$(sha 99)
 
 # Small changes to a fixture, for the cases' filters.
 LIB='
@@ -464,9 +464,10 @@ if [ -z "$WORKER" ] && [ -z "${TEST_ONLY:-}" ]; then
   if [ -n "$SHARD_K" ]; then
     # The ci job adds up the shards' counts; each shard records its own.
     { printf 'cases %s\ntotal %s\ngroups %s\n' "$cases" "$CASES" "${groups:-0}"
-      sort -n "$tmp/times" 2> /dev/null | sed 's/^/group /'; } > "$TEST_SHARD_RAN" \
-      || bad 'the shard record' "can't write $TEST_SHARD_RAN"
-    echo "shard $SHARD_K of $SHARD_N: $cases of $CASES cases, $(grep -c '^group ' "$TEST_SHARD_RAN") of ${groups:-0} groups"
+      sort -n "$tmp/times" 2> /dev/null | sed 's/^/group /'; } > "$tmp/ran" \
+      && { [ -z "${TEST_SHARD_RAN:-}" ] || cat "$tmp/ran" > "$TEST_SHARD_RAN"; } \
+      || bad 'the shard record' "can't write ${TEST_SHARD_RAN:-its record}"
+    echo "shard $SHARD_K of $SHARD_N: $cases of $CASES cases, $(grep -c '^group ' "$tmp/ran") of ${groups:-0} groups"
   else
     [ "$cases" = "$CASES" ] || bad 'every case ran' "$cases cases ran, not $CASES"
   fi
@@ -863,6 +864,15 @@ EOF
 expect 'contexts: conflicting snapshots of one PR fail closed' 2 check.json "$MANY31 | .pulls += [(.pulls[] | select(.number == 31) | .head = sha(99))]" -- check <<EOF
 can't read the issues outside specs
 EOF
+OTHER31='pr31 | open_pr(31; 13; "#13: widget page, green") | .pulls[-1] |= (.id = "PR_synthetic_other_31" | .head = sha("31b"))'
+expect 'contexts #1958: same number in two repositories is two PRs' 0 check.json "$OTHER31" -- spec 10 <<EOF
+review #31 for #12 at $S31: first review
+review #31 for #13 at $S31B: first review
+EOF
+expect 'contexts #1958: same number in two repositories keeps each its own checks' 0 check.json "$OTHER31 | .pulls[-1] |= (.rollup = \"FAILURE\" | .checks[1].conclusion = \"FAILURE\")" -- spec 10 <<EOF
+review #31 for #12 at $S31: first review
+CI failed #31 for #13 at $S31B: tell its builder
+EOF
 # #2119 CI: the hour begins with no contexts before its workflow starts.
 expect 'contexts: hourly workflow start supplies valid pending checks' 0 check.json 'pr31 | pull(31; .checks = [] | running_ci)' -- check < /dev/null
 # R1: the same PR is observed separately under two approved specs.
@@ -1095,6 +1105,20 @@ EOF
 expect 'K9: the pull request changes tests, main changed only docs: merge' 0 check.json 'store31 | pull(31; .files = [changed("tests/store.rs"; "modified")]) | main24("11:15"; [changed("docs/guide.md"; "modified"), changed("README.md"; "modified")])' -- check <<EOF
 merge #31 for #12 at $S31: APPROVE and CI green
 EOF
+expect 'WQ5: with the merge queue on, main changing the same file is no reason to re-test: merge' 0 check.json 'store31 | main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pull(31; .queue = true)' -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+log_has 'WQ5: with the merge queue on, main changing the same file is no reason to re-test: merge' 0 '^files 31$'
+expect 'WQ5: with the merge queue on, a re-test that ran on an old main is no reason to merge main in: merge' 0 check.json 'store31 | merged_pr(23; 99; "11:10"; [changed("README.md"; "modified")]) | main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pr_say(31; 3103; "11:20"; "launch-fleet: re-test sent \(sha(31)) on \(sha("23ec")) in run 901: src/store/store.rs in #24") | pull(31; .checks += [run_in("build"; "11:21"; "SUCCESS"; 901), run_in("test"; "11:21"; "SUCCESS"; 901)] | .queue = true)' -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
+expect 'WQ5: with the merge queue off, main changing the same file still re-tests it' 0 check.json 'store31 | main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pull(31; .queue = false)' -- check <<EOF
+re-test #31 for #12 at $S31: main changed src/store/store.rs in #24 after 2026-11-01T10:30:00Z, which its CI may not have tested; run its CI again on the latest main
+EOF
+expect 'WQ5: with the merge queue on, a red required check and main changing the same file: only the CI failure goes to its builder' 0 check.json 'store31 | main24("11:15"; [changed("src/store/store.rs"; "modified")]) | pull(31; .queue = true | .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE")' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+log_has 'WQ5: with the merge queue on, a red required check and main changing the same file: only the CI failure goes to its builder' 0 '^files 31$'
 expect 'K9: main changed tests, the pull request changes only docs: merge' 0 check.json 'store31 | pull(31; .files = [changed("docs/store.md"; "modified")]) | main24("11:15"; [changed("tests/store.rs"; "modified")])' -- check <<EOF
 merge #31 for #12 at $S31: APPROVE and CI green
 EOF
@@ -1314,6 +1338,36 @@ withdraw #13: its owned paths collide with #70, which is running or claimed firs
 EOF
 expect 'F6 claim: a newer colliding claim loses' 0 check.json "$OWN13"' claim13 | own(70; "src/page/a.md") | say(70; 1302; "11:56"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
 go #13
+EOF
+B1846='launch-fleet'"'"'s start script and its tests in `skills/launch-fleet/scripts/` in `openwizdev/WizSkills`'
+BTWO='`gadget/a.md` in `synthetic-owner/one`, `gadget/b.md` in `synthetic-owner/two`, all in `gadget/`'
+OWNB='def ownb($n; $b): issue($n; .body = "## Owned paths\n\n- \($b)\n\n**Relies on:** nothing\n");'
+expect 'F6 claim: a running bullet with two in phrases holds no other repository'"'"'s start (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(70; "'"$B1846"'") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+go #13
+EOF
+expect 'F6 claim: a bullet with two in phrases starts beside this repository'"'"'s same path (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(13; "'"$B1846"'") | own(70; "skills/launch-fleet/scripts/") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+go #13
+EOF
+expect 'F6 claim: a bullet with two in phrases collides in its last repository (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(13; "'"$B1846"'") | ownb(70; "`skills/launch-fleet/scripts/fleet.sh` in `openwizdev/wizskills`") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+withdraw #13: its owned paths collide with #70, which is running or claimed first
+EOF
+expect 'F6 claim: a bullet naming two repositories withdraws, naming that bullet (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(13; "- `src/page/` (shared: one line)\n- '"$BTWO"'" | sub("^- "; ""))' -- claim 13 1301 <<EOF
+withdraw #13: its owned-path bullet "$BTWO" can't be read
+EOF
+expect 'F6 claim: a running bullet naming two repositories withdraws, naming that bullet (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(70; "'"$BTWO"'") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+withdraw #13: #70's owned-path bullet "$BTWO" can't be read, and #70 is running or claimed first
+EOF
+expect 'F6 claim: an Owned paths section with no bullet withdraws, saying so (#2197)' 0 check.json "$OWN13$OWNB"' claim13 | issue(13; .body = "## Owned paths\n\n`src/page/`\n")' -- claim 13 1301 <<EOF
+withdraw #13: its Owned paths section has no bullet
+EOF
+expect 'F6 claim: a running bullet whose earlier in phrase is a two-segment file holds no other repository'"'"'s start (#2197 R1)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(70; "the test runner file in `check/run.py` in `openwizdev/WizSkills`") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+go #13
+EOF
+expect 'F6 claim: a running bullet with one repository before a last path phrase holds no start here (#2197 R1)' 0 check.json "$OWN13$OWNB"' claim13 | ownb(70; "`src/page/a.md` in `synthetic-owner/other-repo`, its notes in `src/`") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+go #13
+EOF
+expect 'F6 claim: a running ticket with no owned-path bullet withdraws, saying so (#2197 R2)' 0 check.json "$OWN13"' claim13 | issue(70; .body = "## Owned paths\n\n`src/page/`\n") | say(70; 7005; "11:00"; "launch-fleet: started")' -- claim 13 1301 <<EOF
+withdraw #13: #70's Owned paths section has no bullet, and #70 is running or claimed first
 EOF
 expect 'needs-info: a new question after the last one was asked' 0 check.json 'issue(12; .labels += ["needs-answer"]) | say(12; 1202; "11:00"; "Which store?") | say(12; 1203; "11:05"; "launch-fleet: asked the orchestrator") | say(12; 1204; "11:30"; "And one more thing?")' -- check <<EOF
 needs-info #12: a question for the orchestrator

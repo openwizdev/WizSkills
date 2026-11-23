@@ -139,6 +139,12 @@ class GitRead(unittest.TestCase):
         code, out, err = self.o.read()
         self.assertEqual((code, out), (2, ''))
         self.assertIn('not a verified cache', err)
+        self.o.git(None, '--git-dir', str(cache), 'config', 'gitread.repo', REPO)
+        stamp = (cache / 'gitread-fetched').read_text().split()[0]
+        (cache / 'gitread-fetched').write_text(f'{stamp} {"0" * 40}\n')  # a fresh stamp naming no cached commit
+        code, out, err = self.o.read()
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('does not hold', err)
         shutil.rmtree(cache)
         cache.mkdir()
         code, out, _ = self.o.read()

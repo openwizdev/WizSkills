@@ -112,6 +112,8 @@ def show(repo, path, max_age=MAX_AGE):
         last = stamp(cache)
         if last is not None and time.time() - last[0] < max_age:
             commit = last[1]
+            if git(cache, 'cat-file', '-e', f'{commit}^{{commit}}').returncode != 0:
+                raise Error(f'cache {cache} does not hold the commit its stamp names; remove it to start afresh')
         else:
             commit = fetch(cache, repo)
         kind = git(cache, 'cat-file', '-t', f'{commit}:{path}')

@@ -219,6 +219,17 @@ PARENT='parent {
           number state subIssuesSummary { total }
         }'
 
+# FR4 (#2454): an issue's detail, native blockers and comments, read by
+# GraphQL many issues to a query (facts_read), and a page of comments, the
+# latest first; older pages are read back to the first comment.
+COMMENT_PAGE='pageInfo { hasPreviousPage startCursor }
+        nodes { fullDatabaseId createdAt updatedAt body author { __typename login } }'
+ISSUE_FACTS='number id title state stateReason body updatedAt
+      labels(first: 20) { pageInfo { hasNextPage } nodes { name } }
+      blockedBy(first: 20) { pageInfo { hasNextPage } nodes { number id state } }
+      comments(last: 100) {'"$COMMENT_PAGE"'}'
+FACTS_QUERY=''
+
 query() {
   case $1 in
     Specs) printf '%s\n' 'query Specs($owner: String!, $name: String!) {
@@ -295,6 +306,17 @@ query() {
     } }
   }
 }' ;;
+    Facts) printf '%s\n' "$FACTS_QUERY" ;;
+    Comments) printf '%s\n' 'query Comments($owner: String!, $name: String!, $number: Int!, $before: String!) {
+  rateLimit { cost remaining limit resetAt }
+  repository(owner: $owner, name: $name) {
+    issueOrPullRequest(number: $number) {
+      __typename
+      ... on Issue { comments(last: 100, before: $before) {' "$COMMENT_PAGE" '} }
+      ... on PullRequest { comments(last: 100, before: $before) {' "$COMMENT_PAGE" '} }
+    }
+  }
+}' ;;
     Writer) printf '%s\n' 'query Writer($owner: String!, $name: String!, $login: String!) {
   rateLimit { cost remaining limit resetAt }
   repository(owner: $owner, name: $name) {
@@ -317,6 +339,26 @@ query() {
 # stderr, nothing on stdout, exit 0.
 back_off() { printf 'fleet.sh: backing off: %s\n' "$*" >&2; exit 0; }
 
+# stop WHY: a read budget that refuses or can't be read (FR4, #2454) ends the
+# whole check with exit 2, from a lane or a subshell too, so no caller can
+# take the refused read as an answer: one line on stderr, nothing on stdout.
+stop() {
+  printf 'fleet.sh: backing off: %s\n' "$*" >&2
+  kill -TERM $$ 2> /dev/null
+  exit 2
+}
+
+# rest_admit N: FR3's read budget (budget.py) admits the next N REST reads,
+# from the headers of this check's newest REST answers (one answer to a file),
+# or GitHub's free rate_limit before the first; else stop.
+BUDGET=$(cd "$(dirname "$0")" && pwd)/budget.py
+rest_admit() {
+  set -- "$1" $(ls -t "$TMP/headers" 2> /dev/null | head -n 5 | sed "s|^|$TMP/headers/|")
+  verdict=$(python3 -I "$BUDGET" admit "$@" --resource core 2> /dev/null) && return 0
+  why=$(printf '%s\n' "$verdict" | jq -r '.reason | strings' 2> /dev/null) || why=''
+  stop "${why:-the REST read budget gave no answer}"
+}
+
 # gql OP OUT [gh api arguments...]: one GraphQL read, checked, with what it
 # cost and the points left after it in rate.txt. GitHub answers a spent
 # allowance with an error of type RATE_LIMIT (observed live, 2026-11-01;
@@ -328,7 +370,7 @@ gql() {
   op=$1 out=$2
   shift 2
   case $op in
-    Blockers | Nodes | Checks) ;;
+    Blockers | Nodes | Checks | Facts | Comments) ;;
     Merged) [ "${1:-}" = -F ] || set -- -F owner="$OWNER" -F name="$NAME" "$@" ;;
     *) set -- -F owner="$OWNER" -F name="$NAME" "$@" ;;
   esac
@@ -464,7 +506,11 @@ http_get() (
   fi
   set -- api --include -H "Accept: $media"
   [ -z "$etag" ] || set -- "$@" -H "If-None-Match: $etag"
+  [ -n "${REST_ADMITTED:-}" ] || rest_admit 1
   if gh "$@" "$endpoint" > "$work/http" 2> "$work/error"; then ok=yes; else ok=no; fi
+  mkdir -p "$TMP/headers" && headers=$(mktemp "$TMP/headers/h.XXXXXX") \
+    && awk '/^\r?$/ { exit } { print }' "$work/http" > "$headers" || exit 1
+  [ -n "$(http_status "$headers")" ] && grep -qi '^x-ratelimit-remaining:' "$headers" || rm -f "$headers"
   status=$(http_status "$work/http")
   if [ "$status" = 304 ]; then
     [ -n "$etag" ] || { printf 'fleet.sh: unexpected 304 without a readable cached response\n' >&2; exit 1; }
@@ -553,23 +599,29 @@ rest_pages() (
   done
 )
 
-# Run independent REST facts in sixty-four lanes. A free lane keeps reading
-# while another waits on a slow response. Each owns its output files, and
-# pagination stays serial inside a lane. Drain every lane on a read failure,
-# so no worker can outlive the check's temp files.
+# Run independent reads in eight lanes (FR4, #2454: the per-issue REST reads
+# that needed sixty-four are one GraphQL query per twenty issues now). A free
+# lane keeps reading while another waits on a slow response. Each owns its
+# output files, and pagination stays serial inside a lane. The first failure
+# stops every lane before its next read, and every lane is drained, so a
+# failing gh is never asked again and no worker outlives the check's temp
+# files. With `rest`, the read budget admits the whole list first.
 # The initial allowance gate runs before this pool; its rate records are
 # reduced on the main shell after every worker has finished.
+LANES=8
 parallel_reads() (
   reader=$1 list=$2
-  lanes=$(mktemp -d "$TMP/readers.XXXXXX") || exit 1
-  awk -v prefix="$lanes/lane-" '{ print > (prefix ((NR - 1) % 64)) }' "$list" || exit 1
+  if [ "${3:-}" = rest ] && [ -s "$list" ]; then rest_admit "$(grep -c '' "$list")"; REST_ADMITTED=yes; fi
+  lanes=$(mktemp -d "$TMP/readers.XXXXXX") && : > "$lanes/go" || exit 1
+  awk -v prefix="$lanes/lane-" -v n="$LANES" '{ print > (prefix ((NR - 1) % n)) }' "$list" || exit 1
   pids='' failed=0
   for lane in "$lanes"/lane-*; do
     [ -f "$lane" ] || continue
     (
-      while read -r number kind repo id; do
-        "$reader" "$number" "$kind" ${repo:+"$repo" "$id"} || exit 1
+      while [ -f "$lanes/go" ] && read -r number kind repo id; do
+        "$reader" "$number" "$kind" ${repo:+"$repo" "$id"} || { rm -f "$lanes/go"; exit 1; }
       done < "$lane"
+      [ -f "$lanes/go" ]
     ) &
     pids="$pids $!"
   done
@@ -584,10 +636,10 @@ parallel_reads() (
 AUTHORED='def authored($a): map(select(((.user | if type == "object" then .login else null end)
   | if type == "string" then ascii_downcase else null end) as $l | $l != null and any($a[]; . == $l)));'
 
-# Ordinary issue fields and comments have REST equivalents. PR metadata
-# stays with its head and combined CI rollup in GraphQL. Closing relationships
-# and labelled-event selection also stay there: REST references/check lists
-# alone do not establish the same facts.
+# An issue's detail, blockers and comments, and a pull request's comments,
+# are read in batched GraphQL (FR4, #2454). PR metadata stays with its head and
+# combined CI rollup in GraphQL. Closing relationships and labelled-event
+# selection also stay there.
 # Per-check memoization avoids re-reading an issue reached through two specs.
 PR_REPO='def pr_repo($r): .repository.nameWithOwner
   | if type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") then
@@ -597,69 +649,117 @@ item_file() {
   case ${3:-$REPO} in "$REPO") printf '%s/%s-%s.json\n' "$TMP" "$1" "$2" ;;
     *) printf '%s/%s-%s-%s.json\n' "$TMP" "$1" "$(printf '%s' "$3" | tr / @)" "$2" ;; esac
 }
-comment_facts() (
-  n=$1 repo=${2:-$REPO} id=${3:-}
-  file=$(item_file comments "$n" "$repo") || exit 1
-  [ ! -f "$file" ] || exit 0
-  if [ "$repo" != "$REPO" ]; then
-    case $id in '' | 0* | *[!0-9]*) exit 1 ;; esac
-    set -- "$repo" "$id"
-  else set --; fi
-  # REST already walks the whole history. Never cap it at the former
-  # GraphQL window, and never interpret a partially read history as facts.
-  # The existing incomplete-history guard prints look for this item alone.
-  if ! rest_pages "repos/$repo/issues/$n/comments?per_page=100" "$file.raw" "$@" 2> "$file.err"; then
-    why="$(cat "$file.raw.at") failed: $(grep . "$file.err" | tail -n 1)"
-  elif jq -se --slurpfile a "$TMP/authors.json" "$AUTHORED"'select(length > 0 and all(.[]; type == "array")) | add
-      | select(all(.[]; type == "object" and (.id | type) == "number"
-          and (.body | type) == "string" and (.created_at | type) == "string"
-          and (.updated_at | type) == "string"))
-      | {pageInfo: {hasPreviousPage: false},
-         nodes: (authored($a[0]) | map({databaseId: .id, createdAt: .created_at, updatedAt: .updated_at, body, author: (.user.login | ascii_downcase)}))}' \
-      "$file.raw" > "$file" 2> /dev/null; then
-    exit 0
-  else why="an unreadable answer to $(cat "$file.raw.at")"; fi
-  why=$(printf '%s' "$why" | tr -cd ' -~' | cut -c1-300)
-  jq -cn --arg e "$why" '{pageInfo: {hasPreviousPage: true}, nodes: [], error: $e}' > "$file"
-)
-# Each issue's three REST resources are independent too. Fetch them in the
-# same pool before constructing facts, so one issue never serializes them.
-issue_read() (
-  n=$1 part=$2
-  case $part in
-    comments) comment_facts "$n" "${3:-}" "${4:-}" ;;
-    detail) rest "repos/$REPO/issues/$n" "$TMP/facts-issue-$n.json.detail" ;;
-    blockers) rest_pages "repos/$REPO/issues/$n/dependencies/blocked_by?per_page=100" "$TMP/facts-issue-$n.json.blockers" ;;
-    *) exit 1 ;;
-  esac
-)
-issue_facts() (
-  n=$1 kind=$2
-  facts=$(item_file "facts-$kind" "$n" "${3:-}") || exit 1
-  [ ! -f "$facts" ] || exit 0
-  comment_facts "$n" "${3:-}" "${4:-}" || exit 1
-  if [ "$kind" = pr ]; then
-    # The head, its CI rollup and the PR metadata stay together in the one
-    # GraphQL answer. Mixing later REST metadata could borrow another head's
-    # passing checks. Only the PR's comments need a separate REST read.
-    jq -cn --argjson n "$n" --slurpfile c "$(item_file comments "$n" "${3:-}")" '{number: $n, comments: $c[0]}' > "$facts"
-    exit $?
+# FR4 (#2454): the comments the factory wrote, from a GraphQL comment list:
+# GraphQL names an App's bot without the "[bot]" REST and the record authors
+# give it, so a Bot author gets it back before authored() reads the login.
+FACT_COMMENTS='def page_ok: type == "object" and (.pageInfo.hasPreviousPage | type) == "boolean"
+    and (.nodes | type) == "array"
+    and (if .pageInfo.hasPreviousPage then (.nodes | length) > 0 and (.pageInfo.startCursor | type == "string" and length > 0) else true end)
+    and all(.nodes[]; type == "object" and (.fullDatabaseId | type == "string" and test("^[1-9][0-9]{0,15}$"))
+      and (.createdAt | type) == "string" and (.updatedAt | type) == "string" and (.body | type) == "string"
+      and (.author == null or (.author | type == "object" and (.login | type) == "string" and (.__typename | type) == "string")));'
+facts_comments() {
+  jq -e --slurpfile a "$TMP/authors.json" "$AUTHORED"'select(type == "array")
+    | map(. + {user: (.author | if type == "object" then {login: (if .__typename == "Bot" then .login + "[bot]" else .login end)} else null end)})
+    | {pageInfo: {hasPreviousPage: false},
+       nodes: (authored($a[0]) | map({databaseId: (.fullDatabaseId | tonumber), createdAt, updatedAt, body, author: (.user.login | ascii_downcase)}))}' "$1" > "$2"
+}
+
+# facts_batch REPO BATCH: one GraphQL query for BATCH's items of REPO ("N
+# KIND" lines: an issue's whole facts, or the comments alone of a pull
+# request or an issue), each comment list read back to its first comment, into
+# the same fact files the REST reads wrote. A missing page, a null node or an
+# error stops the check (exit 2); none is ever an empty history.
+facts_batch() {
+  repo=$1 batch=$2
+  vars='' fields='' k=0
+  set --
+  while read -r n kind; do
+    case $n in '' | 0* | *[!0-9]*) return 1 ;; esac
+    if [ "$kind" = issue ]; then
+      a=i$k field="issue(number: \$$a) { $ISSUE_FACTS }"
+    else
+      a=c$k field="issueOrPullRequest(number: \$$a) { __typename
+      ... on Issue { comments(last: 100) {$COMMENT_PAGE} }
+      ... on PullRequest { comments(last: 100) {$COMMENT_PAGE} } }"
+    fi
+    vars="$vars, \$$a: Int!" fields="$fields
+    $a: $field"
+    set -- "$@" -F "$a=$n"
+    k=$((k + 1))
+  done < "$batch"
+  FACTS_QUERY="query Facts(\$owner: String!, \$name: String!$vars) {
+  rateLimit { cost remaining limit resetAt }
+  repository(owner: \$owner, name: \$name) {$fields
+  }
+}"
+  # The GraphQL allowance gate, before each batch.
+  if [ -z "$REPLAY" ] && [ -s "$TMP/rate.txt" ]; then
+    last_rate
+    [ "$left" -ge $((limit / 4)) ] || stop "$left of $limit GitHub points left, under the $((limit / 4)) kept for builders and reviewers, until $reset"
   fi
-  if [ "$kind" = issue ]; then
-    jq -se 'select(length > 0) | add | select(type == "array" and all(.[];
-      (.number | type) == "number" and (.node_id | type) == "string" and (.state | IN("open", "closed"))))
-      | {pageInfo: {hasNextPage: (length > 20)}, nodes: (.[0:20] | map({number, node_id, state: (.state | ascii_upcase)}))}' \
-      "$facts.blockers" > "$facts.dependencies" || exit 1
-  else printf '{"nodes": []}' > "$facts.dependencies" || exit 1; fi
-  jq -ce --argjson n "$n" --slurpfile c "$TMP/comments-$n.json" --slurpfile b "$facts.dependencies" '
-    select(type == "object" and .number == $n and (.title | type) == "string"
-      and (.body == null or (.body | type) == "string") and (.state | IN("open", "closed")))
-    |         select((.labels | type) == "array" and all(.labels[]; (.name | type) == "string")
-          and (.updated_at | type) == "string")
-        | {number, id: (.node_id | if type == "string" then . else null end), title, state: (.state | ascii_upcase), body: (.body // ""), updatedAt: .updated_at,
-           stateReason: (.state_reason | if type == "string" then ascii_upcase else null end),
-           labels: {pageInfo: {hasNextPage: ((.labels | length) > 20)}, nodes: (.labels[:20] | map({name}))}}
-      | . + {comments: $c[0], blockedBy: $b[0]}' "$facts.detail" > "$facts" || { rm -f "$facts"; exit 1; }
+  gql Facts "$batch.json" -F owner="${repo%%/*}" -F name="${repo#*/}" "$@"
+  k=0
+  while read -r n kind; do
+    case $kind in issue) a=i$k ;; *) a=c$k ;; esac
+    k=$((k + 1))
+    jq -e --arg a "$a" --arg kind "$kind" "$FACT_COMMENTS"'.data.repository[$a]
+      | select(type == "object" and (if $kind == "issue" then true else .__typename | IN("Issue", "PullRequest") end)
+        and (.comments | page_ok))' "$batch.json" > "$batch.item" || return 1
+    jq '.comments' "$batch.item" > "$batch.page" && jq '.nodes' "$batch.page" > "$batch.nodes" || return 1
+    pages=1
+    while [ "$(jq -r '.pageInfo.hasPreviousPage' "$batch.page")" = true ]; do
+      pages=$((pages + 1))
+      [ "$pages" -le 1000 ] || return 1
+      cursor=$(jq -r '.pageInfo.startCursor' "$batch.page") || return 1
+      gql Comments "$batch.older" -F owner="${repo%%/*}" -F name="${repo#*/}" -F number="$n" -f before="$cursor"
+      jq -e "$FACT_COMMENTS"'.data.repository.issueOrPullRequest
+        | select(type == "object" and (.__typename | IN("Issue", "PullRequest")) and (.comments | page_ok)) | .comments' \
+        "$batch.older" > "$batch.page" || return 1
+      jq -s '.[0].nodes + .[1]' "$batch.page" "$batch.nodes" > "$batch.all" && mv "$batch.all" "$batch.nodes" || return 1
+    done
+    comments=$(item_file comments "$n" "$repo") && facts_comments "$batch.nodes" "$comments" || return 1
+    printf '%s\n' "repos/$repo/issues/$n/comments?per_page=100" >> "$TMP/fact-probes" || return 1
+    case $kind in
+      issue)
+        printf '%s\n' "repos/$repo/issues/$n" "repos/$repo/issues/$n/dependencies/blocked_by?per_page=100" >> "$TMP/fact-probes" || return 1
+        facts=$(item_file facts-issue "$n" "$repo") || return 1
+        jq -ce --argjson n "$n" --slurpfile c "$comments" '
+          select(.number == $n and (.id | type) == "string" and (.title | type) == "string"
+            and (.body == null or (.body | type) == "string") and (.state | IN("OPEN", "CLOSED"))
+            and (.updatedAt | type) == "string" and (.stateReason == null or (.stateReason | type) == "string")
+            and (.labels.pageInfo.hasNextPage | type) == "boolean" and (.labels.nodes | type) == "array"
+            and all(.labels.nodes[]; (.name | type) == "string")
+            and (.blockedBy.pageInfo.hasNextPage | type) == "boolean" and (.blockedBy.nodes | type) == "array"
+            and all(.blockedBy.nodes[]; (.number | type) == "number" and (.id | type) == "string" and (.state | IN("OPEN", "CLOSED"))))
+          | {number, id, title, state, body: (.body // ""), updatedAt, stateReason,
+             labels: {pageInfo: {hasNextPage: .labels.pageInfo.hasNextPage}, nodes: (.labels.nodes | map({name}))},
+             comments: $c[0],
+             blockedBy: {pageInfo: {hasNextPage: .blockedBy.pageInfo.hasNextPage}, nodes: (.blockedBy.nodes | map({number, node_id: .id, state}))}}' \
+          "$batch.item" > "$facts.next" && mv "$facts.next" "$facts" || return 1 ;;
+      pr)
+        facts=$(item_file facts-pr "$n" "$repo") || return 1
+        jq -cn --argjson n "$n" --slurpfile c "$comments" '{number: $n, comments: $c[0]}' > "$facts.next" \
+          && mv "$facts.next" "$facts" || return 1 ;;
+    esac
+  done < "$batch"
+}
+
+# facts_read LIST: the facts of LIST's items ("N KIND [REPO]": KIND issue,
+# pr or comments), twenty to a query, each query of one repository.
+facts_read() (
+  list=$1
+  [ -s "$list" ] || exit 0
+  awk '{ print ($3 == "" ? "-" : $3), $1, $2 }' "$list" | sort -u -k1,1 -k2,2n -k3,3 > "$list.sorted" || exit 1
+  awk '$3 == "issue" { full[$1 " " $2] = 1 } { line[NR] = $0; key[NR] = $1 " " $2; kind[NR] = $3 }
+    END { for (i = 1; i <= NR; i++) if (kind[i] != "comments" || !full[key[i]]) print line[i] }' "$list.sorted" \
+    | awk '$1 != repo || count == 20 { batch++; count = 0; repo = $1 } { count++; print batch, $0 }' > "$list.batches" || exit 1
+  for b in $(cut -d ' ' -f 1 "$list.batches" | uniq); do
+    awk -v b="$b" '$1 == b { print $3, $4 }' "$list.batches" > "$list.batch" \
+      && repo=$(awk -v b="$b" '$1 == b { print $2; exit }' "$list.batches") || exit 1
+    [ "$repo" != - ] || repo=$REPO
+    facts_batch "$repo" "$list.batch" || exit 1
+  done
 )
 # Node IDs are global and opaque; issue numbers are local to a repository.
 # Hash the identity for a filename without interpreting any of its bytes.
@@ -765,10 +865,7 @@ hydrate() (
     set -- "$@" "$facts"
     printf '%s\n' "${repo:+$repo#}$n" >> "$source.keys" || exit 1
     [ ! -f "$facts" ] || continue
-    [ -f "$(item_file comments "$n" "$repo")" ] || printf '%s comments%s\n' "$n" "${repo:+ $repo $id}" >> "$source.requests" || exit 1
-    if [ "$kind" = issue ]; then
-      printf '%s detail\n%s blockers\n' "$n" "$n" >> "$source.requests" || exit 1
-    fi
+    printf '%s %s%s\n' "$n" "$kind" "${repo:+ $repo}" >> "$source.requests" || exit 1
   done < "$source.wanted"
   if [ -n "$extra_comments" ]; then
     while read -r n; do
@@ -776,9 +873,7 @@ hydrate() (
       [ -f "$TMP/comments-$n.json" ] || printf '%s comments\n' "$n" >> "$source.requests" || exit 1
     done < "$extra_comments"
   fi
-  sort -u "$source.requests" > "$source.jobs" || exit 1
-  parallel_reads issue_read "$source.jobs" || exit 1
-  parallel_reads issue_facts "$source.wanted" || exit 1
+  facts_read "$source.requests" || exit 1
   if [ $# -gt 0 ]; then
     jq -s --rawfile k "$source.keys" '[($k | split("\n") | .[:-1]), .] | transpose
       | map({key: .[0], value: .[1]}) | from_entries' "$@" > "$source.facts" || exit 1
@@ -2619,7 +2714,7 @@ probe() (
   while [ -n "$endpoint" ]; do
     page=$((page + 1))
     [ "$page" -le 50 ] || exit 0
-    http_get "$endpoint" "$out.http" 2> /dev/null || exit 0
+    http_get "$endpoint" "$out.http" 2> /dev/null || exit 1
     [ "$(http_status "$out.http")" = 200 ] || exit 0
     [ -f "$out.http.304" ] || same=no
     tag=$(http_etag "$out.http")
@@ -2679,7 +2774,7 @@ unchanged() {
   REPO_ID=$saved_id
   # Prime every saved endpoint even when this snapshot changed or expired:
   # the full read can then retain a snapshot for the next unchanged tick.
-  parallel_reads probe "$TMP/snap/probes" || return 0
+  parallel_reads probe "$TMP/snap/probes" rest || return 0
   [ "$replayable" = true ] && [ "$NOW" -ge "$read_at" ] && [ $((NOW - read_at)) -lt 1800 ] || return 0
   jq -r '.probes[].endpoint' "$TMP/snap/body" > "$TMP/snap/expected" || return 0
   while IFS= read -r endpoint; do
@@ -2731,6 +2826,11 @@ keep_read() {
            and .repository.nameWithOwner? == $h) | .baseRefName] | unique[]
        | "repos/\($h)/git/ref/heads/\(@uri)")]
     | unique[]' "$TMP/world.json" > "$keep_out/probes" 2> /dev/null || return 0
+  # FR4 (#2454): GraphQL read each issue's detail, blockers and comments, so
+  # their REST views join the probe.
+  if [ -f "$TMP/fact-probes" ]; then
+    sort -u "$keep_out/probes" "$TMP/fact-probes" > "$keep_out/probes.all" && mv "$keep_out/probes.all" "$keep_out/probes" || return 0
+  fi
   replayable=true
   : > "$keep_out/etags.json" || return 0
   while IFS= read -r endpoint; do

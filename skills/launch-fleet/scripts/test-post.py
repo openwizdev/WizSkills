@@ -287,6 +287,10 @@ def seed(w, value):
     path.write_text(json.dumps(value))
 
 
+def post_stamp(at):
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(at))
+
+
 def full(times, account='shared', inflight=(), until=0):
     return {'accounts': {account: list(times)}, 'inflight': [list(e) for e in inflight], 'until': until}
 
@@ -446,6 +450,32 @@ class Pacer(unittest.TestCase):
         self.assertIn('queued: refused: write paced, retry after ', err)
         self.assertEqual(w.writes(), [])
 
+    def test_a_secondary_wait_outlives_a_settlement_that_cannot_get_the_state_lock(self):
+        w = paced_world(self, post_answer=('HTTP/2.0 403 Forbidden', ['Retry-After: 120']))
+        seed(w, full([]))
+        hold = ('import fcntl, subprocess\n'
+                'post.SLOT_WAIT_SECONDS = 1\n'
+                'plain = post.subprocess.run\n'
+                'held = []\n'
+                'def run(*a, **k):\n'
+                '    r = plain(*a, **k)\n'
+                '    if "POST" in a[0]:\n'
+                '        held.append(open(%r, "a"))\n'
+                '        fcntl.flock(held[0], fcntl.LOCK_EX)\n'
+                '    return r\n'
+                'post.subprocess.run = run\n' % str(w.dir / 'state' / (STATE + '.lock')))
+        before = time.time()
+        run = patched(w, hold, 'comment', REPO, 12, 'launch-fleet: starting')
+        out, err = run.communicate(timeout=60)
+        self.assertTrue(out.startswith('unknown: ') and 'secondary' in out, out)
+        self.assertEqual((run.returncode, err), (1, ''))
+        code, after = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')
+        self.assertEqual(w.writes(), [])
+        self.assertEqual(code, 1)
+        self.assertTrue(after.startswith('refused: write paced, retry after '), after)
+        self.assertGreaterEqual(after.split(' ')[-1], post_stamp(before + 120))
+        self.assertNotIn('could not be recorded', out)
+
     def test_a_write_refuses_when_its_window_ends_before_the_state_lock_frees(self):
         w = paced_world(self)
         seed(w, full([]))
@@ -521,8 +551,8 @@ class Pacer(unittest.TestCase):
         seed(w, full([now - 1] * 59))
         reads = w.dir / 'reads'
         gh = w.dir / 'bin' / 'gh'
-        gh.write_text(gh.read_text().replace('#!/bin/sh\n', '#!/bin/sh\ncase " $* " in *" --paginate "*) '
-                                             'printf x >> "%s";; esac\n' % reads, 1))
+        gh.write_text(gh.read_text().replace('exec ', '', 1) + '\ncode=$?\ncase " $* " in *" --paginate "*) '
+                      'printf x >> "%s";; esac\nexit $code\n' % reads)
         lock = open(w.dir / 'state' / (STATE + '.lock'), 'a')
         self.addCleanup(lock.close)
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -532,6 +562,7 @@ class Pacer(unittest.TestCase):
         waited = time.monotonic() + 20
         while time.monotonic() < waited and (not reads.exists() or len(reads.read_text()) < 8):
             time.sleep(0.05)
+        self.assertEqual(reads.read_text() if reads.exists() else '', 'x' * 8)
         fcntl.flock(lock, fcntl.LOCK_UN)
         outs = [(r.communicate(timeout=60)[0].strip(), r.returncode) for r in runs]
         self.assertEqual(sorted((out.split(' ')[0], code) for out, code in outs),
@@ -592,8 +623,11 @@ class Pacer(unittest.TestCase):
                      '{"accounts": {}, "inflight": [], "until": 1e300}',
                      '{"accounts": {}, "inflight": [], "until": 1%s}' % ('0' * 400),
                      '{"accounts": {"shared": [1e300]}, "inflight": [], "until": 0}',
-                     '{"accounts": {}, "inflight": [[%d, 1e300]], "until": 0}' % os.getpid()):
-            with self.subTest(text=text):
+                     '{"accounts": {}, "inflight": [[%d, 1e300]], "until": 0}' % os.getpid(),
+                     '[' * 1500 + ']' * 1500,
+                     '{"accounts": {"shared": %s}, "inflight": [], "until": 0}' % ('[' * 1500 + ']' * 1500),
+                     '{"a": ' * 1500 + '0' + '}' * 1500):
+            with self.subTest(text=text[:120]):
                 w = paced_world(self)
                 path = w.dir / 'state' / STATE
                 path.parent.mkdir(parents=True)

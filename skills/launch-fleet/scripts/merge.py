@@ -82,8 +82,8 @@ _spec.loader.exec_module(records)
 
 QUERY = '''query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { defaultBranchRef { name } pullRequest(number: $number) {
-    id state baseRefName headRefOid isMergeQueueEnabled isInMergeQueue mergeable mergeCommit { oid } mergedBy { login }
-    mergeQueueEntry { headCommit { oid } } repository { nameWithOwner }
+    id state baseRefName headRefOid isMergeQueueEnabled isInMergeQueue mergeable mergeCommit { oid }
+    mergedBy { login } mergeQueueEntry { headCommit { oid } } repository { nameWithOwner }
     closingIssuesReferences(first: 50) { pageInfo { hasNextPage } nodes { number body repository { nameWithOwner } } }
     timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 1) {
       nodes { ... on RemovedFromMergeQueueEvent { createdAt reason beforeCommit { oid } } } }

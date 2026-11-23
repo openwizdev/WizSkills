@@ -1305,15 +1305,20 @@ class DemoRepository(unittest.TestCase):
                 self.assertNotIn('seeded', json.loads(j.state.read_text())['created'])
 
     def test_a_verified_create_read_back_later_is_seeded_once(self):
-        j = Journey(self)
-        j.repos.write_text(github(fail_after_create=1))
-        self.assertEqual(j.helper(YES_DEMO).returncode, 6, j.calls[-1][1].stdout)
-        self.assertEqual(self.writes(j), [['POST', 'user/repos']], 'unread: nothing seeded yet')
-        done = j.helper(YES_DEMO)
-        self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertIn('Created and read back', done.stdout)
-        self.assertEqual(j.helper(YES_DEMO).returncode, 0)
-        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)], 'both files, once')
+        empty = [{'method': 'GET', 'path': 'repos/%s/git/ref/heads/main' % REPO, 'mode': 409, 'times': 2}]
+        for name, switches, unread in (('read fails once', {'fail_after_create': 1}, 1),
+                                       ('read empty twice', {'faults': empty}, 2)):
+            with self.subTest(name):
+                j = Journey(self)
+                j.repos.write_text(github(**switches))
+                for _ in range(unread):
+                    self.assertEqual(j.helper(YES_DEMO).returncode, 6, j.calls[-1][1].stdout)
+                    self.assertEqual(self.writes(j), [['POST', 'user/repos']], 'unread: nothing seeded yet')
+                done = j.helper(YES_DEMO)
+                self.assertEqual(done.returncode, 0, done.stdout)
+                self.assertIn('Created and read back', done.stdout)
+                self.assertEqual(j.helper(YES_DEMO).returncode, 0)
+                self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)], 'both files, once')
 
     # Catches: someone else's repository, private or public, taken as the demo
     # or written to, and a repeat that rewrites the owner's later work.

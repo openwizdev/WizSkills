@@ -605,7 +605,8 @@ again 'nightly: the next check reads the new delivery record' 'nightly_record(90
 
 expect 'quiet: nothing due prints nothing' 0 check.json . -- check < /dev/null
 expect 'no command means check' 0 check.json . -- < /dev/null
-expect 'GH_REPO unset: the repository comes from the clone' 0 check.json . GH_REPO= -- check < /dev/null
+POINTS='fleet\.sh: used [0-9]+ measured GitHub points in [0-9]+ questions, [0-9]+ unchanged; [0-9]+ of [0-9]+ left; repository discovery GraphQL cost unmeasured' \
+  expect 'GH_REPO unset: the repository comes from the clone' 0 check.json . GH_REPO= -- check < /dev/null
 log_has 'GH_REPO unset: the repository comes from the clone' 1 '^repo view$'
 expect 'a merge unlocks the ticket waiting on it' 0 check.json 'merge12' -- check <<EOF
 start #13: W3: widget page (spec #10)

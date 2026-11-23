@@ -3,7 +3,6 @@
 
   host.py which                              the host docs/agents/host.md chooses, or `host: none`
   host.py start OWNER/NAME N HARNESS MODEL   start #N's builder through that host's driver
-        [SKILL] [--row ROW]                ROW: the Models row picked (Builder, Small builder, Fixer, ...)
   host.py wake OWNER/NAME N                  wake #N's run, on the host that started it
   host.py stop OWNER/NAME N                  stop #N's run, on the host that started it
 

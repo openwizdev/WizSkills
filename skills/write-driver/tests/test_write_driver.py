@@ -1124,5 +1124,144 @@ class KitStaging(Base):
             self.assertIn(name, seen['files'])
 
 
+LOOKING_KIT = r"""import json, os, sys
+driver = sys.argv[sys.argv.index('--driver') + 1]
+top = os.path.dirname(driver)
+def read(name):
+    try:
+        with open(os.path.join(top, name)) as f:
+            return f.read()
+    except OSError:
+        return None
+with open(os.environ['LOOKING_KIT_OUT'], 'w') as f:
+    json.dump({'readme': read('README.md'), 'fixture': read(os.path.join('fixtures', 'kit-host.json'))}, f)
+for check in ('version', 'start', 'wake', 'stop', 'token'):
+    print('pass %s: synthetic' % check)
+"""
+
+# The stand-in kit's own checks, then a main that starts the driver as the real kit does: once with the kit's
+# own environment (its start check), and once under a loopback test origin of its own (its key check).
+TWO_STARTS = """
+def main():
+    args = sys.argv[1:]
+    driver = args[args.index('--driver') + 1]
+    request = json.dumps({'repository': 'example-user/examplehost-driver-kit', 'ticket': 7, 'skill': 'build-ticket',
+                          'harness': 'exampleagent', 'model': 'example-model'})
+    subprocess.run([driver, 'start'], input=request, text=True, capture_output=True)
+    env = dict(os.environ, OPENWIZ_HOSTKEY_TEST_ORIGIN='http://127.0.0.1:9')
+    subprocess.run([driver, 'start'], input=request, text=True, capture_output=True, env=env)
+    for check in ('version', 'start', 'wake', 'stop', 'token'):
+        print('pass %s: synthetic' % check)
+
+
+if __name__ == '__main__':
+    main()
+"""
+
+
+class KitStagingSafety(Base):
+    """The kit's staged view of the driver: what the kit reads there, what it writes, and what stop-all keeps."""
+
+    def driver_folder(self, kit_text):
+        self.begin()
+        openwiz = self.tmp / 'openwiz'
+        shutil.copytree(OPENWIZ, openwiz)
+        (openwiz / 'kernel' / 'driver-kit' / 'kit.py').write_text(kit_text)
+        self.wd('copy', '--state', self.state, '--openwiz', openwiz, '--into', openwiz, '--login', 'host',
+                '--key-host', 'examplehost', check=0)
+        return openwiz, openwiz / 'adapters' / 'examplehost'
+
+    def run_kit(self, openwiz, folder, check=None, driver=None):
+        return self.wd('kit', '--state', self.state, '--openwiz', openwiz, '--driver', driver or folder / 'driver',
+                       '--repo', 'example-user/examplehost-driver-kit', '--ticket', 7, '--harness', 'exampleagent',
+                       '--model', 'example-model', check=check)
+
+    def test_a_relative_readme_or_fixture_link_reads_the_same_file_in_the_kits_view(self):
+        # catches (R1): staging that keeps a relative link but moves its base, so the kit finds no README and
+        # silently skips its key-host check
+        openwiz, folder = self.driver_folder(LOOKING_KIT)
+        shared = openwiz / 'shared'
+        shared.mkdir()
+        (shared / 'README.md').write_text((folder / 'README.md').read_text())
+        (shared / 'kit-host.json').write_text('{"answers": []}')
+        (folder / 'README.md').unlink()
+        (folder / 'README.md').symlink_to(os.path.join('..', '..', 'shared', 'README.md'))
+        (folder / 'fixtures' / 'kit-host.json').unlink(missing_ok=True)
+        (folder / 'fixtures' / 'kit-host.json').symlink_to(os.path.join('..', '..', '..', 'shared', 'kit-host.json'))
+        self.env['LOOKING_KIT_OUT'] = str(self.tmp / 'seen.json')
+        self.run_kit(openwiz, folder, check=0)
+        seen = json.loads((self.tmp / 'seen.json').read_text())
+        self.assertEqual(seen['readme'], (shared / 'README.md').read_text())
+        self.assertEqual(seen['fixture'], '{"answers": []}')
+
+    def test_a_link_at_the_proxys_name_is_refused_and_its_target_never_written(self):
+        # catches (R7): the proxy written and chmodded through a link the driver's folder holds at its name,
+        # truncating a file outside the kit's state
+        openwiz, folder = self.driver_folder(LOOKING_KIT)
+        victim = self.tmp / 'victim.txt'
+        victim.write_text('synthetic user file\n')
+        victim.chmod(0o640)
+        (folder / '.write-driver-proxy').symlink_to(victim)
+        self.env['LOOKING_KIT_OUT'] = str(self.tmp / 'seen.json')
+        p = self.run_kit(openwiz, folder)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn('could not run', p.stdout)
+        self.assertEqual(victim.read_text(), 'synthetic user file\n')
+        self.assertEqual(oct(victim.stat().st_mode & 0o777), '0o640')
+        self.assertFalse((self.tmp / 'seen.json').exists(), 'the kit ran after a refused stage')
+
+    def test_no_local_file_of_the_drivers_folder_is_copied_into_state_or_left_after_the_kit(self):
+        # catches (R8): a whole-folder copy that duplicates an ignored .env into the kit's state and leaves it
+        # there after the kit and stop-all
+        marker = 'synthetic-local-marker-0123'
+        openwiz, folder = self.driver_folder(LOOKING_KIT)
+        (folder / '.env').write_text('EXAMPLE_SETTING=%s\n' % marker)
+        self.env['LOOKING_KIT_OUT'] = str(self.tmp / 'seen.json')
+        for p in (self.run_kit(openwiz, folder, check=0), self.wd('stop-all', '--state', self.state, check=0)):
+            for path in self.state.rglob('*'):
+                if path.is_file() and not path.is_symlink():
+                    self.assertNotIn(marker, path.read_text(errors='replace'), path)
+        self.assertEqual(sorted(x.name for x in self.state.iterdir()), ['run.json'])
+
+    def test_a_failed_kit_run_leaves_no_stage_behind(self):
+        # catches (R8): a stage kept when the kit could not run
+        openwiz, folder = self.driver_folder('import sys\nsys.exit(5)\n')
+        self.assertEqual(self.run_kit(openwiz, folder).returncode, 2)
+        self.assertEqual(sorted(x.name for x in self.state.iterdir()), ['run.json'])
+
+    def test_a_start_under_the_kits_own_test_origin_never_reaches_stop_all(self):
+        # catches (R9): the key check's start against the kit's loopback fake host saved as an ordinary run, so
+        # stop-all later sends a stop for it on the live route; the kit's own start is still stopped
+        fixture = (OPENWIZ / 'kernel' / 'driver-kit' / 'kit.py').read_text()
+        kit = fixture[:fixture.index('\ndef main():')] + TWO_STARTS
+        for launch in (None, 'http://127.0.0.1:8'):
+            with self.subTest(launch=launch):
+                shutil.rmtree(self.tmp / 'openwiz', True)
+                self.tearDown_state()
+                self.env.pop('OPENWIZ_HOSTKEY_TEST_ORIGIN', None)
+                if launch:
+                    self.env['OPENWIZ_HOSTKEY_TEST_ORIGIN'] = launch
+                openwiz, folder = self.driver_folder(kit)
+                driver = self.tmp / 'two-runs-driver'
+                driver.write_text(
+                    '#!%s\nimport json, os, sys\n'
+                    'run = "run-key" if os.environ.get("OPENWIZ_HOSTKEY_TEST_ORIGIN") == "http://127.0.0.1:9" '
+                    'else "run-main"\n'
+                    'if sys.argv[1] == "start":\n    print(json.dumps({"run": run}))\n'
+                    'else:\n    open(%r, "a").write(sys.stdin.read() + "\\n")\n'
+                    % (sys.executable, str(self.tmp / 'stopped')))
+                driver.chmod(0o700)
+                self.run_kit(openwiz, folder, check=0, driver=driver)
+                self.assertNotIn('run-key', (self.state / 'run.json').read_text())
+                self.env['OPENWIZ_HOSTKEY_TEST_ORIGIN'] = 'http://127.0.0.1:9'  # the route stop-all now has
+                p = self.wd('stop-all', '--state', self.state, check=0)
+                self.assertEqual(p.stdout.strip().split('\n')[-1], 'Stopped: everything it started (1)')
+                self.assertEqual((self.tmp / 'stopped').read_text(), '{"run": "run-main"}\n')
+
+    def tearDown_state(self):
+        shutil.rmtree(self.state, True)
+        (self.tmp / 'stopped').unlink(missing_ok=True)
+
+
 if __name__ == '__main__':
     unittest.main()

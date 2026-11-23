@@ -1266,6 +1266,23 @@ class DemoRepository(unittest.TestCase):
                 if state != 'created':
                     self.assertNotEqual(json.loads(j.state.read_text())['created']['state'], 'created')
 
+    def test_a_teammates_repository_at_the_name_is_never_seeded_on_resume(self):
+        teammate = {'main': {'README.md': '# demo\n'}}
+        for state in ('pending', 'uncertain'):
+            with self.subTest(state):
+                j = Journey(self)
+                j.repos.write_text(github([demo_repository(branches=teammate)]))
+                j.state.write_text(json.dumps({'created': {'repo': REPO, 'state': state}}))
+                j.state.chmod(0o600)
+                before = self.world(j)['repos']
+                for _ in range(2):
+                    result = j.helper(YES_DEMO)
+                    self.assertEqual(result.returncode, 5, result.stdout)
+                    self.assertIn('uncertain', result.stdout)
+                    self.assertNotIn('Created and read back', result.stdout)
+                self.assertEqual((self.world(j)['repos'], self.writes(j)), (before, []), 'neither file written')
+                self.assertNotIn('seeded', json.loads(j.state.read_text())['created'])
+
     # Catches: someone else's repository, private or public, taken as the demo
     # or written to, and a repeat that rewrites the owner's later work.
     def test_existing_repositories_and_owner_work_are_never_written(self):

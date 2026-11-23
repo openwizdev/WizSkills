@@ -14,7 +14,7 @@ SHA = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
 MAX_AGE = 60
 STAMP = 'gitread-fetched'
 FAILED = 'gitread-failed'
-KEEP = re.compile(r'GIT_CONFIG_(GLOBAL|SYSTEM|NOSYSTEM|PARAMETERS|COUNT|KEY_[0-9]+|VALUE_[0-9]+)')
+KEEP = re.compile(r'GIT_ALLOW_PROTOCOL|GIT_CONFIG_(GLOBAL|SYSTEM|NOSYSTEM|PARAMETERS|COUNT|KEY_[0-9]+|VALUE_[0-9]+)')
 QUIET = {name: '0' for name in ('GIT_TRACE', 'GIT_TRACE2', 'GIT_TRACE2_EVENT', 'GIT_TRACE2_PERF', 'GIT_TRACE_CURL',
                                  'GIT_CURL_VERBOSE', 'GIT_TRACE_PACKET', 'GIT_TRACE_PACKFILE', 'GIT_TRACE_PACK_ACCESS',
                                  'GIT_TRACE_PERFORMANCE', 'GIT_TRACE_SETUP', 'GIT_TRACE_SHALLOW', 'GIT_TRACE_REFS',
@@ -61,6 +61,8 @@ def private_root():
 def git(cache, *args):
     env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_') or KEEP.fullmatch(key)}
     env.update(QUIET, GIT_TERMINAL_PROMPT='0', GIT_DIR=str(cache))
+    if os.environ.get('GITREAD_LOCAL_ONLY'):
+        env['GIT_ALLOW_PROTOCOL'] = 'file'
     try:
         run = subprocess.run(['git', *args], capture_output=True, env=env, timeout=60, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -104,9 +106,7 @@ def write(cache, name, text):
 
 def fetch(cache, repo):
     write(cache, FAILED, f'{time.time()}\n')
-    local = ('-c', 'protocol.allow=never', '-c', 'protocol.file.allow=always') \
-        if os.environ.get('GITREAD_LOCAL_ONLY') else ()
-    run = git(cache, *local, '-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential',
+    run = git(cache, '-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential',
               'fetch', '--quiet', '--depth', '1', '--no-tags', f'https://github.com/{repo}.git', 'HEAD')
     if run.returncode != 0:
         raise Error(f'could not fetch the default branch of {repo}')

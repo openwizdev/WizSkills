@@ -953,12 +953,31 @@ def key_host_lines():
 
 class KeyHost(unittest.TestCase):
 
-    def test_a_key_host_driver_calls_only_the_helper_with_a_method_and_a_path(self):
+    def test_a_key_host_driver_calls_only_the_helper_as_ky1_fixes_it(self):
         text = key_host_lines()
-        for words in ("the helper, `hostkey.py` in OpenWiz's `kernel/driver-kit/`, with `python3 -I`", 'every call to the host\'s API',
-                      'exactly `host`, `method` (`GET`, `POST` or `DELETE`), `path` and an optional `body`',
-                      'exactly `status` and `body`', 'never a key, a header or an address'):
+        for words in ("the key helper, `hostkey.py` in OpenWiz's `kernel/driver-kit/`, run with `python3 -I`",
+                      "is the only way the driver reaches the host",
+                      "`host`, the host's registered name; `method`, `GET`, `POST` or `DELETE`; `path`, an absolute "
+                      "path on the host; and, optionally, `body`, an object",
+                      "`status`, the HTTP status, and `body`, the parsed JSON or `null`",
+                      "exits 1 with driver v1's D3 error",
+                      "sends it only over HTTPS to the address registered for that host",
+                      "never names, reads, receives or prints the key, and never chooses the address",
+                      "OpenWiz never stores a key"):
             self.assertIn(words, text)
+        self.assertNotIn('a method and a path only', text)
+
+    def test_a_key_host_driver_is_written_and_proved_in_the_users_openwiz_fork(self):
+        text = key_host_lines()
+        self.assertIn("write the driver in the user's fork of openwizdev/OpenWiz", text)
+        self.assertIn("`<openwiz>` and `<the user's repository>` in every step are the same folder", text)
+        self.assertNotIn('Run the kit on a copy of the driver', text)
+
+    def test_a_key_hosts_live_shape_goes_through_the_helper_with_a_yes_first(self):
+        text = key_host_lines()
+        self.assertIn("**live-shape** for a key host: the host's own tool is the helper", text)
+        self.assertIn('ask first if it costs money or starts a machine', text)
+        self.assertIn('save its `body`', text)
 
     def test_a_key_hosts_readme_line_comes_from_copy_key_host(self):
         self.assertIn("Run `copy` with `--key-host <the host's registered name>` instead of `--key-variable`",

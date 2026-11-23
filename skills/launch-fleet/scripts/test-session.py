@@ -152,6 +152,16 @@ folder.rmdir()
 os.close(fd)
 '''
 
+ROSTER = ('\n## Roster\n\n| Name | Kind | Driver | Roles | Writes as |\n| --- | --- | --- | --- | --- |\n'
+          "| Claude Code | harness | local | orchestrator, builder, reviewer | synthetic-owner's App |\n"
+          "| Codex | harness | local | reviewer | synthetic-owner's App |\n")
+HOST_LOG = r"""
+import json, os, sys
+with open(os.path.join(os.environ['HOME'], 'host.log'), 'a') as log:
+    log.write(json.dumps(sys.argv[1:]) + '\n')
+os.execv(sys.executable, [sys.executable, '-I', %r, *sys.argv[1:]])
+"""
+
 
 def stamp():
     return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -558,6 +568,99 @@ class Session(unittest.TestCase):
         self.assertEqual(calls, [self.lock_dir])
         self.assertEqual((third.returncode, third.stdout),
                          (1, 'session: refused: a session or heartbeat tick already runs spec #7\n'))
+
+    def logged_host(self):
+        (self.scripts / 'host.py').unlink()
+        (self.scripts / 'host.py').write_text(HOST_LOG % str(HERE / 'host.py'))
+
+    def host_starts(self):
+        path = self.home / 'host.log'
+        calls = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        return [c[2:] for c in calls if c[0] == 'start']
+
+    def roster(self, models=MODELS % ('Codex', 'codex')):
+        text = FLEET_MD.replace(MODELS % ('Codex', 'codex'), models) + ROSTER
+        self.change(lambda w: w.update(fleet_md=text))
+        writer = self.home / 'writer'
+        (writer / 'docs/agents/fleet.md').write_text(text)
+        for args in (['add', '-A'], ['commit', '-q', '-m', 'roster'],
+                     ['push', '-q', str(self.home / 'origin.git'), 'trunk']):
+            subprocess.run(['git', '-C', str(writer), *args], check=True, capture_output=True, env=self.env)
+        (self.home / 'adapters/local/driver').write_text(
+            '#!/bin/sh\nFAKE_DRIVER_HOST=local FAKE_EFFORT_MODE=takes exec "%s" -I "%s" "$@"\n'
+            % (sys.executable, HERE / 'fixtures/roster/effort/driver.py'))
+        self.logged_host()
+
+    def built(self, harness='Claude Code', model='Opus 5.5'):
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12, harness=harness, model=model)
+        self.green(12, 5)
+
+    def reviewed(self, *extra):
+        process = self.session(*extra)
+        self.until(lambda: self.records(12)[:1] and self.records(12)[0].startswith(
+            'launch-fleet: review started ' + HEAD), 'the reviewer', process)
+        process.send_signal(signal.SIGINT)
+        self.ended(process, 130)
+        return self.host_starts(), self.starts()
+
+    def test_with_a_roster_a_builder_starts_on_the_builder_row_at_its_effort(self):
+        self.roster()
+        self.tickets(5)
+        process = self.session('--model', 'synthetic-table-builder')
+        self.until(lambda: self.records(5) == ['launch-fleet: started'], 'the start', process)
+        process.send_signal(signal.SIGINT)
+        self.ended(process, 130)
+        self.assertEqual(self.host_starts(), [['5', 'claude', 'synthetic-table-builder', '--row', 'Builder']])
+        self.assertEqual(self.starts(), [{'repository': REPO, 'ticket': 5, 'skill': 'build-ticket', 'harness': 'claude',
+                                          'model': 'synthetic-table-builder', 'effort': 'high'}])
+
+    def test_with_a_roster_the_reviewer_starts_on_the_reviewer_row_at_its_effort(self):
+        self.roster((MODELS % ('Codex', 'codex')).replace('| Table | High |', '| Table | Low |'))
+        self.built()
+        asked, sent = self.reviewed()
+        self.assertEqual(asked, [['12', 'codex', 'synthetic-table-reviewer', 'review-ticket', '--row', 'Reviewer']])
+        self.assertEqual(sent, [{'repository': REPO, 'ticket': 12, 'skill': 'review-ticket', 'harness': 'codex',
+                                 'model': 'synthetic-table-reviewer', 'effort': 'low'}])
+
+    def test_with_a_roster_a_cross_family_fallback_review_starts_on_the_builder_row(self):
+        self.roster((MODELS % ('Codex', 'codex')).replace('| Table | High |', '| Table | Low |'))
+        self.built(harness='Codex')
+        asked, sent = self.reviewed()
+        self.assertEqual(asked, [['12', 'claude', 'synthetic-table-builder', 'review-ticket', '--row', 'Builder']])
+        self.assertEqual(sent, [{'repository': REPO, 'ticket': 12, 'skill': 'review-ticket', 'harness': 'claude',
+                                 'model': 'synthetic-table-builder', 'effort': 'high'}])
+
+    def test_with_a_roster_and_one_harness_the_review_starts_on_the_builders_matched_row(self):
+        (self.home / 'bin/codex').unlink()
+        self.roster()
+        self.built(model='Actual Medium')
+        asked, sent = self.reviewed()
+        self.assertEqual(asked, [['12', 'claude', 'synthetic-actual-builder', 'review-ticket', '--row',
+                                  'Small builder']])
+        self.assertEqual(sent, [{'repository': REPO, 'ticket': 12, 'skill': 'review-ticket', 'harness': 'claude',
+                                 'model': 'synthetic-actual-builder', 'effort': 'medium'}])
+
+    def test_without_a_roster_host_starts_take_the_arguments_they_took_before_rows(self):
+        self.logged_host()
+        self.tickets(5)
+        self.change(lambda w: w['branches'].update({'5': 'room/5-synthetic'}))
+        process = self.session()
+        self.until(lambda: self.records(5) == ['launch-fleet: start checked, branch room/5-synthetic'], 'check',
+                   process)
+        self.green(12, 5)
+        self.note(5, 'builder', pr=12)
+        self.until(lambda: self.records(12)[:1] and self.records(12)[0].startswith(
+            'launch-fleet: review started ' + HEAD), 'the reviewer', process)
+        process.send_signal(signal.SIGINT)
+        self.ended(process, 130)
+        self.assertEqual(self.host_starts(), [['5', 'claude', 'synthetic-builder'],
+                                              ['12', 'codex', 'synthetic-table-reviewer', 'review-ticket']])
+        self.assertEqual(self.starts(), [
+            {'repository': REPO, 'ticket': 5, 'skill': 'build-ticket', 'harness': 'claude', 'model': 'synthetic-builder'},
+            {'repository': REPO, 'ticket': 12, 'skill': 'review-ticket', 'harness': 'codex',
+             'model': 'synthetic-table-reviewer'}])
 
 
 if __name__ == '__main__':

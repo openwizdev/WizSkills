@@ -536,24 +536,64 @@ class RecordedJourney(unittest.TestCase):
 
 
 class HostAwareSetup(unittest.TestCase):
-    def test_where_accepts_a_local_driver_that_lists_effort(self):
+    def local_driver_build(self, *capabilities):
         j = Journey(self)
         driver = j.dir / 'runtime/adapters/local/driver'
         driver.parent.mkdir(parents=True)
+        answer = {'driver': 'local', 'records': ['openwiz:records v1'],
+                  'can': ['start', 'wake', 'stop', *capabilities]}
         driver.write_text(
             "#!/bin/sh\n"
             '[ "$#" -eq 1 ] && [ "$1" = version ] || exit 97\n'
-            "printf '%s\\n' "
-            """'{"driver":"local","records":["openwiz:records v1"],"can":["start","wake","stop","effort"]}'\n"""
+            f"printf '%s\\n' '{json.dumps(answer)}'\n"
         )
         driver.chmod(0o755)
         (j.dir / 'bin/codex').symlink_to('/usr/bin/false')
+        return j
+
+    def test_where_accepts_a_local_driver_that_lists_effort(self):
+        j = self.local_driver_build('effort')
 
         result = j.helper(['where', '--build', str(j.dir), '--agents', 'local', '--yes'])
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('- local: this machine\n', result.stdout)
         self.assertEqual(json.loads(j.state.read_text())['host']['agents'], 'local')
+
+    def test_driver_capability_fallback_matches_the_pinned_schema_enum(self):
+        # External: version.output.properties.can.items.enum from OpenWiz main.
+        # https://github.com/openwizdev/OpenWiz/blob/df714db0e44247499b5d54f7d0f41b7d0bde2a3c/kernel/driver-kit/schema.json
+        schema_enum = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox', 'effort')
+        self.assertEqual(runpy.run_path(str(HELPER))['CAN'], schema_enum)
+
+    def test_where_uses_the_packaged_driver_kit_enum(self):
+        j = self.local_driver_build('synthetic-capability')
+        args = ['where', '--build', str(j.dir), '--agents', 'local']
+        unknown = j.helper(args)
+        self.assertEqual(unknown.returncode, 5, unknown.stdout + unknown.stderr)
+        self.assertIn("Not offered: local: its `version` answer is not driver v1's.", unknown.stdout)
+
+        schema = j.dir / 'runtime/kernel/driver-kit/schema.json'
+        schema.parent.mkdir(parents=True)
+        can = {'items': {'enum': ['start', 'wake', 'stop', 'synthetic-capability']}}
+        version = {'output': {'properties': {'can': can}}}
+        schema.write_text(json.dumps({'contract': 'openwiz:driver v1', 'commands': {'version': version}}))
+        offered = j.helper(args)
+        self.assertEqual(offered.returncode, 12, offered.stdout + offered.stderr)
+        self.assertIn('- local: this machine\n', offered.stdout)
+
+    def test_where_refuses_a_malformed_packaged_driver_kit(self):
+        j = self.local_driver_build('effort')
+        schema = j.dir / 'runtime/kernel/driver-kit/schema.json'
+        schema.parent.mkdir(parents=True)
+        schema.write_text('malformed-synthetic-schema')
+
+        result = j.helper(['where', '--build', str(j.dir), '--agents', 'local', '--yes'])
+
+        self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
+        self.assertIn('Not offered: local: the driver kit has an invalid driver v1 schema.', result.stdout)
+        self.assertNotIn('malformed-synthetic-schema', result.stdout + result.stderr)
+        self.assertFalse(j.state.exists())
 
     def test_driver_setup_carries_without_cloudroom_and_keeps_github_and_harness_gates(self):
         cases = (

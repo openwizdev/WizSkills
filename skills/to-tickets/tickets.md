@@ -7,7 +7,10 @@ versions when needed. Releases and live checks stay in version order.
 
 Write the issue body with Parent, What to build, Owned paths, Links, Acceptance
 criteria and Proof. Parent ends with the size, exactly once: `Size: S.`, `Size: M.`
-or `Size: L.`. In Owned paths give each exact file or folder in backticks, with
+or `Size: L.`. S is an expected diff of about 400 changed lines and 10 files or
+fewer. An M adds its own `Why M: <reason it can't split>` line to Parent, after
+the size. A ticket of size L is split, never cut. In Owned paths give each exact
+file or folder in backticks, with
 `in \`owner/repo\`` when it is another repository's.
 Mark a small shared file `(shared)` and name the separate lines each ticket
 owns. `**Relies on:**` lists exact backticked interface-file paths on one line,

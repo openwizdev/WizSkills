@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""snapshot.py under a fake `gh` (#2625, P2 budget).
-
-The fake serves one synthetic repository by GraphQL and by REST, honours the
-page sizes the caller asks for, answers a matching If-None-Match with a 304
-and logs every call, so a test can count what a write spent.
-"""
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -201,7 +195,6 @@ def item(number, kind='issue', comments=(), **extra):
 
 
 def busy_world():
-    """60 issues (two GraphQL pages of 50), 3 pull requests, issue 7 with 250 comments."""
     items = [item(n) for n in range(1, 61)]
     items[6]['comments'] = [comment(10000 + k, 'someone-else' if k % 3 else 'synthetic-owner',
                                     'comment %d' % k, k) for k in range(250)]

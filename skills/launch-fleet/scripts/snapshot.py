@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""One read of a repository's open work per wake (#2625, spec #2428 FR8).
+from datetime import datetime, timedelta, timezone
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+USAGE = """One read of a repository's open work per wake (#2625, spec #2428 FR8).
 
   snapshot.py write OWNER/NAME OUT   read every open issue and pull request with
                                      every comment into OUT, atomically
@@ -16,15 +26,6 @@ repository's `docs/agents/fleet.md` at write time the way post.py reads them.
 Exit 0 done, 2 refused or unreadable (the reason on stderr). Python 3.11+
 standard library and `gh`.
 """
-from datetime import datetime, timedelta, timezone
-import importlib.util
-import json
-import os
-from pathlib import Path
-import re
-import subprocess
-import sys
-import tempfile
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -110,7 +111,6 @@ def graphql(query, **variables):
 
 
 def connection(conn, what):
-    """A page's nodes, refusing a missing page, a null node or a missing cursor."""
     need(isinstance(conn, dict) and type(conn.get('nodes')) is list and isinstance(conn.get('pageInfo'), dict),
          f'partial page: {what}')
     need(all(isinstance(n, dict) for n in conn['nodes']), f'null node: {what}')
@@ -198,7 +198,6 @@ def read_graphql(repo):
 
 
 def rest(path, cache, raw=False):
-    """One conditional GET: (body text, next path or None). A 304 reuses the saved body."""
     args = ['api', '-i', path]
     if raw:
         args += ['-H', 'Accept: application/vnd.github.raw+json']
@@ -388,7 +387,7 @@ def main(argv):
         elif len(argv) == 3 and argv[0] == 'facts' and argv[2].isdigit():
             facts(argv[1], int(argv[2]))
         else:
-            print(__doc__.strip().split('\n\n')[1], file=sys.stderr)
+            print(USAGE, end='', file=sys.stderr)
             return 2
     except Stop as e:
         print(f'snapshot: refused: {e}', file=sys.stderr)

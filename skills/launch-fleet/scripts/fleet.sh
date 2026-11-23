@@ -221,11 +221,24 @@ PARENT='parent {
 
 query() {
   case $1 in
-    Specs) printf '%s\n' 'query Specs($owner: String!, $name: String!) {
+    Specs) printf '%s\n' 'query Specs($owner: String!, $name: String!, $cursor: String) {
   rateLimit { cost remaining limit resetAt }
   repository(owner: $owner, name: $name) {
     databaseId
     defaultBranchRef { name }
+    issues(states: OPEN, first: 100, after: $cursor, orderBy: {field: CREATED_AT, direction: ASC}) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { number updatedAt body subIssuesSummary { total completed } }
+    }
+  }
+}' ;;
+    Search) printf '%s\n' 'query Search($q: String!, $cursor: String) {
+  rateLimit { cost remaining limit resetAt }
+  search(query: $q, type: ISSUE, first: 100, after: $cursor) {
+    totalCount: issueCount
+    pageInfo { hasNextPage endCursor }
+    nodes { ... on Issue { id number state } }
   }
 }' ;;
     Spec) printf '%s\n' 'query Spec($owner: String!, $name: String!, $number: Int!, $size: Int!) {
@@ -328,7 +341,7 @@ gql() {
   op=$1 out=$2
   shift 2
   case $op in
-    Blockers | Nodes | Checks) ;;
+    Blockers | Nodes | Checks | Search) ;;
     Merged) [ "${1:-}" = -F ] || set -- -F owner="$OWNER" -F name="$NAME" "$@" ;;
     *) set -- -F owner="$OWNER" -F name="$NAME" "$@" ;;
   esac
@@ -341,7 +354,7 @@ gql() {
   # An empty answer is never a spent allowance, nor anything else: jq -e takes
   # an empty file as true (jq 1.6).
   elif ! gh api graphql -f query="$(query "$op")" "$@" > "$out" 2> "$out.err"; then
-    if [ $reads = 0 ] && [ -s "$out" ] && jq -e 'any(.errors[]?.type; . == "RATE_LIMIT" or . == "RATE_LIMITED")' "$out" > /dev/null 2>&1; then
+    if [ "$cmd" != spec ] && [ $reads = 0 ] && [ -s "$out" ] && jq -e 'any(.errors[]?.type; . == "RATE_LIMIT" or . == "RATE_LIMITED")' "$out" > /dev/null 2>&1; then
       back_off "GitHub's allowance has run out, until it resets"
     fi
     # A number a wake names that is no issue or pull request (deleted, or
@@ -891,30 +904,53 @@ settings() {
 # #<ticket> (spec #<spec>)"), into followups.json; and the default branch into
 # $DEFAULT. Its first read is the check's first: it says how much of GitHub's
 # allowance is left.
+wide_allowance() {
+  [ -z "$REPLAY" ] && [ -s "$TMP/rate.txt" ] || return 0
+  if (allowance && exit 3); then die "GitHub's allowance refused a wide read"; fi
+}
+
+WIDE_PAGE='def wide_page($seen; $ids; $cursor):
+  type == "object" and (.totalCount | type == "number" and . >= 0 and . == floor)
+  and (.nodes | type == "array") and all(.nodes[]; type == "object")
+  and ($ids | length) == ($ids | unique | length)
+  and ($seen + (.nodes | length)) <= .totalCount
+  and (if .pageInfo.hasNextPage == true then
+    ($seen + (.nodes | length)) < .totalCount and (.nodes | length) > 0
+    and (.pageInfo.endCursor | type == "string" and length > 0 and . != $cursor)
+  else .pageInfo.hasNextPage == false and ($seen + (.nodes | length)) == .totalCount end);'
+
 specs_list() {
-  : > "$TMP/spec-list.txt"
-  : > "$TMP/followups.txt"
-  gql Specs "$TMP/repository.json"
-  allowance
-  DEFAULT=$(jq -er '.data.repository.defaultBranchRef.name' "$TMP/repository.json") || die "no default branch"
-  endpoint="repos/$REPO/issues?state=open&per_page=100"
-  pages=0
-  while [ -n "$endpoint" ]; do
+  if [ -n "$REPLAY" ]; then
+    cp "$REPLAY/spec-list.sorted" "$REPLAY/followups.json" "$TMP/" || die "can't read the open issues"
+    DEFAULT=$(cat "$REPLAY/spec-list.default") || die "no default branch"
+    REPO_ID=$(cat "$REPLAY/spec-list.repo-id") || die "no repository ID"
+    return
+  fi
+  [ ! -f "$TMP/spec-list.default" ] || return 0
+  : > "$TMP/spec-list.txt" && : > "$TMP/followups.txt" && : > "$TMP/open-issue-ids.txt" || die "can't write"
+  cursor='' pages=0 listed=0 total=null
+  while :; do
     pages=$((pages + 1))
-    [ $pages -le 50 ] || die "more than 5000 open issues: too many to read in one check"
-    rest "$endpoint" "$TMP/issues-page.json" || die "can't read the open issues"
-    jq -ce 'select(type == "array")
-      | [.[] | select(has("pull_request") | not)
-         | {number, updatedAt: .updated_at, body, subIssuesSummary: .sub_issues_summary}]
-      | if all(.[]; (.subIssuesSummary | type) == "object"
-          and all(.subIssuesSummary.total, .subIssuesSummary.completed; type == "number" and . >= 0 and . == floor))
-        then {data: {repository: {issues: {nodes: .}}}}
-        else error("missing sub-issue counts") end' \
-      "$TMP/issues-page.json" > "$TMP/page.json" || die "can't read the open issues"
-    jq -e '[.data.repository.issues.nodes[] | select(.subIssuesSummary.total > 0)]
-      | all(.[]; (.number, .subIssuesSummary.total, .subIssuesSummary.completed | type == "number")
-                 and (.updatedAt | type == "string" and test("^[0-9T:Z.-]+$")))' "$TMP/page.json" > /dev/null \
-      || die "can't read the open issues"
+    [ "$pages" -le 50 ] || die "more than 5000 open issues: too many to read in one check"
+    wide_allowance
+    set --
+    [ -z "$cursor" ] || set -- -f cursor="$cursor"
+    gql Specs "$TMP/page.json" "$@"
+    if [ "$pages" = 1 ] && [ "$cmd" != spec ]; then allowance; else wide_allowance; fi
+    DEFAULT=$(jq -er '.data.repository.defaultBranchRef.name' "$TMP/page.json") || die "no default branch"
+    jq -e --argjson listed "$listed" --argjson total "$total" --arg cursor "$cursor" --rawfile ids "$TMP/open-issue-ids.txt" "$WIDE_PAGE"'
+      .data.repository.issues
+      | wide_page($listed; (($ids | split("\n") | .[:-1]) + [.nodes[].number | tostring]); $cursor)
+      and ($total == null or .totalCount == $total)
+      and all(.nodes[];
+        (.number | type == "number" and . > 0 and . == floor)
+        and (.updatedAt | type == "string" and test("^[0-9T:Z.-]+$"))
+        and (.body | type == "string")
+        and all(.subIssuesSummary.total, .subIssuesSummary.completed; type == "number" and . >= 0 and . == floor))' \
+      "$TMP/page.json" > /dev/null || die "can't read the open issues pagination"
+    total=$(jq '.data.repository.issues.totalCount' "$TMP/page.json") || die "can't read the open issues"
+    jq -r '.data.repository.issues.nodes[].number' "$TMP/page.json" >> "$TMP/open-issue-ids.txt" || die "can't read the open issues"
+    listed=$(wc -l < "$TMP/open-issue-ids.txt") || die "can't count the open issues"
     jq -r '.data.repository.issues.nodes[] | select(.subIssuesSummary.total > 0)
       | "\(.number) \(.subIssuesSummary.total) \(.subIssuesSummary.completed) \(.updatedAt)"' "$TMP/page.json" \
       >> "$TMP/spec-list.txt" || die "can't read the open issues"
@@ -922,10 +958,12 @@ specs_list() {
       | ((.body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) | (first // "") | sub("^\\s+"; "")) as $l
       | ([$l | capture("^Follow-up of #[0-9]+ \\(spec #(?<s>[0-9]+)\\)") | .s | tonumber] | first) as $spec
       | select($spec != null) | {number, spec: $spec}' "$TMP/page.json" >> "$TMP/followups.txt" || die "can't read the open issues"
-    endpoint=$(next_page "$TMP/issues-page.json.http") || die "can't read the open issues pagination"
+    [ "$(jq '.data.repository.issues.pageInfo.hasNextPage' "$TMP/page.json")" = true ] || break
+    cursor=$(jq -er '.data.repository.issues.pageInfo.endCursor' "$TMP/page.json") || die "can't read the open issues pagination"
   done
   sort -n -u -k1,1 "$TMP/spec-list.txt" > "$TMP/spec-list.sorted" || die "can't read the open issues"
   jq -s '.' "$TMP/followups.txt" > "$TMP/followups.json" || die "can't read the follow-ups"
+  printf '%s\n' "$REPO_ID" > "$TMP/spec-list.repo-id" && printf '%s\n' "$DEFAULT" > "$TMP/spec-list.default" || die "can't write"
 }
 
 # quiet_key NUMBER TICKETS CLOSED UPDATED: a spec with no open ticket as the
@@ -1093,33 +1131,41 @@ wake_world() {
 # by its id, unless it is closed and its last comment is its "archived" record.
 # A search that lists fewer than it counts stops the check, so no start or
 # archive is ever dropped.
+wide_search() {
+  q=$1 destination=$2 why=$3
+  cursor='' pages=0 listed=0 total=null
+  : > "$TMP/search-seen.txt" || die "can't write"
+  while :; do
+    pages=$((pages + 1))
+    [ "$pages" -le 11 ] || die "the search for $why did not end"
+    wide_allowance
+    set -- -f q="$q"
+    [ -z "$cursor" ] || set -- "$@" -f cursor="$cursor"
+    gql Search "$TMP/search.json" "$@"
+    total_now=$(jq '.data.search.totalCount' "$TMP/search.json") || die "can't read $why"
+    count=$(jq '.data.search.nodes | length' "$TMP/search.json") || die "can't read $why"
+    jq -e --argjson listed "$listed" --argjson total "$total" --arg cursor "$cursor" --rawfile seen "$TMP/search-seen.txt" "$WIDE_PAGE"'
+      .data.search
+      | wide_page($listed; (($seen | split("\n") | .[:-1]) + [.nodes[].id]); $cursor)
+      and ($total == null or .totalCount == $total)
+      and all(.nodes[]; (.id | type == "string" and test("^[^[:space:]]+$"))
+        and (.number | type == "number" and . > 0 and . == floor) and (.state | IN("OPEN", "CLOSED")))' \
+      "$TMP/search.json" > /dev/null || die "the search listed $((listed + count)) of $total_now $why or answered with an unreadable page"
+    jq -r '.data.search.nodes[] | "\(.number) \(.id) \(.state | ascii_downcase)"' "$TMP/search.json" >> "$destination" || die "can't read $why"
+    jq -r '.data.search.nodes[].id' "$TMP/search.json" >> "$TMP/search-seen.txt" || die "can't read $why"
+    listed=$((listed + count)) total=$total_now
+    [ "$(jq '.data.search.pageInfo.hasNextPage' "$TMP/search.json")" = true ] || break
+    cursor=$(jq -er '.data.search.pageInfo.endCursor' "$TMP/search.json") || die "can't read the $why search pagination"
+  done
+}
+
 singles() {
   label=$(jq -er '."ready-for-agent"' "$TMP/labels.json") || die "can't read the labels"
   : > "$TMP/singles.txt"
   : > "$TMP/single-ids.txt"
   : > "$TMP/search-items.txt"
   for single_label in "$label" held; do
-    q="repo:$REPO is:issue label:\"$single_label\" no:parent-issue"
-    cursor='' pages=0 listed=0 total=0
-    encoded=$(jq -rn --arg q "$q" '$q | @uri') || die "can't encode the issues search"
-    endpoint="search/issues?q=$encoded&per_page=100"
-    while [ -n "$endpoint" ]; do
-      pages=$((pages + 1))
-      [ $pages -le 11 ] || die "the search for issues outside specs did not end"
-      rest "$endpoint" "$TMP/search.json" || die "can't read the issues outside specs"
-      jq -e 'type == "object" and .incomplete_results == false
-        and (.total_count | type == "number" and . >= 0 and . == floor)
-        and (.items | type) == "array" and all(.items[];
-          (.node_id | type) == "string" and (.number | type) == "number" and (.state | IN("open", "closed")))' \
-        "$TMP/search.json" > /dev/null || die "can't read the issues outside specs"
-      total=$(jq .total_count "$TMP/search.json") || die "can't read the issues outside specs"
-      n=$(jq '.items | length' "$TMP/search.json") || die "can't read the issues outside specs"
-      listed=$((listed + n))
-      jq -r '.items[] | "\(.number) \(.node_id) \(.state)"' "$TMP/search.json" >> "$TMP/search-items.txt" \
-        || die "can't read the issues outside specs"
-      endpoint=$(next_page "$TMP/search.json.http") || die "can't read the issues search pagination"
-    done
-    [ "$listed" = "$total" ] || die "the search listed $listed of $total issues outside specs, so a start or an archive could be missed"
+    wide_search "repo:$REPO is:issue label:\"$single_label\" no:parent-issue" "$TMP/search-items.txt" "issues outside specs" || exit 2
   done
   sort -u "$TMP/search-items.txt" > "$TMP/search-items.sorted" \
     && mv "$TMP/search-items.sorted" "$TMP/search-items.txt" || die "can't deduplicate the issues outside specs"
@@ -1158,23 +1204,6 @@ $n
     || die "can't read the issues"
 }
 
-active_search() {
-  encoded=$(jq -rn --arg q "$1" '$q | @uri') || die "can't encode the open work search"
-  endpoint="search/issues?q=$encoded&per_page=100" pages=0 listed=0 total=0
-  while [ -n "$endpoint" ]; do
-    pages=$((pages + 1))
-    [ $pages -le 11 ] || die "the search for open work did not end"
-    rest "$endpoint" "$TMP/search.json" || die "can't read the open work"
-    jq -e 'type == "object" and .incomplete_results == false and (.total_count | type == "number")
-      and (.items | type) == "array" and all(.items[]; (.node_id | type) == "string" and (.number | type) == "number")' \
-      "$TMP/search.json" > /dev/null || die "can't read the open work"
-    total=$(jq .total_count "$TMP/search.json") && n=$(jq '.items | length' "$TMP/search.json") || die "can't read the open work"
-    listed=$((listed + n))
-    jq -r '.items[].node_id' "$TMP/search.json" >> "$TMP/active-ids.txt" || die "can't read the open work"
-    endpoint=$(next_page "$TMP/search.json.http") || die "can't read the open work search pagination"
-  done
-  [ "$listed" = "$total" ] || die "the search listed $listed of $total open tickets, so a colliding start could be missed"
-}
 # active: F6'"'"'s collision scope for a builder start (#1353): every open issue
 # of the repository with live work, in a spec or not, read in full into
 # active.json, so a start sees running and claimed work of every fleet. Live
@@ -1184,12 +1213,11 @@ active_search() {
 # fewer than it counts stops the start.
 active() {
   label=$(jq -er '."ready-for-agent"' "$TMP/labels.json") || die "can't read the labels"
-  : > "$TMP/active-ids.txt" && : > "$TMP/singles.txt" || die "can't write"
+  : > "$TMP/active-rows.txt" && : > "$TMP/singles.txt" || die "can't write"
   for q in "label:\"$label\"" '"launch-fleet" in:comments' 'linked:pr'; do
-    active_search "repo:$REPO is:issue is:open $q"
+    wide_search "repo:$REPO is:issue is:open $q" "$TMP/active-rows.txt" "open work" || exit 2
   done
-  sort -u "$TMP/active-ids.txt" > "$TMP/active-ids.sorted" && mv "$TMP/active-ids.sorted" "$TMP/active-ids.txt" \
-    || die "can't write"
+  awk '{print $2}' "$TMP/active-rows.txt" | sort -u > "$TMP/active-ids.txt" || die "can't write"
   set --
   while read -r id; do
     set -- "$@" -f "ids[]=$id"
@@ -2686,6 +2714,7 @@ unchanged() {
     key=$(printf '%s' "$endpoint" | hash) || return 0
     [ -f "$TMP/probe/$key.same" ] || return 0
   done < "$TMP/snap/expected"
+  specs_list
   if LAUNCH_FLEET_REPLAY=$TMP sh "$0" spec "$SPEC" > "$TMP/replay.out" 2> /dev/null; then
     cat "$TMP/replay.out"
     points

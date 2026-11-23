@@ -416,7 +416,7 @@ def graphql(w, repo, o, ids, page, answer):
         if m:
             op = m[1]
             break
-    if op in ('Singles', 'Nodes', 'Blockers'):
+    if op in ('Singles', 'Nodes', 'Blockers', 'Search'):
         if owner + name:
             fail(op + ' takes no owner or name')
     elif owner + '/' + name != repo and not (op in ('Checks', 'Merged') and owner + '/' + name in foreign_repos(w)):
@@ -431,7 +431,7 @@ def graphql(w, repo, o, ids, page, answer):
         label = label[:len(label) - len(suffix)]
     elif op in ('Nodes', 'Blockers'):
         answer('graphql %s count=%d' % (op, len(ids)))
-    elif op in ('Specs', 'Merged'):
+    elif op in ('Specs', 'Merged', 'Search'):
         answer('graphql %s cursor=%s' % (op, cursor or 'none'))
     elif op == 'Spec':
         answer('graphql Spec number=%s%s' % (number, ' size=' + size if size else ''))
@@ -615,6 +615,26 @@ def graphql(w, repo, o, ids, page, answer):
                   'comments': {'nodes': [{'body': get(c, 'body')} for c in each(jq_slice_last(get(i, 'comments')))]}}
                  for i in found[:cap]]
         out = {'data': {'search': dict({'issueCount': len(found)}, **window(nodes))}}
+    elif op == 'Search':
+        if not q.startswith(f'repo:{repo} is:issue '):
+            fail('unexpected issue search')
+        label_match = re.search(r'label:"([^"]+)"', q)
+
+        def hit(issue):
+            if label_match:
+                return label_match[1] in each_opt(get(issue, 'labels'))
+            if q.endswith('"launch-fleet" in:comments'):
+                return any('launch-fleet' in alt(get(c, 'body'), '') for c in each_opt(get(issue, 'comments')))
+            if q.endswith('linked:pr'):
+                return bool(closing(get(issue, 'number')))
+            fail('unexpected issue search filter')
+
+        found = [i for i in issues if (' no:parent-issue' not in q or get(i, 'parent') is None)
+                 and (' is:open' not in q or get(i, 'state') == 'OPEN') and hit(i)]
+        found = sort_by(found, lambda i: alt(get(i, 'updatedAt'), ''))[::-1]
+        nodes = [{'id': sha_text(get(i, 'number')), 'number': get(i, 'number'), 'state': get(i, 'state')}
+                 for i in found[:cap]]
+        out = {'data': {'search': {'totalCount': len(found), **window(nodes)}}}
     elif op in ('Nodes', 'Blockers'):
         nodes = []
         for x in ids:
@@ -637,7 +657,7 @@ def graphql(w, repo, o, ids, page, answer):
                           'subIssuesSummary': {'total': max(len(subs) - lag, 0),
                                                'completed': len([s for s in subs if get(s, 'state') == 'CLOSED'])}})
         out = {'data': {'repository': {'databaseId': 1, 'defaultBranchRef': {'name': w.get('default')},
-                                       'issues': window(specs)}}}
+                                       'issues': {'totalCount': len(specs), **window(specs)}}}}
     elif op == 'Item':
         def item(i):
             t = ticket(i)

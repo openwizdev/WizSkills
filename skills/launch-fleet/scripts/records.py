@@ -142,7 +142,8 @@ def reviewer_thread(n, commit, threads, state, claim=None, retired=(), key=None)
     if saved:
         state = {**state, f'review:{key}:{commit}': saved}
     threads = [t for t in threads if t['id'] not in retired] if threads is not None else None
-    pattern = re.compile(rf'Review #{n} at ([0-9a-f]{{1,40}})')
+    pull = f'(?i:{re.escape(key)})' if '#' in key else f'#{n}'
+    pattern = re.compile(rf'Review {pull} at ([0-9a-f]{{1,40}})')
     matches = [t for t in threads or [] if (m := pattern.fullmatch(t.get('title') or '')) and commit.startswith(m[1])]
     return choose(f'review:{key}:{commit}', matches, state, threads)
 

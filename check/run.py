@@ -76,9 +76,11 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-heartbeat.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-ledger.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-host.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-session.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-stop-all.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-budget.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-snapshot.py'],
                      ['env', '-u', 'OPENWIZ_GITHUB_APP_KEY', 'python3', '-I', 'skills/launch-fleet/scripts/test-gh-meter.py']],
     # Not a skill: the check's own version rule and changesets (WS18).
     'check': [['python3', '-I', 'check/test_notice.py'],
@@ -86,7 +88,8 @@ SUITES = {
               ['python3', '-I', 'check/test_changesets.py'],
               ['python3', '-I', 'check/test_suites.py'],
               ['python3', '-I', 'check/test_bench.py'],
-              ['python3', '-I', 'check/test_select.py']],
+              ['python3', '-I', 'check/test_select.py'],
+              ['python3', '-I', 'check/test_checklist_rules.py']],
 }
 
 PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}

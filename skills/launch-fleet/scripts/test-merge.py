@@ -970,6 +970,21 @@ class Queue(unittest.TestCase):
         self.assertEqual(settle(), (0, 'cost already posted 5001'))
         self.assertEqual(w.bodies(12), ['launch-fleet: cost: ' + LINE])
 
+    def test_a_direct_merge_after_an_earlier_heads_receipt_still_settles_its_cost(self):
+        # catches: settle running cost at the newest queue receipt's head, so a replacement head the
+        # fleet merged directly after a failed cost write is refused on every wake (R2).
+        old = 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % OTHER
+        w = World(self, pr=pr(), comments={'7': [comment(4000, old)]})
+        project(w, PRINTS)
+        w.update(faults={'post': 'fail'})
+        code, out = Merge.merge(self, w, '--ticket', 12, '--base-rule-checked')
+        self.assertEqual(code, 1, out)
+        self.assertEqual((w.load()['pr']['state'], w.bodies(12)), ('MERGED', []))
+        settle = lambda: w.run('merge.py', 'settle', REPO, 7, 12, cwd=w.dir / 'project')
+        self.assertEqual(settle(), (0, 'cost posted 5001'))
+        self.assertEqual(w.bodies(12), ['launch-fleet: cost: ' + LINE])
+        self.assertEqual(settle(), (0, 'cost already posted 5001'))
+
     def test_a_queued_pull_request_without_its_receipt_gets_one(self):
         # catches: a pull request someone else queued staying without the receipt the removal guard
         # and settle read (#1631).
@@ -1571,6 +1586,28 @@ class Landed(unittest.TestCase):
         self.assertEqual(settle()[1].split('; ')[-1], 'landed already posted %d' % first)
         self.assertEqual([x['delete'] for x in w.writes() if 'delete' in x], [later])
         self.assertEqual(len([x for x in w.writes() if x.get('post') == 9101]), 2)
+
+    def test_a_duplicate_left_by_a_refused_delete_is_deleted_after_the_milestone_moves(self):
+        # catches: the retry matching the duplicate by the current milestone's text, so a report moved to
+        # a later release after the refused delete keeps both comments and settle reports success (R1).
+        receipt = comment(4000, 'launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD)
+        w = self.world(self.issues, comments={'9201': [receipt]}, faults={'delete': 'fail'})
+        project(w, None)
+        w.env['FAKE_RACE'] = '9101'
+        runs = [subprocess.Popen([sys.executable, '-I', str(HERE / 'merge.py'), 'cost', DEST, '9201', HEAD, '9106'],
+                                 stdout=subprocess.PIPE, text=True, env=w.env, cwd=w.dir / 'project')
+                for _ in range(2)]
+        outs = sorted(r.communicate(timeout=60)[0].strip().split('; ')[-1] for r in runs)
+        del w.env['FAKE_RACE']
+        first, later = [c['id'] for c in w.load()['comments']['9101']]
+        self.assertTrue(outs[1].startswith('landed unknown: our duplicate %d ' % later), outs)
+        value = w.load()
+        value['issues']['9101']['milestone'] = {'title': '9.5.0'}
+        w.save(value)
+        code, out = w.run('merge.py', 'settle', DEST, 9201, 9106, cwd=w.dir / 'project')
+        self.assertEqual((code, out.split('; ')[-1]), (0, 'landed already posted %d' % first), out)
+        self.assertEqual([c['id'] for c in w.load()['comments']['9101']], [first])
+        self.assertEqual([x['delete'] for x in w.writes() if 'delete' in x], [later])
 
     def test_a_later_landed_comment_for_another_fix_is_left_alone(self):
         other = LANDED.replace('OpenWiz#9201', 'WizSite#9200')

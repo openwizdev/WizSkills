@@ -3,6 +3,7 @@
 
   host.py which                              the host docs/agents/host.md chooses, or `host: none`
   host.py start OWNER/NAME N HARNESS MODEL   start #N's builder through that host's driver
+        [SKILL] [--row ROW]                ROW: the Models row picked (Builder, Small builder, Fixer, ...)
   host.py wake OWNER/NAME N                  wake #N's run, on the host that started it
   host.py stop OWNER/NAME N                  stop #N's run, on the host that started it
 
@@ -96,7 +97,7 @@ EFFORT_NEXT = ("this host can't set effort: remove the effort for this harness i
 CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox', 'effort')
 ROLE_ROWS = {'builder': ('Builder', 'Small builder', 'Fixer'), 'reviewer': ('Reviewer',),
              'orchestrator': ('Orchestrator',)}
-RECORDS = re.compile(r'openwiz:records v[1-9][0-9]{0,2}')     # driver v1's version records item
+RECORDS = re.compile(r'openwiz:records v[1-9][0-9]{0,2}')
 MODELS_ROWS = tuple(r for rows in ROLE_ROWS.values() for r in rows)
 FLEET = ('LAUNCH_FLEET_HARNESS', 'LAUNCH_FLEET_MODEL', 'LAUNCH_FLEET_SKILLS')
 WITHHELD = 'withheld, as it held a credential, a private id or a machine path; run the driver by hand'
@@ -310,11 +311,6 @@ def pick(entries, repo, ticket, role, choice):
 
 
 def models_row(text, provider, model, taking, picked=None):
-    """The (model name, effort or None) of the Models row this start runs, or None when no row starts it.
-
-    The row is the caller's pick (`--row`), one of the role's own rows; a row that follows Builder runs Builder's.
-    Without a pick it is the role's own row for this provider and model, then any row for them; the role's own rows
-    for them that disagree on effort are refused, as only the caller knows which one it picked."""
     rows = [row for row in (roster_cells(line) for line in ops._section(text, 'Models') or []) if row]
     header = rows[0] if rows else []
     own = ROLE_ROWS.get(taking, ())

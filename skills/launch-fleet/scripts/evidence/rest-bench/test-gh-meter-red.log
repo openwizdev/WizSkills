@@ -3,10 +3,10 @@ EFE.EEFEEE
 ERROR: test_endpoint_templates (__main__.Meter.test_endpoint_templates)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 110, in test_endpoint_templates
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 110, in test_endpoint_templates
     got = [(c['method'], c['endpoint'], c['kind']) for c in self.lines()]
                                                             ^^^^^^^^^^^^
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 79, in lines
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 79, in lines
     return [json.loads(line) for line in self.log.read_text().splitlines()]
                                          ^^^^^^^^^^^^^^^^^^^^
   File "/usr/lib/python3.11/pathlib.py", line 1059, in read_text
@@ -21,7 +21,7 @@ FileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmp_a0q1uel/meter.
 ERROR: test_never_logs_a_token_body_or_other_header (__main__.Meter.test_never_logs_a_token_body_or_other_header)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 156, in test_never_logs_a_token_body_or_other_header
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 156, in test_never_logs_a_token_body_or_other_header
     text = self.log.read_text()
            ^^^^^^^^^^^^^^^^^^^^
   File "/usr/lib/python3.11/pathlib.py", line 1059, in read_text
@@ -36,10 +36,10 @@ FileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmpt6z5bhu4/meter.
 ERROR: test_passes_through_output_input_and_status (__main__.Meter.test_passes_through_output_input_and_status)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 135, in test_passes_through_output_input_and_status
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 135, in test_passes_through_output_input_and_status
     line, = self.lines()
             ^^^^^^^^^^^^
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 79, in lines
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 79, in lines
     return [json.loads(line) for line in self.log.read_text().splitlines()]
                                          ^^^^^^^^^^^^^^^^^^^^
   File "/usr/lib/python3.11/pathlib.py", line 1059, in read_text
@@ -54,10 +54,10 @@ FileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmpmsm8h3qc/meter.
 ERROR: test_report_per_role_per_endpoint_and_top_five (__main__.Meter.test_report_per_role_per_endpoint_and_top_five)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 173, in test_report_per_role_per_endpoint_and_top_five
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 173, in test_report_per_role_per_endpoint_and_top_five
     half = self.lines()
            ^^^^^^^^^^^^
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 79, in lines
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 79, in lines
     return [json.loads(line) for line in self.log.read_text().splitlines()]
                                          ^^^^^^^^^^^^^^^^^^^^
   File "/usr/lib/python3.11/pathlib.py", line 1059, in read_text
@@ -72,10 +72,10 @@ FileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmpjjx__2od/meter.
 ERROR: test_rest_units (__main__.Meter.test_rest_units)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 147, in test_rest_units
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 147, in test_rest_units
     self.assertEqual([c['rest_units'] for c in self.lines()], [1, 0, 3, 0, 0, 0])
                                                ^^^^^^^^^^^^
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 79, in lines
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 79, in lines
     return [json.loads(line) for line in self.log.read_text().splitlines()]
                                          ^^^^^^^^^^^^^^^^^^^^
   File "/usr/lib/python3.11/pathlib.py", line 1059, in read_text
@@ -90,10 +90,10 @@ FileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmp4fa2md0b/meter.
 ERROR: test_rest_used_before_and_after (__main__.Meter.test_rest_used_before_and_after)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 125, in test_rest_used_before_and_after
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 125, in test_rest_used_before_and_after
     self.assertEqual([(c['rest_used_before'], c['rest_used_after']) for c in self.lines()],
                                                                              ^^^^^^^^^^^^
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 79, in lines
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 79, in lines
     return [json.loads(line) for line in self.log.read_text().splitlines()]
                                          ^^^^^^^^^^^^^^^^^^^^
   File "/usr/lib/python3.11/pathlib.py", line 1059, in read_text
@@ -108,10 +108,10 @@ FileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmpjkka0nrb/meter.
 ERROR: test_role_field (__main__.Meter.test_role_field)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 118, in test_role_field
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 118, in test_role_field
     self.assertEqual([c['role'] for c in self.lines()], ['reviewer', 'heartbeat', 'other', 'other'])
                                          ^^^^^^^^^^^^
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 79, in lines
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 79, in lines
     return [json.loads(line) for line in self.log.read_text().splitlines()]
                                          ^^^^^^^^^^^^^^^^^^^^
   File "/usr/lib/python3.11/pathlib.py", line 1059, in read_text
@@ -126,7 +126,7 @@ FileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmp3ccxo1tw/meter.
 FAIL: test_install_refuses_a_quote_in_the_path (__main__.Meter.test_install_refuses_a_quote_in_the_path)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 203, in test_install_refuses_a_quote_in_the_path
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 203, in test_install_refuses_a_quote_in_the_path
     self.assertEqual(run.returncode, 2)
 AssertionError: 0 != 2
 
@@ -134,7 +134,7 @@ AssertionError: 0 != 2
 FAIL: test_report_refuses_a_bad_log (__main__.Meter.test_report_refuses_a_bad_log)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 197, in test_report_refuses_a_bad_log
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 197, in test_report_refuses_a_bad_log
     self.assertEqual((run.returncode, run.stdout), (2, ''))
 AssertionError: Tuples differ: (0, '') != (2, '')
 

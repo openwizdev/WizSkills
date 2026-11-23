@@ -3,7 +3,7 @@ F
 FAIL: test_report_refuses_a_bad_log (__main__.Meter.test_report_refuses_a_bad_log)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/home/cloudroom-agent/.openwiz/b2621/ws/skills/launch-fleet/scripts/test-gh-meter.py", line 211, in test_report_refuses_a_bad_log
+  File "<checkout>/skills/launch-fleet/scripts/test-gh-meter.py", line 211, in test_report_refuses_a_bad_log
     self.assertEqual((run.returncode, run.stdout), (2, ''), text)
 AssertionError: Tuples differ: (0, 'Total: 2 calls, 2 REST units, 0 Graph[474 chars]s\n') != (2, '')
 

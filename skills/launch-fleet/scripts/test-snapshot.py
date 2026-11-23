@@ -93,8 +93,10 @@ def graphql():
     end = start + len(chunk)
     conn = {'totalCount': len(rows), 'nodes': nodes,
             'pageInfo': {'hasNextPage': end < len(rows), 'endCursor': str(end)}}
-    repo = {'issues' if kind == 'issue' else 'pullRequests': conn,
-            'fleet': {'text': W['fleet_md']}}
+    repo = {'issues' if kind == 'issue' else 'pullRequests': conn}
+    if v.get('withFleet', 'true') == 'true':
+        log('fleet blob')
+        repo['fleet'] = {'text': W['fleet_md']}
     print(json.dumps({'data': {'rateLimit': rate, 'repository': repo}}))
     return 0
 
@@ -272,7 +274,7 @@ class GraphqlWrite(unittest.TestCase):
         self.assertEqual((items[3]['kind'], items[3]['state'], items[3]['labels']),
                          ('issue', 'OPEN', ['ready-for-agent']))
         self.assertEqual(items[3]['updated_at'], '2026-01-01T00:00:00Z')
-        calls = w.calls()
+        calls = [c for c in w.calls() if c != 'fleet blob']
         self.assertEqual(calls[0], 'rate_limit')
         self.assertEqual(sorted(calls[1:]), sorted(['graphql SnapshotIssues'] * 2 + ['graphql SnapshotPulls']
                                                    + ['graphql SnapshotComments'] * 2))
@@ -499,6 +501,32 @@ class ReviewFindings(unittest.TestCase):
         code, out, err = w.write()
         self.assertEqual(code, 2, err)
         self.assertEqual(w.out.read_text(), 'previous snapshot')
+
+
+class Polish(unittest.TestCase):
+
+    def test_exactly_1500_left_spends_nothing(self):
+        w = World(self, busy_world(), core=1500, graphql=1500)
+        code, out, err = w.write()
+        self.assertEqual(code, 2, err)
+        self.assertEqual(w.calls(), ['rate_limit'])
+        self.assertFalse(w.out.exists())
+
+    def test_a_read_that_leaves_exactly_1500_stops_before_the_next(self):
+        for name, rate, mid in [('graphql', {}, {'core': 5000, 'graphql': 1500}),
+                                ('rest', {'core': 4000, 'graphql': 2000}, {'core': 1500, 'graphql': 2000})]:
+            with self.subTest(name):
+                w = World(self, busy_world(), mid=mid, **rate)
+                code, out, err = w.write()
+                self.assertEqual(code, 2, err)
+                self.assertEqual(len([c for c in w.calls() if c.startswith(('graphql', 'rest'))]), 1)
+                self.assertFalse(w.out.exists())
+
+    def test_the_fleet_settings_blob_is_asked_for_once(self):
+        w = World(self, busy_world())
+        self.assertEqual(w.write()[0], 0)
+        self.assertEqual(w.calls().count('fleet blob'), 1)
+        self.assertEqual(w.snapshot()['record_authors'], ['openwiz[bot]', 'synthetic-owner'])
 
 
 if __name__ == '__main__':

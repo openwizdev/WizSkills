@@ -249,44 +249,6 @@ def github(repos=(), **switches):
     return json.dumps(world)
 
 
-SEED_GH = r"""
-import base64, hashlib, json, os, re, sys
-fake, argv = sys.argv[1], sys.argv[2:]
-path = os.environ.get('FAKE_GH_REPOS')
-state = json.loads(open(path).read()) if path else {'repos': {}}
-read = len(argv) == 5 and argv[:4] == ['api', '--include', '-X', 'GET'] and re.fullmatch(
-    r'repos/([^/]+/[^/]+)/contents/((?:tests|\.github)/[^?]+)\?ref=(.+)', argv[4])
-put = len(argv) in (10, 12) and argv[:3] == ['api', '-X', 'PUT'] and re.fullmatch(
-    r'repos/([^/]+/[^/]+)/contents/((?:tests|\.github)/[^?]+)', argv[3])
-match = read or put
-repo = state['repos'].get(match[1].lower()) if match else None
-if repo is None:
-    os.execv(sys.executable, [sys.executable, '-I', '-S', fake] + argv)
-files = repo['branches'].setdefault(read[3] if read else dict(v.split('=', 1) for v in argv[5::2])['branch'], {})
-sha = lambda text: hashlib.sha1(b'blob %d\0' % len(text.encode()) + text.encode()).hexdigest()
-if read:
-    state['log'].append(['GET', argv[4]])
-    open(path, 'w').write(json.dumps(state))
-    if read[2] not in files:
-        sys.stdout.write('HTTP/2.0 404 Fixture\r\n\r\n{"message": "Not Found"}')
-        sys.exit(1)
-    sys.stdout.write('HTTP/2.0 200 Fixture\r\n\r\n' + json.dumps({'type': 'file', 'encoding': 'base64', 'sha': sha(
-        files[read[2]]), 'content': base64.b64encode(files[read[2]].encode()).decode()}))
-    sys.exit(0)
-fields = dict(v.split('=', 1) for v in argv[5::2])
-if (put[2] in files) != ('sha' in fields):
-    sys.stderr.write('gh: sha mismatch (HTTP 409)\n')
-    sys.exit(1)
-files[put[2]] = base64.b64decode(fields['content']).decode()
-state['log'].append(['PUT', argv[3]])
-lost = state.get('seed_lost', 0) > 0
-state['seed_lost'] = state.get('seed_lost', 0) - lost
-open(path, 'w').write(json.dumps(state))
-if lost:
-    sys.stderr.write('gh: synthetic lost reply (HTTP 502)\n')
-    sys.exit(1)
-print(json.dumps({'content': {'path': put[2]}}))
-"""
 SEEDED = ('PUT', 'repos/%s/contents/tests/test_check.py' % REPO), \
     ('PUT', 'repos/%s/contents/.github/workflows/check.yml' % REPO)
 
@@ -311,8 +273,7 @@ class Journey:
         self.openwiz = self.dir / 'bin/openwiz'
         self.openwiz.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, FIXTURES / 'fake_openwiz.py'))
         gh = self.dir / 'bin/gh'
-        (self.dir / 'seed_gh.py').write_text(SEED_GH)
-        gh.write_text('#!/bin/sh\nexec "%s" -I -S "%s" "%s" "$@"\n' % (sys.executable, self.dir / 'seed_gh.py', FAKE_GH))
+        gh.write_text('#!/bin/sh\nexec "%s" -I -S "%s" "$@"\n' % (sys.executable, FAKE_GH))
         room = self.dir / 'bin/room-cli'
         room.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, FIXTURES / 'fake_room_cli.py'))
         self.repos = self.dir / 'repos.json'
@@ -1828,7 +1789,7 @@ if argv[:4] == ['api', '-X', 'POST', 'repos/%s/issues' % repo]:
         sys.exit(1)
     print(json.dumps({'number': issues[-1]['number'], 'title': fields['title'], 'state': 'open'}))
     sys.exit(0)
-os.execv(sys.executable, [sys.executable, '-I', '-S', os.path.join(os.path.dirname(path), 'seed_gh.py'), fake] + argv)
+os.execv(sys.executable, [sys.executable, '-I', '-S', fake] + argv)
 """
 
 

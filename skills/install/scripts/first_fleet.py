@@ -94,7 +94,7 @@ OPTIONS = {
     'decisions': ({'--state', '--setup-state'}, {'--yes'}, set()),
     'create-repo': ({'--state', '--repo'}, {'--yes'}, set()),
     'select': ({'--state', '--repo'}, set(), set()),
-    'defaults': ({'--state', '--options'}, {'--yes', '--app', '--login'},
+    'defaults': ({'--state', '--options'}, {'--yes', '--app'},
                  {'--operator', '--service-issue', '--harness', '--model', '--effort', '--confirm',
                   '--reviewer-harness', '--reviewer-model', '--reviewer-effort'}),
     'choose': ({'--state', '--options'}, {'--from-setup'}, {'--harness', '--model', '--effort', '--agents'}),
@@ -198,8 +198,6 @@ def parse(argv):
             not in (0, 3):
         raise Exit(2, 'usage: defaults changes the reviewer with all of --reviewer-harness, --reviewer-model and '
                       '--reviewer-effort')
-    if got.get('--app') and got.get('--login'):
-        raise Exit(2, 'usage: defaults takes --app or --login, not both')
     if argv[0] == 'defaults' and ('--confirm' in got) != bool(got.get('--yes')):
         raise Exit(2, 'usage: --yes takes --confirm with the digest of the block the user said yes to')
     if '--service-issue' in got and not re.fullmatch(r'[1-9][0-9]{0,9}', got['--service-issue']):
@@ -1694,7 +1692,7 @@ def defaults(got):
         _, intended, said = models_change(fleet, choice, offered, driver, reviewer=override)
         reviewer, alone = intended['Reviewer'], said.split('. ', 1)[1] if '. ' in said else None
     issue = int(got['--service-issue']) if '--service-issue' in got else 'new'
-    app = bool(got.get('--app')) or host['agents'] == 'cloud' and not got.get('--login')
+    app = bool(got.get('--app'))
     record = {'operator': got.get('--operator', login), 'service_issue': issue, 'harness': choice[0],
               'model': choice[1], 'effort': choice[2], 'reviewer': list(reviewer),
               'identity': 'app' if app else 'personal_login'}
@@ -1708,7 +1706,6 @@ def defaults(got):
              '- Builder: %s' % ' '.join(choice),
              '- Reviewer: %s%s' % (' '.join(reviewer), ' (%s)' % alone if alone else ''),
              '- Acting identity: %s' % (
-                 'the OpenWiz GitHub App, recommended with CloudRoom' if app and host['agents'] == 'cloud' else
                  'the OpenWiz GitHub App' if app else
                  'your own GitHub login, %s, instead of the OpenWiz GitHub App, for the first fleet' % login)]
     name = None if host['agents'] == 'cloud' else host['agents']
@@ -1739,7 +1736,7 @@ def defaults(got):
         print('Use this setup, or change any line?')
         print("Nothing recorded. On the user's yes, run again with --yes --confirm %s; for a changed line add its "
               'flag: --operator, --service-issue, --harness with --model and --effort, --reviewer-harness with '
-              '--reviewer-model and --reviewer-effort, or --app (or --login with CloudRoom), and show the new block.' % digest)
+              '--reviewer-model and --reviewer-effort, or --app, and show the new block.' % digest)
         return 12
     if got['--confirm'] != digest:
         raise Exit(5, 'This setup is not the one the user said yes to: show this block and ask again; nothing '

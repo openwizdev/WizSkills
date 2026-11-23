@@ -465,5 +465,41 @@ class Facts(unittest.TestCase):
         self.assertEqual(w.run('facts', w.out, 9)[0], 0)
 
 
+class ReviewFindings(unittest.TestCase):
+
+    def test_an_item_reopened_onto_a_new_page_is_read_behind_cached_304s(self):
+        w = World(self, [item(n) for n in range(1, 101)], core=4000, graphql=2000)
+        self.assertEqual(w.write()[0], 0)
+        world = json.loads(w.path.read_text())
+        world['items'].append(item(150))
+        w.save(world)
+        code, out, err = w.write()
+        self.assertEqual(code, 0, err)
+        self.assertTrue(150 in by_number(w.snapshot()), 'the reopened item 150 is missing')
+
+    def test_duplicate_comment_ids_write_nothing_on_both_paths(self):
+        twice = [comment(7, 'synthetic-owner', 'first', 1), comment(7, 'synthetic-owner', 'again', 2)]
+        for name, rate in [('graphql', {}), ('rest', {'core': 4000, 'graphql': 2000})]:
+            with self.subTest(name):
+                w = World(self, [item(9, comments=twice)], **rate)
+                code, out, err = w.write()
+                self.assertEqual(code, 2, err)
+                self.assertFalse(w.out.exists())
+
+    def test_rest_closing_links_skip_code(self):
+        body = 'Closes #1\n\n```\nCloses #5\n```\n\n~~~\nfixes #6\n~~~\n\nSay `resolves #7` to close.\n'
+        w = World(self, [item(1), item(40, 'pull', body=body)], core=4000, graphql=2000)
+        self.assertEqual(w.write()[0], 0)
+        self.assertEqual(by_number(w.snapshot())[40]['closing_issues'], [REPO + '#1'])
+
+    def test_a_failed_cache_write_keeps_the_old_snapshot_and_exits_2(self):
+        w = World(self, [item(1)], core=4000, graphql=2000)
+        w.out.write_text('previous snapshot')
+        Path(str(w.out) + '.etags').mkdir()
+        code, out, err = w.write()
+        self.assertEqual(code, 2, err)
+        self.assertEqual(w.out.read_text(), 'previous snapshot')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import runpy
 import shlex
 import shutil
 import signal
@@ -199,6 +200,8 @@ class Session(unittest.TestCase):
         self.env = dict(git_env, HOME=str(self.home), PATH=os.pathsep.join([str(self.home / 'bin'), *path]),
                         OPENWIZ_ADAPTERS=str(self.home / 'adapters'), FAKE_DRIVER_LOG=str(self.log),
                         FAKE_WORLD=str(self.world), LC_ALL='C')
+        self.git_origin = runpy.run_path(str(HERE / 'fixtures/git_origin.py'))['env']
+        self.env.update(self.git_origin(self.home, {REPO: FLEET_MD}))
         key = hashlib.sha256(('%s#%s' % (REPO.lower(), SPEC)).encode()).hexdigest()[:20]
         self.lock_dir = self.home / '.local/state/openwiz-heartbeat' / ('openwiz-heartbeat-' + key)
 
@@ -214,6 +217,7 @@ class Session(unittest.TestCase):
             w = json.loads(self.world.read_text())
             edit(w)
             self.world.write_text(json.dumps(w))
+        self.env.update(self.git_origin(self.home, {REPO: w['fleet_md']}))
 
     def tickets(self, *numbers):
         self.change(lambda w: w['tickets'].update({str(n): {'title': 'synthetic %d' % n, 'state': 'OPEN'}

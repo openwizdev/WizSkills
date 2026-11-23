@@ -208,6 +208,7 @@ class World(T.World):
         self.others = {repo: T.World(test, repo=repo, **value) for repo, value in (others or {}).items()}
         self.env['FAKE_WORLDS'] = json.dumps({r: str(o.path) for r, o in self.others.items()})
         self.env['TMPDIR'] = str(self.dir)
+        self.env.update(T.git_origin(self.dir, {r: w.load()['fleet_md'] for r, w in [(self.load()['repo'], self), *self.others.items()]}))
 
 
 def closes(*refs):

@@ -658,5 +658,58 @@ class Pacer(unittest.TestCase):
                 self.assertEqual(w.writes(), [])
                 self.assertEqual(path.read_text(), text)
 
+    def test_an_invalid_utf8_byte_in_the_state_or_a_hold_refuses_without_writing(self):
+        for name, data in (('writes.json', b'{"accounts": {"\xff": []}, "inflight": [], "until": 0}'),
+                           ('writes.json.hold.synthetic', b'1\xff')):
+            with self.subTest(name=name):
+                w = paced_world(self)
+                seed(w, full([]))
+                folder = w.dir / 'state' / 'launch-fleet'
+                (folder / name).write_bytes(data)
+                before = {p.name: p.read_bytes() for p in folder.iterdir()}
+                r = subprocess.run([sys.executable, '-I', str(HERE / 'post.py'), 'comment', REPO, '12',
+                                    'launch-fleet: starting'], capture_output=True, text=True, env=w.env, cwd=w.dir,
+                                   timeout=60)
+                self.assertEqual((r.returncode, r.stderr), (1, ''))
+                self.assertEqual(r.stdout, "refused: the write pacer's state file is unreadable; nothing was written\n")
+                self.assertEqual(w.writes(), [])
+                self.assertEqual({p.name: p.read_bytes() for p in folder.iterdir()}, before)
+
+    def test_a_hold_published_after_the_hold_scan_refuses_the_write(self):
+        w = paced_world(self)
+        seed(w, full([]))
+        folder = w.dir / 'state' / 'launch-fleet'
+        scanned = w.dir / 'scanned'
+        pause = ('plain = post.holds\n'
+                 'def holds(path):\n'
+                 '    found = plain(path)\n'
+                 '    if not os.path.exists(%r):\n'
+                 '        open(%r, "w").close()\n'
+                 '        sys.stdin.readline()\n'
+                 '    return found\n'
+                 'post.holds = holds\n' % (str(scanned), str(scanned)))
+        writer = subprocess.Popen([sys.executable, '-I', '-c', RUNNER, str(HERE / 'post.py'), pause, 'comment', REPO,
+                                   '12', 'launch-fleet: starting'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True, env=w.env, cwd=w.dir)
+        self.addCleanup(writer.kill)
+        waited = time.monotonic() + 20
+        while time.monotonic() < waited and not scanned.exists() and writer.poll() is None:
+            time.sleep(0.05)
+        self.assertTrue(scanned.exists())
+        publish = ('import time\n'
+                   'post.SLOT_WAIT_SECONDS = 0\n'
+                   'sys.exit(0 if post.settle([1, 0.0], time.time() + 120) else 3)\n')
+        before = time.time()
+        published = patched(w, publish)
+        self.assertEqual(published.communicate(timeout=60), ('', ''))
+        self.assertEqual(published.returncode, 0)
+        self.assertEqual(len([p for p in folder.iterdir() if p.name.startswith('writes.json.hold.')]), 1)
+        self.assertIsNone(writer.poll())
+        out, err = writer.communicate('go\n', timeout=60)
+        self.assertEqual((writer.returncode, err), (1, ''))
+        self.assertTrue(out.startswith('refused: write paced, retry after '), out)
+        self.assertGreaterEqual(out.split(' ')[-1].strip(), post_stamp(before + 120))
+        self.assertEqual(w.writes(), [])
+
 if __name__ == '__main__':
     unittest.main()

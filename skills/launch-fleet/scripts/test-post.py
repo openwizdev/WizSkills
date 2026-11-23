@@ -284,7 +284,7 @@ class Pacer(unittest.TestCase):
         for name in ('room-cli', 'claude', 'codex', 'boat'):
             found = subprocess.run(['sh', '-c', 'command -v "$1"', 'sh', name], env=p.env, capture_output=True,
                                    text=True).stdout.strip()
-            self.assertEqual(found, str(p.dir / 'bin' / name))
+            self.assertEqual(found, str(p.dir / 'stubs' / name))
             run = subprocess.run([found or name, 'start'], env=p.env, capture_output=True, text=True)
             self.assertEqual((run.returncode, run.stdout), (1, ''))
 

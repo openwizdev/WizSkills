@@ -991,8 +991,8 @@ def unproven(state, name):
         state.save()
     return Exit(5, 'Whether OpenWiz created %s is uncertain: no create reply of this onboarding names that '
                    "repository, so a teammate may have made it. OpenWiz writes neither tests/test_check.py nor "
-                   '.github/workflows/check.yml into it. Choose another name, or use it as an existing '
-                   'repository; nothing written.' % name)
+                   '.github/workflows/check.yml into it. Continue with %s as an existing repository: run next, '
+                   'and Connect goes on with it; nothing written.' % (name, name))
 
 
 def created_line(name, seen):
@@ -1120,6 +1120,8 @@ def create_repo(got):
                           'was created or pushed. Run this again to read it back.' % name)
         if record['state'] == 'created':
             raise Exit(5, '%s is not the private repository this onboarding created; nothing created.' % name)
+    elif record and record['repo'] == name and record['state'] == 'unproven' and isinstance(seen, dict):
+        raise unproven(state, name)
     elif seen != 'absent':
         raise Exit(5, '%s already exists; choose another name, or use it as an existing repository; '
                       'nothing created.' % name)

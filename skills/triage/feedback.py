@@ -87,7 +87,7 @@ def read_facts(body):
     if any(line.startswith(FACTS_PREFIX) for line in lines[:-3]):
         return None
     line = lines[-3]
-    if not line.startswith(FACTS_PREFIX) or len(line) > FACTS_MAX or not line.isascii():
+    if not line.startswith(FACTS_PREFIX) or len(line) > FACTS_MAX or not line.isascii() or INSTRUCTION.search(line):
         return None
     raw = line[len(FACTS_PREFIX):]
     try:

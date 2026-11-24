@@ -655,7 +655,7 @@ item_file() {
 FACT_COMMENTS='def page_ok: type == "object" and (.pageInfo.hasPreviousPage | type) == "boolean"
     and (.nodes | type) == "array"
     and (if .pageInfo.hasPreviousPage then (.nodes | length) > 0 and (.pageInfo.startCursor | type == "string" and length > 0) else true end)
-    and all(.nodes[]; type == "object" and (.fullDatabaseId | type == "string" and test("^[1-9][0-9]{0,15}$"))
+    and all(.nodes[]; type == "object" and (.fullDatabaseId | type == "string" and test("^[1-9][0-9]{0,14}$"))
       and (.createdAt | type) == "string" and (.updatedAt | type) == "string" and (.body | type) == "string"
       and (.author == null or (.author | type == "object" and (.login | type) == "string" and (.__typename | type) == "string")));'
 facts_comments() {
@@ -2678,13 +2678,14 @@ foreign_merges() {
 # it the probe: the REST reads that change whenever one of those answers would
 # (the repository, the account, the spec's sub-issues, each ticket's and each
 # closed blocker's timeline, each linked pull request and the checks and
-# statuses on its head, the waited issues, and the default branch when merges
-# were read), each with the ETags it had before that full read's first
+# statuses on its head, the waited issues, each issue's detail, blockers and
+# comments and each pull request's comments that Facts read, and the default
+# branch when merges were read), each with the ETags it had before that full read's first
 # GraphQL read. When every probe page answers 304 with those ETags and that
 # full read is under 30 minutes old, a second process replays the check:
-# every GraphQL answer from the entry, every REST read revalidated (the
-# spec's own issues, comments, blockers and branches, which must all answer
-# 304), and the clock and CloudRoom's records as they are now, so lines that
+# every GraphQL answer from the entry, every REST read revalidated (the open
+# issues list and branches, which must all answer 304; FR4's issue facts are
+# GraphQL answers, so their REST views are probes), and the clock and CloudRoom's records as they are now, so lines that
 # come due with time still do. Anything else is a full read, as before: a
 # changed answer, a probe that fails, a lost, damaged or unreadable entry, an
 # entry for another spec, repository, host or script, a probe that was not

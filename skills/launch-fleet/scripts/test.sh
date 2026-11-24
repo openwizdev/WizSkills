@@ -1248,8 +1248,8 @@ EOF
 expect 'stall: a wait never starts a second builder' 0 check.json "$WAIT12 | $MERGE71" -- frontier < /dev/null
 expect 'stall: a wait without an existing builder starts nothing early' 0 check.json 'say(13; 1301; "11:00"; "launch-fleet: waiting for #11")' -- wake 13 < /dev/null
 expect 'stall: arbitrary prose quoting a wait is not a wait instruction' 0 check.json 'say(12; 1202; "11:00"; "A report said wait for #11; this is not an instruction.")' -- check < /dev/null
-expect 'stall: unreadable waiter comments produce a look rather than resume' 0 check.json "$WAIT12 | $MERGE71" FAKE_GH_FAIL=issue_comments_12_page=1 -- wake 12 <<EOF
-look #12: comment history could not be read in full: repos/synthetic-owner/synthetic-repo/issues/12/comments?per_page=100 failed: fake gh: planted failure: issue comments 12 page=1
+expect 'stall: unreadable waiter comments stop the check rather than resume' 2 check.json "$WAIT12 | $MERGE71" FAKE_GH_FAIL=graphql_Facts -- wake 12 <<EOF
+fleet.sh: the GitHub query Facts failed
 EOF
 expect 'stall: an unrelated targeted wake leaves the waiter for the safety net' 0 check.json "$WAIT12 | $MERGE71" -- wake 71 < /dev/null
 expect 'stall: every existing builder waiting on a merge gets a line' 0 check.json "$WAIT12 | $MERGE71 | say(13; 1301; \"11:01\"; \"launch-fleet: start checked, thread thr_syn13, branch room/13-page\") | say(13; 1302; \"11:02\"; \"launch-fleet: waiting for #71\")" -- check <<EOF
@@ -1274,8 +1274,8 @@ again 'long form: a resume claim for this repository delivers as #N does (#2096)
 expect 'stall: incomplete spec facts withdraw a resume claim' 0 check.json "$CLAIM12 | reduce range(100; 201) as \$n (.; ticket(\$n; \"Synthetic ticket\"; [\"ready-for-agent\"]; []))" -- claim 12 1203 <<EOF
 withdraw #12: that resume is not due or an older claim holds it
 EOF
-expect 'stall: unreadable spec approvals withdraw a resume claim' 0 check.json "$CLAIM12 | issue(10; .commentsTruncated = true)" FAKE_GH_FAIL=issue_comments_10_page=1 -- claim 12 1203 <<EOF
-withdraw #12: that resume is not due or an older claim holds it
+expect 'stall: unreadable spec approvals stop a resume claim check' 2 check.json "$CLAIM12 | issue(10; .commentsTruncated = true)" FAKE_GH_FAIL=graphql_Facts -- claim 12 1203 <<EOF
+fleet.sh: the GitHub query Facts failed
 EOF
 expect 'stall: recovered spec history permits a resume claim' 0 check.json "$CLAIM12 | issue(10; .commentsTruncated = true)" -- claim 12 1203 <<EOF
 go #12
@@ -1347,8 +1347,8 @@ withdraw #13: its owned paths collide with #81, which is running or claimed firs
 EOF
 # R1 (review of #1759): a colliding issue whose comments can't be read may
 # have a builder, so the claim withdraws.
-expect 'F6 claim: a colliding held ticket whose history can'"'"'t be read withdraws' 0 check.json "$OWN13"' claim13 | other_spec | '"$HELD81" FAKE_GH_FAIL=issue_comments_81_page=1 -- claim 13 1301 <<EOF
-withdraw #13: its owned paths collide with #81, whose start history can't be read
+expect 'F6 claim: a colliding held ticket whose history can'"'"'t be read stops the claim check' 2 check.json "$OWN13"' claim13 | other_spec | '"$HELD81" FAKE_GH_FAIL=graphql_Facts -- claim 13 1301 <<EOF
+fleet.sh: the GitHub query Facts failed
 EOF
 expect 'F6 claim: an older colliding claim wins' 0 check.json "$OWN13"' claim13 | own(70; "src/page/a.md") | say(70; 1300; "11:50"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
 withdraw #13: its owned paths collide with #70, which is running or claimed first
@@ -1795,8 +1795,8 @@ EOF
 expect "cross-repository PR: a claim beside one with more than 20 checks succeeds (#2376)" 0 check.json "merge12 | open_pr(31; 14; \"#14: synthetic tools\") | pull(31; .checks = ([range(40) | {name: \"optional-\(.)\", status: \"COMPLETED\", conclusion: \"SUCCESS\"}] + .checks)) | $TOOLS | say(13; 1301; \"11:55\"; \"launch-fleet: starting\")" -- claim 13 1301 <<EOF
 go #13
 EOF
-expect "cross-repository PR: a failed comment page is reported with its request and error (#2376 R1)" 0 check.json "store31 | $TOOLS | pull(31; .comments = discussion(119) + .comments)" FAKE_GH_FAIL=issue_comments_31_page=2 -- check <<EOF
-look #31: comment history could not be read in full: repositories/2/issues/31/comments?per_page=100&page=2 failed: fake gh: planted failure: issue comments 31 page=2
+expect "cross-repository PR: a failed comment page is reported with its request and error (#2376 R1)" 2 check.json "store31 | $TOOLS | pull(31; .comments = discussion(119) + .comments)" FAKE_GH_FAIL=graphql_Comments_number=31 -- check <<EOF
+fleet.sh: the GitHub query Comments failed
 EOF
 TOOLS31D='.pulls += [.pulls[] | select(.number == 31) | .repo = "synthetic-owner/synthetic-tools" | .id = "PR_tools_31" | .head = sha("31d") | .draft = true | .closes = [14] | .comments = []]'
 expect "cross-repository PR: a same-numbered PR in another repository leaves the re-test guard alone (#2376 R2)" 0 check.json "store31 | $TOOLS31D" -- check <<EOF
@@ -2077,63 +2077,58 @@ EOF
 ### Complete comment histories (#1002), through check and wake
 
 expect 'history: a 51-comment ticket retains its builder' 0 check.json 'issue(12; .comments += discussion(50))' -- check < /dev/null
-log_has 'history: a 51-comment ticket retains its builder' 1 '^issue comments 12 page=1$'
+log_has 'history: a 51-comment ticket retains its builder' 0 '^graphql Comments '
 expect 'history: a 120-comment ticket retains its wait on check' 0 check.json "$WAIT12 | $MERGE71 | issue(12; .comments += discussion(118))" -- check <<EOF
 resume #12: #71 merged; tell its builder, thread thr_syn12 (wait comment 1202)
 EOF
-log_has 'history: a 120-comment ticket retains its wait on check' 1 '^issue comments 12 page=1$'
-log_has 'history: a 120-comment ticket retains its wait on check' 1 '^issue comments 12 page=2$'
+log_has 'history: a 120-comment ticket retains its wait on check' 1 '^graphql Comments number=12 before=[0-9]*$'
 expect 'history: a 120-comment ticket retains its wait on wake' 0 check.json "$WAIT12 | $MERGE71 | issue(12; .comments += discussion(118))" -- wake 12 <<EOF
 resume #12: #71 merged; tell its builder, thread thr_syn12 (wait comment 1202)
 EOF
-log_has 'history: a 120-comment ticket retains its wait on wake' 1 '^issue comments 12 page=1$'
-log_has 'history: a 120-comment ticket retains its wait on wake' 1 '^issue comments 12 page=2$'
+log_has 'history: a 120-comment ticket retains its wait on wake' 1 '^graphql Comments number=12 before=[0-9]*$'
 expect 'history: a 51-comment PR retains its reviewer' 0 check.json 'reviewing31 | pull(31; .comments += discussion(50))' -- check <<EOF
 check review #31 for #12 at $S31: no verdict 30 minutes after "review started $S31, thread thr_synrev31"; read thread thr_synrev31 and tell it again (its record: comment 3101)
 EOF
 expect 'history: a 120-comment PR retains its verdict on wake' 0 check.json 'reviewing31 | pr_say(31; 3102; "11:30"; "VERDICT: APPROVE at \(sha(31))") | pull(31; .comments += discussion(118))' -- wake 31 <<EOF
 merge #31 for #12 at $S31: APPROVE and CI green
 EOF
-log_has 'history: a 120-comment PR retains its verdict on wake' 1 '^issue comments 31 page=1$'
-log_has 'history: a 120-comment PR retains its verdict on wake' 1 '^issue comments 31 page=2$'
+log_has 'history: a 120-comment PR retains its verdict on wake' 1 '^graphql Comments number=31 before=[0-9]*$'
 # #1057: the verdict itself must be read from page 2, not merely paginated past.
 expect 'history: a verdict on page 2 permits a merge on wake' 0 check.json 'reviewing31 | pull(31; .comments += discussion(118)) | pr_say(31; 3102; "11:50"; "VERDICT: APPROVE at \(sha(31))")' -- wake 31 <<EOF
 merge #31 for #12 at $S31: APPROVE and CI green
 EOF
-log_has 'history: a verdict on page 2 permits a merge on wake' 1 '^issue comments 31 page=1$'
-log_has 'history: a verdict on page 2 permits a merge on wake' 1 '^issue comments 31 page=2$'
+log_has 'history: a verdict on page 2 permits a merge on wake' 1 '^graphql Comments number=31 before=[0-9]*$'
 expect 'history: a 120-comment spec retains its approval' 0 check.json 'merge12 | issue(10; .comments += discussion(119))' -- check <<EOF
 start #13: W3: widget page (spec #10)
 EOF
 expect 'history: a 120-comment standalone issue retains its approval' 0 check.json 'own_approval(70; 7002; "10:00") | issue(70; .comments += discussion(118))' -- wake 70 <<EOF
 start #70: Fix the broken link in the widget docs (approved on its own)
 EOF
-expect 'history: an unreadable standalone history cannot start' 0 check.json 'own_approval(70; 7002; "10:00") | issue(70; .comments += discussion(118))' FAKE_GH_FAIL=issue_comments_70_page=2 -- wake 70 <<EOF
-look #70: comment history could not be read in full: repositories/1/issues/70/comments?per_page=100&page=2 failed: fake gh: planted failure: issue comments 70 page=2
+expect 'history: an unreadable standalone history cannot start' 2 check.json 'own_approval(70; 7002; "10:00") | issue(70; .comments += discussion(118))' FAKE_GH_FAIL=graphql_Comments_number=70 -- wake 70 <<EOF
+fleet.sh: the GitHub query Comments failed
 EOF
-expect 'history: an unreadable spec history cannot start its tickets' 0 check.json 'merge12 | issue(10; .comments += discussion(119))' FAKE_GH_FAIL=issue_comments_10_page=2 -- check <<EOF
-look #10: comment history could not be read in full: repositories/1/issues/10/comments?per_page=100&page=2 failed: fake gh: planted failure: issue comments 10 page=2
+expect 'history: an unreadable spec history cannot start its tickets' 2 check.json 'merge12 | issue(10; .comments += discussion(119))' FAKE_GH_FAIL=graphql_Comments_number=10 -- check <<EOF
+fleet.sh: the GitHub query Comments failed
 EOF
-expect 'history: an unreadable third page cannot archive a closed ticket' 0 check.json 'merge12 | issue(12; .comments += discussion(118))' FAKE_GH_PAGE=50 FAKE_GH_FAIL=issue_comments_12_page=3 -- wake 12 <<EOF
-look #12: comment history could not be read in full: repositories/1/issues/12/comments?per_page=100&page=3 failed: fake gh: planted failure: issue comments 12 page=3
+expect 'history: an unreadable third page cannot archive a closed ticket' 2 check.json 'merge12 | issue(12; .comments += discussion(118))' FAKE_GH_PAGE=50 FAKE_GH_FAIL=graphql_Comments_number=12_before=20 -- wake 12 <<EOF
+fleet.sh: the GitHub query Comments failed
 EOF
-log_has 'history: an unreadable third page cannot archive a closed ticket' 1 '^issue comments 12 page=1$'
-log_has 'history: an unreadable third page cannot archive a closed ticket' 1 '^issue comments 12 page=2$'
-log_has 'history: an unreadable third page cannot archive a closed ticket' 1 '^issue comments 12 page=3$'
+log_has 'history: an unreadable third page cannot archive a closed ticket' 1 '^graphql Comments number=12 before=70$'
+log_has 'history: an unreadable third page cannot archive a closed ticket' 1 '^graphql Comments number=12 before=20$'
 
-expect 'history: a closed ticket cannot hide an unreadable PR history' 0 check.json 'merge12 | pr_say(22; 2201; "10:00"; "launch-fleet: review started \(sha(22)), thread thr_synrev22") | pull(22; .comments += discussion(119))' FAKE_GH_FAIL=issue_comments_22_page=2 -- wake 12 <<EOF
-look #22: comment history could not be read in full: repositories/1/issues/22/comments?per_page=100&page=2 failed: fake gh: planted failure: issue comments 22 page=2
+expect 'history: a closed ticket cannot hide an unreadable PR history' 2 check.json 'merge12 | pr_say(22; 2201; "10:00"; "launch-fleet: review started \(sha(22)), thread thr_synrev22") | pull(22; .comments += discussion(119))' FAKE_GH_FAIL=graphql_Comments_number=22 -- wake 12 <<EOF
+fleet.sh: the GitHub query Comments failed
 EOF
 
 # R1: a transient read failure must not close the spec while its agents
 # may still need archiving. Closing the spec would stop their future checks.
 CLOSING_HISTORY='all_closed | issue(12; .comments |= map(select(.id != 1202)))
   | say(10; 1002; "11:30"; "launch-fleet: spec summary")'
-expect 'history: an unreadable ticket cannot close its spec' 0 check.json "$CLOSING_HISTORY" FAKE_GH_FAIL=issue_comments_12_page=1 -- check <<EOF
-look #12: comment history could not be read in full: repos/synthetic-owner/synthetic-repo/issues/12/comments?per_page=100 failed: fake gh: planted failure: issue comments 12 page=1
+expect 'history: an unreadable ticket cannot close its spec' 2 check.json "$CLOSING_HISTORY" FAKE_GH_FAIL=graphql_Facts -- check <<EOF
+fleet.sh: the GitHub query Facts failed
 EOF
-expect 'history: an unreadable linked PR cannot close its spec' 0 check.json "$CLOSING_HISTORY" FAKE_GH_FAIL=issue_comments_22_page=1 -- check <<EOF
-look #22: comment history could not be read in full: repos/synthetic-owner/synthetic-repo/issues/22/comments?per_page=100 failed: fake gh: planted failure: issue comments 22 page=1
+expect 'history: an unreadable linked PR cannot close its spec' 2 check.json "$CLOSING_HISTORY" FAKE_GH_ERRORS=Facts -- check <<EOF
+fleet.sh: the GitHub query Facts answered with errors
 EOF
 
 ### FR4 (#2454): issue facts by GraphQL, REST through the read budget
@@ -2194,17 +2189,27 @@ storm_case() {
   echo "ok   $name"
 }
 storm_case
+# The keeper of the REST pool's cases: 128 closed singles, each needing its
+# comments before its archived record can exclude it, are read twenty to a
+# query, and decide nothing.
+ARCHIVED128='.issues += [range(800; 928) | {number: ., title: "Synthetic archived issue", state: "CLOSED", parent: null,
+  labels: ["ready-for-agent"], blockedBy: [], body: "", comments: [{id: (. * 10), at: at("09:00"), body: "launch-fleet: archived"}]}]'
+expect 'FR4: 128 closed singles are read twenty to a GraphQL query' 0 check.json "$ARCHIVED128" -- check <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+log_has 'FR4: 128 closed singles are read twenty to a GraphQL query' 0 '^issue comments '
+log_has 'FR4: 128 closed singles are read twenty to a GraphQL query' 6 '^graphql Facts count=20$'
 
 ### The check: what it can't read in full
 
-expect 'an unreadable second ticket comment page: look' 0 check.json 'issue(12; .comments += discussion(119))' FAKE_GH_FAIL=issue_comments_12_page=2 -- check <<EOF
-look #12: comment history could not be read in full: repositories/1/issues/12/comments?per_page=100&page=2 failed: fake gh: planted failure: issue comments 12 page=2
+expect 'an unreadable second ticket comment page: exit 2' 2 check.json 'issue(12; .comments += discussion(119))' FAKE_GH_FAIL=graphql_Comments_number=12 -- check <<EOF
+fleet.sh: the GitHub query Comments failed
 EOF
 expect 'a spec with more than 100 tickets: look' 0 check.json 'issue(10; .subIssuesTruncated = true)' -- check <<EOF
 look #10: more than 100 tickets, so its graph can't all be read
 EOF
-expect 'an unreadable second PR comment page: look' 0 check.json 'reviewing31 | pull(31; .comments += discussion(119))' FAKE_GH_FAIL=issue_comments_31_page=2 -- check <<EOF
-look #31: comment history could not be read in full: repositories/1/issues/31/comments?per_page=100&page=2 failed: fake gh: planted failure: issue comments 31 page=2
+expect 'an unreadable second PR comment page: exit 2' 2 check.json 'reviewing31 | pull(31; .comments += discussion(119))' FAKE_GH_FAIL=graphql_Comments_number=31 -- check <<EOF
+fleet.sh: the GitHub query Comments failed
 EOF
 expect 'a ticket look already raised is not raised again' 0 check.json 'issue(12; .labels += [range(1; 22) | "synthetic-label-\(.)"]) | say(12; 1202; "11:00"; "launch-fleet: look: more than 20 labels")' -- check < /dev/null
 expect 'a pull request look already raised is not raised again' 0 check.json 'pr31 | pull(31; .base = "release-1") | pr_say(31; 3101; "11:00"; "launch-fleet: look: its base is release-1, not main")' -- check < /dev/null
@@ -3413,7 +3418,11 @@ assert (state['peak'] == 3 if mode == 'one' else
         1 < state['peak'] <= 64 if mode == 'all' else
         8 <= state['peak'] <= 64 if mode == 'graphs' else
         16 <= state['peak'] <= 64 if mode == 'specs' else state['peak'] == 64), state
-if mode != 'failure':
+if mode == 'graphs':
+    # FR4 (#2454): issue facts are GraphQL now; the eight spec queries overlap.
+    assert sum(e.startswith('graphql Spec ') for e in starts) == 8, starts
+    assert not any('/comments?' in e for e in starts), starts
+elif mode != 'failure':
     expected = {'one': 5, 'pages': 158, 'specs': 74, 'graphs': 83, 'warm': 154,
                 # The unreadable closed single also needs its detail/blockers.
                 'comment_failure': 157}.get(mode, 155)
@@ -3433,16 +3442,7 @@ PYTRACE
   [ "$?" = 0 ] || { bad "$name" "read count, bound or worker drain failed"; return; }
   echo "ok   $name"
 }
-parallel_case 'REST parallel: specs and archive reads share one bounded pool' all
 parallel_case 'REST parallel: independent spec queries overlap after the allowance gate' graphs
-parallel_case 'REST parallel: one issue reads independent facts together' one
-parallel_case 'REST parallel: archive pages share the bounded reader pool' pages
-parallel_case 'REST parallel: a slow reader leaves other readers working' pipeline
-parallel_case 'REST parallel: small specs share the bounded reader pool' specs
-parallel_case 'REST parallel: bounded readers preserve every read and decision' cold
-parallel_case 'REST parallel: repeat checks revalidate the shared ETag cache' warm
-parallel_case 'REST parallel: a failed reader drains workers and prints no actions' failure
-parallel_case 'REST parallel: a failed comment reader drains workers and prints only a look' comment_failure
 
 ### Blocker node identity (#405 R1), through frontier and claim
 
@@ -3603,7 +3603,9 @@ ARCH12="$TOOK12 | say(12; 1291; \"10:20\"; \"launch-fleet: old builder archived,
 # #1750: a takeover starts a builder too, so a held running ticket of another
 # spec on the same paths holds it, as it withdraws a start claim.
 expect 'takeover: a running ticket of another spec on hold holds a takeover start' 0 check.json "$OWN13"' other_spec | '"$HELD81"' | own(12; "src/store/") | issue(81; .body = "## Owned paths\n\n- `src/store/index.md`\n")'" | $ARCH12" -- spec 10 < /dev/null
-expect 'takeover: a colliding held ticket whose history can'"'"'t be read holds a takeover start' 0 check.json "$OWN13"' other_spec | '"$HELD81"' | own(12; "src/store/") | issue(81; .body = "## Owned paths\n\n- `src/store/index.md`\n")'" | $ARCH12" FAKE_GH_FAIL=issue_comments_81_page=1 -- spec 10 < /dev/null
+expect 'takeover: a colliding held ticket whose history can'"'"'t be read holds a takeover start' 2 check.json "$OWN13"' other_spec | '"$HELD81"' | own(12; "src/store/") | issue(81; .body = "## Owned paths\n\n- `src/store/index.md`\n")'" | $ARCH12" FAKE_GH_FAIL=graphql_Facts -- spec 10 <<EOF
+fleet.sh: the GitHub query Facts failed
+EOF
 expect 'takeover: a refused takeover start waits 10 minutes, and nothing goes to a builder' 0 check.json "$ARCH12 | edit(12; 1201; \"11:55\"; \"launch-fleet: start refused: synthetic reason\")" -- spec 10 < /dev/null
 expect 'takeover: a refused takeover start is tried again 10 minutes on' 0 check.json "$ARCH12 | edit(12; 1201; \"11:45\"; \"launch-fleet: start refused: synthetic reason\")" -- spec 10 <<EOF
 take over #12: builder thread thr_syn12 is archived; start a builder to continue branch room/12-w2-widget-store-bbbb (its record: comment 1201; retry after "start refused: synthetic reason")
@@ -3894,8 +3896,8 @@ expect 'ordering: a later hold record withdraws the earlier release claim' 0 che
 withdraw #13: that ordering release is not due or an older claim holds it
 EOF_ORDER
 expect 'ordering: a production live role remains held even with an ordering record' 0 check.json "$ORDER13 | $ORDER71 | issue(13; .labels += [\"ready-for-human\"])" -- check < /dev/null
-expect 'ordering: unreadable held comments cannot authorize release' 0 check.json "$ORDER13 | $ORDER71" FAKE_GH_FAIL=issue_comments_13_page=1 -- wake 13 <<EOF_ORDER
-look #13: comment history could not be read in full: repos/synthetic-owner/synthetic-repo/issues/13/comments?per_page=100 failed: fake gh: planted failure: issue comments 13 page=1
+expect 'ordering: unreadable held comments cannot authorize release' 2 check.json "$ORDER13 | $ORDER71" FAKE_GH_FAIL=graphql_Facts -- wake 13 <<EOF_ORDER
+fleet.sh: the GitHub query Facts failed
 EOF_ORDER
 expect 'ordering: proven failure without label changes permits release retry' 0 check.json "$ORDER13 | $ORDER71 | $ORDERCLAIM | edit(13; 1302; \"11:59\"; \"launch-fleet: release failed 1301: confirmed no labels changed\")" -- wake 13 <<EOF_ORDER
 release #13: ordering hold 1301; issue #71 merged to main; restore ready-for-agent and remove held
@@ -4271,8 +4273,8 @@ start #13: W3: widget page (spec #10)
 EOF
 expect "GI2: a loop id room-cli would read as a flag runs nothing, as today" 0 check.json 'merge12 | say(10; 1090; "10:00"; "launch-fleet: fleet active, loop --all")' -- wake 13 < /dev/null
 expect 'GI2: a loop two specs claim runs for neither, and each is left as today' 0 check.json "merge12 | $SPEC40 | $GI2_FLEET10 | say(40; 4090; \"10:00\"; \"launch-fleet: fleet active, loop $GI2_LOOP10\")" -- wake 13 41 < /dev/null
-expect 'GI2: an unreadable comment history runs no loop and is looked at, as today' 0 check.json "merge12 | $GI2_FLEET10 | issue(10; .comments += discussion(118))" FAKE_GH_FAIL=issue_comments_10_page=1 -- wake 13 <<EOF
-look #10: comment history could not be read in full: repos/synthetic-owner/synthetic-repo/issues/10/comments?per_page=100 failed: fake gh: planted failure: issue comments 10 page=1
+expect 'GI2: an unreadable comment history runs no loop and stops the check' 2 check.json "merge12 | $GI2_FLEET10 | issue(10; .comments += discussion(118))" FAKE_GH_FAIL=graphql_Facts -- wake 13 <<EOF
+fleet.sh: the GitHub query Facts failed
 EOF
 expect "GI2: the project check and the fleet thread's own check are unchanged" 0 check.json "merge12 | $GI2_FLEET10" -- spec 10 <<EOF
 start #13: W3: widget page (spec #10)

@@ -1,6 +1,7 @@
 import fcntl
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -263,7 +264,7 @@ class Report(Helper):
         self.assertIn(f"`{loop['label']}` label", sent['say'])
         self.assertIn('only if triage sends it to a fleet and that fix merges', sent['say'])
         self.assertIn('pull request and the release', sent['say'])
-        self.assertIn('a report held for the owner can close without that comment', sent['say'])
+        self.assertIn('a report held for the OpenWiz maintainers can close without that comment', sent['say'])
         self.assertNotIn('if a fix for it merges', sent['say'])
 
 
@@ -278,7 +279,7 @@ class Outcomes(Helper):
         op, a = self.send(0)
         self.assertEqual(a['phase'], 'sent')
         self.assertEqual(a['issue'], {'number': 41, 'url': 'https://github.com/openwizdev/OpenWiz/issues/41'})
-        self.assertIn('not that Jake', a['say'])
+        self.assertIn('not yet read by the OpenWiz maintainers', a['say'])
         reads = [c['argv'] for c in self.calls()]
         self.assertEqual(reads[-1], ['api', '--include', '--method', 'GET', 'repos/openwizdev/OpenWiz/issues/41'])
 
@@ -780,6 +781,390 @@ class Capitals(Helper):
         f = self.tmp / 'share.txt'
         f.write_text(text)
         return self.run_helper('share', '--text-file', str(f), '--url', url, expect=expect)[1]
+
+
+FACTS_PREFIX = 'OpenWiz feedback facts '
+FACTS_ORDER = [
+    'v', 'kind', 'area', 'openwiz', 'wizskills', 'skill', 'os', 'arch',
+    'host', 'driver', 'harness', 'model', 'log_lines', 'redactions',
+]
+SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,31}$')
+VER_RE = re.compile(r'^[0-9]+\.[0-9]+\.[0-9]+$')
+SKILL_VER_RE = re.compile(r'^feedback@[0-9]+\.[0-9]+\.[0-9]+$')
+MODEL_RE = re.compile(r'^[a-z0-9][a-z0-9._-]{0,63}$')
+MARKER_RE = re.compile(r'^OpenWiz feedback operation [0-9a-f]{32}$')
+
+
+def parse_contract_facts(body):
+    lines = body.split('\n')
+    if len(lines) < 5:
+        return None
+    if not MARKER_RE.fullmatch(lines[-1]) or lines[-2] != '' or lines[-4] != '':
+        return None
+    facts_line = lines[-3]
+    if not facts_line.startswith(FACTS_PREFIX) or len(facts_line) > 1024 or not facts_line.isascii():
+        return None
+    raw = facts_line[len(FACTS_PREFIX):]
+    seen = []
+
+    def pairs(items):
+        keys = [k for k, _ in items]
+        if len(keys) != len(set(keys)):
+            raise ValueError('repeated key')
+        seen.extend(keys)
+        return dict(items)
+
+    try:
+        obj = json.loads(raw, object_pairs_hook=pairs)
+    except ValueError:
+        return None
+    if not isinstance(obj, dict) or json.dumps(obj, separators=(',', ':'), ensure_ascii=True) != raw:
+        return None
+    if 'v' not in obj or obj['v'] != 1 or type(obj['v']) is not int:
+        return None
+    if any(k not in FACTS_ORDER for k in seen):
+        return None
+    if seen != [k for k in FACTS_ORDER if k in obj]:
+        return None
+    checks = {
+        'v': lambda v: type(v) is int and v == 1,
+        'kind': lambda v: v in ('bug', 'idea', 'question'),
+        'area': lambda v: isinstance(v, str) and bool(SLUG_RE.fullmatch(v)),
+        'openwiz': lambda v: isinstance(v, str) and bool(VER_RE.fullmatch(v)),
+        'wizskills': lambda v: isinstance(v, str) and bool(VER_RE.fullmatch(v)),
+        'skill': lambda v: isinstance(v, str) and bool(SKILL_VER_RE.fullmatch(v)),
+        'os': lambda v: v in ('linux', 'macos', 'windows', 'other'),
+        'arch': lambda v: v in ('x86_64', 'arm64', 'other'),
+        'host': lambda v: isinstance(v, str) and bool(SLUG_RE.fullmatch(v)),
+        'driver': lambda v: isinstance(v, str) and bool(SLUG_RE.fullmatch(v)),
+        'harness': lambda v: isinstance(v, str) and bool(SLUG_RE.fullmatch(v)),
+        'model': lambda v: isinstance(v, str) and bool(MODEL_RE.fullmatch(v)),
+        'log_lines': lambda v: type(v) is int and 0 <= v <= 40,
+        'redactions': lambda v: type(v) is int and 0 <= v <= 9999,
+    }
+    if not all(checks[k](v) for k, v in obj.items()):
+        return None
+    if sum(1 for line in lines if line.startswith(FACTS_PREFIX)) != 1:
+        return None
+    return obj
+
+
+class ReportInputAndFacts(Helper):
+    def write_openwiz_stub(self, script):
+        ow = self.bin / 'openwiz'
+        ow.write_text('#!/bin/sh\n' + script + '\n')
+        ow.chmod(0o755)
+
+    def report_file(self, data, name='report.json'):
+        p = self.tmp / name
+        p.write_text(json.dumps(data))
+        return str(p)
+
+    def full_report(self, **overrides):
+        data = {
+            'title': 'launch-fleet stops before starting a builder',
+            'kind': 'bug',
+            'area': 'launch-fleet',
+            'ran': 'openwiz launch-fleet',
+            'happened': 'It exited without starting a builder.',
+            'expected': 'It starts a builder for the ready ticket.',
+            'host': 'cloudroom',
+            'driver': 'cloudroom',
+            'harness': 'claude-code',
+            'model': 'claude-opus-5-5',
+        }
+        data.update(overrides)
+        return data
+
+    def test_report_with_all_fields_previews_and_sends_exact_body(self):
+        self.write_openwiz_stub('echo "openwiz 0.1.1"')
+        log_path = self.tmp / 'run.log'
+        log_path.write_text('user@box:~/work$ openwiz launch-fleet\nerror: failed with synthetic-token-000000\n')
+        _, d = self.run_helper('draft', '--report-file', self.report_file(self.full_report()),
+                               '--log-file', str(log_path), expect=0)
+        op = d['operation_id']
+        a = self.preview(op)
+        _, sent = self.run_helper('send', op, '--preview-id', a['preview_id'], expect=0)
+        self.assertEqual(sent['phase'], 'sent')
+        [create] = self.creates()
+        filed = json.loads(create['stdin'])
+        self.assertEqual(sorted(filed), ['body', 'title'])
+        body = filed['body']
+        self.assertIn(f'Body:\n{body}\n', a['preview'])
+        for label in ('What I ran:', 'What happened:', 'What I expected:', 'Log (secrets removed):'):
+            self.assertIn(label + '\n', body)
+        self.assertLess(body.index('What I ran:'), body.index('What happened:'))
+        self.assertLess(body.index('What happened:'), body.index('What I expected:'))
+        self.assertLess(body.index('What I expected:'), body.index('Log (secrets removed):'))
+        facts = parse_contract_facts(body)
+        self.assertIsNotNone(facts, body)
+        self.assertEqual(facts['kind'], 'bug')
+        self.assertEqual(facts['area'], 'launch-fleet')
+        self.assertEqual(facts['openwiz'], '0.1.1')
+        self.assertEqual(facts['host'], 'cloudroom')
+        self.assertEqual(facts['driver'], 'cloudroom')
+        self.assertEqual(facts['harness'], 'claude-code')
+        self.assertEqual(facts['model'], 'claude-opus-5-5')
+        self.assertEqual(facts['log_lines'], 2)
+        self.assertEqual(facts['redactions'], 1)
+        self.assertIn('OpenWiz 0.1.1', a['preview'])
+        self.assertIn('Agent: claude-code, model claude-opus-5-5', a['preview'])
+        self.assertIn("for OpenWiz's agents", a['preview'])
+        self.assertIn('--drop', a['preview'])
+        self.assertNotIn('synthetic-token-000000', body)
+
+    def test_dropping_every_fact_leaves_no_facts_line(self):
+        self.write_openwiz_stub('echo "openwiz 0.1.1"')
+        rf = self.report_file(self.full_report())
+        _, d = self.run_helper('draft', '--report-file', rf, '--no-facts', expect=0)
+        op = d['operation_id']
+        a = self.preview(op)
+        _, sent = self.run_helper('send', op, '--preview-id', a['preview_id'], expect=0)
+        self.assertEqual(sent['phase'], 'sent')
+        filed = json.loads(self.creates()[0]['stdin'])
+        self.assertNotIn(FACTS_PREFIX, filed['body'])
+        self.assertTrue(filed['body'].endswith(f'\n\nOpenWiz feedback operation {op}'))
+        drop_args = []
+        for k in ('kind', 'area', 'openwiz', 'wizskills', 'skill', 'os', 'arch',
+                  'host', 'driver', 'harness', 'model'):
+            drop_args.extend(['--drop', k])
+        _, d2 = self.run_helper('draft', '--report-file', self.report_file(self.full_report(title='Drop all individually')),
+                                *drop_args, expect=0)
+        op2 = d2['operation_id']
+        a2 = self.preview(op2)
+        self.assertNotIn(FACTS_PREFIX, a2['preview'])
+
+    def test_invalid_fact_values_are_refused_naming_the_key(self):
+        bad_cases = [
+            ('kind', 'feature'),
+            ('area', 'Not_A_Slug'),
+            ('host', 'my host'),
+            ('driver', 'UPPER'),
+            ('harness', 'bad/harness'),
+            ('model', 'model with spaces'),
+        ]
+        for key, bad_val in bad_cases:
+            with self.subTest(key=key):
+                rf = self.report_file(self.full_report(**{key: bad_val}), name=f'bad-{key}.json')
+                _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+                self.assertIn(key, a['refused'])
+
+    def test_changed_fact_voids_preview(self):
+        rf = self.report_file(self.full_report())
+        _, d = self.run_helper('draft', '--report-file', rf, expect=0)
+        op = d['operation_id']
+        a = self.preview(op)
+        self.run_helper('edit', op, '--report-file', rf, '--drop', 'model', expect=0)
+        _, sent = self.run_helper('send', op, '--preview-id', a['preview_id'], expect=1)
+        self.assertEqual(sent['phase'], 'refused')
+        self.assertEqual(self.creates(), [])
+
+    def test_no_private_env_or_hostname_reaches_preview_or_request(self):
+        self.write_openwiz_stub('exit 1')
+        planted_env = {
+            'HOSTNAME': 'secret-laptop-999.internal',
+            'HOST': 'secret-host-999',
+            'USER': 'secret-person-999',
+            'USERNAME': 'secret-person-999',
+            'OPENWIZ_HOST': 'secret-openwiz-host',
+            'OPENWIZ_DRIVER': 'secret-driver',
+            'OPENWIZ_MODEL': 'secret-model',
+            'ANTHROPIC_API_KEY': 'sk-ant-synthetic000000000000000000',
+        }
+        rf = self.report_file({'title': 'Minimal report', 'happened': 'Something broke.'})
+        _, d = self.run_helper('draft', '--report-file', rf, expect=0, env_change=planted_env)
+        op = d['operation_id']
+        _, p = self.run_helper('preview', op, expect=0, env_change=planted_env)
+        code = p['preview'].rsplit('\n', 1)[1].removeprefix('To create it, reply: yes ')
+        self.run_helper('send', op, '--preview-id', code, expect=0, env_change=planted_env)
+        combined = p['preview'] + json.dumps(self.calls())
+        for needle in ('secret-laptop-999', 'secret-host-999', 'secret-person-999',
+                       'secret-openwiz-host', 'secret-driver', 'secret-model',
+                       'sk-ant-synthetic', TOKEN, SECRET_PATH):
+            self.assertNotIn(needle, combined)
+        facts = parse_contract_facts(json.loads(self.creates()[0]['stdin'])['body'])
+        self.assertIsNotNone(facts)
+        self.assertNotIn('openwiz', facts)
+
+
+class SecretsAndWarnings(Helper):
+    def report_file(self, data, name='report.json'):
+        p = self.tmp / name
+        p.write_text(json.dumps(data))
+        return str(p)
+
+    def test_token_in_happened_refused_and_in_log_scrubbed_and_counted(self):
+        bad = {'title': 'Bug title', 'happened': 'line one\nleaked synthetic-token-000000 here'}
+        _, a = self.run_helper('draft', '--report-file', self.report_file(bad, 'bad.json'), expect=1)
+        self.assertIn('happened', a['refused'])
+        self.assertIn('2', a['refused'])
+        good = {'title': 'Bug title', 'happened': 'It crashed on startup.'}
+        log_path = self.tmp / 'crash.log'
+        log_path.write_text('token=synthetic-token-000000\n')
+        _, d = self.run_helper('draft', '--report-file', self.report_file(good, 'good.json'),
+                               '--log-file', str(log_path), expect=0)
+        op = d['operation_id']
+        p = self.preview(op)
+        self.assertNotIn('synthetic-token-000000', p['preview'])
+        self.assertIn('[secret removed]', p['preview'])
+        _, sent = self.run_helper('send', op, '--preview-id', p['preview_id'], expect=0)
+        self.assertEqual(sent['phase'], 'sent')
+        facts = parse_contract_facts(json.loads(self.creates()[0]['stdin'])['body'])
+        self.assertEqual(facts['redactions'], 1)
+        self.assertEqual(facts['log_lines'], 1)
+
+    def test_private_key_block_in_title_or_section_refused(self):
+        key_text = '-----BEGIN OPENSSH PRIVATE KEY-----\nabcdef\n-----END OPENSSH PRIVATE KEY-----'
+        bad = {'title': 'Key leak', 'happened': 'oops\n' + key_text}
+        _, a = self.run_helper('draft', '--report-file', self.report_file(bad, 'key.json'), expect=1)
+        self.assertIn('happened', a['refused'])
+        self.assertIn('2', a['refused'])
+
+    def test_home_path_and_email_in_happened_warn_without_altering_body(self):
+        happened = f'Opened {SECRET_PATH}/app.py and mailed synthetic@example.com.'
+        rf = self.report_file({'title': 'Path and email report', 'happened': happened})
+        _, d = self.run_helper('draft', '--report-file', rf, expect=0)
+        self.assertTrue(d.get('warnings'))
+        joined = '\n'.join(d['warnings']).lower()
+        self.assertIn('path', joined)
+        self.assertIn('e-mail', joined)
+        p = self.preview(d['operation_id'])
+        self.assertTrue(p.get('warnings'))
+        self.assertIn(happened, p['preview'])
+        self.run_helper('send', d['operation_id'], '--preview-id', p['preview_id'], expect=0)
+        filed = json.loads(self.creates()[0]['stdin'])
+        self.assertIn(happened, filed['body'])
+
+    def test_log_scrub_limits_40_lines_200_chars_indent_and_replacements(self):
+        lines = [f'$ line {i} ' + ('x' * 220) for i in range(50)]
+        lines[-1] = (
+            'user@host:~/proj$ curl https://alice:pass@private.example.com/a '
+            'https://example.org/doc synthetic@example.com 192.168.1.42 '
+            '/home/synthetic-user/secret-project thr_abc12345'
+        )
+        log_path = self.tmp / 'big.log'
+        log_path.write_text('\n'.join(lines) + '\n')
+        rf = self.report_file({'title': 'Long log report', 'happened': 'See log.'})
+        _, d = self.run_helper('draft', '--report-file', rf, '--log-file', str(log_path), expect=0)
+        p = self.preview(d['operation_id'])
+        self.run_helper('send', d['operation_id'], '--preview-id', p['preview_id'], expect=0)
+        body = json.loads(self.creates()[0]['stdin'])['body']
+        facts = parse_contract_facts(body)
+        self.assertEqual(facts['log_lines'], 40)
+        self.assertGreaterEqual(facts['redactions'], 6)
+        log_section = body.split('Log (secrets removed):\n', 1)[1].split('\n\nOpenWiz feedback facts ', 1)[0]
+        log_lines = log_section.split('\n')
+        self.assertEqual(len(log_lines), 40)
+        for line in log_lines:
+            self.assertTrue(line.startswith('    '), repr(line))
+            self.assertLessEqual(len(line) - 4, 200)
+        for forbidden in ('alice:pass', 'private.example.com', 'example.org', 'synthetic@example.com',
+                          '192.168.1.42', '/home/synthetic-user/secret-project', 'thr_abc12345', 'user@host:'):
+            self.assertNotIn(forbidden, log_section)
+
+    def test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log(self):
+        cases = [
+            ('stripe_sk_live', 'sk_live_51Hsynthetic000000000000000000', 'sk_live_51Hsynthetic000000000000000000'),
+            ('stripe_rk_test', 'rk_test_51Hsynthetic000000000000000000', 'rk_test_51Hsynthetic000000000000000000'),
+            ('gitlab_pat', 'glpat-synthetic0000000000000', 'glpat-synthetic0000000000000'),
+            ('npm_token', 'npm_synthetic00000000000000000000', 'npm_synthetic00000000000000000000'),
+            ('hf_token', 'hf_synthetic00000000000000000000', 'hf_synthetic00000000000000000000'),
+            ('slack_xoxe', 'xoxe-synthetic-000000000000', 'xoxe-synthetic-000000000000'),
+            ('password_assign', 'password=SyntheticHunter2Password', 'SyntheticHunter2Password'),
+            ('passwd_assign', 'passwd: SyntheticPasswdValue99', 'SyntheticPasswdValue99'),
+            ('secret_assign', 'secret=SyntheticSecretValue99', 'SyntheticSecretValue99'),
+            ('token_assign', 'token=SyntheticRawTokenValue99', 'SyntheticRawTokenValue99'),
+            ('api_key_assign', 'api_key=SyntheticApiKeyValue99', 'SyntheticApiKeyValue99'),
+            ('auth_token_assign', 'auth-token: SyntheticAuthTokenVal99', 'SyntheticAuthTokenVal99'),
+        ]
+        for name, sample, secret_val in cases:
+            with self.subTest(refuse=name):
+                rf = self.report_file({'title': f'Secret {name}', 'happened': f'line 1\nfound {sample} here'},
+                                      name=f'refuse-{name}.json')
+                _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+                self.assertIn('happened', a['refused'])
+                self.assertIn('2', a['refused'])
+        log_path = self.tmp / 'secrets.log'
+        log_path.write_text('\n'.join(sample for _, sample, _ in cases) + '\n')
+        rf = self.report_file({'title': 'Scrub all secret shapes', 'happened': 'See log.'}, name='scrub-all.json')
+        _, d = self.run_helper('draft', '--report-file', rf, '--log-file', str(log_path), expect=0)
+        p = self.preview(d['operation_id'])
+        self.run_helper('send', d['operation_id'], '--preview-id', p['preview_id'], expect=0)
+        body = json.loads(self.creates()[0]['stdin'])['body']
+        facts = parse_contract_facts(body)
+        self.assertEqual(facts['log_lines'], len(cases))
+        self.assertEqual(facts['redactions'], len(cases))
+        for name, _, secret_val in cases:
+            with self.subTest(scrub=name):
+                self.assertNotIn(secret_val, body)
+        self.assertIn('    password=[secret removed]', body)
+        self.assertIn('    api_key=[secret removed]', body)
+
+
+class LegacyRecords(Helper):
+    def write_v030_record(self, op, phase='draft', title='Legacy 0.3.0 draft', chosen_body='Legacy body.',
+                          account=None, preview=None, attempts=0, reason=None):
+        place = self.state / 'feedback'
+        place.mkdir(parents=True, exist_ok=True)
+        self.state.chmod(0o700)
+        place.chmod(0o700)
+        rec = {
+            'schema': 'openwiz.feedback-operation.v1',
+            'operation_id': op,
+            'destination': 'openwizdev/OpenWiz',
+            'phase': phase,
+            'title': title,
+            'chosen_body': chosen_body,
+            'body': f'{chosen_body}\n\nOpenWiz feedback operation {op}',
+            'account': account,
+            'preview': preview,
+            'attempts': attempts,
+            'issue': None,
+            'reason': reason,
+            'evidence': [],
+        }
+        p = place / f'{op}.json'
+        p.write_text(json.dumps(rec, indent=2) + '\n')
+        p.chmod(0o600)
+        return rec
+
+    def test_v030_records_still_read_status_reconcile_and_allow_new_drafts(self):
+        legacy_op = 'a' * 32
+        legacy = self.write_v030_record(
+            legacy_op,
+            phase='uncertain',
+            account=USER,
+            preview={'id': '123456', 'at': '2026-11-24T10:00:00Z'},
+            attempts=1,
+            reason='the create request ended with HTTP 502',
+        )
+        _, st = self.run_helper('status', legacy_op, expect=0)
+        self.assertEqual(st['phase'], 'uncertain')
+        rf = self.tmp / 'new-report.json'
+        rf.write_text(json.dumps({'title': 'New report after upgrade', 'happened': 'It broke.'}))
+        _, d1 = self.run_helper('draft', '--report-file', str(rf), expect=0)
+        self.assertEqual(d1['phase'], 'draft')
+        _, d2 = self.run_helper('draft', *self.files(title='New handoff after upgrade'), expect=0)
+        self.assertEqual(d2['phase'], 'draft')
+        self.world(issues=[{'number': 55, 'title': legacy['title'], 'body': legacy['body'], 'user': USER}])
+        _, rec = self.run_helper('reconcile', legacy_op, expect=0)
+        self.assertEqual((rec['phase'], rec['issue']['number']), ('sent', 55))
+
+
+class NoPersonName(Helper):
+    def test_no_person_name_in_helper_say_refusals_or_skill_md(self):
+        skill_text = (HERE.parent / 'SKILL.md').read_text()
+        self.assertNotIn('Jake', skill_text)
+        _, empty = self.run_helper('draft', *self.files(body='   '), expect=1)
+        self.assertNotIn('Jake', empty['refused'])
+        self.assertIn('the OpenWiz maintainers', empty['refused'])
+        op = self.draft()
+        a = self.preview(op)
+        _, sent = self.run_helper('send', op, '--preview-id', a['preview_id'], expect=0)
+        self.assertNotIn('Jake', sent['say'])
+        self.assertIn('the OpenWiz maintainers', sent['say'])
+        self.assertIn(sent['issue']['url'], sent['say'])
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

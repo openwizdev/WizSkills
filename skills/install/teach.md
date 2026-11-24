@@ -77,7 +77,7 @@ When its summary is ready:
 
 ## Reviewed
 
-> The proposed change at `<pull request link>` was checked: `<approved, so it merges next | changes asked, and the builder is making them>`. Follow it at openwiz.dev/app; still nothing for you to do.
+> The proposed change at `<pull request link>` was checked: `<approved, so it is added to your project next | changes asked, and the helper is making them>`. Follow it at openwiz.dev/app; still nothing for you to do.
 
 ## Merged
 

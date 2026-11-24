@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=1046
+CASES=1051
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1648,6 +1648,12 @@ PY
       && [ "$(cat "$A/read.log")" = 'read none' ] \
       && [ -s "$A/gh-token.log" ] && [ -z "$(grep -vx none "$A/gh-token.log")" ] && grep -qxF "$off" "$A/err"
   }
+  app_loop_key() {
+    fresh && (cd "$A" && loop_env "$@" /bin/sh "$A/install/loop.sh" > "$A/out" 2> "$A/err") \
+      && cmp -s "$A/want" "$A/out" && [ ! -s "$A/openwiz.log" ] && [ ! -s "$A/helper.log" ] \
+      && [ ! -s "$A/read.log" ] \
+      && [ -s "$A/gh-token.log" ] && [ -z "$(grep -vx none "$A/gh-token.log")" ] && grep -qxF "$off" "$A/err"
+  }
   app_block() {
     fresh && (cd "$A" && env -u GH_TOKEN -u GITHUB_TOKEN PATH="$A/bin:$tmp/bin:$PATH" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
         FAKE_GH_WORLD="$A/world.json" FAKE_GH_LOG="$A/gh.log" "$@" /bin/sh "$A/block-run.sh" > "$A/out" 2> "$A/err") \
@@ -1661,9 +1667,7 @@ PY
 $want" ] && [ ! -s "$A/shim.log" ]
   }
   app_on() {
-    step=key && on_loop mint OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
-      && [ "$(cat "$A/openwiz.log")" = 'github token --repository synthetic-owner/synthetic-repo --read' ] \
-      && cmp -s "$A/want" "$A/out" && [ -z "$(grep -vx synthetic-app-token-2394 "$A/gh-token.log")" ] \
+    step=key && app_loop_key OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
       && step=service && on_loop helper OPENWIZ_TOKEN_SERVICE="$A/no-service" \
       && [ "$(cat "$A/helper.log")" = "run --requester fleet-check --repository synthetic-owner/synthetic-repo --read -- sh $A/install/loop.sh" ] \
       && step='key and service' && on_loop helper OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj OPENWIZ_TOKEN_SERVICE="$A/no-service" \
@@ -1675,7 +1679,7 @@ mint' ] && [ "$(cat "$A/openwiz.log")" = 'github token --repository synthetic-ow
       && [ "$(cat "$A/out")" = token=synthetic-app-token-2394 ]
   }
   never_mints() {
-    step=key && app_loop "$@" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
+    step=key && app_loop_key "$@" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
       && step=service && app_loop "$@" OPENWIZ_TOKEN_SERVICE="$A/no-service" \
       && step='key and service' && app_loop "$@" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj OPENWIZ_TOKEN_SERVICE="$A/no-service" \
       && step=block && app_block "$@"
@@ -1711,13 +1715,13 @@ mint' ] && [ "$(cat "$A/openwiz.log")" = 'github token --repository synthetic-ow
   cases=$((cases + 1)) step=world
   name="app identity: an inherited token step's gh shim answers on and the account answers off: never mints, never asks the shim"
   served "$A/fixtures/$off_md.md" "$A/world.json" \
-    && step=key && app_loop $(inherited) OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj && [ ! -s "$A/shim.log" ] \
+    && step=service && app_loop $(inherited) OPENWIZ_TOKEN_SERVICE="$A/no-service" && [ ! -s "$A/shim.log" ] \
     && step=block && app_block $(inherited) && [ ! -s "$A/shim.log" ]; report $?
   cases=$((cases + 1)) step=world
   name="app identity: an inherited token step's gh shim and the account both answer on: one account read, never the shim"
-  cp "$A/on.json" "$A/world.json" && step=key && on_loop mint $(inherited) OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj; report $?
+  cp "$A/on.json" "$A/world.json" && step=service && on_loop helper $(inherited) OPENWIZ_TOKEN_SERVICE="$A/no-service"; report $?
   restore_fails() {
-    fresh && (cd "$A" && loop_env $(inherited) OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj "$1" -c \
+    fresh && (cd "$A" && loop_env $(inherited) OPENWIZ_TOKEN_SERVICE="$A/no-service" "$1" -c \
       'readonly GH_TOKEN; script=$1; shift; . "$script"' sh "$2" > "$A/out" 2> "$A/err"; :) \
       && [ ! -s "$A/read.log" ] && [ ! -s "$A/openwiz.log" ] && [ ! -s "$A/helper.log" ] && [ ! -s "$A/shim.log" ]
   }
@@ -1729,7 +1733,7 @@ mint' ] && [ "$(cat "$A/openwiz.log")" = 'github token --repository synthetic-ow
     && step='loop.sh under bash' && restore_fails bash "$A/install/loop.sh" \
     && step='block under bash' && restore_fails bash "$A/block-run.sh"; report $?
 else
-  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 77))
+  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 82))
 fi
 
 expect 'claim: the only claim goes' 0 check.json 'merge12 | say(13; 1301; "11:58"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
@@ -4573,7 +4577,7 @@ only_reads "$tmp"/case-*/gh*.log "$tmp"/cache-*/gh.log "$tmp"/loop/log[0-9] "$tm
 expected=${TEST_EXPECTED:-1}
 case ${TEST_ONLY:-} in
   loop) expected=4 ;;
-  'app identity') expected=77 ;;
+  'app identity') expected=82 ;;
   fleet-loop) expected=2 ;;
   'contexts:*') expected=31 ;;
   'contexts R1:*') expected=4 ;;

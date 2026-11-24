@@ -121,7 +121,9 @@ app_identity() {
 identity_off=
 if [ -n "$inside" ]; then
   identity_off=1
-elif { [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] || [ -n "$app_key_set" ]; } && ! app_identity; then
+elif [ -z "${OPENWIZ_TOKEN_SERVICE:-}" ]; then
+  if [ -n "$app_key_set" ]; then identity_off=1; fi
+elif ! app_identity; then
   identity_off=1
 fi
 if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ] && [ -z "$identity_off" ]; then

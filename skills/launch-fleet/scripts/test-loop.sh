@@ -164,10 +164,9 @@ cp "$work/world.json" "$work/world-off.json"
 jq '.files["docs/agents/fleet.md"] |= (sub("\\| App \\| Synthetic, for the factory \\|\n"; "") + "| App identity | on |\n")' \
   "$work/world-off.json" > "$work/world-on.json"
 cp "$work/world-on.json" "$work/world.json"
-# catches: loop.sh with App identity on and no token service attempting openwiz github token after unsetting OPENWIZ_GITHUB_APP_KEY.
 (: > "$work/read.log"; : > "$work/order.log"; OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj identity 'none account' "$off")
 [ ! -s "$work/openwiz.log" ]
-echo "ok   with the App identity on and no token service, loop.sh falls back with its note and never runs openwiz (#2835)"
+echo "ok   with the App identity on and no token service, loop.sh falls back with its note and never runs openwiz (catches: attempting openwiz github token with key unset, #2835)"
 cp "$work/world-off.json" "$work/world.json"
 (LAUNCH_FLEET_GITHUB_AUTH=installation identity 'none account' "$fallback")
 [ ! -s "$work/openwiz.log" ]

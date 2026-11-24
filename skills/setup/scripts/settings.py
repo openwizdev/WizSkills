@@ -322,7 +322,7 @@ APP_KEYS = ('Record authors', 'App identity')
 FENCE_LIKE = re.compile(r'[ \t>]*(?:(?:[-*+]|[0-9]+[.)])[ \t]+)?(`{3,}|~{3,})')
 FENCE_OPEN = re.compile(r' {0,3}(`{3,}|~{3,})(.*)')
 SECTION_END = re.compile(r' {0,3}#{1,6}(?:[ \t]|$)')
-SWALLOWS = re.compile(r'[ \t]{0,3}<(?:(?:pre|script|style|textarea)(?:[\s>]|$)|\?|![A-Za-z]|!\[CDATA\[)', re.I)
+SWALLOWS = re.compile(r'<(?:(?:pre|script|style|textarea)(?:[\s>]|$)|\?|![A-Za-z]|!\[CDATA\[)', re.I)
 HEADING = re.compile(r'[ \t>]*#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*')
 CANONICAL_ROW = re.compile(r'\|([^|\\]*)\|([^|\\]*)\|')
 
@@ -358,15 +358,14 @@ def identity_lines(lines):
                 fence = None
             found.append(number)
             continue
-        if not comment:
-            mark = FENCE_OPEN.match(line)
-            if mark and (mark.group(1)[0] == '~' or '`' not in mark.group(2)):
-                fence = mark.group(1)
-                found.append(number)
-                continue
-            if SECTION_END.match(line):
-                inside = False
-                continue
+        mark = FENCE_OPEN.match(line)
+        if mark and (mark.group(1)[0] == '~' or '`' not in mark.group(2)):
+            fence = mark.group(1)
+            found.append(number)
+            continue
+        if not comment and SECTION_END.match(line):
+            inside = False
+            continue
         found.append(number)
         rest = line
         while rest:
@@ -396,13 +395,15 @@ def hidden_heading(lines, at):
             elif mark:
                 return 'a fence-like line inside a fence: ' + line
             continue
-        if mark and not comment:
+        if mark:
+            if comment:
+                return 'a fence-like line while an HTML comment is open: ' + line
             opener = re.fullmatch(r'(`{3,})[^`]*|(~{3,}).*', line)
             if not opener:
                 return 'a fence that does not open at column 0: ' + line
             fence = opener.group(1) or opener.group(2)
             continue
-        if not comment and SWALLOWS.match(line):
+        if SWALLOWS.search(line):
             return 'raw HTML that can run past the heading: ' + line
         rest = line
         while rest:

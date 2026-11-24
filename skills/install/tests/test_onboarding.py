@@ -282,6 +282,11 @@ class Conversation(unittest.TestCase):
                 self.assertEqual([t['agent'] for t in said[:3]], lines['Up front'])
         self.assertTrue(any(t.get('say') == 'missing' for j in ROAD['journeys'] for t in j['turns']))
 
+    def test_teach_has_plain_words_section_with_help_line(self):
+        self.assertIn('\n## Plain words\n', TEACH)
+        plain = TEACH.split('\n## Plain words\n', 1)[1].split('\n## ', 1)[0]
+        self.assertIn("Stuck? I'll set it up with you, free 15 min: https://openwiz.dev/help/", plain)
+
     def test_after_the_grills_yes_only_the_gates_and_the_mode_ask_until_the_closing_offer(self):
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):

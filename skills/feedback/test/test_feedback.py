@@ -264,7 +264,7 @@ class Report(Helper):
         self.assertIn(f"`{loop['label']}` label", sent['say'])
         self.assertIn('only if triage sends it to a fleet and that fix merges', sent['say'])
         self.assertIn('pull request and the release', sent['say'])
-        self.assertIn('a report held for the owner can close without that comment', sent['say'])
+        self.assertIn('a report held for the OpenWiz maintainers can close without that comment', sent['say'])
         self.assertNotIn('if a fix for it merges', sent['say'])
 
 
@@ -279,7 +279,7 @@ class Outcomes(Helper):
         op, a = self.send(0)
         self.assertEqual(a['phase'], 'sent')
         self.assertEqual(a['issue'], {'number': 41, 'url': 'https://github.com/openwizdev/OpenWiz/issues/41'})
-        self.assertIn('not that Jake', a['say'])
+        self.assertIn('not yet read by the OpenWiz maintainers', a['say'])
         reads = [c['argv'] for c in self.calls()]
         self.assertEqual(reads[-1], ['api', '--include', '--method', 'GET', 'repos/openwizdev/OpenWiz/issues/41'])
 

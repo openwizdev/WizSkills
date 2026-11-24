@@ -43,6 +43,7 @@ TIMEOUT = 1000
 VERDICT = re.compile(r'VERDICT: (APPROVE|CHANGES) at ([0-9a-f]{40})')
 FAMILY = re.compile(r'Driver review: (other-family|same-family)')
 GREEN = ('SUCCESS', 'NEUTRAL', 'SKIPPED')
+RUNS = ('queued', 'in_progress', 'waiting', 'pending', 'requested')
 
 
 def sibling(name):
@@ -158,6 +159,7 @@ class Session:
         self.shut = set()
         self.next_ci = 0
         self.reconciled = []
+        self.watch = {}
 
     def thread(self, number):
         if self.authors is None:
@@ -195,6 +197,17 @@ class Session:
         return [f for f in found if stamp(f['time']) >= since]
 
     def ended(self, agent, target, since, number):
+        watched = self.watch.get((agent, target))
+        if watched is not None:
+            found = [status.parse(c['body']) for c in self.thread(number) if c['id'] == watched]
+            note = found[0] if found and found[0] and found[0]['agent'] == agent else None
+            if not note or note['state'] == 'working':
+                return False
+            found_pr = PR.fullmatch(note.get('pr', ''))
+            if found_pr:
+                self.prs[found_pr[1]] = number
+            self.watch.pop((agent, target), None)
+            return True
         notes = self.notes(agent, number, since)
         if not notes or notes[-1]['state'] == 'working':
             return False
@@ -523,11 +536,15 @@ class Session:
                               for c in comments):
             return 'block', ('a VERDICT since its review assignment is not an APPROVE at %s, and no log and merge '
                              'decision for that head follows it' % head)
-        family = FAMILY.search(started[-1]['body'])
-        if not family:
-            return 'block', 'its review assignment names no reviewer family'
+        if 'Driver review:' in started[-1]['body']:
+            family = FAMILY.search(started[-1]['body'])
+            if not family:
+                return 'block', 'its review assignment names no reviewer family'
+            same = family[1] == 'same-family'
+        else:
+            same = False
         built = self.built(n)
-        selected = built if family[1] == 'same-family' else OTHER[built]
+        selected = built if same else OTHER[built]
         url = 'https://github.com/%s/pull/%s' % (self.repo, p)
         reviewers = [(c, f) for c in self.thread(n) for f in [status.parse(c['body'])]
                      if f and f['agent'] == 'reviewer']
@@ -541,13 +558,14 @@ class Session:
         if len(notes) > 1:
             return 'block', ("%d reviewer notes were posted on #%s since its reviewer started, so its selected "
                              "reviewer can't be told apart" % (len(notes), n))
-        mine = notes and DRIVERS.get(notes[0][1]['harness']) == selected and \
-            notes[0][1].get('pr', '').lower() == url.lower()
-        if mine and notes[0][1]['state'] == 'working':
-            return 'wait', stamp(started[-1].get('created_at'))
-        if mine and notes[0][1]['state'] == 'asking':
-            return 'stop', 'its selected %s reviewer is asking, so it has not finished' % selected
-        if not (mine and notes[0][1]['state'] == 'done'
+        pr_url = notes[0][1].get('pr', '').lower() if notes else ''
+        harness_ok = bool(notes) and DRIVERS.get(notes[0][1]['harness']) == selected
+        if harness_ok and (not pr_url or pr_url == url.lower()):
+            if notes[0][1]['state'] == 'working':
+                return 'wait', stamp(started[-1].get('created_at')), notes[0][0]['id']
+            if notes[0][1]['state'] == 'asking':
+                return 'stop', 'its selected %s reviewer is asking, so it has not finished' % selected
+        if not (harness_ok and pr_url == url.lower() and notes[0][1]['state'] == 'done'
                 and stamp(notes[0][0].get('updated_at')) >= stamp(approve.get('created_at'))):
             return 'block', ('no done note from its selected %s reviewer for #%s, posted since that reviewer started '
                              'and edited at or after its APPROVE' % (selected, p))
@@ -564,14 +582,76 @@ class Session:
                 return 'the merge blocked record does not read back'
         return 'recorded merge blocked ' + head
 
-    def batch(self):
-        if not os.environ.get('LAUNCH_FLEET_OVERLOAD_SUPPLY'):
+    def observe(self, checks):
+        def probe(pool, *args):
+            text = post.gh('api', '-i', *args)
+            if text is None:
+                return None
+            top, _, body = text.replace('\r\n', '\n').partition('\n\n')
+            lines = top.split('\n')
+            if not re.fullmatch(r'HTTP/[0-9.]+ 200( .*)?', lines[0]):
+                return None
+            heads = {k.strip().lower(): v.strip() for k, _, v in (h.partition(':') for h in lines[1:])}
+            try:
+                found = {'remaining': int(heads['x-ratelimit-remaining']), 'limit': int(heads['x-ratelimit-limit']),
+                         'reset_at': int(heads['x-ratelimit-reset']), 'retry_after': 0}
+                answer = json.loads(body)
+            except (KeyError, ValueError):
+                return None
+            if heads.get('x-ratelimit-resource') != pool or found['reset_at'] <= time.time() or \
+                    not isinstance(answer, dict) or 'errors' in answer:
+                return None
+            return found
+
+        budgets = {'rest': probe('core', 'repos/%s/actions/runs?per_page=1' % self.repo),
+                   'graphql': probe('graphql', 'graphql', '-f', 'query=query{rateLimit{remaining}}')}
+        jobs, complete = {}, all(budgets.values())
+        try:
+            for wanted in RUNS:
+                pages = post.read_json('api', '--paginate', '--slurp',
+                                       'repos/%s/actions/runs?status=%s&per_page=100' % (self.repo, wanted))
+                for run in [r for page in pages for r in page['workflow_runs']]:
+                    for page in post.read_json('api', '--paginate', '--slurp',
+                                               'repos/%s/actions/runs/%d/jobs?per_page=100' % (self.repo, run['id'])):
+                        for job in page['jobs']:
+                            queued = job['status'] not in ('in_progress', 'completed')
+                            jobs[str(job['id'])] = {
+                                'id': str(job['id']), 'required': job['name'] in checks,
+                                'status': 'queued' if queued else job['status'],
+                                'queued_at': int(stamp(job['created_at'])),
+                                'started_at': None if queued or not job.get('started_at') else
+                                int(stamp(job['started_at']))}
+        except (TypeError, KeyError, ValueError, Unreadable):
+            complete = False
+        return {'repository': self.repo, 'observed_at': int(time.time()), 'complete': complete,
+                'queue': {'complete': complete, 'jobs': list(jobs.values())},
+                'budgets': {k: v for k, v in budgets.items() if v}}
+
+    def batch(self, checks=None):
+        supply = os.environ.get('LAUNCH_FLEET_OVERLOAD_SUPPLY')
+        state = os.environ.get('LAUNCH_FLEET_OVERLOAD_STATE')
+        given = os.environ.get('LAUNCH_FLEET_OVERLOAD_INPUT')
+        if not state:
+            if supply or given:
+                which = 'LAUNCH_FLEET_OVERLOAD_SUPPLY' if supply else 'LAUNCH_FLEET_OVERLOAD_INPUT'
+                raise NeedsYou("no merge batch: %s is set but LAUNCH_FLEET_OVERLOAD_STATE is not, so this session "
+                               "would not share the repository's one overload pause; set it to the state path the "
+                               "fleet uses" % which)
             return
-        if not os.environ.get('LAUNCH_FLEET_OVERLOAD_STATE'):
-            raise NeedsYou("no merge batch: LAUNCH_FLEET_OVERLOAD_SUPPLY is set but LAUNCH_FLEET_OVERLOAD_STATE is "
-                           "not, so this session would not share the repository's one overload pause; set it to the "
-                           "state path the fleet uses")
-        self.guarded(dict(os.environ, LAUNCH_FLEET_OVERLOAD_INPUT='/nonexistent-overload-observation'))
+        if supply:
+            return self.guarded(dict(os.environ, LAUNCH_FLEET_OVERLOAD_INPUT='/nonexistent-overload-observation'))
+        seen = self.observe(checks if checks is not None else self.checks())
+        try:
+            STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+            fd, path = tempfile.mkstemp(prefix='overload-', suffix='.json', dir=STATE)
+        except OSError as e:
+            raise Unreadable("can't write the overload observation (%s)" % type(e).__name__)
+        try:
+            with os.fdopen(fd, 'w') as out:
+                json.dump(seen, out)
+            return self.guarded(dict(os.environ, LAUNCH_FLEET_OVERLOAD_INPUT=path))
+        finally:
+            os.unlink(path)
 
     def guarded(self, env):
         r = run(['sh', str(HERE / 'fleet.sh'), 'overload', 'merge-batch'], env=env)
@@ -616,6 +696,8 @@ class Session:
             found_why = self.approval(p, n, head)
             if found_why and found_why[0] == 'wait':
                 self.live[('reviewer', p)] = (found_why[1], n)
+                self.watch[('reviewer', p)] = found_why[2]
+                self.prs[p] = n
                 did.append('#%s waits for its reviewer to finish' % p)
                 continue
             if found_why and found_why[0] == 'stop':
@@ -628,7 +710,7 @@ class Session:
                 self.held.add(p)
         if not ready:
             return moved
-        self.batch()
+        self.batch(checks)
         for found in ready:
             p, n, head = found.groups()
             admit = script('merge.py', 'admit', self.repo, p, head, ','.join(checks)).stdout.strip().split('\n')[0]

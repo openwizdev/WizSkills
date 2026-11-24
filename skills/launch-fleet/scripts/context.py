@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Print a fleet role's project context or check text before a public write."""
-
 import argparse
 import os
 from pathlib import Path
@@ -149,7 +147,7 @@ def file_label(path, index):
 
 
 def delegated_findings(tool, path, root):
-    result = subprocess.run([sys.executable, '-I', tool, '--title-file', os.devnull, '--body-file', path],
+    result = subprocess.run([sys.executable, '-I', '-B', tool, '--title-file', os.devnull, '--body-file', path],
                             cwd=root, capture_output=True)
     if result.returncode == 0:
         return []
@@ -195,7 +193,7 @@ class Parser(argparse.ArgumentParser):
 
 
 def main():
-    parser = Parser(description=__doc__)
+    parser = Parser(description="Print a fleet role's project context or check text before a public write.")
     commands = parser.add_subparsers(dest='role', required=True)
     for role in (*ROLE_SECTIONS, 'fleet'):
         commands.add_parser(role).add_argument('--root', type=Path)

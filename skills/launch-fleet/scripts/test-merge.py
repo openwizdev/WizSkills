@@ -1671,8 +1671,6 @@ class Landed(unittest.TestCase):
 
 
     def test_a_recorded_cooldown_refuses_the_landed_comment_and_its_delete_without_writing(self):
-        """catches (FR15, #2879): the landed comment's direct POST, or the DELETE of our own later
-        duplicate, skipping post.py's shared cooldown."""
         until = int(time.time()) + 3600
         paced = 'refused: write paced, retry after ' + T.post_stamp(until)
         at = DEST + '#9101'
@@ -1710,9 +1708,6 @@ class Help(unittest.TestCase):
 
 
     def test_r3_r4_the_help_names_the_claim_and_its_attempted_enqueue_and_the_claim_only_read_back(self):
-        """catches (#341 R3, R4): help that says the enqueue was written when it was only attempted,
-        or that every other pending result precedes any write while a claim's read-back posts
-        its claim and deletes its own later duplicate."""
         r = subprocess.run([sys.executable, '-I', str(HERE / 'merge.py'), '--help'], capture_output=True, text=True,
                            timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -2124,7 +2119,6 @@ class Drops(unittest.TestCase):
         self.assertEqual([c['id'] for c in w.load()['comments']['7']], [4000, 4001, 4002, 5001])
 
     def test_a_recorded_cooldown_refuses_a_duplicate_receipt_delete_without_writing(self):
-        """catches (FR15, #2879): reconcile's direct DELETE of a later duplicate skipping the shared cooldown."""
         entry = {'headCommit': {'oid': HEAD}}
         q = World(self, pr=pr(isMergeQueueEnabled=True, isInMergeQueue=True, mergeQueueEntry=entry),
                   comments={'7': [comment(4000, self.receipt), comment(4002, self.receipt)]})
@@ -2137,7 +2131,6 @@ class Drops(unittest.TestCase):
         self.assertEqual((q.writes(), q.bodies(7)), ([{'delete': 4002}], [self.receipt]))
 
     def test_r3_a_blind_retry_enqueue_says_the_claim_was_recorded_and_the_enqueue_attempted(self):
-        """catches (#341 R3): the blind replay, whose enqueue request errors, told as a written enqueue."""
         w = stubbed(self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True,
                                faults={'enqueue': 'blind'}))
         self.add(w, comment(4002, w.bodies(7)[1]))

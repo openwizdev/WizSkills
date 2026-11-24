@@ -1016,7 +1016,6 @@ class Review(unittest.TestCase):
         return json.loads(path.read_text())
 
     def test_a_recorded_cooldown_refuses_a_follow_up_without_filing(self):
-        """catches (FR15, #2879): the follow-up issue POST skipping post.py's shared cooldown."""
         until = int(time.time()) + 3600
         self.pacer({"accounts": {}, "inflight": [], "until": until})
         out = self.follow_up()
@@ -1028,8 +1027,6 @@ class Review(unittest.TestCase):
         self.assertEqual(self.state()["issues"], {})
 
     def test_an_admitted_follow_up_takes_one_pacer_slot_and_keeps_its_read_back(self):
-        """catches (FR15, #2879): a filed issue that bypasses the pacer's slot, sends another
-        title, body or label, or skips the read-back that confirms it."""
         out = self.follow_up()
         self.assertEqual((out.returncode, out.stdout), (0, "filed #70\n"), out.stderr)
         state = self.pacer()

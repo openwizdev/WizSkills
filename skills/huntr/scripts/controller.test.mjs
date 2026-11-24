@@ -440,6 +440,23 @@ scenario('PC2 pace: an unknown timezone, streak or time asks instead of hunting'
     assert.match(r.stderr, /unknown (timezone|empty-hunt streak|last empty hunt time): ask on the tracking issue/);
   }
 });
+scenario('PC4 pace: streak below 2 hunts with no last empty hunt time, while streak 2 still refuses it', w => {
+  const pace = (...args) => w.run(lease, ['pace', ...args]);
+  for (const args of [['UTC', '0', ''], ['UTC', '0', 'none'], ['UTC', '1', ''], ['UTC', '1', 'none']]) {
+    const r = pace(...args);
+    assert.equal(r.status, 0, `${JSON.stringify(args)}: ${r.stderr}`);
+    assert.deepEqual(JSON.parse(r.stdout), {hunt: true}, JSON.stringify(args));
+  }
+  for (const args of [['UTC', '2', ''], ['UTC', '2', 'none']]) {
+    const r = pace(...args);
+    assert.equal(r.status, 2, JSON.stringify(args));
+    assert.equal(r.stdout, '');
+    assert.match(r.stderr, /unknown last empty hunt time: ask on the tracking issue/);
+  }
+  assert.equal(pace('Mars/Olympus', '0', '').status, 2);
+  assert.equal(pace('UTC', '-1', 'none').status, 2);
+  assert.deepEqual(w.calls(), [], 'pace reads no GitHub');
+});
 
 const manifest = join(here, 'manifest.mjs');
 function publish(w, record, run = record.run) {

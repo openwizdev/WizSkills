@@ -114,6 +114,7 @@ SOURCE_LINES = {
     'huntr': ORIGINAL,
     'image': ORIGINAL,
     'install': ORIGINAL,
+    'son-of-anton': ORIGINAL,
     'write-driver': ORIGINAL,
     'where-are-we': "**Source:** dot-context's written plan. Not adapted from Matt Pocock's skills.",
 }

@@ -20,6 +20,4 @@ When a skill names a role (for example, "label it ready for an agent"), use that
 | --- | --- | --- |
 | `pro` | `#8250DF` | Opened by a Pro member |
 
-Create `pro` in the issue tracker when enabling this option. Replace `<owner>/<repo>` below with the private Pro repository, or omit the line to leave automatic labelling off. The label is public, so enable it only where the project tells its Pro members about it.
-
-Pro repository: <owner>/<repo>
+Automatic labelling is off by default. To turn it on, create `pro` in the issue tracker and add a line reading Pro repository: followed by owner/name of the private Pro repository. The label is public, so turn it on only where the project tells its Pro members about it.

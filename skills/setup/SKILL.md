@@ -47,7 +47,7 @@ Done when every missing setting has the user's answer.
 
 ## 3. Write
 
-Fill each template. Every `fleet.md` value names its source: a linked file, a command, or `<decider>, <YYYY-MM-DD>: <decision> ([private record](<comment URL>)).` Create a label only for a role with none (`gh label create <name> --description "<meaning>"`). For configured Pro triage, create the template's `pro` label if missing and write the Pro repository line. Otherwise omit that line. Write no run date, so an unchanged project gives the same bytes. Write only these four files and missing labels; private comments go only to the private repository, named with `--repo`.
+Fill each template. Every `fleet.md` value names its source: a linked file, a command, or `<decider>, <YYYY-MM-DD>: <decision> ([private record](<comment URL>)).` Create a label only for a role with none (`gh label create <name> --description "<meaning>"`). For configured Pro triage, create the template's `pro` label if missing and add the line `Pro repository: owner/name` on its own, with the real private Pro repository. Otherwise add no such line. Write no run date, so an unchanged project gives the same bytes. Write only these four files and missing labels; private comments go only to the private repository, named with `--repo`.
 
 Done when the four files are written.
 

@@ -1105,6 +1105,16 @@ class Session(unittest.TestCase):
         self.assertIn('#12 merged', out)
         self.assertEqual(self.probes(), 0)
 
+    def test_a_fresh_project_without_a_supplier_merges_an_approved_green_pull_request(self):
+        self.approved()
+        for name in ('LAUNCH_FLEET_OVERLOAD_STATE', 'LAUNCH_FLEET_OVERLOAD_INPUT', 'LAUNCH_FLEET_OVERLOAD_SUPPLY'):
+            self.env.pop(name, None)
+        out = self.ended(self.session(), 0)
+        self.assertIn('#12 merged', out)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+        self.assertEqual(self.probes(), 0)
+        self.assertEqual(sorted(p.name for p in self.lock_dir.parent.glob('overload-*')), [])
+
     def test_without_a_configured_overload_state_nothing_is_merged(self):
         self.approved()
         del self.env['LAUNCH_FLEET_OVERLOAD_STATE']

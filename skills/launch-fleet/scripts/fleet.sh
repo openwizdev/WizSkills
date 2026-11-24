@@ -2174,8 +2174,8 @@ def claim: $W.claim.n as $n | $W.claim.id as $id
                 else ([$x.p | records[] | select((.r | test("^(review starting|review started|re-check sent)\\b")) and (.r | names($sha)))]
                       | min_by(.id)) as $older
                   | if $older != null then "withdraw #\($n): an older review claim: \"\($older.r)\""
-                    elif any($x.t | ticket_lines($x.s); startswith("review \($x.p | pr_ref) for #\($x.t.number) at \($sha)")
-                                                        or startswith("re-check \($x.p | pr_ref) for #\($x.t.number) at \($sha)"))
+                    elif any($x.t | ticket_lines($x.s); startswith("review #\($n) for #\($x.t.number) at \($sha)")
+                                                        or startswith("re-check #\($n) for #\($x.t.number) at \($sha)"))
                     then "go #\($n)"
                     else "withdraw #\($n): it is not due a review at \($sha)" end end end end end;
 '

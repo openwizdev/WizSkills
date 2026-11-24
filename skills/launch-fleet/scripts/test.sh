@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=948
+CASES=949
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1847,6 +1847,9 @@ review synthetic-owner/synthetic-tools#31 for #12 at $S31: first review
 EOF
 expect "cross-repository PR: its CI failed line names its own repository (#2792)" 0 check.json "pr31 | pull(31; .rollup = \"FAILURE\" | .checks[1].conclusion = \"FAILURE\") | $TOOLS" -- check <<EOF
 CI failed synthetic-owner/synthetic-tools#31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect "cross-repository PR: a review claim by its bare number is refused, never read as this repository's #31 (#2792)" 2 check.json "pr31 | pr_say(31; 3105; \"11:59\"; \"launch-fleet: review starting \(sha(31))\") | $TOOLS" -- claim 31 3105 <<EOF
+fleet.sh: #31 is neither a ticket nor an open pull request of an approved ticket
 EOF
 
 ### #1340: a machine plan approval starts the fleet; the video's comments steer it

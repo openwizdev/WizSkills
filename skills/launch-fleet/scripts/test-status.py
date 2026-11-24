@@ -1016,7 +1016,7 @@ PRIVATE = [
     ('--skills', '"' + SKILLS + '"'),
     ('--step', 'deployed with token=synthetic-value'),
     ('--step', 'set password: synthetic-value'),
-    ('--step', 'used key AKIAIOSFODNN7EXAMPLE'),
+    ('--step', 'used key AKIA' + 'IOSFODNN7EXAMPLE'),
     ('--step', 'sent Authorization: Bearer synthetic.value.123'),
     ('--preview', 'https://preview.example-site.pages.dev/s/sig=synthetic'),
     ('--step', 'Robin said "ship it"'),

@@ -969,7 +969,7 @@ class ReportInputAndFacts(Helper):
             'OPENWIZ_HOST': 'secret-openwiz-host',
             'OPENWIZ_DRIVER': 'secret-driver',
             'OPENWIZ_MODEL': 'secret-model',
-            'ANTHROPIC_API_KEY': 'sk-ant-synthetic000000000000000000',
+            'ANTHROPIC_API_KEY': 'sk-ant-' + 'synthetic' + '0' * 18,
         }
         rf = self.report_file({'title': 'Minimal report', 'happened': 'Something broke.'})
         _, d = self.run_helper('draft', '--report-file', rf, expect=0, env_change=planted_env)
@@ -1014,7 +1014,7 @@ class SecretsAndWarnings(Helper):
         self.assertEqual(facts['log_lines'], 1)
 
     def test_private_key_block_in_title_or_section_refused(self):
-        key_text = '-----BEGIN OPENSSH PRIVATE KEY-----\nabcdef\n-----END OPENSSH PRIVATE KEY-----'
+        key_text = '-----BEGIN ' + 'OPENSSH PRIVATE KEY-----\nabcdef\n-----END OPENSSH PRIVATE KEY-----'
         bad = {'title': 'Key leak', 'happened': 'oops\n' + key_text}
         _, a = self.run_helper('draft', '--report-file', self.report_file(bad, 'key.json'), expect=1)
         self.assertIn('happened', a['refused'])
@@ -1063,13 +1063,19 @@ class SecretsAndWarnings(Helper):
             self.assertNotIn(forbidden, log_section)
 
     def test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log(self):
+        stripe_sk_live = 'sk_' + 'live_51Hsynthetic' + '0' * 18
+        stripe_rk_test = 'rk_' + 'test_51Hsynthetic' + '0' * 18
+        gitlab_pat = 'glpat-' + 'synthetic' + '0' * 13
+        npm_token = 'npm_' + 'synthetic' + '0' * 20
+        hf_token = 'hf_' + 'synthetic' + '0' * 20
+        slack_xoxe = 'xoxe-' + 'synthetic-' + '0' * 12
         cases = [
-            ('stripe_sk_live', 'sk_live_51Hsynthetic000000000000000000', 'sk_live_51Hsynthetic000000000000000000'),
-            ('stripe_rk_test', 'rk_test_51Hsynthetic000000000000000000', 'rk_test_51Hsynthetic000000000000000000'),
-            ('gitlab_pat', 'glpat-synthetic0000000000000', 'glpat-synthetic0000000000000'),
-            ('npm_token', 'npm_synthetic00000000000000000000', 'npm_synthetic00000000000000000000'),
-            ('hf_token', 'hf_synthetic00000000000000000000', 'hf_synthetic00000000000000000000'),
-            ('slack_xoxe', 'xoxe-synthetic-000000000000', 'xoxe-synthetic-000000000000'),
+            ('stripe_sk_live', stripe_sk_live, stripe_sk_live),
+            ('stripe_rk_test', stripe_rk_test, stripe_rk_test),
+            ('gitlab_pat', gitlab_pat, gitlab_pat),
+            ('npm_token', npm_token, npm_token),
+            ('hf_token', hf_token, hf_token),
+            ('slack_xoxe', slack_xoxe, slack_xoxe),
             ('password_assign', 'password=SyntheticHunter2Password', 'SyntheticHunter2Password'),
             ('passwd_assign', 'passwd: SyntheticPasswdValue99', 'SyntheticPasswdValue99'),
             ('secret_assign', 'secret=SyntheticSecretValue99', 'SyntheticSecretValue99'),

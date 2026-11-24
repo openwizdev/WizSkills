@@ -409,7 +409,7 @@ class Kit(Base):
         # printing it, before the kit has screened the answer
         for name, answer, value in (
                 ('a secret of the environment', '{"run": os.environ["EXAMPLEHOST_API_TOKEN"]}', SECRET),
-                ('a key shape', '{"run": "AKIA" + "SYNTHETIC0000000"}', 'AKIASYNTHETIC0000000'),
+                ('a key shape', '{"run": "AKIA" + "SYNTHETIC0000000"}', 'AKIA' + 'SYNTHETIC0000000'),
                 ('a key shape in a field the schema refuses', '{"run": "run-1", "note": "sk-" + "s" * 24}', 'sk-sss'),
                 ('a run id the schema refuses', '{"run": "-synthetic-run"}', '-synthetic-run')):
             with self.subTest(name):

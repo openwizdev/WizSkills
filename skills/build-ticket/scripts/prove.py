@@ -102,8 +102,6 @@ def node(code, out):
         return 'passed'
     if code != 1 or not n['fail']:
         return 'error'
-    # Spec reporter: each block under "failing tests" must be an assertion; TAP: each
-    # failed test's YAML block must carry ERR_ASSERTION.
     if '✖ failing tests:' in out:
         blocks = re.split(r'^test at ', out.split('✖ failing tests:', 1)[1], flags=re.M)[1:]
     else:
@@ -115,7 +113,6 @@ def node(code, out):
 
 
 def classify(code, out):
-    """Outcome of one run from its exit code and combined output; None code means a timeout."""
     if code is None:
         return 'error'
     for parse in (cargo, pytest, unittest, node):

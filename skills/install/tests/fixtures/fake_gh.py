@@ -132,6 +132,12 @@ def road(argv):
     r = 'repos/%s' % world['repo']
     branches, pulls = world.setdefault('branches', {}), world.setdefault('host_pulls', [])
 
+    def oid(ref):
+        return hashlib.sha1(ref.encode()).hexdigest()
+
+    refs = {oid(ref): ref for ref in [world['default'], *branches]}
+    refs.update(world.get('refs', {}))
+
     def save():
         path.write_text(json.dumps(world))
 
@@ -149,18 +155,20 @@ def road(argv):
     if argv[:2] == ['api', '--include'] and len(argv) in (3, 5) and argv[3:] in ([], raw):
         match = re.fullmatch(re.escape(r + '/contents/') + r'([^?]+)(?:\?ref=(.+))?', argv[2])
         if match:
-            files = world['files'] if match[2] in (None, world['default']) else branches.get(match[2])
+            ref = refs.get(match[2], match[2])
+            files = world['files'] if ref in (None, world['default']) else branches.get(ref)
             if files is None or match[1] not in files:
                 return http(404, '{"message": "Not Found"}')
             text = files[match[1]]
-            edited(match[2], match[1])
+            edited(ref, match[1])
             return http(200, text if argv[3:] else json.dumps({
                 'type': 'file', 'sha': blob_sha(text), 'encoding': 'base64',
                 'content': base64.b64encode(text.encode()).decode()}))
     match = re.fullmatch(re.escape(r + '/compare/') + r'([^.]+)\.\.\.(.+)', argv[1]) if len(argv) == 2 else None
     if match and argv[0] == 'api':
-        base, head = world['files'], branches.get(match[2])
-        if match[1] != world['default'] or head is None:
+        base_ref, head_ref = (refs.get(ref, ref) for ref in match.groups())
+        base, head = (world['files'] if base_ref == world['default'] else branches.get(base_ref)), branches.get(head_ref)
+        if base is None or head is None:
             sys.stderr.write('gh: Not Found (HTTP 404)\n')
             return 1
         files = [{'filename': name, 'status': 'removed' if name not in head else 'added' if name not in base
@@ -208,7 +216,14 @@ def road(argv):
         return 0
     if argv[:2] == ['pr', 'list'] and argv[2:4] == ['--repo', world['repo']]:
         head = argv[argv.index('--head') + 1]
-        print(json.dumps([{'url': p['url'], 'state': p['state']} for p in pulls if p['head'] == head]))
+        fields = argv[argv.index('--json') + 1].split(',')
+        matched = []
+        for pull in pulls:
+            if pull['head'] == head:
+                answer = {'baseRefName': world['default'], 'headRefName': head, 'isCrossRepository': False,
+                          'baseRefOid': oid(world['default']), 'headRefOid': oid(head), **pull}
+                matched.append({key: answer[key] for key in fields})
+        print(json.dumps(matched))
         return 0
     if argv[:2] == ['pr', 'create'] and argv[2:4] == ['--repo', world['repo']]:
         head = argv[argv.index('--head') + 1]

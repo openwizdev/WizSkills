@@ -2381,6 +2381,29 @@ class OneSetupPullRequest(unittest.TestCase):
                 self.assertEqual(j.state.read_bytes(), state)
                 self.assertEqual(j.world_path.read_bytes(), before)
 
+    def test_resuming_checks_the_reported_pull_commits_for_unapproved_changes(self):
+        j = self.road(brain='companion', pull='merged')
+        self.yes(j)
+        self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                         .returncode, 0)
+        self.assertEqual(self.setting(j, '--yes').returncode, 0)
+        j.world = self.world(j)
+        pull = j.world['host_pulls'][0]
+        pull['headRefOid'] = 'c' * 40
+        j.world['refs'] = {pull['headRefOid']: 'synthetic-pull-head'}
+        head = dict(j.world['branches'][pull['head']])
+        unexpected = 'README.md'
+        head[unexpected] = 'Unapproved setup change.\n'
+        j.world['branches']['synthetic-pull-head'] = head
+        j.save_world()
+        before = j.world_path.read_bytes(), j.state.read_bytes()
+
+        resumed = self.setting(j, '--yes')
+
+        self.assertEqual(resumed.returncode, 5, resumed.stdout + resumed.stderr)
+        self.assertIn('changes README.md beyond the approved setup', resumed.stdout)
+        self.assertEqual((j.world_path.read_bytes(), j.state.read_bytes()), before)
+
     def test_a_readme_only_repository_gets_its_setup_files_in_the_one_setup_pull_request(self):
         j = self.road(files={'README.md': '# synthetic\n'})
         made = j.helper(['create-repo', '--repo', REPO, '--yes'])

@@ -715,7 +715,7 @@ def reply_text(path):
 def descendants(skip=None, reap=True):
     """Live processes under this one: what the probe's driver started, wherever its session went, since this
     process is their subreaper. It reads only each process's parent from /proc/<pid>/stat, never an environment."""
-    while reap:  # reap what has already exited here
+    while reap:
         try:
             if os.waitpid(-1, os.WNOHANG)[0] == 0:
                 break

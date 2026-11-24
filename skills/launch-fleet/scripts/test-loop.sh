@@ -304,7 +304,7 @@ echo "ok   restore_today_account drops every git config entry, sparse indexes in
 
 for shell in bash dash; do
   command -v "$shell" > /dev/null
-  for ifs in : '' _ 5 G ' ' - 'ro ' ro_; do
+  for ifs in : '' _ 5 G ' ' - readonly-space readonly-underscore; do
     (inherit; export OPENWIZ_AGENT_TOKEN_GIT_AT=x GIT_CONFIG_COUNT=x
       unset GIT_CONFIG_KEY_2 GIT_CONFIG_VALUE_2
       export GIT_CONFIG_KEY_5=synthetic.sparse GIT_CONFIG_VALUE_5=five GIT_CONFIG_KEY_12=synthetic.sparse \
@@ -313,7 +313,8 @@ GIT_CONFIG_KEY_5 synthetic;name_9=two'
       for copy in loop block; do
         case $ifs in
           -) set -- 'unset IFS' '[ -z "${IFS+x}" ]' ;;
-          ro*) set -- 'IFS=${3#ro}; readonly IFS' '[ "$IFS" = "${3#ro}" ]' ;;
+          readonly-space) set -- 'IFS=" "; readonly IFS' '[ "$IFS" = " " ]' ;;
+          readonly-underscore) set -- 'IFS=_; readonly IFS' '[ "$IFS" = _ ]' ;;
           *) set -- 'IFS=$3' '[ "${IFS-unset}" = "$3" ]' ;;
         esac
         "$shell" -c "$1"'; . "$1"; restore_today_account; '"$2"' || exit 1; "$2"' \

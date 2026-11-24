@@ -2,7 +2,6 @@
 """Read back a project's fleet settings (#1183). Standard library only.
 
   settings.py check [--root DIR] [--labels FILE]
-  settings.py app-identity < contents.json
 
 Reads the four files in DIR/docs/agents/ (default: the current folder) and
 names each missing or unsafe setting: a missing file or section, a builder or
@@ -11,10 +10,6 @@ once as one token, a template placeholder, a reviewer from the builder's model f
 one valid Record authors row, or a triage role without exactly one label. FILE is the saved output of
 `gh label list --limit 500 --json name`; with it, each mapped label must exist
 in the tracker exactly once. It writes nothing and runs nothing.
-
-app-identity reads GitHub's Contents API answer for docs/agents/fleet.md on
-stdin and exits 0 only when its App identity is on: one bare `on` row in the
-one canonical `## GitHub identity` table. check refuses what it refuses.
 
 Exits: 0 verified; 2 usage; 5 refused, each problem on its own line.
 """

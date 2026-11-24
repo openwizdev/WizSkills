@@ -883,7 +883,8 @@ def rest(w, repo, path, page, paginate, include, accept, conditional, answer):
             with open(env['FAKE_GH_HTTP_LOG'], 'a') as log:
                 log.write('%s %s %s\n' % (path, 'conditional' if conditional else 'unconditional', http))
         sys.stdout.write('HTTP/2.0 %s Synthetic\r\nETag: %s\r\n' % (http, etag))
-        allowance = rest_rate()
+        allowance = ({'limit': 30, 'remaining': 30, 'reset': 1793538000, 'resource': 'search'}
+                     if path.startswith('search/') else rest_rate())
         sys.stdout.write(''.join('X-RateLimit-%s: %s\r\n' % (k.capitalize(), allowance[k])
                                  for k in ('limit', 'remaining', 'reset', 'resource')))
         if link:

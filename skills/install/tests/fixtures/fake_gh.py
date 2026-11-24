@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 FLEET_GH = Path(__file__).resolve().parents[3] / 'launch-fleet/scripts/fixtures/gh.py'
-FIELDS = {'nameWithOwner', 'isPrivate', 'defaultBranchRef'}
+FIELDS = {'nameWithOwner', 'isPrivate', 'defaultBranchRef', 'id'}
 
 
 def repository(owner, name, branches):
@@ -18,7 +18,7 @@ def repository(owner, name, branches):
             'description': None, 'homepage': None, 'labels': [], 'pulls': [], 'branches': branches}
 
 
-def demo(argv):
+def demo(argv, api=False):
     path = os.environ['FAKE_GH_REPOS']
     state = json.loads(Path(path).read_text())
     with open(os.environ['FAKE_GH_CREATE_LOG'], 'a') as log:
@@ -39,7 +39,7 @@ def demo(argv):
             sys.stderr.write("GraphQL: Could not resolve to a Repository with the name '%s'.\n" % name)
             return 1
         has = found['default_branch'] in found['branches']
-        known = {'nameWithOwner': found['full_name'], 'isPrivate': found['private'],
+        known = {'nameWithOwner': found['full_name'], 'isPrivate': found['private'], 'id': node_id(found),
                  'defaultBranchRef': {'name': found['default_branch'] if has else ''}}
         print(json.dumps({f: known[f] for f in fields}))
         return 0
@@ -48,14 +48,107 @@ def demo(argv):
         sys.stderr.write('synthetic create refused\n')
         return 1
     owner, short = name.split('/')
-    state['repos'][name.lower()] = repository(owner, short, {'main': {'README.md': '# %s\n' % short}} if readme else {})
+    made = repository(owner, short, {'main': {'README.md': '# %s\n' % short}} if readme else {})
+    made['node_id'] = 'R_synthetic%d' % len(state['log'])
+    state['repos'][name.lower()] = made
     state['log'].append(['POST', 'user/repos'])
     state['view_fails'] = state.get('fail_after_create', 0)
     Path(path).write_text(json.dumps(state))
     if state.get('create') == 'lost':
         return 1
-    print('https://github.com/%s' % name)
+    if not api:
+        print('https://github.com/%s' % name)
+        return 0
+    print(json.dumps({'id': 1000 + len(state['log']), 'node_id': state.get('reply_id', made['node_id']),
+                      'full_name': name, 'private': True}))
     return 0
+
+
+def node_id(found):
+    return found.get('node_id') or 'R_synthetic_' + hashlib.sha256(found['full_name'].encode()).hexdigest()[:8]
+
+
+def api_create(argv):
+    state = json.loads(Path(os.environ['FAKE_GH_REPOS']).read_text())
+    short = argv[5][len('name='):]
+    owner = state['user']['login'] if argv[3] == 'user/repos' else argv[3].split('/')[1]
+    if argv[4:] != ['-f', 'name=' + short, '-F', 'private=true', '-F', 'auto_init=true'] or not short:
+        sys.stderr.write('synthetic create refused\n')
+        return 1
+    return demo(['repo', 'create', '%s/%s' % (owner, short), '--private', '--add-readme'], api=True)
+
+
+def replaced(state, name):
+    if state.pop('replace_before_write', False):
+        owner, short = name.split('/')
+        state['repos'][name.lower()] = dict(repository(owner, short, {'main': {'README.md': '# %s\n' % short}}),
+                                            node_id='R_replacement')
+
+
+def graphql(argv):
+    path = Path(os.environ['FAKE_GH_REPOS'])
+    state = json.loads(path.read_text())
+    fields = dict(value.split('=', 1) for value in argv[3::2])
+    query = fields['query']
+
+    def head(repo, branch):
+        files = repo['branches'][branch]
+        entry = files.get(fields['path'])
+        return {'id': 'REF_%s_%s' % (node_id(repo), branch), 'name': branch, 'target': {
+            'oid': hashlib.sha1(json.dumps(files, sort_keys=True).encode()).hexdigest(),
+            'file': None if entry is None else {'object': {'text': entry}}}}
+
+    def by_ref(ref):
+        return next(((repo, branch) for repo in state['repos'].values() for branch in repo['branches']
+                     if 'REF_%s_%s' % (node_id(repo), branch) == ref), (None, None))
+
+    def answer(data, ok=True, errors=None):
+        path.write_text(json.dumps(state))
+        if errors is None and not ok:
+            errors = [{'message': 'synthetic'}]
+        sys.stdout.write(json.dumps({'data': data} if not errors else {'data': data, 'errors': errors}))
+        return 0 if not errors else 1
+
+    if 'createCommitOnBranch' in query:
+        name = (by_ref(fields['ref'])[0] or {}).get('full_name')
+        if name:
+            replaced(state, name)
+        repo, branch = by_ref(fields['ref'])
+        if repo is None or head(repo, branch)['target']['oid'] != fields['oid']:
+            return answer({'createCommitOnBranch': None}, ok=False)
+        repo['branches'][branch][fields['path']] = base64.b64decode(fields['contents']).decode()
+        state['log'].append(['POST', 'graphql createCommitOnBranch %s %s' % (repo['full_name'], fields['path'])])
+        lost = state.get('seed_lost', 0) > 0
+        state['seed_lost'] = state.get('seed_lost', 0) - lost
+        oid = head(repo, branch)['target']['oid']
+        if lost:
+            path.write_text(json.dumps(state))
+            sys.stderr.write('gh: synthetic lost reply (HTTP 502)\n')
+            return 1
+        return answer({'createCommitOnBranch': {'commit': {'oid': oid}}})
+    if 'node(' in query:
+        repo, branch = by_ref(fields['ref'])
+        state['log'].append(['GET', 'graphql node %s' % fields['path']])
+        if repo is None:
+            return answer({'node': None}, errors=[{'type': 'NOT_FOUND', 'path': ['node'],
+                                                   'message': 'Could not resolve to a node.'}])
+        found = head(repo, branch)
+        errors = None if found['target']['file'] is not None else [{
+            'type': 'NOT_FOUND', 'path': ['node', 'target', 'file'],
+            'message': "Could not resolve file for path '%s'." % fields['path']}]
+        return answer({'node': found}, errors=errors)
+    name = '%s/%s' % (fields['owner'], fields['name'])
+    repo = state['repos'].get(name.lower())
+    state['log'].append(['GET', 'graphql repository %s %s' % (name, fields['path'])])
+    if repo is None or repo.get('hidden'):
+        return answer({'repository': None}, errors=[{'type': 'NOT_FOUND', 'path': ['repository'],
+                                                     'message': 'Could not resolve to a Repository.'}])
+    has = repo['default_branch'] in repo['branches']
+    found = head(repo, repo['default_branch']) if has else None
+    errors = None if not found or found['target']['file'] is not None else [{
+        'type': 'NOT_FOUND', 'path': ['repository', 'defaultBranchRef', 'target', 'file'],
+        'message': "Could not resolve file for path '%s'." % fields['path']}]
+    return answer({'repository': {'id': node_id(repo), 'defaultBranchRef': found}}, errors=errors)
 
 
 def default_ref(target, name, branch):
@@ -91,6 +184,8 @@ def seeded_file(argv):
     if not (read or put) or path is None:
         return None
     state = json.loads(path.read_text())
+    if put:
+        replaced(state, put[1])
     repo = state['repos'].get((read or put)[1].lower())
     if repo is None:
         return None
@@ -240,8 +335,13 @@ def main(argv):
             return 1
         print(state['user']['login'])
         return 0
+    if argv[:3] == ['api', '-X', 'POST'] and len(argv) == 10 and re.fullmatch(r'user/repos|orgs/[^/]+/repos', argv[3]):
+        return api_create(argv)
     if argv[:2] == ['repo', 'create'] or (argv[:2] == ['repo', 'view'] and len(argv) > 2 and not argv[2].startswith('-')):
         return demo(argv)
+    if argv[:2] == ['api', 'graphql'] and len(argv) % 2 == 0 and set(argv[2::2]) == {'-f'} and os.environ.get(
+            'FAKE_GH_REPOS') and argv[3].startswith('query=') and any(a.startswith('path=') for a in argv[3::2]):
+        return graphql(argv)
     answered = seeded_file(argv)
     if answered is not None:
         return answered

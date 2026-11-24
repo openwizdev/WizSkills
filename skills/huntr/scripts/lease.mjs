@@ -66,24 +66,31 @@ function holderOf(list) {
 const current = (holder, now) => holder && Date.parse(holder.expires) > now ? holder : null;
 const held = h => `held by ${h.run} until ${h.expires}`;
 
-function postOnly(issue, body) {
+function unconfirmed(kind, why) {
+  const next = kind === 'index' ? 'read back the switch issue before retrying' : 'run status before retrying';
+  fail(`unconfirmed write: ${kind} ${why}; ${next}`);
+}
+function postOnly(issue, body, kind = 'lease') {
   if (body.length > LIMIT) fail(`comment over ${LIMIT} characters`);
   const dir = mkdtempSync(join(tmpdir(), 'huntr-lease-'));
   try {
     writeFileSync(join(dir, 'body.md'), body);
-    const url = gh(['issue', 'comment', String(issue), '--body-file', join(dir, 'body.md')], 'lease write failed or is unconfirmed; run status before retrying');
+    const next = kind === 'index' ? 'read back the switch issue before retrying' : 'run status before retrying';
+    const url = gh(['issue', 'comment', String(issue), '--body-file', join(dir, 'body.md')],
+      `unconfirmed write: ${kind} write failed or response was lost; ${next}`);
     return Number(url.trim().match(/#issuecomment-(\d+)$/)?.[1]);
   } finally { rmSync(dir, {recursive: true, force: true}); }
 }
-function post(repo, issue, body, before) {
-  const id = postOnly(issue, body);
-  const after = comments(repo, issue);
+function post(repo, issue, body, before, kind = 'lease') {
+  const id = postOnly(issue, body, kind);
+  let after;
+  try { after = comments(repo, issue); } catch { unconfirmed(kind, 'read-back failed after write'); }
   const same = c => c.body.trimEnd() === body.trimEnd();
   const mine = after.find(c => c.id === id && same(c)) ?? (() => {
     const found = after.filter(c => c.id > before && same(c));
     return found.length === 1 ? found[0] : null;
   })();
-  if (!mine) fail('lease write unconfirmed on read-back; run status before retrying');
+  if (!mine) unconfirmed(kind, 'write unconfirmed on read-back');
   return {after, mine};
 }
 function switchState(list) {
@@ -198,7 +205,9 @@ function main() {
   if (command === 'status') return {holder: now};
   if (command === 'record') {
     if (now && now.run === run) fail(`${run} holds the live lease: post its final index with release`);
-    const {after, mine} = post(repo, issue, text, before.at(-1)?.id ?? 0);
+    const existing = before.find(c => c.body.trimEnd() === text.trimEnd());
+    if (existing) return {holder: now, comment: existing.id, already: true};
+    const {after, mine} = post(repo, issue, text, before.at(-1)?.id ?? 0, 'index');
     return {holder: current(holderOf(after), Date.parse(mine.created_at)), comment: mine.id};
   }
   if (command === 'due') {

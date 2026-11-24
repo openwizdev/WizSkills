@@ -16,8 +16,9 @@ labels, then its huntr settings, `docs/agents/huntr.md`: tiers and their
 proofs, never-list, pace, open cap, model rows, switch issue, lease,
 checklist, slice manifests, issue form and gate. Run every script from the
 consuming repository root as `node <installed-huntr>/scripts/<script>`.
-Each refusal exits 2 (an unreadable `due` or a pending `finish` exits 3)
-with its reason on stderr; a refused write posted nothing.
+Each refusal or unconfirmed write exits 2 (an unreadable `due` or a pending `finish` exits 3)
+with its reason on stderr. A pre-write refusal posted nothing; an `unconfirmed write:` error
+means the write may have reached GitHub, so reconcile before retrying.
 
 ## Guards
 
@@ -49,8 +50,12 @@ with its reason on stderr; a refused write posted nothing.
    controller keeps it. Never use a thread id.
 2. `lease.mjs switch` prints on or off and every kind approval line. Off or
    unreadable is off: record it (step 5) and stop.
-3. `lease.mjs claim <run>`. Exit 2: post nothing, hunt nothing, archive.
-   Never contact the holder; its lease expires 45 minutes after renewal.
+3. `lease.mjs claim <run>`. On a pre-write refusal (exit 2), post nothing,
+   hunt nothing, archive; never contact the holder (its lease expires 45
+   minutes after renewal). On an `unconfirmed write:` exit 2, run
+   `lease.mjs status` first: if `<run>` holds the lease, continue; if
+   another run holds it, archive; if no one holds it, retry `claim` once;
+   if `status` is unreadable, stop and archive.
 4. Resume the latest verified record from the switch issue: its root index,
    then every part through `manifest.mjs unpack` with the index's digest.
 5. `lease.mjs pace <timezone> <streak> <last-empty-at>` from that record;
@@ -141,7 +146,10 @@ parts). Exit 3 means nothing was confirmed posted: finalization is pending.
 Keep the record and index in resumable state, stay open and rerun `finish` on
 the next wake; it reuses an index already posted. If no wake comes, the lease
 expires 45 minutes after its last renewal and the next scheduled controller
-resumes from the latest verified record. A failed publish says which part to
+resumes from the latest verified record. On an `unconfirmed write:` exit 2
+from `renew`, `release` or `record`, read back the switch issue before retrying
+or archiving: reuse an index already posted (or rerun `finish`, which reconciles
+an existing index) instead of posting a duplicate. A failed publish says which part to
 reconcile; rerun it. Write the last empty hunt's time as an instant
 with Z.
 Include **found, approved, proposed, skipped**, each with counts and tracker links. An empty hunt with every

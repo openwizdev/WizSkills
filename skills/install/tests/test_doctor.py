@@ -475,7 +475,8 @@ class Doctor(unittest.TestCase):
 # flags, against what OpenWiz 0.1.0's own --help prints (fixtures/openwiz-0.1.0-commands.json, read from
 # the published package). A step naming a command the package lacks stops a stranger's install there.
 SKILL = Path(__file__).resolve().parents[1] / 'SKILL.md'
-LINE = 'maint/0.2'  # the WizSkills line this copy of the skill is on
+PINNED_COMMIT = '350887bbc00ca8e11ee6f084e4936b4fabf852fa'  # pinned WizSkills commit for 0.1.0 installs
+PINNED_TREE = '66899e4ffd5c7ca78d53115cbdbcdc69671a655f'  # expected HEAD:skills/install tree OID
 PACKAGE = Path(__file__).resolve().parent / 'fixtures/openwiz-0.1.0-commands.json'
 # The bare names the skill's prose uses, by the tool each one means.
 BARE = {'install': 'tools/install/install', 'setup.py': 'runtime/setup/setup.py',
@@ -554,7 +555,7 @@ class SkillCommandsMatchPackage(unittest.TestCase):
             self.assertLess(order.index(step), skills, step)
         text = SKILL.read_text()
         self.assertIn('is older than this one; if you are told to install again, follow this skill', text)
-        self.assertIn('https://github.com/openwizdev/WizSkills/blob/%s/skills/install/SKILL.md' % LINE, text)
+        self.assertIn('https://github.com/openwizdev/WizSkills/blob/%s/skills/install/SKILL.md' % PINNED_COMMIT, text)
 
     # catches: a CloudRoom code 0.1.0 prints with no row, so the agent improvises its next step.
     def test_every_cloudroom_code_has_a_row(self):
@@ -583,7 +584,15 @@ class SkillCommandsMatchPackage(unittest.TestCase):
         mine = re.search(r'^version: (\S+)$', text, re.M)[1]
         self.assertNotEqual(mine, json.loads(PACKAGE.read_text())['installed_install_skill_version'])
         step4 = text[text.index('## 4. '):text.index('## 5. ')]
-        self.assertIn('git clone --depth 1 --branch %s https://github.com/openwizdev/WizSkills' % LINE, step4)
+        self.assertNotIn('maint/0.2', text)
+        for pinned in ('expected_commit=%s' % PINNED_COMMIT,
+                       'expected_tree=%s' % PINNED_TREE,
+                       'git -C "$wizskills" fetch -q --depth 1 https://github.com/openwizdev/WizSkills "$expected_commit"',
+                       'git -C "$wizskills" rev-parse HEAD',
+                       'git -C "$wizskills" rev-parse HEAD:skills/install',
+                       'SOURCE MISMATCH'):
+            self.assertIn(pinned, step4)
+        self.assertLess(step4.index('SOURCE MISMATCH'), step4.index('cp -R "$src"/. "$d/install/"'))
         for home in ('.claude/skills', '.codex/skills', 'CODEX_HOME'):
             self.assertIn(home, step4)
         for words in ("'install ope[n] '", "'from the setup pag[e]'", "'Restart the OpenWiz serve[r]'",

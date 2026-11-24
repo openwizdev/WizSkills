@@ -1379,8 +1379,15 @@ def required_ci:
 # One probe per batch (#694): when a batch'"'"'s first start is refused, each
 # other claim of that batch is recorded "start not tried: <why>" instead of
 # being tried, and waits the same 10 minutes, so the batch retries together.
-def refused_lately($last; $k): $last != null and ($last.r | test("^" + $k + " (refused|not tried)\\b"))
-  and ($W.now - ($last.edited | fromdateiso8601)) < 600;
+def quota_reset($last):
+  if $last != null and ($last.r | test("^start not tried: quota\\b")) then
+    ([$last.r | capture("resets (?<t>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)\\b") | .t | try fromdateiso8601 catch empty] | first)
+  else null end;
+def refused_lately($last; $k):
+  if $last == null or ($last.r | test("^" + $k + " (refused|not tried)\\b") | not) then false
+  else (if $k == "start" then quota_reset($last) else null end) as $reset
+    | if $reset != null then $W.now < $reset
+      else ($W.now - ($last.edited | fromdateiso8601)) < 600 end end;
 # A "look" line for #$n, unless one was raised already (its record "look: <why>").
 def look($n; $rs; $why): ($why | gsub("\\bthr_[A-Za-z0-9][A-Za-z0-9_-]*"; "[private thread]")) as $why | if any($rs[]; (.r | gsub("\\bthr_[A-Za-z0-9][A-Za-z0-9_-]*"; "[private thread]")) == "look: \($why)") then empty else "look #\($n): \($why)" end;
 
@@ -2248,7 +2255,10 @@ def claim: $W.claim.n as $n | $W.claim.id as $id | $W.claim.repo as $crepo
             elif $st.state != "queued" then "withdraw #\($n): an older claim or builder: \"\($st.rec.r)\""
             elif (open_prs | length) > 0 then "withdraw #\($n): pull request #\(open_prs[0].number) is open"
             elif (looks | length) > 0 then "withdraw #\($n): \(looks[0])"
-            elif refused_lately($st.last; "start") then "withdraw #\($n): its start was refused less than 10 minutes ago"
+            elif refused_lately($st.last; "start") then
+              (if quota_reset($st.last) != null then
+                 "withdraw #\($n): its start waits for quota reset at \(quota_reset($st.last) | todateiso8601)"
+               else "withdraw #\($n): its start was refused less than 10 minutes ago" end)
             elif ready_unchecked($s) and approver_why != null then "withdraw #\($n): \(approver_why)"
             elif ready($s) then
               # F6 (#1353): the gate every builder start passes. $W.active is

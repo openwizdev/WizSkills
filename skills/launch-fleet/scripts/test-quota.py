@@ -6,7 +6,7 @@ import unittest
 
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / 'quota.py'
-NOW = 1795464000
+NOW = 1795550400
 
 
 def run_cli(text, extra=()):

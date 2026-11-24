@@ -1216,6 +1216,19 @@ class MachineCheckApprovalTest(unittest.TestCase):
         w["fail"] = "revision"
         self.run_check(w, status=1, reason="revision.sh")
 
+    def test_latest_approval_precedence_between_human_and_machine(self):
+        w = self.make_world()
+        old_bad_human = {"id": 150, "user": dict(FACTORY), "body": "**Plan graph approved by Robin, 2026-11-01, revision 1:** bad\n"}
+        w["comments"][0].insert(0, old_bad_human)
+        self.run_check(w)
+        newer_bad_machine = {
+            "id": 250,
+            "user": dict(FACTORY),
+            "body": w["comments"][0][1]["body"].replace("links, relies, sizes, width and owned paths passed.", "links passed."),
+        }
+        w["comments"][0].append(newer_bad_machine)
+        self.run_check(w, status=1, reason="machine plan approval")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

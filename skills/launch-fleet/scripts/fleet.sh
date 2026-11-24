@@ -1878,7 +1878,7 @@ def ticket_lines_now($s): . as $t
          | if $a == null or ($q != null and $q > $a) then "needs-info #\(.number): a question for the orchestrator" else empty end
        else empty end),
       (start as $st
-       | if $st.state == "queued" and ($st.last.r // "" | startswith("start refused: one-way door under a host driver")) then
+       | if $st.state == "queued" and ($st.last.r // "" | test("^start refused: (refused: )?one-way door under a host driver")) then
            records as $rs | look(.number; $rs; "start refused: one-way door under a host driver; the orchestrator decides how #\(.number) is built")
          elif $st.state == "queued" then
            (if may_start($s) then "start #\(.number): \(.title) (\(where($s))"

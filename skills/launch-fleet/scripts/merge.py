@@ -160,6 +160,11 @@ MERGE_HELP = (
     "`--base-rule-checked`, after you applied fleet.md's base rule and `fleet.sh every` still prints this merge line, "
     'and reads it back: `merged <commit>; cost ...` (exit 0). Anything else is `blocked: <why>; recorded <id>` '
     '(exit 1). TICKET is checked before any write. BODY names the APPROVE and the plan approval that allowed it.')
+PR_HELP = (
+    'PR is `N`, in OWNER/NAME, or `PR-OWNER/PR-NAME#N` as a due line names a pull request in another repository '
+    "(#2792): then every read and write of the pull request is in PR-OWNER/PR-NAME, OWNER/NAME is the ticket's "
+    "repository, and a bare TICKET `T` means OWNER/NAME#T. A pull request that reads as another repository's (a "
+    'rename or transfer) is a `stop:` before any write.')
 SETTLE_HELP = (
     '`settle` is the cost a merge still owes: it runs `cost` at the merged head when a record author\'s queue '
     'receipt names that head, or a record author enqueued or merged it, so a merge whose cost write failed still gets '
@@ -178,9 +183,13 @@ def snapshot(repo, number):
                            '-f', f'query={QUERY}')
     try:
         r = value['data']['repository']
-        return r['defaultBranchRef']['name'], r['pullRequest']
+        main, p = r['defaultBranchRef']['name'], r['pullRequest']
     except (TypeError, KeyError):
         raise Stop('stop: the pull request could not be read')
+    found = ((p.get('repository') or {}).get('nameWithOwner') if isinstance(p, dict) else repo)
+    if not isinstance(found, str) or found.casefold() != repo.casefold():
+        raise Stop(f'stop: the pull request read as {found}#{number}, not {repo}#{number}; nothing was written')
+    return main, p
 
 
 def where(main, p, head):
@@ -1148,13 +1157,19 @@ def main(argv):
     usage = __doc__.split('\n\n')[1]
     if argv in (['--help'], ['-h']):
         parts = __doc__.split('\n\n')
-        print('\n\n'.join(parts[:3] + [MERGE_HELP] + parts[3:] + [SETTLE_HELP]))
+        print('\n\n'.join(parts[:3] + [PR_HELP, MERGE_HELP] + parts[3:] + [SETTLE_HELP]))
         return 0
     try:
         verb, repo, number, *rest = argv
         head = None if verb == 'settle' else rest.pop(0)  # settle reads its commit from the queue receipt
-        number = int(number) if re.fullmatch(r'[1-9][0-9]{0,11}', number) else None
-        ok = post.REPO.fullmatch(repo) and number and (head is None or SHA.fullmatch(head))
+        ref = TICKET.fullmatch(number)
+        ok = post.REPO.fullmatch(repo) and ref and (head is None or SHA.fullmatch(head))
+        if ok and ref[1]:
+            at = {'cost': 0, 'settle': 0, 'look': 1, 'ask': 2, 'merge': 3}.get(verb)
+            if at is not None and at < len(rest) and re.fullmatch(r'[1-9][0-9]{0,11}', rest[at]):
+                rest[at] = f'{repo}#{rest[at]}'
+            repo = ref[1]
+        number = int(ref[2]) if ok else None
     except (ValueError, IndexError):
         ok = False
     if not ok:

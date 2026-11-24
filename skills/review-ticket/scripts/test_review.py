@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HELPER = Path(__file__).with_name("review.py")
@@ -203,7 +204,8 @@ class Review(unittest.TestCase):
         gh.write_text(FAKE_GH)
         gh.chmod(0o755)
         self.fixture = root / "world.json"
-        self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FIXTURE": str(self.fixture)}
+        self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FIXTURE": str(self.fixture),
+                    "XDG_STATE_HOME": str(root / "state")}
         self.root = root
         self.repo = root / "repo"
         subprocess.run(["git", "clone", "-q", "--no-local", str(ORIGIN), str(self.repo)], check=True)
@@ -998,10 +1000,49 @@ class Review(unittest.TestCase):
                 self.assertTrue(out.stdout.startswith("stop: "), out.stdout)
                 self.assertEqual(self.state()["writes"], 0)
 
+    def pacer(self, value=None):
+        path = self.root / "state" / "launch-fleet" / "writes.json"
+        if value is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(value))
+        self.assertTrue(path.exists(), "no write went through the pacer")
+        return json.loads(path.read_text())
+
+    def test_a_recorded_cooldown_refuses_a_follow_up_without_filing(self):
+        # catches (FR15, #2879): the follow-up issue POST skipping post.py's shared cooldown.
+        until = int(time.time()) + 3600
+        self.pacer({"accounts": {}, "inflight": [], "until": until})
+        out = self.follow_up()
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until))
+        self.assertEqual((out.returncode, out.stdout, out.stderr), (1, f"refused: write paced, retry after {stamp}\n", ""))
+        self.assertEqual(self.state()["writes"], 0)
+        self.assertEqual([c for c in self.state()["calls"] if "POST" in c], [])
+        self.assertEqual(self.state()["issues"], {})
+
+    def test_an_admitted_follow_up_takes_one_pacer_slot_and_keeps_its_read_back(self):
+        # catches (FR15, #2879): a filed issue that bypasses the pacer's slot, sends another
+        # title, body or label, or skips the read-back that confirms it.
+        out = self.follow_up()
+        self.assertEqual((out.returncode, out.stdout), (0, "filed #70\n"), out.stderr)
+        state = self.pacer()
+        self.assertEqual((len(state["accounts"]["shared"]), state["inflight"], state["until"]), (1, [], 0))
+        issue = self.state()["issues"][PRODUCT][0]
+        self.assertEqual((issue["title"], [x["name"] for x in issue["labels"]]),
+                         ("Help says zip archive file (polish for #41, R2)", ["triage: new"]))
+        self.assertEqual(issue["body"], "Follow-up of #41 (spec #38)\n\n`src/cli.rs:30` (Sweep) Help wording. Fix: say export. "
+                                        f"Found in pull request {SKILLS}#7 at {OLD}; it is polish and did not block the merge.\n")
+        self.world({"hidden_issue_reads": 10})
+        out = self.follow_up()
+        self.assertEqual((out.returncode, out.stdout),
+                         (1, "unknown: not found on read-back; list the issues before filing again\n"))
+        self.assertEqual(self.state()["writes"], 1)
+        self.assertEqual(len(self.pacer()["accounts"]["shared"]), 2)
+
 
 COMMENTS = Path(__file__).with_name("comments.py")
 CHECKER = Path(__file__).with_name("fixtures") / "comment-check" / "check.py"
 SHA = "1234567890" * 4
+
 
 
 class CommentPass(unittest.TestCase):

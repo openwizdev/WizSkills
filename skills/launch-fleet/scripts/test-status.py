@@ -2097,5 +2097,78 @@ class WakeRepair(Tracker):
         self.assertEqual(self.writes(), [])
 
 
+class Paced(Tracker):
+    """FR15 (#2879): status.py's writes go through post.py's write pacer."""
+
+    def cooldown(self, seconds=3600):
+        until = int(time.time()) + seconds
+        path = self.dir / 'state' / 'launch-fleet' / 'writes.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'accounts': {}, 'inflight': [], 'until': until}))
+        return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(until))
+
+    def pacer(self):
+        path = self.dir / 'state' / 'launch-fleet' / 'writes.json'
+        self.assertTrue(path.exists(), 'no write went through the pacer')
+        return json.loads(path.read_text())
+
+    def test_a_recorded_cooldown_refuses_a_new_status_note_without_writing(self):
+        # catches: a status note POST that skips the shared cooldown post.py recorded.
+        self.save()
+        until = self.cooldown()
+        r = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
+        self.assertEqual((r.returncode, r.stdout, r.stderr),
+                         (2, '', f'status.py: refused: write paced, retry after {until}\n'))
+        self.assertEqual(self.writes(), [])
+        self.assertEqual([c['id'] for c in self.ticket()['comments']], [101, 102, 103])
+
+    def test_a_recorded_cooldown_refuses_a_status_note_edit_without_writing(self):
+        # catches: a status note PATCH that skips the shared cooldown.
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+        self.save()
+        until = self.cooldown()
+        r = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual((r.returncode, r.stdout, r.stderr),
+                         (2, '', f'status.py: refused: write paced, retry after {until}\n'))
+        self.assertEqual(self.writes(), [])
+        self.assertEqual(self.ticket()['comments'][3]['body'], note())
+
+    def test_a_recorded_cooldown_refuses_a_label_add_without_writing(self):
+        # catches: the needs-info label POST that skips the shared cooldown; the repair's own
+        # pending note makes the label add its first write.
+        asking = note(state='asking', step='asked which file to change')
+        repairing = note(agent='fleet', step='adding needs-info for an asking note')
+        self.ticket(self.world)['comments'] += [comment(104, BOT, asking), comment(105, BOT, repairing)]
+        self.save()
+        until = self.cooldown()
+        r = self.run_status('repair', '--repo', REPO, '--harness', 'Claude Code', '--model', 'Opus 5.5 Medium',
+                            '--skills', SKILLS)
+        self.assertEqual((r.returncode, r.stdout),
+                         (2, f'status check failed: could not repair #12: refused: write paced, retry after {until}\n'))
+        self.assertEqual(self.writes(), [])
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+
+    def test_an_admitted_note_takes_one_pacer_slot_and_keeps_its_read_back(self):
+        # catches: a write that bypasses the pacer's slot (no count, a stuck in-flight entry),
+        # or loses status.py's own read-back once the pacer admits it.
+        self.save()
+        r = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '#12: builder working, status note 9001 posted\n', ''))
+        state = self.pacer()
+        self.assertEqual((len(state['accounts']['shared']), state['inflight'], state['until']), (1, [], 0))
+        asking = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '9001')
+        self.assertEqual((asking.returncode, asking.stdout), (0, '#12: builder asking, status note 9001 edited\n'))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        state = self.pacer()
+        self.assertEqual((len(state['accounts']['shared']), state['inflight']), (2, []))
+        self.world = self.load()
+        self.world['unlisted'] = [self.world['next_id'] + 1]
+        self.save()
+        lost = self.write('working', 'started the build', '2030-01-02T03:00:00Z', agent='reviewer')
+        self.assertEqual((lost.returncode, lost.stderr),
+                         (2, f'status.py: note {self.world["next_id"] + 1} was posted but not read back\n'))
+        self.assertEqual(len(self.pacer()['accounts']['shared']), 3)
+
+
 if __name__ == '__main__':
     unittest.main()

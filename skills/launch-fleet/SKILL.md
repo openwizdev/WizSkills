@@ -73,6 +73,6 @@ Starting a spec's fleet thread and its per-wake Orchestrator-row check: read [re
 
 ## GitHub identity
 
-App identity (off for everyone) and `Record authors`: read [references/identity.md](references/identity.md) before acting on a comment or when GitHub identity changes.
+App identity (off unless `fleet.md`'s one `App identity` row says exactly `on`, OpenWiz #2835) and `Record authors`: read [references/identity.md](references/identity.md) before acting on a comment or when GitHub identity changes.
 
 Credit: adapted from Matt Pocock's skills under the MIT License; the notice and sources are in [NOTICE.md](NOTICE.md).

@@ -127,17 +127,6 @@ def validate(schema, node, value, path="$"):
     if "enum" in node:
         if not any(type(value) is type(item) and value == item for item in node["enum"]):
             raise ValueError(f"{path}: value {value!r} not in enum {node['enum']!r}")
-    if "allOf" in node:
-        for idx, sub in enumerate(node["allOf"]):
-            validate(schema, sub, value, path)
-    if "if" in node and "then" in node:
-        matched = True
-        try:
-            validate(schema, node["if"], value, path)
-        except ValueError:
-            matched = False
-        if matched:
-            validate(schema, node["then"], value, path)
     if "not" in node:
         matched = True
         try:
@@ -146,17 +135,6 @@ def validate(schema, node, value, path="$"):
             matched = False
         if matched:
             raise ValueError(f"{path}: matched forbidden 'not' schema")
-    if "oneOf" in node:
-        matches = 0
-        errors = []
-        for sub in node["oneOf"]:
-            try:
-                validate(schema, sub, value, path)
-                matches += 1
-            except ValueError as exc:
-                errors.append(str(exc))
-        if matches != 1:
-            raise ValueError(f"{path}: oneOf matched {matches} branches ({'; '.join(errors)})")
     if type(value) is dict:
         required = node.get("required", [])
         for key in required:
@@ -190,6 +168,28 @@ def validate(schema, node, value, path="$"):
             raise ValueError(f"{path}: minimum {node['minimum']} not met (got {value})")
         if "maximum" in node and value > node["maximum"]:
             raise ValueError(f"{path}: maximum {node['maximum']} exceeded (got {value})")
+    if "allOf" in node:
+        for idx, sub in enumerate(node["allOf"]):
+            validate(schema, sub, value, path)
+    if "if" in node and "then" in node:
+        matched = True
+        try:
+            validate(schema, node["if"], value, path)
+        except ValueError:
+            matched = False
+        if matched:
+            validate(schema, node["then"], value, path)
+    if "oneOf" in node:
+        matches = 0
+        errors = []
+        for sub in node["oneOf"]:
+            try:
+                validate(schema, sub, value, path)
+                matches += 1
+            except ValueError as exc:
+                errors.append(str(exc))
+        if matches != 1:
+            raise ValueError(f"{path}: oneOf matched {matches} branches ({'; '.join(errors)})")
 
 
 class DreamCycleContractTests(unittest.TestCase):

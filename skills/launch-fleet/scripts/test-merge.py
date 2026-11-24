@@ -14,6 +14,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 import unittest
 from unittest import mock
 
@@ -220,6 +221,15 @@ def closes(*refs):
 
 HEAD = 'a' * 40
 OTHER = 'b' * 40
+AGENT_CLIS = ('room-cli claude codex boat pi opencode cursor-agent agent droid gemini kimi qwen goose copilot cline '
+              'pane hermes devin kilo crush vibe auggie kiro-cli junie amp agy oz sculpt acpx').split()
+
+
+def stubbed(w):
+    for name in AGENT_CLIS:
+        (w.dir / 'bin' / name).write_text('#!/bin/sh\necho "stub: no %s in tests" >&2\nexit 1\n' % name)
+        (w.dir / 'bin' / name).chmod(0o755)
+    return w
 LINE = ('Ticket #12 cost (PR #7): builder 3.5 credits, 120,000 tokens; reviewer unknown; '
         'CI 4.2 runner minutes; total 3.5 credits, 120,000 tokens, 4.2 runner minutes')
 
@@ -1685,6 +1695,28 @@ class Landed(unittest.TestCase):
         self.assertFalse(any('delete' in x for x in w.writes()))
 
 
+    def test_a_recorded_cooldown_refuses_the_landed_comment_and_its_delete_without_writing(self):
+        until = int(time.time()) + 3600
+        paced = 'refused: write paced, retry after ' + T.post_stamp(until)
+        at = DEST + '#9101'
+        w = stubbed(self.world(self.issues))
+        project(w, None)
+        T.seed(w, T.full([], until=until))
+        self.assertEqual(self.merge(w), (1, '%s; landed unknown: the landed comment on %s was not posted (%s); '
+                                            'a later run reads %s again' % (paced, at, paced, at)))
+        self.assertEqual((w.writes(), w.bodies(9101)), ([], []))
+        w = stubbed(self.world(self.issues, comments={'9101': [comment(4000, LANDED), comment(4001, LANDED)]}))
+        project(w, None)
+        T.seed(w, T.full([], until=until))
+        self.assertEqual(self.merge(w), (1, '%s; landed unknown: our duplicate 4001 on %s could not be deleted (%s), '
+                                            'so reconcile %s' % (paced, at, paced, at)))
+        self.assertEqual((w.writes(), w.bodies(9101)), ([], [LANDED, LANDED]))
+        T.seed(w, T.full([]))
+        code, out = self.merge(w)
+        self.assertEqual((code, out.split('; ')[-1]), (0, 'landed already posted 4000'), out)
+        self.assertEqual(w.writes()[0], {'delete': 4001})
+        self.assertEqual(w.bodies(9101), [LANDED])
+
 class Help(unittest.TestCase):
     def test_the_merge_help_describes_the_current_merge_order(self):
         r = subprocess.run([sys.executable, '-I', str(HERE / 'merge.py'), '--help'], capture_output=True, text=True,
@@ -1699,6 +1731,21 @@ class Help(unittest.TestCase):
         self.assertNotIn('recorded before the enqueue', text)
         self.assertNotIn('recorded before the enqueue', M.__doc__)
 
+
+    def test_r3_r4_the_help_names_the_claim_and_its_attempted_enqueue_and_the_claim_only_read_back(self):
+        r = subprocess.run([sys.executable, '-I', str(HERE / 'merge.py'), '--help'], capture_output=True, text=True,
+                           timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = ' '.join(r.stdout.split())
+        self.assertIn("A re-queue's read-back `pending: ...` comes after its claim was recorded and then its enqueue "
+                      'attempted, and says so;', text)
+        self.assertIn("A re-queue claim's own read-back `pending: ...` (an earlier run's claim counts, or its claim "
+                      'is not confirmed as the only one) comes after it posts that claim and tries to delete it '
+                      'when an earlier claim reads first; it enqueues nothing. Every other `pending: ...` comes '
+                      "before any write, and apart from that claim's own cleanup only a wake that ends neither "
+                      '`pending: ...` nor `unknown: ...` deletes later duplicates', text)
+        self.assertNotIn('its claim and then its enqueue were written', text)
+        self.assertNotIn('comes after two writes', text)
 
 class WizSkillsRoute(unittest.TestCase):
     def route(self):
@@ -2064,9 +2111,9 @@ class Drops(unittest.TestCase):
         self.add(w, comment(4002, drop))
         code, out = self.merge(w)
         self.assertEqual((code, out), (0, 'pending: its removal at 2026-11-22T10:30:00Z does not read as its '
-                                          're-queue yet; its claim and then its enqueue were written, so its one '
-                                          're-queue is spent, and nothing more is written until it reads, so read '
-                                          'it again next wake'))
+                                          're-queue yet; its claim was recorded and then its enqueue attempted, so '
+                                          'its one re-queue is spent, and nothing more is written until it reads, '
+                                          'so read it again next wake'))
         self.assertEqual(w.writes(), [{'post': 7, 'body': CLAIMED}, {'enqueue': 'PR_synthetic7', 'head': HEAD}])
         self.assertEqual([c['id'] for c in w.load()['comments']['7']], [4000, 4001, 4002, 5001])
         value = w.load()
@@ -2090,11 +2137,33 @@ class Drops(unittest.TestCase):
         receipt, drop = w.bodies(7)
         self.add(w, comment(4002, drop))
         code, out = self.merge(w)
-        self.assertEqual((code, out), (0, 'pending: the queue facts could not be read; its claim and then its enqueue '
-                                          'were written, so its one re-queue is spent, and nothing more is written '
-                                          'until it reads, so read it again next wake'))
+        self.assertEqual((code, out), (0, 'pending: the queue facts could not be read; its claim was recorded and then '
+                                          'its enqueue attempted, so its one re-queue is spent, and nothing more is '
+                                          'written until it reads, so read it again next wake'))
         self.assertEqual(w.writes(), [{'post': 7, 'body': CLAIMED}, {'enqueue': 'PR_synthetic7', 'head': HEAD}])
         self.assertEqual([c['id'] for c in w.load()['comments']['7']], [4000, 4001, 4002, 5001])
+
+    def test_a_recorded_cooldown_refuses_a_duplicate_receipt_delete_without_writing(self):
+        entry = {'headCommit': {'oid': HEAD}}
+        q = World(self, pr=pr(isMergeQueueEnabled=True, isInMergeQueue=True, mergeQueueEntry=entry),
+                  comments={'7': [comment(4000, self.receipt), comment(4002, self.receipt)]})
+        project(stubbed(q), PRINTS)
+        T.seed(q, T.full([], until=int(time.time()) + 3600))
+        self.assertEqual(self.merge(q), (0, 'queued; the queue merges it or lets it go'))
+        self.assertEqual((q.writes(), q.bodies(7)), ([], [self.receipt, self.receipt]))
+        T.seed(q, T.full([]))
+        self.assertEqual(self.merge(q), (0, 'queued; the queue merges it or lets it go'))
+        self.assertEqual((q.writes(), q.bodies(7)), ([{'delete': 4002}], [self.receipt]))
+
+    def test_r3_a_blind_retry_enqueue_says_the_claim_was_recorded_and_the_enqueue_attempted(self):
+        w = stubbed(self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True,
+                               faults={'enqueue': 'blind'}))
+        self.add(w, comment(4002, w.bodies(7)[1]))
+        code, out = self.merge(w)
+        self.assertEqual((code, out), (0, 'pending: the queue facts could not be read; its claim was recorded and then '
+                                          'its enqueue attempted, so its one re-queue is spent, and nothing more is '
+                                          'written until it reads, so read it again next wake'))
+        self.assertEqual(w.writes(), [{'post': 7, 'body': CLAIMED}, {'enqueue': 'PR_synthetic7', 'head': HEAD}])
 
     def pending_templates_merge_returns(self):
         found = set()
@@ -2210,8 +2279,8 @@ class Drops(unittest.TestCase):
                 claims = [x for x in writes if x.get('body') == CLAIMED]
                 self.assertEqual(writes[:len(claims)], claims, 'its claim is the first write')
                 if template == written:
-                    told = ('its claim and then its enqueue were written, so its one re-queue is spent' if claims
-                            else 'its enqueue was sent')
+                    told = ('its claim was recorded and then its enqueue attempted, so its one re-queue is spent'
+                            if claims else 'its enqueue was sent')
                     self.assertIn('; %s, and nothing more is written' % told, out)
                 rest = writes[len(claims):]
                 if mutation == 'claim':

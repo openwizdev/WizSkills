@@ -532,7 +532,7 @@ class Session:
         reviewers = [(c, f) for c in self.thread(n) for f in [status.parse(c['body'])]
                      if f and f['agent'] == 'reviewer']
         for claim, after in zip(started, started[1:]):
-            if not any(claim['id'] < c['id'] < after['id']
+            if not any(claim['id'] < c['id'] < after['id'] and f.get('pr', '').lower() == url.lower()
                        for c, f in reviewers):
                 return 'block', ("a reviewer of #%s started in comment %d and posted no status note before the next "
                                  "reviewer started, so a late note from it can't be told from the current reviewer's"

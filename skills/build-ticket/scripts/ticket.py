@@ -254,6 +254,48 @@ def cmd_scope(repo, n, base, supporting, by_hand):
     return 0
 
 
+SIZE_PLANS = {'S': 200, 'M': 400}
+SIZE_FILES = 10
+TEST_PATH = re.compile(r'(?:^|/)(?:tests?|__tests__|fixtures)/|(?:^|/)test_[^/]*$|_test\.[^/]+$'
+                       r'|\.(?:test|spec)\.[^/]+$')
+
+
+def cmd_size(repo, n):
+    body = ticket(repo, n)['body']
+    sizes = re.findall(r'\bSize: ([A-Za-z]+)\b', body)
+    if len(sizes) != 1 or sizes[0] not in SIZE_PLANS:
+        raise Unreadable(f'ticket #{n} needs exactly one `Size: S` or `Size: M`')
+    plan = sizes[0]
+    if plan == 'M' and not any(re.fullmatch(r'Why M: *\S.*', line.rstrip()) for line in section(body, 'parent')):
+        print('plan: M without a `Why M:` line, judged as S')
+        plan = 'S'
+    run(['git', 'rev-parse', '--verify', '--quiet', 'origin/main^{commit}'], 'base origin/main')
+    fields = run(['git', 'diff', '--numstat', '-z', '--find-renames', 'origin/main...HEAD'],
+                 'the diff').split('\0')
+    count = {False: [0, 0], True: [0, 0]}
+    i = 0
+    while i < len(fields) and fields[i]:
+        added, deleted, path = fields[i].split('\t', 2)
+        source = path
+        if not path:
+            source, path, i = fields[i + 1], fields[i + 2], i + 2
+        new_test, old_test = bool(TEST_PATH.search(path)), bool(TEST_PATH.search(source))
+        count[new_test][0] += int(added) if added.isdigit() else 0
+        count[old_test][0] += int(deleted) if deleted.isdigit() else 0
+        for test in {new_test, old_test}:
+            count[test][1] += 1
+        i += 1
+    (lines, files), (test_lines, test_files) = count[False], count[True]
+    target = f'{plan}: about {SIZE_PLANS[plan]} lines and {SIZE_FILES} files'
+    print(f'changed: {lines} lines in {files} files; tests apart: {test_lines} lines in {test_files} files')
+    print(f'plan: {target}')
+    if lines > SIZE_PLANS[plan] or files > SIZE_FILES:
+        print(f'size: over ({lines} lines, {files} files against {target})')
+        return 1
+    print('size: ok')
+    return 0
+
+
 def ids(text):
     found = re.findall(r'R\d+', text)
     return set(found) if len(found) == len(set(found)) else None
@@ -557,6 +599,8 @@ USAGE = (
     '  ticket.py read REPO N                     owned paths, links, blockers, fleet start, readiness\n'
     '  ticket.py scope REPO N [--base REF] [--supporting PATH]... [--owned PATH]...\n'
     '                                            every changed path: owned, supporting or OUT\n'
+    '  ticket.py size REPO N                     changed lines and files against origin/main, tests\n'
+    "                                            apart, against the ticket's planned size: ok or over\n"
     '  ticket.py records REPO N [--ticket] [--comment ID] [--fleet-ref REF]\n'
     '                                            trusted verdict, bound decision and fleet record on pull\n'
     '                                            request N, or with --ticket the fleet record on ticket N;\n'
@@ -599,6 +643,8 @@ def main(argv):
         if name == ['scope'] and len(args) == 3 and not ticket_mode and len(flags['--base']) <= 1:
             base = flags['--base'][0] if flags['--base'] else 'origin/main'
             return cmd_scope(args[1], int(args[2]), base, flags['--supporting'], flags['--owned'])
+        if name == ['size'] and len(args) == 3 and not ticket_mode:
+            return cmd_size(args[1], int(args[2]))
         if name == ['records'] and len(args) == 3 and len(flags['--comment']) <= 1:
             named = flags['--comment'][0] if flags['--comment'] else None
             if named is not None and not named.isdigit():

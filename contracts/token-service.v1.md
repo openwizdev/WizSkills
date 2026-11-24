@@ -219,7 +219,8 @@ falls back as below.
 - **`gh`** gets it as `GH_TOKEN` in its own environment.
 - **git** gets it through a credential helper that reads the **private token
   file**: mode 0600, in a 0700 directory outside every Git working tree,
-  replaced at each refresh and deleted at a fallback. Never in a remote URL, a `-c` option or a header
+  replaced at each refresh and, at a fallback, deleted only after its token is revoked, or kept for a
+  later revoke if that revoke fails. Never in a remote URL, a `-c` option or a header
   argument.
 
 ## The fallback
@@ -238,9 +239,10 @@ scope or expiry differ from the request and this contract), `pairing-off`
 (the pairing route is configured but its read-back has not passed) or the
 refusal's code.
 
-**A fallback leaves no service credential behind**, a failed refresh
-included. Before the agent goes on as the owner, the helper deletes the
-private token file and hands no `GH_TOKEN` to any child. With no file, the git
+**A fallback leaves no service credential in use**, a failed refresh
+included. Before the agent goes on as the owner, the helper revokes the
+token the private token file holds and only then deletes the file, keeps the
+file for a later revoke if that revoke fails, and hands no `GH_TOKEN` to any child. With no file, the git
 credential helper answers nothing, so git uses the owner's credentials too:
 `gh` and git never split between the App and the owner. With **no service configured**, it
 does nothing and prints nothing: starts are exactly as today.

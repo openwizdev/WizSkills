@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -72,14 +72,17 @@ test('R1 the operative handoff requires bounded indexed parts and read-back befo
 });
 
 function finishRecord(finish) {
+  assert.doesNotMatch(finish, /#\d+\b/, 'step 5 uses the configured switch issue, never a hardcoded issue number');
   const sentences = finish.split(/(?<=\.)\s+/);
   const summary = sentences.find(s => s.startsWith('Include **found, approved, proposed, skipped**'));
   assert.match(summary ?? '', /each with counts and tracker links/, 'record includes counts and links');
-  const readBack = sentences.findIndex(s => /read back\*\* every #394 part and index/i.test(s));
+  const readBack = sentences.findIndex(s => /read back\*\* every configured switch issue part and index/i.test(s));
   assert.match(sentences[readBack] ?? '', /use `unpack` with the planned digest to verify all numbered parts/,
     'read-back verifies all numbered parts with the planned digest');
-  const delivery = sentences.findIndex(s => s.startsWith('Once that record is verified, delivery is complete: **#394 is the only report channel** to the orchestrator'));
-  assert.ok(delivery >= 0, '#394 alone completes delivery after verification');
+  assert.match(sentences[readBack] ?? '', /run identity,\s*coverage,\s*manifests,\s*skips,\s*ownership,\s*pacing and next action/i,
+    'read-back checks the recovered record contents');
+  const delivery = sentences.findIndex(s => s.startsWith('Once that record is verified, delivery is complete: **the configured switch issue is the only report channel** to the orchestrator'));
+  assert.ok(delivery >= 0, 'configured switch issue alone completes delivery after verification');
   assert.match(finish, /Do not send direct thread messages or attempt a second delivery/,
     'direct messages and second delivery are forbidden');
   assert.doesNotMatch(finish, /send the orchestrator a short note|room-cli thread tell/i,
@@ -90,21 +93,23 @@ function finishRecord(finish) {
 }
 const step5 = () => readFileSync(join(here, '../SKILL.md'), 'utf8')
   .split('## 5. Record the result and finish this hunt\n')[1].split('\n**Night setting:**')[0];
-test('#959 step 5 sends its report only through the verified #394 record before archival', () => {
+test('#959 step 5 sends its report only through the verified configured switch issue record before archival', () => {
   finishRecord(step5());
 });
 const summaryLine = 'Include **found, approved, proposed, skipped**, each with counts and tracker links.';
-const readBackLine = 'Then **read back** every #394 part and index, use `unpack` with the planned digest to verify all numbered parts.';
-const deliveryLine = 'Once that record is verified, delivery is complete: **#394 is the only report channel** to the orchestrator, including partial results, final results, tier-0 audits, proposals and blockers.';
+const readBackLine = 'Then **read back** every configured switch issue part and index, use `unpack` with the planned digest to verify all numbered parts, and check that the recovered record holds run identity, coverage, manifests, skips, ownership, pacing and next action.';
+const deliveryLine = 'Once that record is verified, delivery is complete: **the configured switch issue is the only report channel** to the orchestrator, including partial results, final results, tier-0 audits, proposals and blockers.';
 const noDirectLine = 'Do not send direct thread messages or attempt a second delivery.';
 const archiveLine = 'Run `room-cli thread archive --self` as the final action.';
 const validPolicy = `${summaryLine} ${readBackLine} ${deliveryLine} ${noDirectLine} ${archiveLine}`;
 for (const [name, text, reason] of [
-  ['direct note instead of #394-only delivery', `${summaryLine} ${readBackLine} Send the orchestrator a short note naming the verified #394 record. ${noDirectLine} ${archiveLine}`,
-    '#394 alone completes delivery after verification'],
+  ['hardcoded issue number instead of configured switch issue', validPolicy.replace('every configured switch issue part', 'every #394 part'),
+    'step 5 uses the configured switch issue, never a hardcoded issue number'],
+  ['direct note instead of configured-channel-only delivery', `${summaryLine} ${readBackLine} Send the orchestrator a short note naming the verified switch issue record. ${noDirectLine} ${archiveLine}`,
+    'configured switch issue alone completes delivery after verification'],
   ['direct thread command added', `${validPolicy} Run \`room-cli thread tell synthetic-orchestrator report\`.`,
     'no direct orchestrator delivery'],
-  ['direct note added', `${validPolicy} Send the orchestrator a short note naming the verified #394 record.`,
+  ['direct note added', `${validPolicy} Send the orchestrator a short note naming the verified switch issue record.`,
     'no direct orchestrator delivery'],
   ['archival before verification', `${summaryLine} ${archiveLine} ${readBackLine} ${deliveryLine} ${noDirectLine}`,
     'verification precedes delivery completion and archival'],
@@ -112,6 +117,8 @@ for (const [name, text, reason] of [
     'verification precedes delivery completion and archival'],
   ['read-back without digest verification', validPolicy.replace(', use `unpack` with the planned digest to verify all numbered parts', ''),
     'read-back verifies all numbered parts with the planned digest'],
+  ['read-back without semantic content check', validPolicy.replace(', and check that the recovered record holds run identity, coverage, manifests, skips, ownership, pacing and next action', ''),
+    'read-back checks the recovered record contents'],
   ['record without counts', validPolicy.replace('counts and ', ''),
     'record includes counts and links'],
 ]) {
@@ -119,6 +126,59 @@ for (const [name, text, reason] of [
     assert.throws(() => finishRecord(text), error => error.code === 'ERR_ASSERTION' && error.message.startsWith(reason));
   });
 }
-test('#959 the record check accepts #394-only delivery after verification and before archival', () => {
+test('#959 the record check accepts configured-channel-only delivery after verification and before archival', () => {
   finishRecord(validPolicy);
+});
+test('#177 publish and finish use the configured switch issue rather than #394', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'huntr-channel-'));
+  try {
+    mkdirSync(join(dir, 'bin'));
+    mkdirSync(join(dir, 'docs/agents'), {recursive: true});
+    const customSettings = readFileSync(settings, 'utf8').replace('"switch_issue": 394', '"switch_issue": 777');
+    writeFileSync(join(dir, 'docs/agents/huntr.md'), customSettings);
+    const stateFile = join(dir, 'state.json');
+    const logFile = join(dir, 'log');
+    writeFileSync(stateFile, JSON.stringify({comments: [{id: 200, created_at: '2030-01-02T00:00:00Z', body: 'huntr: on'}]}));
+    writeFileSync(join(dir, 'bin/gh'), `#!/usr/bin/env node
+import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+const stateFile = process.env.HUNTR_FAKE_STATE;
+const w = JSON.parse(readFileSync(stateFile, 'utf8'));
+const a = process.argv.slice(2);
+appendFileSync(process.env.HUNTR_FAKE_LOG, JSON.stringify(a) + '\\n');
+const repo = process.env.GH_REPO;
+if (a.join(' ') === \`api --paginate --slurp repos/\${repo}/issues/777/comments?per_page=100\`) {
+  process.stdout.write(JSON.stringify([w.comments]));
+} else if (a[0] === 'issue' && a[1] === 'comment' && a[2] === '777' && a[3] === '--body-file' && a.length === 5) {
+  const id = Math.max(199, ...w.comments.map(c => c.id)) + 1;
+  w.comments.push({id, created_at: '2030-01-02T00:05:00Z', body: readFileSync(a[4], 'utf8')});
+  writeFileSync(stateFile, JSON.stringify(w));
+  process.stdout.write(\`https://github.com/\${repo}/issues/777#issuecomment-\${id}\\n\`);
+} else {
+  process.stderr.write('unexpected gh call: ' + JSON.stringify(a) + '\\n');
+  process.exit(1);
+}
+`, {mode: 0o755});
+    const env = {...process.env, GH_REPO: 'synthetic/project', PATH: join(dir, 'bin') + ':' + process.env.PATH,
+      HUNTR_FAKE_STATE: stateFile, HUNTR_FAKE_LOG: logFile, HUNTR_LEASE_RETRY_MS: '0'};
+    const record = {
+      run: 'synthetic-chan-777', coverage: ['core/correctness'], manifests: {'core/correctness': 'sha-syn'},
+      skips: [], owners: {controller: 'synthetic-chan-777'}, pacing: {streak: 0, last_empty_at: 'none'},
+      next: 'continue on next scheduled wake',
+    };
+    const recordFile = join(dir, 'record.json');
+    const indexFile = join(dir, 'index.md');
+    writeFileSync(recordFile, JSON.stringify(record));
+    const pub = spawnSync(process.execPath, [join(here, 'lease.mjs'), 'publish', record.run, recordFile, indexFile], {cwd: dir, env, encoding: 'utf8'});
+    assert.equal(pub.status, 0, pub.stderr);
+    const pubOut = JSON.parse(pub.stdout);
+    const indexText = readFileSync(indexFile, 'utf8');
+    assert.match(indexText, /https:\/\/github\.com\/synthetic\/project\/issues\/777#issuecomment-201/);
+    assert.doesNotMatch(indexText, /issues\/394/);
+    const fin = spawnSync(process.execPath, [join(here, 'lease.mjs'), 'finish', record.run, indexFile], {cwd: dir, env, encoding: 'utf8'});
+    assert.equal(fin.status, 0, fin.stderr);
+    const state = JSON.parse(readFileSync(stateFile, 'utf8'));
+    assert.deepEqual(ok('unpack', [state.comments[1].body], pubOut.sha256), record);
+    const calls = readFileSync(logFile, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.ok(calls.every(c => !c.join(' ').includes('394')), 'no call targets hardcoded #394');
+  } finally { rmSync(dir, {recursive: true, force: true}); }
 });

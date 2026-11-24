@@ -106,3 +106,21 @@ For this synthetic handoff, each numbered part is bounded to 65,536 bytes.
 Use `pack run-record.json` to prepare parts and `unpack readback.json` to
 verify every part against the saved digest. An index has links to every part;
 verify the index and read-back before archival. These names are fixture data.
+
+## Attack targets
+
+| Target | Kind | Copy | Live rate | Files to |
+| --- | --- | --- | --- | --- |
+| `example.test` | `surface` | `staging.example.test` | `10` | `example-org/example-app` |
+| `*.example.test` | `surface` | `none` | `5` | `example-org/example-app` |
+| `example-org/example-app` | `surface` | `throwaway-clone` | `0` | `example-org/example-app` |
+| `name:synthetic-hub` | `infra` | `none` | `0` | `example-org/example-infra` |
+
+## Attack models
+
+| Role | Harness | Model | Effort |
+| --- | --- | --- | --- |
+| controller | Claude Code | Opus 5.5 | High |
+| attacker | Codex | Sol 6.1 | High |
+
+Attack record: `example-org/example-app#9001`

@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=946
+CASES=954
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1840,6 +1840,34 @@ merge #31 for #12 at $S31: APPROVE and CI green
 EOF
 expect "cross-repository PR: a merge in its own repository is its clash (#2376 R3)" 0 check.json "store31 | $TOOLS | main24(\"11:15\"; [changed(\"src/store/store.rs\"; \"modified\")]) | pull(24; .repo = \"synthetic-owner/synthetic-tools\")" -- check <<EOF
 re-test #31 for #12 at $S31: main changed src/store/store.rs in #24 after 2026-11-01T10:30:00Z, which its CI may not have tested; run its CI again on the latest main
+EOF
+expect "cross-repository PR claim: oldest review claim prints go owner/name#N (#2948)" 0 check.json "pr31 | pr_say(31; 3105; \"11:59\"; \"launch-fleet: review starting \(sha(31))\") | $TOOLS" -- claim synthetic-owner/synthetic-tools#31 3105 <<EOF
+go synthetic-owner/synthetic-tools#31
+EOF
+expect "cross-repository PR claim: re-check claim prints go owner/name#N (#2948)" 0 check.json "reviewing31 | pr_say(31; 3102; \"11:20\"; \"VERDICT: CHANGES at \(sha(31))\") | pr_say(31; 3103; \"11:21\"; \"launch-fleet: findings sent \(sha(31))\") | pull(31; .head = sha(\"31f\") | .message = \"#12: fix findings, green\") | pr_say(31; 3105; \"11:59\"; \"launch-fleet: review starting \(sha(\"31f\"))\") | $TOOLS" -- claim synthetic-owner/synthetic-tools#31 3105 <<EOF
+go synthetic-owner/synthetic-tools#31
+EOF
+expect "cross-repository PR claim: local same-numbered ticket does not shadow owner/name#N (#2948)" 0 check.json "pr31 | pr_say(31; 3105; \"11:59\"; \"launch-fleet: review starting \(sha(31))\") | $TOOLS | ticket(31; \"W9: local ticket 31\"; [\"ready-for-agent\"]; [])" -- claim synthetic-owner/synthetic-tools#31 3105 <<EOF
+go synthetic-owner/synthetic-tools#31
+EOF
+expect "cross-repository PR claim: second younger claim at same commit withdraws (#2948)" 0 check.json "pr31 | pr_say(31; 3104; \"11:58\"; \"launch-fleet: review starting \(sha(31))\") | pr_say(31; 3105; \"11:59\"; \"launch-fleet: review starting \(sha(31))\") | $TOOLS" -- claim synthetic-owner/synthetic-tools#31 3105 <<EOF
+withdraw synthetic-owner/synthetic-tools#31: an older review claim: "review starting $S31"
+EOF
+expect "cross-repository PR claim: claim at moved head withdraws (#2948)" 0 check.json "pr31 | pr_say(31; 3105; \"11:59\"; \"launch-fleet: review starting \(sha(31))\") | pull(31; .head = sha(99)) | $TOOLS" -- claim synthetic-owner/synthetic-tools#31 3105 <<EOF
+withdraw synthetic-owner/synthetic-tools#31: the head is now $S99
+EOF
+expect "cross-repository PR claim: repository not closing any ticket is refused without reading it (#2948)" 2 check.json "pr31 | $TOOLS" -- claim other-owner/other-repo#31 3105 <<EOF
+other-owner/other-repo#31 is not an open pull request of an approved ticket
+EOF
+log_has "cross-repository PR claim: repository not closing any ticket is refused without reading it (#2948)" 0 'other-owner/other-repo'
+expect "cross-repository PR claim: malformed owner/name#N is refused before any read (#2948)" 2 check.json "pr31 | $TOOLS" -- claim bad#31 3105 <<EOF
+usage: fleet.sh
+EOF
+if selected "cross-repository PR claim: malformed owner/name#N is refused before any read (#2948)" && [ "$mine" = yes ] && [ -s "$lastlog" ]; then
+  bad "cross-repository PR claim: malformed owner/name#N is refused before any read (#2948)" "made GitHub reads before refusing malformed ref"
+fi
+expect "cross-repository PR claim: bare number refuses a foreign PR without matching it (#2948)" 2 check.json "pr31 | pr_say(31; 3105; \"11:59\"; \"launch-fleet: review starting \(sha(31))\") | $TOOLS" -- claim 31 3105 <<EOF
+#31 is neither a ticket nor an open pull request of an approved ticket
 EOF
 
 ### #1340: a machine plan approval starts the fleet; the video's comments steer it

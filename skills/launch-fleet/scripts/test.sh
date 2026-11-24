@@ -3851,6 +3851,23 @@ EOF
 expect 'one probe per batch: the frontier leaves out a start not tried' 0 check.json "$BATCH"' | say(70; 7003; "11:55"; "launch-fleet: start not tried: #13 was refused: model catalog unavailable")' -- frontier <<EOF
 #13 W3: widget page
 EOF
+expect 'quota reset: start not tried with future reset waits past 10 minutes' 0 check.json "$BATCH"' | say(13; 1301; "11:45"; "launch-fleet: start not tried: quota, resets 2026-11-01T13:30:00Z") | say(70; 7003; "11:45"; "launch-fleet: start not tried: quota, resets 2026-11-01T13:30:00Z")' -- check < /dev/null
+expect 'quota reset: start not tried retries at the reset even within 10 minutes' 0 check.json "$BATCH"' | say(13; 1301; "11:55"; "launch-fleet: start not tried: quota, resets 2026-11-01T12:00:00Z") | say(70; 7003; "11:55"; "launch-fleet: start not tried: quota, resets 2026-11-01T12:00:00Z")' -- check <<EOF
+start #13: W3: widget page (spec #10; retry after "start not tried: quota, resets 2026-11-01T12:00:00Z")
+start #70: Fix the broken link in the widget docs (approved on its own; retry after "start not tried: quota, resets 2026-11-01T12:00:00Z")
+EOF
+expect 'quota reset: claim withdraws naming the reset time while waiting' 0 check.json "$BATCH"' | say(70; 7003; "11:45"; "launch-fleet: start not tried: quota, resets 2026-11-01T13:30:00Z") | say(70; 7004; "11:58"; "launch-fleet: starting")' -- claim 70 7004 <<EOF
+withdraw #70: its start waits for quota reset at 2026-11-01T13:30:00Z
+EOF
+expect 'quota reset: frontier leaves out a ticket waiting for quota reset' 0 check.json "$BATCH"' | say(70; 7003; "11:45"; "launch-fleet: start not tried: quota, resets 2026-11-01T13:30:00Z")' -- frontier <<EOF
+#13 W3: widget page
+EOF
+expect 'quota reset: start not tried without reset time falls back to 10 minutes' 0 check.json "$BATCH"' | say(13; 1301; "11:55"; "launch-fleet: start not tried: quota") | say(70; 7003; "11:45"; "launch-fleet: start not tried: quota")' -- check <<EOF
+start #70: Fix the broken link in the widget docs (approved on its own; retry after "start not tried: quota")
+EOF
+expect 'quota reset: malformed reset timestamp falls back to 10 minutes' 0 check.json "$BATCH"' | say(13; 1301; "11:55"; "launch-fleet: start not tried: quota, resets 2026-99-99T99:99:99Z") | say(70; 7003; "11:45"; "launch-fleet: start not tried: quota, resets 2026-99-99T99:99:99Z")' -- check <<EOF
+start #70: Fix the broken link in the widget docs (approved on its own; retry after "start not tried: quota, resets 2026-99-99T99:99:99Z")
+EOF
 
 ### Token cuts (#694) in the skill: no superseded base-moved text, ticks end,
 ### re-checks carry their delta, one probe per batch, keyed scope blockers
@@ -3883,6 +3900,8 @@ if take; then
   # The re-check message's ids, both heads and delta: test-brief.py's re-check case (WS8).
   skill_has 'skill: one probe per batch, by assignment' 'start that group'"'"'s first claim alone, the probe'
   skill_has 'skill: the start not tried record' '`start not tried: <why>`'
+  skill_has 'skill: first-turn quota error records start not tried: quota' 'start not tried: quota'
+  skill_has 'skill: quota check helper' 'scripts/quota.py'
   skill_has 'skill: a scope blocker is raised once per key' '`look #N: blocked on scope <key>: ...`'
 fi
 

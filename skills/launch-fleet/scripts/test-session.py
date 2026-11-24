@@ -75,6 +75,7 @@ with world() as w:
         pr = w['prs'][args[2]]
         out({'state': pr['state'], 'statusCheckRollup': pr['checks']})
     if args[:2] == ['api', '-i']:
+        w['probes'] = w.get('probes', 0) + 1
         pool = 'graphql' if args[2] == 'graphql' else 'core'
         wait = w['backoff'].get(pool)
         if w['budget'] is None:
@@ -161,6 +162,10 @@ with world() as w:
                 print('review %s: first review' % at)
     if w['tickets'] and all(t['state'] == 'CLOSED' for t in w['tickets'].values()):
         print('spec done #%s: every planned ticket is done; no follow-ups' % w['spec'])
+    if args[0] == 'spec' and w.get('green_after_read'):
+        w['green_after_read'] = False
+        for pr in w['prs'].values():
+            pr['checks'][0].update(status='COMPLETED', conclusion='SUCCESS')
 '''
 
 FAKE_MERGE = WORLD + r'''
@@ -173,11 +178,18 @@ with world() as w:
         print('admit: the merge queue re-tests it' if w['queue'] else 'base rule: no merge queue; mergeable: MERGEABLE')
     elif args[0] == 'read' and args[3] != pr['head']:
         print('stop: #%s is at %s, not %s' % (args[2], pr['head'], args[3]))
+    elif args[0] == 'read' and w.get('read_pending'):
+        w['read_pending'] -= 1
+        print('pending: its queue facts disagree; nothing was written, so read it again next wake')
     elif args[0] == 'read':
         print('merged ' + 'f' * 40 if pr['state'] == 'MERGED' else 'queued' if pr.get('queued') else
               'open, the merge queue is on; it left the queue at 2026-01-01T00:00:00Z: synthetic')
     elif w.get('held'):
         print('held: ask-due: post the evidence ask on #7 with merge.py ask'); sys.exit(1)
+    elif w.get('outcomes'):
+        said = w['outcomes'].pop(0)
+        pr['queued'] = pr.get('queued') or said.startswith('re-queued')
+        print(said)
     elif w.get('pending'):
         w['pending'] -= 1
         print('pending: its queue facts disagree; nothing was written, so read it again next wake')
@@ -255,7 +267,8 @@ class Session(unittest.TestCase):
         self.env = dict(git_env, HOME=str(self.home), PATH=os.pathsep.join([str(self.home / 'bin'), *path]),
                         FAKE_REAL_FLEET=str(HERE / 'fleet.sh'),
                         OPENWIZ_ADAPTERS=str(self.home / 'adapters'), FAKE_DRIVER_LOG=str(self.log),
-                        FAKE_WORLD=str(self.world), LC_ALL='C')
+                        FAKE_WORLD=str(self.world), LC_ALL='C',
+                        LAUNCH_FLEET_OVERLOAD_STATE=str(self.home / 'shared-pause.json'))
         self.git_origin = runpy.run_path(str(HERE / 'fixtures/git_origin.py'))['env']
         self.env.update(self.git_origin(self.home, {REPO: FLEET_MD}))
         key = hashlib.sha256(('%s#%s' % (REPO.lower(), SPEC)).encode()).hexdigest()[:20]
@@ -308,7 +321,7 @@ class Session(unittest.TestCase):
         self.change(lambda w: w['prs'].update({str(p): {'ticket': n, 'head': HEAD, 'state': 'OPEN', 'checks': [
             {'__typename': 'CheckRun', 'name': 'check', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'}]}}))
 
-    def approved(self, verdict_first=False, assigned=HEAD, reviewer='Codex', reviewed=12):
+    def approved(self, verdict_first=False, assigned=HEAD, reviewer='Codex', reviewed=12, state='done'):
         self.tickets(5)
         self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
         self.note(5, 'builder', pr=12)
@@ -317,7 +330,7 @@ class Session(unittest.TestCase):
                    'VERDICT: APPROVE at ' + HEAD]
         for body in reversed(records) if verdict_first else records:
             self.comment(12, body)
-        self.note(5, 'reviewer', pr=reviewed, harness=reviewer)
+        return self.note(5, 'reviewer', pr=reviewed, harness=reviewer, state=state)
 
     def guard(self):
         now = int(time.time())
@@ -905,6 +918,168 @@ class Session(unittest.TestCase):
         out = self.ended(self.session(), 3)
         self.assertIn('needs you: #12 did not merge: held: ask-due: post the evidence ask', out)
         self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+
+    def blocks(self):
+        return [r for r in self.records(12) if r.startswith('launch-fleet: merge blocked ')]
+
+    def test_a_reviewer_replaced_before_its_first_note_shows_merges_nothing(self):
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12)
+        self.green(12, 5)
+        retired = self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.comment(12, 'launch-fleet: review given up %s: quiet for an hour' % HEAD)
+        self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        out = self.ended(self.session(**self.guard()), 3)
+        why = ("a reviewer of #12 started in comment %d and posted no status note before the next reviewer "
+               "started, so a late note from it can't be told from the current reviewer's" % retired)
+        self.assertIn('needs you: #12 was not merged: %s; recorded merge blocked %s\n' % (why, HEAD), out)
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(self.blocks(), ['launch-fleet: merge blocked %s: %s' % (HEAD, why)])
+
+    def test_an_approval_whose_reviewer_is_still_finishing_waits_for_its_done_note(self):
+        note = self.approved(state='working')
+        process = self.session('--idle', '10', **self.guard())
+        time.sleep(1.5)
+        self.assertIsNone(process.poll(), process.poll() is not None and process.stdout.read())
+        self.assertEqual(self.merges(), [])
+        self.note(5, 'reviewer', pr=12, harness='Codex', edit=note)
+        out = self.ended(process, 0)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+        self.assertIn('#12 waits for its reviewer to finish', out)
+        self.assertIn('#12 merged', out)
+        self.assertEqual(self.blocks(), [])
+
+    def test_an_asking_reviewer_stops_the_session_without_a_block_record(self):
+        self.approved(state='asking')
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn('needs you: #12 was not merged: its selected codex reviewer is asking, so it has not '
+                      'finished\n', out)
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(self.blocks(), [])
+
+    def test_a_pull_request_that_turns_green_right_after_the_fleet_read_merges_on_the_first_ci_poll(self):
+        self.approved()
+        self.tickets(6)
+        self.comment(6, 'launch-fleet: started')
+        self.change(lambda w: (w['prs']['12']['checks'][0].update(status='IN_PROGRESS', conclusion=None),
+                               w.update(green_after_read=True)))
+        process = self.session('--idle', '3', '--poll', '0.1', '--ci-poll', '0.2')
+        self.until(lambda: 'merge' in [m[0] for m in self.merges()], 'the merge', process)
+        out = self.ended(process, 3)
+        self.assertIn('#12 merged\n', out)
+        self.assertIn('needs you: nothing moved on spec #7 for 3 seconds\n', out)
+
+    def test_a_queue_entry_that_reads_pending_stays_tracked_until_it_lands(self):
+        self.approved()
+        self.change(lambda w: w.update(queue=True, read_pending=2))
+        process = self.session('--idle', '10', **self.guard())
+        self.until(lambda: json.loads(self.world.read_text())['prs']['12'].get('queued'), 'the queue', process)
+
+        def land(w):
+            w['prs']['12']['state'] = 'MERGED'
+            w['tickets']['5']['state'] = 'CLOSED'
+        self.change(land)
+        out = self.ended(process, 0)
+        self.assertEqual(out.count('#12 merged'), 1)
+        self.assertEqual([m[0] for m in self.merges()].count('merge'), 1)
+
+    def test_a_confirmed_requeue_is_tracked_until_it_lands(self):
+        self.approved()
+        self.change(lambda w: w.update(queue=True, outcomes=['re-queued; recorded 31']))
+        process = self.session('--idle', '10', **self.guard())
+        self.until(lambda: json.loads(self.world.read_text())['prs']['12'].get('queued'), 'the re-queue', process)
+        time.sleep(0.5)
+        self.assertIsNone(process.poll())
+
+        def land(w):
+            w['prs']['12']['state'] = 'MERGED'
+            w['tickets']['5']['state'] = 'CLOSED'
+        self.change(land)
+        out = self.ended(process, 0)
+        self.assertIn('#12 re-queued', out)
+        self.assertEqual(out.count('#12 merged'), 1)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+
+    def test_a_waiting_or_dropped_merge_is_sent_again_on_the_next_poll(self):
+        self.approved()
+        self.change(lambda w: w.update(outcomes=['waiting: its required checks run again after the removal',
+                                                 'dropped; recorded 32']))
+        out = self.ended(self.session('--idle', '10', **self.guard()), 0)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'] * 3)
+        self.assertEqual(out.count('#12 merged'), 1)
+
+    def test_a_head_that_leaves_the_queue_is_reconciled_on_the_ci_poll(self):
+        self.approved()
+        self.tickets(6)
+        self.comment(6, 'launch-fleet: started')
+        self.change(lambda w: w.update(queue=True))
+        process = self.session('--idle', '6', '--poll', '0.1', '--ci-poll', '0.2', **self.guard())
+        self.until(lambda: json.loads(self.world.read_text())['prs']['12'].get('queued'), 'the queue', process)
+        time.sleep(0.5)
+        self.change(lambda w: w['prs']['12'].update(queued=False))
+        self.until(lambda: [m[0] for m in self.merges()].count('merge') == 2, 'the merge sent again', process)
+        process.send_signal(signal.SIGINT)
+        self.ended(process, 130)
+
+    def supplier(self, fails=False):
+        path = self.home / 'supply.py'
+        path.write_text(
+            'import json, sys, time\n'
+            'args = sys.argv[1:]\n'
+            'if %r:\n'
+            '    sys.exit(1)\n'
+            'now = int(time.time())\n'
+            "pool = {'remaining': 1000, 'limit': 1000, 'reset_at': now + 3600, 'retry_after': 0}\n"
+            "seen = {'repository': args[args.index('--repository') + 1], 'observed_at': now, 'complete': True,\n"
+            "        'queue': {'complete': True, 'jobs': []}, 'budgets': {'rest': pool, 'graphql': pool}}\n"
+            "with open(args[args.index('--output') + 1], 'w') as out:\n"
+            '    json.dump(seen, out)\n' % fails)
+        return str(path)
+
+    def probes(self):
+        return json.loads(self.world.read_text()).get('probes', 0)
+
+    def test_with_a_supplier_the_supplier_alone_observes_and_its_failure_denies_the_batch(self):
+        self.approved()
+        self.change(lambda w: w.update(budget=None))
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier(fails=True)), 3)
+        self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(self.probes(), 0)
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 3)
+        self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
+        self.assertEqual(self.merges(), [])
+
+    def test_with_a_healthy_supplier_the_session_makes_no_probe_of_its_own(self):
+        self.approved()
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 0)
+        self.assertIn('#12 merged', out)
+        self.assertEqual(self.probes(), 0)
+
+    def test_without_a_configured_overload_state_nothing_is_merged(self):
+        self.approved()
+        del self.env['LAUNCH_FLEET_OVERLOAD_STATE']
+        out = self.ended(self.session(), 3)
+        self.assertIn('needs you: no merge batch: LAUNCH_FLEET_OVERLOAD_STATE is not set, so this session would '
+                      "not share the repository's one overload pause; set it to the state path the fleet uses\n",
+                      out)
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(self.probes(), 0)
+        self.assertEqual(sorted(p.name for p in self.lock_dir.parent.glob('overload-*')), [])
+
+    def test_a_definitive_refusal_records_merge_blocked_once(self):
+        self.approved(reviewer='Claude Code')
+        for _ in range(2):
+            out = self.ended(self.session(**self.guard()), 3)
+            self.assertIn('needs you: #12 was not merged: no done note from its selected codex reviewer', out)
+            self.assertIn('; recorded merge blocked %s\n' % HEAD, out)
+        self.assertEqual(len(self.blocks()), 1)
+        self.assertTrue(self.blocks()[0].startswith('launch-fleet: merge blocked %s: no done note from its '
+                                                    'selected codex reviewer for #12' % HEAD))
+        self.assertEqual(self.merges(), [])
 
     def test_a_lock_folder_removed_under_a_contender_is_not_a_second_lock(self):
         holder, ready, release = self.home / 'holder.py', self.home / 'ready', self.home / 'release'

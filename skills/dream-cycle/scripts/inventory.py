@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""Read-only dream-cycle inventory for one repository (dream-cycle.v1, DC2).
-
-python3 -I inventory.py <repo> [--days 14] [--pr-idle-days 7] [--limit 20]
-
-<repo> is a local clone path or owner/repo (cloned once into a temporary
-folder). Reads are `git` and paginated REST `gh api` only. Prints one compact
-JSON object; exits 0 when every section is confirmed, 2 when any read failed
-or was partial (that section is `unconfirmed`, never zero), 1 on bad
-arguments or an unreadable target. Python standard library only.
-"""
 import argparse
 import json
 import os
@@ -22,7 +12,6 @@ SCHEMA = "openwiz.dream-cycle.inventory.v1"
 SLUG = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 REMOTE = re.compile(r"github\.com[:/]+([A-Za-z0-9._-]+/[A-Za-z0-9._-]+?)(?:\.git)?/?$")
 TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|spec)/|(^|/)test_[^/]*$|_test\.[^/]+$|\.(test|spec)\.[^/]+$")
-# (marker, pattern, test files only); decorators and calls anchored to code, not strings.
 MARKERS = [
     ("xfail", re.compile(r"^\s*@(pytest\.mark\.xfail|unittest\.expectedFailure)\b|\bpytest\.xfail\("), True),
     ("skip", re.compile(r"^\s*@(pytest\.mark\.skip(if)?|unittest\.skip(If|Unless)?)\b|\b(pytest\.skip|self\.skipTest)\(|"
@@ -41,7 +30,6 @@ class ReadError(Exception):
 
 
 def line(text, cap=200):
-    """One printable line, short enough for the contract's non_empty_line."""
     text = re.sub(r"[\x00-\x1f\x7f]+", " ", str(text)).strip()
     return (text[:cap - 1] + "…" if len(text) > cap else text) or "unknown"
 
@@ -63,7 +51,6 @@ def git(repo, *args, ok=(0,)):
 
 
 def gh_list(slug, path):
-    """All pages of a REST list; concatenated page arrays are joined."""
     if not slug:
         raise ReadError("no GitHub repository: origin is not a github.com remote")
     raw = run(["gh", "api", "--paginate", f"repos/{slug}/{path}"])
@@ -121,10 +108,17 @@ def default_branch(repo):
     raise ReadError("default branch unknown: no origin/HEAD and HEAD is detached")
 
 
+def same_repo_head(pull, slug):
+    head = pull.get("head") or {}
+    if "repo" not in head:
+        return True
+    head_repo = head["repo"]
+    return isinstance(head_repo, dict) and head_repo.get("full_name") == slug
+
+
 def orphan_branches(repo, slug, pulls):
     ref, base = default_branch(repo)
-    open_heads = {p.get("head", {}).get("ref") for p in pulls
-                  if (p.get("head", {}).get("repo") or {}).get("full_name", slug) == slug}
+    open_heads = {p.get("head", {}).get("ref") for p in pulls if same_repo_head(p, slug)}
     seen = {}
     rows = git(repo, "for-each-ref", "--format=%(refname)%09%(committerdate:short)",
                "refs/heads", "refs/remotes/origin").splitlines()
@@ -150,7 +144,7 @@ def idle(rows, cutoff, extra=lambda r: {}):
 
 
 def skipped_tests(repo):
-    raw = git(repo, "grep", "-n", "-I", "-E", PREFILTER, "HEAD", "--", ok=(0, 1))  # 1: no match
+    raw = git(repo, "grep", "-n", "-I", "-E", PREFILTER, "HEAD", "--", ok=(0, 1))
     items = []
     for row in raw.splitlines():
         _, path, num, text = row.split(":", 3)
@@ -176,7 +170,6 @@ def generated_files(tracked):
 
 
 def resolve(target, workdir):
-    """Return (local clone path, owner/repo or None); raise ReadError if unreadable."""
     if os.path.isdir(target):
         top = git(target, "rev-parse", "--show-toplevel").strip()
         git(top, "rev-parse", "--verify", "-q", "HEAD^{commit}")
@@ -250,8 +243,8 @@ def main(argv=None):
         read("idle_issues", lambda: needs(issues, lambda i: idle(i, cutoff)))
         read("idle_prs", lambda: needs(pulls, lambda p: idle(p, pr_cutoff, lambda r: {"branch": r["head"]["ref"]})))
         read("empty_milestones", lambda: needs(miles, lambda ms: (lambda items: (len(items), items))(
-            [{"number": m["number"], "title": line(m["title"], 120), "closed_issues": m.get("closed_issues", 0)}
-             for m in ms if m["open_issues"] == 0])))
+            sorted([{"number": m["number"], "title": line(m["title"], 120), "closed_issues": m.get("closed_issues", 0)}
+                    for m in ms if m["open_issues"] == 0], key=lambda i: (i["number"], i["title"])))))
         read("skipped_tests", lambda: skipped_tests(repo))
         read("generated_files", lambda: generated_files(tracked))
 

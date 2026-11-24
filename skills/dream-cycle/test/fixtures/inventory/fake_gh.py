@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""Synthetic `gh` for the inventory tests: answers `gh api` from a JSON file.
-
-FAKE_GH_DATA names a JSON object mapping an endpoint word (`pulls`,
-`milestones`, `issues`) to the list it returns, or to the string "FAIL" for a
-failed read. FAKE_GH_LOG, when set, gets one line per call.
-"""
 import json
 import os
+import subprocess
 import sys
 
 args = sys.argv[1:]
 if os.environ.get("FAKE_GH_LOG"):
     with open(os.environ["FAKE_GH_LOG"], "a", encoding="utf-8") as log:
         log.write(" ".join(args) + "\n")
+if args[:2] == ["repo", "clone"] and os.environ.get("FAKE_GH_CLONE_SOURCE"):
+    dest = args[3]
+    extra = args[5:] if len(args) > 4 and args[4] == "--" else []
+    res = subprocess.run(["git", "clone", *extra, os.environ["FAKE_GH_CLONE_SOURCE"], dest],
+                         capture_output=True, text=True)
+    if res.returncode != 0:
+        sys.stderr.write(res.stderr)
+        sys.exit(res.returncode)
+    sys.exit(0)
 with open(os.environ["FAKE_GH_DATA"], encoding="utf-8") as fh:
     data = json.load(fh)
 endpoint = next((a for a in args if a.startswith("repos/")), "")
@@ -25,7 +29,6 @@ else:
 if answer == "FAIL":
     print("gh api error: simulated offline failure", file=sys.stderr)
     sys.exit(1)
-# Two pages, the way `gh api --paginate` prints them: concatenated arrays.
 half = len(answer) // 2
 print(json.dumps(answer[:half]))
 print(json.dumps(answer[half:]))

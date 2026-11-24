@@ -13,7 +13,7 @@ HERE = Path(__file__).resolve().parent
 SCRIPT = HERE.parent / "scripts" / "inventory.py"
 FIXTURES = HERE / "fixtures" / "inventory"
 sys.path.insert(0, str(HERE))
-from test_contract import SCHEMA_PATH, parse_json_strict, validate  # noqa: E402
+from test_contract import SCHEMA_PATH, parse_json_strict, validate  # noqa: E402 -- sibling test_contract is loaded from HERE
 
 SECTIONS = {
     "stale_paths", "orphan_branches", "idle_issues", "idle_prs",
@@ -35,7 +35,6 @@ def _write(repo, rel, text):
 
 
 def _build_fixture_repo(root):
-    """Synthetic repository: old and fresh paths, test markers, generated files, branches."""
     repo = root / "repo"
     repo.mkdir()
     _git(repo, "init", "-b", "main")
@@ -76,8 +75,7 @@ def _build_fixture_repo(root):
     return repo
 
 
-def _run(root, repo_arg, gh_data, *extra):
-    """Run inventory.py with the synthetic gh on PATH; return (exit code, JSON or None, stderr)."""
+def _run(root, repo_arg, gh_data, *extra, clone_source=None):
     bin_dir = root / "bin"
     bin_dir.mkdir(exist_ok=True)
     gh = bin_dir / "gh"
@@ -88,6 +86,8 @@ def _run(root, repo_arg, gh_data, *extra):
     data.write_text((FIXTURES / gh_data).read_text(encoding="utf-8").replace("NOW", now), encoding="utf-8")
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
            "FAKE_GH_DATA": str(data), "FAKE_GH_LOG": str(root / "gh.log")}
+    if clone_source is not None:
+        env["FAKE_GH_CLONE_SOURCE"] = str(clone_source)
     proc = subprocess.run([sys.executable, "-I", str(SCRIPT), str(repo_arg), *extra],
                           capture_output=True, text=True, env=env)
     try:
@@ -130,7 +130,7 @@ class DreamCycleInventoryTests(unittest.TestCase):
         stale_count = sum(i["count"] for i in s["stale_paths"]["items"])
         self.assertEqual(s["stale_paths"]["total"], stale_count)
         self.assertNotIn("fresh", json.dumps(s["stale_paths"]))
-        self.assertEqual(stale["src"]["count"], 2)  # check.py and merged.py; fresh.py is recent
+        self.assertEqual(stale["src"]["count"], 2)
 
         self.assertEqual(s["orphan_branches"]["total"], 2)
         branches = {i["branch"]: i for i in s["orphan_branches"]["items"]}
@@ -225,6 +225,14 @@ class DreamCycleInventoryTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIsNone(data)
         self.assertTrue(err.strip())
+
+    def test_slug_target_clones_and_reads_inventory(self):
+        code, data, err = _run(self.root, "example/alpha", "gh_ok.json", "--days", "14", clone_source=self.repo)
+        self.assertEqual(code, 0, err)
+        self.assertInventory(data)
+        self.assertEqual(data["repo"], "example/alpha")
+        self.assertEqual(data["sections"]["orphan_branches"]["total"], 2)
+        self.assertEqual(data["sections"]["skipped_tests"]["total"], 5)
 
 
 if __name__ == "__main__":

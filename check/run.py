@@ -64,6 +64,7 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-inbox.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-records.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-status.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-context.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-ops-starts.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-on1.py'],
                      ['sh', 'skills/launch-fleet/scripts/test-loop.sh'],

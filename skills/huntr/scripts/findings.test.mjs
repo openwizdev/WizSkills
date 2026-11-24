@@ -24,7 +24,7 @@ function baseFinding(overrides = {}) {
     machine_level: false,
     summary: 'Missing Content-Security-Policy-Report-Only header on public site.',
     proof_command: 'curl -sI https://example.test/users/profile',
-    steps: 'PRIVATE-EXPLOIT-STEP-SENTINEL: 1. send crafted request to 192.0.2.10 with thr_synstep1',
+    steps: 'PRIVATE-EXPLOIT-STEP-SENTINEL: 1. send crafted request to 192.0.2.10 with ' + 'thr' + '_synstep1',
     ...overrides,
   };
 }
@@ -175,11 +175,12 @@ test('P3: route covers all 128 combinations of five flags and four severities (R
 test('P4: issue prints neutral public body with required fields and acceptance criterion, never steps', () => {
   withTempDir(dir => {
     const file = join(dir, 'public.json');
+    const stepThread = 'thr' + '_syn999';
     const finding = baseFinding({
       machine_level: true,
       summary: 'Missing Strict-Transport-Security on disk-usage page v1.2.3.',
       proof_command: 'curl -sI https://example.test/api/v1/organizations/members/settings',
-      steps: 'SECRET-STEPS-MUST-NEVER-PRINT thr_syn999 /home/synthetic/x 192.0.2.55 someone@example.org',
+      steps: `SECRET-STEPS-MUST-NEVER-PRINT ${stepThread} /home/synthetic/x 192.0.2.55 someone@example.org`,
     });
     writeFileSync(file, JSON.stringify(finding), 'utf8');
 
@@ -197,7 +198,7 @@ test('P4: issue prints neutral public body with required fields and acceptance c
     assert.ok(r.stdout.includes(finding.proof_command), 'body must include safe proof command');
     assert.ok(lines.includes(ACCEPTANCE_CRITERION), 'body must include exact regression-check acceptance criterion');
     assert.ok(!r.stdout.includes('SECRET-STEPS-MUST-NEVER-PRINT'), 'body must never print steps');
-    assert.ok(!r.stdout.includes('thr_syn999'), 'body must never leak steps content');
+    assert.ok(!r.stdout.includes(stepThread), 'body must never leak steps content');
   });
 });
 
@@ -218,8 +219,9 @@ test('P4: issue refuses non-public findings (advisory and private) with exit 2',
 });
 
 test('P4: issue refuses every leak pattern in any printed field without echoing the leaked value', () => {
+  const threadLeak = 'thr' + '_synabc123';
   const leaks = [
-    ['thread id', 'see thr_synabc123 for details', 'thr_synabc123'],
+    ['thread id', `see ${threadLeak} for details`, threadLeak],
     ['linux home path', 'check /home/synthetic/app/config', '/home/synthetic/app/config'],
     ['macos home path', 'check /Users/synthetic/app/config', '/Users/synthetic/app/config'],
     ['tilde home path', 'check ~/secrets/config', '~/secrets/config'],
@@ -231,6 +233,7 @@ test('P4: issue refuses every leak pattern in any printed field without echoing 
     ['xox token', 'slack ' + 'xox' + 'b-123456-synthetic', 'xox' + 'b-123456-synthetic'],
     ['hex 32+ run', 'digest ' + '0123456789abcdef'.repeat(2), '0123456789abcdef'.repeat(2)],
     ['base64 32+ run', 'blob YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=', 'YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo='],
+    ['base64 padded 32 run', 'blob ' + 'A'.repeat(30) + '==', 'A'.repeat(30) + '=='],
     ['base64url 32+ run', 'blob aB1_cD2-eF3_gH4-iJ5_kL6-mN7_oP89', 'aB1_cD2-eF3_gH4-iJ5_kL6-mN7_oP89'],
   ];
 
@@ -247,7 +250,7 @@ test('P4: issue refuses every leak pattern in any printed field without echoing 
     }
 
     for (const field of ['target', 'technique', 'proof_command']) {
-      const secret = 'thr_synfield1';
+      const secret = 'thr' + '_synfield1';
       writeFileSync(file, JSON.stringify(baseFinding({[field]: `bad ${secret}`})), 'utf8');
       const r = run('issue', file);
       assert.ifError(r.error);

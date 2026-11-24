@@ -107,19 +107,29 @@ def holds(path):
     return sorted(p for p in path.parent.glob(path.name + '.hold.*') if not p.name.endswith('.tmp'))
 
 
-def decode(text):
+def decode(data):
     try:
-        return json.loads(text, object_pairs_hook=unique)
+        return json.loads(data.decode('utf-8'), object_pairs_hook=unique)
     except (ValueError, RecursionError, MemoryError):
         return None
 
 
+def scan(path):
+    try:
+        held = holds(path)
+        waits = [decode(p.read_bytes()) for p in held]
+    except OSError:
+        waits = [None]
+    if not all(number(t) for t in waits):
+        raise Stop('refused: the write pacer\'s state file is unreadable; nothing was written')
+    return held, waits
+
+
 @contextmanager
-def pacer_state(deadline):
-    path = state_path()
+def locked(path, deadline):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        lock = open(path.with_name(path.name + '.lock'), 'a')
+        lock = open(path, 'a')
     except OSError:
         raise Stop('refused: the write pacer\'s state folder cannot be used; nothing was written')
     with lock:
@@ -131,18 +141,35 @@ def pacer_state(deadline):
                 if time.monotonic() >= deadline:
                     raise paced(time.time())
                 time.sleep(0.05)
-        waits = []
+        yield
+
+
+def publishing(deadline):
+    path = state_path()
+    return locked(path.with_name(path.name + '.publish.lock'), deadline)
+
+
+@contextmanager
+def pacer_state(deadline):
+    path = state_path()
+    with locked(path.with_name(path.name + '.lock'), deadline):
         try:
-            value = decode(path.read_text()) if path.exists() else {'accounts': {}, 'inflight': [], 'until': 0}
-            held = holds(path)
-            waits = [decode(p.read_text()) for p in held]
+            value = decode(path.read_bytes()) if path.exists() else {'accounts': {}, 'inflight': [], 'until': 0}
         except OSError:
             value = None
-        if not valid(value) or not all(number(t) for t in waits):
+        if not valid(value):
             raise Stop('refused: the write pacer\'s state file is unreadable; nothing was written')
+        held, waits = scan(path)
         value['until'] = max([value['until'], *waits])
-        yield value
-        save(path, value)
+        saved = [False]
+
+        def commit():
+            save(path, value)
+            saved[0] = True
+
+        yield value, commit
+        if not saved[0]:
+            save(path, value)
         for p in held:
             try:
                 p.unlink()
@@ -171,7 +198,7 @@ def take(paced_write):
     key = credential() if paced_write else None
     deadline = time.monotonic() + SLOT_WAIT_SECONDS
     while True:
-        with pacer_state(deadline) as s:
+        with pacer_state(deadline) as (s, commit):
             now = time.time()
             s['inflight'] = [e for e in s['inflight'] if now - e[1] < IN_FLIGHT_STALE_SECONDS and alive(e[0])]
             s['accounts'] = {k: kept for k, v in s['accounts'].items() if (kept := [t for t in v if now - t < 3600])}
@@ -189,17 +216,25 @@ def take(paced_write):
             if left <= 0 or (free > now + left and not busy):
                 raise paced(max(free, now))
             if free <= now and not busy:
-                if paced_write:
-                    s['accounts'][key] = times + [now]
-                entry = [os.getpid(), now]
-                s['inflight'].append(entry)
+                with publishing(deadline):
+                    late = max(scan(state_path())[1], default=0)
+                    if late > now:
+                        s['until'] = max(s['until'], late)
+                        continue
+                    if time.monotonic() >= deadline:
+                        raise paced(time.time())
+                    if paced_write:
+                        s['accounts'][key] = times + [now]
+                    entry = [os.getpid(), now]
+                    s['inflight'].append(entry)
+                    commit()
                 return entry
         time.sleep(max(0.05, min(0.5 if busy else free - now, left)))
 
 
 def settle(entry, until=None):
     try:
-        with pacer_state(time.monotonic() + SLOT_WAIT_SECONDS) as s:
+        with pacer_state(time.monotonic() + SLOT_WAIT_SECONDS) as (s, _):
             if until is not None:
                 s['until'] = max(s['until'], until)
             if entry in s['inflight']:
@@ -209,9 +244,17 @@ def settle(entry, until=None):
         if until is None:
             return False
     try:
-        save(state_path(), until, hold=True)
+        with publishing(time.monotonic() + SLOT_WAIT_SECONDS):
+            save(state_path(), until, hold=True)
         return True
     except Stop:
+        pass
+    try:
+        path = state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        save(path, until, hold=True)
+        return True
+    except (OSError, Stop):
         return False
 
 

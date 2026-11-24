@@ -712,5 +712,69 @@ class Pacer(unittest.TestCase):
         self.assertGreaterEqual(out.split(' ')[-1].strip(), post_stamp(before + 120))
         self.assertEqual(w.writes(), [])
 
+    def test_a_hold_cannot_be_published_between_the_final_scan_and_the_slot_record(self):
+        w = paced_world(self)
+        seed(w, full([]))
+        folder = w.dir / 'state' / 'launch-fleet'
+        scanned = w.dir / 'scanned'
+        pause = ('plain = post.scan\n'
+                 'calls = []\n'
+                 'def scan(path):\n'
+                 '    found = plain(path)\n'
+                 '    calls.append(path)\n'
+                 '    if len(calls) == 2:\n'
+                 '        open(%r, "w").close()\n'
+                 '        sys.stdin.readline()\n'
+                 '    return found\n'
+                 'post.scan = scan\n' % str(scanned))
+        writer = subprocess.Popen([sys.executable, '-I', '-c', RUNNER, str(HERE / 'post.py'), pause, 'comment', REPO,
+                                   '12', 'launch-fleet: starting'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True, env=w.env, cwd=w.dir)
+        self.addCleanup(writer.kill)
+        waited = time.monotonic() + 20
+        while time.monotonic() < waited and not scanned.exists() and writer.poll() is None:
+            time.sleep(0.05)
+        self.assertTrue(scanned.exists())
+        publish = ('import time\n'
+                   'post.SLOT_WAIT_SECONDS = 0\n'
+                   'sys.exit(0 if post.settle([1, 0.0], time.time() + 120) else 3)\n')
+        published = patched(w, publish)
+        self.assertEqual(published.communicate(timeout=60), ('', ''))
+        self.assertEqual(published.returncode, 3)
+        self.assertEqual([p.name for p in folder.iterdir() if p.name.startswith('writes.json.hold.')], [])
+        self.assertIsNone(writer.poll())
+        out, err = writer.communicate('go\n', timeout=60)
+        self.assertEqual((writer.returncode, out, err), (0, 'posted 5001\n', ''))
+        self.assertEqual(len(w.writes()), 1)
+        again = patched(w, publish)
+        self.assertEqual(again.communicate(timeout=60), ('', ''))
+        self.assertEqual(again.returncode, 0)
+        self.assertEqual(len([p for p in folder.iterdir() if p.name.startswith('writes.json.hold.')]), 1)
+
+    def test_a_writer_paused_past_its_window_at_the_final_scan_is_refused(self):
+        w = paced_world(self)
+        seed(w, full([]))
+        scanned = w.dir / 'scanned'
+        pause = ('import time\n'
+                 'post.SLOT_WAIT_SECONDS = 2\n'
+                 'plain = post.scan\n'
+                 'calls = []\n'
+                 'def scan(path):\n'
+                 '    found = plain(path)\n'
+                 '    calls.append(time.monotonic())\n'
+                 '    if len(calls) == 2:\n'
+                 '        open(%r, "w").close()\n'
+                 '        while time.monotonic() < calls[0] + 2.2:\n'
+                 '            time.sleep(0.05)\n'
+                 '    return found\n'
+                 'post.scan = scan\n' % str(scanned))
+        writer = patched(w, pause, 'comment', REPO, 12, 'launch-fleet: starting')
+        out, err = writer.communicate(timeout=60)
+        self.assertTrue(scanned.exists())
+        self.assertEqual((writer.returncode, err), (1, ''))
+        self.assertTrue(out.startswith('refused: write paced, retry after '), out)
+        self.assertEqual(w.writes(), [])
+        self.assertEqual(state(w)['inflight'], [])
+
 if __name__ == '__main__':
     unittest.main()

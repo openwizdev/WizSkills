@@ -65,7 +65,7 @@ class ContextTests(unittest.TestCase):
         host = 'docs/agents/host.md'
         cases = [
             ('builder', builder, [('GLOSSARY.md', glossary)]),
-            ('reviewer', reviewer, [('GLOSSARY.md', glossary)]),
+            ('reviewer', ['Models', *reviewer], [('GLOSSARY.md', glossary)]),
             ('fleet', fleet, [(LABELS, '# Triage\n\n## Labels\n\nLead prose.\n\n' + TABLE + '\nTail prose.'),
                               (host, '# Host\n\nSynthetic host.')]),
             ('planner', planner, [(tracker, section('Where things live').strip() + '\n\n'
@@ -88,6 +88,19 @@ class ContextTests(unittest.TestCase):
                     f'{path} {self.git("rev-parse", f"HEAD:{path}")}' for path in paths))
                 self.assertEqual(result.returncode, 0)
                 self.assertEqual(result.stderr, '')
+
+        with self.subTest(role='reviewer', settings='legacy'):
+            claude_table = 'Reviewer for Claude-built'
+            gpt_table = 'Reviewer for GPT-built'
+            self.put(FLEET, '\n'.join(map(section, [gpt_table, 'Builder', *reviewer, claude_table])))
+            result = self.run_cli('reviewer')
+            body = result.stdout.split('\n\n', 2)[-1]
+            self.assertEqual(body, '\n\n'.join([
+                '# Public writes\n\nSynthetic card.',
+                *(section(name).strip() for name in [claude_table, gpt_table, *reviewer]),
+                glossary,
+            ]) + '\n')
+            self.assertEqual((result.returncode, result.stderr), (0, ''))
 
     def test_missing_sources_and_legacy_only_settings(self):
         missing = self.run_cli('builder')

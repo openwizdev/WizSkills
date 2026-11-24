@@ -159,17 +159,15 @@ identity() { # "token identity" every gh call gets; the stderr line expected, or
 }
 (OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj identity 'none account' "$off")
 [ ! -s "$work/openwiz.log" ]
-[ "$(cat "$work/read.log")" = 'none account' ]
-echo "ok   with the key secret and no App identity row the check reads fleet.md on today's account, never mints (#2394, #2835)"
+echo "ok   with the key secret and no token service the check runs on today's account, never mints (#2394, #2835)"
 cp "$work/world.json" "$work/world-off.json"
 jq '.files["docs/agents/fleet.md"] |= (sub("\\| App \\| Synthetic, for the factory \\|\n"; "") + "| App identity | on |\n")' \
   "$work/world-off.json" > "$work/world-on.json"
 cp "$work/world-on.json" "$work/world.json"
-(: > "$work/read.log"; : > "$work/order.log"; OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj identity "$token installation" '')
-[ "$(cat "$work/openwiz.log")" = 'github token --repository synthetic-owner/synthetic-repo --read' ]
-[ "$(cat "$work/read.log")" = 'none account' ]
-[ "$(cat "$work/order.log")" = "$(printf 'read\nmint')" ]
-echo 'ok   with the App identity on, one account read of fleet.md, then the check reads GitHub with a read-only App token and prints none (#2549, #2835)'
+# catches: loop.sh with App identity on and no token service attempting openwiz github token after unsetting OPENWIZ_GITHUB_APP_KEY.
+(: > "$work/read.log"; : > "$work/order.log"; OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj identity 'none account' "$off")
+[ ! -s "$work/openwiz.log" ]
+echo "ok   with the App identity on and no token service, loop.sh falls back with its note and never runs openwiz (#2835)"
 cp "$work/world-off.json" "$work/world.json"
 (LAUNCH_FLEET_GITHUB_AUTH=installation identity 'none account' "$fallback")
 [ ! -s "$work/openwiz.log" ]

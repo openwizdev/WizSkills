@@ -704,6 +704,21 @@ APP_IDENTITY = (
     case('an on row under an aligned delimiter', False, False, row=ON, table='| Setting | Value |\n| :-- | --- |\n'),
     case('an on row under a three-column delimiter', False, False, row=ON,
          table='| Setting | Value |\n| --- | --- | --- |\n'),
+    # catches: an inline code span `<!--` blinding hidden_heading() to a real fence opener until `-->` inside the fence.
+    case('R2: an on row wrapped in a fence after a code-span comment opener', False, False,
+         before='Write `<!--` here.\n\n```md\n-->\n\n', row=ON, tail='\n```\n'),
+    # catches: an inline code span `<!--` blinding identity_lines() to a fence hiding ## Example and a duplicate off row.
+    case('R2: an on row then a code-span comment opener and a fenced off row after a heading', False, False, row=ON,
+         tail='\nWrite `<!--` here.\n\n```md\n-->\n## Example\n\n' + OFF + '```\n'),
+    # catches: a <pre> tag after `-->` on the same line bypassing SWALLOWS.match at column 0.
+    case('R2: an on row wrapped in a pre block after a closed comment on the same line', False, False,
+         before='<!-- ok --> <pre>\n\n', row=ON, tail='\n</pre>\n'),
+    # catches: a self-closing `<!-->` blinding hidden_heading() to a real fence opener until `-->` inside the fence.
+    case('R2: an on row wrapped in a fence after a self-closing comment', False, False,
+         before='<!-->\n\n```md\n-->\n\n', row=ON, tail='\n```\n'),
+    # catches: a self-closing `<!-->` blinding identity_lines() to a fence hiding ## Example and a duplicate off row.
+    case('R2: an on row then a self-closing comment and a fenced off row after a heading', False, False, row=ON,
+         tail='\n<!-->\n\n```md\n-->\n## Example\n\n' + OFF + '```\n'),
 )
 
 

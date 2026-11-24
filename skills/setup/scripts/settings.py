@@ -320,6 +320,8 @@ def fleet(text, problems):
 
 APP_KEYS = ('Record authors', 'App identity')
 FENCE_LIKE = re.compile(r'[ \t>]*(?:(?:[-*+]|[0-9]+[.)])[ \t]+)?(`{3,}|~{3,})')
+FENCE_OPEN = re.compile(r' {0,3}(`{3,}|~{3,})(.*)')
+SECTION_END = re.compile(r' {0,3}#{1,6}(?:[ \t]|$)')
 SWALLOWS = re.compile(r'[ \t]{0,3}<(?:(?:pre|script|style|textarea)(?:[\s>]|$)|\?|![A-Za-z]|!\[CDATA\[)', re.I)
 HEADING = re.compile(r'[ \t>]*#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*')
 CANONICAL_ROW = re.compile(r'\|([^|\\]*)\|([^|\\]*)\|')
@@ -342,10 +344,43 @@ def split_cells(line):
     return cells[1:] if line.startswith('|') else cells
 
 
+def identity_lines(lines):
+    found, inside, fence, comment = [], False, None, False
+    for number, line in enumerate(lines):
+        if line == '## GitHub identity':
+            inside, fence, comment = True, None, False
+            continue
+        if not inside:
+            continue
+        if fence:
+            mark = FENCE_OPEN.match(line)
+            if mark and mark.group(1)[0] == fence[0] and len(mark.group(1)) >= len(fence) and not mark.group(2).strip():
+                fence = None
+            found.append(number)
+            continue
+        if not comment:
+            mark = FENCE_OPEN.match(line)
+            if mark and (mark.group(1)[0] == '~' or '`' not in mark.group(2)):
+                fence = mark.group(1)
+                found.append(number)
+                continue
+            if SECTION_END.match(line):
+                inside = False
+                continue
+        found.append(number)
+        rest = line
+        while rest:
+            pos = rest.find('-->' if comment else '<!--')
+            if pos < 0:
+                break
+            comment, rest = not comment, rest[pos + (3 if comment else 4):]
+    return found
+
+
 def app_rows(lines):
     rows = []
-    for number, line in enumerate(lines):
-        cells = split_cells(line)
+    for number in identity_lines(lines):
+        cells = split_cells(lines[number])
         if cells and plain(cells[0]) == 'app identity':
             rows.append(number)
     return rows

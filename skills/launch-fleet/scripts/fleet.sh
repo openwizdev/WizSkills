@@ -497,10 +497,11 @@ http_get() (
   fi
   set -- api --include -H "Accept: $media"
   [ -z "$etag" ] || set -- "$@" -H "If-None-Match: $etag"
-  [ -n "${REST_ADMITTED:-}" ] || rest_admit 1
+  case $endpoint in search/*) ;; *) [ -n "${REST_ADMITTED:-}" ] || rest_admit 1 ;; esac
   if gh "$@" "$endpoint" > "$work/http" 2> "$work/error"; then ok=yes; else ok=no; fi
   awk '/^\r?$/ { exit } { print }' "$work/http" > "$work/headers" || exit 1
-  if [ -n "$(http_status "$work/headers")" ] && grep -qi '^x-ratelimit-remaining:' "$work/headers"; then
+  if [ -n "$(http_status "$work/headers")" ] && grep -qi '^x-ratelimit-remaining:' "$work/headers" \
+    && tr -d '\r' < "$work/headers" | grep -qiE '^x-ratelimit-resource:[[:space:]]*core[[:space:]]*$'; then
     mkdir -p "$TMP/headers" && mv "$work/headers" "$TMP/headers/$(basename "$work")" || exit 1
   fi
   status=$(http_status "$work/http")

@@ -244,7 +244,7 @@ if seg[0] == 'issues' and seg[2:] == ['comments'] and method == 'POST':
         it['comments'].append(dict(rival, id=world['next_id'], updated=now))
     world['next_id'] += 1
     c = {'id': world['next_id'], 'author': world['login'], 'body': body['body'], 'updated': now}
-    it['comments'].append(c); save(); out(rest(c))
+    it['comments'].append(c); races('race_after_post'); save(); out(rest(c))
 if seg[:2] == ['issues', 'comments'] and len(seg) == 3 and method == 'DELETE':
     for it in world['issues']:
         for c in list(it['comments']):
@@ -392,6 +392,59 @@ class Write(Tracker):
             ('DELETE', 'repos/example/tracker/issues/12/labels/needs-info'),
         ])
         self.assertEqual([c['body'] for c in self.calls() if c['path'].endswith('/12/labels')], [{'labels': ['needs-info']}])
+
+    def test_a_failed_label_read_after_post_names_the_note_for_retry(self):
+        self.world['race_after_post'] = [{'fail_once': f'GET repos/{REPO}/issues/12'}]
+        self.save()
+        args = ('asking', 'asked which file to change', '2030-01-02T04:00:00Z')
+        failed = self.write(*args)
+        self.assertEqual((failed.returncode, failed.stdout), (2, ''))
+        self.assertIn('note 9001 posted; retry with --note 9001', failed.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+
+        retry = self.write(*args, '--note', '9001')
+        self.assertEqual((retry.returncode, retry.stdout, retry.stderr),
+                         (0, '#12: builder asking, status note 9001 edited\n', ''))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        self.assertEqual(self.writes(), [
+            ('POST', f'repos/{REPO}/issues/12/comments'),
+            ('PATCH', f'repos/{REPO}/issues/comments/9001'),
+            ('POST', f'repos/{REPO}/issues/12/labels'),
+        ])
+
+    def test_a_plain_write_in_the_notes_own_second_records_an_edit(self):
+        spec = importlib.util.spec_from_file_location('status_under_test', SCRIPT)
+        status = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(status)
+        pinned = datetime.now(timezone.utc).replace(microsecond=0)
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note(time=pinned.strftime('%Y-%m-%dT%H:%M:%SZ'))))
+        self.world['noop_unrecorded'] = True
+        self.save()
+        clock = pinned
+
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock
+
+        def sleep(seconds):
+            nonlocal clock
+            clock += timedelta(seconds=seconds)
+
+        env = {'PATH': str(self.dir / 'bin') + ':' + os.environ['PATH'], 'FAKE_GH_WORLD': str(self.dir / 'world.json'),
+               'FAKE_GH_LOG': str(self.dir / 'gh.log')}
+        argv = self.write_argv('working', 'started the build', pinned.strftime('%Y-%m-%dT%H:%M:%SZ'), '--note', '104')
+        del argv[-4:-2]
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, env), mock.patch.object(status, 'datetime', Clock), \
+                mock.patch.object(status, 'time', mock.Mock(wraps=time, sleep=sleep)), contextlib.redirect_stderr(err):
+            code = status.main(argv[3:])
+        self.assertEqual(code, 0, err.getvalue())
+        self.assertEqual(clock, pinned + timedelta(seconds=1))
+        mine = self.ticket()['comments'][3]
+        self.assertEqual(mine['edits'], [note(time=at.strftime('%Y-%m-%dT%H:%M:%SZ')) for at in (pinned, clock)])
+        seen = [c['method'] for c in self.calls() if '/issues/12/comments?' in c['path'] or c['method'] == 'PATCH']
+        self.assertEqual(seen, ['GET'] * 4 + ['PATCH'] + ['GET'] * 4)
 
     def test_leaving_asking_keeps_a_needs_info_it_did_not_set(self):
         self.ticket(self.world)['labels'] = ['ready-for-agent', 'needs-info', 'held']
@@ -1275,6 +1328,45 @@ class Check(Tracker):
         clean = self.run_status('check', '--repo', REPO)
         self.assertEqual((clean.returncode, clean.stdout, clean.stderr), (0, '', ''))
 
+    def test_check_reports_a_label_stranded_by_two_record_authors(self):
+        self.save()
+        builder = self.write('asking', 'asked the first question', '2030-01-02T03:00:00Z')
+        self.assertEqual(builder.returncode, 0, builder.stderr)
+        self.world = self.load()
+        self.world['login'] = 'synthetic-owner'
+        self.save()
+        reviewer = self.write('asking', 'asked the second question', '2030-01-02T03:01:00Z', agent='reviewer')
+        self.assertEqual(reviewer.returncode, 0, reviewer.stderr)
+        self.world = self.load()
+        self.world['login'] = BOT
+        self.save()
+        answered = self.write('done', 'got the first answer', '2030-01-02T03:02:00Z', '--note', '9001')
+        self.assertEqual(answered.returncode, 0, answered.stderr)
+        still_asking = self.run_status('check', '--repo', REPO)
+        self.assertEqual((still_asking.returncode, still_asking.stdout, still_asking.stderr), (0, '', ''))
+        self.world = self.load()
+        self.world['login'] = 'synthetic-owner'
+        self.save()
+        answered = self.write('done', 'got the second answer', '2030-01-02T03:03:00Z', '--note', '9002', agent='reviewer')
+        self.assertEqual(answered.returncode, 0, answered.stderr)
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        before = (self.dir / 'world.json').read_bytes()
+        count = len(self.writes())
+        stranded = self.run_status('check', '--repo', REPO)
+        self.assertEqual((stranded.returncode, stranded.stdout, stranded.stderr),
+                         (1, '#12: needs-info last added by a record author, but no live note asks\n', ''))
+        self.assertEqual((self.dir / 'world.json').read_bytes(), before)
+        self.assertEqual(self.writes()[count:], [])
+
+        self.world = self.load()
+        self.ticket(self.world)['events'] += [
+            {'event': 'unlabeled', 'label': {'name': 'needs-info'}, 'actor': {'login': 'synthetic-maintainer'}},
+            {'event': 'labeled', 'label': {'name': 'needs-info'}, 'actor': {'login': 'synthetic-maintainer'}},
+        ]
+        self.save()
+        clean = self.run_status('check', '--repo', REPO)
+        self.assertEqual((clean.returncode, clean.stdout, clean.stderr), (0, '', ''))
+
     def test_check_that_cannot_read_says_so(self):
         self.world['repo'] = 'example/other'
         self.save()
@@ -1655,6 +1747,63 @@ class Run(Tracker):
                     if stopped is not None:
                         self.assertLess(stopped - ok_at, lease)
                         self.assertEqual(fails, list(range(1, 40)))
+
+    def test_slow_heartbeat_requests_share_one_budget_before_the_lease_lapses(self):
+        spec = importlib.util.spec_from_file_location('status_under_test', SCRIPT)
+        status = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(status)
+        self.save()
+        now, alarm, stopping = 0, None, []
+        transport = subprocess.run
+        worker = mock.Mock(pid=9010)
+        process = mock.Mock(wraps=subprocess, Popen=mock.Mock(return_value=worker),
+                            TimeoutExpired=subprocess.TimeoutExpired)
+        requests = []
+
+        def wait(timeout):
+            nonlocal now
+            now += timeout
+            raise subprocess.TimeoutExpired('synthetic command', timeout)
+
+        def run(command, **kwargs):
+            nonlocal now
+            if now and command[:2] == ['gh', 'api']:
+                requests.append(now)
+                if alarm is not None and now + 120 >= alarm:
+                    now = alarm
+                    signal.raise_signal(signal.SIGALRM)
+                now += 120
+                if now >= 1800:
+                    return subprocess.CompletedProcess(command, 1, b'HTTP/2 502\n\n', b'')
+            return transport(command, **kwargs)
+
+        def timer(which, seconds):
+            nonlocal alarm
+            self.assertEqual(which, signal.ITIMER_REAL)
+            alarm = now + seconds if seconds else None
+
+        worker.wait.side_effect = wait
+        env = {'PATH': str(self.dir / 'bin') + ':' + os.environ['PATH'], 'FAKE_GH_WORLD': str(self.dir / 'world.json'),
+               'FAKE_GH_LOG': str(self.dir / 'gh.log')}
+        saved = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGALRM)}
+        err = io.StringIO()
+        try:
+            with mock.patch.dict(os.environ, env), mock.patch.object(status.time, 'monotonic', lambda: now), \
+                    mock.patch.object(subprocess, 'run', run), mock.patch.object(signal, 'setitimer', timer), \
+                    mock.patch.object(status, 'subprocess', process), \
+                    mock.patch.object(status, 'stop_group', lambda proc: stopping.append((proc.pid, now))), \
+                    contextlib.redirect_stderr(err):
+                code = status.main(['run', '--repo', REPO, '--ticket', '12', '--agent', 'builder', '--note', '104',
+                                    '--every', '900', '--', 'synthetic-command'])
+        finally:
+            for sig, handler in saved.items():
+                signal.signal(sig, handler)
+        self.assertEqual(code, 3, err.getvalue())
+        [(pid, stopped)] = stopping
+        self.assertEqual(pid, worker.pid)
+        self.assertLess(stopped + status.GRACE, 1800)
+        self.assertEqual(requests, list(range(900, 1800, 120)))
+        self.assertIsNone(alarm)
 
     def test_a_first_beat_in_the_notes_own_second_still_changes_the_body(self):
         spec = importlib.util.spec_from_file_location('status_under_test', SCRIPT)
@@ -2158,11 +2307,14 @@ class Paced(Tracker):
         state = self.pacer()
         self.assertEqual((len(state['accounts']['shared']), state['inflight']), (2, []))
         self.world = self.load()
-        self.world['unlisted'] = [self.world['next_id'] + 1]
+        lost_id = self.world['next_id'] + 1
+        self.world['unlisted'] = [lost_id]
         self.save()
         lost = self.write('working', 'started the build', '2030-01-02T03:00:00Z', agent='reviewer')
-        self.assertEqual((lost.returncode, lost.stderr),
-                         (2, f'status.py: note {self.world["next_id"] + 1} was posted but not read back\n'))
+        self.assertEqual(
+            (lost.returncode, lost.stderr),
+            (2, f'status.py: note {lost_id} posted; retry with --note {lost_id}: note {lost_id} was posted but not read back\n'),
+        )
         self.assertEqual(len(self.pacer()['accounts']['shared']), 3)
 
 

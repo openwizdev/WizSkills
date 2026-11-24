@@ -1,0 +1,276 @@
+{
+  "repository": "syn-owner/site",
+  "person": "syn-owner",
+  "roster": [
+    {
+      "name": "Demo Bot",
+      "kind": "bot",
+      "driver": "demo-bot",
+      "roles": [
+        "orchestrator"
+      ],
+      "writes_as": "syn-owner's App",
+      "label": "Demo Bot via syn-owner"
+    },
+    {
+      "name": "Claude Code",
+      "kind": "harness",
+      "driver": "cloudroom",
+      "roles": [
+        "builder",
+        "reviewer"
+      ],
+      "writes_as": "syn-owner's App",
+      "label": "Claude Code via syn-owner"
+    },
+    {
+      "name": "Codex",
+      "kind": "harness",
+      "driver": "cloudroom",
+      "roles": [
+        "reviewer"
+      ],
+      "writes_as": "syn-owner's App",
+      "label": "Codex via syn-owner"
+    },
+    {
+      "name": "Own computer",
+      "kind": "host",
+      "driver": "local",
+      "roles": [
+        "builder",
+        "helper"
+      ],
+      "writes_as": "syn-owner's App",
+      "label": "Own computer via syn-owner"
+    }
+  ],
+  "picks": [
+    {
+      "ticket": 1001,
+      "role": "orchestrator",
+      "start": {
+        "kind": "spec"
+      },
+      "choice": {
+        "harness": "Claude Code",
+        "provider": "claude-code",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "model_name": "Opus 5.5"
+      },
+      "pick": {
+        "name": "Demo Bot",
+        "kind": "bot",
+        "driver": "demo-bot",
+        "start": {
+          "harness": "claude",
+          "model": "claude-opus-5-5"
+        },
+        "note": {
+          "harness": "Demo Bot via syn-owner",
+          "model": "Opus 5.5 default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "orchestrator-1001",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    },
+    {
+      "ticket": 1002,
+      "role": "builder",
+      "start": {
+        "kind": "build",
+        "labels": []
+      },
+      "choice": {
+        "harness": "Claude Code",
+        "provider": "claude-code",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "model_name": "Opus 5.5"
+      },
+      "pick": {
+        "name": "Claude Code",
+        "kind": "harness",
+        "driver": "cloudroom",
+        "start": {
+          "harness": "claude",
+          "model": "claude-opus-5-5"
+        },
+        "note": {
+          "harness": "Claude Code via syn-owner",
+          "model": "Opus 5.5 default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "builder-1002",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    },
+    {
+      "ticket": 1002,
+      "role": "reviewer",
+      "start": {
+        "kind": "review",
+        "builder_family": "claude"
+      },
+      "choice": {
+        "harness": "Codex",
+        "provider": "codex",
+        "model": "gpt-6.2-sol",
+        "effort": "medium",
+        "model_name": "Sol 6.2"
+      },
+      "pick": {
+        "name": "Codex",
+        "kind": "harness",
+        "driver": "cloudroom",
+        "start": {
+          "harness": "codex",
+          "model": "gpt-6.2-sol"
+        },
+        "note": {
+          "harness": "Codex via syn-owner",
+          "model": "Sol 6.2 default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "reviewer-1002",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    },
+    {
+      "ticket": 1003,
+      "role": "reviewer",
+      "start": {
+        "kind": "review",
+        "builder_family": "gpt"
+      },
+      "choice": {
+        "harness": "Claude Code",
+        "provider": "claude-code",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "model_name": "Opus 5.5"
+      },
+      "pick": {
+        "name": "Claude Code",
+        "kind": "harness",
+        "driver": "cloudroom",
+        "start": {
+          "harness": "claude",
+          "model": "claude-opus-5-5"
+        },
+        "note": {
+          "harness": "Claude Code via syn-owner",
+          "model": "Opus 5.5 default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "reviewer-1003",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    },
+    {
+      "ticket": 1004,
+      "role": "builder",
+      "start": {
+        "kind": "fix",
+        "builder_family": "gpt"
+      },
+      "choice": {
+        "harness": "Codex",
+        "provider": "codex",
+        "model": "gpt-6.2-sol",
+        "effort": "medium",
+        "model_name": "Sol 6.2"
+      },
+      "pick": {
+        "name": "Own computer",
+        "kind": "host",
+        "driver": "local",
+        "start": {
+          "harness": "codex",
+          "model": "gpt-6.2-sol"
+        },
+        "note": {
+          "harness": "Own computer via syn-owner",
+          "model": "Sol 6.2 default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "builder-1004",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    },
+    {
+      "ticket": 1005,
+      "role": "helper",
+      "start": {
+        "kind": "helper"
+      },
+      "choice": {
+        "harness": "Claude Code",
+        "provider": "claude-code",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "model_name": "Opus 5.5"
+      },
+      "pick": {
+        "name": "Own computer",
+        "kind": "host",
+        "driver": "local",
+        "start": {
+          "harness": "claude",
+          "model": "claude-opus-5-5"
+        },
+        "note": {
+          "harness": "Own computer via syn-owner",
+          "model": "Opus 5.5 default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "helper-1005",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    }
+  ]
+}

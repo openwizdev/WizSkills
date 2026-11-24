@@ -316,6 +316,22 @@ class Doctor(unittest.TestCase):
                          'Apps), then python3 -I -B %s/runtime/setup/setup.py check --state-dir %s'
                          % (REPO, self.s.build, self.s.state))
 
+    def test_existing_app_problems_name_the_github_fix(self):
+        for code, advice in {
+            'app_wrong_repository': 'add %s to the selected repositories' % REPO,
+            'app_suspended': 'unsuspend the installation',
+            'app_read_only': 'grant the required write permissions',
+            'app_permissions_mismatch': 'accept the updated permissions',
+        }.items():
+            with self.subTest(code=code):
+                self.s.observations['github_app'] = code
+                self.s.save()
+                line = self.only(self.s.run())
+                self.assertIn('not verified (%s)' % code, line)
+                self.assertIn(advice, line)
+                self.assertIn('Settings > Applications > Installed GitHub Apps', line)
+                self.assertIn('runtime/setup/setup.py check', line)
+
     def test_acting_login_not_a_record_author(self):
         write(self.s.fake / 'viewer.json', json.dumps({'data': {'viewer': {'login': 'synthetic-stranger'}}}))
         self.assertEqual(self.only(self.s.run()),

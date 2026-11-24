@@ -1056,5 +1056,166 @@ class PreferCut(unittest.TestCase):
                 self.assertEqual(out.stderr, "prefer: b.json: a cycle: A B can never start\n")
 
 
+FAKE_MACHINE_GH = '''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+w = json.loads(Path(os.environ["FAKE_WORLD"]).read_text())
+n = os.environ["FAKE_SPEC"]
+if args == ["repo", "view", "--json", "isPrivate,nameWithOwner"]:
+    key = "repo"
+elif args == ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/triage-labels.md"]:
+    key = "labels_doc"
+elif args == ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/issue-tracker.md"]:
+    key = "tracker_doc"
+elif args == ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/fleet.md"]:
+    key = "fleet_doc"
+elif args == ["issue", "view", n, "--json", "body,createdAt,subIssues"]:
+    key = "graph"
+elif args == ["api", "--paginate", "repos/{owner}/{repo}/issues/" + n + "/comments?per_page=100"]:
+    key = "comments"
+elif len(args) == 7 and args[:2] == ["issue", "view"] and args[3] == "--json" and args[5] == "--jq":
+    if w.get("fail") == "revision":
+        sys.exit("planted revision read failure")
+    target = int(args[2])
+    fields = args[4]
+    if target == int(n) and fields == "subIssues":
+        subs = w["graph"]["subIssues"]
+        print(subs["totalCount"])
+        for node in subs["nodes"]:
+            print(node["number"])
+        sys.exit(0)
+    if target == int(n) and fields == "body":
+        print(w["graph"]["body"])
+        sys.exit(0)
+    ticket = next(t for t in w["tickets"] if t["number"] == target)
+    if fields == "number,title,blockedBy":
+        blockers = " ".join(f"#{b}" for b in sorted(ticket["blockedBy"])) or "none"
+        print(f"#{ticket['number']}\\t{blockers}\\t{ticket['title']}")
+        sys.exit(0)
+    if fields == "body":
+        print(ticket["body"])
+        sys.exit(0)
+    sys.exit("unexpected jq gh call: " + repr(args))
+else:
+    sys.exit("unexpected gh call: " + repr(args))
+if w.get("fail") == key:
+    sys.exit("planted read failure")
+if key in ("labels_doc", "tracker_doc", "fleet_doc"):
+    print(w[key], end="")
+elif key == "comments":
+    for page in w[key]:
+        print(json.dumps(page))
+else:
+    print(json.dumps(w[key]))
+'''
+
+
+class MachineCheckApprovalTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="machine-approval-"))
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.root = self.tmp / "root"
+        (self.root / "docs").mkdir(parents=True)
+        (self.root / "docs/existing.md").write_text("Synthetic interface.\n")
+
+    def make_world(self, rev=1, changed=None, closed_last=False, private=False):
+        tickets = plan()
+        if closed_last:
+            tickets[-1]["state"] = "CLOSED"
+        spec_json = {"body": SPEC_BODY, "createdAt": "2026-11-01T00:00:00Z"}
+        state = self.tmp / f"rev-{rev}-{closed_last}"
+        (state / "bin").mkdir(parents=True, exist_ok=True)
+        issues = [{"number": SPEC, "title": "Synthetic spec", "body": spec_json["body"], "state": "OPEN",
+                   "parent": None, "milestone": "Synthetic", "blockedBy": [], "labels": [], "comments": []}]
+        issues += [{"number": t["number"], "title": t["title"], "body": t["body"], "state": t["state"],
+                    "parent": SPEC, "milestone": "Synthetic", "blockedBy": [b["number"] for b in t["blocked_by"]],
+                    "labels": [], "comments": []} for t in tickets]
+        (state / "state.json").write_text(json.dumps({"next_issue": 9200, "issues": issues}))
+        rev_gh = state / "bin/gh"
+        rev_gh.write_text(f'#!/bin/sh\nexec python3 -I "{FAKE_REVISION_GH}" "$@"\n')
+        rev_gh.chmod(0o755)
+        rev_env = dict(os.environ, FAKE_GH_STATE=str(state), PATH=f"{state / 'bin'}:{os.environ['PATH']}")
+        rev_out = subprocess.run(["sh", str(REVISION), str(SPEC)], capture_output=True, text=True, env=rev_env)
+        self.assertEqual(rev_out.returncode, 0, rev_out.stderr)
+
+        (state / "spec.json").write_text(json.dumps(spec_json))
+        (state / "graph.json").write_text(json.dumps(graph_read(tickets)))
+        (state / "revision.txt").write_text(rev_out.stdout)
+        extra = ["--changed", changed] if changed else []
+        app_out = subprocess.run(
+            ["python3", "-I", str(APPROVE), "--graph", str(state / "graph.json"),
+             "--revision", str(state / "revision.txt"), "--spec", str(state / "spec.json"),
+             "--grill", GRILL, "--number", str(rev), "--date", "2026-11-24", "--root", str(self.root), *extra],
+            capture_output=True, text=True)
+        self.assertEqual(app_out.returncode, 0, app_out.stderr)
+        return {
+            "graph": {
+                "subIssues": {"totalCount": len(tickets), "nodes": [{"number": t["number"]} for t in tickets]},
+                "createdAt": spec_json["createdAt"],
+                "body": spec_json["body"],
+            },
+            "tickets": [{"number": t["number"], "title": t["title"], "body": t["body"],
+                         "blockedBy": [b["number"] for b in t["blocked_by"]]} for t in tickets],
+            "comments": [[{"id": 200, "user": dict(FACTORY), "body": app_out.stdout}]],
+            "labels_doc": LABELS,
+            "fleet_doc": FLEET,
+            "tracker_doc": "# Tracker\n\n- **Private records:** `synthetic-owner/synthetic-private`, permanently private.\n",
+            "repo": {"isPrivate": private, "nameWithOwner": "synthetic-owner/synthetic-repo"},
+        }
+
+    def run_check(self, world, status=0, reason=None):
+        work = Path(tempfile.mkdtemp(dir=self.tmp))
+        (work / "gh").write_text(FAKE_MACHINE_GH)
+        (work / "gh").chmod(0o700)
+        (work / "world.json").write_text(json.dumps(world))
+        env = dict(os.environ, PATH=str(work) + os.pathsep + os.environ["PATH"],
+                   FAKE_WORLD=str(work / "world.json"), FAKE_SPEC=str(SPEC))
+        result = subprocess.run(["sh", str(CHECKER), str(SPEC)], env=env, text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, status, result.stdout + result.stderr)
+        if status == 0:
+            self.assertEqual(result.stdout, f"check-approval.sh: #{SPEC} approval table is valid\n")
+            self.assertEqual(result.stderr, "")
+        else:
+            self.assertEqual(result.stdout, "")
+            self.assertIn(reason, result.stderr)
+
+    def test_valid_machine_plan_approval_passes(self):
+        self.run_check(self.make_world())
+        self.run_check(self.make_world(rev=2, changed="split the export page"))
+        self.run_check(self.make_world(closed_last=True))
+
+    def test_stale_machine_plan_approval_is_refused(self):
+        w = self.make_world()
+        w["tickets"][0]["title"] += " (edited)"
+        self.run_check(w, status=1, reason="stale")
+
+    def test_tampered_machine_revision_text_is_refused(self):
+        w = self.make_world()
+        w["comments"][0][0]["body"] = w["comments"][0][0]["body"].replace(
+            "Write the export contract", "Write the export contracts")
+        self.run_check(w, status=1, reason="fingerprint")
+
+    def test_malformed_or_outsider_machine_approval_is_refused(self):
+        for before, after, reason in (
+            ("links, relies, sizes, width and owned paths passed.", "links passed.", "machine plan approval"),
+            (f"Grill confirmed: {GRILL}\n", "", "machine plan approval"),
+            ("synthetic-owner/synthetic-private", "other-owner/other-private", "machine plan approval"),
+            ("Checks: 7 tickets;", "Checks: 6 tickets;", "machine plan approval"),
+            ("ready-for-agent", "bogus-label", "machine plan approval"),
+            ("\n</details>", "\nThread thr_synmachine1\n</details>", "machine plan approval"),
+        ):
+            with self.subTest(after=after):
+                w = self.make_world()
+                w["comments"][0][0]["body"] = w["comments"][0][0]["body"].replace(before, after, 1)
+                self.run_check(w, status=1, reason=reason)
+        w = self.make_world()
+        w["comments"][0][0]["user"] = dict(OUTSIDER)
+        self.run_check(w, status=1, reason="no posted plan graph approval")
+        w = self.make_world()
+        w["fail"] = "revision"
+        self.run_check(w, status=1, reason="revision.sh")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

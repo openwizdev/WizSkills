@@ -1262,5 +1262,37 @@ class ExpressFirstFleet(unittest.TestCase):
             self.assertRegex(first, r'Every other spec gets its video\.$')
 
 
+class WatchPagesOffer(unittest.TestCase):
+
+    def section(self, text, heading):
+        return text.split(heading + '\n', 1)[1].split('\n#', 1)[0]
+
+    def test_watch_offers_github_pages_between_merged_and_closing_offer(self):
+        watch = self.section((SKILL_DIR / 'SKILL.md').read_text(), '### 9. Watch')
+        offer = '"I can put it online for free with GitHub Pages, so you get a link you can open on your phone. Shall I?"'
+        enable = ("`gh api -X POST repos/<owner>/<name>/pages -f 'source[branch]=<default branch>' "
+                  "-f 'source[path]=</ or /docs>'`")
+        readback = '`gh api repos/<owner>/<name>/pages --jq .html_url`'
+        live = ('"It\'s online: <link>. Open it on your phone; it updates by itself each time the helpers '
+                'add a change."')
+        private_line = "A private repository on a free GitHub plan can't use Pages:"
+
+        for snippet in (offer, '`index.html`', '`docs/`', enable, 'an existing Pages site is read, not changed',
+                        readback, '20 seconds', '5 minutes', live, private_line,
+                        'offer nothing that costs money', 'help line from [teach.md](teach.md)',
+                        'No yes, nothing changes.', 'not a gate for the merge or the closing offer'):
+            self.assertIn(snippet, watch)
+
+        merged_at = watch.index('**Merged**')
+        offer_at = watch.index(offer)
+        readback_at = watch.index(readback)
+        private_at = watch.index(private_line)
+        closing_at = watch.index('**The closing offer**')
+        self.assertLess(merged_at, offer_at)
+        self.assertLess(offer_at, readback_at)
+        self.assertLess(readback_at, private_at)
+        self.assertLess(private_at, closing_at)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -29,10 +29,11 @@
 
 ## Top links
 
-1. **`cross-001`** (`PLAUSIBLE`, medium, M) — `example/beta`: `tools/slug.rs`, `example/alpha:src/slug.rs`
-   - **What:** Duplicate slug helper maintained separately in alpha and beta.
-   - **Evidence:** `diff -u alpha/src/slug.rs beta/tools/slug.rs -> 2 lines differ`
-   - **Why keep:** Repos currently avoid cross-repo runtime dependencies.
+1. **`cross-001`** (`duplicates`, `PLAUSIBLE`, score 6, owner `platform`, route `ticket`)
+   - **End 1:** `example/alpha:src/slug.py#L1-L20` (2030-01-14) — "def slugify(text):"
+   - **End 2:** `example/beta:tools/slug.py#L3-L24` (2030-01-14) — "def slugify(text):"
+   - **Changes:** Open ticket example/beta#41 plans a third slug helper; it should reuse one.
+   - **Best reason not a link:** Repos currently avoid cross-repo runtime dependencies, so a shared helper may cost more than the copy.
 
 ## Rejected
 

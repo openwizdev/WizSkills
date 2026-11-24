@@ -2116,7 +2116,7 @@ EOF
 log_has 'history: an unreadable third page cannot archive a closed ticket' 1 '^graphql Comments number=12 before=70$'
 log_has 'history: an unreadable third page cannot archive a closed ticket' 1 '^graphql Comments number=12 before=20$'
 
-expect 'history: a closed ticket cannot hide an unreadable PR history' 2 check.json 'merge12 | pr_say(22; 2201; "10:00"; "launch-fleet: review started \(sha(22)), thread thr_synrev22") | pull(22; .comments += discussion(119))' FAKE_GH_FAIL=graphql_Comments_number=22 -- wake 12 <<EOF
+expect 'history: a closed ticket cannot hide an unreadable PR history' 2 check.json 'merge12 | pr_say(22; 2201; "10:00"; "launch-fleet: review started \(sha(22)), thread thr_syn-rev22") | pull(22; .comments += discussion(119))' FAKE_GH_FAIL=graphql_Comments_number=22 -- wake 12 <<EOF
 fleet.sh: the GitHub query Comments failed
 EOF
 
@@ -2138,8 +2138,8 @@ log_has 'FR4: a spec check reads issue facts by GraphQL, never REST' 1 '^graphql
 log_has 'FR4: a spec check reads issue facts by GraphQL, never REST' 0 '^issue comments '
 log_has 'FR4: a spec check reads issue facts by GraphQL, never REST' 0 '^detail '
 log_has 'FR4: a spec check reads issue facts by GraphQL, never REST' 0 '^dependencies '
-expect 'FR4: a 120-comment ticket is read to its first comment' 0 check.json "$WAIT12 | $MERGE71 | issue(12; .comments += discussion(118))" -- wake 12 <<EOF
-resume #12: #71 merged; tell its builder, thread thr_syn12 (wait comment 1202)
+expect 'FR4: a 120-comment ticket is read to its first comment' 0 check.json "$WAIT12 | $MERGE71 | issue(12; .comments[0].body |= sub(\"syn12\"; \"syn-12\") | .comments += discussion(118))" -- wake 12 <<EOF
+resume #12: #71 merged; tell its builder, thread thr_syn-12 (wait comment 1202)
 EOF
 log_has 'FR4: a 120-comment ticket is read to its first comment' 1 '^graphql Comments number=12 before=20$'
 log_has 'FR4: a 120-comment ticket is read to its first comment' 0 '^issue comments '

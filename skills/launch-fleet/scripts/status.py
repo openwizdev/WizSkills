@@ -197,10 +197,28 @@ def gh(method, path, payload=None, accept=None, raw=False):
         raise Failed(f'{method} {path}: not JSON')
 
 
+def load_read_helper(name):
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / f'{name}.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+ghcache = load_read_helper('ghcache')
+gitread = load_read_helper('gitread')
+
+
+def get(path):
+    try:
+        return ghcache.get(path)
+    except ghcache.Error as error:
+        raise Failed(str(error)) from None
+
+
 def pages(path):
     items, page = [], 1
     while True:
-        chunk = gh('GET', f'{path}?per_page=100&page={page}')
+        chunk = get(f'{path}?per_page=100&page={page}')
         if not isinstance(chunk, list):
             raise Failed(f'GET {path}: not a list')
         if not chunk:
@@ -214,10 +232,8 @@ def record_authors(repo):
     grants = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(grants)
     try:
-        text = gh('GET', f'repos/{repo}/contents/docs/agents/fleet.md',
-                  accept='Accept: application/vnd.github.raw', raw=True)
-        return grants.record_authors(text)
-    except (Failed, ValueError) as error:
+        return grants.record_authors(gitread.show(repo, 'docs/agents/fleet.md'))
+    except (gitread.Error, ValueError) as error:
         raise Failed(f'no record authors in docs/agents/fleet.md: {error}')
 
 
@@ -406,7 +422,7 @@ def held(repo, n, comments, authors):
     now = datetime.now(timezone.utc)
     if any(x[1]['state'] == 'asking' and live(x, now) for x in notes(pages(comments), authors)):
         return []
-    labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+    labels = [label['name'] for label in get(f'repos/{repo}/issues/{n}')['labels']]
     return left_on(n) if ASKING_LABEL in labels else []
 
 
@@ -435,7 +451,7 @@ def asked_label(repo, n, made, fields, author):
 
 def take_own(repo, n, login, labels, asked=None, locked=False):
     def labelled():
-        return ASKING_LABEL in [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+        return ASKING_LABEL in [label['name'] for label in get(f'repos/{repo}/issues/{n}')['labels']]
     left = left_on(n)
     if not locked:
         return left if ASKING_LABEL in labels else []
@@ -551,7 +567,7 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
     report = []
     with settling(repo, n) as locked:
         found = notes(pages(comments), authors)
-        labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+        labels = [label['name'] for label in get(f'repos/{repo}/issues/{n}')['labels']]
         asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)
         if asking and ASKING_LABEL not in labels:
             add_own(repo, n, login, locked)
@@ -762,7 +778,7 @@ def settle(repo, n, authors, login, base, pending):
         return next((x for x in notes(pages(comments), authors) if x[1]['state'] == 'asking' and live(x, now)), None)
 
     def labelled():
-        return ASKING_LABEL in [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+        return ASKING_LABEL in [label['name'] for label in get(f'repos/{repo}/issues/{n}')['labels']]
 
     still = asking()
     if pending is None:

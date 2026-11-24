@@ -18,8 +18,8 @@ ROLE_SECTIONS = {
     'reviewer': ('Supporting edits', 'Test commands', 'CI checks', 'Approval rules'),
     'planner': ('Labels', 'Supporting edits', 'Approval rules'),
 }
-LEGACY_MODELS = {'Builder', 'Builder for small tickets', 'Reviewer for Claude-built',
-                 'Reviewer for GPT-built', 'Fixer'}
+LEGACY_REVIEWER_MODELS = ('Reviewer for Claude-built', 'Reviewer for GPT-built')
+LEGACY_MODELS = {'Builder', 'Builder for small tickets', *LEGACY_REVIEWER_MODELS, 'Fixer'}
 
 
 def git(root, *args):
@@ -49,13 +49,16 @@ def sections(text):
     return {name: ''.join(lines).strip() for name, lines in result.items()}
 
 
-def selected_sections(path, text, names):
+def selected_sections(path, text, names, role):
     found = sections(text)
     if names is None:
         excluded = {'Test commands', 'Supporting edits'}
         if 'Models' in found:
             excluded.update(LEGACY_MODELS)
         names = [name for name in found if name not in excluded]
+    elif role == 'reviewer':
+        model_sections = ('Models',) if 'Models' in found else LEGACY_REVIEWER_MODELS
+        names = (*model_sections, *names)
     return [found.get(name, f'No `{name}` section in `{path}`.') for name in names]
 
 
@@ -108,7 +111,7 @@ def print_role(role, root):
         elif role == 'planner' and path == AGENTS + 'triage-labels.md':
             parts.append(labels_table(text))
         elif path == FLEET or names is not None:
-            parts.extend(selected_sections(path, text, names))
+            parts.extend(selected_sections(path, text, names, role))
         else:
             parts.append(text.rstrip('\n'))
     print(f'# Context for {role} at {short}\n\nBlobs: ' + (', '.join(blobs) or 'none') + '\n')

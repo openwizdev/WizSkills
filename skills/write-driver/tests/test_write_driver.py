@@ -773,6 +773,38 @@ KEY_DRIVER = r'''#!/usr/bin/env python3
 import json, os, subprocess, sys
 HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'kernel', 'driver-kit', 'hostkey.py')
 HOST = 'examplehost'
+BOX = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+
+def cmdlines():
+    found = {}
+    for pid in filter(str.isdigit, os.listdir('/proc')):
+        try:
+            found[int(pid)] = open('/proc/%s/cmdline' % pid, 'rb').read()
+        except OSError:
+            pass
+    return found
+
+
+def fake_hosts():
+    hosts = [pid for pid, line in cmdlines().items() if b'\0fake-host\0' in line]
+    if not hosts:
+        raise LookupError('no fake host')
+    return hosts
+
+
+def box_text():
+    import stat
+    seen = ''
+    for root, _, files in os.walk(BOX):
+        for name in files:
+            path = os.path.join(root, name)
+            try:
+                if stat.S_ISREG(os.lstat(path).st_mode):
+                    seen += open(path, errors='replace').read()
+            except OSError:
+                pass
+    return seen
 
 
 def refuse(error, next_):
@@ -1065,6 +1097,176 @@ class KeyHostExpiredLogin(Base):
         self.assertEqual(workers(), [], 'the timed-out driver left its worker running')
         self.assertIn('did not answer', out)
         self.assertNotIn('expired-login', self.saved()['lessons'])
+
+    def test_a_refused_rerun_clears_the_saved_result_and_the_share_offer(self):
+        # catches: a rerun refused at route validation leaving the earlier pass and its share offer standing (R8)
+        bad = {'an unregistered host': ['--key-host', 'otherhost', '--openwiz', KEY_OPENWIZ],
+               'no checkout': ['--key-host', 'examplehost'],
+               'a bad harness name': ['--harness', 'Bad Harness', '--key-host', 'examplehost', '--openwiz',
+                                      KEY_OPENWIZ]}
+        for name, args in bad.items():
+            with self.subTest(name):
+                shutil.rmtree(self.state, ignore_errors=True)
+                self.passing_report(23)
+                self.assertEqual(self.saved()['lessons']['expired-login'], 'pass')
+                self.assertIsNotNone(self.saved()['report'])
+                harness = [] if '--harness' in args else ['--harness', 'exampleagent']
+                self.wd('lesson', 'expired-login', '--state', self.state, '--driver', self.key_driver(
+                    'rerun-%d' % len(name)), *harness, *args, check=1)
+                self.assertNotIn('expired-login', self.saved()['lessons'])
+                self.assertIsNone(self.saved()['report'])
+                self.assertIsNone(self.saved()['passed_at'])
+                self.assertEqual(self.wd('share', 'offer', '--state', self.state).returncode, 1)
+
+    def test_below_landlock_abi_6_the_route_launches_nothing(self):
+        # catches: a kernel without Landlock's signal scope admitted, so a boxed process can kill the probe (R7)
+        for abi in (1, 4, 5):
+            with self.subTest(abi=abi):
+                self.begin()
+                code, out, launched = self.run_in_process('--driver', self.key_driver('abi-%d' % abi),
+                                                          '--key-host', 'examplehost', '--openwiz', KEY_OPENWIZ,
+                                                          abi=abi)
+                self.assertEqual(code, 1, out)
+                self.assertIn('cannot isolate', out)
+                self.assertIn('signal', out)
+                self.assertEqual(launched, [])
+                self.assertNotIn('expired-login', self.saved()['lessons'])
+
+    def test_without_a_subreaper_the_route_launches_nothing(self):
+        # catches: PR_SET_CHILD_SUBREAPER failing unnoticed, so a worker in its own session escapes the cleanup (R7)
+        import ctypes
+        from unittest import mock
+        real = ctypes.CDLL
+
+        class Lib:
+            def __init__(self, *a, **k):
+                self.real = real(*a, **k)
+
+            def __getattr__(self, name):
+                return getattr(self.real, name)
+
+            def prctl(self, op, *a):
+                return -1 if op == 36 else self.real.prctl(op, *a)
+        self.begin()
+        with mock.patch.object(wd.ctypes, 'CDLL', Lib):
+            code, out, launched = self.run_in_process('--driver', self.key_driver('no-subreaper'), '--key-host',
+                                                      'examplehost', '--openwiz', KEY_OPENWIZ)
+        self.assertEqual(code, 1, out)
+        self.assertIn('subreaper', out)
+        self.assertEqual(launched, [])
+        self.assertNotIn('expired-login', self.saved()['lessons'])
+
+    def test_neither_the_driver_nor_the_helper_can_signal_the_probe_or_the_fake_host(self):
+        # catches: a boxed process able to signal the supervising probe or the fake host (R7); signal 0 kills nothing
+        self.begin()
+        reach = {'the supervising probe': 'os.kill(os.getppid(), 0)',
+                 'the fake host': '[os.kill(pid, 0) for pid in fake_hosts()]'}
+        for n, (name, probe) in enumerate(reach.items()):
+            with self.subTest('driver: ' + name):
+                guarded = ('try:\n            %s\n        except PermissionError:\n            pass\n'
+                           '        except Exception as e:\n            refuse("the kernel let it try: %%r" %% e, '
+                           '"nothing")\n        else:\n            refuse("the probe reached it", "nothing")' % probe)
+                p = self.lesson(self.key_driver('signal-%d' % n, probe=guarded), check=0)
+                self.assertIn('expired-login pass', p.stdout)
+        supervisor = 'int(open("/proc/%d/stat" % os.getppid()).read().rpartition(")")[2].split()[1])'
+        helper = {'the fake host': 'os.kill(os.getppid(), 0)', 'the supervising probe': 'os.kill(%s, 0)' % supervisor}
+        evil = self.tmp / 'evil-signal'
+        shutil.copytree(KEY_OPENWIZ, evil)
+        f = evil / 'kernel' / 'driver-kit' / 'hostkey.py'
+        checks = ''.join('    try:\n        %s\n    except PermissionError:\n        pass\n'
+                         '    except Exception:\n        reached.append(%r)\n    else:\n        reached.append(%r)\n'
+                         % (probe, name, name) for name, probe in helper.items())
+        f.write_text(f.read_text().replace(
+            'def main():\n', 'def main():\n    reached = []\n' + checks +
+            '    if reached:\n        print(json.dumps({"status": 200, "body": {}}))\n        return 0\n'))
+        p = self.lesson(self.key_driver('signal-helper'), openwiz=evil, check=0)
+        self.assertIn('expired-login pass', p.stdout)
+
+    def leaky_checkout(self, name, leak, answer=None):
+        """A checkout whose helper sends the correctly keyed request, then tries to leak the key."""
+        evil = self.tmp / name
+        shutil.copytree(KEY_OPENWIZ, evil)
+        f = evil / 'kernel' / 'driver-kit' / 'hostkey.py'
+        text = f.read_text()
+        anchor = "    print(json.dumps({'status': status, 'body': json.loads(raw) if raw else None}))\n"
+        assert anchor in text
+        f.write_text(text.replace(anchor, leak + (answer or anchor)))
+        return evil
+
+    def test_a_helper_that_leaks_the_test_key_never_reaches_the_driver(self):
+        # catches: the helper sharing the relay folder with the driver, or its answer forwarded verbatim, so a
+        # modified helper hands the driver the test key while it sends a correctly keyed request (R6)
+        find = ('    argv = open("/proc/%d/cmdline" % os.getppid(), "rb").read().split(b"\\0")\n'
+                '    for folder in [a.decode() for a in argv if a.endswith(b"/relay")]:\n')
+        to_file = find + ('        try:\n            open(os.path.join(folder, "leak"), "w").write(key)\n'
+                          '        except OSError:\n            pass\n')
+        to_fifo = find + ('        try:\n            names = os.listdir(folder)\n        except OSError:\n'
+                          '            names = []\n        for name in names:\n            try:\n'
+                          '                fd = os.open(os.path.join(folder, name), os.O_WRONLY | os.O_NONBLOCK)\n'
+                          '                os.write(fd, key.encode())\n            except OSError:\n'
+                          '                pass\n')
+        echo = "    print(json.dumps({'status': status, 'body': {'key': key}}))\n"
+        reversed_echo = "    print(json.dumps({'status': status, 'body': {}, 'k': key[::-1]}))\n"
+        looks = ("        seen = json.dumps(out) + box_text()\n"
+                 "        if 'write-driver-probe-' in seen or '-eborp-revird-etirw' in seen:\n"
+                 "            print(json.dumps({'run': 'run-saw-the-key'}))\n            return 0\n"
+                 "        if out['status'] == 401:")
+        driver = self.key_driver('looks', change=lambda t: t.replace("        if out['status'] == 401:", looks))
+        self.begin()
+        for name, leak in (('a file in the relay folder', to_file), ('the answer FIFO', to_fifo)):
+            with self.subTest(name):
+                p = self.lesson(driver, openwiz=self.leaky_checkout('leak-%d' % len(name), leak), check=0)
+                self.assertIn('expired-login pass', p.stdout)
+        for name, leak in (('echo', echo), ('reversed', reversed_echo)):
+            with self.subTest(name):
+                # the key in the answer: the fake host forwards only its own reply, so the helper's answer fits
+                # nothing and the run proves nothing
+                p = self.lesson(driver, openwiz=self.leaky_checkout('leak-' + name, '', leak), check=1)
+                self.assertIn("never reached the kit's fake host through the key helper", p.stdout)
+                self.assertNotIn('expired-login', self.saved()['lessons'])
+
+    def test_helper_traffic_outside_start_earns_no_credit(self):
+        # catches: the witness counting a helper request made by `stop`, a background process `start` left, or
+        # an answer nobody read, so `start` gets credit for handling a 401 it never saw (R3)
+        stop_only = self.key_driver(
+            'stop-only', probe="print(json.dumps({'run': 'run-synthetic-1'}))\n        return 0",
+            change=lambda t: t.replace("    print(json.dumps({'run': req.get('run'), 'stopped': True}))",
+                                       "    ask('DELETE', '/v1/runs/1')\n"
+                                       "    print(json.dumps({'run': req.get('run'), 'stopped': True}))"))
+        background = self.key_driver('background', probe=(
+            "late = subprocess.Popen([sys.executable, '-I', HELPER], stdin=subprocess.PIPE, "
+            "stdout=subprocess.DEVNULL, start_new_session=True)\n"
+            "        late.stdin.write(json.dumps({'host': HOST, 'method': 'POST', 'path': '/v1/runs', 'body': {}})"
+            ".encode())\n        late.stdin.close()\n"
+            "        print(json.dumps({'run': 'run-synthetic-1'}))\n        return 0"))
+        unread = self.key_driver('unread', probe=(
+            "base = os.path.join(BOX, 'relay', os.urandom(16).hex())\n"
+            "        os.mkfifo(base + '.out', 0o600)\n"
+            "        open(base + '.part', 'w').write(json.dumps({'host': HOST, 'method': 'POST', "
+            "'path': '/v1/runs', 'body': {}}))\n"
+            "        os.rename(base + '.part', base + '.in')\n"
+            "        held = open(base + '.out', 'rb')\n"
+            "        __import__('time').sleep(1)\n"
+            "        print(json.dumps({'run': 'run-synthetic-1'}))\n        return 0"))
+        self.begin()
+        for name, driver in (('only in stop', stop_only), ('left in the background', background),
+                             ('never read', unread)):
+            with self.subTest(name):
+                p = self.lesson(driver, check=1)
+                self.assertIn("never reached the kit's fake host through the key helper", p.stdout)
+                self.assertNotIn('expired-login', self.saved()['lessons'])
+
+    def test_the_control_status_is_not_on_the_fake_hosts_command_line(self):
+        # catches: the 401 or 500 readable in /proc from the fake host's arguments, so a driver can answer the
+        # control without the helper's reply (R3)
+        peek = ("seen = b''.join(line for pid, line in cmdlines().items() if pid in fake_hosts())\n"
+                "        out = ask('POST', '/v1/runs', {'ticket': req['ticket']})\n"
+                "        if b'\\x00401\\x00' in seen or b'\\x00401\\n' in seen:\n"
+                "            refuse('the host answered 401: the sign-in has ended', %s)\n"
+                "        print(json.dumps({'run': 'run-synthetic-1'}))\n        return 0" % SIGN_IN_NEXT)
+        self.begin()
+        p = self.lesson(self.key_driver('peek', probe=peek), check=0)
+        self.assertIn('expired-login fail: silent-start', p.stdout)
 
     def test_the_skill_teaches_the_key_host_route_in_place_of_out_of_reach(self):
         text = key_host_lines()

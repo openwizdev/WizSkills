@@ -1,0 +1,84 @@
+{
+  "repository": "syn-owner/site",
+  "person": "syn-owner",
+  "roster": [
+    {
+      "name": "Claude Code",
+      "kind": "harness",
+      "driver": "local",
+      "roles": [
+        "builder"
+      ],
+      "writes_as": "syn-owner's App",
+      "label": "Claude Code via syn-owner"
+    },
+    {
+      "name": "Codex",
+      "kind": "harness",
+      "driver": "local",
+      "roles": [
+        "reviewer"
+      ],
+      "writes_as": "syn-owner's App",
+      "label": "Codex via syn-owner"
+    }
+  ],
+  "picks": [
+    {
+      "ticket": 4001,
+      "role": "builder",
+      "start": {
+        "kind": "build",
+        "labels": []
+      },
+      "choice": {
+        "harness": "Claude Code",
+        "provider": "claude-code",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "model_name": "Opus 5.5"
+      },
+      "pick": {
+        "name": "Claude Code",
+        "kind": "harness",
+        "driver": "local",
+        "start": {
+          "harness": "claude",
+          "model": "claude-opus-5-5"
+        },
+        "note": {
+          "harness": "Claude Code via syn-owner",
+          "model": "Opus 5.5 default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "builder-4001",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    },
+    {
+      "ticket": 4001,
+      "role": "reviewer",
+      "start": {
+        "kind": "review",
+        "builder_family": "claude"
+      },
+      "choice": {
+        "harness": "Codex",
+        "provider": "codex",
+        "model": "vendor/demo",
+        "effort": "medium",
+        "model_name": "vendor/demo"
+      },
+      "pick": null,
+      "waits": "driver",
+      "look": "roster: driver v1 can't start codex vendor/demo; choose another model in the Models table"
+    }
+  ]
+}

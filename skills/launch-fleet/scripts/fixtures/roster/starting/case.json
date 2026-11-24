@@ -1,0 +1,183 @@
+{
+  "repository": "syn-owner/site",
+  "person": "syn-owner",
+  "roster": [
+    {
+      "name": "Claude Code",
+      "kind": "harness",
+      "driver": "local",
+      "roles": [
+        "orchestrator",
+        "builder",
+        "reviewer",
+        "helper"
+      ],
+      "writes_as": "syn-owner's App",
+      "label": "Claude Code via syn-owner"
+    }
+  ],
+  "picks": [
+    {
+      "ticket": 3001,
+      "role": "orchestrator",
+      "start": {
+        "kind": "spec"
+      },
+      "choice": {
+        "harness": "Claude Code",
+        "provider": "claude-code",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "model_name": "Opus 5.5"
+      },
+      "pick": {
+        "name": "Claude Code",
+        "kind": "harness",
+        "driver": "local",
+        "start": {
+          "harness": "claude",
+          "model": "claude-opus-5-5"
+        },
+        "note": {
+          "harness": "Claude Code via syn-owner",
+          "model": "Opus 5.5 default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "orchestrator-3001",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    },
+    {
+      "ticket": 3002,
+      "role": "builder",
+      "start": {
+        "kind": "build",
+        "labels": []
+      },
+      "choice": {
+        "harness": "Claude Code",
+        "provider": "claude-code",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "model_name": "Opus 5.5"
+      },
+      "pick": {
+        "name": "Claude Code",
+        "kind": "harness",
+        "driver": "local",
+        "start": {
+          "harness": "claude",
+          "model": "claude-opus-5-5"
+        },
+        "note": {
+          "harness": "Claude Code via syn-owner",
+          "model": "Opus 5.5 default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "builder-3002",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    },
+    {
+      "ticket": 3003,
+      "role": "reviewer",
+      "start": {
+        "kind": "review",
+        "builder_family": "gpt"
+      },
+      "choice": {
+        "harness": "Claude Code",
+        "provider": "claude-code",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "model_name": "Opus 5.5"
+      },
+      "pick": {
+        "name": "Claude Code",
+        "kind": "harness",
+        "driver": "local",
+        "start": {
+          "harness": "claude",
+          "model": "claude-opus-5-5"
+        },
+        "note": {
+          "harness": "Claude Code via syn-owner",
+          "model": "Opus 5.5 default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "reviewer-3003",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    },
+    {
+      "ticket": 3004,
+      "role": "reviewer",
+      "start": {
+        "kind": "review",
+        "builder_family": "claude"
+      },
+      "choice": null,
+      "pick": null,
+      "waits": "models",
+      "look": null
+    },
+    {
+      "ticket": 3005,
+      "role": "helper",
+      "start": {
+        "kind": "helper"
+      },
+      "choice": {
+        "harness": "Claude Code",
+        "provider": "claude-code",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "model_name": "Opus 5.5"
+      },
+      "pick": {
+        "name": "Claude Code",
+        "kind": "harness",
+        "driver": "local",
+        "start": {
+          "harness": "claude",
+          "model": "claude-opus-5-5"
+        },
+        "note": {
+          "harness": "Claude Code via syn-owner",
+          "model": "Opus 5.5 default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "helper-3005",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    }
+  ]
+}

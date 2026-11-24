@@ -18,7 +18,7 @@ def repository(owner, name, branches):
             'description': None, 'homepage': None, 'labels': [], 'pulls': [], 'branches': branches}
 
 
-def demo(argv):
+def demo(argv, api=False):
     path = os.environ['FAKE_GH_REPOS']
     state = json.loads(Path(path).read_text())
     with open(os.environ['FAKE_GH_CREATE_LOG'], 'a') as log:
@@ -56,7 +56,11 @@ def demo(argv):
     Path(path).write_text(json.dumps(state))
     if state.get('create') == 'lost':
         return 1
-    print(json.dumps({'node_id': state.get('reply_id', made['node_id']), 'full_name': name, 'private': True}))
+    if not api:
+        print('https://github.com/%s' % name)
+        return 0
+    print(json.dumps({'id': 1000 + len(state['log']), 'node_id': state.get('reply_id', made['node_id']),
+                      'full_name': name, 'private': True}))
     return 0
 
 
@@ -71,7 +75,7 @@ def api_create(argv):
     if argv[4:] != ['-f', 'name=' + short, '-F', 'private=true', '-F', 'auto_init=true'] or not short:
         sys.stderr.write('synthetic create refused\n')
         return 1
-    return demo(['repo', 'create', '%s/%s' % (owner, short), '--private', '--add-readme'])
+    return demo(['repo', 'create', '%s/%s' % (owner, short), '--private', '--add-readme'], api=True)
 
 
 def default_ref(target, name, branch):

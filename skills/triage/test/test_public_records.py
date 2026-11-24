@@ -414,7 +414,7 @@ class FeedbackPath(unittest.TestCase):
             ("bad_area", 'Problem.\n\nOpenWiz feedback facts {"v":1,"area":"Bad_Slug"}\n\n' + MARKER),
             ("bad_openwiz", 'Problem.\n\nOpenWiz feedback facts {"v":1,"openwiz":"v0.1.1"}\n\n' + MARKER),
             ("bad_wizskills", 'Problem.\n\nOpenWiz feedback facts {"v":1,"wizskills":"0.4"}\n\n' + MARKER),
-            ("bad_skill", 'Problem.\n\nOpenWiz feedback facts {"v":1,"skill":"triage@0.4.0"}\n\n' + MARKER),
+            ("bad_skill", 'Problem.\n\nOpenWiz feedback facts {"v":1,"skill":"feedback-0.4.0"}\n\n' + MARKER),
             ("bad_os", 'Problem.\n\nOpenWiz feedback facts {"v":1,"os":"freebsd"}\n\n' + MARKER),
             ("bad_arch", 'Problem.\n\nOpenWiz feedback facts {"v":1,"arch":"riscv64"}\n\n' + MARKER),
             ("bad_host", 'Problem.\n\nOpenWiz feedback facts {"v":1,"host":"CloudRoom"}\n\n' + MARKER),
@@ -435,7 +435,7 @@ class FeedbackPath(unittest.TestCase):
         ]
         for label, body in bad_bodies:
             with self.subTest(case=label):
-                labels = ["feedback"] if label == "wrong_place_no_marker" else []
+                labels = ["feedback"] if label in ("wrong_place_no_marker", "wrong_place_no_blank_after") else []
                 rc, out, text = plan(case(report(body=body, labels=labels)))
                 self.assertEqual(rc, 0, text)
                 self.assertEqual(out["outcome"], "fleet", text)

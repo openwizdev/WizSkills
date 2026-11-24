@@ -11,7 +11,7 @@ Write a project's settings as four short files in `docs/agents/`, which every fl
 | File | Says | Template |
 | --- | --- | --- |
 | `issue-tracker.md` | Where issues, versions, specs and tickets live, and the private records repository | [template](templates/issue-tracker.md) |
-| `triage-labels.md` | The five triage roles and each one's label | [template](templates/triage-labels.md) |
+| `triage-labels.md` | The five triage roles and optional Pro triage | [template](templates/triage-labels.md) |
 | `domain.md` | Where the glossary, ADRs, grills and private state live | [template](templates/domain.md) |
 | `fleet.md` | Builders, reviewers, test commands, CI checks, approval rules, merge rules and record authors | [template](templates/fleet.md) |
 
@@ -36,7 +36,7 @@ Done when every value in the four files has a named source, or is known to be mi
 Tell the user in a few lines what you found and what is missing. Then ask one setting at a time, each with a recommendation they can accept in a word, skipping any already settled:
 
 1. **Tracker:** GitHub, this repository, plus the verified private repository for grills, exact replies and orchestrator state.
-2. **Triage labels:** keep the five standard roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`)? A role with an existing label keeps that name.
+2. **Triage labels:** keep the five standard roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`)? A role with an existing label keeps that name. Include the optional Pro settings only when the user names a Pro repository.
 3. **Glossary and ADRs:** one root `GLOSSARY.md` and `docs/adr/`, grills in the private repository's `docs/grills/`, with the recorded handoff page and private state folder. Offer per-package glossaries only for several packages. Keep an existing layout.
 4. **Builder and reviewer:** the recorded choice; with none, Claude Code, Opus 5.5, XHigh builders and Codex, Sol 6.1, Medium reviewers.
 5. **Test commands and CI checks:** copied exactly; with none, say so.
@@ -47,7 +47,7 @@ Done when every missing setting has the user's answer.
 
 ## 3. Write
 
-Fill each template. Every `fleet.md` value names its source: a linked file, a command, or `<decider>, <YYYY-MM-DD>: <decision> ([private record](<comment URL>)).` Create a label only for a role with none (`gh label create <name> --description "<meaning>"`). Write no run date, so an unchanged project gives the same bytes. Write only these four files and missing labels; private comments go only to the private repository, named with `--repo`.
+Fill each template. Every `fleet.md` value names its source: a linked file, a command, or `<decider>, <YYYY-MM-DD>: <decision> ([private record](<comment URL>)).` Create a label only for a role with none (`gh label create <name> --description "<meaning>"`). For configured Pro triage, create the template's `pro` label if missing and write the Pro repository line. Otherwise omit that line. Write no run date, so an unchanged project gives the same bytes. Write only these four files and missing labels; private comments go only to the private repository, named with `--repo`.
 
 Done when the four files are written.
 

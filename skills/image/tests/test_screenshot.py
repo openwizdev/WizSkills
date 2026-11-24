@@ -390,7 +390,6 @@ class Screenshots(unittest.TestCase):
                 self.assertEqual(len(state['captures']), 1)
 
     def test_fixed_at_bottom_captures_first_screen_beyond_viewport_and_accepts_non_uniform_png(self):
-        # Right edge is uniform (like a centred desktop layout); only pixel (0, 0) differs.
         first_png = make_png(4, 4, (252, 252, 252), first_pixel=(213, 94, 0), filter_byte=4)
         full_png = make_png(4, 4, (213, 94, 0), first_pixel=(204, 121, 167), filter_byte=0)
         with tempfile.TemporaryDirectory() as temp:

@@ -161,8 +161,15 @@ def pacer_state(deadline):
             raise Stop('refused: the write pacer\'s state file is unreadable; nothing was written')
         held, waits = scan(path)
         value['until'] = max([value['until'], *waits])
-        yield value
-        save(path, value)
+        saved = [False]
+
+        def commit():
+            save(path, value)
+            saved[0] = True
+
+        yield value, commit
+        if not saved[0]:
+            save(path, value)
         for p in held:
             try:
                 p.unlink()
@@ -191,7 +198,7 @@ def take(paced_write):
     key = credential() if paced_write else None
     deadline = time.monotonic() + SLOT_WAIT_SECONDS
     while True:
-        with pacer_state(deadline) as s:
+        with pacer_state(deadline) as (s, commit):
             now = time.time()
             s['inflight'] = [e for e in s['inflight'] if now - e[1] < IN_FLIGHT_STALE_SECONDS and alive(e[0])]
             s['accounts'] = {k: kept for k, v in s['accounts'].items() if (kept := [t for t in v if now - t < 3600])}
@@ -220,14 +227,14 @@ def take(paced_write):
                         s['accounts'][key] = times + [now]
                     entry = [os.getpid(), now]
                     s['inflight'].append(entry)
-                    save(state_path(), s)
+                    commit()
                 return entry
         time.sleep(max(0.05, min(0.5 if busy else free - now, left)))
 
 
 def settle(entry, until=None):
     try:
-        with pacer_state(time.monotonic() + SLOT_WAIT_SECONDS) as s:
+        with pacer_state(time.monotonic() + SLOT_WAIT_SECONDS) as (s, _):
             if until is not None:
                 s['until'] = max(s['until'], until)
             if entry in s['inflight']:
@@ -241,6 +248,13 @@ def settle(entry, until=None):
             save(state_path(), until, hold=True)
         return True
     except Stop:
+        pass
+    try:
+        path = state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        save(path, until, hold=True)
+        return True
+    except (OSError, Stop):
         return False
 
 

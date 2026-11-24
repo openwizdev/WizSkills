@@ -39,8 +39,15 @@ Settings: the project's `docs/agents/huntr.md` sections `## Attack targets`
 3. Cross targets with techniques: headers and TLS, sign-in and sessions,
    input injection, secrets in repositories, builds and logs, the install line
    and release assets, token scope, sandbox reach, prompt injection against
-   skills and agents, loops and their scripts. One attacker per slice, with no
-   artificial cap. Pin `origin/main` for each code target.
+   skills and agents, loops and their scripts, and gate attacks. One attacker
+   per slice, with no artificial cap. Pin `origin/main` for each code target.
+   A gate attack makes a deliberately bad change in a throwaway clone (a
+   weakened test or assertion, a hidden skip, an edited check or its fixture,
+   or a stub that only fakes the behaviour) and runs the project's own checks
+   on it locally: the test suite, CI's check entrypoint, and the review and
+   build helpers' checks. A check that stays green is a finding. The bad
+   change is never pushed, and never opened as a pull request on a live
+   repository.
 
 **Done when** the matrix is written in resumable state.
 
@@ -75,7 +82,10 @@ archive those attackers.
 
 Post one record on the attack record issue: `<run>`, pins, every slice as
 reported or blocked, findings by channel (public links, private counts only),
-gaps and next focus. Archive every attacker, then
+then `disproved: <n>`: the findings that disprove a merged claim (a spec Proof
+line, a changelog line, a test's name or a doc saying the code does what it
+doesn't), counted like fixes and filed like any other finding. Then gaps and
+next focus. Archive every attacker, then
 `room-cli thread archive --self`.
 
 ## Every fixed hole leaves a check

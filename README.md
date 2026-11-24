@@ -5,26 +5,15 @@
 
 # WizSkills
 
-**The skills your agents follow to run an [OpenWiz](https://github.com/openwizdev/OpenWiz) factory: grill, spec, tickets, build, review, merge.** OpenWiz is the kernel; WizSkills is what the agents actually do on top of it.
+**The skills coding agents follow to run an [OpenWiz](https://github.com/openwizdev/OpenWiz) agent factory: grill, spec, tickets, build, review, merge.**
 
-**Status:** release 0.1.2. 0.2.0 is coming soon. Works with Claude Code, Codex, or any agent that can read a file.
-
-## Quick start
-
-On Claude Code, install the plugin pinned to this release, then start a new session:
+Latest release: [v0.4.2](https://github.com/openwizdev/WizSkills/releases/tag/v0.4.2), 20 skills. On Claude Code, run this in your project, then start a new session:
 
 ```sh
-claude plugin marketplace add https://github.com/openwizdev/WizSkills.git#v0.1.2
-claude plugin install openwiz@wizskills --scope project
+claude plugin marketplace add https://github.com/openwizdev/WizSkills.git#v0.4.2 && claude plugin install openwiz@wizskills --scope project
 ```
 
-`--scope project` enables the plugin for this one project only: run the install in each project that should have the skills.
-
-Codex and other agents: see [docs/install.md](docs/install.md), which also shows how to check a release before you run it. `install.sh` prints the version and commit it installed. Codex's skill catalog lists each skill at its `.agents/skills/<name>` link path, not at the installed folder the link points to.
-
-## How it works
-
-A skill is a folder, `skills/<name>/`, with a `SKILL.md` your agent reads and the scripts and tests beside it. On Claude Code each is named `openwiz:<name>`. The main path through a factory:
+Codex or any agent that can read a file: [docs/install.md](docs/install.md).
 
 | Step | Skill | What the agent does |
 | --- | --- | --- |
@@ -34,15 +23,11 @@ A skill is a folder, `skills/<name>/`, with a `SKILL.md` your agent reads and th
 | Review | [`review-ticket`](skills/review-ticket/SKILL.md) | A reviewer from another model family checks it before merge |
 | Watch | [`where-are-we`](skills/where-are-we/SKILL.md) | Tells you where things stand |
 
-Every skill is listed in [skills/README.md](skills/README.md). Skills write their records to GitHub by OpenWiz's [records rules](https://github.com/openwizdev/OpenWiz/blob/main/kernel/records.v1.md). WizSkills supplies no credentials: your agent uses its own signed-in tools.
-
-## Checking a change
-
-Run `npm ci --ignore-scripts` once before `python3 check/run.py`: without it, the release tests fail because Changesets is not installed.
+Each skill is a folder, `skills/<name>/`, with a `SKILL.md` the agent reads plus its scripts and tests; on Claude Code it is `openwiz:<name>`. All skills: [skills/README.md](skills/README.md). Skills write their records to GitHub by OpenWiz's [records rules](https://github.com/openwizdev/OpenWiz/blob/main/kernel/records.v1.md) and use your agent's own signed-in tools; WizSkills supplies no credentials.
 
 ## Links
 
-- [Install guide](docs/install.md) · [Versions and releases](docs/versions.md) · [Changelog](CHANGELOG.md)
+- [Install guide](docs/install.md) (also: checking a release, running the tests) · [Versions](docs/versions.md) · [Changelog](CHANGELOG.md)
 - [OpenWiz](https://github.com/openwizdev/OpenWiz) · [openwiz.dev](https://openwiz.dev) · [all repos](https://github.com/openwizdev)
-- To report a problem, ask your agent to file a GitHub issue.
-- [Apache License 2.0](LICENSE). [NOTICE](NOTICE) collects the upstream notices; each adapted skill keeps its own `NOTICE.md`.
+- Report a problem: ask your agent to file a GitHub issue.
+- [Apache License 2.0](LICENSE). [NOTICE](NOTICE) collects upstream notices; each adapted skill keeps its own `NOTICE.md`.

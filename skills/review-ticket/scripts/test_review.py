@@ -123,6 +123,8 @@ Checked: R1, R3 and the changed code. Ran: `cargo test` (33 passed).
 
 Next: none open. It merges by the project's merge rules.
 """
+LATE_PRE = ("- **R5 [pre-existing]** `src/cli.rs:12` (Sweep) Help exits 0 on a bad flag. Fix: exit 2. "
+            "Pre-existing issue: #62.\n  Late: the first review read the CLI only for the export flag.")
 FAKE_GH = r'''#!/usr/bin/env python3
 import base64, json, os, sys
 from pathlib import Path
@@ -503,7 +505,8 @@ class Review(unittest.TestCase):
             "user path on unchanged code": (risk.replace("Risk: privacy: a cook's sync token reaches the terminal log.",
                                                          "User path: a cook sees the token in the terminal."),
                                             fresh, 1, refused),
-            "stated risk on unchanged code": (risk, fresh, 0, "report ok"),
+            "stated risk on unchanged code": (risk + "\n  Late: the first review never opened the CLI.", fresh, 0,
+                                              "report ok; late: 1; held back: 0"),
             "polish on changed code": (old_r4, merge, 0, "report ok"),
         }
         for name, (line, (verdict, nxt), code, expected) in cases.items():
@@ -586,6 +589,233 @@ class Review(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout), (2, ""), out.stderr)
         self.assertEqual(out.stderr.strip(), f"refused: cannot read the pull request's own changes: git diff "
                          f"{UNRELATED}...{OLD} failed: fatal: {UNRELATED}...{OLD}: no merge base")
+
+    def late_report(self, *findings, held=1):
+        r4 = "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60."
+        text = RECHECK.replace(r4, "\n".join((r4, *findings)))
+        if held is not None:
+            text = text.replace("Checked: R1", f"{held} findings on unchanged code held back as pre-existing.\n\n"
+                                "Checked: R1")
+        if any("Risk:" in x for x in findings):
+            text = text.replace("VERDICT: APPROVE", "VERDICT: CHANGES").replace(
+                "Next: none open. It merges by the project's merge rules.",
+                "Next: a fresh, stronger builder fixes R6 once, then one final check.")
+        return text
+
+    def test_a_late_finding_on_unchanged_code_is_held_back_as_pre_existing_and_counted(self):
+        self.world({}, comments=[report(FULL)])
+        risk = ("- **R6 [blocking]** `src/cli.rs:9` (Sweep) The sync token is printed. Fix: redact it.\n"
+                "  Class: credential\n"
+                "  Late: the first review read the CLI only for the export flag.\n"
+                "  Risk: privacy: a cook's sync token reaches the terminal log.")
+        cases = {
+            "pre-existing": (self.late_report(LATE_PRE), "report ok; late: 1; held back: 1"),
+            "pre-existing and a risk": (self.late_report(LATE_PRE, risk), "report ok; late: 2; held back: 1"),
+            "risk only": (self.late_report(risk.replace("R6", "R5"), held=None).replace("fixes R6", "fixes R5"),
+                          "report ok; late: 1; held back: 0"),
+        }
+        for name, (text, expected) in cases.items():
+            with self.subTest(name):
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual((out.returncode, out.stdout.strip()), (0, expected), out.stdout + out.stderr)
+
+    def test_a_late_finding_needs_its_late_line_and_never_blocks_without_a_risk(self):
+        self.world({}, comments=[report(FULL)])
+        no_late = LATE_PRE.replace("\n  Late: the first review read the CLI only for the export flag.", "")
+        risk = ("- **R5 [blocking]** `src/cli.rs:9` (Sweep) The sync token is printed. Fix: redact it.\n"
+                "  Class: credential\n"
+                "  Risk: privacy: a cook's sync token reaches the terminal log.")
+        user = LATE_PRE.replace("[pre-existing]", "[blocking]").replace(" Pre-existing issue: #62.", "") + \
+            "\n  Class: input\n  User path: a cook mistypes a flag and the script carries on."
+        unchanged = (f"R5: `src/cli.rs` is unchanged since {OLD[:7]}; a re-check raises a new finding there "
+                     "only as a Risk: security, privacy or data-loss blocker")
+        needs = f"R5: a new finding on code unchanged since {OLD[:7]} needs its Late: line"
+        cases = {
+            "pre-existing without Late:": (self.late_report(no_late), needs),
+            "risk blocker without Late:": (self.late_report(risk, held=None).replace("fixes R6", "fixes R5"), needs),
+            "late blocker with a user path": (self.late_report(user, held=None).replace(
+                "VERDICT: APPROVE", "VERDICT: CHANGES").replace(
+                "Next: none open. It merges by the project's merge rules.",
+                "Next: a fresh, stronger builder fixes R5 once, then one final check."), unchanged),
+            "late polish": (self.late_report(LATE_PRE.replace("[pre-existing]", "[polish]").replace(
+                "Pre-existing issue", "Polish issue"), held=None), unchanged),
+            "pre-existing with a risk": (self.late_report(
+                LATE_PRE + "\n  Risk: privacy: a cook's sync token reaches the terminal log."),
+                "R5: a finding with a Risk: line is graded blocking"),
+            "pre-existing without its issue": (self.late_report(LATE_PRE.replace(" Pre-existing issue: #62.", "")),
+                                               "R5: a new pre-existing finding ends with Pre-existing issue: #<n>"),
+            "pre-existing on changed code": (self.late_report(LATE_PRE.replace("src/cli.rs:12", "src/export.rs:9"),
+                                                              held=None),
+                                             "R5: Late: and [pre-existing] are only for a re-check's new finding "
+                                             "on unchanged code"),
+            "unknown hyphenated grade": (self.late_report(LATE_PRE.replace("[pre-existing]", "[pre-exist-ing]"),
+                                                          held=None), "R5: the grade is blocking, polish or pre-existing"),
+            "held-back line missing": (self.late_report(LATE_PRE, held=None),
+                                       "the report says `1 findings on unchanged code held back as pre-existing.`"),
+            "held-back count wrong": (self.late_report(LATE_PRE, held=2),
+                                      "the report says `1 findings on unchanged code held back as pre-existing.`"),
+        }
+        for name, (text, problem) in cases.items():
+            with self.subTest(name):
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn(problem, out.stdout.splitlines())
+
+    def test_a_first_review_has_no_late_or_pre_existing_finding(self):
+        self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
+        r2 = "- **R2 [polish]** `src/cli.rs:30` (Sweep) Help wording. Fix: say export. Polish issue: #58."
+        for name, line in {"pre-existing": LATE_PRE.replace("R5", "R4"),
+                           "Late: on polish": r2.replace("R2", "R4") + "\n  Late: no reason."}.items():
+            with self.subTest(name):
+                text = FULL.replace("reaches a shared log.\n", "reaches a shared log.\n" + line.replace(
+                    "src/cli.rs:12", "src/cli.rs:40") + "\n", 1)
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn("R4: Late: and [pre-existing] are only for a re-check's new finding on unchanged code",
+                              out.stdout.splitlines())
+
+    def test_a_pre_existing_finding_keeps_its_grade_and_issue_at_the_final_check(self):
+        fresh = self.late_report(LATE_PRE).replace(
+            "- **R3 [blocking]** resolved at bbbbbbb: the log line is redacted.",
+            "- **R3 [blocking]** still open after the re-check: still logged.\n"
+            "  Risk: privacy: a cook's sync token reaches a shared log.").replace(
+            "VERDICT: APPROVE", "VERDICT: CHANGES").replace(
+            "Next: none open. It merges by the project's merge rules.",
+            "Next: a fresh, stronger builder fixes R3 once, then one final check.")
+        self.world({"checks": green(NEWER)}, pr={"head": {"sha": NEWER}}, comments=[report(FULL), report(fresh)])
+        final = fresh.replace(HEAD, NEWER).replace("Re-check of R1, R3", "Final check of R3").replace(
+            "1 findings on unchanged code held back as pre-existing.\n\n", "").replace(
+            "Next: a fresh, stronger builder fixes R3 once, then one final check.",
+            "Next: park R3 as a decision for Jake.")
+        status = "- **R5 [pre-existing]** Pre-existing issue: #62."
+        final = final.replace(LATE_PRE, status).replace(
+            "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60.",
+            "- **R4 [polish]** Polish issue: #60.")
+        cases = {
+            "kept": (final, 0, "report ok"),
+            "regraded": (final.replace(status, "- **R5 [polish]** Polish issue: #62."), 1,
+                         "R5: keeps its earlier grade, pre-existing"),
+            "polish status": (final.replace(status, "- **R5 [pre-existing]** Polish issue: #62."), 1,
+                              "R5: a pre-existing finding's status is Pre-existing issue: #<n>"),
+        }
+        for name, (text, code, expected) in cases.items():
+            with self.subTest(name):
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, code, out.stdout + out.stderr)
+                self.assertIn(expected, out.stdout.splitlines())
+
+    def three_heads(self):
+        def git(*args):
+            return subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Builder", "-c",
+                                   "user.email=builder@example.com", *args],
+                                  check=True, capture_output=True, text=True).stdout.strip()
+
+        def commit(message, changed):
+            lines = (self.repo / "src/export.rs").read_text().splitlines() if changed else []
+            lines = lines or [f"line {n}" for n in range(1, 61)]
+            for n in changed:
+                lines[n - 1] += " edited"
+            (self.repo / "src").mkdir(exist_ok=True)
+            (self.repo / "src/export.rs").write_text("\n".join(lines) + "\n")
+            git("add", "-A")
+            git("commit", "-qm", message)
+            return git("rev-parse", "HEAD")
+        git("checkout", "-q", BASE)
+        first = commit("sixty lines", [])
+        second = commit("fix round", [1, 10, 52])
+        (self.repo / "src/share.rs").write_text("fn share() {}\n")
+        git("add", "-A")
+        git("commit", "-qm", "fresh round")
+        third = git("rev-parse", "HEAD")
+        return first, second, third
+
+    def test_a_late_finding_is_judged_by_its_line_not_its_file(self):
+        first, second, _ = self.three_heads()
+        self.world({"checks": green(second)}, pr={"head": {"sha": second}}, comments=[report(FULL.replace(OLD, first))])
+        pre = LATE_PRE.replace("src/cli.rs:12", "src/export.rs:{}")
+        polish = "- **R5 [polish]** `src/export.rs:{}` (Sweep) Typo. Fix: file exists. Polish issue: #63."
+        only = "R5: Late: and [pre-existing] are only for a re-check's new finding on unchanged code"
+        cases = {
+            "pre-existing on an untouched line of a changed file": (pre.format(20), 1, 0, "report ok; late: 1; held back: 1"),
+            "pre-existing on the edited line": (pre.format(1), None, 1, only),
+            "polish on the edited line": (polish.format(10), None, 0, "report ok"),
+            "polish on an untouched line of a changed file": (polish.format(30), None, 1,
+                f"R5: `src/export.rs:30` is unchanged since {first[:7]}; a re-check raises a new finding there "
+                "only as a Risk: security, privacy or data-loss blocker"),
+            "a line past the file's end counts as changed": (pre.format(99), None, 1, only),
+        }
+        for name, (line, held, code, expected) in cases.items():
+            with self.subTest(name):
+                text = self.late_report(line, held=held).replace(HEAD, second)
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, code, out.stdout + out.stderr)
+                self.assertIn(expected, out.stdout.splitlines())
+
+    def test_late_is_measured_from_the_first_verdict_at_every_check(self):
+        first, second, third = self.three_heads()
+        full = FULL.replace(OLD, first)
+        fresh = RECHECK.replace(HEAD, second).replace("VERDICT: APPROVE", "VERDICT: CHANGES").replace(
+            "- **R3 [blocking]** resolved at bbbbbbb: the log line is redacted.",
+            "- **R3 [blocking]** still open after the re-check: still logged.\n"
+            "  Risk: privacy: a cook's sync token reaches a shared log.").replace(
+            "Next: none open. It merges by the project's merge rules.",
+            "Next: a fresh, stronger builder fixes R3 once, then one final check.")
+        r4 = "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60."
+        final = fresh.replace(second, third).replace("Re-check of R1, R3", "Final check of R3").replace(
+            r4, "- **R4 [polish]** Polish issue: #60.").replace(
+            "Next: a fresh, stronger builder fixes R3 once, then one final check.",
+            "Next: park R3 as a decision for Jake.")
+        pre = LATE_PRE.replace("src/cli.rs:12", "src/export.rs:{}")
+        held = "Checked: R1"
+        only = "R5: Late: and [pre-existing] are only for a re-check's new finding on unchanged code"
+        log = (f"**Orchestrator decision:** log and merge: R3 at {third}. Polish issues: #64. "
+               "Why: the log stays local.")
+        approve = final.replace("VERDICT: CHANGES", "VERDICT: APPROVE").replace(
+            "- **R3 [blocking]** still open after the re-check: still logged.\n"
+            "  Risk: privacy: a cook's sync token reaches a shared log.",
+            "- **R3 [polish]** Polish issue: #64.").replace(
+            "Next: park R3 as a decision for Jake.", "Next: none open. It merges by the project's merge rules.")
+        worlds = {
+            "final check": ([full, fresh], final, third),
+            "log and merge": ([full, fresh, final, log], approve, third),
+        }
+        for mode, (comments, text, head) in worlds.items():
+            for line, code, expected in ((10, 1, only), (40, 0, "report ok; late: 1; held back: 1")):
+                with self.subTest(mode=mode, line=line):
+                    self.world({"checks": green(head)}, pr={"head": {"sha": head}},
+                               comments=[report(c) if c.startswith("VERDICT") else {"body": c, "user": {"login": "owner"}}
+                                         for c in comments])
+                    body = text.replace("- **R4 [polish]** Polish issue: #60.",
+                                        "- **R4 [polish]** Polish issue: #60.\n" + pre.format(line))
+                    if code == 0:
+                        body = body.replace(held, "1 findings on unchanged code held back as pre-existing.\n\n" + held)
+                    out = self.run_helper("check", self.file("r.md", body), "--repo", SKILLS, "--pr", "7")
+                    self.assertEqual(out.returncode, code, out.stdout + out.stderr)
+                    self.assertIn(expected, out.stdout.splitlines())
+
+    def test_a_risk_line_never_rides_on_a_non_blocking_finding(self):
+        risk = "\n  Risk: privacy: a cook's sync token reaches the terminal log."
+        late_polish = LATE_PRE.replace("[pre-existing]", "[polish]").replace("Pre-existing issue", "Polish issue")
+        changed_polish = "- **R5 [polish]** `src/export.rs:9` (Sweep) Typo. Fix: file exists. Polish issue: #63."
+        stays = "R5: a finding with a Risk: line is graded blocking"
+        cases = {
+            "late polish": (late_polish + risk, None),
+            "late pre-existing": (LATE_PRE + risk, 1),
+            "polish on changed code": (changed_polish + risk, None),
+        }
+        self.world({}, comments=[report(FULL)])
+        for name, (line, held) in cases.items():
+            with self.subTest(name):
+                text = self.late_report(line, held=held).replace("fixes R6", "fixes R5")
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn(stays, out.stdout.splitlines())
+        with self.subTest("polish at a full review"):
+            self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
+            text = FULL.replace("Polish issue: #58.", "Polish issue: #58." + risk.replace("terminal", "shared"))
+            out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+            self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+            self.assertIn("R2: a finding with a Risk: line is graded blocking", out.stdout.splitlines())
 
     def hand_back(self, code_line):
         upstream, work = self.root / "upstream", self.root / "work"

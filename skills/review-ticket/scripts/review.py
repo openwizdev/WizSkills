@@ -11,9 +11,10 @@ from urllib.parse import quote
 
 SHA = re.compile(r"[0-9a-f]{40}")
 VERDICT = re.compile(r"VERDICT: (APPROVE|CHANGES) at ([0-9a-f]{40})")
-FINDING = re.compile(r"- \*\*(R[1-9][0-9]*) \[([a-z]+)\]\*\* (.*)")
+FINDING = re.compile(r"- \*\*(R[1-9][0-9]*) \[([a-z-]+)\]\*\* (.*)")
 NEW = re.compile(r"`[^`\s]+:[1-9][0-9]*` \((?:Standards|Spec|Sweep)\) \S")
-STATUSES = ("resolved at ", "withdrawn: ", "still open after the ", "disputed, kept: ", "Polish issue: #")
+STATUSES = ("resolved at ", "withdrawn: ", "still open after the ", "disputed, kept: ", "Polish issue: #",
+            "Pre-existing issue: #")
 BLOCKER_STATUSES = ("resolved at ", "withdrawn: ", "still open after the ", "disputed, kept: ")
 POLISH_STATUSES = ("Polish issue: #", "withdrawn: ")
 OPEN = ("still open after the ", "disputed, kept: ")
@@ -22,6 +23,9 @@ CLASS = re.compile(r"Class: (.*)")
 CLASS_WORD = re.compile(r"input|error-path|guard|output|state|files|process|credential|other: [a-z]+(?:-[a-z]+)*")
 RISK = re.compile(r"Risk: (?:security|privacy|data loss): \S.*")
 POLISH = re.compile(r"Polish issue: #[1-9][0-9]*\.?$")
+PRE = re.compile(r"Pre-existing issue: #[1-9][0-9]*\.?$")
+LATE = re.compile(r"Late: \S.*")
+HELD = re.compile(r"[0-9]+ findings on unchanged code held back as pre-existing\.")
 LOGGED = re.compile(r".*\bLogged as follow-up #[1-9][0-9]*\.$")
 MARK = re.compile(r"- \*\*Ruling ([1-9][0-9]*)\*\* (?:upheld|overturned as (R[1-9][0-9]*)): \S.*")
 IDS = r"R[1-9][0-9]*(?:(?:, R[1-9][0-9]*)* and R[1-9][0-9]*)?"
@@ -146,7 +150,8 @@ def parse(text):
         findings.append({"id": m[1], "grade": m[2], "new": bool(NEW.match(rest)), "text": rest,
                          "status": next((s for s in STATUSES if rest.startswith(s)), None),
                          "user": any(USER.fullmatch(x) for x in more), "risk": any(RISK.fullmatch(x) for x in more),
-                         "polish": bool(POLISH.search(rest)), "logged": bool(LOGGED.fullmatch(rest)),
+                         "polish": bool(POLISH.search(rest)), "pre": bool(PRE.search(rest)),
+                         "late": any(LATE.fullmatch(x) for x in more), "logged": bool(LOGGED.fullmatch(rest)),
                          "classes": [c[1] for x in more if (c := CLASS.fullmatch(x))]})
     nxt = paras[-1] if paras and paras[-1].startswith("Next:") else None
     state = next((s for s, p in NEXT.items() if nxt and re.fullmatch(p, nxt)), None)
@@ -172,8 +177,9 @@ def description_rulings(text):
     return [int(m[1]) for line in rulings_lines(text) or [] if (m := re.match(r"([1-9][0-9]*)\. ", line))]
 
 
-def check(text, description, mode, head, earlier, decision=None, changed=None):
-    r, problems = parse(text), []
+def check(text, description, mode, head, earlier, decision=None, changed=None, counts=None, untouched=None,
+          first=None):
+    r, problems, late = parse(text), [], []
     if r["verdict"] is None:
         problems.append("the first line is VERDICT: APPROVE or CHANGES at the 40-character head")
     elif r["head"] != head:
@@ -197,8 +203,8 @@ def check(text, description, mode, head, earlier, decision=None, changed=None):
                  for i in sorted(set(before) - set(ids), key=lambda x: int(x[1:]))]
     for f in r["findings"]:
         i, blocking = f["id"], f["grade"] == "blocking"
-        if f["grade"] not in ("blocking", "polish"):
-            problems.append(f"{i}: the grade is blocking or polish")
+        if f["grade"] not in ("blocking", "polish", "pre-existing"):
+            problems.append(f"{i}: the grade is blocking, polish or pre-existing")
         elif i in before and f["new"]:
             problems.append(f"{i}: an earlier id takes a status, not a new finding")
         elif i in before and not (f["status"] or f["logged"]):
@@ -207,8 +213,12 @@ def check(text, description, mode, head, earlier, decision=None, changed=None):
             problems.append(f"{i}: a new finding names `file:line` and its check (Standards, Spec or Sweep)")
         elif f["new"] and blocking and not (f["user"] or f["risk"]):
             problems.append(f"{i}: a new blocking finding needs its User path: or Risk: line")
-        elif f["new"] and not blocking and not f["polish"]:
+        elif f["new"] and f["grade"] == "polish" and not f["polish"]:
             problems.append(f"{i}: a new polish finding ends with Polish issue: #<n>")
+        elif f["new"] and f["grade"] == "pre-existing" and not f["pre"]:
+            problems.append(f"{i}: a new pre-existing finding ends with Pre-existing issue: #<n>")
+        if f["new"] and f["risk"] and not blocking:
+            problems.append(f"{i}: a finding with a Risk: line is graded blocking")
         words, kept = f["classes"], (before.get(i) or {}).get("classes", [])
         if blocking and not words:
             problems.append(f"{i}: a blocker names its class: one Class: line from references/verdict.md")
@@ -219,8 +229,18 @@ def check(text, description, mode, head, earlier, decision=None, changed=None):
                             "use Class: other: <word> when none fits")
         elif blocking and len(kept) == 1 and before[i]["grade"] == "blocking" and words != kept:
             problems.append(f"{i}: keeps its earlier class, {kept[0]}")
-        where = re.match(r"`([^`\s]+):[1-9][0-9]*`", f["text"]) if f["new"] and i not in before else None
-        if where and changed is not None and where[1] not in changed and not (blocking and f["risk"]):
+        where = re.match(r"`([^`\s]+):([1-9][0-9]*)`", f["text"]) if f["new"] and i not in before else None
+        spot = where and untouched and untouched(where[1], int(where[2]))
+        if spot:
+            late.append(f)
+            if not (f["grade"] == "pre-existing" or (blocking and f["risk"])):
+                problems.append(f"{i}: `{spot}` is unchanged since {first[:7]}; a re-check raises a "
+                                "new finding there only as a Risk: security, privacy or data-loss blocker")
+            elif not f["late"]:
+                problems.append(f"{i}: a new finding on code unchanged since {first[:7]} needs its Late: line")
+        elif where and (f["late"] or f["grade"] == "pre-existing"):
+            problems.append(f"{i}: Late: and [pre-existing] are only for a re-check's new finding on unchanged code")
+        elif where and changed is not None and where[1] not in changed and not (blocking and f["risk"]):
             problems.append(f"{i}: `{where[1]}` is unchanged since {earlier['head'][:7]}; a re-check raises a new "
                             "finding there only as a Risk: security, privacy or data-loss blocker")
         old = before.get(i)
@@ -229,11 +249,13 @@ def check(text, description, mode, head, earlier, decision=None, changed=None):
                     and re.search(r"#[1-9][0-9]*", f["text"])[0] in decision["polish"]):
                 problems.append(f"{i}: the decision grades it polish with Polish issue: {' or '.join(decision['polish'])}")
             continue
-        if old and f["grade"] != old["grade"] and f["grade"] in ("blocking", "polish"):
+        if old and f["grade"] != old["grade"] and f["grade"] in ("blocking", "polish", "pre-existing"):
             problems.append(f"{i}: keeps its earlier grade, {old['grade']}")
+        elif old and f["grade"] == "pre-existing" and f["status"] != "Pre-existing issue: #":
+            problems.append(f"{i}: a pre-existing finding's status is Pre-existing issue: #<n>")
         elif old and blocking and f["status"] and f["status"] not in BLOCKER_STATUSES:
             problems.append(f"{i}: a blocker's status is resolved, withdrawn, still open, disputed or logged")
-        elif old and not blocking and f["status"] and f["status"] not in POLISH_STATUSES:
+        elif old and f["grade"] == "polish" and f["status"] and f["status"] not in POLISH_STATUSES:
             problems.append(f"{i}: a polish finding's status is Polish issue: #<n> or withdrawn")
         if old and old["risk"] and f["user"] and not f["risk"]:
             problems.append(f"{i}: keeps its Risk: line")
@@ -242,6 +264,13 @@ def check(text, description, mode, head, earlier, decision=None, changed=None):
         elif blocking and not f["new"] and (f["logged"] or (f["status"] or "").startswith(OPEN)) \
                 and not (f["user"] or f["risk"]):
             problems.append(f"{i}: an open or logged blocker restates its User path: or Risk: line")
+    held = sum(f["grade"] == "pre-existing" for f in late)
+    line = f"{held} findings on unchanged code held back as pre-existing."
+    shown = [p for p in r["paras"] if HELD.fullmatch(p)]
+    if (held or shown) and shown != [line]:
+        problems.append(f"the report says `{line}`")
+    if counts is not None:
+        counts.update(late=len(late), held=held)
     opened = open_blockers(r)
     risky = {f["id"] for f in r["findings"] if f["risk"]}
     if mode != "full":
@@ -347,7 +376,8 @@ def admit(repo, number, assigned, skip=None, ticket=None):
     if last is not None and last["head"] == head and mode != "log-and-merge":
         raise Stop(f"stop: already reported at {head}")
     return {"pr": pr, "head": head, "ticket": ticket, "checks": names, "authors": authors,
-            "comments": comments, "last": last, "mode": mode, "decision": decision}
+            "comments": comments, "last": last, "first": reports[0][1] if reports else None, "mode": mode,
+            "decision": decision}
 
 
 def pin(repo, number, assigned, ticket=None):
@@ -388,15 +418,39 @@ def changed_since(base, last, head):
     return names(last, head) & (names(f"{base}...{last}") | names(f"{base}...{head}"))
 
 
-def report_problems(path, repo, number, assigned, ticket=None):
+def report_problems(path, repo, number, assigned, ticket=None, counts=None):
     text = Path(path).read_text(encoding="utf-8").replace("\r\n", "\n")
     s = admit(repo, number, assigned, skip=text, ticket=ticket)
-    changed = None
-    if s["mode"] in ("re-check", "final"):
-        changed = changed_since(s["pr"]["base"].get("sha"), s["last"]["head"], s["head"])
-    elif s["mode"] == "log-and-merge":
-        changed = set()
-    return text, s, check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"], s["decision"], changed)
+    changed = untouched = first = None
+    if s["mode"] != "full":
+        base, first = s["pr"]["base"].get("sha"), s["first"]["head"]
+        changed = changed_since(base, s["last"]["head"], s["head"]) if s["mode"] != "log-and-merge" else set()
+        untouched = untouched_lines(first, s["head"], changed_since(base, first, s["head"]))
+    return text, s, check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"], s["decision"], changed,
+                          counts, untouched, first)
+
+
+def untouched_lines(first, head, touched):
+    seen = {}
+
+    def edits(path):
+        try:
+            size = len(git("cat-file", "blob", f"{head}:{path}").splitlines())
+            diff = git("--literal-pathspecs", "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", first, head,
+                       "--", path, what=f"cannot read the pull request's own changes: git diff {first} {head}")
+        except (Refusal, UnicodeDecodeError):
+            return None
+        spans = [(int(m[1]), int(m[1]) + int(m[2] or 1)) for m in re.finditer(r"(?m)^@@ -\S+ \+(\d+)(?:,(\d+))? @@", diff)]
+        return size, spans
+
+    def spot(path, line):
+        if path not in touched:
+            return path
+        info = seen[path] = seen[path] if path in seen else edits(path)
+        if info is None or line > info[0] or any(a <= line < b for a, b in info[1]):
+            return None
+        return f"{path}:{line}"
+    return spot
 
 
 def git(*args, what=None):
@@ -645,8 +699,10 @@ def main(argv=None):
         if a.command == "pin":
             print(pin(a.repo, a.pr, a.head, a.ticket))
         elif a.command == "check":
-            problems = report_problems(a.report, a.repo, a.pr, a.head, a.ticket)[2]
-            print("\n".join(problems) if problems else "report ok")
+            counts = {}
+            problems = report_problems(a.report, a.repo, a.pr, a.head, a.ticket, counts)[2]
+            ok = "report ok" + (f"; late: {counts['late']}; held back: {counts['held']}" if counts.get("late") else "")
+            print("\n".join(problems) if problems else ok)
             return 1 if problems else 0
         elif a.command == "post":
             print(post(a.report, a.repo, a.pr, a.head, a.ticket))

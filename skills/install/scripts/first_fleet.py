@@ -452,10 +452,30 @@ MODES = {
 
 
 def mode_rows(text):
-    """KN3's permission-mode rows in a fleet.md text, each as its value, or None for one it can't read."""
-    rows = [line for line in (text or '').splitlines() if line.startswith(MODE_ROW)]
-    values = [re.findall(r'`([^`]*)`', row) for row in rows]
-    return [v[0] if len(v) == 1 and re.fullmatch(MODE_VALUE, v[0]) else None for v in values]
+    label = MODE_ROW.strip('| ')
+    programs = {label: None, **{'%s (%s)' % (label, program): program for program in MODE_FLAGS}}
+    modes = {}
+    for line in (text or '').splitlines():
+        cells = line.strip().split('|', 2)
+        if len(cells) != 3 or cells[0]:
+            continue
+        name = ' '.join(cells[1].split())
+        if name != label and not name.startswith(label + ' ('):
+            continue
+        if name not in programs:
+            return None
+        program = programs[name]
+        if program in modes or (program is None and not line.startswith(MODE_ROW)):
+            return None
+        values = re.findall(r'`([^`]*)`', cells[2])
+        if len(values) != 1 or not re.fullmatch(MODE_VALUE, values[0]):
+            return None
+        modes[program] = values[0]
+    return None if None in modes and len(modes) > 1 else modes
+
+
+def modes_match(rows, modes):
+    return rows == modes or (len(modes) == 1 and rows == {None: next(iter(modes.values()))})
 
 
 def saved_rows(env):
@@ -468,7 +488,7 @@ def saved_rows(env):
         text = module.setting_text()
     except Exception as error:
         raise Exit(1, 'Could not read %s from the default branch: %s; %s' % (MODE_FILE, error, NOTHING))
-    return [line.rstrip() for line in (text or '').splitlines() if line.startswith(MODE_ROWS)]
+    return mode_rows(text)
 
 
 MODE_ROWS = '| Harness permission mode'
@@ -1251,19 +1271,27 @@ def blob(repo, path, env, ref):
         raise Exit(1, 'Could not read %s on %s; nothing written.' % (path, ref))
 
 
-def host_pull(repo, env, head=HOST_BRANCH):
-    """The host setting pull request's URL and state, or None when there is none; Exit when unreadable."""
+def host_pull(repo, env, branch, head):
+    fields = ('url', 'state', 'baseRefName', 'headRefName', 'isCrossRepository', 'baseRefOid', 'headRefOid')
     result = run(['gh', 'pr', 'list', '--repo', repo, '--head', head, '--state', 'all',
-                  '--json', 'url,state'], env)
+                  '--json', ','.join(fields)], env)
     try:
         assert result is not None and result.returncode == 0
         pulls = strict(result.stdout.decode('utf-8'))
         assert isinstance(pulls, list) and len(pulls) <= 1
-        assert all(isinstance(p, dict) and set(p) == {'url', 'state'} and isinstance(p['url'], str)
-                   and p['state'] in ('OPEN', 'MERGED', 'CLOSED') for p in pulls)
-        return (pulls[0]['url'], pulls[0]['state']) if pulls else None
+        if not pulls:
+            return None
+        pull = pulls[0]
+        assert isinstance(pull, dict) and set(pull) == set(fields)
+        assert all(isinstance(pull[k], str) and pull[k] for k in fields if k != 'isCrossRepository')
+        assert pull['state'] in ('OPEN', 'MERGED', 'CLOSED') and type(pull['isCrossRepository']) is bool
+        assert all(re.fullmatch(r'[0-9a-f]{40}', pull[k]) for k in ('baseRefOid', 'headRefOid'))
     except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError):
         raise Exit(6, 'Could not read whether the host setting pull request exists; run this again to read it.')
+    if pull['baseRefName'] != branch or pull['headRefName'] != head or pull['isCrossRepository']:
+        raise Exit(5, 'The host setting pull request must target the default branch from the expected branch in '
+                      'this repository; nothing written.')
+    return pull
 
 
 def mode(got):
@@ -1343,7 +1371,7 @@ def setting(got):
     if now is not None and now != name:
         raise Exit(5, '%s already says Host: %s on the default branch; OpenWiz never overwrites it. Ask the user '
                       'whether to change that line, or answer where agents run again; nothing written.' % (HOST_FILE, now))
-    writes, values, models = [], [], None
+    writes, values, models = [], {}, None
     fresh = None
     if local or chosen:
         fleet = raw(repo, MODE_FILE, env)
@@ -1361,15 +1389,13 @@ def setting(got):
         models, intended, _ = models_change(fleet, choice, None, reviewer=tuple(chosen['reviewer']))
         if models_table(fleet) == intended:
             models = None
-    if local and fresh:
-        values = []
-    elif local:
-        values = [line.rstrip() for line in fleet.splitlines() if line.startswith(MODE_ROWS)]
-        if values and values != mode_lines(modes):
+    if local and not fresh:
+        values = mode_rows(fleet)
+        if values is None or (values and not modes_match(values, modes)):
             raise Exit(5, '%s already saves %s; OpenWiz never adds a second row or replaces the owner\'s. Ask the '
                           'owner whether to change that row; nothing written.' % (
-                              MODE_FILE, ', '.join('`%s`' % v for v in mode_rows(fleet) if v) or
-                              ', '.join(values)))
+                              MODE_FILE, ', '.join('`%s`' % v for v in values.values()) if values else
+                              'invalid or ambiguous harness permission rows'))
     if name and now is None:
         writes.append(HOST_FILE)
     if local and not values or models:
@@ -1417,18 +1443,20 @@ def setting(got):
             proposed = brain_files(got, host, brain)
     elif recorded.get('state') not in ('pending', 'opened'):
         head = HOST_BRANCH
-    if recorded.get('state') in ('pending', 'opened') or head == BRAIN_BRANCH:
-        found = host_pull(repo, env, head)
-        if found and found[1] == 'CLOSED':
-            raise Exit(5, 'The host setting pull request %s was closed without merging; the user reopens and merges '
-                          'it, or answers where agents run again; nothing written.' % found[0])
-        if found and not branch_check(repo, env, branch, head, proposed, want, based):
-            state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked,
-                                           'branch': head}, **kept(modes))
-            state.save()
-            print('The %s pull request is open: %s. The user merges it; launch waits for it.%s' % (
-                'one setup' if chosen else 'host setting', found[0], note))
-            return 0
+    found = host_pull(repo, env, branch, head)
+    if found and found['state'] != 'OPEN':
+        raise Exit(5, 'The host setting pull request %s is %s and the current settings are missing on the default '
+                      'branch. Check the pull request and default branch; nothing written.' % (
+                          found['url'], found['state'].lower()))
+    if found and not branch_check(repo, env, found['baseRefOid'], found['headRefOid'],
+                                  proposed, want, based, head_name=head):
+        state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found['url'], 'mode': picked,
+                                       'branch': head}, **kept(modes))
+        if not state.save():
+            raise Exit(6, 'The host setting pull request is open (%s), but that could not be saved.' % found['url'])
+        print('The %s pull request is open: %s. The user merges it; launch waits for it.%s' % (
+            'one setup' if chosen else 'host setting', found['url'], note))
+        return 0
     rows = 'add %s, %s' % ('one row' if len(modes) == 1 else '%d rows' % len(modes), ' and '.join(mode_lines(modes)))
     table = models and 'set its Models table to %s for the Orchestrator and Builder, with %s as the Reviewer' % (
         ' '.join(choice), ' '.join(chosen['reviewer']))
@@ -1504,7 +1532,7 @@ def setting(got):
     if branch_check(repo, env, branch, head, proposed, want, based):
         raise Exit(6, 'The settings on %s did not read back as written; run this again to read them before anything '
                       'else.' % head)
-    if host_pull(repo, env, head) is None:
+    if host_pull(repo, env, branch, head) is None:
         body = ('Adds `Host: local` to %s and the owner\'s harness permission mode as %s of %s: OpenWiz '
                 'starts this project\'s agents through its local driver, which passes that mode to the harness '
                 'unchanged (records v1, section 6). Merge it to start the first fleet there.' % (
@@ -1521,19 +1549,22 @@ def setting(got):
         run(['gh', 'pr', 'create', '--repo', repo, '--head', head, '--base', branch, '--title',
              'Where agents run: %s' % host_label(name).split(',')[0] if name else 'OpenWiz setup', '--body', body],
             env)
-    found = host_pull(repo, env, head)
+    found = host_pull(repo, env, branch, head)
     if found is None:
         raise Exit(6, 'Whether the host setting pull request was opened is uncertain; run this again to read it '
                       'before anything else.')
-    state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked,
+    if found['state'] != 'OPEN' or branch_check(repo, env, found['baseRefOid'], found['headRefOid'],
+                                              proposed, want, based, head_name=head):
+        raise Exit(6, 'The host setting pull request did not read back as ready; run this again to check it.')
+    state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found['url'], 'mode': picked,
                                    'branch': head}, **kept(modes))
     if not state.save():
-        raise Exit(6, 'The host setting pull request is open (%s), but that could not be saved.' % found[0])
+        raise Exit(6, 'The host setting pull request is open (%s), but that could not be saved.' % found['url'])
     if head == BRAIN_BRANCH:
         print('The one setup pull request, %s, now carries the brain and these settings. The user merges it once; '
-              'then run the setup check and continue.' % found[0])
+              'then run the setup check and continue.' % found['url'])
     else:
-        print('Opened %s. The user merges it; launch waits for it on the default branch.%s' % (found[0], note))
+        print('Opened %s. The user merges it; launch waits for it on the default branch.%s' % (found['url'], note))
     return 0
 
 
@@ -1672,7 +1703,7 @@ def brain_files(got, host, brain):
         raise Exit(5, "Could not read the brain files init proposes from %s; nothing written." % build)
 
 
-def branch_check(repo, env, branch, head, proposed, want, based):
+def branch_check(repo, env, branch, head, proposed, want, based, *, head_name=None):
     result = run(['gh', 'api', 'repos/%s/compare/%s...%s' % (repo, branch, head)], env)
     try:
         assert result is not None and result.returncode == 0
@@ -1686,11 +1717,12 @@ def branch_check(repo, env, branch, head, proposed, want, based):
     missing = []
     for path in sorted(set(changed) | set(proposed) | set(want)):
         text = raw(repo, path, env, head) if path in changed or path in proposed else based.get(path)
-        if path in proposed and (changed.get(path) != 'added' or text != proposed[path]) \
+        if changed.get(path) not in (None, 'added', 'modified') \
+                or path in proposed and (changed.get(path) != 'added' or text != proposed[path]) \
                 or path not in proposed and (path not in want or text not in (want[path], based[path])):
             raise Exit(5, 'Branch %s changes %s beyond the approved setup, so its pull request is not ready and '
                           'OpenWiz writes, opens or reports nothing. The owner deletes that branch (closing its '
-                          'pull request), then run this again.' % (head, path))
+                          'pull request), then run this again.' % (head_name or head, path))
         if path in want and text != want[path]:
             missing.append(path)
     return missing
@@ -2501,7 +2533,7 @@ def launch(got):
     if local and modes and set(modes) != {PROGRAMS[h] for h in routed(host, choices['harness'])}:
         raise Exit(5, 'The permission modes saved here are not for every harness this fleet starts on this machine: '
                       'run mode again, then setting, and merge it; ' + NOTHING)
-    if local and (not picked or saved_rows(env) != mode_lines(modes)):
+    if local and (not picked or not modes_match(saved_rows(env), modes)):
         raise Exit(5, 'No %s row, the Harness permission mode the owner picked, is in %s on the default '
                       "branch, and the local driver starts no agent without it: run mode, then setting, and merge "
                       'it; %s' % (' and '.join('`%s`' % line for line in mode_lines(modes or {'': '<mode>'})),

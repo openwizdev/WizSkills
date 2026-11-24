@@ -232,7 +232,8 @@ class Starts(unittest.TestCase):
             'closes two tickets': ('closes', [9002, 9003]),
             'not the default branch': ('base', 'release-1'),
             'head is not a hand-back': ('subject', '#9002: wip: synthetic'),
-            'green only inside a word': ('subject', '#9002: evergreen synthetic'),
+            'green only at the end of a word': ('subject', '#9002: evergreen synthetic'),
+            'green only at the start of a word': ('subject', '#9002: GREENish synthetic'),
             'has a verdict': ('verdict', 'VERDICT: CHANGES at ' + 'c' * 40),
             'capacity': ('admission', 'capacity'),
             'incomplete read': ('complete', False),
@@ -245,6 +246,15 @@ class Starts(unittest.TestCase):
                 self.assertEqual((e['decision'], e['intent'], e['result'], e['settings']),
                                  ('refused', None, None, None))
                 self.assertTrue(e['reason'])
+        self.assertEqual(self.calls, [])
+
+    def test_hand_back_accepts_green_as_a_whole_word_in_any_case(self):
+        for word in ('green', 'Green', 'GREEN'):
+            with self.subTest(word=word):
+                self.world['reviews'][0]['subject'] = f'#9002: {word}: synthetic'
+                entry = self.only(self.plan(), 'review_start')
+                self.assertEqual(entry['decision'], 'dispatch', entry['reason'])
+                self.assertEqual(entry['result']['state'], 'disabled')
         self.assertEqual(self.calls, [])
 
     # A reader takes only the exact shape: a missing or extra fact refuses that start alone.
@@ -278,6 +288,23 @@ class Starts(unittest.TestCase):
                 self.assertEqual([(e['action'], e['decision']) for e in entries],
                                  [('builder_start', 'refused'), ('builder_start', 'dispatch'),
                                   ('review_start', 'dispatch')])
+        self.assertEqual(self.calls, [])
+
+    def test_malformed_current_evidence_refuses_reuse_of_a_persisted_intent(self):
+        self.record([self.only(self.plan(), 'builder_start')])
+        valid = self.world['builders'][0]['evidence'].copy()
+        for field, value in (('evidence_class', 'unknown'), ('source', ''), ('source', []), ('source', 'x' * 513)):
+            with self.subTest(field=field, value=value):
+                self.world['builders'][0]['evidence'] = dict(valid, **{field: value})
+                entries = self.plan()
+                builder = self.only(entries, 'builder_start')
+                self.assertEqual((builder['decision'], builder['intent'], builder['new'], builder['result']),
+                                 ('refused', None, False, None))
+                self.assertEqual(builder['reason'], 'incomplete or malformed source')
+                self.assertEqual(self.only(entries, 'review_start')['result']['state'], 'disabled')
+        self.world['builders'][0]['evidence'] = valid
+        builder = self.only(self.plan(), 'builder_start')
+        self.assertEqual((builder['decision'], builder['new']), ('dispatch', False))
         self.assertEqual(self.calls, [])
 
     # P7: a settings table that would give a Claude-built PR a Claude reviewer is refused.
@@ -316,6 +343,36 @@ class Starts(unittest.TestCase):
         self.assertEqual((fresh['decision'], fresh['result']['state']), ('dispatch', 'disabled'))
         self.assertNotEqual(fresh['intent']['assignment'], first['intent']['assignment'])
         self.assertNotEqual(fresh['intent']['operation_key'], first['intent']['operation_key'])
+
+    def test_fresh_review_can_follow_a_verdict_on_an_older_head(self):
+        review = self.world['reviews'][0]
+        review['spans'] = [{'head': 'd' * 40, 'given_up': True}]
+        for verdict in ('APPROVE', 'CHANGES'):
+            with self.subTest(verdict=verdict):
+                review['verdict'] = f'VERDICT: {verdict} at ' + 'd' * 40
+                entry = self.only(self.plan(), 'review_start')
+                self.assertEqual(entry['decision'], 'dispatch', entry['reason'])
+                self.assertEqual(entry['result']['state'], 'disabled')
+        self.assertEqual(self.calls, [])
+
+    def test_fresh_review_refuses_current_or_malformed_verdicts_and_retained_reviewers(self):
+        review = self.world['reviews'][0]
+        review['spans'] = [{'head': 'd' * 40, 'given_up': True}]
+        for verdict in ('VERDICT: APPROVE at ' + 'c' * 40,
+                        'VERDICT: CHANGES at ' + 'c' * 40,
+                        'VERDICT: APPROVE at ' + 'd' * 39,
+                        'VERDICT: APPROVE at ' + 'd' * 40 + '\nextra',
+                        42):
+            with self.subTest(verdict=verdict):
+                review['verdict'] = verdict
+                entry = self.only(self.plan(), 'review_start')
+                self.assertEqual((entry['decision'], entry['intent']), ('refused', None))
+        review['verdict'] = 'VERDICT: CHANGES at ' + 'd' * 40
+        review['spans'][0]['given_up'] = False
+        entry = self.only(self.plan(), 'review_start')
+        self.assertEqual((entry['decision'], entry['reason']),
+                         ('refused', 'a retained reviewer re-checks (OB6), no new start'))
+        self.assertEqual(self.calls, [])
 
     # R1: a re-approval allocates sequences afresh; intent ids stay unique and the
     # new start is not refused as a conflicting identity.
@@ -421,7 +478,7 @@ class Starts(unittest.TestCase):
         refused = copy.deepcopy(self.world['builders'][0])
         refused.update(ticket=9003, admission='capacity')
         slow = copy.deepcopy(self.world['reviews'][0])
-        slow.update(pr=9103, ticket=9004, reviewer_available=False)
+        slow.update(pr=9103, ticket=9004, closes=[9004], reviewer_available=False)
         self.world['builders'].insert(0, refused)
         self.world['reviews'].insert(0, slow)
         entries = self.plan()
@@ -430,6 +487,7 @@ class Starts(unittest.TestCase):
                                      ('review_start', 9103): 'refused', ('review_start', 9101): 'dispatch'})
         self.world['builders'] = []
         entries = self.plan()
+        self.assertEqual(entries[0]['reason'], 'selected reviewer unavailable: waits, never swapped')
         self.assertEqual([(e['action'], e['decision'], e['intent'] and e['intent']['destination']) for e in entries],
                          [('review_start', 'refused', None), ('review_start', 'dispatch', 'reviewer')])
 

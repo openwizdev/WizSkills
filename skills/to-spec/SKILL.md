@@ -16,10 +16,17 @@ describes when this road applies.
 
 ## 1. Read the confirmed grill
 
-Read the consumer project's tracker, domain and fleet settings in `docs/agents/`.
-Read the grill privately, with its confirmation comment, the glossary, relevant
-ADRs and the code. An unconfirmed grill, or a decision still open, goes back to
-[grill](../grill/SKILL.md). Keep the confirmation's private-comment URL: it is
+Run `python3 -I "<this skill's folder>/../launch-fleet/scripts/context.py" planner`
+once per session (and again only when a blob its header lists changes). It prints
+the public-writes card, the planner's fleet sections, the tracker's
+where-things-live and repositories, the triage labels table, the private storage
+rules, the roads page and the glossary's term index. Read a term's definition in
+`GLOSSARY.md` only when you use it, and an ADR only when it touches the area.
+The card's decision-record forms replace reading the open-development contract
+for public decision records; read the full contract only for release, publishing,
+importer and ticket-mover work. Read the grill privately, with its confirmation
+comment, and the code. An unconfirmed grill, or a decision still open, goes back
+to [grill](../grill/SKILL.md). Keep the confirmation's private-comment URL: it is
 the plan approval's authority.
 
 Keep exact replies, grill sources, thread IDs and private media in private

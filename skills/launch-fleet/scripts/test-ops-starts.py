@@ -812,6 +812,113 @@ class ModelsTable(unittest.TestCase):
                                      stdin=stdin)
                     self.assertEqual((run.returncode, run.stdout), (2, ''))
 
+    def test_reviewer_fallback_order_and_antigravity_flags_p1(self):
+        fleet = (
+            '# Fleet settings\n\n'
+            '## Models\n\n'
+            '| Role | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
+            '| --- | --- | --- | --- | --- |\n'
+            '| Orchestrator | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Builder | Antigravity | Gemini 4 Neon | Medium | '
+            '`--provider antigravity --reasoning-level medium` |\n'
+            '| Reviewer | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Small builder | follows Builder | | | |\n'
+            '| Fixer | follows Builder | | | |\n'
+            '| Reviewer fall-back 1 | Antigravity | Gemini 4 Neon | High | '
+            '`--provider antigravity --reasoning-level high` |\n'
+            '| Reviewer fall-back 2 | Codex | Sol 6.2 | Medium | '
+            '`--provider codex --model gpt-6.2-sol --reasoning-level medium` |\n'
+        )
+        run = self.flags(fleet, 'builder')
+        self.assertEqual((run.returncode, run.stdout, run.stderr),
+                         (0, '--provider antigravity --reasoning-level medium\n', ''))
+        run = self.flags(fleet, 'small_builder')
+        self.assertEqual((run.returncode, run.stdout, run.stderr),
+                         (0, '--provider antigravity --reasoning-level medium\n', ''))
+        with tempfile.TemporaryDirectory() as tmp:
+            order, _ = run_cli(tmp, fleet, 'reviewer-order', '--repo', 'synthetic/ops')
+            self.assertEqual(order.returncode, 0, order.stderr)
+            self.assertEqual(
+                order.stdout.splitlines(),
+                [
+                    '--provider claude-code --model claude-opus-5-5 --reasoning-level medium',
+                    '--provider antigravity --reasoning-level high',
+                    '--provider codex --model gpt-6.2-sol --reasoning-level medium',
+                ],
+            )
+        bad_cases = (
+            ('skipped fallback index', fleet.replace('Reviewer fall-back 1', 'Reviewer fall-back 2', 1)),
+            ('duplicate fallback', fleet + '| Reviewer fall-back 1 | Codex | Sol 6.2 | Medium | '
+                                           '`--provider codex --model gpt-6.2-sol --reasoning-level medium` |\n'),
+            ('fallback follows builder', fleet.replace(
+                '| Reviewer fall-back 1 | Antigravity | Gemini 4 Neon | High | '
+                '`--provider antigravity --reasoning-level high` |',
+                '| Reviewer fall-back 1 | follows Builder | | | |', 1)),
+            ('missing reasoning-level flag', fleet.replace(
+                '`--provider antigravity --reasoning-level medium`',
+                '`--provider antigravity`', 1)),
+        )
+        for name, broken in bad_cases:
+            with self.subTest(name):
+                run = self.flags(broken, 'builder')
+                self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+
+    def test_reviewer_fallback_advances_only_on_usage_limit_refusal_p2(self):
+        fleet = (
+            '# Fleet settings\n\n'
+            '## Models\n\n'
+            '| Role | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
+            '| --- | --- | --- | --- | --- |\n'
+            '| Orchestrator | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Builder | Antigravity | Gemini 4 Neon | Medium | '
+            '`--provider antigravity --reasoning-level medium` |\n'
+            '| Reviewer | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Small builder | follows Builder | | | |\n'
+            '| Fixer | follows Builder | | | |\n'
+            '| Reviewer fall-back 1 | Antigravity | Gemini 4 Neon | High | '
+            '`--provider antigravity --reasoning-level high` |\n'
+            '| Reviewer fall-back 2 | Codex | Sol 6.2 | Medium | '
+            '`--provider codex --model gpt-6.2-sol --reasoning-level medium` |\n'
+        )
+        commit = 'a' * 40
+        other_commit = 'b' * 40
+        self.assertEqual(
+            self.api.refused_families_for_commit([
+                f'launch-fleet: review refused {commit}: claude usage limit',
+                f'launch-fleet: review started {commit}',
+                f'launch-fleet: review refused {commit}: network timeout',
+                f'launch-fleet: review refused {other_commit}: antigravity usage limit',
+            ], commit),
+            ('claude',),
+        )
+        self.assertEqual(
+            self.api.refused_families_for_commit([
+                f'launch-fleet: review refused {commit}: claude usage limit',
+                f'launch-fleet: review refused {commit}: antigravity usage limit',
+            ], commit),
+            ('claude', 'antigravity'),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            first, _ = run_cli(tmp, fleet, 'reviewer-order', '--repo', 'synthetic/ops')
+            self.assertEqual((first.returncode, first.stdout.splitlines()[0]),
+                             (0, '--provider claude-code --model claude-opus-5-5 --reasoning-level medium'))
+            fb1, _ = run_cli(tmp, fleet, 'reviewer-order', '--repo', 'synthetic/ops', '--refused', 'claude')
+            self.assertEqual((fb1.returncode, fb1.stdout.splitlines()), (0, [
+                '--provider antigravity --reasoning-level high',
+                '--provider codex --model gpt-6.2-sol --reasoning-level medium',
+            ]))
+            fb2, _ = run_cli(tmp, fleet, 'reviewer-order', '--repo', 'synthetic/ops',
+                             '--refused', 'claude', '--refused', 'antigravity')
+            self.assertEqual((fb2.returncode, fb2.stdout.splitlines()),
+                             (0, ['--provider codex --model gpt-6.2-sol --reasoning-level medium']))
+            exhausted, _ = run_cli(tmp, fleet, 'reviewer-order', '--repo', 'synthetic/ops',
+                                   '--refused', 'claude', '--refused', 'antigravity', '--refused', 'codex')
+            self.assertEqual((exhausted.returncode, exhausted.stdout), (1, ''))
+
 
 if __name__ == '__main__':
     unittest.main()

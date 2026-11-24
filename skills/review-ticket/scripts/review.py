@@ -1,5 +1,6 @@
 import argparse
 import base64
+import importlib.util
 import json
 import re
 import subprocess
@@ -516,6 +517,20 @@ def post(path, repo, number, assigned, ticket=None):
     return f"posted {found['id']}"
 
 
+def paced(where, *args):
+    spec = importlib.util.spec_from_file_location(
+        "launch_fleet_post", Path(__file__).resolve().parents[2] / "launch-fleet" / "scripts" / "post.py")
+    post = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(post)
+    except (OSError, ImportError):
+        raise Refusal("launch-fleet's write pacer (scripts/post.py) cannot be loaded; nothing was filed")
+    try:
+        return post.write(where, *args)
+    except post.Stop as e:
+        raise Stop(str(e)) from None
+
+
 def follow_up(a):
     repo = a.repo
     labels = setting(repo, get(f"repos/{repo}")["default_branch"], "docs/agents/triage-labels.md")
@@ -554,8 +569,8 @@ def follow_up(a):
         return None
     if issue := existing():
         return f"already filed #{issue['number']}"
-    gh("-X", "POST", f"repos/{repo}/issues", "--input", "-",
-       data=json.dumps({"title": title, "body": body, "labels": [found[0]]}))
+    paced(f"{repo}'s issues", "--method", "POST", f"repos/{repo}/issues", "-f", f"title={title}", "-f", f"body={body}",
+          "-f", f"labels[]={found[0]}")
     for delay in (0, 1, 2):
         if delay:
             time.sleep(delay)

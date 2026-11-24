@@ -88,6 +88,16 @@ class Recheck(unittest.TestCase):
                    {'comment': 503, 'author': FACTORY, 'line': 'launch-fleet: re-check sent ' + NEW}]
         self.assertEqual(self.decide(pr_view(records=records)), ('none', 'recheck already sent'))
 
+    def test_a_legacy_send_only_covers_the_verdict_that_precedes_it(self):
+        view = pr_view()
+        view['verdicts'].append(dict(view['verdicts'][0], comment=504))
+        view['records'].append({'comment': 503, 'author': FACTORY, 'line': 'launch-fleet: re-check sent ' + NEW})
+        state, intent = self.decide(view)
+        self.assertEqual(state, 'record')
+        self.assertEqual(intent['prior_verdict'], 504)
+        view['records'].append(dict(view['records'][-1], comment=505))
+        self.assertEqual(self.decide(view), ('none', 'recheck already sent'))
+
     def test_nothing_is_due_without_a_new_green_head(self):
         self.assertEqual(self.decide(pr_view(head=OLD, ci={'head': OLD, 'state': 'success'})),
                          ('none', 'head unchanged since the verdict'))
@@ -172,6 +182,7 @@ class Inbox(unittest.TestCase):
 
     def view(self, records, **changes):
         view = {'repository': 'synthetic/ops', 'spec': 9000, 'ticket': 9001, 'approval': copy.deepcopy(APPROVAL),
+                'assignments': {'builder': 'builder-9001', 'reviewer': 'review-span-501'},
                 'head': NEW, 'complete': True, 'cursor': {'created_at': 0, 'comment': 0},
                 'read_through': {'created_at': 3000, 'comment': 777}, 'records': records, 'authors': AUTHORS,
                 'verdicts': [{'comment': 502, 'author': FACTORY, 'verdict': 'CHANGES', 'head': OLD}], 'verified_acks': set()}
@@ -276,6 +287,37 @@ class Inbox(unittest.TestCase):
         self.assertEqual(self.states(self.pull([self.one, newer, unsure], verdicts=verdicts)),
                          [(self.one['id'], 'reconcile', 'uncertain_outcome'), (newer['id'], 'deferred', 'out_of_order')])
 
+    def test_a_same_head_builder_replacement_supersedes_before_ordering(self):
+        _, first = inbox.findings(pr_view(head=OLD))
+        _, replacement = inbox.findings(pr_view(head=OLD, builder='builder-next', intents=[first]))
+        view = self.view([first, replacement], head=OLD,
+                         assignments={'builder': 'builder-next', 'reviewer': 'review-span-501'})
+        self.assertEqual(self.states(inbox.pull(view, 'builder', 'builder-9001', set())),
+                         [(first['id'], 'superseded', 'superseded')])
+        self.assertEqual(self.states(inbox.pull(view, 'builder', 'builder-next', set())),
+                         [(replacement['id'], 'recorded', 'record_only')])
+        view['records'].append(event('transport', first, 'transport-1', state='uncertain', receipt_digest=None))
+        self.assertEqual(self.states(inbox.pull(view, 'builder', 'builder-9001', set())),
+                         [(first['id'], 'reconcile', 'uncertain_outcome')])
+        self.assertEqual(self.states(inbox.pull(view, 'builder', 'builder-next', set())),
+                         [(replacement['id'], 'deferred', 'out_of_order')])
+
+    def test_retired_reviewer_work_cannot_be_acknowledged(self):
+        assignments = {'builder': 'builder-9001', 'reviewer': None}
+        self.assertEqual(self.states(self.pull([self.one], assignments=assignments)),
+                         [(self.one['id'], 'superseded', 'superseded')])
+        view = self.view([self.one], assignments=assignments)
+        with self.assertRaisesRegex(ValueError, 'next pending item'):
+            inbox.acknowledge(view, 'reviewer', 'review-span-501', set(), self.one['id'],
+                              'ack-9', 2500, evidence('fixture:ops-inbox/ack'), 'e' * 64)
+
+    def test_missing_or_malformed_assignment_context_refuses_the_read(self):
+        for assignments in (None, {'builder': 'builder-9001'}, {'builder': '', 'reviewer': None}):
+            with self.subTest(assignments=assignments):
+                view = self.view([self.one], assignments=assignments)
+                self.assertEqual(inbox.pull(view, 'reviewer', 'review-span-501', set()),
+                                 {'complete': False, 'cursor': view['cursor'], 'items': [], 'next': 'end'})
+
     def test_r3_an_unresolved_earlier_item_for_another_recipient_defers_this_one(self):
         first = ops(self.one, destination='orchestrator', assignment='ops-owner')
         self.assertEqual(self.states(self.pull([first, self.two])), [(self.two['id'], 'deferred', 'out_of_order')])
@@ -321,6 +363,39 @@ class Measures(unittest.TestCase):
         done = event('completion', one, 'completion-1', state='completed', result_digest='9' * 64)
         self.assertEqual(inbox.measure(records=[one, done], own=set(), now=1200000, eligible={}, held=[])['pending'],
                          {'count': 0, 'oldest_minutes': None})
+
+    def test_uncertainty_stays_pending_despite_a_bound_ack_or_completion(self):
+        _, one = inbox.recheck(pr_view(now=60000))
+        ack = event('ack', one, 'ack-1', recipient='reviewer', assignment='review-span-501', sequence=1,
+                    checked_head=NEW, created_at=180000)
+        completed = event('completion', one, 'completion-1', state='completed', result_digest='9' * 64)
+        superseded = event('completion', one, 'completion-1', state='superseded', superseded_by='f' * 64)
+        for outcome in (ack, completed, superseded):
+            for kind in ('transport', 'completion'):
+                with self.subTest(outcome=outcome.get('state', 'ack'), uncertain=kind):
+                    unsure = event(kind, one, 'uncertain-1', state='uncertain')
+                    result = inbox.measure([one, outcome, unsure], {'ack-1'}, 600000, {NEW: 60000}, [])
+                    self.assertEqual(result['pending'], {'count': 1, 'oldest_minutes': 9.0})
+                    self.assertEqual(result['recheck_delay']['minutes'], [2.0] if outcome is ack else [])
+
+    def test_settlement_is_scoped_to_the_intents_repository(self):
+        _, one = inbox.recheck(pr_view(now=60000))
+        other = ops(one, repository='synthetic/other', created_at=120000)
+        ack = event('ack', one, 'ack-1', recipient='reviewer', assignment='review-span-501', sequence=1,
+                    checked_head=NEW, created_at=180000)
+        completed = event('completion', one, 'completion-1', state='completed', result_digest='9' * 64)
+        for outcome in (ack, completed):
+            with self.subTest(outcome=outcome['kind']):
+                result = inbox.measure([one, other, outcome], {'ack-1'}, 600000, {NEW: 60000}, [])
+                measured = int(outcome is ack)
+                self.assertEqual(result['recheck_delay'],
+                                 {'eligible': 2, 'measured': measured, 'open': 2 - measured, 'unknown': 0,
+                                  'minutes': [2.0] if measured else []})
+                self.assertEqual(result['pending'], {'count': 1, 'oldest_minutes': 8.0})
+
+    def test_empty_inbox_still_refuses_a_reversed_held_interval(self):
+        with self.assertRaisesRegex(ValueError, 'malformed held interval'):
+            inbox.measure([], set(), 600000, {}, [[300000, 100000]])
 
     def test_r7_overlapping_holds_are_subtracted_once_and_bad_holds_refuse(self):
         _, one = inbox.recheck(pr_view(now=0))

@@ -995,46 +995,46 @@ class MachineApproval(unittest.TestCase):
                 self.assertEqual(out.returncode, 0, out.stderr)
 
     def test_hidden_markdown_is_ignored_for_size_done_by_and_owned_paths(self):
-        # 1. Size only in an HTML comment
-        tickets = plan()
-        find(tickets, 9101)["body"] = find(tickets, 9101)["body"].replace("Size: S.", "<!-- Size: S. -->")
-        out = self.approve(tickets)
-        self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
-        self.assertIn("approve: sizes:", out.stderr)
+        with self.subTest(case="size-only-in-html-comment"):
+            tickets = plan()
+            find(tickets, 9101)["body"] = find(tickets, 9101)["body"].replace("Size: S.", "<!-- Size: S. -->")
+            out = self.approve(tickets)
+            self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+            self.assertIn("approve: sizes:", out.stderr)
 
-        # 2. Size only in What to build (not in Parent)
-        tickets = plan()
-        find(tickets, 9101)["body"] = (find(tickets, 9101)["body"]
-                                       .replace("Size: S.", "No size here.")
-                                       .replace("Synthetic work for #9101.", "Synthetic work for #9101. Size: S."))
-        out = self.approve(tickets)
-        self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
-        self.assertIn("approve: sizes:", out.stderr)
+        with self.subTest(case="size-only-in-what-to-build"):
+            tickets = plan()
+            find(tickets, 9101)["body"] = (find(tickets, 9101)["body"]
+                                           .replace("Size: S.", "No size here.")
+                                           .replace("Synthetic work for #9101.", "Synthetic work for #9101. Size: S."))
+            out = self.approve(tickets)
+            self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+            self.assertIn("approve: sizes:", out.stderr)
 
-        # 3. Hidden Done by in an HTML comment cannot hide an owned-path clash
-        tickets = plan()
-        find(tickets, 9104)["body"] = find(tickets, 9104)["body"].replace(
-            "## Owned paths", "<!--\n## Done by\n\nHidden owner.\n-->\n\n## Owned paths").replace(
-            " (shared: the export row only)", "")
-        out = self.approve(tickets)
-        self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
-        self.assertIn("approve: owned paths:", out.stderr)
+        with self.subTest(case="hidden-done-by-cannot-hide-owned-path-clash"):
+            tickets = plan()
+            find(tickets, 9104)["body"] = find(tickets, 9104)["body"].replace(
+                "## Owned paths", "<!--\n## Done by\n\nHidden owner.\n-->\n\n## Owned paths").replace(
+                " (shared: the export row only)", "")
+            out = self.approve(tickets)
+            self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+            self.assertIn("approve: owned paths:", out.stderr)
 
-        # 4. Only owned-path bullet inside a fenced code block
-        tickets = plan()
-        find(tickets, 9103)["body"] = find(tickets, 9103)["body"].replace(
-            "- `cli/export.py`\n", "```md\n- `cli/export.py`\n```\n")
-        out = self.approve(tickets)
-        self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
-        self.assertIn("approve: owned paths:", out.stderr)
+        with self.subTest(case="only-owned-path-bullet-in-code-fence"):
+            tickets = plan()
+            find(tickets, 9103)["body"] = find(tickets, 9103)["body"].replace(
+                "- `cli/export.py`\n", "```md\n- `cli/export.py`\n```\n")
+            out = self.approve(tickets)
+            self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+            self.assertIn("approve: owned paths:", out.stderr)
 
-        # 5. Hidden Done by keeps ready-for-agent row when owned paths are clean
-        tickets = plan()
-        find(tickets, 9104)["body"] = find(tickets, 9104)["body"].replace(
-            "## Owned paths", "<!--\n## Done by\n\nHidden owner.\n-->\n\n## Owned paths")
-        out = self.approve(tickets)
-        self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertIn("| #9104 | List export in the fleet settings | none | ready-for-agent |", out.stdout)
+        with self.subTest(case="hidden-done-by-keeps-ready-for-agent"):
+            tickets = plan()
+            find(tickets, 9104)["body"] = find(tickets, 9104)["body"].replace(
+                "## Owned paths", "<!--\n## Done by\n\nHidden owner.\n-->\n\n## Owned paths")
+            out = self.approve(tickets)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertIn("| #9104 | List export in the fleet settings | none | ready-for-agent |", out.stdout)
 
     def test_cross_repository_relies_uses_the_dependent_repository_checkout(self):
         second_repo = "synthetic-owner/second-repo"
@@ -1056,32 +1056,31 @@ class MachineApproval(unittest.TestCase):
                                       if blocker_owns else ()))}
             return [t1, t2]
 
-        # 1. Existing file in supplied second checkout passes
-        out = self.approve(external_tickets("`docs/contract.md`"), None, "--checkout", f"{second_repo}={second_root}")
-        self.assertEqual(out.returncode, 0, out.stderr)
+        with self.subTest(case="existing-file-in-supplied-second-checkout-passes"):
+            out = self.approve(external_tickets("`docs/contract.md`"), None, "--checkout", f"{second_repo}={second_root}")
+            self.assertEqual(out.returncode, 0, out.stderr)
 
-        # 2. File found only in graph checkout is refused when checking second checkout
-        out = self.approve(external_tickets("`docs/existing.md`"), None, "--checkout", f"{second_repo}={second_root}")
-        self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
-        self.assertIn("approve: relies:", out.stderr)
+        with self.subTest(case="file-only-in-graph-checkout-refused-with-second-checkout"):
+            out = self.approve(external_tickets("`docs/existing.md`"), None, "--checkout", f"{second_repo}={second_root}")
+            self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+            self.assertIn("approve: relies:", out.stderr)
 
-        # 3. With no checkout for second repo, file in graph checkout is still refused
-        out = self.approve(external_tickets("`docs/existing.md`"))
-        self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
-        self.assertIn("approve: relies:", out.stderr)
+        with self.subTest(case="file-only-in-graph-checkout-refused-without-second-checkout"):
+            out = self.approve(external_tickets("`docs/existing.md`"))
+            self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+            self.assertIn("approve: relies:", out.stderr)
 
-        # 4. Eligible planned external path passes even when graph checkout has a folder at that path
-        (self.root / "contracts/ext.v1.md").mkdir(parents=True)
-        out = self.approve(external_tickets("`contracts/ext.v1.md`", blocker_owns="contracts/ext.v1.md"))
-        self.assertEqual(out.returncode, 0, out.stderr)
+        with self.subTest(case="planned-external-path-passes-despite-graph-checkout-folder"):
+            (self.root / "contracts/ext.v1.md").mkdir(parents=True)
+            out = self.approve(external_tickets("`contracts/ext.v1.md`", blocker_owns="contracts/ext.v1.md"))
+            self.assertEqual(out.returncode, 0, out.stderr)
 
-        # 5. Bad --checkout forms exit 2
         tickets = plan()
         for bad in (["--checkout", "no-equals"],
                     ["--checkout", f"not-a-repo={second_root}"],
                     ["--checkout", f"{second_repo}={self.tmp / 'missing-dir'}"],
                     ["--checkout", f"{second_repo}={second_root}", "--checkout", f"{second_repo.upper()}={second_root}"]):
-            with self.subTest(bad=bad):
+            with self.subTest(bad_checkout=bad):
                 out = self.approve(tickets, None, *bad)
                 self.assertEqual((out.returncode, out.stdout), (2, ""), out.stderr)
                 self.assertIn("approve: usage:", out.stderr)

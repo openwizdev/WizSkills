@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=978
+CASES=980
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1029,7 +1029,7 @@ expect 'a failed claim whose reason names a thread does not retire that reviewer
 re-check #31 for #12 at $S31F: tell its reviewer, thread thr_synrev31 (retry after "review failed $S31F: thread thr_synrev31 never got the message")
 EOF
 expect 'a review record that names no thread: look, since its reviewer cannot be checked' 0 check.json 'pr31 | pr_say(31; 3101; "11:00"; "launch-fleet: review started \(sha(31))")' -- check <<EOF
-look #31: thread discovery is out of reach
+look #31: thread discovery is out of reach; set LAUNCH_FLEET_STATE ({"repo":"synthetic-owner/synthetic-repo","threads":{}}) to an absolute private JSON file outside the checkout
 EOF
 expect 'a review claim with no outcome after 10 minutes is reconciled' 0 check.json 'pr31 | pr_say(31; 3101; "11:40"; "launch-fleet: review starting \(sha(31))")' -- check <<EOF
 reconcile review #31 for #12 at $S31: claimed at 2026-11-01T11:40:00Z, no outcome after 10 minutes
@@ -4487,6 +4487,13 @@ if selected 'FR9: a saved full read never replays a spec done line, so a new fol
   else bad "$name" "${gi1_why:-setup}"; fi
 fi
 
+expect 'routing: missing LAUNCH_FLEET_STATE file exits 2 and names the file and JSON shape' 2 check.json '.' "LAUNCH_FLEET_STATE=$tmp/missing-state.json" -- check <<EOF
+records: private routing file LAUNCH_FLEET_STATE is missing; create it outside the checkout with {"repo":"synthetic-owner/synthetic-repo","threads":{}}
+EOF
+expect 'routing: missing LAUNCH_FLEET_RUNS file reports how to create it' 0 check.json 'pr31 | issue(12; .comments = [{id: 1201, at: at("09:40"), body: "launch-fleet: started"}]) | pull(31; .checks[0].conclusion = "FAILURE")' "LAUNCH_FLEET_RUNS=$tmp/missing-runs.json" -- wake 12 <<EOF
+look #12: the private run map LAUNCH_FLEET_RUNS was not restored from the private state; create it outside the checkout with {"repo":"synthetic-owner/synthetic-repo","runs":{}}
+EOF
+
 ### Every case ran, and every call was a read
 
 if [ -n "$WORKER" ]; then
@@ -4511,6 +4518,7 @@ case ${TEST_ONLY:-} in
   'CW-G:*') expected=4 ;;
   'cross-repository PR:*') expected=12 ;;
   'FR9:*') expected=11 ;;
+  'routing:*') expected=2 ;;
 esac
 cases=$((cases - support))
 [ "$cases" = "$expected" ] || bad 'the selected cases ran' "$cases cases ran, not $expected: is \"$TEST_ONLY\" a case's name?"

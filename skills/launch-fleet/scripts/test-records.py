@@ -82,11 +82,13 @@ class Fleet(unittest.TestCase):
         runs.write_text(json.dumps({'repo': 'example/other', 'runs': {}}))
         self.assertEqual(self.run_fleet('wake', '12'), 'look #12: the private runs file is unreadable\n')
         runs.unlink()
-        self.assertEqual(self.run_fleet('wake', '12'), 'look #12: the private run map LAUNCH_FLEET_RUNS was not '
-                                                       'restored from the private state\n')
+        self.assertEqual(self.run_fleet('wake', '12'),
+                         'look #12: the private run map LAUNCH_FLEET_RUNS was not restored from the private state; '
+                         'create it outside the checkout with {"repo":"example/public","runs":{}}\n')
         del self.env['LAUNCH_FLEET_RUNS']
-        self.assertEqual(self.run_fleet('wake', '12'), 'look #12: no thread matches builder:12, and no private run '
-                                                       'map LAUNCH_FLEET_RUNS was restored\n')
+        self.assertEqual(self.run_fleet('wake', '12'),
+                         'look #12: no thread matches builder:12, and no private run map LAUNCH_FLEET_RUNS was '
+                         'restored (create outside the checkout with {"repo":"example/public","runs":{}})\n')
 
     def test_builder_found_by_title_and_checked_branch(self):
         self.pr['checks'][0]['conclusion'] = 'FAILURE'
@@ -107,7 +109,11 @@ class Fleet(unittest.TestCase):
         for threads in ({'id': 'thr_synbuilder'}, 'thr_synbuilder', [{'title': '#12: Synthetic'}]):
             with self.subTest(threads=threads):
                 self.threads = threads
-                self.assertEqual(self.run_fleet('wake', '12'), 'look #12: thread discovery is out of reach\n')
+                self.assertEqual(
+                    self.run_fleet('wake', '12'),
+                    'look #12: thread discovery is out of reach; set LAUNCH_FLEET_STATE '
+                    '({"repo":"example/public","threads":{}}) or LAUNCH_FLEET_RUNS '
+                    '({"repo":"example/public","runs":{}}) to an absolute private JSON file outside the checkout\n')
 
     def test_driver_review_rechecks_nudges_and_archives_the_pull_request_run(self):
         runs = self.dir / 'runs.json'
@@ -716,6 +722,77 @@ class RoutedStartedClaim(unittest.TestCase):
         ]}, closedByPullRequestsReferences={'nodes': []})
         bad = self.records.annotate({'specs': [], 'singles': [inline]}, 'example/public', False, [thread], {})
         self.assertIsNone(bad['singles'][0]['comments']['nodes'][0].get('resolvedThread'))
+
+
+class MissingRoutingFiles(unittest.TestCase):
+    setUp = Fleet.setUp
+    issue = Fleet.issue
+    say = Fleet.say
+    run_fleet = Fleet.run_fleet
+
+    def run_records(self, world=None):
+        payload = world or {'specs': [], 'singles': []}
+        return subprocess.run(
+            [sys.executable, '-I', str(HERE / 'records.py'), self.world['repo'], 'false'],
+            input=json.dumps(payload), env=self.env, cwd=self.dir, capture_output=True, text=True, timeout=30)
+
+    def test_missing_state_file_names_env_var_and_json_shape_without_creating_it(self):
+        missing = self.dir / 'missing-state.json'
+        self.env['LAUNCH_FLEET_STATE'] = str(missing)
+        done = self.run_records()
+        self.assertEqual(done.returncode, 2)
+        self.assertEqual(done.stdout, '')
+        self.assertEqual(
+            done.stderr,
+            'records: private routing file LAUNCH_FLEET_STATE is missing; '
+            'create it outside the checkout with {"repo":"example/public","threads":{}}\n')
+        self.assertFalse(missing.exists())
+        self.assertNotIn(str(self.dir), done.stderr)
+
+    def test_relative_state_path_names_env_var_and_requirement(self):
+        self.env['LAUNCH_FLEET_STATE'] = 'relative/state.json'
+        done = self.run_records()
+        self.assertEqual(done.returncode, 2)
+        self.assertEqual(done.stdout, '')
+        self.assertEqual(
+            done.stderr,
+            'records: private routing state could not be read: '
+            'LAUNCH_FLEET_STATE must be an absolute path outside the checkout\n')
+
+    def test_unset_state_with_unreachable_discovery_for_reviewer_names_launch_fleet_state(self):
+        self.issue(12)['comments'] = []
+        self.env['LAUNCH_FLEET_GITHUB_ONLY'] = '1'
+        self.say('review started ' + SHA)
+        out = self.run_fleet('wake', '12')
+        self.assertIn(
+            'look #31: thread discovery is out of reach; set LAUNCH_FLEET_STATE '
+            '({"repo":"example/public","threads":{}}) to an absolute private JSON file outside the checkout\n',
+            out)
+        self.assertNotIn(str(self.dir), out)
+        self.assertNotRegex(out, r'\bthr_[A-Za-z0-9]')
+
+    def test_existing_empty_state_file_with_unreachable_discovery_reports_out_of_reach(self):
+        self.issue(12)['comments'] = []
+        state_file = self.dir / 'state.json'
+        state_file.write_text(json.dumps({'repo': self.world['repo'], 'threads': {}}))
+        self.env['LAUNCH_FLEET_STATE'] = str(state_file)
+        self.env['LAUNCH_FLEET_GITHUB_ONLY'] = '1'
+        self.say('review started ' + SHA)
+        out = self.run_fleet('wake', '12')
+        self.assertIn('look #31: thread discovery is out of reach\n', out)
+        self.assertNotIn('LAUNCH_FLEET_STATE', out)
+
+    def test_missing_runs_file_never_creates_file_or_leaks_path(self):
+        missing = self.dir / 'missing-runs.json'
+        self.env['LAUNCH_FLEET_RUNS'] = str(missing)
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        out = self.run_fleet('wake', '12')
+        self.assertEqual(
+            out,
+            'look #12: the private run map LAUNCH_FLEET_RUNS was not restored from the private state; '
+            'create it outside the checkout with {"repo":"example/public","runs":{}}\n')
+        self.assertFalse(missing.exists())
+        self.assertNotIn(str(self.dir), out)
 
 
 if __name__ == '__main__':

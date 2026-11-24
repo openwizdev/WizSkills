@@ -1123,6 +1123,11 @@ def create_repo(got):
     elif seen != 'absent':
         raise Exit(5, '%s already exists; choose another name, or use it as an existing repository; '
                       'nothing created.' % name)
+    retry = bool(record) and record['repo'] == name and record['state'] in ('pending', 'uncertain', 'unproven')
+    if retry and (record.get('id') or record['state'] == 'unproven'):
+        raise Exit(6, '%s does not read back now, but an earlier create of this onboarding may have made it (renamed, '
+                      'hidden or deleted since), so OpenWiz never creates it again. Nothing created or written; run '
+                      'this again to read it back.' % name)
     state.value['created'] = {'repo': name, 'state': 'pending'}
     if not state.save():
         raise Exit(10, 'Could not save the repository name first; nothing created.')
@@ -1130,7 +1135,7 @@ def create_repo(got):
     seen = look(name)
     if isinstance(seen, dict) and seen['id'] != reply:
         raise unproven(state, name)
-    ended = 'created' if isinstance(seen, dict) else 'absent' if seen == 'absent' and reply is None else 'uncertain'
+    ended = 'created' if isinstance(seen, dict) else 'absent' if seen == 'absent' and reply is None and not retry else 'uncertain'
     state.value['created'] = {'repo': name, 'state': ended, **(seen if ended == 'created' else {}),
                               **({'id': reply} if ended == 'uncertain' and reply else {})}
     saved = state.save()

@@ -311,7 +311,6 @@ for shell in bash dash; do
         GIT_CONFIG_VALUE_40=forty SYNTHETIC_LINES='one
 GIT_CONFIG_KEY_5 synthetic;name_9=two'
       for copy in loop block; do
-        # catches: restore_today_account assigning a readonly caller IFS, so bash keeps the entries and dash aborts the caller
         case $ifs in
           -) set -- 'unset IFS' '[ -z "${IFS+x}" ]' ;;
           ro*) set -- 'IFS=${3#ro}; readonly IFS' '[ "$IFS" = "${3#ro}" ]' ;;

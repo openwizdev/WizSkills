@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shlex
 import shutil
 import signal
@@ -22,6 +23,7 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 SCRIPT = HERE / 'status.py'
+git_origin = runpy.run_path(str(HERE / 'fixtures/git_origin.py'))['env']
 CONTRACT = ROOT / 'contracts/agent-status.v1.md'
 SCHEMA = ROOT / 'contracts/agent-status.v1.schema.json'
 REPO = 'example/tracker'
@@ -38,7 +40,7 @@ def at(name):
 SKILLS = at('build-ticket')
 
 FAKE_GH = r'''
-import fcntl, json, os, sys
+import fcntl, hashlib, json, os, sys
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, parse_qs, unquote
 args = sys.argv[1:]
@@ -87,17 +89,38 @@ if args[:2] == ['issue', 'edit']:
 assert args[0] == 'api', args
 args = args[1:]
 method, path, accept, body = 'GET', None, None, None
+include, match, next_page = False, None, None
 i = 0
 while i < len(args):
     a = args[i]
     if a == '--method': method = args[i + 1]; i += 2
-    elif a == '-H': accept = args[i + 1]; i += 2
+    elif a == '--include': include = True; i += 1
+    elif a == '-H':
+        header = args[i + 1]; i += 2
+        if header.startswith('If-None-Match: '):
+            match = header.partition(': ')[2]
+        else:
+            accept = header
     elif a == '--input': assert args[i + 1] == '-'; body = json.loads(sys.stdin.read()); i += 2
     else: assert path is None, args; path = a; i += 1
-with open(os.environ['FAKE_GH_LOG'], 'a') as log:
-    log.write(json.dumps({'method': method, 'path': path, 'body': body}) + '\n')
+def log_call(**response):
+    with open(os.environ['FAKE_GH_LOG'], 'a') as log:
+        log.write(json.dumps(dict(method=method, path=path, body=body, **response)) + '\n')
+if method != 'GET':
+    log_call()
 size = int(os.environ.get('FAKE_GH_PAGE', '100'))
+def http(code, etag=None, link=None):
+    sys.stdout.write('HTTP/2 %d\n' % code)
+    if etag:
+        sys.stdout.write('ETag: %s\n' % etag)
+    if link:
+        sys.stdout.write('Link: <%s>; rel="next"\n' % link)
+    sys.stdout.write('\n')
 def fail(code, text):
+    if method == 'GET':
+        log_call(match=match, status=code)
+    if include:
+        http(code)
     sys.stderr.write('gh: %s (HTTP %d)\n' % (text, code)); sys.exit(1)
 if method + ' ' + path in world.get('fail_once', []):
     world['fail_once'].remove(method + ' ' + path)
@@ -105,7 +128,16 @@ if method + ' ' + path in world.get('fail_once', []):
     fail(502, 'Bad Gateway')
 now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 def out(value):
-    sys.stdout.write(json.dumps(value)); sys.exit(0)
+    answer = json.dumps(value)
+    etag = '"' + hashlib.sha256(answer.encode()).hexdigest() + '"'
+    code = 304 if include and match == etag else 200
+    if method == 'GET':
+        log_call(match=match, status=code, etag=etag)
+    if include:
+        http(code, etag, next_page if code == 200 else None)
+    if code == 304:
+        sys.exit(1)
+    sys.stdout.write(answer); sys.exit(0)
 def save():
     json.dump(world, open(world_path, 'w'), indent=1, sort_keys=True)
 def issue(n):
@@ -116,7 +148,12 @@ def rest(c):
     return {'id': c['id'], 'node_id': 'IC_%d' % c['id'], 'user': {'login': c['author']} if c['author'] else None,
             'body': c['body'], 'updated_at': c['updated']}
 def page(items, query):
-    k = int(query.get('page', ['1'])[0]); n = min(int(query.get('per_page', ['30'])[0]), size)
+    global next_page
+    k = int(query.get('page', ['1'])[0]); per_page = int(query.get('per_page', ['30'])[0])
+    n = min(per_page, size)
+    if k * n < len(items):
+        tail = '/'.join(seg)
+        next_page = f'https://api.github.com/repositories/42/{tail}?per_page={per_page}&page={k + 1}'
     return items[(k - 1) * n:k * n]
 parts = urlsplit(path); query = parse_qs(parts.query)
 seg = [unquote(s) for s in parts.path.split('/')]
@@ -160,11 +197,15 @@ if path == 'graphql':
     if world.get('race_after_scan'):
         races('race_after_scan'); save()
     out(answer)
-assert '/'.join(seg[:3]) == 'repos/' + world['repo'], path
-seg = seg[3:]
+if seg[:3] == ['', 'repositories', '42']:
+    seg = seg[3:]
+else:
+    assert '/'.join(seg[:3]) == 'repos/' + world['repo'], path
+    seg = seg[3:]
 if method == 'GET' and seg == ['contents', 'docs', 'agents', 'fleet.md']:
     assert accept == 'Accept: application/vnd.github.raw'
     if world.get('fleet_md') is None: fail(404, 'Not Found')
+    log_call(match=match, status=200)
     sys.stdout.write(world['fleet_md']); sys.exit(0)
 if seg[0] == 'issues' and len(seg) == 2 and method == 'GET':
     it = issue(seg[1]); out({'number': it['number'], 'state': it['state'], 'labels': [{'name': l} for l in it['labels']]})
@@ -272,9 +313,9 @@ class Tracker(unittest.TestCase):
             ]}],
         }
         self.page = '100'
-        state = mock.patch.dict(os.environ, {'XDG_STATE_HOME': str(self.dir / 'state')})
-        state.start()
-        self.addCleanup(state.stop)
+        env = mock.patch.dict(os.environ, {'XDG_STATE_HOME': str(self.dir / 'state'), **self.origin()})
+        env.start()
+        self.addCleanup(env.stop)
 
     def save(self):
         (self.dir / 'world.json').write_text(json.dumps(self.world))
@@ -289,10 +330,13 @@ class Tracker(unittest.TestCase):
     def writes(self):
         return [(c['method'], c['path']) for c in self.calls() if c['method'] != 'GET' and c['path'] != 'graphql']
 
+    def origin(self):
+        return git_origin(self.dir, {REPO: self.world['fleet_md']})
+
     def run_status(self, *args, script=SCRIPT):
         env = dict(os.environ, PATH=str(self.dir / 'bin') + ':' + os.environ['PATH'],
                    FAKE_GH_WORLD=str(self.dir / 'world.json'), FAKE_GH_LOG=str(self.dir / 'gh.log'),
-                   FAKE_GH_PAGE=self.page)
+                   FAKE_GH_PAGE=self.page, **self.origin())
         for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_REPO'):
             env.pop(key, None)
         return subprocess.run([sys.executable, '-I', str(script), *args], env=env,
@@ -689,7 +733,7 @@ class Write(Tracker):
                 result = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
                 self.assertEqual((result.returncode, result.stdout), (2, ''))
                 self.assertIn('record authors', result.stderr)
-                self.assertEqual([c['method'] for c in self.calls()], ['GET'])
+                self.assertEqual(self.calls(), [])
                 self.assertEqual(self.load(), self.world)
 
 
@@ -1278,7 +1322,7 @@ class FleetRun(Tracker):
     def step(self, argv, *extra):
         env = dict(os.environ, PATH=str(self.dir / 'bin') + ':' + os.environ['PATH'],
                    FAKE_GH_WORLD=str(self.dir / 'world.json'), FAKE_GH_LOG=str(self.dir / 'gh.log'),
-                   FAKE_GH_PAGE=self.page)
+                   FAKE_GH_PAGE=self.page, **self.origin())
         for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_REPO'):
             env.pop(key, None)
         return subprocess.run(argv + list(extra), env=env, capture_output=True, text=True, timeout=60)
@@ -1665,6 +1709,68 @@ class WakeRepair(Tracker):
                 done = self.step(filled('launch-fleet', fix, {'<N>': n, '<owner>/<repo>': REPO}))
                 self.assertEqual(done.returncode, 0, done.stderr)
         return seen.returncode, [x for x in report if not (fix and x.endswith(': no needs-info label'))]
+
+    def repair_with_a_pending_marker(self):
+        issue = self.ticket(self.world)
+        issue['labels'].append('needs-info')
+        issue['comments'] += [
+            comment(104, BOT, '<!-- openwiz:needs-info-repair v1 -->'),
+            *[comment(cid, 'synthetic-owner', 'plain') for cid in range(105, 202)],
+        ]
+        issue['events'] = [
+            *[{'event': 'assigned', 'id': eid} for eid in range(500, 600)],
+            {'event': 'labeled', 'label': {'name': 'needs-info'}, 'actor': {'login': 'synthetic-owner'}},
+        ]
+
+    def test_unchanged_repair_revalidates_every_rest_read(self):
+        self.repair_with_a_pending_marker()
+        issue = f'repos/{REPO}/issues/12'
+        comments = [
+            issue + '/comments?per_page=100&page=1', issue + '/comments?per_page=100&page=2',
+            issue + '/comments?per_page=100&page=3',
+        ]
+        events = [
+            issue + '/events?per_page=100&page=1', issue + '/events?per_page=100&page=2',
+            issue + '/events?per_page=100&page=3',
+        ]
+        expected_reads = comments * 2 + [issue] + events
+        self.save()
+        self.assertEqual(self.wake(), (0, []))
+        before = self.calls()
+
+        self.save()
+        self.assertEqual(self.wake(), (0, []))
+        after = self.calls()[len(before):]
+        first = [c for c in before if c['method'] == 'GET']
+        second = [c for c in after if c['method'] == 'GET']
+        self.assertEqual([c['status'] for c in second], [304] * len(expected_reads))
+        self.assertEqual([c['path'] for c in first], expected_reads)
+        self.assertEqual([c['path'] for c in second], expected_reads)
+        self.assertEqual([c['match'] for c in second], [c['etag'] for c in first])
+        self.assertEqual(self.writes(), [('DELETE', f'repos/{REPO}/issues/comments/104')] * 2)
+
+    def test_repair_fails_closed_when_a_cached_rest_read_is_refused(self):
+        issue = f'repos/{REPO}/issues/12'
+        for path in (issue, issue + '/comments?per_page=100&page=1', issue + '/events?per_page=100&page=2'):
+            with self.subTest(path=path):
+                self.setUp()
+                self.repair_with_a_pending_marker()
+                self.save()
+                self.assertEqual(self.wake(), (0, []))
+                self.world['fail_once'] = ['GET ' + path]
+                self.save()
+                mark = len(self.calls())
+                code, report = self.wake()
+                self.assertEqual(code, 2)
+                self.assertEqual(len(report), 1)
+                self.assertRegex(report[0], r'^status check failed: .*HTTP 502')
+                attempted = self.calls()[mark:]
+                refused, = [c for c in attempted if c['path'] == path]
+                self.assertEqual(refused['status'], 502)
+                self.assertTrue(refused['match'])
+                for call in attempted:
+                    self.assertTrue(call['method'] == 'GET' or call['path'] == 'graphql', call)
+                self.assertEqual([c['id'] for c in self.ticket()['comments'] if c['id'] == 104], [104])
 
     def test_a_builder_that_resumes_during_the_wake_is_never_marked_as_needing_the_user(self):
         asking = note(state='asking', step='asked which file to change')

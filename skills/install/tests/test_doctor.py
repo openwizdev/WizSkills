@@ -522,6 +522,8 @@ class SkillCommandsMatchPackage(unittest.TestCase):
         text = SKILL.read_text()
         preflight = text[text.index('## 1. Preflight'):text.index('## 2. Verified install')]
         self.assertIn('`aarch64-unknown-linux-gnu`', preflight)
+        self.assertIn('0.1.1', preflight)
+        self.assertIn('refuse Linux on ARM', preflight)
         self.assertNotIn('Linux on ARM is refused', preflight)
 
     def test_removal_names_each_entry_and_never_deletes_a_folder_whole(self):

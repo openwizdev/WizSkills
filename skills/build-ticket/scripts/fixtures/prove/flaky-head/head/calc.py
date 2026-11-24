@@ -1,9 +1,10 @@
-import os
+from pathlib import Path
+
+MARKER = Path('ran-once')
 
 
 def add(a, b):
-    # Right on the first run in a worktree, wrong after: a marker file stands in for flakiness.
-    if os.path.exists('ran-once'):
+    if MARKER.exists():
         return 0
-    open('ran-once', 'w').close()
+    MARKER.touch()
     return a + b

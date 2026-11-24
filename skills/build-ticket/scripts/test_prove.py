@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""prove.py: the fixture repositories end to end, and the outcome rules per test runner."""
 import importlib.util
 import json
 import os

@@ -10,6 +10,7 @@
     "./skills/ask-wiz",
     "./skills/build-ticket",
     "./skills/diagnose",
+    "./skills/dream-cycle",
     "./skills/feedback",
     "./skills/grill",
     "./skills/handoff",

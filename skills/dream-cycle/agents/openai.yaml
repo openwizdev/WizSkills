@@ -1,0 +1,3 @@
+interface:
+  display_name: "Dream cycle"
+  short_description: "Run an organization-wide read-only review into a private report and confirmed tickets"

@@ -28,7 +28,7 @@ Routine triage comments start with this line, exactly as Matt wrote it; approval
 
 ## Pro issues
 
-If the trusted project settings in `docs/agents/triage-labels.md` have a `Pro repository: owner/name` line (for example, `Pro repository: openwizpro/WizPro`), check for `pro` when triage can edit an issue’s labels. Skip already labelled issues and feedback reports governed by the exact label sets below. Use the issue author’s GitHub login and a `gh` identity with admin access to the configured Pro repository:
+If the trusted project settings in `docs/agents/triage-labels.md` have a `Pro repository: owner/name` line (for example, `Pro repository: openwizpro/WizPro`), check for `pro` when triage can edit an issue’s labels. Skip issues that already have `pro` and feedback reports governed by the exact label sets below. Use the issue author’s GitHub login and a `gh` identity with admin access to the configured Pro repository:
 
 - `gh api --silent "repos/$pro_repo/collaborators/$author"` succeeds for a collaborator (HTTP 204).
 - Otherwise, run `gh api --paginate "repos/$pro_repo/invitations" --jq '.[].invitee.login // empty'`. A pending invite counts if its login matches the author, ignoring case.

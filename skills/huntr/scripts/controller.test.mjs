@@ -597,13 +597,66 @@ scenario('D5 a controller paused after claiming cannot record past its live leas
   assert.equal(next.status, 0, next.stderr);
 });
 
-test('W1 the last wake and a pause after claiming finish with release; record only without a live lease', () => {
-  const skill = readFileSync(join(here, '../SKILL.md'), 'utf8');
-  const section = heading => skill.split(`\n${heading}\n`)[1].split('\n## ')[0].replace(/\s+/g, ' ');
-  assert.match(section('## On every wake'), /every slice is reported or blocked[^.]*\bfinish the hunt \(step 5\)/i);
-  assert.match(section('## 1. Check whether to hunt'), /`hunt: false` ends the hunt as paused: finish it \(step 5\)/);
-  assert.match(section('## 5. Record the result and finish this hunt'), /to finish the hunt, `lease\.mjs finish <run> <index>`/);
-  assert.doesNotMatch(section('## 5. Record the result and finish this hunt'), /`record` \(off, paused, blocked/);
+scenario('W1 dry-run trace: the final wake and a pause after claiming publish a verified index, release the lease and let the next controller claim', w => {
+  w.env.HUNTR_LEASE_RETRY_MS = '0';
+  w.state.comments = [{id: 100, ...on}];
+  const pin = 'a'.repeat(40);
+  const run = w.run(lease, ['id']).stdout.trim();
+  assert.equal(JSON.parse(w.run(lease, ['switch']).stdout).switch, 'on');
+  assert.equal(w.run(lease, ['claim', run]).status, 0);
+  assert.deepEqual(JSON.parse(w.run(lease, ['pace', 'UTC', '0', 'none']).stdout), {hunt: true});
+  assert.equal(w.run(lease, ['due', run, 'hunter']).status, 0);
+  const collected = JSON.parse(w.run(hunters, ['collect', pin,
+    `core/correctness=${w.file('report.txt', `huntr hunter: report core/correctness at ${pin}\nfindings: none\n`)}`]).stdout);
+  assert.deepEqual(collected, {pin, reported: ['core/correctness'], blocked: []});
+  const finalRecord = {
+    run, date: '2030-01-02', timezone: 'UTC', base: pin, switch: 'on',
+    coverage: collected.reported, manifests: {'core/correctness': 'synthetic-digest'},
+    skips: [], owners: {controller: run}, pacing: {streak: 1, last_empty_at: '2030-01-02T00:00:00Z'},
+    gaps: [], next: 'wait for next scheduled hunt',
+  };
+  const {r: pub1, index: index1} = publish(w, finalRecord);
+  assert.equal(pub1.status, 0, pub1.stderr);
+  const pub1Out = JSON.parse(pub1.stdout);
+  const fin1 = w.run(lease, ['finish', run, join(w.dir, 'index.md')]);
+  assert.equal(fin1.status, 0, fin1.stderr);
+  const fin1Out = JSON.parse(fin1.stdout);
+  assert.deepEqual(fin1Out, {finished: 'release', verified: true, comment: w.state.comments.at(-1).id, holder: null});
+  assert.equal(w.state.comments.at(-1).body, `huntr lease: release ${run}\n\n${index1}`);
+  const partIds1 = [...index1.matchAll(/#issuecomment-(\d+)/g)].map(m => Number(m[1]));
+  assert.equal(partIds1.length, pub1Out.parts);
+  const partBodies1 = partIds1.map(id => w.state.comments.find(c => c.id === id).body);
+  assert.deepEqual(unpackPosted(w, partBodies1, pub1Out.sha256), finalRecord);
+  assert.equal(JSON.parse(w.run(lease, ['status']).stdout).holder, null);
+
+  const nextRun = w.run(lease, ['id']).stdout.trim();
+  const nextClaim = w.run(lease, ['claim', nextRun]);
+  assert.equal(nextClaim.status, 0, nextClaim.stderr);
+  assert.equal(JSON.parse(nextClaim.stdout).holder.run, nextRun);
+
+  const midday = zone(h => h >= 6 && h < 18);
+  const hourAgo = new Date(Date.now() - 3600000).toISOString();
+  const pausedPace = JSON.parse(w.run(lease, ['pace', midday.tz, '2', hourAgo]).stdout);
+  assert.deepEqual(pausedPace, {hunt: false, until: nextDay(midday.local)});
+  const pausedRecord = {
+    run: nextRun, date: '2030-01-02', timezone: midday.tz, base: pin, switch: 'on',
+    coverage: [], manifests: {}, skips: [], owners: {controller: nextRun},
+    pacing: {streak: 2, last_empty_at: hourAgo}, gaps: [], next: `paused until ${pausedPace.until}`,
+  };
+  const {r: pub2, index: index2} = publish(w, pausedRecord);
+  assert.equal(pub2.status, 0, pub2.stderr);
+  const pub2Out = JSON.parse(pub2.stdout);
+  const fin2 = w.run(lease, ['finish', nextRun, join(w.dir, 'index.md')]);
+  assert.equal(fin2.status, 0, fin2.stderr);
+  assert.deepEqual(JSON.parse(fin2.stdout), {finished: 'release', verified: true, comment: w.state.comments.at(-1).id, holder: null});
+  assert.equal(w.state.comments.at(-1).body, `huntr lease: release ${nextRun}\n\n${index2}`);
+  const partIds2 = [...index2.matchAll(/#issuecomment-(\d+)/g)].map(m => Number(m[1]));
+  assert.deepEqual(unpackPosted(w, partIds2.map(id => w.state.comments.find(c => c.id === id).body), pub2Out.sha256), pausedRecord);
+
+  const thirdRun = w.run(lease, ['id']).stdout.trim();
+  const thirdClaim = w.run(lease, ['claim', thirdRun]);
+  assert.equal(thirdClaim.status, 0, thirdClaim.stderr);
+  assert.equal(JSON.parse(thirdClaim.stdout).holder.run, thirdRun);
 });
 
 scenario('D6 due: an unreadable switch issue exits 3, never the lost-lease exit 2; after it recovers the holder releases', w => {

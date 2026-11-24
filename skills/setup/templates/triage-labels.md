@@ -18,8 +18,8 @@ When a skill names a role (for example, "label it ready for an agent"), use that
 
 | Label | Colour | Description |
 | --- | --- | --- |
-| `pro` | `#8250DF` | Opened by an OpenWiz Pro supporter |
+| `pro` | `#8250DF` | Opened by a Pro member |
 
-Create `pro` in the issue tracker when enabling this option. Replace the example repository below with the private Pro repository, or omit the line to leave automatic labelling off.
+Create `pro` in the issue tracker when enabling this option. Replace `<owner>/<repo>` below with the private Pro repository, or omit the line to leave automatic labelling off. The label is public, so enable it only where the project tells its Pro members about it.
 
-Pro repository: openwizpro/WizPro
+Pro repository: <owner>/<repo>

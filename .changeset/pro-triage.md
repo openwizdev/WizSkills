@@ -3,4 +3,4 @@
 "triage": minor
 ---
 
-Triage can flag issues from OpenWiz Pro members and list them first.
+Triage can flag issues from Pro members and list them first.

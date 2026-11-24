@@ -28,12 +28,12 @@ Routine triage comments start with this line, exactly as Matt wrote it; approval
 
 ## Pro issues
 
-If the trusted project settings in `docs/agents/triage-labels.md` have a `Pro repository: owner/name` line (for example, `Pro repository: openwizpro/WizPro`), check for `pro` when triage can edit an issue’s labels. Skip issues that already have `pro` and feedback reports governed by the exact label sets below. Use the issue author’s GitHub login and a `gh` identity with admin access to the configured Pro repository:
+If the trusted project settings in `docs/agents/triage-labels.md` have a `Pro repository: <owner>/<repo>` line, check each issue `find-work.sh` lists that lacks `pro`, once per triage run, before sorting it. Skip feedback reports governed by the exact label sets below. The `pro` label is public, so a project enables this only where it tells its Pro members about the label. Use the issue author's GitHub login and a `gh` identity with admin access to the configured Pro repository. The author counts only as an outside collaborator or a pending invitee of that repository, never through organisation membership or team access:
 
-- `gh api --silent "repos/$pro_repo/collaborators/$author"` succeeds for a collaborator (HTTP 204).
-- Otherwise, run `gh api --paginate "repos/$pro_repo/invitations" --jq '.[].invitee.login // empty'`. A pending invite counts if its login matches the author, ignoring case.
+- `gh api "repos/$pro_repo/collaborators?affiliation=outside" --paginate --jq '.[].login'` lists the outside collaborators.
+- `gh api "repos/$pro_repo/invitations" --paginate --jq '.[].invitee.login // empty'` lists the pending invitations.
 
-On either confirmed match, run `gh issue edit "$number" --repo "$issue_repo" --add-label pro`. If access cannot be verified, leave the label alone. Preserve any existing `pro` label during triage. With no Pro repository line, skip the check.
+Fetch both lists once per run. If either login list holds the author, ignoring case, run `gh issue edit "$number" --repo "$issue_repo" --add-label pro`. If either list cannot be read, leave the label alone. Preserve any existing `pro` label during triage. With no Pro repository line, skip the check.
 
 ## Sort an issue
 

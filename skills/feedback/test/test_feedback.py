@@ -1062,6 +1062,94 @@ class SecretsAndWarnings(Helper):
                           '192.168.1.42', '/home/synthetic-user/secret-project', 'thr_abc12345', 'user@host:'):
             self.assertNotIn(forbidden, log_section)
 
+    def test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log(self):
+        cases = [
+            ('stripe_sk_live', 'sk_live_51Hsynthetic000000000000000000', 'sk_live_51Hsynthetic000000000000000000'),
+            ('stripe_rk_test', 'rk_test_51Hsynthetic000000000000000000', 'rk_test_51Hsynthetic000000000000000000'),
+            ('gitlab_pat', 'glpat-synthetic0000000000000', 'glpat-synthetic0000000000000'),
+            ('npm_token', 'npm_synthetic00000000000000000000', 'npm_synthetic00000000000000000000'),
+            ('hf_token', 'hf_synthetic00000000000000000000', 'hf_synthetic00000000000000000000'),
+            ('slack_xoxe', 'xoxe-synthetic-000000000000', 'xoxe-synthetic-000000000000'),
+            ('password_assign', 'password=SyntheticHunter2Password', 'SyntheticHunter2Password'),
+            ('passwd_assign', 'passwd: SyntheticPasswdValue99', 'SyntheticPasswdValue99'),
+            ('secret_assign', 'secret=SyntheticSecretValue99', 'SyntheticSecretValue99'),
+            ('token_assign', 'token=SyntheticRawTokenValue99', 'SyntheticRawTokenValue99'),
+            ('api_key_assign', 'api_key=SyntheticApiKeyValue99', 'SyntheticApiKeyValue99'),
+            ('auth_token_assign', 'auth-token: SyntheticAuthTokenVal99', 'SyntheticAuthTokenVal99'),
+        ]
+        for name, sample, secret_val in cases:
+            with self.subTest(refuse=name):
+                rf = self.report_file({'title': f'Secret {name}', 'happened': f'line 1\nfound {sample} here'},
+                                      name=f'refuse-{name}.json')
+                _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+                self.assertIn('happened', a['refused'])
+                self.assertIn('2', a['refused'])
+        log_path = self.tmp / 'secrets.log'
+        log_path.write_text('\n'.join(sample for _, sample, _ in cases) + '\n')
+        rf = self.report_file({'title': 'Scrub all secret shapes', 'happened': 'See log.'}, name='scrub-all.json')
+        _, d = self.run_helper('draft', '--report-file', rf, '--log-file', str(log_path), expect=0)
+        p = self.preview(d['operation_id'])
+        self.run_helper('send', d['operation_id'], '--preview-id', p['preview_id'], expect=0)
+        body = json.loads(self.creates()[0]['stdin'])['body']
+        facts = parse_contract_facts(body)
+        self.assertEqual(facts['log_lines'], len(cases))
+        self.assertEqual(facts['redactions'], len(cases))
+        for name, _, secret_val in cases:
+            with self.subTest(scrub=name):
+                self.assertNotIn(secret_val, body)
+        self.assertIn('    password=[secret removed]', body)
+        self.assertIn('    api_key=[secret removed]', body)
+
+
+class LegacyRecords(Helper):
+    def write_v030_record(self, op, phase='draft', title='Legacy 0.3.0 draft', chosen_body='Legacy body.',
+                          account=None, preview=None, attempts=0, reason=None):
+        place = self.state / 'feedback'
+        place.mkdir(parents=True, exist_ok=True)
+        self.state.chmod(0o700)
+        place.chmod(0o700)
+        rec = {
+            'schema': 'openwiz.feedback-operation.v1',
+            'operation_id': op,
+            'destination': 'openwizdev/OpenWiz',
+            'phase': phase,
+            'title': title,
+            'chosen_body': chosen_body,
+            'body': f'{chosen_body}\n\nOpenWiz feedback operation {op}',
+            'account': account,
+            'preview': preview,
+            'attempts': attempts,
+            'issue': None,
+            'reason': reason,
+            'evidence': [],
+        }
+        p = place / f'{op}.json'
+        p.write_text(json.dumps(rec, indent=2) + '\n')
+        p.chmod(0o600)
+        return rec
+
+    def test_v030_records_still_read_status_reconcile_and_allow_new_drafts(self):
+        legacy_op = 'a' * 32
+        legacy = self.write_v030_record(
+            legacy_op,
+            phase='uncertain',
+            account=USER,
+            preview={'id': '123456', 'at': '2026-11-24T10:00:00Z'},
+            attempts=1,
+            reason='the create request ended with HTTP 502',
+        )
+        _, st = self.run_helper('status', legacy_op, expect=0)
+        self.assertEqual(st['phase'], 'uncertain')
+        rf = self.tmp / 'new-report.json'
+        rf.write_text(json.dumps({'title': 'New report after upgrade', 'happened': 'It broke.'}))
+        _, d1 = self.run_helper('draft', '--report-file', str(rf), expect=0)
+        self.assertEqual(d1['phase'], 'draft')
+        _, d2 = self.run_helper('draft', *self.files(title='New handoff after upgrade'), expect=0)
+        self.assertEqual(d2['phase'], 'draft')
+        self.world(issues=[{'number': 55, 'title': legacy['title'], 'body': legacy['body'], 'user': USER}])
+        _, rec = self.run_helper('reconcile', legacy_op, expect=0)
+        self.assertEqual((rec['phase'], rec['issue']['number']), ('sent', 55))
+
 
 class NoPersonName(Helper):
     def test_no_person_name_in_helper_say_refusals_or_skill_md(self):

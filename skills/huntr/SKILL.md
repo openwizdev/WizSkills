@@ -16,8 +16,9 @@ labels, then its huntr settings, `docs/agents/huntr.md`: tiers and their
 proofs, never-list, pace, open cap, model rows, switch issue, lease,
 checklist, slice manifests, issue form and gate. Run every script from the
 consuming repository root as `node <installed-huntr>/scripts/<script>`.
-Each refusal exits 2 (an unreadable `due` or a pending `finish` exits 3)
-with its reason on stderr; a refused write posted nothing.
+Each refusal or unconfirmed write exits 2 (an unreadable `due` or a pending `finish` exits 3)
+with its reason on stderr. A pre-write refusal posted nothing; an `unconfirmed write:` error
+means the write may have reached GitHub, so reconcile before retrying.
 
 ## Attack mode
 
@@ -54,13 +55,17 @@ For an attack run (started by `son-of-anton` or the orchestrator), read
    controller keeps it. Never use a thread id.
 2. `lease.mjs switch` prints on or off and every kind approval line. Off or
    unreadable is off: record it (step 5) and stop.
-3. `lease.mjs claim <run>`. Exit 2: post nothing, hunt nothing, archive.
-   Never contact the holder; its lease expires 45 minutes after renewal.
+3. `lease.mjs claim <run>`. On a pre-write refusal (exit 2), post nothing,
+   hunt nothing, archive; never contact the holder (its lease expires 45
+   minutes after renewal). On an `unconfirmed write:` exit 2, run
+   `lease.mjs status` first: if `<run>` holds the lease, continue; if
+   another run holds it, archive; if no one holds it, retry `claim` once;
+   if `status` is unreadable, stop and archive.
 4. Resume the latest verified record from the switch issue: its root index,
    then every part through `manifest.mjs unpack` with the index's digest.
 5. `lease.mjs pace <timezone> <streak> <last-empty-at>` from that record;
    `<last-empty-at>` is an ISO instant with Z or an offset, never a bare
-   local time. `hunt: false` ends the hunt as paused: finish it (step 5).
+   local time (or `none` when the streak is below 2). `hunt: false` ends the hunt as paused: finish it (step 5).
    Exit 2 means ask on the tracking issue, do only independent
    reconciliation, then finish the same way.
 6. Do any one-time reconciliation the settings name. Check the open cap.
@@ -134,7 +139,7 @@ without the tier's proof. Security proposals never take this route.
 
 Write the hunt's resumable record as JSON with `run` set to `<run>`: identity,
 date and timezone, base, switch, coverage, compact slice results, ledger,
-owners, gaps, empty-hunt streak and next action. Then run
+owners, gaps, empty-hunt streak, last empty hunt time and next action. Then run
 `lease.mjs publish <run> <record.json> <index>` and post the index with
 `renew` (a checkpoint while a wake is pending) or, to finish the hunt,
 `lease.mjs finish <run> <index>` on every final path: done, paused, blocked,
@@ -146,12 +151,15 @@ parts). Exit 3 means nothing was confirmed posted: finalization is pending.
 Keep the record and index in resumable state, stay open and rerun `finish` on
 the next wake; it reuses an index already posted. If no wake comes, the lease
 expires 45 minutes after its last renewal and the next scheduled controller
-resumes from the latest verified record. A failed publish says which part to
+resumes from the latest verified record. On an `unconfirmed write:` exit 2
+from `renew`, `release` or `record`, read back the switch issue before retrying
+or archiving: reuse an index already posted (or rerun `finish`, which reconciles
+an existing index) instead of posting a duplicate. A failed publish says which part to
 reconcile; rerun it. Write the last empty hunt's time as an instant
 with Z.
 Include **found, approved, proposed, skipped**, each with counts and tracker links. An empty hunt with every
 required source read adds one to the streak; a nonempty hunt resets it.
 
-Archive every hunter. Then **read back** every #394 part and index, use `unpack` with the planned digest to verify all numbered parts. Once that record is verified, delivery is complete: **#394 is the only report channel** to the orchestrator, including partial results, final results, tier-0 audits, proposals and blockers. Do not send direct thread messages or attempt a second delivery. Run `room-cli thread archive --self` as the final action, for off, paused, empty and blocked hunts too. If the record cannot be saved, stay open until a later wake reconciles it.
+Archive every hunter. Then **read back** every configured switch issue part and index, use `unpack` with the planned digest to verify all numbered parts, and check that the recovered record holds run identity, coverage, manifests, skips, ownership, pacing and next action. Once that record is verified, delivery is complete: **the configured switch issue is the only report channel** to the orchestrator, including partial results, final results, tier-0 audits, proposals and blockers. Do not send direct thread messages or attempt a second delivery. Run `room-cli thread archive --self` as the final action, for off, paused, empty and blocked hunts too. If the record cannot be saved, stay open until a later wake reconciles it.
 
 **Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills.

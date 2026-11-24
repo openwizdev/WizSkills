@@ -18,6 +18,7 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 | [`research`](research/SKILL.md) |
 | [`review-ticket`](review-ticket/SKILL.md) |
 | [`setup`](setup/SKILL.md) |
+| [`son-of-anton`](son-of-anton/SKILL.md) |
 | [`to-spec`](to-spec/SKILL.md) |
 | [`to-tickets`](to-tickets/SKILL.md) |
 | [`triage`](triage/SKILL.md) |

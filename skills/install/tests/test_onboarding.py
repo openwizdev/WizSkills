@@ -920,13 +920,26 @@ class ReviewRound(unittest.TestCase):
     def road(self, name='always-wanted'):
         return Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
 
-    def test_r1_the_road_never_runs_a_sign_in_itself(self):
+    def test_r1_the_road_starts_sign_in_only_after_a_clear_yes_and_never_reads_a_token(self):
         text = (SKILL_DIR / 'SKILL.md').read_text()
+        guards = text[text.index('## Guards'):text.index('## Where your agents run')]
+        yes_prompt = ("I'll open GitHub's sign-in page and give you a short code; "
+                      "you type your password only on GitHub's own page. OK?")
+        self.assertIn('Never touch a login without a clear yes, and never see it.', guards)
+        self.assertIn(yes_prompt, guards)
+        self.assertLess(guards.index(yes_prompt), guards.index('github_login.py sign-in --state-dir <state> --yes'))
+        for words in ('in the background', 'https://github.com/login/device', 'never read, pass or store a token',
+                      'cloudroom.py sign-in'):
+            self.assertIn(words, guards)
         lines = [line for line in text.splitlines() if 'github_login.py sign-in' in line or 'auth login' in line]
         self.assertTrue(lines)
         for line in lines:
-            self.assertRegex(line, r'\b(themselves|yourself)\b', line)
+            self.assertRegex(line, r'clear yes|without.*yes', line)
+            self.assertIn('in the background', line)
         self.assertIn('github_login.py status', text, "the agent's own step is the read-only check")
+        self.assertIn('https://github.com/signup', text)
+        self.assertIn("I'll add the setup to your project now. OK?", text)
+        self.assertIn('gh pr merge <number> --merge', text)
         road = self.road('fresh-project')
         road.change({'world': 'signed_out'})
         result = road.helper(['where', '--agents', 'cloud', '--yes'])

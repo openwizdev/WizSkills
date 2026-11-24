@@ -595,9 +595,24 @@ class SkillCommandsMatchPackage(unittest.TestCase):
 
     def test_a_missing_gh_gets_its_install_step(self):
         text = self.parts()[0]
-        for words in ('login_gh_missing', 'https://cli.github.com', 'gh --version'):
+        step1 = text[text.index('## 1. '):text.index('## 2. ')]
+        for words in ('login_gh_missing', 'https://github.com/cli/cli/releases/latest', 'brew install gh',
+                      '~/.local/bin', 'checksums', 'gh --version', 'xcode-select --install'):
             self.assertIn(words, text)
-        self.assertIn('even on exit 0', text[text.index('## 1. '):text.index('## 2. ')])
+        self.assertIn('even on exit 0', step1)
+        self.assertIn("I'll install gh, GitHub's free helper tool, so I can set up your project for you. OK?", step1)
+        self.assertNotIn('https://cli.github.com', text)
+
+    def test_every_stop_names_the_help_line_and_skill_never_names_sudo(self):
+        text = self.parts()[0]
+        guards = text[text.index('## Guards'):text.index('## Where your agents run')]
+        step1 = text[text.index('## 1. '):text.index('## 2. ')]
+        help_line = "Stuck? I'll set it up with you, free 15 min: https://openwiz.dev/help/"
+        self.assertIn(help_line, guards)
+        self.assertIn(help_line, step1)
+        for platform in ('Windows', 'Chromebook', 'phone or tablet', 'Linux on ARM'):
+            self.assertIn(platform, step1)
+        self.assertNotRegex(text, r'(?i)\bsudo\b')
 
     def test_the_reader_finds_a_synthetic_skill_s_commands(self):
         text = ('Run `install open --root <root> --browser` and\n\n```sh\n'

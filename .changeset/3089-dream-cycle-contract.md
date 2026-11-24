@@ -1,4 +1,5 @@
 ---
+"ask-wiz": patch
 "dream-cycle": minor
 "wizskills": minor
 ---

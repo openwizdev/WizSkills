@@ -4,6 +4,8 @@
 python3 -I skills/launch-fleet/scripts/test-brief.py
 """
 import ast
+from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import os
 import re
@@ -11,6 +13,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -229,6 +232,88 @@ class Token(unittest.TestCase):
                     self.assertNotIn('agent-token', text)
                     self.assertNotIn(OWNER_LOGIN, text)
                     self.assertNotIn(EXCLUSIVE, text)
+
+
+def snapshot_file(folder, repo, number=12, minutes_old=0, **change):
+    read_at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_old)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    item = {'number': number, 'kind': 'issue', 'title': 'Synthetic ticket', 'state': 'OPEN',
+            'labels': ['ready-for-agent'], 'updated_at': '2026-01-02T03:04:05Z', 'body': 'Synthetic body.',
+            'comments': [{'id': 501, 'author': 'synthetic-lead', 'created_at': '2026-01-02T03:00:00Z',
+                          'updated_at': '2026-01-02T03:00:00Z', 'body': 'launch-fleet: started'},
+                         {'id': 502, 'author': 'synthetic-passer', 'created_at': '2026-01-02T03:01:00Z',
+                          'updated_at': '2026-01-02T03:01:00Z', 'body': 'not a record'}]}
+    snap = {'repo': repo, 'read_at': read_at, 'complete': True, 'via': 'graphql',
+            'record_authors': ['synthetic-lead'], 'items': [item]}
+    snap.update(change)
+    path = Path(folder) / ('snap-%d-%d.json' % (number, len(list(Path(folder).iterdir()))))
+    path.write_text(json.dumps(snap))
+    return path, read_at
+
+
+class Snapshot(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+
+    def facts(self, path, number):
+        r = subprocess.run([sys.executable, '-I', str(HERE / 'snapshot.py'), 'facts', str(path), str(number)],
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.rstrip('\n')
+
+    def test_builder_and_reviewer_briefs_end_with_the_snapshot_facts(self):
+        for args, repo, number in ((('builder', TICKET), 'synthetic-owner/synthetic-tracker', 12),
+                                   (('reviewer', PR, HEAD), 'synthetic-owner/synthetic-code', 31),
+                                   (('reviewer', PR, HEAD, 'same-family'), 'synthetic-owner/synthetic-code', 31)):
+            for env in ({}, {'OPENWIZ_TOKEN_SERVICE': SERVICE}):
+                with self.subTest(args=args, env=env):
+                    path, read_at = snapshot_file(self.dir.name, repo, number)
+                    code, today = brief(*args, **env)
+                    self.assertEqual(code, 0)
+                    code, text = brief(*args, '--snapshot', path, **env)
+                    self.assertEqual(code, 0)
+                    intro = ('The facts below were read from GitHub at %s, in this wake\'s snapshot of %s (a bare #N in '
+                             'them is %s#N): read GitHub again only for anything newer.' % (read_at, repo, repo))
+                    self.assertEqual(text, today + '\n\n' + intro + '\n\n' + self.facts(path, number))
+                    self.assertIn('## %s#%d: Synthetic ticket' % (repo, number), text)
+                    self.assertIn('launch-fleet: started', text)
+                    self.assertNotIn('not a record', text)
+
+    def test_without_the_option_the_brief_is_byte_for_byte_today(self):
+        expected = ('You are the builder for %s. Use the build-ticket skill. ' % TICKET + LOOKUP_BUILD + '. '
+                    + PASS_REPO + '\n')
+        r = subprocess.run([sys.executable, '-I', str(HERE / 'brief.py'), 'builder', TICKET],
+                           capture_output=True, timeout=30,
+                           env={k: v for k, v in os.environ.items() if not k.startswith('OPENWIZ_')})
+        self.assertEqual((r.returncode, r.stdout), (0, expected.encode()))
+
+    def test_a_stale_incomplete_or_foreign_snapshot_gives_today_s_brief(self):
+        repo = 'synthetic-owner/synthetic-tracker'
+        today = brief('builder', TICKET)
+        bad = {'stale': snapshot_file(self.dir.name, repo, minutes_old=31)[0],
+               'incomplete': snapshot_file(self.dir.name, repo, complete=False)[0],
+               'no items': snapshot_file(self.dir.name, repo, items=None)[0],
+               'no read time': snapshot_file(self.dir.name, repo, read_at=None)[0],
+               'other ticket': snapshot_file(self.dir.name, repo, number=13)[0],
+               'other repository': snapshot_file(self.dir.name, 'synthetic-owner/synthetic-code')[0],
+               'missing': Path(self.dir.name) / 'absent.json'}
+        broken = Path(self.dir.name) / 'broken.json'
+        broken.write_text('{"repo": "synthetic-owner/synthetic-tracker", "complete": tr')
+        bad['unreadable'] = broken
+        for why, path in bad.items():
+            with self.subTest(why=why):
+                self.assertEqual(brief('builder', TICKET, '--snapshot', path), today)
+
+    def test_the_option_is_only_for_builder_and_reviewer_briefs_and_needs_a_file(self):
+        path = snapshot_file(self.dir.name, 'synthetic-owner/synthetic-tracker')[0]
+        for args in (('fresh', TICKET, PR, 'room/12-synthetic', HEAD, '--snapshot', path),
+                     ('re-check', PR, HEAD, OLD, 'R1', 'none', '--snapshot', path), ('diagnose', '--snapshot', path),
+                     ('wake', 4001, 'synthetic-owner/synthetic-repo', '--snapshot', path),
+                     ('builder', TICKET, '--snapshot'), ('builder', TICKET, '--snapshot', ''),
+                     ('builder', TICKET, '--snapshot', path, '--snapshot', path),
+                     ('builder', '--snapshot', path)):
+            with self.subTest(args=args):
+                self.assertEqual(brief(*args), (2, ''))
 
 
 LOOKUP_BUILD = (

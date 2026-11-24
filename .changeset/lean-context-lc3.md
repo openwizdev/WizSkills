@@ -13,6 +13,7 @@
 "research": patch
 "review-ticket": patch
 "setup": patch
+"son-of-anton": patch
 "to-spec": patch
 "to-tickets": patch
 "triage": patch

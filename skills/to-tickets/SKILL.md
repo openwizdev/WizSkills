@@ -14,11 +14,19 @@ describes when this road applies.
 
 ## 1. Check the starting point
 
-Read the project's tracker, domain, label and fleet settings in `docs/agents/`.
-You need the spec and its grill confirmation's private-comment URL; read that
-comment back privately. No confirmed grill: stop and use [grill](../grill/SKILL.md).
-If the plan was already approved, [hold before editing](changes.md). Existing
-contract holds keep their recorded release conditions.
+Run `python3 -I "<this skill's folder>/../launch-fleet/scripts/context.py" planner`
+once per session (and again only when a blob its header lists changes). It prints
+the public-writes card, the planner's fleet sections, the tracker's
+where-things-live and repositories, the triage labels table, the private storage
+rules, the roads page and the glossary's term index. Read a term's definition in
+`GLOSSARY.md` only when you use it, and an ADR only when it touches the area.
+The card's decision-record forms replace reading the open-development contract
+for public decision records; read the full contract only for release, publishing,
+importer and ticket-mover work. You need the spec and its grill confirmation's
+private-comment URL; read that comment back privately. No confirmed grill: stop
+and use [grill](../grill/SKILL.md). If the plan was already approved,
+[hold before editing](changes.md). Existing contract holds keep their recorded
+release conditions.
 
 Keep exact owner replies and private sources private. Verify tracker and private
 repository before writing. A failed read or unknown state stops the write or
@@ -45,6 +53,9 @@ step 4 hold you to them. See [the ticket and graph inputs](tickets.md).
 
 ## 3. Write and verify the tickets
 
+Before you create or show the tickets, run the
+[fidelity pass](../to-spec/fidelity.md) on the whole drafted set: drop or fix
+each item, or keep it and tell the user why in one line.
 Create each issue without a ready label, blockers first, in the spec's
 milestone, with its native parent and blockers. Read back every issue: title,
 body, parent, milestone, labels and blockers. Draw the read-back graph with

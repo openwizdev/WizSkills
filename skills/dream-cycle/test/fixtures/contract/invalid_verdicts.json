@@ -1,0 +1,37 @@
+[
+  {
+    "name": "not-an-object",
+    "raw": "123",
+    "expected_reason": "object"
+  },
+  {
+    "name": "duplicate-key",
+    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"verdict\": \"REJECTED\", \"reason\": \"ok\", \"evidence\": [\"cmd -> ok\"]}",
+    "expected_reason": "duplicate key"
+  },
+  {
+    "name": "unknown-verdict",
+    "raw": "{\"id\": \"a-1\", \"verdict\": \"MAYBE\", \"reason\": \"unsure\", \"evidence\": [\"cmd -> ok\"]}",
+    "expected_reason": "enum"
+  },
+  {
+    "name": "empty-reason",
+    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"reason\": \"\", \"evidence\": [\"cmd -> ok\"]}",
+    "expected_reason": "minLength"
+  },
+  {
+    "name": "bad-evidence-format",
+    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"reason\": \"verified\", \"evidence\": [\"no arrow here\"]}",
+    "expected_reason": "pattern"
+  },
+  {
+    "name": "extra-key",
+    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"reason\": \"verified\", \"evidence\": [\"cmd -> ok\"], \"prover\": \"p1\"}",
+    "expected_reason": "extra"
+  },
+  {
+    "name": "missing-evidence",
+    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"reason\": \"verified\"}",
+    "expected_reason": "missing"
+  }
+]

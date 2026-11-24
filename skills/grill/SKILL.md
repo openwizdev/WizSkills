@@ -12,7 +12,16 @@ no authority to plan from unsettled answers, start tickets, build, or review.
 
 ## Start or resume
 
-1. Read the project's tracker and domain settings, relevant glossary and ADRs.
+1. Run `python3 -I "<this skill's folder>/../launch-fleet/scripts/context.py" planner`
+   once per session (and again only when a blob its header lists changes). It
+   prints the public-writes card, the planner's fleet sections, the tracker's
+   where-things-live and repositories, the triage labels table, the private
+   storage rules, the roads page and the glossary's term index. Read a term's
+   definition in `GLOSSARY.md` only when you use it, and an ADR only when it
+   touches the area. The card's decision-record forms replace reading the
+   open-development contract for public decision records (saving and reading
+   back the exact words in a private comment first stays as it is); read the
+   full contract only for release, publishing, importer and ticket-mover work.
    Verify the configured private repository's visibility and the private
    checkout's remote before any write. Stop if you cannot verify either.
    Keep the grill, its branch, PR, exact replies and requests there. Before

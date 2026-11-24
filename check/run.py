@@ -36,6 +36,9 @@ SUITES = {
               ['python3', 'skills/grill/scripts/test_records.py']],
     'diagnose': [['node', '--test', 'skills/diagnose/tests/hitl-loop.test.mjs'],
                  ['python3', '-I', 'skills/diagnose/scripts/test_loop.py']],
+    'dream-cycle': [['python3', '-I', 'skills/dream-cycle/test/test_contract.py'],
+                    ['python3', '-I', 'skills/dream-cycle/test/test_inventory.py'],
+                    ['python3', '-I', 'skills/dream-cycle/test/test_dream.py']],
     'where-are-we': [['python3', '-I', 'skills/where-are-we/test/test_read_github.py']],
     'handoff': [['python3', '-I', 'skills/handoff/test/test_handoff.py']],
     'ask-wiz': [['python3', '-I', 'skills/ask-wiz/test/test_routes.py']],
@@ -109,11 +112,13 @@ def rows():
 # SKILL.md carries exactly, on a line of its own, instead of his notice.
 ORIGINAL = "**Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills."
 SOURCE_LINES = {
+    'dream-cycle': ORIGINAL,
     'feedback': ORIGINAL,
     'hill-climb': ORIGINAL,
     'huntr': ORIGINAL,
     'image': ORIGINAL,
     'install': ORIGINAL,
+    'son-of-anton': ORIGINAL,
     'write-driver': ORIGINAL,
     'where-are-we': "**Source:** dot-context's written plan. Not adapted from Matt Pocock's skills.",
 }

@@ -1,6 +1,6 @@
 # Skills
 
-One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, and its own scripts, tests and resources. `python3 check/run.py` checks the rules below, then the standalone check and every skill's own suites.
+One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, and its own scripts, tests and resources. Run `npm ci --ignore-scripts` once (it installs Changesets, which the release tests need), then `python3 check/run.py` checks the rules below, then the standalone check and every skill's own suites.
 
 | Skill |
 | --- |

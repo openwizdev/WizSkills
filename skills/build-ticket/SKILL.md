@@ -54,8 +54,9 @@ Only when the ticket's Parent has the line `One-way door: yes`; any other ticket
    ```
 4. **Red:** write one proof and run it; it must fail at its own assertion for the claim's reason, not in setup. Commit it and its synthetic log before the fix.
 5. **Green:** just enough code to pass, then the next slice. Every deleted test names its keeper.
-6. Log each choice inside the ticket's intent as a ruling: `<n>. <ruling> Why: <reason> Cost if wrong: high|low: <consequence>`.
-7. A product change adds `changes/<N>.md` per `changes/README.md` when owned or covered; infra, docs and tests use the `no-changelog` label, or say why no line is needed when the label is absent.
+6. **Prove:** commit, then `python3 -I <this skill's folder>/scripts/prove.py --base origin/<default branch> --test <each proof's test path>... -- <its test command>` must exit 0: base `failed` 2 of 2, head `passed` 2 of 2. Paste the JSON line it prints in the pull request's Evidence, with the command.
+7. Log each choice inside the ticket's intent as a ruling: `<n>. <ruling> Why: <reason> Cost if wrong: high|low: <consequence>`.
+8. A product change adds `changes/<N>.md` per `changes/README.md` when owned or covered; infra, docs and tests use the `no-changelog` label, or say why no line is needed when the label is absent.
 
 Done when every proof passes and every red run is kept.
 

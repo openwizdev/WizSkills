@@ -1757,6 +1757,8 @@ def clash($mine; $theirs):
     elif any($theirs[]; is_test) and any($mine[]; is_doc | not) then
       {files: [$theirs[] | select(is_test)], why: " (tests that may read its files)"}
     else null end;
+def pr_ref: (.repository.nameWithOwner // "") as $o
+  | if $o == "" or ($o | ascii_downcase) == $W.repo then "#\(.number)" else "\($o)#\(.number)" end;
 def guard($p; $at; $rs; $head; $c):
   # Each required check'"'"'s latest run, as required_ci picks it (latest_check).
   [$W.checks[] as $n | [$c.statusCheckRollup.contexts.nodes[]? | select((.name // .context) == $n)] | latest_check] as $latest
@@ -1909,7 +1911,7 @@ def ticket_lines_now($s): . as $t
          else empty end),
       (open_prs | map(select(.isDraft | not)) | first // empty | . as $p | .headRefOid as $head
        | records as $rs
-       | "#\(.number) for #\($t.number) at \($head)" as $at
+       | "\(pr_ref) for #\($t.number) at \($head)" as $at
        | (.commits.nodes[0].commit // {}) as $c
        | if .baseRefName != $W.default then look(.number; $rs; "its base is \(.baseRefName), not \($W.default)")
          elif .comments.pageInfo.hasPreviousPage then look(.number; $rs; history_why)
@@ -1983,7 +1985,7 @@ def ticket_lines_now($s): . as $t
          # closes right after claiming. Any other closure is someone'"'"'s choice.
          | select($cl != null and ($cl.r | test("^re-test starting ")) and ($q.closedAt | type) == "string"
                   and $q.closedAt >= $cl.at and (($q.closedAt | fromdateiso8601) - ($cl.at | fromdateiso8601)) < 600)
-         | "reopen #\($q.number) for #\($t.number) at \($q.headRefOid): closed by its re-test (comment \($cl.id)) and not reopened; reopen it" end)
+         | "reopen \($q | pr_ref) for #\($t.number) at \($q.headRefOid): closed by its re-test (comment \($cl.id)) and not reopened; reopen it" end)
     end;
 
 # A builder from before the fleet thread (ClosedWiz#192): the fleet asks the

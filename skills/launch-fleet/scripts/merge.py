@@ -101,7 +101,7 @@ ENQUEUE = '''mutation($id: ID!, $head: GitObjectID!) {
 COST = 'tools/collector/cost_line.py'
 SHA = re.compile(r'[0-9a-f]{40}')
 TIME = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z')
-SPENT = 'its claim and then its enqueue were written, so its one re-queue is spent'
+SPENT = 'its claim was recorded and then its enqueue attempted, so its one re-queue is spent'
 TICKET = re.compile(r'(?:([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#)?([1-9][0-9]{0,11})')
 QUEUED = re.compile(r'launch-fleet: merge queued ([0-9a-f]{40})\b')
 RERAN = 'every required check ran again after the removal and is green'
@@ -148,12 +148,15 @@ MERGE_HELP = (
     'spent: it is never enqueued again at that head, and a later wake that still sees no enqueue records `blocked: '
     're-queue claimed but not confirmed`. A removal of HEAD whose enqueue does not read yet, and queue facts it '
     'cannot read or that disagree, are `pending: ...` with nothing written. Two runs on one machine take turns. '
-    "A re-queue's read-back `pending: ...` comes after two writes, its claim and then its enqueue, and says so; "
-    'it writes nothing more, no drop record and no delete, and a removal is recorded only once it reads after '
-    'an enqueue by a record author made after the claim. A first enqueue\'s or merge\'s read-back `pending: ...` '
-    'comes after that one call and says so. Every other `pending: ...` comes before any write, and only a wake '
-    'that ends neither `pending: ...` nor `unknown: ...` deletes later duplicates of a receipt, drop record or '
-    'claim. Without a merge queue it merges with `gh pr merge --merge --match-head-commit` only with '
+    "A re-queue's read-back `pending: ...` comes after its claim was recorded and then its enqueue attempted, and "
+    'says so; it writes nothing more, no drop record and no delete, and a removal is recorded only once it reads '
+    'after an enqueue by a record author made after the claim. A first enqueue\'s or merge\'s read-back `pending: ...` '
+    "comes after that one call and says so. A re-queue claim's own read-back `pending: ...` (an earlier run's "
+    'claim counts, or its claim is not confirmed as the only one) comes after it posts that claim and tries to '
+    'delete it when an earlier claim reads first; it enqueues nothing. Every other `pending: ...` comes before any '
+    "write, and apart from that claim's own cleanup only a wake that ends neither `pending: ...` nor `unknown: ...` "
+    'deletes later duplicates of a receipt, drop record or claim. Without a merge queue it merges with '
+    '`gh pr merge --merge --match-head-commit` only with '
     "`--base-rule-checked`, after you applied fleet.md's base rule and `fleet.sh every` still prints this merge line, "
     'and reads it back: `merged <commit>; cost ...` (exit 0). Anything else is `blocked: <why>; recorded <id>` '
     '(exit 1). TICKET is checked before any write. BODY names the APPROVE and the plan approval that allowed it.')
@@ -332,7 +335,13 @@ def land(fix, report, auth):
         mine = LANDED.split('{version}')[0].format(pr=fix)
         return drop(repo, report, min(found), [c['id'] for c in before if c.get('id') in found
                                                and c['id'] != min(found) and c['body'].startswith(mine)])
-    made = post.read_json('api', '--method', 'POST', f'repos/{repo}/issues/{report}/comments', '-f', f'body={body}')
+    try:
+        made = post.write(at, '--method', 'POST', f'repos/{repo}/issues/{report}/comments', '-f', f'body={body}')
+        made = json.loads(made) if made else None
+    except Stop as outcome:
+        return f'landed unknown: the landed comment on {at} was not posted ({outcome}); a later run reads {at} again'
+    except ValueError:
+        made = None
     if not isinstance(made, dict) or type(made.get('id')) is not int:
         return f'landed unknown: the write on {at} returned no receipt, so reconcile {at} and never retry blind'
     after = post.thread(repo, report) or []
@@ -347,10 +356,18 @@ def land(fix, report, auth):
     return drop(repo, report, earliest, [made['id']])
 
 
+def delete(repo, comment_id):
+    return post.write(f'comment {comment_id}', '--method', 'DELETE', f'repos/{repo}/issues/comments/{comment_id}',
+                      paced=False)
+
+
 def drop(repo, report, earliest, duplicates):
     at = f'{repo}#{report}'
     for d in duplicates:
-        post.gh('api', '--method', 'DELETE', f'repos/{repo}/issues/comments/{d}')
+        try:
+            delete(repo, d)
+        except Stop as outcome:
+            return f'landed unknown: our duplicate {d} on {at} could not be deleted ({outcome}), so reconcile {at}'
     back = post.thread(repo, report) if duplicates else []
     kept = [d for d in duplicates if back is None or any(c.get('id') == d for c in back)]
     if kept:
@@ -832,7 +849,10 @@ def reconcile(repo, number):
     for c in ours:
         key = twin_key(first_line(c))
         if key in seen:
-            post.gh('api', '--method', 'DELETE', f'repos/{repo}/issues/comments/{c["id"]}')
+            try:
+                delete(repo, c['id'])
+            except Stop:
+                return
         elif key:
             seen.add(key)
 
@@ -847,7 +867,10 @@ def earliest(repo, number, made, same):
                    f'read #{number} before any retry')
     if twins[0]['id'] == made:
         return twins[0]
-    post.gh('api', '--method', 'DELETE', f'repos/{repo}/issues/comments/{made}')
+    try:
+        delete(repo, made)
+    except Stop as outcome:
+        raise Stop(f'unknown: our duplicate {made} on #{number} could not be deleted ({outcome}); reconcile #{number}')
     back = post.thread(repo, number)
     if back is None or any(c.get('id') == made for c in back):
         raise Stop(f'unknown: our duplicate {made} on #{number} could not be deleted; reconcile #{number}')

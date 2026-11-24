@@ -133,12 +133,19 @@ def done(value, code=0):
     sys.exit(code)
 if args[:1] != ["api"]:
     done(None, 3)
-url = [a for a in args[1:] if not a.startswith("-") and a not in ("POST",)][-1]
+fields = [args[i + 1] for i, a in enumerate(args) if a == "-f"]
+url = [a for a in args[1:] if not a.startswith("-") and a not in ("POST", *fields)][-1]
 post = "POST" in args
 parts = url.split("?")[0].split("/")
 repo = "/".join(parts[1:3])
 if post:
-    payload = json.loads(sys.stdin.read())
+    payload = {} if fields else json.loads(sys.stdin.read())
+    for field in fields:
+        key, _, value = field.partition("=")
+        if key.endswith("[]"):
+            payload.setdefault(key[:-2], []).append(value)
+        else:
+            payload[key] = value
     if parts[3:4] == ["issues"] and len(parts) == 6:
         w["writes"] += 1
         if w.get("fail_post"):
@@ -1009,19 +1016,20 @@ class Review(unittest.TestCase):
         return json.loads(path.read_text())
 
     def test_a_recorded_cooldown_refuses_a_follow_up_without_filing(self):
-        # catches (FR15, #2879): the follow-up issue POST skipping post.py's shared cooldown.
+        """catches (FR15, #2879): the follow-up issue POST skipping post.py's shared cooldown."""
         until = int(time.time()) + 3600
         self.pacer({"accounts": {}, "inflight": [], "until": until})
         out = self.follow_up()
         stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until))
-        self.assertEqual((out.returncode, out.stdout, out.stderr), (1, f"refused: write paced, retry after {stamp}\n", ""))
+        self.assertEqual((out.returncode, out.stdout, out.stderr),
+                         (1, f"refused: write paced, retry after {stamp}\n", ""))
         self.assertEqual(self.state()["writes"], 0)
         self.assertEqual([c for c in self.state()["calls"] if "POST" in c], [])
         self.assertEqual(self.state()["issues"], {})
 
     def test_an_admitted_follow_up_takes_one_pacer_slot_and_keeps_its_read_back(self):
-        # catches (FR15, #2879): a filed issue that bypasses the pacer's slot, sends another
-        # title, body or label, or skips the read-back that confirms it.
+        """catches (FR15, #2879): a filed issue that bypasses the pacer's slot, sends another
+        title, body or label, or skips the read-back that confirms it."""
         out = self.follow_up()
         self.assertEqual((out.returncode, out.stdout), (0, "filed #70\n"), out.stderr)
         state = self.pacer()
@@ -1029,8 +1037,9 @@ class Review(unittest.TestCase):
         issue = self.state()["issues"][PRODUCT][0]
         self.assertEqual((issue["title"], [x["name"] for x in issue["labels"]]),
                          ("Help says zip archive file (polish for #41, R2)", ["triage: new"]))
-        self.assertEqual(issue["body"], "Follow-up of #41 (spec #38)\n\n`src/cli.rs:30` (Sweep) Help wording. Fix: say export. "
-                                        f"Found in pull request {SKILLS}#7 at {OLD}; it is polish and did not block the merge.\n")
+        self.assertEqual(issue["body"], "Follow-up of #41 (spec #38)\n\n`src/cli.rs:30` (Sweep) Help wording. "
+                                        f"Fix: say export. Found in pull request {SKILLS}#7 at {OLD}; it is polish "
+                                        "and did not block the merge.\n")
         self.world({"hidden_issue_reads": 10})
         out = self.follow_up()
         self.assertEqual((out.returncode, out.stdout),

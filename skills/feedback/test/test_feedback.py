@@ -1166,5 +1166,182 @@ class NoPersonName(Helper):
         self.assertIn(sent['issue']['url'], sent['say'])
 
 
+class ClearErrorsBrowserRouteAndList(Helper):
+    def report_file(self, data, name='report.json'):
+        p = self.tmp / name
+        p.write_text(json.dumps(data))
+        return str(p)
+
+    def write_openwiz_stub(self, script):
+        ow = self.bin / 'openwiz'
+        ow.write_text('#!/bin/sh\n' + script + '\n')
+        ow.chmod(0o755)
+
+    def full_report(self, **overrides):
+        data = {
+            'title': 'launch-fleet stops before starting a builder',
+            'kind': 'bug',
+            'area': 'launch-fleet',
+            'ran': 'openwiz launch-fleet',
+            'happened': 'It exited without starting a builder.',
+            'expected': 'It starts a builder for the ready ticket.',
+            'host': 'cloudroom',
+            'driver': 'cloudroom',
+            'harness': 'claude-code',
+            'model': 'claude-opus-5-5',
+        }
+        data.update(overrides)
+        return data
+
+    def test_four_login_refusals_have_distinct_words_next_step_and_browser_route(self):
+        empty_bin = self.tmp / 'empty-bin'
+        empty_bin.mkdir()
+        op = self.draft()
+        _, no_gh = self.run_helper('preview', op, expect=1, env_change={'PATH': str(empty_bin)})
+        self.assertIn('not installed', no_gh['refused'].lower())
+        self.assertIn('gh auth login', no_gh['refused'])
+        self.assertIn(f'link {op}', no_gh['refused'])
+        self.assertEqual(self.record(op)['phase'], 'draft')
+
+        self.world(user=None, accounts=[])
+        _, not_logged = self.run_helper('preview', op, expect=1)
+        self.assertIn('not logged in', not_logged['refused'].lower())
+        self.assertIn('gh auth login', not_logged['refused'])
+        self.assertIn(f'link {op}', not_logged['refused'])
+        self.assertEqual(self.record(op)['phase'], 'draft')
+
+        self.world(user=USER, accounts=['synthetic-user'])
+        _, tok = self.run_helper('preview', op, expect=1, env_change={'GH_TOKEN': TOKEN})
+        self.assertIn('GH_TOKEN', tok['refused'])
+        self.assertIn('unset', tok['refused'].lower())
+        self.assertIn(f'link {op}', tok['refused'])
+        self.assertEqual(self.record(op)['phase'], 'draft')
+
+        self.world(user=USER, accounts=['synthetic-user', 'synthetic-other'])
+        _, multi = self.run_helper('preview', op, expect=1)
+        self.assertIn('more than one GitHub account', multi['refused'])
+        self.assertIn(f'link {op}', multi['refused'])
+        self.assertEqual(self.record(op)['phase'], 'draft')
+
+        messages = [no_gh['refused'], not_logged['refused'], tok['refused'], multi['refused']]
+        self.assertEqual(len(set(messages)), 4)
+        self.assertEqual(self.creates(), [])
+
+    def test_browser_link_fills_form_fields_excludes_log_and_changes_nothing(self):
+        from urllib.parse import parse_qs, urlsplit
+        self.write_openwiz_stub('echo "openwiz 0.1.1"')
+        log_path = self.tmp / 'run.log'
+        log_path.write_text('$ openwiz launch-fleet\nsecret log line marker-xyz\n')
+        report = self.full_report()
+        _, d = self.run_helper('draft', '--report-file', self.report_file(report),
+                               '--log-file', str(log_path), expect=0)
+        op = d['operation_id']
+        rec_path = self.state / 'feedback' / f'{op}.json'
+        before_bytes = rec_path.read_bytes()
+        _, linked = self.run_helper('link', op, expect=0)
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(rec_path.read_bytes(), before_bytes)
+        url = linked['url']
+        parts = urlsplit(url)
+        self.assertEqual((parts.scheme, parts.netloc, parts.path),
+                         ('https', 'github.com', '/openwizdev/OpenWiz/issues/new'))
+        qs = parse_qs(parts.query)
+        self.assertEqual(qs['template'], ['feedback.yml'])
+        self.assertEqual(qs['title'], [report['title']])
+        self.assertEqual(qs['what-happened'], [report['happened']])
+        self.assertEqual(qs['expected'], [report['expected']])
+        self.assertEqual(qs['steps'], [report['ran']])
+        self.assertEqual(qs['version'], ['0.1.1'])
+        self.assertEqual(len(qs['setup']), 1)
+        for token in ('cloudroom', 'claude-code', 'claude-opus-5-5'):
+            self.assertIn(token, qs['setup'][0])
+        self.assertNotIn('marker-xyz', url)
+        self.assertNotIn('Log (secrets removed)', url)
+        self.assertIn('does not count it as sent', linked['say'].lower())
+
+    def test_browser_link_over_6000_chars_is_refused_with_shorten_it(self):
+        report = self.full_report(happened='x' * 6100)
+        _, d = self.run_helper('draft', '--report-file', self.report_file(report, 'long.json'), expect=0)
+        op = d['operation_id']
+        rec_path = self.state / 'feedback' / f'{op}.json'
+        before_bytes = rec_path.read_bytes()
+        _, refused = self.run_helper('link', op, expect=1)
+        self.assertIn('shorten it', refused['refused'].lower())
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(rec_path.read_bytes(), before_bytes)
+
+    def test_wrong_or_missing_code_says_to_preview_again_and_reply_with_new_code(self):
+        op = self.draft()
+        self.preview(op)
+        _, wrong = self.run_helper('send', op, '--preview-id', '000000', expect=1)
+        self.assertEqual(wrong['phase'], 'refused')
+        self.assertEqual(wrong['reason'], 'the yes was for a different or earlier preview')
+        self.assertIn('preview again', wrong['say'].lower())
+        self.assertIn('new code', wrong['say'].lower())
+        self.preview(op)
+        _, missing = self.run_helper('send', op, expect=1)
+        self.assertEqual(missing['phase'], 'refused')
+        self.assertIn('preview again', missing['say'].lower())
+        self.assertIn('new code', missing['say'].lower())
+        self.assertEqual(self.creates(), [])
+
+    def test_failed_create_adds_plain_hint_by_status(self):
+        hints = {
+            401: 'login expired',
+            403: 'refused this account or is rate-limiting it',
+            404: 'issues are not open',
+            410: 'issues are not open',
+            422: 'rejected the text',
+            429: 'wait and try later',
+        }
+        for status, phrase in hints.items():
+            with self.subTest(status=status):
+                self.world(create={'status': status})
+                op = self.draft(title=f'{TITLE} (HTTP {status})')
+                a = self.preview(op)
+                _, sent = self.run_helper('send', op, '--preview-id', a['preview_id'], expect=1)
+                self.assertEqual(sent['phase'], 'failed')
+                self.assertEqual(sent['reason'], f'GitHub answered HTTP {status}')
+                self.assertIn(phrase, sent['say'].lower())
+                _, st = self.run_helper('status', op, expect=0)
+                self.assertIn(phrase, st['say'].lower())
+
+    def test_list_shows_drafted_operations_newest_first_and_changes_nothing(self):
+        _, empty = self.run_helper('list', expect=0)
+        self.assertEqual(empty['operations'], [])
+        self.assertFalse((self.state / 'feedback').exists())
+        op1 = self.draft(title='First drafted issue')
+        op2 = self.draft(title='Second drafted issue')
+        p1 = self.state / 'feedback' / f'{op1}.json'
+        p2 = self.state / 'feedback' / f'{op2}.json'
+        b1, b2 = p1.read_bytes(), p2.read_bytes()
+        _, listed = self.run_helper('list', expect=0)
+        ops = listed['operations']
+        self.assertEqual([o['operation_id'] for o in ops], [op2, op1])
+        self.assertEqual([o['title'] for o in ops], ['Second drafted issue', 'First drafted issue'])
+        self.assertEqual([o['phase'] for o in ops], ['draft', 'draft'])
+        self.assertEqual([o['preview_at'] for o in ops], [None, None])
+        self.assertEqual((p1.read_bytes(), p2.read_bytes()), (b1, b2))
+        self.assertEqual(self.calls(), [])
+        self.preview(op1)
+        _, listed2 = self.run_helper('list', expect=0)
+        self.assertEqual(listed2['operations'][0]['operation_id'], op1)
+        self.assertEqual(listed2['operations'][0]['phase'], 'previewed')
+        self.assertRegex(listed2['operations'][0]['preview_at'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
+
+    def test_usage_errors_print_one_json_answer_with_refused_and_exit_1(self):
+        for argv in ([], ['nonsense'], ['status'], ['refuse', 'a' * 32], ['reconcile', 'a' * 32, '--issue', '0']):
+            with self.subTest(argv=argv):
+                env = {'PATH': str(self.bin), 'OPENWIZ_STATE_DIR': str(self.state), 'HOME': str(self.work),
+                       'LC_ALL': 'C'}
+                run = subprocess.run([sys.executable, '-I', str(HELPER), *argv], capture_output=True,
+                                     text=True, env=env, cwd=self.work, timeout=60)
+                self.assertEqual(run.returncode, 1, (run.stdout, run.stderr))
+                self.assertEqual(run.stderr, '')
+                data = json.loads(run.stdout)
+                self.assertEqual(list(data), ['refused'])
+                self.assertTrue(data['refused'])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

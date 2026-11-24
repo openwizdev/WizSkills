@@ -1,0 +1,160 @@
+test_browser_link_fills_form_fields_excludes_log_and_changes_nothing (__main__.ClearErrorsBrowserRouteAndList.test_browser_link_fills_form_fields_excludes_log_and_changes_nothing) ... FAIL
+test_browser_link_over_6000_chars_is_refused_with_shorten_it (__main__.ClearErrorsBrowserRouteAndList.test_browser_link_over_6000_chars_is_refused_with_shorten_it) ... FAIL
+test_failed_create_adds_plain_hint_by_status (__main__.ClearErrorsBrowserRouteAndList.test_failed_create_adds_plain_hint_by_status) ... 
+  test_failed_create_adds_plain_hint_by_status (__main__.ClearErrorsBrowserRouteAndList.test_failed_create_adds_plain_hint_by_status) (status=401) ... FAIL
+  test_failed_create_adds_plain_hint_by_status (__main__.ClearErrorsBrowserRouteAndList.test_failed_create_adds_plain_hint_by_status) (status=403) ... FAIL
+  test_failed_create_adds_plain_hint_by_status (__main__.ClearErrorsBrowserRouteAndList.test_failed_create_adds_plain_hint_by_status) (status=404) ... FAIL
+  test_failed_create_adds_plain_hint_by_status (__main__.ClearErrorsBrowserRouteAndList.test_failed_create_adds_plain_hint_by_status) (status=410) ... FAIL
+  test_failed_create_adds_plain_hint_by_status (__main__.ClearErrorsBrowserRouteAndList.test_failed_create_adds_plain_hint_by_status) (status=422) ... FAIL
+  test_failed_create_adds_plain_hint_by_status (__main__.ClearErrorsBrowserRouteAndList.test_failed_create_adds_plain_hint_by_status) (status=429) ... FAIL
+test_four_login_refusals_have_distinct_words_next_step_and_browser_route (__main__.ClearErrorsBrowserRouteAndList.test_four_login_refusals_have_distinct_words_next_step_and_browser_route) ... FAIL
+test_list_shows_drafted_operations_newest_first_and_changes_nothing (__main__.ClearErrorsBrowserRouteAndList.test_list_shows_drafted_operations_newest_first_and_changes_nothing) ... FAIL
+test_usage_errors_print_one_json_answer_with_refused_and_exit_1 (__main__.ClearErrorsBrowserRouteAndList.test_usage_errors_print_one_json_answer_with_refused_and_exit_1) ... 
+  test_usage_errors_print_one_json_answer_with_refused_and_exit_1 (__main__.ClearErrorsBrowserRouteAndList.test_usage_errors_print_one_json_answer_with_refused_and_exit_1) (argv=[]) ... FAIL
+  test_usage_errors_print_one_json_answer_with_refused_and_exit_1 (__main__.ClearErrorsBrowserRouteAndList.test_usage_errors_print_one_json_answer_with_refused_and_exit_1) (argv=['nonsense']) ... FAIL
+  test_usage_errors_print_one_json_answer_with_refused_and_exit_1 (__main__.ClearErrorsBrowserRouteAndList.test_usage_errors_print_one_json_answer_with_refused_and_exit_1) (argv=['status']) ... FAIL
+  test_usage_errors_print_one_json_answer_with_refused_and_exit_1 (__main__.ClearErrorsBrowserRouteAndList.test_usage_errors_print_one_json_answer_with_refused_and_exit_1) (argv=['refuse', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']) ... FAIL
+  test_usage_errors_print_one_json_answer_with_refused_and_exit_1 (__main__.ClearErrorsBrowserRouteAndList.test_usage_errors_print_one_json_answer_with_refused_and_exit_1) (argv=['reconcile', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '--issue', '0']) ... FAIL
+test_wrong_or_missing_code_says_to_preview_again_and_reply_with_new_code (__main__.ClearErrorsBrowserRouteAndList.test_wrong_or_missing_code_says_to_preview_again_and_reply_with_new_code) ... FAIL
+
+======================================================================
+FAIL: test_browser_link_fills_form_fields_excludes_log_and_changes_nothing (__main__.ClearErrorsBrowserRouteAndList.test_browser_link_fills_form_fields_excludes_log_and_changes_nothing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1241, in test_browser_link_fills_form_fields_excludes_log_and_changes_nothing
+    _, linked = self.run_helper('link', op, expect=0)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 2 != 0 : ('', "usage: feedback.py [-h]\n                   {draft,edit,preview,status,refuse,send,reconcile,share} ...\nfeedback.py: error: argument cmd: invalid choice: 'link' (choose from 'draft', 'edit', 'preview', 'status', 'refuse', 'send', 'reconcile', 'share')\n")
+
+======================================================================
+FAIL: test_browser_link_over_6000_chars_is_refused_with_shorten_it (__main__.ClearErrorsBrowserRouteAndList.test_browser_link_over_6000_chars_is_refused_with_shorten_it)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1268, in test_browser_link_over_6000_chars_is_refused_with_shorten_it
+    _, refused = self.run_helper('link', op, expect=1)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 2 != 1 : ('', "usage: feedback.py [-h]\n                   {draft,edit,preview,status,refuse,send,reconcile,share} ...\nfeedback.py: error: argument cmd: invalid choice: 'link' (choose from 'draft', 'edit', 'preview', 'status', 'refuse', 'send', 'reconcile', 'share')\n")
+
+======================================================================
+FAIL: test_failed_create_adds_plain_hint_by_status (__main__.ClearErrorsBrowserRouteAndList.test_failed_create_adds_plain_hint_by_status) (status=401)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1305, in test_failed_create_adds_plain_hint_by_status
+    self.assertIn(phrase, sent['say'].lower())
+AssertionError: 'login expired' not found in 'github refused the request, so no issue was created. you can preview it again and, after a new yes, try once more.'
+
+======================================================================
+FAIL: test_failed_create_adds_plain_hint_by_status (__main__.ClearErrorsBrowserRouteAndList.test_failed_create_adds_plain_hint_by_status) (status=403)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1305, in test_failed_create_adds_plain_hint_by_status
+    self.assertIn(phrase, sent['say'].lower())
+AssertionError: 'refused this account or is rate-limiting it' not found in 'github refused the request, so no issue was created. you can preview it again and, after a new yes, try once more.'
+
+======================================================================
+FAIL: test_failed_create_adds_plain_hint_by_status (__main__.ClearErrorsBrowserRouteAndList.test_failed_create_adds_plain_hint_by_status) (status=404)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1305, in test_failed_create_adds_plain_hint_by_status
+    self.assertIn(phrase, sent['say'].lower())
+AssertionError: 'issues are not open' not found in 'github refused the request, so no issue was created. you can preview it again and, after a new yes, try once more.'
+
+======================================================================
+FAIL: test_failed_create_adds_plain_hint_by_status (__main__.ClearErrorsBrowserRouteAndList.test_failed_create_adds_plain_hint_by_status) (status=410)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1305, in test_failed_create_adds_plain_hint_by_status
+    self.assertIn(phrase, sent['say'].lower())
+AssertionError: 'issues are not open' not found in 'github refused the request, so no issue was created. you can preview it again and, after a new yes, try once more.'
+
+======================================================================
+FAIL: test_failed_create_adds_plain_hint_by_status (__main__.ClearErrorsBrowserRouteAndList.test_failed_create_adds_plain_hint_by_status) (status=422)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1305, in test_failed_create_adds_plain_hint_by_status
+    self.assertIn(phrase, sent['say'].lower())
+AssertionError: 'rejected the text' not found in 'github refused the request, so no issue was created. you can preview it again and, after a new yes, try once more.'
+
+======================================================================
+FAIL: test_failed_create_adds_plain_hint_by_status (__main__.ClearErrorsBrowserRouteAndList.test_failed_create_adds_plain_hint_by_status) (status=429)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1305, in test_failed_create_adds_plain_hint_by_status
+    self.assertIn(phrase, sent['say'].lower())
+AssertionError: 'wait and try later' not found in 'github refused the request, so no issue was created. you can preview it again and, after a new yes, try once more.'
+
+======================================================================
+FAIL: test_four_login_refusals_have_distinct_words_next_step_and_browser_route (__main__.ClearErrorsBrowserRouteAndList.test_four_login_refusals_have_distinct_words_next_step_and_browser_route)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1201, in test_four_login_refusals_have_distinct_words_next_step_and_browser_route
+    self.assertIn('not installed', no_gh['refused'].lower())
+AssertionError: 'not installed' not found in 'the destination openwizdev/openwiz could not be read; nothing was sent.'
+
+======================================================================
+FAIL: test_list_shows_drafted_operations_newest_first_and_changes_nothing (__main__.ClearErrorsBrowserRouteAndList.test_list_shows_drafted_operations_newest_first_and_changes_nothing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1310, in test_list_shows_drafted_operations_newest_first_and_changes_nothing
+    _, empty = self.run_helper('list', expect=0)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 2 != 0 : ('', "usage: feedback.py [-h]\n                   {draft,edit,preview,status,refuse,send,reconcile,share} ...\nfeedback.py: error: argument cmd: invalid choice: 'list' (choose from 'draft', 'edit', 'preview', 'status', 'refuse', 'send', 'reconcile', 'share')\n")
+
+======================================================================
+FAIL: test_usage_errors_print_one_json_answer_with_refused_and_exit_1 (__main__.ClearErrorsBrowserRouteAndList.test_usage_errors_print_one_json_answer_with_refused_and_exit_1) (argv=[])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1339, in test_usage_errors_print_one_json_answer_with_refused_and_exit_1
+    self.assertEqual(run.returncode, 1, (run.stdout, run.stderr))
+AssertionError: 2 != 1 : ('', 'usage: feedback.py [-h]\n                   {draft,edit,preview,status,refuse,send,reconcile,share} ...\nfeedback.py: error: the following arguments are required: cmd\n')
+
+======================================================================
+FAIL: test_usage_errors_print_one_json_answer_with_refused_and_exit_1 (__main__.ClearErrorsBrowserRouteAndList.test_usage_errors_print_one_json_answer_with_refused_and_exit_1) (argv=['nonsense'])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1339, in test_usage_errors_print_one_json_answer_with_refused_and_exit_1
+    self.assertEqual(run.returncode, 1, (run.stdout, run.stderr))
+AssertionError: 2 != 1 : ('', "usage: feedback.py [-h]\n                   {draft,edit,preview,status,refuse,send,reconcile,share} ...\nfeedback.py: error: argument cmd: invalid choice: 'nonsense' (choose from 'draft', 'edit', 'preview', 'status', 'refuse', 'send', 'reconcile', 'share')\n")
+
+======================================================================
+FAIL: test_usage_errors_print_one_json_answer_with_refused_and_exit_1 (__main__.ClearErrorsBrowserRouteAndList.test_usage_errors_print_one_json_answer_with_refused_and_exit_1) (argv=['status'])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1339, in test_usage_errors_print_one_json_answer_with_refused_and_exit_1
+    self.assertEqual(run.returncode, 1, (run.stdout, run.stderr))
+AssertionError: 2 != 1 : ('', 'usage: feedback.py status [-h] op\nfeedback.py status: error: the following arguments are required: op\n')
+
+======================================================================
+FAIL: test_usage_errors_print_one_json_answer_with_refused_and_exit_1 (__main__.ClearErrorsBrowserRouteAndList.test_usage_errors_print_one_json_answer_with_refused_and_exit_1) (argv=['refuse', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1339, in test_usage_errors_print_one_json_answer_with_refused_and_exit_1
+    self.assertEqual(run.returncode, 1, (run.stdout, run.stderr))
+AssertionError: 2 != 1 : ('', 'usage: feedback.py refuse [-h] --reason REASON op\nfeedback.py refuse: error: the following arguments are required: --reason\n')
+
+======================================================================
+FAIL: test_usage_errors_print_one_json_answer_with_refused_and_exit_1 (__main__.ClearErrorsBrowserRouteAndList.test_usage_errors_print_one_json_answer_with_refused_and_exit_1) (argv=['reconcile', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '--issue', '0'])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1339, in test_usage_errors_print_one_json_answer_with_refused_and_exit_1
+    self.assertEqual(run.returncode, 1, (run.stdout, run.stderr))
+AssertionError: 2 != 1 : ('', 'usage: feedback.py [-h]\n                   {draft,edit,preview,status,refuse,send,reconcile,share} ...\nfeedback.py: error: --issue must be a positive issue number\n')
+
+======================================================================
+FAIL: test_wrong_or_missing_code_says_to_preview_again_and_reply_with_new_code (__main__.ClearErrorsBrowserRouteAndList.test_wrong_or_missing_code_says_to_preview_again_and_reply_with_new_code)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/code/WizSkills/skills/feedback/test/test_feedback.py", line 1279, in test_wrong_or_missing_code_says_to_preview_again_and_reply_with_new_code
+    self.assertIn('preview again', wrong['say'].lower())
+AssertionError: 'preview again' not found in 'not sent. the draft is kept, so it can be edited and previewed again.'
+
+----------------------------------------------------------------------
+Ran 7 tests in 18.604s
+
+FAILED (failures=16)

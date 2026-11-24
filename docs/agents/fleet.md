@@ -36,7 +36,18 @@ WizSkills changes use the ticket and approved plan in [OpenWiz](https://github.c
 
 New assignments follow the current orchestrator ruling. Existing agents keep their assignments. The reviewer is always from the other family. Source for the default tables: [OpenWiz fleet settings](https://github.com/openwizdev/OpenWiz/blob/main/docs/agents/fleet.md).
 
+## Supporting edits
+
+Every ticket may make these edits beside its owned paths without asking:
+
+1. **Its own changeset** under `.changeset/`, naming only the skills its owned paths change.
+2. **Updates to byte-identical carried copies** of a file it owns.
+
+Only its own lines. The pull request lists each use with its kind and path, and the reviewer checks it. Still ask first for any contract, workflow, dependency, protected guard, or anything outside these two kinds. Source: the lead, under the lean context approval ([private record](https://github.com/jparker2006/ClosedWiz/issues/3065#issuecomment-7135622282)).
+
 ## Test commands
+
+Locally, run only the shards your change can affect (`python3 check/run.py --shard <name>`, named by `check/select.py` or `--list`) and the red/green proof; never the full suite locally. CI's `check` at the exact head is the full run, for builders and reviewers alike.
 
 Run `python3 check/run.py` at the repository root, or `python3 check/run.py --shard <name>[,<name>...]` for the shards `python3 check/run.py --list` names ([check shards contract](../../contracts/check-shards.v1.md)). The hosted workflow runs one job per listed shard with `TEST_JOBS=2` (on a pull request, only the shards `check/select.py` picks for its changed files; merge groups and pushes to `main` run every shard), installing the pinned test-only browser tools only in the shards whose skill names `playwright-core`, and the changeset and comment gates in their own job. Source: [WizSkills CI](../../.github/workflows/ci.yml).
 

@@ -668,7 +668,7 @@ class Documented(unittest.TestCase):
     (the installed skill lives outside it), so the project's FM4 command resolves there."""
 
     def commands(self):
-        text = (HERE.parent / 'SKILL.md').read_text()
+        text = (HERE.parent / 'references/merging.md').read_text()
         found = re.findall(r'`(python3 -I [^`]*merge\.py"? (?:admit|merge) [^`]*)`', text)
         self.assertEqual(len(found), 2, found)
         values = {"<this skill's folder>": str(HERE.parent), '<owner>/<repo>': REPO, '<P>': '7',
@@ -698,7 +698,7 @@ class Documented(unittest.TestCase):
 
     def archive_rule(self):
         """The archive row's settle command, filled, and the results it may archive after."""
-        row = next(x for x in (HERE.parent / 'SKILL.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
+        row = next(x for x in (HERE.parent / 'references/merging.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
         found = re.findall(r'`(python3 -I [^`]*merge\.py"? settle [^`]*)`', row)
         self.assertEqual(len(found), 1, row)
         command = found[0]
@@ -1642,7 +1642,7 @@ class Landed(unittest.TestCase):
 
     def archive(self, w):
         """One wake's archive row, filled for this fix: (archives, its output) (#1848 R1)."""
-        row = next(x for x in (HERE.parent / 'SKILL.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
+        row = next(x for x in (HERE.parent / 'references/merging.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
         command = re.findall(r'`(python3 -I [^`]*merge\.py"? settle [^`]*)`', row)[0]
         for name, value in {"<this skill's folder>": str(HERE.parent), '<owner>/<repo>': DEST, '<P>': '9201',
                             '<N>': '9106'}.items():
@@ -1676,7 +1676,7 @@ class Landed(unittest.TestCase):
                 self.assertEqual(self.archive(w)[0], True)
                 self.assertEqual(w.bodies(9101), [LANDED])
         # The row settles every merged pull request, so a direct merge's landed comment is retried too.
-        row = next(x for x in (HERE.parent / 'SKILL.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
+        row = next(x for x in (HERE.parent / 'references/merging.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
         self.assertNotIn('through the merge queue', row)
 
     def test_two_runs_racing_on_one_report_leave_the_earliest_comment_only(self):

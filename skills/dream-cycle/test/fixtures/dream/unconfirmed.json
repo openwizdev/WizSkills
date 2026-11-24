@@ -1,0 +1,3 @@
+[
+  {"repo": "example/beta", "source": "idle_prs", "reason": "gh api failed: exit 1"}
+]

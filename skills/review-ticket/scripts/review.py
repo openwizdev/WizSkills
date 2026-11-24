@@ -183,7 +183,8 @@ def description_rulings(text):
     return [int(m[1]) for line in rulings_lines(text) or [] if (m := re.match(r"([1-9][0-9]*)\. ", line))]
 
 
-def check(text, description, mode, head, earlier, decision=None, changed=None, counts=None):
+def check(text, description, mode, head, earlier, decision=None, changed=None, counts=None, untouched=None,
+          first=None):
     r, problems, late = parse(text), [], []
     if r["verdict"] is None:
         problems.append("the first line is VERDICT: APPROVE or CHANGES at the 40-character head")
@@ -222,18 +223,22 @@ def check(text, description, mode, head, earlier, decision=None, changed=None, c
             problems.append(f"{i}: a new polish finding ends with Polish issue: #<n>")
         elif f["new"] and f["grade"] == "pre-existing" and not f["pre"]:
             problems.append(f"{i}: a new pre-existing finding ends with Pre-existing issue: #<n>")
-        where = re.match(r"`([^`\s]+):[1-9][0-9]*`", f["text"]) if f["new"] and i not in before else None
-        if where and changed is not None and where[1] not in changed:
+        if f["new"] and f["risk"] and not blocking:
+            problems.append(f"{i}: a finding with a Risk: line is graded blocking")
+        where = re.match(r"`([^`\s]+):([1-9][0-9]*)`", f["text"]) if f["new"] and i not in before else None
+        spot = where and untouched and untouched(where[1], int(where[2]))
+        if spot:
             late.append(f)
-            if f["grade"] == "pre-existing" and f["risk"]:
-                problems.append(f"{i}: a late finding with a Risk: line stays blocking")
-            elif not (f["grade"] == "pre-existing" or f["risk"]):
-                problems.append(f"{i}: `{where[1]}` is unchanged since {earlier['head'][:7]}; a re-check raises a "
+            if not (f["grade"] == "pre-existing" or f["risk"]):
+                problems.append(f"{i}: `{spot}` is unchanged since {first[:7]}; a re-check raises a "
                                 "new finding there only as a Risk: security, privacy or data-loss blocker")
             elif not f["late"]:
-                problems.append(f"{i}: a new finding on code unchanged since {earlier['head'][:7]} needs its Late: line")
-        elif (f["late"] or f["grade"] == "pre-existing") and i not in before:
+                problems.append(f"{i}: a new finding on code unchanged since {first[:7]} needs its Late: line")
+        elif where and (f["late"] or f["grade"] == "pre-existing"):
             problems.append(f"{i}: Late: and [pre-existing] are only for a re-check's new finding on unchanged code")
+        elif where and changed is not None and where[1] not in changed and not f["risk"]:
+            problems.append(f"{i}: `{where[1]}` is unchanged since {earlier['head'][:7]}; a re-check raises a new "
+                            "finding there only as a Risk: security, privacy or data-loss blocker")
         old = before.get(i)
         if i in logged_ids:
             if not (f["grade"] == "polish" and f["status"] == "Polish issue: #"
@@ -357,7 +362,8 @@ def admit(repo, number, assigned, skip=None, ticket=None):
     if last is not None and last["head"] == head and mode != "log-and-merge":
         raise Stop(f"stop: already reported at {head}")
     return {"pr": pr, "head": head, "ticket": ticket, "checks": names, "authors": authors,
-            "comments": comments, "last": last, "mode": mode, "decision": decision}
+            "comments": comments, "last": last, "first": reports[0][1] if reports else None, "mode": mode,
+            "decision": decision}
 
 
 def pin(repo, number, assigned, ticket=None):
@@ -401,13 +407,36 @@ def changed_since(base, last, head):
 def report_problems(path, repo, number, assigned, ticket=None, counts=None):
     text = Path(path).read_text(encoding="utf-8").replace("\r\n", "\n")
     s = admit(repo, number, assigned, skip=text, ticket=ticket)
-    changed = None
-    if s["mode"] in ("re-check", "final"):
-        changed = changed_since(s["pr"]["base"].get("sha"), s["last"]["head"], s["head"])
-    elif s["mode"] == "log-and-merge":
-        changed = set()
+    changed = untouched = first = None
+    if s["mode"] != "full":
+        base, first = s["pr"]["base"].get("sha"), s["first"]["head"]
+        changed = changed_since(base, s["last"]["head"], s["head"]) if s["mode"] != "log-and-merge" else set()
+        untouched = untouched_lines(first, s["head"], changed_since(base, first, s["head"]))
     return text, s, check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"], s["decision"], changed,
-                          counts)
+                          counts, untouched, first)
+
+
+def untouched_lines(first, head, touched):
+    seen = {}
+
+    def edits(path):
+        try:
+            size = len(git("cat-file", "blob", f"{head}:{path}").splitlines())
+            diff = git("--literal-pathspecs", "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", first, head,
+                       "--", path, what=f"cannot read the pull request's own changes: git diff {first} {head}")
+        except (Refusal, UnicodeDecodeError):
+            return None
+        spans = [(int(m[1]), int(m[1]) + int(m[2] or 1)) for m in re.finditer(r"(?m)^@@ -\S+ \+(\d+)(?:,(\d+))? @@", diff)]
+        return size, spans
+
+    def spot(path, line):
+        if path not in touched:
+            return path
+        info = seen[path] = seen[path] if path in seen else edits(path)
+        if info is None or line > info[0] or any(a <= line < b for a, b in info[1]):
+            return None
+        return f"{path}:{line}"
+    return spot
 
 
 def git(*args, what=None):

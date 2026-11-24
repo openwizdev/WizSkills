@@ -92,7 +92,8 @@ SUITES = {
               ['python3', '-I', 'check/test_suites.py'],
               ['python3', '-I', 'check/test_bench.py'],
               ['python3', '-I', 'check/test_select.py'],
-              ['python3', '-I', 'check/test_checklist_rules.py']],
+              ['python3', '-I', 'check/test_checklist_rules.py'],
+              ['python3', '-I', 'check/test_context_budget.py']],
 }
 
 PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}
@@ -708,7 +709,7 @@ def standalone(root):
 
 
 STANDALONE = ['python3', '-I', 'check/standalone.py', '--tree', '.']
-USAGE = 'usage: python3 check/run.py [--list | --shard <name>[,<name>...]]'
+USAGE = 'usage: python3 check/run.py [--list | --shard <name>[,<name>...] | --write-context-budget]'
 
 
 def shards(root):
@@ -735,6 +736,12 @@ def selection(argv):
 
 
 def main(argv):
+    if argv == ['--write-context-budget']:
+        sys.path.insert(0, str(ROOT / 'check'))
+        import context_budget
+        sizes = context_budget.write(ROOT)
+        print(f'context budget: wrote {context_budget.BUDGET.as_posix()} for {len(sizes)} skills')
+        return 0
     selected = selection(argv)
     if isinstance(selected, str):
         print(selected, file=sys.stderr)

@@ -977,6 +977,73 @@ class ModelsTable(unittest.TestCase):
                                    '--refused', 'claude', '--refused', 'antigravity', '--refused', 'codex')
             self.assertEqual((exhausted.returncode, exhausted.stdout), (1, ''))
 
+    def test_review_sort_setting_and_off_switch(self):
+        base = (
+            '# Fleet settings\n\n'
+            '## Models\n\n'
+            '| Role | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
+            '| --- | --- | --- | --- | --- |\n'
+            '| Orchestrator | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Builder | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Reviewer | Codex | Sol 6.2 | Medium | '
+            '`--provider codex --model gpt-6.2-sol --reasoning-level medium` |\n'
+        )
+        enabled_line = (
+            base
+            + '\n## Review sort\n\n'
+            + 'Review sort: Gemini Neon Low\n\n'
+            + 'One-line revert: set `Review sort: off`.\n\n'
+            + '```text\nReview sort: off\n```\n'
+        )
+        enabled_table = (
+            base
+            + '\n## Review sort\n\n'
+            + '| Setting | Value |\n'
+            + '| --- | --- |\n'
+            + '| Review sort | Gemini Neon Low |\n'
+        )
+        off_line = base + '\n## Review sort\n\nReview sort: off\n'
+        off_table = (
+            base
+            + '\n## Review sort\n\n'
+            + '| Setting | Value |\n'
+            + '| --- | --- |\n'
+            + '| Review sort | off |\n'
+        )
+        good_cases = (
+            ('enabled line with prose and fence mention', enabled_line,
+             (0, '--provider antigravity --reasoning-level low\n', '')),
+            ('enabled table row', enabled_table,
+             (0, '--provider antigravity --reasoning-level low\n', '')),
+            ('off line', off_line, (0, 'off\n', '')),
+            ('off table row', off_table, (0, 'off\n', '')),
+            ('absent setting defaults off', base, (0, 'off\n', '')),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, fleet, want in good_cases:
+                with self.subTest(name):
+                    run, gh_log = run_cli(tmp, fleet, 'review-sort', '--repo', 'synthetic/ops',
+                                          checkout=off_line if fleet is enabled_line else enabled_line)
+                    self.assertEqual((run.returncode, run.stdout, run.stderr), want)
+                    self.assertEqual(gh_log, [])
+            bad_cases = (
+                ('unknown model', base + '\nReview sort: Gemini Neon High\n'),
+                ('uppercase off', base + '\nReview sort: OFF\n'),
+                ('boolean false', base + '\nReview sort: false\n'),
+                ('empty value', base + '\nReview sort:\n'),
+                ('empty table value', base + '\n| Review sort | |\n'),
+                ('duplicate lines', base + '\nReview sort: Gemini Neon Low\nReview sort: off\n'),
+                ('line and table duplicate', enabled_line + '\n| Review sort | off |\n'),
+                ('extra table column', base + '\n| Review sort | Gemini Neon Low | extra |\n'),
+            )
+            for name, broken in bad_cases:
+                with self.subTest(name):
+                    run, _ = run_cli(tmp, broken, 'review-sort', '--repo', 'synthetic/ops')
+                    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]),
+                                     (2, '', 'ops-starts: refused: '))
+
 
 if __name__ == '__main__':
     unittest.main()

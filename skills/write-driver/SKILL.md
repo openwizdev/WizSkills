@@ -1,6 +1,6 @@
 ---
 name: write-driver
-description: Take a user from one pasted line to an OpenWiz driver of their own that passes 5 of 5 on their real host, as fast as possible. Reads the host's own help first, grills in rounds of three, writes the driver from OpenWiz's template, runs the five-check kit and the three live lessons with the user, opens a pull request in their repository, stops everything it started, reports the time from paste, and shares it only on the user's yes. Use when the user pastes "Write an OpenWiz driver for my host with the write-driver skill" or asks to write a driver for a host.
+description: Build and verify an OpenWiz driver for a host. Use when the user asks to write a driver for their host or pastes the write-driver prompt.
 version: 0.4.0
 ---
 

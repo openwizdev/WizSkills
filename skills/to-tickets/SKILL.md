@@ -1,6 +1,6 @@
 ---
 name: to-tickets
-description: Turn a spec into sized tickets and approve the plan by its own checks (links, relies, sizes, width, owned paths), recording a machine plan approval. Use when to-spec hands over a spec, or to re-cut a changed plan. Send unconfirmed grills to grill.
+description: Split a spec into sized tickets and check the plan. Use when to-spec hands over a spec or when an existing ticket plan needs revision.
 version: 0.4.0
 ---
 

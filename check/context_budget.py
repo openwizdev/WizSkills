@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""The context budget ratchet (AD7): what agents always read may not grow silently.
-
-python3 -I check/context_budget.py compare <base.json> <head.json> [--allow-increase]
-
-`check/context-budget.json` records each skill's `SKILL.md` size in UTF-8
-bytes; check/test_context_budget.py keeps it equal to the measured sizes, and
-CI compares the pull request's file with its base's. Exits 1 on growth without
---allow-increase, 2 on an unreadable budget. Python 3.11+ standard library.
-"""
 import json
 import sys
 from pathlib import Path
@@ -15,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BUDGET = Path('check', 'context-budget.json')
 LABEL = 'context-increase'
+USAGE = 'usage: python3 -I check/context_budget.py compare <base.json> <head.json> [--allow-increase]'
 HELP = (
     'check/context-budget.json holds the UTF-8 byte size of every skill\'s SKILL.md, '
     'and CI fails a pull request that raises any of them above its base, a new skill counting as growth from 0. '
@@ -54,13 +46,12 @@ def load(path):
 
 def main(argv):
     if argv in (['--help'], ['-h']):
-        print(__doc__.strip() + '\n\n' + HELP)
+        print(USAGE + '\n\n' + HELP)
         return 0
     allow = '--allow-increase' in argv
     args = [a for a in argv if a != '--allow-increase']
     if len(args) != 3 or args[0] != 'compare':
-        print('usage: python3 -I check/context_budget.py compare <base.json> <head.json> [--allow-increase]',
-              file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     try:
         base, head = load(args[1]), load(args[2])

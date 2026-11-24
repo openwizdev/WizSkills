@@ -114,8 +114,9 @@ class Fleet(unittest.TestCase):
         self.env['FAKE_ROOM_CLI'] = 'cloud'
         self.env.pop('LAUNCH_FLEET_STATE', None)
         self.env.pop('LAUNCH_FLEET_RUNS', None)
+        builder = self.threads[0]['id']
         self.assertEqual(self.run_fleet('wake', '12'),
-                         f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')
+                         f'CI failed #31 for #12 at {SHA}: tell its builder, thread {builder}\n')
 
     def test_missing_or_unreadable_private_thread_map_names_file_and_creation_shape(self):
         self.pr['checks'][0]['conclusion'] = 'FAILURE'
@@ -132,8 +133,9 @@ class Fleet(unittest.TestCase):
         self.assertNotIn(str(missing), r.stderr)
 
         missing.write_text(expected_json)
+        builder = self.threads[0]['id']
         self.assertEqual(self.run_fleet('wake', '12'),
-                         f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')
+                         f'CI failed #31 for #12 at {SHA}: tell its builder, thread {builder}\n')
 
         self.env['LAUNCH_FLEET_STATE'] = 'relative-state.json'
         r = subprocess.run(['sh', os.environ.get('FLEET_SH', str(HERE / 'fleet.sh')), 'wake', '12'],

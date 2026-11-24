@@ -1,3 +1,4 @@
+import base64
 import http.server
 import json
 import os
@@ -68,6 +69,101 @@ def png_column(path):
         column.append(list(line[right:right + 3]))
         prev = line
     return column
+
+
+def make_png(width, height, fill_pixel, *, first_pixel=None, colour_type=2, filter_byte=0):
+    channels = {0: 1, 2: 3, 4: 2, 6: 4}[colour_type]
+    fill = bytes(fill_pixel)
+    first = bytes(first_pixel) if first_pixel is not None else fill
+    if len(fill) != channels or len(first) != channels:
+        raise ValueError('pixel length must match channel count')
+    stride = width * channels
+    prev = bytes(stride)
+    raw = bytearray()
+    for y in range(height):
+        row = (first + fill * (width - 1)) if y == 0 else (fill * width)
+        raw.append(filter_byte)
+        for x in range(stride):
+            a = row[x - channels] if x >= channels else 0
+            b = prev[x]
+            c = prev[x - channels] if x >= channels else 0
+            if filter_byte == 0:
+                pred = 0
+            elif filter_byte == 1:
+                pred = a
+            elif filter_byte == 2:
+                pred = b
+            elif filter_byte == 3:
+                pred = (a + b) >> 1
+            elif filter_byte == 4:
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                pred = a if pa <= pb and pa <= pc else b if pb <= pc else c
+            else:
+                raise ValueError('unsupported filter byte')
+            raw.append((row[x] - pred) & 0xff)
+        prev = row
+
+    def chunk(kind, payload):
+        return (struct.pack('>I', len(payload)) + kind + payload
+                + struct.pack('>I', zlib.crc32(kind + payload) & 0xffffffff))
+
+    ihdr = struct.pack('>IIBBBBB', width, height, 8, colour_type, 0, 0, 0)
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr)
+            + chunk(b'IDAT', zlib.compress(bytes(raw))) + chunk(b'IEND', b''))
+
+
+def write_stub_harness(directory, log_path, first_screen_bytes, full_page_bytes):
+    stub = Path(directory) / 'browser-harness'
+    stub.write_text(
+        f'#!{sys.executable}\n'
+        'import base64, json, pathlib, sys\n'
+        f'LOG_PATH = pathlib.Path({str(log_path)!r})\n'
+        f'FIRST_B64 = {base64.b64encode(first_screen_bytes).decode("ascii")!r}\n'
+        f'FULL_B64 = {base64.b64encode(full_page_bytes).decode("ascii")!r}\n'
+        'state = {"width": 0, "opened": [], "closed": [], "captures": []}\n'
+        'def new_tab():\n'
+        '    tab = f"tab-{len(state[\'opened\']) + 1}"\n'
+        '    state["opened"].append(tab)\n'
+        '    return tab\n'
+        'def activate_tab(tab): pass\n'
+        'def close_tab(tab): state["closed"].append(tab)\n'
+        'def wait_for_load(timeout=30): return True\n'
+        'def wait_for_element(selector, timeout=30, visible=True): return True\n'
+        'def cdp(method, **params):\n'
+        '    if method == "Emulation.setDeviceMetricsOverride":\n'
+        '        state["width"] = params["width"]\n'
+        '        return {}\n'
+        '    if method == "Page.navigate":\n'
+        '        return {}\n'
+        '    if method == "Runtime.evaluate":\n'
+        '        expr = params.get("expression", "")\n'
+        '        if expr == "innerWidth":\n'
+        '            return {"result": {"value": state["width"]}}\n'
+        '        if "responseStatus" in expr:\n'
+        '            return {"result": {"value": 200}}\n'
+        '        return {"result": {"value": True}}\n'
+        '    if method == "Page.getLayoutMetrics":\n'
+        '        h = 1200 if state["width"] == 390 else 1100\n'
+        '        return {"cssContentSize": {"width": state["width"], "height": h}}\n'
+        '    if method == "Page.captureScreenshot":\n'
+        '        index = len(state["captures"])\n'
+        '        state["captures"].append({\n'
+        '            "captureBeyondViewport": params.get("captureBeyondViewport"),\n'
+        '            "clip": params.get("clip"),\n'
+        '        })\n'
+        '        return {"data": FIRST_B64 if index % 2 == 0 else FULL_B64}\n'
+        '    return {}\n'
+        'ns = {\n'
+        '    "new_tab": new_tab, "activate_tab": activate_tab, "close_tab": close_tab,\n'
+        '    "wait_for_load": wait_for_load, "wait_for_element": wait_for_element, "cdp": cdp,\n'
+        '}\n'
+        'try:\n'
+        '    exec(sys.stdin.read(), ns)\n'
+        'finally:\n'
+        '    LOG_PATH.write_text(json.dumps(state))\n'
+    )
+    stub.chmod(0o755)
+    return stub
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -256,6 +352,65 @@ class Screenshots(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('HTTP(S)', result.stderr)
             self.assertFalse(out.exists())
+
+
+    def run_capture_with_stub(self, bin_dir, output, *args, url=None):
+        env = os.environ.copy()
+        env['PATH'] = str(bin_dir) + os.pathsep + env.get('PATH', '')
+        return subprocess.run([sys.executable, str(SCRIPT), url or self.url,
+                               '--out', str(output), '--ready-selector', '#ready',
+                               '--timeout', '5', *args], text=True,
+                              capture_output=True, timeout=30, env=env)
+
+    def test_fixed_at_bottom_refuses_single_colour_and_invalid_first_screen_png(self):
+        full_png = make_png(4, 4, (213, 94, 0), first_pixel=(204, 121, 167))
+        cases = [
+            ('rgb-filter-0', make_png(4, 4, (252, 252, 252), colour_type=2, filter_byte=0), 'single-colour'),
+            ('rgb-filter-1', make_png(4, 4, (252, 252, 252), colour_type=2, filter_byte=1), 'single-colour'),
+            ('rgb-filter-2', make_png(4, 4, (252, 252, 252), colour_type=2, filter_byte=2), 'single-colour'),
+            ('rgb-filter-3', make_png(4, 4, (252, 252, 252), colour_type=2, filter_byte=3), 'single-colour'),
+            ('rgb-filter-4', make_png(4, 4, (252, 252, 252), colour_type=2, filter_byte=4), 'single-colour'),
+            ('rgba-single', make_png(4, 4, (252, 252, 252, 255), colour_type=6, filter_byte=1), 'single-colour'),
+            ('corrupt-png', b'not-a-png', 'png'),
+        ]
+        for label, first_png, expected_error in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temp:
+                bin_dir = Path(temp) / 'bin'
+                bin_dir.mkdir()
+                log_path = Path(temp) / 'stub.json'
+                write_stub_harness(bin_dir, log_path, first_png, full_png)
+                out = Path(temp) / 'out'
+                result = self.run_capture_with_stub(bin_dir, out, '--fixed-at-bottom')
+                self.assertNotEqual(result.returncode, 0, result.stderr + result.stdout)
+                self.assertIn(expected_error, result.stderr.lower())
+                self.assertFalse((out / 'capture.json').exists())
+                state = json.loads(log_path.read_text())
+                self.assertEqual(state['opened'], ['tab-1'])
+                self.assertEqual(state['closed'], ['tab-1'])
+                self.assertEqual(len(state['captures']), 1)
+
+    def test_fixed_at_bottom_captures_first_screen_beyond_viewport_and_accepts_non_uniform_png(self):
+        # Right edge is uniform (like a centred desktop layout); only pixel (0, 0) differs.
+        first_png = make_png(4, 4, (252, 252, 252), first_pixel=(213, 94, 0), filter_byte=4)
+        full_png = make_png(4, 4, (213, 94, 0), first_pixel=(204, 121, 167), filter_byte=0)
+        with tempfile.TemporaryDirectory() as temp:
+            bin_dir = Path(temp) / 'bin'
+            bin_dir.mkdir()
+            log_path = Path(temp) / 'stub.json'
+            write_stub_harness(bin_dir, log_path, first_png, full_png)
+            out = Path(temp) / 'out'
+            result = self.run_capture_with_stub(bin_dir, out, '--fixed-at-bottom')
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            self.assertTrue((out / 'capture.json').is_file())
+            state = json.loads(log_path.read_text())
+            self.assertEqual(state['opened'], ['tab-1', 'tab-2'])
+            self.assertEqual(state['closed'], ['tab-1', 'tab-2'])
+            self.assertEqual(state['captures'], [
+                {'captureBeyondViewport': True, 'clip': {'x': 0, 'y': 0, 'width': 390, 'height': 844, 'scale': 1}},
+                {'captureBeyondViewport': False, 'clip': {'x': 0, 'y': 0, 'width': 390, 'height': 1200, 'scale': 1}},
+                {'captureBeyondViewport': True, 'clip': {'x': 0, 'y': 0, 'width': 1440, 'height': 900, 'scale': 1}},
+                {'captureBeyondViewport': False, 'clip': {'x': 0, 'y': 0, 'width': 1440, 'height': 1100, 'scale': 1}},
+            ])
 
 
 if __name__ == '__main__':

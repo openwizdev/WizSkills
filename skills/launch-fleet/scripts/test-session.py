@@ -427,6 +427,22 @@ class Session(unittest.TestCase):
         self.assertIn('#12 merged', out)
         self.assertIn('session: done: spec done #7: every planned ticket is done; no follow-ups\n', out)
 
+    def test_an_inherited_gh_repo_never_names_another_repository_in_the_review_claim(self):
+        self.tickets(5)
+        self.change(lambda w: w['branches'].update({'5': 'room/5-synthetic'}))
+        process = self.session('--idle', '10', GH_REPO='synthetic-owner/synthetic-private')
+        self.until(lambda: self.records(5) == ['launch-fleet: start checked, branch room/5-synthetic'], 'check',
+                   process)
+        self.green(12, 5)
+        self.note(5, 'builder', pr=12)
+        self.until(lambda: self.records(12)[:1] and self.records(12)[0].startswith(
+            'launch-fleet: review started ' + HEAD), 'the reviewer', process)
+        claim = self.records(12)[0]
+        self.assertIn('pull request %s#12 at %s' % (REPO, HEAD), claim)
+        self.assertNotIn('synthetic-private', claim)
+        process.send_signal(signal.SIGINT)
+        self.ended(process, 130)
+
     def test_a_spec_whose_planned_tickets_are_done_ends_the_session_as_done(self):
         self.tickets(5)
         self.change(lambda w: w['tickets']['5'].update(state='CLOSED'))

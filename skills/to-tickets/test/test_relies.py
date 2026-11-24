@@ -139,6 +139,54 @@ class ReliesTest(unittest.TestCase):
             self.assertEqual(checker.stderr, b'Relies on: name individual contract files, not folders\n')
 
 
+    def test_a_path_in_another_repository_counts_only_with_its_elsewhere_vouch(self):
+        second, remote = 'synthetic-owner/second-repo', 'contracts/remote.v1.md'
+        vouch = ['--elsewhere', second, remote]
+        cases = [
+            ('vouched', f'`{remote}` in `{second}`', vouch, 0),
+            ('vouched, the repository in another case', f'`{remote}` in `Synthetic-Owner/Second-Repo`', vouch, 0),
+            ('beside a bare path', f'`contracts/widget.v1.md`, `{remote}` in `{second}`', vouch, 0),
+            ('two vouched', f'`{remote}` in `{second}`, `docs/x.md` in `synthetic-owner/third-repo`',
+             vouch + ['--elsewhere', 'synthetic-owner/third-repo', 'docs/x.md'], 0),
+            ('not vouched', f'`{remote}` in `{second}`', [], 1),
+            ('vouched in another repository', f'`{remote}` in `{second}`',
+             ['--elsewhere', 'synthetic-owner/third-repo', remote], 1),
+            ('another path vouched', f'`{remote}` in `{second}`', ['--elsewhere', second, 'contracts/other.md'], 1),
+            ('a vouch is not a bare path', f'`{remote}`', vouch, 1),
+            ('a repository without its owner', f'`{remote}` in `second-repo`', [], 1),
+            ('two repositories', f'`{remote}` in `{second}` in `synthetic-owner/third-repo`', vouch, 1),
+            ('the repository unticked', f'`{remote}` in {second}', vouch, 1),
+            ('a pattern', f'`contracts/*.md` in `{second}`', ['--elsewhere', second, 'contracts/x.md'], 1),
+            ('a parent component', f'`../{remote}` in `{second}`', ['--elsewhere', second, f'../{remote}'], 1),
+            ('a vouched folder form', f'`contracts/` in `{second}`', ['--elsewhere', second, 'contracts/'], 1),
+            ('a bad vouched repository', f'`{remote}` in `{second}`', ['--elsewhere', 'second-repo', remote], 1),
+            ('a vouch without its path', f'`{remote}` in `{second}`', ['--elsewhere', second], 2),
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'contracts').mkdir()
+            (root / 'contracts/widget.v1.md').write_text('Synthetic contract.\n')
+            tools = root / 'checker-tools'
+            tools.mkdir()
+            for name in ('sh', 'jq'):
+                program = shutil.which(name)
+                self.assertIsNotNone(program, name)
+                (tools / name).symlink_to(program)
+            for name, value, extra, code in cases:
+                with self.subTest(case=name):
+                    ticket = f'# Synthetic ticket\n\n**Relies on:** {value}\n\n## Acceptance criteria\n\n- [ ] Synthetic.\n'
+                    result = subprocess.run([str(tools / 'sh'), str(SCRIPT), '--root', str(root), *extra],
+                                            input=ticket.encode(), capture_output=True, env={'PATH': str(tools)})
+                    self.assertEqual((result.returncode, result.stdout), (code, b''), result.stderr)
+                    if code == 1:
+                        self.assertTrue(result.stderr.startswith(b'Relies on: '), result.stderr)
+            result = subprocess.run([str(tools / 'sh'), str(SCRIPT), '--root', str(root)],
+                                    input=f'**Relies on:** `{remote}` in `{second}`\n'.encode(),
+                                    capture_output=True, env={'PATH': str(tools)})
+            self.assertEqual(result.stderr.decode(), f'Relies on: `{remote}` is in `{second}`, which --root is not; '
+                                                     'a direct blocker must own it or its default branch hold it\n')
+
+
 def approval_fixtures():
     import importlib.util
     import sys

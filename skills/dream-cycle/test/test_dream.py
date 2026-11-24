@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Merge and report command tests against fixture findings (P3; red against DC1 stub)."""
 import json
 import subprocess
 import sys
@@ -13,7 +12,6 @@ FIXTURES = HERE / "fixtures" / "dream"
 
 
 class DreamCycleMergeAndReportTests(unittest.TestCase):
-    # DC3 (#3091) removes expectedFailure when dream.py is implemented.
     @unittest.expectedFailure
     def test_merge_validates_dedupes_ranks_and_splits_batches(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -35,15 +33,12 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             merged = json.loads(merged_file.read_text(encoding="utf-8"))
             self.assertEqual(merged["schema"], "openwiz.dream-cycle.merged.v1")
-            # 1 invalid line (alpha-bad) dropped with file, line and reason.
             self.assertEqual(len(merged["dropped"]), 1)
             dropped = merged["dropped"][0]
             self.assertIn("scout_alpha.jsonl", dropped["file"])
             self.assertEqual(dropped["line"], 3)
             self.assertTrue(dropped["reason"])
 
-            # alpha-001 and alpha-001-dup share (example/alpha, [src/legacy_export.py])
-            # so 6 valid lines dedupe to 5 merged findings.
             self.assertEqual(len(merged["findings"]), 5)
             deduped = [f for f in merged["findings"] if f["paths"] == ["src/legacy_export.py"]]
             self.assertEqual(len(deduped), 1)
@@ -60,7 +55,6 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
             self.assertEqual(sum(batch_counts), 5)
             self.assertLessEqual(max(batch_counts) - min(batch_counts), 1)
 
-    # DC3 (#3091) removes expectedFailure when dream.py is implemented.
     @unittest.expectedFailure
     def test_report_applies_verdicts_excludes_unproven_tickets_and_renders_loops(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -117,9 +111,7 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
 
             tickets = json.loads(tickets_json.read_text(encoding="utf-8"))
             ticket_ids = {t["id"] for t in tickets}
-            # Only CONFIRMED findings with a ticket title enter tickets.json.
             self.assertEqual(ticket_ids, {"alpha-001-dup", "loops-001"})
-            # Unproven (alpha-unproven), PLAUSIBLE (cross-001), REJECTED (alpha-002) never ticketed.
             self.assertNotIn("alpha-unproven", ticket_ids)
             self.assertNotIn("cross-001", ticket_ids)
             self.assertNotIn("alpha-002", ticket_ids)

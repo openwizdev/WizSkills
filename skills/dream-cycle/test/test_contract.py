@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Contract and fixture tests for dream-cycle.v1 (P1)."""
 import json
 import re
 import unittest

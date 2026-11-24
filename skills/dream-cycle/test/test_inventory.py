@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Inventory command tests against fixture repositories (P2; red against DC1 stub)."""
 import json
 import os
 import stat
@@ -92,7 +91,6 @@ def _install_fake_gh(bin_dir, script_text):
 
 
 class DreamCycleInventoryTests(unittest.TestCase):
-    # DC2 (#3090) removes expectedFailure when inventory.py is implemented.
     @unittest.expectedFailure
     def test_inventory_reports_all_seven_sections(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -135,7 +133,6 @@ class DreamCycleInventoryTests(unittest.TestCase):
             self.assertGreaterEqual(sections["skipped_tests"]["total"], 1)
             self.assertGreaterEqual(sections["generated_files"]["total"], 1)
 
-    # DC2 (#3090) removes expectedFailure when inventory.py is implemented.
     @unittest.expectedFailure
     def test_failed_gh_read_reports_unconfirmed_and_exits_2(self):
         with tempfile.TemporaryDirectory() as tmp:

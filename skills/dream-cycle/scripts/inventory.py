@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Read-only repository inventory for dream-cycle (stub; implemented by DC2 #3090)."""
 import argparse
 import sys
 

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Merge findings and render dream-cycle reports (stub; implemented by DC3 #3091)."""
 import argparse
 import sys
 

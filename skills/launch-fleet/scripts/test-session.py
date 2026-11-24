@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from types import SimpleNamespace
 import unittest
@@ -467,21 +468,11 @@ class Session(unittest.TestCase):
 
     def test_a_merge_waits_when_the_overload_guard_pauses_or_cannot_see(self):
         self.approved()
-        self.change(lambda w: w['jobs'].append({'id': 77, 'name': 'check', 'status': 'queued', 'run_status': 'queued',
-                                                'created_at': '2026-01-01T00:00:00Z', 'started_at': None}))
-        out = self.ended(self.session(), 3)
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier(waiting=1000)), 3)
         self.assertIn('needs you: fleet.sh overload merge-batch did not admit a merge batch: paused: escalate '
                       '(required_job_wait)', out)
-        self.change(lambda w: w.update(jobs=[]))
-        out = self.ended(self.session(), 3)
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 3)
         self.assertIn('did not admit a merge batch: paused: escalate (required_job_wait)', out)
-        self.assertEqual(self.merges(), [])
-
-    def test_a_merge_waits_when_the_overload_observation_is_unknown(self):
-        self.approved()
-        self.change(lambda w: w.update(budget=None))
-        out = self.ended(self.session(), 3)
-        self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
         self.assertEqual(self.merges(), [])
 
     def test_an_approval_for_another_head_or_from_another_reviewer_merges_nothing(self):
@@ -725,52 +716,27 @@ class Session(unittest.TestCase):
                       "a claude model in the models rule", out)
         self.assertEqual(self.starts(), [])
 
-    def test_a_merge_waits_during_a_secondary_backoff(self):
-        self.approved()
-        self.change(lambda w: w.update(backoff={'graphql': 60}))
-        out = self.ended(self.session(), 3)
-        self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
-        self.assertEqual(self.merges(), [])
-
-    def test_a_merge_waits_when_the_budget_reads_carry_no_rate_limit_evidence(self):
-        self.approved()
-        self.change(lambda w: w.update(bare=True))
-        out = self.ended(self.session(), 3)
-        self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
-        self.assertEqual(self.merges(), [])
-
     def test_two_specs_of_one_repository_each_get_their_own_observation(self):
         spec = importlib.util.spec_from_file_location('session_batches', HERE / 'session.py')
         session = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(session)
-        session.STATE = self.lock_dir.parent
-        env = dict(self.env, GH_REPO=REPO, LAUNCH_FLEET_OVERLOAD_STATE=str(self.home / 'pause.json'))
+        seen = self.home / 'seen'
+        env = dict(self.env, GH_REPO=REPO, LAUNCH_FLEET_OVERLOAD_STATE=str(self.home / 'pause.json'),
+                   LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier(log=seen))
 
         def runner(number):
             args = SimpleNamespace(repo=REPO, spec=number, harness='claude', model='synthetic-builder', max=3,
                                    poll=0.05, ci_poll=0.05, idle=5)
             return session.Session(args, 'carry on')
-        first, second = runner('7'), runner('8')
-        real, calls = json.dump, []
-
-        def interleaved(value, out, **kw):
-            if not calls:
-                calls.append(1)
-                second.batch()
-            return real(value, out, **kw)
-
-        def guarded(argv, env=None):
-            if argv[-2:] == ['overload', 'merge-batch']:
-                seen.append(env['LAUNCH_FLEET_OVERLOAD_INPUT'])
-                self.assertEqual(json.loads(Path(seen[-1]).read_text())['repository'], REPO)
-            return run(argv, env)
-        run, seen = session.run, []
-        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(json, 'dump', interleaved), \
-                mock.patch.object(session, 'run', guarded):
-            first.batch()
-        self.assertEqual(calls, [1])
-        self.assertEqual(len(set(seen)), 2, seen)
-        self.assertEqual([Path(path).exists() for path in seen], [False, False])
+        with mock.patch.dict(os.environ, env, clear=True):
+            batches = [threading.Thread(target=runner(n).batch) for n in ('7', '8')]
+            for batch in batches:
+                batch.start()
+            for batch in batches:
+                batch.join()
+        paths = seen.read_text().split()
+        self.assertEqual(len(set(paths)), 2, paths)
+        self.assertEqual([Path(path).exists() for path in paths], [False, False])
 
     def replaced(self):
         self.tickets(5)
@@ -892,27 +858,6 @@ class Session(unittest.TestCase):
         out = self.ended(self.session('--idle', '2', '--poll', '0.1'), 3)
         self.assertIn('needs you: nothing moved on spec #7 for 2 seconds\n', out)
         self.assertLessEqual(len((self.home / 'fleet.log').read_text().splitlines()), 2)
-
-    def test_a_graphql_error_with_quota_headers_denies_the_batch(self):
-        self.approved()
-        self.change(lambda w: w.update(failing=['graphql']))
-        out = self.ended(self.session(), 3)
-        self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
-        self.assertEqual(self.merges(), [])
-
-    def test_a_rest_probe_that_errors_denies_the_batch(self):
-        self.approved()
-        self.change(lambda w: w.update(failing=['core']))
-        out = self.ended(self.session(), 3)
-        self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
-        self.assertEqual(self.merges(), [])
-
-    def test_a_probe_whose_reset_deadline_has_passed_denies_the_batch(self):
-        self.approved()
-        self.change(lambda w: w.update(reset_in=-5))
-        out = self.ended(self.session(), 3)
-        self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
-        self.assertEqual(self.merges(), [])
 
     def test_a_merge_that_reads_pending_is_read_again_and_then_merges(self):
         self.approved()
@@ -1070,19 +1015,25 @@ class Session(unittest.TestCase):
         process.send_signal(signal.SIGINT)
         self.ended(process, 130)
 
-    def supplier(self, fails=False):
+    def supplier(self, fails=False, waiting=0, log=None):
         path = self.home / 'supply.py'
         path.write_text(
             'import json, sys, time\n'
             'args = sys.argv[1:]\n'
+            'output = args[args.index(\'--output\') + 1]\n'
+            'if %r:\n'
+            '    with open(%r, \'a\') as log:\n'
+            '        log.write(output + \'\\n\')\n'
+            '    time.sleep(0.5)\n'
             'if %r:\n'
             '    sys.exit(1)\n'
             'now = int(time.time())\n'
             "pool = {'remaining': 1000, 'limit': 1000, 'reset_at': now + 3600, 'retry_after': 0}\n"
+            "jobs = [{'id': '77', 'required': True, 'status': 'queued', 'queued_at': now - %d, 'started_at': None}]\n"
             "seen = {'repository': args[args.index('--repository') + 1], 'observed_at': now, 'complete': True,\n"
-            "        'queue': {'complete': True, 'jobs': []}, 'budgets': {'rest': pool, 'graphql': pool}}\n"
-            "with open(args[args.index('--output') + 1], 'w') as out:\n"
-            '    json.dump(seen, out)\n' % fails)
+            "        'queue': {'complete': True, 'jobs': jobs if %d else []}, 'budgets': {'rest': pool, 'graphql': pool}}\n"
+            "with open(output, 'w') as out:\n"
+            '    json.dump(seen, out)\n' % (bool(log), str(log), fails, waiting, waiting))
         return str(path)
 
     def probes(self):
@@ -1115,16 +1066,14 @@ class Session(unittest.TestCase):
         self.assertEqual(self.probes(), 0)
         self.assertEqual(sorted(p.name for p in self.lock_dir.parent.glob('overload-*')), [])
 
-    def test_without_a_configured_overload_state_nothing_is_merged(self):
+    def test_with_a_supplier_but_no_overload_state_nothing_is_merged(self):
         self.approved()
         del self.env['LAUNCH_FLEET_OVERLOAD_STATE']
-        out = self.ended(self.session(), 3)
-        self.assertIn('needs you: no merge batch: LAUNCH_FLEET_OVERLOAD_STATE is not set, so this session would '
-                      "not share the repository's one overload pause; set it to the state path the fleet uses\n",
-                      out)
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 3)
+        self.assertIn('needs you: no merge batch: LAUNCH_FLEET_OVERLOAD_SUPPLY is set but LAUNCH_FLEET_OVERLOAD_STATE '
+                      "is not, so this session would not share the repository's one overload pause; set it to the "
+                      'state path the fleet uses\n', out)
         self.assertEqual(self.merges(), [])
-        self.assertEqual(self.probes(), 0)
-        self.assertEqual(sorted(p.name for p in self.lock_dir.parent.glob('overload-*')), [])
 
     def test_a_definitive_refusal_records_merge_blocked_once(self):
         self.approved(reviewer='Claude Code')

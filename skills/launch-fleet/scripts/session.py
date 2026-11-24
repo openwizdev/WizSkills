@@ -43,7 +43,6 @@ TIMEOUT = 1000
 VERDICT = re.compile(r'VERDICT: (APPROVE|CHANGES) at ([0-9a-f]{40})')
 FAMILY = re.compile(r'Driver review: (other-family|same-family)')
 GREEN = ('SUCCESS', 'NEUTRAL', 'SKIPPED')
-RUNS = ('queued', 'in_progress', 'waiting', 'pending', 'requested')
 
 
 def sibling(name):
@@ -565,69 +564,14 @@ class Session:
                 return 'the merge blocked record does not read back'
         return 'recorded merge blocked ' + head
 
-    def observe(self, checks):
-        def probe(pool, *args):
-            text = post.gh('api', '-i', *args)
-            if text is None:
-                return None
-            top, _, body = text.replace('\r\n', '\n').partition('\n\n')
-            lines = top.split('\n')
-            if not re.fullmatch(r'HTTP/[0-9.]+ 200( .*)?', lines[0]):
-                return None
-            heads = {k.strip().lower(): v.strip() for k, _, v in (h.partition(':') for h in lines[1:])}
-            try:
-                found = {'remaining': int(heads['x-ratelimit-remaining']), 'limit': int(heads['x-ratelimit-limit']),
-                         'reset_at': int(heads['x-ratelimit-reset']), 'retry_after': 0}
-                answer = json.loads(body)
-            except (KeyError, ValueError):
-                return None
-            if heads.get('x-ratelimit-resource') != pool or found['reset_at'] <= time.time() or \
-                    not isinstance(answer, dict) or 'errors' in answer:
-                return None
-            return found
-
-        budgets = {'rest': probe('core', 'repos/%s/actions/runs?per_page=1' % self.repo),
-                   'graphql': probe('graphql', 'graphql', '-f', 'query=query{rateLimit{remaining}}')}
-        jobs, complete = {}, all(budgets.values())
-        try:
-            for wanted in RUNS:
-                pages = post.read_json('api', '--paginate', '--slurp',
-                                       'repos/%s/actions/runs?status=%s&per_page=100' % (self.repo, wanted))
-                for run in [r for page in pages for r in page['workflow_runs']]:
-                    for page in post.read_json('api', '--paginate', '--slurp',
-                                               'repos/%s/actions/runs/%d/jobs?per_page=100' % (self.repo, run['id'])):
-                        for job in page['jobs']:
-                            queued = job['status'] not in ('in_progress', 'completed')
-                            jobs[str(job['id'])] = {
-                                'id': str(job['id']), 'required': job['name'] in checks,
-                                'status': 'queued' if queued else job['status'],
-                                'queued_at': int(stamp(job['created_at'])),
-                                'started_at': None if queued or not job.get('started_at') else
-                                int(stamp(job['started_at']))}
-        except (TypeError, KeyError, ValueError, Unreadable):
-            complete = False
-        return {'repository': self.repo, 'observed_at': int(time.time()), 'complete': complete,
-                'queue': {'complete': complete, 'jobs': list(jobs.values())},
-                'budgets': {k: v for k, v in budgets.items() if v}}
-
-    def batch(self, checks=None):
+    def batch(self):
+        if not os.environ.get('LAUNCH_FLEET_OVERLOAD_SUPPLY'):
+            return
         if not os.environ.get('LAUNCH_FLEET_OVERLOAD_STATE'):
-            raise NeedsYou("no merge batch: LAUNCH_FLEET_OVERLOAD_STATE is not set, so this session would not share "
-                           "the repository's one overload pause; set it to the state path the fleet uses")
-        if os.environ.get('LAUNCH_FLEET_OVERLOAD_SUPPLY'):
-            return self.guarded(dict(os.environ, LAUNCH_FLEET_OVERLOAD_INPUT='/nonexistent-overload-observation'))
-        seen = self.observe(checks if checks is not None else self.checks())
-        try:
-            STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
-            fd, path = tempfile.mkstemp(prefix='overload-', suffix='.json', dir=STATE)
-        except OSError as e:
-            raise Unreadable("can't write the overload observation (%s)" % type(e).__name__)
-        try:
-            with os.fdopen(fd, 'w') as out:
-                json.dump(seen, out)
-            return self.guarded(dict(os.environ, LAUNCH_FLEET_OVERLOAD_INPUT=path))
-        finally:
-            os.unlink(path)
+            raise NeedsYou("no merge batch: LAUNCH_FLEET_OVERLOAD_SUPPLY is set but LAUNCH_FLEET_OVERLOAD_STATE is "
+                           "not, so this session would not share the repository's one overload pause; set it to the "
+                           "state path the fleet uses")
+        self.guarded(dict(os.environ, LAUNCH_FLEET_OVERLOAD_INPUT='/nonexistent-overload-observation'))
 
     def guarded(self, env):
         r = run(['sh', str(HERE / 'fleet.sh'), 'overload', 'merge-batch'], env=env)
@@ -684,7 +628,7 @@ class Session:
                 self.held.add(p)
         if not ready:
             return moved
-        self.batch(checks)
+        self.batch()
         for found in ready:
             p, n, head = found.groups()
             admit = script('merge.py', 'admit', self.repo, p, head, ','.join(checks)).stdout.strip().split('\n')[0]

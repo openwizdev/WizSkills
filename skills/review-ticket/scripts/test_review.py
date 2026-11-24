@@ -1659,6 +1659,13 @@ class ReviewRules(unittest.TestCase):
         self.assertEqual(code, 2, out)
         self.assertIn("style-only renames in tests: declined often", out)
 
+    def test_the_shipped_template_has_no_rules(self):
+        shipped = (HELPER.parents[2] / "setup" / "templates" / "review-rules.md").read_text(encoding="utf-8")
+        code, lines, out = self.rules({"docs/agents/review-rules.md": shipped}, {**self.CHANGED, "<glob>": "x\n"},
+                                      "style-only renames in tests")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(lines, ["report: style-only renames in tests"])
+
 
 if __name__ == "__main__":
     unittest.main()

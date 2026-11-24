@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
-"""Prove red before, green after, in one deterministic check.
+import argparse
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
 
-python3 -I prove.py --base <ref> --test <path>... [--timeout <s>] [--repo <dir>] -- <test command>
+RUNS = 2
+ABOUT = """Prove red before, green after, in one deterministic check.
 
 Run it from the repository, or name it with `--repo`. It checks the committed HEAD, never the
 working tree. It adds two throwaway worktrees (`git worktree add --detach`), one at `--base` and
@@ -16,18 +26,6 @@ the side that broke the rule; exit 2 on bad arguments or a git failure before an
 It prints one JSON line on stdout, a line per run on stderr, and removes both worktrees on
 every exit. Python 3.11+ standard library only.
 """
-import argparse
-import json
-import os
-from pathlib import Path, PurePosixPath
-import re
-import shutil
-import signal
-import subprocess
-import sys
-import tempfile
-
-RUNS = 2
 
 
 def git(repo, *args):
@@ -157,10 +155,8 @@ def verdict(base, head):
 
 
 def parse(argv):
-    if '--' not in argv:
-        raise SystemExit('prove: put the test command after --')
-    split = argv.index('--')
-    p = argparse.ArgumentParser(prog='prove.py')
+    split = argv.index('--') if '--' in argv else len(argv)
+    p = argparse.ArgumentParser(prog='prove.py', usage='%(prog)s --base <ref> --test <path>... [--timeout <s>] [--repo <dir>] -- <test command>', description=ABOUT)
     p.add_argument('--base', required=True)
     p.add_argument('--test', required=True, nargs='+', action='extend')
     p.add_argument('--timeout', type=float, default=600)
@@ -168,7 +164,7 @@ def parse(argv):
     args = p.parse_args(argv[:split])
     args.command = argv[split + 1:]
     if not args.command:
-        raise SystemExit('prove: no test command after --')
+        raise SystemExit('prove: put the test command after --')
     if args.timeout <= 0:
         raise SystemExit('prove: --timeout must be positive')
     for rel in args.test:

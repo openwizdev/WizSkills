@@ -72,6 +72,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -99,7 +100,7 @@ OPTIONS = {
                   '--reviewer-harness', '--reviewer-model', '--reviewer-effort'}),
     'choose': ({'--state', '--options'}, {'--from-setup'}, {'--harness', '--model', '--effort', '--agents'}),
     'spec': ({'--state', '--spec', '--repo'}, set(), set()),
-    'launch': ({'--state', '--spec'}, {'--yes'}, {'--confirm'}),
+    'launch': ({'--state', '--spec'}, {'--yes', '--heartbeat', '--carry-on'}, {'--confirm'}),
     'progress': ({'--state', '--spec', '--openwiz'}, set(), set()),
     'next': ({'--state'}, set(), {'--setup-state'}),
 }
@@ -131,7 +132,8 @@ DRIVER_NAME = r'[a-z0-9]+(?:-[a-z0-9]+)*'
 VERSION_WAIT = 60
 PROBE_ENV = ('PATH', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR')
 RECORDS = r'openwiz:records v[1-9][0-9]{0,2}'
-CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox')
+CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox', 'effort')
+REQUIRED_CAN = {'start', 'wake', 'stop'}
 LOGIN_LINE = 'https://github.com/openwizdev/OpenWiz/blob/main/adapters/%s/README.md'
 HOSTS = {
     'local': {'label': 'this machine', 'where': 'on this machine'},
@@ -213,6 +215,8 @@ def parse(argv):
         raise Exit(2, 'usage: --spec takes an issue number')
     if argv[0] == 'launch' and ('--confirm' in got) != bool(got.get('--yes')) or not re.fullmatch(r'[0-9a-f]{64}', got.get('--confirm', '0' * 64)):
         raise Exit(2, 'usage: --yes takes --confirm with the digest of the preview the user said yes to')
+    if argv[0] == 'launch' and got.get('--carry-on') and len(got) > 3:
+        raise Exit(2, 'usage: launch --carry-on takes only --state and --spec')
     if '--build' in got and not os.path.isabs(got['--build']):
         raise Exit(2, 'usage: --build takes the verified install\'s build folder by absolute path')
     if '--pr' in got and not re.fullmatch(r'[1-9][0-9]{0,9}', got['--pr']):
@@ -322,6 +326,22 @@ def adapters_of(got, env):
     return env.get('OPENWIZ_ADAPTERS') or None
 
 
+def driver_capabilities(adapters):
+    schema = Path(adapters).parent / 'kernel/driver-kit/schema.json'
+    try:
+        text = schema.read_text(encoding='utf-8')
+    except FileNotFoundError:
+        return CAN
+    kit = strict(text)
+    if kit['contract'] != 'openwiz:driver v1':
+        raise ValueError('expected driver v1')
+    words = kit['commands']['version']['output']['properties']['can']['items']['enum']
+    if (not isinstance(words, list) or not all(isinstance(word, str) and word for word in words)
+            or len(set(words)) != len(words) or not REQUIRED_CAN <= set(words)):
+        raise ValueError('invalid can enum')
+    return words
+
+
 def driver_answer(env, adapters, name):
     """A driver's `version` answer (driver v1, D1), or the reason it has none, as (answer, None) or (None, why).
 
@@ -332,6 +352,10 @@ def driver_answer(env, adapters, name):
     path = Path(adapters, name, 'driver')
     if not os.path.isabs(adapters) or not path.is_file() or not os.access(path, os.X_OK):
         return None, 'there is no runnable driver'
+    try:
+        capabilities = driver_capabilities(adapters)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, 'the driver kit has an invalid driver v1 schema'
     probe = {k: env[k] for k in PROBE_ENV if k in env}
     result = run([str(path), 'version'], probe, timeout=VERSION_WAIT, stdin=subprocess.DEVNULL)
     if result is None:
@@ -348,7 +372,7 @@ def driver_answer(env, adapters, name):
         assert all(isinstance(r, str) and re.fullmatch(RECORDS, r) for r in records)
         assert 'openwiz:records v1' in records
         assert isinstance(can, list) and len(set(map(str, can))) == len(can)
-        assert all(isinstance(c, str) and c in CAN for c in can) and {'start', 'wake', 'stop'} <= set(can)
+        assert all(isinstance(c, str) and c in capabilities for c in can) and REQUIRED_CAN <= set(can)
     except (AssertionError, UnicodeDecodeError, ValueError, TypeError):
         return None, "its `version` answer is not driver v1's"
     if version['driver'] != name:
@@ -933,7 +957,7 @@ def look(name):
     'empty' (private, but no default branch and commit read back) or
     {'branch', 'commit'} (private, its default branch at that commit). None when
     a read failed or answered something else: unknown, never success."""
-    result = run(['gh', 'repo', 'view', name, '--json', 'nameWithOwner,isPrivate,defaultBranchRef'], gh_env())
+    result = run(['gh', 'repo', 'view', name, '--json', 'nameWithOwner,isPrivate,defaultBranchRef,id'], gh_env())
     if result is None:
         return None
     if result.returncode != 0:
@@ -941,6 +965,7 @@ def look(name):
     try:
         found = strict(result.stdout.decode('utf-8'))
         assert found['nameWithOwner'] == name and type(found['isPrivate']) is bool
+        assert isinstance(found['id'], str) and found['id']
         branch = (found['defaultBranchRef'] or {}).get('name') or ''
         assert isinstance(branch, str)
     except (UnicodeDecodeError, ValueError, KeyError, TypeError, AttributeError, AssertionError):
@@ -965,7 +990,33 @@ def look(name):
         assert isinstance(commit, str) and re.fullmatch('[0-9a-f]{40}', commit)
     except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):
         return None
-    return {'branch': branch, 'commit': commit}
+    return {'id': found['id'], 'branch': branch, 'commit': commit}
+
+
+def create(name, login):
+    owner, short = name.split('/')
+    path = 'user/repos' if owner.lower() == login.lower() else 'orgs/%s/repos' % owner
+    result = run(['gh', 'api', '-X', 'POST', path, '-f', 'name=' + short, '-F', 'private=true',
+                  '-F', 'auto_init=true'], gh_env())
+    if result is None or result.returncode != 0:
+        return None
+    try:
+        reply = strict(result.stdout.decode('utf-8'))
+        assert reply['full_name'] == name and reply['private'] is True
+        assert isinstance(reply['node_id'], str) and reply['node_id']
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):
+        return None
+    return reply['node_id']
+
+
+def unproven(state, name):
+    if state.value['created']['state'] != 'created':
+        state.value['created'] = {'repo': name, 'state': 'unproven'}
+        state.save()
+    return Exit(5, 'Whether OpenWiz created %s is uncertain: no create reply of this onboarding names that '
+                   "repository, so a teammate may have made it. OpenWiz writes neither tests/test_check.py nor "
+                   '.github/workflows/check.yml into it. Continue with %s as an existing repository: run next, '
+                   'and Connect goes on with it; nothing written.' % (name, name))
 
 
 def created_line(name, seen):
@@ -998,35 +1049,68 @@ def untested(repo):
                    'this again. Nothing recorded.' % repo)
 
 
-def seed_file(name, path, branch):
-    result = run(['gh', 'api', '--include', '-X', 'GET', 'repos/%s/contents/%s?ref=%s' % (
-        name, path, urllib.parse.quote(branch, safe=''))], gh_env())
-    text = result.stdout.decode('utf-8', 'replace').replace('\r\n', '\n') if result is not None else ''
-    head, _, body = text.partition('\n\n')
-    status = re.match(r'HTTP/[0-9.]+ ([0-9]{3})', head)
-    if status and status[1] == '404':
-        return None
+TREE = '{id name target{... on Commit{oid file(path:$path){object{... on Blob{text}}}}}}'
+BY_NAME = ('query($owner:String!,$name:String!,$path:String!){repository(owner:$owner,name:$name){id '
+           'defaultBranchRef%s}}' % TREE)
+BY_REF = 'query($ref:ID!,$path:String!){node(id:$ref){... on Ref%s}}' % TREE
+WRITE = ('mutation($ref:ID!,$oid:GitObjectID!,$path:String!,$contents:Base64String!){createCommitOnBranch(input:{'
+         'branch:{id:$ref},expectedHeadOid:$oid,message:{headline:"OpenWiz: a passing test and its CI check"},'
+         'fileChanges:{additions:[{path:$path,contents:$contents}]}}){commit{oid}}}')
+
+
+def graphql(query, **fields):
+    argv = ['gh', 'api', 'graphql', '-f', 'query=' + query]
+    for key, value in fields.items():
+        argv += ['-f', '%s=%s' % (key, value)]
+    return run(argv, gh_env())
+
+
+def tree(query, **fields):
+    result = graphql(query, **fields)
     try:
-        assert status and status[1] == '200'
-        found = strict(body)
-        assert found['type'] == 'file' and found['encoding'] == 'base64'
-        return base64.b64decode(found['content'], validate=False).decode('utf-8', 'replace')
-    except (AssertionError, ValueError, KeyError, TypeError):
-        raise Exit(6, 'Could not read %s on %s; run this again to read it before anything else.' % (path, name))
+        assert result is not None
+        body = strict(result.stdout.decode('utf-8'))
+        data = body['data']
+        repo = data['repository']['id'] if query == BY_NAME else None
+        ref = data['repository']['defaultBranchRef'] if query == BY_NAME else data['node']
+        assert query != BY_NAME or (isinstance(repo, str) and repo)
+        assert isinstance(ref['id'], str) and ref['id'] and isinstance(ref['name'], str)
+        assert isinstance(ref['target']['oid'], str) and re.fullmatch('[0-9a-f]{40}', ref['target']['oid'])
+        entry = ref['target']['file']
+        errors = body.get('errors')
+        if result.returncode == 0:
+            assert not errors
+        else:
+            expect = (['repository', 'defaultBranchRef', 'target', 'file'] if query == BY_NAME
+                      else ['node', 'target', 'file'])
+            assert (entry is None and isinstance(errors, list) and len(errors) == 1
+                    and isinstance(errors[0], dict) and errors[0].get('type') == 'NOT_FOUND'
+                    and errors[0].get('path') == expect)
+        text = None if entry is None else entry['object']['text']
+        assert text is None or isinstance(text, str)
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):
+        return None
+    return {'repo': repo, 'ref': ref['id'], 'branch': ref['name'], 'oid': ref['target']['oid'], 'text': text}
 
 
 def seed(state, name, seen):
+    owner, short = name.split('/')
+    at = None
     for path, text in SEED.items():
-        have = seed_file(name, path, seen['branch'])
-        if have == text:
+        at = tree(BY_NAME, owner=owner, name=short, path=path) if at is None else tree(BY_REF, ref=at['ref'], path=path)
+        if at is None:
+            raise Exit(6, 'Could not read %s on %s; run this again to read it before anything else.' % (path, name))
+        if at['repo'] not in (None, seen['id']) or at['branch'] != seen['branch']:
+            raise Exit(5, '%s is no longer the repository this onboarding created; OpenWiz writes neither '
+                          'tests/test_check.py nor .github/workflows/check.yml into it. Nothing written.' % name)
+        if at['text'] == text:
             continue
-        if have is not None:
+        if at['text'] is not None:
             raise Exit(5, '%s already holds another %s; OpenWiz never writes over it. Nothing more written.'
                        % (name, path))
-        run(['gh', 'api', '-X', 'PUT', 'repos/%s/contents/%s' % (name, path), '-f',
-             'message=OpenWiz: a passing test and its CI check', '-f',
-             'content=' + base64.b64encode(text.encode()).decode(), '-f', 'branch=' + seen['branch']], gh_env())
-        if seed_file(name, path, seen['branch']) != text:
+        graphql(WRITE, ref=at['ref'], oid=at['oid'], path=path, contents=base64.b64encode(text.encode()).decode())
+        at = tree(BY_REF, ref=at['ref'], path=path)
+        if at is None or at['text'] != text:
             raise Exit(6, 'Whether %s was written to %s is uncertain; run this again: it reads the file back before '
                           'any write. If GitHub refused the workflow, run gh auth refresh -s workflow first.'
                        % (path, name))
@@ -1066,16 +1150,19 @@ def create_repo(got):
     if seen is None:
         raise Exit(1 if not record else 6, 'Could not read whether %s exists; nothing created.' % name)
     if record and record['repo'] == name and record['state'] in ('pending', 'uncertain', 'created'):
-        if isinstance(seen, dict) and record.get('seeded') and record.get('branch') == seen['branch']:
+        if isinstance(seen, dict) and record.get('seeded') and record.get('branch') == seen['branch'] \
+                and record.get('id') in (None, seen['id']):
             print(created_line(name, seen))
             return 0
-        if isinstance(seen, dict):
+        if isinstance(seen, dict) and record.get('id') == seen['id']:
             state.value['created'] = {'repo': name, 'state': 'created', **seen}
             if not state.save():
                 raise Exit(6, 'Could not save the created repository; it exists, so never create it again.')
             seed(state, name, seen)
             print(created_line(name, seen))
             return 0
+        if isinstance(seen, dict):
+            raise unproven(state, name)
         if seen == 'public':
             raise Exit(5, '%s is not the private repository this onboarding created; nothing created.' % name)
         if seen == 'empty':
@@ -1083,22 +1170,33 @@ def create_repo(got):
                 raise Exit(5, '%s has no default branch and initial commit, which init needs; OpenWiz never pushes '
                               'one into an existing repository. Add a first commit yourself, or choose a new '
                               'name; nothing created.' % name)
-            state.value['created'] = {'repo': name, 'state': 'uncertain'}
+            state.value['created'] = {'repo': name, 'state': 'uncertain',
+                                      **({'id': record['id']} if record.get('id') else {})}
             state.save()
             raise Exit(6, '%s exists, but its default branch and initial commit did not read back; nothing more '
                           'was created or pushed. Run this again to read it back.' % name)
         if record['state'] == 'created':
             raise Exit(5, '%s is not the private repository this onboarding created; nothing created.' % name)
+    elif record and record['repo'] == name and record['state'] == 'unproven' and isinstance(seen, dict):
+        raise unproven(state, name)
     elif seen != 'absent':
         raise Exit(5, '%s already exists; choose another name, or use it as an existing repository; '
                       'nothing created.' % name)
+    retry = bool(record) and record['repo'] == name and record['state'] in ('pending', 'uncertain', 'unproven')
+    if retry and (record.get('id') or record['state'] == 'unproven'):
+        raise Exit(6, '%s does not read back now, but an earlier create of this onboarding may have made it (renamed, '
+                      'hidden or deleted since), so OpenWiz never creates it again. Nothing created or written; run '
+                      'this again to read it back.' % name)
     state.value['created'] = {'repo': name, 'state': 'pending'}
     if not state.save():
         raise Exit(10, 'Could not save the repository name first; nothing created.')
-    run(['gh', 'repo', 'create', name, '--private', '--add-readme'])
+    reply = create(name, login.stdout.strip().decode())
     seen = look(name)
-    ended = 'created' if isinstance(seen, dict) else 'absent' if seen == 'absent' else 'uncertain'
-    state.value['created'] = {'repo': name, 'state': ended, **(seen if ended == 'created' else {})}
+    if isinstance(seen, dict) and seen['id'] != reply:
+        raise unproven(state, name)
+    ended = 'created' if isinstance(seen, dict) else 'absent' if seen == 'absent' and reply is None and not retry else 'uncertain'
+    state.value['created'] = {'repo': name, 'state': ended, **(seen if ended == 'created' else {}),
+                              **({'id': reply} if ended == 'uncertain' and reply else {})}
     saved = state.save()
     if ended == 'created' and saved:
         seed(state, name, seen)
@@ -2207,6 +2305,13 @@ def fleet_recorded(spec, env):
     return any(body.split('\n')[0].strip() == FLEET_RECORD + str(spec) for body in bodies)
 
 
+SESSION = LAUNCH_FLEET / 'scripts/session.py'
+CARRY_ON = ("Onboarding's carry on: run launch --spec %d --carry-on. It runs that same session again in this chat, "
+            "with this fleet's saved driver folder and GitHub-only, and saves where it stops.")
+OPT_IN = ('To keep the fleet going after this chat closes, the opt-in is a local heartbeat: ask the user, and only '
+          'on their yes run launch --spec %d --heartbeat to preview it.')
+
+
 def activation(spec, host, env):
     if host == 'cloud':
         return fleet_recorded(spec, env)
@@ -2305,7 +2410,36 @@ def launch(got):
     env = repository(state.value.get('repo'))
     agents_host = host['agents']
     driver = agents_host != 'cloud'
+    local = agents_host == 'local'
     previous = state.value.get('launch')
+    if got.get('--heartbeat'):
+        return opt_in(state, spec, env, host, got)
+    if got.get('--carry-on'):
+        return carry_session(state, spec, env, local, previous)
+    if local and previous and previous['spec'] == spec and previous.get('session') and previous['state'] == 'started':
+        print('Spec #%d already started once; not starting again.' % spec)
+        print(session_line(spec, previous['session']))
+        print(record_line(spec, activation(spec, agents_host, env), agents_host))
+        return 0
+    if local and previous and previous['spec'] == spec and previous['state'] != 'refused':
+        recorded = activation(spec, agents_host, env)
+        print(record_line(spec, recorded, agents_host))
+        if recorded is None:
+            raise Exit(6, 'The saved yes was for the heartbeat handoff, and whether that heartbeat is installed is '
+                          'unknown, so the yes is kept: run this again; ' + NOTHING)
+        if recorded:
+            if previous['state'] != 'started':
+                previous['state'] = 'started'
+                if not state.save():
+                    raise Exit(10, "Could not save the fleet's start; run this again to read it.")
+            print('Spec #%d already started once, through its heartbeat; not starting again.' % spec)
+            return 0
+        del state.value['launch']
+        state.value.pop('preview', None)
+        if not state.save():
+            raise Exit(10, 'Could not withdraw the yes; run this again; ' + NOTHING)
+        raise Exit(5, 'The saved yes was for the heartbeat handoff, and no heartbeat is installed; the fleet now '
+                      'runs in this chat: preview again and ask again; ' + NOTHING)
     if previous and previous['spec'] == spec and previous['state'] != 'refused':
         recorded = activation(spec, agents_host, env)
         if previous['state'] != 'started' and recorded:
@@ -2355,7 +2489,6 @@ def launch(got):
     if any(current[k] != carried.get(k) for k in current):
         withdraw(state)
         raise Exit(5, 'Setup changed since it was carried; run continue again; ' + NOTHING)
-    local = host['agents'] == 'local'
     name = None if host['agents'] == 'cloud' else host['agents']
     named = host_setting(env)
     if named != name:
@@ -2401,8 +2534,10 @@ def launch(got):
     builder, reviewer = review(choices, rules)
     orchestrator = rules['orchestrator']
     where = where_of(agents_host)
-    if driver and (orchestrator is None or orchestrator['harness'] not in PROGRAMS or
-                   not shutil.which(PROGRAMS[orchestrator['harness']], path=env.get('PATH'))):
+    if local and not shutil.which(PROGRAMS[builder['harness']], path=env.get('PATH')):
+        raise Exit(5, "The session starts builders with %s, which is not installed here; " % builder['harness'] + NOTHING)
+    if driver and not local and (orchestrator is None or orchestrator['harness'] not in PROGRAMS or
+                                 not shutil.which(PROGRAMS[orchestrator['harness']], path=env.get('PATH'))):
         raise Exit(5, 'The orchestrator needs an installed Claude Code or Codex harness for the heartbeat; ' + NOTHING)
     same_family = driver and not shutil.which(PROGRAMS[reviewer['harness']], path=env.get('PATH'))
     if same_family:
@@ -2411,7 +2546,7 @@ def launch(got):
                'host': host['agents'], 'mode': (picked if len(modes) == 1 else modes) if local else None, 'builder': builder, 'reviewer': reviewer, 'grill': confirmed,
                'tickets': [[n, ready[n]] for n in starts]}
     if driver:
-        effects['heartbeat'] = adapters
+        effects['session' if local else 'heartbeat'] = adapters
     digest = hashlib.sha256(json.dumps(effects, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     if got.get('--yes'):
         shown = state.value.get('preview') or {}
@@ -2421,7 +2556,12 @@ def launch(got):
     agents = '%s %s %s' % (builder['harness'], builder['model'], builder['effort'])
     fleet_thread = '%s %s %s' % (orchestrator['harness'], orchestrator['model'], orchestrator['effort'])
     if not got.get('--yes'):
-        if driver:
+        if local:
+            print("Ready to start the fleet for spec #%d %s through launch-fleet's session runner, in this chat: it "
+                  'starts a builder (%s) for each of these tickets, up to 3 at once, and starts each next step the '
+                  'moment a run ends, with no timer. It merges nothing: at an approved, green pull request it stops '
+                  'and shows you how to merge it and carry on:' % (spec, where, agents))
+        elif driver:
             print('Ready to start the fleet for spec #%d %s through launch-fleet. A local heartbeat checks GitHub '
                   'every 10 minutes and starts an orchestrator wake (%s) when work is due. '
                   'Ready for a builder (%s):' % (spec, where, fleet_thread, agents))
@@ -2438,6 +2578,8 @@ def launch(got):
         if local:
             print('Its agents run %s you picked.' % ' and '.join(
                 '%s with the %s permission mode' % (HARNESS_OF[p], modes[p]) for p in sorted(modes)))
+            print('The fleet moves while the session runs here; keeping it going after the chat closes is the '
+                  'heartbeat, offered afterwards as its own opt-in.')
         print('Start the fleet %s now? It can cost money: %s.' % (where, cost))
         state.value['preview'] = {'spec': spec, 'effects': digest}
         if not state.save():
@@ -2445,12 +2587,22 @@ def launch(got):
         print('Confirmation: %s' % digest)
         print("Nothing started. Ask exactly that; on the user's yes, run again with --yes --confirm %s." % digest)
         return 12
-    state.value['launch'] = {'spec': spec, 'state': 'authorized', 'effects': digest, 'tickets': starts,
-                             'orchestrator': orchestrator}
+    starting = teach('The fleet starting', (str(len(starts)),), which=1) if local else None
+    state.value['launch'] = {'spec': spec, 'state': 'started' if local else 'authorized', 'effects': digest,
+                             'tickets': starts, 'orchestrator': orchestrator}
     if driver:
         state.value['launch']['adapters'] = adapters
+    if local:
+        state.value['launch']['runner'] = {'harness': PROGRAMS[builder['harness']], 'model': builder['model']}
+        state.value['launch']['session'] = {'exit': None, 'said': [], 'carry_on': shlex.join(
+            ['python3', '-I', *session_argv(state, spec)])}
     if not state.save():
         raise Exit(10, 'Could not save the start the user said yes to; ' + NOTHING)
+    if local:
+        print("The user said yes to starting spec #%d's fleet %s: launch-fleet's session runner runs it in this chat "
+              'now.' % (spec, where))
+        print(starting)
+        return hand_over(state, spec, env)
     if driver:
         print("The user said yes to starting spec #%d's fleet %s. Follow the heartbeat handoff for the scheduled job."
               % (spec, where))
@@ -2464,6 +2616,133 @@ def launch(got):
 
 def agent_words(agent):
     return ' '.join(agent[k] for k in ('harness', 'model', 'effort'))
+
+
+def session_argv(state, spec):
+    runner = state.value['launch'].get('runner') or {}
+    if runner.get('harness') not in PROGRAMS.values() or not isinstance(runner.get('model'), str):
+        return None
+    return [str(SESSION), 'run', state.value['repo'], '--spec', str(spec), '--harness', runner['harness'],
+            '--model', runner['model']]
+
+
+def carry_session(state, spec, env, local, launched):
+    if not local or not launched or launched.get('spec') != spec or launched.get('state') != 'started' or \
+            not launched.get('session'):
+        raise Exit(5, 'Carry on continues the session this onboarding started in this chat, and spec #%d has none '
+                      'yet: launch --spec %d first; %s' % (spec, spec, NOTHING))
+    if launched['session'].get('exit') == 0:
+        print(session_line(spec, launched['session']))
+        print('Nothing to carry on: the session already finished spec #%d.' % spec)
+        return 0
+    if not session_argv(state, spec) or not launched.get('adapters'):
+        raise Exit(5, "This onboarding's saved start names no session command or driver folder to carry on with; "
+                      + NOTHING)
+    env.update(OPENWIZ_ADAPTERS=launched['adapters'], LAUNCH_FLEET_GITHUB_ONLY='1')
+    print("Carrying on spec #%d's session in this chat." % spec)
+    return hand_over(state, spec, env, carried=True)
+
+
+def hand_over(state, spec, env, carried=False):
+    argv = session_argv(state, spec)
+    sys.stdout.flush()
+    lines, quiet = [], {s: signal.signal(s, lambda *_: None) for s in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        child = subprocess.Popen([sys.executable, '-I', *argv], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, env=env)
+        for raw in child.stdout:
+            sys.stdout.buffer.write(raw)
+            sys.stdout.flush()
+            lines.append(raw.decode('utf-8', 'replace').rstrip('\n'))
+        code = child.wait()
+    except OSError:
+        code = None
+    finally:
+        for s, handler in quiet.items():
+            signal.signal(s, handler)
+    at = next((i for i in reversed(range(len(lines))) if lines[i].startswith(('session: ', 'session.py: '))), None)
+    stop = '' if at is None else lines[at]
+    if carried and (code is None or code == 1 and stop.startswith('session: refused: ')):
+        raise Exit(5, 'The session %s, so this carry-on ran nothing; the fleet keeps its start and its last saved '
+                   'stop: run launch --spec %d --carry-on again once that clears; %s' % (
+                       'did not run' if code is None else 'was refused: ' + stop[len('session: refused: '):], spec,
+                       NOTHING))
+    if code is None or code == 1 and stop.startswith('session: refused: '):
+        del state.value['launch']
+        state.value.pop('preview', None)
+        saved = state.save()
+        raise Exit(5 if saved else 10, 'The session %s, so this launch started nothing; the yes is withdrawn: preview '
+                   'again and ask again; %s' % ('did not run' if code is None else 'was refused: '
+                                                + stop[len('session: refused: '):], NOTHING))
+    carry = next((line[len('carry on: '):] for line in reversed(lines) if line.startswith('carry on: ')),
+                 shlex.join(['python3', '-I', *argv]))
+    session = {'exit': code, 'said': [] if at is None else lines[at:], 'carry_on': carry}
+    state.value['launch']['session'] = session
+    if not state.save():
+        raise Exit(10, "Could not save where the session stopped; run progress --spec %d to read the fleet." % spec)
+    print(session_line(spec, session))
+    if code:
+        print(OPT_IN % spec)
+    return 0 if code in (0, 3, 130) else 1
+
+
+def session_line(spec, session):
+    code, said = session['exit'], session['said']
+    if code == 0:
+        return "Spec #%d's session in this chat ended: the session finished spec #%d." % (spec, spec)
+    if code is None:
+        return "Spec #%d's session in this chat started; where it stopped was not saved.\n%s" % (spec, CARRY_ON % spec)
+    why = {3: 'it needs you', 130: 'it was interrupted; the runs it started keep going', 2: 'a read failed'}
+    lines = ["Spec #%d's session in this chat stopped: %s. What it said, to show the user as it is:"
+             % (spec, why.get(code, 'exit %d' % code)), *(said or ['(nothing)'])]
+    if not any(line.startswith('carry on: ') for line in said):
+        lines.append('carry on: ' + session['carry_on'])
+    lines.append(CARRY_ON % spec)
+    return '\n'.join(lines)
+
+
+def opt_in(state, spec, env, host, got):
+    launched = state.value.get('launch') or {}
+    if host['agents'] != 'local' or launched.get('spec') != spec or not launched.get('session'):
+        raise Exit(5, "The heartbeat is the opt-in after this machine's session: start the fleet in this chat first "
+                      '(launch --spec %d); nothing installed.' % spec)
+    orchestrator, adapters = launched.get('orchestrator') or {}, launched.get('adapters')
+    program = PROGRAMS.get(orchestrator.get('harness'))
+    if not program or not adapters or not shutil.which(program, path=env.get('PATH')):
+        raise Exit(5, 'The heartbeat wakes an orchestrator, and no installed Claude Code or Codex harness is saved for '
+                      'it; nothing installed.')
+    env.update(OPENWIZ_ADAPTERS=adapters, LAUNCH_FLEET_GITHUB_ONLY='1')
+    argv = [sys.executable, '-I', str(HEARTBEAT), 'install', state.value['repo'], str(spec), program,
+            orchestrator['model']]
+    digest = hashlib.sha256(json.dumps({'heartbeat': argv[3:], 'adapters': adapters, 'launch': launched['effects']},
+                                       sort_keys=True).encode()).hexdigest()
+    if not got.get('--yes'):
+        shown = run(argv, env, timeout=60)
+        if shown is None or shown.returncode:
+            raise Exit(1, 'The heartbeat preview did not read: %s; nothing installed.' % (
+                shown.stdout.decode('utf-8', 'replace').strip() if shown else 'it did not run'))
+        print(shown.stdout.decode('utf-8', 'replace').rstrip('\n'))
+        launched['heartbeat'] = digest
+        if not state.save():
+            raise Exit(10, 'Could not save the heartbeat preview; nothing installed.')
+        print('This is the opt-in to keep the fleet going after this chat closes: a local heartbeat checks GitHub '
+              'every 10 minutes and wakes an orchestrator (%s) when work is due. Install it?' % agent_words(orchestrator))
+        print('Confirmation: %s' % digest)
+        print("Nothing installed. Ask exactly that; on the user's yes, run again with --heartbeat --yes --confirm %s."
+              % digest)
+        return 12
+    if got['--confirm'] != digest or launched.get('heartbeat') != digest:
+        raise Exit(5, 'This is not the heartbeat preview the user said yes to: run launch --spec %d --heartbeat and '
+                      'ask again; nothing installed.' % spec)
+    done = run([*argv, '--yes'], env, timeout=120)
+    if done is None or done.returncode:
+        raise Exit(1, 'The heartbeat did not install: %s' % (
+            done.stdout.decode('utf-8', 'replace').strip() if done else 'it did not run'))
+    launched.pop('heartbeat')
+    if not state.save():
+        raise Exit(10, 'The heartbeat installed, but its yes could not be cleared; run progress --spec %d.' % spec)
+    print(record_line(spec, activation(spec, 'local', env), 'local'))
+    return 0
 
 
 def handoff(spec, repo, adapters, orchestrator):
@@ -2494,6 +2773,8 @@ def record_line(spec, recorded, host):
             return "Spec #%d's active local heartbeat could not be confirmed." % spec
         if recorded:
             return "Spec #%d's local heartbeat is active. It checks GitHub every 10 minutes." % spec
+        if host == 'local':
+            return 'No heartbeat is installed: the fleet moves only while a session runs in a chat.'
         return "Spec #%d has no local heartbeat installed yet." % spec
     if recorded is None:
         return "The spec's fleet record could not be read right now."
@@ -2509,6 +2790,10 @@ def watch(got):
         raise Exit(5, 'This onboarding planned no spec #%d.' % spec)
     env = repository(state.value.get('repo'))
     host = (state.value.get('host') or {}).get('agents', 'cloud')
+    if host == 'local':
+        launched = state.value.get('launch') or {}
+        print(session_line(spec, launched['session']) if launched.get('spec') == spec and launched.get('session')
+              else 'Spec #%d has no session in this chat yet: run launch --spec %d.' % (spec, spec))
     print(record_line(spec, activation(spec, host, env), host))
     if host != 'cloud':
         return github_progress(spec, env)

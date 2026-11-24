@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HELPER = Path(__file__).with_name("review.py")
@@ -89,9 +90,11 @@ Full review by Codex, Sol 6.2, Medium. CI green on this commit: check.
 Intent: export writes the whole cookbook to one zip and refuses to overwrite.
 
 - **R1 [blocking]** `src/export.rs:48` (Spec) An existing zip is overwritten. Fix: refuse with status 3.
+  Class: files
   User path: a cook exports twice; the first export is lost.
 - **R2 [polish]** `src/cli.rs:30` (Sweep) Help wording. Fix: say export. Polish issue: #58.
 - **R3 [blocking]** `src/export.rs:71` (Sweep) Token written to the log. Fix: redact it.
+  Class: credential
   Risk: privacy: a cook's sync token reaches a shared log.
 
 - **Ruling 1** upheld: the importer reads cookbook.zip.
@@ -109,9 +112,11 @@ Re-check of R1, R3 and the code changed since aaaaaaa, by Codex, Sol 6.2, Medium
 Intent: export writes the whole cookbook to one zip and refuses to overwrite.
 
 - **R1 [blocking]** still open after the re-check: the web export still overwrites. Logged as follow-up #61.
+  Class: files
   User path: a cook exports twice from the web page; the first export is lost.
 - **R2 [polish]** Polish issue: #58.
 - **R3 [blocking]** resolved at bbbbbbb: the log line is redacted.
+  Class: credential
 - **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60.
 
 - **Ruling 1** upheld: the importer reads cookbook.zip.
@@ -136,12 +141,19 @@ def done(value, code=0):
     sys.exit(code)
 if args[:1] != ["api"]:
     done(None, 3)
-url = [a for a in args[1:] if not a.startswith("-") and a not in ("POST",)][-1]
+fields = [args[i + 1] for i, a in enumerate(args) if a == "-f"]
+url = [a for a in args[1:] if not a.startswith("-") and a not in ("POST", *fields)][-1]
 post = "POST" in args
 parts = url.split("?")[0].split("/")
 repo = "/".join(parts[1:3])
 if post:
-    payload = json.loads(sys.stdin.read())
+    payload = {} if fields else json.loads(sys.stdin.read())
+    for field in fields:
+        key, _, value = field.partition("=")
+        if key.endswith("[]"):
+            payload.setdefault(key[:-2], []).append(value)
+        else:
+            payload[key] = value
     if parts[3:4] == ["issues"] and len(parts) == 6:
         w["writes"] += 1
         if w.get("fail_post"):
@@ -178,8 +190,12 @@ if parts[3] == "compare":
     found = w["compare"].get(parts[4])
     done({"files": [{"filename": f} for f in found]}) if found is not None else done(None, 1)
 if parts[3] == "issues" and len(parts) == 6:
+    w.update(w.pop("after_comments", {}))
     done([w["comments"].get(repo + "#" + parts[4], [])])
 if parts[3] == "issues" and len(parts) == 4:
+    if w["writes"] and w.get("hidden_issue_reads", 0):
+        w["hidden_issue_reads"] -= 1
+        done([[]])
     done([w["issues"].get(repo, [])])
 done(None, 4)
 '''
@@ -203,7 +219,8 @@ class Review(unittest.TestCase):
         gh.write_text(FAKE_GH)
         gh.chmod(0o755)
         self.fixture = root / "world.json"
-        self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FIXTURE": str(self.fixture)}
+        self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FIXTURE": str(self.fixture),
+                    "XDG_STATE_HOME": str(root / "state")}
         self.root = root
         self.repo = root / "repo"
         subprocess.run(["git", "clone", "-q", "--no-local", str(ORIGIN), str(self.repo)], check=True)
@@ -477,7 +494,7 @@ class Review(unittest.TestCase):
         self.world({}, comments=[report(FULL)])
         unchanged = "- **R4 [polish]** `src/cli.rs:12` (Sweep) Typo. Fix: file exists. Polish issue: #60."
         risk = ("- **R4 [blocking]** `src/cli.rs:12` (Sweep) The sync token is printed. Fix: redact it.\n"
-                "  Risk: privacy: a cook's sync token reaches the terminal log.")
+                "  Class: credential\n  Risk: privacy: a cook's sync token reaches the terminal log.")
         fresh = ("VERDICT: CHANGES", "Next: a fresh, stronger builder fixes R4 once, then one final check.")
         old_r4 = "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60."
         merge = ("VERDICT: APPROVE", "Next: none open. It merges by the project's merge rules.")
@@ -485,6 +502,8 @@ class Review(unittest.TestCase):
                    "only as a Risk: security, privacy or data-loss blocker")
         cases = {
             "polish on unchanged code": (unchanged, merge, 1, refused),
+            "polish with risk on unchanged code": (unchanged + "\n  Risk: privacy: the token reaches the log.",
+                                                  merge, 1, refused),
             "user path on unchanged code": (risk.replace("Risk: privacy: a cook's sync token reaches the terminal log.",
                                                          "User path: a cook sees the token in the terminal."),
                                             fresh, 1, refused),
@@ -626,6 +645,16 @@ class Review(unittest.TestCase):
             "no Rulings section": (lambda h: description(h).replace(rulings, ""), clean,
                                    "no ## Rulings section with numbered rulings or exactly none"),
             "stale head": (lambda h: description(OLD), clean, "the description does not name the head {head}"),
+            "stale head cited in Evidence": (lambda h: description(OLD).replace(
+                "## Summary", f"## Evidence\n\nCurrent commit: `{h}`.\n\n## Summary"), clean,
+                "the description does not name the head {head}"),
+            "test annotation in Gaps": (lambda h: description(h).replace(
+                " catches: a second export overwriting the first.",
+                "\n- **Gaps:** Example catches: a second export overwriting the first."), clean,
+                "no `catches: <the bug>` or `no new test: <why>` line"),
+            "only a fenced ruling": (lambda h: description(h).replace(
+                rulings, "## Rulings\n\n```markdown\n1. Sample only.\n```\n\n"), clean,
+                "no ## Rulings section with numbered rulings or exactly none"),
             "no test-rule line": (lambda h: description(h).replace(" catches: a second export overwriting the first.",
                                                                    ""), clean,
                                   "no `catches: <the bug>` or `no new test: <why>` line"),
@@ -646,6 +675,13 @@ class Review(unittest.TestCase):
         out = self.run_helper("self-check", self.file("d.md", description(head)), "--base", "origin/gone", cwd=work)
         self.assertEqual((out.returncode, out.stdout), (2, ""), out.stdout)
         self.assertIn("cannot read origin/gone...HEAD with git", out.stderr)
+
+    def test_report_ignores_fenced_examples_next_to_real_rulings(self):
+        body = DESCRIPTION.replace("## Rulings\n", "## Rulings\n\n```markdown\n"
+                                   "## Example\n2. Sample only.\n~~~\n3. Also a sample.\n```\n")
+        self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}, "body": body})
+        out = self.run_helper("check", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
 
     def test_the_builders_own_pass_needs_a_self_check_line_for_each_probe(self):
         work, head = self.hand_back("raise FileExistsError('cookbook.zip')")
@@ -713,6 +749,31 @@ class Review(unittest.TestCase):
         self.assertEqual(again.stdout.strip(), "already posted 900")
         self.assertEqual(self.state()["writes"], 1)
 
+    def test_post_refuses_a_duplicate_report_for_an_earlier_head(self):
+        self.world({}, comments=[report(FULL)])
+        out = self.run_helper("post", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn(f"VERDICT names {OLD}, not the pinned head {HEAD}", out.stdout.splitlines())
+        self.assertEqual(self.state()["writes"], 0)
+
+    def test_post_rechecks_live_admission_after_reading_the_comments(self):
+        red = {OLD: [{"name": "check", "status": "completed", "conclusion": "failure"}]}
+        cases = {
+            "draft and red": ({"draft": True}, red, "stop: draft"),
+            "red": ({}, red, f"stop: check is not green at {OLD}"),
+            "head moved": ({"head": {"sha": HEAD}}, green(HEAD), f"stop: the head is {HEAD}, not the assigned {OLD}"),
+            "ticket changed": ({"body": DESCRIPTION.replace("#41", "#42")}, green(OLD), "stop: the ticket changed"),
+        }
+        pr = {**self.state()["pulls"]["7"], "head": {"sha": OLD}}
+        for name, (update, checks, message) in cases.items():
+            with self.subTest(name):
+                self.world({"checks": green(OLD), "after_comments": {
+                    "pulls": {"7": {**pr, **update}}, "checks": checks,
+                }}, pr=pr)
+                out = self.run_helper("post", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7", "--head", OLD)
+                self.assertEqual((out.returncode, out.stdout.strip()), (1, message), out.stdout + out.stderr)
+                self.assertEqual(self.state()["writes"], 0)
+
     def test_post_refuses_a_failing_report_with_zero_writes(self):
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
         out = self.run_helper("post", self.file("r.md", FULL.replace(" Polish issue: #58.", "")),
@@ -755,10 +816,38 @@ class Review(unittest.TestCase):
         out = self.follow_up("--logged", "re-check", "--user-path", "a cook exports twice; one is lost")
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "filed #70"), out.stdout + out.stderr)
         issue = self.state()["issues"][PRODUCT][0]
-        self.assertEqual(issue["title"], "Help says zip archive file (follow-up for #41, R2)")
+        self.assertEqual(issue["title"], "Follow-up of #41 (spec #38)")
         self.assertIn("User path: a cook exports twice; one is lost\n", issue["body"])
         self.assertIn(f"Still open after the re-check of pull request {SKILLS}#7 at {OLD}; logged, "
                       "so it did not block the merge.", issue["body"])
+
+    def test_logged_blockers_with_the_same_title_are_filed_separately(self):
+        logged = ("--logged", "re-check", "--user-path", "a cook exports twice; one is lost")
+        self.assertEqual(self.follow_up(*logged).stdout.strip(), "filed #70")
+        self.assertEqual(self.follow_up(*logged, "--id", "R3").stdout.strip(), "filed #71")
+        self.assertEqual(self.follow_up(*logged).stdout.strip(), "already filed #70")
+        issues = self.state()["issues"][PRODUCT]
+        self.assertEqual([issue["title"] for issue in issues], ["Follow-up of #41 (spec #38)"] * 2)
+        self.assertEqual(self.state()["writes"], 2)
+
+    def test_logged_blocker_retry_recognizes_an_existing_legacy_title(self):
+        self.world({"issues": {PRODUCT: [{"number": 69, "title": "Help says zip archive file (follow-up for #41, R2)"}]}})
+        out = self.follow_up("--logged", "re-check", "--user-path", "a cook exports twice; one is lost")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "already filed #69"), out.stdout + out.stderr)
+        self.assertEqual(self.state()["writes"], 0)
+
+    def test_follow_up_reads_again_when_the_first_listing_is_stale(self):
+        self.world({"hidden_issue_reads": 1, "lose": True})
+        out = self.follow_up()
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "filed #70"), out.stdout + out.stderr)
+        self.assertEqual(self.state()["writes"], 1)
+
+    def test_follow_up_that_stays_invisible_reports_an_unknown_write(self):
+        self.world({"hidden_issue_reads": 10})
+        out = self.follow_up()
+        self.assertEqual((out.returncode, out.stdout.strip()),
+                         (1, "unknown: not found on read-back; list the issues before filing again"))
+        self.assertEqual(self.state()["writes"], 1)
 
     def test_follow_up_label_must_be_unique(self):
         for name, labels in {"none": LABELS.replace("| `needs-triage` | `triage: new` | Sort it |\n", ""),
@@ -926,6 +1015,100 @@ class Review(unittest.TestCase):
                                 "re-check", review.parse(again)["head"], review.parse(first))
         self.assertIn("no Disproved: line; write Disproved: <n> candidate findings dropped. before Checked:", problems)
 
+    def test_a_blocker_names_exactly_one_class_from_the_verdict_format(self):
+        self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
+        line = "  Class: files\n"
+        missing = "R1: a blocker names its class: one Class: line from references/verdict.md"
+        unknown = "R1: Class: {} is not a word from references/verdict.md; use Class: other: <word> when none fits"
+        cases = {
+            "no class": (FULL.replace(line, ""), 1, missing),
+            "unknown word": (FULL.replace(line, "  Class: memory\n"), 1, unknown.format("memory")),
+            "capitalised word": (FULL.replace(line, "  Class: Files\n"), 1, unknown.format("Files")),
+            "two words": (FULL.replace(line, "  Class: files state\n"), 1, unknown.format("files state")),
+            "other with a spaced word": (FULL.replace(line, "  Class: other: race window\n"), 1,
+                                         unknown.format("other: race window")),
+            "two class lines": (FULL.replace(line, line + "  Class: state\n"), 1,
+                                "R1: a blocker carries exactly one Class: line"),
+            "class as finding text": (FULL.replace(line, "").replace("Fix: refuse with status 3.",
+                                                                     "Fix: refuse with status 3. Class: files"), 1, missing),
+            "other with one word": (FULL.replace(line, "  Class: other: race-window\n"), 0, "report ok"),
+            "every listed word": (FULL.replace(line, "  Class: error-path\n"), 0, "report ok"),
+        }
+        for name, (text, code, expected) in cases.items():
+            with self.subTest(name):
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, code, out.stdout + out.stderr)
+                self.assertIn(expected, out.stdout.splitlines())
+        for word in ("input", "error-path", "guard", "output", "state", "files", "process", "credential"):
+            with self.subTest(word):
+                out = self.run_helper("check", self.file("r.md", FULL.replace(line, f"  Class: {word}\n")),
+                                      "--repo", SKILLS, "--pr", "7")
+                self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+
+    def test_only_a_blocker_is_asked_for_its_class(self):
+        self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
+        out = self.run_helper("check", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+        late = ("- **R2 [pre-existing]** `src/cli.rs:30` (Sweep) Help wording. Fix: say export. "
+                "Pre-existing issue: #58.\n  Late: the first review read only the export.")
+        text = FULL.replace("- **R2 [polish]** `src/cli.rs:30` (Sweep) Help wording. Fix: say export. Polish issue: #58.",
+                            late)
+        out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual([x for x in out.stdout.splitlines() if x.startswith("R2:") and "Class" in x], [])
+        self.assertIn("R1: a blocker names its class: one Class: line from references/verdict.md",
+                      self.run_helper("check", self.file("r.md", text.replace("  Class: files\n", "")),
+                                      "--repo", SKILLS, "--pr", "7").stdout.splitlines())
+
+    def test_a_blocker_keeps_its_class_at_every_later_status(self):
+        self.world({}, comments=[report(FULL)])
+        resolved = "- **R3 [blocking]** resolved at bbbbbbb: the log line is redacted.\n"
+        cases = {
+            "resolved without its class": (RECHECK.replace(resolved + "  Class: credential\n", resolved),
+                                           "R3: a blocker names its class: one Class: line from references/verdict.md"),
+            "logged without its class": (RECHECK.replace("  Class: files\n", ""),
+                                         "R1: a blocker names its class: one Class: line from references/verdict.md"),
+            "resolved with another class": (RECHECK.replace("  Class: credential\n", "  Class: output\n"),
+                                            "R3: keeps its earlier class, credential"),
+        }
+        for name, (text, problem) in cases.items():
+            with self.subTest(name):
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, 1, out.stdout)
+                self.assertIn(problem, out.stdout.splitlines())
+        self.world({}, comments=[report(FULL.replace("  Class: credential\n", ""))])
+        out = self.run_helper("check", self.file("r.md", RECHECK), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+
+    def test_the_verdict_formats_first_example_passes_and_needs_its_class(self):
+        page = (HELPER.parent.parent / "references" / "verdict.md").read_text()
+        example = re.search(r"```md\n(VERDICT: CHANGES at ([0-9a-f]{40})\n.*?)```", page, re.S)
+        self.world({"checks": green(example[2])}, pr={"head": {"sha": example[2]}})
+        out = self.run_helper("check", self.file("r.md", example[1]), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+        self.assertIn("  Class: files\n", example[1])
+        out = self.run_helper("check", self.file("r.md", example[1].replace("  Class: files\n", "")),
+                              "--repo", SKILLS, "--pr", "7")
+        self.assertEqual(out.stdout.splitlines(),
+                         ["R1: a blocker names its class: one Class: line from references/verdict.md"])
+
+    def test_the_skills_own_example_names_its_blockers_class(self):
+        page = (HELPER.parent.parent / "SKILL.md").read_text()
+        example = re.search(r"```md\n(VERDICT: CHANGES at ([0-9a-f]{40})\n.*?)```", page, re.S)
+        self.world({"checks": green(example[2])}, pr={"head": {"sha": example[2]}})
+        out = self.run_helper("check", self.file("r.md", example[1]), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+
+    def test_the_recheck_guides_example_keeps_its_blockers_class(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("review_module", HELPER)
+        review = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(review)
+        md = r"```md\n(VERDICT: (?:CHANGES|APPROVE) at ([0-9a-f]{40})\n.*?)```"
+        first = re.search(md, (HELPER.parent.parent / "SKILL.md").read_text(), re.S)
+        again = re.search(md, (HELPER.parent.parent / "references" / "re-checks.md").read_text(), re.S)
+        problems = review.check(again[1], DESCRIPTION, "re-check", again[2], review.parse(first[1]))
+        self.assertEqual(problems, [])
+
     def test_record_author_row_is_parsed_whole(self):
         row = "| Record authors | `example[bot]`, `owner` |\n"
         for name, bad in {"missing comma": "| Record authors | `example[bot]` `owner` |\n",
@@ -979,10 +1162,48 @@ class Review(unittest.TestCase):
                 self.assertTrue(out.stdout.startswith("stop: "), out.stdout)
                 self.assertEqual(self.state()["writes"], 0)
 
+    def pacer(self, value=None):
+        path = self.root / "state" / "launch-fleet" / "writes.json"
+        if value is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(value))
+        self.assertTrue(path.exists(), "no write went through the pacer")
+        return json.loads(path.read_text())
+
+    def test_a_recorded_cooldown_refuses_a_follow_up_without_filing(self):
+        until = int(time.time()) + 3600
+        self.pacer({"accounts": {}, "inflight": [], "until": until})
+        out = self.follow_up()
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until))
+        self.assertEqual((out.returncode, out.stdout, out.stderr),
+                         (1, f"refused: write paced, retry after {stamp}\n", ""))
+        self.assertEqual(self.state()["writes"], 0)
+        self.assertEqual([c for c in self.state()["calls"] if "POST" in c], [])
+        self.assertEqual(self.state()["issues"], {})
+
+    def test_an_admitted_follow_up_takes_one_pacer_slot_and_keeps_its_read_back(self):
+        out = self.follow_up()
+        self.assertEqual((out.returncode, out.stdout), (0, "filed #70\n"), out.stderr)
+        state = self.pacer()
+        self.assertEqual((len(state["accounts"]["shared"]), state["inflight"], state["until"]), (1, [], 0))
+        issue = self.state()["issues"][PRODUCT][0]
+        self.assertEqual((issue["title"], [x["name"] for x in issue["labels"]]),
+                         ("Help says zip archive file (polish for #41, R2)", ["triage: new"]))
+        self.assertEqual(issue["body"], "Follow-up of #41 (spec #38)\n\n`src/cli.rs:30` (Sweep) Help wording. "
+                                        f"Fix: say export. Found in pull request {SKILLS}#7 at {OLD}; it is polish "
+                                        "and did not block the merge.\n")
+        self.world({"hidden_issue_reads": 10})
+        out = self.follow_up()
+        self.assertEqual((out.returncode, out.stdout),
+                         (1, "unknown: not found on read-back; list the issues before filing again\n"))
+        self.assertEqual(self.state()["writes"], 1)
+        self.assertEqual(len(self.pacer()["accounts"]["shared"]), 2)
+
 
 COMMENTS = Path(__file__).with_name("comments.py")
 CHECKER = Path(__file__).with_name("fixtures") / "comment-check" / "check.py"
 SHA = "1234567890" * 4
+
 
 
 class CommentPass(unittest.TestCase):

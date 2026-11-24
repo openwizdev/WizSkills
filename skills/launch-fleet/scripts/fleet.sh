@@ -1238,10 +1238,6 @@ single_nodes() {
 # an issue approved on its own.
 LIB='
 def lines: gsub("\r"; "") | split("\n");
-# #2096: an issue reference is #N or OWNER/NAME#N. A long form naming this
-# repository ($W.repo, compared case-insensitively) reads as #N everywhere a
-# line is parsed; one naming another repository stays as written, so no parse
-# reads it, and ref_looks refuses it naming its line.
 def long_ref: "(?<![A-Za-z0-9_./-])(?<o>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#(?<n>[1-9][0-9]*)";
 def short: gsub(long_ref; if (.o | ascii_downcase) == $W.repo then "#\(.n)" else "\(.o)#\(.n)" end);
 def foreign: [scan(long_ref) | select((.[0] | ascii_downcase) != $W.repo) | "\(.[0])#\(.[1])"] | unique;
@@ -1465,10 +1461,6 @@ def waiting: [.comments.nodes[] | . as $c | (.body | first_line) as $line
 def pending_wait: waiting as $w | records as $rs
   | if $w != null and (any($rs[]; .r == "resume sent \($w.id) for #\($w.number)") | not) then $w else null end;
 
-# #2096: a record or orchestrator line in a shape that names one of this
-# repository'"'"'s issues, naming another repository'"'"'s instead: refused once,
-# naming its line, never skipped silently.
-# Only the reference in the shape'"'"'s own place counts, never prose after it.
 def ref_line: "^(?:launch-fleet:\\s*(?:waiting for|resume (?:starting|sent|failed|withdrawn) [0-9]+ for|held for ordering: (?:issue|PR)|held for|noted) |Orchestrator(?: \\([^\\r\\n]*\\))?: \\*\\*(?:(?:yes|confirmed)[,:] )?wait for )(?<r>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*)";
 def legacy_ordering_refs: "^Orchestrator: \\*\\*held for ordering only; the plan and its approval are unchanged\\.\\*\\* (?<r>(?:[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,8}) .+ Released \\(`ready-for-agent` back, `held` off\\) as soon as (?<release>(?:[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,8}) merges\\.$";
 def ref_looks: records as $rs | .number as $n | .comments.nodes[] | . as $c | (.body | first_text | sub("^\\s+"; "") | sub("\\s+$"; "")) as $l
@@ -1765,6 +1757,8 @@ def clash($mine; $theirs):
     elif any($theirs[]; is_test) and any($mine[]; is_doc | not) then
       {files: [$theirs[] | select(is_test)], why: " (tests that may read its files)"}
     else null end;
+def pr_ref: (.repository.nameWithOwner // "") as $o
+  | if $o == "" or ($o | ascii_downcase) == $W.repo then "#\(.number)" else "\($o)#\(.number)" end;
 def guard($p; $at; $rs; $head; $c):
   # Each required check'"'"'s latest run, as required_ci picks it (latest_check).
   [$W.checks[] as $n | [$c.statusCheckRollup.contexts.nodes[]? | select((.name // .context) == $n)] | latest_check] as $latest
@@ -1891,7 +1885,7 @@ def ticket_lines_now($s): . as $t
          else empty end),
       (open_prs | map(select(.isDraft | not)) | first // empty | . as $p | .headRefOid as $head
        | records as $rs
-       | "#\(.number) for #\($t.number) at \($head)" as $at
+       | "\(pr_ref) for #\($t.number) at \($head)" as $at
        | (.commits.nodes[0].commit // {}) as $c
        | if .baseRefName != $W.default then look(.number; $rs; "its base is \(.baseRefName), not \($W.default)")
          elif .comments.pageInfo.hasPreviousPage then look(.number; $rs; history_why)
@@ -1965,7 +1959,7 @@ def ticket_lines_now($s): . as $t
          # closes right after claiming. Any other closure is someone'"'"'s choice.
          | select($cl != null and ($cl.r | test("^re-test starting ")) and ($q.closedAt | type) == "string"
                   and $q.closedAt >= $cl.at and (($q.closedAt | fromdateiso8601) - ($cl.at | fromdateiso8601)) < 600)
-         | "reopen #\($q.number) for #\($t.number) at \($q.headRefOid): closed by its re-test (comment \($cl.id)) and not reopened; reopen it" end)
+         | "reopen \($q | pr_ref) for #\($t.number) at \($q.headRefOid): closed by its re-test (comment \($cl.id)) and not reopened; reopen it" end)
     end;
 
 # A builder from before the fleet thread (ClosedWiz#192): the fleet asks the
@@ -2009,9 +2003,6 @@ def ticket_lines($s):
 
 # A spec'"'"'s approval: a look when it lists no tickets, a re-approve when the
 # plan changed since.
-# #2096: a table line of the latest approval whose Ticket or Blocked by cell
-# names another repository'"'"'s issue: refused, naming its line (that row
-# approves nothing). A title may name anything.
 def approval_refs($s): ([$s.comments.nodes[] | select(.body | first_text | sub("^\\s+"; "") | test("^\\*\\*(?:Plan graph approved by|Machine plan approval, )"))] | max_by(.databaseId)) as $c
   | if $c == null then empty else
       $c.body | lines[] | sub("\\s+$"; "") | select(startswith("|")) | . as $l

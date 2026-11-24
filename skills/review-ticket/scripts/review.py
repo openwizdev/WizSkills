@@ -1,9 +1,11 @@
 import argparse
 import base64
+import importlib.util
 import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -16,6 +18,8 @@ BLOCKER_STATUSES = ("resolved at ", "withdrawn: ", "still open after the ", "dis
 POLISH_STATUSES = ("Polish issue: #", "withdrawn: ")
 OPEN = ("still open after the ", "disputed, kept: ")
 USER = re.compile(r"User path: \S.*")
+CLASS = re.compile(r"Class: (.*)")
+CLASS_WORD = re.compile(r"input|error-path|guard|output|state|files|process|credential|other: [a-z]+(?:-[a-z]+)*")
 RISK = re.compile(r"Risk: (?:security|privacy|data loss): \S.*")
 POLISH = re.compile(r"Polish issue: #[1-9][0-9]*\.?$")
 LOGGED = re.compile(r".*\bLogged as follow-up #[1-9][0-9]*\.$")
@@ -36,6 +40,7 @@ CLOSES = re.compile(r"(?im)^\s*(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+((?:[
 TICKET = re.compile(r"[A-Za-z0-9](?:-?[A-Za-z0-9])*/[A-Za-z0-9._-]+#[1-9][0-9]*")
 LOGIN = r"`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`"
 AUTHORS_CELL = re.compile(rf"\s*{LOGIN}(?:\s*,\s*{LOGIN})*\s*")
+FACT_FIELD = re.compile(r"(?:[-*+] +)?(\*\*[A-Za-z][A-Za-z /-]*:\*\*|[A-Za-z][A-Za-z /-]*:)[ \t]*(.*)")
 TEST_RULE = re.compile(r"\b(?:catches|no new test): \S")
 SELF_CHECK = re.compile(r"(?i) {0,3}##[ \t]+self-check[ \t]*")
 SECTION_END = re.compile(r" {0,3}#{1,2}(?:[ \t]|$)")
@@ -141,7 +146,8 @@ def parse(text):
         findings.append({"id": m[1], "grade": m[2], "new": bool(NEW.match(rest)), "text": rest,
                          "status": next((s for s in STATUSES if rest.startswith(s)), None),
                          "user": any(USER.fullmatch(x) for x in more), "risk": any(RISK.fullmatch(x) for x in more),
-                         "polish": bool(POLISH.search(rest)), "logged": bool(LOGGED.fullmatch(rest))})
+                         "polish": bool(POLISH.search(rest)), "logged": bool(LOGGED.fullmatch(rest)),
+                         "classes": [c[1] for x in more if (c := CLASS.fullmatch(x))]})
     nxt = paras[-1] if paras and paras[-1].startswith("Next:") else None
     state = next((s for s, p in NEXT.items() if nxt and re.fullmatch(p, nxt)), None)
     named = re.findall(r"R[1-9][0-9]*", nxt or "") if state != "merge" else []
@@ -158,20 +164,8 @@ def open_blockers(report):
 
 
 def rulings_lines(text):
-    lines, fenced, fence = text.splitlines(), [], False
-    for line in lines:
-        if line.lstrip().startswith(("```", "~~~")):
-            fence = not fence
-        fenced.append(fence)
-    heads = [i for i, x in enumerate(lines) if x.strip() == "## Rulings" and not fenced[i]]
-    if not heads:
-        return None
-    out = []
-    for line, quoted in zip(lines[heads[0] + 1:], fenced[heads[0] + 1:]):
-        if re.match(r"#{1,2} ", line) and not quoted:
-            break
-        out.append(line.strip())
-    return out
+    lines = description_section(text, "## Rulings")
+    return None if lines is None else [line.strip() for line in lines]
 
 
 def description_rulings(text):
@@ -215,8 +209,18 @@ def check(text, description, mode, head, earlier, decision=None, changed=None):
             problems.append(f"{i}: a new blocking finding needs its User path: or Risk: line")
         elif f["new"] and not blocking and not f["polish"]:
             problems.append(f"{i}: a new polish finding ends with Polish issue: #<n>")
+        words, kept = f["classes"], (before.get(i) or {}).get("classes", [])
+        if blocking and not words:
+            problems.append(f"{i}: a blocker names its class: one Class: line from references/verdict.md")
+        elif blocking and len(words) > 1:
+            problems.append(f"{i}: a blocker carries exactly one Class: line")
+        elif blocking and not CLASS_WORD.fullmatch(words[0]):
+            problems.append(f"{i}: Class: {words[0]} is not a word from references/verdict.md; "
+                            "use Class: other: <word> when none fits")
+        elif blocking and len(kept) == 1 and before[i]["grade"] == "blocking" and words != kept:
+            problems.append(f"{i}: keeps its earlier class, {kept[0]}")
         where = re.match(r"`([^`\s]+):[1-9][0-9]*`", f["text"]) if f["new"] and i not in before else None
-        if where and changed is not None and where[1] not in changed and not f["risk"]:
+        if where and changed is not None and where[1] not in changed and not (blocking and f["risk"]):
             problems.append(f"{i}: `{where[1]}` is unchanged since {earlier['head'][:7]}; a re-check raises a new "
                             "finding there only as a Risk: security, privacy or data-loss blocker")
         old = before.get(i)
@@ -286,7 +290,7 @@ def same(comment, text):
     return (comment.get("body") or "").replace("\r\n", "\n").strip() == text.strip()
 
 
-def admit(repo, number, assigned, skip=None, ticket=None):
+def pull_snapshot(repo, number, assigned, ticket):
     if ticket is not None and not TICKET.fullmatch(ticket):
         raise Refusal(f"--ticket must be OWNER/NAME#N, not {ticket!r}")
     pr = get(f"repos/{repo}/pulls/{number}")
@@ -305,8 +309,10 @@ def admit(repo, number, assigned, skip=None, ticket=None):
         ticket = closes[1] if not closes[1].startswith("#") else repo + closes[1]
     if head != assigned:
         raise Stop(f"stop: the head is {head}, not the assigned {assigned}")
-    fleet = setting(repo, pr["base"]["ref"], "docs/agents/fleet.md")
-    authors, names = record_authors(fleet), required_checks(fleet)
+    return pr, ticket
+
+
+def require_green(repo, head, names):
     runs = get(f"repos/{repo}/commits/{head}/check-runs?per_page=100").get("check_runs", [])
     bad = []
     for name in names:
@@ -316,6 +322,14 @@ def admit(repo, number, assigned, skip=None, ticket=None):
             bad.append(name)
     if bad:
         raise Stop(f"stop: {', '.join(bad)} is not green at {head}")
+
+
+def admit(repo, number, assigned, skip=None, ticket=None):
+    pr, ticket = pull_snapshot(repo, number, assigned, ticket)
+    head = pr["head"]["sha"]
+    fleet = setting(repo, pr["base"]["ref"], "docs/agents/fleet.md")
+    authors, names = record_authors(fleet), required_checks(fleet)
+    require_green(repo, head, names)
     comments = pages(f"repos/{repo}/issues/{number}/comments?per_page=100")
     records = [c for c in comments if authored(c, authors)]
     reports = [(n, parse(c["body"].replace("\r\n", "\n"))) for n, c in enumerate(records)
@@ -418,6 +432,33 @@ def unfenced(description):
             fence = None
 
 
+def description_section(description, heading):
+    lines = None
+    for _, line in unfenced(description):
+        if lines is None:
+            if line.strip() == heading:
+                lines = []
+        elif SECTION_END.match(line):
+            break
+        else:
+            lines.append(line)
+    return lines
+
+
+def facts_fields(description):
+    fields = {}
+    name = None
+    for line in description_section(description, "## Facts") or []:
+        if field := FACT_FIELD.fullmatch(line):
+            name = field[1].strip("*").removesuffix(":")
+            fields.setdefault(name, []).append(field[2].strip())
+        elif name in ("Test", "Tests") and line.startswith(("  ", "\t")):
+            fields[name][-1] += "\n" + line
+        elif line.strip():
+            name = None
+    return fields
+
+
 def self_check_misses(description):
     lines, inside, found = [], False, False
     for number, line in unfenced(description):
@@ -447,9 +488,10 @@ def self_check(path, base):
         misses.append("no Closes line names the ticket; the review cannot start")
     if rulings is None or not (description_rulings(description) or {"none", "`none`"} & set(rulings)):
         misses.append("no ## Rulings section with numbered rulings or exactly none")
-    if head not in description:
+    facts = facts_fields(description)
+    if facts.get("Head") not in ([head], [f"`{head}`"]):
         misses.append(f"the description does not name the head {head}")
-    if not TEST_RULE.search(description):
+    if not any(TEST_RULE.search(entry) for key in ("Test", "Tests") for entry in facts.get(key, [])):
         misses.append("no `catches: <the bug>` or `no new test: <why>` line")
     misses += self_check_misses(description)
     leaks = ["the description"] if PRIVATE.search(description) else []
@@ -471,11 +513,18 @@ def self_check(path, base):
 def post(path, repo, number, assigned, ticket=None):
     text, s, problems = report_problems(path, repo, number, assigned, ticket)
     mine = [c for c in s["comments"] if authored(c, s["authors"]) and same(c, text)]
-    if mine:
+    if mine and parse(text)["head"] == assigned:
         return f"already posted {mine[0]['id']}"
     if problems:
         raise Stop("\n".join(problems))
     before = {c.get("id") for c in s["comments"]}
+    current, current_ticket = pull_snapshot(repo, number, assigned, ticket)
+    if current_ticket != s["ticket"]:
+        raise Stop("stop: the ticket changed")
+    base_changed = any(current["base"].get(key) != s["pr"]["base"].get(key) for key in ("ref", "sha"))
+    if base_changed or current.get("body") != s["pr"].get("body"):
+        raise Stop("stop: the base or description changed")
+    require_green(repo, assigned, s["checks"])
     code, made = gh("-X", "POST", f"repos/{repo}/issues/{number}/comments", "--input", "-",
                     data=json.dumps({"body": text}))
     if code == 0 and isinstance(made, dict) and made.get("id") is not None:
@@ -491,6 +540,20 @@ def post(path, repo, number, assigned, ticket=None):
     return f"posted {found['id']}"
 
 
+def paced(where, *args):
+    spec = importlib.util.spec_from_file_location(
+        "launch_fleet_post", Path(__file__).resolve().parents[2] / "launch-fleet" / "scripts" / "post.py")
+    post = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(post)
+    except (OSError, ImportError):
+        raise Refusal("launch-fleet's write pacer (scripts/post.py) cannot be loaded; nothing was filed")
+    try:
+        return post.write(where, *args)
+    except post.Stop as e:
+        raise Stop(str(e)) from None
+
+
 def follow_up(a):
     repo = a.repo
     labels = setting(repo, get(f"repos/{repo}")["default_branch"], "docs/agents/triage-labels.md")
@@ -502,13 +565,16 @@ def follow_up(a):
         raise Refusal("keep backticks, $ and double quotes out of the title")
     finding = Path(a.finding).read_text(encoding="utf-8").strip()
     finding += "" if finding.endswith(".") else "."
-    head = f"Follow-up of #{a.ticket} (spec #{a.spec})\n\n"
+    marker = f"Follow-up of #{a.ticket} (spec #{a.spec})"
+    head = marker + "\n\n"
+    legacy_title = None
     if a.logged:
         if not a.user_path:
             raise Refusal("a logged blocker carries its --user-path")
-        title = f"{a.title} (follow-up for #{a.ticket}, {a.id})"
+        title = marker
+        legacy_title = f"{a.title} (follow-up for #{a.ticket}, {a.id})"
         body = (head + f"{finding}\nUser path: {a.user_path}\n\nStill open after the {a.logged} of pull request "
-                f"{a.pr} at {a.head}; logged, so it did not block the merge.\n")
+                f"{a.pr} at {a.head}; logged, so it did not block the merge.\n\nFinding: {a.id}.\n")
     else:
         title = f"{a.title} (polish for #{a.ticket}, {a.id})"
         body = head + f"{finding} Found in pull request {a.pr} at {a.head}; it is polish and did not block the merge.\n"
@@ -517,13 +583,22 @@ def follow_up(a):
     url = f"repos/{repo}/issues?state=all&per_page=100&labels={quote(found[0], safe='')}"
 
     def existing():
-        return next((i for i in pages(url) if i.get("title") == title), None)
+        for issue in pages(url):
+            issue_title = issue.get("title")
+            if issue_title == title and (not a.logged or same(issue, body)):
+                return issue
+            if legacy_title and issue_title == legacy_title:
+                return issue
+        return None
     if issue := existing():
         return f"already filed #{issue['number']}"
-    gh("-X", "POST", f"repos/{repo}/issues", "--input", "-",
-       data=json.dumps({"title": title, "body": body, "labels": [found[0]]}))
-    if issue := existing():
-        return f"filed #{issue['number']}"
+    paced(f"{repo}'s issues", "--method", "POST", f"repos/{repo}/issues", "-f", f"title={title}", "-f", f"body={body}",
+          "-f", f"labels[]={found[0]}")
+    for delay in (0, 1, 2):
+        if delay:
+            time.sleep(delay)
+        if issue := existing():
+            return f"filed #{issue['number']}"
     raise Stop("unknown: not found on read-back; list the issues before filing again")
 
 
@@ -540,10 +615,10 @@ DESCRIPTION = (
     '\n'
     'pin, check and post take --ticket OWNER/NAME#N for an explicitly assigned\n'
     "ticket, admitted only by an exact `Refs OWNER/NAME#N` line; without it a Closes line names it.\n"
-    'Each command reads one pull-request snapshot and admits it (open, ready, a\n'
-    'ticket, the assigned head, every required check green there) before anything\n'
-    'else (self-check reads only the local checkout and description, before a pull\n'
-    "request exists). Settings are read from the base branch, never the pull request's head.\n"
+    'Each review command admits the pull request (open, ready, a ticket, the assigned\n'
+    'head, every required check green there). Post checks these again before writing.\n'
+    'Self-check reads only the local checkout and description. Settings are read from\n'
+    "the base branch, never the pull request's head.\n"
     "A re-check's changed files come from git in this checkout, never GitHub's capped compare.\n"
     'Only comments by the `Record authors` row of docs/agents/fleet.md count. Exit 0\n'
     'done, 1 a stop, report problems or an unknown write, 2 a refusal (unreadable\n'

@@ -42,6 +42,10 @@ When `pin` prints `review re-check`, `review final` or `review log-and-merge`, r
 
 When the fleet starts or tells you about a ticket's `Approach note:` comment, there is no pull request yet: skip `pin` and the report, and write your status (`working`, then `done` once you answer; keep the note id for its pull request). Read the note against the ticket, its spec and any contract it names: it stays inside the owned paths, meets every acceptance criterion, names what can't be undone, plans a test that fails before merge if that goes wrong, and drops no safer alternative of the same cost. Answer once on the ticket (`gh issue comment <N>`), first line `Approach OK: <note id>` or `Approach changes: <note id>`, then one line per change: what must change and why. Ask only for what can't be undone or a broken criterion; leave the rest to the pull request's review. A revised note gets one answer the same way. Then end your turn: you review its pull request too.
 
+## Review rules
+
+Read `git show origin/<base>:docs/agents/review-rules.md` from the base, never the head, so a pull request can't change its own rules; when the base has no such file, skip this step. Through steps 2 to 4, report no finding in a **Never flag** class unless it carries a `Risk:` line, and apply a **Path rules** line only when a path in `git diff --name-only origin/<base>...<head>` matches its glob (`*` within one folder, `**` across folders); use the **Severity examples** to grade. When the owner or builder declines a finding with a reason, propose one line for the owner in your next report, `Proposed never-flag: <class>: declined <n>, <YYYY-MM-DD>`, and never write the file yourself.
+
 ## 2. Run three checks, apart
 
 Read `git diff --find-renames origin/<base>...<head>` and the code around it. Keep each check's findings apart. Follow `fleet.md`'s test-command rule; a parallel or scratch run, such as undoing the change, goes in a separate worktree with its own build output and is never committed.

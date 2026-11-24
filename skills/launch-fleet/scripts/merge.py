@@ -1015,6 +1015,8 @@ def requeue(repo, number, head, checks, ticket, p, kept, drops, claims, since, b
             return dropped(repo, number, head, line, back)
     if refused is None:
         return written('the enqueue call succeeded but it does not read queued yet', SPENT)
+    if state.startswith('open') and back.get('mergeable') == 'CONFLICTING':
+        blocked('not mergeable: CONFLICTING')
     raise Stop(f'not re-queued: {refused}; its claim is spent, so it is never enqueued again at {head}')
 
 
@@ -1107,6 +1109,8 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
     if state.startswith('open') and done:
         return 'pending: the merge command succeeded but it still reads open; read it again next wake'
     if admit.startswith('admit: '):
+        if state.startswith('open') and back.get('mergeable') == 'CONFLICTING':
+            blocked('not mergeable: CONFLICTING')
         tail = f'; it reads back as: {state[6:]}' if state.startswith('stop: ') else ''
         raise Stop(f"not queued: {refused or 'the enqueue call succeeded'}{tail}; "
                    'nothing was recorded, so run it again next wake')

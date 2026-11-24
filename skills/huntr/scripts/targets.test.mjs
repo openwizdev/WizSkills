@@ -52,6 +52,7 @@ test('T2 list refuses each malformed table', () => {
     'negative rate': file(table([row.replace('`0`', '`-1`')])),
     'fractional rate': file(table([row.replace('`0`', '`1.5`')])),
     'word rate': file(table([row.replace('`0`', '`fast`')])),
+    'unsafe rate': file(table([row.replace('`0`', '`99999999999999999999`')])),
     'bad files to': file(table([row.replace('`example-org/example-app`', '`example-app`')])),
     'short row': file(table(['| `example.test` | `surface` | `none` | `0` |'])),
     'duplicate': file(table([row, row.replace('example.test', 'Example.Test')])),

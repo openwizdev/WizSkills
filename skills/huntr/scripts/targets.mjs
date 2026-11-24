@@ -53,7 +53,7 @@ function list(file) {
     const t = parse(target, false);
     if (!t) fail(`unreadable target: ${target}`);
     if (kind !== 'surface' && kind !== 'infra') fail(`kind is not surface or infra: ${target}`);
-    if (!/^(0|[1-9][0-9]{0,5})$/.test(rate)) fail(`live rate is not a whole number of 0 or more: ${target}`);
+    if (!/^(0|[1-9][0-9]*)$/.test(rate) || !Number.isSafeInteger(Number(rate))) fail(`live rate is not a whole number of 0 or more: ${target}`);
     if (!REPO.test(files_to)) fail(`files to is not owner/repo: ${target}`);
     if (!copy) fail(`no copy: ${target}`);
     const key = `${t.type}:${t.value}`;

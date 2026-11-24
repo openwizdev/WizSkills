@@ -42,7 +42,7 @@
     {
      "step": "run",
      "say": "missing",
-     "agent": "You need a GitHub sign-in first: open https://github.com/login and sign in yourself, because I never touch your login. Say done here when you're in."
+     "agent": "You need a GitHub sign-in first: open https://github.com/login and follow the setup steps there. Sign up or sign in yourself if needed, because I never touch your login. Say done here when setup is complete."
     },
     {
      "step": "run",
@@ -169,7 +169,7 @@
     {
      "step": "grill",
      "say": "grill-summary",
-     "agent": "That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off."
+     "agent": "That's your grill. If it matches what you want, say yes here. You can follow the plan at openwiz.dev/app as it builds and checks itself. If something is off, tell me here."
     },
     {
      "step": "grill",
@@ -598,7 +598,7 @@
     {
      "step": "grill",
      "say": "grill-summary",
-     "agent": "That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off."
+     "agent": "That's your grill. If it matches what you want, say yes here. You can follow the plan at openwiz.dev/app as it builds and checks itself. If something is off, tell me here."
     },
     {
      "step": "grill",
@@ -979,7 +979,7 @@
     {
      "step": "grill",
      "say": "grill-summary",
-     "agent": "That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off."
+     "agent": "That's your grill. If it matches what you want, say yes here. You can follow the plan at openwiz.dev/app as it builds and checks itself. If something is off, tell me here."
     },
     {
      "step": "grill",

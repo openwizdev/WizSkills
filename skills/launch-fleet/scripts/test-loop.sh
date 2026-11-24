@@ -304,14 +304,19 @@ echo "ok   restore_today_account drops every git config entry, sparse indexes in
 
 for shell in bash dash; do
   command -v "$shell" > /dev/null
-  for ifs in : '' _ 5 G ' ' -; do
+  for ifs in : '' _ 5 G ' ' - 'ro ' ro_; do
     (inherit; export OPENWIZ_AGENT_TOKEN_GIT_AT=x GIT_CONFIG_COUNT=x
       unset GIT_CONFIG_KEY_2 GIT_CONFIG_VALUE_2
       export GIT_CONFIG_KEY_5=synthetic.sparse GIT_CONFIG_VALUE_5=five GIT_CONFIG_KEY_12=synthetic.sparse \
         GIT_CONFIG_VALUE_40=forty SYNTHETIC_LINES='one
 GIT_CONFIG_KEY_5 synthetic;name_9=two'
       for copy in loop block; do
-        if [ "$ifs" = - ]; then set -- 'unset IFS' '[ -z "${IFS+x}" ]'; else set -- 'IFS=$3' '[ "${IFS-unset}" = "$3" ]'; fi
+        # catches: restore_today_account assigning a readonly caller IFS, so bash keeps the entries and dash aborts the caller
+        case $ifs in
+          -) set -- 'unset IFS' '[ -z "${IFS+x}" ]' ;;
+          ro*) set -- 'IFS=${3#ro}; readonly IFS' '[ "$IFS" = "${3#ro}" ]' ;;
+          *) set -- 'IFS=$3' '[ "${IFS-unset}" = "$3" ]' ;;
+        esac
         "$shell" -c "$1"'; . "$1"; restore_today_account; '"$2"' || exit 1; "$2"' \
           sh "$work/restore.$copy" "$(command -v env)" "$ifs" > "$work/env"
         [ -s "$work/env" ]
@@ -320,7 +325,7 @@ GIT_CONFIG_KEY_5 synthetic;name_9=two'
       done)
   done
 done
-echo "ok   restore_today_account drops every git config entry under any caller IFS, in bash and dash, and leaves IFS as it was (#2875)"
+echo "ok   restore_today_account drops every git config entry under any caller IFS, in bash and dash, readonly included, and leaves IFS as it was (#2875)"
 
 # Failed refreshes and first clones must not emit work or leave runtime files.
 mv "$work/remote" "$work/offline"

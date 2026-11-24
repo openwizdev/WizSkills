@@ -232,7 +232,8 @@ class Starts(unittest.TestCase):
             'closes two tickets': ('closes', [9002, 9003]),
             'not the default branch': ('base', 'release-1'),
             'head is not a hand-back': ('subject', '#9002: wip: synthetic'),
-            'green only inside a word': ('subject', '#9002: evergreen synthetic'),
+            'green only at the end of a word': ('subject', '#9002: evergreen synthetic'),
+            'green only at the start of a word': ('subject', '#9002: GREENish synthetic'),
             'has a verdict': ('verdict', 'VERDICT: CHANGES at ' + 'c' * 40),
             'capacity': ('admission', 'capacity'),
             'incomplete read': ('complete', False),
@@ -245,6 +246,15 @@ class Starts(unittest.TestCase):
                 self.assertEqual((e['decision'], e['intent'], e['result'], e['settings']),
                                  ('refused', None, None, None))
                 self.assertTrue(e['reason'])
+        self.assertEqual(self.calls, [])
+
+    def test_hand_back_accepts_green_as_a_whole_word_in_any_case(self):
+        for word in ('green', 'Green', 'GREEN'):
+            with self.subTest(word=word):
+                self.world['reviews'][0]['subject'] = f'#9002: {word}: synthetic'
+                entry = self.only(self.plan(), 'review_start')
+                self.assertEqual(entry['decision'], 'dispatch', entry['reason'])
+                self.assertEqual(entry['result']['state'], 'disabled')
         self.assertEqual(self.calls, [])
 
     # A reader takes only the exact shape: a missing or extra fact refuses that start alone.
@@ -278,6 +288,23 @@ class Starts(unittest.TestCase):
                 self.assertEqual([(e['action'], e['decision']) for e in entries],
                                  [('builder_start', 'refused'), ('builder_start', 'dispatch'),
                                   ('review_start', 'dispatch')])
+        self.assertEqual(self.calls, [])
+
+    def test_malformed_current_evidence_refuses_reuse_of_a_persisted_intent(self):
+        self.record([self.only(self.plan(), 'builder_start')])
+        valid = self.world['builders'][0]['evidence'].copy()
+        for field, value in (('evidence_class', 'unknown'), ('source', ''), ('source', []), ('source', 'x' * 513)):
+            with self.subTest(field=field, value=value):
+                self.world['builders'][0]['evidence'] = dict(valid, **{field: value})
+                entries = self.plan()
+                builder = self.only(entries, 'builder_start')
+                self.assertEqual((builder['decision'], builder['intent'], builder['new'], builder['result']),
+                                 ('refused', None, False, None))
+                self.assertEqual(builder['reason'], 'incomplete or malformed source')
+                self.assertEqual(self.only(entries, 'review_start')['result']['state'], 'disabled')
+        self.world['builders'][0]['evidence'] = valid
+        builder = self.only(self.plan(), 'builder_start')
+        self.assertEqual((builder['decision'], builder['new']), ('dispatch', False))
         self.assertEqual(self.calls, [])
 
     # P7: a settings table that would give a Claude-built PR a Claude reviewer is refused.
@@ -316,6 +343,36 @@ class Starts(unittest.TestCase):
         self.assertEqual((fresh['decision'], fresh['result']['state']), ('dispatch', 'disabled'))
         self.assertNotEqual(fresh['intent']['assignment'], first['intent']['assignment'])
         self.assertNotEqual(fresh['intent']['operation_key'], first['intent']['operation_key'])
+
+    def test_fresh_review_can_follow_a_verdict_on_an_older_head(self):
+        review = self.world['reviews'][0]
+        review['spans'] = [{'head': 'd' * 40, 'given_up': True}]
+        for verdict in ('APPROVE', 'CHANGES'):
+            with self.subTest(verdict=verdict):
+                review['verdict'] = f'VERDICT: {verdict} at ' + 'd' * 40
+                entry = self.only(self.plan(), 'review_start')
+                self.assertEqual(entry['decision'], 'dispatch', entry['reason'])
+                self.assertEqual(entry['result']['state'], 'disabled')
+        self.assertEqual(self.calls, [])
+
+    def test_fresh_review_refuses_current_or_malformed_verdicts_and_retained_reviewers(self):
+        review = self.world['reviews'][0]
+        review['spans'] = [{'head': 'd' * 40, 'given_up': True}]
+        for verdict in ('VERDICT: APPROVE at ' + 'c' * 40,
+                        'VERDICT: CHANGES at ' + 'c' * 40,
+                        'VERDICT: APPROVE at ' + 'd' * 39,
+                        'VERDICT: APPROVE at ' + 'd' * 40 + '\nextra',
+                        42):
+            with self.subTest(verdict=verdict):
+                review['verdict'] = verdict
+                entry = self.only(self.plan(), 'review_start')
+                self.assertEqual((entry['decision'], entry['intent']), ('refused', None))
+        review['verdict'] = 'VERDICT: CHANGES at ' + 'd' * 40
+        review['spans'][0]['given_up'] = False
+        entry = self.only(self.plan(), 'review_start')
+        self.assertEqual((entry['decision'], entry['reason']),
+                         ('refused', 'a retained reviewer re-checks (OB6), no new start'))
+        self.assertEqual(self.calls, [])
 
     # R1: a re-approval allocates sequences afresh; intent ids stay unique and the
     # new start is not refused as a conflicting identity.
@@ -421,7 +478,7 @@ class Starts(unittest.TestCase):
         refused = copy.deepcopy(self.world['builders'][0])
         refused.update(ticket=9003, admission='capacity')
         slow = copy.deepcopy(self.world['reviews'][0])
-        slow.update(pr=9103, ticket=9004, reviewer_available=False)
+        slow.update(pr=9103, ticket=9004, closes=[9004], reviewer_available=False)
         self.world['builders'].insert(0, refused)
         self.world['reviews'].insert(0, slow)
         entries = self.plan()
@@ -430,6 +487,7 @@ class Starts(unittest.TestCase):
                                      ('review_start', 9103): 'refused', ('review_start', 9101): 'dispatch'})
         self.world['builders'] = []
         entries = self.plan()
+        self.assertEqual(entries[0]['reason'], 'selected reviewer unavailable: waits, never swapped')
         self.assertEqual([(e['action'], e['decision'], e['intent'] and e['intent']['destination']) for e in entries],
                          [('review_start', 'refused', None), ('review_start', 'dispatch', 'reviewer')])
 
@@ -811,6 +869,113 @@ class ModelsTable(unittest.TestCase):
                     run, _ = run_cli(tmp, self.one, 'loop-agent', '--repo', 'synthetic/ops', 'loop-spec', '-',
                                      stdin=stdin)
                     self.assertEqual((run.returncode, run.stdout), (2, ''))
+
+    def test_reviewer_fallback_order_and_antigravity_flags_p1(self):
+        fleet = (
+            '# Fleet settings\n\n'
+            '## Models\n\n'
+            '| Role | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
+            '| --- | --- | --- | --- | --- |\n'
+            '| Orchestrator | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Builder | Antigravity | Gemini 4 Neon | Medium | '
+            '`--provider antigravity --reasoning-level medium` |\n'
+            '| Reviewer | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Small builder | follows Builder | | | |\n'
+            '| Fixer | follows Builder | | | |\n'
+            '| Reviewer fall-back 1 | Antigravity | Gemini 4 Neon | High | '
+            '`--provider antigravity --reasoning-level high` |\n'
+            '| Reviewer fall-back 2 | Codex | Sol 6.2 | Medium | '
+            '`--provider codex --model gpt-6.2-sol --reasoning-level medium` |\n'
+        )
+        run = self.flags(fleet, 'builder')
+        self.assertEqual((run.returncode, run.stdout, run.stderr),
+                         (0, '--provider antigravity --reasoning-level medium\n', ''))
+        run = self.flags(fleet, 'small_builder')
+        self.assertEqual((run.returncode, run.stdout, run.stderr),
+                         (0, '--provider antigravity --reasoning-level medium\n', ''))
+        with tempfile.TemporaryDirectory() as tmp:
+            order, _ = run_cli(tmp, fleet, 'reviewer-order', '--repo', 'synthetic/ops')
+            self.assertEqual(order.returncode, 0, order.stderr)
+            self.assertEqual(
+                order.stdout.splitlines(),
+                [
+                    '--provider claude-code --model claude-opus-5-5 --reasoning-level medium',
+                    '--provider antigravity --reasoning-level high',
+                    '--provider codex --model gpt-6.2-sol --reasoning-level medium',
+                ],
+            )
+        bad_cases = (
+            ('skipped fallback index', fleet.replace('Reviewer fall-back 1', 'Reviewer fall-back 2', 1)),
+            ('duplicate fallback', fleet + '| Reviewer fall-back 1 | Codex | Sol 6.2 | Medium | '
+                                           '`--provider codex --model gpt-6.2-sol --reasoning-level medium` |\n'),
+            ('fallback follows builder', fleet.replace(
+                '| Reviewer fall-back 1 | Antigravity | Gemini 4 Neon | High | '
+                '`--provider antigravity --reasoning-level high` |',
+                '| Reviewer fall-back 1 | follows Builder | | | |', 1)),
+            ('missing reasoning-level flag', fleet.replace(
+                '`--provider antigravity --reasoning-level medium`',
+                '`--provider antigravity`', 1)),
+        )
+        for name, broken in bad_cases:
+            with self.subTest(name):
+                run = self.flags(broken, 'builder')
+                self.assertEqual((run.returncode, run.stdout, run.stderr[:21]), (2, '', 'ops-starts: refused: '))
+
+    def test_reviewer_fallback_advances_only_on_usage_limit_refusal_p2(self):
+        fleet = (
+            '# Fleet settings\n\n'
+            '## Models\n\n'
+            '| Role | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
+            '| --- | --- | --- | --- | --- |\n'
+            '| Orchestrator | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Builder | Antigravity | Gemini 4 Neon | Medium | '
+            '`--provider antigravity --reasoning-level medium` |\n'
+            '| Reviewer | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Small builder | follows Builder | | | |\n'
+            '| Fixer | follows Builder | | | |\n'
+            '| Reviewer fall-back 1 | Antigravity | Gemini 4 Neon | High | '
+            '`--provider antigravity --reasoning-level high` |\n'
+            '| Reviewer fall-back 2 | Codex | Sol 6.2 | Medium | '
+            '`--provider codex --model gpt-6.2-sol --reasoning-level medium` |\n'
+        )
+        commit = 'a' * 40
+        other_commit = 'b' * 40
+        self.assertEqual(
+            self.api.refused_families_for_commit([
+                f'launch-fleet: review refused {commit}: claude usage limit',
+                f'launch-fleet: review started {commit}',
+                f'launch-fleet: review refused {commit}: network timeout',
+                f'launch-fleet: review refused {other_commit}: antigravity usage limit',
+            ], commit),
+            ('claude',),
+        )
+        self.assertEqual(
+            self.api.refused_families_for_commit([
+                f'launch-fleet: review refused {commit}: claude usage limit',
+                f'launch-fleet: review refused {commit}: antigravity usage limit',
+            ], commit),
+            ('claude', 'antigravity'),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            first, _ = run_cli(tmp, fleet, 'reviewer-order', '--repo', 'synthetic/ops')
+            self.assertEqual((first.returncode, first.stdout.splitlines()[0]),
+                             (0, '--provider claude-code --model claude-opus-5-5 --reasoning-level medium'))
+            fb1, _ = run_cli(tmp, fleet, 'reviewer-order', '--repo', 'synthetic/ops', '--refused', 'claude')
+            self.assertEqual((fb1.returncode, fb1.stdout.splitlines()), (0, [
+                '--provider antigravity --reasoning-level high',
+                '--provider codex --model gpt-6.2-sol --reasoning-level medium',
+            ]))
+            fb2, _ = run_cli(tmp, fleet, 'reviewer-order', '--repo', 'synthetic/ops',
+                             '--refused', 'claude', '--refused', 'antigravity')
+            self.assertEqual((fb2.returncode, fb2.stdout.splitlines()),
+                             (0, ['--provider codex --model gpt-6.2-sol --reasoning-level medium']))
+            exhausted, _ = run_cli(tmp, fleet, 'reviewer-order', '--repo', 'synthetic/ops',
+                                   '--refused', 'claude', '--refused', 'antigravity', '--refused', 'codex')
+            self.assertEqual((exhausted.returncode, exhausted.stdout), (1, ''))
 
 
 if __name__ == '__main__':

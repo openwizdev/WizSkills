@@ -13,7 +13,9 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -73,12 +75,37 @@ with world() as w:
     if args[:2] == ['pr', 'view']:
         pr = w['prs'][args[2]]
         out({'state': pr['state'], 'statusCheckRollup': pr['checks']})
+    if args[:2] == ['api', '-i']:
+        w['probes'] = w.get('probes', 0) + 1
+        pool = 'graphql' if args[2] == 'graphql' else 'core'
+        wait = w['backoff'].get(pool)
+        if w['budget'] is None:
+            sys.stdout.write('HTTP/2.0 502 Bad Gateway\r\n\r\n'); sys.exit(1)
+        reset = int(datetime.now(timezone.utc).timestamp()) + w['reset_in']
+        heads = '' if w['bare'] else ('X-Ratelimit-Limit: 5000\r\nX-Ratelimit-Remaining: %d\r\nX-Ratelimit-Reset: %d\r\n'
+                                      'X-Ratelimit-Resource: %s\r\n' % (w['budget'], reset, pool))
+        if wait:
+            sys.stdout.write('HTTP/2.0 403 Forbidden\r\n%sRetry-After: %d\r\n\r\n{"message": "secondary rate limit"}'
+                             % (heads, wait))
+            sys.exit(1)
+        if pool in w['failing']:
+            sys.stdout.write('HTTP/2.0 200 OK\r\n%s\r\n{"errors": [{"type": "RATE_LIMITED"}]}' % heads)
+            sys.exit(1)
+        body = {'data': {'rateLimit': {'remaining': w['budget']}}} if pool == 'graphql' else {'workflow_runs': []}
+        sys.stdout.write('HTTP/2.0 200 OK\r\n%s\r\n%s' % (heads, json.dumps(body))); sys.exit(0)
     path = next(a for a in args if a.startswith('repos/'))
     rest, method = path[len(base):].split('?')[0].split('/'), 'GET'
     if '--method' in args:
         method = args[args.index('--method') + 1]
     if rest == ['contents', 'docs', 'agents', 'fleet.md']:
         sys.stdout.write(w['fleet_md']); sys.exit(0)
+    if rest == ['actions', 'runs']:
+        wanted = path.split('status=')[1].split('&')[0]
+        runs = [{'id': 900 + i} for i, job in enumerate(w['jobs']) if job['run_status'] == wanted]
+        out([{'total_count': len(runs), 'workflow_runs': runs}])
+    if rest[:2] == ['actions', 'runs'] and rest[3:] == ['jobs']:
+        job = w['jobs'][int(rest[2]) - 900]
+        out([{'total_count': 1, 'jobs': [{k: v for k, v in job.items() if k != 'run_status'}]}])
     if rest[0] == 'issues' and rest[2:] == ['sub_issues']:
         page = [{'number': int(n), 'state': t['state'].lower()} for n, t in sorted(w['tickets'].items())]
         out([page] if '--slurp' in args else page)
@@ -96,7 +123,7 @@ with world() as w:
     if rest[:2] == ['issues', 'comments']:
         c = next(c for items in w['comments'].values() for c in items if c['id'] == int(rest[2]))
         if method == 'PATCH':
-            c['body'] = flag('body')
+            c.update(body=flag('body'), updated_at=now())
         out(c)
 print('unexpected gh call: %s' % ' '.join(args), file=sys.stderr)
 sys.exit(1)
@@ -106,7 +133,12 @@ FAKE_FLEET = WORLD + r'''
 args = sys.argv[1:]
 if args[0] == 'claim':
     print('go #%s' % args[1]); sys.exit(0)
+if args[0] == 'spec':
+    with open(os.path.join(os.environ['HOME'], 'fleet.log'), 'a') as log:
+        log.write('spec\n')
 with world() as w:
+    if args[0] == 'overload':
+        os.execvp('sh', ['sh', os.environ['FAKE_REAL_FLEET'], *args])
     if not w['spec_open']:
         print('fleet done #%s: it is not an open spec; delete this fleet thread\'s loop and archive the thread'
               % w['spec'])
@@ -118,7 +150,8 @@ with world() as w:
         if int(n) in w['questions']:
             print('needs-info #%s: a question for the orchestrator' % n)
         elif not starts:
-            print('start #%s: %s (spec #%s)' % (n, t['title'], w['spec']))
+            if w['tickets'].get(w['blocked'].get(n, ''), {}).get('state', 'CLOSED') == 'CLOSED':
+                print('start #%s: %s (spec #%s)' % (n, t['title'], w['spec']))
         elif starts[-1] == 'launch-fleet: started' and n in w['branches']:
             print('check start #%s: thread run:%s, branch %s' % (n, n, w['branches'][n]))
         for p, pr in sorted(w['prs'].items()):
@@ -126,18 +159,50 @@ with world() as w:
                 continue
             at = '#%s for #%s at %s' % (p, n, pr['head'])
             if records(w, p, 'VERDICT: APPROVE at ' + pr['head']):
-                print('merge %s: APPROVE and CI green' % at)
+                if not (args[0] == 'every' and p in w['every_hide']):
+                    print('merge %s: APPROVE and CI green' % at)
             elif not records(w, p, 'launch-fleet: review start'):
                 print('review %s: first review' % at)
     if w['tickets'] and all(t['state'] == 'CLOSED' for t in w['tickets'].values()):
         print('spec done #%s: every planned ticket is done; no follow-ups' % w['spec'])
+    if args[0] == 'spec' and w.get('green_after_read'):
+        w['green_after_read'] = False
+        for pr in w['prs'].values():
+            pr['checks'][0].update(status='COMPLETED', conclusion='SUCCESS')
 '''
 
-FAKE_MERGE = r'''
-import json, os, sys
+FAKE_MERGE = WORLD + r'''
+args = sys.argv[1:]
 with open(os.path.join(os.environ['HOME'], 'merge.log'), 'a') as log:
-    log.write(json.dumps(sys.argv[1:]) + '\n')
-sys.exit(1)
+    log.write(json.dumps(args) + '\n')
+with world() as w:
+    pr = w['prs'][args[2]]
+    if args[0] == 'admit':
+        print('admit: the merge queue re-tests it' if w['queue'] else 'base rule: no merge queue; mergeable: MERGEABLE')
+    elif args[0] == 'read' and args[3] != pr['head']:
+        print('stop: #%s is at %s, not %s' % (args[2], pr['head'], args[3]))
+    elif args[0] == 'read' and w.get('read_pending'):
+        w['read_pending'] -= 1
+        print('pending: its queue facts disagree; nothing was written, so read it again next wake')
+    elif args[0] == 'read':
+        print('merged ' + 'f' * 40 if pr['state'] == 'MERGED' else 'queued' if pr.get('queued') else
+              'open, the merge queue is on; it left the queue at 2026-01-01T00:00:00Z: synthetic')
+    elif w.get('held'):
+        print('held: ask-due: post the evidence ask on #7 with merge.py ask'); sys.exit(1)
+    elif w.get('outcomes'):
+        said = w['outcomes'].pop(0)
+        pr['queued'] = pr.get('queued') or said.startswith('re-queued')
+        print(said)
+    elif w.get('pending'):
+        w['pending'] -= 1
+        print('pending: its queue facts disagree; nothing was written, so read it again next wake')
+    elif w['queue']:
+        pr['queued'] = True
+        print('queued; recorded 1')
+    else:
+        pr['state'] = 'MERGED'
+        w['tickets'][str(pr['ticket'])]['state'] = 'CLOSED'
+        print('merged %s; cost posted 1' % ('f' * 40))
 '''
 
 HOLDER = r'''
@@ -153,6 +218,16 @@ while not Path(sys.argv[3]).exists():
 folder.rmdir()
 os.close(fd)
 '''
+
+ROSTER = ('\n## Roster\n\n| Name | Kind | Driver | Roles | Writes as |\n| --- | --- | --- | --- | --- |\n'
+          "| Claude Code | harness | local | orchestrator, builder, reviewer | synthetic-owner's App |\n"
+          "| Codex | harness | local | reviewer | synthetic-owner's App |\n")
+HOST_LOG = r"""
+import json, os, sys
+with open(os.path.join(os.environ['HOME'], 'host.log'), 'a') as log:
+    log.write(json.dumps(sys.argv[1:]) + '\n')
+os.execv(sys.executable, [sys.executable, '-I', %r, *sys.argv[1:]])
+"""
 
 
 def stamp():
@@ -195,13 +270,18 @@ class Session(unittest.TestCase):
         self.world = self.home / 'world.json'
         self.world.write_text(json.dumps({'repo': REPO, 'me': 'synthetic-owner', 'fleet_md': FLEET_MD,
                                           'next_id': 100, 'comments': {}, 'tickets': {}, 'prs': {},
-                                          'branches': {}, 'questions': [], 'spec': SPEC, 'spec_open': True}))
+                                          'branches': {}, 'questions': [], 'spec': SPEC, 'spec_open': True,
+                                          'queue': False, 'every_hide': [], 'blocked': {}, 'budget': 5000,
+                                          'jobs': [], 'backoff': {}, 'bare': False, 'failing': [],
+                                          'reset_in': 3600}))
         self.log = self.home / 'driver.log'
         path = [d for d in os.environ['PATH'].split(os.pathsep)
                 if not any(os.path.exists(os.path.join(d, name)) for name in ('claude', 'codex'))]
         self.env = dict(git_env, HOME=str(self.home), PATH=os.pathsep.join([str(self.home / 'bin'), *path]),
+                        FAKE_REAL_FLEET=str(HERE / 'fleet.sh'),
                         OPENWIZ_ADAPTERS=str(self.home / 'adapters'), FAKE_DRIVER_LOG=str(self.log),
-                        FAKE_WORLD=str(self.world), LC_ALL='C')
+                        FAKE_WORLD=str(self.world), LC_ALL='C',
+                        LAUNCH_FLEET_OVERLOAD_STATE=str(self.home / 'shared-pause.json'))
         self.git_origin = runpy.run_path(str(HERE / 'fixtures/git_origin.py'))['env']
         self.env.update(self.git_origin(self.home, {REPO: FLEET_MD}))
         key = hashlib.sha256(('%s#%s' % (REPO.lower(), SPEC)).encode()).hexdigest()[:20]
@@ -225,25 +305,36 @@ class Session(unittest.TestCase):
         self.change(lambda w: w['tickets'].update({str(n): {'title': 'synthetic %d' % n, 'state': 'OPEN'}
                                                    for n in numbers}))
 
-    def note(self, n, agent, pr=None, harness='Claude Code', model='Opus 5.5'):
-        fields = {'agent': agent, 'state': 'done', 'harness': harness, 'model': model,
+    def note(self, n, agent, pr=None, harness='Claude Code', model='Opus 5.5', state='done', edit=None):
+        fields = {'agent': agent, 'state': state, 'harness': harness, 'model': model,
                   'skills': 'build-ticket@0.2.1', 'step': 'handed back', 'time': stamp()}
         if pr:
             fields['pr'] = 'https://github.com/%s/pull/%d' % (REPO, pr)
-        self.comment(n, status.body(fields))
+        if edit:
+            return self.edit(n, edit, status.body(fields))
+        return self.comment(n, status.body(fields))
 
     def comment(self, n, body):
         def add(w):
             w['next_id'] += 1
             w['comments'].setdefault(str(n), []).append(
-                {'id': w['next_id'], 'body': body, 'user': {'login': 'synthetic-owner'}, 'created_at': stamp()})
+                {'id': w['next_id'], 'body': body, 'user': {'login': 'synthetic-owner'}, 'created_at': stamp(),
+                 'updated_at': stamp()})
+            made.append(w['next_id'])
+        made = []
         self.change(add)
+        return made[0]
+
+    def edit(self, n, comment, body):
+        def patch(w):
+            next(c for c in w['comments'][str(n)] if c['id'] == comment).update(body=body, updated_at=stamp())
+        self.change(patch)
 
     def green(self, p, n):
         self.change(lambda w: w['prs'].update({str(p): {'ticket': n, 'head': HEAD, 'state': 'OPEN', 'checks': [
             {'__typename': 'CheckRun', 'name': 'check', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'}]}}))
 
-    def approved(self, verdict_first=False, assigned=HEAD, reviewer='Codex', reviewed=12):
+    def approved(self, verdict_first=False, assigned=HEAD, reviewer='Codex', reviewed=12, state='done'):
         self.tickets(5)
         self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
         self.note(5, 'builder', pr=12)
@@ -252,7 +343,16 @@ class Session(unittest.TestCase):
                    'VERDICT: APPROVE at ' + HEAD]
         for body in reversed(records) if verdict_first else records:
             self.comment(12, body)
-        self.note(5, 'reviewer', pr=reviewed, harness=reviewer)
+        return self.note(5, 'reviewer', pr=reviewed, harness=reviewer, state=state)
+
+    def guard(self):
+        now = int(time.time())
+        pool = {'remaining': 1000, 'limit': 1000, 'reset_at': now + 3600, 'retry_after': 0}
+        seen = self.home / 'observation.json'
+        seen.write_text(json.dumps({'repository': REPO, 'observed_at': now, 'complete': True,
+                                    'queue': {'complete': True, 'jobs': []},
+                                    'budgets': {'rest': pool, 'graphql': pool}}))
+        return {'LAUNCH_FLEET_OVERLOAD_INPUT': str(seen), 'LAUNCH_FLEET_OVERLOAD_STATE': str(self.home / 'pause.json')}
 
     def merges(self):
         path = self.home / 'merge.log'
@@ -313,7 +413,7 @@ class Session(unittest.TestCase):
         self.assertIn(self.carry_on() + '\n', out)
         self.assertFalse(self.lock_dir.exists())
 
-    def test_a_finished_build_gets_its_reviewer_and_an_approved_green_pull_request_stops_for_its_merge(self):
+    def test_a_finished_build_gets_its_reviewer_and_an_approved_green_pull_request_merges(self):
         self.tickets(5)
         self.change(lambda w: w['branches'].update({'5': 'room/5-synthetic'}))
         process = self.session('--idle', '10')
@@ -326,16 +426,19 @@ class Session(unittest.TestCase):
         self.assertEqual(self.starts()[1], {'repository': REPO, 'ticket': 12, 'skill': 'review-ticket',
                                             'harness': 'codex', 'model': 'synthetic-table-reviewer'})
         self.assertEqual(self.records(12)[0].split('\n')[1], 'Driver review: other-family')
+        self.assertEqual(self.merges(), [])
         time.sleep(1)
         self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
         time.sleep(1)
-        self.assertIsNone(process.poll())
-        self.note(5, 'reviewer', pr=12, harness='Codex')
-        out = self.ended(process, 3)
-        self.assertIn(': needs you: merge #12 for #5 at %s: APPROVE and CI green: merge '
-                      "it with launch-fleet's Merging steps, then carry on\n" % HEAD, out)
-        self.assertIn(self.carry_on() + ' --idle 10\n', out)
         self.assertEqual(self.merges(), [])
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        out = self.ended(process, 0)
+        merges = self.merges()
+        self.assertEqual([m[0] for m in merges], ['admit', 'merge'])
+        self.assertEqual(merges[1][:5] + merges[1][6:], ['merge', REPO, '12', HEAD, 'check', '--ticket', '5',
+                                                         '--base-rule-checked'])
+        self.assertIn('#12 merged', out)
+        self.assertIn('session: done: spec done #7: every planned ticket is done; no follow-ups\n', out)
 
     def test_an_inherited_gh_repo_never_names_another_repository_in_the_review_claim(self):
         self.tickets(5)
@@ -353,15 +456,6 @@ class Session(unittest.TestCase):
         process.send_signal(signal.SIGINT)
         self.ended(process, 130)
 
-    def test_an_approved_pull_request_stops_the_session_after_the_ticks_other_work(self):
-        self.approved()
-        self.tickets(6)
-        out = self.ended(self.session(), 3)
-        self.assertIn('session: tick 1: started #6\n', out)
-        self.assertIn('session: stopped at tick 1: needs you: merge #12 for #5 at %s: APPROVE and CI green' % HEAD, out)
-        self.assertEqual(self.merges(), [])
-        self.assertEqual(self.records(6), ['launch-fleet: started'])
-
     def test_a_spec_whose_planned_tickets_are_done_ends_the_session_as_done(self):
         self.tickets(5)
         self.change(lambda w: w['tickets']['5'].update(state='CLOSED'))
@@ -376,6 +470,65 @@ class Session(unittest.TestCase):
         self.change(lambda w: w['tickets']['5'].update(state='CLOSED'))
         out = self.ended(self.session(), 0)
         self.assertIn('session: done: every ticket of spec #7 is closed\n', out)
+
+    def test_an_approval_from_before_the_current_review_assignment_merges_nothing(self):
+        self.approved(verdict_first=True)
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn("needs you: #12 was not merged: its newest VERDICT is older than its current review "
+                      "assignment", out)
+        self.assertNotIn('merge', [m[0] for m in self.merges()])
+
+    def test_a_merge_waits_when_the_overload_guard_pauses_or_cannot_see(self):
+        self.approved()
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier(waiting=1000)), 3)
+        self.assertIn('needs you: fleet.sh overload merge-batch did not admit a merge batch: paused: escalate '
+                      '(required_job_wait)', out)
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 3)
+        self.assertIn('did not admit a merge batch: paused: escalate (required_job_wait)', out)
+        self.assertEqual(self.merges(), [])
+
+    def test_an_approval_for_another_head_or_from_another_reviewer_merges_nothing(self):
+        self.approved(assigned='b' * 40)
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn('needs you: #12 was not merged: its current review assignment is not for ' + HEAD, out)
+        self.assertNotIn('merge', [m[0] for m in self.merges()])
+
+    def test_an_approval_without_the_selected_reviewers_note_merges_nothing(self):
+        self.approved(reviewer='Claude Code')
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn("needs you: #12 was not merged: no done note from its selected codex reviewer", out)
+        self.assertNotIn('merge', [m[0] for m in self.merges()])
+
+    def test_a_landing_during_a_working_build_unblocks_the_next_ticket(self):
+        self.approved()
+        self.tickets(6, 7)
+        self.comment(6, 'launch-fleet: started')
+        self.change(lambda w: w.update(queue=True, blocked={'7': '5'}))
+        process = self.session('--idle', '8', **self.guard())
+        self.until(lambda: json.loads(self.world.read_text())['prs']['12'].get('queued'), 'the queue', process)
+        time.sleep(1)
+
+        def land(w):
+            w['prs']['12']['state'] = 'MERGED'
+            w['tickets']['5']['state'] = 'CLOSED'
+        self.change(land)
+        self.until(lambda: self.records(7) == ['launch-fleet: started'], 'the unblocked start', process)
+        time.sleep(0.5)
+        process.send_signal(signal.SIGINT)
+        out = self.ended(process, 130)
+        self.assertIn('#12 merged', out)
+
+    def test_an_old_queue_receipt_does_not_hold_a_corrected_head(self):
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12)
+        self.green(12, 5)
+        self.comment(12, 'launch-fleet: merge queued %s: synthetic' % ('b' * 40))
+        process = self.session()
+        self.until(lambda: self.records(12)[-1:] and self.records(12)[-1].startswith(
+            'launch-fleet: review started ' + HEAD), 'the reviewer of the corrected head', process)
+        process.send_signal(signal.SIGINT)
+        self.ended(process, 130)
 
     def test_the_models_rule_can_make_a_review_wait(self):
         self.tickets(5)
@@ -403,6 +556,31 @@ class Session(unittest.TestCase):
         self.assertEqual(self.records(12)[0].split('\n')[1], 'Driver review: same-family')
         process.send_signal(signal.SIGINT)
         self.ended(process, 130)
+
+    def test_without_a_queue_a_merge_line_missing_from_every_merges_nothing(self):
+        self.approved()
+        self.change(lambda w: w['every_hide'].append('12'))
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn('needs you: #12 was not merged: fleet.sh every no longer prints its merge line', out)
+        self.assertEqual([m[0] for m in self.merges()], ['admit'])
+
+    def test_a_queued_merge_is_reported_merged_only_once_it_lands(self):
+        self.approved()
+        self.change(lambda w: w.update(queue=True))
+        process = self.session(**self.guard())
+        self.until(lambda: json.loads(self.world.read_text())['prs']['12'].get('queued'), 'the queue', process)
+        time.sleep(0.5)
+        self.assertIsNone(process.poll())
+
+        def land(w):
+            w['prs']['12']['state'] = 'MERGED'
+            w['tickets']['5']['state'] = 'CLOSED'
+        self.change(land)
+        out = self.ended(process, 0)
+        self.assertIn('#12 queued', out)
+        self.assertLess(out.index('#12 queued'), out.index('#12 merged'))
+        self.assertEqual(out.count('#12 merged'), 1)
+        self.assertIn('session: done: spec done #7', out)
 
     def test_the_reviewer_is_the_other_family_of_the_checked_builder(self):
         self.tickets(5)
@@ -520,6 +698,12 @@ class Session(unittest.TestCase):
                          (1, 'session: refused: a session or heartbeat tick already runs spec #7\n'))
         self.assertEqual(len(self.starts()), 1)
 
+    def test_an_approval_whose_reviewer_note_names_another_pull_request_merges_nothing(self):
+        self.approved(reviewed=19)
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn('needs you: #12 was not merged: no done note from its selected codex reviewer for #12', out)
+        self.assertNotIn('merge', [m[0] for m in self.merges()])
+
     def test_with_one_harness_the_builders_recorded_model_picks_the_review_model(self):
         (self.home / 'bin/codex').unlink()
         self.tickets(5)
@@ -543,6 +727,479 @@ class Session(unittest.TestCase):
         self.assertIn("needs you: the review of #12 waits: the builder's recorded model the-actual-builder is not "
                       "a claude model in the models rule", out)
         self.assertEqual(self.starts(), [])
+
+    def test_two_specs_of_one_repository_each_get_their_own_observation(self):
+        spec = importlib.util.spec_from_file_location('session_batches', HERE / 'session.py')
+        session = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(session)
+        seen = self.home / 'seen'
+        env = dict(self.env, GH_REPO=REPO, LAUNCH_FLEET_OVERLOAD_STATE=str(self.home / 'pause.json'),
+                   LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier(log=seen))
+
+        def runner(number):
+            args = SimpleNamespace(repo=REPO, spec=number, harness='claude', model='synthetic-builder', max=3,
+                                   poll=0.05, ci_poll=0.05, idle=5)
+            return session.Session(args, 'carry on')
+        with mock.patch.dict(os.environ, env, clear=True):
+            batches = [threading.Thread(target=runner(n).batch) for n in ('7', '8')]
+            for batch in batches:
+                batch.start()
+            for batch in batches:
+                batch.join()
+        paths = seen.read_text().split()
+        self.assertEqual(len(set(paths)), 2, paths)
+        self.assertEqual([Path(path).exists() for path in paths], [False, False])
+
+    def replaced(self):
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12)
+        self.green(12, 5)
+        self.comment(12, 'launch-fleet: review given up %s: quiet for an hour' % HEAD)
+        retired = self.note(5, 'reviewer', pr=12, harness='Codex', state='working')
+        self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        return retired
+
+    def test_a_retired_reviewers_late_verdict_and_done_note_merge_nothing(self):
+        retired = self.replaced()
+        self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex', edit=retired)
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn('needs you: #12 was not merged: no done note from its selected codex reviewer for #12, posted '
+                      'since that reviewer started', out)
+        self.assertEqual(self.merges(), [])
+        self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        out = self.ended(self.session(**self.guard()), 0)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+        self.assertIn('session: tick 1: #12 merged\n', out)
+
+    def test_two_reviewer_notes_since_the_current_reviewer_started_merge_nothing(self):
+        self.replaced()
+        self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn("needs you: #12 was not merged: 2 reviewer notes were posted on #5 since its reviewer started, "
+                      "so its selected reviewer can't be told apart", out)
+        self.assertEqual(self.merges(), [])
+
+    def test_an_approval_after_changes_at_the_same_head_needs_the_log_and_merge_decision(self):
+        self.replaced()
+        self.comment(12, 'VERDICT: CHANGES at ' + HEAD)
+        self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn('needs you: #12 was not merged: a VERDICT since its review assignment is not an APPROVE at %s, '
+                      'and no log and merge decision for that head follows it' % HEAD, out)
+        self.assertEqual(self.merges(), [])
+
+    def test_the_same_reviewers_approval_after_a_log_and_merge_decision_merges(self):
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12)
+        self.green(12, 5)
+        self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        mine = self.note(5, 'reviewer', pr=12, harness='Codex', state='working')
+        self.comment(12, 'VERDICT: CHANGES at ' + HEAD)
+        self.comment(12, '**Orchestrator decision:** log and merge: R2 at %s. Polish issues: #9. Why: polish.' % HEAD)
+        self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex', edit=mine)
+        out = self.ended(self.session(**self.guard()), 0)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+        self.assertIn('#12 merged', out)
+
+    def test_a_done_note_edited_before_the_verdict_merges_nothing(self):
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12)
+        self.green(12, 5)
+        self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        time.sleep(1.1)
+        self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn('needs you: #12 was not merged: no done note from its selected codex reviewer for #12', out)
+        self.assertEqual(self.merges(), [])
+
+    def test_an_approved_green_pull_request_is_merged_once_and_the_session_carries_on(self):
+        self.approved()
+        self.tickets(6, 7)
+        self.change(lambda w: w.update(blocked={'7': '5'}))
+        process = self.session()
+        self.until(lambda: self.records(7) == ['launch-fleet: started'], 'the ticket the merge unblocked', process)
+        self.assertIsNone(process.poll())
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+        process.send_signal(signal.SIGINT)
+        out = self.ended(process, 130)
+        self.assertIn('session: tick 1: started #6; #12 merged\n', out)
+        self.assertNotIn('needs you', out)
+        self.assertNotIn("launch-fleet's Merging steps", out)
+        last = out.rindex('session: ')
+        self.assertIn('\nmerged: #12 for #5 at %s\n' % HEAD, out[last:])
+        self.assertLess(out.index('\nmerged: #12'), out.index('\ncarry on: '))
+
+    def test_a_pull_request_that_turns_green_while_a_builder_runs_merges_on_the_next_ci_poll(self):
+        self.approved()
+        self.tickets(6)
+        self.comment(6, 'launch-fleet: started')
+        self.change(lambda w: w['prs']['12']['checks'][0].update(status='IN_PROGRESS', conclusion=None))
+        process = self.session('--idle', '4', '--poll', '0.2')
+        time.sleep(1.5)
+        self.assertEqual(self.merges(), [])
+        self.change(lambda w: w['prs']['12']['checks'][0].update(status='COMPLETED', conclusion='SUCCESS'))
+        turned = time.monotonic()
+        self.until(lambda: 'merge' in [m[0] for m in self.merges()], 'the merge', process)
+        self.assertLess(time.monotonic() - turned, 2)
+        self.assertIsNone(process.poll())
+        out = self.ended(process, 3)
+        self.assertIn('#12 merged\n', out)
+        self.assertIn('needs you: nothing moved on spec #7 for 4 seconds\n', out)
+        self.assertLess(out.index('#12 merged'), out.index('nothing moved'))
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+
+    def test_an_idle_builder_with_steady_checks_costs_no_extra_fleet_reads(self):
+        self.tickets(6)
+        self.comment(6, 'launch-fleet: started')
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12)
+        self.green(12, 5)
+        self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        out = self.ended(self.session('--idle', '2', '--poll', '0.1'), 3)
+        self.assertIn('needs you: nothing moved on spec #7 for 2 seconds\n', out)
+        self.assertLessEqual(len((self.home / 'fleet.log').read_text().splitlines()), 2)
+
+    def test_a_merge_that_reads_pending_is_read_again_and_then_merges(self):
+        self.approved()
+        self.change(lambda w: w.update(pending=1))
+        out = self.ended(self.session('--idle', '10'), 0)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge', 'admit', 'merge'])
+        self.assertEqual(out.count('#12 merged'), 1)
+
+    def test_a_merge_that_stays_pending_still_stops_at_the_idle_limit(self):
+        self.approved()
+        self.change(lambda w: w.update(pending=10 ** 6))
+        out = self.ended(self.session('--idle', '2', '--ci-poll', '0.2'), 3, timeout=20)
+        self.assertIn('needs you: nothing moved on spec #7 for 2 seconds\n', out)
+        self.assertNotIn('merged', out)
+
+    def test_a_late_look_hold_stops_the_session_with_merge_pys_own_line(self):
+        self.approved()
+        self.change(lambda w: w.update(held=True))
+        out = self.ended(self.session(), 3)
+        self.assertIn('needs you: #12 did not merge: held: ask-due: post the evidence ask', out)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+
+    def blocks(self):
+        return [r for r in self.records(12) if r.startswith('launch-fleet: merge blocked ')]
+
+    def test_a_reviewer_replaced_before_its_first_note_shows_merges_nothing(self):
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12)
+        self.green(12, 5)
+        retired = self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.comment(12, 'launch-fleet: review given up %s: quiet for an hour' % HEAD)
+        self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        out = self.ended(self.session(**self.guard()), 3)
+        why = ("a reviewer of #12 started in comment %d and posted no status note before the next reviewer "
+               "started, so a late note from it can't be told from the current reviewer's" % retired)
+        self.assertIn('needs you: #12 was not merged: %s; recorded merge blocked %s\n' % (why, HEAD), out)
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(self.blocks(), ['launch-fleet: merge blocked %s: %s' % (HEAD, why)])
+
+    def test_a_replaced_reviewer_counts_only_with_a_note_for_this_pull_request_before_its_replacement(self):
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12)
+        self.green(12, 5)
+        retired = self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.note(5, 'reviewer', pr=11, harness='Codex', state='working')
+        self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn('needs you: #12 was not merged: a reviewer of #12 started in comment %d and posted no status '
+                      'note before the next reviewer started' % retired, out)
+        self.assertEqual(self.merges(), [])
+
+    def test_a_replaced_reviewer_with_its_own_note_before_the_replacement_lets_the_current_one_merge(self):
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12)
+        self.green(12, 5)
+        self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex', state='working')
+        self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        out = self.ended(self.session(**self.guard()), 0)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+        self.assertIn('#12 merged', out)
+        self.assertEqual(self.blocks(), [])
+
+    def test_an_approval_whose_reviewer_is_still_finishing_waits_for_its_done_note(self):
+        note = self.approved(state='working')
+        process = self.session('--idle', '10', **self.guard())
+        time.sleep(1.5)
+        self.assertIsNone(process.poll(), process.poll() is not None and process.stdout.read())
+        self.assertEqual(self.merges(), [])
+        self.note(5, 'reviewer', pr=12, harness='Codex', edit=note)
+        out = self.ended(process, 0)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+        self.assertIn('#12 waits for its reviewer to finish', out)
+        self.assertIn('#12 merged', out)
+        self.assertEqual(self.blocks(), [])
+
+    def test_an_asking_reviewer_stops_the_session_without_a_block_record(self):
+        self.approved(state='asking')
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn('needs you: #12 was not merged: its selected codex reviewer is asking, so it has not '
+                      'finished\n', out)
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(self.blocks(), [])
+
+    def test_a_working_reviewer_without_a_pr_field_still_waits_for_its_done_note(self):
+        note = self.approved(reviewed=None, state='working')
+        process = self.session('--idle', '10', **self.guard())
+        time.sleep(1.5)
+        self.assertIsNone(process.poll(), process.poll() is not None and process.stdout.read())
+        self.assertEqual(self.merges(), [])
+        self.note(5, 'reviewer', pr=12, harness='Codex', edit=note)
+        out = self.ended(process, 0)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+        self.assertIn('#12 waits for its reviewer to finish', out)
+        self.assertIn('#12 merged', out)
+        self.assertEqual(self.blocks(), [])
+
+    def test_an_asking_reviewer_without_a_pr_field_stops_without_a_block_record(self):
+        self.approved(reviewed=None, state='asking')
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn('needs you: #12 was not merged: its selected codex reviewer is asking, so it has not '
+                      'finished\n', out)
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(self.blocks(), [])
+
+    def test_a_cloudroom_review_assignment_without_driver_line_recognizes_the_other_family_reviewer(self):
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12)
+        self.green(12, 5)
+        self.comment(12, 'launch-fleet: review started ' + HEAD)
+        self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        out = self.ended(self.session(**self.guard()), 0)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+        self.assertIn('#12 merged', out)
+        self.assertEqual(self.blocks(), [])
+
+    def test_a_pull_request_that_turns_green_right_after_the_fleet_read_merges_on_the_first_ci_poll(self):
+        self.approved()
+        self.tickets(6)
+        self.comment(6, 'launch-fleet: started')
+        self.change(lambda w: (w['prs']['12']['checks'][0].update(status='IN_PROGRESS', conclusion=None),
+                               w.update(green_after_read=True)))
+        process = self.session('--idle', '3', '--poll', '0.1', '--ci-poll', '0.2')
+        self.until(lambda: 'merge' in [m[0] for m in self.merges()], 'the merge', process)
+        out = self.ended(process, 3)
+        self.assertIn('#12 merged\n', out)
+        self.assertIn('needs you: nothing moved on spec #7 for 3 seconds\n', out)
+
+    def test_a_queue_entry_that_reads_pending_stays_tracked_until_it_lands(self):
+        self.approved()
+        self.change(lambda w: w.update(queue=True, read_pending=2))
+        process = self.session('--idle', '10', **self.guard())
+        self.until(lambda: json.loads(self.world.read_text())['prs']['12'].get('queued'), 'the queue', process)
+
+        def land(w):
+            w['prs']['12']['state'] = 'MERGED'
+            w['tickets']['5']['state'] = 'CLOSED'
+        self.change(land)
+        out = self.ended(process, 0)
+        self.assertEqual(out.count('#12 merged'), 1)
+        self.assertEqual([m[0] for m in self.merges()].count('merge'), 1)
+
+    def test_a_confirmed_requeue_is_tracked_until_it_lands(self):
+        self.approved()
+        self.change(lambda w: w.update(queue=True, outcomes=['re-queued; recorded 31']))
+        process = self.session('--idle', '10', **self.guard())
+        self.until(lambda: json.loads(self.world.read_text())['prs']['12'].get('queued'), 'the re-queue', process)
+        time.sleep(0.5)
+        self.assertIsNone(process.poll())
+
+        def land(w):
+            w['prs']['12']['state'] = 'MERGED'
+            w['tickets']['5']['state'] = 'CLOSED'
+        self.change(land)
+        out = self.ended(process, 0)
+        self.assertIn('#12 re-queued', out)
+        self.assertEqual(out.count('#12 merged'), 1)
+        self.assertEqual([m[0] for m in self.merges() if m[0] != 'read'], ['admit', 'merge'])
+
+    def test_a_waiting_or_dropped_merge_is_sent_again_on_the_next_poll(self):
+        self.approved()
+        self.change(lambda w: w.update(outcomes=['waiting: its required checks run again after the removal',
+                                                 'dropped; recorded 32']))
+        out = self.ended(self.session('--idle', '10', **self.guard()), 0)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'] * 3)
+        self.assertEqual(out.count('#12 merged'), 1)
+
+    def test_a_head_that_leaves_the_queue_is_reconciled_on_the_ci_poll(self):
+        self.approved()
+        self.tickets(6)
+        self.comment(6, 'launch-fleet: started')
+        self.change(lambda w: w.update(queue=True))
+        process = self.session('--idle', '6', '--poll', '0.1', '--ci-poll', '0.2', **self.guard())
+        self.until(lambda: json.loads(self.world.read_text())['prs']['12'].get('queued'), 'the queue', process)
+        time.sleep(0.5)
+        self.change(lambda w: w['prs']['12'].update(queued=False))
+        self.until(lambda: [m[0] for m in self.merges()].count('merge') == 2, 'the merge sent again', process)
+        process.send_signal(signal.SIGINT)
+        self.ended(process, 130)
+
+    def supplier(self, fails=False, waiting=0, log=None):
+        path = self.home / 'supply.py'
+        path.write_text(
+            'import json, sys, time\n'
+            'args = sys.argv[1:]\n'
+            'output = args[args.index(\'--output\') + 1]\n'
+            'if %r:\n'
+            '    with open(%r, \'a\') as log:\n'
+            '        log.write(output + \'\\n\')\n'
+            '    time.sleep(0.5)\n'
+            'if %r:\n'
+            '    sys.exit(1)\n'
+            'now = int(time.time())\n'
+            "pool = {'remaining': 1000, 'limit': 1000, 'reset_at': now + 3600, 'retry_after': 0}\n"
+            "jobs = [{'id': '77', 'required': True, 'status': 'queued', 'queued_at': now - %d, 'started_at': None}]\n"
+            "seen = {'repository': args[args.index('--repository') + 1], 'observed_at': now, 'complete': True,\n"
+            "        'queue': {'complete': True, 'jobs': jobs if %d else []}, 'budgets': {'rest': pool, 'graphql': pool}}\n"
+            "with open(output, 'w') as out:\n"
+            '    json.dump(seen, out)\n' % (bool(log), str(log), fails, waiting, waiting))
+        return str(path)
+
+    def probes(self):
+        return json.loads(self.world.read_text()).get('probes', 0)
+
+    def test_with_a_supplier_the_supplier_alone_observes_and_its_failure_denies_the_batch(self):
+        self.approved()
+        self.change(lambda w: w.update(budget=None))
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier(fails=True)), 3)
+        self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(self.probes(), 0)
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 3)
+        self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
+        self.assertEqual(self.merges(), [])
+
+    def test_with_a_healthy_supplier_the_session_makes_no_probe_of_its_own(self):
+        self.approved()
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 0)
+        self.assertIn('#12 merged', out)
+        self.assertEqual(self.probes(), 0)
+
+    def test_a_fresh_project_without_a_supplier_merges_an_approved_green_pull_request(self):
+        self.approved()
+        for name in ('LAUNCH_FLEET_OVERLOAD_STATE', 'LAUNCH_FLEET_OVERLOAD_INPUT', 'LAUNCH_FLEET_OVERLOAD_SUPPLY'):
+            self.env.pop(name, None)
+        out = self.ended(self.session(), 0)
+        self.assertIn('#12 merged', out)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+        self.assertEqual(self.probes(), 0)
+        self.assertEqual(sorted(p.name for p in self.lock_dir.parent.glob('overload-*')), [])
+
+    def test_with_a_supplier_but_no_overload_state_nothing_is_merged(self):
+        self.approved()
+        del self.env['LAUNCH_FLEET_OVERLOAD_STATE']
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 3)
+        self.assertIn('needs you: no merge batch: LAUNCH_FLEET_OVERLOAD_SUPPLY is set but LAUNCH_FLEET_OVERLOAD_STATE '
+                      "is not, so this session would not share the repository's one overload pause; set it to the "
+                      'state path the fleet uses\n', out)
+        self.assertEqual(self.merges(), [])
+
+    def test_with_overload_input_but_no_overload_state_nothing_is_merged(self):
+        self.approved()
+        del self.env['LAUNCH_FLEET_OVERLOAD_STATE']
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_INPUT=str(self.home / 'observation.json')), 3)
+        self.assertIn('needs you: no merge batch: LAUNCH_FLEET_OVERLOAD_INPUT is set but LAUNCH_FLEET_OVERLOAD_STATE '
+                      "is not, so this session would not share the repository's one overload pause; set it to the "
+                      'state path the fleet uses\n', out)
+        self.assertEqual(self.merges(), [])
+
+    def test_an_existing_overload_pause_on_configured_state_is_honored_without_a_supplier(self):
+        self.approved()
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier(waiting=1000)), 3)
+        self.assertIn('did not admit a merge batch: paused: escalate (required_job_wait)', out)
+        out = self.ended(self.session(), 3)
+        self.assertIn('did not admit a merge batch: paused: escalate (required_job_wait)', out)
+        self.assertEqual(self.merges(), [])
+
+    def test_without_a_supplier_a_failed_probe_denies_and_pauses_the_configured_state(self):
+        for label, fault in (
+            ('rest_error', lambda w: w.update(budget=None)),
+            ('graphql_error', lambda w: w.update(failing=['graphql'])),
+            ('secondary_backoff', lambda w: w.update(backoff={'core': 60})),
+            ('bare_headers', lambda w: w.update(bare=True)),
+            ('passed_reset', lambda w: w.update(reset_in=-10)),
+        ):
+            with self.subTest(label):
+                state = self.home / ('pause-%s.json' % label)
+                self.change(lambda w: w.update(budget=5000, failing=[], backoff={}, bare=False, reset_in=3600))
+                self.approved()
+                self.change(fault)
+                out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_STATE=str(state)), 3)
+                self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
+                self.assertEqual(self.merges(), [])
+                self.assertGreater(self.probes(), 0)
+                self.change(lambda w: w.update(budget=5000, failing=[], backoff={}, bare=False, reset_in=3600))
+                out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_STATE=str(state)), 3)
+                self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
+                self.assertEqual(self.merges(), [])
+
+    def test_without_a_supplier_two_specs_of_one_repository_each_get_their_own_observation(self):
+        spec = importlib.util.spec_from_file_location('session_batches_probe', HERE / 'session.py')
+        session = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(session)
+        seen = []
+        original_guarded = session.Session.guarded
+
+        def record(inst, env):
+            seen.append(env['LAUNCH_FLEET_OVERLOAD_INPUT'])
+            self.assertTrue(Path(env['LAUNCH_FLEET_OVERLOAD_INPUT']).is_file())
+            time.sleep(0.2)
+            return original_guarded(inst, env)
+
+        env = dict(self.env, GH_REPO=REPO, LAUNCH_FLEET_OVERLOAD_STATE=str(self.home / 'probe-pause.json'))
+        env.pop('LAUNCH_FLEET_OVERLOAD_SUPPLY', None)
+
+        def runner(number):
+            args = SimpleNamespace(repo=REPO, spec=number, harness='claude', model='synthetic-builder', max=3,
+                                   poll=0.05, ci_poll=0.05, idle=5)
+            return session.Session(args, 'carry on')
+
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(session.Session, 'guarded', record):
+            batches = [threading.Thread(target=runner(n).batch) for n in ('7', '8')]
+            for batch in batches:
+                batch.start()
+            for batch in batches:
+                batch.join()
+        self.assertEqual(len(set(seen)), 2, seen)
+        self.assertEqual([Path(path).exists() for path in seen], [False, False])
+
+    def test_a_definitive_refusal_records_merge_blocked_once(self):
+        self.approved(reviewer='Claude Code')
+        for _ in range(2):
+            out = self.ended(self.session(**self.guard()), 3)
+            self.assertIn('needs you: #12 was not merged: no done note from its selected codex reviewer', out)
+            self.assertIn('; recorded merge blocked %s\n' % HEAD, out)
+        self.assertEqual(len(self.blocks()), 1)
+        self.assertTrue(self.blocks()[0].startswith('launch-fleet: merge blocked %s: no done note from its '
+                                                    'selected codex reviewer for #12' % HEAD))
+        self.assertEqual(self.merges(), [])
 
     def test_a_lock_folder_removed_under_a_contender_is_not_a_second_lock(self):
         holder, ready, release = self.home / 'holder.py', self.home / 'ready', self.home / 'release'
@@ -576,6 +1233,111 @@ class Session(unittest.TestCase):
         self.assertEqual(calls, [self.lock_dir])
         self.assertEqual((third.returncode, third.stdout),
                          (1, 'session: refused: a session or heartbeat tick already runs spec #7\n'))
+
+    def logged_host(self):
+        (self.scripts / 'host.py').unlink()
+        (self.scripts / 'host.py').write_text(HOST_LOG % str(HERE / 'host.py'))
+
+    def host_starts(self):
+        path = self.home / 'host.log'
+        calls = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        return [c[2:] for c in calls if c[0] == 'start']
+
+    def roster(self, models=MODELS % ('Codex', 'codex')):
+        text = FLEET_MD.replace(MODELS % ('Codex', 'codex'), models) + ROSTER
+        self.change(lambda w: w.update(fleet_md=text))
+        writer = self.home / 'writer'
+        (writer / 'docs/agents/fleet.md').write_text(text)
+        for args in (['add', '-A'], ['commit', '-q', '-m', 'roster'],
+                     ['push', '-q', str(self.home / 'origin.git'), 'trunk']):
+            subprocess.run(['git', '-C', str(writer), *args], check=True, capture_output=True, env=self.env)
+        (self.home / 'adapters/local/driver').write_text(
+            '#!/bin/sh\nFAKE_DRIVER_HOST=local FAKE_EFFORT_MODE=takes exec "%s" -I "%s" "$@"\n'
+            % (sys.executable, HERE / 'fixtures/roster/effort/driver.py'))
+        self.logged_host()
+
+    def built(self, harness='Claude Code', model='Opus 5.5'):
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12, harness=harness, model=model)
+        self.green(12, 5)
+
+    def reviewed(self, *extra):
+        process = self.session(*extra)
+        self.until(lambda: self.records(12)[:1] and self.records(12)[0].startswith(
+            'launch-fleet: review started ' + HEAD), 'the reviewer', process)
+        process.send_signal(signal.SIGINT)
+        self.ended(process, 130)
+        return self.host_starts(), self.starts()
+
+    def test_with_a_roster_a_builder_starts_on_the_builder_row_at_its_effort(self):
+        self.roster()
+        self.tickets(5)
+        process = self.session('--model', 'synthetic-table-builder')
+        self.until(lambda: self.records(5) == ['launch-fleet: started'], 'the start', process)
+        process.send_signal(signal.SIGINT)
+        self.ended(process, 130)
+        self.assertEqual(self.host_starts(), [['5', 'claude', 'synthetic-table-builder', '--row', 'Builder']])
+        self.assertEqual(self.starts(), [{'repository': REPO, 'ticket': 5, 'skill': 'build-ticket', 'harness': 'claude',
+                                          'model': 'synthetic-table-builder', 'effort': 'high'}])
+
+    def test_with_a_roster_the_reviewer_starts_on_the_reviewer_row_at_its_effort(self):
+        self.roster((MODELS % ('Codex', 'codex')).replace('| Table | High |', '| Table | Low |'))
+        self.built()
+        asked, sent = self.reviewed()
+        self.assertEqual(asked, [['12', 'codex', 'synthetic-table-reviewer', 'review-ticket', '--row', 'Reviewer']])
+        self.assertEqual(sent, [{'repository': REPO, 'ticket': 12, 'skill': 'review-ticket', 'harness': 'codex',
+                                 'model': 'synthetic-table-reviewer', 'effort': 'low'}])
+
+    def test_with_a_roster_a_cross_family_fallback_review_starts_on_the_builder_row(self):
+        self.roster((MODELS % ('Codex', 'codex')).replace('| Table | High |', '| Table | Low |'))
+        self.built(harness='Codex')
+        asked, sent = self.reviewed()
+        self.assertEqual(asked, [['12', 'claude', 'synthetic-table-builder', 'review-ticket', '--row', 'Builder']])
+        self.assertEqual(sent, [{'repository': REPO, 'ticket': 12, 'skill': 'review-ticket', 'harness': 'claude',
+                                 'model': 'synthetic-table-builder', 'effort': 'high'}])
+
+    def test_with_a_roster_and_one_harness_the_review_starts_on_the_builders_matched_row(self):
+        (self.home / 'bin/codex').unlink()
+        self.roster()
+        self.built(model='Actual Medium')
+        asked, sent = self.reviewed()
+        self.assertEqual(asked, [['12', 'claude', 'synthetic-actual-builder', 'review-ticket', '--row',
+                                  'Small builder']])
+        self.assertEqual(sent, [{'repository': REPO, 'ticket': 12, 'skill': 'review-ticket', 'harness': 'claude',
+                                 'model': 'synthetic-actual-builder', 'effort': 'medium'}])
+
+    def test_with_a_roster_and_one_harness_a_builder_model_on_no_worker_row_makes_the_review_wait(self):
+        (self.home / 'bin/codex').unlink()
+        lead = ('| Orchestrator | Claude Code | Lead | High | `--provider claude-code --model synthetic-lead '
+                '--reasoning-level high` |\n')
+        rows = (MODELS % ('Codex', 'codex')).split('\n')
+        self.roster('\n'.join(rows[:4]) + '\n' + lead + '\n'.join(rows[5:]))
+        self.built(model='Lead')
+        out = self.ended(self.session('--idle', '5'), 3)
+        self.assertIn("needs you: the review of #12 waits: the builder's recorded model Lead is on no builder, "
+                      "fixer or reviewer row of the Models table\n", out)
+        self.assertEqual((self.host_starts(), self.starts(), self.records(12)), ([], [], []))
+
+    def test_without_a_roster_host_starts_take_the_arguments_they_took_before_rows(self):
+        self.logged_host()
+        self.tickets(5)
+        self.change(lambda w: w['branches'].update({'5': 'room/5-synthetic'}))
+        process = self.session()
+        self.until(lambda: self.records(5) == ['launch-fleet: start checked, branch room/5-synthetic'], 'check',
+                   process)
+        self.green(12, 5)
+        self.note(5, 'builder', pr=12)
+        self.until(lambda: self.records(12)[:1] and self.records(12)[0].startswith(
+            'launch-fleet: review started ' + HEAD), 'the reviewer', process)
+        process.send_signal(signal.SIGINT)
+        self.ended(process, 130)
+        self.assertEqual(self.host_starts(), [['5', 'claude', 'synthetic-builder'],
+                                              ['12', 'codex', 'synthetic-table-reviewer', 'review-ticket']])
+        self.assertEqual(self.starts(), [
+            {'repository': REPO, 'ticket': 5, 'skill': 'build-ticket', 'harness': 'claude', 'model': 'synthetic-builder'},
+            {'repository': REPO, 'ticket': 12, 'skill': 'review-ticket', 'harness': 'codex',
+             'model': 'synthetic-table-reviewer'}])
 
 
 if __name__ == '__main__':

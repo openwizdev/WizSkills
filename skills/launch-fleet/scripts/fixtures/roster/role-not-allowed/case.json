@@ -1,0 +1,134 @@
+{
+  "repository": "syn-owner/site",
+  "person": "syn-owner",
+  "roster": [
+    {
+      "name": "Demo Bot",
+      "kind": "bot",
+      "driver": "demo-bot",
+      "roles": [
+        "helper",
+        "orchestrator"
+      ],
+      "writes_as": "syn-owner's App",
+      "label": "Demo Bot via syn-owner"
+    },
+    {
+      "name": "Claude Code",
+      "kind": "harness",
+      "driver": "local",
+      "roles": [
+        "builder"
+      ],
+      "writes_as": "syn-owner's App",
+      "label": "Claude Code via syn-owner"
+    }
+  ],
+  "picks": [
+    {
+      "ticket": 2001,
+      "role": "builder",
+      "start": {
+        "kind": "build",
+        "labels": []
+      },
+      "choice": {
+        "harness": "Claude Code",
+        "provider": "claude-code",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "model_name": "Opus 5.5"
+      },
+      "pick": {
+        "name": "Claude Code",
+        "kind": "harness",
+        "driver": "local",
+        "start": {
+          "harness": "claude",
+          "model": "claude-opus-5-5"
+        },
+        "note": {
+          "harness": "Claude Code via syn-owner",
+          "model": "Opus 5.5 default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "builder-2001",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    },
+    {
+      "ticket": 2002,
+      "role": "reviewer",
+      "start": {
+        "kind": "review",
+        "builder_family": "gpt"
+      },
+      "choice": {
+        "harness": "Claude Code",
+        "provider": "claude-code",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "model_name": "Opus 5.5"
+      },
+      "pick": null,
+      "waits": "roster",
+      "look": "roster: no entry may take the reviewer role with Claude Code"
+    },
+    {
+      "ticket": 2003,
+      "role": "reviewer",
+      "start": {
+        "kind": "review",
+        "builder_family": "claude"
+      },
+      "choice": null,
+      "pick": null,
+      "waits": "models",
+      "look": null
+    },
+    {
+      "ticket": 2004,
+      "role": "orchestrator",
+      "start": {
+        "kind": "spec"
+      },
+      "choice": {
+        "harness": "Claude Code",
+        "provider": "claude-code",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "model_name": "Opus 5.5"
+      },
+      "pick": {
+        "name": "Demo Bot",
+        "kind": "bot",
+        "driver": "demo-bot",
+        "start": {
+          "harness": "claude",
+          "model": "claude-opus-5-5"
+        },
+        "note": {
+          "harness": "Demo Bot via syn-owner",
+          "model": "Opus 5.5 default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "orchestrator-2004",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    }
+  ]
+}

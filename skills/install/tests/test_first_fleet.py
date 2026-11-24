@@ -250,8 +250,8 @@ def github(repos=(), **switches):
     return json.dumps(world)
 
 
-SEEDED = ('PUT', 'repos/%s/contents/tests/test_check.py' % REPO), \
-    ('PUT', 'repos/%s/contents/.github/workflows/check.yml' % REPO)
+SEEDED = ('POST', 'graphql createCommitOnBranch %s tests/test_check.py' % REPO), \
+    ('POST', 'graphql createCommitOnBranch %s .github/workflows/check.yml' % REPO)
 
 
 class Journey:
@@ -1196,10 +1196,7 @@ class Launch(unittest.TestCase):
         self.assertEqual([c[1] for c in j.gh_creates()].count('create'), 1, 'a repeat only reads')
 
     def test_a_lost_create_is_read_before_any_retry(self):
-        # lost: created but no answer, settled by the read-back; unread: the
-        # read-back itself fails, so it stays uncertain and the next run reads
-        # first; fail: nothing was created, so a later yes may create it.
-        for create, fails, first, second, creates in (('lost', 0, 0, 0, 1), ('lost', 2, 6, 6, 1), ('fail', 0, 5, 0, 2)):
+        for create, fails, first, second, creates in (('lost', 0, 5, 5, 1), ('lost', 2, 6, 6, 1), ('fail', 0, 5, 0, 2)):
             with self.subTest(create, fails=fails):
                 j = Journey(self)
                 j.repos.write_text(github(create=create, fail_after_create=fails))
@@ -1208,8 +1205,10 @@ class Launch(unittest.TestCase):
                     self.assertEqual(j.helper(yes).returncode, 6, j.calls[-1][1].stdout)
                     self.assertIn('uncertain', j.calls[-1][1].stdout)
                     self.assertEqual(j.helper(yes).returncode, 6, 'the next read fails too: still uncertain, no create')
-                    self.assertEqual(j.helper(yes).returncode, 0, j.calls[-1][1].stdout)
+                    self.assertEqual(j.helper(yes).returncode, 5, j.calls[-1][1].stdout)
+                    self.assertIn('uncertain', j.calls[-1][1].stdout)
                     self.assertEqual([c[1] for c in j.gh_creates()].count('create'), 1, 'read, never created twice')
+                    self.assertNotIn('seeded', json.loads(j.state.read_text())['created'])
                     continue
                 self.assertEqual(j.helper(yes).returncode, first, j.calls[-1][1].stdout)
                 state = json.loads(j.repos.read_text())
@@ -1318,6 +1317,46 @@ class LocalSession(unittest.TestCase):
         digest = re.findall(r'(?m)^Confirmation: ([0-9a-f]{64})$', preview.stdout)[0]
         self.assertEqual(self.log(road, 'session.log'), [], 'the preview starts nothing')
         return preview, road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest])
+
+    def merged_mode_rows(self, rows):
+        road = self.road()
+        state = road.saved()
+        state['host']['harnesses'] = ['claude-code', 'codex']
+        modes = {'claude': 'acceptEdits', 'codex': 'workspace-write'}
+        state['mode'] = {'harness': 'claude-code', 'mode': 'acceptEdits', 'modes': modes}
+        road.state.write_text(json.dumps(state))
+        (road.host_state / 'approvals.json').write_text(json.dumps({road.repo: modes}))
+        world = json.loads(road.world_path.read_text())
+        path = 'docs/agents/fleet.md'
+        fleet = re.sub(r'(?m)^\| Harness permission mode.*\n', '', world['files'][path])
+        world['files'][path] = fleet + '\n'.join(rows) + '\n'
+        road.world = world
+        road.save_world()
+        road.origin_write({path: world['files'][path]})
+        return road
+
+    def test_local_mode_rows_are_aligned_and_reordered(self):
+        road = self.merged_mode_rows([
+            '|  Harness  permission mode (codex)   | `workspace-write`    |',
+            '  | Harness permission mode (claude) | `acceptEdits` |',
+        ])
+        setting = road.helper(['setting'])
+        self.assertEqual(setting.returncode, 0, setting.stdout + setting.stderr)
+        preview = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(preview.returncode, 12, preview.stdout + preview.stderr)
+        self.assertEqual(self.log(road, 'session.log'), [])
+
+    def test_local_mode_rows_refuse_a_padded_duplicate_before_preview(self):
+        road = self.merged_mode_rows([
+            '| Harness permission mode (claude) | `acceptEdits` |',
+            '| Harness permission mode (codex) | `workspace-write` |',
+            '|  Harness permission mode (codex)  | `workspace-write` |',
+        ])
+        preview = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(preview.returncode, 5, preview.stdout + preview.stderr)
+        self.assertNotIn('Confirmation:', preview.stdout)
+        self.assertEqual(road.helper(['setting']).returncode, 5)
+        self.assertEqual(self.log(road, 'session.log'), [])
 
     def test_a_local_launch_starts_the_session_in_this_chat_and_installs_no_heartbeat(self):
         road = self.road()
@@ -1629,6 +1668,158 @@ class DemoRepository(unittest.TestCase):
                 self.assertEqual(self.writes(j), [])
                 if state != 'created':
                     self.assertNotEqual(json.loads(j.state.read_text())['created']['state'], 'created')
+
+    def test_a_teammates_repository_at_the_name_is_never_seeded_on_resume(self):
+        teammate = {'main': {'README.md': '# demo\n'}}
+        for state in ('pending', 'uncertain'):
+            with self.subTest(state):
+                j = Journey(self)
+                j.repos.write_text(github([demo_repository(branches=teammate)]))
+                j.state.write_text(json.dumps({'created': {'repo': REPO, 'state': state}}))
+                j.state.chmod(0o600)
+                before = self.world(j)['repos']
+                for _ in range(2):
+                    result = j.helper(YES_DEMO)
+                    self.assertEqual(result.returncode, 5, result.stdout)
+                    self.assertIn('uncertain', result.stdout)
+                    self.assertIn('Continue with %s as an existing repository: run next' % REPO, result.stdout)
+                    self.assertNotIn('another name', result.stdout, 'this onboarding makes no second repository')
+                    self.assertNotIn('Created and read back', result.stdout)
+                self.assertEqual((self.world(j)['repos'], self.writes(j)), (before, []), 'neither file written')
+                self.assertEqual(json.loads(j.state.read_text())['created'], {'repo': REPO, 'state': 'unproven'})
+                other = j.helper(['create-repo', '--repo', 'synthetic-owner/second-demo', '--yes'])
+                self.assertEqual(other.returncode, 5, other.stdout)
+                self.assertEqual(self.writes(j), [], 'still uncertain: no second repository')
+
+    def test_a_lost_reply_or_another_id_writes_neither_file(self):
+        for name, switches, saved in (('lost reply', {'create': 'lost'}, None),
+                                      ('reply names another id', {'reply_id': 'R_other'}, None),
+                                      ('saved id is not the repository read', {}, 'R_other')):
+            with self.subTest(name):
+                j = Journey(self)
+                repos = [demo_repository(branches={'main': {'README.md': '# demo\n'}})] if saved else []
+                j.repos.write_text(github(repos, **switches))
+                if saved:
+                    j.state.write_text(json.dumps({'created': {'repo': REPO, 'state': 'uncertain', 'id': saved}}))
+                    j.state.chmod(0o600)
+                result = j.helper(YES_DEMO)
+                self.assertEqual(result.returncode, 5, result.stdout)
+                self.assertIn('uncertain', result.stdout)
+                self.assertEqual(self.writes(j), [] if saved else [['POST', 'user/repos']], 'neither file written')
+                self.assertEqual(j.helper(YES_DEMO).returncode, 5, 'a rerun neither creates nor seeds')
+                self.assertEqual(self.writes(j), [] if saved else [['POST', 'user/repos']])
+                self.assertNotIn('seeded', json.loads(j.state.read_text())['created'])
+
+    def test_a_verified_create_read_back_later_is_seeded_once(self):
+        empty = [{'method': 'GET', 'path': 'repos/%s/git/ref/heads/main' % REPO, 'mode': 409, 'times': 2}]
+        for name, switches, unread in (('read fails once', {'fail_after_create': 1}, 1),
+                                       ('read empty twice', {'faults': empty}, 2)):
+            with self.subTest(name):
+                j = Journey(self)
+                j.repos.write_text(github(**switches))
+                for _ in range(unread):
+                    self.assertEqual(j.helper(YES_DEMO).returncode, 6, j.calls[-1][1].stdout)
+                    self.assertEqual(self.writes(j), [['POST', 'user/repos']], 'unread: nothing seeded yet')
+                done = j.helper(YES_DEMO)
+                self.assertEqual(done.returncode, 0, done.stdout)
+                self.assertIn('Created and read back', done.stdout)
+                self.assertEqual(j.helper(YES_DEMO).returncode, 0)
+                self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)], 'both files, once')
+
+    def test_a_retry_keeps_a_verified_id_and_the_one_repository_guard_when_the_name_stops_resolving(self):
+        made = demo_repository(branches={'main': {'README.md': '# demo\n'}})
+        made['node_id'] = 'R_made'
+        renamed = dict(made, full_name='synthetic-owner/renamed')
+        for name, repos, record, code in (
+                ('verified, then renamed', [renamed], {'state': 'uncertain', 'id': 'R_made'}, 6),
+                ('verified, then hidden', [dict(made, hidden=True)], {'state': 'uncertain', 'id': 'R_made'}, 6),
+                ('unproven, then hidden', [dict(made, hidden=True)], {'state': 'unproven'}, 6),
+                ('pending, then hidden', [dict(made, hidden=True)], {'state': 'pending'}, 6)):
+            with self.subTest(name):
+                j = Journey(self)
+                j.repos.write_text(github(repos))
+                j.state.write_text(json.dumps({'created': {'repo': REPO, **record}}))
+                j.state.chmod(0o600)
+                for _ in range(2):
+                    result = j.helper(YES_DEMO)
+                    self.assertEqual(result.returncode, code, result.stdout)
+                    self.assertNotIn('Created and read back', result.stdout)
+                self.assertEqual(self.writes(j), [], 'no second create, nothing seeded')
+                kept = json.loads(j.state.read_text())['created']
+                self.assertEqual((kept['repo'], kept['state'] != 'absent', kept.get('id')),
+                                 (REPO, True, record.get('id')), 'the id and the guard are kept')
+                other = j.helper(['create-repo', '--repo', 'synthetic-owner/second-demo', '--yes'])
+                self.assertEqual(other.returncode, 5, other.stdout)
+                self.assertEqual(self.writes(j), [], 'no second repository under another name')
+
+    def test_a_repository_replaced_before_a_seed_write_gets_neither_file(self):
+        j = Journey(self)
+        j.repos.write_text(github(replace_before_write=True))
+        for _ in range(2):
+            result = j.helper(YES_DEMO)
+            found = self.world(j)['repos'][REPO.lower()]
+            self.assertEqual(found['node_id'], 'R_replacement', 'the fake replaced it before the first write')
+            self.assertEqual(found['branches'], {'main': {'README.md': '# synthetic-sheep\n'}},
+                             'nothing written into the replacement')
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertNotIn('Created and read back', result.stdout)
+        self.assertEqual(self.writes(j), [['POST', 'user/repos']])
+
+    def test_a_missing_starter_file_not_found_seeds_both_files_and_other_errors_refuse(self):
+        j = Journey(self)
+        done = j.helper(YES_DEMO)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)])
+        self.assertEqual(j.helper(YES_DEMO).returncode, 0)
+        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)])
+        bad_cases = (
+            ('forbidden on file', [{'type': 'FORBIDDEN', 'path': ['repository', 'defaultBranchRef', 'target', 'file'],
+                                    'message': 'synthetic'}]),
+            ('not found on another path', [{'type': 'NOT_FOUND', 'path': ['repository'], 'message': 'synthetic'}]),
+            ('extra error alongside not found', [
+                {'type': 'NOT_FOUND', 'path': ['repository', 'defaultBranchRef', 'target', 'file'],
+                 'message': 'synthetic'},
+                {'type': 'INTERNAL', 'path': ['repository'], 'message': 'synthetic'},
+            ]),
+        )
+        for label, errors in bad_cases:
+            with self.subTest(label):
+                j = Journey(self)
+                err_file = j.dir / 'graphql-errors.json'
+                err_file.write_text(json.dumps(errors))
+                wrapper = j.dir / 'gh_wrap.py'
+                wrapper.write_text(
+                    'import json, subprocess, sys\n'
+                    'r = subprocess.run([sys.executable, "-I", "-S", %r, *sys.argv[1:]], capture_output=True)\n'
+                    'out = r.stdout\n'
+                    'if sys.argv[1:3] == ["api", "graphql"] and "createCommitOnBranch" not in " ".join(sys.argv):\n'
+                    '    body = json.loads(out.decode())\n'
+                    '    body["errors"] = json.loads(open(%r).read())\n'
+                    '    out = json.dumps(body).encode()\n'
+                    '    sys.stdout.buffer.write(out)\n'
+                    '    sys.exit(1)\n'
+                    'sys.stdout.buffer.write(out)\n'
+                    'sys.stderr.buffer.write(r.stderr)\n'
+                    'sys.exit(r.returncode)\n' % (str(FAKE_GH), str(err_file))
+                )
+                gh = j.dir / 'bin/gh'
+                gh.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, wrapper))
+                gh.chmod(0o755)
+                result = j.helper(YES_DEMO)
+                self.assertEqual(result.returncode, 6, result.stdout)
+                self.assertIn('Could not read tests/test_check.py', result.stdout)
+                self.assertEqual(self.writes(j), [['POST', 'user/repos']], 'nothing seeded on unexpected error')
+
+    def test_the_create_reply_is_matched_by_node_id_never_its_numeric_id(self):
+        for name, switches, code, writes in (('numeric id differs, node_id matches', {}, 0, SEEDED),
+                                             ('node_id differs from the read-back', {'reply_id': 'R_other'}, 5, ())):
+            with self.subTest(name):
+                j = Journey(self)
+                j.repos.write_text(github(**switches))
+                result = j.helper(YES_DEMO)
+                self.assertEqual(result.returncode, code, result.stdout)
+                self.assertEqual(j.helper(YES_DEMO).returncode, code)
+                self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, writes)], 'seeded once or never')
 
     # Catches: someone else's repository, private or public, taken as the demo
     # or written to, and a repeat that rewrites the owner's later work.
@@ -2379,6 +2570,49 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertEqual(self.world(j)['host_pulls'], world['host_pulls'], 'nothing reopened')
         self.assertEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: plan.')
+
+    def test_resuming_a_host_setting_refuses_a_retargeted_or_cross_repository_pull(self):
+        j = self.road(brain='companion', pull='merged')
+        self.yes(j)
+        self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                         .returncode, 0)
+        self.assertEqual(self.setting(j, '--yes').returncode, 0)
+        original = self.world(j)
+        state = j.state.read_bytes()
+        for fields in ({'baseRefName': 'other'}, {'headRefName': 'other'}, {'isCrossRepository': True}):
+            with self.subTest(fields=fields):
+                j.world = self.world(j)
+                j.world['host_pulls'] = [dict(original['host_pulls'][0], **fields)]
+                j.save_world()
+                before = j.world_path.read_bytes()
+                resumed = self.setting(j, '--yes')
+                self.assertEqual(resumed.returncode, 5, resumed.stdout + resumed.stderr)
+                self.assertIn('pull request', resumed.stdout)
+                self.assertEqual(j.state.read_bytes(), state)
+                self.assertEqual(j.world_path.read_bytes(), before)
+
+    def test_resuming_checks_the_reported_pull_commits_for_unapproved_changes(self):
+        j = self.road(brain='companion', pull='merged')
+        self.yes(j)
+        self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                         .returncode, 0)
+        self.assertEqual(self.setting(j, '--yes').returncode, 0)
+        j.world = self.world(j)
+        pull = j.world['host_pulls'][0]
+        pull['headRefOid'] = 'c' * 40
+        j.world['refs'] = {pull['headRefOid']: 'synthetic-pull-head'}
+        head = dict(j.world['branches'][pull['head']])
+        unexpected = 'README.md'
+        head[unexpected] = 'Unapproved setup change.\n'
+        j.world['branches']['synthetic-pull-head'] = head
+        j.save_world()
+        before = j.world_path.read_bytes(), j.state.read_bytes()
+
+        resumed = self.setting(j, '--yes')
+
+        self.assertEqual(resumed.returncode, 5, resumed.stdout + resumed.stderr)
+        self.assertIn('changes README.md beyond the approved setup', resumed.stdout)
+        self.assertEqual((j.world_path.read_bytes(), j.state.read_bytes()), before)
 
     def test_a_readme_only_repository_gets_its_setup_files_in_the_one_setup_pull_request(self):
         j = self.road(files={'README.md': '# synthetic\n'})

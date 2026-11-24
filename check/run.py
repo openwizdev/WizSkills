@@ -64,6 +64,7 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-inbox.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-records.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-status.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-context.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-ops-starts.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-on1.py'],
                      ['sh', 'skills/launch-fleet/scripts/test-loop.sh'],
@@ -630,7 +631,8 @@ def unlisted_tests(root):
                 covered.add(rel)
     # Huntr's public shell entrypoint executes its four Node test modules.
     covered.update('skills/huntr/scripts/' + name for name in
-                   ('gate.test.mjs', 'manifest.test.mjs', 'records.test.mjs', 'controller.test.mjs'))
+                   ('gate.test.mjs', 'manifest.test.mjs', 'records.test.mjs', 'controller.test.mjs',
+                    'targets.test.mjs', 'findings.test.mjs'))
     discovered = {p.relative_to(root).as_posix() for p in (root / 'skills').rglob('*')
                   if p.is_file() and 'fixtures' not in p.parts and
                   ((p.name.startswith('test') and p.suffix in ('.py', '.sh'))

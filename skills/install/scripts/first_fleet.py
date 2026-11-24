@@ -452,10 +452,30 @@ MODES = {
 
 
 def mode_rows(text):
-    """KN3's permission-mode rows in a fleet.md text, each as its value, or None for one it can't read."""
-    rows = [line for line in (text or '').splitlines() if line.startswith(MODE_ROW)]
-    values = [re.findall(r'`([^`]*)`', row) for row in rows]
-    return [v[0] if len(v) == 1 and re.fullmatch(MODE_VALUE, v[0]) else None for v in values]
+    label = MODE_ROW.strip('| ')
+    programs = {label: None, **{'%s (%s)' % (label, program): program for program in MODE_FLAGS}}
+    modes = {}
+    for line in (text or '').splitlines():
+        cells = line.strip().split('|', 2)
+        if len(cells) != 3 or cells[0]:
+            continue
+        name = ' '.join(cells[1].split())
+        if name != label and not name.startswith(label + ' ('):
+            continue
+        if name not in programs:
+            return None
+        program = programs[name]
+        if program in modes or (program is None and not line.startswith(MODE_ROW)):
+            return None
+        values = re.findall(r'`([^`]*)`', cells[2])
+        if len(values) != 1 or not re.fullmatch(MODE_VALUE, values[0]):
+            return None
+        modes[program] = values[0]
+    return None if None in modes and len(modes) > 1 else modes
+
+
+def modes_match(rows, modes):
+    return rows == modes or (len(modes) == 1 and rows == {None: next(iter(modes.values()))})
 
 
 def saved_rows(env):
@@ -468,7 +488,7 @@ def saved_rows(env):
         text = module.setting_text()
     except Exception as error:
         raise Exit(1, 'Could not read %s from the default branch: %s; %s' % (MODE_FILE, error, NOTHING))
-    return [line.rstrip() for line in (text or '').splitlines() if line.startswith(MODE_ROWS)]
+    return mode_rows(text)
 
 
 MODE_ROWS = '| Harness permission mode'
@@ -957,7 +977,7 @@ def look(name):
     'empty' (private, but no default branch and commit read back) or
     {'branch', 'commit'} (private, its default branch at that commit). None when
     a read failed or answered something else: unknown, never success."""
-    result = run(['gh', 'repo', 'view', name, '--json', 'nameWithOwner,isPrivate,defaultBranchRef'], gh_env())
+    result = run(['gh', 'repo', 'view', name, '--json', 'nameWithOwner,isPrivate,defaultBranchRef,id'], gh_env())
     if result is None:
         return None
     if result.returncode != 0:
@@ -965,6 +985,7 @@ def look(name):
     try:
         found = strict(result.stdout.decode('utf-8'))
         assert found['nameWithOwner'] == name and type(found['isPrivate']) is bool
+        assert isinstance(found['id'], str) and found['id']
         branch = (found['defaultBranchRef'] or {}).get('name') or ''
         assert isinstance(branch, str)
     except (UnicodeDecodeError, ValueError, KeyError, TypeError, AttributeError, AssertionError):
@@ -989,7 +1010,33 @@ def look(name):
         assert isinstance(commit, str) and re.fullmatch('[0-9a-f]{40}', commit)
     except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):
         return None
-    return {'branch': branch, 'commit': commit}
+    return {'id': found['id'], 'branch': branch, 'commit': commit}
+
+
+def create(name, login):
+    owner, short = name.split('/')
+    path = 'user/repos' if owner.lower() == login.lower() else 'orgs/%s/repos' % owner
+    result = run(['gh', 'api', '-X', 'POST', path, '-f', 'name=' + short, '-F', 'private=true',
+                  '-F', 'auto_init=true'], gh_env())
+    if result is None or result.returncode != 0:
+        return None
+    try:
+        reply = strict(result.stdout.decode('utf-8'))
+        assert reply['full_name'] == name and reply['private'] is True
+        assert isinstance(reply['node_id'], str) and reply['node_id']
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):
+        return None
+    return reply['node_id']
+
+
+def unproven(state, name):
+    if state.value['created']['state'] != 'created':
+        state.value['created'] = {'repo': name, 'state': 'unproven'}
+        state.save()
+    return Exit(5, 'Whether OpenWiz created %s is uncertain: no create reply of this onboarding names that '
+                   "repository, so a teammate may have made it. OpenWiz writes neither tests/test_check.py nor "
+                   '.github/workflows/check.yml into it. Continue with %s as an existing repository: run next, '
+                   'and Connect goes on with it; nothing written.' % (name, name))
 
 
 def created_line(name, seen):
@@ -1022,35 +1069,68 @@ def untested(repo):
                    'this again. Nothing recorded.' % repo)
 
 
-def seed_file(name, path, branch):
-    result = run(['gh', 'api', '--include', '-X', 'GET', 'repos/%s/contents/%s?ref=%s' % (
-        name, path, urllib.parse.quote(branch, safe=''))], gh_env())
-    text = result.stdout.decode('utf-8', 'replace').replace('\r\n', '\n') if result is not None else ''
-    head, _, body = text.partition('\n\n')
-    status = re.match(r'HTTP/[0-9.]+ ([0-9]{3})', head)
-    if status and status[1] == '404':
-        return None
+TREE = '{id name target{... on Commit{oid file(path:$path){object{... on Blob{text}}}}}}'
+BY_NAME = ('query($owner:String!,$name:String!,$path:String!){repository(owner:$owner,name:$name){id '
+           'defaultBranchRef%s}}' % TREE)
+BY_REF = 'query($ref:ID!,$path:String!){node(id:$ref){... on Ref%s}}' % TREE
+WRITE = ('mutation($ref:ID!,$oid:GitObjectID!,$path:String!,$contents:Base64String!){createCommitOnBranch(input:{'
+         'branch:{id:$ref},expectedHeadOid:$oid,message:{headline:"OpenWiz: a passing test and its CI check"},'
+         'fileChanges:{additions:[{path:$path,contents:$contents}]}}){commit{oid}}}')
+
+
+def graphql(query, **fields):
+    argv = ['gh', 'api', 'graphql', '-f', 'query=' + query]
+    for key, value in fields.items():
+        argv += ['-f', '%s=%s' % (key, value)]
+    return run(argv, gh_env())
+
+
+def tree(query, **fields):
+    result = graphql(query, **fields)
     try:
-        assert status and status[1] == '200'
-        found = strict(body)
-        assert found['type'] == 'file' and found['encoding'] == 'base64'
-        return base64.b64decode(found['content'], validate=False).decode('utf-8', 'replace')
-    except (AssertionError, ValueError, KeyError, TypeError):
-        raise Exit(6, 'Could not read %s on %s; run this again to read it before anything else.' % (path, name))
+        assert result is not None
+        body = strict(result.stdout.decode('utf-8'))
+        data = body['data']
+        repo = data['repository']['id'] if query == BY_NAME else None
+        ref = data['repository']['defaultBranchRef'] if query == BY_NAME else data['node']
+        assert query != BY_NAME or (isinstance(repo, str) and repo)
+        assert isinstance(ref['id'], str) and ref['id'] and isinstance(ref['name'], str)
+        assert isinstance(ref['target']['oid'], str) and re.fullmatch('[0-9a-f]{40}', ref['target']['oid'])
+        entry = ref['target']['file']
+        errors = body.get('errors')
+        if result.returncode == 0:
+            assert not errors
+        else:
+            expect = (['repository', 'defaultBranchRef', 'target', 'file'] if query == BY_NAME
+                      else ['node', 'target', 'file'])
+            assert (entry is None and isinstance(errors, list) and len(errors) == 1
+                    and isinstance(errors[0], dict) and errors[0].get('type') == 'NOT_FOUND'
+                    and errors[0].get('path') == expect)
+        text = None if entry is None else entry['object']['text']
+        assert text is None or isinstance(text, str)
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):
+        return None
+    return {'repo': repo, 'ref': ref['id'], 'branch': ref['name'], 'oid': ref['target']['oid'], 'text': text}
 
 
 def seed(state, name, seen):
+    owner, short = name.split('/')
+    at = None
     for path, text in SEED.items():
-        have = seed_file(name, path, seen['branch'])
-        if have == text:
+        at = tree(BY_NAME, owner=owner, name=short, path=path) if at is None else tree(BY_REF, ref=at['ref'], path=path)
+        if at is None:
+            raise Exit(6, 'Could not read %s on %s; run this again to read it before anything else.' % (path, name))
+        if at['repo'] not in (None, seen['id']) or at['branch'] != seen['branch']:
+            raise Exit(5, '%s is no longer the repository this onboarding created; OpenWiz writes neither '
+                          'tests/test_check.py nor .github/workflows/check.yml into it. Nothing written.' % name)
+        if at['text'] == text:
             continue
-        if have is not None:
+        if at['text'] is not None:
             raise Exit(5, '%s already holds another %s; OpenWiz never writes over it. Nothing more written.'
                        % (name, path))
-        run(['gh', 'api', '-X', 'PUT', 'repos/%s/contents/%s' % (name, path), '-f',
-             'message=OpenWiz: a passing test and its CI check', '-f',
-             'content=' + base64.b64encode(text.encode()).decode(), '-f', 'branch=' + seen['branch']], gh_env())
-        if seed_file(name, path, seen['branch']) != text:
+        graphql(WRITE, ref=at['ref'], oid=at['oid'], path=path, contents=base64.b64encode(text.encode()).decode())
+        at = tree(BY_REF, ref=at['ref'], path=path)
+        if at is None or at['text'] != text:
             raise Exit(6, 'Whether %s was written to %s is uncertain; run this again: it reads the file back before '
                           'any write. If GitHub refused the workflow, run gh auth refresh -s workflow first.'
                        % (path, name))
@@ -1090,16 +1170,19 @@ def create_repo(got):
     if seen is None:
         raise Exit(1 if not record else 6, 'Could not read whether %s exists; nothing created.' % name)
     if record and record['repo'] == name and record['state'] in ('pending', 'uncertain', 'created'):
-        if isinstance(seen, dict) and record.get('seeded') and record.get('branch') == seen['branch']:
+        if isinstance(seen, dict) and record.get('seeded') and record.get('branch') == seen['branch'] \
+                and record.get('id') in (None, seen['id']):
             print(created_line(name, seen))
             return 0
-        if isinstance(seen, dict):
+        if isinstance(seen, dict) and record.get('id') == seen['id']:
             state.value['created'] = {'repo': name, 'state': 'created', **seen}
             if not state.save():
                 raise Exit(6, 'Could not save the created repository; it exists, so never create it again.')
             seed(state, name, seen)
             print(created_line(name, seen))
             return 0
+        if isinstance(seen, dict):
+            raise unproven(state, name)
         if seen == 'public':
             raise Exit(5, '%s is not the private repository this onboarding created; nothing created.' % name)
         if seen == 'empty':
@@ -1107,22 +1190,33 @@ def create_repo(got):
                 raise Exit(5, '%s has no default branch and initial commit, which init needs; OpenWiz never pushes '
                               'one into an existing repository. Add a first commit yourself, or choose a new '
                               'name; nothing created.' % name)
-            state.value['created'] = {'repo': name, 'state': 'uncertain'}
+            state.value['created'] = {'repo': name, 'state': 'uncertain',
+                                      **({'id': record['id']} if record.get('id') else {})}
             state.save()
             raise Exit(6, '%s exists, but its default branch and initial commit did not read back; nothing more '
                           'was created or pushed. Run this again to read it back.' % name)
         if record['state'] == 'created':
             raise Exit(5, '%s is not the private repository this onboarding created; nothing created.' % name)
+    elif record and record['repo'] == name and record['state'] == 'unproven' and isinstance(seen, dict):
+        raise unproven(state, name)
     elif seen != 'absent':
         raise Exit(5, '%s already exists; choose another name, or use it as an existing repository; '
                       'nothing created.' % name)
+    retry = bool(record) and record['repo'] == name and record['state'] in ('pending', 'uncertain', 'unproven')
+    if retry and (record.get('id') or record['state'] == 'unproven'):
+        raise Exit(6, '%s does not read back now, but an earlier create of this onboarding may have made it (renamed, '
+                      'hidden or deleted since), so OpenWiz never creates it again. Nothing created or written; run '
+                      'this again to read it back.' % name)
     state.value['created'] = {'repo': name, 'state': 'pending'}
     if not state.save():
         raise Exit(10, 'Could not save the repository name first; nothing created.')
-    run(['gh', 'repo', 'create', name, '--private', '--add-readme'])
+    reply = create(name, login.stdout.strip().decode())
     seen = look(name)
-    ended = 'created' if isinstance(seen, dict) else 'absent' if seen == 'absent' else 'uncertain'
-    state.value['created'] = {'repo': name, 'state': ended, **(seen if ended == 'created' else {})}
+    if isinstance(seen, dict) and seen['id'] != reply:
+        raise unproven(state, name)
+    ended = 'created' if isinstance(seen, dict) else 'absent' if seen == 'absent' and reply is None and not retry else 'uncertain'
+    state.value['created'] = {'repo': name, 'state': ended, **(seen if ended == 'created' else {}),
+                              **({'id': reply} if ended == 'uncertain' and reply else {})}
     saved = state.save()
     if ended == 'created' and saved:
         seed(state, name, seen)
@@ -1177,19 +1271,27 @@ def blob(repo, path, env, ref):
         raise Exit(1, 'Could not read %s on %s; nothing written.' % (path, ref))
 
 
-def host_pull(repo, env, head=HOST_BRANCH):
-    """The host setting pull request's URL and state, or None when there is none; Exit when unreadable."""
+def host_pull(repo, env, branch, head):
+    fields = ('url', 'state', 'baseRefName', 'headRefName', 'isCrossRepository', 'baseRefOid', 'headRefOid')
     result = run(['gh', 'pr', 'list', '--repo', repo, '--head', head, '--state', 'all',
-                  '--json', 'url,state'], env)
+                  '--json', ','.join(fields)], env)
     try:
         assert result is not None and result.returncode == 0
         pulls = strict(result.stdout.decode('utf-8'))
         assert isinstance(pulls, list) and len(pulls) <= 1
-        assert all(isinstance(p, dict) and set(p) == {'url', 'state'} and isinstance(p['url'], str)
-                   and p['state'] in ('OPEN', 'MERGED', 'CLOSED') for p in pulls)
-        return (pulls[0]['url'], pulls[0]['state']) if pulls else None
+        if not pulls:
+            return None
+        pull = pulls[0]
+        assert isinstance(pull, dict) and set(pull) == set(fields)
+        assert all(isinstance(pull[k], str) and pull[k] for k in fields if k != 'isCrossRepository')
+        assert pull['state'] in ('OPEN', 'MERGED', 'CLOSED') and type(pull['isCrossRepository']) is bool
+        assert all(re.fullmatch(r'[0-9a-f]{40}', pull[k]) for k in ('baseRefOid', 'headRefOid'))
     except (AssertionError, UnicodeDecodeError, ValueError, KeyError, TypeError):
         raise Exit(6, 'Could not read whether the host setting pull request exists; run this again to read it.')
+    if pull['baseRefName'] != branch or pull['headRefName'] != head or pull['isCrossRepository']:
+        raise Exit(5, 'The host setting pull request must target the default branch from the expected branch in '
+                      'this repository; nothing written.')
+    return pull
 
 
 def mode(got):
@@ -1269,7 +1371,7 @@ def setting(got):
     if now is not None and now != name:
         raise Exit(5, '%s already says Host: %s on the default branch; OpenWiz never overwrites it. Ask the user '
                       'whether to change that line, or answer where agents run again; nothing written.' % (HOST_FILE, now))
-    writes, values, models = [], [], None
+    writes, values, models = [], {}, None
     fresh = None
     if local or chosen:
         fleet = raw(repo, MODE_FILE, env)
@@ -1287,15 +1389,13 @@ def setting(got):
         models, intended, _ = models_change(fleet, choice, None, reviewer=tuple(chosen['reviewer']))
         if models_table(fleet) == intended:
             models = None
-    if local and fresh:
-        values = []
-    elif local:
-        values = [line.rstrip() for line in fleet.splitlines() if line.startswith(MODE_ROWS)]
-        if values and values != mode_lines(modes):
+    if local and not fresh:
+        values = mode_rows(fleet)
+        if values is None or (values and not modes_match(values, modes)):
             raise Exit(5, '%s already saves %s; OpenWiz never adds a second row or replaces the owner\'s. Ask the '
                           'owner whether to change that row; nothing written.' % (
-                              MODE_FILE, ', '.join('`%s`' % v for v in mode_rows(fleet) if v) or
-                              ', '.join(values)))
+                              MODE_FILE, ', '.join('`%s`' % v for v in values.values()) if values else
+                              'invalid or ambiguous harness permission rows'))
     if name and now is None:
         writes.append(HOST_FILE)
     if local and not values or models:
@@ -1343,18 +1443,20 @@ def setting(got):
             proposed = brain_files(got, host, brain)
     elif recorded.get('state') not in ('pending', 'opened'):
         head = HOST_BRANCH
-    if recorded.get('state') in ('pending', 'opened') or head == BRAIN_BRANCH:
-        found = host_pull(repo, env, head)
-        if found and found[1] == 'CLOSED':
-            raise Exit(5, 'The host setting pull request %s was closed without merging; the user reopens and merges '
-                          'it, or answers where agents run again; nothing written.' % found[0])
-        if found and not branch_check(repo, env, branch, head, proposed, want, based):
-            state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked,
-                                           'branch': head}, **kept(modes))
-            state.save()
-            print('The %s pull request is open: %s. The user merges it; launch waits for it.%s' % (
-                'one setup' if chosen else 'host setting', found[0], note))
-            return 0
+    found = host_pull(repo, env, branch, head)
+    if found and found['state'] != 'OPEN':
+        raise Exit(5, 'The host setting pull request %s is %s and the current settings are missing on the default '
+                      'branch. Check the pull request and default branch; nothing written.' % (
+                          found['url'], found['state'].lower()))
+    if found and not branch_check(repo, env, found['baseRefOid'], found['headRefOid'],
+                                  proposed, want, based, head_name=head):
+        state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found['url'], 'mode': picked,
+                                       'branch': head}, **kept(modes))
+        if not state.save():
+            raise Exit(6, 'The host setting pull request is open (%s), but that could not be saved.' % found['url'])
+        print('The %s pull request is open: %s. The user merges it; launch waits for it.%s' % (
+            'one setup' if chosen else 'host setting', found['url'], note))
+        return 0
     rows = 'add %s, %s' % ('one row' if len(modes) == 1 else '%d rows' % len(modes), ' and '.join(mode_lines(modes)))
     table = models and 'set its Models table to %s for the Orchestrator and Builder, with %s as the Reviewer' % (
         ' '.join(choice), ' '.join(chosen['reviewer']))
@@ -1430,7 +1532,7 @@ def setting(got):
     if branch_check(repo, env, branch, head, proposed, want, based):
         raise Exit(6, 'The settings on %s did not read back as written; run this again to read them before anything '
                       'else.' % head)
-    if host_pull(repo, env, head) is None:
+    if host_pull(repo, env, branch, head) is None:
         body = ('Adds `Host: local` to %s and the owner\'s harness permission mode as %s of %s: OpenWiz '
                 'starts this project\'s agents through its local driver, which passes that mode to the harness '
                 'unchanged (records v1, section 6). Merge it to start the first fleet there.' % (
@@ -1447,19 +1549,22 @@ def setting(got):
         run(['gh', 'pr', 'create', '--repo', repo, '--head', head, '--base', branch, '--title',
              'Where agents run: %s' % host_label(name).split(',')[0] if name else 'OpenWiz setup', '--body', body],
             env)
-    found = host_pull(repo, env, head)
+    found = host_pull(repo, env, branch, head)
     if found is None:
         raise Exit(6, 'Whether the host setting pull request was opened is uncertain; run this again to read it '
                       'before anything else.')
-    state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found[0], 'mode': picked,
+    if found['state'] != 'OPEN' or branch_check(repo, env, found['baseRefOid'], found['headRefOid'],
+                                              proposed, want, based, head_name=head):
+        raise Exit(6, 'The host setting pull request did not read back as ready; run this again to check it.')
+    state.value['setting'] = dict({'host': name, 'state': 'opened', 'pull': found['url'], 'mode': picked,
                                    'branch': head}, **kept(modes))
     if not state.save():
-        raise Exit(6, 'The host setting pull request is open (%s), but that could not be saved.' % found[0])
+        raise Exit(6, 'The host setting pull request is open (%s), but that could not be saved.' % found['url'])
     if head == BRAIN_BRANCH:
         print('The one setup pull request, %s, now carries the brain and these settings. The user merges it once; '
-              'then run the setup check and continue.' % found[0])
+              'then run the setup check and continue.' % found['url'])
     else:
-        print('Opened %s. The user merges it; launch waits for it on the default branch.%s' % (found[0], note))
+        print('Opened %s. The user merges it; launch waits for it on the default branch.%s' % (found['url'], note))
     return 0
 
 
@@ -1598,7 +1703,7 @@ def brain_files(got, host, brain):
         raise Exit(5, "Could not read the brain files init proposes from %s; nothing written." % build)
 
 
-def branch_check(repo, env, branch, head, proposed, want, based):
+def branch_check(repo, env, branch, head, proposed, want, based, *, head_name=None):
     result = run(['gh', 'api', 'repos/%s/compare/%s...%s' % (repo, branch, head)], env)
     try:
         assert result is not None and result.returncode == 0
@@ -1612,11 +1717,12 @@ def branch_check(repo, env, branch, head, proposed, want, based):
     missing = []
     for path in sorted(set(changed) | set(proposed) | set(want)):
         text = raw(repo, path, env, head) if path in changed or path in proposed else based.get(path)
-        if path in proposed and (changed.get(path) != 'added' or text != proposed[path]) \
+        if changed.get(path) not in (None, 'added', 'modified') \
+                or path in proposed and (changed.get(path) != 'added' or text != proposed[path]) \
                 or path not in proposed and (path not in want or text not in (want[path], based[path])):
             raise Exit(5, 'Branch %s changes %s beyond the approved setup, so its pull request is not ready and '
                           'OpenWiz writes, opens or reports nothing. The owner deletes that branch (closing its '
-                          'pull request), then run this again.' % (head, path))
+                          'pull request), then run this again.' % (head_name or head, path))
         if path in want and text != want[path]:
             missing.append(path)
     return missing
@@ -2427,7 +2533,7 @@ def launch(got):
     if local and modes and set(modes) != {PROGRAMS[h] for h in routed(host, choices['harness'])}:
         raise Exit(5, 'The permission modes saved here are not for every harness this fleet starts on this machine: '
                       'run mode again, then setting, and merge it; ' + NOTHING)
-    if local and (not picked or saved_rows(env) != mode_lines(modes)):
+    if local and (not picked or not modes_match(saved_rows(env), modes)):
         raise Exit(5, 'No %s row, the Harness permission mode the owner picked, is in %s on the default '
                       "branch, and the local driver starts no agent without it: run mode, then setting, and merge "
                       'it; %s' % (' and '.join('`%s`' % line for line in mode_lines(modes or {'': '<mode>'})),

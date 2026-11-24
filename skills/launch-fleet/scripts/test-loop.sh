@@ -8,7 +8,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/plugin cache/skills/launch-fleet/scripts/carried" \
   "$work/plugin cache/skills/to-tickets" "$work/remote" "$work/runtime"
-cp "$HERE/loop.sh" "$HERE/fleet.sh" "$HERE/records.py" "$work/plugin cache/skills/launch-fleet/scripts/"
+cp "$HERE/loop.sh" "$HERE/fleet.sh" "$HERE/records.py" "$HERE/budget.py" "$work/plugin cache/skills/launch-fleet/scripts/"
 cp "$HERE/../../to-tickets/revision.sh" "$HERE/../../to-tickets/check-links.sh" "$work/plugin cache/skills/to-tickets/"
 cp "$HERE/carried/alarm.py" "$work/plugin cache/skills/launch-fleet/scripts/carried/"
 mkdir "$work/plugin cache/skills/launch-fleet/scripts/github-app"
@@ -112,7 +112,7 @@ echo 'ok   later runs refresh the consumer while keeping the packaged helpers'
 # E6: the installed loop.sh run directly (no bundle) uses its own installed
 # fleet and revision helpers, never the consumer clone's hostile skills/.
 mkdir -p "$work/installed/skills/launch-fleet/scripts/carried" "$work/installed/skills/to-tickets"
-cp "$HERE/loop.sh" "$HERE/fleet.sh" "$HERE/records.py" "$work/installed/skills/launch-fleet/scripts/"
+cp "$HERE/loop.sh" "$HERE/fleet.sh" "$HERE/records.py" "$HERE/budget.py" "$work/installed/skills/launch-fleet/scripts/"
 cp "$HERE/../../to-tickets/revision.sh" "$HERE/../../to-tickets/check-links.sh" "$work/installed/skills/to-tickets/"
 cp "$HERE/carried/alarm.py" "$work/installed/skills/launch-fleet/scripts/carried/"
 mkdir "$work/installed/skills/launch-fleet/scripts/github-app"

@@ -98,6 +98,10 @@ if args[:2] != ['api', 'graphql'] and args[0] == 'api':
     endpoint = next(a for a in args[1:] if a.startswith('repos/'))
     base = 'repos/%s/' % repo
     if not endpoint.startswith(base):
+        for other in world.get('other_issue_repos', []):
+            lead = 'repos/%s/issues/' % other
+            if method == 'GET' and endpoint.startswith(lead) and endpoint[len(lead):].isdigit():
+                out({'number': int(endpoint[len(lead):]), 'labels': [], 'body': ''})
         fail('HTTP 404')
     rest = endpoint[len(base):].split('?')[0]
     if rest == 'contents/docs/agents/fleet.md':

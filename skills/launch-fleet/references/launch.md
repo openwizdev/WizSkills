@@ -107,17 +107,19 @@ python3 -I "<this skill's folder>/scripts/session.py" run "<owner>/<repo>" --spe
   --model "<builder model>"
 ```
 
+Where the project uses overload admission, set `LAUNCH_FLEET_OVERLOAD_STATE` to the overload state path the rest of the fleet uses for that repository (and `LAUNCH_FLEET_OVERLOAD_SUPPLY` when the checkout has an overload supplier); setting a supplier or `LAUNCH_FLEET_OVERLOAD_INPUT` without `LAUNCH_FLEET_OVERLOAD_STATE` stops before merging. A genuinely fresh project with none of those configured needs none of them.
+
 It runs in the foreground, one tick after another, with no timer. Each tick reads `fleet.sh spec <S>` and does the lines a script can do alone, by this skill's own claims and records:
 - a `start` line starts that ticket's builder through `host.py`, at most `--max` (default 3) at once;
 - a `check start` line records `start checked`;
 - a `review` line starts the reviewer the models rule picks for the builder recorded on the ticket (its status note's harness). With both `claude` and `codex` installed, that is the other-family row `ops-starts.py flags` prints, and no row means the review waits. With only the builder's harness, it is the same family with the CLI id the models table gives the builder's recorded model (its status note's `model`, matched to a row's model name, model name and effort, or id). No single match means the review waits;
-- a `merge` line stops the session once the tick's other lines are done. The session merges nothing: merge that pull request with "Merging" in this skill (verdict check, overload admission, `merge.py`), then run the `carry on:` command.
+- a `merge` line merges that pull request through "Merging" in this skill, then carries on: the verdict check, bound to the current reviewer assignment at the exact head; overload admission (`fleet.sh overload merge-batch`) where the project configures overload state or a supplier; `merge.py admit`; and `merge.py merge`, through the merge queue where there is one. It waits while the selected reviewer's status note still says `working`, and records `launch-fleet: merge blocked <commit>: <why>` once when the approval can't be tied to the current reviewer.
 
-After a tick that did something, it ticks again at once. Otherwise it waits for a run to end (that agent's status note on the ticket leaves `working`; a reviewer's note is on its pull request's ticket), or, with no run going, for a known pull request's checks. On start, and so on `carry on`, it rebuilds the spec's running builders and reviewers from their GitHub records, so `--max` counts builders still running from an earlier session.
+After a tick that did something, it ticks again at once. Otherwise it waits for a run to end (that agent's status note on the ticket leaves `working`; a reviewer's note is on its pull request's ticket), or, with no run going, for a known pull request's checks. While runs, queued merges or merges waiting on CI go on, it also reads their checks and queue entries every `--ci-poll` seconds (default 30), so a pull request that turns green merges at once. On start, and so on `carry on`, it rebuilds the spec's running builders and reviewers from their GitHub records, so `--max` counts builders still running from an earlier session.
 
 It stops in three cases, and prints where it stopped and a `carry on:` command:
 - **Done (exit 0):** the check prints `spec done` or `close spec` for the spec, or the spec is no longer open and every ticket of it is closed. The spec summary, closing the spec and `archive` lines stay with this skill.
-- **Needs you (exit 3):** a line it doesn't do (a question, findings, a red check, a look, an approved pull request to merge), a refused start, or nothing moving for `--idle` seconds. Handle that line with this skill, then run the `carry on:` command.
+- **Needs you (exit 3):** a line it doesn't do (a question, findings, a red check, a look), a refused start, a merge it refused or recorded as blocked, an overload supplier or input set without `LAUNCH_FLEET_OVERLOAD_STATE`, or nothing moving for `--idle` seconds. Handle that line with this skill, then run the `carry on:` command.
 - **Interrupt (exit 130):** it stops at once. A start still answering keeps going on its own, and its record stays for this skill to reconcile.
 
 Builders and reviewers it started keep running after it stops. It holds the spec's heartbeat lock, so a session and a heartbeat tick never run together: a second session, or a heartbeat tick during one, is refused (exit 1).
@@ -134,7 +136,7 @@ Use the same script with `status|pause|resume|remove|run "<owner>/<repo>" "<S>"`
 
 ### Running a local wake
 
-`host.py start OWNER/NAME N HARNESS MODEL [SKILL]` sends the named skill to the selected host driver. Leaving off `SKILL` starts `build-ticket`. The heartbeat uses `host.py start <owner>/<repo> <S> <harness> <model> launch-fleet` so the wake starts on the spec.
+`host.py start OWNER/NAME N HARNESS MODEL [SKILL]` sends the named skill to the selected host driver. Leaving off `SKILL` starts `build-ticket`. The heartbeat uses `host.py start <owner>/<repo> <S> <harness> <model> launch-fleet --row Orchestrator` so the wake starts on the spec, and with a Roster only on the Orchestrator row's model and effort.
 
 A driver-started `launch-fleet` wake on a non-CloudRoom host takes up that spec. Set `LAUNCH_FLEET_RUNS` to the absolute path in `LAUNCH_FLEET_HEARTBEAT_RUNS` before reading or changing project runs. The heartbeat keeps that shared project map separate from the spec's private orchestrator map. Read the project's current settings and recheck the spec with `fleet.sh spec <S>` from the wake's project checkout. Handle the due lines with the skill's claim, verification and merge gates, then record the outcomes on GitHub.
 

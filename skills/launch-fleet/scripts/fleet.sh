@@ -176,8 +176,10 @@ RECORD=''
 
 
 REPO=${GH_REPO:-}
+discovery=''
 if [ -z "$REPO" ]; then
   REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || die "set GH_REPO=owner/name, or run inside a clone"
+  discovery="repository discovery GraphQL cost unmeasured"
 fi
 case $REPO in
   */*/* | /* | */ | *[!A-Za-z0-9._/-]*) die "GH_REPO must be owner/name, not '$REPO'" ;;
@@ -389,16 +391,15 @@ reads=0
 gql() {
   op=$1 out=$2
   shift 2
+  query_name=$op
+  [ "$op" != Spec ] || query_name="Spec #$spec_number"
   case $op in
     Blockers | Nodes | Checks | Search | Facts | Comments) ;;
     Merged) [ "${1:-}" = -F ] || set -- -F owner="$OWNER" -F name="$NAME" "$@" ;;
     *) set -- -F owner="$OWNER" -F name="$NAME" "$@" ;;
   esac
-  # GI1: a full read of `spec S` keeps each answer, by its whole request; a
-  # replay answers from them and asks GitHub nothing (the probe has shown
-  # nothing they read has changed). No saved answer stops the replay.
-  key=$(printf '%s\n' 'launch-fleet GraphQL v1' "$op" "$@" | hash) && [ ${#key} = 64 ] || die "can't hash the GitHub query $op"
-  if [ -n "$REPLAY" ]; then
+  key=$(printf '%s\n' 'launch-fleet GraphQL v1' "$op" "$@" | hash) && [ ${#key} = 64 ] || die "can't hash the GitHub query $query_name"
+  if [ -n "$REPLAY" ] && [ "$op" != Writer ]; then
     [ -f "$REPLAY/snap/gql-$key.json" ] && cp "$REPLAY/snap/gql-$key.json" "$out" || die "the saved full read has no answer to $op"
   # An empty answer is never a spent allowance, nor anything else: jq -e takes
   # an empty file as true (jq 1.6).
@@ -411,26 +412,26 @@ gql() {
     # 2026-11-01), and nothing is due on it.
     if [ "$op" = Item ] && [ -s "$out" ] && jq -e '.data.repository.issueOrPullRequest == null and (.errors | length) > 0
          and all(.errors[]; .type == "NOT_FOUND" and .path == ["repository", "issueOrPullRequest"])' "$out" > /dev/null 2>&1; then
-      jq 'del(.errors)' "$out" > "$out.found" && mv "$out.found" "$out" || die "can't read the GitHub query $op"
+      jq 'del(.errors)' "$out" > "$out.found" && mv "$out.found" "$out" || die "can't read the GitHub query $query_name"
     else
-      die "the GitHub query $op failed: $(head -n 1 "$out.err" | head -c 300)"
+      die "the GitHub query $query_name failed: $(head -n 1 "$out.err" | head -c 300)"
     fi
   fi
-  [ -s "$out" ] || die "the GitHub query $op answered nothing"
+  [ -s "$out" ] || die "the GitHub query $query_name answered nothing"
   jq -e '(.errors // []) == [] and (.data | type) == "object" and all(.data[]; type == "object" or type == "array")' "$out" > /dev/null 2>&1 \
-    || die "the GitHub query $op answered with errors: $(jq -c '.errors' "$out" 2> /dev/null | head -c 300)"
-  if [ -z "$REPLAY" ]; then
+    || die "the GitHub query $query_name answered with errors: $(jq -c '.errors' "$out" 2> /dev/null | head -c 300)"
+  if [ -z "$REPLAY" ] || [ "$op" = Writer ]; then
     jq -er '.data.rateLimit | select(type == "object")
       | select(all(.cost, .remaining, .limit; type == "number" and . >= 0 and . == floor) and .limit > 0
                and (.resetAt | type) == "string" and (.resetAt | test("^[0-9T:Z-]+$")))
-      | "\(.cost) \(.remaining) \(.limit) \(.resetAt)"' "$out" >> "$TMP/rate.txt" 2> /dev/null \
-      || die "the GitHub query $op did not say what it cost and what is left"
-    [ -z "$RECORD" ] || { kept=$(mktemp "$RECORD/gql-$key.XXXXXX") && cp "$out" "$kept"; } || RECORD=''
+      | "\(.cost) \(.remaining) \(.limit) \(.resetAt)"' "$out" >> "$COUNTS/rate.txt" 2> /dev/null \
+      || die "the GitHub query $query_name did not say what it cost and what is left"
+    [ -z "$RECORD" ] || [ "$op" = Writer ] || { kept=$(mktemp "$RECORD/gql-$key.XXXXXX") && cp "$out" "$kept"; } || RECORD=''
   fi
   reads=$((reads + 1))
   case $op in Specs | Item)
     REPO_ID=$(jq -er '.data.repository.databaseId | select(type == "number" and . > 0 and . == floor)' "$out") \
-      || die "the GitHub query $op did not identify the repository" ;;
+      || die "the GitHub query $query_name did not identify the repository" ;;
   esac
   case $op in
     Nodes | Item)
@@ -438,7 +439,7 @@ gql() {
       # Comments are read only with the record authors known (#641), so a
       # wake's first Item read takes the settings first, once.
       settings
-      hydrate "$out" || die "can't read REST issue facts for the GitHub query $op"
+      hydrate "$out" || die "can't read REST issue facts for the GitHub query $query_name"
       ;;
   esac
 }
@@ -474,10 +475,10 @@ points() {
   unchanged=$(wc -l < "$TMP/unchanged") || die "can't count the questions"
   if [ -s "$TMP/rate.txt" ]; then
     last_rate
-    left="$left of $limit left"
-  else left='no GraphQL read'; fi
-  printf 'fleet.sh: used %s GitHub points in %s questions, %s unchanged; %s\n' \
-    $((used + by_revision)) $((asked + by_revision)) $((unchanged)) "$left" >&2
+    left="$left of $limit left${discovery:+; $discovery}"
+  else left=${discovery:-no GraphQL read}; fi
+  printf 'fleet.sh: used %s %sGitHub points in %s questions, %s unchanged; %s\n' \
+    $((used + by_revision)) "${discovery:+measured }" $((asked + by_revision)) $((unchanged)) "$left" >&2
 }
 
 # FILES: a jq filter over `gh api --paginate .../pulls/N/files` pages (read
@@ -1326,12 +1327,17 @@ def first_text: ([lines[] | select(test("\\S"))] | first) // "";
 def first_line: first_text | short;
 def rec: (first_line | sub("^\\s+"; "")) as $l
   | if ($l | startswith("launch-fleet:")) then ($l | ltrimstr("launch-fleet:") | sub("^\\s+"; "") | sub("\\s+$"; "")) else null end;
+def review_retry_claim:
+  lines | (if (.[1] // "" | test("^Driver re-check: (other-family|same-family)$")) then .[2] else .[1] end)
+  | ([. // "" | capture("^Decision retry: (?<id>[1-9][0-9]*)$").id] | first);
 # In a claim ($W.claim: {n, id}), the claimed issue'"'"'s records are those older
 # than the claim: the state the claim was made against.
 def item_repo: (.repository.nameWithOwner // $W.repo) | ascii_downcase;
-def records: .number as $n | item_repo as $r
-  | [.comments.nodes[] | {id: .databaseId, at: .createdAt, edited: (.updatedAt // .createdAt), thread: .resolvedThread, archiveThread: .archiveThread, error: .recordError, closed: (.reviewClosed // false), givenUp: (.givenUp // false), r: (.body | rec)} | select(.r != null)
-  | select($W.claim == null or $n != $W.claim.n or $r != (($W.claim.repo // $W.repo) | ascii_downcase) or .id < $W.claim.id)];
+def records: .number as $n | item_repo as $repo
+  | [.comments.nodes[] | (.body | rec) as $r | select($r != null)
+    | {id: .databaseId, at: .createdAt, edited: (.updatedAt // .createdAt), thread: .resolvedThread, archiveThread: .archiveThread, error: .recordError, closed: (.reviewClosed // false), givenUp: (.givenUp // false), r: $r,
+       decisionRetry: (if $r | startswith("review starting ") then .body | review_retry_claim else null end)}
+  | select($W.claim == null or $n != $W.claim.n or $repo != (($W.claim.repo // $W.repo) | ascii_downcase) or .id < $W.claim.id)];
 def plain: [.comments.nodes[] | select((.body | rec) == null)];
 def kind($k): select(.r | test("^(" + $k + ")(\\b|$)"));
 def age: $W.now - (.at | fromdateiso8601);
@@ -1449,7 +1455,7 @@ def spec_rec($s; $re): any($s | records[]; .r | test($re));
 def fleet($s): [($s.comments.nodes // [])[] | {id: .databaseId, at: .createdAt, body, error: .recordError} | select(.error == null) | . as $c
   | ((.body | rec) // "" | capture("^(?:fleet active, loop (?<loop>[A-Za-z0-9_-]+)|fleet thread (?<t>[A-Za-z0-9_][A-Za-z0-9_-]{0,127})(, loop (?<l>[A-Za-z0-9_][A-Za-z0-9_-]{0,127}))?)$"))
   | {id: $c.id, at: $c.at, thread: (.t // "private fleet"), loop: (.loop // .l),
-     fresh: (.loop != null and ($c.body | split("\n") | index("Wake mode: fresh") != null))}] | max_by(.id);
+     fresh: (.loop != null and ($c.body | lines | any(.[]; sub("\\s+$"; "") == "Wake mode: fresh")))}] | max_by(.id);
 # Only a legacy retained fleet thread uses the takeover cutoff.
 def fleet_of($s): if $s != null and $W.spec == $s.number then (fleet($s) | if .fresh then null else . end) else null end;
 # A record last edited before the fleet thread'"'"'s record, or in the same
@@ -1895,6 +1901,22 @@ def out_of_reach($at; $th; $f; $rec):
   "check review \($at): its reviewer, thread \($th), was started before fleet thread \($f.thread), so it is out of reach; record review given up (its record: comment \($rec.id))";
 
 # What each part of a spec has due.
+def decision_line($at; $id): "decision \($at): Jake'"'"'s answer in comment \($id)";
+def review_retry_line($at; $id): "re-check \($at): parked decision \($id) still needs a replacement report";
+def retry_parked_review($n; $at; $head; $v; $d; $rs):
+  ([$d.body | first_line | capture("^\\*\\*Orchestrator decision:\\*\\* log and merge: (?<ids>R[0-9]+(?:(?:, R[0-9]+)* and R[0-9]+)?) at \($head)\\. Polish issues: #[0-9]+(?:, #[0-9]+)*\\. Why: \\S")] | first) as $answer
+  | ([$v.body | lines | map(select(test("\\S"))) | last
+      | capture("^Next: park (?<ids>R[0-9]+(?:(?:, R[0-9]+)* and R[0-9]+)?) as a decision for Jake\\.\\s*$")] | first) as $park
+  | if $answer == null or $park == null or ([$answer.ids | scan("R[0-9]+")] | sort) != ([$park.ids | scan("R[0-9]+")] | sort)
+    then empty
+    else ([$rs[] | select(.id > $d.databaseId and .r == "findings sent \($head): decision \($d.databaseId): log and merge")] | min_by(.id)) as $sent
+      | ([$rs[] | select(.id > $sent.id and .r == "review starting \($head)" and .decisionRetry == ($d.databaseId | tostring))] | min_by(.id)) as $retry
+      | if $sent == null then empty
+        elif $retry != null then
+          if ($retry | age) >= 1800 then look($n; $rs; "decision \($d.databaseId) still needs a replacement review at \($head) after its retry") else empty end
+        elif ($sent | age) >= 1800 then review_retry_line($at; $d.databaseId)
+        else empty end
+    end;
 def ticket_lines_now($s): . as $t
   | if .comments.pageInfo.hasPreviousPage then look(.number; []; history_why)
     elif .state == "CLOSED" and any(.closedByPullRequestsReferences.nodes[]; .comments.pageInfo.hasPreviousPage) then
@@ -1998,8 +2020,9 @@ def ticket_lines_now($s): . as $t
                   ([$p.comments.nodes[] | select([.body | first_line | capture("^\\*\\*Orchestrator decision:\\*\\* (?:fix once more|log and merge): R[0-9]+(?:(?:, R[0-9]+)* and R[0-9]+)? at (?<c>[0-9a-f]{40})\\. ") | .c] == [$head])] | max_by(.databaseId)) as $d
                   | (if $d != null and $d.databaseId > $v.databaseId and all($rs[]; .id < $d.databaseId)
                         and ($v.body | test("(^|\n)Next: park [^\n]* as a decision for Jake\\.\\s*$")) then
-                       "decision \($at): Jake'"'"'s answer in comment \($d.databaseId); act on it as references/reviews.md says"
-                     elif any($rs[]; (.r | test("^findings sent\\b")) and (.r | names($head))) then empty
+                       decision_line($at; $d.databaseId) + "; act on it as references/reviews.md says"
+                     elif any($rs[]; (.r | test("^findings sent\\b")) and (.r | names($head))) then
+                       if $d != null and $d.databaseId > $v.databaseId then retry_parked_review($p.number; $at; $head; $v; $d; $rs) else empty end
                      else "findings \($at): tell its builder\($t | bthread)" end) end)
              else
                [$rs[] | select(.r | names($head))] as $here
@@ -2157,7 +2180,8 @@ def start_selection: [candidates | .s as $s | .t
 # The users who labelled a ticket that could otherwise start, not record
 # authors: their write access is read (Writer), once each.
 def writers_wanted: [candidates | .s as $s | .t
-  | select(.state == "OPEN" and is_approved($s) and (looks | length) == 0 and ready_unchecked($s))
+  | select(.state == "OPEN" and is_approved($s) and (looks | length) == 0 and ready_unchecked($s)
+      and (refused_lately(start.last; "start") | not))
   | approval_label | .actor | select(type == "object" and .__typename == "User") | login_of
   | select(. != null and (among($W.authors) | not))] | unique | .[];
 # Only existing, readable builders can be resumed; this never starts one.
@@ -2261,6 +2285,10 @@ def claim: $W.claim.n as $n | $W.claim.id as $id | $W.claim.repo as $crepo
               "error comment \($id) on \($ref) is not a \"launch-fleet: review starting <commit>\" claim"
             else ($cm.body | rec | capture("(?<c>[0-9a-f]{40})").c) as $sha
               | if $x.p.headRefOid != $sha then "withdraw \($ref): the head is now \($x.p.headRefOid)"
+                elif ($cm.body | review_retry_claim) != null then
+                  ($cm.body | review_retry_claim) as $decision
+                  | if any($x.t | ticket_lines($x.s); . == review_retry_line("\($due_ref) for #\($x.t.number) at \($sha)"; $decision))
+                    then "go \($ref)" else "withdraw \($ref): that decision retry is no longer due" end
                 else ([$x.p | records[] | select((.r | test("^(review starting|review started|re-check sent)\\b")) and (.r | names($sha)))]
                       | min_by(.id)) as $older
                   | if $older != null then "withdraw \($ref): an older review claim: \"\($older.r)\""
@@ -2773,7 +2801,7 @@ unchanged() {
     key=$(printf '%s' "$endpoint" | hash) || return 0
     [ -f "$TMP/probe/$key.same" ] || return 0
   done < "$TMP/snap/expected"
-  if LAUNCH_FLEET_REPLAY=$TMP sh "$0" spec "$SPEC" > "$TMP/replay.out" 2> /dev/null; then
+  if GH_REPO=$REPO LAUNCH_FLEET_REPLAY=$TMP sh "$0" spec "$SPEC" > "$TMP/replay.out" 2> /dev/null; then
     cat "$TMP/replay.out"
     points
     exit 0
@@ -2864,8 +2892,6 @@ if [ "$cmd" = wake ] || { [ "$cmd" = claim ] && [ -z "${CLAIM_REPO:-}" ]; }; the
     active
   fi
 elif [ "$cmd" = spec ]; then
-  # A fleet thread's check: the check's reads, of its own spec alone; none
-  # at all past the probe when nothing it read has changed (GI1).
   [ -n "$REPLAY" ] || unchanged
   specs_list
   settings

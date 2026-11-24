@@ -53,15 +53,21 @@ PRIVATE_KEY_START = re.compile(r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----')
 PRIVATE_KEY_BLOCK = re.compile(r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)')
 URL_CRED = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://[^\s/@]+:[^\s/@]+@[^\s"\'<>]+')
 SECRET_PATTERNS = (
-    re.compile(r'\bsynthetic-token-[A-Za-z0-9_-]+\b'),
-    re.compile(r'\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b'),
-    re.compile(r'\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}\b'),
-    re.compile(r'\b(?:AKIA|ASIA)[0-9A-Z]{16}\b'),
-    re.compile(r'\bxox[baprs]-[A-Za-z0-9-]{10,}\b'),
-    re.compile(r'\bAIza[0-9A-Za-z_-]{35}\b'),
-    re.compile(r'\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b'),
-    re.compile(r'\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b'),
-    URL_CRED,
+    (re.compile(r'\bsynthetic-token-[A-Za-z0-9_-]+\b'), '[secret removed]'),
+    (re.compile(r'\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b'), '[secret removed]'),
+    (re.compile(r'\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}\b'), '[secret removed]'),
+    (re.compile(r'\bglpat-[A-Za-z0-9_-]{10,}\b'), '[secret removed]'),
+    (re.compile(r'\bnpm_[A-Za-z0-9]{10,}\b'), '[secret removed]'),
+    (re.compile(r'\bhf_[A-Za-z0-9]{10,}\b'), '[secret removed]'),
+    (re.compile(r'\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}\b'), '[secret removed]'),
+    (re.compile(r'\b(?:AKIA|ASIA)[0-9A-Z]{16}\b'), '[secret removed]'),
+    (re.compile(r'\bxox[a-z]-[A-Za-z0-9-]{10,}\b'), '[secret removed]'),
+    (re.compile(r'\bAIza[0-9A-Za-z_-]{35}\b'), '[secret removed]'),
+    (re.compile(r'\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b'), '[secret removed]'),
+    (re.compile(r'\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b'), '[secret removed]'),
+    (URL_CRED, '[secret removed]'),
+    (re.compile(r'\b((?:[A-Za-z0-9_]*_)?(?:password|passwd|secret|token|api[_-]?key|auth[_-]?token)\s*[:=]\s*)'
+                r'(?!\[(?:secret|path|link|email|ip|id) removed\])\S+', re.I), r'\1[secret removed]'),
 )
 LINK_RE = re.compile(r'(?:https?|ssh|ftp)://[^\s"\'<>()]+|\bwww\.[^\s"\'<>()]+|git@[A-Za-z0-9._-]+:[^\s"\'<>()]+', re.I)
 EMAIL_RE = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b')
@@ -86,6 +92,8 @@ SHARE_ISSUE = re.compile(r'https://github\.com/openwizdev/OpenWiz/issues/([1-9][
 URLISH = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://|\bwww\.|\blocalhost\b|\b\d{1,3}(\.\d{1,3}){3}\b'
                     r'|\b(?:[a-z0-9-]+\.)+[a-z]{2,}\.?(?::[\w.~-]*)?/|\b[a-z0-9-]+:\d+/'
                     r'|@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.?:~?[\w.-]*/', re.I)
+KEYS_030 = ['schema', 'operation_id', 'destination', 'phase', 'title', 'chosen_body', 'body',
+            'account', 'preview', 'attempts', 'issue', 'reason', 'evidence']
 KEYS = ['schema', 'operation_id', 'destination', 'phase', 'title', 'chosen_body', 'body', 'facts', 'warnings',
         'account', 'preview', 'attempts', 'issue', 'reason', 'evidence']
 
@@ -185,10 +193,12 @@ def read_record(path):
         rec = json.loads(text, object_pairs_hook=pairs)
     except ValueError:
         rec = None
-    if not (isinstance(rec, dict) and list(rec) == KEYS and rec['schema'] == SCHEMA
+    if not (isinstance(rec, dict) and list(rec) in (KEYS, KEYS_030) and rec['schema'] == SCHEMA
             and rec['phase'] in PHASES and same_name(rec['destination'], DESTINATION)
             and path.name == f"{rec['operation_id']}.json"):
         raise Stop('The record is unreadable. OpenWiz cannot tell whether earlier feedback was created; nothing was sent.')
+    if list(rec) == KEYS_030:
+        rec = {k: (None if k == 'facts' else [] if k == 'warnings' else rec[k]) for k in KEYS}
     return rec
 
 
@@ -316,7 +326,7 @@ def check_secrets_and_warnings(sections):
         for lineno, line in enumerate(text.split('\n'), 1):
             if PRIVATE_KEY_START.search(line):
                 raise Stop(f'Refused: private key block found in {name} (line {lineno}); remove it before previewing.')
-            for pat in SECRET_PATTERNS:
+            for pat, _ in SECRET_PATTERNS:
                 if pat.search(line):
                     raise Stop(f'Refused: token-shaped secret found in {name} (line {lineno}); remove it before previewing.')
     warnings = []
@@ -353,8 +363,8 @@ def scrub_log(path):
     out_lines = []
     for line in lines:
         line = SHELL_PROMPT_RE.sub('', line, count=1)
-        for pat in SECRET_PATTERNS:
-            line, n = pat.subn('[secret removed]', line)
+        for pat, repl in SECRET_PATTERNS:
+            line, n = pat.subn(repl, line)
             count += n
         for pat, repl in (
             (LINK_RE, '[link removed]'),

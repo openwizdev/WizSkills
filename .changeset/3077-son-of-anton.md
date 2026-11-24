@@ -1,4 +1,5 @@
 ---
+"ask-wiz": patch
 "son-of-anton": minor
 "wizskills": minor
 ---

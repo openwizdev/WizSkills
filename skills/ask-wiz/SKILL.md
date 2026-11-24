@@ -41,6 +41,7 @@ Done when the user has one named recommendation with its start words, and nothin
 | `diagnose` | Find a hard bug's cause from a tight failing loop, in the caller's scope |
 | `feedback` | Report an OpenWiz problem as one public issue, after its exact preview and your yes |
 | `huntr` | Find and prove small unplanned work under its configured approval gate |
+| `son-of-anton` | Attack your own factory on a schedule through `huntr`'s attack mode and file what is proven |
 | `wayfind` | Map an effort too big or unclear for one grill, then hand it to `to-spec` |
 | `hill-climb` | Improve an outcome through judged candidates and human checkpoints |
 | `image` | Make a picture, a UI target or evidence from a real page |

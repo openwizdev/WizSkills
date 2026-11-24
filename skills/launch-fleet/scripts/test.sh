@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=949
+CASES=950
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1847,6 +1847,9 @@ review synthetic-owner/synthetic-tools#31 for #12 at $S31: first review
 EOF
 expect "cross-repository PR: its CI failed line names its own repository (#2792)" 0 check.json "pr31 | pull(31; .rollup = \"FAILURE\" | .checks[1].conclusion = \"FAILURE\") | $TOOLS" -- check <<EOF
 CI failed synthetic-owner/synthetic-tools#31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect "cross-repository PR: its reopen line names its own repository (#2792)" 0 check.json "store31 | $TOOLS | pr_say(31; 3103; \"11:20\"; \"launch-fleet: re-test starting \(sha(31))\") | pull(31; .state = \"CLOSED\" | .closedAt = at(\"11:20\"))" -- check <<EOF
+reopen synthetic-owner/synthetic-tools#31 for #12 at $S31: closed by its re-test (comment 3103) and not reopened; reopen it
 EOF
 expect "cross-repository PR: a review claim by its bare number is refused, never read as this repository's #31 (#2792)" 2 check.json "pr31 | pr_say(31; 3105; \"11:59\"; \"launch-fleet: review starting \(sha(31))\") | $TOOLS" -- claim 31 3105 <<EOF
 fleet.sh: #31 is neither a ticket nor an open pull request of an approved ticket

@@ -1264,17 +1264,23 @@ class KeyHostExpiredLogin(Base):
         self.assertIn("the kit's fake host answering 401", text)
         self.assertIn('no real key, no live host and no network', text)
         self.assertIn('fail `start` with `next` exactly the contract\'s `sign_in_next`', text)
-        self.assertIn('runs `start` again against the fake host answering 500', text)
+        self.assertIn('runs `start` against the fake host answering 500, in a random order', text)
+        self.assertIn('Only a reply `start` itself read before it exited counts', text)
+        self.assertIn('only the fake host\'s own reply reaches the driver, never the key', text)
+        self.assertIn('A rerun clears the last result before it checks anything.', text)
         self.assertIn('A driver that never reaches the fake host through the helper, or that names the sign-in '
                       'step after the 500 too, proves nothing, and the lesson records nothing.', text)
-        self.assertIn('This route needs Linux with Landlock; elsewhere it refuses and runs nothing, and on macOS '
+        self.assertIn('This route needs Linux with Landlock ABI 6 or later; elsewhere it refuses and runs nothing, '
+                      'and on macOS '
                       'the lesson reads `not run` as step 4 says.', text)
 
     def test_the_contract_names_the_key_host_route(self):
         text = ' '.join(wd.CONTRACT.read_text().split())
         self.assertIn('**Key-host route.**', text)
         self.assertIn("the kit's fake host answering 401", text)
-        self.assertIn('again against the fake host answering 500', text)
+        self.assertIn('against the fake host answering 500, in a random order', text)
+        self.assertIn('Only a reply that `start`\'s own process read before it exited counts', text)
+        self.assertIn('The route needs Landlock ABI 6 or later', text)
         self.assertIn('no process of the probe can open a socket', text)
 
     @unittest.skipUnless(os.environ.get('WRITE_DRIVER_OPENWIZ'),

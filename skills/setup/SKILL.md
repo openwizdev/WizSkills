@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Set up a project for fleets, writing its issue tracker, triage labels, glossary layout and fleet defaults (builder, reviewer, test commands, CI checks, merge rules) to docs/agents/. Use before a project's first fleet, when a skill finds docs/agents/ missing, or after one of those settings changes. To install OpenWiz itself or start a first fleet, use install.
+description: Configure a project for fleets, including its tracker, labels, glossary and defaults. Use when project settings are missing or need updating.
 version: 0.4.0
 ---
 

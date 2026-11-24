@@ -1,6 +1,6 @@
 ---
 name: launch-fleet
-description: Launch a project's fleets and move each approved plan graph's tickets through build, review and merge. Use when a plan graph is approved, when a loop wakes you with due lines or GitHub's messages, when moving a spec to fresh wakes, or to see what a fleet has due. Not for planning (to-tickets), building (build-ticket) or reviewing (review-ticket).
+description: Launch fleets and move approved tickets through build, review and merge. Use when a plan graph is approved, a fleet wakes or you need to see what is due.
 version: 1.0.0
 ---
 

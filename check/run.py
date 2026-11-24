@@ -147,7 +147,7 @@ MATT_COPYRIGHT = 'Copyright (c) 2026 Matt Pocock'
 ASK_WIZ = 'ask-wiz'
 ASK_WIZ_POLICY = 'policy:\n  allow_implicit_invocation: false'
 FRONTMATTER_KEYS = ('name', 'description', 'version')
-DESCRIPTION_MAX = 1024
+DESCRIPTION_MAX = 180
 OPENAI_KEYS = ('display_name', 'short_description')
 
 PLUGIN = '.claude-plugin/plugin.json'

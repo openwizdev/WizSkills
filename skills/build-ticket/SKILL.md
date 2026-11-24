@@ -1,6 +1,6 @@
 ---
 name: build-ticket
-description: Build one ticket as its builder, proof first and inside its owned paths, hand back one green pull request, and stay with it through review and CI until it merges. Use when you are told you are the builder for a ticket, or when your ticket's pull request gets a review, fails CI or conflicts with main. Reviewing someone else's pull request is review-ticket.
+description: Build a ticket and hand back its pull request. Use when assigned as the builder or when your pull request gets review feedback, fails CI or conflicts with main.
 version: 0.3.0
 ---
 

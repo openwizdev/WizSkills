@@ -15,10 +15,10 @@
 
 ## Top deletes
 
-1. **`alpha-001`** (`CONFIRMED`, high, S) — `example/alpha`: `src/legacy_export.py`
+1. **`alpha-001`** (`CONFIRMED`, high, S) — `example/alpha`: `src/legacy_export.rs`
    - **What:** Unused legacy exporter with no callers in repository.
-   - **Evidence:** `git grep legacy_export -> 0 matches outside src/legacy_export.py`
-   - **Why keep:** External scripts could import it directly if not checked outside this repo.
+   - **Evidence:** `git grep legacy_export -> 0 matches outside src/legacy_export.rs`
+   - **Why keep:** External callers could import it directly if not checked outside this repo.
 
 ## Top fixes
 
@@ -29,14 +29,14 @@
 
 ## Top links
 
-1. **`cross-001`** (`PLAUSIBLE`, medium, M) — `example/beta`: `tools/slug.py`, `example/alpha:src/slug.py`
+1. **`cross-001`** (`PLAUSIBLE`, medium, M) — `example/beta`: `tools/slug.rs`, `example/alpha:src/slug.rs`
    - **What:** Duplicate slug helper maintained separately in alpha and beta.
-   - **Evidence:** `diff -u alpha/src/slug.py beta/tools/slug.py -> 2 lines differ`
+   - **Evidence:** `diff -u alpha/src/slug.rs beta/tools/slug.rs -> 2 lines differ`
    - **Why keep:** Repos currently avoid cross-repo runtime dependencies.
 
 ## Rejected
 
-- **`alpha-002`** (`example/alpha`): Flag --fast is parsed dynamically in src/options.py.
+- **`alpha-002`** (`example/alpha`): Flag --fast is parsed dynamically in src/options.rs.
 
 ## Unconfirmed reads
 
@@ -44,5 +44,5 @@
 
 ## Tickets filed
 
-- `example/alpha` — Delete unused src/legacy_export.py (`alpha-001`)
+- `example/alpha` — Delete unused src/legacy_export.rs (`alpha-001`)
 - `Loops` — Update nightly-check loop target branch to main (`loops-001`)

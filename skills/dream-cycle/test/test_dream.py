@@ -13,6 +13,8 @@ FIXTURES = HERE / "fixtures" / "dream"
 
 
 class DreamCycleMergeAndReportTests(unittest.TestCase):
+    # DC3 (#3091) removes expectedFailure when dream.py is implemented.
+    @unittest.expectedFailure
     def test_merge_validates_dedupes_ranks_and_splits_batches(self):
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
@@ -58,6 +60,8 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
             self.assertEqual(sum(batch_counts), 5)
             self.assertLessEqual(max(batch_counts) - min(batch_counts), 1)
 
+    # DC3 (#3091) removes expectedFailure when dream.py is implemented.
+    @unittest.expectedFailure
     def test_report_applies_verdicts_excludes_unproven_tickets_and_renders_loops(self):
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)

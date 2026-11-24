@@ -126,11 +126,10 @@ def scan(path):
 
 
 @contextmanager
-def pacer_state(deadline):
-    path = state_path()
+def locked(path, deadline):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        lock = open(path.with_name(path.name + '.lock'), 'a')
+        lock = open(path, 'a')
     except OSError:
         raise Stop('refused: the write pacer\'s state folder cannot be used; nothing was written')
     with lock:
@@ -142,6 +141,18 @@ def pacer_state(deadline):
                 if time.monotonic() >= deadline:
                     raise paced(time.time())
                 time.sleep(0.05)
+        yield
+
+
+def publishing(deadline):
+    path = state_path()
+    return locked(path.with_name(path.name + '.publish.lock'), deadline)
+
+
+@contextmanager
+def pacer_state(deadline):
+    path = state_path()
+    with locked(path.with_name(path.name + '.lock'), deadline):
         try:
             value = decode(path.read_bytes()) if path.exists() else {'accounts': {}, 'inflight': [], 'until': 0}
         except OSError:
@@ -198,14 +209,18 @@ def take(paced_write):
             if left <= 0 or (free > now + left and not busy):
                 raise paced(max(free, now))
             if free <= now and not busy:
-                late = max(scan(state_path())[1], default=0)
-                if late > now:
-                    s['until'] = max(s['until'], late)
-                    continue
-                if paced_write:
-                    s['accounts'][key] = times + [now]
-                entry = [os.getpid(), now]
-                s['inflight'].append(entry)
+                with publishing(deadline):
+                    late = max(scan(state_path())[1], default=0)
+                    if late > now:
+                        s['until'] = max(s['until'], late)
+                        continue
+                    if time.monotonic() >= deadline:
+                        raise paced(time.time())
+                    if paced_write:
+                        s['accounts'][key] = times + [now]
+                    entry = [os.getpid(), now]
+                    s['inflight'].append(entry)
+                    save(state_path(), s)
                 return entry
         time.sleep(max(0.05, min(0.5 if busy else free - now, left)))
 
@@ -222,7 +237,8 @@ def settle(entry, until=None):
         if until is None:
             return False
     try:
-        save(state_path(), until, hold=True)
+        with publishing(time.monotonic() + SLOT_WAIT_SECONDS):
+            save(state_path(), until, hold=True)
         return True
     except Stop:
         return False

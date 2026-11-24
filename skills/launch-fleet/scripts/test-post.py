@@ -487,7 +487,8 @@ class Pacer(unittest.TestCase):
                 if answer:
                     self.assertEqual((code, out), answer)
                     self.assertEqual(state(w)['until'], float(hold))
-                    self.assertEqual(sorted(p.name for p in folder.iterdir()), ['writes.json', 'writes.json.lock'])
+                    self.assertEqual(sorted(p.name for p in folder.iterdir()),
+                                     ['writes.json', 'writes.json.lock', 'writes.json.publish.lock'])
                 else:
                     self.assertEqual(code, 1)
                     self.assertTrue(out.startswith('refused: ') and str(w.dir) not in out, out)
@@ -560,7 +561,8 @@ class Pacer(unittest.TestCase):
         self.assertTrue(out.startswith('refused: '), out)
         self.assertNotIn(str(w.dir), out)
         self.assertEqual(w.writes(), [])
-        self.assertEqual(sorted(p.name for p in (w.dir / 'state' / 'launch-fleet').iterdir()), ['writes.json.lock'])
+        self.assertEqual(sorted(p.name for p in (w.dir / 'state' / 'launch-fleet').iterdir()),
+                         ['writes.json.lock', 'writes.json.publish.lock'])
 
     def test_processes_racing_for_the_last_slot_get_one_write(self):
         w = paced_world(self)
@@ -746,8 +748,10 @@ class Pacer(unittest.TestCase):
         out, err = writer.communicate('go\n', timeout=60)
         self.assertEqual((writer.returncode, out, err), (0, 'posted 5001\n', ''))
         self.assertEqual(len(w.writes()), 1)
-        again = patched(w, publish)
-        self.assertEqual(again.communicate(timeout=60), ('', ''))
+        with open(folder / 'writes.json.lock', 'a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            again = patched(w, publish)
+            self.assertEqual(again.communicate(timeout=60), ('', ''))
         self.assertEqual(again.returncode, 0)
         self.assertEqual(len([p for p in folder.iterdir() if p.name.startswith('writes.json.hold.')]), 1)
 

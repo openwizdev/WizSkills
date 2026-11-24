@@ -1025,35 +1025,58 @@ def untested(repo):
                    'this again. Nothing recorded.' % repo)
 
 
-def seed_file(name, path, branch):
-    result = run(['gh', 'api', '--include', '-X', 'GET', 'repos/%s/contents/%s?ref=%s' % (
-        name, path, urllib.parse.quote(branch, safe=''))], gh_env())
-    text = result.stdout.decode('utf-8', 'replace').replace('\r\n', '\n') if result is not None else ''
-    head, _, body = text.partition('\n\n')
-    status = re.match(r'HTTP/[0-9.]+ ([0-9]{3})', head)
-    if status and status[1] == '404':
-        return None
+TREE = '{id name target{... on Commit{oid file(path:$path){object{... on Blob{text}}}}}}'
+BY_NAME = ('query($owner:String!,$name:String!,$path:String!){repository(owner:$owner,name:$name){id '
+           'defaultBranchRef%s}}' % TREE)
+BY_REF = 'query($ref:ID!,$path:String!){node(id:$ref){... on Ref%s}}' % TREE
+WRITE = ('mutation($ref:ID!,$oid:GitObjectID!,$path:String!,$contents:Base64String!){createCommitOnBranch(input:{'
+         'branch:{id:$ref},expectedHeadOid:$oid,message:{headline:"OpenWiz: a passing test and its CI check"},'
+         'fileChanges:{additions:[{path:$path,contents:$contents}]}}){commit{oid}}}')
+
+
+def graphql(query, **fields):
+    argv = ['gh', 'api', 'graphql', '-f', 'query=' + query]
+    for key, value in fields.items():
+        argv += ['-f', '%s=%s' % (key, value)]
+    return run(argv, gh_env())
+
+
+def tree(query, **fields):
+    result = graphql(query, **fields)
     try:
-        assert status and status[1] == '200'
-        found = strict(body)
-        assert found['type'] == 'file' and found['encoding'] == 'base64'
-        return base64.b64decode(found['content'], validate=False).decode('utf-8', 'replace')
-    except (AssertionError, ValueError, KeyError, TypeError):
-        raise Exit(6, 'Could not read %s on %s; run this again to read it before anything else.' % (path, name))
+        assert result is not None and result.returncode == 0
+        data = strict(result.stdout.decode('utf-8'))['data']
+        repo = data['repository']['id'] if query == BY_NAME else None
+        ref = data['repository']['defaultBranchRef'] if query == BY_NAME else data['node']
+        assert query != BY_NAME or (isinstance(repo, str) and repo)
+        assert isinstance(ref['id'], str) and ref['id'] and isinstance(ref['name'], str)
+        assert isinstance(ref['target']['oid'], str) and re.fullmatch('[0-9a-f]{40}', ref['target']['oid'])
+        entry = ref['target']['file']
+        text = None if entry is None else entry['object']['text']
+        assert text is None or isinstance(text, str)
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):
+        return None
+    return {'repo': repo, 'ref': ref['id'], 'branch': ref['name'], 'oid': ref['target']['oid'], 'text': text}
 
 
 def seed(state, name, seen):
+    owner, short = name.split('/')
+    at = None
     for path, text in SEED.items():
-        have = seed_file(name, path, seen['branch'])
-        if have == text:
+        at = tree(BY_NAME, owner=owner, name=short, path=path) if at is None else tree(BY_REF, ref=at['ref'], path=path)
+        if at is None:
+            raise Exit(6, 'Could not read %s on %s; run this again to read it before anything else.' % (path, name))
+        if at['repo'] not in (None, seen['id']) or at['branch'] != seen['branch']:
+            raise Exit(5, '%s is no longer the repository this onboarding created; OpenWiz writes neither '
+                          'tests/test_check.py nor .github/workflows/check.yml into it. Nothing written.' % name)
+        if at['text'] == text:
             continue
-        if have is not None:
+        if at['text'] is not None:
             raise Exit(5, '%s already holds another %s; OpenWiz never writes over it. Nothing more written.'
                        % (name, path))
-        run(['gh', 'api', '-X', 'PUT', 'repos/%s/contents/%s' % (name, path), '-f',
-             'message=OpenWiz: a passing test and its CI check', '-f',
-             'content=' + base64.b64encode(text.encode()).decode(), '-f', 'branch=' + seen['branch']], gh_env())
-        if seed_file(name, path, seen['branch']) != text:
+        graphql(WRITE, ref=at['ref'], oid=at['oid'], path=path, contents=base64.b64encode(text.encode()).decode())
+        at = tree(BY_REF, ref=at['ref'], path=path)
+        if at is None or at['text'] != text:
             raise Exit(6, 'Whether %s was written to %s is uncertain; run this again: it reads the file back before '
                           'any write. If GitHub refused the workflow, run gh auth refresh -s workflow first.'
                        % (path, name))

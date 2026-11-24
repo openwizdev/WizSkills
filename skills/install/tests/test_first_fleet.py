@@ -250,8 +250,8 @@ def github(repos=(), **switches):
     return json.dumps(world)
 
 
-SEEDED = ('PUT', 'repos/%s/contents/tests/test_check.py' % REPO), \
-    ('PUT', 'repos/%s/contents/.github/workflows/check.yml' % REPO)
+SEEDED = ('POST', 'graphql createCommitOnBranch %s tests/test_check.py' % REPO), \
+    ('POST', 'graphql createCommitOnBranch %s .github/workflows/check.yml' % REPO)
 
 
 class Journey:

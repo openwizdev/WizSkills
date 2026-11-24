@@ -99,11 +99,11 @@ function pace(timezone, streak, lastEmpty) {
   catch { ask('timezone'); }
   if (!timezone) ask('timezone');
   if (!/^(0|[1-9][0-9]*)$/.test(streak)) ask('empty-hunt streak');
+  if (Number(streak) < 2) return {hunt: true};
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?$/.test(lastEmpty))
     fail('last empty hunt time needs Z or an offset (such as 2026-11-19T23:55:00Z): ask on the tracking issue');
   const last = Date.parse(lastEmpty);
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})$/.test(lastEmpty) || Number.isNaN(last)) ask('last empty hunt time');
-  if (Number(streak) < 2) return {hunt: true};
   const lastDay = day.format(last);
   if (day.format(Date.now()) > lastDay) return {hunt: true};
   const [y, m, d] = lastDay.split('-').map(Number);

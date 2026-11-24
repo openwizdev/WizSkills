@@ -55,7 +55,7 @@ with its reason on stderr; a refused write posted nothing.
    then every part through `manifest.mjs unpack` with the index's digest.
 5. `lease.mjs pace <timezone> <streak> <last-empty-at>` from that record;
    `<last-empty-at>` is an ISO instant with Z or an offset, never a bare
-   local time. `hunt: false` ends the hunt as paused: finish it (step 5).
+   local time (or `none` when the streak is below 2). `hunt: false` ends the hunt as paused: finish it (step 5).
    Exit 2 means ask on the tracking issue, do only independent
    reconciliation, then finish the same way.
 6. Do any one-time reconciliation the settings name. Check the open cap.
@@ -129,7 +129,7 @@ without the tier's proof. Security proposals never take this route.
 
 Write the hunt's resumable record as JSON with `run` set to `<run>`: identity,
 date and timezone, base, switch, coverage, compact slice results, ledger,
-owners, gaps, empty-hunt streak and next action. Then run
+owners, gaps, empty-hunt streak, last empty hunt time and next action. Then run
 `lease.mjs publish <run> <record.json> <index>` and post the index with
 `renew` (a checkpoint while a wake is pending) or, to finish the hunt,
 `lease.mjs finish <run> <index>` on every final path: done, paused, blocked,

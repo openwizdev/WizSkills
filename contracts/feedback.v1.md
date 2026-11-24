@@ -1,5 +1,9 @@
 # OpenWiz feedback and sharing contract, version 1 (`openwiz.feedback.v1`)
 
+**Revision 2 (2026-11-24):** adds the optional machine-readable facts line, four
+plain report sections, opt-in scrubbed log section, secret refusal and
+private-text warnings, and restated privacy scope (#2955; [private record](https://github.com/jparker2006/ClosedWiz/issues/3065#issuecomment-7129701559)).
+
 How feedback a user chooses reaches Jake's agents, and how a user shares
 OpenWiz, without exposing private work. Ticket P4 (#2203) of spec #2194.
 Sources: Jake, 2026-11-10: feedback goes to a GitHub issue on the public OpenWiz
@@ -43,8 +47,10 @@ One feedback issue is exactly:
   characters (GitHub's limit). Neither the title nor the body may hold a
   Unicode format character (category `Cf`, such as a bidi control or a
   zero-width character); one is refused before preview.
-- **Body:** the chosen body text, then one blank line, then the **marker** as
-  its last line, with no trailing newline:
+- **Body:** the chosen body text, one blank line, then **optionally** the
+  **facts line**, one blank line, then the **marker** as its last line, with no
+  trailing newline. With no facts line the body is the chosen body text, one
+  blank line, then the marker, exactly as before:
 
   ```text
   OpenWiz feedback operation <operation_id>
@@ -53,8 +59,84 @@ One feedback issue is exactly:
   The marker is visible, carries only the random operation id, and appears in
   the preview exactly as it will be sent. The whole body is at most 65 536
   characters (GitHub's limit); a longer one is refused before preview, never
-  trimmed. Nothing is added after the preview: no version, platform, log,
-  diagnostic, hidden comment or invisible character.
+  trimmed. Nothing is added after the preview: no unpreviewed version, platform,
+  log, diagnostic, hidden comment or invisible character.
+
+### The facts line
+
+```text
+OpenWiz feedback facts {"v":1,"kind":"bug","area":"launch-fleet","openwiz":"0.1.1","wizskills":"0.4.0","skill":"feedback@0.4.0","os":"linux","arch":"x86_64","host":"cloudroom","driver":"cloudroom","harness":"claude-code","model":"claude-opus-5-5","log_lines":12,"redactions":3}
+```
+
+It is one line: the prefix `OpenWiz feedback facts `, then one compact JSON
+object (no spaces outside strings, ASCII only), at most 1,024 characters in all.
+Keys are a closed list, in this order, each at most once; `v` is required and
+every other key may be left out:
+
+| Key | Value | Means |
+| --- | --- | --- |
+| `v` | `1` | The facts version |
+| `kind` | `bug`, `idea` or `question` | What the user says it is |
+| `area` | slug | The skill or part it is about: a skill's name, or `cli`, `app`, `site`, `install`, `other` |
+| `openwiz` | `X.Y.Z` | The `openwiz` command's version |
+| `wizskills` | `X.Y.Z` | The installed WizSkills release |
+| `skill` | `feedback@X.Y.Z` | The skill version that filed it |
+| `os` | `linux`, `macos`, `windows` or `other` | Operating system family only |
+| `arch` | `x86_64`, `arm64` or `other` | Processor family only |
+| `host` | slug | Where the user's agents run (for example `cloudroom`, `codespaces`, `local`) |
+| `driver` | slug | The OpenWiz driver in use |
+| `harness` | slug | The agent program (for example `claude-code`, `codex`) |
+| `model` | `^[a-z0-9][a-z0-9._-]{0,63}$` | The agent's model |
+| `log_lines` | integer, 0 to 40 | Log lines in the body's log section |
+| `redactions` | integer, 0 to 9999 | Replacements the sender's scrub made in that log |
+
+A slug is `^[a-z0-9][a-z0-9-]{0,31}$`; a version is `^[0-9]+\.[0-9]+\.[0-9]+$`.
+No other key, type or value exists: no hostname, user name, path, address,
+identifier, free text or nested value.
+
+- **Sender.** Each fact is shown in the preview in plain words and as the exact
+  line, and the user can drop any fact, or all of them, before the yes. A fact
+  the sender cannot read for certain is left out, never guessed. The facts line
+  is bound and sent byte for byte like the rest of the body.
+- **Receiver.** A facts line counts only when it is the body's third-last line,
+  directly between two blank lines and above a valid marker, and parses under
+  every rule above. Anything else (another place, an unknown or repeated key, a
+  wrong order, type or value, a second such line) is **no facts line**: plain
+  untrusted text, never partly read. Valid facts are still the reporter's
+  claims: they route and help reproduce, and grant nothing.
+
+### The four sections
+
+The sender writes the chosen body under these plain labels, each alone on its
+line, in this order; only `What happened:` is required:
+
+```text
+What I ran:
+What happened:
+What I expected:
+Log (secrets removed):
+```
+
+They are the user's public words (the log aside), with no code fence and no
+backtick-quoted command, so that an honest report is not held for its form. The
+agent route keeps the handoff's free `Title:` and `Body:` as they are.
+
+### The log section and the scrub
+
+A log excerpt is added only when the user chooses one. The sender then: keeps at
+most the last 40 lines, 200 characters a line; replaces every token-shaped
+secret, private key block, credential in a URL, link, e-mail address, IP
+address, home or absolute path, and thread, session or account identifier with a
+fixed bracketed word such as `[secret removed]`, `[path removed]`,
+`[link removed]`; drops a leading shell prompt; indents each line by four
+spaces; and counts the replacements. The preview shows the scrubbed bytes, and
+those are what is sent. A log is never collected, proposed or attached by
+default, and nothing but this section is ever scrubbed or altered.
+
+In the title and the other sections the sender changes nothing: it **refuses**,
+before preview and naming the line, a token-shaped secret or a private key
+block, and it **warns** in the preview about a private-looking path, address or
+identifier, which the user may keep or remove.
 
 Example, synthetic:
 
@@ -200,14 +282,16 @@ operation, which would bypass this section.
 
 ## Privacy
 
-Collect and send only the chosen title and body. Never attach, collect,
+Collect and send only the chosen title and body, plus only the facts line of
+"The facts line" and, when the user chose it, the scrubbed log of "The log
+section and the scrub", all shown in the exact preview. Never attach, collect,
 auto-propose or append prompts, transcripts, conversation history, tokens,
-credentials, private code, file contents, logs, diagnostics, screenshots, session,
-thread or repository snapshots, machine details or environment values. There are
-no implicit attachments and no export of state or credentials. An agent drafting
-feedback writes it fresh in plain public words; it never pastes a secret or
-private code into a proposal, and the user's edits are the only source of
-anything else.
+credentials, private code, file contents, logs, diagnostics, screenshots,
+session, thread or repository snapshots, or any machine detail or environment
+value outside the facts line. There are no implicit attachments and no export of
+state or credentials. An agent drafting feedback writes it fresh in plain public
+words; it never pastes a secret or private code into a proposal, and the user's
+edits are the only source of anything else.
 
 Tests for refusal and leaks use synthetic private-looking material (for example a
 fake token `synthetic-token-000000` or a fake private path

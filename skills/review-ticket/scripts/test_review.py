@@ -90,9 +90,11 @@ Full review by Codex, Sol 6.2, Medium. CI green on this commit: check.
 Intent: export writes the whole cookbook to one zip and refuses to overwrite.
 
 - **R1 [blocking]** `src/export.rs:48` (Spec) An existing zip is overwritten. Fix: refuse with status 3.
+  Class: files
   User path: a cook exports twice; the first export is lost.
 - **R2 [polish]** `src/cli.rs:30` (Sweep) Help wording. Fix: say export. Polish issue: #58.
 - **R3 [blocking]** `src/export.rs:71` (Sweep) Token written to the log. Fix: redact it.
+  Class: credential
   Risk: privacy: a cook's sync token reaches a shared log.
 
 - **Ruling 1** upheld: the importer reads cookbook.zip.
@@ -108,9 +110,11 @@ Re-check of R1, R3 and the code changed since aaaaaaa, by Codex, Sol 6.2, Medium
 Intent: export writes the whole cookbook to one zip and refuses to overwrite.
 
 - **R1 [blocking]** still open after the re-check: the web export still overwrites. Logged as follow-up #61.
+  Class: files
   User path: a cook exports twice from the web page; the first export is lost.
 - **R2 [polish]** Polish issue: #58.
 - **R3 [blocking]** resolved at bbbbbbb: the log line is redacted.
+  Class: credential
 - **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60.
 
 - **Ruling 1** upheld: the importer reads cookbook.zip.
@@ -488,7 +492,7 @@ class Review(unittest.TestCase):
         self.world({}, comments=[report(FULL)])
         unchanged = "- **R4 [polish]** `src/cli.rs:12` (Sweep) Typo. Fix: file exists. Polish issue: #60."
         risk = ("- **R4 [blocking]** `src/cli.rs:12` (Sweep) The sync token is printed. Fix: redact it.\n"
-                "  Risk: privacy: a cook's sync token reaches the terminal log.")
+                "  Class: credential\n  Risk: privacy: a cook's sync token reaches the terminal log.")
         fresh = ("VERDICT: CHANGES", "Next: a fresh, stronger builder fixes R4 once, then one final check.")
         old_r4 = "- **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60."
         merge = ("VERDICT: APPROVE", "Next: none open. It merges by the project's merge rules.")
@@ -601,6 +605,7 @@ class Review(unittest.TestCase):
     def test_a_late_finding_on_unchanged_code_is_held_back_as_pre_existing_and_counted(self):
         self.world({}, comments=[report(FULL)])
         risk = ("- **R6 [blocking]** `src/cli.rs:9` (Sweep) The sync token is printed. Fix: redact it.\n"
+                "  Class: credential\n"
                 "  Late: the first review read the CLI only for the export flag.\n"
                 "  Risk: privacy: a cook's sync token reaches the terminal log.")
         cases = {
@@ -618,9 +623,10 @@ class Review(unittest.TestCase):
         self.world({}, comments=[report(FULL)])
         no_late = LATE_PRE.replace("\n  Late: the first review read the CLI only for the export flag.", "")
         risk = ("- **R5 [blocking]** `src/cli.rs:9` (Sweep) The sync token is printed. Fix: redact it.\n"
+                "  Class: credential\n"
                 "  Risk: privacy: a cook's sync token reaches the terminal log.")
         user = LATE_PRE.replace("[pre-existing]", "[blocking]").replace(" Pre-existing issue: #62.", "") + \
-            "\n  User path: a cook mistypes a flag and the script carries on."
+            "\n  Class: input\n  User path: a cook mistypes a flag and the script carries on."
         unchanged = (f"R5: `src/cli.rs` is unchanged since {OLD[:7]}; a re-check raises a new finding there "
                      "only as a Risk: security, privacy or data-loss blocker")
         needs = f"R5: a new finding on code unchanged since {OLD[:7]} needs its Late: line"
@@ -1181,6 +1187,100 @@ class Review(unittest.TestCase):
                             "- **Ruling 1** upheld: ok.\n- **Ruling 2** upheld: ok.\n\nRulings: none.")
         out = self.run_helper("check", self.file("r.md", none), "--repo", SKILLS, "--pr", "7")
         self.assertIn("Rulings: none. stands beside a ruling mark", out.stdout.splitlines())
+
+    def test_a_blocker_names_exactly_one_class_from_the_verdict_format(self):
+        self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
+        line = "  Class: files\n"
+        missing = "R1: a blocker names its class: one Class: line from references/verdict.md"
+        unknown = "R1: Class: {} is not a word from references/verdict.md; use Class: other: <word> when none fits"
+        cases = {
+            "no class": (FULL.replace(line, ""), 1, missing),
+            "unknown word": (FULL.replace(line, "  Class: memory\n"), 1, unknown.format("memory")),
+            "capitalised word": (FULL.replace(line, "  Class: Files\n"), 1, unknown.format("Files")),
+            "two words": (FULL.replace(line, "  Class: files state\n"), 1, unknown.format("files state")),
+            "other with a spaced word": (FULL.replace(line, "  Class: other: race window\n"), 1,
+                                         unknown.format("other: race window")),
+            "two class lines": (FULL.replace(line, line + "  Class: state\n"), 1,
+                                "R1: a blocker carries exactly one Class: line"),
+            "class as finding text": (FULL.replace(line, "").replace("Fix: refuse with status 3.",
+                                                                     "Fix: refuse with status 3. Class: files"), 1, missing),
+            "other with one word": (FULL.replace(line, "  Class: other: race-window\n"), 0, "report ok"),
+            "every listed word": (FULL.replace(line, "  Class: error-path\n"), 0, "report ok"),
+        }
+        for name, (text, code, expected) in cases.items():
+            with self.subTest(name):
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, code, out.stdout + out.stderr)
+                self.assertIn(expected, out.stdout.splitlines())
+        for word in ("input", "error-path", "guard", "output", "state", "files", "process", "credential"):
+            with self.subTest(word):
+                out = self.run_helper("check", self.file("r.md", FULL.replace(line, f"  Class: {word}\n")),
+                                      "--repo", SKILLS, "--pr", "7")
+                self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+
+    def test_only_a_blocker_is_asked_for_its_class(self):
+        self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
+        out = self.run_helper("check", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+        late = ("- **R2 [pre-existing]** `src/cli.rs:30` (Sweep) Help wording. Fix: say export. "
+                "Pre-existing issue: #58.\n  Late: the first review read only the export.")
+        text = FULL.replace("- **R2 [polish]** `src/cli.rs:30` (Sweep) Help wording. Fix: say export. Polish issue: #58.",
+                            late)
+        out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual([x for x in out.stdout.splitlines() if x.startswith("R2:") and "Class" in x], [])
+        self.assertIn("R1: a blocker names its class: one Class: line from references/verdict.md",
+                      self.run_helper("check", self.file("r.md", text.replace("  Class: files\n", "")),
+                                      "--repo", SKILLS, "--pr", "7").stdout.splitlines())
+
+    def test_a_blocker_keeps_its_class_at_every_later_status(self):
+        self.world({}, comments=[report(FULL)])
+        resolved = "- **R3 [blocking]** resolved at bbbbbbb: the log line is redacted.\n"
+        cases = {
+            "resolved without its class": (RECHECK.replace(resolved + "  Class: credential\n", resolved),
+                                           "R3: a blocker names its class: one Class: line from references/verdict.md"),
+            "logged without its class": (RECHECK.replace("  Class: files\n", ""),
+                                         "R1: a blocker names its class: one Class: line from references/verdict.md"),
+            "resolved with another class": (RECHECK.replace("  Class: credential\n", "  Class: output\n"),
+                                            "R3: keeps its earlier class, credential"),
+        }
+        for name, (text, problem) in cases.items():
+            with self.subTest(name):
+                out = self.run_helper("check", self.file("r.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, 1, out.stdout)
+                self.assertIn(problem, out.stdout.splitlines())
+        self.world({}, comments=[report(FULL.replace("  Class: credential\n", ""))])
+        out = self.run_helper("check", self.file("r.md", RECHECK), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+
+    def test_the_verdict_formats_first_example_passes_and_needs_its_class(self):
+        page = (HELPER.parent.parent / "references" / "verdict.md").read_text()
+        example = re.search(r"```md\n(VERDICT: CHANGES at ([0-9a-f]{40})\n.*?)```", page, re.S)
+        self.world({"checks": green(example[2])}, pr={"head": {"sha": example[2]}})
+        out = self.run_helper("check", self.file("r.md", example[1]), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+        self.assertIn("  Class: files\n", example[1])
+        out = self.run_helper("check", self.file("r.md", example[1].replace("  Class: files\n", "")),
+                              "--repo", SKILLS, "--pr", "7")
+        self.assertEqual(out.stdout.splitlines(),
+                         ["R1: a blocker names its class: one Class: line from references/verdict.md"])
+
+    def test_the_skills_own_example_names_its_blockers_class(self):
+        page = (HELPER.parent.parent / "SKILL.md").read_text()
+        example = re.search(r"```md\n(VERDICT: CHANGES at ([0-9a-f]{40})\n.*?)```", page, re.S)
+        self.world({"checks": green(example[2])}, pr={"head": {"sha": example[2]}})
+        out = self.run_helper("check", self.file("r.md", example[1]), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+
+    def test_the_recheck_guides_example_keeps_its_blockers_class(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("review_module", HELPER)
+        review = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(review)
+        md = r"```md\n(VERDICT: (?:CHANGES|APPROVE) at ([0-9a-f]{40})\n.*?)```"
+        first = re.search(md, (HELPER.parent.parent / "SKILL.md").read_text(), re.S)
+        again = re.search(md, (HELPER.parent.parent / "references" / "re-checks.md").read_text(), re.S)
+        problems = review.check(again[1], DESCRIPTION, "re-check", again[2], review.parse(first[1]))
+        self.assertEqual(problems, [])
 
     def test_record_author_row_is_parsed_whole(self):
         row = "| Record authors | `example[bot]`, `owner` |\n"

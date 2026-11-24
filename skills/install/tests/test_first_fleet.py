@@ -1361,6 +1361,51 @@ class DemoRepository(unittest.TestCase):
             self.assertNotIn('Created and read back', result.stdout)
         self.assertEqual(self.writes(j), [['POST', 'user/repos']])
 
+    def test_a_missing_starter_file_not_found_seeds_both_files_and_other_errors_refuse(self):
+        j = Journey(self)
+        done = j.helper(YES_DEMO)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)])
+        self.assertEqual(j.helper(YES_DEMO).returncode, 0)
+        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)])
+        bad_cases = (
+            ('forbidden on file', [{'type': 'FORBIDDEN', 'path': ['repository', 'defaultBranchRef', 'target', 'file'],
+                                    'message': 'synthetic'}]),
+            ('not found on another path', [{'type': 'NOT_FOUND', 'path': ['repository'], 'message': 'synthetic'}]),
+            ('extra error alongside not found', [
+                {'type': 'NOT_FOUND', 'path': ['repository', 'defaultBranchRef', 'target', 'file'],
+                 'message': 'synthetic'},
+                {'type': 'INTERNAL', 'path': ['repository'], 'message': 'synthetic'},
+            ]),
+        )
+        for label, errors in bad_cases:
+            with self.subTest(label):
+                j = Journey(self)
+                err_file = j.dir / 'graphql-errors.json'
+                err_file.write_text(json.dumps(errors))
+                wrapper = j.dir / 'gh_wrap.py'
+                wrapper.write_text(
+                    'import json, subprocess, sys\n'
+                    'r = subprocess.run([sys.executable, "-I", "-S", %r, *sys.argv[1:]], capture_output=True)\n'
+                    'out = r.stdout\n'
+                    'if sys.argv[1:3] == ["api", "graphql"] and "createCommitOnBranch" not in " ".join(sys.argv):\n'
+                    '    body = json.loads(out.decode())\n'
+                    '    body["errors"] = json.loads(open(%r).read())\n'
+                    '    out = json.dumps(body).encode()\n'
+                    '    sys.stdout.buffer.write(out)\n'
+                    '    sys.exit(1)\n'
+                    'sys.stdout.buffer.write(out)\n'
+                    'sys.stderr.buffer.write(r.stderr)\n'
+                    'sys.exit(r.returncode)\n' % (str(FAKE_GH), str(err_file))
+                )
+                gh = j.dir / 'bin/gh'
+                gh.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, wrapper))
+                gh.chmod(0o755)
+                result = j.helper(YES_DEMO)
+                self.assertEqual(result.returncode, 6, result.stdout)
+                self.assertIn('Could not read tests/test_check.py', result.stdout)
+                self.assertEqual(self.writes(j), [['POST', 'user/repos']], 'nothing seeded on unexpected error')
+
     def test_the_create_reply_is_matched_by_node_id_never_its_numeric_id(self):
         for name, switches, code, writes in (('numeric id differs, node_id matches', {}, 0, SEEDED),
                                              ('node_id differs from the read-back', {'reply_id': 'R_other'}, 5, ())):

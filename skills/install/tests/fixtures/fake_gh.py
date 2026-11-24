@@ -102,10 +102,12 @@ def graphql(argv):
         return next(((repo, branch) for repo in state['repos'].values() for branch in repo['branches']
                      if 'REF_%s_%s' % (node_id(repo), branch) == ref), (None, None))
 
-    def answer(data, ok=True):
+    def answer(data, ok=True, errors=None):
         path.write_text(json.dumps(state))
-        sys.stdout.write(json.dumps({'data': data} if ok else {'data': data, 'errors': [{'message': 'synthetic'}]}))
-        return 0 if ok else 1
+        if errors is None and not ok:
+            errors = [{'message': 'synthetic'}]
+        sys.stdout.write(json.dumps({'data': data} if not errors else {'data': data, 'errors': errors}))
+        return 0 if not errors else 1
 
     if 'createCommitOnBranch' in query:
         name = (by_ref(fields['ref'])[0] or {}).get('full_name')
@@ -127,15 +129,26 @@ def graphql(argv):
     if 'node(' in query:
         repo, branch = by_ref(fields['ref'])
         state['log'].append(['GET', 'graphql node %s' % fields['path']])
-        return answer({'node': head(repo, branch) if repo else None}, ok=repo is not None)
+        if repo is None:
+            return answer({'node': None}, errors=[{'type': 'NOT_FOUND', 'path': ['node'],
+                                                   'message': 'Could not resolve to a node.'}])
+        found = head(repo, branch)
+        errors = None if found['target']['file'] is not None else [{
+            'type': 'NOT_FOUND', 'path': ['node', 'target', 'file'],
+            'message': "Could not resolve file for path '%s'." % fields['path']}]
+        return answer({'node': found}, errors=errors)
     name = '%s/%s' % (fields['owner'], fields['name'])
     repo = state['repos'].get(name.lower())
     state['log'].append(['GET', 'graphql repository %s %s' % (name, fields['path'])])
     if repo is None or repo.get('hidden'):
-        return answer({'repository': None}, ok=False)
+        return answer({'repository': None}, errors=[{'type': 'NOT_FOUND', 'path': ['repository'],
+                                                     'message': 'Could not resolve to a Repository.'}])
     has = repo['default_branch'] in repo['branches']
-    return answer({'repository': {'id': node_id(repo),
-                                  'defaultBranchRef': head(repo, repo['default_branch']) if has else None}})
+    found = head(repo, repo['default_branch']) if has else None
+    errors = None if not found or found['target']['file'] is not None else [{
+        'type': 'NOT_FOUND', 'path': ['repository', 'defaultBranchRef', 'target', 'file'],
+        'message': "Could not resolve file for path '%s'." % fields['path']}]
+    return answer({'repository': {'id': node_id(repo), 'defaultBranchRef': found}}, errors=errors)
 
 
 def default_ref(target, name, branch):

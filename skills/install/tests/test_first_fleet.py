@@ -1348,6 +1348,30 @@ class DemoRepository(unittest.TestCase):
                 self.assertEqual(other.returncode, 5, other.stdout)
                 self.assertEqual(self.writes(j), [], 'no second repository under another name')
 
+    def test_a_repository_replaced_before_a_seed_write_gets_neither_file(self):
+        j = Journey(self)
+        j.repos.write_text(github(replace_before_write=True))
+        for _ in range(2):
+            result = j.helper(YES_DEMO)
+            found = self.world(j)['repos'][REPO.lower()]
+            self.assertEqual(found['node_id'], 'R_replacement', 'the fake replaced it before the first write')
+            self.assertEqual(found['branches'], {'main': {'README.md': '# synthetic-sheep\n'}},
+                             'nothing written into the replacement')
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertNotIn('Created and read back', result.stdout)
+        self.assertEqual(self.writes(j), [['POST', 'user/repos']])
+
+    def test_the_create_reply_is_matched_by_node_id_never_its_numeric_id(self):
+        for name, switches, code, writes in (('numeric id differs, node_id matches', {}, 0, SEEDED),
+                                             ('node_id differs from the read-back', {'reply_id': 'R_other'}, 5, ())):
+            with self.subTest(name):
+                j = Journey(self)
+                j.repos.write_text(github(**switches))
+                result = j.helper(YES_DEMO)
+                self.assertEqual(result.returncode, code, result.stdout)
+                self.assertEqual(j.helper(YES_DEMO).returncode, code)
+                self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, writes)], 'seeded once or never')
+
     # Catches: someone else's repository, private or public, taken as the demo
     # or written to, and a repeat that rewrites the owner's later work.
     def test_existing_repositories_and_owner_work_are_never_written(self):

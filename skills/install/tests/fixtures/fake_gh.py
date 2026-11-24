@@ -78,6 +78,66 @@ def api_create(argv):
     return demo(['repo', 'create', '%s/%s' % (owner, short), '--private', '--add-readme'], api=True)
 
 
+def replaced(state, name):
+    if state.pop('replace_before_write', False):
+        owner, short = name.split('/')
+        state['repos'][name.lower()] = dict(repository(owner, short, {'main': {'README.md': '# %s\n' % short}}),
+                                            node_id='R_replacement')
+
+
+def graphql(argv):
+    path = Path(os.environ['FAKE_GH_REPOS'])
+    state = json.loads(path.read_text())
+    fields = dict(value.split('=', 1) for value in argv[3::2])
+    query = fields['query']
+
+    def head(repo, branch):
+        files = repo['branches'][branch]
+        entry = files.get(fields['path'])
+        return {'id': 'REF_%s_%s' % (node_id(repo), branch), 'name': branch, 'target': {
+            'oid': hashlib.sha1(json.dumps(files, sort_keys=True).encode()).hexdigest(),
+            'file': None if entry is None else {'object': {'text': entry}}}}
+
+    def by_ref(ref):
+        return next(((repo, branch) for repo in state['repos'].values() for branch in repo['branches']
+                     if 'REF_%s_%s' % (node_id(repo), branch) == ref), (None, None))
+
+    def answer(data, ok=True):
+        path.write_text(json.dumps(state))
+        sys.stdout.write(json.dumps({'data': data} if ok else {'data': data, 'errors': [{'message': 'synthetic'}]}))
+        return 0 if ok else 1
+
+    if 'createCommitOnBranch' in query:
+        name = (by_ref(fields['ref'])[0] or {}).get('full_name')
+        if name:
+            replaced(state, name)
+        repo, branch = by_ref(fields['ref'])
+        if repo is None or head(repo, branch)['target']['oid'] != fields['oid']:
+            return answer({'createCommitOnBranch': None}, ok=False)
+        repo['branches'][branch][fields['path']] = base64.b64decode(fields['contents']).decode()
+        state['log'].append(['POST', 'graphql createCommitOnBranch %s %s' % (repo['full_name'], fields['path'])])
+        lost = state.get('seed_lost', 0) > 0
+        state['seed_lost'] = state.get('seed_lost', 0) - lost
+        oid = head(repo, branch)['target']['oid']
+        if lost:
+            path.write_text(json.dumps(state))
+            sys.stderr.write('gh: synthetic lost reply (HTTP 502)\n')
+            return 1
+        return answer({'createCommitOnBranch': {'commit': {'oid': oid}}})
+    if 'node(' in query:
+        repo, branch = by_ref(fields['ref'])
+        state['log'].append(['GET', 'graphql node %s' % fields['path']])
+        return answer({'node': head(repo, branch) if repo else None}, ok=repo is not None)
+    name = '%s/%s' % (fields['owner'], fields['name'])
+    repo = state['repos'].get(name.lower())
+    state['log'].append(['GET', 'graphql repository %s %s' % (name, fields['path'])])
+    if repo is None or repo.get('hidden'):
+        return answer({'repository': None}, ok=False)
+    has = repo['default_branch'] in repo['branches']
+    return answer({'repository': {'id': node_id(repo),
+                                  'defaultBranchRef': head(repo, repo['default_branch']) if has else None}})
+
+
 def default_ref(target, name, branch):
     path = Path(os.environ['FAKE_GH_REPOS'])
     state = json.loads(path.read_text())
@@ -111,6 +171,8 @@ def seeded_file(argv):
     if not (read or put) or path is None:
         return None
     state = json.loads(path.read_text())
+    if put:
+        replaced(state, put[1])
     repo = state['repos'].get((read or put)[1].lower())
     if repo is None:
         return None
@@ -264,6 +326,9 @@ def main(argv):
         return api_create(argv)
     if argv[:2] == ['repo', 'create'] or (argv[:2] == ['repo', 'view'] and len(argv) > 2 and not argv[2].startswith('-')):
         return demo(argv)
+    if argv[:2] == ['api', 'graphql'] and len(argv) % 2 == 0 and set(argv[2::2]) == {'-f'} and os.environ.get(
+            'FAKE_GH_REPOS') and argv[3].startswith('query=') and any(a.startswith('path=') for a in argv[3::2]):
+        return graphql(argv)
     answered = seeded_file(argv)
     if answered is not None:
         return answered

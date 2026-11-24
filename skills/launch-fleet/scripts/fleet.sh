@@ -219,9 +219,6 @@ PARENT='parent {
           number state subIssuesSummary { total }
         }'
 
-# FR4 (#2454): an issue's detail, native blockers and comments, read by
-# GraphQL many issues to a query (facts_read), and a page of comments, the
-# latest first; older pages are read back to the first comment.
 COMMENT_PAGE='pageInfo { hasPreviousPage startCursor }
         nodes { fullDatabaseId createdAt updatedAt body author { __typename login } }'
 ISSUE_FACTS='number id title state stateReason body updatedAt
@@ -339,18 +336,12 @@ query() {
 # stderr, nothing on stdout, exit 0.
 back_off() { printf 'fleet.sh: backing off: %s\n' "$*" >&2; exit 0; }
 
-# stop WHY: a read budget that refuses or can't be read (FR4, #2454) ends the
-# whole check with exit 2, from a lane or a subshell too, so no caller can
-# take the refused read as an answer: one line on stderr, nothing on stdout.
 stop() {
   printf 'fleet.sh: backing off: %s\n' "$*" >&2
   kill -TERM $$ 2> /dev/null
   exit 2
 }
 
-# rest_admit N: FR3's read budget (budget.py) admits the next N REST reads,
-# from the headers of this check's newest REST answers (one answer to a file),
-# or GitHub's free rate_limit before the first; else stop.
 BUDGET=$(cd "$(dirname "$0")" && pwd)/budget.py
 rest_admit() {
   set -- "$1" $(ls -t "$TMP/headers" 2> /dev/null | head -n 5 | sed "s|^|$TMP/headers/|")
@@ -508,9 +499,10 @@ http_get() (
   [ -z "$etag" ] || set -- "$@" -H "If-None-Match: $etag"
   [ -n "${REST_ADMITTED:-}" ] || rest_admit 1
   if gh "$@" "$endpoint" > "$work/http" 2> "$work/error"; then ok=yes; else ok=no; fi
-  mkdir -p "$TMP/headers" && headers=$(mktemp "$TMP/headers/h.XXXXXX") \
-    && awk '/^\r?$/ { exit } { print }' "$work/http" > "$headers" || exit 1
-  [ -n "$(http_status "$headers")" ] && grep -qi '^x-ratelimit-remaining:' "$headers" || rm -f "$headers"
+  awk '/^\r?$/ { exit } { print }' "$work/http" > "$work/headers" || exit 1
+  if [ -n "$(http_status "$work/headers")" ] && grep -qi '^x-ratelimit-remaining:' "$work/headers"; then
+    mkdir -p "$TMP/headers" && mv "$work/headers" "$TMP/headers/$(basename "$work")" || exit 1
+  fi
   status=$(http_status "$work/http")
   if [ "$status" = 304 ]; then
     [ -n "$etag" ] || { printf 'fleet.sh: unexpected 304 without a readable cached response\n' >&2; exit 1; }
@@ -599,15 +591,6 @@ rest_pages() (
   done
 )
 
-# Run independent reads in eight lanes (FR4, #2454: the per-issue REST reads
-# that needed sixty-four are one GraphQL query per twenty issues now). A free
-# lane keeps reading while another waits on a slow response. Each owns its
-# output files, and pagination stays serial inside a lane. The first failure
-# stops every lane before its next read, and every lane is drained, so a
-# failing gh is never asked again and no worker outlives the check's temp
-# files. With `rest`, the read budget admits the whole list first.
-# The initial allowance gate runs before this pool; its rate records are
-# reduced on the main shell after every worker has finished.
 LANES=8
 parallel_reads() (
   reader=$1 list=$2
@@ -636,10 +619,6 @@ parallel_reads() (
 AUTHORED='def authored($a): map(select(((.user | if type == "object" then .login else null end)
   | if type == "string" then ascii_downcase else null end) as $l | $l != null and any($a[]; . == $l)));'
 
-# An issue's detail, blockers and comments, and a pull request's comments,
-# are read in batched GraphQL (FR4, #2454). PR metadata stays with its head and
-# combined CI rollup in GraphQL. Closing relationships and labelled-event
-# selection also stay there.
 # Per-check memoization avoids re-reading an issue reached through two specs.
 PR_REPO='def pr_repo($r): .repository.nameWithOwner
   | if type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") then
@@ -649,9 +628,6 @@ item_file() {
   case ${3:-$REPO} in "$REPO") printf '%s/%s-%s.json\n' "$TMP" "$1" "$2" ;;
     *) printf '%s/%s-%s-%s.json\n' "$TMP" "$1" "$(printf '%s' "$3" | tr / @)" "$2" ;; esac
 }
-# FR4 (#2454): the comments the factory wrote, from a GraphQL comment list:
-# GraphQL names an App's bot without the "[bot]" REST and the record authors
-# give it, so a Bot author gets it back before authored() reads the login.
 FACT_COMMENTS='def page_ok: type == "object" and (.pageInfo.hasPreviousPage | type) == "boolean"
     and (.nodes | type) == "array"
     and (if .pageInfo.hasPreviousPage then (.nodes | length) > 0 and (.pageInfo.startCursor | type == "string" and length > 0) else true end)
@@ -665,11 +641,6 @@ facts_comments() {
        nodes: (authored($a[0]) | map({databaseId: (.fullDatabaseId | tonumber), createdAt, updatedAt, body, author: (.user.login | ascii_downcase)}))}' "$1" > "$2"
 }
 
-# facts_batch REPO BATCH: one GraphQL query for BATCH's items of REPO ("N
-# KIND" lines: an issue's whole facts, or the comments alone of a pull
-# request or an issue), each comment list read back to its first comment, into
-# the same fact files the REST reads wrote. A missing page, a null node or an
-# error stops the check (exit 2); none is ever an empty history.
 facts_batch() {
   repo=$1 batch=$2
   vars='' fields='' k=0
@@ -693,7 +664,6 @@ facts_batch() {
   repository(owner: \$owner, name: \$name) {$fields
   }
 }"
-  # The GraphQL allowance gate, before each batch.
   if [ -z "$REPLAY" ] && [ -s "$TMP/rate.txt" ]; then
     last_rate
     [ "$left" -ge $((limit / 4)) ] || stop "$left of $limit GitHub points left, under the $((limit / 4)) kept for builders and reviewers, until $reset"
@@ -745,8 +715,6 @@ facts_batch() {
   done < "$batch"
 }
 
-# facts_read LIST: the facts of LIST's items ("N KIND [REPO]": KIND issue,
-# pr or comments), twenty to a query, each query of one repository.
 facts_read() (
   list=$1
   [ -s "$list" ] || exit 0
@@ -2678,14 +2646,13 @@ foreign_merges() {
 # it the probe: the REST reads that change whenever one of those answers would
 # (the repository, the account, the spec's sub-issues, each ticket's and each
 # closed blocker's timeline, each linked pull request and the checks and
-# statuses on its head, the waited issues, each issue's detail, blockers and
-# comments and each pull request's comments that Facts read, and the default
-# branch when merges were read), each with the ETags it had before that full read's first
+# statuses on its head, the waited issues, and the default branch when merges
+# were read), each with the ETags it had before that full read's first
 # GraphQL read. When every probe page answers 304 with those ETags and that
 # full read is under 30 minutes old, a second process replays the check:
-# every GraphQL answer from the entry, every REST read revalidated (the open
-# issues list and branches, which must all answer 304; FR4's issue facts are
-# GraphQL answers, so their REST views are probes), and the clock and CloudRoom's records as they are now, so lines that
+# every GraphQL answer from the entry, every REST read revalidated (the
+# spec's own issues, comments, blockers and branches, which must all answer
+# 304), and the clock and CloudRoom's records as they are now, so lines that
 # come due with time still do. Anything else is a full read, as before: a
 # changed answer, a probe that fails, a lost, damaged or unreadable entry, an
 # entry for another spec, repository, host or script, a probe that was not
@@ -2827,8 +2794,6 @@ keep_read() {
            and .repository.nameWithOwner? == $h) | .baseRefName] | unique[]
        | "repos/\($h)/git/ref/heads/\(@uri)")]
     | unique[]' "$TMP/world.json" > "$keep_out/probes" 2> /dev/null || return 0
-  # FR4 (#2454): GraphQL read each issue's detail, blockers and comments, so
-  # their REST views join the probe.
   if [ -f "$TMP/fact-probes" ]; then
     sort -u "$keep_out/probes" "$TMP/fact-probes" > "$keep_out/probes.all" && mv "$keep_out/probes.all" "$keep_out/probes" || return 0
   fi

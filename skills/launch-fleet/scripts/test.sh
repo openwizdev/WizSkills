@@ -2131,8 +2131,6 @@ expect 'history: an unreadable linked PR cannot close its spec' 2 check.json "$C
 fleet.sh: the GitHub query Facts answered with errors
 EOF
 
-### FR4 (#2454): issue facts by GraphQL, REST through the read budget
-
 expect 'FR4: a spec check reads issue facts by GraphQL, never REST' 0 check.json 'merge12' -- spec 10 <<EOF
 start #13: W3: widget page (spec #10)
 EOF
@@ -2161,10 +2159,6 @@ expect 'FR4: an unknown REST allowance is exit 2' 2 check.json 'merge12' FAKE_GH
 fleet.sh: backing off: unknown allowance: rate_limit can't be read
 EOF
 
-# A failing gh stops every lane at once (FR5's bench, #2621: about 2,800
-# calls in 80 seconds across 64 lanes). A first `spec 10` keeps its unchanged
-# entry; the second runs with a gh that answers only the free rate_limit read,
-# so its probe lanes fail. It must exit 2 after at most one call per lane.
 storm_case() {
   name='FR4: a failing gh stops the lanes at once'
   selected "$name" || return
@@ -2189,9 +2183,6 @@ storm_case() {
   echo "ok   $name"
 }
 storm_case
-# The keeper of the REST pool's cases: 128 closed singles, each needing its
-# comments before its archived record can exclude it, are read twenty to a
-# query, and decide nothing.
 ARCHIVED128='.issues += [range(800; 928) | {number: ., title: "Synthetic archived issue", state: "CLOSED", parent: null,
   labels: ["ready-for-agent"], blockedBy: [], body: "", comments: [{id: (. * 10), at: at("09:00"), body: "launch-fleet: archived"}]}]'
 expect 'FR4: 128 closed singles are read twenty to a GraphQL query' 0 check.json "$ARCHIVED128" -- check < /dev/null
@@ -2603,11 +2594,6 @@ EOF
 
 ### Budget: GitHub's allowance (ClosedWiz#189)
 
-# The literal costs below were measured through the fake transport. The
-# small fixture asks seven GraphQL reads (metadata, spec, blocker closures,
-# single, merges and two batches of issue facts, FR4 #2454), plus 7 REST GETs,
-# the free rate_limit read of the read budget and the repository privacy read:
-# 16 questions. A repeat revalidates REST
 # responses; 304s cost no primary allowance. Revision reads still cost one
 # GraphQL point each. The old bundled query cost six points in nine calls.
 ERR='fleet.sh: used 7 GitHub points in 16 questions, 0 unchanged; 5000 of 5000 left'
@@ -2642,10 +2628,6 @@ expect 'budget: an allowance GitHub does not give as a number fails loudly' 2 ch
 the GitHub query Specs did not say what it cost and what is left
 EOF
 
-# Several fleets: current measured costs are 45 points / 53 questions
-# cold and 8 / 16 warm (including the repository privacy read; FR4 #2454 reads
-# issue facts by GraphQL, a point a batch, for about seventy fewer REST reads). Conditional REST increases raw calls but makes
-# unchanged REST answers free; fingerprint reuse still avoids revision reads.
 ERR='fleet.sh: used 45 GitHub points in 53 questions, 0 unchanged; 5000 of 5000 left'
 expect 'budget: several fleets, the first check' 0 frontier.json . -- check <<EOF
 start #41: G1: gadget reader (spec #40)
@@ -3177,9 +3159,6 @@ elif hour; then
   # The timer as it was before #259 (fleet.sh at efa2490, with the fake gh of
   # its day), on this same hour: measured with HOUR_BEFORE at the commit
   # before the search for issues outside specs (private/evidence/infra-fleets/fa7/).
-  # FR4 (#2454) moved the per-issue reads from REST to GraphQL: on main before
-  # it the wakes asked 255 points in 1262 questions; a GraphQL batch costs a
-  # point, so the points bound is 45% and the questions (REST, mostly) at most 600.
   today=762
   cases=$((cases + 1))
   if [ $((wp * 100)) -le $((today * 45)) ] && [ "$wq" -le 600 ]; then
@@ -3251,9 +3230,6 @@ cache_case() {
   fi
   if ! cache_check 1; then bad "$name" "first read: $(cat "$d/err1")"; return; fi
   if [ "$mode" = transport ]; then
-    # Hand-counted from check.json: the open issues, two label searches, the two
-    # settings files, one merged PR's files and the nightly run; FR4 (#2454) reads
-    # its six issues' and one PR's facts in GraphQL, never REST.
     if grep -q '^graphql Singles' "$d/gh.log" || [ "$(wc -l < "$d/http.log")" -ne 7 ] \
       || [ "$(grep -c '^search/issues?.* 200$' "$d/http.log")" -ne 2 ] \
       || [ "$(grep -c '/issues?state=open.* 200$' "$d/http.log")" -ne 1 ] \

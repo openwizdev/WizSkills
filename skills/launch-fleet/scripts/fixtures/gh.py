@@ -399,7 +399,6 @@ def main(argv):
         sys.stdout.write(graphql(w, repo, o, ids, page, answer))
         return 0
     if path == 'rate_limit':
-        # FR4 (#2454): GitHub's free allowance read, as budget.py asks it.
         answer('rate limit')
         pools = {'core': rest_rate(), 'graphql': dict(rest_rate(), remaining=5000, resource='graphql')}
         sys.stdout.write(compact({'resources': pools, 'rate': pools['core']}) + '\n')
@@ -419,9 +418,6 @@ def pages(a, page):
 
 
 def rest_rate():
-    """FR4 (#2454): REST's allowance, as its x-ratelimit headers and
-    rate_limit give it: $FAKE_GH_REST_REMAINING (default 5000) of 5000,
-    resetting at 13:00 on the fixtures' day."""
     return {'limit': 5000, 'remaining': tonumber(env.get('FAKE_GH_REST_REMAINING') or '5000'),
             'reset': 1793538000, 'used': 0, 'resource': 'core'}
 
@@ -617,9 +613,6 @@ def graphql(w, repo, o, ids, page, answer):
     def subs_total(n):
         return len([i for i in issues if get(i, 'parent') == n])
 
-    # FR4 (#2454): an issue's or pull request's whole comment history, oldest
-    # first (a "commentsTruncated" one has 51 older comments first, as REST
-    # gives them), read backwards a page at a time from $before.
     def history(x):
         old = ([{'id': 1 + k, 'at': '2026-01-01T00:00:00Z', 'body': 'Synthetic old comment'} for k in range(51)]
                if truthy(get(x, 'commentsTruncated')) else [])
@@ -638,8 +631,6 @@ def graphql(w, repo, o, ids, page, answer):
         return {'pageInfo': {'hasPreviousPage': start > 0, 'startCursor': tostring(start) if nodes else None},
                 'nodes': nodes}
 
-    # FR4: an issue's detail, its native blockers ($world.dependencyResponses
-    # stands in for them, as REST's blocked_by gave them) and its comments.
     def issue_facts(i):
         n = get(i, 'number')
         responses = alt(w.get('dependencyResponses'), {})

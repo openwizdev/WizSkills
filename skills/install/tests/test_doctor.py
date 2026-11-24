@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import runpy
 import shlex
 import stat
 import subprocess
@@ -11,7 +12,9 @@ import tempfile
 import time
 import unittest
 
-DOCTOR = Path(__file__).resolve().parents[1] / 'scripts/doctor.py'
+SKILLS = Path(__file__).resolve().parents[2]
+DOCTOR = SKILLS / 'install/scripts/doctor.py'
+git_origin = runpy.run_path(str(SKILLS / 'launch-fleet/scripts/fixtures/git_origin.py'))['env']
 REPO = 'synthetic-owner/synthetic-repo'
 LOGIN = 'synthetic-factory[bot]'
 SECRET = 'ghs_' + 'S' * 36
@@ -104,7 +107,7 @@ class Setup:
         self.driver = root / 'driver'
         write(self.fake / 'bin/gh', FAKE_GH, 0o755)
         write(self.fake / 'labels.json', json.dumps([{'name': l} for l in LABELS + ('polish',)]))
-        write(self.fake / 'fleet.md', FLEET)
+        self.origin = git_origin(root, {REPO: FLEET})
         write(self.fake / 'viewer.json', json.dumps({'data': {'viewer': {'login': LOGIN}}}))
         write(self.checkout / 'docs/agents/triage-labels.md', TRIAGE)
         write(self.build / 'runtime/setup/setup.py', FAKE_SETUP)
@@ -130,7 +133,7 @@ class Setup:
 
     def run(self, *extra, driver=True):
         env = {'PATH': '%s:%s' % (self.fake / 'bin', os.environ.get('PATH', '/usr/bin:/bin')),
-               'FAKE_DIR': str(self.fake), 'HOME': str(self.root), 'GH_TOKEN': SECRET}
+               'FAKE_DIR': str(self.fake), 'HOME': str(self.root), 'GH_TOKEN': SECRET, **self.origin}
         argv = [sys.executable, '-I', str(DOCTOR), '--repo', REPO, '--root', str(self.checkout),
                 '--state-dir', str(self.state), '--build', str(self.build), '--openwiz', str(self.openwiz)]
         argv += ['--driver', str(self.driver)] if driver else []

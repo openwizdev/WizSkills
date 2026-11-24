@@ -462,7 +462,8 @@ def graphql(w, repo, o, ids, page, answer):
         answer('graphql Comments number=%s before=%s' % (number, o['before'] or 'none'))
     else:
         fail('unknown query: ' + query.split('\n')[0])
-    if env.get('FAKE_GH_ERRORS', '') == op:
+    error = env.get('FAKE_GH_ERRORS', '')
+    if error == op or (op == 'Spec' and error == f'Spec:{number}'):
         return '{"data":null,"errors":[{"message":"planted GraphQL error"}]}\n'
     if env.get('FAKE_GH_RATE_LIMITED', '') == op:
         sys.stdout.write(compact({'errors': [{'type': env.get('FAKE_GH_RATE_TYPE') or 'RATE_LIMIT',
@@ -1049,12 +1050,10 @@ def rest_read(w, repo, path, page, paginate, include, accept, answer, out):
         answer('user')
         out.append(compact({'login': alt(w.get('login'), 'synthetic-user'), 'id': 1}) + '\n')
     elif path == 'installation/repositories?per_page=100':
-        # GI7 (#2549): what an App installation token covers; a world's
-        # "installation" stands for another installation.
         answer('installation repositories')
         out.append(compact({'total_count': 1, 'repository_selection': 'selected',
                             'repositories': [{'id': 1, 'full_name': repo,
-                                              'installation': alt(w.get('installation'), 'synthetic-installation')}]}) + '\n')
+                                              'description': w.get('installation_repository_description')}]}) + '\n')
     elif after(r + 'issues/', '/sub_issues?per_page=100'):
         n = path[len(r + 'issues/'):].split('/', 1)[0]
         answer('sub issues %s page=%s' % (n, path_page(path)))
@@ -1081,8 +1080,24 @@ def rest_read(w, repo, path, page, paginate, include, accept, answer, out):
         ps = [p for p in pulls() if get(p, 'head') == sha]
         cs = [c for p in ps for c in (each_opt(get(p, 'checks')))]
         if kind == 'status':
-            out.append(compact({'state': get(ps[0], 'rollup') if ps else None, 'sha': sha,
-                                'statuses': [c for c in cs if get(c, 'type') == 'StatusContext']}) + '\n')
+            by_context = {}
+            for check in cs:
+                if get(check, 'type') != 'StatusContext':
+                    continue
+                context = get(check, 'context')
+                created = get(check, 'createdAt')
+                if context not in by_context or (created or '') > (by_context[context]['created_at'] or ''):
+                    by_context[context] = {'context': context, 'created_at': created,
+                                           'state': ascii_downcase(get(check, 'state'))}
+            statuses = list(by_context.values())
+            states = {status['state'] for status in statuses}
+            if states & {'error', 'failure'}:
+                state = 'failure'
+            elif not states or 'pending' in states:
+                state = 'pending'
+            else:
+                state = 'success'
+            out.append(compact({'state': state, 'sha': sha, 'statuses': statuses}) + '\n')
         else:
             runs = [c for c in cs if get(c, 'type') != 'StatusContext']
             out.append(compact({'total_count': len(runs), 'check_runs': runs}) + '\n')

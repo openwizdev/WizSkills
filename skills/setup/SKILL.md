@@ -47,7 +47,7 @@ Done when every missing setting has the user's answer.
 
 ## 3. Write
 
-Fill each template. Every `fleet.md` value names its source: a linked file, a command, or `<decider>, <YYYY-MM-DD>: <decision> ([private record](<comment URL>)).` Create a label only for a role with none (`gh label create <name> --description "<meaning>"`). Write no run date, so an unchanged project gives the same bytes. Write only these four files and missing labels; private comments go only to the private repository, named with `--repo`.
+Fill each template. Every `fleet.md` value names its source: a linked file, a command, or `<decider>, <YYYY-MM-DD>: <decision> ([private record](<comment URL>)).` Create a label only for a role with none (`gh label create <name> --description "<meaning>"`). Write no run date, so an unchanged project gives the same bytes. Write only these four files and missing labels, plus, when `docs/agents/review-rules.md` is missing and the user accepts your one offer of it, that file from [the template](templates/review-rules.md) with every section empty; private comments go only to the private repository, named with `--repo`.
 
 Done when the four files are written.
 

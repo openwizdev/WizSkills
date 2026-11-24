@@ -215,12 +215,12 @@ test('invalid plans and non-files never become reusable coverage', () => fixture
   assert.equal(f.run('snapshot', f.plan).status, 2);
   assert.equal(existsSync(join(f.repo, 'manifest.json')), false);
 }));
-test('finish instructions persist and read back #394 before archiving the controller', () => {
+test('finish instructions persist and read back the configured switch issue before archiving the controller', () => {
   const skill = readFileSync(join(here, '../SKILL.md'), 'utf8');
   const finish = skill.split('## 5. Record the result and finish this hunt\n')[1]?.split('\n## ')[0] ?? '';
-  assert.match(finish, /#394/);
+  assert.match(finish, /configured switch issue/);
   assert.match(finish, /read back/i);
   assert.match(finish, /room-cli thread archive --self/);
   assert.match(finish, /off.*paused.*blocked/i);
-  assert.ok(finish.indexOf('#394') < finish.indexOf('room-cli thread archive --self'));
+  assert.ok(finish.indexOf('configured switch issue') < finish.indexOf('room-cli thread archive --self'));
 });

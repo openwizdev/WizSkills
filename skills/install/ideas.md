@@ -26,4 +26,4 @@ Build the first small slice of the wish, one they can use within the hour; the r
 - **A simple browser game**: tic-tac-toe or a memory card game; fun to play the moment it merges.
 - **A countdown page**: the days until a trip, a launch or a birthday; one page with a clear finish line.
 - **A quiz on something they love**: ten questions and a score at the end; easy to grill, and theirs from the first question.
-- **A chore-saving script**: the first version of a tool they wish they had, such as renaming files by date in a folder they choose; it saves them time from day one.
+- **A chore-saving script**: start a file-renaming tool with a preview. It lists the files in a folder they choose, groups them by date, and shows each proposed new name. The preview leaves every file unchanged.

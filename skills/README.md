@@ -7,6 +7,7 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 | [`ask-wiz`](ask-wiz/SKILL.md) |
 | [`build-ticket`](build-ticket/SKILL.md) |
 | [`diagnose`](diagnose/SKILL.md) |
+| [`dream-cycle`](dream-cycle/SKILL.md) |
 | [`feedback`](feedback/SKILL.md) |
 | [`grill`](grill/SKILL.md) |
 | [`handoff`](handoff/SKILL.md) |
@@ -18,6 +19,7 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 | [`research`](research/SKILL.md) |
 | [`review-ticket`](review-ticket/SKILL.md) |
 | [`setup`](setup/SKILL.md) |
+| [`son-of-anton`](son-of-anton/SKILL.md) |
 | [`to-spec`](to-spec/SKILL.md) |
 | [`to-tickets`](to-tickets/SKILL.md) |
 | [`triage`](triage/SKILL.md) |

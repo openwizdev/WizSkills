@@ -23,7 +23,7 @@ class PublicRecords(unittest.TestCase):
         section = contract.split('## Fleet records\n')[1].split('\n**Finding')[0]
         forms = re.findall(r'^\| `[^`]+` \| `([^`]+)` \|$', section, re.M)
         self.assertEqual(len(forms), 9)
-        table = (HERE.parent / 'SKILL.md').read_text().split('## Records\n')[1].split('\n## ')[0]
+        table = (HERE.parent / 'references/records.md').read_text().split('## Records\n')[1].split('\n## ')[0]
         for form in forms:
             with self.subTest(form=form):
                 self.assertIn('`' + form.removeprefix('launch-fleet: ') + '`', table.replace('`launch-fleet: ', '`'))
@@ -681,7 +681,7 @@ class Dispatcher(unittest.TestCase):
 
 
     def test_the_archive_settles_with_the_flow_inputs_and_never_archives_on_a_refused_settlement(self):
-        lines = (HERE.parent / 'SKILL.md').read_text().splitlines()
+        lines = (HERE.parent / 'references/merging.md').read_text().splitlines()
         row = next(x for x in lines if x.startswith('| `archive #N` |'))
         merge = next(x for x in lines if x.startswith('4. **Merge:**'))
         self.assertIn("private flow files after `--`", merge)
@@ -692,6 +692,30 @@ class Dispatcher(unittest.TestCase):
         self.assertNotIn('archive goes ahead', refused)
         self.assertRegex(refused, r'leaves? the `archive` line for a later wake',
                          'a refused settlement keeps its retry: the archive waits')
+
+
+class RoutedStartedClaim(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.records = load(HERE / 'records.py', 'fleet_records_routed')
+
+    def test_routed_model_on_line_two_still_resolves_builder_thread(self):
+        builder = 'thr_b-routed7'
+        thread = dict(id=builder, title='#7: synthetic ticket', branch=None)
+        routed = dict(number=7, comments={'nodes': [
+            dict(databaseId=701, createdAt='2026-11-01T11:01:00Z', body='launch-fleet: started\nrouted: neon')
+        ]}, closedByPullRequestsReferences={'nodes': []})
+        world = self.records.annotate({'specs': [], 'singles': [routed]}, 'example/public', False, [thread], {})
+        comment = world['singles'][0]['comments']['nodes'][0]
+        self.assertEqual(comment['resolvedThread'], builder)
+        self.assertIsNone(comment['recordError'])
+
+        inline = dict(number=7, comments={'nodes': [
+            dict(databaseId=702, createdAt='2026-11-01T11:02:00Z', body='launch-fleet: started (routed: neon)')
+        ]}, closedByPullRequestsReferences={'nodes': []})
+        bad = self.records.annotate({'specs': [], 'singles': [inline]}, 'example/public', False, [thread], {})
+        self.assertIsNone(bad['singles'][0]['comments']['nodes'][0].get('resolvedThread'))
 
 
 if __name__ == '__main__':

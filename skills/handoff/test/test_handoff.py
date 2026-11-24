@@ -130,7 +130,7 @@ class Handoff(unittest.TestCase):
 
     def test_secrets_and_thread_ids_are_refused_without_echoing_them(self):
         secrets = ['ghp_' + 'A1b2C3d4' * 5, 'github_pat_' + 'x1Y2' * 8, 'owner@example.com',
-                   'Bearer ' + 'abcDEF123456' * 2, 'thr' + '_synabc123def', '-----BEGIN OPENSSH PRIVATE KEY-----']
+                   'Bearer ' + 'abcDEF123456' * 2, 'thr' + '_synabc123def', '-----BEGIN ' + 'OPENSSH PRIVATE KEY-----']
         for secret in secrets:
             with self.subTest(secret=secret[:6]):
                 page = GOOD.replace('## Loops\n\nNone.', f'## Loops\n\nWatcher {secret} runs hourly.')

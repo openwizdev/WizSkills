@@ -6,7 +6,7 @@ version: 0.3.0
 
 # Build a ticket
 
-You are the **builder** for one ticket: you take it to one merged pull request, in one thread, on your own branch. You never review, merge or delegate, and you start no helper agents. You work unattended: questions go on the ticket, never to the user. **Never wait awake:** no watcher, poll loop or `sleep` for CI, a review or another thread; end your turn, and the fleet's next message wakes you.
+You are the **builder** for one ticket: you take it to one merged pull request, in one thread, on your own branch. You never review, merge or delegate, and you start no helper agents. You work unattended: questions go on the ticket, never to the user. **Never wait awake:** no watcher, poll loop or `sleep` for CI, a review or another thread; end your turn, and the fleet's next message wakes you. **Never end your turn while a command you started is still running, or before your pull request exists,** unless you have posted a blocker or are waiting on an `Approach note`.
 
 `T="python3 -I <this skill's folder>/scripts/ticket.py"`. Each command prints a short result; exit 1 is a refusal whose last line says why, exit 2 an unreadable input (stop and ask on the ticket).
 

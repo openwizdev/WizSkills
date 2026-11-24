@@ -939,6 +939,36 @@ class Session(unittest.TestCase):
         self.assertEqual(self.merges(), [])
         self.assertEqual(self.blocks(), ['launch-fleet: merge blocked %s: %s' % (HEAD, why)])
 
+    def test_a_replaced_reviewer_counts_only_with_a_note_for_this_pull_request_before_its_replacement(self):
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12)
+        self.green(12, 5)
+        retired = self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.note(5, 'reviewer', pr=11, harness='Codex', state='working')
+        self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        out = self.ended(self.session(**self.guard()), 3)
+        self.assertIn('needs you: #12 was not merged: a reviewer of #12 started in comment %d and posted no status '
+                      'note before the next reviewer started' % retired, out)
+        self.assertEqual(self.merges(), [])
+
+    def test_a_replaced_reviewer_with_its_own_note_before_the_replacement_lets_the_current_one_merge(self):
+        self.tickets(5)
+        self.comment(5, 'launch-fleet: start checked, branch room/5-synthetic')
+        self.note(5, 'builder', pr=12)
+        self.green(12, 5)
+        self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex', state='working')
+        self.comment(12, 'launch-fleet: review started %s\nDriver review: other-family' % HEAD)
+        self.comment(12, 'VERDICT: APPROVE at ' + HEAD)
+        self.note(5, 'reviewer', pr=12, harness='Codex')
+        out = self.ended(self.session(**self.guard()), 0)
+        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+        self.assertIn('#12 merged', out)
+        self.assertEqual(self.blocks(), [])
+
     def test_an_approval_whose_reviewer_is_still_finishing_waits_for_its_done_note(self):
         note = self.approved(state='working')
         process = self.session('--idle', '10', **self.guard())

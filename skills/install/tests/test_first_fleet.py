@@ -1274,10 +1274,12 @@ class DemoRepository(unittest.TestCase):
                 j.state.write_text(json.dumps({'created': {'repo': REPO, 'state': state}}))
                 j.state.chmod(0o600)
                 before = self.world(j)['repos']
-                for said in ('uncertain', 'already exists'):
+                for _ in range(2):
                     result = j.helper(YES_DEMO)
                     self.assertEqual(result.returncode, 5, result.stdout)
-                    self.assertIn(said, result.stdout)
+                    self.assertIn('uncertain', result.stdout)
+                    self.assertIn('Continue with %s as an existing repository: run next' % REPO, result.stdout)
+                    self.assertNotIn('another name', result.stdout, 'this onboarding makes no second repository')
                     self.assertNotIn('Created and read back', result.stdout)
                 self.assertEqual((self.world(j)['repos'], self.writes(j)), (before, []), 'neither file written')
                 self.assertEqual(json.loads(j.state.read_text())['created'], {'repo': REPO, 'state': 'unproven'})

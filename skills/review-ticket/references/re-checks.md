@@ -56,6 +56,8 @@ Intent: `pantry export` writes the whole cookbook to one zip and refuses to over
 
 - **Ruling 1** upheld: the importer reads `photos/` in every export (`src/import.rs:14`).
 
+Disproved: 1 candidate findings dropped.
+
 Checked: R1 and `git diff 4b1f0c9 9e8d7c6` with the three checks. Ran: R1's command (prints `3`); `cargo test` (33 passed).
 
 Next: none open. It merges by the project's merge rules.

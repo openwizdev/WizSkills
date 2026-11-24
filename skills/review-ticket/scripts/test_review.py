@@ -99,6 +99,8 @@ Intent: export writes the whole cookbook to one zip and refuses to overwrite.
 
 - **Ruling 1** upheld: the importer reads cookbook.zip.
 
+Disproved: 0 candidate findings dropped.
+
 Checked: Standards (AGENTS.md), Spec (#41, spec #38), full sweep. Ran: `cargo test` (31 passed).
 
 Next: the builder fixes or disputes R1 and R3 once, then one re-check.
@@ -118,6 +120,8 @@ Intent: export writes the whole cookbook to one zip and refuses to overwrite.
 - **R4 [polish]** `src/export.rs:52` (Sweep) Typo. Fix: file exists. Polish issue: #60.
 
 - **Ruling 1** upheld: the importer reads cookbook.zip.
+
+Disproved: 0 candidate findings dropped.
 
 Checked: R1, R3 and the changed code. Ran: `cargo test` (33 passed).
 
@@ -1187,6 +1191,59 @@ class Review(unittest.TestCase):
                             "- **Ruling 1** upheld: ok.\n- **Ruling 2** upheld: ok.\n\nRulings: none.")
         out = self.run_helper("check", self.file("r.md", none), "--repo", SKILLS, "--pr", "7")
         self.assertIn("Rulings: none. stands beside a ruling mark", out.stdout.splitlines())
+
+    def test_a_report_carries_one_disproved_line_before_checked(self):
+        line = "Disproved: 0 candidate findings dropped.\n\n"
+        checked = {"full": "Checked: Standards", "re-check": "Checked: R1, R3"}
+        bad = {
+            "none": ("", "no Disproved: line; write Disproved: <n> candidate findings dropped. before Checked:"),
+            "two": (line + line, "2 Disproved: lines; write exactly one"),
+            "leading zero": ("Disproved: 02 candidate findings dropped.\n\n",
+                             "the Disproved: line reads Disproved: <n> candidate findings dropped."),
+            "other words": ("Disproved: 1 candidate finding dropped.\n\n",
+                            "the Disproved: line reads Disproved: <n> candidate findings dropped."),
+            "inside checked": ("Disproved: 1 candidate findings dropped.\n",
+                               "the Disproved: line is its own paragraph before Checked:"),
+        }
+        for mode, text in {"full": FULL, "re-check": RECHECK}.items():
+            if mode == "full":
+                self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
+            else:
+                self.world({}, comments=[report(FULL)])
+            bare = text.replace(line, "")
+            for name, (insert, problem) in bad.items():
+                with self.subTest(mode=mode, case=name):
+                    out = self.run_helper("check", self.file("r.md", bare.replace(checked[mode], insert + checked[mode])),
+                                          "--repo", SKILLS, "--pr", "7")
+                    self.assertEqual(out.returncode, 1, out.stdout)
+                    self.assertIn(problem, out.stdout.splitlines())
+            with self.subTest(mode=mode, case="after checked"):
+                out = self.run_helper("check", self.file("r.md", bare.replace("\n\nNext: ", "\n\n" + line + "Next: ")),
+                                      "--repo", SKILLS, "--pr", "7")
+                self.assertIn("the Disproved: line is its own paragraph before Checked:", out.stdout.splitlines())
+            for count in ("0", "1", "12"):
+                with self.subTest(mode=mode, count=count):
+                    good = text.replace("Disproved: 0 ", f"Disproved: {count} ")
+                    out = self.run_helper("check", self.file("r.md", good), "--repo", SKILLS, "--pr", "7")
+                    self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+
+    def test_the_verdict_contracts_examples_meet_the_disproved_rule(self):
+        sys.path.insert(0, str(HELPER.parent))
+        import review
+        contract = (HELPER.parent.parent / "references" / "verdict.md").read_text()
+        first, again = re.findall(r"```md\n(.*?)```", contract, re.S)
+        head = review.parse(first)["head"]
+        self.world({"checks": green(head)}, pr={"head": {"sha": head}})
+        skill = re.findall(r"```md\n(.*?)```", (HELPER.parent.parent / "SKILL.md").read_text(), re.S)
+        for name, text in {"verdict.md": first, "SKILL.md": skill[0]}.items():
+            with self.subTest(name):
+                out = self.run_helper("check", self.file("first.md", text), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+        problems = review.check(again, DESCRIPTION, "re-check", review.parse(again)["head"], review.parse(first))
+        self.assertEqual([p for p in problems if "Disproved" in p], [])
+        problems = review.check(again.replace("Disproved: 1 candidate findings dropped.\n\n", ""), DESCRIPTION,
+                                "re-check", review.parse(again)["head"], review.parse(first))
+        self.assertIn("no Disproved: line; write Disproved: <n> candidate findings dropped. before Checked:", problems)
 
     def test_a_blocker_names_exactly_one_class_from_the_verdict_format(self):
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})

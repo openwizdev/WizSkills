@@ -69,6 +69,10 @@ Done when the three checks covered the whole diff and every finding has its file
 
 A finding **blocks** only with a line under it: `User path: <who does what ordinary thing, and what visibly breaks>` or `Risk: <security|privacy|data loss>: <what is at risk>`, then `Shows the break: <command> printed <output>` when a run shows it, rerun at the head just before posting. A blocker also names its class: exactly one `Class: <word>` line, a word from the [verdict format](references/verdict.md#class)'s list or `Class: other: <word>` when none fits, naming what every instance of the cause shares so the builder fixes the whole class. Everything else is **polish**: filed as an issue, never holding the verdict. First write each candidate's trigger, broken contract, causal path and evidence; name an unsupported hypothesis as uncertainty, not a finding. One cause is one finding, whatever the number of places it shows, and two causes are two findings, each with its class; accept any equivalent safe fix. Blocking should be rare.
 
+## Disprove
+
+Before the report, try to disprove every candidate finding, blocking, polish or pre-existing: read its caller, run its case at the pinned head and check the guard upstream. Drop each candidate you can't prove; it is never posted, not even as polish. Disproving changes no grade: a blocker still needs its `User path:` or `Risk:` line, and there is no new grade. Every report, re-checks included, carries the count you dropped as one line of [the verdict format](references/verdict.md#disproved), its own paragraph before `Checked:`: `Disproved: <n> candidate findings dropped.` `review.py check` refuses a report with no such line, or with two.
+
 ## Ask, never guess
 
 When a finding turns on a fact no reading or run can settle, comment on the ticket `Reviewer question: #<PR> at <the full head>`, then the question on the next line, answerable in a word. Write your status `asking` (it adds `needs-info`), post no report for that head and end your turn. Resume on a record author's `Orchestrator answer: #<PR> at <the same head>`, and write `working` (it clears `needs-info` only when no live note is `asking` and your own login added it last; otherwise a person removes it).
@@ -97,6 +101,8 @@ Intent: `pantry export` writes the whole cookbook to one zip and refuses to over
 - **R2 [polish]** `src/cli.rs:30` (Sweep) The help says "zip archive file"; the glossary's word is "export". Fix: "Write the cookbook as one export." Polish issue: #58.
 
 - **Ruling 1** upheld: the importer reads `photos/` in every export (`src/import.rs:14`).
+
+Disproved: 2 candidate findings dropped.
 
 Checked: Standards (`AGENTS.md`, `docs/agents/`, ADR 0002), Spec (#41, spec #38), full sweep. Ran: `cargo test` (31 passed); R1's command; the test with the change undone (fails, as it should).
 

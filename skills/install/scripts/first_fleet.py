@@ -1044,14 +1044,24 @@ def graphql(query, **fields):
 def tree(query, **fields):
     result = graphql(query, **fields)
     try:
-        assert result is not None and result.returncode == 0
-        data = strict(result.stdout.decode('utf-8'))['data']
+        assert result is not None
+        body = strict(result.stdout.decode('utf-8'))
+        data = body['data']
         repo = data['repository']['id'] if query == BY_NAME else None
         ref = data['repository']['defaultBranchRef'] if query == BY_NAME else data['node']
         assert query != BY_NAME or (isinstance(repo, str) and repo)
         assert isinstance(ref['id'], str) and ref['id'] and isinstance(ref['name'], str)
         assert isinstance(ref['target']['oid'], str) and re.fullmatch('[0-9a-f]{40}', ref['target']['oid'])
         entry = ref['target']['file']
+        errors = body.get('errors')
+        if result.returncode == 0:
+            assert not errors
+        else:
+            expect = (['repository', 'defaultBranchRef', 'target', 'file'] if query == BY_NAME
+                      else ['node', 'target', 'file'])
+            assert (entry is None and isinstance(errors, list) and len(errors) == 1
+                    and isinstance(errors[0], dict) and errors[0].get('type') == 'NOT_FOUND'
+                    and errors[0].get('path') == expect)
         text = None if entry is None else entry['object']['text']
         assert text is None or isinstance(text, str)
     except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):

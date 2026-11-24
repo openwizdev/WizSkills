@@ -15,7 +15,7 @@ Read this for a `start`, `reconcile start`, `check start`, `resume` or `reconcil
      --prompt "$(python3 -I "<this skill's folder>/scripts/brief.py" builder <ticket repo>#<N>)"
    ```
 
-   Everything about the work is in the ticket and its spec, so the brief never drifts from them. A top-level thread starts from the default branch on GitHub, and outlives this tick. A fleet thread starts it as its own child instead (`--parent-self --project "$ROOM_PROJECT_ID"` in place of `--top-level`), so it can reach it (SKILL.md, "Fleet threads").
+   Everything about the work is in the ticket and its spec, so the brief never drifts from them. A top-level thread starts from the default branch on GitHub, and outlives this tick. A fleet thread starts it as its own child instead (`--parent-self --project "$ROOM_PROJECT_ID"` in place of `--top-level`), so it can reach it ([fleet-threads.md](fleet-threads.md)).
 
    With a host chosen (`host.py which` prints `host: <name>`), start it through that host's driver instead ("Hosts", below); `host: none` keeps the `room-cli` start above.
 

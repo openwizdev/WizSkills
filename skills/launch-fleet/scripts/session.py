@@ -36,6 +36,7 @@ DRIVERS = {'Claude Code': 'claude', 'Codex': 'codex'}
 OTHER = {'claude': 'codex', 'codex': 'claude'}
 PROVIDERS = {'claude-code': 'claude', 'codex': 'codex'}
 REVIEWS = {'claude': 'review_of_claude_built', 'codex': 'review_of_gpt_built'}
+WORKERS = ('Builder', 'Small builder', 'Fixer', 'Reviewer')
 FLAGS = re.compile(r'--provider (\S+) --model (\S+) --reasoning-level \S+')
 PR = re.compile(r'https://github\.com/[^/]+/[^/]+/pull/([1-9][0-9]*)')
 STATE = Path.home() / '.local/state/openwiz-heartbeat'
@@ -315,13 +316,18 @@ class Session:
     def builders(self):
         return sum(agent == 'builder' for agent, _ in self.live)
 
+    def rostered(self):
+        return script('host.py', 'roster').stdout.strip() != 'roster: none'
+
     def start(self, numbers):
         started, stops = [], []
+        row = ['--row', 'Builder'] if self.rostered() else []
         for batch in (numbers[:1], numbers[1:]):
             since = int(time.time())
             claims = [(n, c) for n in batch for c in [self.claim(n, 'launch-fleet: starting',
                                                                  'launch-fleet: start withdrawn')] if c]
-            jobs = [self.detached("#%s's start" % n, 'host.py', 'start', self.repo, n, self.a.harness, self.a.model)
+            jobs = [self.detached("#%s's start" % n, 'host.py', 'start', self.repo, n, self.a.harness, self.a.model,
+                                  *row)
                     for n, _ in claims]
             for (n, claim), r in zip(claims, self.answers(jobs)):
                 if r.returncode:
@@ -372,18 +378,32 @@ class Session:
                                % (p, REVIEWS[built]))
             if row[0] != OTHER[built]:
                 raise NeedsYou('the review of #%s waits: the models rule names no %s reviewer' % (p, OTHER[built]))
-            return row[0], row[1], 'other-family'
+            if not self.rostered():
+                return row[0], row[1], 'other-family', []
+            r = script('ops-starts.py', 'host', '--repo', self.repo, REVIEWS[built])
+            picked = r.stdout.strip().split(' ', 2)
+            if r.returncode or len(picked) != 3 or tuple(picked[:2]) != row:
+                raise NeedsYou('the review of #%s waits: the models rule names no Models row for its %s reviewer'
+                               % (p, row[0]))
+            return row[0], row[1], 'other-family', ['--row', picked[2]]
         if not shutil.which(built):
             raise NeedsYou("#%s's builder harness %s is not installed, so its review waits" % (n, built))
         recorded = [f['model'] for f in (status.parse(c['body']) for c in self.thread(n))
                     if f and f['agent'] == 'builder']
-        models = {cli for harness, names, cli in self.identities() if harness == built and recorded[-1:] and
-                  recorded[-1] in names}
+        matched = [(cli, row) for harness, names, cli, row in self.identities()
+                   if harness == built and recorded[-1:] and recorded[-1] in names]
+        models = {cli for cli, _ in matched}
         if len(models) != 1:
             raise NeedsYou("the review of #%s waits: the builder's recorded model %s is %s a %s model in the "
                            "models rule" % (p, (recorded or ['(none)'])[-1], 'not' if not models else 'more than',
                                             built))
-        return built, models.pop(), 'same-family'
+        if not self.rostered():
+            return built, models.pop(), 'same-family', []
+        rows = [row for _, row in matched if row in WORKERS]
+        if not rows:
+            raise NeedsYou("the review of #%s waits: the builder's recorded model %s is on no builder, fixer or "
+                           "reviewer row of the Models table" % (p, recorded[-1]))
+        return built, models.pop(), 'same-family', ['--row', rows[0]]
 
     def identities(self):
         found, section, setting = [], None, {}
@@ -393,20 +413,21 @@ class Session:
                     harness, model, effort = (setting[k] for k in ('Harness', 'Model', 'Effort'))
                     if harness[1] and model[1]:
                         found.append((PROVIDERS.get(harness[1]), {model[0], model[1], '%s %s' % (model[0], effort[0])},
-                                      model[1]))
+                                      model[1], None))
                 section, setting = row[3:], {}
                 continue
             cells = [c.strip() for c in row.strip().strip('|').split('|')] if row.startswith('|') else []
             flags = FLAGS.search(cells[-1]) if cells else None
             if section == 'Models' and len(cells) == 5 and flags:
-                found.append((PROVIDERS.get(flags[1]), {flags[2], cells[2], '%s %s' % (cells[2], cells[3])}, flags[2]))
+                found.append((PROVIDERS.get(flags[1]), {flags[2], cells[2], '%s %s' % (cells[2], cells[3])}, flags[2],
+                              cells[0]))
             elif len(cells) == 3 and cells[0] in ('Harness', 'Model', 'Effort'):
                 value = re.fullmatch(r'`--(?:provider|model|reasoning-level) (\S+)`', cells[2])
                 setting[cells[0]] = (cells[1], value[1] if value else None)
         return found
 
     def review(self, p, n, head):
-        harness, model, family = self.reviewer(p, n)
+        harness, model, family, row = self.reviewer(p, n)
         claim = self.claim(p, 'launch-fleet: review starting %s' % head, 'launch-fleet: review withdrawn %s' % head)
         if not claim:
             return False
@@ -418,7 +439,7 @@ class Session:
         self.edit(claim, 'launch-fleet: review starting %s%s' % (head, rest))
         since = int(time.time())
         r, = self.answers([self.detached("#%s's review start" % p, 'host.py', 'start', self.repo, p, harness, model,
-                                         'review-ticket')])
+                                         'review-ticket', *row)])
         if r.returncode:
             raise NeedsYou(self.refusal(claim, 'launch-fleet: review refused %s: %%s%s' % (head, rest.replace('%', '%%')),
                                         p, r))

@@ -1,7 +1,7 @@
 ---
 name: triage
 description: Sort issues that arrive outside a plan graph (new bugs and ideas, a reviewer's low findings, a builder's needs-info question) with the project's triage labels, and give each a brief, a question, a road or an answer. Use when the five-minute check finds triage work, or when the user asks what needs their attention or names an issue to look at. Not for specs or their tickets, which belong to to-tickets. Starts nothing; only the user's approval does.
-version: 0.4.0
+version: 0.5.0
 ---
 
 # Triage
@@ -27,6 +27,8 @@ Routine triage comments start with this line, exactly as Matt wrote it; approval
 **Comments hold facts about the work:** no keys, tokens, personal details or thread ids. Follow `contracts/open-development.v1.md` when present: the user's exact words go in a private-repository comment; publicly give the decision in your own words, its date and that comment's pointer. If the private record cannot be saved or read back, stop and ask the orchestrator; never invent a pointer or post the words.
 
 ## Sort an issue
+
+Before ranking or choosing a priority, when `openwiz-bench` is on `PATH`, read `openwiz-bench --json` and name the bench that moved the priority. Unmeasured benches change nothing, and a missing command or failed read blocks nothing.
 
 1. **Read** the whole issue, keeping what earlier triage settled; the glossary and ADRs (`docs/agents/domain.md`); for a low finding, its review and pull request. Search the default branch for the behaviour by what it does (**already built?**), and read every `.out-of-scope/` file when present (**rejected before?**, as [OUT-OF-SCOPE.md](OUT-OF-SCOPE.md) says). Done when you can say where you looked and both answers. A report (a `feedback` label, or the feedback marker last) leaves this list for [Feedback reports](#feedback-reports).
 2. **Check the claim:** reproduce a bug, or run an outside pull request's tests, using only what the project lets you run without asking; for anything needing the user's machine, account or a live read, write down what it would take. Done with one result: **confirmed** (with its code path), **not reproduced**, or **not enough detail to try**.

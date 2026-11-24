@@ -332,11 +332,14 @@ def wake_or_start(state, config, env, repo, spec):
     path.parent.mkdir(mode=0o700, exist_ok=True)
     starting = state / 'starting'
     starting.mkdir(mode=0o700)
-    result = host_call(config, env, 'start', config['harness'], config['model'], 'launch-fleet')
+    result = host_call(config, env, 'start', config['harness'], config['model'], 'launch-fleet', '--row',
+                       'Orchestrator')
     if result.returncode == 0:
         starting.rmdir()
         return 0, 'started'
-    if result.stdout.startswith(('refused:', 'stopped (driver start failed):')) or result.returncode == 2:
+    if (result.returncode == 1 and result.stdout.startswith(
+            ('refused:', 'stopped (driver start failed):', "stopped (driver can't set effort):"))) \
+            or result.returncode == 2:
         starting.rmdir()
         return result.returncode, 'start refused'
     (starting / 'host-result').write_text(result.stdout)

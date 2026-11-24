@@ -323,6 +323,38 @@ class Fleet(unittest.TestCase):
         self.world['commitComments'].append(dict(id=9002, commit_id='81' * 20, body='launch-fleet: nightly uncertain 801 attempt 1'))
         self.assertNotIn('nightly red', self.run_fleet('check'))
 
+    def test_interrupted_parked_review_gets_one_claimed_retry(self):
+        self.say(f'review started {SHA}')
+        self.pr['comments'] += [
+            dict(id=3102, at='2026-11-01T10:30:00Z',
+                 body=f'VERDICT: CHANGES at {SHA}\n\nNext: park R2 as a decision for Jake.'),
+            dict(id=3103, at='2026-11-01T10:35:00Z',
+                 body=f'**Orchestrator decision:** log and merge: R2 at {SHA}. Polish issues: #64. Why: synthetic.'),
+        ]
+        due = f"decision #31 for #12 at {SHA}: Jake's answer in comment 3103"
+        self.assertIn(due + '; act on it', self.run_fleet('wake', '31'))
+
+        self.say(f'findings sent {SHA}: decision 3103: log and merge', 3104, '11:40')
+        self.assertEqual(self.run_fleet('wake', '31'), '')
+        self.env['LAUNCH_FLEET_NOW'] = str(1793534400 + 600)
+        self.assertEqual(self.run_fleet('wake', '31'),
+                         f're-check #31 for #12 at {SHA}: parked decision 3103 still needs a replacement report\n')
+
+        self.say(f'review starting {SHA}\nDecision retry: 3103', 3105, '12:10')
+        self.assertEqual(self.run_fleet('claim', '31', '3105'), 'go #31\n')
+        self.say(f'review starting {SHA}\nDecision retry: 3103', 3106, '12:11')
+        self.assertIn('withdraw #31:', self.run_fleet('claim', '31', '3106'))
+        self.assertEqual(self.run_fleet('wake', '31'), '')
+
+        self.env['LAUNCH_FLEET_NOW'] = str(1793534400 + 2400)
+        self.assertEqual(self.run_fleet('wake', '31'),
+                         f'look #31: decision 3103 still needs a replacement review at {SHA} after its retry\n')
+
+        self.pr['comments'] = self.pr['comments'][:4]
+        self.pr['comments'].append(dict(id=3107, at='2026-11-01T12:11:00Z',
+                                        body=f'VERDICT: APPROVE at {SHA}'))
+        self.assertNotIn('decision #31', self.run_fleet('wake', '31'))
+
     def test_public_resume_claim_wins_once(self):
         self.issue(12)['comments'] += [dict(id=1202, at='2026-11-01T11:00:00Z', body='launch-fleet: waiting for #11'),
             dict(id=1203, at='2026-11-01T11:59:00Z', body='launch-fleet: resume starting 1202 for #11')]
@@ -660,6 +692,30 @@ class Dispatcher(unittest.TestCase):
         self.assertNotIn('archive goes ahead', refused)
         self.assertRegex(refused, r'leaves? the `archive` line for a later wake',
                          'a refused settlement keeps its retry: the archive waits')
+
+
+class RoutedStartedClaim(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.records = load(HERE / 'records.py', 'fleet_records_routed')
+
+    def test_routed_model_on_line_two_still_resolves_builder_thread(self):
+        builder = 'thr_b-routed7'
+        thread = dict(id=builder, title='#7: synthetic ticket', branch=None)
+        routed = dict(number=7, comments={'nodes': [
+            dict(databaseId=701, createdAt='2026-11-01T11:01:00Z', body='launch-fleet: started\nrouted: neon')
+        ]}, closedByPullRequestsReferences={'nodes': []})
+        world = self.records.annotate({'specs': [], 'singles': [routed]}, 'example/public', False, [thread], {})
+        comment = world['singles'][0]['comments']['nodes'][0]
+        self.assertEqual(comment['resolvedThread'], builder)
+        self.assertIsNone(comment['recordError'])
+
+        inline = dict(number=7, comments={'nodes': [
+            dict(databaseId=702, createdAt='2026-11-01T11:02:00Z', body='launch-fleet: started (routed: neon)')
+        ]}, closedByPullRequestsReferences={'nodes': []})
+        bad = self.records.annotate({'specs': [], 'singles': [inline]}, 'example/public', False, [thread], {})
+        self.assertIsNone(bad['singles'][0]['comments']['nodes'][0].get('resolvedThread'))
 
 
 if __name__ == '__main__':

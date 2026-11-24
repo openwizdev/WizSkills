@@ -1,7 +1,7 @@
 ---
 name: review-ticket
 description: Review a ticket's pull request as its independent other-family reviewer at its exact head once CI is green, on Standards, Spec and one full sweep, and post one verdict report on the pull request; only a real-user path or a security, privacy or data-loss risk blocks. Use when you are a pull request's reviewer, for its re-check, or to tell whether a pull request needs review. Fixing the code is build-ticket's job, never this one.
-version: 0.4.0
+version: 0.5.0
 ---
 
 # Review a ticket
@@ -61,13 +61,17 @@ Read `git diff --find-renames origin/<base>...<head>` and the code around it. Ke
 
 **Full sweep:** read the whole diff once more for bugs, broken callers, error paths, security and privacy.
 
-**One pass:** this step is the checklist the builder also runs on its own diff (build-ticket step 4, with `review.py self-check`). A missing `## Self-check`, or one line of it that your own run plainly contradicts, is one polish finding (Standards). Report every finding, blocking and polish, in your first verdict: a held-back finding costs a round. A re-check reads only the listed findings and the code changed since, and `review.py check` refuses a new finding on unchanged code unless it is a stated `Risk:` (security, privacy or data loss).
+**One pass:** this step is the checklist the builder also runs on its own diff (build-ticket step 4, with `review.py self-check`). A missing `## Self-check`, or one line of it that your own run plainly contradicts, is one polish finding (Standards). Report every finding, blocking and polish, in your first verdict: a held-back finding costs a round. A re-check reads only the listed findings and the code changed since, and a new finding on unchanged code is late: `review.py check` accepts it only with a `Late:` line, graded `[pre-existing]` or `[blocking]` with a stated `Risk:` (security, privacy or data loss), as [re-checks](references/re-checks.md) says.
 
 Done when the three checks covered the whole diff and every finding has its file and line, its check and the exact fix, rechecked at the pinned head.
 
 ## 3. Grade
 
 A finding **blocks** only with a line under it: `User path: <who does what ordinary thing, and what visibly breaks>` or `Risk: <security|privacy|data loss>: <what is at risk>`, then `Shows the break: <command> printed <output>` when a run shows it, rerun at the head just before posting. A blocker also names its class: exactly one `Class: <word>` line, a word from the [verdict format](references/verdict.md#class)'s list or `Class: other: <word>` when none fits, naming what every instance of the cause shares so the builder fixes the whole class. Everything else is **polish**: filed as an issue, never holding the verdict. First write each candidate's trigger, broken contract, causal path and evidence; name an unsupported hypothesis as uncertainty, not a finding. One cause is one finding, whatever the number of places it shows, and two causes are two findings, each with its class; accept any equivalent safe fix. Blocking should be rare.
+
+## Disprove
+
+Before the report, try to disprove every candidate finding, blocking, polish or pre-existing: read its caller, run its case at the pinned head and check the guard upstream. Drop each candidate you can't prove; it is never posted, not even as polish. Disproving changes no grade: a blocker still needs its `User path:` or `Risk:` line, and there is no new grade. Every report, re-checks included, carries the count you dropped as one line of [the verdict format](references/verdict.md#disproved), its own paragraph before `Checked:`: `Disproved: <n> candidate findings dropped.` `review.py check` refuses a report with no such line, or with two.
 
 ## Ask, never guess
 
@@ -97,6 +101,8 @@ Intent: `pantry export` writes the whole cookbook to one zip and refuses to over
 - **R2 [polish]** `src/cli.rs:30` (Sweep) The help says "zip archive file"; the glossary's word is "export". Fix: "Write the cookbook as one export." Polish issue: #58.
 
 - **Ruling 1** upheld: the importer reads `photos/` in every export (`src/import.rs:14`).
+
+Disproved: 2 candidate findings dropped.
 
 Checked: Standards (`AGENTS.md`, `docs/agents/`, ADR 0002), Spec (#41, spec #38), full sweep. Ran: `cargo test` (31 passed); R1's command; the test with the change undone (fails, as it should).
 

@@ -1,6 +1,6 @@
 # What to say while onboarding
 
-The onboarding agent is a teacher. When a moment below happens, say its line, filling each `<...>` from what just happened and keeping the rest of the words. Every line says what just happened, where to watch it at openwiz.dev/app, and what to do next.
+The onboarding agent is a teacher. When a moment below happens, say its line, filling each `<...>` from what just happened and keeping the rest of the words. Each line guides the user through the current step. There is no project activity to watch until the project is connected. From the grill on, every line also says where to watch at openwiz.dev/app.
 
 Only three lines ask anything, because the flow needs the answer: where agents run, the grill's yes, and the closing offer. No other line asks a question. These lines approve nothing and skip no gate: creating a repository, any write, spend, secrets and publishing still ask first, in their own step's words.
 
@@ -22,9 +22,9 @@ Say all three before the first choice:
 
 > Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom.
 
-When something is missing, such as a GitHub account or a sign-in:
+When something is missing, such as a GitHub account, a sign-in, or an agent installation:
 
-> You need `<what's missing>` first: open `<link>` and sign in yourself, because I never touch your login. Say done here when you're in.
+> You need `<what's missing>` first: open `<link>` and follow the setup steps there. Sign up or sign in yourself if needed, because I never touch your login. Say done here when setup is complete.
 
 ## The grill
 
@@ -34,7 +34,7 @@ When the grill starts:
 
 When its summary is ready:
 
-> That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off.
+> That's your grill. If it matches what you want, say yes here. You can follow the plan at openwiz.dev/app as it builds and checks itself. If something is off, tell me here.
 
 ## The spec and its video
 

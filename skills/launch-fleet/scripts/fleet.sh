@@ -176,8 +176,10 @@ RECORD=''
 
 
 REPO=${GH_REPO:-}
+discovery=''
 if [ -z "$REPO" ]; then
   REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || die "set GH_REPO=owner/name, or run inside a clone"
+  discovery="repository discovery GraphQL cost unmeasured"
 fi
 case $REPO in
   */*/* | /* | */ | *[!A-Za-z0-9._/-]*) die "GH_REPO must be owner/name, not '$REPO'" ;;
@@ -235,13 +237,34 @@ PARENT='parent {
           number state subIssuesSummary { total }
         }'
 
+COMMENT_PAGE='pageInfo { hasPreviousPage startCursor }
+        nodes { fullDatabaseId createdAt updatedAt body author { __typename login } }'
+ISSUE_FACTS='number id title state stateReason body updatedAt
+      labels(first: 20) { pageInfo { hasNextPage } nodes { name } }
+      blockedBy(first: 20) { pageInfo { hasNextPage } nodes { number id state } }
+      comments(last: 100) {'"$COMMENT_PAGE"'}'
+FACTS_QUERY=''
+
 query() {
   case $1 in
-    Specs) printf '%s\n' 'query Specs($owner: String!, $name: String!) {
+    Specs) printf '%s\n' 'query Specs($owner: String!, $name: String!, $cursor: String) {
   rateLimit { cost remaining limit resetAt }
   repository(owner: $owner, name: $name) {
     databaseId
     defaultBranchRef { name }
+    issues(states: OPEN, first: 100, after: $cursor, orderBy: {field: CREATED_AT, direction: DESC}) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { number updatedAt body subIssuesSummary { total completed } }
+    }
+  }
+}' ;;
+    Search) printf '%s\n' 'query Search($q: String!, $cursor: String) {
+  rateLimit { cost remaining limit resetAt }
+  search(query: $q, type: ISSUE, first: 100, after: $cursor) {
+    issueCount
+    pageInfo { hasNextPage endCursor }
+    nodes { __typename ... on Issue { id number state } }
   }
 }' ;;
     Spec) printf '%s\n' 'query Spec($owner: String!, $name: String!, $number: Int!, $size: Int!) {
@@ -311,6 +334,17 @@ query() {
     } }
   }
 }' ;;
+    Facts) printf '%s\n' "$FACTS_QUERY" ;;
+    Comments) printf '%s\n' 'query Comments($owner: String!, $name: String!, $number: Int!, $before: String!) {
+  rateLimit { cost remaining limit resetAt }
+  repository(owner: $owner, name: $name) {
+    issueOrPullRequest(number: $number) {
+      __typename
+      ... on Issue { comments(last: 100, before: $before) {' "$COMMENT_PAGE" '} }
+      ... on PullRequest { comments(last: 100, before: $before) {' "$COMMENT_PAGE" '} }
+    }
+  }
+}' ;;
     Writer) printf '%s\n' 'query Writer($owner: String!, $name: String!, $login: String!) {
   rateLimit { cost remaining limit resetAt }
   repository(owner: $owner, name: $name) {
@@ -333,6 +367,20 @@ query() {
 # stderr, nothing on stdout, exit 0.
 back_off() { printf 'fleet.sh: backing off: %s\n' "$*" >&2; exit 0; }
 
+stop() {
+  printf 'fleet.sh: backing off: %s\n' "$*" >&2
+  kill -TERM $$ 2> /dev/null
+  exit 2
+}
+
+BUDGET=$(cd "$(dirname "$0")" && pwd)/budget.py
+rest_admit() {
+  set -- "$1" $(ls -t "$TMP/headers" 2> /dev/null | head -n 5 | sed "s|^|$TMP/headers/|")
+  verdict=$(python3 -I "$BUDGET" admit "$@" --resource core 2> /dev/null) && return 0
+  why=$(printf '%s\n' "$verdict" | jq -r '.reason | strings' 2> /dev/null) || why=''
+  stop "${why:-the REST read budget gave no answer}"
+}
+
 # gql OP OUT [gh api arguments...]: one GraphQL read, checked, with what it
 # cost and the points left after it in rate.txt. GitHub answers a spent
 # allowance with an error of type RATE_LIMIT (observed live, 2026-11-01;
@@ -343,16 +391,15 @@ reads=0
 gql() {
   op=$1 out=$2
   shift 2
+  query_name=$op
+  [ "$op" != Spec ] || query_name="Spec #$spec_number"
   case $op in
-    Blockers | Nodes | Checks) ;;
+    Blockers | Nodes | Checks | Search | Facts | Comments) ;;
     Merged) [ "${1:-}" = -F ] || set -- -F owner="$OWNER" -F name="$NAME" "$@" ;;
     *) set -- -F owner="$OWNER" -F name="$NAME" "$@" ;;
   esac
-  # GI1: a full read of `spec S` keeps each answer, by its whole request; a
-  # replay answers from them and asks GitHub nothing (the probe has shown
-  # nothing they read has changed). No saved answer stops the replay.
-  key=$(printf '%s\n' 'launch-fleet GraphQL v1' "$op" "$@" | hash) && [ ${#key} = 64 ] || die "can't hash the GitHub query $op"
-  if [ -n "$REPLAY" ]; then
+  key=$(printf '%s\n' 'launch-fleet GraphQL v1' "$op" "$@" | hash) && [ ${#key} = 64 ] || die "can't hash the GitHub query $query_name"
+  if [ -n "$REPLAY" ] && [ "$op" != Writer ]; then
     [ -f "$REPLAY/snap/gql-$key.json" ] && cp "$REPLAY/snap/gql-$key.json" "$out" || die "the saved full read has no answer to $op"
   # An empty answer is never a spent allowance, nor anything else: jq -e takes
   # an empty file as true (jq 1.6).
@@ -365,26 +412,26 @@ gql() {
     # 2026-11-01), and nothing is due on it.
     if [ "$op" = Item ] && [ -s "$out" ] && jq -e '.data.repository.issueOrPullRequest == null and (.errors | length) > 0
          and all(.errors[]; .type == "NOT_FOUND" and .path == ["repository", "issueOrPullRequest"])' "$out" > /dev/null 2>&1; then
-      jq 'del(.errors)' "$out" > "$out.found" && mv "$out.found" "$out" || die "can't read the GitHub query $op"
+      jq 'del(.errors)' "$out" > "$out.found" && mv "$out.found" "$out" || die "can't read the GitHub query $query_name"
     else
-      die "the GitHub query $op failed: $(head -n 1 "$out.err" | head -c 300)"
+      die "the GitHub query $query_name failed: $(head -n 1 "$out.err" | head -c 300)"
     fi
   fi
-  [ -s "$out" ] || die "the GitHub query $op answered nothing"
+  [ -s "$out" ] || die "the GitHub query $query_name answered nothing"
   jq -e '(.errors // []) == [] and (.data | type) == "object" and all(.data[]; type == "object" or type == "array")' "$out" > /dev/null 2>&1 \
-    || die "the GitHub query $op answered with errors: $(jq -c '.errors' "$out" 2> /dev/null | head -c 300)"
-  if [ -z "$REPLAY" ]; then
+    || die "the GitHub query $query_name answered with errors: $(jq -c '.errors' "$out" 2> /dev/null | head -c 300)"
+  if [ -z "$REPLAY" ] || [ "$op" = Writer ]; then
     jq -er '.data.rateLimit | select(type == "object")
       | select(all(.cost, .remaining, .limit; type == "number" and . >= 0 and . == floor) and .limit > 0
                and (.resetAt | type) == "string" and (.resetAt | test("^[0-9T:Z-]+$")))
-      | "\(.cost) \(.remaining) \(.limit) \(.resetAt)"' "$out" >> "$TMP/rate.txt" 2> /dev/null \
-      || die "the GitHub query $op did not say what it cost and what is left"
-    [ -z "$RECORD" ] || { kept=$(mktemp "$RECORD/gql-$key.XXXXXX") && cp "$out" "$kept"; } || RECORD=''
+      | "\(.cost) \(.remaining) \(.limit) \(.resetAt)"' "$out" >> "$COUNTS/rate.txt" 2> /dev/null \
+      || die "the GitHub query $query_name did not say what it cost and what is left"
+    [ -z "$RECORD" ] || [ "$op" = Writer ] || { kept=$(mktemp "$RECORD/gql-$key.XXXXXX") && cp "$out" "$kept"; } || RECORD=''
   fi
   reads=$((reads + 1))
   case $op in Specs | Item)
     REPO_ID=$(jq -er '.data.repository.databaseId | select(type == "number" and . > 0 and . == floor)' "$out") \
-      || die "the GitHub query $op did not identify the repository" ;;
+      || die "the GitHub query $query_name did not identify the repository" ;;
   esac
   case $op in
     Nodes | Item)
@@ -392,7 +439,7 @@ gql() {
       # Comments are read only with the record authors known (#641), so a
       # wake's first Item read takes the settings first, once.
       settings
-      hydrate "$out" || die "can't read REST issue facts for the GitHub query $op"
+      hydrate "$out" || die "can't read REST issue facts for the GitHub query $query_name"
       ;;
   esac
 }
@@ -413,6 +460,12 @@ allowance() {
   keep=$((limit / 4))
   [ "$left" -ge "$keep" ] || back_off "$left of $limit GitHub points left, under the $keep kept for builders and reviewers, until $reset"
 }
+refuse_low() {
+  [ -z "$REPLAY" ] || return 0
+  last_rate
+  keep=$((limit / 4))
+  [ "$left" -ge "$keep" ] || die "$left of $limit GitHub points left, under the $keep kept for builders and reviewers, until $reset"
+}
 
 # points: the points line, on stderr. Each question revision.sh asks is a
 # small GraphQL read, which GitHub charges one point.
@@ -422,10 +475,10 @@ points() {
   unchanged=$(wc -l < "$TMP/unchanged") || die "can't count the questions"
   if [ -s "$TMP/rate.txt" ]; then
     last_rate
-    left="$left of $limit left"
-  else left='no GraphQL read'; fi
-  printf 'fleet.sh: used %s GitHub points in %s questions, %s unchanged; %s\n' \
-    $((used + by_revision)) $((asked + by_revision)) $((unchanged)) "$left" >&2
+    left="$left of $limit left${discovery:+; $discovery}"
+  else left=${discovery:-no GraphQL read}; fi
+  printf 'fleet.sh: used %s %sGitHub points in %s questions, %s unchanged; %s\n' \
+    $((used + by_revision)) "${discovery:+measured }" $((asked + by_revision)) $((unchanged)) "$left" >&2
 }
 
 # FILES: a jq filter over `gh api --paginate .../pulls/N/files` pages (read
@@ -480,7 +533,13 @@ http_get() (
   fi
   set -- api --include -H "Accept: $media"
   [ -z "$etag" ] || set -- "$@" -H "If-None-Match: $etag"
+  case $endpoint in search/*) ;; *) [ -n "${REST_ADMITTED:-}" ] || rest_admit 1 ;; esac
   if gh "$@" "$endpoint" > "$work/http" 2> "$work/error"; then ok=yes; else ok=no; fi
+  awk '/^\r?$/ { exit } { print }' "$work/http" > "$work/headers" || exit 1
+  if [ -n "$(http_status "$work/headers")" ] && grep -qi '^x-ratelimit-remaining:' "$work/headers" \
+    && tr -d '\r' < "$work/headers" | grep -qiE '^x-ratelimit-resource:[[:space:]]*core[[:space:]]*$'; then
+    mkdir -p "$TMP/headers" && mv "$work/headers" "$TMP/headers/$(basename "$work")" || exit 1
+  fi
   status=$(http_status "$work/http")
   if [ "$status" = 304 ]; then
     [ -n "$etag" ] || { printf 'fleet.sh: unexpected 304 without a readable cached response\n' >&2; exit 1; }
@@ -502,16 +561,8 @@ http_get() (
   fi
   cp "$work/http" "$destination" || exit 1
   if [ "$ok" != yes ] || [ "$status" != 200 ]; then cat "$work/error" >&2; exit 1; fi
-  # A replay stands only on unchanged answers. The open issues list is the
-  # whole repository's; the replay reads it afresh, as a full read does, and
-  # the spec's own changes show in its own issue's answers.
   changed=no
-  if [ -n "$REPLAY" ] && [ ! -f "$destination.304" ]; then
-    case $endpoint in
-      "repos/$REPO/issues?state=open&per_page=100" | "repositories/$REPO_ID/issues?state=open&per_page=100&page="*) ;;
-      *) changed=yes ;;
-    esac
-  fi
+  [ -z "$REPLAY" ] || [ -f "$destination.304" ] || changed=yes
   tag=$(http_etag "$work/http")
   if [ -n "$CACHE" ] && [ ! -d "$entry" ] && printf '%s\n' "$tag" | LC_ALL=C grep -qE '^(W/)?"[!#-~]{1,250}"$'; then
     digest=$(hash < "$work/http") || exit 1
@@ -552,8 +603,7 @@ next_page() {
   host=${GH_HOST:-github.com}
   if [ "$host" = github.com ]; then prefix=https://api.github.com/; else prefix=https://$host/api/v3/; fi
   case $next in "$prefix"*) next=${next#"$prefix"} ;; *) return 1 ;; esac
-  case $next in "repos/${2:-$REPO}/"* | "repositories/${3:-$REPO_ID}/"*) printf '%s\n' "$next" ;;
-    search/issues\?*) [ -z "${2:-}" ] && printf '%s\n' "$next" ;; *) return 1 ;; esac
+  case $next in "repos/${2:-$REPO}/"* | "repositories/${3:-$REPO_ID}/"*) printf '%s\n' "$next" ;; *) return 1 ;; esac
 }
 rest_pages() (
   endpoint=$1 destination=$2
@@ -569,23 +619,20 @@ rest_pages() (
   done
 )
 
-# Run independent REST facts in sixty-four lanes. A free lane keeps reading
-# while another waits on a slow response. Each owns its output files, and
-# pagination stays serial inside a lane. Drain every lane on a read failure,
-# so no worker can outlive the check's temp files.
-# The initial allowance gate runs before this pool; its rate records are
-# reduced on the main shell after every worker has finished.
+LANES=8
 parallel_reads() (
   reader=$1 list=$2
-  lanes=$(mktemp -d "$TMP/readers.XXXXXX") || exit 1
-  awk -v prefix="$lanes/lane-" '{ print > (prefix ((NR - 1) % 64)) }' "$list" || exit 1
+  if [ "${3:-}" = rest ] && [ -s "$list" ]; then rest_admit "$(grep -c '' "$list")"; REST_ADMITTED=yes; fi
+  lanes=$(mktemp -d "$TMP/readers.XXXXXX") && : > "$lanes/go" || exit 1
+  awk -v prefix="$lanes/lane-" -v n="$LANES" '{ print > (prefix ((NR - 1) % n)) }' "$list" || exit 1
   pids='' failed=0
   for lane in "$lanes"/lane-*; do
     [ -f "$lane" ] || continue
     (
-      while read -r number kind repo id; do
-        "$reader" "$number" "$kind" ${repo:+"$repo" "$id"} || exit 1
+      while [ -f "$lanes/go" ] && read -r number kind repo id; do
+        "$reader" "$number" "$kind" ${repo:+"$repo" "$id"} || { rm -f "$lanes/go"; exit 1; }
       done < "$lane"
+      [ -f "$lanes/go" ]
     ) &
     pids="$pids $!"
   done
@@ -600,10 +647,6 @@ parallel_reads() (
 AUTHORED='def authored($a): map(select(((.user | if type == "object" then .login else null end)
   | if type == "string" then ascii_downcase else null end) as $l | $l != null and any($a[]; . == $l)));'
 
-# Ordinary issue fields and comments have REST equivalents. PR metadata
-# stays with its head and combined CI rollup in GraphQL. Closing relationships
-# and labelled-event selection also stay there: REST references/check lists
-# alone do not establish the same facts.
 # Per-check memoization avoids re-reading an issue reached through two specs.
 PR_REPO='def pr_repo($r): .repository.nameWithOwner
   | if type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") then
@@ -613,69 +656,106 @@ item_file() {
   case ${3:-$REPO} in "$REPO") printf '%s/%s-%s.json\n' "$TMP" "$1" "$2" ;;
     *) printf '%s/%s-%s-%s.json\n' "$TMP" "$1" "$(printf '%s' "$3" | tr / @)" "$2" ;; esac
 }
-comment_facts() (
-  n=$1 repo=${2:-$REPO} id=${3:-}
-  file=$(item_file comments "$n" "$repo") || exit 1
-  [ ! -f "$file" ] || exit 0
-  if [ "$repo" != "$REPO" ]; then
-    case $id in '' | 0* | *[!0-9]*) exit 1 ;; esac
-    set -- "$repo" "$id"
-  else set --; fi
-  # REST already walks the whole history. Never cap it at the former
-  # GraphQL window, and never interpret a partially read history as facts.
-  # The existing incomplete-history guard prints look for this item alone.
-  if ! rest_pages "repos/$repo/issues/$n/comments?per_page=100" "$file.raw" "$@" 2> "$file.err"; then
-    why="$(cat "$file.raw.at") failed: $(grep . "$file.err" | tail -n 1)"
-  elif jq -se --slurpfile a "$TMP/authors.json" "$AUTHORED"'select(length > 0 and all(.[]; type == "array")) | add
-      | select(all(.[]; type == "object" and (.id | type) == "number"
-          and (.body | type) == "string" and (.created_at | type) == "string"
-          and (.updated_at | type) == "string"))
-      | {pageInfo: {hasPreviousPage: false},
-         nodes: (authored($a[0]) | map({databaseId: .id, createdAt: .created_at, updatedAt: .updated_at, body, author: (.user.login | ascii_downcase)}))}' \
-      "$file.raw" > "$file" 2> /dev/null; then
-    exit 0
-  else why="an unreadable answer to $(cat "$file.raw.at")"; fi
-  why=$(printf '%s' "$why" | tr -cd ' -~' | cut -c1-300)
-  jq -cn --arg e "$why" '{pageInfo: {hasPreviousPage: true}, nodes: [], error: $e}' > "$file"
-)
-# Each issue's three REST resources are independent too. Fetch them in the
-# same pool before constructing facts, so one issue never serializes them.
-issue_read() (
-  n=$1 part=$2
-  case $part in
-    comments) comment_facts "$n" "${3:-}" "${4:-}" ;;
-    detail) rest "repos/$REPO/issues/$n" "$TMP/facts-issue-$n.json.detail" ;;
-    blockers) rest_pages "repos/$REPO/issues/$n/dependencies/blocked_by?per_page=100" "$TMP/facts-issue-$n.json.blockers" ;;
-    *) exit 1 ;;
-  esac
-)
-issue_facts() (
-  n=$1 kind=$2
-  facts=$(item_file "facts-$kind" "$n" "${3:-}") || exit 1
-  [ ! -f "$facts" ] || exit 0
-  comment_facts "$n" "${3:-}" "${4:-}" || exit 1
-  if [ "$kind" = pr ]; then
-    # The head, its CI rollup and the PR metadata stay together in the one
-    # GraphQL answer. Mixing later REST metadata could borrow another head's
-    # passing checks. Only the PR's comments need a separate REST read.
-    jq -cn --argjson n "$n" --slurpfile c "$(item_file comments "$n" "${3:-}")" '{number: $n, comments: $c[0]}' > "$facts"
-    exit $?
+FACT_COMMENTS='def page_ok: type == "object" and (.pageInfo.hasPreviousPage | type) == "boolean"
+    and (.nodes | type) == "array"
+    and (if .pageInfo.hasPreviousPage then (.nodes | length) > 0 and (.pageInfo.startCursor | type == "string" and length > 0) else true end)
+    and all(.nodes[]; type == "object" and (.fullDatabaseId | type == "string" and test("^[1-9][0-9]{0,14}$"))
+      and (.createdAt | type) == "string" and (.updatedAt | type) == "string" and (.body | type) == "string"
+      and (.author == null or (.author | type == "object" and (.login | type) == "string" and (.__typename | type) == "string")));'
+facts_comments() {
+  jq -e --slurpfile a "$TMP/authors.json" "$AUTHORED"'select(type == "array")
+    | map(. + {user: (.author | if type == "object" then {login: (if .__typename == "Bot" then .login + "[bot]" else .login end)} else null end)})
+    | {pageInfo: {hasPreviousPage: false},
+       nodes: (authored($a[0]) | map({databaseId: (.fullDatabaseId | tonumber), createdAt, updatedAt, body, author: (.user.login | ascii_downcase)}))}' "$1" > "$2"
+}
+
+facts_batch() {
+  repo=$1 batch=$2
+  vars='' fields='' k=0
+  set --
+  while read -r n kind; do
+    case $n in '' | 0* | *[!0-9]*) return 1 ;; esac
+    if [ "$kind" = issue ]; then
+      a=i$k field="issue(number: \$$a) { $ISSUE_FACTS }"
+    else
+      a=c$k field="issueOrPullRequest(number: \$$a) { __typename
+      ... on Issue { comments(last: 100) {$COMMENT_PAGE} }
+      ... on PullRequest { comments(last: 100) {$COMMENT_PAGE} } }"
+    fi
+    vars="$vars, \$$a: Int!" fields="$fields
+    $a: $field"
+    set -- "$@" -F "$a=$n"
+    k=$((k + 1))
+  done < "$batch"
+  FACTS_QUERY="query Facts(\$owner: String!, \$name: String!$vars) {
+  rateLimit { cost remaining limit resetAt }
+  repository(owner: \$owner, name: \$name) {$fields
+  }
+}"
+  if [ -z "$REPLAY" ] && [ -s "$TMP/rate.txt" ]; then
+    last_rate
+    [ "$left" -ge $((limit / 4)) ] || stop "$left of $limit GitHub points left, under the $((limit / 4)) kept for builders and reviewers, until $reset"
   fi
-  if [ "$kind" = issue ]; then
-    jq -se 'select(length > 0) | add | select(type == "array" and all(.[];
-      (.number | type) == "number" and (.node_id | type) == "string" and (.state | IN("open", "closed"))))
-      | {pageInfo: {hasNextPage: (length > 20)}, nodes: (.[0:20] | map({number, node_id, state: (.state | ascii_upcase)}))}' \
-      "$facts.blockers" > "$facts.dependencies" || exit 1
-  else printf '{"nodes": []}' > "$facts.dependencies" || exit 1; fi
-  jq -ce --argjson n "$n" --slurpfile c "$TMP/comments-$n.json" --slurpfile b "$facts.dependencies" '
-    select(type == "object" and .number == $n and (.title | type) == "string"
-      and (.body == null or (.body | type) == "string") and (.state | IN("open", "closed")))
-    |         select((.labels | type) == "array" and all(.labels[]; (.name | type) == "string")
-          and (.updated_at | type) == "string")
-        | {number, id: (.node_id | if type == "string" then . else null end), title, state: (.state | ascii_upcase), body: (.body // ""), updatedAt: .updated_at,
-           stateReason: (.state_reason | if type == "string" then ascii_upcase else null end),
-           labels: {pageInfo: {hasNextPage: ((.labels | length) > 20)}, nodes: (.labels[:20] | map({name}))}}
-      | . + {comments: $c[0], blockedBy: $b[0]}' "$facts.detail" > "$facts" || { rm -f "$facts"; exit 1; }
+  gql Facts "$batch.json" -F owner="${repo%%/*}" -F name="${repo#*/}" "$@"
+  k=0
+  while read -r n kind; do
+    case $kind in issue) a=i$k ;; *) a=c$k ;; esac
+    k=$((k + 1))
+    jq -e --arg a "$a" --arg kind "$kind" "$FACT_COMMENTS"'.data.repository[$a]
+      | select(type == "object" and (if $kind == "issue" then true else .__typename | IN("Issue", "PullRequest") end)
+        and (.comments | page_ok))' "$batch.json" > "$batch.item" || return 1
+    jq '.comments' "$batch.item" > "$batch.page" && jq '.nodes' "$batch.page" > "$batch.nodes" || return 1
+    pages=1
+    while [ "$(jq -r '.pageInfo.hasPreviousPage' "$batch.page")" = true ]; do
+      pages=$((pages + 1))
+      [ "$pages" -le 1000 ] || return 1
+      cursor=$(jq -r '.pageInfo.startCursor' "$batch.page") || return 1
+      gql Comments "$batch.older" -F owner="${repo%%/*}" -F name="${repo#*/}" -F number="$n" -f before="$cursor"
+      jq -e "$FACT_COMMENTS"'.data.repository.issueOrPullRequest
+        | select(type == "object" and (.__typename | IN("Issue", "PullRequest")) and (.comments | page_ok)) | .comments' \
+        "$batch.older" > "$batch.page" || return 1
+      jq -s '.[0].nodes + .[1]' "$batch.page" "$batch.nodes" > "$batch.all" && mv "$batch.all" "$batch.nodes" || return 1
+    done
+    comments=$(item_file comments "$n" "$repo") && facts_comments "$batch.nodes" "$comments" || return 1
+    printf '%s\n' "repos/$repo/issues/$n/comments?per_page=100" >> "$TMP/fact-probes" || return 1
+    case $kind in
+      issue)
+        printf '%s\n' "repos/$repo/issues/$n" "repos/$repo/issues/$n/dependencies/blocked_by?per_page=100" >> "$TMP/fact-probes" || return 1
+        facts=$(item_file facts-issue "$n" "$repo") || return 1
+        jq -ce --argjson n "$n" --slurpfile c "$comments" '
+          select(.number == $n and (.id | type) == "string" and (.title | type) == "string"
+            and (.body == null or (.body | type) == "string") and (.state | IN("OPEN", "CLOSED"))
+            and (.updatedAt | type) == "string" and (.stateReason == null or (.stateReason | type) == "string")
+            and (.labels.pageInfo.hasNextPage | type) == "boolean" and (.labels.nodes | type) == "array"
+            and all(.labels.nodes[]; (.name | type) == "string")
+            and (.blockedBy.pageInfo.hasNextPage | type) == "boolean" and (.blockedBy.nodes | type) == "array"
+            and all(.blockedBy.nodes[]; (.number | type) == "number" and (.id | type) == "string" and (.state | IN("OPEN", "CLOSED"))))
+          | {number, id, title, state, body: (.body // ""), updatedAt, stateReason,
+             labels: {pageInfo: {hasNextPage: .labels.pageInfo.hasNextPage}, nodes: (.labels.nodes | map({name}))},
+             comments: $c[0],
+             blockedBy: {pageInfo: {hasNextPage: .blockedBy.pageInfo.hasNextPage}, nodes: (.blockedBy.nodes | map({number, node_id: .id, state}))}}' \
+          "$batch.item" > "$facts.next" && mv "$facts.next" "$facts" || return 1 ;;
+      pr)
+        facts=$(item_file facts-pr "$n" "$repo") || return 1
+        jq -cn --argjson n "$n" --slurpfile c "$comments" '{number: $n, comments: $c[0]}' > "$facts.next" \
+          && mv "$facts.next" "$facts" || return 1 ;;
+    esac
+  done < "$batch"
+}
+
+facts_read() (
+  list=$1
+  [ -s "$list" ] || exit 0
+  awk '{ print ($3 == "" ? "-" : $3), $1, $2 }' "$list" | sort -u -k1,1 -k2,2n -k3,3 > "$list.sorted" || exit 1
+  awk '$3 == "issue" { full[$1 " " $2] = 1 } { line[NR] = $0; key[NR] = $1 " " $2; kind[NR] = $3 }
+    END { for (i = 1; i <= NR; i++) if (kind[i] != "comments" || !full[key[i]]) print line[i] }' "$list.sorted" \
+    | awk '$1 != repo || count == 20 { batch++; count = 0; repo = $1 } { count++; print batch, $0 }' > "$list.batches" || exit 1
+  for b in $(cut -d ' ' -f 1 "$list.batches" | uniq); do
+    awk -v b="$b" '$1 == b { print $3, $4 }' "$list.batches" > "$list.batch" \
+      && repo=$(awk -v b="$b" '$1 == b { print $2; exit }' "$list.batches") || exit 1
+    [ "$repo" != - ] || repo=$REPO
+    facts_batch "$repo" "$list.batch" || exit 1
+  done
 )
 # Node IDs are global and opaque; issue numbers are local to a repository.
 # Hash the identity for a filename without interpreting any of its bytes.
@@ -781,10 +861,7 @@ hydrate() (
     set -- "$@" "$facts"
     printf '%s\n' "${repo:+$repo#}$n" >> "$source.keys" || exit 1
     [ ! -f "$facts" ] || continue
-    [ -f "$(item_file comments "$n" "$repo")" ] || printf '%s comments%s\n' "$n" "${repo:+ $repo $id}" >> "$source.requests" || exit 1
-    if [ "$kind" = issue ]; then
-      printf '%s detail\n%s blockers\n' "$n" "$n" >> "$source.requests" || exit 1
-    fi
+    printf '%s %s%s\n' "$n" "$kind" "${repo:+ $repo}" >> "$source.requests" || exit 1
   done < "$source.wanted"
   if [ -n "$extra_comments" ]; then
     while read -r n; do
@@ -792,9 +869,7 @@ hydrate() (
       [ -f "$TMP/comments-$n.json" ] || printf '%s comments\n' "$n" >> "$source.requests" || exit 1
     done < "$extra_comments"
   fi
-  sort -u "$source.requests" > "$source.jobs" || exit 1
-  parallel_reads issue_read "$source.jobs" || exit 1
-  parallel_reads issue_facts "$source.wanted" || exit 1
+  facts_read "$source.requests" || exit 1
   if [ $# -gt 0 ]; then
     jq -s --rawfile k "$source.keys" '[($k | split("\n") | .[:-1]), .] | transpose
       | map({key: .[0], value: .[1]}) | from_entries' "$@" > "$source.facts" || exit 1
@@ -913,24 +988,19 @@ specs_list() {
   gql Specs "$TMP/repository.json"
   allowance
   DEFAULT=$(jq -er '.data.repository.defaultBranchRef.name' "$TMP/repository.json") || die "no default branch"
-  endpoint="repos/$REPO/issues?state=open&per_page=100"
-  pages=0
-  while [ -n "$endpoint" ]; do
-    pages=$((pages + 1))
-    [ $pages -le 50 ] || die "more than 5000 open issues: too many to read in one check"
-    rest "$endpoint" "$TMP/issues-page.json" || die "can't read the open issues"
-    jq -ce 'select(type == "array")
-      | [.[] | select(has("pull_request") | not)
-         | {number, updatedAt: .updated_at, body, subIssuesSummary: .sub_issues_summary}]
-      | if all(.[]; (.subIssuesSummary | type) == "object"
-          and all(.subIssuesSummary.total, .subIssuesSummary.completed; type == "number" and . >= 0 and . == floor))
-        then {data: {repository: {issues: {nodes: .}}}}
-        else error("missing sub-issue counts") end' \
-      "$TMP/issues-page.json" > "$TMP/page.json" || die "can't read the open issues"
-    jq -e '[.data.repository.issues.nodes[] | select(.subIssuesSummary.total > 0)]
-      | all(.[]; (.number, .subIssuesSummary.total, .subIssuesSummary.completed | type == "number")
-                 and (.updatedAt | type == "string" and test("^[0-9T:Z.-]+$")))' "$TMP/page.json" > /dev/null \
-      || die "can't read the open issues"
+  cp "$TMP/repository.json" "$TMP/page.json" || die "can't read the open issues"
+  pages=1 listed=0
+  while :; do
+    jq -e '.data.repository.issues | type == "object" and (.totalCount | type == "number" and . >= 0 and . == floor)
+      and (.pageInfo.hasNextPage | type == "boolean") and (.nodes | type == "array")
+      and all(.nodes[]; type == "object" and (.number | type == "number")
+        and (.body == null or (.body | type) == "string") and (.updatedAt | type == "string" and test("^[0-9T:Z.-]+$"))
+        and (.subIssuesSummary | type) == "object"
+        and all(.subIssuesSummary.total, .subIssuesSummary.completed; type == "number" and . >= 0 and . == floor))
+      and (if .pageInfo.hasNextPage then (.nodes | length) > 0 and (.pageInfo.endCursor | type == "string" and length > 0) else true end)' \
+      "$TMP/page.json" > /dev/null || die "can't read the open issues"
+    n=$(jq '.data.repository.issues.nodes | length' "$TMP/page.json") || die "can't read the open issues"
+    listed=$((listed + n))
     jq -r '.data.repository.issues.nodes[] | select(.subIssuesSummary.total > 0)
       | "\(.number) \(.subIssuesSummary.total) \(.subIssuesSummary.completed) \(.updatedAt)"' "$TMP/page.json" \
       >> "$TMP/spec-list.txt" || die "can't read the open issues"
@@ -938,8 +1008,15 @@ specs_list() {
       | ((.body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) | (first // "") | sub("^\\s+"; "")) as $l
       | ([$l | capture("^Follow-up of #[0-9]+ \\(spec #(?<s>[0-9]+)\\)") | .s | tonumber] | first) as $spec
       | select($spec != null) | {number, spec: $spec}' "$TMP/page.json" >> "$TMP/followups.txt" || die "can't read the open issues"
-    endpoint=$(next_page "$TMP/issues-page.json.http") || die "can't read the open issues pagination"
+    [ "$(jq '.data.repository.issues.pageInfo.hasNextPage' "$TMP/page.json")" = true ] || break
+    pages=$((pages + 1))
+    [ $pages -le 50 ] || die "more than 5000 open issues: too many to read in one check"
+    cursor=$(jq -er '.data.repository.issues.pageInfo.endCursor' "$TMP/page.json") || die "can't read the open issues"
+    refuse_low
+    gql Specs "$TMP/page.json" -f cursor="$cursor"
   done
+  total=$(jq '.data.repository.issues.totalCount' "$TMP/page.json") || die "can't read the open issues"
+  [ "$listed" = "$total" ] || die "the open issues list gave $listed of $total, so a spec or a follow-up could be missed"
   sort -n -u -k1,1 "$TMP/spec-list.txt" > "$TMP/spec-list.sorted" || die "can't read the open issues"
   jq -s '.' "$TMP/followups.txt" > "$TMP/followups.json" || die "can't read the follow-ups"
 }
@@ -1118,27 +1195,8 @@ singles() {
   : > "$TMP/single-ids.txt"
   : > "$TMP/search-items.txt"
   for single_label in "$label" held; do
-    q="repo:$REPO is:issue label:\"$single_label\" no:parent-issue"
-    cursor='' pages=0 listed=0 total=0
-    encoded=$(jq -rn --arg q "$q" '$q | @uri') || die "can't encode the issues search"
-    endpoint="search/issues?q=$encoded&per_page=100"
-    while [ -n "$endpoint" ]; do
-      pages=$((pages + 1))
-      [ $pages -le 11 ] || die "the search for issues outside specs did not end"
-      rest "$endpoint" "$TMP/search.json" || die "can't read the issues outside specs"
-      jq -e 'type == "object" and .incomplete_results == false
-        and (.total_count | type == "number" and . >= 0 and . == floor)
-        and (.items | type) == "array" and all(.items[];
-          (.node_id | type) == "string" and (.number | type) == "number" and (.state | IN("open", "closed")))' \
-        "$TMP/search.json" > /dev/null || die "can't read the issues outside specs"
-      total=$(jq .total_count "$TMP/search.json") || die "can't read the issues outside specs"
-      n=$(jq '.items | length' "$TMP/search.json") || die "can't read the issues outside specs"
-      listed=$((listed + n))
-      jq -r '.items[] | "\(.number) \(.node_id) \(.state)"' "$TMP/search.json" >> "$TMP/search-items.txt" \
-        || die "can't read the issues outside specs"
-      endpoint=$(next_page "$TMP/search.json.http") || die "can't read the issues search pagination"
-    done
-    [ "$listed" = "$total" ] || die "the search listed $listed of $total issues outside specs, so a start or an archive could be missed"
+    search "repo:$REPO is:issue label:\"$single_label\" no:parent-issue" "$TMP/search-items.txt" \
+      "issues outside specs" "issues outside specs, so a start or an archive could be missed"
   done
   sort -u "$TMP/search-items.txt" > "$TMP/search-items.sorted" \
     && mv "$TMP/search-items.sorted" "$TMP/search-items.txt" || die "can't deduplicate the issues outside specs"
@@ -1177,22 +1235,28 @@ $n
     || die "can't read the issues"
 }
 
-active_search() {
-  encoded=$(jq -rn --arg q "$1" '$q | @uri') || die "can't encode the open work search"
-  endpoint="search/issues?q=$encoded&per_page=100" pages=0 listed=0 total=0
-  while [ -n "$endpoint" ]; do
+search() {
+  cursor='' pages=0 listed=0
+  while :; do
     pages=$((pages + 1))
-    [ $pages -le 11 ] || die "the search for open work did not end"
-    rest "$endpoint" "$TMP/search.json" || die "can't read the open work"
-    jq -e 'type == "object" and .incomplete_results == false and (.total_count | type == "number")
-      and (.items | type) == "array" and all(.items[]; (.node_id | type) == "string" and (.number | type) == "number")' \
-      "$TMP/search.json" > /dev/null || die "can't read the open work"
-    total=$(jq .total_count "$TMP/search.json") && n=$(jq '.items | length' "$TMP/search.json") || die "can't read the open work"
+    [ $pages -le 11 ] || die "the search for $3 did not end"
+    refuse_low
+    if [ -z "$cursor" ]; then gql Search "$TMP/search.json" -f q="$1"
+    else gql Search "$TMP/search.json" -f q="$1" -f cursor="$cursor"; fi
+    jq -e '.data.search | type == "object" and (.issueCount | type == "number" and . >= 0 and . == floor)
+      and (.pageInfo.hasNextPage | type == "boolean") and (.nodes | type == "array")
+      and all(.nodes[]; type == "object" and .__typename == "Issue" and (.id | type == "string" and length > 0)
+        and (.number | type == "number") and (.state | IN("OPEN", "CLOSED")))
+      and (if .pageInfo.hasNextPage then (.nodes | length) > 0 and (.pageInfo.endCursor | type == "string" and length > 0) else true end)' \
+      "$TMP/search.json" > /dev/null || die "can't read the $3"
+    total=$(jq '.data.search.issueCount' "$TMP/search.json") && n=$(jq '.data.search.nodes | length' "$TMP/search.json") \
+      || die "can't read the $3"
     listed=$((listed + n))
-    jq -r '.items[].node_id' "$TMP/search.json" >> "$TMP/active-ids.txt" || die "can't read the open work"
-    endpoint=$(next_page "$TMP/search.json.http") || die "can't read the open work search pagination"
+    jq -r '.data.search.nodes[] | "\(.number) \(.id) \(.state | ascii_downcase)"' "$TMP/search.json" >> "$2" || die "can't read the $3"
+    [ "$(jq '.data.search.pageInfo.hasNextPage' "$TMP/search.json")" = true ] || break
+    cursor=$(jq -er '.data.search.pageInfo.endCursor' "$TMP/search.json") || die "can't read the $3"
   done
-  [ "$listed" = "$total" ] || die "the search listed $listed of $total open tickets, so a colliding start could be missed"
+  [ "$listed" = "$total" ] || die "the search listed $listed of $total $4"
 }
 # active: F6'"'"'s collision scope for a builder start (#1353): every open issue
 # of the repository with live work, in a spec or not, read in full into
@@ -1203,12 +1267,11 @@ active_search() {
 # fewer than it counts stops the start.
 active() {
   label=$(jq -er '."ready-for-agent"' "$TMP/labels.json") || die "can't read the labels"
-  : > "$TMP/active-ids.txt" && : > "$TMP/singles.txt" || die "can't write"
+  : > "$TMP/active-found.txt" && : > "$TMP/singles.txt" || die "can't write"
   for q in "label:\"$label\"" '"launch-fleet" in:comments' 'linked:pr'; do
-    active_search "repo:$REPO is:issue is:open $q"
+    search "repo:$REPO is:issue is:open $q" "$TMP/active-found.txt" "open work" "open tickets, so a colliding start could be missed"
   done
-  sort -u "$TMP/active-ids.txt" > "$TMP/active-ids.sorted" && mv "$TMP/active-ids.sorted" "$TMP/active-ids.txt" \
-    || die "can't write"
+  cut -d ' ' -f 2 "$TMP/active-found.txt" | sort -u > "$TMP/active-ids.txt" || die "can't write"
   set --
   while read -r id; do
     set -- "$@" -f "ids[]=$id"
@@ -1264,12 +1327,17 @@ def first_text: ([lines[] | select(test("\\S"))] | first) // "";
 def first_line: first_text | short;
 def rec: (first_line | sub("^\\s+"; "")) as $l
   | if ($l | startswith("launch-fleet:")) then ($l | ltrimstr("launch-fleet:") | sub("^\\s+"; "") | sub("\\s+$"; "")) else null end;
+def review_retry_claim:
+  lines | (if (.[1] // "" | test("^Driver re-check: (other-family|same-family)$")) then .[2] else .[1] end)
+  | ([. // "" | capture("^Decision retry: (?<id>[1-9][0-9]*)$").id] | first);
 # In a claim ($W.claim: {n, id}), the claimed issue'"'"'s records are those older
 # than the claim: the state the claim was made against.
 def item_repo: (.repository.nameWithOwner // $W.repo) | ascii_downcase;
-def records: .number as $n | item_repo as $r
-  | [.comments.nodes[] | {id: .databaseId, at: .createdAt, edited: (.updatedAt // .createdAt), thread: .resolvedThread, archiveThread: .archiveThread, error: .recordError, closed: (.reviewClosed // false), givenUp: (.givenUp // false), r: (.body | rec)} | select(.r != null)
-  | select($W.claim == null or $n != $W.claim.n or $r != (($W.claim.repo // $W.repo) | ascii_downcase) or .id < $W.claim.id)];
+def records: .number as $n | item_repo as $repo
+  | [.comments.nodes[] | (.body | rec) as $r | select($r != null)
+    | {id: .databaseId, at: .createdAt, edited: (.updatedAt // .createdAt), thread: .resolvedThread, archiveThread: .archiveThread, error: .recordError, closed: (.reviewClosed // false), givenUp: (.givenUp // false), r: $r,
+       decisionRetry: (if $r | startswith("review starting ") then .body | review_retry_claim else null end)}
+  | select($W.claim == null or $n != $W.claim.n or $repo != (($W.claim.repo // $W.repo) | ascii_downcase) or .id < $W.claim.id)];
 def plain: [.comments.nodes[] | select((.body | rec) == null)];
 def kind($k): select(.r | test("^(" + $k + ")(\\b|$)"));
 def age: $W.now - (.at | fromdateiso8601);
@@ -1387,7 +1455,7 @@ def spec_rec($s; $re): any($s | records[]; .r | test($re));
 def fleet($s): [($s.comments.nodes // [])[] | {id: .databaseId, at: .createdAt, body, error: .recordError} | select(.error == null) | . as $c
   | ((.body | rec) // "" | capture("^(?:fleet active, loop (?<loop>[A-Za-z0-9_-]+)|fleet thread (?<t>[A-Za-z0-9_][A-Za-z0-9_-]{0,127})(, loop (?<l>[A-Za-z0-9_][A-Za-z0-9_-]{0,127}))?)$"))
   | {id: $c.id, at: $c.at, thread: (.t // "private fleet"), loop: (.loop // .l),
-     fresh: (.loop != null and ($c.body | split("\n") | index("Wake mode: fresh") != null))}] | max_by(.id);
+     fresh: (.loop != null and ($c.body | lines | any(.[]; sub("\\s+$"; "") == "Wake mode: fresh")))}] | max_by(.id);
 # Only a legacy retained fleet thread uses the takeover cutoff.
 def fleet_of($s): if $s != null and $W.spec == $s.number then (fleet($s) | if .fresh then null else . end) else null end;
 # A record last edited before the fleet thread'"'"'s record, or in the same
@@ -1833,6 +1901,22 @@ def out_of_reach($at; $th; $f; $rec):
   "check review \($at): its reviewer, thread \($th), was started before fleet thread \($f.thread), so it is out of reach; record review given up (its record: comment \($rec.id))";
 
 # What each part of a spec has due.
+def decision_line($at; $id): "decision \($at): Jake'"'"'s answer in comment \($id)";
+def review_retry_line($at; $id): "re-check \($at): parked decision \($id) still needs a replacement report";
+def retry_parked_review($n; $at; $head; $v; $d; $rs):
+  ([$d.body | first_line | capture("^\\*\\*Orchestrator decision:\\*\\* log and merge: (?<ids>R[0-9]+(?:(?:, R[0-9]+)* and R[0-9]+)?) at \($head)\\. Polish issues: #[0-9]+(?:, #[0-9]+)*\\. Why: \\S")] | first) as $answer
+  | ([$v.body | lines | map(select(test("\\S"))) | last
+      | capture("^Next: park (?<ids>R[0-9]+(?:(?:, R[0-9]+)* and R[0-9]+)?) as a decision for Jake\\.\\s*$")] | first) as $park
+  | if $answer == null or $park == null or ([$answer.ids | scan("R[0-9]+")] | sort) != ([$park.ids | scan("R[0-9]+")] | sort)
+    then empty
+    else ([$rs[] | select(.id > $d.databaseId and .r == "findings sent \($head): decision \($d.databaseId): log and merge")] | min_by(.id)) as $sent
+      | ([$rs[] | select(.id > $sent.id and .r == "review starting \($head)" and .decisionRetry == ($d.databaseId | tostring))] | min_by(.id)) as $retry
+      | if $sent == null then empty
+        elif $retry != null then
+          if ($retry | age) >= 1800 then look($n; $rs; "decision \($d.databaseId) still needs a replacement review at \($head) after its retry") else empty end
+        elif ($sent | age) >= 1800 then review_retry_line($at; $d.databaseId)
+        else empty end
+    end;
 def ticket_lines_now($s): . as $t
   | if .comments.pageInfo.hasPreviousPage then look(.number; []; history_why)
     elif .state == "CLOSED" and any(.closedByPullRequestsReferences.nodes[]; .comments.pageInfo.hasPreviousPage) then
@@ -1941,8 +2025,9 @@ def ticket_lines_now($s): . as $t
                   ([$p.comments.nodes[] | select([.body | first_line | capture("^\\*\\*Orchestrator decision:\\*\\* (?:fix once more|log and merge): R[0-9]+(?:(?:, R[0-9]+)* and R[0-9]+)? at (?<c>[0-9a-f]{40})\\. ") | .c] == [$head])] | max_by(.databaseId)) as $d
                   | (if $d != null and $d.databaseId > $v.databaseId and all($rs[]; .id < $d.databaseId)
                         and ($v.body | test("(^|\n)Next: park [^\n]* as a decision for Jake\\.\\s*$")) then
-                       "decision \($at): Jake'"'"'s answer in comment \($d.databaseId); act on it as references/reviews.md says"
-                     elif any($rs[]; (.r | test("^findings sent\\b")) and (.r | names($head))) then empty
+                       decision_line($at; $d.databaseId) + "; act on it as references/reviews.md says"
+                     elif any($rs[]; (.r | test("^findings sent\\b")) and (.r | names($head))) then
+                       if $d != null and $d.databaseId > $v.databaseId then retry_parked_review($p.number; $at; $head; $v; $d; $rs) else empty end
                      else "findings \($at): tell its builder\($t | bthread)" end) end)
              else
                [$rs[] | select(.r | names($head))] as $here
@@ -2100,7 +2185,8 @@ def start_selection: [candidates | .s as $s | .t
 # The users who labelled a ticket that could otherwise start, not record
 # authors: their write access is read (Writer), once each.
 def writers_wanted: [candidates | .s as $s | .t
-  | select(.state == "OPEN" and is_approved($s) and (looks | length) == 0 and ready_unchecked($s))
+  | select(.state == "OPEN" and is_approved($s) and (looks | length) == 0 and ready_unchecked($s)
+      and (refused_lately(start.last; "start") | not))
   | approval_label | .actor | select(type == "object" and .__typename == "User") | login_of
   | select(. != null and (among($W.authors) | not))] | unique | .[];
 # Only existing, readable builders can be resumed; this never starts one.
@@ -2204,6 +2290,10 @@ def claim: $W.claim.n as $n | $W.claim.id as $id | $W.claim.repo as $crepo
               "error comment \($id) on \($ref) is not a \"launch-fleet: review starting <commit>\" claim"
             else ($cm.body | rec | capture("(?<c>[0-9a-f]{40})").c) as $sha
               | if $x.p.headRefOid != $sha then "withdraw \($ref): the head is now \($x.p.headRefOid)"
+                elif ($cm.body | review_retry_claim) != null then
+                  ($cm.body | review_retry_claim) as $decision
+                  | if any($x.t | ticket_lines($x.s); . == review_retry_line("\($due_ref) for #\($x.t.number) at \($sha)"; $decision))
+                    then "go \($ref)" else "withdraw \($ref): that decision retry is no longer due" end
                 else ([$x.p | records[] | select((.r | test("^(review starting|review started|re-check sent)\\b")) and (.r | names($sha)))]
                       | min_by(.id)) as $older
                   | if $older != null then "withdraw \($ref): an older review claim: \"\($older.r)\""
@@ -2649,7 +2739,7 @@ probe() (
   while [ -n "$endpoint" ]; do
     page=$((page + 1))
     [ "$page" -le 50 ] || exit 0
-    http_get "$endpoint" "$out.http" 2> /dev/null || exit 0
+    http_get "$endpoint" "$out.http" 2> /dev/null || exit 1
     [ "$(http_status "$out.http")" = 200 ] || exit 0
     [ -f "$out.http.304" ] || same=no
     tag=$(http_etag "$out.http")
@@ -2709,14 +2799,14 @@ unchanged() {
   REPO_ID=$saved_id
   # Prime every saved endpoint even when this snapshot changed or expired:
   # the full read can then retain a snapshot for the next unchanged tick.
-  parallel_reads probe "$TMP/snap/probes" || return 0
+  parallel_reads probe "$TMP/snap/probes" rest || return 0
   [ "$replayable" = true ] && [ "$NOW" -ge "$read_at" ] && [ $((NOW - read_at)) -lt 1800 ] || return 0
   jq -r '.probes[].endpoint' "$TMP/snap/body" > "$TMP/snap/expected" || return 0
   while IFS= read -r endpoint; do
     key=$(printf '%s' "$endpoint" | hash) || return 0
     [ -f "$TMP/probe/$key.same" ] || return 0
   done < "$TMP/snap/expected"
-  if LAUNCH_FLEET_REPLAY=$TMP sh "$0" spec "$SPEC" > "$TMP/replay.out" 2> /dev/null; then
+  if GH_REPO=$REPO LAUNCH_FLEET_REPLAY=$TMP sh "$0" spec "$SPEC" > "$TMP/replay.out" 2> /dev/null; then
     cat "$TMP/replay.out"
     points
     exit 0
@@ -2761,6 +2851,9 @@ keep_read() {
            and .repository.nameWithOwner? == $h) | .baseRefName] | unique[]
        | "repos/\($h)/git/ref/heads/\(@uri)")]
     | unique[]' "$TMP/world.json" > "$keep_out/probes" 2> /dev/null || return 0
+  if [ -f "$TMP/fact-probes" ]; then
+    sort -u "$keep_out/probes" "$TMP/fact-probes" > "$keep_out/probes.all" && mv "$keep_out/probes.all" "$keep_out/probes" || return 0
+  fi
   replayable=true
   : > "$keep_out/etags.json" || return 0
   while IFS= read -r endpoint; do
@@ -2804,8 +2897,6 @@ if [ "$cmd" = wake ] || { [ "$cmd" = claim ] && [ -z "${CLAIM_REPO:-}" ]; }; the
     active
   fi
 elif [ "$cmd" = spec ]; then
-  # A fleet thread's check: the check's reads, of its own spec alone; none
-  # at all past the probe when nothing it read has changed (GI1).
   [ -n "$REPLAY" ] || unchanged
   specs_list
   settings
@@ -2861,6 +2952,7 @@ elif [ "$cmd" = spec ]; then
   [ -z "$RECORD" ] || keep_read
 fi
 [ -z "$REPLAY" ] || [ ! -e "$TMP/changed" ] || die "an answer changed since the saved full read"
+[ -z "$REPLAY" ] || ! grep -q '^spec done ' "$TMP/out.txt" || die "a spec done line names the follow-ups open now, so it is read in full"
 cat "$TMP/out.txt"
 [ -z "${done_spec:-}" ] || printf '%s\n' "$done_spec"
 [ "$cmd" != check ] || [ ! -f "$TMP/nightly-out.txt" ] || cat "$TMP/nightly-out.txt"

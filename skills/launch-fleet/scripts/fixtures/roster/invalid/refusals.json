@@ -1,0 +1,19 @@
+{
+  "headings.md": "Roster refused: more than one ## Roster heading",
+  "no-table.md": "Roster refused: the Roster section has no table",
+  "header.md": "Roster refused: the header is not Name, Kind, Driver, Roles, Writes as",
+  "empty.md": "Roster refused: the table has no entries",
+  "cells.md": "Roster refused: row 2 has 4 cells, not 5",
+  "name.md": "Roster refused: row 1: bad name: Demo/Bot",
+  "duplicate-name.md": "Roster refused: row 2: codex is already an entry",
+  "kind.md": "Roster refused: row 1 (Demo Bot): unknown kind: agent",
+  "driver.md": "Roster refused: row 1 (Demo Bot): bad driver: Demo_Bot",
+  "no-role.md": "Roster refused: row 1 (Demo Bot): no roles",
+  "role.md": "Roster refused: row 2 (Demo Bot): unknown role: deployer",
+  "repeated-role.md": "Roster refused: row 1 (Demo Bot): role listed twice: builder",
+  "writes-as.md": "Roster refused: row 2 (Demo Bot): writes as its own account, not <person>'s App",
+  "person.md": "Roster refused: row 2 (Demo Bot): writes as syn-other's App, not syn-owner's App like row 1",
+  "label.md": "Roster refused: row 1 (A long synthetic entry name): A long synthetic entry name via syn-owner-with-a-longer-login is longer than 60 characters",
+  "heading-form.md": "Roster refused: the Roster heading must be exactly ## Roster: ## Roster ##",
+  "heading-form-underlined.md": "Roster refused: the Roster heading must be exactly ## Roster: Roster"
+}

@@ -1260,6 +1260,46 @@ class LocalSession(unittest.TestCase):
         self.assertEqual(self.log(road, 'session.log'), [], 'the preview starts nothing')
         return preview, road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest])
 
+    def merged_mode_rows(self, rows):
+        road = self.road()
+        state = road.saved()
+        state['host']['harnesses'] = ['claude-code', 'codex']
+        modes = {'claude': 'acceptEdits', 'codex': 'workspace-write'}
+        state['mode'] = {'harness': 'claude-code', 'mode': 'acceptEdits', 'modes': modes}
+        road.state.write_text(json.dumps(state))
+        (road.host_state / 'approvals.json').write_text(json.dumps({road.repo: modes}))
+        world = json.loads(road.world_path.read_text())
+        path = 'docs/agents/fleet.md'
+        fleet = re.sub(r'(?m)^\| Harness permission mode.*\n', '', world['files'][path])
+        world['files'][path] = fleet + '\n'.join(rows) + '\n'
+        road.world = world
+        road.save_world()
+        road.origin_write({path: world['files'][path]})
+        return road
+
+    def test_local_mode_rows_are_aligned_and_reordered(self):
+        road = self.merged_mode_rows([
+            '|  Harness  permission mode (codex)   | `workspace-write`    |',
+            '  | Harness permission mode (claude) | `acceptEdits` |',
+        ])
+        setting = road.helper(['setting'])
+        self.assertEqual(setting.returncode, 0, setting.stdout + setting.stderr)
+        preview = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(preview.returncode, 12, preview.stdout + preview.stderr)
+        self.assertEqual(self.log(road, 'session.log'), [])
+
+    def test_local_mode_rows_refuse_a_padded_duplicate_before_preview(self):
+        road = self.merged_mode_rows([
+            '| Harness permission mode (claude) | `acceptEdits` |',
+            '| Harness permission mode (codex) | `workspace-write` |',
+            '|  Harness permission mode (codex)  | `workspace-write` |',
+        ])
+        preview = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(preview.returncode, 5, preview.stdout + preview.stderr)
+        self.assertNotIn('Confirmation:', preview.stdout)
+        self.assertEqual(road.helper(['setting']).returncode, 5)
+        self.assertEqual(self.log(road, 'session.log'), [])
+
     def test_a_local_launch_starts_the_session_in_this_chat_and_installs_no_heartbeat(self):
         road = self.road()
         preview, yes = self.launched(road)
@@ -2320,6 +2360,26 @@ class OneSetupPullRequest(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertEqual(self.world(j)['host_pulls'], world['host_pulls'], 'nothing reopened')
         self.assertEqual(j.helper(['next']).stdout.splitlines()[0], 'Next: plan.')
+
+    def test_resuming_a_host_setting_refuses_a_retargeted_or_cross_repository_pull(self):
+        j = self.road(brain='companion', pull='merged')
+        self.yes(j)
+        self.assertEqual(j.helper(['mode', '--claude-mode', 'acceptEdits', '--codex-mode', 'workspace-write'])
+                         .returncode, 0)
+        self.assertEqual(self.setting(j, '--yes').returncode, 0)
+        original = self.world(j)
+        state = j.state.read_bytes()
+        for fields in ({'baseRefName': 'other'}, {'headRefName': 'other'}, {'isCrossRepository': True}):
+            with self.subTest(fields=fields):
+                j.world = self.world(j)
+                j.world['host_pulls'] = [dict(original['host_pulls'][0], **fields)]
+                j.save_world()
+                before = j.world_path.read_bytes()
+                resumed = self.setting(j, '--yes')
+                self.assertEqual(resumed.returncode, 5, resumed.stdout + resumed.stderr)
+                self.assertIn('pull request', resumed.stdout)
+                self.assertEqual(j.state.read_bytes(), state)
+                self.assertEqual(j.world_path.read_bytes(), before)
 
     def test_a_readme_only_repository_gets_its_setup_files_in_the_one_setup_pull_request(self):
         j = self.road(files={'README.md': '# synthetic\n'})

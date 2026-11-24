@@ -26,9 +26,10 @@ handoff it would authorize.
 
 ## 2. Cut the tickets
 
-Cut end-to-end builder tickets to an expected diff of about 400 changed lines
+Cut end-to-end builder tickets to an expected diff of about 200 changed lines
 and 10 files or fewer, judged from first-pass review results on comparable work:
-that range is `Size: S.`. Size M is allowed only with a
+that range is `Size: S.` (this revises openwizdev/OpenWiz#2484's RR2, which set
+about 400). An M is about 400. Size M is allowed only with a
 `Why M: <reason it can't split>` line in Parent. A ticket of size L is split,
 never cut. For a spec created on or after approve.py's `SIZES_SINCE`, step 4
 refuses an L, and an M without that line. Cut for the shortest critical chain,

@@ -1099,8 +1099,6 @@ class KeyHostExpiredLogin(Base):
         self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_a_refused_rerun_clears_the_saved_result_and_the_share_offer(self):
-        """Catches: a rerun refused at route validation leaving the earlier pass and its share offer standing
-        (R8)"""
         bad = {'an unregistered host': ['--key-host', 'otherhost', '--openwiz', KEY_OPENWIZ],
                'no checkout': ['--key-host', 'examplehost'],
                'a bad harness name': ['--harness', 'Bad Harness', '--key-host', 'examplehost', '--openwiz',
@@ -1120,8 +1118,6 @@ class KeyHostExpiredLogin(Base):
                 self.assertEqual(self.wd('share', 'offer', '--state', self.state).returncode, 1)
 
     def test_below_landlock_abi_6_the_route_launches_nothing(self):
-        """Catches: a kernel without Landlock's signal scope admitted, so a boxed process can kill the probe
-        (R7)"""
         for abi in (1, 4, 5):
             with self.subTest(abi=abi):
                 self.begin()
@@ -1135,8 +1131,6 @@ class KeyHostExpiredLogin(Base):
                 self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_without_a_subreaper_the_route_launches_nothing(self):
-        """Catches: PR_SET_CHILD_SUBREAPER failing unnoticed, so a worker in its own session escapes the cleanup
-        (R7)"""
         import ctypes
         from unittest import mock
         real = ctypes.CDLL
@@ -1160,8 +1154,6 @@ class KeyHostExpiredLogin(Base):
         self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_neither_the_driver_nor_the_helper_can_signal_the_probe_or_the_fake_host(self):
-        """Catches: a boxed process able to signal the supervising probe or the fake host (R7); signal 0 kills
-        nothing"""
         self.begin()
         reach = {'the supervising probe': 'os.kill(os.getppid(), 0)',
                  'the fake host': '[os.kill(pid, 0) for pid in fake_hosts()]'}
@@ -1187,7 +1179,6 @@ class KeyHostExpiredLogin(Base):
         self.assertIn('expired-login pass', p.stdout)
 
     def leaky_checkout(self, name, leak, answer=None):
-        """A checkout whose helper sends the correctly keyed request, then tries to leak the key."""
         evil = self.tmp / name
         shutil.copytree(KEY_OPENWIZ, evil)
         f = evil / 'kernel' / 'driver-kit' / 'hostkey.py'
@@ -1198,8 +1189,6 @@ class KeyHostExpiredLogin(Base):
         return evil
 
     def test_a_helper_that_leaks_the_test_key_never_reaches_the_driver(self):
-        """Catches: the helper sharing the relay folder with the driver, or its answer forwarded verbatim, so a
-        modified helper hands the driver the test key while it sends a correctly keyed request (R6)"""
         find = ('    argv = open("/proc/%d/cmdline" % os.getppid(), "rb").read().split(b"\\0")\n'
                 '    for folder in [a.decode() for a in argv if a.endswith(b"/relay")]:\n')
         to_file = find + ('        try:\n            open(os.path.join(folder, "leak"), "w").write(key)\n'
@@ -1228,8 +1217,6 @@ class KeyHostExpiredLogin(Base):
                 self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_helper_traffic_outside_start_earns_no_credit(self):
-        """Catches: the witness counting a helper request made by `stop`, a background process `start` left, or
-        an answer nobody read, so `start` gets credit for handling a 401 it never saw (R3)"""
         stop_only = self.key_driver(
             'stop-only', probe="print(json.dumps({'run': 'run-synthetic-1'}))\n        return 0",
             change=lambda t: t.replace("    print(json.dumps({'run': req.get('run'), 'stopped': True}))",
@@ -1259,8 +1246,6 @@ class KeyHostExpiredLogin(Base):
                 self.assertNotIn('expired-login', self.saved()['lessons'])
 
     def test_the_control_status_is_not_on_the_fake_hosts_command_line(self):
-        """Catches: the 401 or 500 readable in /proc from the fake host's arguments, so a driver can answer the
-        control without the helper's reply (R3)"""
         peek = ("seen = b''.join(line for pid, line in cmdlines().items() if pid in fake_hosts())\n"
                 "        out = ask('POST', '/v1/runs', {'ticket': req['ticket']})\n"
                 "        if b'\\x00401\\x00' in seen or b'\\x00401\\n' in seen:\n"

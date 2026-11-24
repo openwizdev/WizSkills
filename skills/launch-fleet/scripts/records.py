@@ -24,13 +24,31 @@ def first(body):
     return next((line.strip() for line in body.splitlines() if line.strip()), '')
 
 
+def empty_map(repo, field):
+    return json.dumps({'repo': repo, field: {}}, separators=(',', ':'))
+
+
+def missing_state_message(repo):
+    return (f'records: private routing file LAUNCH_FLEET_STATE is missing; '
+            f'create it outside the checkout with {empty_map(repo, "threads")}')
+
+
+def out_of_reach(repo, state_set=True, runs=None):
+    if state_set or not repo:
+        return 'thread discovery is out of reach'
+    create = f'LAUNCH_FLEET_STATE ({empty_map(repo, "threads")})'
+    if runs is UNSET:
+        create += f' or LAUNCH_FLEET_RUNS ({empty_map(repo, "runs")})'
+    return f'thread discovery is out of reach; set {create} to an absolute private JSON file outside the checkout'
+
+
 def private_state(repo):
     path = os.environ.get('LAUNCH_FLEET_STATE')
     if not path:
         return {}
     source = Path(path)
     if not source.is_absolute():
-        raise ValueError('private state needs an absolute path')
+        raise ValueError('LAUNCH_FLEET_STATE must be an absolute path outside the checkout')
     value = json.loads(source.read_text(), object_pairs_hook=unique)
     if (not isinstance(value, dict) or set(value) != {'repo', 'threads'} or value['repo'] != repo
             or not isinstance(value['threads'], dict)
@@ -65,10 +83,10 @@ def discover():
         return None
 
 
-def choose(key, matches, state, threads):
+def choose(key, matches, state, threads, repo=None, state_set=True, runs=None):
     saved = state.get(key)
     if threads is None:
-        return (saved, None) if saved else (None, 'thread discovery is out of reach')
+        return (saved, None) if saved else (None, out_of_reach(repo, state_set, runs))
     if len(matches) > 1:
         return None, 'two threads match ' + key
     found = matches[0]['id'] if matches else None
@@ -98,11 +116,12 @@ def driver_runs(repo):
         return UNREADABLE
 
 
-def builder_thread(n, branch, threads, state, runs=None):
+def builder_thread(n, branch, threads, state, runs=None, repo=None, state_set=True):
     if runs is UNREADABLE:
         return None, 'the private runs file is unreadable'
     if runs is MISSING:
-        return None, 'the private run map LAUNCH_FLEET_RUNS was not restored from the private state'
+        suffix = f'; create it outside the checkout with {empty_map(repo, "runs")}' if repo else ''
+        return None, 'the private run map LAUNCH_FLEET_RUNS was not restored from the private state' + suffix
     if isinstance(runs, dict) and str(n) in runs:
         return f'run:{n}', None
     saved = state.get(f'builder:{n}')
@@ -111,9 +130,10 @@ def builder_thread(n, branch, threads, state, runs=None):
     matches = [t for t in threads or [] if isinstance(t.get('title'), str)
                and t['title'].startswith(f'#{n}: ')
                and (branch is None or t.get('branch') == branch)]
-    found, error = choose(f'builder:{n}', matches, state, threads)
+    found, error = choose(f'builder:{n}', matches, state, threads, repo=repo, state_set=state_set, runs=runs)
     if runs is UNSET and error == f'no thread matches builder:{n}':
-        error += ', and no private run map LAUNCH_FLEET_RUNS was restored'
+        suffix = f' (create outside the checkout with {empty_map(repo, "runs")})' if repo else ''
+        error += ', and no private run map LAUNCH_FLEET_RUNS was restored' + suffix
     return found, error
 
 
@@ -136,7 +156,7 @@ def review_keys(state):
     return keys
 
 
-def reviewer_thread(n, commit, threads, state, claim=None, retired=(), key=None):
+def reviewer_thread(n, commit, threads, state, claim=None, retired=(), key=None, repo=None, state_set=True):
     key = key or str(n)
     saved = state.get(f'review:{key}:claim:{claim}')
     if saved:
@@ -145,7 +165,7 @@ def reviewer_thread(n, commit, threads, state, claim=None, retired=(), key=None)
     pull = f'(?i:{re.escape(key)})' if '#' in key else f'#{n}'
     pattern = re.compile(rf'Review {pull} at ([0-9a-f]{{1,40}})')
     matches = [t for t in threads or [] if (m := pattern.fullmatch(t.get('title') or '')) and commit.startswith(m[1])]
-    return choose(f'review:{key}:{commit}', matches, state, threads)
+    return choose(f'review:{key}:{commit}', matches, state, threads, repo=repo, state_set=state_set)
 
 
 def reviewer_run(n, runs):
@@ -155,7 +175,7 @@ def reviewer_run(n, runs):
     return None, f'no live private driver run for reviewer #{n}'
 
 
-def annotate(world, repo, private, threads, state):
+def annotate(world, repo, private, threads, state, state_set=True):
     runs = driver_runs(repo)
     state = review_keys(state)
 
@@ -186,7 +206,8 @@ def annotate(world, repo, private, threads, state):
                     line = line.replace('review failed ', 'review given up ', 1)
             branch = re.fullmatch(r'start checked, branch ([A-Za-z0-9._/-]+)', line)
             if not legacy and (line == 'started' or branch):
-                c['resolvedThread'], c['recordError'] = builder_thread(obj['number'], branch[1] if branch else None, threads, state, runs)
+                c['resolvedThread'], c['recordError'] = builder_thread(
+                    obj['number'], branch[1] if branch else None, threads, state, runs, repo=repo, state_set=state_set)
             review = re.fullmatch(rf'(review started|re-check sent|review told again|review given up) ({SHA})(?:: .+)?', line)
             if review:
                 kind, commit = review.groups()
@@ -226,7 +247,8 @@ def annotate(world, repo, private, threads, state):
                 elif driver_review and not legacy and not any(record.get('givenUp') for record in span):
                     c['resolvedThread'], c['recordError'] = reviewer_run(obj['number'], runs)
                 elif not legacy and not driver_review:
-                    c['resolvedThread'], c['recordError'] = reviewer_thread(obj['number'], start, threads, routes, start_claim, retired, key)
+                    c['resolvedThread'], c['recordError'] = reviewer_thread(
+                        obj['number'], start, threads, routes, start_claim, retired, key, repo=repo, state_set=state_set)
                 if c.get('resolvedThread') in retired:
                     c['recordError'] = 'reviewer was already given up on this pull request'
                 if any(record.get('givenUp') for record in span):
@@ -357,8 +379,22 @@ def main():
         return isinstance(x, list) and any(needed(v) for v in x)
     try:
         state = private_state(repo)
+    except FileNotFoundError:
+        print(missing_state_message(repo), file=sys.stderr)
+        return 2
+    except ValueError as error:
+        if 'absolute path' in str(error):
+            print(f'records: private routing state could not be read: {error}', file=sys.stderr)
+        else:
+            print('records: private routing state could not be read', file=sys.stderr)
+        return 2
+    except (OSError, KeyError, TypeError):
+        print('records: private routing state could not be read', file=sys.stderr)
+        return 2
+    try:
         threads = discover() if os.environ.get('LAUNCH_FLEET_GITHUB_ONLY') != '1' and needed(world) else None
-        json.dump(annotate(world, repo, private == 'true', threads, state), sys.stdout)
+        json.dump(annotate(world, repo, private == 'true', threads, state,
+                           state_set=bool(os.environ.get('LAUNCH_FLEET_STATE'))), sys.stdout)
     except (OSError, ValueError, KeyError, TypeError):
         print('records: private routing state could not be read', file=sys.stderr)
         return 2

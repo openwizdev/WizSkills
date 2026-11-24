@@ -374,6 +374,56 @@ scenario('D4 a controller that lost its lease records its handoff while the new 
   assert.equal(r.status, 0, r.stderr);
   assert.equal(JSON.parse(r.stdout).holder.run, 'night-r9');
 });
+scenario('D7 an unconfirmed write is distinct from a pre-write refusal, and recovery finds a stored index or claim without duplicating', w => {
+  const realGh = join(here, 'fixtures/gh-switch.mjs');
+  const wrapGh = join(w.dir, 'bin/gh');
+  rmSync(wrapGh, {force: true});
+  writeFileSync(wrapGh, `#!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
+const stateFile = process.env.HUNTR_FAKE_STATE;
+const args = process.argv.slice(2);
+const r = spawnSync(process.execPath, [${JSON.stringify(realGh)}, ...args], {env: process.env, encoding: 'utf8'});
+const state = JSON.parse(readFileSync(stateFile, 'utf8'));
+if (args[0] === 'issue' && args[1] === 'comment' && state.losePostResponse) {
+  delete state.losePostResponse;
+  writeFileSync(stateFile, JSON.stringify(state));
+  process.stderr.write('synthetic connection reset after store\\n');
+  process.exit(1);
+}
+if (args[0] === 'issue' && args[1] === 'comment' && state.failNextRead) {
+  delete state.failNextRead;
+  state.readFailures = 1;
+  writeFileSync(stateFile, JSON.stringify(state));
+}
+if (r.stdout) process.stdout.write(r.stdout);
+if (r.stderr) process.stderr.write(r.stderr);
+process.exit(r.status ?? 1);
+`, {mode: 0o755});
+  w.state.comments = [{id: 100, ...on}];
+  const index = w.file('index.md', 'Hunt record index for night-lost: 1 parts, sha256 ' + 'a'.repeat(64) + '\n');
+  w.state.readFailure = true;
+  const preRefusal = w.run(lease, ['record', 'night-lost', index]);
+  assert.equal(preRefusal.status, 2);
+  assert.doesNotMatch(preRefusal.stderr, /unconfirmed write:/);
+  assert.equal(w.state.comments.length, 1);
+  w.state.readFailure = false;
+  w.state.losePostResponse = true;
+  const lostIndex = w.run(lease, ['record', 'night-lost', index]);
+  assert.equal(lostIndex.status, 2);
+  assert.match(lostIndex.stderr, /unconfirmed write:.*read back/i);
+  assert.equal(w.state.comments.length, 2, 'remote stored the index once');
+  const storedId = w.state.comments[1].id;
+  const recovered = w.run(lease, ['record', 'night-lost', index]);
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.deepEqual(JSON.parse(recovered.stdout), {holder: null, comment: storedId, already: true});
+  assert.equal(w.state.comments.length, 2, 'no duplicate index posted');
+  w.state.failNextRead = true;
+  const lostClaim = w.run(lease, ['claim', 'night-claim']);
+  assert.equal(lostClaim.status, 2);
+  assert.match(lostClaim.stderr, /unconfirmed write:.*status/i);
+  assert.equal(JSON.parse(w.run(lease, ['status']).stdout).holder.run, 'night-claim');
+});
 
 scenario('L11 legacy thread-bearing lease remains held by its run until release or expiry', w => {
   w.state.comments = [{id: 100, ...on}, {id: 101, created_at: at(-10),

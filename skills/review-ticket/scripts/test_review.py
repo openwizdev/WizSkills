@@ -956,6 +956,17 @@ class Review(unittest.TestCase):
         out = self.run_helper("check", self.file("r.md", example[1]), "--repo", SKILLS, "--pr", "7")
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
 
+    def test_the_recheck_guides_example_keeps_its_blockers_class(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("review_module", HELPER)
+        review = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(review)
+        md = r"```md\n(VERDICT: (?:CHANGES|APPROVE) at ([0-9a-f]{40})\n.*?)```"
+        first = re.search(md, (HELPER.parent.parent / "SKILL.md").read_text(), re.S)
+        again = re.search(md, (HELPER.parent.parent / "references" / "re-checks.md").read_text(), re.S)
+        problems = review.check(again[1], DESCRIPTION, "re-check", again[2], review.parse(first[1]))
+        self.assertEqual(problems, [])
+
     def test_record_author_row_is_parsed_whole(self):
         row = "| Record authors | `example[bot]`, `owner` |\n"
         for name, bad in {"missing comma": "| Record authors | `example[bot]` `owner` |\n",

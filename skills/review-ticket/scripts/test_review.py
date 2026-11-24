@@ -1588,5 +1588,83 @@ class CommentPass(unittest.TestCase):
         self.assertEqual((code, len(out.splitlines())), (2, 1), out)
         self.assertTrue(out.startswith("refused: "), out)
 
+
+RULES = ("# Review rules\n\n## Never flag\n\n- style-only renames in tests: declined 4, 2026-11-20\n\n"
+         "## Path rules\n\n- `src/export/**`: an export never overwrites an existing file\n"
+         "- `docs/*.md`: every page links back to the index\n- `**/cli.rs`: every flag has help text\n\n"
+         "## Severity examples\n\n- Blocking: an export silently replaces the last one\n")
+
+
+class ReviewRules(unittest.TestCase):
+    """The rules command: Never flag classes skip planted findings; Path rules apply by glob, from the base only."""
+
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.repo)])
+        self.git("init", "-q", "-b", "main")
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Builder", "-c", "user.email=b@example.com",
+                        *args], check=True, capture_output=True)
+
+    def commit(self, files, branch):
+        for name, text in files.items():
+            (self.repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / name).write_text(text, encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", branch)
+        self.git("branch", "-f", branch)
+
+    def rules(self, base_files, head_files, *findings):
+        self.commit({"README.md": "pantry\n", **base_files}, "base")
+        self.commit(head_files, "head")
+        args = [a for f in findings for a in ("--finding", f)]
+        out = subprocess.run([sys.executable, "-I", str(HELPER), "rules", "--base", "base", "--head", "head", *args],
+                             text=True, capture_output=True, timeout=60, cwd=self.repo)
+        return out.returncode, out.stdout.splitlines(), out.stdout + out.stderr
+
+    CHANGED = {"src/export/zip/write.rs": "fn write() {}\n", "src/cli.rs": "fn main() {}\n",
+               "tests/export.rs": "fn renamed() {}\n"}
+
+    def test_a_never_flag_class_skips_its_planted_finding(self):
+        # catches: a reviewer reporting a class the owner already declined.
+        code, lines, out = self.rules({"docs/agents/review-rules.md": RULES}, self.CHANGED,
+                                      "Style-only renames in tests", "unchecked error")
+        self.assertEqual(code, 0, out)
+        self.assertIn("never flag: style-only renames in tests (declined 4, 2026-11-20)", lines)
+        self.assertIn("skip: Style-only renames in tests", lines)
+        self.assertIn("report: unchecked error", lines)
+
+    def test_without_the_file_the_same_finding_is_reported(self):
+        # catches: a missing file being read as an empty skip list that still drops findings, or as an error.
+        code, lines, out = self.rules({}, self.CHANGED, "style-only renames in tests")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(lines, ["review rules: none at base", "report: style-only renames in tests"])
+
+    def test_path_rules_apply_only_where_a_changed_path_matches(self):
+        # catches: every path rule applied to every pull request, `*` crossing folders, `**/` needing a folder.
+        code, lines, out = self.rules({"docs/agents/review-rules.md": RULES},
+                                      {**self.CHANGED, "docs/guide/page.md": "x\n"})
+        self.assertEqual(code, 0, out)
+        rules = [x for x in lines if x.startswith("path rule: ")]
+        self.assertEqual(rules, ["path rule: `src/export/**`: an export never overwrites an existing file",
+                                 "path rule: `**/cli.rs`: every flag has help text"])
+
+    def test_the_head_cannot_change_its_own_rules(self):
+        # catches: reading the rules from the pull request's head, where the change itself could silence a finding.
+        widened = RULES.replace("## Path rules", "- unchecked error: declined 1, 2026-11-21\n\n## Path rules")
+        code, lines, out = self.rules({"docs/agents/review-rules.md": RULES},
+                                      {**self.CHANGED, "docs/agents/review-rules.md": widened}, "unchecked error")
+        self.assertEqual(code, 0, out)
+        self.assertIn("report: unchecked error", lines)
+
+    def test_an_unreadable_line_refuses(self):
+        # catches: a mistyped rule silently ignored, so its findings come back.
+        bad = RULES.replace("declined 4, 2026-11-20", "declined often")
+        code, lines, out = self.rules({"docs/agents/review-rules.md": bad}, self.CHANGED, "unchecked error")
+        self.assertEqual(code, 2, out)
+        self.assertIn("style-only renames in tests: declined often", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -746,6 +746,7 @@ class Pacer(unittest.TestCase):
                    '    return plain(deadline)\n'
                    'post.publishing = publishing\n'
                    'sys.exit(0 if post.settle([1, 0.0], time.time() + 120) else 3)\n' % str(waiting))
+        before = time.time()
         published = patched(w, publish)
         self.addCleanup(published.kill)
         waited = time.monotonic() + 20
@@ -760,7 +761,11 @@ class Pacer(unittest.TestCase):
         self.assertEqual(len(w.writes()), 1)
         self.assertEqual(published.communicate(timeout=60), ('', ''))
         self.assertEqual(published.returncode, 0)
-        self.assertEqual(len([p for p in folder.iterdir() if p.name.startswith('writes.json.hold.')]), 1)
+        code, after = w.run('post.py', 'comment', REPO, 12, 'launch-fleet: starting')
+        self.assertEqual(code, 1)
+        self.assertTrue(after.startswith('refused: write paced, retry after '), after)
+        self.assertGreaterEqual(after.split(' ')[-1], post_stamp(before + 120))
+        self.assertEqual(len(w.writes()), 1)
 
     def test_a_writer_paused_past_its_window_at_the_final_scan_is_refused(self):
         w = paced_world(self)
@@ -801,6 +806,7 @@ class Pacer(unittest.TestCase):
                         '        sys.stdin.readline()\n'
                         '    return plain(entry, until)\n'
                         'post.settle = settle\n' % str(got_403))
+        before = time.time()
         settler = subprocess.Popen([sys.executable, '-I', '-c', RUNNER, str(HERE / 'post.py'), settler_code,
                                     'comment', REPO, '12', 'launch-fleet: starting'], stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=w.env, cwd=w.dir)
@@ -828,7 +834,6 @@ class Pacer(unittest.TestCase):
         while time.monotonic() < waited and not scanned.exists() and writer.poll() is None:
             time.sleep(0.05)
         self.assertTrue(scanned.exists())
-        before = time.time()
         s_out, s_err = settler.communicate('go\n', timeout=60)
         self.assertEqual((settler.returncode, s_err), (1, ''))
         self.assertTrue(s_out.startswith('unknown: ') and 'secondary' in s_out, s_out)

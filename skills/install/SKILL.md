@@ -22,12 +22,35 @@ Take them from that line to setup, then down the onboarding road to their first 
 - **Credentials stay out of the conversation.** Never ask for a key or token in chat or put one in a prompt, argument, URL, log, issue or file. Keys go only through the tools' protected setup, into owner-only state on this computer or CloudRoom's secret store. Save the user's exact words only under [open-development](https://github.com/openwizdev/WizSkills/blob/main/contracts/open-development.v1.md).
 - **Uncertain is never retried blindly.** Run the same command again: it reads its record first and never repeats an effect.
 - **Read JSON and exit codes, never a screen.** Run installed programs by absolute path: there is no `openwiz` on `PATH`; it is `<root>/current/openwiz`. Python 3.9+ only: no Rust, Cargo, Node, npm or source build; if a step seems to need one, stop and say so.
-- **CloudRoom is optional.** It is one place agents can run, beside this computer and boat.dev, never a requirement or a done condition: its install and sign-in run only when the user picks it. There is no setup page or local server: setup is the commands below.
+- **CloudRoom is optional (from OpenWiz 0.1.1).** It is one place agents can run, beside this computer and boat.dev, never a requirement or a done condition: its install and sign-in run only when the user picks it. There is no setup page or local server: setup is the commands below.
 - **Free now; other charges are separate.** OpenWiz is free now. Paid plans come later. CloudRoom and model charges are separate and not included. More Cloud Credits are CloudRoom's own plan, from `https://cloudroom.dev/pricing`. Referral verification is unavailable. No referral is applied. Never add a code or parameter to that link.
 
 ## Where your agents run
 
-Ask this first, before step 1, in these exact words, with the three as equal choices and no recommendation:
+For a new install, start step 1 by reading the release you install, GitHub's Latest:
+
+```sh
+curl -sS --proto '=https' -o /dev/null -w '%{redirect_url}\n' https://github.com/openwizdev/OpenWiz/releases/latest
+```
+
+It prints `https://github.com/openwizdev/OpenWiz/releases/tag/<tag>`. Use that `<tag>` (such as `v0.1.1`) below, and `<version>` for it without the `v` (`0.1.1`). With no `/tag/` in it, GitHub has no Latest release yet: use the tag the user names, never a guess.
+
+Use the chosen release's `<version>` for this check, on both a new install and a resume:
+
+```sh
+case '<version>' in
+  0.1.0) printf '%s\n' cloudroom-only ;;
+  *) printf '%s\n' choose-host ;;
+esac
+```
+
+For `cloudroom-only`, offer only CloudRoom. Say:
+
+> This computer and boat.dev need OpenWiz 0.1.1 or later, which isn't released yet. Today, OpenWiz 0.1.0 runs agents on CloudRoom only.
+
+Offer to follow the [0.1.0 install instructions](https://github.com/openwizdev/WizSkills/blob/maint/0.2/skills/install/SKILL.md) (WizSkills v0.2.x), with its hand-started fleets at the end, or wait for 0.1.1. In those instructions, when 0.1.0 is the release you install, always take the pinned `v0.1.0` fetch in step 2, never its `download`. Stop this skill here.
+
+For `choose-host` (OpenWiz 0.1.1 or later), ask in these exact words, with the three as equal choices and no recommendation:
 
 > Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom.
 
@@ -39,10 +62,21 @@ Keep `<root>` (default `$HOME/.local/lib/openwiz`), and the `build` and `state_r
 
 Two roads lead past step 4. **The same session (the default):** step 4 has you read the running agent's installed `install/SKILL.md` and carry on at step 5 in this chat, with the host, release, `<root>`, `<build>` and `<state>` it already holds; you don't start here. **A new session** (after step 4's fallback restart, or when the chat ended), whatever the user said ("continue", the continuation message, or the one line again), starts here: find the first unfinished step and resume there. Use only the installed files, never a temporary clone: a new session doesn't have it.
 
-Read the host from the continuation message: `local` means this computer, `boat` means boat.dev, and `cloud` means CloudRoom. Read the release from it too: `release <tag>` names the release step 1 chose (its `<tag>`, and `<version>` without the `v`); use that release, never GitHub's Latest again, everywhere below. Use that choice for the setup checks below and carry it to step 6.1. If the message has no host, reuse the answer from this chat or `host.agents` if it is already recorded in the owner-only first-fleet state. Ask the host question only if you have none of those.
+Read the release from the continuation message: `release <tag>` names the release step 1 chose (its `<tag>`, and `<version>` without the `v`); use that release, never GitHub's Latest again, everywhere below.
+
+If `<root>/current` exists, read the installed build before choosing a host:
 
 ```sh
 <root>/current/openwiz --build-identity
+```
+
+If the continuation message has no `release <tag>`, read Latest in **Where your agents run** to get the release you will install. Run the release check there with that release's `<version>`. On `cloudroom-only`, follow that path and stop. On `choose-host`, recover or ask for the host below.
+
+Read the host from the continuation message: `local` means this computer, `boat` means boat.dev, and `cloud` means CloudRoom. Use that choice for the setup checks below and carry it to step 6.1. If the message has no host, reuse the answer from this chat or `host.agents` if it is already recorded in the owner-only first-fleet state. Ask the host question only if you have none of those.
+
+No `<root>/current`, or `--build-identity` does not read the `<version>` of the release you install: resume at step 1. For a matching installed build, run the setup checks:
+
+```sh
 build=$(readlink <root>/current); state=${build%/service/builds/*}
 OPENWIZ_STATE_DIR="$state" python3 -I -B "$build"/runtime/setup/setup.py check --state-dir "$state"
 OPENWIZ_STATE_DIR="$state" python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir "$state"
@@ -51,20 +85,11 @@ grep -m1 '^version:' ~/.claude/skills/install/SKILL.md "${CODEX_HOME:-$HOME/.cod
 
 `<root>` is `$HOME/.local/lib/openwiz` unless the user chose another. Take the first that holds:
 
-- No `<root>/current`, or `--build-identity` does not read the `<version>` of the release you install (step 1 reads it): resume at step 1.
 - `status` does not read the GitHub account, or the user chose CloudRoom and `check` does not read `cloudroom_login_verified`: resume at step 3. `identity_unreadable` means GitHub gave no clear answer: wait a minute and run `status` again; it clears.
 - The running agent's `install/SKILL.md` is missing, or does not read `version: <version of this skill>`, this file's own `version:` line at the top: resume at step 4. When that agent's folder holds every skill the verified build ships (each folder in `"$build"/runtime/skills`), each with an `.openwiz-skill` whose second line is the `source` that `--build-identity` prints (an older copy names another), run only step 4's overwrite block, which needs no OpenWiz clone. When they are missing, copying them needs OpenWiz's installer again: step 1's `git clone` into a new temporary folder (it installs nothing), then all of step 4. Either way, step 4 ends by carrying on in this session; the restart is again only its fallback.
 - Otherwise resume at step 5; for a first fleet already under way, at step 6 with `first_fleet.py next`. If it prints `Next: where.`, follow step 6.1 with the recovered choice.
 
 ## 1. Preflight
-
-First read the release you install, GitHub's Latest:
-
-```sh
-curl -sS --proto '=https' -o /dev/null -w '%{redirect_url}\n' https://github.com/openwizdev/OpenWiz/releases/latest
-```
-
-It prints `https://github.com/openwizdev/OpenWiz/releases/tag/<tag>`. Use that `<tag>` (such as `v0.1.1`) below, and `<version>` for it without the `v` (`0.1.1`). To install 0.1.0, stop this skill and follow the [0.1.0 install instructions](https://github.com/openwizdev/WizSkills/blob/maint/0.2/skills/install/SKILL.md) (WizSkills v0.2.x) instead, with its hand-started fleets at the end. 0.1.0 is no longer Latest, so in its step 2 always take its pinned `v0.1.0` fetch, never its `download`. With no `/tag/` in it, GitHub has no Latest release yet: use the tag the user names, never a guess.
 
 ```sh
 openwiz=<private temporary folder>/openwiz
@@ -301,13 +326,20 @@ Done when the machine plan approval is on the spec and `spec` saved it.
 
 ### 8. Launch
 
-Preview with `first_fleet.py launch --spec <N>`. It reads the spec's machine plan approval for this grill, the host the user chose (a driver host, this machine or boat.dev or another, only once its host setting is merged) and launch-fleet's own frontier, then prints the start's effects and one question that names the host and says it can cost money. Show the effects and ask that question as printed. This is the one yes before the fleet starts; never skip it, even though the cost was shown at **Where agents run**. On the yes, run it with `--yes --confirm <the digest it printed>`. It refuses if anything changed since the preview: preview again and ask again. It starts nothing itself: it saves the yes and names launch-fleet's own start path. With CloudRoom, follow launch-fleet's Launch section ([references/launch.md](../launch-fleet/references/launch.md)): the project's two loops, the GitHub messages question (a gate, in its own words), then "Starting one": the spec's loop, its private loop-map entry, read back, and the `launch-fleet: fleet active, loop fleet-<S>` record, read back. With a driver host, follow the local heartbeat handoff as `launch` printed it, including the heartbeat preview and approval. Then run `first_fleet.py launch --spec <N>` again. For CloudRoom it says **The fleet starting** when the activation record reads back. For a driver host it confirms the active heartbeat. Never start the fleet a second way.
+Preview with `first_fleet.py launch --spec <N>`. It reads the spec's machine plan approval for this grill, the host the user chose (a driver host, this machine or boat.dev or another, only once its host setting is merged) and launch-fleet's own frontier, then prints the start's effects and one question that names the host and says it can cost money. Show the effects and ask that question as printed. This is the one yes before the fleet starts; never skip it, even though the cost was shown at **Where agents run**. On the yes, run it with `--yes --confirm <the digest it printed>`. It refuses if anything changed since the preview: preview again and ask again.
 
-Done when `launch` reads back the CloudRoom activation record or the active heartbeat for the chosen driver host.
+- **This machine:** the yes hands the fleet to launch-fleet's session runner (`session.py run`, [Hosts without CloudRoom](../launch-fleet/references/launch.md#hosts-without-cloudroom)) in this chat, with no timer and no heartbeat. Say **The fleet starting** as `launch` prints it, then let the session run: its tick lines show here, and `launch` waits until it stops. It prints where the session stopped and, unless the spec is done, the session's own stop lines as they are, its `carry on:` command among them: show them to the user unchanged. After them it prints onboarding's carry on, `first_fleet.py launch --spec <N> --carry-on`: that is the one you run here. It runs the same session command again with the fleet's saved driver folder and GitHub-only, and saves where it stops, so `progress` shows the latest stop; never run the session's own `carry on:` command by hand in onboarding. The session merges nothing: at an approved, green pull request it stops with exit 3 and its lines say how to merge it and carry on; the user merges it (or launch-fleet's Merging steps do), then run `launch --spec <N> --carry-on`. On any other **needs you**, handle that line with launch-fleet, then run `launch --spec <N> --carry-on`. A refused carry-on keeps the fleet's start: run it again once the other session or heartbeat tick ends. If the session was refused (another session or a heartbeat already runs the spec), the yes is withdrawn: preview again and ask again.
+- **The heartbeat, the opt-in:** after a session that did not finish the spec, `launch` offers the heartbeat for keeping the fleet going after the chat closes. Ask only that, once. Only on the user's yes, run `first_fleet.py launch --spec <N> --heartbeat`, show its job preview and question, and on a second yes to that, run it with `--heartbeat --yes --confirm <its digest>`. Without their yes, install nothing.
+- **CloudRoom:** it starts nothing itself: it saves the yes and names launch-fleet's own start path. Follow launch-fleet's Launch section ([references/launch.md](../launch-fleet/references/launch.md)): the project's two loops, the GitHub messages question (a gate, in its own words), then "Starting one": the spec's loop, its private loop-map entry, read back, and the `launch-fleet: fleet active, loop fleet-<S>` record, read back. Then run `first_fleet.py launch --spec <N>` again: it says **The fleet starting** when the activation record reads back.
+- **Another driver host (boat.dev or another):** follow the local heartbeat handoff as `launch` printed it, including the heartbeat preview and approval. Then run `first_fleet.py launch --spec <N>` again: it confirms the active heartbeat.
+
+Never start the fleet a second way.
+
+Done when this machine's session has run and stopped, `launch` reads back the CloudRoom activation record, or it confirms the active heartbeat for another driver host.
 
 ### 9. Watch
 
-Run `first_fleet.py progress --spec <N> --openwiz <root>/current/openwiz` when the user asks or a moment may have happened, and say each moment's line once: **A pull request opened**, then **Reviewed**. A count is never a merge. When a pull request merges, run `first_fleet.py first-merge --pr <number>`: it reads the merge back from GitHub and prints **Merged** and **The closing offer**; say both. On the answer: stay as the project's orchestrator (launch-fleet), start a new project (this road again, with a new state file), or keep building (the grill again, for the next idea).
+Run `first_fleet.py progress --spec <N> --openwiz <root>/current/openwiz` when the user asks or a moment may have happened, and say each moment's line once: **A pull request opened**, then **Reviewed**. On this machine it first says where this chat's session last stopped (after a carry-on, where that one stopped), with the session's own stop lines and onboarding's `launch --spec <N> --carry-on`, and whether the heartbeat is installed. A count is never a merge. When a pull request merges, run `first_fleet.py first-merge --pr <number>`: it reads the merge back from GitHub and prints **Merged** and **The closing offer**; say both. On the answer: stay as the project's orchestrator (launch-fleet), start a new project (this road again, with a new state file), or keep building (the grill again, for the next idea).
 
 Done when the user has heard the closing offer.
 

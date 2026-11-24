@@ -65,13 +65,18 @@ class Project:
         bin_dir.mkdir()
         (bin_dir / 'gh').write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, HERE / 'fixtures/fake_github.py'))
         (bin_dir / 'gh').chmod(0o755)
+        (self.dir / 'stubs').mkdir()
+        for name in ('room-cli', 'claude', 'codex', 'boat'):
+            (self.dir / 'stubs' / name).write_text('#!/bin/sh\necho "stub: no %s in tests" >&2\nexit 1\n' % name)
+            (self.dir / 'stubs' / name).chmod(0o755)
         self.world = self.dir / 'world.json'
         self.world.write_text(json.dumps({'repo': REPO, 'me': 'openwiz[bot]', 'fleet_md': FLEET_MD, 'next_id': 5000,
                                           'comments': {}, 'writes': [], 'faults': {}}))
         self.env = dict(self.git_env, OPENWIZ_ADAPTERS=str(self.dir / 'adapters'), LAUNCH_FLEET_RUNS=str(self.runs),
-                        FAKE_DRIVER_LOG=str(self.log), PATH='%s:%s' % (bin_dir, os.environ['PATH']),
+                        FAKE_DRIVER_LOG=str(self.log), PATH='%s:%s:%s' % (bin_dir, self.dir / 'stubs', os.environ['PATH']),
                         FAKE_WORLD=str(self.world), LAUNCH_FLEET_HARNESS='Claude Code',
                         LAUNCH_FLEET_MODEL='Opus 5.5 Medium', LAUNCH_FLEET_SKILLS='launch-fleet@' + VERSION)
+        self.env['XDG_STATE_HOME'] = str(self.dir / 'state')
         self.env.update(runpy.run_path(str(HERE / 'fixtures/git_origin.py'))['env'](self.dir, {REPO: FLEET_MD}))
 
     def git(self, *args):

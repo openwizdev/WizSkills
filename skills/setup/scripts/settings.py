@@ -22,10 +22,15 @@ import sys
 
 FILES = ('issue-tracker.md', 'triage-labels.md', 'domain.md', 'fleet.md')
 TABLES = ('Builder', 'Builder for small tickets', 'Reviewer for Claude-built', 'Reviewer for GPT-built')
+OPTIONAL_TABLES = ('Reviewer for Gemini-built',)
 SECTIONS = TABLES + ('Test commands', 'CI checks', 'Standing merge rules', 'GitHub identity')
 FLAGS = ('provider', 'model', 'reasoning-level')
-FAMILY = {'claude-code': 'claude', 'codex': 'gpt'}
-REVIEWS = {'Reviewer for Claude-built': 'claude', 'Reviewer for GPT-built': 'gpt'}
+FAMILY = {'claude-code': 'claude', 'codex': 'gpt', 'antigravity': 'gemini'}
+REVIEWS = {
+    'Reviewer for Claude-built': 'claude',
+    'Reviewer for GPT-built': 'gpt',
+    'Reviewer for Gemini-built': 'gemini',
+}
 ROLES = ('needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix')
 # The whole Record authors cell, as the review and launch-fleet readers take it.
 LOGIN = r'`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`'
@@ -270,7 +275,7 @@ def fleet(text, problems):
     for title in SECTIONS if table is None else SECTIONS[len(TABLES):]:
         if title not in (exact if title == 'GitHub identity' else found):
             problems.append('fleet.md: no ## %s section' % title)
-    for title in TABLES:
+    for title in TABLES + OPTIONAL_TABLES:
         body = found.get(title)
         if body is None:
             continue

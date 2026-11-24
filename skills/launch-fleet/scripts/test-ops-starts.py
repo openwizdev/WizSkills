@@ -1040,6 +1040,16 @@ class ModelsTable(unittest.TestCase):
             self.pass_settings(older_with_gemini, built_by='antigravity')['review_start'],
             claude,
         )
+        run = self.flags(claude_builder_gemini_reviewer, 'review_of_gemini_built')
+        self.assertEqual(
+            (run.returncode, run.stdout),
+            (0, '--provider claude-code --model claude-opus-5-5 --reasoning-level medium\n'),
+        )
+        run = self.flags(gemini_builder_claude_reviewer, 'fix_round_for_gemini_builder')
+        self.assertEqual(
+            (run.returncode, run.stdout),
+            (0, '--provider antigravity --model gemini-4-neon --reasoning-level medium\n'),
+        )
 
 
 if __name__ == '__main__':

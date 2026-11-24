@@ -2397,8 +2397,6 @@ class Drops(unittest.TestCase):
         self.assertEqual(self.enqueues(w), [{'enqueue': 'PR_synthetic7', 'head': HEAD}])
 
     def test_3131_null_before_commit_removal_requeues_newer_approved_head(self):
-        # catches: tied() returning pending forever when a conflict removal's beforeCommit reads null,
-        # blocking a newer approved head from being enqueued (#3131, #3159).
         green = [run_of('SUCCESS', '2026-11-22T10:10:00Z')]
         approve = dict(comment(4010, 'VERDICT: APPROVE at %s\n\nNext: none open.' % HEAD),
                        created_at='2026-11-22T10:15:00Z')

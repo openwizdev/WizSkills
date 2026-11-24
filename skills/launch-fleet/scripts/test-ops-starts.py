@@ -478,7 +478,7 @@ class Starts(unittest.TestCase):
         refused = copy.deepcopy(self.world['builders'][0])
         refused.update(ticket=9003, admission='capacity')
         slow = copy.deepcopy(self.world['reviews'][0])
-        slow.update(pr=9103, ticket=9004, reviewer_available=False)
+        slow.update(pr=9103, ticket=9004, closes=[9004], reviewer_available=False)
         self.world['builders'].insert(0, refused)
         self.world['reviews'].insert(0, slow)
         entries = self.plan()

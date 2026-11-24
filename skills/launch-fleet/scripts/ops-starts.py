@@ -76,6 +76,7 @@ LOOP = re.compile(r'[A-Za-z0-9_-]+')
 ROLES = (('Orchestrator', 'orchestrator'), ('Builder', 'builder'), ('Reviewer', 'reviewer'),
          ('Small builder', 'small_builder'), ('Fixer', 'fixer'))
 ID = re.compile(r'[A-Za-z0-9._-]+')
+VERDICT = re.compile(r'VERDICT: (?:APPROVE|CHANGES) at ([0-9a-f]{40})')
 STARTS = {'fleet_thread': ('roles', 'orchestrator'), 'builder': ('roles', 'builder'),
           'small_builder': ('roles', 'small_builder'), 'review_of_claude_built': ('reviews', 'claude'),
           'review_of_gpt_built': ('reviews', 'gpt'), 'fix_round_for_claude_builder': ('fixers', 'claude'),
@@ -313,9 +314,13 @@ def check_review(c, models):
     require(c['closes'] == [c['ticket']], 'the pull request does not close exactly its ticket')
     require(type(c['default_branch']) is str and c['default_branch'] != '' and c['base'] == c['default_branch'],
             'the pull request does not target the default branch')
-    require(type(c['subject']) is str and re.search(r'\bgreen\b', c['subject']) is not None,
+    require(type(c['subject']) is str and re.search(r'\bgreen\b', c['subject'], re.IGNORECASE) is not None,
             'the head is not a hand-back (no "green" in its subject)')
-    require(c['verdict'] is None, 'the pull request already has a verdict')
+    verdict = c['verdict']
+    if verdict is not None:
+        match = VERDICT.fullmatch(verdict) if type(verdict) is str else None
+        require(match is not None, 'the latest verdict is malformed')
+        require(match[1] != head, 'the pull request already has a verdict at the current head')
     spans = c['spans']
     require(type(spans) is list and all(type(x) is dict and set(x) == {'head', 'given_up'} for x in spans),
             'reviewer history unreadable')
@@ -392,6 +397,8 @@ def _operation(c, review, action, subject, selected, world, history, planned, en
             and (r['repository'], r['spec'], r['ticket']) == (repo, spec, ticket)]
     same = sorted((r for r in mine if all(r[k] == v for k, v in identity.items())), key=lambda r: r['sequence'])
     bound = binding_digest(dict(identity, sequence=0), selected, world['rule'])
+    evidence = dict(c['evidence'], digest=bound)
+    effects._validate(effects.SCHEMA['$defs']['evidence'], evidence)
     latest = same[-1] if same else None
     if latest is not None and latest['rule'] == world['rule'] and latest['evidence'][0]['digest'] == bound:
         intent = latest
@@ -400,8 +407,6 @@ def _operation(c, review, action, subject, selected, world, history, planned, en
     else:
         # First start, or the settled earlier intent's settings/rule changed: a new operation.
         sequence = 1 + max([r['sequence'] for r in mine if r['approval'] == c['approval']], default=0)
-        evidence = dict(evidence_class=c['evidence']['evidence_class'], source=c['evidence']['source'],
-                        digest=bound)
         intent = dict(identity, schema='openwiz.ops-dispatch.v1', kind='intent', created_at=world['pass']['now'],
                       id='pending', rule=world['rule'], evidence=[evidence], sequence=sequence)
         intent['operation_key'] = effects.operation_key(intent)

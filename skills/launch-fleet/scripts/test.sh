@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=967
+CASES=968
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -3754,6 +3754,9 @@ expect 'approach: a host driver'"'"'s refusal asks the orchestrator once, never 
 look #13: start refused: one-way door under a host driver; the orchestrator decides how #13 is built
 EOF
 again 'approach: a host driver'"'"'s refusal, once looked at, is quiet' 'say(13; 1302; "11:40"; "launch-fleet: look: start refused: one-way door under a host driver; the orchestrator decides how #13 is built")' -- check < /dev/null
+expect 'approach: a host driver'"'"'s refusal with host.py'"'"'s leading refused: prefix still asks once' 0 check.json 'merge12 | say(13; 1301; "11:30"; "launch-fleet: start refused: refused: one-way door under a host driver: synthetic")' -- check <<EOF
+look #13: start refused: one-way door under a host driver; the orchestrator decides how #13 is built
+EOF
 
 # Two starts due in one batch: #13 (spec #10) and #70 (approved on its own).
 BATCH='merge12 | own_approval(70; 7002; "10:00")'

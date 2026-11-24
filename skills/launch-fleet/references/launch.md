@@ -4,6 +4,8 @@ Read this when a plan graph is approved, when a spec moves to fresh wakes, or wh
 
 ## Launch (the orchestrator, when a plan graph is approved: by its machine approval, or by the user)
 
+The orchestrator launches a fleet when a plan graph is approved, by its machine approval (J203, no human reply) or by the user: check the approval is recorded, make sure the project's two loops exist, ask about GitHub's messages, and start the spec's fleet loop. Follow [references/launch.md](launch.md). Done when both loops exist, the approver of `fleet.md`'s Approval rules row for installing the repository webhook (the user when that section is absent) said yes or no to GitHub's messages, and the spec has a read-back `launch-fleet: fleet active, loop fleet-<S>` record (or a `look` saying why not).
+
 1. **Check the approval is recorded** on the spec issue, as `to-tickets` writes it. No record, no fleet. A machine approval needs no human reply (J203): re-run to-tickets' checks on the plan as it stands (its step 4, with the record's grill link, revision number, date and changed line) and launch only when `approve.py` prints exactly the record.
 2. **Make sure the project has its two loops.** They drive every fleet in the project. `room-cli loop list` shows them if they exist. If not, create them. The safety net, a check every 10 minutes until GitHub's messages are on (step 3), then every 30:
 
@@ -99,6 +101,8 @@ Legacy records keep their existing takeover semantics during rollout.
 **A message for a spec with its own loop** prints `wake fleet #<S>: room-cli loop run fleet-<S>`. Resolve the handle through the private loop file (`LAUNCH_FLEET_LOOPS`, key `S`) with `scripts/route.py loop`, run `room-cli loop run <that id>` once and do nothing else for that spec; never post the real id. If the file or key is missing (`route.py tick` prints `wake fleet #<S>: unresolved`), write nothing on GitHub, as any record there comes back through the same webhook and wakes the same missing handle again: name it in the loop report (`--action "fleet #<S> loop handle unresolved"`) and leave the spec to its own loop. If CloudRoom refuses the run, record nothing: the spec's loop still runs on its own. A spec whose record names no loop, or a loop another spec in the same wake names, gets no line and waits for its loop.
 
 ## Hosts without CloudRoom
+
+Use the [local heartbeat](launch.md#hosts-without-cloudroom) to launch a fleet and to handle each driver-started `launch-fleet` wake. It polls GitHub every ten minutes, and “run the fleet now” runs the same check immediately. Follow the same claim and merge gates. Use the driver's `wake` for delivery. Loop reporting and thread archiving are no-ops on this path.
 
 After checking the spec's recorded approval, run the fleet in the open chat with the session runner. This is the default local launch. Run the commands from a checkout of the project with `origin` set. Use the installed launch-fleet skill's absolute folder, the approved harness and model IDs, and the absolute `OPENWIZ_ADAPTERS` folder from host setup. GitHub CLI, Git, jq, Python 3 and the harness must be available to the signed-in user.
 

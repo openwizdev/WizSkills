@@ -23,7 +23,7 @@ class PublicRecords(unittest.TestCase):
         section = contract.split('## Fleet records\n')[1].split('\n**Finding')[0]
         forms = re.findall(r'^\| `[^`]+` \| `([^`]+)` \|$', section, re.M)
         self.assertEqual(len(forms), 9)
-        table = (HERE.parent / 'SKILL.md').read_text().split('## Records\n')[1].split('\n## ')[0]
+        table = (HERE.parent / 'references/records.md').read_text().split('## Records\n')[1].split('\n## ')[0]
         for form in forms:
             with self.subTest(form=form):
                 self.assertIn('`' + form.removeprefix('launch-fleet: ') + '`', table.replace('`launch-fleet: ', '`'))
@@ -681,7 +681,7 @@ class Dispatcher(unittest.TestCase):
 
 
     def test_the_archive_settles_with_the_flow_inputs_and_never_archives_on_a_refused_settlement(self):
-        lines = (HERE.parent / 'SKILL.md').read_text().splitlines()
+        lines = (HERE.parent / 'references/merging.md').read_text().splitlines()
         row = next(x for x in lines if x.startswith('| `archive #N` |'))
         merge = next(x for x in lines if x.startswith('4. **Merge:**'))
         self.assertIn("private flow files after `--`", merge)

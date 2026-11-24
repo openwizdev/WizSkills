@@ -50,9 +50,9 @@ For `cloudroom-only`, offer only CloudRoom. Say:
 
 Offer to follow the [0.1.0 install instructions](https://github.com/openwizdev/WizSkills/blob/maint/0.2/skills/install/SKILL.md) (WizSkills v0.2.x), with its hand-started fleets at the end, or wait for 0.1.1. In those instructions, when 0.1.0 is the release you install, always take the pinned `v0.1.0` fetch in step 2, never its `download`. Stop this skill here.
 
-For `choose-host` (OpenWiz 0.1.1 or later), ask in these exact words, with the three as equal choices and no recommendation:
+For `choose-host` (OpenWiz 0.1.1 or later), ask in [teach.md](teach.md)'s "Where agents run" words, recommending **this computer** when you are Claude Code or Codex running on it (the person needs nothing new), otherwise **CloudRoom** when `room-cli` is on `PATH`, otherwise **this computer**; the person's answer always wins:
 
-> Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom.
+> Where should your AI helpers work? I recommend `<recommended place>`, because `<why, in a few plain words>`. The choices are this computer (with the Claude Code or Codex you already use), boat.dev (a service that runs them online) or CloudRoom (an app that runs them for you). Shall I go with `<recommended place>`?
 
 Keep the answer for the whole install: it is the host the onboarding road's step 1 records. **This computer** and **boat.dev** skip every CloudRoom step: CloudRoom's install and sign-in, and its rows in step 3. **CloudRoom** runs them all, exactly as written. Carry that answer in step 4's restart message. In a resumed session, recover the choice as Resume says. Moving to CloudRoom later runs step 3's CloudRoom rows, then continues where the user was.
 

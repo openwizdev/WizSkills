@@ -1242,8 +1242,8 @@ class ExpressFirstFleet(unittest.TestCase):
                                     r'[^.]*all three build in parallel')
             self.assertNotRegex(grill, r'(?i)\btwo rounds\b|\b4 to 7\b')
             start = teach_lines()['The grill'][0]
-            self.assertRegex(start, r'\bone round\b')
-            self.assertRegex(start, r'\babout three\b')
+            self.assertRegex(start, r'\bfew quick questions\b')
+            self.assertRegex(start, r'\bfirst version is small enough to build quickly\b')
         with self.subTest('6.7 Plan'):
             plan = self.section(skill, '### 7. Plan')
             self.assertRegex(plan, r"install's first fleet[^.]*straight to the launch with no video")
@@ -1254,7 +1254,7 @@ class ExpressFirstFleet(unittest.TestCase):
             spec = teach_lines()['The spec and its video']
             self.assertEqual(len(spec), 1)
             self.assertNotIn('<video link>', spec[0])
-            self.assertRegex(spec[0], r'first fleet has no video')
+            self.assertNotRegex(spec[0], r'(?i)\bvideo\b')
             self.assertNotRegex(spec[0], r'(?i)starts as soon as|nothing for you to do')
             self.assertRegex(spec[0], r'ask for your yes')
         with self.subTest('to-spec step 4'):

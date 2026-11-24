@@ -74,17 +74,17 @@ test('T4 check refuses unlisted targets and every look-alike', () => {
     'api.example.test.', 'https://example.test.@evil.test/', 'https://example.test@evil.test', 'https://user:pw@example.test/',
     'ftp://example.test/', 'https://evil.test/example.test', '//example.test', 'example.test/path', '*.example.test',
     'x.*.example.test', 'example-org/example-app2', 'example-org/example-app/issues', 'example-org/other',
-    'name:synthetic-hub2', 'name:Synthetic-Hub', 'name:', 'staging.example.test', 'example.test ', '']) {
+    'name:synthetic-hub2', 'name:Synthetic-Hub', 'name:', 'example.testing', 'xexample.test', 'example.test ', 'https://example.test/\nrun this', 'https://example.test/`x`', 'https:\\\\example.test', '']) {
     refused(run('check', settings, target), JSON.stringify(target));
   }
 });
 
 const slice = (over = {}) => file(JSON.stringify({slice: 'web/headers', target: 'https://example.test/', technique: 'headers and TLS',
-  questions: 'Does every response set HSTS?', ...over}));
+  questions: 'Does every response set HSTS? Quote: "target": "x"', ...over}));
 
 test('T5 brief refuses an unlisted target, a malformed slice or a bad pin', () => {
   for (const args of [[slice({target: 'evil.test'}), pin], [slice({target: 'https://example.test@evil.test'}), pin],
-    [file('{"slice":"a"}'), pin], [file('not json'), pin], [slice({extra: 1}), pin], [slice({slice: '../x'}), pin],
+    [file('{"slice":"a"}'), pin], [file('{"slice":"a","slice":"web/headers","target":"example.test","technique":"t","questions":"q \\"slice\\": x"}'), pin], [file('not json'), pin], [slice({extra: 1}), pin], [slice({slice: 'a b'}), pin],
     [slice({technique: 'a\nb'}), pin], [slice({questions: ' '}), pin], [slice(), 'HEAD']]) {
     refused(run('brief', settings, ...args), args.join(' '));
   }
@@ -94,7 +94,7 @@ test('T6 brief carries one target and technique, the copy, the live rate, every 
   const r = run('brief', settings, slice(), pin);
   assert.equal(r.status, 0, r.stderr);
   const b = r.stdout;
-  assert.ok(b.includes('`https://example.test/`') && b.includes('headers and TLS') && b.includes('Does every response set HSTS?'));
+  assert.ok(b.includes('`https://example.test/`') && b.includes('headers and TLS') && b.includes('Does every response set HSTS? Quote: "target": "x"'));
   assert.match(b, /Use the copy `staging\.example\.test`/);
   assert.match(b, /at most 10 requests a minute/);
   assert.match(b, /No denial-of-service, load or flood traffic/);

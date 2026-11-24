@@ -12,8 +12,6 @@ const HOST = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z
 const NAME = /^name:[A-Za-z0-9_-]+$/;
 const HEADER = 'Target|Kind|Copy|Live rate|Files to';
 
-// One target as {type, value}: a host (lowercased), a `*.host` wildcard, an owner/repo
-// (lowercased), a `name:<word>`, or for queries an http(s) URL reduced to its host.
 function parse(target, query) {
   if (typeof target !== 'string' || /[\s\x00-\x1f\x7f`\\]/.test(target)) return null;
   if (NAME.test(target)) return {type: 'name', value: target};
@@ -77,8 +75,7 @@ function check(file, target) {
   return match;
 }
 
-// The keys of a JSON text's top-level object, each time it appears, so a repeated key is seen.
-function topKeys(text) {
+function topLevelKeysWithRepeats(text) {
   const keys = [];
   for (let i = 0, depth = 0; i < text.length; i++) {
     const ch = text[i];
@@ -96,7 +93,7 @@ function topKeys(text) {
 function slice(file) {
   let s, text;
   try { text = readFileSync(file, 'utf8'); s = JSON.parse(text); } catch { fail('unreadable slice'); }
-  const keys = topKeys(text);
+  const keys = topLevelKeysWithRepeats(text);
   if (new Set(keys).size !== keys.length) fail('unreadable slice: repeated key');
   const line = v => typeof v === 'string' && v.trim() && !/[\r\n]/.test(v);
   if (!s || typeof s !== 'object' || Array.isArray(s) || Object.keys(s).sort().join(',') !== 'questions,slice,target,technique'

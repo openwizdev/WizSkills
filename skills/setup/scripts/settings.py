@@ -32,8 +32,10 @@ LOGIN = r'`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`'
 CELL = re.compile(r'\s*%s(?:\s*,\s*%s)*\s*' % (LOGIN, LOGIN))
 MODELS_HEADER = ['Role', 'Harness', 'Model', 'Effort', '`room-cli thread spawn` flags']
 MODEL_ROWS = ('Orchestrator', 'Builder', 'Reviewer', 'Small builder', 'Fixer')
+FALL_BACK = 'Reviewer fall-back'
 ID = r'[A-Za-z0-9._-]+'
 FLAGS_CELL = re.compile(r'`--provider (%s) --model (%s(?:/%s)*) --reasoning-level (%s)`' % (ID, ID, ID, ID))
+NO_MODEL_CELL = re.compile(r'`--provider (?!--)(%s) --reasoning-level (?!--)(%s)`' % (ID, ID))
 ROSTER_HEADER = ['Name', 'Kind', 'Driver', 'Roles', 'Writes as']
 KINDS = ('harness', 'host', 'bot')
 ROSTER_ROLES = ('orchestrator', 'builder', 'reviewer', 'helper')
@@ -74,7 +76,8 @@ def cells(line):
     return [cell.strip() for cell in line.strip()[1:-1].split('|')] if line.strip().endswith('|') else None
 
 
-def models(text):
+def models(text, fall_backs=False):
+    # DATA LOSS: install's choose rewrites a table this accepts to five rows, so fall-back rows need the opt-in.
     lines = text.split('\n')
     headings = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Models']
     if not headings:
@@ -93,12 +96,18 @@ def models(text):
         raise ValueError(["the header is not the contract's"])
     body = [cells(row) for row in rows[2:]]
     names = [row[0] if row and len(row) == 5 else None for row in body]
+    at = next((n for n, name in enumerate(names) if name and name.startswith(FALL_BACK)), len(names))
+    if fall_backs and at < len(names):
+        if at < 3 or names[at:] != ['%s %d' % (FALL_BACK, n) for n in range(1, len(names) - at + 1)]:
+            raise ValueError(['fall-back rows not %s 1, 2 and so on, in order, after every other row' % FALL_BACK])
+        names = names[:at]
     if names[:3] != list(MODEL_ROWS[:3]) or names[3:] not in ([], ['Small builder'], ['Fixer'],
                                                              ['Small builder', 'Fixer']):
         raise ValueError(['rows not Orchestrator, Builder, Reviewer, then optional Small builder, Fixer'])
     found, broken = {}, []
     for role, harness, model, effort, flags in body:
         match = FLAGS_CELL.fullmatch(flags)
+        bare = NO_MODEL_CELL.fullmatch(flags) if fall_backs else None
         if harness == 'follows Builder':
             found[role] = None
             if role not in MODEL_ROWS[3:]:
@@ -109,10 +118,10 @@ def models(text):
             broken.append('%s: unfilled' % role)
         elif not (harness and model and effort):
             broken.append('%s: Harness, Model and Effort need names' % role)
-        elif not match:
+        elif not (match or bare):
             broken.append('%s: the flags are not one exact `--provider --model --reasoning-level`' % role)
         else:
-            found[role] = match.groups()
+            found[role] = match.groups() if match else (bare.group(1), None, bare.group(2))
     if broken:
         raise ValueError(broken)
     return found
@@ -252,7 +261,7 @@ def fixer(body, problems):
 def fleet(text, problems):
     found, exact = sections(text), sections(text, exact=True)
     try:
-        table = models(text)
+        table = models(text, fall_backs=True)
     except ValueError as error:
         problems.extend('fleet.md: Models: %s' % line for line in error.args[0])
         table = False

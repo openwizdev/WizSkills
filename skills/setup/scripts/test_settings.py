@@ -389,7 +389,6 @@ class Check(unittest.TestCase):
         self.assertEqual(code, 5, 'never falls back to the older tables past a broken Models table\n' + out)
 
     def test_fall_back_rows_and_flags_with_no_model_read_back_verified(self):
-        # catches: the check refusing a table launch-fleet's reader starts reviews and builders from.
         starts = reader(SKILLS / 'launch-fleet/scripts/ops-starts.py')
         builder, follows = choice('Builder', 'claude-code', 'syn-claude-1'), '| Fixer | follows Builder | | | |\n'
         small = '| Small builder | follows Builder | | | |\n'
@@ -434,7 +433,7 @@ class Check(unittest.TestCase):
             'no number': (fallen(first.replace('fall-back 1', 'fall-back')), order),
             'before the Fixer': (NEW.replace(follows, first + '\n' + follows), order),
             'before the Reviewer': (NEW.replace(reviewer, first + '\n' + reviewer), order),
-            'no Reviewer': (fallen(first).replace(reviewer, ''), order),
+            'no Reviewer': (fallen(first).replace(reviewer, ''), others),
             'another name': (fallen(no_model('Tester')), others),
             'another name after a fall-back': (fallen(first, no_model('Tester')), order),
             'a name in another case': (fallen(first.replace('Reviewer fall', 'reviewer fall')), others),
@@ -475,7 +474,6 @@ class Check(unittest.TestCase):
         self.assertIn('fleet.md: Fixer: Claude: no --model', out.splitlines())
 
     def test_install_never_rewrites_a_table_whose_rows_it_would_drop(self):
-        # catches: install's choose rewriting an accepted table to its five rows, deleting the fall-back rows.
         launch = reader(SKILLS / 'install/scripts/first_fleet.py')
         follows = '| Fixer | follows Builder | | | |\n'
         for text in (NEW.replace(follows, follows + choice('Reviewer fall-back 1', 'codex', 'syn-codex-2') + '\n'),

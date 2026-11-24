@@ -1845,8 +1845,8 @@ EOF
 expect "cross-repository PR: its review line names its own repository (#2792)" 0 check.json "pr31 | $TOOLS" -- check <<EOF
 review synthetic-owner/synthetic-tools#31 for #12 at $S31: first review
 EOF
-expect "cross-repository PR: its CI failed line names its own repository (#2792)" 0 check.json "pr31 | pull(31; .rollup = \"FAILURE\" | .checks[1].conclusion = \"FAILURE\") | $TOOLS" -- check <<EOF
-CI failed synthetic-owner/synthetic-tools#31 for #12 at $S31: tell its builder, thread thr_syn12
+expect "cross-repository PR: its CI failed line names its own repository (#2792)" 0 check.json "pr31 | issue(12; .comments = []) | pull(31; .rollup = \"FAILURE\" | .checks[1].conclusion = \"FAILURE\") | $TOOLS" -- check <<EOF
+CI failed synthetic-owner/synthetic-tools#31 for #12 at $S31: tell its builder
 EOF
 expect "cross-repository PR: its reopen line names its own repository (#2792)" 0 check.json "store31 | $TOOLS | pr_say(31; 3103; \"11:20\"; \"launch-fleet: re-test starting \(sha(31))\") | pull(31; .state = \"CLOSED\" | .closedAt = at(\"11:20\"))" -- check <<EOF
 reopen synthetic-owner/synthetic-tools#31 for #12 at $S31: closed by its re-test (comment 3103) and not reopened; reopen it

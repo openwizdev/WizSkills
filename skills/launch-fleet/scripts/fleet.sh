@@ -1959,7 +1959,7 @@ def ticket_lines_now($s): . as $t
          # closes right after claiming. Any other closure is someone'"'"'s choice.
          | select($cl != null and ($cl.r | test("^re-test starting ")) and ($q.closedAt | type) == "string"
                   and $q.closedAt >= $cl.at and (($q.closedAt | fromdateiso8601) - ($cl.at | fromdateiso8601)) < 600)
-         | "reopen #\($q.number) for #\($t.number) at \($q.headRefOid): closed by its re-test (comment \($cl.id)) and not reopened; reopen it" end)
+         | "reopen \($q | pr_ref) for #\($t.number) at \($q.headRefOid): closed by its re-test (comment \($cl.id)) and not reopened; reopen it" end)
     end;
 
 # A builder from before the fleet thread (ClosedWiz#192): the fleet asks the

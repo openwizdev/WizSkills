@@ -815,14 +815,16 @@ def stage(driver, into, openwiz=None, relay=None):
 def isolation(box, *more, script=False):
     """What runs in the probe's child before it becomes the driver, or Refused when this system can't isolate it."""
     abi, arch = landlock_abi(), SYSCALLS.get(os.uname().machine)
-    if abi < 1 or arch is None:
-        raise Refused('this system cannot isolate the expired-login probe (it needs Linux Landlock on x86_64 or '
+    if abi < 6 or arch is None:
+        # SECURITY: below ABI 6 Landlock has no signal scope, so a boxed process could kill the probe before its
+        # cleanup runs, or signal any other process of the user's
+        raise Refused('this system cannot isolate the expired-login probe (it needs Linux Landlock ABI 6 or later, '
+                      'whose signal scope keeps the driver from signalling anything outside its box, on x86_64 or '
                       'aarch64), so it runs nothing: check that lesson on a machine that can')
     # Each right this kernel's Landlock knows: refer (2), truncate (3), device ioctl (5); TCP (4) and the
     # abstract-socket and signal scopes (6) on top of the seccomp filter's ban on every socket.
-    fs = (1 << 13) - 1 | (1 << 13 if abi >= 2 else 0) | (1 << 14 if abi >= 3 else 0) | (1 << 15 if abi >= 5 else 0)
-    attr = struct.pack('=QQQ', fs, 3 if abi >= 4 else 0, 3 if abi >= 6 else 0)
-    attr = attr[:8 if abi < 4 else 16 if abi < 6 else 24]
+    fs = (1 << 16) - 1
+    attr = struct.pack('=QQQ', fs, 3, 3)
     python = [os.path.join(sys.base_prefix, x) for x in ('bin', 'lib', 'lib64')]
     python.append(os.path.dirname(os.path.realpath(sys.executable)))
     reads = sorted({str(Path(x).resolve()) for x in SYSTEM + tuple(python) + ('/proc',) if os.path.isdir(x)})
@@ -855,6 +857,15 @@ def isolation(box, *more, script=False):
     return enter
 
 
+
+
+def subreaper():
+    # SECURITY: what the driver starts in a session of its own stays this process's child only while it is the
+    # subreaper; the kernel must confirm that (PR_GET_CHILD_SUBREAPER), or the cleanup could miss a worker
+    libc, flag = ctypes.CDLL(None, use_errno=True), ctypes.c_int(0)
+    if libc.prctl(36, 1, 0, 0, 0) != 0 or libc.prctl(37, ctypes.byref(flag), 0, 0, 0) != 0 or flag.value != 1:
+        raise Refused('the expired-login probe could not become the subreaper of what the driver starts, so it '
+                      'could not stop all of it: it runs nothing')
 
 
 def key_route(a):
@@ -893,6 +904,9 @@ def cmd_lesson(a):
     # its first turn on a sign-in line. Nothing of the caller's reaches it: an empty home, a PATH of the stand-in,
     # the driver's fixtures and the system's programs, its own state folder, and no other variable; and the
     # kernel lets it reach nothing outside its box (isolation, above).
+    state['lessons'].pop('expired-login', None)
+    mark_clock(state)
+    save(a.state, state)
     if not field('harness', a.harness):
         raise Refused('%s is not a harness name: 1 to 40 lower-case letters, digits or -, starting with a letter'
                       % a.harness)
@@ -910,9 +924,6 @@ def cmd_lesson(a):
         save(a.state, state)
         print('expired-login not run: skipped on your no')
         return 3
-    state['lessons'].pop('expired-login', None)
-    mark_clock(state)
-    save(a.state, state)
     driver = os.path.abspath(a.driver)
     expected = render('sign_in_next', harness=a.harness, host=state['host'])
     code, answer, left = probe_start(a, state, driver, openwiz, 401)
@@ -938,6 +949,7 @@ def probe_start(a, state, driver, openwiz, status):
     host = None
     try:
         enter = isolation(box)
+        subreaper()
         for name in ('bin', 'home', 'state'):
             (box / name).mkdir(mode=0o700)
         ran = box / 'ran'
@@ -952,7 +964,6 @@ def probe_start(a, state, driver, openwiz, status):
                                         '/usr/local/bin', '/usr/bin', '/bin']),
                'HOME': str(box / 'home'), 'LANG': 'C.UTF-8',
                'OPENWIZ_%s_STATE' % state['host'].upper().replace('-', '_'): str(box / 'state')}
-        ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER: keep what it starts
         if openwiz is not None:
             host = FakeHost(openwiz, box / 'relay', status)
         request = {'repository': 'example-user/%s-driver-kit' % state['host'], 'ticket': 1,

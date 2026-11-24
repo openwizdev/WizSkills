@@ -70,7 +70,7 @@
 # stderr; never 1, which a CloudRoom loop's check takes as "nothing due".
 
 die() { printf 'fleet.sh: %s\n' "$*" >&2; exit 2; }
-usage() { die "usage: fleet.sh [check | frontier | holds | every | claim NUMBER COMMENT_ID | wake NUMBER... | spec NUMBER]"; }
+usage() { die "usage: fleet.sh [check | frontier | holds | every | claim NUMBER|OWNER/NAME#NUMBER COMMENT_ID | wake NUMBER... | spec NUMBER]"; }
 is_number() { case $1 in '' | *[!0-9]*) return 1 ;; esac; }
 
 cmd=${1:-check}
@@ -111,8 +111,24 @@ if [ "$cmd" = overload ]; then
 fi
 case $cmd in
   check | frontier | holds | every) [ $# -eq 0 ] || usage ;;
-  claim) [ $# -eq 2 ] && is_number "$1" && [ ${#1} -le 9 ] && is_number "$2" || usage
-    CLAIM_N=$1 CLAIM_ID=$2 WAKE=$1 ;;
+  claim) [ $# -eq 2 ] && is_number "$2" || usage
+    case $1 in
+      *#*)
+        CLAIM_REPO=${1%#*} CLAIM_N=${1#*#}
+        case $CLAIM_REPO in
+          */*/* | /* | */ | *[!A-Za-z0-9._/-]*) usage ;;
+          ?*/?*)
+            case ${CLAIM_REPO%%/*} in -* | *- | *[!A-Za-z0-9-]*) usage ;; esac
+            case ${CLAIM_REPO#*/} in . | ..) usage ;; esac ;;
+          *) usage ;;
+        esac
+        is_number "$CLAIM_N" && [ ${#CLAIM_N} -le 9 ] || usage
+        case $CLAIM_N in 0*) usage ;; esac ;;
+      *)
+        is_number "$1" && [ ${#1} -le 9 ] || usage
+        CLAIM_REPO='' CLAIM_N=$1 WAKE=$1 ;;
+    esac
+    CLAIM_ID=$2 ;;
   wake) [ $# -gt 0 ] || usage
     for n in "$@"; do is_number "$n" && [ ${#n} -le 9 ] || usage; done
     WAKE=$(printf '%s\n' "$@" | sort -n -u) ;;
@@ -972,8 +988,11 @@ specs() {
   # A full check shares its REST pool with the archive scan in singles().
   # A targeted wake/claim, and a fleet thread's check, have no archive scan
   # and hydrate their specs here.
-  case $cmd in wake | claim | spec)
-    hydrate "$TMP/specs.json" || die "can't read REST issue facts for the GitHub query Spec" ;;
+  case $cmd in
+    wake | spec)
+      hydrate "$TMP/specs.json" || die "can't read REST issue facts for the GitHub query Spec" ;;
+    claim)
+      [ -n "${CLAIM_REPO:-}" ] || hydrate "$TMP/specs.json" || die "can't read REST issue facts for the GitHub query Spec" ;;
   esac
 }
 
@@ -1247,8 +1266,10 @@ def rec: (first_line | sub("^\\s+"; "")) as $l
   | if ($l | startswith("launch-fleet:")) then ($l | ltrimstr("launch-fleet:") | sub("^\\s+"; "") | sub("\\s+$"; "")) else null end;
 # In a claim ($W.claim: {n, id}), the claimed issue'"'"'s records are those older
 # than the claim: the state the claim was made against.
-def records: .number as $n | [.comments.nodes[] | {id: .databaseId, at: .createdAt, edited: (.updatedAt // .createdAt), thread: .resolvedThread, archiveThread: .archiveThread, error: .recordError, closed: (.reviewClosed // false), givenUp: (.givenUp // false), r: (.body | rec)} | select(.r != null)
-  | select($W.claim == null or $n != $W.claim.n or .id < $W.claim.id)];
+def item_repo: (.repository.nameWithOwner // $W.repo) | ascii_downcase;
+def records: .number as $n | item_repo as $r
+  | [.comments.nodes[] | {id: .databaseId, at: .createdAt, edited: (.updatedAt // .createdAt), thread: .resolvedThread, archiveThread: .archiveThread, error: .recordError, closed: (.reviewClosed // false), givenUp: (.givenUp // false), r: (.body | rec)} | select(.r != null)
+  | select($W.claim == null or $n != $W.claim.n or $r != (($W.claim.repo // $W.repo) | ascii_downcase) or .id < $W.claim.id)];
 def plain: [.comments.nodes[] | select((.body | rec) == null)];
 def kind($k): select(.r | test("^(" + $k + ")(\\b|$)"));
 def age: $W.now - (.at | fromdateiso8601);
@@ -2112,8 +2133,8 @@ def holds: check | select(startswith("note #"));
 # still live (starting, started, start checked; or for a review, starting,
 # started or re-check sent on the same commit), no builder or pull request is
 # there, and the item is still due. A claim keeps its item as it is edited on.
-def claim: $W.claim.n as $n | $W.claim.id as $id
-  | ([candidates | select(.t.number == $n)] | first) as $c
+def claim: $W.claim.n as $n | $W.claim.id as $id | $W.claim.repo as $crepo
+  | (if $crepo == null then [candidates | select(.t.number == $n)] | first else null end) as $c
   | if $c != null then
       ([$c.t.comments.nodes[] | select(.databaseId == $id)] | first) as $cm
       | if $cm == null then "error can'"'"'t find comment \($id) on #\($n)"
@@ -2163,21 +2184,34 @@ def claim: $W.claim.n as $n | $W.claim.id as $id
             else "withdraw #\($n): it is not on the frontier now" end end
     else
       ([candidates | .s as $s | .t | select(.state == "OPEN" and is_approved($s)) | . as $t
-        | .closedByPullRequestsReferences.nodes[] | select(.number == $n and .state == "OPEN") | {p: ., t: $t, s: $s}] | first) as $x
-      | if $x == null then "error #\($n) is neither a ticket nor an open pull request of an approved ticket"
-        else ([$x.p.comments.nodes[] | select(.databaseId == $id)] | first) as $cm
-          | if $cm == null then "error can'"'"'t find comment \($id) on #\($n)"
+        | .closedByPullRequestsReferences.nodes[]
+        | select(.number == $n and .state == "OPEN" and item_repo == (($crepo // $W.repo) | ascii_downcase))
+        | {p: ., t: $t, s: $s}] | first) as $x
+      | if $x == null then
+          if $crepo == null then "error #\($n) is neither a ticket nor an open pull request of an approved ticket"
+          else "error \($crepo)#\($n) is not an open pull request of an approved ticket" end
+        else ($x.p.repository.nameWithOwner // "") as $prepo
+          | (if $crepo == null then "#\($n)" else "\($prepo)#\($n)" end) as $ref
+          | (if $prepo == "" or ($prepo | ascii_downcase) == $W.repo then "#\($n)" else "\($prepo)#\($n)" end) as $due_ref
+          | ([$x.p.comments.nodes[] | select(.databaseId == $id)] | first) as $cm
+          | if $cm == null then "error can'"'"'t find comment \($id) on \($ref)"
             elif (($cm.body | rec // "") | test("^review starting [0-9a-f]{40}$") | not) then
-              "error comment \($id) on #\($n) is not a \"launch-fleet: review starting <commit>\" claim"
+              "error comment \($id) on \($ref) is not a \"launch-fleet: review starting <commit>\" claim"
             else ($cm.body | rec | capture("(?<c>[0-9a-f]{40})").c) as $sha
-              | if $x.p.headRefOid != $sha then "withdraw #\($n): the head is now \($x.p.headRefOid)"
+              | if $x.p.headRefOid != $sha then "withdraw \($ref): the head is now \($x.p.headRefOid)"
                 else ([$x.p | records[] | select((.r | test("^(review starting|review started|re-check sent)\\b")) and (.r | names($sha)))]
                       | min_by(.id)) as $older
-                  | if $older != null then "withdraw #\($n): an older review claim: \"\($older.r)\""
-                    elif any($x.t | ticket_lines($x.s); startswith("review #\($n) for #\($x.t.number) at \($sha)")
-                                                        or startswith("re-check #\($n) for #\($x.t.number) at \($sha)"))
-                    then "go #\($n)"
-                    else "withdraw #\($n): it is not due a review at \($sha)" end end end end end;
+                  | if $older != null then "withdraw \($ref): an older review claim: \"\($older.r)\""
+                    else ($x.t | open_prs | map(select(.isDraft | not)) | first) as $first
+                    | if $first != null and $first.number == $n and ($first | item_repo) == ($x.p | item_repo)
+                         and any($x.t | ticket_lines($x.s);
+                                 startswith("review \($due_ref) for #\($x.t.number) at \($sha)")
+                                 or startswith("re-check \($due_ref) for #\($x.t.number) at \($sha)")
+                                 or ($due_ref != "#\($n)"
+                                     and (startswith("review #\($n) for #\($x.t.number) at \($sha)")
+                                          or startswith("re-check #\($n) for #\($x.t.number) at \($sha)"))))
+                      then "go \($ref)"
+                      else "withdraw \($ref): it is not due a review at \($sha)" end end end end end end;
 '
 
 # jqw [-j] PROGRAM: run PROGRAM on the world, with the shared rules; -j
@@ -2193,11 +2227,11 @@ jqw() {
 # world CHECKS LABELS SINGLES: what was read, as one JSON file.
 world() {
   jq -n --argjson now "$NOW" --arg default "$DEFAULT" --arg repo "$REPO" --slurpfile specs "$TMP/specs.json" \
-    --slurpfile checks "$1" --slurpfile labels "$2" --slurpfile singles "$3" --arg claim "${CLAIM_N:+$CLAIM_N $CLAIM_ID}" \
+    --slurpfile checks "$1" --slurpfile labels "$2" --slurpfile singles "$3" --arg claim "${CLAIM_N:+$CLAIM_N $CLAIM_ID}" --arg claim_repo "${CLAIM_REPO:-}" \
     --slurpfile followups "$TMP/followups.json" --arg spec "${SPEC:-}" --slurpfile authors "$TMP/authors.json" \
     '{now: $now, default: $default, repo: ($repo | ascii_downcase), specs: $specs[0], singles: $singles[0], checks: $checks[0], labels: $labels[0],
       followups: $followups[0], authors: $authors[0], writers: [], spec: (if $spec == "" then null else ($spec | tonumber) end),
-      claim: (if $claim == "" then null else ($claim | split(" ") | {n: (.[0] | tonumber), id: (.[1] | tonumber)}) end),
+      claim: (if $claim == "" then null else ($claim | split(" ") | {n: (.[0] | tonumber), id: (.[1] | tonumber), repo: (if $claim_repo == "" then null else $claim_repo end)}) end),
       fingerprints: {}, branches: {}, merged: [], prfiles: {}, active: [], links: {}, selected: null}' > "$TMP/world.json" || die "can't build the world"
 }
 
@@ -2756,7 +2790,7 @@ keep_read() {
   else rm -f "$pending"; fi
 }
 
-if [ "$cmd" = wake ] || [ "$cmd" = claim ]; then
+if [ "$cmd" = wake ] || { [ "$cmd" = claim ] && [ -z "${CLAIM_REPO:-}" ]; }; then
   items
   settings
   wake_world

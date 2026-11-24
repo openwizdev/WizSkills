@@ -57,6 +57,10 @@ def choice(role, provider, model, effort='medium'):
         role, provider, model, effort)
 
 
+def no_model(role):
+    return '| %s | Synthetic | Synthetic | Medium | `--provider antigravity --reasoning-level medium` |' % role
+
+
 MODELS = models(choice('Orchestrator', 'claude-code', 'syn-claude-1'), choice('Builder', 'claude-code', 'syn-claude-1'),
                 choice('Reviewer', 'codex', 'syn-codex-1'), '| Small builder | follows Builder | | | |',
                 '| Fixer | follows Builder | | | |')
@@ -383,6 +387,105 @@ class Check(unittest.TestCase):
         broken = FLEET.replace(OLDER, cases['order'][0][cases['order'][0].index('## Models'):].split('## Test')[0] + OLDER)
         code, out = self.check(self.project(**{'fleet.md': broken}))
         self.assertEqual(code, 5, 'never falls back to the older tables past a broken Models table\n' + out)
+
+    def test_fall_back_rows_and_flags_with_no_model_read_back_verified(self):
+        # catches: the check refusing a table launch-fleet's reader starts reviews and builders from.
+        starts = reader(SKILLS / 'launch-fleet/scripts/ops-starts.py')
+        builder, follows = choice('Builder', 'claude-code', 'syn-claude-1'), '| Fixer | follows Builder | | | |\n'
+        small = '| Small builder | follows Builder | | | |\n'
+        first, second = no_model('Reviewer fall-back 1'), choice('Reviewer fall-back 2', 'codex', 'vendor/syn-codex-2')
+        third = choice('Reviewer fall-back 3', 'claude-code', 'syn-claude-1')
+        rows = first + '\n' + second + '\n'
+        fleet = NEW.replace(builder, no_model('Builder')).replace(
+            choice('Reviewer', 'codex', 'syn-codex-1'), choice('Reviewer', 'claude-code', 'syn-claude-1'))
+        cases = {
+            'every row, as OpenWiz #2947': (fleet.replace(follows, follows + rows), 2),
+            'one fall-back': (NEW.replace(follows, follows + first + '\n'), 1),
+            'three fall-backs': (NEW.replace(follows, follows + rows + third + '\n'), 3),
+            'after Small builder': (NEW.replace(follows, rows), 2),
+            'after Fixer, no Small builder': (NEW.replace(small, '').replace(follows, follows + rows), 2),
+            'straight after Reviewer': (NEW.replace(small, '').replace(follows, rows), 2),
+            'no model, no fall-back': (NEW.replace(builder, no_model('Builder')), 0),
+            'no model on the Fixer': (NEW.replace(follows, no_model('Fixer') + '\n'), 0),
+        }
+        for name, (text, count) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(len(starts.read_models(text)['reviewer_fallbacks']), count)
+                code, out = self.check(self.project(**{'fleet.md': text}))
+                self.assertEqual((code, out), (0, 'Settings: verified (4 files).\n'))
+
+    def test_a_broken_fall_back_row_or_no_model_cell_is_refused_by_name(self):
+        builder, follows = choice('Builder', 'claude-code', 'syn-claude-1'), '| Fixer | follows Builder | | | |\n'
+        first, second = no_model('Reviewer fall-back 1'), choice('Reviewer fall-back 2', 'codex', 'syn-codex-2')
+        reviewer = choice('Reviewer', 'codex', 'syn-codex-1') + '\n'
+        order = ('fleet.md: Models: fall-back rows not Reviewer fall-back 1, 2 and so on, in order, '
+                 'after every other row')
+        others = 'fleet.md: Models: rows not Orchestrator, Builder, Reviewer, then optional Small builder, Fixer'
+        flags = 'fleet.md: Models: %s: the flags are not one exact `--provider --model --reasoning-level`'
+        fallen = lambda *rows: NEW.replace(follows, follows + ''.join(row + '\n' for row in rows))
+        cell = lambda flags: NEW.replace(builder, '| Builder | Synthetic | Synthetic | Medium | %s |' % flags)
+        cases = {
+            'misordered': (fallen(second, first), order),
+            'gap from 1 to 3': (fallen(first, second.replace('fall-back 2', 'fall-back 3')), order),
+            'starts at 2': (fallen(second), order),
+            'starts at 0': (fallen(first.replace('fall-back 1', 'fall-back 0')), order),
+            'repeated': (fallen(first, first), order),
+            'leading zero': (fallen(first.replace('fall-back 1', 'fall-back 01')), order),
+            'no number': (fallen(first.replace('fall-back 1', 'fall-back')), order),
+            'before the Fixer': (NEW.replace(follows, first + '\n' + follows), order),
+            'before the Reviewer': (NEW.replace(reviewer, first + '\n' + reviewer), order),
+            'no Reviewer': (fallen(first).replace(reviewer, ''), order),
+            'another name': (fallen(no_model('Tester')), others),
+            'another name after a fall-back': (fallen(first, no_model('Tester')), order),
+            'a name in another case': (fallen(first.replace('Reviewer fall', 'reviewer fall')), others),
+            'follows': (fallen('| Reviewer fall-back 1 | follows Builder | | | |'),
+                        'fleet.md: Models: Reviewer fall-back 1: only Small builder and Fixer may follow'),
+            'unfilled': (fallen(first.replace('antigravity', '<provider>')),
+                         'fleet.md: Models: Reviewer fall-back 1: unfilled'),
+            'empty name': (fallen(first.replace('| Synthetic | Synthetic |', '| | Synthetic |')),
+                           'fleet.md: Models: Reviewer fall-back 1: Harness, Model and Effort need names'),
+            'empty Model name, no --model': (NEW.replace(builder, no_model('Builder').replace(
+                'Synthetic | Synthetic | Medium', 'Synthetic | | Medium')),
+                'fleet.md: Models: Builder: Harness, Model and Effort need names'),
+            'fall-back flags': (fallen(first.replace('--reasoning-level', '--effort')), flags % 'Reviewer fall-back 1'),
+            'no value after --model': (cell('`--provider syn --model --reasoning-level medium`'), flags % 'Builder'),
+            'no value after --provider': (cell('`--provider --model --reasoning-level medium`'), flags % 'Builder'),
+            'option as the effort': (cell('`--provider syn --reasoning-level --model`'), flags % 'Builder'),
+            'no --reasoning-level': (cell('`--provider syn --model syn-1`'), flags % 'Builder'),
+            'provider only': (cell('`--provider syn`'), flags % 'Builder'),
+            'two spaces': (cell('`--provider syn  --reasoning-level medium`'), flags % 'Builder'),
+            'other order': (cell('`--reasoning-level medium --provider syn`'), flags % 'Builder'),
+            'trailing word': (cell('`--provider syn --reasoning-level medium --fast`'), flags % 'Builder'),
+            'slash in the provider': (cell('`--provider a/b --reasoning-level medium`'), flags % 'Builder'),
+            'no code span': (cell('--provider syn --reasoning-level medium'), flags % 'Builder'),
+            'no-model Reviewer of the Builder\'s family': (NEW.replace(reviewer, no_model('Reviewer').replace(
+                'antigravity', 'claude-code') + '\n'),
+                'fleet.md: Models: Reviewer: claude-code is not from another model family than the Builder'),
+        }
+        for name, (text, line) in cases.items():
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': text}))
+                self.assertEqual((code, out.splitlines()), (5, [line, 'Settings: refused (1 problems).']))
+
+    def test_an_older_fixer_row_still_needs_its_model(self):
+        fixer = ('## Fixer\n\n| Builder family | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
+                 '| --- | --- | --- | --- | --- |\n%s\n\n' % no_model('Claude'))
+        code, out = self.check(self.project(**{'fleet.md': FLEET.replace('## Test commands', fixer + '## Test commands')}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Fixer: Claude: no --model', out.splitlines())
+
+    def test_install_never_rewrites_a_table_whose_rows_it_would_drop(self):
+        # catches: install's choose rewriting an accepted table to its five rows, deleting the fall-back rows.
+        launch = reader(SKILLS / 'install/scripts/first_fleet.py')
+        follows = '| Fixer | follows Builder | | | |\n'
+        for text in (NEW.replace(follows, follows + choice('Reviewer fall-back 1', 'codex', 'syn-codex-2') + '\n'),
+                     NEW.replace(choice('Reviewer', 'codex', 'syn-codex-1'),
+                                 no_model('Reviewer').replace('antigravity', 'codex'))):
+            self.assertEqual(self.check(self.project(**{'fleet.md': text}))[0], 0)
+            with self.assertRaises(launch.Exit) as refused:
+                launch.models_change(text, ('claude-code', 'syn-claude-2', 'high'), {'harnesses': []},
+                                     reviewer=('codex', 'syn-codex-1', 'medium'))
+            self.assertIn('nothing recorded', str(refused.exception))
 
     def test_the_launch_reads_every_models_table_setup_verifies(self):
         launch = reader(SKILLS / 'install/scripts/first_fleet.py')

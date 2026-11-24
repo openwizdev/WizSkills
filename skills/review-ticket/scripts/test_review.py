@@ -1596,7 +1596,6 @@ RULES = ("# Review rules\n\n## Never flag\n\n- style-only renames in tests: decl
 
 
 class ReviewRules(unittest.TestCase):
-    """The rules command: Never flag classes skip planted findings; Path rules apply by glob, from the base only."""
 
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp())
@@ -1627,7 +1626,6 @@ class ReviewRules(unittest.TestCase):
                "tests/export.rs": "fn renamed() {}\n"}
 
     def test_a_never_flag_class_skips_its_planted_finding(self):
-        # catches: a reviewer reporting a class the owner already declined.
         code, lines, out = self.rules({"docs/agents/review-rules.md": RULES}, self.CHANGED,
                                       "Style-only renames in tests", "unchecked error")
         self.assertEqual(code, 0, out)
@@ -1636,13 +1634,11 @@ class ReviewRules(unittest.TestCase):
         self.assertIn("report: unchecked error", lines)
 
     def test_without_the_file_the_same_finding_is_reported(self):
-        # catches: a missing file being read as an empty skip list that still drops findings, or as an error.
         code, lines, out = self.rules({}, self.CHANGED, "style-only renames in tests")
         self.assertEqual(code, 0, out)
         self.assertEqual(lines, ["review rules: none at base", "report: style-only renames in tests"])
 
     def test_path_rules_apply_only_where_a_changed_path_matches(self):
-        # catches: every path rule applied to every pull request, `*` crossing folders, `**/` needing a folder.
         code, lines, out = self.rules({"docs/agents/review-rules.md": RULES},
                                       {**self.CHANGED, "docs/guide/page.md": "x\n"})
         self.assertEqual(code, 0, out)
@@ -1651,7 +1647,6 @@ class ReviewRules(unittest.TestCase):
                                  "path rule: `**/cli.rs`: every flag has help text"])
 
     def test_the_head_cannot_change_its_own_rules(self):
-        # catches: reading the rules from the pull request's head, where the change itself could silence a finding.
         widened = RULES.replace("## Path rules", "- unchecked error: declined 1, 2026-11-21\n\n## Path rules")
         code, lines, out = self.rules({"docs/agents/review-rules.md": RULES},
                                       {**self.CHANGED, "docs/agents/review-rules.md": widened}, "unchecked error")
@@ -1659,7 +1654,6 @@ class ReviewRules(unittest.TestCase):
         self.assertIn("report: unchecked error", lines)
 
     def test_an_unreadable_line_refuses(self):
-        # catches: a mistyped rule silently ignored, so its findings come back.
         bad = RULES.replace("declined 4, 2026-11-20", "declined often")
         code, lines, out = self.rules({"docs/agents/review-rules.md": bad}, self.CHANGED, "unchecked error")
         self.assertEqual(code, 2, out)

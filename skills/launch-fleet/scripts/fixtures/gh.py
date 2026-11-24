@@ -347,8 +347,9 @@ def main(argv):
     args = args[1:]
 
     o = {'query': '', 'owner': '', 'name': '', 'number': '', 'cursor': '', 'label': '',
-         'state': '', 'size': '', 'q': '', 'oid': '', 'login': ''}
+         'state': '', 'size': '', 'q': '', 'oid': '', 'login': '', 'before': ''}
     ids = []
+    items = {}
     accept = paginate = include = ''
     conditional = path = ''
     while args:
@@ -362,6 +363,8 @@ def main(argv):
                 o[key] = value
             elif v.startswith('ids[]='):
                 ids.append(v[len('ids[]='):])
+            elif eq and re.fullmatch(r'[ic][0-9]+', key):
+                items[key] = value
             else:
                 fail('unexpected field: ' + v)
             args = args[2:]
@@ -391,7 +394,14 @@ def main(argv):
             args = args[1:]
 
     if path == 'graphql':
+        if items:
+            o['items'] = items
         sys.stdout.write(graphql(w, repo, o, ids, page, answer))
+        return 0
+    if path == 'rate_limit':
+        answer('rate limit')
+        pools = {'core': rest_rate(), 'graphql': dict(rest_rate(), remaining=5000, resource='graphql')}
+        sys.stdout.write(compact({'resources': pools, 'rate': pools['core']}) + '\n')
         return 0
     return rest(w, repo, path, page, paginate, include, accept, conditional, answer)
 
@@ -407,6 +417,11 @@ def pages(a, page):
     return ''.join(out)
 
 
+def rest_rate():
+    return {'limit': 5000, 'remaining': tonumber(env.get('FAKE_GH_REST_REMAINING') or '5000'),
+            'reset': 1793538000, 'used': 0, 'resource': 'core'}
+
+
 def graphql(w, repo, o, ids, page, answer):
     query, owner, name, number, cursor = o['query'], o['owner'], o['name'], o['number'], o['cursor']
     size, q = o['size'], o['q']
@@ -419,7 +434,7 @@ def graphql(w, repo, o, ids, page, answer):
     if op in ('Singles', 'Search', 'Nodes', 'Blockers'):
         if owner + name:
             fail(op + ' takes no owner or name')
-    elif owner + '/' + name != repo and not (op in ('Checks', 'Merged') and owner + '/' + name in foreign_repos(w)):
+    elif owner + '/' + name != repo and not (op in ('Checks', 'Merged', 'Facts', 'Comments') and owner + '/' + name in foreign_repos(w)):
         fail('graphql for %s/%s, not %s' % (owner, name, repo))
     label = ''
     if op == 'Singles':
@@ -443,6 +458,10 @@ def graphql(w, repo, o, ids, page, answer):
         answer('graphql Item number=%s size=%s%s' % (number, size, ' cursor=' + cursor if cursor else ''))
     elif op == 'Writer':
         answer('graphql Writer login=%s' % o['login'])
+    elif op == 'Facts':
+        answer('graphql Facts count=%d' % len(o.get('items', {})))
+    elif op == 'Comments':
+        answer('graphql Comments number=%s before=%s' % (number, o['before'] or 'none'))
     else:
         fail('unknown query: ' + query.split('\n')[0])
     if env.get('FAKE_GH_ERRORS', '') == op:
@@ -498,6 +517,8 @@ def graphql(w, repo, o, ids, page, answer):
         cost = round_cost(weight * len(ids))
     elif op == 'Item':
         cost = 1 if tickets <= 2 else 2
+    elif op == 'Facts':
+        cost = round_cost(3 * len(o.get('items', {})))
     else:
         cost = 1
     rate = {'rateLimit': {'cost': cost, 'remaining': remaining, 'limit': 5000, 'resetAt': '2026-11-01T13:00:00Z'}}
@@ -594,7 +615,82 @@ def graphql(w, repo, o, ids, page, answer):
     def subs_total(n):
         return len([i for i in issues if get(i, 'parent') == n])
 
-    if op == 'Writer':
+    def history(x):
+        old = ([{'id': 1 + k, 'at': '2026-01-01T00:00:00Z', 'body': 'Synthetic old comment'} for k in range(51)]
+               if truthy(get(x, 'commentsTruncated')) else [])
+        cs = alt(get(x, 'comments'), [])
+        if not isinstance(cs, list):
+            fail('the world is not valid')
+        return old + cs
+
+    def comment_page(x, before):
+        all_ = history(x)
+        end = len(all_) if before == '' else number_of(before)
+        start = max(0, end - min(page, 100))
+        nodes = [{'fullDatabaseId': str(get(c, 'id')) if type(get(c, 'id')) is int else get(c, 'id'),
+                  'createdAt': get(c, 'at'), 'updatedAt': alt(get(c, 'edited'), get(c, 'at')),
+                  'body': get(c, 'body'), 'author': actor(c.get('author', FACTORY))} for c in all_[start:end]]
+        return {'pageInfo': {'hasPreviousPage': start > 0, 'startCursor': tostring(start) if nodes else None},
+                'nodes': nodes}
+
+    def issue_facts(i):
+        n = get(i, 'number')
+        responses = alt(w.get('dependencyResponses'), {})
+        if not isinstance(responses, dict):
+            fail('the world is not valid')
+        if tostring(n) in responses:
+            deps = responses[tostring(n)]
+            if not truthy(deps):
+                return None
+            deps = [{'number': get(d, 'number'), 'id': get(d, 'node_id'),
+                     'state': get(d, 'state').upper() if isinstance(get(d, 'state'), str) else get(d, 'state')} for d in deps]
+        else:
+            deps = [{'number': get(x, 'number'), 'id': sha_text(get(x, 'number')), 'state': get(x, 'state')}
+                    for b in each_opt(get(i, 'blockedBy')) for x in issues if get(x, 'number') == b]
+            if truthy(get(i, 'blockersTruncated')):
+                deps += [{'number': 900000 + k, 'id': 'I_unused', 'state': 'OPEN'} for k in range(1, 22)]
+        labels = [{'name': l} for l in each_opt(get(i, 'labels'))]
+        return {'number': n, 'id': sha_text(n), 'title': get(i, 'title'), 'state': get(i, 'state'),
+                'stateReason': state_reason(i, lambda r: r), 'body': alt(get(i, 'body'), ''), 'updatedAt': updated(i),
+                'labels': {'pageInfo': {'hasNextPage': len(labels) > 20}, 'nodes': labels[:20]},
+                'blockedBy': {'pageInfo': {'hasNextPage': len(deps) > 20}, 'nodes': deps[:20]},
+                'comments': comment_page(i, '')}
+
+    def find(n):
+        here = view(w, owner + '/' + name)
+        return ([x for x in each_opt(here['issues']) if get(x, 'number') == n]
+                + [p for p in here['pulls'] if get(p, 'number') == n] + [None])[0]
+
+    if op == 'Facts':
+        found, errors = {}, []
+        for alias, value in sorted(o.get('items', {}).items(), key=lambda kv: int(kv[0][1:])):
+            if not re.search(r'\b%s: %s\(number: \$%s\)' % (alias, 'issue' if alias[0] == 'i' else 'issueOrPullRequest', alias), query):
+                fail('an item the query does not read: ' + alias)
+            x = find(number_of(value))
+            if alias[0] == 'i' and x is not None and x in issues:
+                found[alias] = issue_facts(x)
+                if found[alias] is None:
+                    errors.append({'type': 'SYNTHETIC', 'path': ['repository', alias], 'message': 'planted blocker failure'})
+            elif alias[0] == 'c' and x is not None:
+                found[alias] = {'__typename': 'Issue' if x in issues else 'PullRequest', 'comments': comment_page(x, '')}
+            else:
+                found[alias] = None
+                errors.append({'type': 'NOT_FOUND', 'path': ['repository', alias],
+                               'message': 'Could not resolve to an issue or pull request with the number of %s.' % value})
+        out = {'data': {'repository': found}}
+        if errors:
+            out['errors'] = errors
+            out['data'].update(rate)
+            sys.stdout.write(compact(out) + '\n')
+            sys.stderr.write('gh: %s\n' % errors[0]['message'])
+            raise Status(1)
+    elif op == 'Comments':
+        x = find(number_of(number))
+        if x is None:
+            fail('Could not resolve to an issue or pull request with the number of %s.' % number)
+        out = {'data': {'repository': {'issueOrPullRequest': {
+            '__typename': 'Issue' if x in issues else 'PullRequest', 'comments': comment_page(x, o['before'])}}}}
+    elif op == 'Writer':
         # KN13 (#1448): a repository's collaborators matching a login, with
         # their permission ($world.collaborators: {login: permission}).
         found = [{'permission': v, 'node': {'login': k}} for k, v in (w.get('collaborators') or {}).items()
@@ -821,6 +917,10 @@ def rest(w, repo, path, page, paginate, include, accept, conditional, answer):
             with open(env['FAKE_GH_HTTP_LOG'], 'a') as log:
                 log.write('%s %s %s\n' % (path, 'conditional' if conditional else 'unconditional', http))
         sys.stdout.write('HTTP/2.0 %s Synthetic\r\nETag: %s\r\n' % (http, etag))
+        allowance = ({'limit': 30, 'remaining': 30, 'reset': 1793538000, 'resource': 'search'}
+                     if path.startswith('search/') else rest_rate())
+        sys.stdout.write(''.join('X-RateLimit-%s: %s\r\n' % (k.capitalize(), allowance[k])
+                                 for k in ('limit', 'remaining', 'reset', 'resource')))
         if link:
             sys.stdout.write('Link: <%s>; rel="next"\r\n' % link)
         sys.stdout.write('\r\n')

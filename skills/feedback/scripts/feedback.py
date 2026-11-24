@@ -9,6 +9,7 @@ import os
 import platform
 import re
 import secrets
+import shutil
 import stat
 import subprocess
 import sys
@@ -47,7 +48,23 @@ PHASES = {'draft', 'previewed', 'refused', 'sending', 'sent', 'failed', 'uncerta
 EDITABLE = {'draft', 'previewed', 'refused', 'failed'}
 TITLE_MAX = 256
 BODY_MAX = 65536
+LINK_MAX = 6000
 TIMEOUT_S = 60
+SECTION_HEADERS = {
+    'ran': 'What I ran:',
+    'happened': 'What happened:',
+    'expected': 'What I expected:',
+}
+LOG_HEADER = 'Log (secrets removed):'
+SECTION_LABELS = {*SECTION_HEADERS.values(), LOG_HEADER}
+FAILED_HINTS = {
+    401: 'The login expired; sign in again with gh auth login, or use the browser link.',
+    403: 'GitHub refused this account or is rate-limiting it; check your account or wait, or use the browser link.',
+    404: 'Issues are not open there right now.',
+    410: 'Issues are not open there right now.',
+    422: 'GitHub rejected the text; edit the draft and preview again.',
+    429: 'GitHub is rate-limiting requests; wait and try later.',
+}
 SINCE_MARGIN = datetime.timedelta(days=1)
 PRIVATE_KEY_START = re.compile(r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----')
 PRIVATE_KEY_BLOCK = re.compile(r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)')
@@ -96,6 +113,7 @@ KEYS_030 = ['schema', 'operation_id', 'destination', 'phase', 'title', 'chosen_b
             'account', 'preview', 'attempts', 'issue', 'reason', 'evidence']
 KEYS = ['schema', 'operation_id', 'destination', 'phase', 'title', 'chosen_body', 'body', 'facts', 'warnings',
         'account', 'preview', 'attempts', 'issue', 'reason', 'evidence']
+KEYS_WITH_REPORT = [*KEYS, 'report_fields']
 
 
 class Stop(Exception):
@@ -193,19 +211,20 @@ def read_record(path):
         rec = json.loads(text, object_pairs_hook=pairs)
     except ValueError:
         rec = None
-    if not (isinstance(rec, dict) and list(rec) in (KEYS, KEYS_030) and rec['schema'] == SCHEMA
+    if not (isinstance(rec, dict) and list(rec) in (KEYS, KEYS_030, KEYS_WITH_REPORT) and rec['schema'] == SCHEMA
             and rec['phase'] in PHASES and same_name(rec['destination'], DESTINATION)
             and path.name == f"{rec['operation_id']}.json"):
         raise Stop('The record is unreadable. OpenWiz cannot tell whether earlier feedback was created; nothing was sent.')
     if list(rec) == KEYS_030:
-        rec = {k: (None if k == 'facts' else [] if k == 'warnings' else rec[k]) for k in KEYS}
+        rec.update(facts=None, warnings=[], report_fields=None)
     return rec
 
 
 def write_record(place, rec):
     path = place / f"{rec['operation_id']}.json"
     tmp = place / f".{rec['operation_id']}.{secrets.token_hex(4)}.tmp"
-    data = (json.dumps({k: rec[k] for k in KEYS}, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+    keys = KEYS_WITH_REPORT if 'report_fields' in rec else KEYS
+    data = (json.dumps({k: rec[k] for k in keys}, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
@@ -316,7 +335,7 @@ def chosen(title_file, body_file):
         raise Stop('The body cannot hold a carriage return or its own feedback marker or facts line.')
     visible(title, body)
     warnings = check_secrets_and_warnings([('title', title), ('body', body)])
-    return title, body, None, warnings
+    return title, body, None, warnings, None
 
 
 def check_secrets_and_warnings(sections):
@@ -532,30 +551,24 @@ def chosen_report(report_file, log_file=None, drop=(), no_facts=False):
     if len(title) > TITLE_MAX:
         raise Stop(f'The title is longer than {TITLE_MAX} characters; shorten it.')
 
-    ran = read_field('ran').rstrip()
-    happened = read_field('happened', required=True).rstrip()
-    expected = read_field('expected').rstrip()
-    if not happened:
+    fields = {name: read_field(name, required=name == 'happened').rstrip() for name in SECTION_HEADERS}
+    if not fields['happened']:
         raise Stop('The `happened` field is empty; write what you want the OpenWiz maintainers to read.')
 
-    text_sections = [('title', title), ('ran', ran), ('happened', happened), ('expected', expected)]
+    text_sections = [('title', title), *fields.items()]
     for name, text in text_sections:
         if '\r' in text or any(line.startswith(MARKER) or line.startswith(FACTS_PREFIX) for line in text.split('\n')):
             raise Stop(f'The `{name}` section cannot hold a carriage return or its own feedback marker or facts line.')
+        if name in SECTION_HEADERS and any(line in SECTION_LABELS for line in text.split('\n')):
+            raise Stop(f'The `{name}` section cannot contain a feedback section label on its own line.')
     warnings = check_secrets_and_warnings(text_sections)
-
-    body_parts = []
-    if ran:
-        body_parts.append(f'What I ran:\n{ran}')
-    body_parts.append(f'What happened:\n{happened}')
-    if expected:
-        body_parts.append(f'What I expected:\n{expected}')
+    body_parts = [f'{SECTION_HEADERS[name]}\n{text}' for name, text in fields.items() if text]
 
     log_lines = None
     redactions = None
     if log_file:
         scrubbed, log_lines, redactions = scrub_log(log_file)
-        body_parts.append(f'Log (secrets removed):\n{scrubbed}')
+        body_parts.append(f'{LOG_HEADER}\n{scrubbed}')
 
     body = '\n\n'.join(body_parts)
     visible(title, body)
@@ -584,7 +597,7 @@ def chosen_report(report_file, log_file=None, drop=(), no_facts=False):
         for k in drop:
             raw_facts.pop(k, None)
         facts = validate_facts(raw_facts)
-    return title, body, facts, warnings
+    return title, body, facts, warnings, fields
 
 
 def visible(title, body):
@@ -608,23 +621,37 @@ def full_body(chosen_body, op, facts=None):
 TOKEN_VARS = ('GH_TOKEN', 'GITHUB_TOKEN')
 
 
-def gh_env():
+def link_hint(op=None):
+    cmd = f'link {op}' if op else 'link <operation_id>'
+    return f'or run {cmd} to open the public form in your browser.'
+
+
+def no_gh_msg(op=None):
+    return (f'GitHub CLI (gh) is not installed. Nothing was sent. '
+            f'Install gh and sign in with gh auth login, {link_hint(op)}')
+
+
+def gh_env(op=None):
     host = os.environ.get('GH_HOST', '')
     if host not in ('', 'github.com'):
         raise Stop('GH_HOST names another GitHub host; feedback goes only to github.com.')
     for name in TOKEN_VARS:
         if name in os.environ:
             raise Stop(f'{name} is set, so gh would use that token instead of your own login. Nothing was sent; '
-                       f'OpenWiz never uses a token given to it. Unset {name} yourself if you want to go on.')
+                       f'OpenWiz never uses a token given to it. Unset {name} yourself to use gh, {link_hint(op)}')
     env = dict(os.environ)
     env.update(GH_PROMPT_DISABLED='1', NO_COLOR='1', GH_NO_UPDATE_NOTIFIER='1', GH_PAGER='cat')
+    if not shutil.which('gh', path=env.get('PATH', '')):
+        raise Stop(no_gh_msg(op))
     return env
 
 
-def gh(args, payload=None):
+def gh(args, payload=None, op=None):
     try:
         run = subprocess.run(['gh', 'api', '--include', *args], input=payload, capture_output=True,
-                             env=gh_env(), timeout=TIMEOUT_S)
+                             env=gh_env(op), timeout=TIMEOUT_S)
+    except FileNotFoundError:
+        raise Stop(no_gh_msg(op))
     except (OSError, subprocess.TimeoutExpired):
         return None
     head, sep, rest = run.stdout.partition(b'\r\n\r\n')
@@ -644,8 +671,8 @@ def gh(args, payload=None):
     return code, data
 
 
-def read_destination():
-    got = gh(['--method', 'GET', f'repos/{DESTINATION}'])
+def read_destination(op=None):
+    got = gh(['--method', 'GET', f'repos/{DESTINATION}'], op=op)
     if not got or got[0] != 200 or not isinstance(got[1], dict):
         raise Stop(f'The destination {DESTINATION} could not be read; nothing was sent.')
     repo = got[1]
@@ -658,32 +685,37 @@ def read_destination():
 NO_LOGIN = 'Your GitHub login could not be read through gh. Nothing was sent; OpenWiz never logs in or uses another account.'
 
 
-def stored_login():
+def stored_login(op=None):
+    env = gh_env(op)
     try:
         run = subprocess.run(['gh', 'auth', 'status', '--json', 'hosts', '--hostname', 'github.com'],
-                             capture_output=True, env=gh_env(), timeout=TIMEOUT_S)
+                             capture_output=True, env=env, timeout=TIMEOUT_S)
         status = json.loads(run.stdout.decode('utf-8')) if run.returncode == 0 else None
+    except FileNotFoundError:
+        raise Stop(no_gh_msg(op))
     except (OSError, subprocess.TimeoutExpired, ValueError):
         status = None
     hosts = status.get('hosts') if isinstance(status, dict) else None
     entries = hosts.get('github.com') if isinstance(hosts, dict) else None
     if isinstance(entries, list) and len(entries) > 1:
-        raise Stop('gh holds more than one GitHub account for github.com. Nothing was sent; '
-                   'settle which one is yours outside OpenWiz, which never switches account.')
+        raise Stop(f'gh holds more than one GitHub account for github.com. Nothing was sent; '
+                   f'OpenWiz never switches account. Remove extra accounts outside OpenWiz so only yours remains, '
+                   f'{link_hint(op)}')
     entry = entries[0] if isinstance(entries, list) and entries else None
     if not (isinstance(entry, dict) and entry.get('active') is True
             and isinstance(entry.get('login'), str) and entry['login']):
-        raise Stop(NO_LOGIN)
+        raise Stop(f'gh is installed, but you are not logged in to github.com. Nothing was sent; '
+                   f'OpenWiz never logs in or uses another account. Run gh auth login yourself, {link_hint(op)}')
     return entry['login']
 
 
-def read_account():
-    login = stored_login()
-    got = gh(['--method', 'GET', 'user'])
+def read_account(op=None):
+    login = stored_login(op)
+    got = gh(['--method', 'GET', 'user'], op=op)
     user = got[1] if got and got[0] == 200 else None
     if not (isinstance(user, dict) and user.get('login') == login
             and type(user.get('id')) is int and user['id'] > 0):
-        raise Stop(NO_LOGIN)
+        raise Stop(f'{NO_LOGIN} Run gh auth login yourself, {link_hint(op)}')
     return {'login': user['login'], 'id': user['id']}
 
 
@@ -718,8 +750,23 @@ def sent_say(rec):
             'can close without that comment.')
 
 
+def failed_say(rec):
+    m = re.search(r'HTTP (\d{3})', rec.get('reason') or '')
+    code = int(m.group(1)) if m else None
+    hint = FAILED_HINTS.get(code)
+    if hint:
+        return (f'GitHub refused the request (HTTP {code}), so no issue was created. {hint} '
+                'You can preview it again and, after a new yes, try once more.')
+    return SAY['failed']
+
+
 def answer(rec, **extra):
-    say = sent_say(rec) if rec['phase'] == 'sent' else SAY[rec['phase']]
+    if rec['phase'] == 'sent':
+        say = sent_say(rec)
+    elif rec['phase'] == 'failed':
+        say = failed_say(rec)
+    else:
+        say = SAY[rec['phase']]
     a = {'operation_id': rec['operation_id'], 'phase': rec['phase'], 'say': say}
     if rec['reason']:
         a['reason'] = rec['reason']
@@ -823,11 +870,11 @@ def load_input(a):
 
 def cmd_draft(a):
     place = area()
-    title, body, facts, warnings = load_input(a)
+    title, body, facts, warnings, fields = load_input(a)
     op = secrets.token_hex(16)
     rec = dict(schema=SCHEMA, operation_id=op, destination=DESTINATION, phase='draft', title=title,
                chosen_body=body, body=full_body(body, op, facts), facts=facts, warnings=warnings,
-               account=None, preview=None, attempts=0, issue=None, reason=None, evidence=[])
+               account=None, preview=None, attempts=0, issue=None, reason=None, evidence=[], report_fields=fields)
     with Lock(place, op), StoreLock(place):
         other = twin(place, op, title, body)
         if other:
@@ -838,7 +885,7 @@ def cmd_draft(a):
 
 def cmd_edit(a):
     place = area()
-    title, body, facts, warnings = load_input(a)
+    title, body, facts, warnings, fields = load_input(a)
     with Lock(place, a.op):
         rec = recorded(read_record(record_path(place, a.op)))
         if rec['phase'] not in EDITABLE:
@@ -848,7 +895,7 @@ def cmd_edit(a):
             if other:
                 raise Stop(TWIN.format(other))
             rec.update(phase='draft', title=title, chosen_body=body, body=full_body(body, a.op, facts),
-                       facts=facts, warnings=warnings, account=None, preview=None, reason=None)
+                       facts=facts, warnings=warnings, account=None, preview=None, reason=None, report_fields=fields)
             write_record(place, rec)
     return out(answer(rec), 0)
 
@@ -865,8 +912,8 @@ def cmd_preview(a):
         visible(rec['title'], rec['chosen_body'])
         check_secrets_and_warnings([('title', rec['title']), ('body', rec['chosen_body'])])
         validate_facts(rec['facts'])
-        read_destination()
-        account = read_account()
+        account = read_account(rec['operation_id'])
+        read_destination(rec['operation_id'])
         rec.update(phase='previewed', account=account, reason=None,
                    preview={'id': f'{secrets.randbelow(10 ** 6):06d}', 'at': iso(now())})
         write_record(place, rec)
@@ -884,10 +931,11 @@ def cmd_refuse(a):
     return out(answer(rec), 0)
 
 
-def refuse_send(place, rec, reason):
+def refuse_send(place, rec, reason, say=None):
     rec.update(phase='refused', preview=None, reason=reason)
     write_record(place, rec)
-    return out(answer(rec), 1)
+    extra = {'say': say} if say else {}
+    return out(answer(rec, **extra), 1)
 
 
 def cmd_send(a):
@@ -909,10 +957,13 @@ def cmd_send(a):
         except Stop as e:
             return refuse_send(place, rec, str(e))
         if not PREVIEW_ID.fullmatch(a.preview_id or '') or a.preview_id != rec['preview']['id']:
-            return refuse_send(place, rec, 'the yes was for a different or earlier preview')
+            return refuse_send(
+                place, rec, 'the yes was for a different or earlier preview',
+                say='Not sent: that preview code was wrong or missing, so this preview is void. '
+                    'Preview again and reply with the new code.')
         try:
-            read_destination()
-            account = read_account()
+            account = read_account(rec['operation_id'])
+            read_destination(rec['operation_id'])
         except Stop as e:
             return refuse_send(place, rec, str(e))
         if account != rec['account']:
@@ -1022,6 +1073,111 @@ def cmd_status(a):
     return out(answer(rec, **extra), 0)
 
 
+def split_report_sections(chosen_body):
+    lines = chosen_body.split('\n')
+    if LOG_HEADER in lines:
+        lines = lines[:lines.index(LOG_HEADER)]
+
+    headers = {label: name for name, label in SECTION_HEADERS.items()}
+    current = headers.get(lines[0]) if lines else None
+    if current not in ('ran', 'happened'):
+        text = '\n'.join(lines).rstrip()
+        if text:
+            return '', text, ''
+
+    sections = {name: [] for name in SECTION_HEADERS}
+    next_section = {'ran': 'happened', 'happened': 'expected'}
+    for line in lines[1:]:
+        if line in headers and sections[current] and sections[current][-1] == '':
+            if headers[line] != next_section.get(current):
+                break
+            current = headers[line]
+        else:
+            sections[current].append(line)
+    else:
+        ran, happened, expected = ('\n'.join(sections[name]).rstrip() for name in SECTION_HEADERS)
+        if happened:
+            return ran, happened, expected
+    raise Stop('The saved report sections could not be read. Edit the draft before using a browser link.')
+
+
+def cmd_link(a):
+    place = state_dir() / 'feedback'
+    rec = read_record(record_path(place, a.op))
+    rec = recorded(rec, Lock(place, a.op).held())
+    if rec['phase'] not in EDITABLE:
+        return out(answer(rec, refused='This operation is already sent or uncertain; do not file it again in the browser.'), 1)
+    if 'report_fields' not in rec:
+        ran, happened, expected = split_report_sections(rec['chosen_body'])
+    elif rec['report_fields'] is None:
+        ran, happened, expected = '', rec['chosen_body'], ''
+    else:
+        fields = rec['report_fields']
+        if (not isinstance(fields, dict) or fields.keys() != SECTION_HEADERS.keys()
+                or not all(isinstance(value, str) for value in fields.values()) or not fields['happened']):
+            raise Stop('The saved report fields are unreadable. Edit the draft before using a browser link.')
+        ran, happened, expected = (fields[name] for name in SECTION_HEADERS)
+    visible(rec['title'], '\n'.join(p for p in (ran, happened, expected) if p))
+    check_secrets_and_warnings([('title', rec['title']), ('ran', ran), ('happened', happened), ('expected', expected)])
+    params = [
+        ('template', 'feedback.yml'),
+        ('title', rec['title']),
+        ('what-happened', happened),
+    ]
+    if expected:
+        params.append(('expected', expected))
+    if ran:
+        params.append(('steps', ran))
+    facts = rec.get('facts') if isinstance(rec.get('facts'), dict) else {}
+    if facts.get('openwiz'):
+        params.append(('version', facts['openwiz']))
+    setup_parts = []
+    if facts.get('host'):
+        setup_parts.append(f"Host: {facts['host']}")
+    if facts.get('harness'):
+        setup_parts.append(f"Harness: {facts['harness']}")
+    if facts.get('model'):
+        setup_parts.append(f"Model: {facts['model']}")
+    if setup_parts:
+        params.append(('setup', ', '.join(setup_parts)))
+    url = f'{WEB_REPO}/issues/new?' + urllib.parse.urlencode(params)
+    if len(url) > LINK_MAX:
+        raise Stop(f'The browser link is longer than {LINK_MAX} characters; shorten it.')
+    return out(answer(
+        rec,
+        url=url,
+        say='Open this link in your browser to review and submit the public issue yourself. '
+            'Nothing was sent, and OpenWiz does not count it as sent.',
+    ), 0)
+
+
+def cmd_list(a):
+    place = state_dir() / 'feedback'
+    if not place.exists():
+        return out({'operations': [], 'say': 'No feedback operations found.'}, 0)
+    info = os.lstat(place)
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise Stop(f'{place} is not a plain directory.')
+    rows = []
+    for path in sorted(place.glob('*.json')):
+        st = path.stat()
+        rec = read_record(path)
+        rec = recorded(rec, Lock(place, rec['operation_id']).held())
+        preview_at = (rec['preview']['at']
+                      if isinstance(rec.get('preview'), dict) and isinstance(rec['preview'].get('at'), str)
+                      else None)
+        rows.append((st.st_mtime_ns, preview_at or '', rec['operation_id'], {
+            'operation_id': rec['operation_id'],
+            'phase': rec['phase'],
+            'title': rec['title'],
+            'preview_at': preview_at,
+        }))
+    rows.sort(key=lambda r: (r[0], r[1], r[2]), reverse=True)
+    ops = [r[3] for r in rows]
+    say = f'{len(ops)} feedback operation(s), newest first.' if ops else 'No feedback operations found.'
+    return out({'operations': ops, 'say': say}, 0)
+
+
 def cmd_share(a):
     text = read_text(a.text_file, 'share text').replace('\r\n', '\n').strip()
     if not text:
@@ -1044,8 +1200,14 @@ def cmd_share(a):
 DESCRIPTION = 'One consented feedback operation, under contracts/feedback.v1.md (#2292).'
 
 
+class JsonParser(argparse.ArgumentParser):
+
+    def error(self, message):
+        raise Stop(f'Usage error: {message}')
+
+
 def main(argv):
-    p = argparse.ArgumentParser(prog='feedback.py', description=DESCRIPTION)
+    p = JsonParser(prog='feedback.py', description=DESCRIPTION)
     sub = p.add_subparsers(dest='cmd', required=True)
     for name in ('draft', 'edit'):
         s = sub.add_parser(name)
@@ -1057,24 +1219,25 @@ def main(argv):
         s.add_argument('--log-file')
         s.add_argument('--drop', action='append', default=[])
         s.add_argument('--no-facts', action='store_true')
-    for name in ('preview', 'status'):
+    for name in ('preview', 'status', 'link'):
         sub.add_parser(name).add_argument('op')
+    sub.add_parser('list')
     s = sub.add_parser('refuse')
     s.add_argument('op')
     s.add_argument('--reason', required=True)
     s = sub.add_parser('send')
     s.add_argument('op')
-    s.add_argument('--preview-id', required=True)
+    s.add_argument('--preview-id')
     s = sub.add_parser('reconcile')
     s.add_argument('op')
     s.add_argument('--issue', type=int)
     s = sub.add_parser('share')
     s.add_argument('--text-file', required=True)
     s.add_argument('--url', required=True)
-    a = p.parse_args(argv)
-    if getattr(a, 'issue', None) is not None and a.issue < 1:
-        p.error('--issue must be a positive issue number')
     try:
+        a = p.parse_args(argv)
+        if getattr(a, 'issue', None) is not None and a.issue < 1:
+            p.error('--issue must be a positive issue number')
         return globals()['cmd_' + a.cmd](a)
     except Stop as e:
         return out({'refused': str(e)}, 1)

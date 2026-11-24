@@ -1,0 +1,106 @@
+{
+  "repository": "syn-owner/site",
+  "person": "syn-owner",
+  "roster": [
+    {
+      "name": "Claude Code",
+      "kind": "harness",
+      "driver": "local",
+      "roles": [
+        "builder"
+      ],
+      "writes_as": "syn-owner's App",
+      "label": "Claude Code via syn-owner"
+    },
+    {
+      "name": "Codex",
+      "kind": "harness",
+      "driver": "local",
+      "roles": [
+        "reviewer"
+      ],
+      "writes_as": "syn-owner's App",
+      "label": "Codex via syn-owner"
+    }
+  ],
+  "picks": [
+    {
+      "ticket": 5001,
+      "role": "builder",
+      "start": {
+        "kind": "build",
+        "labels": [
+          "polish"
+        ]
+      },
+      "choice": {
+        "harness": "Claude Code",
+        "provider": "claude-code",
+        "model": "syn-model-45",
+        "effort": "medium",
+        "model_name": "Synthetic Long Display Name For Edge Case 45x"
+      },
+      "pick": {
+        "name": "Claude Code",
+        "kind": "harness",
+        "driver": "local",
+        "start": {
+          "harness": "claude",
+          "model": "syn-model-45"
+        },
+        "note": {
+          "harness": "Claude Code via syn-owner",
+          "model": "Synthetic Long Display Name For Edge Case 45x default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "builder-5001",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    },
+    {
+      "ticket": 5001,
+      "role": "reviewer",
+      "start": {
+        "kind": "review",
+        "builder_family": "claude"
+      },
+      "choice": {
+        "harness": "Codex",
+        "provider": "codex",
+        "model": "syn-model-46",
+        "effort": "medium",
+        "model_name": "Synthetic Long Display Name For Edge Case 46xy"
+      },
+      "pick": {
+        "name": "Codex",
+        "kind": "harness",
+        "driver": "local",
+        "start": {
+          "harness": "codex",
+          "model": "syn-model-46"
+        },
+        "note": {
+          "harness": "Codex via syn-owner",
+          "model": "Synthetic Long Display Name For Edge Case... default effort"
+        },
+        "writes_as": "syn-owner's App",
+        "token": {
+          "service": "syn-owner",
+          "requester": "reviewer-5001",
+          "repositories": [
+            "syn-owner/site"
+          ]
+        }
+      },
+      "waits": null,
+      "look": null
+    }
+  ]
+}

@@ -1,0 +1,171 @@
+test_v030_records_still_read_status_reconcile_and_allow_new_drafts (__main__.LegacyRecords.test_v030_records_still_read_status_reconcile_and_allow_new_drafts) ... FAIL
+test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) ... 
+  test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='stripe_sk_live') ... FAIL
+  test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='stripe_rk_test') ... FAIL
+  test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='gitlab_pat') ... FAIL
+  test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='npm_token') ... FAIL
+  test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='hf_token') ... FAIL
+  test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='slack_xoxe') ... FAIL
+  test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='password_assign') ... FAIL
+  test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='passwd_assign') ... FAIL
+  test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='secret_assign') ... FAIL
+  test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='token_assign') ... FAIL
+  test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='api_key_assign') ... FAIL
+  test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='auth_token_assign') ... FAIL
+test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) ... FAIL
+
+======================================================================
+FAIL: test_v030_records_still_read_status_reconcile_and_allow_new_drafts (__main__.LegacyRecords.test_v030_records_still_read_status_reconcile_and_allow_new_drafts)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1141, in test_v030_records_still_read_status_reconcile_and_allow_new_drafts
+    _, st = self.run_helper('status', legacy_op, expect=0)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 1 != 0 : ('{\n  "refused": "The record is unreadable. OpenWiz cannot tell whether earlier feedback was created; nothing was sent."\n}\n', '')
+
+======================================================================
+FAIL: test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='stripe_sk_live')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1084, in test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log
+    _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 0 != 1 : ('{\n  "operation_id": "4729d0aada15fbed8dbdb4883b2a85c1",\n  "phase": "draft",\n  "say": "Draft kept; nothing previewed or sent."\n}\n', '')
+
+======================================================================
+FAIL: test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='stripe_rk_test')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1084, in test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log
+    _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 0 != 1 : ('{\n  "operation_id": "ddd124f2c954cb1b99b668949751dc7b",\n  "phase": "draft",\n  "say": "Draft kept; nothing previewed or sent."\n}\n', '')
+
+======================================================================
+FAIL: test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='gitlab_pat')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1084, in test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log
+    _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 0 != 1 : ('{\n  "operation_id": "2d5e85f976ffe6da817d5e5114a449ad",\n  "phase": "draft",\n  "say": "Draft kept; nothing previewed or sent."\n}\n', '')
+
+======================================================================
+FAIL: test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='npm_token')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1084, in test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log
+    _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 0 != 1 : ('{\n  "operation_id": "6b5af0d2e06a2d2d3e565bc7e9d8c6b6",\n  "phase": "draft",\n  "say": "Draft kept; nothing previewed or sent."\n}\n', '')
+
+======================================================================
+FAIL: test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='hf_token')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1084, in test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log
+    _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 0 != 1 : ('{\n  "operation_id": "84fc0c9289739748af761eb852865b65",\n  "phase": "draft",\n  "say": "Draft kept; nothing previewed or sent."\n}\n', '')
+
+======================================================================
+FAIL: test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='slack_xoxe')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1084, in test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log
+    _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 0 != 1 : ('{\n  "operation_id": "3cd3c7d571471d4fdc019fd700898372",\n  "phase": "draft",\n  "say": "Draft kept; nothing previewed or sent."\n}\n', '')
+
+======================================================================
+FAIL: test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='password_assign')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1084, in test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log
+    _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 0 != 1 : ('{\n  "operation_id": "6bc2d0a7194f52f897464dd45848416d",\n  "phase": "draft",\n  "say": "Draft kept; nothing previewed or sent."\n}\n', '')
+
+======================================================================
+FAIL: test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='passwd_assign')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1084, in test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log
+    _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 0 != 1 : ('{\n  "operation_id": "a17cb0e279d2074232799ea565e9cf72",\n  "phase": "draft",\n  "say": "Draft kept; nothing previewed or sent."\n}\n', '')
+
+======================================================================
+FAIL: test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='secret_assign')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1084, in test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log
+    _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 0 != 1 : ('{\n  "operation_id": "c2c8eb3fb0296d007329f75cb91042c6",\n  "phase": "draft",\n  "say": "Draft kept; nothing previewed or sent."\n}\n', '')
+
+======================================================================
+FAIL: test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='token_assign')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1084, in test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log
+    _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 0 != 1 : ('{\n  "operation_id": "66c41249902c193887b95a286d8803ad",\n  "phase": "draft",\n  "say": "Draft kept; nothing previewed or sent."\n}\n', '')
+
+======================================================================
+FAIL: test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='api_key_assign')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1084, in test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log
+    _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 0 != 1 : ('{\n  "operation_id": "4cdab99d5ee7e4a498fe4e40c2fe33c8",\n  "phase": "draft",\n  "say": "Draft kept; nothing previewed or sent."\n}\n', '')
+
+======================================================================
+FAIL: test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log) (refuse='auth_token_assign')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1084, in test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log
+    _, a = self.run_helper('draft', '--report-file', rf, expect=1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "skills/feedback/test/test_feedback.py", line 111, in run_helper
+    self.assertEqual(run.returncode, expect, (run.stdout, run.stderr))
+AssertionError: 0 != 1 : ('{\n  "operation_id": "1d23e8cc0091929b6947c6d539c89646",\n  "phase": "draft",\n  "say": "Draft kept; nothing previewed or sent."\n}\n', '')
+
+======================================================================
+FAIL: test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log (__main__.SecretsAndWarnings.test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "skills/feedback/test/test_feedback.py", line 1096, in test_all_secret_shapes_refused_in_happened_and_scrubbed_in_log
+    self.assertEqual(facts['redactions'], len(cases))
+AssertionError: 0 != 12
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.983s
+
+FAILED (failures=14)

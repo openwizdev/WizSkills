@@ -17,8 +17,11 @@ never goes into a public record.
 Exit 2 and print nothing for an unknown kind or a malformed target. The
 skill-file lookup belongs to the recipient, so it is printed unexpanded.
 """
+import json
 import os
+from pathlib import Path
 import re
+import subprocess
 import sys
 
 LOOKUP = ("Read 'skills/{s}/SKILL.md' if present, otherwise find '*/skills/{s}/SKILL.md' only inside your own "
@@ -31,29 +34,34 @@ LOOKUP = ("Read 'skills/{s}/SKILL.md' if present, otherwise find '*/skills/{s}/S
           "./skills/{s}; report missing, unreadable or ambiguous matches, otherwise read the unique matching file and "
           "follow it")
 N = r'[1-9][0-9]{0,8}'
+REPO = r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+'
+REF = REPO + '#' + N
 SHA = r'[0-9a-f]{40}'
 FORMS = {
-    'builder': ([N], 'You are the builder for #{0}. Use the build-ticket skill. {b}.'),
-    'reviewer': ([N, SHA], 'You are the reviewer for pull request #{0} at {1}. Use the review-ticket skill. {r}.'),
-    're-check': ([N, SHA, SHA, r'none|R[0-9]+(,R[0-9]+)*', r'none|https://github\.com/[A-Za-z0-9_./#-]+'],
-                 "Re-check pull request #{0} at {1}: use the review-ticket skill. {r}, Re-checks. Open findings: {3}. "
+    'builder': ([REF], 'You are the builder for {0}. Use the build-ticket skill. {b}.'),
+    'reviewer': ([REF, SHA], 'You are the reviewer for pull request {0} at {1}. Use the review-ticket skill. {r}.'),
+    're-check': ([REF, SHA, SHA, r'none|R[0-9]+(,R[0-9]+)*', r'none|https://github\.com/[A-Za-z0-9_./#-]+'],
+                 "Re-check pull request {0} at {1}: use the review-ticket skill. {r}, Re-checks. Open findings: {3}. "
                  "Changed since {2}: git diff {2} {1}; the builder's answer: {4}."),
-    'fresh': ([N, N, r'room/[A-Za-z0-9._/-]+', SHA],
-              'You are the fresh builder for #{0}: one fresh round on pull request #{1}, on its branch {2}, after '
+    'fresh': ([REF, REF, r'room/[A-Za-z0-9._/-]+', SHA],
+              'You are the fresh builder for {0}: one fresh round on pull request {1}, on its branch {2}, after '
               'the report at {3}. Use the build-ticket skill. {b}, its fresh round.'),
     'diagnose': ([], 'Use the diagnose skill. {d} for the finding.'),
-    'fleet': ([N, r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+'],
-              'You are the fleet thread for spec #{0} of {1}. Use the launch-fleet skill. {f}; do its Fleet threads '
+    'fleet': ([N, REPO],
+              'You are the fleet thread for spec {1}#{0}. Use the launch-fleet skill. {f}; do its Fleet threads '
               'section, first wake.'),
-    'wake': ([N, r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+'],
-             'Fleet wake for {1} spec #{0}. Use the launch-fleet skill. {f}; do its Fleet threads section, Each wake.'),
-    'tick': ([r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+', r'thr_[A-Za-z0-9_-]+'],
+    'wake': ([N, REPO],
+             'Fleet wake for spec {1}#{0}. Use the launch-fleet skill. {f}; do its Fleet threads section, Each wake.'),
+    'tick': ([REPO, r'thr_[A-Za-z0-9_-]+'],
              "You are a launch-fleet tick for {0}. Use the launch-fleet skill. {f}; do its Each wake section for the "
              "due lines below. The orchestrator's thread is {1}."),
-    'wakes': ([r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+', r'thr_[A-Za-z0-9_-]+'],
+    'wakes': ([REPO, r'thr_[A-Za-z0-9_-]+'],
               "You are a launch-fleet tick for {0}, woken by GitHub's messages. Use the launch-fleet skill. {f}; do its "
               "Each wake section for the messages below. The orchestrator's thread is {1}."),
 }
+
+PASS_REPO = (" Every ticket and pull request above is written as OWNER/NAME#N: pass that OWNER/NAME with `--repo` on "
+             "every `gh` command (in `gh api`, as the `repos/OWNER/NAME/` path), never your sandbox's own repository.")
 
 REQUESTERS = {'builder': ('builder-{0}', None), 'fresh': ('builder-{0}', None), 'reviewer': ('reviewer-{0}', None),
               're-check': ('reviewer-{0}', None), 'diagnose': ('diagnose', None), 'fleet': ('fleet-{0}', '{1}'),
@@ -73,15 +81,39 @@ TOKEN = (" GitHub token: run every gh or git command that reaches GitHub through
          "repository settings and pushes that change `.github/workflows/` stay on the owner's login: run those "
          "without the helper.")
 
+SNAPSHOT = ("\n\nThe facts below were read from GitHub at {0}, in this wake's snapshot of {1} (a bare #N in them is "
+            "{1}#N): read GitHub again only for anything newer.\n\n")
+STAMP = r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
+
+
+def snapshot_block(path, ref):
+    repo, _, number = ref.partition('#')
+    try:
+        read_at = json.loads(Path(path).read_text())['read_at']
+        r = subprocess.run([sys.executable, '-I', str(Path(__file__).resolve().parent / 'snapshot.py'), 'facts',
+                            path, number], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    except (OSError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired):
+        return ''
+    if r.returncode or not isinstance(read_at, str) or not re.fullmatch(STAMP, read_at) \
+            or not r.stdout.startswith('## %s: ' % ref):
+        return ''
+    return SNAPSHOT.format(read_at, repo) + r.stdout.rstrip('\n')
+
 
 def token_step(kind, args):
     if not os.environ.get('OPENWIZ_TOKEN_SERVICE'):
         return ''
     who, repo = REQUESTERS[kind]
+    args = [a.partition('#')[2] or a for a in args]
     return TOKEN.format(who=who.format(*args), repo=repo.format(*args) if repo else 'OWNER/NAME')
 
 
 def main(argv):
+    snapshot = None
+    if len(argv) >= 2 and argv[-2] == '--snapshot':
+        argv, snapshot = argv[:-2], argv[-1]
+        if argv[:1] not in (['builder'], ['reviewer']) or not snapshot:
+            return 2
     same_family = len(argv) == 4 and argv[0] == 'reviewer' and argv[3] == 'same-family'
     if same_family:
         argv = argv[:3]
@@ -94,7 +126,8 @@ def main(argv):
                                       ('f', 'launch-fleet'))})
     if same_family:
         brief += ' Put "same-family review" on the line immediately below the VERDICT header.'
-    print(brief + token_step(argv[0], argv[1:]))
+    brief += PASS_REPO + token_step(argv[0], argv[1:])
+    print(brief + (snapshot_block(snapshot, argv[1]) if snapshot else ''))
     return 0
 
 

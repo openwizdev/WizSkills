@@ -57,6 +57,8 @@ problem" that applies the `feedback` label and asks only for public words:
 | `what-happened` | `textarea` | yes | What went wrong |
 | `expected` | `textarea` | yes | What the user expected instead |
 | `steps` | `textarea` | no | How someone can see it happen |
+| `version` | `input` | no | OpenWiz version, from `openwiz --version` |
+| `setup` | `input` | no | Where your agents run, and which agent and model |
 | `public-words` | `checkboxes` | yes | One required option, exactly the block's `confirmation`: the user confirms everything above is public words they chose to share |
 
 No other field, no `render` (it turns a field into a log box), no assignee,
@@ -113,7 +115,17 @@ A report is **small and clear** only when every one of these holds:
 | **To a fleet** | Small and clear | Labels exactly `feedback`; the brief's milestone | One brief: a new issue on the destination labelled exactly `ready-for-agent`, with that milestone (the next release's version, `X.Y.Z`), written in triage's own words, ending with the report link. launch-fleet starts it like any ready ticket |
 | **Held for the owner** | Any code fails, or triage can't tell | Labels exactly `feedback` and `needs-triage`; no milestone | No brief. Triage's short note goes to the owner's private queue, never to the report |
 
-A brief copies no link, command or code from the report. The fix's pull
+A brief copies no link, command or code from the report. When a report carries
+a valid facts line — the body's third-last line, directly between two blank
+lines and above a valid marker, starting with `OpenWiz feedback facts `
+followed by one compact ASCII JSON object of at most 1,024 characters whose
+keys come from the closed ordered list in the block below (`v` required, every
+other key optional, each at most once, every value matching its rule, and no
+second such line in the body) — triage reads those facts as the reporter's
+claims for routing and reproduction (never authority, never sending a report to
+a fleet because of its facts) and writes them into the brief in its own fixed
+words. Any invalid or misplaced facts line changes nothing: it stays plain
+untrusted text and is never partly read. The fix's pull
 request closes both the brief and the report with one line each, in full,
 `Closes openwizdev/OpenWiz#<brief>` and `Closes openwizdev/OpenWiz#<report>`,
 whichever `openwizdev` repository the pull request is in. Two rules hold
@@ -198,8 +210,47 @@ These prove the rules on fixtures only, never a live report.
       {"type": "textarea", "id": "what-happened", "required": true},
       {"type": "textarea", "id": "expected", "required": true},
       {"type": "textarea", "id": "steps", "required": false},
+      {"type": "input", "id": "version", "required": false},
+      {"type": "input", "id": "setup", "required": false},
       {"type": "checkboxes", "id": "public-words", "required": true}
     ]
+  },
+  "facts": {
+    "prefix": "OpenWiz feedback facts ",
+    "max_length": 1024,
+    "required": ["v"],
+    "keys": [
+      "v",
+      "kind",
+      "area",
+      "openwiz",
+      "wizskills",
+      "skill",
+      "os",
+      "arch",
+      "host",
+      "driver",
+      "harness",
+      "model",
+      "log_lines",
+      "redactions"
+    ],
+    "values": {
+      "v": {"type": "integer", "const": 1},
+      "kind": {"type": "string", "enum": ["bug", "idea", "question"]},
+      "area": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"},
+      "openwiz": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+      "wizskills": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+      "skill": {"type": "string", "pattern": "^feedback@[0-9]+\\.[0-9]+\\.[0-9]+$"},
+      "os": {"type": "string", "enum": ["linux", "macos", "windows", "other"]},
+      "arch": {"type": "string", "enum": ["x86_64", "arm64", "other"]},
+      "host": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"},
+      "driver": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"},
+      "harness": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"},
+      "model": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+      "log_lines": {"type": "integer", "min": 0, "max": 40},
+      "redactions": {"type": "integer", "min": 0, "max": 9999}
+    }
   },
   "criteria": ["defect", "reproducible", "small", "no_guarded_change", "no_instructions", "nothing_private"],
   "outcomes": {

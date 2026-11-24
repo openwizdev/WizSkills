@@ -49,6 +49,7 @@ Re-check of R1 and the code changed since 4b1f0c9, by Codex, Sol 6.2, Medium. CI
 Intent: `pantry export` writes the whole cookbook to one zip and refuses to overwrite an existing file.
 
 - **R1 [blocking]** resolved at 9e8d7c6: R1's command now prints `3`, and `cookbook.zip` is unchanged.
+  Class: files
 - **R2 [polish]** Polish issue: #58.
 - **R3 [polish]** `src/export.rs:52` (Sweep) The new error says "file exist". Fix: "file exists". Polish issue: #60.
 

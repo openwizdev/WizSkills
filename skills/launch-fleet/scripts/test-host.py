@@ -9,6 +9,7 @@ adapters folder of synthetic drivers (fixtures/driver.py, one per host) that
 log every call, a private runs file and a synthetic GitHub (fixtures/fake_github.py on PATH as `gh`).
 Nothing reaches GitHub or a host.
 """
+import http.server
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,7 @@ import runpy
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -65,13 +67,18 @@ class Project:
         bin_dir.mkdir()
         (bin_dir / 'gh').write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, HERE / 'fixtures/fake_github.py'))
         (bin_dir / 'gh').chmod(0o755)
+        (self.dir / 'stubs').mkdir()
+        for name in ('room-cli', 'claude', 'codex', 'boat'):
+            (self.dir / 'stubs' / name).write_text('#!/bin/sh\necho "stub: no %s in tests" >&2\nexit 1\n' % name)
+            (self.dir / 'stubs' / name).chmod(0o755)
         self.world = self.dir / 'world.json'
         self.world.write_text(json.dumps({'repo': REPO, 'me': 'openwiz[bot]', 'fleet_md': FLEET_MD, 'next_id': 5000,
                                           'comments': {}, 'writes': [], 'faults': {}}))
         self.env = dict(self.git_env, OPENWIZ_ADAPTERS=str(self.dir / 'adapters'), LAUNCH_FLEET_RUNS=str(self.runs),
-                        FAKE_DRIVER_LOG=str(self.log), PATH='%s:%s' % (bin_dir, os.environ['PATH']),
+                        FAKE_DRIVER_LOG=str(self.log), PATH='%s:%s:%s' % (bin_dir, self.dir / 'stubs', os.environ['PATH']),
                         FAKE_WORLD=str(self.world), LAUNCH_FLEET_HARNESS='Claude Code',
                         LAUNCH_FLEET_MODEL='Opus 5.5 Medium', LAUNCH_FLEET_SKILLS='launch-fleet@' + VERSION)
+        self.env['XDG_STATE_HOME'] = str(self.dir / 'state')
         self.env.update(runpy.run_path(str(HERE / 'fixtures/git_origin.py'))['env'](self.dir, {REPO: FLEET_MD}))
 
     def git(self, *args):
@@ -303,7 +310,27 @@ class Token(unittest.TestCase):
         private.mkdir(mode=0o700)
         p.service_log = p.dir / 'service.log'
         return dict(OPENWIZ_TOKEN_SERVICE=str(HERE / 'fixtures/token_service.py'), OPENWIZ_TOKEN_SERVICE_ROUTE='local',
-                    OPENWIZ_AGENT_TOKEN_DIR=str(private), FAKE_SERVICE_LOG=str(p.service_log))
+                    OPENWIZ_AGENT_TOKEN_DIR=str(private), FAKE_SERVICE_LOG=str(p.service_log),
+                    OPENWIZ_GITHUB_API_BASE='http://127.0.0.1:1')
+
+    def loopback_github_api(self, statuses):
+        seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_DELETE(self):
+                seen.append((self.command, self.path, self.headers.get('Authorization') == 'Bearer ' + TOKEN))
+                self.send_response(statuses.pop(0))
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return 'http://127.0.0.1:%s' % server.server_port, seen
 
     def requests(self, p):
         return [json.loads(line) for line in p.service_log.read_text().splitlines()] if p.service_log.exists() else []
@@ -401,6 +428,30 @@ class Token(unittest.TestCase):
         self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', NOTE))
         self.assertEqual(len(self.requests(p)), 2)
         self.assertEqual(list((p.dir / 'token-private').iterdir()), [])
+
+    def test_a_fallback_revokes_the_builders_held_token_and_keeps_it_while_github_refuses(self):
+        p = Project(self)
+        base, seen = self.loopback_github_api([401, 204])
+        env = dict(self.service(p), OPENWIZ_GITHUB_API_BASE=base)
+        private = p.dir / 'token-private'
+        revoke = ('DELETE', '/installation/token', True)
+        started = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env)
+        self.assertEqual(started, (0, 'started #7 on local', ''))
+        self.assertEqual(seen, [])
+        held, = private.iterdir()
+        held.write_text(json.dumps(dict(json.loads(held.read_text()), expires_at=int(time.time()) + 200)))
+        refused = p.host('wake', REPO, 7, **env, FAKE_SERVICE_REFUSE='1')
+        self.assertEqual(refused, (0, 'woke #7 on local', NOTE))
+        self.assertEqual(seen, [revoke])
+        kept = list(private.iterdir())
+        self.assertEqual([re.sub('[0-9a-f]{32}', 'N', f.name) for f in kept], ['kept-N-N.json'])
+        self.assertEqual(kept[0].stat().st_mode & 0o777, 0o600)
+        self.assertTrue(json.loads(kept[0].read_text())['token'] == TOKEN)
+        revoked = p.host('wake', REPO, 7, **env, FAKE_SERVICE_REFUSE='1')
+        self.assertEqual(revoked, (0, 'woke #7 on local', NOTE))
+        self.assertEqual(seen, [revoke, revoke])
+        self.assertEqual(list(private.iterdir()), [])
+        self.assertFalse(self.exposed(p, *started[1:], *refused[1:], *revoked[1:]))
 
     def test_with_no_service_no_helper_runs_and_starts_are_as_today(self):
         p = Project(self)

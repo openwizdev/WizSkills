@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import runpy
 import shlex
 import stat
 import subprocess
@@ -11,7 +12,9 @@ import tempfile
 import time
 import unittest
 
-DOCTOR = Path(__file__).resolve().parents[1] / 'scripts/doctor.py'
+SKILLS = Path(__file__).resolve().parents[2]
+DOCTOR = SKILLS / 'install/scripts/doctor.py'
+git_origin = runpy.run_path(str(SKILLS / 'launch-fleet/scripts/fixtures/git_origin.py'))['env']
 REPO = 'synthetic-owner/synthetic-repo'
 LOGIN = 'synthetic-factory[bot]'
 SECRET = 'ghs_' + 'S' * 36
@@ -104,7 +107,7 @@ class Setup:
         self.driver = root / 'driver'
         write(self.fake / 'bin/gh', FAKE_GH, 0o755)
         write(self.fake / 'labels.json', json.dumps([{'name': l} for l in LABELS + ('polish',)]))
-        write(self.fake / 'fleet.md', FLEET)
+        self.origin = git_origin(root, {REPO: FLEET})
         write(self.fake / 'viewer.json', json.dumps({'data': {'viewer': {'login': LOGIN}}}))
         write(self.checkout / 'docs/agents/triage-labels.md', TRIAGE)
         write(self.build / 'runtime/setup/setup.py', FAKE_SETUP)
@@ -130,7 +133,7 @@ class Setup:
 
     def run(self, *extra, driver=True):
         env = {'PATH': '%s:%s' % (self.fake / 'bin', os.environ.get('PATH', '/usr/bin:/bin')),
-               'FAKE_DIR': str(self.fake), 'HOME': str(self.root), 'GH_TOKEN': SECRET}
+               'FAKE_DIR': str(self.fake), 'HOME': str(self.root), 'GH_TOKEN': SECRET, **self.origin}
         argv = [sys.executable, '-I', str(DOCTOR), '--repo', REPO, '--root', str(self.checkout),
                 '--state-dir', str(self.state), '--build', str(self.build), '--openwiz', str(self.openwiz)]
         argv += ['--driver', str(self.driver)] if driver else []
@@ -312,6 +315,22 @@ class Doctor(unittest.TestCase):
                          'Applications > Installed GitHub Apps > Configure, or the organization\'s Settings > GitHub '
                          'Apps), then python3 -I -B %s/runtime/setup/setup.py check --state-dir %s'
                          % (REPO, self.s.build, self.s.state))
+
+    def test_existing_app_problems_name_the_github_fix(self):
+        for code, advice in {
+            'app_wrong_repository': 'add %s to the selected repositories' % REPO,
+            'app_suspended': 'unsuspend the installation',
+            'app_read_only': 'grant the required write permissions',
+            'app_permissions_mismatch': 'accept the updated permissions',
+        }.items():
+            with self.subTest(code=code):
+                self.s.observations['github_app'] = code
+                self.s.save()
+                line = self.only(self.s.run())
+                self.assertIn('not verified (%s)' % code, line)
+                self.assertIn(advice, line)
+                self.assertIn('Settings > Applications > Installed GitHub Apps', line)
+                self.assertIn('runtime/setup/setup.py check', line)
 
     def test_acting_login_not_a_record_author(self):
         write(self.s.fake / 'viewer.json', json.dumps({'data': {'viewer': {'login': 'synthetic-stranger'}}}))

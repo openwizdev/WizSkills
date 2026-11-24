@@ -6,6 +6,7 @@ import errno
 import fcntl
 import json
 import os
+import platform
 import re
 import secrets
 import stat
@@ -20,6 +21,25 @@ API_REPO = 'https://api.github.com/repos/' + DESTINATION
 WEB_REPO = 'https://github.com/' + DESTINATION
 SCHEMA = 'openwiz.feedback-operation.v1'
 MARKER = 'OpenWiz feedback operation '
+FACTS_PREFIX = 'OpenWiz feedback facts '
+FACTS_MAX = 1024
+FACTS_ORDER = (
+    'v', 'kind', 'area', 'openwiz', 'wizskills', 'skill', 'os', 'arch',
+    'host', 'driver', 'harness', 'model', 'log_lines', 'redactions',
+)
+DROPPABLE_FACTS = set(FACTS_ORDER) - {'v'}
+REPORT_KEYS = {'title', 'kind', 'area', 'ran', 'happened', 'expected', 'host', 'driver', 'harness', 'model'}
+SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,31}$')
+VERSION_RE = re.compile(r'^[0-9]+\.[0-9]+\.[0-9]+$')
+SKILL_VER_RE = re.compile(r'^feedback@[0-9]+\.[0-9]+\.[0-9]+$')
+MODEL_RE = re.compile(r'^[a-z0-9][a-z0-9._-]{0,63}$')
+KINDS = ('bug', 'idea', 'question')
+OS_FAMILIES = ('linux', 'macos', 'windows', 'other')
+ARCH_FAMILIES = ('x86_64', 'arm64', 'other')
+LOG_MAX_LINES = 40
+LOG_MAX_CHARS = 200
+REDACTIONS_MAX = 9999
+OPENWIZ_VERSION_TIMEOUT_S = 2
 OP_ID = re.compile(r'[0-9a-f]{32}')
 PREVIEW_ID = re.compile(r'[0-9]{6}')
 FAILED_STATUSES = {401, 403, 404, 410, 422, 429}
@@ -29,6 +49,39 @@ TITLE_MAX = 256
 BODY_MAX = 65536
 TIMEOUT_S = 60
 SINCE_MARGIN = datetime.timedelta(days=1)
+PRIVATE_KEY_START = re.compile(r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----')
+PRIVATE_KEY_BLOCK = re.compile(r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)')
+URL_CRED = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://[^\s/@]+:[^\s/@]+@[^\s"\'<>]+')
+SECRET_PATTERNS = (
+    (re.compile(r'\bsynthetic-token-[A-Za-z0-9_-]+\b'), '[secret removed]'),
+    (re.compile(r'\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b'), '[secret removed]'),
+    (re.compile(r'\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}\b'), '[secret removed]'),
+    (re.compile(r'\bglpat-[A-Za-z0-9_-]{10,}\b'), '[secret removed]'),
+    (re.compile(r'\bnpm_[A-Za-z0-9]{10,}\b'), '[secret removed]'),
+    (re.compile(r'\bhf_[A-Za-z0-9]{10,}\b'), '[secret removed]'),
+    (re.compile(r'\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}\b'), '[secret removed]'),
+    (re.compile(r'\b(?:AKIA|ASIA)[0-9A-Z]{16}\b'), '[secret removed]'),
+    (re.compile(r'\bxox[a-z]-[A-Za-z0-9-]{10,}\b'), '[secret removed]'),
+    (re.compile(r'\bAIza[0-9A-Za-z_-]{35}\b'), '[secret removed]'),
+    (re.compile(r'\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b'), '[secret removed]'),
+    (re.compile(r'\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b'), '[secret removed]'),
+    (URL_CRED, '[secret removed]'),
+    (re.compile(r'\b((?:[A-Za-z0-9_]*_)?(?:password|passwd|secret|token|api[_-]?key|auth[_-]?token)\s*[:=]\s*)'
+                r'(?!\[(?:secret|path|link|email|ip|id) removed\])\S+', re.I), r'\1[secret removed]'),
+)
+LINK_RE = re.compile(r'(?:https?|ssh|ftp)://[^\s"\'<>()]+|\bwww\.[^\s"\'<>()]+|git@[A-Za-z0-9._-]+:[^\s"\'<>()]+', re.I)
+EMAIL_RE = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b')
+IPV4_RE = re.compile(r'\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b(?::\d{1,5})?')
+IPV6_RE = re.compile(r'(?<![A-Za-z0-9:])(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{0,4}(?![A-Za-z0-9:])'
+                     r'|(?<![A-Za-z0-9:])::(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}(?![A-Za-z0-9:])')
+PATH_RE = re.compile(r'~/[^\s"\'<>:,;)]*'
+                     r'|(?<![A-Za-z0-9._:-])/(?:Users|home|root|var|tmp|etc|opt|srv|mnt|media|Volumes|private|code|repos|run|proc|sys)/[^\s"\'<>:,;)]*'
+                     r'|(?<![A-Za-z0-9._:-])/[A-Za-z0-9._-]+/[A-Za-z0-9._/@~+-]+'
+                     r'|\b[A-Za-z]:\\[^\s"\'<>:,;)]+')
+ID_RE = re.compile(r'\b(?:thr|prj|ses|sess|acct|acc|usr|user|org|ws|run|job|req)_[A-Za-z0-9_-]{4,}\b'
+                   r'|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b')
+SHELL_PROMPT_RE = re.compile(r'^[ \t]*(?:[A-Za-z0-9._-]+@[A-Za-z0-9._-]+(?::[^\s$#%>]*)?\s*[$#%>]|PS [A-Z]:\\[^>]*>|[$#%>])\s+')
+SKILL_VERSION_LINE = re.compile(r'^version:\s*["\']?([0-9]+\.[0-9]+\.[0-9]+)["\']?\s*$')
 
 
 def same_name(value, name):
@@ -39,7 +92,9 @@ SHARE_ISSUE = re.compile(r'https://github\.com/openwizdev/OpenWiz/issues/([1-9][
 URLISH = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://|\bwww\.|\blocalhost\b|\b\d{1,3}(\.\d{1,3}){3}\b'
                     r'|\b(?:[a-z0-9-]+\.)+[a-z]{2,}\.?(?::[\w.~-]*)?/|\b[a-z0-9-]+:\d+/'
                     r'|@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.?:~?[\w.-]*/', re.I)
-KEYS = ['schema', 'operation_id', 'destination', 'phase', 'title', 'chosen_body', 'body',
+KEYS_030 = ['schema', 'operation_id', 'destination', 'phase', 'title', 'chosen_body', 'body',
+            'account', 'preview', 'attempts', 'issue', 'reason', 'evidence']
+KEYS = ['schema', 'operation_id', 'destination', 'phase', 'title', 'chosen_body', 'body', 'facts', 'warnings',
         'account', 'preview', 'attempts', 'issue', 'reason', 'evidence']
 
 
@@ -138,10 +193,12 @@ def read_record(path):
         rec = json.loads(text, object_pairs_hook=pairs)
     except ValueError:
         rec = None
-    if not (isinstance(rec, dict) and list(rec) == KEYS and rec['schema'] == SCHEMA
+    if not (isinstance(rec, dict) and list(rec) in (KEYS, KEYS_030) and rec['schema'] == SCHEMA
             and rec['phase'] in PHASES and same_name(rec['destination'], DESTINATION)
             and path.name == f"{rec['operation_id']}.json"):
         raise Stop('The record is unreadable. OpenWiz cannot tell whether earlier feedback was created; nothing was sent.')
+    if list(rec) == KEYS_030:
+        rec = {k: (None if k == 'facts' else [] if k == 'warnings' else rec[k]) for k in KEYS}
     return rec
 
 
@@ -254,11 +311,280 @@ def chosen(title_file, body_file):
     if len(title) > TITLE_MAX:
         raise Stop(f'The title is longer than {TITLE_MAX} characters; shorten it.')
     if not body:
-        raise Stop('The body is empty; write what you want Jake to read.')
-    if '\r' in body or any(line.startswith(MARKER) for line in body.split('\n')):
-        raise Stop('The body cannot hold a carriage return or its own feedback marker line.')
+        raise Stop('The body is empty; write what you want the OpenWiz maintainers to read.')
+    if '\r' in body or any(line.startswith(MARKER) or line.startswith(FACTS_PREFIX) for line in body.split('\n')):
+        raise Stop('The body cannot hold a carriage return or its own feedback marker or facts line.')
     visible(title, body)
-    return title, body
+    warnings = check_secrets_and_warnings([('title', title), ('body', body)])
+    return title, body, None, warnings
+
+
+def check_secrets_and_warnings(sections):
+    for name, text in sections:
+        if not text:
+            continue
+        for lineno, line in enumerate(text.split('\n'), 1):
+            if PRIVATE_KEY_START.search(line):
+                raise Stop(f'Refused: private key block found in {name} (line {lineno}); remove it before previewing.')
+            for pat, _ in SECRET_PATTERNS:
+                if pat.search(line):
+                    raise Stop(f'Refused: token-shaped secret found in {name} (line {lineno}); remove it before previewing.')
+    warnings = []
+    seen = set()
+    for name, text in sections:
+        if not text:
+            continue
+        for lineno, line in enumerate(text.split('\n'), 1):
+            checks = (
+                ('path', PATH_RE, f'Private-looking path in {name} (line {lineno})'),
+                ('email', EMAIL_RE, f'E-mail address in {name} (line {lineno})'),
+                ('ip', IPV4_RE, f'IP address in {name} (line {lineno})'),
+                ('ip', IPV6_RE, f'IP address in {name} (line {lineno})'),
+                ('id', ID_RE, f'Private-looking identifier in {name} (line {lineno})'),
+            )
+            for kind, pat, msg in checks:
+                if pat.search(line) and (kind, name, lineno) not in seen:
+                    seen.add((kind, name, lineno))
+                    warnings.append(msg)
+    return warnings
+
+
+def scrub_log(path):
+    text = read_text(path, 'log').replace('\r\n', '\n').replace('\r', '\n')
+    count = 0
+    text, n = PRIVATE_KEY_BLOCK.subn('[secret removed]', text)
+    count += n
+    lines = text.split('\n')
+    while lines and lines[-1] == '':
+        lines.pop()
+    if not lines:
+        raise Stop('The log file is empty.')
+    lines = lines[-LOG_MAX_LINES:]
+    out_lines = []
+    for line in lines:
+        line = SHELL_PROMPT_RE.sub('', line, count=1)
+        for pat, repl in SECRET_PATTERNS:
+            line, n = pat.subn(repl, line)
+            count += n
+        for pat, repl in (
+            (LINK_RE, '[link removed]'),
+            (EMAIL_RE, '[email removed]'),
+            (IPV4_RE, '[ip removed]'),
+            (IPV6_RE, '[ip removed]'),
+            (PATH_RE, '[path removed]'),
+            (ID_RE, '[id removed]'),
+        ):
+            line, n = pat.subn(repl, line)
+            count += n
+        if len(line) > LOG_MAX_CHARS:
+            line = line[:LOG_MAX_CHARS]
+        out_lines.append('    ' + line)
+    if count > REDACTIONS_MAX:
+        raise Stop(f'The log holds more than {REDACTIONS_MAX} redactions; trim it first.')
+    return '\n'.join(out_lines), len(out_lines), count
+
+
+def read_skill_version():
+    skill_md = Path(__file__).resolve().parent.parent / 'SKILL.md'
+    try:
+        lines = skill_md.read_text(encoding='utf-8').split('\n')
+    except OSError:
+        return None
+    if lines[:1] != ['---'] or '---' not in lines[1:]:
+        return None
+    end = lines.index('---', 1)
+    for line in lines[1:end]:
+        m = SKILL_VERSION_LINE.fullmatch(line)
+        if m:
+            return f'feedback@{m.group(1)}'
+    return None
+
+
+def read_wizskills_version():
+    manifest = Path(__file__).resolve().parents[3] / '.claude-plugin' / 'plugin.json'
+    try:
+        data = json.loads(manifest.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    ver = data.get('version') if isinstance(data, dict) else None
+    return ver if isinstance(ver, str) and VERSION_RE.fullmatch(ver) else None
+
+
+def read_openwiz_version():
+    try:
+        run = subprocess.run(
+            ['openwiz', '--version'],
+            capture_output=True,
+            text=True,
+            env={'PATH': os.environ.get('PATH', ''), 'LC_ALL': 'C'},
+            timeout=OPENWIZ_VERSION_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if run.returncode != 0:
+        return None
+    m = re.fullmatch(r'(?:openwiz\s+)?v?([0-9]+\.[0-9]+\.[0-9]+)', run.stdout.strip(), re.I)
+    return m.group(1) if m else None
+
+
+def read_os_family():
+    if sys.platform.startswith('linux'):
+        return 'linux'
+    if sys.platform == 'darwin':
+        return 'macos'
+    if sys.platform in ('win32', 'cygwin'):
+        return 'windows'
+    return 'other'
+
+
+def read_arch_family():
+    machine = (os.uname().machine if hasattr(os, 'uname') else platform.machine()).lower()
+    if machine in ('x86_64', 'amd64'):
+        return 'x86_64'
+    if machine in ('arm64', 'aarch64'):
+        return 'arm64'
+    return 'other'
+
+
+def validate_facts(facts):
+    if facts is None:
+        return None
+    if not isinstance(facts, dict):
+        raise Stop('Facts must be a JSON object.')
+    for k in facts:
+        if k not in FACTS_ORDER:
+            raise Stop(f'Unknown fact key `{k}`.')
+    if facts.get('v') != 1 or type(facts.get('v')) is not int:
+        raise Stop('Invalid fact `v`: must be 1.')
+    checks = {
+        'v': lambda v: type(v) is int and v == 1,
+        'kind': lambda v: isinstance(v, str) and v in KINDS,
+        'area': lambda v: isinstance(v, str) and bool(SLUG_RE.fullmatch(v)),
+        'openwiz': lambda v: isinstance(v, str) and bool(VERSION_RE.fullmatch(v)),
+        'wizskills': lambda v: isinstance(v, str) and bool(VERSION_RE.fullmatch(v)),
+        'skill': lambda v: isinstance(v, str) and bool(SKILL_VER_RE.fullmatch(v)),
+        'os': lambda v: isinstance(v, str) and v in OS_FAMILIES,
+        'arch': lambda v: isinstance(v, str) and v in ARCH_FAMILIES,
+        'host': lambda v: isinstance(v, str) and bool(SLUG_RE.fullmatch(v)),
+        'driver': lambda v: isinstance(v, str) and bool(SLUG_RE.fullmatch(v)),
+        'harness': lambda v: isinstance(v, str) and bool(SLUG_RE.fullmatch(v)),
+        'model': lambda v: isinstance(v, str) and bool(MODEL_RE.fullmatch(v)),
+        'log_lines': lambda v: type(v) is int and 0 <= v <= LOG_MAX_LINES,
+        'redactions': lambda v: type(v) is int and 0 <= v <= REDACTIONS_MAX,
+    }
+    ordered = {}
+    for k in FACTS_ORDER:
+        if k in facts:
+            val = facts[k]
+            if not checks[k](val):
+                raise Stop(f'Invalid fact `{k}`: value is outside the contract pattern.')
+            ordered[k] = val
+    if len(ordered) <= 1:
+        return None
+    return ordered
+
+
+def format_facts_line(facts):
+    ordered = validate_facts(facts)
+    if ordered is None:
+        return None
+    line = FACTS_PREFIX + json.dumps(ordered, separators=(',', ':'), ensure_ascii=True)
+    if not line.isascii() or len(line) > FACTS_MAX:
+        raise Stop(f'The facts line exceeds {FACTS_MAX} ASCII characters; drop a fact.')
+    return line
+
+
+def chosen_report(report_file, log_file=None, drop=(), no_facts=False):
+    raw = read_text(report_file, 'report')
+
+    def pairs(items):
+        keys = [k for k, _ in items]
+        if len(keys) != len(set(keys)):
+            raise ValueError('repeated key')
+        return dict(items)
+
+    try:
+        data = json.loads(raw, object_pairs_hook=pairs)
+    except ValueError:
+        raise Stop('The report file must be a valid JSON object with no repeated keys.')
+    if not isinstance(data, dict):
+        raise Stop('The report file must be a JSON object.')
+    for k in data:
+        if k not in REPORT_KEYS:
+            raise Stop(f'Unknown key `{k}` in report file.')
+    for k in drop:
+        if k not in DROPPABLE_FACTS:
+            raise Stop(f'Unknown fact key `{k}` for --drop.')
+
+    def read_field(name, required=False):
+        val = data.get(name)
+        if val is None:
+            if required:
+                raise Stop(f'The report file is missing required `{name}`.')
+            return ''
+        if not isinstance(val, str):
+            raise Stop(f'Invalid `{name}` in report file: must be a string.')
+        return val.replace('\r\n', '\n')
+
+    title = read_field('title', required=True).strip()
+    if not title or '\n' in title or '\r' in title:
+        raise Stop('The title must be one line, not empty.')
+    if len(title) > TITLE_MAX:
+        raise Stop(f'The title is longer than {TITLE_MAX} characters; shorten it.')
+
+    ran = read_field('ran').rstrip()
+    happened = read_field('happened', required=True).rstrip()
+    expected = read_field('expected').rstrip()
+    if not happened:
+        raise Stop('The `happened` field is empty; write what you want the OpenWiz maintainers to read.')
+
+    text_sections = [('title', title), ('ran', ran), ('happened', happened), ('expected', expected)]
+    for name, text in text_sections:
+        if '\r' in text or any(line.startswith(MARKER) or line.startswith(FACTS_PREFIX) for line in text.split('\n')):
+            raise Stop(f'The `{name}` section cannot hold a carriage return or its own feedback marker or facts line.')
+    warnings = check_secrets_and_warnings(text_sections)
+
+    body_parts = []
+    if ran:
+        body_parts.append(f'What I ran:\n{ran}')
+    body_parts.append(f'What happened:\n{happened}')
+    if expected:
+        body_parts.append(f'What I expected:\n{expected}')
+
+    log_lines = None
+    redactions = None
+    if log_file:
+        scrubbed, log_lines, redactions = scrub_log(log_file)
+        body_parts.append(f'Log (secrets removed):\n{scrubbed}')
+
+    body = '\n\n'.join(body_parts)
+    visible(title, body)
+
+    if no_facts:
+        facts = None
+    else:
+        raw_facts = {'v': 1}
+        for k in ('kind', 'area', 'host', 'driver', 'harness', 'model'):
+            if k in data and data[k] is not None:
+                raw_facts[k] = data[k]
+        ow = read_openwiz_version()
+        if ow:
+            raw_facts['openwiz'] = ow
+        ws = read_wizskills_version()
+        if ws:
+            raw_facts['wizskills'] = ws
+        sk = read_skill_version()
+        if sk:
+            raw_facts['skill'] = sk
+        raw_facts['os'] = read_os_family()
+        raw_facts['arch'] = read_arch_family()
+        if log_lines is not None:
+            raw_facts['log_lines'] = log_lines
+            raw_facts['redactions'] = redactions
+        for k in drop:
+            raw_facts.pop(k, None)
+        facts = validate_facts(raw_facts)
+    return title, body, facts, warnings
 
 
 def visible(title, body):
@@ -268,8 +594,12 @@ def visible(title, body):
             raise Stop(f'The {what} holds an invisible character, U+{ord(hidden):04X}; remove it.')
 
 
-def full_body(chosen_body, op):
-    body = f'{chosen_body}\n\n{MARKER}{op}'
+def full_body(chosen_body, op, facts=None):
+    facts_line = format_facts_line(facts)
+    if facts_line:
+        body = f'{chosen_body}\n\n{facts_line}\n\n{MARKER}{op}'
+    else:
+        body = f'{chosen_body}\n\n{MARKER}{op}'
     if len(body) > BODY_MAX:
         raise Stop(f'The body with its marker is longer than {BODY_MAX} characters; shorten it.')
     return body
@@ -375,29 +705,73 @@ SAY = {
     'previewed': 'Shown exactly; waiting for an explicit yes to this preview.',
     'refused': 'Not sent. The draft is kept, so it can be edited and previewed again.',
     'sending': 'The create request is being made now.',
-    'sent': ('The public issue was created and read back. This proves only that the issue exists, not that Jake\'s agents '
-             'have read it. OpenWiz\'s triage adds the `feedback` label when it reads the report. The issue gets one comment '
-             'naming the pull request and the release that will carry the fix only if triage sends it to a fleet and that '
-             'fix merges; a report held for the owner can close without that comment.'),
     'failed': 'GitHub refused the request, so no issue was created. You can preview it again and, after a new yes, try once more.',
     'uncertain': 'OpenWiz cannot tell whether the issue was created. Nothing will be sent again for it. Check the issue list, then reconcile.',
 }
 
 
+def sent_say(rec):
+    url = rec['issue']['url'] if isinstance(rec.get('issue'), dict) and rec['issue'].get('url') else WEB_REPO
+    return (f'Filed public issue {url} (read back; not yet read by the OpenWiz maintainers). '
+            'OpenWiz\'s triage adds the `feedback` label and comments with the pull request and the release '
+            'only if triage sends it to a fleet and that fix merges; a report held for the OpenWiz maintainers '
+            'can close without that comment.')
+
+
 def answer(rec, **extra):
-    a = {'operation_id': rec['operation_id'], 'phase': rec['phase'], 'say': SAY[rec['phase']]}
+    say = sent_say(rec) if rec['phase'] == 'sent' else SAY[rec['phase']]
+    a = {'operation_id': rec['operation_id'], 'phase': rec['phase'], 'say': say}
     if rec['reason']:
         a['reason'] = rec['reason']
     if rec['issue']:
         a['issue'] = rec['issue']
+    if rec.get('warnings'):
+        a['warnings'] = rec['warnings']
     if rec['phase'] == 'uncertain':
         a['check'] = f'{WEB_REPO}/issues?q=' + urllib.parse.quote(f'"{MARKER}{rec["operation_id"]}" in:body')
     a.update(extra)
     return a
 
 
+def facts_summary_lines(facts):
+    lines = []
+    if 'kind' in facts:
+        lines.append(f'- Kind: {facts["kind"]}')
+    if 'area' in facts:
+        lines.append(f'- Area: {facts["area"]}')
+    if 'openwiz' in facts:
+        lines.append(f'- OpenWiz {facts["openwiz"]}')
+    if 'wizskills' in facts:
+        lines.append(f'- WizSkills {facts["wizskills"]}')
+    if 'skill' in facts:
+        lines.append(f'- Skill: {facts["skill"]}')
+    if 'os' in facts and 'arch' in facts:
+        lines.append(f'- Platform: {facts["os"]}, {facts["arch"]}')
+    elif 'os' in facts:
+        lines.append(f'- OS: {facts["os"]}')
+    elif 'arch' in facts:
+        lines.append(f'- Arch: {facts["arch"]}')
+    if 'host' in facts:
+        lines.append(f'- Host: {facts["host"]}')
+    if 'driver' in facts:
+        lines.append(f'- Driver: {facts["driver"]}')
+    if 'harness' in facts and 'model' in facts:
+        lines.append(f'- Agent: {facts["harness"]}, model {facts["model"]}')
+    elif 'harness' in facts:
+        lines.append(f'- Agent: {facts["harness"]}')
+    elif 'model' in facts:
+        lines.append(f'- Model: {facts["model"]}')
+    if 'log_lines' in facts and 'redactions' in facts:
+        lines.append(f'- Log: {facts["log_lines"]} lines ({facts["redactions"]} redactions)')
+    elif 'log_lines' in facts:
+        lines.append(f'- Log: {facts["log_lines"]} lines')
+    elif 'redactions' in facts:
+        lines.append(f'- Log redactions: {facts["redactions"]}')
+    return lines
+
+
 def preview_text(rec):
-    return '\n'.join([
+    parts = [
         f'Destination: {DESTINATION} (public: anyone can read it)',
         f"Account: {rec['account']['login']}",
         f'A yes creates one public issue on {DESTINATION}, once.',
@@ -407,9 +781,25 @@ def preview_text(rec):
         '',
         'Body:',
         rec['body'],
+    ]
+    if rec.get('facts'):
+        parts.extend([
+            '',
+            "Facts (the facts line above the marker is for OpenWiz's agents):",
+            *facts_summary_lines(rec['facts']),
+            'To drop a fact, edit with --drop <key> (or --no-facts to drop all).',
+        ])
+    if rec.get('warnings'):
+        parts.extend([
+            '',
+            'Warnings (you may keep or remove these before saying yes):',
+            *(f'- {w}' for w in rec['warnings']),
+        ])
+    parts.extend([
         '',
         f"To create it, reply: yes {rec['preview']['id']}",
     ])
+    return '\n'.join(parts)
 
 
 def recorded(rec, lock_held=False):
@@ -419,13 +809,25 @@ def recorded(rec, lock_held=False):
     return rec
 
 
+def load_input(a):
+    if a.report_file:
+        if a.title_file or a.body_file:
+            raise Stop('Use either --report-file or --title-file with --body-file, not both.')
+        return chosen_report(a.report_file, log_file=a.log_file, drop=a.drop or (), no_facts=a.no_facts)
+    if not (a.title_file and a.body_file):
+        raise Stop('Pass --report-file, or both --title-file and --body-file.')
+    if a.log_file or a.drop or a.no_facts:
+        raise Stop('--log-file, --drop and --no-facts require --report-file.')
+    return chosen(a.title_file, a.body_file)
+
+
 def cmd_draft(a):
     place = area()
-    title, body = chosen(a.title_file, a.body_file)
+    title, body, facts, warnings = load_input(a)
     op = secrets.token_hex(16)
     rec = dict(schema=SCHEMA, operation_id=op, destination=DESTINATION, phase='draft', title=title,
-               chosen_body=body, body=full_body(body, op), account=None, preview=None, attempts=0,
-               issue=None, reason=None, evidence=[])
+               chosen_body=body, body=full_body(body, op, facts), facts=facts, warnings=warnings,
+               account=None, preview=None, attempts=0, issue=None, reason=None, evidence=[])
     with Lock(place, op), StoreLock(place):
         other = twin(place, op, title, body)
         if other:
@@ -436,7 +838,7 @@ def cmd_draft(a):
 
 def cmd_edit(a):
     place = area()
-    title, body = chosen(a.title_file, a.body_file)
+    title, body, facts, warnings = load_input(a)
     with Lock(place, a.op):
         rec = recorded(read_record(record_path(place, a.op)))
         if rec['phase'] not in EDITABLE:
@@ -445,8 +847,8 @@ def cmd_edit(a):
             other = twin(place, a.op, title, body)
             if other:
                 raise Stop(TWIN.format(other))
-            rec.update(phase='draft', title=title, chosen_body=body, body=full_body(body, a.op),
-                       account=None, preview=None, reason=None)
+            rec.update(phase='draft', title=title, chosen_body=body, body=full_body(body, a.op, facts),
+                       facts=facts, warnings=warnings, account=None, preview=None, reason=None)
             write_record(place, rec)
     return out(answer(rec), 0)
 
@@ -461,6 +863,8 @@ def cmd_preview(a):
                 write_record(place, rec)
             return out(answer(rec, refused='This operation is not previewed again.'), 1)
         visible(rec['title'], rec['chosen_body'])
+        check_secrets_and_warnings([('title', rec['title']), ('body', rec['chosen_body'])])
+        validate_facts(rec['facts'])
         read_destination()
         account = read_account()
         rec.update(phase='previewed', account=account, reason=None,
@@ -500,6 +904,8 @@ def cmd_send(a):
             return refuse_send(place, rec, 'there is no current preview to say yes to')
         try:
             visible(rec['title'], rec['chosen_body'])
+            check_secrets_and_warnings([('title', rec['title']), ('body', rec['chosen_body'])])
+            expected_body = full_body(rec['chosen_body'], rec['operation_id'], rec['facts'])
         except Stop as e:
             return refuse_send(place, rec, str(e))
         if not PREVIEW_ID.fullmatch(a.preview_id or '') or a.preview_id != rec['preview']['id']:
@@ -511,8 +917,8 @@ def cmd_send(a):
             return refuse_send(place, rec, str(e))
         if account != rec['account']:
             return refuse_send(place, rec, 'the GitHub account changed since the preview')
-        if rec['body'] != full_body(rec['chosen_body'], rec['operation_id']):
-            return refuse_send(place, rec, 'the body changed since the preview')
+        if rec['body'] != expected_body:
+            return refuse_send(place, rec, 'the body or facts changed since the preview')
         with StoreLock(place):
             other = twin(place, rec['operation_id'], rec['title'], rec['chosen_body'])
             if other:
@@ -645,8 +1051,12 @@ def main(argv):
         s = sub.add_parser(name)
         if name == 'edit':
             s.add_argument('op')
-        s.add_argument('--title-file', required=True)
-        s.add_argument('--body-file', required=True)
+        s.add_argument('--title-file')
+        s.add_argument('--body-file')
+        s.add_argument('--report-file')
+        s.add_argument('--log-file')
+        s.add_argument('--drop', action='append', default=[])
+        s.add_argument('--no-facts', action='store_true')
     for name in ('preview', 'status'):
         sub.add_parser(name).add_argument('op')
     s = sub.add_parser('refuse')

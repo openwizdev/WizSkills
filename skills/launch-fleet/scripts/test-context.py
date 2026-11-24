@@ -54,7 +54,7 @@ class ContextTests(unittest.TestCase):
         self.put('docs/agents/domain.md', section('Public') + '\n' + section('Private storage'))
         self.put('docs/agents/issue-tracker.md',
                  '\n'.join(map(section, ['Where things live', 'Unused', 'Repositories'])))
-        self.put('GLOSSARY.md', '# Terms\n\n**Cherry**:\n\nDefinition with **emphasis**.\n\n**Pear**:\n\nFruit.\n')
+        self.put('GLOSSARY.md', '# Terms\n\n**Cherry**:\n\nDefinition with **emphasis**.\n\n**Pear**: Fruit.\n')
         self.git('add', '.')
         self.git('commit', '-qm', 'Synthetic project')
         glossary = ('Use the words in `GLOSSARY.md`; read it when you name something new, '
@@ -135,6 +135,7 @@ class ContextTests(unittest.TestCase):
             'fixture@example.com fixture@example.org fixture@example.net fixture@example.invalid',
             'fixture@two.host.example 123+fixture@users.noreply.github.com noreply@github.com',
             'Ordinary prose:** "A quotation without a bold lead."',
+            '**Ordinary emphasis** followed by prose:** "An unrelated quotation."',
         ]))
         result = self.run_cli('check', 'comment.md')
         self.assertEqual((result.stdout, result.returncode, result.stderr), ('check: ok\n', 0, ''))

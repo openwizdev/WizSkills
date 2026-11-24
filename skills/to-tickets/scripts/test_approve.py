@@ -254,6 +254,21 @@ class CrossRepositoryRelies(unittest.TestCase):
                                   {'files': {f'{SECOND}:{CONTRACT}': REGULAR}, 'renamed': 'synthetic-owner/moved-repo'})
         self.assertEqual((out.returncode, out.stdout, len(calls)), (2, '', 1), out.stderr)
 
+    def test_a_present_errors_key_is_unreadable_whatever_its_value(self):
+        clean = {'data': {'repository': {'nameWithOwner': SECOND, 'defaultBranchRef': {'target': {
+            'file': {'mode': REGULAR}}}}}}
+        for value in (None, False, 0, '', {}, []):
+            with self.subTest(errors=repr(value)):
+                out, calls = self.approve(self.plan('CLOSED', f'`{CONTRACT}` in `{SECOND}`'),
+                                          {'answer': {**clean, 'errors': value}})
+                self.assertEqual((out.returncode, out.stdout), (2, ''), out.stderr)
+                self.assertIn(f'approve: unreadable input: cannot read `{CONTRACT}` in `{SECOND}`', out.stderr)
+                self.assertEqual(len(calls), 1, calls)
+        out, calls = self.approve(self.plan('CLOSED', f'`{CONTRACT}` in `{SECOND}`'), {'answer': clean})
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertTrue(out.stdout.startswith('**Machine plan approval, '), out.stdout[:80])
+        self.assertEqual(len(calls), 1, calls)
+
     def test_a_bad_path_is_refused_without_a_read(self):
         for relies in (f'`../{CONTRACT}` in `{SECOND}`', f'`contracts/*.md` in `{SECOND}`',
                        f'`contracts/./shared.md` in `{SECOND}`', f'`{CONTRACT}` in `second-repo`'):

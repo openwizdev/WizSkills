@@ -50,12 +50,13 @@ TITLE_MAX = 256
 BODY_MAX = 65536
 LINK_MAX = 6000
 TIMEOUT_S = 60
-SECTION_HEADERS = (
-    ('ran', 'What I ran:'),
-    ('happened', 'What happened:'),
-    ('expected', 'What I expected:'),
-    ('log', 'Log (secrets removed):'),
-)
+SECTION_HEADERS = {
+    'ran': 'What I ran:',
+    'happened': 'What happened:',
+    'expected': 'What I expected:',
+}
+LOG_HEADER = 'Log (secrets removed):'
+SECTION_LABELS = {*SECTION_HEADERS.values(), LOG_HEADER}
 FAILED_HINTS = {
     401: 'The login expired; sign in again with gh auth login, or use the browser link.',
     403: 'GitHub refused this account or is rate-limiting it; check your account or wait, or use the browser link.',
@@ -112,6 +113,7 @@ KEYS_030 = ['schema', 'operation_id', 'destination', 'phase', 'title', 'chosen_b
             'account', 'preview', 'attempts', 'issue', 'reason', 'evidence']
 KEYS = ['schema', 'operation_id', 'destination', 'phase', 'title', 'chosen_body', 'body', 'facts', 'warnings',
         'account', 'preview', 'attempts', 'issue', 'reason', 'evidence']
+KEYS_WITH_REPORT = [*KEYS, 'report_fields']
 
 
 class Stop(Exception):
@@ -209,19 +211,20 @@ def read_record(path):
         rec = json.loads(text, object_pairs_hook=pairs)
     except ValueError:
         rec = None
-    if not (isinstance(rec, dict) and list(rec) in (KEYS, KEYS_030) and rec['schema'] == SCHEMA
+    if not (isinstance(rec, dict) and list(rec) in (KEYS, KEYS_030, KEYS_WITH_REPORT) and rec['schema'] == SCHEMA
             and rec['phase'] in PHASES and same_name(rec['destination'], DESTINATION)
             and path.name == f"{rec['operation_id']}.json"):
         raise Stop('The record is unreadable. OpenWiz cannot tell whether earlier feedback was created; nothing was sent.')
     if list(rec) == KEYS_030:
-        rec = {k: (None if k == 'facts' else [] if k == 'warnings' else rec[k]) for k in KEYS}
+        rec.update(facts=None, warnings=[], report_fields=None)
     return rec
 
 
 def write_record(place, rec):
     path = place / f"{rec['operation_id']}.json"
     tmp = place / f".{rec['operation_id']}.{secrets.token_hex(4)}.tmp"
-    data = (json.dumps({k: rec[k] for k in KEYS}, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+    keys = KEYS_WITH_REPORT if 'report_fields' in rec else KEYS
+    data = (json.dumps({k: rec[k] for k in keys}, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
@@ -332,7 +335,7 @@ def chosen(title_file, body_file):
         raise Stop('The body cannot hold a carriage return or its own feedback marker or facts line.')
     visible(title, body)
     warnings = check_secrets_and_warnings([('title', title), ('body', body)])
-    return title, body, None, warnings
+    return title, body, None, warnings, None
 
 
 def check_secrets_and_warnings(sections):
@@ -548,30 +551,24 @@ def chosen_report(report_file, log_file=None, drop=(), no_facts=False):
     if len(title) > TITLE_MAX:
         raise Stop(f'The title is longer than {TITLE_MAX} characters; shorten it.')
 
-    ran = read_field('ran').rstrip()
-    happened = read_field('happened', required=True).rstrip()
-    expected = read_field('expected').rstrip()
-    if not happened:
+    fields = {name: read_field(name, required=name == 'happened').rstrip() for name in SECTION_HEADERS}
+    if not fields['happened']:
         raise Stop('The `happened` field is empty; write what you want the OpenWiz maintainers to read.')
 
-    text_sections = [('title', title), ('ran', ran), ('happened', happened), ('expected', expected)]
+    text_sections = [('title', title), *fields.items()]
     for name, text in text_sections:
         if '\r' in text or any(line.startswith(MARKER) or line.startswith(FACTS_PREFIX) for line in text.split('\n')):
             raise Stop(f'The `{name}` section cannot hold a carriage return or its own feedback marker or facts line.')
+        if name in SECTION_HEADERS and any(line in SECTION_LABELS for line in text.split('\n')):
+            raise Stop(f'The `{name}` section cannot contain a feedback section label on its own line.')
     warnings = check_secrets_and_warnings(text_sections)
-
-    body_parts = []
-    if ran:
-        body_parts.append(f'What I ran:\n{ran}')
-    body_parts.append(f'What happened:\n{happened}')
-    if expected:
-        body_parts.append(f'What I expected:\n{expected}')
+    body_parts = [f'{SECTION_HEADERS[name]}\n{text}' for name, text in fields.items() if text]
 
     log_lines = None
     redactions = None
     if log_file:
         scrubbed, log_lines, redactions = scrub_log(log_file)
-        body_parts.append(f'Log (secrets removed):\n{scrubbed}')
+        body_parts.append(f'{LOG_HEADER}\n{scrubbed}')
 
     body = '\n\n'.join(body_parts)
     visible(title, body)
@@ -600,7 +597,7 @@ def chosen_report(report_file, log_file=None, drop=(), no_facts=False):
         for k in drop:
             raw_facts.pop(k, None)
         facts = validate_facts(raw_facts)
-    return title, body, facts, warnings
+    return title, body, facts, warnings, fields
 
 
 def visible(title, body):
@@ -873,11 +870,11 @@ def load_input(a):
 
 def cmd_draft(a):
     place = area()
-    title, body, facts, warnings = load_input(a)
+    title, body, facts, warnings, fields = load_input(a)
     op = secrets.token_hex(16)
     rec = dict(schema=SCHEMA, operation_id=op, destination=DESTINATION, phase='draft', title=title,
                chosen_body=body, body=full_body(body, op, facts), facts=facts, warnings=warnings,
-               account=None, preview=None, attempts=0, issue=None, reason=None, evidence=[])
+               account=None, preview=None, attempts=0, issue=None, reason=None, evidence=[], report_fields=fields)
     with Lock(place, op), StoreLock(place):
         other = twin(place, op, title, body)
         if other:
@@ -888,7 +885,7 @@ def cmd_draft(a):
 
 def cmd_edit(a):
     place = area()
-    title, body, facts, warnings = load_input(a)
+    title, body, facts, warnings, fields = load_input(a)
     with Lock(place, a.op):
         rec = recorded(read_record(record_path(place, a.op)))
         if rec['phase'] not in EDITABLE:
@@ -898,7 +895,7 @@ def cmd_edit(a):
             if other:
                 raise Stop(TWIN.format(other))
             rec.update(phase='draft', title=title, chosen_body=body, body=full_body(body, a.op, facts),
-                       facts=facts, warnings=warnings, account=None, preview=None, reason=None)
+                       facts=facts, warnings=warnings, account=None, preview=None, reason=None, report_fields=fields)
             write_record(place, rec)
     return out(answer(rec), 0)
 
@@ -1078,27 +1075,30 @@ def cmd_status(a):
 
 def split_report_sections(chosen_body):
     lines = chosen_body.split('\n')
-    first = lines[0] if lines else ''
-    if first not in ('What I ran:', 'What happened:'):
-        return '', chosen_body, ''
-    sections = {'ran': [], 'happened': [], 'expected': [], 'log': []}
-    order = [label for _, label in SECTION_HEADERS]
-    keys = [key for key, _ in SECTION_HEADERS]
-    idx = order.index(first)
-    current = keys[idx]
+    if LOG_HEADER in lines:
+        lines = lines[:lines.index(LOG_HEADER)]
+
+    headers = {label: name for name, label in SECTION_HEADERS.items()}
+    current = headers.get(lines[0]) if lines else None
+    if current not in ('ran', 'happened'):
+        text = '\n'.join(lines).rstrip()
+        if text:
+            return '', text, ''
+
+    sections = {name: [] for name in SECTION_HEADERS}
+    next_section = {'ran': 'happened', 'happened': 'expected'}
     for line in lines[1:]:
-        if line in order[idx + 1:] and sections[current] and sections[current][-1] == '':
-            sections[current].pop()
-            idx = order.index(line)
-            current = keys[idx]
-            continue
-        sections[current].append(line)
-    ran = '\n'.join(sections['ran']).rstrip()
-    happened = '\n'.join(sections['happened']).rstrip()
-    expected = '\n'.join(sections['expected']).rstrip()
-    if not happened:
-        return '', chosen_body, ''
-    return ran, happened, expected
+        if line in headers and sections[current] and sections[current][-1] == '':
+            if headers[line] != next_section.get(current):
+                break
+            current = headers[line]
+        else:
+            sections[current].append(line)
+    else:
+        ran, happened, expected = ('\n'.join(sections[name]).rstrip() for name in SECTION_HEADERS)
+        if happened:
+            return ran, happened, expected
+    raise Stop('The saved report sections could not be read. Edit the draft before using a browser link.')
 
 
 def cmd_link(a):
@@ -1107,7 +1107,16 @@ def cmd_link(a):
     rec = recorded(rec, Lock(place, a.op).held())
     if rec['phase'] not in EDITABLE:
         return out(answer(rec, refused='This operation is already sent or uncertain; do not file it again in the browser.'), 1)
-    ran, happened, expected = split_report_sections(rec['chosen_body'])
+    if 'report_fields' not in rec:
+        ran, happened, expected = split_report_sections(rec['chosen_body'])
+    elif rec['report_fields'] is None:
+        ran, happened, expected = '', rec['chosen_body'], ''
+    else:
+        fields = rec['report_fields']
+        if (not isinstance(fields, dict) or fields.keys() != SECTION_HEADERS.keys()
+                or not all(isinstance(value, str) for value in fields.values()) or not fields['happened']):
+            raise Stop('The saved report fields are unreadable. Edit the draft before using a browser link.')
+        ran, happened, expected = (fields[name] for name in SECTION_HEADERS)
     visible(rec['title'], '\n'.join(p for p in (ran, happened, expected) if p))
     check_secrets_and_warnings([('title', rec['title']), ('ran', ran), ('happened', happened), ('expected', expected)])
     params = [

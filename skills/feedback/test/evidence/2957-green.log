@@ -63,3 +63,11 @@ test_share_shows_exactly_the_text_and_the_repository_url (__main__.Share.test_sh
 Ran 60 tests in 146.981s
 
 OK
+
+R1 follow-up
+python3 check/run.py --shard feedback
+Ran 64 tests
+OK
+
+The CLI regressions cover log exclusion on legacy records, precedence of saved
+report fields, preservation of file-based text, and label refusal at draft and edit.

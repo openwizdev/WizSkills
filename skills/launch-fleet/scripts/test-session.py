@@ -1001,7 +1001,7 @@ class Session(unittest.TestCase):
         out = self.ended(process, 0)
         self.assertIn('#12 re-queued', out)
         self.assertEqual(out.count('#12 merged'), 1)
-        self.assertEqual([m[0] for m in self.merges()], ['admit', 'merge'])
+        self.assertEqual([m[0] for m in self.merges() if m[0] != 'read'], ['admit', 'merge'])
 
     def test_a_waiting_or_dropped_merge_is_sent_again_on_the_next_poll(self):
         self.approved()

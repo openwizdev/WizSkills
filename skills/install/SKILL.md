@@ -339,7 +339,17 @@ Done when this machine's session has run and stopped, `launch` reads back the Cl
 
 ### 9. Watch
 
-Run `first_fleet.py progress --spec <N> --openwiz <root>/current/openwiz` when the user asks or a moment may have happened, and say each moment's line once: **A pull request opened**, then **Reviewed**. On this machine it first says where this chat's session last stopped (after a carry-on, where that one stopped), with the session's own stop lines and onboarding's `launch --spec <N> --carry-on`, and whether the heartbeat is installed. A count is never a merge. When a pull request merges, run `first_fleet.py first-merge --pr <number>`: it reads the merge back from GitHub and prints **Merged** and **The closing offer**; say both. On the answer: stay as the project's orchestrator (launch-fleet), start a new project (this road again, with a new state file), or keep building (the grill again, for the next idea).
+Run `first_fleet.py progress --spec <N> --openwiz <root>/current/openwiz` when the user asks or a moment may have happened, and say each moment's line once: **A pull request opened**, then **Reviewed**. On this machine it first says where this chat's session last stopped (after a carry-on, where that one stopped), with the session's own stop lines and onboarding's `launch --spec <N> --carry-on`, and whether the heartbeat is installed. A count is never a merge. When a pull request merges, run `first_fleet.py first-merge --pr <number>`: it reads the merge back from GitHub and prints **Merged** and the closing offer; say **Merged** first.
+
+Next, before the closing offer, when the project's default branch has an `index.html` at its root or in `docs/` (the two folders GitHub Pages can publish from a branch), offer once, in plain words with the recommendation first: "I can put it online for free with GitHub Pages, so you get a link you can open on your phone. Shall I?" On the yes:
+
+1. Turn on GitHub Pages for the repository from its default branch and that folder, as the user's own signed-in login: `gh api -X POST repos/<owner>/<name>/pages -f 'source[branch]=<default branch>' -f 'source[path]=</ or /docs>'` (an existing Pages site is read, not changed).
+2. Read back `gh api repos/<owner>/<name>/pages --jq .html_url`, wait until that address answers (Pages takes a minute or two; check every 20 seconds, at most 5 minutes), and say: "It's online: <link>. Open it on your phone; it updates by itself each time the helpers add a change."
+3. A private repository on a free GitHub plan can't use Pages: say that in one plain sentence, offer nothing that costs money, and end with the help line from [teach.md](teach.md).
+
+No yes, nothing changes. This is not a gate for the merge or the closing offer.
+
+Then say **The closing offer**. On the answer: stay as the project's orchestrator (launch-fleet), start a new project (this road again, with a new state file), or keep building (the grill again, for the next idea).
 
 Done when the user has heard the closing offer.
 

@@ -132,7 +132,8 @@ DRIVER_NAME = r'[a-z0-9]+(?:-[a-z0-9]+)*'
 VERSION_WAIT = 60
 PROBE_ENV = ('PATH', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR')
 RECORDS = r'openwiz:records v[1-9][0-9]{0,2}'
-CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox')
+CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox', 'effort')
+REQUIRED_CAN = {'start', 'wake', 'stop'}
 LOGIN_LINE = 'https://github.com/openwizdev/OpenWiz/blob/main/adapters/%s/README.md'
 HOSTS = {
     'local': {'label': 'this machine', 'where': 'on this machine'},
@@ -325,6 +326,22 @@ def adapters_of(got, env):
     return env.get('OPENWIZ_ADAPTERS') or None
 
 
+def driver_capabilities(adapters):
+    schema = Path(adapters).parent / 'kernel/driver-kit/schema.json'
+    try:
+        text = schema.read_text(encoding='utf-8')
+    except FileNotFoundError:
+        return CAN
+    kit = strict(text)
+    if kit['contract'] != 'openwiz:driver v1':
+        raise ValueError('expected driver v1')
+    words = kit['commands']['version']['output']['properties']['can']['items']['enum']
+    if (not isinstance(words, list) or not all(isinstance(word, str) and word for word in words)
+            or len(set(words)) != len(words) or not REQUIRED_CAN <= set(words)):
+        raise ValueError('invalid can enum')
+    return words
+
+
 def driver_answer(env, adapters, name):
     """A driver's `version` answer (driver v1, D1), or the reason it has none, as (answer, None) or (None, why).
 
@@ -335,6 +352,10 @@ def driver_answer(env, adapters, name):
     path = Path(adapters, name, 'driver')
     if not os.path.isabs(adapters) or not path.is_file() or not os.access(path, os.X_OK):
         return None, 'there is no runnable driver'
+    try:
+        capabilities = driver_capabilities(adapters)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, 'the driver kit has an invalid driver v1 schema'
     probe = {k: env[k] for k in PROBE_ENV if k in env}
     result = run([str(path), 'version'], probe, timeout=VERSION_WAIT, stdin=subprocess.DEVNULL)
     if result is None:
@@ -351,7 +372,7 @@ def driver_answer(env, adapters, name):
         assert all(isinstance(r, str) and re.fullmatch(RECORDS, r) for r in records)
         assert 'openwiz:records v1' in records
         assert isinstance(can, list) and len(set(map(str, can))) == len(can)
-        assert all(isinstance(c, str) and c in CAN for c in can) and {'start', 'wake', 'stop'} <= set(can)
+        assert all(isinstance(c, str) and c in capabilities for c in can) and REQUIRED_CAN <= set(can)
     except (AssertionError, UnicodeDecodeError, ValueError, TypeError):
         return None, "its `version` answer is not driver v1's"
     if version['driver'] != name:
@@ -936,7 +957,7 @@ def look(name):
     'empty' (private, but no default branch and commit read back) or
     {'branch', 'commit'} (private, its default branch at that commit). None when
     a read failed or answered something else: unknown, never success."""
-    result = run(['gh', 'repo', 'view', name, '--json', 'nameWithOwner,isPrivate,defaultBranchRef'], gh_env())
+    result = run(['gh', 'repo', 'view', name, '--json', 'nameWithOwner,isPrivate,defaultBranchRef,id'], gh_env())
     if result is None:
         return None
     if result.returncode != 0:
@@ -944,6 +965,7 @@ def look(name):
     try:
         found = strict(result.stdout.decode('utf-8'))
         assert found['nameWithOwner'] == name and type(found['isPrivate']) is bool
+        assert isinstance(found['id'], str) and found['id']
         branch = (found['defaultBranchRef'] or {}).get('name') or ''
         assert isinstance(branch, str)
     except (UnicodeDecodeError, ValueError, KeyError, TypeError, AttributeError, AssertionError):
@@ -968,7 +990,33 @@ def look(name):
         assert isinstance(commit, str) and re.fullmatch('[0-9a-f]{40}', commit)
     except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):
         return None
-    return {'branch': branch, 'commit': commit}
+    return {'id': found['id'], 'branch': branch, 'commit': commit}
+
+
+def create(name, login):
+    owner, short = name.split('/')
+    path = 'user/repos' if owner.lower() == login.lower() else 'orgs/%s/repos' % owner
+    result = run(['gh', 'api', '-X', 'POST', path, '-f', 'name=' + short, '-F', 'private=true',
+                  '-F', 'auto_init=true'], gh_env())
+    if result is None or result.returncode != 0:
+        return None
+    try:
+        reply = strict(result.stdout.decode('utf-8'))
+        assert reply['full_name'] == name and reply['private'] is True
+        assert isinstance(reply['node_id'], str) and reply['node_id']
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):
+        return None
+    return reply['node_id']
+
+
+def unproven(state, name):
+    if state.value['created']['state'] != 'created':
+        state.value['created'] = {'repo': name, 'state': 'unproven'}
+        state.save()
+    return Exit(5, 'Whether OpenWiz created %s is uncertain: no create reply of this onboarding names that '
+                   "repository, so a teammate may have made it. OpenWiz writes neither tests/test_check.py nor "
+                   '.github/workflows/check.yml into it. Continue with %s as an existing repository: run next, '
+                   'and Connect goes on with it; nothing written.' % (name, name))
 
 
 def created_line(name, seen):
@@ -1001,35 +1049,68 @@ def untested(repo):
                    'this again. Nothing recorded.' % repo)
 
 
-def seed_file(name, path, branch):
-    result = run(['gh', 'api', '--include', '-X', 'GET', 'repos/%s/contents/%s?ref=%s' % (
-        name, path, urllib.parse.quote(branch, safe=''))], gh_env())
-    text = result.stdout.decode('utf-8', 'replace').replace('\r\n', '\n') if result is not None else ''
-    head, _, body = text.partition('\n\n')
-    status = re.match(r'HTTP/[0-9.]+ ([0-9]{3})', head)
-    if status and status[1] == '404':
-        return None
+TREE = '{id name target{... on Commit{oid file(path:$path){object{... on Blob{text}}}}}}'
+BY_NAME = ('query($owner:String!,$name:String!,$path:String!){repository(owner:$owner,name:$name){id '
+           'defaultBranchRef%s}}' % TREE)
+BY_REF = 'query($ref:ID!,$path:String!){node(id:$ref){... on Ref%s}}' % TREE
+WRITE = ('mutation($ref:ID!,$oid:GitObjectID!,$path:String!,$contents:Base64String!){createCommitOnBranch(input:{'
+         'branch:{id:$ref},expectedHeadOid:$oid,message:{headline:"OpenWiz: a passing test and its CI check"},'
+         'fileChanges:{additions:[{path:$path,contents:$contents}]}}){commit{oid}}}')
+
+
+def graphql(query, **fields):
+    argv = ['gh', 'api', 'graphql', '-f', 'query=' + query]
+    for key, value in fields.items():
+        argv += ['-f', '%s=%s' % (key, value)]
+    return run(argv, gh_env())
+
+
+def tree(query, **fields):
+    result = graphql(query, **fields)
     try:
-        assert status and status[1] == '200'
-        found = strict(body)
-        assert found['type'] == 'file' and found['encoding'] == 'base64'
-        return base64.b64decode(found['content'], validate=False).decode('utf-8', 'replace')
-    except (AssertionError, ValueError, KeyError, TypeError):
-        raise Exit(6, 'Could not read %s on %s; run this again to read it before anything else.' % (path, name))
+        assert result is not None
+        body = strict(result.stdout.decode('utf-8'))
+        data = body['data']
+        repo = data['repository']['id'] if query == BY_NAME else None
+        ref = data['repository']['defaultBranchRef'] if query == BY_NAME else data['node']
+        assert query != BY_NAME or (isinstance(repo, str) and repo)
+        assert isinstance(ref['id'], str) and ref['id'] and isinstance(ref['name'], str)
+        assert isinstance(ref['target']['oid'], str) and re.fullmatch('[0-9a-f]{40}', ref['target']['oid'])
+        entry = ref['target']['file']
+        errors = body.get('errors')
+        if result.returncode == 0:
+            assert not errors
+        else:
+            expect = (['repository', 'defaultBranchRef', 'target', 'file'] if query == BY_NAME
+                      else ['node', 'target', 'file'])
+            assert (entry is None and isinstance(errors, list) and len(errors) == 1
+                    and isinstance(errors[0], dict) and errors[0].get('type') == 'NOT_FOUND'
+                    and errors[0].get('path') == expect)
+        text = None if entry is None else entry['object']['text']
+        assert text is None or isinstance(text, str)
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError, AssertionError):
+        return None
+    return {'repo': repo, 'ref': ref['id'], 'branch': ref['name'], 'oid': ref['target']['oid'], 'text': text}
 
 
 def seed(state, name, seen):
+    owner, short = name.split('/')
+    at = None
     for path, text in SEED.items():
-        have = seed_file(name, path, seen['branch'])
-        if have == text:
+        at = tree(BY_NAME, owner=owner, name=short, path=path) if at is None else tree(BY_REF, ref=at['ref'], path=path)
+        if at is None:
+            raise Exit(6, 'Could not read %s on %s; run this again to read it before anything else.' % (path, name))
+        if at['repo'] not in (None, seen['id']) or at['branch'] != seen['branch']:
+            raise Exit(5, '%s is no longer the repository this onboarding created; OpenWiz writes neither '
+                          'tests/test_check.py nor .github/workflows/check.yml into it. Nothing written.' % name)
+        if at['text'] == text:
             continue
-        if have is not None:
+        if at['text'] is not None:
             raise Exit(5, '%s already holds another %s; OpenWiz never writes over it. Nothing more written.'
                        % (name, path))
-        run(['gh', 'api', '-X', 'PUT', 'repos/%s/contents/%s' % (name, path), '-f',
-             'message=OpenWiz: a passing test and its CI check', '-f',
-             'content=' + base64.b64encode(text.encode()).decode(), '-f', 'branch=' + seen['branch']], gh_env())
-        if seed_file(name, path, seen['branch']) != text:
+        graphql(WRITE, ref=at['ref'], oid=at['oid'], path=path, contents=base64.b64encode(text.encode()).decode())
+        at = tree(BY_REF, ref=at['ref'], path=path)
+        if at is None or at['text'] != text:
             raise Exit(6, 'Whether %s was written to %s is uncertain; run this again: it reads the file back before '
                           'any write. If GitHub refused the workflow, run gh auth refresh -s workflow first.'
                        % (path, name))
@@ -1069,16 +1150,19 @@ def create_repo(got):
     if seen is None:
         raise Exit(1 if not record else 6, 'Could not read whether %s exists; nothing created.' % name)
     if record and record['repo'] == name and record['state'] in ('pending', 'uncertain', 'created'):
-        if isinstance(seen, dict) and record.get('seeded') and record.get('branch') == seen['branch']:
+        if isinstance(seen, dict) and record.get('seeded') and record.get('branch') == seen['branch'] \
+                and record.get('id') in (None, seen['id']):
             print(created_line(name, seen))
             return 0
-        if isinstance(seen, dict):
+        if isinstance(seen, dict) and record.get('id') == seen['id']:
             state.value['created'] = {'repo': name, 'state': 'created', **seen}
             if not state.save():
                 raise Exit(6, 'Could not save the created repository; it exists, so never create it again.')
             seed(state, name, seen)
             print(created_line(name, seen))
             return 0
+        if isinstance(seen, dict):
+            raise unproven(state, name)
         if seen == 'public':
             raise Exit(5, '%s is not the private repository this onboarding created; nothing created.' % name)
         if seen == 'empty':
@@ -1086,22 +1170,33 @@ def create_repo(got):
                 raise Exit(5, '%s has no default branch and initial commit, which init needs; OpenWiz never pushes '
                               'one into an existing repository. Add a first commit yourself, or choose a new '
                               'name; nothing created.' % name)
-            state.value['created'] = {'repo': name, 'state': 'uncertain'}
+            state.value['created'] = {'repo': name, 'state': 'uncertain',
+                                      **({'id': record['id']} if record.get('id') else {})}
             state.save()
             raise Exit(6, '%s exists, but its default branch and initial commit did not read back; nothing more '
                           'was created or pushed. Run this again to read it back.' % name)
         if record['state'] == 'created':
             raise Exit(5, '%s is not the private repository this onboarding created; nothing created.' % name)
+    elif record and record['repo'] == name and record['state'] == 'unproven' and isinstance(seen, dict):
+        raise unproven(state, name)
     elif seen != 'absent':
         raise Exit(5, '%s already exists; choose another name, or use it as an existing repository; '
                       'nothing created.' % name)
+    retry = bool(record) and record['repo'] == name and record['state'] in ('pending', 'uncertain', 'unproven')
+    if retry and (record.get('id') or record['state'] == 'unproven'):
+        raise Exit(6, '%s does not read back now, but an earlier create of this onboarding may have made it (renamed, '
+                      'hidden or deleted since), so OpenWiz never creates it again. Nothing created or written; run '
+                      'this again to read it back.' % name)
     state.value['created'] = {'repo': name, 'state': 'pending'}
     if not state.save():
         raise Exit(10, 'Could not save the repository name first; nothing created.')
-    run(['gh', 'repo', 'create', name, '--private', '--add-readme'])
+    reply = create(name, login.stdout.strip().decode())
     seen = look(name)
-    ended = 'created' if isinstance(seen, dict) else 'absent' if seen == 'absent' else 'uncertain'
-    state.value['created'] = {'repo': name, 'state': ended, **(seen if ended == 'created' else {})}
+    if isinstance(seen, dict) and seen['id'] != reply:
+        raise unproven(state, name)
+    ended = 'created' if isinstance(seen, dict) else 'absent' if seen == 'absent' and reply is None and not retry else 'uncertain'
+    state.value['created'] = {'repo': name, 'state': ended, **(seen if ended == 'created' else {}),
+                              **({'id': reply} if ended == 'uncertain' and reply else {})}
     saved = state.save()
     if ended == 'created' and saved:
         seed(state, name, seen)

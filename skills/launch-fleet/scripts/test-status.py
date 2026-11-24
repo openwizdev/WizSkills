@@ -102,6 +102,10 @@ while i < len(args):
         else:
             accept = header
     elif a == '--input': assert args[i + 1] == '-'; body = json.loads(sys.stdin.read()); i += 2
+    elif a == '-f':
+        key, _, value = args[i + 1].partition('='); body = body or {}; i += 2
+        if key.endswith('[]'): body.setdefault(key[:-2], []).append(value)
+        else: body[key] = value
     else: assert path is None, args; path = a; i += 1
 def log_call(**response):
     with open(os.environ['FAKE_GH_LOG'], 'a') as log:
@@ -509,7 +513,7 @@ class Write(Tracker):
         self.save()
         asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
         self.assertEqual(asked.returncode, 0, asked.stderr)
-        [kept] = (self.dir / 'state').rglob('*.json')
+        [kept] = (self.dir / 'state' / 'openwiz').rglob('*.json')
         recorded = kept.read_text()
         lock = kept.with_suffix('.lock')
         lock.unlink()
@@ -546,7 +550,7 @@ class Write(Tracker):
                 self.save()
                 asked = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
                 self.assertEqual(asked.returncode, 0, asked.stderr)
-                [kept] = (self.dir / 'state').rglob('*.json')
+                [kept] = (self.dir / 'state' / 'openwiz').rglob('*.json')
                 self.assertEqual(json.loads(kept.read_text()), json.loads(good))
                 kept.write_text(record)
                 back = self.write('working', 'got the answer', '2030-01-02T05:00:00Z', '--note', '104')
@@ -2244,6 +2248,74 @@ class WakeRepair(Tracker):
         self.assertEqual(len(report), 1, report)
         self.assertRegex(report[0], r'^status check failed: could not read: ')
         self.assertEqual(self.writes(), [])
+
+
+class Paced(Tracker):
+    def cooldown(self, seconds=3600):
+        until = int(time.time()) + seconds
+        path = self.dir / 'state' / 'launch-fleet' / 'writes.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'accounts': {}, 'inflight': [], 'until': until}))
+        return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(until))
+
+    def pacer(self):
+        path = self.dir / 'state' / 'launch-fleet' / 'writes.json'
+        self.assertTrue(path.exists(), 'no write went through the pacer')
+        return json.loads(path.read_text())
+
+    def test_a_recorded_cooldown_refuses_a_new_status_note_without_writing(self):
+        self.save()
+        until = self.cooldown()
+        r = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
+        self.assertEqual((r.returncode, r.stdout, r.stderr),
+                         (2, '', f'status.py: refused: write paced, retry after {until}\n'))
+        self.assertEqual(self.writes(), [])
+        self.assertEqual([c['id'] for c in self.ticket()['comments']], [101, 102, 103])
+
+    def test_a_recorded_cooldown_refuses_a_status_note_edit_without_writing(self):
+        self.ticket(self.world)['comments'].append(comment(104, BOT, note()))
+        self.save()
+        until = self.cooldown()
+        r = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '104')
+        self.assertEqual((r.returncode, r.stdout, r.stderr),
+                         (2, '', f'status.py: refused: write paced, retry after {until}\n'))
+        self.assertEqual(self.writes(), [])
+        self.assertEqual(self.ticket()['comments'][3]['body'], note())
+
+    def test_a_recorded_cooldown_refuses_a_label_add_without_writing(self):
+        asking = note(state='asking', step='asked which file to change')
+        repairing = note(agent='fleet', step='adding needs-info for an asking note')
+        self.ticket(self.world)['comments'] += [comment(104, BOT, asking), comment(105, BOT, repairing)]
+        self.save()
+        until = self.cooldown()
+        r = self.run_status('repair', '--repo', REPO, '--harness', 'Claude Code', '--model', 'Opus 5.5 Medium',
+                            '--skills', SKILLS)
+        self.assertEqual((r.returncode, r.stdout),
+                         (2, f'status check failed: could not repair #12: refused: write paced, retry after {until}\n'))
+        self.assertEqual(self.writes(), [])
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent'])
+
+    def test_an_admitted_note_takes_one_pacer_slot_and_keeps_its_read_back(self):
+        self.save()
+        r = self.write('working', 'started the build', '2030-01-02T03:00:00Z')
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '#12: builder working, status note 9001 posted\n', ''))
+        state = self.pacer()
+        self.assertEqual((len(state['accounts']['shared']), state['inflight'], state['until']), (1, [], 0))
+        asking = self.write('asking', 'asked which file to change', '2030-01-02T04:00:00Z', '--note', '9001')
+        self.assertEqual((asking.returncode, asking.stdout), (0, '#12: builder asking, status note 9001 edited\n'))
+        self.assertEqual(self.ticket()['labels'], ['ready-for-agent', 'needs-info'])
+        state = self.pacer()
+        self.assertEqual((len(state['accounts']['shared']), state['inflight']), (2, []))
+        self.world = self.load()
+        lost_id = self.world['next_id'] + 1
+        self.world['unlisted'] = [lost_id]
+        self.save()
+        lost = self.write('working', 'started the build', '2030-01-02T03:00:00Z', agent='reviewer')
+        self.assertEqual(
+            (lost.returncode, lost.stderr),
+            (2, f'status.py: note {lost_id} posted; retry with --note {lost_id}: note {lost_id} was posted but not read back\n'),
+        )
+        self.assertEqual(len(self.pacer()['accounts']['shared']), 3)
 
 
 if __name__ == '__main__':

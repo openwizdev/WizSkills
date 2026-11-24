@@ -210,6 +210,24 @@ def load_read_helper(name):
 
 ghcache = load_read_helper('ghcache')
 gitread = load_read_helper('gitread')
+post = load_read_helper('post')
+
+
+def send(method, path, payload=None):
+    args = ['--method', method, path]
+    for key, value in (payload or {}).items():
+        pairs = [(key, value)] if isinstance(value, str) else [(f'{key}[]', v) for v in value]
+        args += [x for k, v in pairs for x in ('-f', f'{k}={v}')]
+    try:
+        text = post.write(path, *args, paced=method == 'POST')
+    except post.Stop as error:
+        raise Failed(str(error)) from None
+    if text is None:
+        raise Failed(f'{method} {path}: the write failed')
+    try:
+        return json.loads(text) if text.strip() else None
+    except ValueError:
+        raise Failed(f'{method} {path}: not JSON')
 
 
 def get(path):
@@ -314,7 +332,7 @@ def step_down(found, note_id, kind, fields, repo):
     other = next((x for x in found if x[0] != note_id and x[1]['agent'] == kind
                   and live(x, datetime.now(timezone.utc))), None)
     if other:
-        gh('PATCH', f'repos/{repo}/issues/comments/{note_id}',
+        send('PATCH', f'repos/{repo}/issues/comments/{note_id}',
            {'body': body(dict(fields, state='stopped (lost claim)'))})
         raise Stop(f'note {other[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
 
@@ -388,14 +406,14 @@ def forget(repo, n):
 
 def add_own(repo, n, login, locked):
     if not locked:
-        gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+        send('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
         return
     forget(repo, n)
     try:
         before = len(label_events(repo, n))
     except Failed:
         before = None
-    gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+    send('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
     if before is None or not app(login):
         return
     try:
@@ -542,18 +560,18 @@ def write(args, now, beat=False, out=sys.stdout, retry_of=None):
             if args.floor is None:
                 args.floor = own[1]['time']
             state = args.state = fields['state']
-        made = gh('PATCH', f'repos/{repo}/issues/comments/{own[0]}', {'body': text})
+        made = send('PATCH', f'repos/{repo}/issues/comments/{own[0]}', {'body': text})
         note_id, verb = own[0], 'edited'
     else:
         first = holder(found, kind, now)
         if args.state in CLAIMING and first:
             raise Stop(f'note {first[0]} holds the {kind} claim')
-        made = gh('POST', comments, {'body': body(fields)})
+        made = send('POST', comments, {'body': body(fields)})
         note_id, verb = int(made['id']), 'posted'
     author = made['user']['login'] if isinstance(made.get('user'), dict) else None
     if not (isinstance(author, str) and author.lower() in authors):
         if verb == 'posted':
-            gh('DELETE', f'repos/{repo}/issues/comments/{note_id}')
+            send('DELETE', f'repos/{repo}/issues/comments/{note_id}')
         raise Failed(f'note {note_id} was written by {author}, not a record author; it was deleted')
     login = login or author
     retry = retry_post(note_id) if verb == 'posted' else contextlib.nullcontext()
@@ -574,7 +592,7 @@ def write(args, now, beat=False, out=sys.stdout, retry_of=None):
                 if mine is None:
                     raise Failed(f'note {note_id} was edited over a release but not read back')
                 if mine[1]['state'] in CLAIMING:
-                    gh('PATCH', f'repos/{repo}/issues/comments/{note_id}', {'body': body(prior)})
+                    send('PATCH', f'repos/{repo}/issues/comments/{note_id}', {'body': body(prior)})
                 raise Stop(f'note {note_id} was {prior["state"].split(" ")[0]} before this edit landed; '
                            'the release is put back')
         if mine is None or mine[1] != fields:
@@ -582,7 +600,7 @@ def write(args, now, beat=False, out=sys.stdout, retry_of=None):
         if verb == 'posted' and args.state in CLAIMING:
             first = holder(found, kind, datetime.now(timezone.utc))
             if first and first[0] < note_id:
-                gh('PATCH', f'repos/{repo}/issues/comments/{note_id}',
+                send('PATCH', f'repos/{repo}/issues/comments/{note_id}',
                    {'body': body(dict(fields, state='stopped (lost claim)'))})
                 raise Stop(f'note {first[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
         if verb == 'edited' and args.state in CLAIMING:
@@ -765,9 +783,9 @@ def stamp():
 def record(repo, n, base, state, step, note_id=None):
     fields = dict(base, state=state, step=step, time=stamp())
     if note_id is None:
-        made = gh('POST', f'repos/{repo}/issues/{n}/comments', {'body': body(fields)})
+        made = send('POST', f'repos/{repo}/issues/{n}/comments', {'body': body(fields)})
     else:
-        made = gh('PATCH', f'repos/{repo}/issues/comments/{note_id}', {'body': body(fields)})
+        made = send('PATCH', f'repos/{repo}/issues/comments/{note_id}', {'body': body(fields)})
     if not (isinstance(made.get('updated_at'), str) and TIME.fullmatch(made['updated_at'])):
         raise Failed(f'the repair note on #{n} was written but GitHub gave no time for it')
     return int(made['id']), made['updated_at']
@@ -799,7 +817,7 @@ def cleanup(repo, n, login, mine, labelled, taker='the repair', any_login=False)
         last = max((k for k, e in enumerate(events) if e['event'] == 'labeled'), default=None)
         if last != mine:
             return []
-        gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
+        send('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
         events = label_events(repo, n)
     after = events[mine + 1:]
     off = [k for k, e in enumerate(after) if e['event'] == 'unlabeled' and by(e, login)]
@@ -808,7 +826,7 @@ def cleanup(repo, n, login, mine, labelled, taker='the repair', any_login=False)
     people = [e for e in after[:off[-1]] if e['event'] == 'labeled' and (any_login or not by(e, login))]
     if not people or labelled():
         return []
-    gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+    send('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
     who = actor(people[-1]) or 'an account GitHub does not name'
     return [f'#{n}: {ASKING_LABEL} put back: {who} applied it as {taker} took it off; check whose it is']
 
@@ -846,7 +864,7 @@ def settle(repo, n, authors, login, base, pending):
         reuse = fleet[-1][0] if fleet and not fleet[-1][1]['state'].startswith('stopped') else None
         stopped = reuse is None and bool(everyone) and everyone[-1][1]['state'].startswith('stopped')
         if stopped:
-            note_id, marked = int(gh('POST', comments, {'body': PENDING_BODY})['id']), True
+            note_id, marked = int(send('POST', comments, {'body': PENDING_BODY})['id']), True
         else:
             note_id, marked = record(repo, n, base, 'working', REPAIRING, reuse)[0], False
     else:
@@ -854,7 +872,7 @@ def settle(repo, n, authors, login, base, pending):
     report, mine = [], None
     if still is not None and not labelled():
         before = len(label_events(repo, n))
-        gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+        send('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
         new = label_events(repo, n)[before:]
         if app(login) and len(new) == 1 and new[0]['event'] == 'labeled' and by(new[0], login):
             mine = before
@@ -864,7 +882,7 @@ def settle(repo, n, authors, login, base, pending):
     if still is None:
         report += left(repo, n, login, labelled) if mine is None else cleanup(repo, n, login, mine, labelled)
     if marked:
-        gh('DELETE', f'repos/{repo}/issues/comments/{note_id}')
+        send('DELETE', f'repos/{repo}/issues/comments/{note_id}')
     else:
         record(repo, n, base, 'done', REPAIRED, note_id)
     return report

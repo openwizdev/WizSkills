@@ -1,6 +1,6 @@
 ---
 name: huntr
-description: Run one hunt for small, unplanned, proven fixes under the project's approved risk tiers. One controller holds the lease, sends a hunter per area and category, proves each finding, files it and asks the approval gate. Use when a huntr loop or the orchestrator starts a hunt; not for planned tickets (triage, build-ticket) or one known bug (diagnose).
+description: Run one hunt for small, unplanned, proven fixes under the project's approved risk tiers, or run attack mode against the project's own targets. One controller holds the lease, sends a hunter per area and category, proves each finding, files it and asks the approval gate. Use when a huntr loop, son-of-anton, or the orchestrator starts a hunt or attack run; not for planned tickets (triage, build-ticket) or one known bug (diagnose).
 version: 0.2.2
 ---
 
@@ -18,6 +18,11 @@ checklist, slice manifests, issue form and gate. Run every script from the
 consuming repository root as `node <installed-huntr>/scripts/<script>`.
 Each refusal exits 2 (an unreadable `due` or a pending `finish` exits 3)
 with its reason on stderr; a refused write posted nothing.
+
+## Attack mode
+
+For an attack run (started by `son-of-anton` or the orchestrator), read
+[attack.md](attack.md) and follow it instead of steps 1 to 5.
 
 ## Guards
 

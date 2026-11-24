@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import hashlib
+import math
 import os
 import re
 import secrets
@@ -53,7 +54,8 @@ def rate(args):
                 raise ValueError
         except (TypeError, ValueError):
             refuse(f'unreadable option {name}')
-    if runs is None or runs < 1 or not command or (timeout is not None and timeout <= 0):
+    invalid_timeout = timeout is not None and (not math.isfinite(timeout) or timeout <= 0)
+    if runs is None or runs < 1 or not command or invalid_timeout:
         refuse('usage: loop.py rate --runs N [--timeout SECONDS] -- COMMAND...')
     exits, timeouts = Counter(), 0
     for _ in range(runs):

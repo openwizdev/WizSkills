@@ -89,17 +89,19 @@ class Rate(unittest.TestCase):
                 'worker = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"])\n'
                 'open(pids, "a").write(f"{worker.pid}\\n")\n'
                 'time.sleep(60)\n')
-            self.addCleanup(stop_workers, pids)
-            r = run('rate', '--runs', '2', '--timeout', '1.5', '--',
-                    sys.executable, '-I', str(script), str(pids), str(log))
-            self.assertEqual((r.returncode, r.stdout), (1, 'rate: 2/2 failed; exits none; timeouts 2\n'))
-            self.assertEqual(log.read_text(), 'start\nstart\n')
-            workers = [int(p) for p in pids.read_text().split()]
-            self.assertEqual(len(workers), 2)
-            deadline = time.monotonic() + 5
-            while any(map(alive, workers)) and time.monotonic() < deadline:
-                time.sleep(0.05)
-            self.assertEqual([p for p in workers if alive(p)], [])
+            try:
+                r = run('rate', '--runs', '2', '--timeout', '1.5', '--',
+                        sys.executable, '-I', str(script), str(pids), str(log))
+                self.assertEqual((r.returncode, r.stdout), (1, 'rate: 2/2 failed; exits none; timeouts 2\n'))
+                self.assertEqual(log.read_text(), 'start\nstart\n')
+                workers = [int(p) for p in pids.read_text().split()]
+                self.assertEqual(len(workers), 2)
+                deadline = time.monotonic() + 5
+                while any(map(alive, workers)) and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                self.assertEqual([p for p in workers if alive(p)], [])
+            finally:
+                stop_workers(pids)
 
     def test_rate_runs_on_python_3_10s_subprocess(self):
         launcher = (
@@ -140,6 +142,14 @@ class Rate(unittest.TestCase):
             r = run(*args)
             self.assertEqual(r.returncode, 2, args)
             self.assertEqual(r.stdout, '', args)
+
+
+    def test_non_finite_timeouts_are_refused_before_running(self):
+        for timeout in ('nan', 'inf', '-inf'):
+            with self.subTest(timeout=timeout), tempfile.TemporaryDirectory() as tmp:
+                r = run('rate', '--runs', '1', '--timeout', timeout, '--', *counter(tmp, set()))
+                self.assertEqual((r.returncode, r.stdout, Path(tmp, 'count').exists()),
+                                 (2, '', False))
 
 
 def git_tree(tmp):

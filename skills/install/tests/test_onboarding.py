@@ -282,6 +282,11 @@ class Conversation(unittest.TestCase):
                 self.assertEqual([t['agent'] for t in said[:3]], lines['Up front'])
         self.assertTrue(any(t.get('say') == 'missing' for j in ROAD['journeys'] for t in j['turns']))
 
+    def test_teach_has_plain_words_section_with_help_line(self):
+        self.assertIn('\n## Plain words\n', TEACH)
+        plain = TEACH.split('\n## Plain words\n', 1)[1].split('\n## ', 1)[0]
+        self.assertIn("Stuck? I'll set it up with you, free 15 min: https://openwiz.dev/help/", plain)
+
     def test_after_the_grills_yes_only_the_gates_and_the_mode_ask_until_the_closing_offer(self):
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):
@@ -1237,8 +1242,8 @@ class ExpressFirstFleet(unittest.TestCase):
                                     r'[^.]*all three build in parallel')
             self.assertNotRegex(grill, r'(?i)\btwo rounds\b|\b4 to 7\b')
             start = teach_lines()['The grill'][0]
-            self.assertRegex(start, r'\bone round\b')
-            self.assertRegex(start, r'\babout three\b')
+            self.assertRegex(start, r'\bfew quick questions\b')
+            self.assertRegex(start, r'\bfirst version is small enough to build quickly\b')
         with self.subTest('6.7 Plan'):
             plan = self.section(skill, '### 7. Plan')
             self.assertRegex(plan, r"install's first fleet[^.]*straight to the launch with no video")
@@ -1249,7 +1254,7 @@ class ExpressFirstFleet(unittest.TestCase):
             spec = teach_lines()['The spec and its video']
             self.assertEqual(len(spec), 1)
             self.assertNotIn('<video link>', spec[0])
-            self.assertRegex(spec[0], r'first fleet has no video')
+            self.assertNotRegex(spec[0], r'(?i)\bvideo\b')
             self.assertNotRegex(spec[0], r'(?i)starts as soon as|nothing for you to do')
             self.assertRegex(spec[0], r'ask for your yes')
         with self.subTest('to-spec step 4'):

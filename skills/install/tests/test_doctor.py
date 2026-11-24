@@ -1021,8 +1021,10 @@ class RemovalStopsTheHeartbeatThenUsesTheInstaller(unittest.TestCase):
         self.assertIn('Only for 0.1.0\'s installer, which has no `remove`', removal)
 
 
-HOST_QUESTION = ("Where should your agents run? This computer (Claude Code or Codex you're signed in to), "
-                 "boat.dev, or CloudRoom.")
+HOST_QUESTION = ("Where should your AI helpers work? I recommend `<recommended place>`, because "
+                 "`<why, in a few plain words>`. The choices are this computer (with the Claude Code or "
+                 "Codex you already use), boat.dev (a service that runs them online) or CloudRoom (an app "
+                 "that runs them for you). Shall I go with `<recommended place>`?")
 
 
 class NoCloudRoomRequired(unittest.TestCase):
@@ -1051,8 +1053,10 @@ class NoCloudRoomRequired(unittest.TestCase):
         at = self.text.index(HOST_QUESTION)
         self.assertLess(at, self.text.index('cloudroom.py', self.text.index('## Resume')))
         self.assertLess(at, self.text.index('## 1. Preflight'))
-        paragraph = self.text[self.text.rindex('\n\n', 0, at):self.text.index('\n\n', at)]
-        self.assertFalse('recommend' in paragraph.lower(), 'the host question recommends one host')
+        intro = self.text[self.text.rindex('For `choose-host`', 0, at):at]
+        self.assertIn('recommending **this computer** when you are Claude Code or Codex running on it', intro)
+        self.assertIn('otherwise **CloudRoom** when `room-cli` is on `PATH`, otherwise **this computer**', intro)
+        self.assertIn("the person's answer always wins", intro)
         step3 = self.between('## 3. ', '## 4. ')
         self.assertTrue('ignore every `cloudroom_*` code' in step3, 'cloudroom_* codes are not ignored')
         self.assertLess(step3.index('ignore every `cloudroom_*` code'), step3.index('| Code | Next |'))
@@ -1093,7 +1097,7 @@ class InstallHostReleaseTests(unittest.TestCase):
     def test_latest_is_read_before_the_host_question(self):
         skill = SKILL.read_text()
         self.assertLess(skill.index('OpenWiz/releases/latest'),
-                        skill.index('> Where should your agents run?'))
+                        skill.index('> Where should your AI helpers work?'))
 
     def test_resume_checks_the_installed_build_before_asking(self):
         skill = SKILL.read_text()

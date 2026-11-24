@@ -1320,6 +1320,32 @@ class DemoRepository(unittest.TestCase):
                 self.assertEqual(j.helper(YES_DEMO).returncode, 0)
                 self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)], 'both files, once')
 
+    def test_a_retry_keeps_a_verified_id_and_the_one_repository_guard_when_the_name_stops_resolving(self):
+        made = demo_repository(branches={'main': {'README.md': '# demo\n'}})
+        made['node_id'] = 'R_made'
+        renamed = dict(made, full_name='synthetic-owner/renamed')
+        for name, repos, record, code in (
+                ('verified, then renamed', [renamed], {'state': 'uncertain', 'id': 'R_made'}, 6),
+                ('verified, then hidden', [dict(made, hidden=True)], {'state': 'uncertain', 'id': 'R_made'}, 6),
+                ('unproven, then hidden', [dict(made, hidden=True)], {'state': 'unproven'}, 6),
+                ('pending, then hidden', [dict(made, hidden=True)], {'state': 'pending'}, 6)):
+            with self.subTest(name):
+                j = Journey(self)
+                j.repos.write_text(github(repos))
+                j.state.write_text(json.dumps({'created': {'repo': REPO, **record}}))
+                j.state.chmod(0o600)
+                for _ in range(2):
+                    result = j.helper(YES_DEMO)
+                    self.assertEqual(result.returncode, code, result.stdout)
+                    self.assertNotIn('Created and read back', result.stdout)
+                self.assertEqual(self.writes(j), [], 'no second create, nothing seeded')
+                kept = json.loads(j.state.read_text())['created']
+                self.assertEqual((kept['repo'], kept['state'] != 'absent', kept.get('id')),
+                                 (REPO, True, record.get('id')), 'the id and the guard are kept')
+                other = j.helper(['create-repo', '--repo', 'synthetic-owner/second-demo', '--yes'])
+                self.assertEqual(other.returncode, 5, other.stdout)
+                self.assertEqual(self.writes(j), [], 'no second repository under another name')
+
     # Catches: someone else's repository, private or public, taken as the demo
     # or written to, and a repeat that rewrites the owner's later work.
     def test_existing_repositories_and_owner_work_are_never_written(self):

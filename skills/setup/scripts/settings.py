@@ -216,15 +216,37 @@ def fixer(body, problems):
     rows = [line for line in body.splitlines() if line.startswith('|')
             and not re.fullmatch(r'\|[\s|:-]*', line)][1:]
     for row in rows:
-        family = row.split('|')[1].strip()
+        parsed = cells(row)
+        if not parsed or len(parsed) != 5:
+            problems.append('fleet.md: Fixer: row has %d cells, not 5' % (len(parsed or [])))
+            continue
+        family, _, _, _, flags = parsed
+        matched = FLAGS_CELL.fullmatch(flags)
+        if matched:
+            bad = [(flag, value) for flag, value in zip(FLAGS, matched.groups()) if value.startswith('--')]
+            if bad:
+                for flag, value in bad:
+                    problems.append('fleet.md: Fixer: %s: malformed --%s value %s' % (family, flag, value))
+                continue
+            continue
+        broken = []
         for flag in FLAGS:
             found = list(re.finditer(token(flag), row))
             if not found:
-                problems.append('fleet.md: Fixer: %s: no --%s' % (family, flag))
+                broken.append('fleet.md: Fixer: %s: no --%s' % (family, flag))
             elif len(found) > 1:
-                problems.append('fleet.md: Fixer: %s: --%s appears %d times' % (family, flag, len(found)))
+                broken.append('fleet.md: Fixer: %s: --%s appears %d times' % (family, flag, len(found)))
             elif not re.match(r' (?!--)[^\s`|]+(?=[ `|])', row[found[0].end():]):
-                problems.append('fleet.md: Fixer: %s: malformed --%s' % (family, flag))
+                tail = row[found[0].end():].lstrip()
+                value = tail.split(None, 1)[0] if tail else ''
+                if value.startswith('--'):
+                    broken.append('fleet.md: Fixer: %s: malformed --%s value %s' % (family, flag, value))
+                else:
+                    broken.append('fleet.md: Fixer: %s: malformed --%s' % (family, flag))
+        if broken:
+            problems.extend(broken)
+        else:
+            problems.append('fleet.md: Fixer: %s: malformed %s' % (family, flags))
 
 
 def fleet(text, problems):
@@ -288,6 +310,12 @@ def fleet(text, problems):
                                 % (number, len(rows), row.strip()))
         elif len(cells) != 4 or cells[3].strip() or not CELL.fullmatch(cells[2]):
             problems.append('fleet.md: GitHub identity: Record authors needs one or more exact logins')
+        rows = re.findall(r'^\| *App identity *\|.*$', identity, re.M)
+        for number, row in enumerate(rows[1:], 2):
+            problems.append('fleet.md: GitHub identity: App identity row %d of %d: %s'
+                            % (number, len(rows), row.strip()))
+        if rows and not re.fullmatch(r'\| *App identity *\| *(`?)(on|off)\1 *\| *', rows[0]):
+            problems.append('fleet.md: GitHub identity: App identity must be exactly on or off')
 
 
 def approval(text, problems):

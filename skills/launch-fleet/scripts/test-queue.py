@@ -3,6 +3,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,7 @@ import unittest
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 QUEUE = HERE / 'queue.py'
+git_origin = runpy.run_path(str(HERE / 'fixtures/git_origin.py'))['env']
 FIXTURES = HERE / 'fixtures/queue'
 REPO, NUMBER, CHECKS = 'openwizdev/OpenWiz', '2253', 'ci,privacy,web-test'
 HEAD = '0c54d3bb82cb197314d6d028ae78c4fdb5ad66c4'
@@ -107,9 +109,11 @@ class Queue(unittest.TestCase):
     def run_queue(self, value, *argv):
         path = self.root / 'fixture.json'
         path.write_text(json.dumps(value) if not isinstance(value, str) else (FIXTURES / f'{value}.json').read_text())
+        fleet = json.loads(path.read_text()).get('fleet', 'default')
+        origin = git_origin(self.root, {REPO: FLEET if fleet == 'default' else fleet})
         r = subprocess.run([sys.executable, '-I', str(QUEUE), *(argv or ('read', REPO, NUMBER, HEAD, CHECKS))],
                            capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
-                           env=dict(self.env, FAKE_QUEUE=str(path)))
+                           env=dict(self.env, FAKE_QUEUE=str(path), **origin))
         self.assertEqual(self.calls('write'), [], 'queue.py tried to write')
         self.assertEqual(self.calls('unexpected'), [], 'queue.py made a read no fixture serves')
         return r.returncode, r.stdout, r.stderr

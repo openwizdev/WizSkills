@@ -190,6 +190,22 @@ class Check(unittest.TestCase):
         self.assertEqual(code, 5, out)
         self.assertIn('Record authors row 2 of 2', out)
 
+    def test_setup_checks_the_app_identity_row_is_exactly_on_or_off(self):
+        row = '| Record authors | `synthetic-factory[bot]`, `synthetic-owner` |\n'
+        for value in ('on', 'off', '`on`'):
+            fleet = FLEET.replace(row, row + '| App identity | %s |\n' % value)
+            code, out = self.check(self.project(**{'fleet.md': fleet}))
+            self.assertEqual(code, 0, value + '\n' + out)
+        for value in ('yes', 'On', '<on or off>', 'on | note'):
+            fleet = FLEET.replace(row, row + '| App identity | %s |\n' % value)
+            code, out = self.check(self.project(**{'fleet.md': fleet}))
+            self.assertEqual(code, 5, value + '\n' + out)
+            self.assertIn('fleet.md: GitHub identity: App identity must be exactly on or off', out)
+        two = FLEET.replace(row, row + '| App identity | on |\n| App identity | off |\n')
+        code, out = self.check(self.project(**{'fleet.md': two}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: GitHub identity: App identity row 2 of 2: | App identity | off |', out)
+
     def test_a_record_authors_cell_is_validated_whole(self):
         # catches: a row the readers refuse whole (text beside the logins, an extra
         # cell) passed because each backticked login parsed on its own.
@@ -240,6 +256,20 @@ class Check(unittest.TestCase):
         code, out = self.check(self.project(**{'fleet.md': missing}))
         self.assertEqual(code, 5, out)
         self.assertIn('fleet.md: Fixer: GPT: malformed --reasoning-level', out)
+        trailing = valid.replace(
+            '| Claude | Claude Code | Syn | High | `--provider claude-code --model syn-claude-1 --reasoning-level high` |',
+            '| Claude | Claude Code | Syn | High | `--provider claude-code --model syn-claude-1 --reasoning-level high extra` |')
+        code, out = self.check(self.project(**{'fleet.md': trailing}))
+        self.assertEqual(code, 5, out)
+        self.assertIn(
+            'fleet.md: Fixer: Claude: malformed `--provider claude-code --model syn-claude-1 --reasoning-level high extra`',
+            out)
+        option_value = valid.replace(
+            '| Claude | Claude Code | Syn | High | `--provider claude-code --model syn-claude-1 --reasoning-level high` |',
+            '| Claude | Claude Code | Syn | High | `--provider --missing --model syn-claude-1 --reasoning-level high` |')
+        code, out = self.check(self.project(**{'fleet.md': option_value}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Fixer: Claude: malformed --provider value --missing', out)
 
     def test_a_malformed_flag_is_counted_beside_an_old_note(self):
         # catches: a tab-separated new flag skipped, so an old well-formed flag

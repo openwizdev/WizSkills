@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=966
+CASES=967
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -3747,6 +3747,7 @@ EOF
 expect 'approach: OK for an older note is ignored, the revised note goes to its reviewer' 0 check.json "$DOOR13 | $OK13"' | say(13; 1304; "11:54"; "Approach changes: 1302") | say(13; 1305; "11:55"; "launch-fleet: approach resume sent 1304") | say(13; 1306; "11:56"; "Approach note: synthetic revised plan.") | say(13; 1307; "11:57"; "Approach OK: 1302")' -- check <<EOF
 approach re-check #13: note 1306; tell its approach reviewer
 EOF
+expect 'approach: an OK by someone outside the record authors is ignored' 0 check.json "$DOOR13 | $OK13"' | by(13; 1304; "11:58"; outsider; "Approach OK: 1302")' -- check < /dev/null
 expect 'approach: a reply not exactly naming the note is ignored' 0 check.json "$DOOR13 | $OK13"' | issue(13; .labels += ["needs-answer"]) | say(13; 1304; "11:58"; "Approach OK: 1302, thanks") | say(13; 1305; "11:58"; "Approach OK") | say(13; 1306; "11:58"; "approach ok: 1302")' -- check < /dev/null
 expect 'approach: an OK older than the note'"'"'s last edit is ignored' 0 check.json "$DOOR13 | $OK13"' | issue(13; .labels += ["needs-answer"]) | say(13; 1304; "11:54"; "Approach OK: 1302") | edit(13; 1302; "11:55"; "Approach note: synthetic plan, edited.")' -- check < /dev/null
 expect 'approach: a host driver'"'"'s refusal asks the orchestrator once, never retries' 0 check.json 'merge12 | say(13; 1301; "11:30"; "launch-fleet: start refused: one-way door under a host driver: synthetic")' -- check <<EOF

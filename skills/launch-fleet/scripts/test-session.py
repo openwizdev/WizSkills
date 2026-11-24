@@ -91,6 +91,8 @@ with world() as w:
     if rest[0] == 'issues' and rest[2:] == ['comments']:
         page = w['comments'].get(rest[1], []) if 'page=2' not in path else []
         out([page] if '--slurp' in args else page)
+    if rest[0] == 'issues' and len(rest) == 2 and method == 'GET':
+        out({'number': int(rest[1]), 'body': ''})
     if rest[:2] == ['issues', 'comments']:
         c = next(c for items in w['comments'].values() for c in items if c['id'] == int(rest[2]))
         if method == 'PATCH':

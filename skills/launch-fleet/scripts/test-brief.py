@@ -311,7 +311,7 @@ class Snapshot(unittest.TestCase):
                      ('wake', 4001, 'synthetic-owner/synthetic-repo', '--snapshot', path),
                      ('builder', TICKET, '--snapshot'), ('builder', TICKET, '--snapshot', ''),
                      ('builder', TICKET, '--snapshot', path, '--snapshot', path),
-                     ('builder', '--snapshot', path)):
+                     ('builder', '--snapshot', path), ('--snapshot', path)):
             with self.subTest(args=args):
                 self.assertEqual(brief(*args), (2, ''))
 

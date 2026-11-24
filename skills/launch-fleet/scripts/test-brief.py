@@ -4,17 +4,25 @@
 python3 -I skills/launch-fleet/scripts/test-brief.py
 """
 import ast
+from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import os
+import re
 import runpy
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 HERE = Path(__file__).resolve().parent
 HEAD = '0123456789abcdef0123456789abcdef01234567'
 OLD = 'fedcba9876543210fedcba9876543210fedcba98'
+TICKET = 'synthetic-owner/synthetic-tracker#12'
+PR = 'synthetic-owner/synthetic-code#31'
+PASS_REPO = ("Every ticket and pull request above is written as OWNER/NAME#N: pass that OWNER/NAME with `--repo` on "
+             "every `gh` command (in `gh api`, as the `repos/OWNER/NAME/` path), never your sandbox's own repository.")
 
 
 SERVICE = '/synthetic/openwiz/tools/github-app/token-service.py'
@@ -26,7 +34,7 @@ OWNER_LOGIN = ("Approvals, repository settings and pushes that change `.github/w
 
 
 def brief(*args, **env):
-    base = {k: v for k, v in os.environ.items() if not k.startswith('OPENWIZ_')}
+    base = {k: v for k, v in os.environ.items() if not k.startswith('OPENWIZ_') and k != 'GH_REPO'}
     r = subprocess.run([sys.executable, '-I', str(HERE / 'brief.py'), *map(str, args)],
                        capture_output=True, text=True, timeout=30, env={**base, **env})
     return r.returncode, r.stdout.rstrip('\n')
@@ -40,13 +48,13 @@ def lookup(skill):
 class Brief(unittest.TestCase):
     def test_each_brief_points_at_its_own_work_and_skill(self):
         cases = [
-            (('builder', 12), 'You are the builder for #12. Use the build-ticket skill.', 'build-ticket'),
-            (('reviewer', 31, HEAD), 'You are the reviewer for pull request #31 at %s.' % HEAD, 'review-ticket'),
-            (('re-check', 31, HEAD, OLD, 'R1,R2', 'none'),
-             'Re-check pull request #31 at %s: use the review-ticket skill.' % HEAD, 'review-ticket'),
-            (('fresh', 12, 31, 'room/12-synthetic', HEAD),
-             'You are the fresh builder for #12: one fresh round on pull request #31, on its branch '
-             'room/12-synthetic, after the report at %s.' % HEAD, 'build-ticket'),
+            (('builder', TICKET), 'You are the builder for %s. Use the build-ticket skill.' % TICKET, 'build-ticket'),
+            (('reviewer', PR, HEAD), 'You are the reviewer for pull request %s at %s.' % (PR, HEAD), 'review-ticket'),
+            (('re-check', PR, HEAD, OLD, 'R1,R2', 'none'),
+             'Re-check pull request %s at %s: use the review-ticket skill.' % (PR, HEAD), 'review-ticket'),
+            (('fresh', TICKET, PR, 'room/12-synthetic', HEAD),
+             'You are the fresh builder for %s: one fresh round on pull request %s, on its branch '
+             'room/12-synthetic, after the report at %s.' % (TICKET, PR, HEAD), 'build-ticket'),
             (('diagnose',), 'Use the diagnose skill.', 'diagnose'),
             (('tick', 'synthetic-owner/synthetic-repo', 'thr_synorch1'),
              'You are a launch-fleet tick for synthetic-owner/synthetic-repo. Use the launch-fleet skill.', 'launch-fleet'),
@@ -54,11 +62,11 @@ class Brief(unittest.TestCase):
              "You are a launch-fleet tick for synthetic-owner/synthetic-repo, woken by GitHub's messages.",
              'launch-fleet'),
             (('wake', 4001, 'synthetic-owner/synthetic-repo'),
-             'Fleet wake for synthetic-owner/synthetic-repo spec #4001. Use the launch-fleet skill.', 'launch-fleet'),
+             'Fleet wake for spec synthetic-owner/synthetic-repo#4001. Use the launch-fleet skill.', 'launch-fleet'),
             # The fleet thread's first-wake brief, which launch-fleet's own start path sends. Install's onboarding no
             # longer sends one of its own (OpenWiz #1358, review R7), so it is checked here directly.
             (('fleet', 4001, 'synthetic-owner/synthetic-repo'),
-             'You are the fleet thread for spec #4001 of synthetic-owner/synthetic-repo. Use the launch-fleet skill.',
+             'You are the fleet thread for spec synthetic-owner/synthetic-repo#4001. Use the launch-fleet skill.',
              'launch-fleet'),
         ]
         for args, start, skill in cases:
@@ -67,17 +75,17 @@ class Brief(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertTrue(text.startswith(start), text)
                 self.assertIn(lookup(skill), text)
-        code, text = brief('tick', 'synthetic-owner/synthetic-repo', 'thr_synorch1')
+        code, text = brief('tick', 'synthetic-owner/synthetic-repo', 'thr_syn-orch')
         self.assertTrue(text.endswith("do its Each wake section for the due lines below. "
-                                      "The orchestrator's thread is thr_synorch1."), text)
-        code, text = brief('re-check', 31, HEAD, OLD, 'R1,R2', 'none')
+                                      "The orchestrator's thread is thr_syn-orch. " + PASS_REPO), text)
+        code, text = brief('re-check', PR, HEAD, OLD, 'R1,R2', 'none')
         self.assertIn('Open findings: R1,R2. Changed since %s: git diff %s %s' % (OLD, OLD, HEAD), text)
 
     def test_same_family_brief_keeps_the_machine_header_first(self):
-        code, text = brief('reviewer', 31, HEAD, 'same-family')
+        code, text = brief('reviewer', PR, HEAD, 'same-family')
         self.assertEqual(code, 0)
         self.assertIn('Put "same-family review" on the line immediately below the VERDICT header.', text)
-        self.assertNotIn('same-family review', brief('reviewer', 31, HEAD)[1])
+        self.assertNotIn('same-family review', brief('reviewer', PR, HEAD)[1])
 
     def test_non_cloudroom_review_start_uses_the_installed_harnesses(self):
         fixture = runpy.run_path(str(HERE / 'test-host.py'))
@@ -102,6 +110,7 @@ class Brief(unittest.TestCase):
                     executable.chmod(0o755)
                 repo = fixture['REPO']
                 env = dict(project.env, PATH=str(bin_dir))
+                env['XDG_STATE_HOME'] = str(project.dir / 'state')
                 env.pop('CDPATH', None)
                 claim = subprocess.run([sys.executable, '-I', str(HERE / 'post.py'), 'comment',
                                         repo, '31', 'launch-fleet: review starting ' + HEAD],
@@ -118,14 +127,65 @@ class Brief(unittest.TestCase):
                 [(record, body)] = project.ticket(31)
                 self.assertEqual(record, 'launch-fleet: review starting ' + HEAD)
                 self.assertTrue(body.startswith('Driver review: ' + marking + '\n\n'), body)
-                self.assertIn('pull request #31 at ' + HEAD, body)
+                self.assertIn('pull request %s#31 at %s' % (repo, HEAD), body)
                 self.assertEqual('same-family review' in body, marking == 'same-family')
 
     def test_malformed_targets_print_no_brief(self):
-        for args in (('builder', '12; rm -rf /'), ('reviewer', 31, 'abc123'), ('fresh', 12, 31, 'main branch', HEAD),
-                     ('re-check', 31, HEAD, OLD, 'R1', 'thr_synthetic'), ('fleet', 1, 'not a repo'), ('tick', 'synthetic-owner/synthetic-repo', 'me'), ('nope',)):
+        for args in (('builder', '12; rm -rf /'), ('reviewer', PR, 'abc123'), ('fresh', TICKET, PR, 'main branch', HEAD),
+                     ('re-check', PR, HEAD, OLD, 'R1', 'thr_syn-x'), ('fleet', 1, 'not a repo'), ('tick', 'synthetic-owner/synthetic-repo', 'me'), ('nope',)):
             with self.subTest(args=args):
                 self.assertEqual(brief(*args), (2, ''))
+
+
+class Repository(unittest.TestCase):
+    ALL = [('builder', TICKET), ('reviewer', PR, HEAD), ('reviewer', PR, HEAD, 'same-family'),
+           ('re-check', PR, HEAD, OLD, 'R1,R2', 'none'), ('fresh', TICKET, PR, 'room/12-synthetic', HEAD),
+           ('diagnose',), ('fleet', 4001, 'synthetic-owner/synthetic-repo'),
+           ('wake', 4001, 'synthetic-owner/synthetic-repo'), ('tick', 'synthetic-owner/synthetic-repo', 'thr_syn-orch'),
+           ('wakes', 'synthetic-owner/synthetic-repo', 'thr_syn-orch')]
+
+    def test_no_brief_names_a_ticket_or_pull_request_without_its_repository(self):
+        for env in ({}, {'OPENWIZ_TOKEN_SERVICE': SERVICE}):
+            for args in self.ALL:
+                with self.subTest(args=args, env=env):
+                    code, text = brief(*args, **env)
+                    self.assertEqual(code, 0)
+                    self.assertIsNone(re.search(r'(?<![A-Za-z0-9_.-])#[0-9]', text), text)
+        self.assertIn('fresh builder for %s: one fresh round on pull request %s,' % (TICKET, PR),
+                      brief('fresh', TICKET, PR, 'room/12-synthetic', HEAD)[1])
+
+    def test_every_brief_says_to_pass_the_repository_to_gh(self):
+        for args in self.ALL:
+            with self.subTest(args=args):
+                self.assertIn(PASS_REPO, brief(*args)[1])
+
+    def test_a_bare_or_malformed_number_prints_no_brief(self):
+        for args in (('builder', 12), ('builder', '#12'), ('builder', 'synthetic-tracker#12'),
+                     ('builder', TICKET + ' x'), ('builder', 'synthetic-owner/synthetic-tracker#0'),
+                     ('reviewer', 31, HEAD), ('re-check', 31, HEAD, OLD, 'R1', 'none'),
+                     ('fresh', 12, PR, 'room/12-synthetic', HEAD), ('fresh', TICKET, 31, 'room/12-synthetic', HEAD)):
+            with self.subTest(args=args):
+                self.assertEqual(brief(*args), (2, ''))
+
+    def test_a_bare_reviewer_number_prints_no_brief_even_with_an_inherited_gh_repo(self):
+        for repo in ('synthetic-owner/synthetic-private', 'synthetic-owner/synthetic-code'):
+            for extra in ((), ('same-family',)):
+                for env in ({'GH_REPO': repo}, {'GH_REPO': repo, 'OPENWIZ_TOKEN_SERVICE': SERVICE}):
+                    with self.subTest(env=env, extra=extra):
+                        self.assertEqual(brief('reviewer', 31, HEAD, *extra, **env), (2, ''))
+
+    def test_a_bare_number_with_no_usable_repository_prints_no_brief(self):
+        for repo in (None, '', 'synthetic-code', 'not a repo', 'synthetic-owner/synthetic-code#31',
+                     'github.com/synthetic-owner/synthetic-code', 'synthetic-owner/..', 'synthetic-owner/.'):
+            for extra in ((), ('same-family',)):
+                with self.subTest(repo=repo, extra=extra):
+                    env = {} if repo is None else {'GH_REPO': repo}
+                    self.assertEqual(brief('reviewer', 31, HEAD, *extra, **env), (2, ''))
+        for args in (('builder', 12), ('re-check', 31, HEAD, OLD, 'R1', 'none'),
+                     ('fresh', 12, PR, 'room/12-synthetic', HEAD), ('fresh', TICKET, 31, 'room/12-synthetic', HEAD),
+                     ('reviewer', '#31', HEAD), ('reviewer', 0, HEAD), ('reviewer', '31 x', HEAD)):
+            with self.subTest(args=args):
+                self.assertEqual(brief(*args, GH_REPO='synthetic-owner/synthetic-code'), (2, ''))
 
 
 GH_ALLOWED = sorted(ast.literal_eval(next(
@@ -134,10 +194,10 @@ GH_ALLOWED = sorted(ast.literal_eval(next(
 
 
 class Token(unittest.TestCase):
-    KINDS = [(('builder', 12), 'builder-12', 'OWNER/NAME'),
-             (('fresh', 12, 31, 'room/12-synthetic', HEAD), 'builder-12', 'OWNER/NAME'),
-             (('reviewer', 31, HEAD), 'reviewer-31', 'OWNER/NAME'),
-             (('re-check', 31, HEAD, OLD, 'R1', 'none'), 'reviewer-31', 'OWNER/NAME'),
+    KINDS = [(('builder', TICKET), 'builder-12', 'OWNER/NAME'),
+             (('fresh', TICKET, PR, 'room/12-synthetic', HEAD), 'builder-12', 'OWNER/NAME'),
+             (('reviewer', PR, HEAD), 'reviewer-31', 'OWNER/NAME'),
+             (('re-check', PR, HEAD, OLD, 'R1', 'none'), 'reviewer-31', 'OWNER/NAME'),
              (('diagnose',), 'diagnose', 'OWNER/NAME'),
              (('fleet', 4001, 'synthetic-owner/synthetic-repo'), 'fleet-4001', 'synthetic-owner/synthetic-repo'),
              (('wake', 4001, 'synthetic-owner/synthetic-repo'), 'fleet-4001', 'synthetic-owner/synthetic-repo'),
@@ -162,15 +222,98 @@ class Token(unittest.TestCase):
                               'so run that without the helper.' % ', '.join('`gh %s`' % c for c in GH_ALLOWED), text)
 
     def test_with_no_service_every_brief_is_exactly_as_today(self):
-        expected = ('You are the builder for #12. Use the build-ticket skill. ' + LOOKUP_BUILD + '.')
+        expected = ('You are the builder for %s. Use the build-ticket skill. ' % TICKET + LOOKUP_BUILD + '. '
+                    + PASS_REPO)
         for env in ({}, {'OPENWIZ_TOKEN_SERVICE': ''}):
             with self.subTest(env=env):
-                self.assertEqual(brief('builder', 12, **env), (0, expected))
+                self.assertEqual(brief('builder', TICKET, **env), (0, expected))
                 for args, _, _ in self.KINDS:
                     code, text = brief(*args, **env)
                     self.assertNotIn('agent-token', text)
                     self.assertNotIn(OWNER_LOGIN, text)
                     self.assertNotIn(EXCLUSIVE, text)
+
+
+def snapshot_file(folder, repo, number=12, minutes_old=0, **change):
+    read_at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_old)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    item = {'number': number, 'kind': 'issue', 'title': 'Synthetic ticket', 'state': 'OPEN',
+            'labels': ['ready-for-agent'], 'updated_at': '2026-01-02T03:04:05Z', 'body': 'Synthetic body.',
+            'comments': [{'id': 501, 'author': 'synthetic-lead', 'created_at': '2026-01-02T03:00:00Z',
+                          'updated_at': '2026-01-02T03:00:00Z', 'body': 'launch-fleet: started'},
+                         {'id': 502, 'author': 'synthetic-passer', 'created_at': '2026-01-02T03:01:00Z',
+                          'updated_at': '2026-01-02T03:01:00Z', 'body': 'not a record'}]}
+    snap = {'repo': repo, 'read_at': read_at, 'complete': True, 'via': 'graphql',
+            'record_authors': ['synthetic-lead'], 'items': [item]}
+    snap.update(change)
+    path = Path(folder) / ('snap-%d-%d.json' % (number, len(list(Path(folder).iterdir()))))
+    path.write_text(json.dumps(snap))
+    return path, read_at
+
+
+class Snapshot(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+
+    def facts(self, path, number):
+        r = subprocess.run([sys.executable, '-I', str(HERE / 'snapshot.py'), 'facts', str(path), str(number)],
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.rstrip('\n')
+
+    def test_builder_and_reviewer_briefs_end_with_the_snapshot_facts(self):
+        for args, repo, number in ((('builder', TICKET), 'synthetic-owner/synthetic-tracker', 12),
+                                   (('reviewer', PR, HEAD), 'synthetic-owner/synthetic-code', 31),
+                                   (('reviewer', PR, HEAD, 'same-family'), 'synthetic-owner/synthetic-code', 31)):
+            for env in ({}, {'OPENWIZ_TOKEN_SERVICE': SERVICE}):
+                with self.subTest(args=args, env=env):
+                    path, read_at = snapshot_file(self.dir.name, repo, number)
+                    code, today = brief(*args, **env)
+                    self.assertEqual(code, 0)
+                    code, text = brief(*args, '--snapshot', path, **env)
+                    self.assertEqual(code, 0)
+                    intro = ('The facts below were read from GitHub at %s, in this wake\'s snapshot of %s (a bare #N in '
+                             'them is %s#N): read GitHub again only for anything newer.' % (read_at, repo, repo))
+                    self.assertEqual(text, today + '\n\n' + intro + '\n\n' + self.facts(path, number))
+                    self.assertIn('## %s#%d: Synthetic ticket' % (repo, number), text)
+                    self.assertIn('launch-fleet: started', text)
+                    self.assertNotIn('not a record', text)
+
+    def test_without_the_option_the_brief_is_byte_for_byte_today(self):
+        expected = ('You are the builder for %s. Use the build-ticket skill. ' % TICKET + LOOKUP_BUILD + '. '
+                    + PASS_REPO + '\n')
+        r = subprocess.run([sys.executable, '-I', str(HERE / 'brief.py'), 'builder', TICKET],
+                           capture_output=True, timeout=30,
+                           env={k: v for k, v in os.environ.items() if not k.startswith('OPENWIZ_')})
+        self.assertEqual((r.returncode, r.stdout), (0, expected.encode()))
+
+    def test_a_stale_incomplete_or_foreign_snapshot_gives_today_s_brief(self):
+        repo = 'synthetic-owner/synthetic-tracker'
+        today = brief('builder', TICKET)
+        bad = {'stale': snapshot_file(self.dir.name, repo, minutes_old=31)[0],
+               'incomplete': snapshot_file(self.dir.name, repo, complete=False)[0],
+               'no items': snapshot_file(self.dir.name, repo, items=None)[0],
+               'no read time': snapshot_file(self.dir.name, repo, read_at=None)[0],
+               'other ticket': snapshot_file(self.dir.name, repo, number=13)[0],
+               'other repository': snapshot_file(self.dir.name, 'synthetic-owner/synthetic-code')[0],
+               'missing': Path(self.dir.name) / 'absent.json'}
+        broken = Path(self.dir.name) / 'broken.json'
+        broken.write_text('{"repo": "synthetic-owner/synthetic-tracker", "complete": tr')
+        bad['unreadable'] = broken
+        for why, path in bad.items():
+            with self.subTest(why=why):
+                self.assertEqual(brief('builder', TICKET, '--snapshot', path), today)
+
+    def test_the_option_is_only_for_builder_and_reviewer_briefs_and_needs_a_file(self):
+        path = snapshot_file(self.dir.name, 'synthetic-owner/synthetic-tracker')[0]
+        for args in (('fresh', TICKET, PR, 'room/12-synthetic', HEAD, '--snapshot', path),
+                     ('re-check', PR, HEAD, OLD, 'R1', 'none', '--snapshot', path), ('diagnose', '--snapshot', path),
+                     ('wake', 4001, 'synthetic-owner/synthetic-repo', '--snapshot', path),
+                     ('builder', TICKET, '--snapshot'), ('builder', TICKET, '--snapshot', ''),
+                     ('builder', TICKET, '--snapshot', path, '--snapshot', path),
+                     ('builder', '--snapshot', path), ('--snapshot', path)):
+            with self.subTest(args=args):
+                self.assertEqual(brief(*args), (2, ''))
 
 
 LOOKUP_BUILD = (

@@ -1,0 +1,65 @@
+Fixed comparison scenario: each script runs once per wake, 6 wakes an hour. Derived, not measured.
+
+| Script | Role | Fixture runs | Calls | Calls per run | REST calls | GraphQL calls | REST units | Uncertain calls | REST units per run | REST units per spec-hour (scenario) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| fleet.sh spec | fleet | 261 | 16893 | 64.7 | 12582 | 4311 | 7837 | 1 | 30.03 | 180.2 |
+| merge.py | orchestrator | 174 | 1206 | 6.9 | 942 | 264 | 942 | 431 | 5.41 | 32.5 |
+| status.py repair | orchestrator | 45 | 511 | 11.4 | 423 | 88 | 423 | 0 | 9.40 | 56.4 |
+| post.py | orchestrator | 21 | 38 | 1.8 | 38 | 0 | 38 | 9 | 1.81 | 10.9 |
+| ops-starts.py | orchestrator | 60 | 56 | 0.9 | 56 | 0 | 56 | 0 | 0.93 | 5.6 |
+| brief.py | orchestrator | 49 | 0 | 0.0 | 0 | 0 | 0 | 0 | 0.00 | 0.0 |
+
+Total in the scenario: 285.5 REST units per spec-hour (summed unrounded, rounded once)
+
+Agent-CLI stubs: 25 installed; 0 calls reached them
+
+Total: 18704 calls, 9296 REST units, 4663 GraphQL calls, from 5 logs; 441 calls uncertain
+
+Per role. REST units are counted, a lower bound where a call is uncertain. Used delta is a
+shared-account observation: the account's REST `used` change around each call, every agent's
+calls included, left out where the allowance reset between the reads.
+
+| Role | Calls | REST calls | GraphQL calls | REST units | Uncertain | Used delta (shared account) |
+| --- | --- | --- | --- | --- | --- | --- |
+| fleet | 16893 | 12582 | 4311 | 7837 | 1 | - |
+| orchestrator | 1811 | 1459 | 352 | 1459 | 440 | - |
+
+Per endpoint:
+
+| Method | Endpoint | Kind | Calls | REST units |
+| --- | --- | --- | --- | --- |
+| GET | repos/:owner/:repo/issues/:n/comments | rest | 4423 | 3098 |
+| GET | repos/:owner/:repo/issues/:n | rest | 3111 | 1956 |
+| GET | repos/:owner/:repo/issues/:n/dependencies/blocked_by | rest | 2783 | 1830 |
+| GET | repos/:owner/:repo/contents/:path | rest | 962 | 808 |
+| GET | repos/:owner/:repo/pulls/:n/files | rest | 401 | 401 |
+| GET | repos/:owner/:repo/issues/:n/timeline | rest | 816 | 290 |
+| GET | repos/:owner/:repo/issues | rest | 260 | 186 |
+| POST | repos/:owner/:repo/issues/:n/comments | rest | 145 | 145 |
+| GET | repos/:owner/:repo/pulls/:n | rest | 337 | 120 |
+| GET | repos/:owner/:repo/issues/:n/events | rest | 97 | 97 |
+| GET | search/issues | rest | 63 | 63 |
+| GET | repos/:owner/:repo/commits/:sha/check-runs | rest | 133 | 50 |
+| GET | repos/:owner/:repo/commits/:sha/status | rest | 133 | 50 |
+| GET | repos/:owner/:repo/issues/:n/sub_issues | rest | 72 | 32 |
+| GET | repos/:owner/:repo/git/ref/:ref | rest | 72 | 27 |
+| POST | repos/:owner/:repo/issues/:n/labels | rest | 27 | 27 |
+| GET | repos/:owner/:repo | rest | 72 | 26 |
+| GET | user | rest | 66 | 25 |
+| PATCH | repos/:owner/:repo/issues/comments/:n | rest | 22 | 22 |
+| GET | repos/:owner/:repo/issues/comments/:n | rest | 20 | 20 |
+| GET | repos/:owner/:repo/git/matching-refs/:ref | rest | 10 | 10 |
+| DELETE | repos/:owner/:repo/issues/:n/labels/:name | rest | 6 | 6 |
+| DELETE | repos/:owner/:repo/issues/comments/:n | rest | 4 | 4 |
+| GET | installation/repositories | rest | 6 | 3 |
+| view | issue view | graphql | 3164 | 0 |
+| POST | graphql | graphql | 1267 | 0 |
+| view | repo view | graphql | 226 | 0 |
+| merge | pr merge | graphql | 6 | 0 |
+
+Top five endpoints by REST units:
+1. GET repos/:owner/:repo/issues/:n/comments: 3098 units, 4423 calls
+2. GET repos/:owner/:repo/issues/:n: 1956 units, 3111 calls
+3. GET repos/:owner/:repo/issues/:n/dependencies/blocked_by: 1830 units, 2783 calls
+4. GET repos/:owner/:repo/contents/:path: 808 units, 962 calls
+5. GET repos/:owner/:repo/pulls/:n/files: 401 units, 401 calls

@@ -67,6 +67,12 @@ def digest(value):
 
 
 FAMILY = {'claude-code': 'claude', 'codex': 'gpt'}
+REFUSAL_ALIASES = {
+    'claude-code': ('claude', 'claude-code'),
+    'antigravity': ('gemini', 'antigravity'),
+    'codex': ('codex', 'gpt'),
+}
+REFUSED_USAGE = re.compile(r'^launch-fleet: review refused ([0-9a-f]{40}): ([A-Za-z0-9._-]+) usage limit\s*$', re.I)
 OLDER = ('Builder', 'Builder for small tickets', 'Reviewer for Claude-built', 'Reviewer for GPT-built', 'Fixer')
 MODELS_HEADER = ['Role', 'Harness', 'Model', 'Effort', '`room-cli thread spawn` flags']
 FIXER_HEADER = ['Builder family'] + MODELS_HEADER[1:]
@@ -76,6 +82,7 @@ LOOP = re.compile(r'[A-Za-z0-9_-]+')
 ROLES = (('Orchestrator', 'orchestrator'), ('Builder', 'builder'), ('Reviewer', 'reviewer'),
          ('Small builder', 'small_builder'), ('Fixer', 'fixer'))
 ID = re.compile(r'[A-Za-z0-9._-]+')
+VERDICT = re.compile(r'VERDICT: (?:APPROVE|CHANGES) at ([0-9a-f]{40})')
 STARTS = {'fleet_thread': ('roles', 'orchestrator'), 'builder': ('roles', 'builder'),
           'small_builder': ('roles', 'small_builder'), 'review_of_claude_built': ('reviews', 'claude'),
           'review_of_gpt_built': ('reviews', 'gpt'), 'fix_round_for_claude_builder': ('fixers', 'claude'),
@@ -112,14 +119,16 @@ def _id(word, model=False):
 def _choice(names, provider, model, effort):
     if not all(names):
         raise ValueError('fleet settings: an empty name cell')
-    return dict(provider=_id(provider), model=_id(model, True), effort=_id(effort))
+    return dict(provider=_id(provider), model=None if model is None else _id(model, True), effort=_id(effort))
 
 
 def _flags(cell):
     words = cell[1:-1].split(' ') if len(cell) > 1 and cell[0] == cell[-1] == '`' else []
-    if len(words) != 6 or words[0::2] != ['--provider', '--model', '--reasoning-level']:
-        raise ValueError(f'fleet settings: bad flags {cell!r}')
-    return words[1::2]
+    if len(words) == 6 and words[0::2] == ['--provider', '--model', '--reasoning-level']:
+        return words[1], words[3], words[5]
+    if len(words) == 4 and words[0::2] == ['--provider', '--reasoning-level']:
+        return words[1], None, words[3]
+    raise ValueError(f'fleet settings: bad flags {cell!r}')
 
 
 def _models_table(lines):
@@ -133,10 +142,17 @@ def _models_table(lines):
         rows.append(_cells(line))
     if len(rows) < 2 or rows[0] != MODELS_HEADER or rows[1] != ['---'] * 5:
         raise ValueError('fleet settings: bad Models header')
-    roles, next_at = {}, 0
+    roles, fallbacks, next_at, next_fb = {}, [], 0, 1
     for row in rows[2:]:
         if len(row) != 5:
             raise ValueError('fleet settings: a Models row without five cells')
+        if row[0] == f'Reviewer fall-back {next_fb}' and next_at >= 3:
+            if row[1] == 'follows Builder' and row[2:] == ['', '', '']:
+                raise ValueError(f'fleet settings: {row[0]} cannot follow')
+            fallbacks.append(_choice(row[1:4], *_flags(row[4])))
+            next_at = len(ROLES)
+            next_fb += 1
+            continue
         at = next((i for i in range(next_at, len(ROLES)) if ROLES[i][0] == row[0]), None)
         if at is None:
             raise ValueError(f'fleet settings: row {row[0]!r} out of place')
@@ -155,7 +171,7 @@ def _models_table(lines):
         role = roles.setdefault(key, dict(follows='builder', choice=None))
         if role['follows']:
             role['choice'] = roles['builder']['choice']
-    return roles
+    return roles, fallbacks
 
 
 def _one_table(lines, header, name):
@@ -215,7 +231,8 @@ def _older_tables(text):
                            builder=dict(older, choice=builder), reviewer=dict(older, choice=tables[2 + own]),
                            small_builder=dict(older, choice=small), fixer=dict(older, choice=fixers[own])),
                 reviews=dict(claude=dict(choice=for_claude), gpt=dict(choice=for_gpt)),
-                fixers=dict(claude=dict(choice=fixers[0]), gpt=dict(choice=fixers[1])))
+                fixers=dict(claude=dict(choice=fixers[0]), gpt=dict(choice=fixers[1])),
+                reviewer_fallbacks=[])
 
 
 def read_models(text):
@@ -224,7 +241,7 @@ def read_models(text):
         if not any(line == '## ' + name for name in OLDER for line in _lines(text)):
             raise ValueError('fleet settings: no model settings')
         return _older_tables(text)
-    roles = _models_table(section)
+    roles, fallbacks = _models_table(section)
     builder, reviewer, fixer = (roles[k]['choice'] for k in ('builder', 'reviewer', 'fixer'))
     reviews, fixers = {}, {}
     for family in ('claude', 'gpt'):
@@ -232,7 +249,7 @@ def read_models(text):
                                 if FAMILY.get(c['provider']) not in (None, family)), dict(choice=None))
         fixers[family] = next((dict(choice=c) for c in (fixer, reviewer)
                                if FAMILY.get(c['provider']) == family), dict(choice=None))
-    return dict(read='models_table', roles=roles, reviews=reviews, fixers=fixers)
+    return dict(read='models_table', roles=roles, reviews=reviews, fixers=fixers, reviewer_fallbacks=fallbacks)
 
 
 def read_fleet(repo):
@@ -260,12 +277,39 @@ def loop_agent(models, listing, loop):
             f'--reasoning {want["effort"]}')
 
 
+def _format_flags(c):
+    if c is None:
+        return None
+    if c['model'] is None:
+        return f'--provider {c["provider"]} --reasoning-level {c["effort"]}'
+    return f'--provider {c["provider"]} --model {c["model"]} --reasoning-level {c["effort"]}'
+
+
 def spawn_flags(models):
-    out = {}
-    for start, (kind, key) in STARTS.items():
-        c = models[kind][key]['choice']
-        out[start] = None if c is None else (f'--provider {c["provider"]} --model {c["model"]} '
-                                             f'--reasoning-level {c["effort"]}')
+    return {start: _format_flags(models[kind][key]['choice']) for start, (kind, key) in STARTS.items()}
+
+
+def refused_families_for_commit(comments, commit):
+    seen, out = set(), []
+    for body in comments:
+        for line in _lines(body):
+            m = REFUSED_USAGE.fullmatch(line.strip())
+            if m and m.group(1).lower() == commit.lower():
+                family = m.group(2).lower()
+                if family not in seen:
+                    seen.add(family)
+                    out.append(family)
+    return tuple(out)
+
+
+def reviewer_order(models, refused=()):
+    blocked = {f.lower() for f in refused}
+    candidates = [models['roles']['reviewer']['choice'], *models.get('reviewer_fallbacks', ())]
+    out = []
+    for c in candidates:
+        aliases = set(REFUSAL_ALIASES.get(c['provider'], (c['provider'],)))
+        if not (aliases & blocked):
+            out.append(c)
     return out
 
 
@@ -313,9 +357,13 @@ def check_review(c, models):
     require(c['closes'] == [c['ticket']], 'the pull request does not close exactly its ticket')
     require(type(c['default_branch']) is str and c['default_branch'] != '' and c['base'] == c['default_branch'],
             'the pull request does not target the default branch')
-    require(type(c['subject']) is str and re.search(r'\bgreen\b', c['subject']) is not None,
+    require(type(c['subject']) is str and re.search(r'\bgreen\b', c['subject'], re.IGNORECASE) is not None,
             'the head is not a hand-back (no "green" in its subject)')
-    require(c['verdict'] is None, 'the pull request already has a verdict')
+    verdict = c['verdict']
+    if verdict is not None:
+        match = VERDICT.fullmatch(verdict) if type(verdict) is str else None
+        require(match is not None, 'the latest verdict is malformed')
+        require(match[1] != head, 'the pull request already has a verdict at the current head')
     spans = c['spans']
     require(type(spans) is list and all(type(x) is dict and set(x) == {'head', 'given_up'} for x in spans),
             'reviewer history unreadable')
@@ -392,6 +440,8 @@ def _operation(c, review, action, subject, selected, world, history, planned, en
             and (r['repository'], r['spec'], r['ticket']) == (repo, spec, ticket)]
     same = sorted((r for r in mine if all(r[k] == v for k, v in identity.items())), key=lambda r: r['sequence'])
     bound = binding_digest(dict(identity, sequence=0), selected, world['rule'])
+    evidence = dict(c['evidence'], digest=bound)
+    effects._validate(effects.SCHEMA['$defs']['evidence'], evidence)
     latest = same[-1] if same else None
     if latest is not None and latest['rule'] == world['rule'] and latest['evidence'][0]['digest'] == bound:
         intent = latest
@@ -400,8 +450,6 @@ def _operation(c, review, action, subject, selected, world, history, planned, en
     else:
         # First start, or the settled earlier intent's settings/rule changed: a new operation.
         sequence = 1 + max([r['sequence'] for r in mine if r['approval'] == c['approval']], default=0)
-        evidence = dict(evidence_class=c['evidence']['evidence_class'], source=c['evidence']['source'],
-                        digest=bound)
         intent = dict(identity, schema='openwiz.ops-dispatch.v1', kind='intent', created_at=world['pass']['now'],
                       id='pending', rule=world['rule'], evidence=[evidence], sequence=sequence)
         intent['operation_key'] = effects.operation_key(intent)
@@ -527,6 +575,22 @@ def main():
             else:
                 print(flags[args[3]])
                 return 0
+        elif len(args) >= 3 and args[:2] == ['reviewer-order', '--repo']:
+            rest = args[3:]
+            refused = []
+            if len(rest) % 2 != 0:
+                raise ValueError('expected --refused <family> pairs')
+            for i in range(0, len(rest), 2):
+                if rest[i] != '--refused' or not ID.fullmatch(rest[i + 1]):
+                    raise ValueError(f'bad reviewer-order argument {rest[i]!r}')
+                refused.append(rest[i + 1])
+            choices = reviewer_order(read_models(read_fleet(args[2])), refused)
+            if not choices:
+                print('ops-starts: reviewer-order waits: all configured reviewers refused', file=sys.stderr)
+                return 1
+            for c in choices:
+                print(_format_flags(c))
+            return 0
         elif len(args) == 5 and args[:2] == ['loop-agent', '--repo']:
             if not REPO.fullmatch(args[2]) or not LOOP.fullmatch(args[3]):
                 raise ValueError('a repository and a loop id are required')

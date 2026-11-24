@@ -28,6 +28,8 @@ Routine triage comments start with this line, exactly as Matt wrote it; approval
 
 ## Sort an issue
 
+Before ranking or choosing a priority, when `openwiz-bench` is on `PATH`, read `openwiz-bench --json` and name the bench that moved the priority. Unmeasured benches change nothing, and a missing command or failed read blocks nothing.
+
 1. **Read** the whole issue, keeping what earlier triage settled; the glossary and ADRs (`docs/agents/domain.md`); for a low finding, its review and pull request. Search the default branch for the behaviour by what it does (**already built?**), and read every `.out-of-scope/` file when present (**rejected before?**, as [OUT-OF-SCOPE.md](OUT-OF-SCOPE.md) says). Done when you can say where you looked and both answers. A report (a `feedback` label, or the feedback marker last) leaves this list for [Feedback reports](#feedback-reports).
 2. **Check the claim:** reproduce a bug, or run an outside pull request's tests, using only what the project lets you run without asking; for anything needing the user's machine, account or a live read, write down what it would take. Done with one result: **confirmed** (with its code path), **not reproduced**, or **not enough detail to try**.
 3. **Decide and apply** one category and one state, removing the old state, and post the comment:

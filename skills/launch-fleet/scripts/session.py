@@ -408,9 +408,10 @@ class Session:
         claim = self.claim(p, 'launch-fleet: review starting %s' % head, 'launch-fleet: review withdrawn %s' % head)
         if not claim:
             return False
-        brief = script('brief.py', 'reviewer', p, head, *(['same-family'] if family == 'same-family' else []))
+        target = '%s#%s' % (self.repo, p)
+        brief = script('brief.py', 'reviewer', target, head, *(['same-family'] if family == 'same-family' else []))
         if brief.returncode:
-            raise NeedsYou('brief.py made no reviewer brief for #%s' % p)
+            raise NeedsYou('brief.py made no reviewer brief for %s' % target)
         rest = '\nDriver review: %s\n\n%s' % (family, brief.stdout.strip())
         self.edit(claim, 'launch-fleet: review starting %s%s' % (head, rest))
         since = int(time.time())

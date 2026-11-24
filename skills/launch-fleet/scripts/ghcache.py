@@ -8,7 +8,7 @@ import secrets
 import stat
 import subprocess
 import sys
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 ETAG = re.compile(r'(W/)?"[!#-~]{1,250}"')
 NEXT = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
@@ -21,7 +21,9 @@ class Error(Exception):
 
 
 def cache_dir():
-    base = os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache')
+    base = os.environ.get('XDG_CACHE_HOME')
+    if not base or not os.path.isabs(base):
+        base = os.path.join(os.path.expanduser('~'), '.cache')
     return Path(base) / 'launch-fleet' / 'rest'
 
 
@@ -45,27 +47,46 @@ def _trusted(info, own):
     return info.st_uid in (0, os.getuid()) and (not info.st_mode & 0o022 or info.st_mode & stat.S_ISVTX)
 
 
-def _root():
-    base = Path(os.path.realpath(cache_dir().parent.parent))
-    names = list(base.parts[1:]) + ['launch-fleet', 'rest']
+def _step(fd, name, own):
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    fd = None
     try:
-        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
-        if not _trusted(os.fstat(fd), False):
-            raise Error('ghcache: unsafe cache folder, refused')
-        for number, name in enumerate(names):
+        child = os.open(name, flags, dir_fd=fd)
+    except FileNotFoundError:
+        try:
+            os.mkdir(name, 0o700, dir_fd=fd)
+        except FileExistsError:
+            pass
+        child = os.open(name, flags, dir_fd=fd)
+    if not _trusted(os.fstat(child), own):
+        os.close(child)
+        raise Error('ghcache: unsafe cache folder, refused')
+    if fd is not None:
+        os.close(fd)
+    return child
+
+
+def _root():
+    base = cache_dir().parent.parent
+    if not base.is_absolute():
+        raise Error('ghcache: unsafe cache folder, refused')
+    names, fd, links = list(base.parts), None, 0
+    try:
+        while names:
+            name = names.pop(0)
             try:
-                child = os.open(name, flags, dir_fd=fd)
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
             except FileNotFoundError:
-                os.mkdir(name, 0o700, dir_fd=fd)
-                child = os.open(name, flags, dir_fd=fd)
-            os.close(fd)
-            fd = child
-            info = os.fstat(fd)
-            if not _trusted(info, number >= len(names) - 2):
-                raise Error('ghcache: unsafe cache folder, refused')
-        if stat.S_IMODE(info.st_mode) != 0o700:
+                info = None
+            if info and stat.S_ISLNK(info.st_mode):
+                links += 1
+                if links > 40 or info.st_uid not in (0, os.getuid()) or os.fstat(fd).st_mode & 0o022:
+                    raise Error('ghcache: unsafe cache folder, refused')
+                names[:0] = Path(os.readlink(name, dir_fd=fd)).parts
+                continue
+            fd = _step(fd, name, False)
+        for name in ('launch-fleet', 'rest'):
+            fd = _step(fd, name, True)
+        if stat.S_IMODE(os.fstat(fd).st_mode) != 0o700:
             os.fchmod(fd, 0o700)
     except BaseException as error:
         if fd is not None:
@@ -187,14 +208,7 @@ def _cached(root, endpoint, accept, label, request):
     if status == 304:
         if not entry:
             raise Error('ghcache: 304 for %s with no saved answer' % label)
-        link = headers.get('link', entry['link'])
-        if link != entry['link'] and not _save(root, name, _entry(request, entry['etag'], link, entry['body'])):
-            try:
-                os.unlink(name, dir_fd=root)
-            except OSError:
-                pass
-            raise Error('ghcache: cannot save the new Link for %s in the cache; read again' % label)
-        return entry['body'], link
+        return entry['body'], headers.get('link')
     if status != 200:
         raise Error('ghcache: HTTP %d for %s' % (status, label))
     if run.returncode != 0:
@@ -220,6 +234,21 @@ def get(endpoint, accept=None):
     return _json(_read(endpoint, accept)[0], endpoint)
 
 
+def _counted(endpoint, count):
+    parts = urlsplit(endpoint)
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    keys = [key for key, _ in query]
+    found = dict(query)
+    size, page = found.get('per_page', '30'), found.get('page', '1')
+    if (keys.count('per_page') > 1 or keys.count('page') > 1 or not size.isdigit() or not page.isdigit()
+            or int(size) < 1 or int(page) < 1):
+        raise Error('ghcache: a 304 without a Link for %s, and its page size is unknown' % _label(endpoint))
+    if count < min(int(size), 100):
+        return None
+    query = [(key, value) for key, value in query if key != 'page'] + [('page', str(int(page) + 1))]
+    return urlunsplit(parts._replace(query=urlencode(query, safe='/:,')))
+
+
 def pages(endpoint):
     items, seen = [], set()
     while endpoint:
@@ -231,6 +260,9 @@ def pages(endpoint):
         if not isinstance(page, list):
             raise Error('ghcache: a page of %s that is not a list' % _label(endpoint))
         items += page
+        if link is None:
+            endpoint = _counted(endpoint, len(page))
+            continue
         found = NEXT.search(link)
         endpoint = found.group(1) if found else None
     return items

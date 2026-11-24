@@ -1082,7 +1082,7 @@ class KeyHostExpiredLogin(Base):
         self.addCleanup(kill_left)
         run = ('import subprocess, sys\nsys.path.insert(0, %r)\nimport write_driver as wd\nreal = subprocess.run\n'
                'def run(*a, **k):\n    if k.get("timeout") == 300:\n        k["timeout"] = 3\n'
-               '    return real(*a, **k)\nwd.subprocess.run = run\nsys.exit(wd.main(sys.argv[1:]))\n'
+               '    return real(*a, **k)\nwd.subprocess.run = run\nwd.PROBE_WAIT = 3\nsys.exit(wd.main(sys.argv[1:]))\n'
                % str(SCRIPT.parent))
         probe = subprocess.Popen([sys.executable, '-I', '-c', run, 'lesson', 'expired-login', '--state', self.state,
                                   '--driver', driver, '--harness', 'exampleagent', '--key-host', 'examplehost',
@@ -1201,7 +1201,8 @@ class KeyHostExpiredLogin(Base):
         echo = "    print(json.dumps({'status': status, 'body': {'key': key}}))\n"
         reversed_echo = "    print(json.dumps({'status': status, 'body': {}, 'k': key[::-1]}))\n"
         looks = ("        seen = json.dumps(out) + box_text()\n"
-                 "        if 'write-driver-probe-' in seen or '-eborp-revird-etirw' in seen:\n"
+                 "        found = __import__('re').compile('write-driver-probe-[0-9a-f]{32}').search\n"
+                 "        if found(seen) or found(seen[::-1]):\n"
                  "            print(json.dumps({'run': 'run-saw-the-key'}))\n            return 0\n"
                  "        if out['status'] == 401:")
         driver = self.key_driver('looks', change=lambda t: t.replace("        if out['status'] == 401:", looks))

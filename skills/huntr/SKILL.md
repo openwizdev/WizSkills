@@ -155,6 +155,6 @@ with Z.
 Include **found, approved, proposed, skipped**, each with counts and tracker links. An empty hunt with every
 required source read adds one to the streak; a nonempty hunt resets it.
 
-Archive every hunter. Then **read back** every #394 part and index, use `unpack` with the planned digest to verify all numbered parts. Once that record is verified, delivery is complete: **#394 is the only report channel** to the orchestrator, including partial results, final results, tier-0 audits, proposals and blockers. Do not send direct thread messages or attempt a second delivery. Run `room-cli thread archive --self` as the final action, for off, paused, empty and blocked hunts too. If the record cannot be saved, stay open until a later wake reconciles it.
+Archive every hunter. Then **read back** every configured switch issue part and index, use `unpack` with the planned digest to verify all numbered parts, and check that the recovered record holds run identity, coverage, manifests, skips, ownership, pacing and next action. Once that record is verified, delivery is complete: **the configured switch issue is the only report channel** to the orchestrator, including partial results, final results, tier-0 audits, proposals and blockers. Do not send direct thread messages or attempt a second delivery. Run `room-cli thread archive --self` as the final action, for off, paused, empty and blocked hunts too. If the record cannot be saved, stay open until a later wake reconciles it.
 
 **Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills.

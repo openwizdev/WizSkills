@@ -433,7 +433,7 @@ class Write(Tracker):
         del argv[-4:-2]
         err = io.StringIO()
         with mock.patch.dict(os.environ, env), mock.patch.object(status, 'datetime', Clock), \
-                mock.patch.object(status.time, 'sleep', sleep), contextlib.redirect_stderr(err):
+                mock.patch.object(status, 'time', mock.Mock(wraps=time, sleep=sleep)), contextlib.redirect_stderr(err):
             code = status.main(argv[3:])
         self.assertEqual(code, 0, err.getvalue())
         self.assertEqual(clock, pinned + timedelta(seconds=1))

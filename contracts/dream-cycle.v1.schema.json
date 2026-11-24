@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:openwiz:schema:dream-cycle:v1",
+  "title": "openwiz:dream-cycle v1",
+  "description": "Data shapes for the dream-cycle.v1 contract: scout findings lines, prover verdict lines, repository inventory output, merged findings, and ticket entries. See dream-cycle.v1.md for report sections, project settings, CLI seams, and guards.",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "non_empty_line": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "line_or_empty": {
+      "type": "string",
+      "maxLength": 500,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+    },
+    "evidence_entry": {
+      "description": "One verifiable command and its short result, formatted as '<command> -> <short result>'.",
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 500,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+ -> [^\\u0000-\\u001f\\u007f]+$"
+    },
+    "utc_timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "finding": {
+      "description": "One scout finding line (JSONL). Field names are pinned to the contract.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "repo",
+        "paths",
+        "what",
+        "evidence",
+        "why_keep",
+        "confidence",
+        "size",
+        "ticket"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["delete", "fix", "link", "summary"] },
+        "repo": { "$ref": "#/$defs/non_empty_line" },
+        "paths": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/non_empty_line" }
+        },
+        "what": { "$ref": "#/$defs/non_empty_line" },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/evidence_entry" }
+        },
+        "why_keep": { "$ref": "#/$defs/line_or_empty" },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "size": { "enum": ["S", "M", "L"] },
+        "ticket": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "kind": { "const": "delete" } }
+          },
+          "then": {
+            "properties": {
+              "paths": { "minItems": 1 },
+              "why_keep": { "minLength": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "verdict": {
+      "description": "One prover verdict line (JSONL) re-running a finding's evidence.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "verdict", "reason", "evidence"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "verdict": { "enum": ["CONFIRMED", "PLAUSIBLE", "REJECTED"] },
+        "reason": { "$ref": "#/$defs/non_empty_line" },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/evidence_entry" }
+        }
+      }
+    },
+    "inventory_section_ok": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "total", "items", "reason"],
+      "properties": {
+        "status": { "const": "ok" },
+        "total": { "type": "integer", "minimum": 0 },
+        "items": { "type": "array" },
+        "reason": { "type": "null" }
+      }
+    },
+    "inventory_section_unconfirmed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "total", "items", "reason"],
+      "properties": {
+        "status": { "const": "unconfirmed" },
+        "total": { "type": "null" },
+        "items": { "type": "array", "maxItems": 0 },
+        "reason": { "$ref": "#/$defs/non_empty_line" }
+      }
+    },
+    "inventory_section": {
+      "oneOf": [
+        { "$ref": "#/$defs/inventory_section_ok" },
+        { "$ref": "#/$defs/inventory_section_unconfirmed" }
+      ]
+    },
+    "unconfirmed_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "reason"],
+      "properties": {
+        "source": { "$ref": "#/$defs/non_empty_line" },
+        "reason": { "$ref": "#/$defs/non_empty_line" }
+      }
+    },
+    "inventory": {
+      "description": "Compact read-only repository inventory printed by scripts/inventory.py.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "repo",
+        "days",
+        "pr_idle_days",
+        "generated_at",
+        "sections",
+        "unconfirmed"
+      ],
+      "properties": {
+        "schema": { "const": "openwiz.dream-cycle.inventory.v1" },
+        "repo": { "$ref": "#/$defs/non_empty_line" },
+        "days": { "type": "integer", "minimum": 1 },
+        "pr_idle_days": { "type": "integer", "minimum": 1 },
+        "generated_at": { "$ref": "#/$defs/utc_timestamp" },
+        "sections": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stale_paths",
+            "orphan_branches",
+            "idle_issues",
+            "idle_prs",
+            "empty_milestones",
+            "skipped_tests",
+            "generated_files"
+          ],
+          "properties": {
+            "stale_paths": { "$ref": "#/$defs/inventory_section" },
+            "orphan_branches": { "$ref": "#/$defs/inventory_section" },
+            "idle_issues": { "$ref": "#/$defs/inventory_section" },
+            "idle_prs": { "$ref": "#/$defs/inventory_section" },
+            "empty_milestones": { "$ref": "#/$defs/inventory_section" },
+            "skipped_tests": { "$ref": "#/$defs/inventory_section" },
+            "generated_files": { "$ref": "#/$defs/inventory_section" }
+          }
+        },
+        "unconfirmed": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/unconfirmed_entry" }
+        }
+      }
+    },
+    "merged": {
+      "description": "Merged, validated, deduplicated, and ranked findings written by scripts/dream.py merge.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "findings", "dropped", "counts"],
+      "properties": {
+        "schema": { "const": "openwiz.dream-cycle.merged.v1" },
+        "findings": { "type": "array" },
+        "dropped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["file", "line", "reason"],
+            "properties": {
+              "file": { "$ref": "#/$defs/non_empty_line" },
+              "line": { "type": "integer", "minimum": 1 },
+              "reason": { "$ref": "#/$defs/non_empty_line" }
+            }
+          }
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input", "valid", "dropped", "merged"],
+          "properties": {
+            "input": { "type": "integer", "minimum": 0 },
+            "valid": { "type": "integer", "minimum": 0 },
+            "dropped": { "type": "integer", "minimum": 0 },
+            "merged": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}

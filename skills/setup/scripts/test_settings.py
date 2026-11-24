@@ -582,6 +582,59 @@ class Check(unittest.TestCase):
         code, out = self.check(self.project(**{'fleet.md': with_rules(re.sub(r'<[^>]*>', 'syn-owner', section))}))
         self.assertEqual(code, 0, out)
 
+    def test_gemini_antigravity_is_a_known_model_family_in_models_and_reviewer_tables(self):
+        claude_builder = choice('Builder', 'claude-code', 'syn-claude-1')
+        codex_reviewer = choice('Reviewer', 'codex', 'syn-codex-1')
+        gemini_builder = choice('Builder', 'antigravity', 'syn-gemini-1')
+        gemini_reviewer = choice('Reviewer', 'antigravity', 'syn-gemini-1')
+        claude_reviewer = choice('Reviewer', 'claude-code', 'syn-claude-1')
+        codex_builder = choice('Builder', 'codex', 'syn-codex-1')
+
+        for name, text in (
+            ('claude built reviewed by gemini', NEW.replace(codex_reviewer, gemini_reviewer)),
+            ('gemini built reviewed by claude', NEW.replace(claude_builder, gemini_builder).replace(codex_reviewer, claude_reviewer)),
+            ('gemini built reviewed by codex', NEW.replace(claude_builder, gemini_builder)),
+            ('codex built reviewed by gemini', NEW.replace(claude_builder, codex_builder).replace(codex_reviewer, gemini_reviewer)),
+        ):
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': text}))
+                self.assertEqual(code, 0, out)
+
+        same_gemini = NEW.replace(claude_builder, gemini_builder).replace(codex_reviewer, gemini_reviewer)
+        code, out = self.check(self.project(**{'fleet.md': same_gemini}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Models: Reviewer: antigravity is not from another model family than the Builder',
+                      out.splitlines())
+
+        older_claude_by_gemini = FLEET.replace(
+            table('Reviewer for Claude-built', 'codex', 'syn-codex-1'),
+            table('Reviewer for Claude-built', 'antigravity', 'syn-gemini-1'),
+        )
+        code, out = self.check(self.project(**{'fleet.md': older_claude_by_gemini}))
+        self.assertEqual(code, 0, out)
+
+        older_with_gemini = FLEET + table('Reviewer for Gemini-built', 'claude-code', 'syn-claude-1')
+        code, out = self.check(self.project(**{'fleet.md': older_with_gemini}))
+        self.assertEqual(code, 0, out)
+
+        older_gemini_same = FLEET + table('Reviewer for Gemini-built', 'antigravity', 'syn-gemini-1')
+        code, out = self.check(self.project(**{'fleet.md': older_gemini_same}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Reviewer for Gemini-built: antigravity is not from another model family',
+                      out.splitlines())
+
+        older_gemini_unknown = FLEET + table('Reviewer for Gemini-built', 'syn-harness', 'syn-1')
+        code, out = self.check(self.project(**{'fleet.md': older_gemini_unknown}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Reviewer for Gemini-built: syn-harness has no known model family',
+                      out.splitlines())
+
+        launch = reader(SKILLS / 'install/scripts/first_fleet.py')
+        claude_gemini = NEW.replace(codex_reviewer, gemini_reviewer)
+        rules = launch.settings_rules(claude_gemini)
+        self.assertEqual(rules['reviewer_claude']['harness'], 'antigravity')
+        self.assertEqual(rules['reviewer_gemini']['harness'], 'claude-code')
+
     def test_usage_errors_exit_2(self):
         # catches: a mistyped command read as a verified project.
         result = subprocess.run([sys.executable, '-I', str(SCRIPT), 'verify'], capture_output=True, text=True)

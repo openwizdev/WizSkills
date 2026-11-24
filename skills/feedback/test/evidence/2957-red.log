@@ -158,3 +158,12 @@ AssertionError: 'preview again' not found in 'not sent. the draft is kept, so it
 Ran 7 tests in 18.604s
 
 FAILED (failures=16)
+
+R1 regression run at the reviewed head (four CLI tests, exit 1):
+- A legacy report with a label inside ran returned a URL whose what-happened query field included the synthetic log sentinel.
+- A record with saved report fields was rejected as unreadable.
+- A file-based draft lost part of its chosen body when projected into what-happened.
+- Draft and edit accepted all four reserved labels in each structured report field.
+
+Ran 4 tests
+FAILED (failures=39)

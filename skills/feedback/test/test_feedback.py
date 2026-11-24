@@ -1259,6 +1259,77 @@ class ClearErrorsBrowserRouteAndList(Helper):
         self.assertNotIn('Log (secrets removed)', url)
         self.assertIn('does not count it as sent', linked['say'].lower())
 
+    def test_browser_link_reads_legacy_sections_without_the_log(self):
+        from urllib.parse import parse_qs, urlsplit
+        for ran in ('example command', 'example command\n\nWhat I expected:\nmisleading heading'):
+            with self.subTest(ran=ran):
+                chosen = (f'What I ran:\n{ran}\n\nWhat happened:\nThe example failed.\n\n'
+                          'Log (secrets removed):\n    synthetic log sentinel')
+                op = self.draft(body=chosen)
+                path = self.state / 'feedback' / f'{op}.json'
+                record = self.record(op)
+                record.pop('report_fields', None)
+                path.write_text(json.dumps(record))
+                status, linked = self.run_helper('link', op)
+                if ran == 'example command':
+                    self.assertEqual(status, 0)
+                    fields = parse_qs(urlsplit(linked['url']).query)
+                    self.assertEqual(fields['steps'], ['example command'])
+                    self.assertEqual(fields['what-happened'], ['The example failed.'])
+                    self.assertNotIn('synthetic log sentinel', str(fields))
+                else:
+                    self.assertNotIn('url', linked)
+                    self.assertEqual(status, 1)
+                    self.assertIn('edit', linked['refused'].lower())
+
+    def test_browser_link_uses_stored_fields_even_if_the_rendered_report_is_ambiguous(self):
+        from urllib.parse import parse_qs, urlsplit
+        chosen = ('What I ran:\nexample command\n\nWhat I expected:\nmisleading heading\n\n'
+                  'What happened:\nThe example failed.\n\nLog (secrets removed):\n    synthetic log sentinel')
+        op = self.draft(body=chosen)
+        path = self.state / 'feedback' / f'{op}.json'
+        record = self.record(op)
+        record['report_fields'] = {
+            'ran': 'example command\n\nWhat I expected:\nmisleading heading',
+            'happened': 'The example failed.',
+            'expected': '',
+        }
+        path.write_text(json.dumps(record))
+        _, linked = self.run_helper('link', op, expect=0)
+        fields = parse_qs(urlsplit(linked['url']).query)
+        self.assertEqual(fields['steps'], ['example command\n\nWhat I expected:\nmisleading heading'])
+        self.assertEqual(fields['what-happened'], ['The example failed.'])
+        self.assertNotIn('expected', fields)
+
+    def test_browser_link_keeps_file_based_text_in_what_happened_after_draft_and_edit(self):
+        from urllib.parse import parse_qs, urlsplit
+        body = 'What happened:\nThe example failed.\n\nWhat I expected:\nThe example to finish.'
+        op = self.draft(body=body)
+        for action, text in [('draft', body), ('edit', 'What I ran:\nexample command')]:
+            with self.subTest(action=action):
+                if action == 'edit':
+                    self.run_helper('edit', op, *self.files(body=text), expect=0)
+                _, linked = self.run_helper('link', op, expect=0)
+                fields = parse_qs(urlsplit(linked['url']).query)
+                self.assertEqual(fields['what-happened'], [text])
+                self.assertNotIn('steps', fields)
+                self.assertNotIn('expected', fields)
+
+    def test_draft_and_edit_refuse_section_labels_in_report_fields(self):
+        op = self.draft()
+        original = self.record(op)
+        for field in ('ran', 'happened', 'expected'):
+            for label in ('What I ran:', 'What happened:', 'What I expected:', 'Log (secrets removed):'):
+                with self.subTest(field=field, label=label):
+                    report = self.full_report(**{field: f'Example text.\r\n\r\n{label}\r\nMore example text.'})
+                    args = ('--report-file', self.report_file(report))
+                    for command in [('draft',), ('edit', op)]:
+                        with self.subTest(command=command[0]):
+                            _, result = self.run_helper(*command, *args, expect=1)
+                            self.assertIn(field, result['refused'])
+                            self.assertIn('label', result['refused'])
+                    self.assertEqual(self.record(op), original)
+
     def test_browser_link_over_6000_chars_is_refused_with_shorten_it(self):
         report = self.full_report(happened='x' * 6100)
         _, d = self.run_helper('draft', '--report-file', self.report_file(report, 'long.json'), expect=0)

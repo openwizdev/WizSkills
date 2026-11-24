@@ -886,6 +886,31 @@ class Enqueue(unittest.TestCase):
         self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
         self.assertEqual(w.bodies(7), ['launch-fleet: merge queued %s: APPROVE 1 and plan approval 2' % HEAD])
 
+    def test_a_refused_enqueue_on_a_conflicting_pr_is_blocked_and_recorded(self):
+        w = World(self, pr=pr(isMergeQueueEnabled=True, mergeable='CONFLICTING'), faults={'enqueue': 'fail'})
+        project(w, PRINTS)
+        self.assertEqual(self.merge(w), (1, 'blocked: not mergeable: CONFLICTING; recorded 5001'))
+        blocked = 'launch-fleet: merge blocked %s: not mergeable: CONFLICTING' % HEAD
+        self.assertEqual(w.writes(), [{'enqueue': 'PR_synthetic7', 'head': HEAD}, {'post': 7, 'body': blocked}])
+        self.assertEqual(w.bodies(7), [blocked])
+
+    def test_a_refused_enqueue_with_unknown_mergeability_stays_not_queued(self):
+        w = World(self, pr=pr(isMergeQueueEnabled=True, mergeable='UNKNOWN'), faults={'enqueue': 'fail'})
+        project(w, PRINTS)
+        self.assertEqual(self.merge(w), (1, 'not queued: GraphQL: Pull request is not ready to be enqueued; '
+                                            'nothing was recorded, so run it again next wake'))
+        self.assertEqual(w.writes(), [{'enqueue': 'PR_synthetic7', 'head': HEAD}])
+        self.assertEqual(w.bodies(7), [])
+
+    def test_a_head_move_on_a_conflicting_pr_still_writes_no_blocked_record(self):
+        w = World(self, pr=pr(isMergeQueueEnabled=True, mergeable='CONFLICTING'), faults={'enqueue': 'moved'})
+        project(w, PRINTS)
+        self.assertEqual(self.merge(w), (1, 'not queued: GraphQL: Pull request is not ready to be enqueued; '
+                                            'it reads back as: its head is %s, not %s; nothing was recorded, '
+                                            'so run it again next wake' % (OTHER, HEAD)))
+        self.assertEqual(w.writes(), [{'enqueue': 'PR_synthetic7', 'head': HEAD}])
+        self.assertEqual(w.bodies(7), [])
+
 
 class Queue(unittest.TestCase):
     """#1616 and #1631: what the merge queue owes across wakes."""
@@ -2234,6 +2259,14 @@ class Drops(unittest.TestCase):
             self.assertIsNone(run.poll())
             self.assertEqual(w.writes(), [])
         self.assertEqual(run.communicate(timeout=60)[0].strip(), 'dropped; recorded 5001')
+
+    def test_a_refused_requeue_on_a_conflicting_pr_is_blocked_as_conflicting(self):
+        w = self.world(checks=[run_of('SUCCESS', '2026-11-22T10:20:00Z')], recorded=True, faults={'enqueue': 'fail'})
+        self.change(w, mergeable='CONFLICTING')
+        self.assertEqual(self.merge(w), (1, 'blocked: not mergeable: CONFLICTING; recorded 5002'))
+        blocked = 'launch-fleet: merge blocked %s: not mergeable: CONFLICTING' % HEAD
+        self.assertEqual(w.bodies(7)[-2:], [CLAIMED, blocked])
+        self.assertEqual(self.enqueues(w), [{'enqueue': 'PR_synthetic7', 'head': HEAD}])
 
 
 if __name__ == '__main__':

@@ -889,6 +889,7 @@ class ModelsTable(unittest.TestCase):
         self.assertEqual(
             self.api.refused_families_for_commit([
                 f'launch-fleet: review refused {commit}: claude usage limit',
+                f'launch-fleet: review started {commit}',
                 f'launch-fleet: review refused {commit}: network timeout',
                 f'launch-fleet: review refused {other_commit}: antigravity usage limit',
             ], commit),

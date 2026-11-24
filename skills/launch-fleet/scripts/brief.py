@@ -17,8 +17,11 @@ never goes into a public record.
 Exit 2 and print nothing for an unknown kind or a malformed target. The
 skill-file lookup belongs to the recipient, so it is printed unexpanded.
 """
+import json
 import os
+from pathlib import Path
 import re
+import subprocess
 import sys
 
 LOOKUP = ("Read 'skills/{s}/SKILL.md' if present, otherwise find '*/skills/{s}/SKILL.md' only inside your own "
@@ -78,6 +81,24 @@ TOKEN = (" GitHub token: run every gh or git command that reaches GitHub through
          "repository settings and pushes that change `.github/workflows/` stay on the owner's login: run those "
          "without the helper.")
 
+SNAPSHOT = ("\n\nThe facts below were read from GitHub at {0}, in this wake's snapshot of {1} (a bare #N in them is "
+            "{1}#N): read GitHub again only for anything newer.\n\n")
+STAMP = r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
+
+
+def snapshot_block(path, ref):
+    repo, _, number = ref.partition('#')
+    try:
+        read_at = json.loads(Path(path).read_text())['read_at']
+        r = subprocess.run([sys.executable, '-I', str(Path(__file__).resolve().parent / 'snapshot.py'), 'facts',
+                            path, number], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    except (OSError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired):
+        return ''
+    if r.returncode or not isinstance(read_at, str) or not re.fullmatch(STAMP, read_at) \
+            or not r.stdout.startswith('## %s: ' % ref):
+        return ''
+    return SNAPSHOT.format(read_at, repo) + r.stdout.rstrip('\n')
+
 
 def token_step(kind, args):
     if not os.environ.get('OPENWIZ_TOKEN_SERVICE'):
@@ -88,6 +109,11 @@ def token_step(kind, args):
 
 
 def main(argv):
+    snapshot = None
+    if len(argv) >= 2 and argv[-2] == '--snapshot':
+        argv, snapshot = argv[:-2], argv[-1]
+        if argv[:1] not in (['builder'], ['reviewer']) or not snapshot:
+            return 2
     same_family = len(argv) == 4 and argv[0] == 'reviewer' and argv[3] == 'same-family'
     if same_family:
         argv = argv[:3]
@@ -100,7 +126,8 @@ def main(argv):
                                       ('f', 'launch-fleet'))})
     if same_family:
         brief += ' Put "same-family review" on the line immediately below the VERDICT header.'
-    print(brief + PASS_REPO + token_step(argv[0], argv[1:]))
+    brief += PASS_REPO + token_step(argv[0], argv[1:])
+    print(brief + (snapshot_block(snapshot, argv[1]) if snapshot else ''))
     return 0
 
 

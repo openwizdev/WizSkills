@@ -1,0 +1,8 @@
+{
+ "examplehost": {
+  "origin": "https://api.examplehost.example",
+  "variable": "EXAMPLEHOST_API_KEY",
+  "keychain": "openwiz-examplehost",
+  "header": "authorization-bearer"
+ }
+}

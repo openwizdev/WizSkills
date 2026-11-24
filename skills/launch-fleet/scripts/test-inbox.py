@@ -306,13 +306,17 @@ class Inbox(unittest.TestCase):
         assignments = {'builder': 'builder-9001', 'reviewer': None}
         self.assertEqual(self.states(self.pull([self.one], assignments=assignments)),
                          [(self.one['id'], 'superseded', 'superseded')])
+        orphaned = ops(self.one, assignment=None)
+        unbound = self.view([orphaned], assignments=assignments)
+        self.assertEqual(self.states(inbox.pull(unbound, 'reviewer', None, set())),
+                         [(orphaned['id'], 'superseded', 'superseded')])
         view = self.view([self.one], assignments=assignments)
         with self.assertRaisesRegex(ValueError, 'next pending item'):
             inbox.acknowledge(view, 'reviewer', 'review-span-501', set(), self.one['id'],
                               'ack-9', 2500, evidence('fixture:ops-inbox/ack'), 'e' * 64)
 
     def test_missing_or_malformed_assignment_context_refuses_the_read(self):
-        for assignments in (None, {'builder': 'builder-9001'}, {'builder': '', 'reviewer': None}):
+        for assignments in (None, {'builder': 'builder-9001'}, {'builder': 'wrong builder', 'reviewer': None}):
             with self.subTest(assignments=assignments):
                 view = self.view([self.one], assignments=assignments)
                 self.assertEqual(inbox.pull(view, 'reviewer', 'review-span-501', set()),

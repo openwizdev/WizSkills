@@ -702,10 +702,13 @@ def checkout_state():
 
 
 def content(path):
-    if path.is_symlink():
-        return "link:" + os.readlink(path)
-    if path.is_file():
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+    try:
+        if path.is_symlink():
+            return "link:" + os.readlink(path)
+        if path.is_file():
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as e:
+        raise Refusal(f"cannot read working-tree file ({type(e).__name__})")
     return None
 
 
@@ -721,19 +724,33 @@ def snapshot(path):
     return "snapshot: ok"
 
 
-def verify(path):
+def load_snapshot(path):
     try:
         old = json.loads(Path(path).read_text(encoding="utf-8"))
-        old_top, old_head, old_status = old["top"], old["head"], dict(old["status"])
-    except (OSError, ValueError, KeyError, TypeError) as e:
+    except (OSError, ValueError) as e:
         raise Refusal(f"cannot read the snapshot ({type(e).__name__}); take one with snapshot first")
+    if (not isinstance(old, dict) or set(old) != {"top", "head", "status"}
+            or not isinstance(old["top"], str) or not old["top"]
+            or not isinstance(old["head"], str) or not SHA.fullmatch(old["head"])
+            or not isinstance(old["status"], dict)
+            or not all(isinstance(k, str) and isinstance(v, list) and len(v) == 2
+                       and isinstance(v[0], str) and len(v[0]) == 2
+                       and (v[1] is None or isinstance(v[1], str))
+                       for k, v in old["status"].items())):
+        raise Refusal("cannot read the snapshot (invalid shape); take one with snapshot first")
+    return old["top"], old["head"], old["status"]
+
+
+def verify(path):
+    old_top, old_head, old_status = load_snapshot(path)
     now = checkout_state()
     if now["top"] != old_top:
         raise Refusal("this is not the checkout the snapshot was taken in")
     changed = []
     if now["head"] != old_head:
         changed.append("HEAD")
-        diff = git("diff", "--name-only", "-z", old_head, now["head"], what="comparing HEAD with the snapshot")
+        diff = git("-C", now["top"], "diff", "--name-only", "-z", old_head, now["head"],
+                   what="comparing HEAD with the snapshot")
         changed += sorted(filter(None, diff.split("\0")))
     for name in sorted(set(old_status) | set(now["status"])):
         if old_status.get(name) != now["status"].get(name) and name not in changed:

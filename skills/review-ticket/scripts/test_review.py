@@ -1589,8 +1589,6 @@ class CommentPass(unittest.TestCase):
         self.assertTrue(out.startswith("refused: "), out)
 
 class ReadOnlyCheckout(unittest.TestCase):
-    """The reviewer's checkout must look the same at verify as at snapshot."""
-
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp())
         self.run_dir = Path(tempfile.mkdtemp())
@@ -1617,12 +1615,10 @@ class ReadOnlyCheckout(unittest.TestCase):
         return out.returncode, out.stdout.strip(), out.stderr
 
     def test_an_untouched_checkout_passes(self):
-        # catches: verify refusing a checkout the reviewer only read, or one dirty before the snapshot
         self.assertEqual((self.snapshot.returncode, self.snapshot.stdout.strip()), (0, "snapshot: ok"))
         self.assertEqual(self.verify()[:2], (0, "verify: ok"))
 
     def test_scratch_worktree_under_the_temp_folder_is_ignored(self):
-        # catches: an undo check in a scratch worktree, with its own commit, counted as a checkout change
         scratch = self.run_dir / "undo"
         self.git("worktree", "add", "-q", "--detach", str(scratch))
         (scratch / "a.txt").write_text("undone\n", encoding="utf-8")
@@ -1632,39 +1628,35 @@ class ReadOnlyCheckout(unittest.TestCase):
         self.assertEqual(self.verify()[:2], (0, "verify: ok"))
 
     def test_an_edited_file_fails_and_is_named(self):
-        # catches: an edit to a tracked file, or a further edit to a file already dirty, slipping through
         (self.repo / "a.txt").write_text("edited\n", encoding="utf-8")
         (self.repo / "dirty.txt").write_text("edited again\n", encoding="utf-8")
         self.assertEqual(self.verify()[:2], (1, "reviewer changed the checkout: a.txt, dirty.txt"))
 
     def test_a_new_untracked_file_fails_and_is_named(self):
-        # catches: a new file in a new folder hidden behind its folder name, or not seen at all
         (self.repo / "notes").mkdir()
         (self.repo / "notes" / "fix.py").write_text("x = 1\n", encoding="utf-8")
         self.assertEqual(self.verify()[:2], (1, "reviewer changed the checkout: notes/fix.py"))
 
     def test_a_new_commit_fails_and_names_its_files(self):
-        # catches: a commit that leaves the working tree clean passing, because only status was compared
         (self.repo / "a.txt").write_text("committed\n", encoding="utf-8")
         self.git("commit", "-qm", "reviewer fix", "a.txt")
         self.assertEqual(self.verify()[:2], (1, "reviewer changed the checkout: HEAD, a.txt"))
 
     def test_an_empty_commit_still_fails(self):
-        # catches: a moved HEAD with no changed files passing because the file list is empty
         self.git("commit", "-q", "--allow-empty", "-m", "empty")
         self.assertEqual(self.verify()[:2], (1, "reviewer changed the checkout: HEAD"))
 
     def test_a_missing_or_broken_snapshot_refuses(self):
-        # catches: verify passing, or crashing with a traceback, when there is no snapshot to compare with
-        self.snap.write_text("{", encoding="utf-8")
-        code, out, err = self.verify()
-        self.assertEqual((code, out), (2, ""))
-        self.assertTrue(err.startswith("refused: "), err)
+        for bad in ("{", '{"top": "/tmp/x", "head": "--evil", "status": {}}',
+                    '{"top": "/tmp/x", "head": "' + "a" * 40 + '", "status": [], "extra": 1}'):
+            self.snap.write_text(bad, encoding="utf-8")
+            code, out, err = self.verify()
+            self.assertEqual((code, out), (2, ""))
+            self.assertTrue(err.startswith("refused: "), err)
         self.snap.unlink()
         self.assertEqual(self.verify()[0], 2)
 
     def test_a_snapshot_inside_the_checkout_refuses(self):
-        # catches: the snapshot file itself becoming the new untracked file verify then reports
         out = self.helper("snapshot", str(self.repo / "snap.json"))
         self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
         self.assertFalse((self.repo / "snap.json").exists())

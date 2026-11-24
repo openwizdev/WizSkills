@@ -3707,7 +3707,7 @@ expect 'scope blocker: the needs-info label off, the start is checked again' 0 c
 check start #13: thread thr_syn13, no branch 30 minutes after the start
 EOF
 
-DOOR13='merge12 | issue(13; .body = "## Parent\n\nTicket of spec #10.\nOne-way door: yes\n\n## What to build\n\n" + .body) | say(13; 1301; "11:50"; "launch-fleet: started, thread thr_syn13") | say(13; 1302; "11:52"; "Approach note: synthetic plan.")'
+DOOR13='merge12 | issue(13; .body = "## Parent\n\nTicket of spec #10.\nOne-way door: yes\n\n## What to build\n\n" + .body) | say(13; 1301; "11:50"; "launch-fleet: started, thread syn-builder-13") | say(13; 1302; "11:52"; "Approach note: synthetic plan.")'
 OK13='say(13; 1303; "11:53"; "launch-fleet: approach review started 1302")'
 expect 'approach: a new note starts its reviewer' 0 check.json "$DOOR13" -- check <<EOF
 approach review #13: note 1302; start its other-family reviewer
@@ -3730,9 +3730,9 @@ expect 'approach: a refused start waits 10 minutes, then retries' 0 check.json "
 again 'approach: 10 minutes after the refusal, it retries' 'edit(13; 1303; "11:49"; "launch-fleet: approach review refused 1302: synthetic")' -- check <<EOF
 approach review #13: note 1302; start its other-family reviewer
 EOF
-expect 'approach: a note under review waits quietly, its needs-info too' 0 check.json "$DOOR13 | $OK13"' | issue(13; .labels += ["needs-answer"]) | edit(13; 1301; "11:20"; "launch-fleet: started, thread thr_syn13")' -- check < /dev/null
+expect 'approach: a note under review waits quietly, its needs-info too' 0 check.json "$DOOR13 | $OK13"' | issue(13; .labels += ["needs-answer"]) | edit(13; 1301; "11:20"; "launch-fleet: started, thread syn-builder-13")' -- check < /dev/null
 expect 'approach: OK for the current note resumes the builder' 0 check.json "$DOOR13 | $OK13"' | say(13; 1304; "11:58"; "Approach OK: 1302")' -- check <<EOF
-approach resume #13: Approach OK: 1302 in comment 1304; tell its builder, thread thr_syn13
+approach resume #13: Approach OK: 1302 in comment 1304; tell its builder, thread syn-builder-13
 EOF
 expect 'approach: a resume claim admits the oldest live one' 0 check.json "$DOOR13 | $OK13"' | say(13; 1304; "11:58"; "Approach OK: 1302") | say(13; 1305; "11:59"; "launch-fleet: approach resume starting 1304")' -- claim 13 1305 <<EOF
 go #13
@@ -3742,7 +3742,7 @@ withdraw #13: that approach line is not due or an older claim holds it
 EOF
 expect 'approach: a sent resume is quiet' 0 check.json "$DOOR13 | $OK13"' | say(13; 1304; "11:58"; "Approach OK: 1302") | say(13; 1305; "11:59"; "launch-fleet: approach resume sent 1304")' -- check < /dev/null
 expect 'approach: changes for the current note reach the builder' 0 check.json "$DOOR13 | $OK13"' | say(13; 1304; "11:58"; "Approach changes: 1302\nSynthetic change.")' -- check <<EOF
-approach resume #13: Approach changes: 1302 in comment 1304; tell its builder, thread thr_syn13
+approach resume #13: Approach changes: 1302 in comment 1304; tell its builder, thread syn-builder-13
 EOF
 expect 'approach: OK for an older note is ignored, the revised note goes to its reviewer' 0 check.json "$DOOR13 | $OK13"' | say(13; 1304; "11:54"; "Approach changes: 1302") | say(13; 1305; "11:55"; "launch-fleet: approach resume sent 1304") | say(13; 1306; "11:56"; "Approach note: synthetic revised plan.") | say(13; 1307; "11:57"; "Approach OK: 1302")' -- check <<EOF
 approach re-check #13: note 1306; tell its approach reviewer

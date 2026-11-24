@@ -25,11 +25,11 @@ The helper refuses an empty or multi-line title, a title over 256 characters, an
 
 ## 2. Preview, then one explicit yes
 
-1. Run `preview <operation_id>`. It reads the destination (it must be public, unarchived, with issues on) and the GitHub account actually logged in through `gh`. If either can't be read, or the login is missing or refused, stop: tell the user, and never log in, switch account, ask for a token or scope, or use any other account or credential. If the user says more than one account could be meant, stop and let them settle it outside this skill.
+1. Run `preview <operation_id>`. It reads the GitHub account actually logged in through `gh` and the destination (it must be public, unarchived, with issues on). If `gh` is not installed, not logged in, blocked by a token variable (`GH_TOKEN` or `GITHUB_TOKEN`), or holds more than one account, stop: tell the user the helper's exact reason and next step, and never log in, switch account, ask for a token or scope, or use any other account or credential. Whenever the agent route is refused for a login reason, offer the **browser route**: run `link <operation_id>` to print one GitHub "Report a problem" form link filled from the draft (never including any log section), for the user to open, read and submit themselves. `link` makes no network call, changes no record, sends nothing, and never counts the report as sent. If the user says more than one account could be meant, stop and let them settle it outside this skill, or offer `link <operation_id>`.
 2. Show the helper's `preview` text to the user exactly, every line, with nothing added or left out: the destination and that it is public, the account, the title and the entire body (including the facts line, scrubbed log if chosen, and the marker `OpenWiz feedback operation <operation_id>` last), the plain-word summary of each fact and how to drop any fact, any warnings, and its last line, `To create it, reply: yes <code>`, with a six-digit code. Then ask: "Create this public issue on openwizdev/OpenWiz once? Anyone can read it."
 3. Wait for their answer in their next turn.
    - **An explicit yes** to that preview that repeats its code: run `send <operation_id> --preview-id <code>`, with the code exactly as the user typed it in that reply. The helper hands you no other key: never take the code from the preview yourself.
-   - **Anything else** (a no, silence, a reaction, "maybe", "looks good but change X", a yes without the code or with another one, a yes to an earlier preview, a standing preference): run `refuse <operation_id> --reason "<a few plain words>"`. Nothing is sent. To change the words or facts, `edit`, then preview again.
+   - **Anything else** (a no, silence, a reaction, "maybe", "looks good but change X", a yes without the code or with another one, a yes to an earlier preview, a standing preference): run `refuse <operation_id> --reason "<a few plain words>"`. Nothing is sent. A wrong or missing code voids the preview; tell the user to preview again and reply with the new code. To change the words or facts, `edit`, then preview again.
 4. If anything changes after the preview (the words, the facts, the log, the account, the destination), or the conversation restarts, the preview is stale: preview again and ask again. The helper refuses a yes that no longer matches.
 
 A yes covers this one attempt only: not later feedback, edits, other destinations or anything else.
@@ -45,7 +45,7 @@ A yes covers this one attempt only: not later feedback, edits, other destination
 | `uncertain` | OpenWiz cannot tell whether the issue was created. Nothing will be sent again for it. Give them the helper's `check` link to look |
 | `refused` | Nothing was sent, and why. The draft is kept |
 
-A repeated yes, a reload or a restart never sends again: the helper shows the recorded outcome. Run `status <operation_id>` to read it at any time; it changes nothing.
+A repeated yes, a reload or a restart never sends again: the helper shows the recorded outcome. Run `status <operation_id>` to read it at any time, or `list` to see every operation's id, phase, title and preview time (newest first) when an operation id was lost; neither changes anything.
 
 ## 4. Reconcile an uncertain operation
 

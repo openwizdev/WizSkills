@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=1009
+CASES=1014
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1711,7 +1711,7 @@ mint' ] && [ "$(cat "$A/openwiz.log")" = 'github token --repository synthetic-ow
     && step='loop.sh under bash' && restore_fails bash "$A/install/loop.sh" \
     && step='block under bash' && restore_fails bash "$A/block-run.sh"; report $?
 else
-  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 72))
+  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 77))
 fi
 
 expect 'claim: the only claim goes' 0 check.json 'merge12 | say(13; 1301; "11:58"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
@@ -4358,7 +4358,7 @@ only_reads "$tmp"/case-*/gh*.log "$tmp"/cache-*/gh.log "$tmp"/loop/log[0-9] "$tm
 expected=${TEST_EXPECTED:-1}
 case ${TEST_ONLY:-} in
   loop) expected=4 ;;
-  'app identity') expected=72 ;;
+  'app identity') expected=77 ;;
   fleet-loop) expected=2 ;;
   'contexts:*') expected=31 ;;
   'contexts R1:*') expected=4 ;;

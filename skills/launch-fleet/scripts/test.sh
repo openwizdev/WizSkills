@@ -2175,7 +2175,7 @@ storm_case() {
   jq "$LIB"' . as $w | reduce range(100; 140) as $n ($w; ticket($n; "Synthetic ticket"; ["ready-for-agent"]; []))' \
     "$FIX/check.json" > "$d/world.json" || { bad "$name" "fixture"; return; }
   storm_run() {
-    env PATH="$1:$PATH" GH_REPO=synthetic-owner/synthetic-repo OPENWIZ_STATE_DIR="$d/no-installation" \
+    env PATH="$1:$tmp/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo OPENWIZ_STATE_DIR="$d/no-installation" \
       FAKE_GH_WORLD="$d/world.json" FAKE_GH_LOG="$d/gh.log" LAUNCH_FLEET_NOW=$NOW LAUNCH_FLEET_CACHE="$d/cache" \
       LAUNCH_FLEET_REVISION="$FIX/revision.sh" sh "$FLEET" spec 10 > "$d/out" 2> "$d/err"
   }
@@ -2194,9 +2194,7 @@ storm_case
 # query, and decide nothing.
 ARCHIVED128='.issues += [range(800; 928) | {number: ., title: "Synthetic archived issue", state: "CLOSED", parent: null,
   labels: ["ready-for-agent"], blockedBy: [], body: "", comments: [{id: (. * 10), at: at("09:00"), body: "launch-fleet: archived"}]}]'
-expect 'FR4: 128 closed singles are read twenty to a GraphQL query' 0 check.json "$ARCHIVED128" -- check <<EOF
-start #13: W3: widget page (spec #10)
-EOF
+expect 'FR4: 128 closed singles are read twenty to a GraphQL query' 0 check.json "$ARCHIVED128" -- check < /dev/null
 log_has 'FR4: 128 closed singles are read twenty to a GraphQL query' 0 '^issue comments '
 log_has 'FR4: 128 closed singles are read twenty to a GraphQL query' 6 '^graphql Facts count=20$'
 
@@ -3419,8 +3417,8 @@ assert (state['peak'] == 3 if mode == 'one' else
         8 <= state['peak'] <= 64 if mode == 'graphs' else
         16 <= state['peak'] <= 64 if mode == 'specs' else state['peak'] == 64), state
 if mode == 'graphs':
-    # FR4 (#2454): issue facts are GraphQL now; the eight spec queries overlap.
-    assert sum(e.startswith('graphql Spec ') for e in starts) == 8, starts
+    # FR4 (#2454): issue facts are GraphQL now; spec #10's query and the eight overlapping ones.
+    assert sum(e.startswith('graphql Spec ') for e in starts) == 9, starts
     assert not any('/comments?' in e for e in starts), starts
 elif mode != 'failure':
     expected = {'one': 5, 'pages': 158, 'specs': 74, 'graphs': 83, 'warm': 154,

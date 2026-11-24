@@ -124,25 +124,19 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 2
-      - name: No skill's SKILL.md grows above the base's check/context-budget.json unless the pull request has the context-increase label, read live so a rerun after labelling sees it (base is the pull request merge commit's first parent; python3 -I check/context_budget.py --help says how to update the file)
+      - name: No skill's SKILL.md grows above the base unless the pull request has the context-increase label, read live so a rerun after labelling sees it (base is the pull request merge commit's first parent; python3 -I check/context_budget.py --help says when to ask for the label)
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          budget=check/context-budget.json
-          if ! git cat-file -e "HEAD^1:$budget" 2>/dev/null; then
-            echo "context budget: the base has no $budget yet"
-            exit 0
-          fi
-          git show "HEAD^1:$budget" > "$RUNNER_TEMP/base.json"
           labels=$(gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name')
           allow=
           if printf '%s\n' "$labels" | grep -qx context-increase; then
             allow=--allow-increase
           fi
-          python3 -I check/context_budget.py compare "$RUNNER_TEMP/base.json" "$budget" $allow
+          python3 -I check/context_budget.py compare HEAD^1 HEAD $allow
   shard:
     name: shard ${{ matrix.shard }}
     needs: list

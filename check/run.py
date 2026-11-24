@@ -714,7 +714,7 @@ def standalone(root):
 
 
 STANDALONE = ['python3', '-I', 'check/standalone.py', '--tree', '.']
-USAGE = 'usage: python3 check/run.py [--list | --shard <name>[,<name>...] | --write-context-budget]'
+USAGE = 'usage: python3 check/run.py [--list | --shard <name>[,<name>...]]'
 
 
 def shards(root):
@@ -741,12 +741,6 @@ def selection(argv):
 
 
 def main(argv):
-    if argv == ['--write-context-budget']:
-        sys.path.insert(0, str(ROOT / 'check'))
-        import context_budget
-        sizes = context_budget.write(ROOT)
-        print(f'context budget: wrote {context_budget.BUDGET.as_posix()} for {len(sizes)} skills')
-        return 0
     selected = selection(argv)
     if isinstance(selected, str):
         print(selected, file=sys.stderr)

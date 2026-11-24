@@ -88,9 +88,43 @@ def contains(own, path):
     return len(x) <= longest and all(fnmatch.fnmatchcase(q, p) for p, q in zip(x, y))
 
 
-def relies_paths(body):
+def relies_items(body):
     lines = [line for line in body.split('\n') if line.startswith('**Relies on:**')]
-    return re.findall(r'`([^`]+)`', lines[0]) if len(lines) == 1 else []
+    found = re.findall(r'`([^`]+)`(?: in `([^`]+)`)?', lines[0]) if len(lines) == 1 else []
+    return [(repo.lower() or None, path) for path, repo in found]
+
+
+def relies_paths(body):
+    return [path for _, path in relies_items(body)]
+
+
+REMOTE_PATH = re.compile(r'[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*')
+FILE_QUERY = ('query($owner: String!, $name: String!, $path: String!) { repository(owner: $owner, name: $name) '
+              '{ nameWithOwner defaultBranchRef { target { ... on Commit { file(path: $path) { mode } } } } } }')
+MODES = {0o100644: True, 0o100755: True, 0o040000: False, 0o120000: False, 0o160000: False}
+NOT_FOUND = {'type': 'NOT_FOUND', 'path': ['repository', 'defaultBranchRef', 'target', 'file']}
+
+
+def on_default_branch(repo, path):
+    if not REPO.fullmatch(repo) or not REMOTE_PATH.fullmatch(path) or {'.', '..'} & set(path.split('/')):
+        return False
+    owner, name = repo.split('/')
+    out = subprocess.run(['gh', 'api', 'graphql', '-f', f'owner={owner}', '-f', f'name={name}', '-f', f'path={path}',
+                          '-f', f'query={FILE_QUERY}'], capture_output=True, text=True)
+    try:
+        answer = json.loads(out.stdout)
+        found = answer['data']['repository']
+        entry, errors = found['defaultBranchRef']['target']['file'], answer.get('errors', [])
+        same = found['nameWithOwner'].lower() == repo.lower()
+    except (ValueError, TypeError, KeyError, AttributeError):
+        same = False
+    if same and entry is None and out.returncode != 0 and isinstance(errors, list) and errors and all(
+            isinstance(e, dict) and {k: e.get(k) for k in NOT_FOUND} == NOT_FOUND for e in errors):
+        return False
+    if (same and out.returncode == 0 and 'errors' not in answer and isinstance(entry, dict)
+            and type(entry.get('mode')) is int and entry['mode'] in MODES):
+        return MODES[entry['mode']]
+    raise Unreadable(f'cannot read `{path}` in `{repo}` from its default branch')
 
 
 def read_revision(text, graph):
@@ -147,13 +181,22 @@ def check_checkpoints(spec_text, graph, revision):
     return (why or ['check-approval.sh refused']) if out.returncode != 0 else []
 
 
+def run_relies(root, body, args):
+    return subprocess.run(['sh', str(RELIES), '--root', str(root), *args], input=body, capture_output=True, text=True)
+
+
 def check_relies(tickets, owners, root, root_repo):
     why = []
     for t in tickets:
         blockers = [b['number'] for b in t['blocked_by']]
         repos = {repo for repo, _, _ in owners.get(t['number'], [])}
-        planned, unplanned = [], []
-        for path in relies_paths(t['body']):
+        planned, unplanned, vouched, remote = [], [], [], []
+        for elsewhere, path in relies_items(t['body']):
+            if elsewhere is not None:
+                vouched.append((elsewhere, path))
+                if not any(repo == elsewhere and contains(own, path) for b in blockers for repo, own, _ in owners.get(b, [])):
+                    remote.append((elsewhere, path))
+                continue
             if len(repos) == 1 and any(repo in repos and contains(own, path)
                                        for b in blockers for repo, own, _ in owners.get(b, [])):
                 planned += ['--planned', path]
@@ -161,8 +204,12 @@ def check_relies(tickets, owners, root, root_repo):
                 unplanned.append(path)
         in_root = repos == {root_repo}
         checked = planned if in_root else planned + [a for p in unplanned for a in ('--planned', p)]
-        out = subprocess.run(['sh', str(RELIES), '--root', str(root), *checked], input=t['body'],
-                             capture_output=True, text=True)
+        out = run_relies(root, t['body'], checked + [a for item in vouched for a in ('--elsewhere', *item)])
+        if out.returncode == 0 and remote:
+            missing = {item for item in remote if not on_default_branch(*item)}
+            if missing:
+                out = run_relies(root, t['body'], checked + [a for item in vouched if item not in missing
+                                                             for a in ('--elsewhere', *item)])
         if out.returncode != 0:
             why.append(f'#{t["number"]}: ' + (out.stderr.strip().splitlines() or ['refused'])[-1])
         elif unplanned and not in_root:

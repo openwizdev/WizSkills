@@ -250,8 +250,8 @@ def github(repos=(), **switches):
     return json.dumps(world)
 
 
-SEEDED = ('PUT', 'repos/%s/contents/tests/test_check.py' % REPO), \
-    ('PUT', 'repos/%s/contents/.github/workflows/check.yml' % REPO)
+SEEDED = ('POST', 'graphql createCommitOnBranch %s tests/test_check.py' % REPO), \
+    ('POST', 'graphql createCommitOnBranch %s .github/workflows/check.yml' % REPO)
 
 
 class Journey:
@@ -536,6 +536,65 @@ class RecordedJourney(unittest.TestCase):
 
 
 class HostAwareSetup(unittest.TestCase):
+    def local_driver_build(self, *capabilities):
+        j = Journey(self)
+        driver = j.dir / 'runtime/adapters/local/driver'
+        driver.parent.mkdir(parents=True)
+        answer = {'driver': 'local', 'records': ['openwiz:records v1'],
+                  'can': ['start', 'wake', 'stop', *capabilities]}
+        driver.write_text(
+            "#!/bin/sh\n"
+            '[ "$#" -eq 1 ] && [ "$1" = version ] || exit 97\n'
+            f"printf '%s\\n' '{json.dumps(answer)}'\n"
+        )
+        driver.chmod(0o755)
+        (j.dir / 'bin/codex').symlink_to('/usr/bin/false')
+        return j
+
+    def test_where_accepts_a_local_driver_that_lists_effort(self):
+        j = self.local_driver_build('effort')
+
+        result = j.helper(['where', '--build', str(j.dir), '--agents', 'local', '--yes'])
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('- local: this machine\n', result.stdout)
+        self.assertEqual(json.loads(j.state.read_text())['host']['agents'], 'local')
+
+    def test_driver_capability_fallback_matches_the_pinned_schema_enum(self):
+        # comment-ok: The source pin makes this offline schema excerpt reproducible.
+        # https://github.com/openwizdev/OpenWiz/blob/df714db0e44247499b5d54f7d0f41b7d0bde2a3c/kernel/driver-kit/schema.json
+        schema_enum = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox', 'effort')
+        self.assertEqual(runpy.run_path(str(HELPER))['CAN'], schema_enum)
+
+    def test_where_uses_the_packaged_driver_kit_enum(self):
+        j = self.local_driver_build('synthetic-capability')
+        args = ['where', '--build', str(j.dir), '--agents', 'local']
+        unknown = j.helper(args)
+        self.assertEqual(unknown.returncode, 5, unknown.stdout + unknown.stderr)
+        self.assertIn("Not offered: local: its `version` answer is not driver v1's.", unknown.stdout)
+
+        schema = j.dir / 'runtime/kernel/driver-kit/schema.json'
+        schema.parent.mkdir(parents=True)
+        can = {'items': {'enum': ['start', 'wake', 'stop', 'synthetic-capability']}}
+        version = {'output': {'properties': {'can': can}}}
+        schema.write_text(json.dumps({'contract': 'openwiz:driver v1', 'commands': {'version': version}}))
+        offered = j.helper(args)
+        self.assertEqual(offered.returncode, 12, offered.stdout + offered.stderr)
+        self.assertIn('- local: this machine\n', offered.stdout)
+
+    def test_where_refuses_a_malformed_packaged_driver_kit(self):
+        j = self.local_driver_build('effort')
+        schema = j.dir / 'runtime/kernel/driver-kit/schema.json'
+        schema.parent.mkdir(parents=True)
+        schema.write_text('malformed-synthetic-schema')
+
+        result = j.helper(['where', '--build', str(j.dir), '--agents', 'local', '--yes'])
+
+        self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
+        self.assertIn('Not offered: local: the driver kit has an invalid driver v1 schema.', result.stdout)
+        self.assertNotIn('malformed-synthetic-schema', result.stdout + result.stderr)
+        self.assertFalse(j.state.exists())
+
     def test_driver_setup_carries_without_cloudroom_and_keeps_github_and_harness_gates(self):
         cases = (
             ('local', 'local', 'harness_listed', 'project_verified', 0, 'agents on local'),
@@ -1137,10 +1196,7 @@ class Launch(unittest.TestCase):
         self.assertEqual([c[1] for c in j.gh_creates()].count('create'), 1, 'a repeat only reads')
 
     def test_a_lost_create_is_read_before_any_retry(self):
-        # lost: created but no answer, settled by the read-back; unread: the
-        # read-back itself fails, so it stays uncertain and the next run reads
-        # first; fail: nothing was created, so a later yes may create it.
-        for create, fails, first, second, creates in (('lost', 0, 0, 0, 1), ('lost', 2, 6, 6, 1), ('fail', 0, 5, 0, 2)):
+        for create, fails, first, second, creates in (('lost', 0, 5, 5, 1), ('lost', 2, 6, 6, 1), ('fail', 0, 5, 0, 2)):
             with self.subTest(create, fails=fails):
                 j = Journey(self)
                 j.repos.write_text(github(create=create, fail_after_create=fails))
@@ -1149,8 +1205,10 @@ class Launch(unittest.TestCase):
                     self.assertEqual(j.helper(yes).returncode, 6, j.calls[-1][1].stdout)
                     self.assertIn('uncertain', j.calls[-1][1].stdout)
                     self.assertEqual(j.helper(yes).returncode, 6, 'the next read fails too: still uncertain, no create')
-                    self.assertEqual(j.helper(yes).returncode, 0, j.calls[-1][1].stdout)
+                    self.assertEqual(j.helper(yes).returncode, 5, j.calls[-1][1].stdout)
+                    self.assertIn('uncertain', j.calls[-1][1].stdout)
                     self.assertEqual([c[1] for c in j.gh_creates()].count('create'), 1, 'read, never created twice')
+                    self.assertNotIn('seeded', json.loads(j.state.read_text())['created'])
                     continue
                 self.assertEqual(j.helper(yes).returncode, first, j.calls[-1][1].stdout)
                 state = json.loads(j.repos.read_text())
@@ -1176,6 +1234,311 @@ class Launch(unittest.TestCase):
         self.assertEqual(busy.returncode, 7, busy.stdout + busy.stderr)
         self.assertEqual(j.spawns() + j.logged(), [])
 
+
+
+FAKE_SESSION = r'''import importlib.util, json, os, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('real_session', %(real)r)
+real = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(real)
+real.arguments(sys.argv[1:])  # what launch hands over must pass the real session runner's own parser
+with open(os.environ['FAKE_SESSION_LOG'], 'a') as log:
+    log.write(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'adapters': os.environ.get('OPENWIZ_ADAPTERS'),
+                          'github_only': os.environ.get('LAUNCH_FLEET_GITHUB_ONLY'),
+                          'heartbeat': Path(os.environ['FAKE_HEARTBEAT_ON']).exists()}) + '\n')
+script = json.loads(Path(os.environ['FAKE_SESSION_SCRIPT']).read_text())
+sys.stdout.write(script['stdout'])
+sys.exit(script['exit'])
+'''
+FAKE_HEARTBEAT = r'''import json, os, sys
+from pathlib import Path
+on = Path(os.environ['FAKE_HEARTBEAT_ON'])
+with open(os.environ['FAKE_HEARTBEAT_LOG'], 'a') as log:
+    log.write(json.dumps({'argv': sys.argv[1:], 'adapters': os.environ.get('OPENWIZ_ADAPTERS')}) + '\n')
+if sys.argv[1] == 'status' and on.exists() and on.read_text() == 'unreadable':
+    sys.exit(7)
+elif sys.argv[1] == 'status':
+    print('heartbeat: active (cron)' if on.exists() else 'heartbeat: not installed')
+elif sys.argv[1] == 'install' and sys.argv[-1] == '--yes':
+    on.write_text('installed')
+elif sys.argv[1] == 'install':
+    print('heartbeat: a synthetic job would run fleet.sh spec %s every 10 minutes' % sys.argv[3])
+else:
+    sys.exit(99)
+'''
+NEEDS_YOU = ('session: tick 1: started #901, #902\n'
+             'session: stopped at tick 4: needs you: needs-info #902: a question for the orchestrator\n'
+             'carry on: python3 -I /synthetic/launch-fleet/scripts/session.py run synthetic-owner/synthetic-notes '
+             '--spec 900 --harness claude --model syn-claude-model-01\n')
+
+
+class LocalSession(unittest.TestCase):
+    def road(self, session=(3, NEEDS_YOU)):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import test_onboarding
+        journey = next(j for j in test_onboarding.ROAD['journeys'] if j['name'] == 'small-change')
+        road = test_onboarding.Road(self, journey)
+        (road.dir / 'bin/room-cli').unlink()
+        home = road.dir / 'skills'
+        (home / 'install/scripts').mkdir(parents=True)
+        (road.dir / 'contracts').symlink_to(SKILL_DIR.parents[1] / 'contracts', target_is_directory=True)
+        shutil.copyfile(HELPER, home / 'install/scripts/first_fleet.py')
+        (home / 'install/teach.md').symlink_to(SKILL_DIR / 'teach.md')
+        for name in ('setup', 'to-tickets'):
+            (home / name).symlink_to(SKILL_DIR.parent / name, target_is_directory=True)
+        shutil.copytree(SKILL_DIR.parent / 'launch-fleet', home / 'launch-fleet')
+        scripts = home / 'launch-fleet/scripts'
+        (scripts / 'session.py').write_text(FAKE_SESSION % {'real': str(SKILL_DIR.parent / 'launch-fleet/scripts/session.py')})
+        (scripts / 'heartbeat.py').write_text(FAKE_HEARTBEAT)
+        road.home = road.dir / 'home'
+        road.home.mkdir()
+        road.extra_env.update(HOME=str(road.home), FAKE_SESSION_LOG=str(road.dir / 'session.log'),
+                              FAKE_SESSION_SCRIPT=str(road.dir / 'session.json'),
+                              FAKE_HEARTBEAT_LOG=str(road.dir / 'heartbeat.log'),
+                              FAKE_HEARTBEAT_ON=str(road.dir / 'heartbeat-on'))
+        self.script(road, *session)
+        road.replay_road(stop=lambda t: t['step'] == 'launch')
+        self.assertIsNone(shutil.which('room-cli', path=road.env()['PATH']))
+        return road
+
+    def script(self, road, code, out):
+        (road.dir / 'session.json').write_text(json.dumps({'exit': code, 'stdout': out}))
+
+    def log(self, road, name):
+        path = road.dir / name
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def installs(self, road):
+        return [c['argv'] for c in self.log(road, 'heartbeat.log') if c['argv'][0] == 'install']
+
+    def launched(self, road):
+        preview = road.helper(['launch', '--spec', '900'])
+        self.assertEqual(preview.returncode, 12, preview.stdout + preview.stderr)
+        digest = re.findall(r'(?m)^Confirmation: ([0-9a-f]{64})$', preview.stdout)[0]
+        self.assertEqual(self.log(road, 'session.log'), [], 'the preview starts nothing')
+        return preview, road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest])
+
+    def test_a_local_launch_starts_the_session_in_this_chat_and_installs_no_heartbeat(self):
+        road = self.road()
+        preview, yes = self.launched(road)
+        self.assertIn('session', preview.stdout)
+        self.assertIn('in this chat', preview.stdout)
+        self.assertNotIn('every 10 minutes', preview.stdout)
+        self.assertIn('Start the fleet on this machine now? It can cost money: ', preview.stdout)
+        self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
+        sessions = self.log(road, 'session.log')
+        self.assertEqual([s['argv'] for s in sessions], [['run', road.repo, '--spec', '900', '--harness', 'claude',
+                                                          '--model', 'syn-claude-model-01']])
+        self.assertEqual(sessions[0]['adapters'], str(road.dir / 'adapters'), 'host.py finds the local driver')
+        self.assertEqual(Path(sessions[0]['cwd']).resolve(), road.dir.resolve(), "from the project's checkout")
+        self.assertFalse(sessions[0]['heartbeat'])
+        self.assertEqual(self.installs(road), [], 'no heartbeat, not even a preview of one')
+        lines = yes.stdout.splitlines()
+        for line in NEEDS_YOU.splitlines():
+            self.assertIn(line, lines, "the session's own ticks and stop are shown in the chat")
+        self.assertLess(lines.index('The plan passed its checks, so the fleet started in this chat: 3 builders, '
+                                    'each on one small ticket, and each next step starts the moment a run ends. Watch '
+                                    'them here and at openwiz.dev/app; keep this chat open: it stops here when it '
+                                    'needs you, such as an approved pull request for you to merge.'),
+                        lines.index(NEEDS_YOU.splitlines()[0]))
+        self.assertNotIn("launch-fleet's Launch section", yes.stdout, 'no handoff for the orchestrator to follow')
+        self.assertIn('launch --spec 900 --heartbeat', yes.stdout, 'the opt-in is offered after the session')
+        self.assertEqual(road.spawns(), [])
+        again = road.helper(['launch', '--spec', '900', '--yes', '--confirm', '0' * 64])
+        self.assertEqual(again.returncode, 0, again.stdout)
+        self.assertIn('already started once', again.stdout)
+        self.assertIn('carry on: python3 -I /synthetic/launch-fleet/scripts/session.py run', again.stdout)
+        self.assertEqual(len(self.log(road, 'session.log')), 1, 'never a second session from launch')
+        watch = road.tool({'tool': ['progress', '--spec', '900'], 'progress': ['building', 'building', 'blocked']})
+        self.assertEqual(watch.returncode, 0, watch.stdout)
+        self.assertIn("Spec #900's session in this chat stopped: it needs you.", watch.stdout)
+        self.assertIn(NEEDS_YOU.splitlines()[1], watch.stdout.splitlines())
+        self.assertIn('No heartbeat is installed', watch.stdout)
+        self.assertEqual(self.installs(road), [])
+
+    def test_each_session_stop_is_reported_and_a_refused_session_withdraws_the_yes(self):
+        done = 'session: done: spec #900: every ticket is closed\n'
+        stops = ((0, done, 0, 'session finished spec #900', False),
+                 (130, 'session: stopped on interrupt at tick 2; the runs it started keep going\ncarry on: x\n', 0,
+                  'stopped on interrupt', True),
+                 (2, '', 1, 'stopped: a read failed', True))
+        for code, out, exit, said, offered in stops:
+            with self.subTest(session=code):
+                road = self.road(session=(code, out))
+                _, yes = self.launched(road)
+                self.assertEqual(yes.returncode, exit, yes.stdout + yes.stderr)
+                self.assertIn(said, yes.stdout)
+                self.assertEqual('--heartbeat' in yes.stdout, offered)
+                self.assertEqual(road.saved()['launch']['state'], 'started')
+                watch = road.tool({'tool': ['progress', '--spec', '900'], 'progress': ['building', 'building', 'blocked']})
+                self.assertIn("Spec #900's session in this chat", watch.stdout)
+        road = self.road(session=(1, 'session: refused: a session or heartbeat tick already runs spec #900\n'))
+        _, yes = self.launched(road)
+        self.assertEqual(yes.returncode, 5, yes.stdout)
+        self.assertIn('a session or heartbeat tick already runs spec #900', yes.stdout)
+        self.assertNotIn('launch', road.saved(), 'the yes is withdrawn: preview again and ask again')
+        self.assertEqual(self.installs(road), [])
+
+    def test_a_stop_at_an_approved_pull_request_shows_its_own_merge_lines_and_launch_merges_nothing(self):
+        head = 'a' * 40
+        stop = ['session: stopped at tick 4: needs you: merge #911 for #901 at %s: APPROVE and CI green: merge it '
+                "with launch-fleet's Merging steps, then carry on" % head,
+                'synthetic copyable line: gh pr merge 911 --match-head-commit %s && carry on' % head,
+                'carry on: python3 -I /synthetic/launch-fleet/scripts/session.py run synthetic-owner/synthetic-notes '
+                '--spec 900 --harness claude --model syn-claude-model-01']
+        road = self.road(session=(3, 'session: tick 1: started #901, #902\n' + '\n'.join(stop) + '\n'))
+        preview, yes = self.launched(road)
+        self.assertIn('merges nothing', preview.stdout)
+        self.assertIn('approved, green pull request', preview.stdout)
+        self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
+        lines = yes.stdout.splitlines()
+        teach_line = next(line for line in lines if line.startswith('The plan passed its checks'))
+        self.assertNotIn('nothing for you to do until the first merge', teach_line)
+        said = lines[lines.index("Spec #900's session in this chat stopped: it needs you. What it said, to show the "
+                                 'user as it is:') + 1:]
+        self.assertEqual(said[:3], stop, "the session's own stop lines, every one, verbatim and in order")
+        self.assertIn('launch --spec 900 --heartbeat', yes.stdout)
+        self.assertNotIn('merged', yes.stdout.replace(stop[0], ''))
+        argv = road.dir / 'gh-argv.log'
+        calls = [json.loads(line) for line in argv.read_text().splitlines()]
+        self.assertGreater(len(calls), 0)
+        self.assertEqual([c for c in calls if c[:2] == ['pr', 'merge'] or any(str(w).endswith('/merge') for w in c)],
+                         [], 'launch merges nothing itself')
+        watch = road.tool({'tool': ['progress', '--spec', '900'], 'progress': ['building', 'building', 'blocked']})
+        self.assertEqual(watch.returncode, 0, watch.stdout)
+        shown = watch.stdout.splitlines()
+        at = shown.index("Spec #900's session in this chat stopped: it needs you. What it said, to show the user as "
+                         'it is:')
+        self.assertEqual(shown[at + 1:at + 4], stop, 'progress shows the same saved lines')
+
+    def test_the_heartbeat_is_installed_only_on_its_own_opt_in_yes(self):
+        road = self.road()
+        early = road.helper(['launch', '--spec', '900', '--heartbeat'])
+        self.assertEqual(early.returncode, 5, early.stdout)
+        self.assertIn('session', early.stdout)
+        _, yes = self.launched(road)
+        self.assertEqual(yes.returncode, 0, yes.stdout)
+        self.assertEqual(self.installs(road), [])
+        offer = road.helper(['launch', '--spec', '900', '--heartbeat'])
+        self.assertEqual(offer.returncode, 12, offer.stdout + offer.stderr)
+        self.assertIn('heartbeat: a synthetic job would run fleet.sh spec 900 every 10 minutes', offer.stdout)
+        self.assertIn('after this chat closes', offer.stdout)
+        self.assertEqual(self.installs(road), [['install', road.repo, '900', 'claude', 'syn-claude-model-01']],
+                         'its preview only')
+        digest = re.findall(r'(?m)^Confirmation: ([0-9a-f]{64})$', offer.stdout)[0]
+        self.assertEqual(road.helper(['launch', '--spec', '900', '--heartbeat', '--yes']).returncode, 2)
+        launch_digest = road.saved()['launch']['effects']
+        for wrong in (launch_digest, '0' * 64):
+            refused = road.helper(['launch', '--spec', '900', '--heartbeat', '--yes', '--confirm', wrong])
+            self.assertEqual(refused.returncode, 5, refused.stdout)
+        self.assertEqual(len(self.installs(road)), 1, 'no install without its own yes')
+        installed = road.helper(['launch', '--spec', '900', '--heartbeat', '--yes', '--confirm', digest])
+        self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+        self.assertEqual(self.installs(road)[-1], ['install', road.repo, '900', 'claude', 'syn-claude-model-01', '--yes'])
+        self.assertEqual(self.log(road, 'heartbeat.log')[-2]['adapters'], str(road.dir / 'adapters'))
+        self.assertIn("Spec #900's local heartbeat is active", installed.stdout)
+        self.assertEqual(len(self.log(road, 'session.log')), 1, 'the opt-in starts no session')
+        watch = road.tool({'tool': ['progress', '--spec', '900'], 'progress': ['building', 'building', 'blocked']})
+        self.assertIn("Spec #900's local heartbeat is active", watch.stdout)
+
+    def test_carry_on_runs_the_session_again_with_the_saved_driver_folder_and_github_only(self):
+        road = self.road()
+        _, yes = self.launched(road)
+        self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
+        lines = yes.stdout.splitlines()
+        at = lines.index("Spec #900's session in this chat stopped: it needs you. What it said, to show the user as "
+                         'it is:')
+        self.assertEqual(lines[at + 1:at + 3], NEEDS_YOU.splitlines()[1:], "the session's own stop lines, unchanged")
+        self.assertIn('launch --spec 900 --carry-on', lines[at + 3], "onboarding's own carry-on, after those lines")
+        del road.extra_env['OPENWIZ_ADAPTERS']
+        self.assertEqual({'OPENWIZ_ADAPTERS', 'LAUNCH_FLEET_GITHUB_ONLY'} & set(road.env()), set(),
+                         "the chat's own environment names no driver folder")
+        self.script(road, 0, 'session: tick 1: nothing due\nsession: done: spec #900: every ticket is closed\n')
+        carried = road.helper(['launch', '--spec', '900', '--carry-on'])
+        self.assertEqual(carried.returncode, 0, carried.stdout + carried.stderr)
+        first, second = self.log(road, 'session.log')
+        self.assertEqual(second['argv'], first['argv'], 'the same session command the user said yes to')
+        self.assertEqual(second['adapters'], str(road.dir / 'adapters'), 'the saved driver folder, restored')
+        self.assertEqual((first['github_only'], second['github_only']), ('1', '1'), 'GitHub-only, as at the start')
+        self.assertIn('session: done: spec #900: every ticket is closed', carried.stdout.splitlines())
+        self.assertEqual(self.installs(road), [])
+        self.assertEqual(road.helper(['launch', '--spec', '900', '--carry-on', '--yes', '--confirm', '0' * 64]).returncode, 2)
+        self.assertEqual(road.helper(['launch', '--spec', '900', '--carry-on', '--heartbeat']).returncode, 2)
+        fresh = self.road()
+        early = fresh.helper(['launch', '--spec', '900', '--carry-on'])
+        self.assertEqual(early.returncode, 5, early.stdout)
+        self.assertEqual(self.log(fresh, 'session.log'), [], 'no carry-on before the yes that starts the fleet')
+
+    def test_progress_shows_where_the_carried_on_session_last_stopped(self):
+        merge = ('session: stopped at tick 4: needs you: merge #911 for #901 at %s: APPROVE and CI green: merge it '
+                 "with launch-fleet's Merging steps, then carry on" % ('a' * 40))
+        carry = ('carry on: python3 -I /synthetic/launch-fleet/scripts/session.py run synthetic-owner/synthetic-notes '
+                 '--spec 900 --harness claude --model syn-claude-model-01')
+        road = self.road(session=(3, '%s\n%s\n' % (merge, carry)))
+        _, yes = self.launched(road)
+        self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
+        turn = {'tool': ['progress', '--spec', '900'], 'progress': ['merged', 'building', 'blocked']}
+        self.assertIn(merge, road.tool(turn).stdout.splitlines())
+        question = 'session: stopped at tick 9: needs you: needs-info #902: a question for the orchestrator'
+        self.script(road, 3, '%s\n%s\n' % (question, carry))
+        self.assertEqual(road.helper(['launch', '--spec', '900', '--carry-on']).returncode, 0)
+        watch = road.tool(turn).stdout.splitlines()
+        self.assertIn(question, watch, 'the latest stop')
+        self.assertNotIn(merge, watch, 'never the merge the user already did')
+        self.script(road, 1, 'session: refused: a session or heartbeat tick already runs spec #900\n')
+        refused = road.helper(['launch', '--spec', '900', '--carry-on'])
+        self.assertEqual(refused.returncode, 5, refused.stdout)
+        self.assertIn('a session or heartbeat tick already runs spec #900', refused.stdout)
+        self.assertEqual(road.saved()['launch']['state'], 'started', 'a refused carry-on withdraws no yes')
+        self.assertIn(question, road.tool(turn).stdout.splitlines(), 'and keeps the last stop it saved')
+        self.script(road, 0, 'session: done: spec #900: every ticket is closed\n')
+        self.assertEqual(road.helper(['launch', '--spec', '900', '--carry-on']).returncode, 0)
+        watch = road.tool(turn).stdout
+        self.assertIn("Spec #900's session in this chat ended: the session finished spec #900.", watch)
+        self.assertNotIn('needs you', watch)
+        self.assertEqual(len(self.log(road, 'session.log')), 4)
+        over = road.helper(['launch', '--spec', '900', '--carry-on'])
+        self.assertEqual(over.returncode, 0, over.stdout)
+        self.assertEqual(len(self.log(road, 'session.log')), 4, 'a finished spec has nothing to carry on')
+
+    def handed_off(self, road, state):
+        _, yes = self.launched(road)
+        self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
+        saved = road.saved()
+        del saved['launch']['session']
+        saved['launch']['state'] = state
+        saved.pop('preview', None)
+        road.state.write_text(json.dumps(saved))
+        return saved['launch']
+
+    def test_an_upgrade_reads_the_heartbeat_before_it_drops_a_saved_heartbeat_handoff(self):
+        on = lambda road: road.dir / 'heartbeat-on'
+        for state in ('authorized', 'started'):
+            with self.subTest(saved=state, heartbeat='active'):
+                road = self.road()
+                handoff = self.handed_off(road, state)
+                on(road).write_text('installed')
+                again = road.helper(['launch', '--spec', '900'])
+                self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+                self.assertIn("Spec #900's local heartbeat is active", again.stdout)
+                self.assertNotIn('preview again', again.stdout)
+                self.assertEqual(road.saved()['launch'], dict(handoff, state='started'), 'the active job is the start')
+            with self.subTest(saved=state, heartbeat='unknown'):
+                road = self.road()
+                handoff = self.handed_off(road, state)
+                on(road).write_text('unreadable')
+                again = road.helper(['launch', '--spec', '900'])
+                self.assertEqual(again.returncode, 6, again.stdout + again.stderr)
+                self.assertEqual(road.saved()['launch'], handoff, 'an unread status keeps the yes as it was')
+            with self.subTest(saved=state, heartbeat='absent'):
+                road = self.road()
+                self.handed_off(road, state)
+                again = road.helper(['launch', '--spec', '900'])
+                self.assertEqual(again.returncode, 5, again.stdout + again.stderr)
+                self.assertIn('preview again and ask again', again.stdout)
+                self.assertNotIn('launch', road.saved(), 'only a confirmed absence asks for a fresh launch')
+            self.assertEqual(len(self.log(road, 'session.log')), 1, 'none of these starts a session')
+            self.assertEqual(self.installs(road), [])
 
 
 YES_DEMO = ['create-repo', '--repo', REPO, '--yes']
@@ -1265,6 +1628,158 @@ class DemoRepository(unittest.TestCase):
                 self.assertEqual(self.writes(j), [])
                 if state != 'created':
                     self.assertNotEqual(json.loads(j.state.read_text())['created']['state'], 'created')
+
+    def test_a_teammates_repository_at_the_name_is_never_seeded_on_resume(self):
+        teammate = {'main': {'README.md': '# demo\n'}}
+        for state in ('pending', 'uncertain'):
+            with self.subTest(state):
+                j = Journey(self)
+                j.repos.write_text(github([demo_repository(branches=teammate)]))
+                j.state.write_text(json.dumps({'created': {'repo': REPO, 'state': state}}))
+                j.state.chmod(0o600)
+                before = self.world(j)['repos']
+                for _ in range(2):
+                    result = j.helper(YES_DEMO)
+                    self.assertEqual(result.returncode, 5, result.stdout)
+                    self.assertIn('uncertain', result.stdout)
+                    self.assertIn('Continue with %s as an existing repository: run next' % REPO, result.stdout)
+                    self.assertNotIn('another name', result.stdout, 'this onboarding makes no second repository')
+                    self.assertNotIn('Created and read back', result.stdout)
+                self.assertEqual((self.world(j)['repos'], self.writes(j)), (before, []), 'neither file written')
+                self.assertEqual(json.loads(j.state.read_text())['created'], {'repo': REPO, 'state': 'unproven'})
+                other = j.helper(['create-repo', '--repo', 'synthetic-owner/second-demo', '--yes'])
+                self.assertEqual(other.returncode, 5, other.stdout)
+                self.assertEqual(self.writes(j), [], 'still uncertain: no second repository')
+
+    def test_a_lost_reply_or_another_id_writes_neither_file(self):
+        for name, switches, saved in (('lost reply', {'create': 'lost'}, None),
+                                      ('reply names another id', {'reply_id': 'R_other'}, None),
+                                      ('saved id is not the repository read', {}, 'R_other')):
+            with self.subTest(name):
+                j = Journey(self)
+                repos = [demo_repository(branches={'main': {'README.md': '# demo\n'}})] if saved else []
+                j.repos.write_text(github(repos, **switches))
+                if saved:
+                    j.state.write_text(json.dumps({'created': {'repo': REPO, 'state': 'uncertain', 'id': saved}}))
+                    j.state.chmod(0o600)
+                result = j.helper(YES_DEMO)
+                self.assertEqual(result.returncode, 5, result.stdout)
+                self.assertIn('uncertain', result.stdout)
+                self.assertEqual(self.writes(j), [] if saved else [['POST', 'user/repos']], 'neither file written')
+                self.assertEqual(j.helper(YES_DEMO).returncode, 5, 'a rerun neither creates nor seeds')
+                self.assertEqual(self.writes(j), [] if saved else [['POST', 'user/repos']])
+                self.assertNotIn('seeded', json.loads(j.state.read_text())['created'])
+
+    def test_a_verified_create_read_back_later_is_seeded_once(self):
+        empty = [{'method': 'GET', 'path': 'repos/%s/git/ref/heads/main' % REPO, 'mode': 409, 'times': 2}]
+        for name, switches, unread in (('read fails once', {'fail_after_create': 1}, 1),
+                                       ('read empty twice', {'faults': empty}, 2)):
+            with self.subTest(name):
+                j = Journey(self)
+                j.repos.write_text(github(**switches))
+                for _ in range(unread):
+                    self.assertEqual(j.helper(YES_DEMO).returncode, 6, j.calls[-1][1].stdout)
+                    self.assertEqual(self.writes(j), [['POST', 'user/repos']], 'unread: nothing seeded yet')
+                done = j.helper(YES_DEMO)
+                self.assertEqual(done.returncode, 0, done.stdout)
+                self.assertIn('Created and read back', done.stdout)
+                self.assertEqual(j.helper(YES_DEMO).returncode, 0)
+                self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)], 'both files, once')
+
+    def test_a_retry_keeps_a_verified_id_and_the_one_repository_guard_when_the_name_stops_resolving(self):
+        made = demo_repository(branches={'main': {'README.md': '# demo\n'}})
+        made['node_id'] = 'R_made'
+        renamed = dict(made, full_name='synthetic-owner/renamed')
+        for name, repos, record, code in (
+                ('verified, then renamed', [renamed], {'state': 'uncertain', 'id': 'R_made'}, 6),
+                ('verified, then hidden', [dict(made, hidden=True)], {'state': 'uncertain', 'id': 'R_made'}, 6),
+                ('unproven, then hidden', [dict(made, hidden=True)], {'state': 'unproven'}, 6),
+                ('pending, then hidden', [dict(made, hidden=True)], {'state': 'pending'}, 6)):
+            with self.subTest(name):
+                j = Journey(self)
+                j.repos.write_text(github(repos))
+                j.state.write_text(json.dumps({'created': {'repo': REPO, **record}}))
+                j.state.chmod(0o600)
+                for _ in range(2):
+                    result = j.helper(YES_DEMO)
+                    self.assertEqual(result.returncode, code, result.stdout)
+                    self.assertNotIn('Created and read back', result.stdout)
+                self.assertEqual(self.writes(j), [], 'no second create, nothing seeded')
+                kept = json.loads(j.state.read_text())['created']
+                self.assertEqual((kept['repo'], kept['state'] != 'absent', kept.get('id')),
+                                 (REPO, True, record.get('id')), 'the id and the guard are kept')
+                other = j.helper(['create-repo', '--repo', 'synthetic-owner/second-demo', '--yes'])
+                self.assertEqual(other.returncode, 5, other.stdout)
+                self.assertEqual(self.writes(j), [], 'no second repository under another name')
+
+    def test_a_repository_replaced_before_a_seed_write_gets_neither_file(self):
+        j = Journey(self)
+        j.repos.write_text(github(replace_before_write=True))
+        for _ in range(2):
+            result = j.helper(YES_DEMO)
+            found = self.world(j)['repos'][REPO.lower()]
+            self.assertEqual(found['node_id'], 'R_replacement', 'the fake replaced it before the first write')
+            self.assertEqual(found['branches'], {'main': {'README.md': '# synthetic-sheep\n'}},
+                             'nothing written into the replacement')
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertNotIn('Created and read back', result.stdout)
+        self.assertEqual(self.writes(j), [['POST', 'user/repos']])
+
+    def test_a_missing_starter_file_not_found_seeds_both_files_and_other_errors_refuse(self):
+        j = Journey(self)
+        done = j.helper(YES_DEMO)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)])
+        self.assertEqual(j.helper(YES_DEMO).returncode, 0)
+        self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, SEEDED)])
+        bad_cases = (
+            ('forbidden on file', [{'type': 'FORBIDDEN', 'path': ['repository', 'defaultBranchRef', 'target', 'file'],
+                                    'message': 'synthetic'}]),
+            ('not found on another path', [{'type': 'NOT_FOUND', 'path': ['repository'], 'message': 'synthetic'}]),
+            ('extra error alongside not found', [
+                {'type': 'NOT_FOUND', 'path': ['repository', 'defaultBranchRef', 'target', 'file'],
+                 'message': 'synthetic'},
+                {'type': 'INTERNAL', 'path': ['repository'], 'message': 'synthetic'},
+            ]),
+        )
+        for label, errors in bad_cases:
+            with self.subTest(label):
+                j = Journey(self)
+                err_file = j.dir / 'graphql-errors.json'
+                err_file.write_text(json.dumps(errors))
+                wrapper = j.dir / 'gh_wrap.py'
+                wrapper.write_text(
+                    'import json, subprocess, sys\n'
+                    'r = subprocess.run([sys.executable, "-I", "-S", %r, *sys.argv[1:]], capture_output=True)\n'
+                    'out = r.stdout\n'
+                    'if sys.argv[1:3] == ["api", "graphql"] and "createCommitOnBranch" not in " ".join(sys.argv):\n'
+                    '    body = json.loads(out.decode())\n'
+                    '    body["errors"] = json.loads(open(%r).read())\n'
+                    '    out = json.dumps(body).encode()\n'
+                    '    sys.stdout.buffer.write(out)\n'
+                    '    sys.exit(1)\n'
+                    'sys.stdout.buffer.write(out)\n'
+                    'sys.stderr.buffer.write(r.stderr)\n'
+                    'sys.exit(r.returncode)\n' % (str(FAKE_GH), str(err_file))
+                )
+                gh = j.dir / 'bin/gh'
+                gh.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, wrapper))
+                gh.chmod(0o755)
+                result = j.helper(YES_DEMO)
+                self.assertEqual(result.returncode, 6, result.stdout)
+                self.assertIn('Could not read tests/test_check.py', result.stdout)
+                self.assertEqual(self.writes(j), [['POST', 'user/repos']], 'nothing seeded on unexpected error')
+
+    def test_the_create_reply_is_matched_by_node_id_never_its_numeric_id(self):
+        for name, switches, code, writes in (('numeric id differs, node_id matches', {}, 0, SEEDED),
+                                             ('node_id differs from the read-back', {'reply_id': 'R_other'}, 5, ())):
+            with self.subTest(name):
+                j = Journey(self)
+                j.repos.write_text(github(**switches))
+                result = j.helper(YES_DEMO)
+                self.assertEqual(result.returncode, code, result.stdout)
+                self.assertEqual(j.helper(YES_DEMO).returncode, code)
+                self.assertEqual(self.writes(j), [['POST', 'user/repos'], *map(list, writes)], 'seeded once or never')
 
     # Catches: someone else's repository, private or public, taken as the demo
     # or written to, and a repeat that rewrites the owner's later work.

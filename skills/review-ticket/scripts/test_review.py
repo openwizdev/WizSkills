@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HELPER = Path(__file__).with_name("review.py")
@@ -134,12 +135,19 @@ def done(value, code=0):
     sys.exit(code)
 if args[:1] != ["api"]:
     done(None, 3)
-url = [a for a in args[1:] if not a.startswith("-") and a not in ("POST",)][-1]
+fields = [args[i + 1] for i, a in enumerate(args) if a == "-f"]
+url = [a for a in args[1:] if not a.startswith("-") and a not in ("POST", *fields)][-1]
 post = "POST" in args
 parts = url.split("?")[0].split("/")
 repo = "/".join(parts[1:3])
 if post:
-    payload = json.loads(sys.stdin.read())
+    payload = {} if fields else json.loads(sys.stdin.read())
+    for field in fields:
+        key, _, value = field.partition("=")
+        if key.endswith("[]"):
+            payload.setdefault(key[:-2], []).append(value)
+        else:
+            payload[key] = value
     if parts[3:4] == ["issues"] and len(parts) == 6:
         w["writes"] += 1
         if w.get("fail_post"):
@@ -176,8 +184,12 @@ if parts[3] == "compare":
     found = w["compare"].get(parts[4])
     done({"files": [{"filename": f} for f in found]}) if found is not None else done(None, 1)
 if parts[3] == "issues" and len(parts) == 6:
+    w.update(w.pop("after_comments", {}))
     done([w["comments"].get(repo + "#" + parts[4], [])])
 if parts[3] == "issues" and len(parts) == 4:
+    if w["writes"] and w.get("hidden_issue_reads", 0):
+        w["hidden_issue_reads"] -= 1
+        done([[]])
     done([w["issues"].get(repo, [])])
 done(None, 4)
 '''
@@ -201,7 +213,8 @@ class Review(unittest.TestCase):
         gh.write_text(FAKE_GH)
         gh.chmod(0o755)
         self.fixture = root / "world.json"
-        self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FIXTURE": str(self.fixture)}
+        self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FIXTURE": str(self.fixture),
+                    "XDG_STATE_HOME": str(root / "state")}
         self.root = root
         self.repo = root / "repo"
         subprocess.run(["git", "clone", "-q", "--no-local", str(ORIGIN), str(self.repo)], check=True)
@@ -483,6 +496,8 @@ class Review(unittest.TestCase):
                    "only as a Risk: security, privacy or data-loss blocker")
         cases = {
             "polish on unchanged code": (unchanged, merge, 1, refused),
+            "polish with risk on unchanged code": (unchanged + "\n  Risk: privacy: the token reaches the log.",
+                                                  merge, 1, refused),
             "user path on unchanged code": (risk.replace("Risk: privacy: a cook's sync token reaches the terminal log.",
                                                          "User path: a cook sees the token in the terminal."),
                                             fresh, 1, refused),
@@ -850,6 +865,16 @@ class Review(unittest.TestCase):
             "no Rulings section": (lambda h: description(h).replace(rulings, ""), clean,
                                    "no ## Rulings section with numbered rulings or exactly none"),
             "stale head": (lambda h: description(OLD), clean, "the description does not name the head {head}"),
+            "stale head cited in Evidence": (lambda h: description(OLD).replace(
+                "## Summary", f"## Evidence\n\nCurrent commit: `{h}`.\n\n## Summary"), clean,
+                "the description does not name the head {head}"),
+            "test annotation in Gaps": (lambda h: description(h).replace(
+                " catches: a second export overwriting the first.",
+                "\n- **Gaps:** Example catches: a second export overwriting the first."), clean,
+                "no `catches: <the bug>` or `no new test: <why>` line"),
+            "only a fenced ruling": (lambda h: description(h).replace(
+                rulings, "## Rulings\n\n```markdown\n1. Sample only.\n```\n\n"), clean,
+                "no ## Rulings section with numbered rulings or exactly none"),
             "no test-rule line": (lambda h: description(h).replace(" catches: a second export overwriting the first.",
                                                                    ""), clean,
                                   "no `catches: <the bug>` or `no new test: <why>` line"),
@@ -870,6 +895,13 @@ class Review(unittest.TestCase):
         out = self.run_helper("self-check", self.file("d.md", description(head)), "--base", "origin/gone", cwd=work)
         self.assertEqual((out.returncode, out.stdout), (2, ""), out.stdout)
         self.assertIn("cannot read origin/gone...HEAD with git", out.stderr)
+
+    def test_report_ignores_fenced_examples_next_to_real_rulings(self):
+        body = DESCRIPTION.replace("## Rulings\n", "## Rulings\n\n```markdown\n"
+                                   "## Example\n2. Sample only.\n~~~\n3. Also a sample.\n```\n")
+        self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}, "body": body})
+        out = self.run_helper("check", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
 
     def test_the_builders_own_pass_needs_a_self_check_line_for_each_probe(self):
         work, head = self.hand_back("raise FileExistsError('cookbook.zip')")
@@ -937,6 +969,31 @@ class Review(unittest.TestCase):
         self.assertEqual(again.stdout.strip(), "already posted 900")
         self.assertEqual(self.state()["writes"], 1)
 
+    def test_post_refuses_a_duplicate_report_for_an_earlier_head(self):
+        self.world({}, comments=[report(FULL)])
+        out = self.run_helper("post", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn(f"VERDICT names {OLD}, not the pinned head {HEAD}", out.stdout.splitlines())
+        self.assertEqual(self.state()["writes"], 0)
+
+    def test_post_rechecks_live_admission_after_reading_the_comments(self):
+        red = {OLD: [{"name": "check", "status": "completed", "conclusion": "failure"}]}
+        cases = {
+            "draft and red": ({"draft": True}, red, "stop: draft"),
+            "red": ({}, red, f"stop: check is not green at {OLD}"),
+            "head moved": ({"head": {"sha": HEAD}}, green(HEAD), f"stop: the head is {HEAD}, not the assigned {OLD}"),
+            "ticket changed": ({"body": DESCRIPTION.replace("#41", "#42")}, green(OLD), "stop: the ticket changed"),
+        }
+        pr = {**self.state()["pulls"]["7"], "head": {"sha": OLD}}
+        for name, (update, checks, message) in cases.items():
+            with self.subTest(name):
+                self.world({"checks": green(OLD), "after_comments": {
+                    "pulls": {"7": {**pr, **update}}, "checks": checks,
+                }}, pr=pr)
+                out = self.run_helper("post", self.file("r.md", FULL), "--repo", SKILLS, "--pr", "7", "--head", OLD)
+                self.assertEqual((out.returncode, out.stdout.strip()), (1, message), out.stdout + out.stderr)
+                self.assertEqual(self.state()["writes"], 0)
+
     def test_post_refuses_a_failing_report_with_zero_writes(self):
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
         out = self.run_helper("post", self.file("r.md", FULL.replace(" Polish issue: #58.", "")),
@@ -979,10 +1036,38 @@ class Review(unittest.TestCase):
         out = self.follow_up("--logged", "re-check", "--user-path", "a cook exports twice; one is lost")
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "filed #70"), out.stdout + out.stderr)
         issue = self.state()["issues"][PRODUCT][0]
-        self.assertEqual(issue["title"], "Help says zip archive file (follow-up for #41, R2)")
+        self.assertEqual(issue["title"], "Follow-up of #41 (spec #38)")
         self.assertIn("User path: a cook exports twice; one is lost\n", issue["body"])
         self.assertIn(f"Still open after the re-check of pull request {SKILLS}#7 at {OLD}; logged, "
                       "so it did not block the merge.", issue["body"])
+
+    def test_logged_blockers_with_the_same_title_are_filed_separately(self):
+        logged = ("--logged", "re-check", "--user-path", "a cook exports twice; one is lost")
+        self.assertEqual(self.follow_up(*logged).stdout.strip(), "filed #70")
+        self.assertEqual(self.follow_up(*logged, "--id", "R3").stdout.strip(), "filed #71")
+        self.assertEqual(self.follow_up(*logged).stdout.strip(), "already filed #70")
+        issues = self.state()["issues"][PRODUCT]
+        self.assertEqual([issue["title"] for issue in issues], ["Follow-up of #41 (spec #38)"] * 2)
+        self.assertEqual(self.state()["writes"], 2)
+
+    def test_logged_blocker_retry_recognizes_an_existing_legacy_title(self):
+        self.world({"issues": {PRODUCT: [{"number": 69, "title": "Help says zip archive file (follow-up for #41, R2)"}]}})
+        out = self.follow_up("--logged", "re-check", "--user-path", "a cook exports twice; one is lost")
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "already filed #69"), out.stdout + out.stderr)
+        self.assertEqual(self.state()["writes"], 0)
+
+    def test_follow_up_reads_again_when_the_first_listing_is_stale(self):
+        self.world({"hidden_issue_reads": 1, "lose": True})
+        out = self.follow_up()
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "filed #70"), out.stdout + out.stderr)
+        self.assertEqual(self.state()["writes"], 1)
+
+    def test_follow_up_that_stays_invisible_reports_an_unknown_write(self):
+        self.world({"hidden_issue_reads": 10})
+        out = self.follow_up()
+        self.assertEqual((out.returncode, out.stdout.strip()),
+                         (1, "unknown: not found on read-back; list the issues before filing again"))
+        self.assertEqual(self.state()["writes"], 1)
 
     def test_follow_up_label_must_be_unique(self):
         for name, labels in {"none": LABELS.replace("| `needs-triage` | `triage: new` | Sort it |\n", ""),
@@ -1150,10 +1235,48 @@ class Review(unittest.TestCase):
                 self.assertTrue(out.stdout.startswith("stop: "), out.stdout)
                 self.assertEqual(self.state()["writes"], 0)
 
+    def pacer(self, value=None):
+        path = self.root / "state" / "launch-fleet" / "writes.json"
+        if value is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(value))
+        self.assertTrue(path.exists(), "no write went through the pacer")
+        return json.loads(path.read_text())
+
+    def test_a_recorded_cooldown_refuses_a_follow_up_without_filing(self):
+        until = int(time.time()) + 3600
+        self.pacer({"accounts": {}, "inflight": [], "until": until})
+        out = self.follow_up()
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until))
+        self.assertEqual((out.returncode, out.stdout, out.stderr),
+                         (1, f"refused: write paced, retry after {stamp}\n", ""))
+        self.assertEqual(self.state()["writes"], 0)
+        self.assertEqual([c for c in self.state()["calls"] if "POST" in c], [])
+        self.assertEqual(self.state()["issues"], {})
+
+    def test_an_admitted_follow_up_takes_one_pacer_slot_and_keeps_its_read_back(self):
+        out = self.follow_up()
+        self.assertEqual((out.returncode, out.stdout), (0, "filed #70\n"), out.stderr)
+        state = self.pacer()
+        self.assertEqual((len(state["accounts"]["shared"]), state["inflight"], state["until"]), (1, [], 0))
+        issue = self.state()["issues"][PRODUCT][0]
+        self.assertEqual((issue["title"], [x["name"] for x in issue["labels"]]),
+                         ("Help says zip archive file (polish for #41, R2)", ["triage: new"]))
+        self.assertEqual(issue["body"], "Follow-up of #41 (spec #38)\n\n`src/cli.rs:30` (Sweep) Help wording. "
+                                        f"Fix: say export. Found in pull request {SKILLS}#7 at {OLD}; it is polish "
+                                        "and did not block the merge.\n")
+        self.world({"hidden_issue_reads": 10})
+        out = self.follow_up()
+        self.assertEqual((out.returncode, out.stdout),
+                         (1, "unknown: not found on read-back; list the issues before filing again\n"))
+        self.assertEqual(self.state()["writes"], 1)
+        self.assertEqual(len(self.pacer()["accounts"]["shared"]), 2)
+
 
 COMMENTS = Path(__file__).with_name("comments.py")
 CHECKER = Path(__file__).with_name("fixtures") / "comment-check" / "check.py"
 SHA = "1234567890" * 4
+
 
 
 class CommentPass(unittest.TestCase):

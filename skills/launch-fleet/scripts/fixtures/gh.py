@@ -431,7 +431,7 @@ def graphql(w, repo, o, ids, page, answer):
         if m:
             op = m[1]
             break
-    if op in ('Singles', 'Nodes', 'Blockers'):
+    if op in ('Singles', 'Search', 'Nodes', 'Blockers'):
         if owner + name:
             fail(op + ' takes no owner or name')
     elif owner + '/' + name != repo and not (op in ('Checks', 'Merged', 'Facts', 'Comments') and owner + '/' + name in foreign_repos(w)):
@@ -444,6 +444,8 @@ def graphql(w, repo, o, ids, page, answer):
             fail('unexpected search: ' + q)
         label = q[len(prefix):]
         label = label[:len(label) - len(suffix)]
+    elif op == 'Search':
+        answer('graphql Search cursor=' + (cursor or 'none'))
     elif op in ('Nodes', 'Blockers'):
         answer('graphql %s count=%d' % (op, len(ids)))
     elif op in ('Specs', 'Merged'):
@@ -712,6 +714,33 @@ def graphql(w, repo, o, ids, page, answer):
                   'comments': {'nodes': [{'body': get(c, 'body')} for c in each(jq_slice_last(get(i, 'comments')))]}}
                  for i in found[:cap]]
         out = {'data': {'search': dict({'issueCount': len(found)}, **window(nodes))}}
+    elif op == 'Search':
+        prefix = 'repo:%s is:issue ' % repo
+        if not q.startswith(prefix):
+            fail('unexpected search: ' + q)
+        terms = q[len(prefix):]
+        whole = not terms.endswith(' no:parent-issue')
+        terms = terms if whole else terms[:-len(' no:parent-issue')]
+        only_open = terms.startswith('is:open ')
+        terms = terms[len('is:open '):] if only_open else terms
+        wanted = re.fullmatch(r'label:"([^"]*)"', terms)
+        if terms == '"launch-fleet" in:comments':
+            def hit(i):
+                return any('launch-fleet' in alt(get(c, 'body'), '') for c in each_opt(get(i, 'comments')))
+        elif terms == 'linked:pr':
+            def hit(i):
+                return any(get(i, 'number') in each_opt(get(p, 'closes')) for p in pulls)
+        elif wanted:
+            def hit(i):
+                return any(l == wanted[1] for l in each_opt(get(i, 'labels')))
+        else:
+            fail('unexpected search: ' + q)
+        found = [i for i in issues if (whole or get(i, 'parent') is None)
+                 and (not only_open or get(i, 'state') == 'OPEN') and hit(i)]
+        found = sort_by(found, lambda i: alt(get(i, 'updatedAt'), ''))[::-1]
+        nodes = [{'__typename': 'Issue', 'id': sha_text(get(i, 'number')), 'number': get(i, 'number'),
+                  'state': get(i, 'state')} for i in found[:cap]]
+        out = {'data': {'search': dict({'issueCount': len(found)}, **window(nodes))}}
     elif op in ('Nodes', 'Blockers'):
         nodes = []
         for x in ids:
@@ -734,7 +763,7 @@ def graphql(w, repo, o, ids, page, answer):
                           'subIssuesSummary': {'total': max(len(subs) - lag, 0),
                                                'completed': len([s for s in subs if get(s, 'state') == 'CLOSED'])}})
         out = {'data': {'repository': {'databaseId': 1, 'defaultBranchRef': {'name': w.get('default')},
-                                       'issues': window(specs)}}}
+                                       'issues': dict({'totalCount': len(specs)}, **window(specs))}}}
     elif op == 'Item':
         def item(i):
             t = ticket(i)
@@ -787,6 +816,11 @@ def graphql(w, repo, o, ids, page, answer):
              'mergeCommit': None if get(p, 'mergeCommit') is None else {'oid': get(p, 'mergeCommit')},
              'closingIssuesReferences': {'nodes': [{'number': c} for c in each(get(p, 'closes'))]}}
             for p in merged])}}}
+    listed = out['data'].get('search') if op == 'Search' else out['data']['repository'].get('issues') if op == 'Specs' else None
+    if listed is not None and env.get('FAKE_GH_SHORT', '') == op and listed['nodes']:
+        listed['nodes'] = listed['nodes'][:-1]
+    if listed is not None and env.get('FAKE_GH_NULL', '') == op and listed['nodes']:
+        listed['nodes'][0] = None
     data = out['data']
     for k, v in rate.items():
         data[k] = v

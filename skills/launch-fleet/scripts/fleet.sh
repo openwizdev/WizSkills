@@ -247,11 +247,24 @@ FACTS_QUERY=''
 
 query() {
   case $1 in
-    Specs) printf '%s\n' 'query Specs($owner: String!, $name: String!) {
+    Specs) printf '%s\n' 'query Specs($owner: String!, $name: String!, $cursor: String) {
   rateLimit { cost remaining limit resetAt }
   repository(owner: $owner, name: $name) {
     databaseId
     defaultBranchRef { name }
+    issues(states: OPEN, first: 100, after: $cursor, orderBy: {field: CREATED_AT, direction: DESC}) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { number updatedAt body subIssuesSummary { total completed } }
+    }
+  }
+}' ;;
+    Search) printf '%s\n' 'query Search($q: String!, $cursor: String) {
+  rateLimit { cost remaining limit resetAt }
+  search(query: $q, type: ISSUE, first: 100, after: $cursor) {
+    issueCount
+    pageInfo { hasNextPage endCursor }
+    nodes { __typename ... on Issue { id number state } }
   }
 }' ;;
     Spec) printf '%s\n' 'query Spec($owner: String!, $name: String!, $number: Int!, $size: Int!) {
@@ -381,7 +394,7 @@ gql() {
   query_name=$op
   [ "$op" != Spec ] || query_name="Spec #$spec_number"
   case $op in
-    Blockers | Nodes | Checks | Facts | Comments) ;;
+    Blockers | Nodes | Checks | Search | Facts | Comments) ;;
     Merged) [ "${1:-}" = -F ] || set -- -F owner="$OWNER" -F name="$NAME" "$@" ;;
     *) set -- -F owner="$OWNER" -F name="$NAME" "$@" ;;
   esac
@@ -446,6 +459,12 @@ allowance() {
   last_rate
   keep=$((limit / 4))
   [ "$left" -ge "$keep" ] || back_off "$left of $limit GitHub points left, under the $keep kept for builders and reviewers, until $reset"
+}
+refuse_low() {
+  [ -z "$REPLAY" ] || return 0
+  last_rate
+  keep=$((limit / 4))
+  [ "$left" -ge "$keep" ] || die "$left of $limit GitHub points left, under the $keep kept for builders and reviewers, until $reset"
 }
 
 # points: the points line, on stderr. Each question revision.sh asks is a
@@ -542,16 +561,8 @@ http_get() (
   fi
   cp "$work/http" "$destination" || exit 1
   if [ "$ok" != yes ] || [ "$status" != 200 ]; then cat "$work/error" >&2; exit 1; fi
-  # A replay stands only on unchanged answers. The open issues list is the
-  # whole repository's; the replay reads it afresh, as a full read does, and
-  # the spec's own changes show in its own issue's answers.
   changed=no
-  if [ -n "$REPLAY" ] && [ ! -f "$destination.304" ]; then
-    case $endpoint in
-      "repos/$REPO/issues?state=open&per_page=100" | "repositories/$REPO_ID/issues?state=open&per_page=100&page="*) ;;
-      *) changed=yes ;;
-    esac
-  fi
+  [ -z "$REPLAY" ] || [ -f "$destination.304" ] || changed=yes
   tag=$(http_etag "$work/http")
   if [ -n "$CACHE" ] && [ ! -d "$entry" ] && printf '%s\n' "$tag" | LC_ALL=C grep -qE '^(W/)?"[!#-~]{1,250}"$'; then
     digest=$(hash < "$work/http") || exit 1
@@ -592,8 +603,7 @@ next_page() {
   host=${GH_HOST:-github.com}
   if [ "$host" = github.com ]; then prefix=https://api.github.com/; else prefix=https://$host/api/v3/; fi
   case $next in "$prefix"*) next=${next#"$prefix"} ;; *) return 1 ;; esac
-  case $next in "repos/${2:-$REPO}/"* | "repositories/${3:-$REPO_ID}/"*) printf '%s\n' "$next" ;;
-    search/issues\?*) [ -z "${2:-}" ] && printf '%s\n' "$next" ;; *) return 1 ;; esac
+  case $next in "repos/${2:-$REPO}/"* | "repositories/${3:-$REPO_ID}/"*) printf '%s\n' "$next" ;; *) return 1 ;; esac
 }
 rest_pages() (
   endpoint=$1 destination=$2
@@ -978,24 +988,19 @@ specs_list() {
   gql Specs "$TMP/repository.json"
   allowance
   DEFAULT=$(jq -er '.data.repository.defaultBranchRef.name' "$TMP/repository.json") || die "no default branch"
-  endpoint="repos/$REPO/issues?state=open&per_page=100"
-  pages=0
-  while [ -n "$endpoint" ]; do
-    pages=$((pages + 1))
-    [ $pages -le 50 ] || die "more than 5000 open issues: too many to read in one check"
-    rest "$endpoint" "$TMP/issues-page.json" || die "can't read the open issues"
-    jq -ce 'select(type == "array")
-      | [.[] | select(has("pull_request") | not)
-         | {number, updatedAt: .updated_at, body, subIssuesSummary: .sub_issues_summary}]
-      | if all(.[]; (.subIssuesSummary | type) == "object"
-          and all(.subIssuesSummary.total, .subIssuesSummary.completed; type == "number" and . >= 0 and . == floor))
-        then {data: {repository: {issues: {nodes: .}}}}
-        else error("missing sub-issue counts") end' \
-      "$TMP/issues-page.json" > "$TMP/page.json" || die "can't read the open issues"
-    jq -e '[.data.repository.issues.nodes[] | select(.subIssuesSummary.total > 0)]
-      | all(.[]; (.number, .subIssuesSummary.total, .subIssuesSummary.completed | type == "number")
-                 and (.updatedAt | type == "string" and test("^[0-9T:Z.-]+$")))' "$TMP/page.json" > /dev/null \
-      || die "can't read the open issues"
+  cp "$TMP/repository.json" "$TMP/page.json" || die "can't read the open issues"
+  pages=1 listed=0
+  while :; do
+    jq -e '.data.repository.issues | type == "object" and (.totalCount | type == "number" and . >= 0 and . == floor)
+      and (.pageInfo.hasNextPage | type == "boolean") and (.nodes | type == "array")
+      and all(.nodes[]; type == "object" and (.number | type == "number")
+        and (.body == null or (.body | type) == "string") and (.updatedAt | type == "string" and test("^[0-9T:Z.-]+$"))
+        and (.subIssuesSummary | type) == "object"
+        and all(.subIssuesSummary.total, .subIssuesSummary.completed; type == "number" and . >= 0 and . == floor))
+      and (if .pageInfo.hasNextPage then (.nodes | length) > 0 and (.pageInfo.endCursor | type == "string" and length > 0) else true end)' \
+      "$TMP/page.json" > /dev/null || die "can't read the open issues"
+    n=$(jq '.data.repository.issues.nodes | length' "$TMP/page.json") || die "can't read the open issues"
+    listed=$((listed + n))
     jq -r '.data.repository.issues.nodes[] | select(.subIssuesSummary.total > 0)
       | "\(.number) \(.subIssuesSummary.total) \(.subIssuesSummary.completed) \(.updatedAt)"' "$TMP/page.json" \
       >> "$TMP/spec-list.txt" || die "can't read the open issues"
@@ -1003,8 +1008,15 @@ specs_list() {
       | ((.body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) | (first // "") | sub("^\\s+"; "")) as $l
       | ([$l | capture("^Follow-up of #[0-9]+ \\(spec #(?<s>[0-9]+)\\)") | .s | tonumber] | first) as $spec
       | select($spec != null) | {number, spec: $spec}' "$TMP/page.json" >> "$TMP/followups.txt" || die "can't read the open issues"
-    endpoint=$(next_page "$TMP/issues-page.json.http") || die "can't read the open issues pagination"
+    [ "$(jq '.data.repository.issues.pageInfo.hasNextPage' "$TMP/page.json")" = true ] || break
+    pages=$((pages + 1))
+    [ $pages -le 50 ] || die "more than 5000 open issues: too many to read in one check"
+    cursor=$(jq -er '.data.repository.issues.pageInfo.endCursor' "$TMP/page.json") || die "can't read the open issues"
+    refuse_low
+    gql Specs "$TMP/page.json" -f cursor="$cursor"
   done
+  total=$(jq '.data.repository.issues.totalCount' "$TMP/page.json") || die "can't read the open issues"
+  [ "$listed" = "$total" ] || die "the open issues list gave $listed of $total, so a spec or a follow-up could be missed"
   sort -n -u -k1,1 "$TMP/spec-list.txt" > "$TMP/spec-list.sorted" || die "can't read the open issues"
   jq -s '.' "$TMP/followups.txt" > "$TMP/followups.json" || die "can't read the follow-ups"
 }
@@ -1183,27 +1195,8 @@ singles() {
   : > "$TMP/single-ids.txt"
   : > "$TMP/search-items.txt"
   for single_label in "$label" held; do
-    q="repo:$REPO is:issue label:\"$single_label\" no:parent-issue"
-    cursor='' pages=0 listed=0 total=0
-    encoded=$(jq -rn --arg q "$q" '$q | @uri') || die "can't encode the issues search"
-    endpoint="search/issues?q=$encoded&per_page=100"
-    while [ -n "$endpoint" ]; do
-      pages=$((pages + 1))
-      [ $pages -le 11 ] || die "the search for issues outside specs did not end"
-      rest "$endpoint" "$TMP/search.json" || die "can't read the issues outside specs"
-      jq -e 'type == "object" and .incomplete_results == false
-        and (.total_count | type == "number" and . >= 0 and . == floor)
-        and (.items | type) == "array" and all(.items[];
-          (.node_id | type) == "string" and (.number | type) == "number" and (.state | IN("open", "closed")))' \
-        "$TMP/search.json" > /dev/null || die "can't read the issues outside specs"
-      total=$(jq .total_count "$TMP/search.json") || die "can't read the issues outside specs"
-      n=$(jq '.items | length' "$TMP/search.json") || die "can't read the issues outside specs"
-      listed=$((listed + n))
-      jq -r '.items[] | "\(.number) \(.node_id) \(.state)"' "$TMP/search.json" >> "$TMP/search-items.txt" \
-        || die "can't read the issues outside specs"
-      endpoint=$(next_page "$TMP/search.json.http") || die "can't read the issues search pagination"
-    done
-    [ "$listed" = "$total" ] || die "the search listed $listed of $total issues outside specs, so a start or an archive could be missed"
+    search "repo:$REPO is:issue label:\"$single_label\" no:parent-issue" "$TMP/search-items.txt" \
+      "issues outside specs" "issues outside specs, so a start or an archive could be missed"
   done
   sort -u "$TMP/search-items.txt" > "$TMP/search-items.sorted" \
     && mv "$TMP/search-items.sorted" "$TMP/search-items.txt" || die "can't deduplicate the issues outside specs"
@@ -1242,22 +1235,28 @@ $n
     || die "can't read the issues"
 }
 
-active_search() {
-  encoded=$(jq -rn --arg q "$1" '$q | @uri') || die "can't encode the open work search"
-  endpoint="search/issues?q=$encoded&per_page=100" pages=0 listed=0 total=0
-  while [ -n "$endpoint" ]; do
+search() {
+  cursor='' pages=0 listed=0
+  while :; do
     pages=$((pages + 1))
-    [ $pages -le 11 ] || die "the search for open work did not end"
-    rest "$endpoint" "$TMP/search.json" || die "can't read the open work"
-    jq -e 'type == "object" and .incomplete_results == false and (.total_count | type == "number")
-      and (.items | type) == "array" and all(.items[]; (.node_id | type) == "string" and (.number | type) == "number")' \
-      "$TMP/search.json" > /dev/null || die "can't read the open work"
-    total=$(jq .total_count "$TMP/search.json") && n=$(jq '.items | length' "$TMP/search.json") || die "can't read the open work"
+    [ $pages -le 11 ] || die "the search for $3 did not end"
+    refuse_low
+    if [ -z "$cursor" ]; then gql Search "$TMP/search.json" -f q="$1"
+    else gql Search "$TMP/search.json" -f q="$1" -f cursor="$cursor"; fi
+    jq -e '.data.search | type == "object" and (.issueCount | type == "number" and . >= 0 and . == floor)
+      and (.pageInfo.hasNextPage | type == "boolean") and (.nodes | type == "array")
+      and all(.nodes[]; type == "object" and .__typename == "Issue" and (.id | type == "string" and length > 0)
+        and (.number | type == "number") and (.state | IN("OPEN", "CLOSED")))
+      and (if .pageInfo.hasNextPage then (.nodes | length) > 0 and (.pageInfo.endCursor | type == "string" and length > 0) else true end)' \
+      "$TMP/search.json" > /dev/null || die "can't read the $3"
+    total=$(jq '.data.search.issueCount' "$TMP/search.json") && n=$(jq '.data.search.nodes | length' "$TMP/search.json") \
+      || die "can't read the $3"
     listed=$((listed + n))
-    jq -r '.items[].node_id' "$TMP/search.json" >> "$TMP/active-ids.txt" || die "can't read the open work"
-    endpoint=$(next_page "$TMP/search.json.http") || die "can't read the open work search pagination"
+    jq -r '.data.search.nodes[] | "\(.number) \(.id) \(.state | ascii_downcase)"' "$TMP/search.json" >> "$2" || die "can't read the $3"
+    [ "$(jq '.data.search.pageInfo.hasNextPage' "$TMP/search.json")" = true ] || break
+    cursor=$(jq -er '.data.search.pageInfo.endCursor' "$TMP/search.json") || die "can't read the $3"
   done
-  [ "$listed" = "$total" ] || die "the search listed $listed of $total open tickets, so a colliding start could be missed"
+  [ "$listed" = "$total" ] || die "the search listed $listed of $total $4"
 }
 # active: F6'"'"'s collision scope for a builder start (#1353): every open issue
 # of the repository with live work, in a spec or not, read in full into
@@ -1268,12 +1267,11 @@ active_search() {
 # fewer than it counts stops the start.
 active() {
   label=$(jq -er '."ready-for-agent"' "$TMP/labels.json") || die "can't read the labels"
-  : > "$TMP/active-ids.txt" && : > "$TMP/singles.txt" || die "can't write"
+  : > "$TMP/active-found.txt" && : > "$TMP/singles.txt" || die "can't write"
   for q in "label:\"$label\"" '"launch-fleet" in:comments' 'linked:pr'; do
-    active_search "repo:$REPO is:issue is:open $q"
+    search "repo:$REPO is:issue is:open $q" "$TMP/active-found.txt" "open work" "open tickets, so a colliding start could be missed"
   done
-  sort -u "$TMP/active-ids.txt" > "$TMP/active-ids.sorted" && mv "$TMP/active-ids.sorted" "$TMP/active-ids.txt" \
-    || die "can't write"
+  cut -d ' ' -f 2 "$TMP/active-found.txt" | sort -u > "$TMP/active-ids.txt" || die "can't write"
   set --
   while read -r id; do
     set -- "$@" -f "ids[]=$id"
@@ -2949,6 +2947,7 @@ elif [ "$cmd" = spec ]; then
   [ -z "$RECORD" ] || keep_read
 fi
 [ -z "$REPLAY" ] || [ ! -e "$TMP/changed" ] || die "an answer changed since the saved full read"
+[ -z "$REPLAY" ] || ! grep -q '^spec done ' "$TMP/out.txt" || die "a spec done line names the follow-ups open now, so it is read in full"
 cat "$TMP/out.txt"
 [ -z "${done_spec:-}" ] || printf '%s\n' "$done_spec"
 [ "$cmd" != check ] || [ ! -f "$TMP/nightly-out.txt" ] || cat "$TMP/nightly-out.txt"

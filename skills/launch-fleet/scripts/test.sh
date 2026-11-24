@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=967
+CASES=978
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -435,7 +435,7 @@ take() {
 
 # only_reads LOG...: every gh call in these logs was one of fleet.sh's reads.
 only_reads() {
-  grep -h -v -E '^(repo view|nightly runs branch=[^ ]+|commit comments [0-9a-f]{40}|contents docs/agents/(fleet|triage-labels)\.md|graphql (Specs|Merged) cursor=[0-9a-z]+|graphql Spec number=[0-9]+( size=[0-9]+)?|graphql Singles cursor=[0-9a-z]+|files [0-9]+|refs heads/room/[0-9]+-|graphql (Nodes|Blockers) count=[0-9]+|graphql Writer login=[a-z0-9-]+|graphql Facts count=[0-9]+|graphql Comments number=[0-9]+ before=[0-9a-zA-Z=+/_-]+|rate limit|graphql Checks oid=[0-9a-f]{40} cursor=[0-9]+|graphql Item number=[0-9]+ size=(2|5)( cursor=[0-9]+)?|issue view [0-9]+ (subIssues|body|number,title,blockedBy)|issues page=[0-9]+|search issues page=[0-9]+|issue comments [0-9]+ page=[0-9]+|detail [0-9]+|dependencies [0-9]+ page=[0-9]+|repo clone|repository|user|installation repositories|sub issues [0-9]+ page=[0-9]+|timeline [0-9]+ page=[0-9]+|(check runs|status) [0-9a-f]{40}|ref heads/[A-Za-z0-9._/-]+)$' "$@" 2> /dev/null \
+  grep -h -v -E '^(repo view|nightly runs branch=[^ ]+|commit comments [0-9a-f]{40}|contents docs/agents/(fleet|triage-labels)\.md|graphql (Specs|Merged) cursor=[0-9a-z]+|graphql Spec number=[0-9]+( size=[0-9]+)?|graphql (Singles|Search) cursor=[0-9a-z]+|files [0-9]+|refs heads/room/[0-9]+-|graphql (Nodes|Blockers) count=[0-9]+|graphql Writer login=[a-z0-9-]+|graphql Facts count=[0-9]+|graphql Comments number=[0-9]+ before=[0-9a-zA-Z=+/_-]+|rate limit|graphql Checks oid=[0-9a-f]{40} cursor=[0-9]+|graphql Item number=[0-9]+ size=(2|5)( cursor=[0-9]+)?|issue view [0-9]+ (subIssues|body|number,title,blockedBy)|issues page=[0-9]+|search issues page=[0-9]+|issue comments [0-9]+ page=[0-9]+|detail [0-9]+|dependencies [0-9]+ page=[0-9]+|repo clone|repository|user|installation repositories|sub issues [0-9]+ page=[0-9]+|timeline [0-9]+ page=[0-9]+|(check runs|status) [0-9a-f]{40}|ref heads/[A-Za-z0-9._/-]+)$' "$@" 2> /dev/null \
     | sed 's/^/    /' > "$tmp/odd-calls"
   if [ -s "$tmp/odd-calls" ]; then bad 'only reads' "unexpected gh calls:"; cat "$tmp/odd-calls"; else echo "ok   every gh call was one of fleet.sh's reads"; fi
 }
@@ -1708,12 +1708,12 @@ EOF
 expect 'an open issue approved on its own, past the first page of the search, starts (#259)' 0 check.json 'own_approval(70; 7002; "09:00") | reduce range(71; 91) as $n (.; closed_single($n; "11:00"))' FAKE_GH_PAGE=5 -- check <<EOF
 start #70: Fix the broken link in the widget docs (approved on its own)
 EOF
-log_has 'an open issue approved on its own, past the first page of the search, starts (#259)' 6 '^search issues page='
+log_has 'an open issue approved on its own, past the first page of the search, starts (#259)' 6 '^graphql Search cursor='
 
 expect 'a closed issue approved on its own is archived, even past the first page of closed issues (Sol R2)' 0 check.json 'own_approval(70; 7002; "09:00") | say(70; 7003; "09:10"; "launch-fleet: start checked, thread thr_syn70, branch room/70-fix-eeee") | issue(70; .state = "CLOSED" | .updatedAt = at("09:30")) | reduce range(71; 91) as $n (.; closed_single($n; "11:00"))' FAKE_GH_PAGE=5 -- check <<EOF
 archive #70: closed; archive thr_syn70
 EOF
-log_has 'a closed issue approved on its own is archived, even past the first page of closed issues (Sol R2)' 6 '^search issues page='
+log_has 'a closed issue approved on its own is archived, even past the first page of closed issues (Sol R2)' 6 '^graphql Search cursor='
 expect 'a search that lists fewer issues outside specs than it counts fails loudly' 2 check.json 'own_approval(70; 7002; "09:00") | issue(70; .state = "CLOSED" | .updatedAt = at("09:30")) | reduce range(71; 91) as $n (.; closed_single($n; "11:00"))' FAKE_GH_SEARCH_CAP=10 -- check <<EOF
 the search listed 10 of 21 issues outside specs
 EOF
@@ -2360,8 +2360,8 @@ EOF
 expect 'the frontier read in pages of one' 0 frontier.json . FAKE_GH_PAGE=1 -- frontier <<EOF
 $FRONTIER
 EOF
-log_has 'the frontier read in pages of one' 1 '^graphql Specs'
-log_has 'the frontier read in pages of one' 20 '^issues page='
+log_has 'the frontier read in pages of one' 20 '^graphql Specs'
+log_has 'the frontier read in pages of one' 0 '^issues page='
 # F6 (#1353): only a hard blocker holds a start. A `file` link (the two only
 # share files) is context; owned paths that collide with a running ticket, or
 # with a lower-numbered ticket starting in the same read, hold it instead.
@@ -2691,14 +2691,12 @@ EOF
 
 ### Budget: GitHub's allowance (ClosedWiz#189)
 
-# responses; 304s cost no primary allowance. Revision reads still cost one
-# GraphQL point each. The old bundled query cost six points in nine calls.
-ERR='fleet.sh: used 7 GitHub points in 16 questions, 0 unchanged; 5000 of 5000 left'
+ERR='fleet.sh: used 9 GitHub points in 15 questions, 0 unchanged; 5000 of 5000 left'
 expect 'budget: the check reports the points and questions it used, on stderr' 0 check.json . -- check < /dev/null
 log_has 'budget: the check reports the points and questions it used, on stderr' 0 '^graphql Singles cursor=none$'
-log_has 'budget: the check reports the points and questions it used, on stderr' 2 '^search issues page=1$'
+log_has 'budget: the check reports the points and questions it used, on stderr' 2 '^graphql Search cursor=none$'
 log_has 'budget: the check reports the points and questions it used, on stderr' 1 '^graphql Nodes count=1$'
-ERR='fleet.sh: used 17 GitHub points in 27 questions, 0 unchanged; 5000 of 5000 left'
+ERR='fleet.sh: used 19 GitHub points in 26 questions, 0 unchanged; 5000 of 5000 left'
 expect 'budget: revision.sh'"'"'s questions are counted, a point each' 0 check.json 'merge12' -- check <<EOF
 start #13: W3: widget page (spec #10)
 EOF
@@ -2708,7 +2706,7 @@ EOF
 ERR='fleet.sh: backing off: 1249 of 5000 GitHub points left, under the 1250 kept for builders and reviewers, until 2026-11-01T13:00:00Z'
 expect 'budget: a low allowance backs off: one line, exit 0, nothing more asked' 0 check.json 'merge12' FAKE_GH_REMAINING=1249 -- check < /dev/null
 log_has 'budget: a low allowance backs off: one line, exit 0, nothing more asked' 1 '.'
-ERR='fleet.sh: used 17 GitHub points in 27 questions, 0 unchanged; 1250 of 5000 left'
+ERR='fleet.sh: used 19 GitHub points in 26 questions, 0 unchanged; 1250 of 5000 left'
 expect 'budget: a quarter of the allowance left still checks' 0 check.json 'merge12' FAKE_GH_REMAINING=1250 -- check <<EOF
 start #13: W3: widget page (spec #10)
 EOF
@@ -2725,7 +2723,7 @@ expect 'budget: an allowance GitHub does not give as a number fails loudly' 2 ch
 the GitHub query Specs did not say what it cost and what is left
 EOF
 
-ERR='fleet.sh: used 45 GitHub points in 53 questions, 0 unchanged; 5000 of 5000 left'
+ERR='fleet.sh: used 47 GitHub points in 52 questions, 0 unchanged; 5000 of 5000 left'
 expect 'budget: several fleets, the first check' 0 frontier.json . -- check <<EOF
 start #41: G1: gadget reader (spec #40)
 start #45: G5: gadget import (spec #40)
@@ -2738,7 +2736,7 @@ re-approve #50: changed since revision 1 (fingerprint now $(fp12 frontier.json .
 look #50: open sub-issue #53 is not in the approved plan
 look #60: planned #62 is closed without a verified merge
 EOF
-ERR='fleet.sh: used 8 GitHub points in 16 questions, 7 unchanged; 5000 of 5000 left'
+ERR='fleet.sh: used 10 GitHub points in 15 questions, 4 unchanged; 5000 of 5000 left'
 again 'budget: several fleets, the next check: the same lines, about a quarter of the points' . -- check <<EOF
 start #41: G1: gadget reader (spec #40)
 start #45: G5: gadget import (spec #40)
@@ -2751,7 +2749,7 @@ re-approve #50: changed since revision 1 (fingerprint now $(fp12 frontier.json .
 look #50: open sub-issue #53 is not in the approved plan
 look #60: planned #62 is closed without a verified merge
 EOF
-log_has 'budget: several fleets, the next check: the same lines, about a quarter of the points' 15 '.'
+log_has 'budget: several fleets, the next check: the same lines, about a quarter of the points' 14 '.'
 log_has 'budget: several fleets, the next check: the same lines, about a quarter of the points' 0 '^issue view'
 log_has 'budget: several fleets, the next check: the same lines, about a quarter of the points' 0 '^graphql Spec number=80'
 
@@ -3241,6 +3239,7 @@ hour() {
   FP50=$(fp12 frontier.json . 50) && [ ${#FP50} = 12 ] || return 1
   # Each loop's sandbox has checked before the hour: its cache is warm.
   hour_run timer 0 00 "$H/loop-timer" check > /dev/null && hour_run wakes 0 00 "$H/loop-wakes" check > /dev/null || return 1
+  : > "$H/gh-wakes.log" || return 1
   # The two regimes share nothing but the base world: they run at once.
   hour_regime timer & timer_pid=$!
   hour_regime wakes; wakes_status=$?
@@ -3258,10 +3257,12 @@ elif hour; then
   # before the search for issues outside specs (private/evidence/infra-fleets/fa7/).
   today=762
   cases=$((cases + 1))
-  if [ $((wp * 100)) -le $((today * 45)) ] && [ "$wq" -le 600 ]; then
-    echo "ok   an hour of the fake fleet: the wakes ask at most 45% of the points the timer asked before #259 ($today), in at most 600 questions: $summary"
+  search_points=$(grep -c '^graphql Search ' "$H/gh-wakes.log")
+  budget="an hour of the fake fleet: the wakes use at most 45% of the old timer's $today points plus 24 search points, in at most 600 questions"
+  if [ $(((wp - search_points) * 100)) -le $((today * 45)) ] && [ "$search_points" -le 24 ] && [ "$wq" -le 600 ]; then
+    echo "ok   $budget: $summary, $search_points search points"
   else
-    bad "an hour of the fake fleet: the wakes ask at most 45% of the points the timer asked before #259 ($today), in at most 600 questions" "$summary"
+    bad "$budget" "$summary, $search_points search points"
   fi
   cases=$((cases + 1))
   if [ "$wp" -lt "$tp" ]; then
@@ -3309,7 +3310,12 @@ cache_case() {
     jq "$LIB pr31" "$d/world.json" > "$d/new.json" && mv "$d/new.json" "$d/world.json" \
       || { bad "$name" "make open PR"; return; }
   fi
-  [ "$mode" != pages ] || cache_page=1
+  if [ "$mode" = pages ]; then
+    cache_page=1
+    jq "$LIB nightly | nightly_record(9001; \"Synthetic note one\") | nightly_record(9002; \"Synthetic note two\")" \
+      "$d/world.json" > "$d/new.json" && mv "$d/new.json" "$d/world.json" \
+      || { bad "$name" "setup pages"; return; }
+  fi
   cache_check() {
     env FAKE_GH_PAGE="$cache_page" FAKE_GH_PULL_HEAD="$cache_head" PATH="$tmp/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo \
       FAKE_GH_WORLD="$d/world.json" FAKE_GH_LOG="$d/gh.log" FAKE_GH_HTTP_LOG="$d/http.log" \
@@ -3327,13 +3333,14 @@ cache_case() {
   fi
   if ! cache_check 1; then bad "$name" "first read: $(cat "$d/err1")"; return; fi
   if [ "$mode" = transport ]; then
-    if grep -q '^graphql Singles' "$d/gh.log" || [ "$(wc -l < "$d/http.log")" -ne 7 ] \
-      || [ "$(grep -c '^search/issues?.* 200$' "$d/http.log")" -ne 2 ] \
-      || [ "$(grep -c '/issues?state=open.* 200$' "$d/http.log")" -ne 1 ] \
+    if grep -q '^graphql Singles' "$d/gh.log" || [ "$(wc -l < "$d/http.log")" -ne 4 ] \
+      || [ "$(grep -c '^search/issues?' "$d/http.log")" -ne 0 ] \
+      || [ "$(grep -c '/issues?state=open' "$d/http.log")" -ne 0 ] \
+      || [ "$(grep -c '^graphql Search cursor=none$' "$d/gh.log")" -ne 2 ] \
       || [ "$(grep -c '/issues/[0-9]*/comments?' "$d/http.log")" -ne 0 ] \
       || [ "$(grep -c '/dependencies/blocked_by?' "$d/http.log")" -ne 0 ] \
       || [ "$(grep -c '^graphql Facts count=' "$d/gh.log")" -ne 2 ]; then
-      bad "$name" "issue listing and search must use REST, and issue facts GraphQL"; return
+      bad "$name" "issue facts, listing and search must use GraphQL"; return
     fi
     echo "ok   $name"; return
   fi
@@ -3378,17 +3385,16 @@ cache_case() {
   if ! cache_check 2; then bad "$name" "repeat read: $(cat "$d/err2")"; return; fi
   case $mode in
     pages)
-      cmp -s "$d/out1" "$d/out2" && [ "$(grep -c '/issues?state=open.* 304$' "$d/http.log")" = 5 ] \
-        || { bad "$name" "all five cached issue pages must be revalidated"; return; }
-      jq '.issues += [{number: 71, title: "Synthetic extra issue", state: "OPEN", parent: null,
-        body: "", labels: [], blockedBy: [], comments: []}]' "$d/world.json" > "$d/new.json" \
+      cmp -s "$d/out1" "$d/out2" && [ "$(grep -c '/commits/[^/]*/comments?.* 304$' "$d/http.log")" = 2 ] \
+        || { bad "$name" "both cached commit comment pages must be revalidated"; return; }
+      jq "$LIB nightly_record(9003; \"Synthetic note three\")" "$d/world.json" > "$d/new.json" \
         && mv "$d/new.json" "$d/world.json" || { bad "$name" "append page"; return; }
       : > "$d/http.log"
-      cache_check 3 && cmp -s "$d/out2" "$d/out3" && grep -q '/issues?state=open.*page=6 unconditional 200$' "$d/http.log" \
-        || { bad "$name" "a 304 with a new next-page Link must expose page six"; return; } ;;
+      cache_check 3 && cmp -s "$d/out2" "$d/out3" && grep -q '/commits/[^/]*/comments?.*page=3 unconditional 200$' "$d/http.log" \
+        || { bad "$name" "a 304 with a new next-page Link must expose page three"; return; } ;;
     unchanged | upgrade)
-      cmp -s "$d/out1" "$d/out2" && [ "$(grep -c ' 304$' "$d/http.log")" = 6 ] \
-        || { bad "$name" "same output and exactly six REST 304s required"; return; } ;;
+      cmp -s "$d/out1" "$d/out2" && [ "$(grep -c ' 304$' "$d/http.log")" = 3 ] \
+        || { bad "$name" "same output and exactly three REST 304s required"; return; } ;;
     changed)
       printf 'nightly red 801 attempt 1 at %s: https://github.com/synthetic-owner/synthetic-repo/actions/runs/801 (failure)\n' "$(sha 81)" > "$d/want"
       cmp -s "$d/want" "$d/out2" && grep -q 'runs?.* 200$' "$d/http.log" \
@@ -3397,15 +3403,15 @@ cache_case() {
       cache_check 3 && cmp -s "$d/out2" "$d/out3" && grep -q 'runs?.* 304$' "$d/http.log" \
         || { bad "$name" "replacement was not reused on 304"; return; } ;;
     corrupt | duplicate | split | unreadable)
-      cmp -s "$d/out1" "$d/out2" && [ "$(grep -c ' unconditional 200$' "$d/http.log")" = 6 ] \
-        || { bad "$name" "invalid cache must make six unconditional REST reads"; return; } ;;
+      cmp -s "$d/out1" "$d/out2" && [ "$(grep -c ' unconditional 200$' "$d/http.log")" = 3 ] \
+        || { bad "$name" "invalid cache must make three unconditional REST reads"; return; } ;;
   esac
   echo "ok   $name"
 }
 cache_case 'REST cache: reader updates retain conditional GETs' upgrade
 cache_case 'REST cache: changed PR heads cannot borrow previous checks' mixed
 cache_case 'REST cache: paginated 304s retain and refresh next-page links' pages
-cache_case 'REST cache: issue listing and search use REST, issue facts GraphQL' transport
+cache_case 'REST cache: issue facts, listing and search use GraphQL' transport
 cache_case 'REST cache: 304 keeps the same check output' unchanged
 cache_case 'REST cache: a changed response replaces the cached answer' changed
 cache_case 'REST cache: split envelope objects are ignored' split
@@ -4432,6 +4438,55 @@ expect "GI2: the project check and the fleet thread's own check are unchanged" 0
 start #13: W3: widget page (spec #10)
 EOF
 
+FR9_SINGLES='own_approval(70; 7002; "09:00") | reduce range(71; 91) as $n (.; closed_single($n; "11:00"))'
+FR9_HELD="${OWN13-}"' claim13 | other_spec | '"${HELD81-}"
+expect 'FR9: the check reads the open issues and the issues outside specs with no REST call' 0 check.json "$FR9_SINGLES" FAKE_GH_PAGE=5 FAKE_GH_FAIL=issues_page= -- check <<EOF
+start #70: Fix the broken link in the widget docs (approved on its own)
+EOF
+log_has 'FR9: the check reads the open issues and the issues outside specs with no REST call' 6 '^graphql Search cursor='
+expect 'FR9: every reads the open issues and the issues outside specs with no REST call' 0 check.json "$FR9_SINGLES" FAKE_GH_FAIL=issues_page= -- every <<EOF
+start #70: Fix the broken link in the widget docs (approved on its own)
+EOF
+expect "FR9: a fleet thread's check reads the open issues in pages with no REST call" 0 check.json 'merge12' FAKE_GH_PAGE=1 FAKE_GH_FAIL=issues_page= -- spec 10 <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'FR9: a start claim searches the open work with no REST call' 0 check.json "$FR9_HELD" FAKE_GH_FAIL=issues_page= -- claim 13 1301 <<EOF
+withdraw #13: its owned paths collide with #81, which is running or claimed first
+EOF
+log_has 'FR9: a start claim searches the open work with no REST call' 3 '^graphql Search cursor=none$'
+expect 'FR9: a partial page of the open issues is unreadable, never a shorter list' 2 check.json "$FR9_SINGLES" FAKE_GH_PAGE=5 FAKE_GH_SHORT=Specs -- check <<EOF
+the open issues list gave
+EOF
+expect 'FR9: a partial page of the issues outside specs is unreadable, never a shorter list' 2 check.json "$FR9_SINGLES" FAKE_GH_PAGE=5 FAKE_GH_SHORT=Search -- check <<EOF
+the search listed 16 of 21 issues outside specs
+EOF
+expect 'FR9: a partial page of the open work is unreadable, never a shorter list' 2 check.json "$FR9_HELD" FAKE_GH_SHORT=Search -- claim 13 1301 <<EOF
+open tickets, so a colliding start could be missed
+EOF
+expect 'FR9: a null open issue is unreadable' 2 check.json "$FR9_SINGLES" FAKE_GH_NULL=Specs -- spec 10 <<EOF
+can't read the open issues
+EOF
+expect 'FR9: a null issue outside specs is unreadable' 2 check.json "$FR9_SINGLES" FAKE_GH_NULL=Search -- every <<EOF
+can't read the issues outside specs
+EOF
+expect 'FR9: a search that fails is unreadable, never an empty list' 2 check.json "$FR9_SINGLES" FAKE_GH_ERRORS=Search -- check <<EOF
+the GitHub query Search answered with errors
+EOF
+
+if selected 'FR9: a saved full read never replays a spec done line, so a new follow-up is named' && take heavy; then
+  name='FR9: a saved full read never replays a spec done line, so a new follow-up is named'
+  cases=$((cases + 1))
+  d=$tmp/fr9-replay gi1_why=''
+  if mkdir "$d" && world check.json 'all_closed' "$d" > "$d/world.json" \
+    && gi1_pair 1 0 && gi1_pair 2 60 \
+    && gi1_change 'followup(16; "OPEN"; "Follow-up of #12 (spec #10): a synthetic nit.")' \
+    && gi1_pair 3 120 && gi1_full 3; then
+    if grep -qx 'spec done #10: every planned ticket is done; open polish follow-ups: #16' "$d/out-3"; then
+      echo "ok   $name"
+    else bad "$name" "run 3 printed $(head -c 300 "$d/out-3")"; fi
+  else bad "$name" "${gi1_why:-setup}"; fi
+fi
+
 ### Every case ran, and every call was a read
 
 if [ -n "$WORKER" ]; then
@@ -4455,6 +4510,7 @@ case ${TEST_ONLY:-} in
   'GI2:*') expected=13 ;;
   'CW-G:*') expected=4 ;;
   'cross-repository PR:*') expected=12 ;;
+  'FR9:*') expected=11 ;;
 esac
 cases=$((cases - support))
 [ "$cases" = "$expected" ] || bad 'the selected cases ran' "$cases cases ran, not $expected: is \"$TEST_ONLY\" a case's name?"

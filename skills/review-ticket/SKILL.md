@@ -28,6 +28,8 @@ For a driver wake or start targeting `owner/repo#N` with the `review-ticket` ski
 
 ## 1. Pin the head
 
+Before pinning, check your reviewer role against `docs/agents/fleet.md`: you are the right reviewer when you are the first-choice reviewer in `docs/agents/fleet.md`, or a fall-back reviewer named in `docs/agents/fleet.md` with a recorded `launch-fleet: review refused <head>: <family> usage limit` comment before it on this pull request; stop and post nothing if you are neither, or if your thread built the pull request. Name your reviewer model and effort in the verdict's first lines (for example `reviewer: Neon High`).
+
 `review.py pin` prints `review full #57 at <head>; ticket example/pantry#41; checks build, test`, or `stop: <why>`: a draft, closed or merged, no ticket, a head other than the assigned one, a required check not green at this head, already reported at this head, or parked for Jake with no matching decision. On a stop, post nothing and say why. A re-check line adds `last read <commit>; open <ids>; next id R<k>` (see Re-checks, below). Check out only that head (`git fetch origin <base> pull/<N>/head`, `git checkout --detach <head>`). Read the ticket and its parent spec (`gh issue view <n> --repo <ticket repo> --json title,body,comments,parent`) and any grill or contract it names.
 
 Done when you hold one green head and have read its ticket and spec.

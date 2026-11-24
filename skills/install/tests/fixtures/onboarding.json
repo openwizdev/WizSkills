@@ -337,25 +337,16 @@
       "--confirm",
       "@preview"
      ],
-     "exit": 0
-    },
-    {
-     "step": "launch",
-     "world": "heartbeat_active"
-    },
-    {
-     "step": "launch",
-     "tool": [
-      "launch",
-      "--spec",
-      "900"
-     ],
-     "exit": 0
+     "exit": 0,
+     "session": {
+      "exit": 3,
+      "stdout": "session: tick 1: started #901, #902\nsession: stopped at tick 3: needs you: look #901: a look for the orchestrator\ncarry on: python3 -I synthetic-session.py run --spec 900\n"
+     }
     },
     {
      "step": "launch",
      "say": "fleet-start",
-     "agent": "Spec #900's local heartbeat is active. It checks GitHub every 10 minutes."
+     "agent": "The plan passed its checks, so the fleet started in this chat: 3 builders, each on one small ticket, and each next step starts the moment a run ends. Watch them here and at openwiz.dev/app; keep this chat open: it stops here when it needs you, such as an approved pull request for you to merge."
     },
     {
      "step": "watch",
@@ -1156,25 +1147,16 @@
       "--confirm",
       "@preview"
      ],
-     "exit": 0
-    },
-    {
-     "step": "launch",
-     "world": "heartbeat_active"
-    },
-    {
-     "step": "launch",
-     "tool": [
-      "launch",
-      "--spec",
-      "900"
-     ],
-     "exit": 0
+     "exit": 0,
+     "session": {
+      "exit": 3,
+      "stdout": "session: tick 1: started #901, #902, #903\nsession: stopped at tick 3: needs you: look #901: a look for the orchestrator\ncarry on: python3 -I synthetic-session.py run --spec 900\n"
+     }
     },
     {
      "step": "launch",
      "say": "fleet-start",
-     "agent": "Spec #900's local heartbeat is active. It checks GitHub every 10 minutes."
+     "agent": "The plan passed its checks, so the fleet started in this chat: 3 builders, each on one small ticket, and each next step starts the moment a run ends. Watch them here and at openwiz.dev/app; keep this chat open: it stops here when it needs you, such as an approved pull request for you to merge."
     },
     {
      "step": "watch",

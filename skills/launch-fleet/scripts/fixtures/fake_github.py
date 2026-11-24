@@ -60,6 +60,8 @@ def find(comment_id):
 
 
 def out(value):
+    if '--include' in args:
+        print('HTTP/2 200 OK\nContent-Type: application/json\n')
     print(json.dumps(value))
     sys.exit(0)
 

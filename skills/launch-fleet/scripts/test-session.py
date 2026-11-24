@@ -337,6 +337,22 @@ class Session(unittest.TestCase):
         self.assertIn(self.carry_on() + ' --idle 10\n', out)
         self.assertEqual(self.merges(), [])
 
+    def test_an_inherited_gh_repo_never_names_another_repository_in_the_review_claim(self):
+        self.tickets(5)
+        self.change(lambda w: w['branches'].update({'5': 'room/5-synthetic'}))
+        process = self.session('--idle', '10', GH_REPO='synthetic-owner/synthetic-private')
+        self.until(lambda: self.records(5) == ['launch-fleet: start checked, branch room/5-synthetic'], 'check',
+                   process)
+        self.green(12, 5)
+        self.note(5, 'builder', pr=12)
+        self.until(lambda: self.records(12)[:1] and self.records(12)[0].startswith(
+            'launch-fleet: review started ' + HEAD), 'the reviewer', process)
+        claim = self.records(12)[0]
+        self.assertIn('pull request %s#12 at %s' % (REPO, HEAD), claim)
+        self.assertNotIn('synthetic-private', claim)
+        process.send_signal(signal.SIGINT)
+        self.ended(process, 130)
+
     def test_an_approved_pull_request_stops_the_session_after_the_ticks_other_work(self):
         self.approved()
         self.tickets(6)

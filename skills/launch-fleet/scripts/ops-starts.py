@@ -87,10 +87,29 @@ STARTS = {'fleet_thread': ('roles', 'orchestrator'), 'builder': ('roles', 'build
           'small_builder': ('roles', 'small_builder'), 'review_of_claude_built': ('reviews', 'claude'),
           'review_of_gpt_built': ('reviews', 'gpt'), 'fix_round_for_claude_builder': ('fixers', 'claude'),
           'fix_round_for_gpt_builder': ('fixers', 'gpt')}
+REVIEW_SORT_CHOICES = {'Gemini Neon Low': dict(provider='antigravity', model=None, effort='low')}
+REVIEW_SORT_LINE = re.compile(r'^Review sort:(.*)$')
+REVIEW_SORT_TABLE = re.compile(r'^\|[ \t]*Review sort[ \t]*(?:\||$)')
+FENCE = re.compile(r'^ {0,3}(`{3,}|~{3,})(.*)$')
 
 
 def _lines(text):
     return [line[:-1] if line.endswith('\r') else line for line in text.split('\n')]
+
+
+def _outside_fences(lines):
+    fence = ''
+    for line in lines:
+        marker = FENCE.match(line)
+        if marker:
+            run, tail = marker.groups()
+            if not fence:
+                fence = run
+            elif run.startswith(fence) and not tail.strip():
+                fence = ''
+            continue
+        if not fence:
+            yield line
 
 
 def _cells(line):
@@ -250,6 +269,30 @@ def read_models(text):
         fixers[family] = next((dict(choice=c, row=row) for c, row in ((fixer, 'Fixer'), (reviewer, 'Reviewer'))
                                if FAMILY.get(c['provider']) == family), dict(choice=None, row=None))
     return dict(read='models_table', roles=roles, reviews=reviews, fixers=fixers, reviewer_fallbacks=fallbacks)
+
+
+def read_review_sort(text):
+    found = []
+    for line in _outside_fences(_lines(text)):
+        match = REVIEW_SORT_LINE.match(line)
+        if match:
+            found.append(match.group(1).strip())
+        elif REVIEW_SORT_TABLE.match(line):
+            cells = _cells(line)
+            if len(cells) != 2:
+                raise ValueError('fleet settings: Review sort table row must have two cells')
+            found.append(cells[1])
+    if not found:
+        return None
+    if len(found) > 1:
+        raise ValueError('fleet settings: more than one Review sort row')
+    value = found[0]
+    if value == 'off':
+        return None
+    choice = REVIEW_SORT_CHOICES.get(value)
+    if choice is None:
+        raise ValueError(f'fleet settings: unsupported Review sort value {value!r}')
+    return dict(choice)
 
 
 def read_fleet(repo):
@@ -602,6 +645,10 @@ def main():
             for c in choices:
                 print(_format_flags(c))
             return 0
+        elif len(args) == 3 and args[:2] == ['review-sort', '--repo']:
+            choice = read_review_sort(read_fleet(args[2]))
+            print('off' if choice is None else _format_flags(choice))
+            return 0
         elif len(args) == 5 and args[:2] == ['loop-agent', '--repo']:
             if not REPO.fullmatch(args[2]) or not LOOP.fullmatch(args[3]):
                 raise ValueError('a repository and a loop id are required')
@@ -614,8 +661,9 @@ def main():
             out = [report(json.loads(Path(args[1]).read_text(), object_pairs_hook=records.unique))]
         else:
             print('usage: ops-starts.py pass WORLD.json [--bench BENCH.json] | flags --repo OWNER/REPO [START] | '
-                  'host --repo OWNER/REPO START | '
-                  'loop-agent --repo OWNER/REPO LOOP_ID LIST.json|- | report BENCH.json', file=sys.stderr)
+                  'host --repo OWNER/REPO START | reviewer-order --repo OWNER/REPO [--refused FAMILY]... | '
+                  'review-sort --repo OWNER/REPO | loop-agent --repo OWNER/REPO LOOP_ID LIST.json|- | '
+                  'report BENCH.json', file=sys.stderr)
             return 2
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f'ops-starts: refused: {error}', file=sys.stderr)

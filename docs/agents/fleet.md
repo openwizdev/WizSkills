@@ -36,6 +36,12 @@ WizSkills changes use the ticket and approved plan in [OpenWiz](https://github.c
 
 New assignments follow the current orchestrator ruling. Existing agents keep their assignments. The reviewer is always from the other family. Source for the default tables: [OpenWiz fleet settings](https://github.com/openwizdev/OpenWiz/blob/main/docs/agents/fleet.md).
 
+## Review sort
+
+Review sort: Gemini Neon Low
+
+Before routing a `CHANGES` verdict, sort each finding into blocking or polish with Gemini Neon Low (`--provider antigravity --reasoning-level low`). One-line revert: set `Review sort: off`. For the first day, every 10th sort is also spot-checked by Opus 5.5 Medium; any mismatch on a blocking finding reverts to `off`.
+
 ## Supporting edits
 
 Every ticket may make these edits beside its owned paths without asking:

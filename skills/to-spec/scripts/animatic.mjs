@@ -11,7 +11,7 @@ const HEIGHT = 720;
 const HOLD = 0.4;
 const PLAYWRIGHT = "playwright-core@1.64.1";
 const HOME = process.env.ANIMATIC_HOME ?? path.join(os.homedir(), ".cache", "animatic");
-const BANNED = /\b(bench(mark)?(s|ed|ing)?|graphs?)\b/i;
+const BANNED = /\b(bench(mark)?(s|ed|ing)?|benches|graphs?)\b/i;
 const TEXT_MAX = 70;
 
 const fail = (reasons, code = 1) => {
@@ -45,7 +45,7 @@ if (verb === "link") {
     parts = null;
   }
   const raw = url.match(/^https:\/\/([^/?#]*)/);
-  if (!parts || parts.protocol !== "https:" || !parts.hostname || parts.username || parts.password
+  if (!parts || parts.protocol !== "https:" || !parts.hostname || parts.port === "0" || parts.username || parts.password
       || !raw || raw[1].includes("@") || !/^[^:]+(:\d+)?$/.test(raw[1])
       || !/^https:\/\/[^\s\x00-\x1f\x7f<>()\\`]+$/.test(url)) {
     fail("use a verified HTTPS playback URL without credentials");
@@ -71,19 +71,19 @@ const check = (moments) => {
     if (extra.length) why.push(`${at}: only "say" and "frame"; not ${extra.join(", ")} (no own images or pages)`);
     if (typeof m.say !== "string" || !m.say.trim() || /[\r\n]/.test(m.say)) why.push(`${at}: needs one spoken line in "say"`);
     const f = m.frame;
-    if (!f || typeof f !== "object" || !keys[f.type]) return why.push(`${at}: a frame is title, user or codebase`);
+    if (!f || typeof f !== "object" || Array.isArray(f) || typeof f.type !== "string" || !Object.hasOwn(keys, f.type)) return why.push(`${at}: a frame is title, user or codebase`);
     const bad = Object.keys(f).filter((k) => !keys[f.type].includes(k));
     if (bad.length) why.push(`${at}: a ${f.type} frame has no ${bad.join(", ")}`);
     for (const k of needs[f.type]) if (f[k] === undefined) why.push(`${at}: a ${f.type} frame needs ${k}`);
-    const texts = [m.say, f.kicker, f.headline, f.sub, ...(Array.isArray(f.points) ? f.points : []), ...(Array.isArray(f.paths) ? f.paths : [])];
+    const frameTexts = [f.kicker, f.headline, f.sub, ...(Array.isArray(f.points) ? f.points : []), ...(Array.isArray(f.paths) ? f.paths : [])];
     for (const k of ["points", "paths"]) {
       if (f[k] !== undefined && (!Array.isArray(f[k]) || f[k].length < 1 || f[k].length > 4 || !f[k].every((s) => typeof s === "string" && s.trim()))) {
         why.push(`${at}: ${k} is a list of 1 to 4 lines`);
       }
     }
     for (const k of ["kicker", "headline", "sub"]) if (f[k] !== undefined && (typeof f[k] !== "string" || !f[k].trim())) why.push(`${at}: ${k} is text`);
-    if (texts.some((t) => typeof t === "string" && BANNED.test(t))) why.push(`${at}: no bench and no graph in the video; the graph stays on the spec`);
-    if ([f.kicker, f.headline, f.sub, ...(f.points ?? []), ...(f.paths ?? [])].some((t) => typeof t === "string" && t.length > TEXT_MAX)) {
+    if ([m.say, ...frameTexts].some((t) => typeof t === "string" && BANNED.test(t))) why.push(`${at}: no bench and no graph in the video; the graph stays on the spec`);
+    if (frameTexts.some((t) => typeof t === "string" && t.length > TEXT_MAX)) {
       why.push(`${at}: frame text is at most ${TEXT_MAX} characters`);
     }
     if (f.type === "title") {
@@ -171,22 +171,26 @@ const run = (cmd, args, opts = {}) => {
   if (r.status !== 0) throw new Error(`${cmd} failed: ${(r.stderr || "").trim().split("\n").pop()}`);
   return r.stdout;
 };
-const duration = (f) => Number(run("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", f]).trim());
-const toWav = (src, wav) => run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-i", src, "-ac", "1", "-ar", "48000", wav]);
+const fileProtocol = ["-protocol_whitelist", "file"];
+const duration = (f) => Number(run("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", ...fileProtocol, f]).trim());
+const toWav = (src, wav) => run("ffmpeg", ["-nostdin", "-v", "error", "-y", ...fileProtocol, "-i", src, "-ac", "1", "-ar", "48000", wav]);
 
 const loudest = (f) => {
-  const r = spawnSync("ffmpeg", ["-nostdin", "-i", f, "-af", "volumedetect", "-vn", "-f", "null", "-"], { encoding: "utf8" });
+  const r = spawnSync("ffmpeg", ["-nostdin", ...fileProtocol, "-i", f, "-af", "volumedetect", "-vn", "-f", "null", "-"], { encoding: "utf8" });
   return Number(((r.stderr ?? "").match(/max_volume: (-?[\d.]+) dB/) ?? [])[1]);
 };
 
 const voice = (text, wav) => {
   const base = wav.replace(/\.wav$/, ".src");
   const dir = path.dirname(base);
-  const ours = () => fs.readdirSync(dir).filter((f) => f.startsWith(path.basename(base) + ".")).map((f) => path.join(dir, f));
+  const prefix = path.basename(base) + ".";
+  const ours = () => fs.readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => !entry.isDirectory() && entry.name.startsWith(prefix))
+    .map((entry) => path.join(dir, entry.name));
   for (const f of [wav, ...ours()]) fs.rmSync(f, { force: true });
   if (flags["tts-command"]) {
     const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
-    const cmd = flags["tts-command"].replaceAll("{out}", q(base)).replaceAll("{text}", q(text));
+    const cmd = flags["tts-command"].replace(/\{(out|text)\}/g, (_, key) => q(key === "out" ? base : text));
     const r = spawnSync("sh", ["-c", cmd], { input: text, stdio: ["pipe", "ignore", "pipe"], encoding: "utf8" });
     if (r.status !== 0) {
       for (const f of ours()) fs.rmSync(f, { force: true });
@@ -199,9 +203,14 @@ const voice = (text, wav) => {
     run(engine, [...(flags.voice ? ["-v", flags.voice] : []), "-w", `${base}.wav`, text]);
   }
   const made = ours();
-  const src = made.find((f) => fs.statSync(f).size > 0);
   try {
-    if (!src) throw new Error(`the voice wrote nothing for "${text.slice(0, 60)}"`);
+    const src = made.find((f) => {
+      const ext = path.extname(f).toLowerCase();
+      if (ext !== ".wav" && ext !== ".mp3" && !(engine === "say" && ext === ".aiff")) return false;
+      const stat = fs.lstatSync(f);
+      return stat.isFile() && stat.size > 0;
+    });
+    if (!src) throw new Error(`the voice wrote no supported regular audio file for "${text.slice(0, 60)}"`);
     toWav(src, wav);
   } finally {
     for (const f of made) fs.rmSync(f, { force: true });
@@ -244,13 +253,15 @@ try {
   const args = ["-nostdin", "-v", "error"];
   const filters = [];
   moments.forEach((_, i) => {
-    args.push("-loop", "1", "-framerate", "30", "-i", path.join(build, `frame-${pad(i)}.png`), "-i", path.join(build, `line-${pad(i)}.wav`));
+    args.push("-loop", "1", "-framerate", "30", ...fileProtocol, "-i", path.join(build, `frame-${pad(i)}.png`),
+      ...fileProtocol, "-i", path.join(build, `line-${pad(i)}.wav`));
     filters.push(`[${2 * i}:v]trim=duration=${lengths[i].toFixed(3)},fps=30,format=yuv420p,setsar=1[v${i}]`,
       `[${2 * i + 1}:a]aformat=sample_rates=48000:channel_layouts=stereo,apad=whole_dur=${lengths[i].toFixed(3)},atrim=duration=${lengths[i].toFixed(3)}[a${i}]`);
   });
   filters.push(`${moments.map((_, i) => `[v${i}][a${i}]`).join("")}concat=n=${moments.length}:v=1:a=1[v][a]`);
   const total = lengths.reduce((a, b) => a + b, 0);
-  run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-framerate", "1", "-i", path.join(build, "frame-%02d.png"),
+  run("ffmpeg", ["-nostdin", "-v", "error", "-y", "-framerate", "1", "-start_number", "1",
+    "-t", String(moments.length), ...fileProtocol, "-i", path.join(build, "frame-%02d.png"),
     "-vf", `scale=426:-1,tile=3x${Math.ceil(moments.length / 3)}`,
     "-frames:v", "1", path.join(build, "sheet.png")]);
 
@@ -259,7 +270,7 @@ try {
   try {
     run("ffmpeg", [...args, "-filter_complex", filters.join(";"), "-map", "[v]", "-map", "[a]", "-r", "30",
       "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", partial]);
-    const meta = JSON.parse(run("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", partial]));
+    const meta = JSON.parse(run("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", ...fileProtocol, partial]));
     const kinds = meta.streams.map((s) => s.codec_type).sort().join(",");
     if (kinds !== "audio,video") throw new Error(`the MP4 holds ${kinds}, not one video and one audio track`);
     if (Math.abs(Number(meta.format.duration) - total) > 0.25) throw new Error(`the MP4 runs ${meta.format.duration} s, not ${total.toFixed(2)} s`);

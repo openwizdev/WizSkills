@@ -159,6 +159,23 @@ def skill_version(path):
     return found[0].group(1)
 
 
+STAMP = re.compile(r"(?m)^(WIZSKILLS_VERSION = ')([^']+)(')$")
+
+
+def stamp_brief(version):
+    path = ROOT / 'skills/launch-fleet/scripts/brief.py'
+    if not path.is_file():
+        return
+    text = path.read_text(encoding='utf-8')
+    match = STAMP.search(text)
+    if match is None:
+        raise Unusable('skills/launch-fleet/scripts/brief.py has no WIZSKILLS_VERSION stamp')
+    if match.group(2) == version:
+        return
+    path.write_text(STAMP.sub(lambda found: found.group(1) + version + found.group(3), text, count=1),
+                    encoding='utf-8')
+
+
 def bumped(version, bump):
     m = PLAIN.fullmatch(version)
     if not m:
@@ -342,6 +359,7 @@ def release(since, date, write, first=False):
         path.write_text('\n'.join(lines), encoding='utf-8')
     plugin_data['version'] = version
     plugin_path.write_text(json.dumps(plugin_data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+    stamp_brief(version)
     market_path = ROOT / '.claude-plugin/marketplace.json'
     if market_path.is_file():
         market = json.loads(market_path.read_text(encoding='utf-8'))

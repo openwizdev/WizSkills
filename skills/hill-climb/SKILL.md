@@ -1,6 +1,6 @@
 ---
 name: hill-climb
-description: Improve one outcome in autonomous rounds. Fresh CloudRoom branches each try one change, an isolated judge council (or pairwise Bradley-Terry) keeps or undoes it, and Jake picks at checkpoints. Use for a hill-climb run or iterative design exploration; for one picture or screenshot, use image instead.
+description: Improve one outcome through iterative experiments. Use when asked to run a hill-climb or explore a design over multiple rounds.
 version: 0.2.2
 ---
 

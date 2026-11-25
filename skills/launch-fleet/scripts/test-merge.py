@@ -2396,6 +2396,57 @@ class Drops(unittest.TestCase):
         self.assertEqual(w.bodies(7)[-2:], [CLAIMED, blocked])
         self.assertEqual(self.enqueues(w), [{'enqueue': 'PR_synthetic7', 'head': HEAD}])
 
+    def test_3131_null_before_commit_removal_requeues_newer_approved_head(self):
+        green = [run_of('SUCCESS', '2026-11-22T10:10:00Z')]
+        approve = dict(comment(4010, 'VERDICT: APPROVE at %s\n\nNext: none open.' % HEAD),
+                       created_at='2026-11-22T10:15:00Z')
+        null_removal = {'createdAt': REMOVED_AT, 'reason': 'merge_conflict', 'actor': BOT, 'beforeCommit': None}
+        pending = ('pending: the commit that last left the merge queue does not read; nothing was written, '
+                   'so read it again next wake')
+        for name, removals in [
+                ('null beforeCommit', [null_removal]),
+                ('null beforeCommit.oid', [dict(null_removal, beforeCommit={'oid': None})]),
+                ('earlier other-head removal then null removal',
+                 [{'createdAt': '2026-11-22T09:55:00Z', 'reason': 'failed_checks', 'actor': BOT,
+                   'beforeCommit': {'oid': OTHER}}, null_removal])]:
+            with self.subTest(case=name):
+                w = World(self, pr=pr(isMergeQueueEnabled=True, checks=green, removals=removals),
+                          comments={'7': [approve]})
+                project(w, PRINTS)
+                self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
+                self.assertEqual(w.writes(), [{'enqueue': 'PR_synthetic7', 'head': HEAD},
+                                              {'post': 7, 'body': self.receipt}])
+                self.assertEqual(w.bodies(7), [approve['body'], self.receipt])
+        for name, removals, comments in [
+                ('older approval', [null_removal],
+                 [dict(comment(4010, 'VERDICT: APPROVE at ' + HEAD), created_at='2026-11-22T09:50:00Z')]),
+                ('same-second approval', [null_removal],
+                 [dict(comment(4010, 'VERDICT: APPROVE at ' + HEAD), created_at=REMOVED_AT)]),
+                ('outsider approval', [null_removal],
+                 [dict(comment(4010, 'VERDICT: APPROVE at ' + HEAD, login='someone-else'),
+                       created_at='2026-11-22T10:15:00Z')]),
+                ('approval at another head', [null_removal],
+                 [dict(comment(4010, 'VERDICT: APPROVE at ' + OTHER), created_at='2026-11-22T10:15:00Z')]),
+                ('newer changes after approval', [null_removal],
+                 [approve, dict(comment(4011, 'VERDICT: CHANGES at ' + HEAD), created_at='2026-11-22T10:16:00Z')]),
+                ('earlier removal named this head',
+                 [{'createdAt': '2026-11-22T09:55:00Z', 'reason': 'failed_checks', 'actor': BOT,
+                   'beforeCommit': {'oid': HEAD}}, null_removal],
+                 [approve]),
+                ('malformed non-null oid', [dict(null_removal, beforeCommit={'oid': 'not-a-sha'})], [approve])]:
+            with self.subTest(refused=name):
+                w = World(self, pr=pr(isMergeQueueEnabled=True, checks=green, removals=removals),
+                          comments={'7': comments})
+                project(w, PRINTS)
+                self.assertEqual(self.merge(w), (0, pending))
+                self.assertEqual(w.writes(), [])
+        w = World(self, pr=pr(isMergeQueueEnabled=True, checks=green, removals=[null_removal]),
+                  comments={'7': [dict(comment(4000, self.receipt), created_at='2026-11-22T09:49:10Z'), approve]})
+        project(w, PRINTS)
+        self.assertEqual(self.merge(w), (1, 'unknown: the commit that left the merge queue could not be read; '
+                                            'nothing was enqueued or recorded, so run it again next wake'))
+        self.assertEqual(w.writes(), [])
+
 
 if __name__ == '__main__':
     unittest.main()

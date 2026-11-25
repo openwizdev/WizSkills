@@ -20,6 +20,11 @@ DESCRIPTION = 'description: A synthetic skill.'
 
 
 class SkillVersion(unittest.TestCase):
+    def test_description_length_boundary(self):
+        self.assertEqual(findings(NAME, 'description: ' + 'x' * 180, 'version: 0.2.0'), [])
+        self.assertEqual(findings(NAME, 'description: ' + 'x' * 181, 'version: 0.2.0'),
+                         ['`description` is longer than 180 characters'])
+
     def test_a_valid_version_passes(self):
         for version in ('0.2.0', '1.0.0', '0.2.0-rc.1', '2.10.3+build.7', '"0.2.0"'):
             with self.subTest(version=version):

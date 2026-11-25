@@ -1,3 +1,27 @@
+# The context-budget job is adapted from T3 Code's
+# .github/workflows/agent-context-budget.yml (github.com/pingdotgg/t3code
+# @ 90e6e3e69d82d95796edb6777dfeaf2f43ed181e), under the MIT License:
+#
+# Copyright (c) 2026 T3 Tools Inc.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 # Test-only dependency record (WZ15/J53):
 # playwright-core 1.64.1 (Apache-2.0); no transitive npm dependencies.
 # Chrome for Testing and Chrome Headless Shell 156.0.8078.4, revision 1248,
@@ -88,6 +112,31 @@ jobs:
         env:
           GATE_BASE: ${{ github.event.merge_group.base_sha }}
         run: python3 -I tools/comment-check/check.py diff --base "${GATE_BASE:-HEAD^1}"
+  context-budget:
+    name: context budget
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: No skill's SKILL.md grows above the base unless the pull request has the context-increase label, read live so a rerun after labelling sees it (base is the pull request merge commit's first parent; python3 -I check/context_budget.py --help says when to ask for the label)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          labels=$(gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name')
+          allow=
+          if printf '%s\n' "$labels" | grep -qx context-increase; then
+            allow=--allow-increase
+          fi
+          python3 -I check/context_budget.py compare HEAD^1 HEAD $allow
   shard:
     name: shard ${{ matrix.shard }}
     needs: list
@@ -125,7 +174,7 @@ jobs:
         run: python3 check/run.py --shard "$SHARD"
   check:
     name: check
-    needs: [list, gates, shard]
+    needs: [list, gates, context-budget, shard]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

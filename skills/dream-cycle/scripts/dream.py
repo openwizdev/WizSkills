@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""Merge dream-cycle scout findings and render dated private reports (DC3 #3091).
-
-Python standard library only. Follows contracts/dream-cycle.v1.md.
-"""
 import argparse
 from collections import Counter, defaultdict
 from datetime import date
@@ -134,7 +130,6 @@ def _validate_link_end(end, idx):
 
 
 def validate_finding(record):
-    """Validate one finding dict against #/$defs/finding. Return error reason or None."""
     if not isinstance(record, dict):
         return "line must be a JSON object"
     keys = set(record)
@@ -228,7 +223,6 @@ def validate_finding(record):
 
 
 def validate_verdict(record):
-    """Validate one verdict dict against #/$defs/verdict. Return error reason or None."""
     if not isinstance(record, dict):
         return "verdict line must be a JSON object"
     keys = set(record)
@@ -477,7 +471,6 @@ def _load_expired_links(ledger_path_str):
 
 
 def _evaluate_canaries(canaries_path_str, verdicts_by_id):
-    """Return (canary_ids, missed_list) where missed_list has dicts {id, expected, actual}."""
     if not canaries_path_str:
         return set(), []
     data = parse_json_strict(Path(canaries_path_str).read_text(encoding="utf-8"))
@@ -625,7 +618,6 @@ def cmd_report(args):
         print(f"report: failed to load input: {exc}", file=sys.stderr)
         return 1
 
-    # Map finding ids (and merged_ids) to finding dicts
     finding_by_id = {}
     alias_to_id = {}
     for f in findings:
@@ -634,7 +626,6 @@ def cmd_report(args):
         for mid in f.get("merged_ids", []):
             alias_to_id.setdefault(mid, f["id"])
 
-    # Load and validate prover verdicts
     verdicts_by_id = {}
     invalid_verdicts = []
     for path in sorted(verdicts_dir.glob("*.jsonl")):
@@ -661,7 +652,6 @@ def cmd_report(args):
 
             target_id = alias_to_id.get(rec["id"], rec["id"])
             target_finding = finding_by_id.get(target_id)
-            # DC5 review rule: reject a CONFIRMED link verdict whose changes_confirmed is null
             if (
                 target_finding is not None
                 and target_finding.get("kind") == "link"
@@ -776,18 +766,15 @@ def cmd_report(args):
         if isinstance(rej, dict) and rej.get("reason"):
             rejected_link_reasons[rej["reason"]] += 1
 
-    # Rank deletes & fixes: CONFIRMED before PLAUSIBLE, then merge rank
     deletes.sort(key=lambda x: (VERDICT_RANK[x[1]], _rank_key(x[0])))
     fixes.sort(key=lambda x: (VERDICT_RANK[x[1]], _rank_key(x[0])))
 
-    # Rank links: highest score first, then says-vs-does/promise-to-work, CONFIRMED, newest seen, id
     def _link_sort_key(item):
         f = item["finding"]
         return (
             -item["score"],
             LINK_TYPE_PRIORITY.get(f["link_type"], 2),
             VERDICT_RANK[item["verdict"]],
-            # newest ISO date first: invert by character negation using tuple of negated ordinals
             tuple(-ord(c) for c in _newest_end_seen(f)),
             f["id"],
         )
@@ -797,7 +784,6 @@ def cmd_report(args):
     for route_name in controller_routes:
         controller_routes[route_name].sort(key=lambda r: (-r["score"], r["id"]))
 
-    # Scope & Areas table
     scope_list = [s.strip() for s in args.scope.split(",") if s.strip()] if args.scope else []
     area_order = list(scope_list)
     for f in active_findings:
@@ -812,7 +798,6 @@ def cmd_report(args):
     all_unconfirmed = list(unconfirmed) + invalid_verdicts
     unconfirmed_label = "unconfirmed read" if len(all_unconfirmed) == 1 else "unconfirmed reads"
 
-    # Render Markdown report
     lines = [f"# Dream cycle report — {args.date}", ""]
     if canary_missed:
         missed_str = ", ".join(f"`{m['id']}` (expected {m['expected']}, got {m['actual']})" for m in canary_missed)

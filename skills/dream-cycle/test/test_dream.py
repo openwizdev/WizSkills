@@ -97,7 +97,6 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
             self.assertEqual(len(deduped[0]["evidence"]), 2)
             self.assertEqual(deduped[0]["confidence"], "high")
 
-            # Deterministic ranking: delete before fix before link, high before medium
             kinds = [f["kind"] for f in merged["findings"]]
             self.assertEqual(kinds, ["delete", "delete", "fix", "fix", "link"])
 
@@ -157,7 +156,6 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
             self.assertIn("Loops", report)
             self.assertIn("Flag --fast is parsed dynamically", report)
             self.assertIn("idle_prs", report)
-            # Link card fields for cross-001
             self.assertIn("**`cross-001`** (`duplicates`, `PLAUSIBLE`, score ", report)
             self.assertIn("- **End 1:** `example/alpha:src/slug.py#L1-L20` (2030-01-14)", report)
             self.assertIn("- **Changes:** Open ticket example/beta#41", report)
@@ -274,7 +272,7 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
                 else:
                     links.append(_make_link(fid, route="ticket", ticket=f"Ticket {fid}"))
                 verdicts.append(_make_verdict(fid, "CONFIRMED", changes_confirmed=True))
-                scores[fid] = i * 2  # lnk-17 has highest score (34), lnk-01 lowest (2)
+                scores[fid] = i * 2
 
             (fdir / "s.jsonl").write_text("\n".join(json.dumps(x) for x in links) + "\n", encoding="utf-8")
             (vdir / "v.jsonl").write_text("\n".join(json.dumps(x) for x in verdicts) + "\n", encoding="utf-8")
@@ -298,10 +296,8 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             report = report_md.read_text(encoding="utf-8")
             top_links_section = report.split("## Top links")[1].split("## Rejected")[0]
-            # Top card must be lnk-17 (score 34, pattern with 3 ends)
             self.assertIn("1. **`lnk-17`** (`pattern`, `CONFIRMED`, score 34", top_links_section)
             self.assertIn("- **End 3:** `c:f3#L1` (2030-01-14)", top_links_section)
-            # 15th card must be lnk-03 (score 6); lnk-02 and lnk-01 must NOT render as cards
             self.assertIn("15. **`lnk-03`**", top_links_section)
             self.assertNotIn("16. **`lnk-02`**", top_links_section)
             self.assertNotIn("**`lnk-01`**", top_links_section)
@@ -374,11 +370,9 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
 
-            # Ticket route only
             tickets = json.loads(tickets_json.read_text(encoding="utf-8"))
             self.assertEqual([t["id"] for t in tickets], ["r-ticket"])
 
-            # One inbox file per owner in private run folder, sanitized filename
             inbox_files = sorted(p.name for p in inboxes_dir.glob("*.md"))
             self.assertEqual(inbox_files, ["people-ops.md", "strategy.md"])
             self.assertIn("r-inbox", (inboxes_dir / "strategy.md").read_text(encoding="utf-8"))
@@ -386,7 +380,6 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
             self.assertIn("r-people", people_text)
             self.assertIn("DRAFT ONLY", people_text)
 
-            # Controller routes listed in report and JSON
             routes = json.loads(routes_json.read_text(encoding="utf-8"))
             self.assertEqual([r["id"] for r in routes["question-comment"]], ["r-question"])
             self.assertEqual([r["id"] for r in routes["spec-candidate"]], ["r-spec"])
@@ -428,7 +421,6 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
                 "\n".join(json.dumps(x) for x in (del_finding, lnk_finding, canary_junk)) + "\n",
                 encoding="utf-8",
             )
-            # Prover wrongly CONFIRMED the junk canary!
             (vdir / "v.jsonl").write_text(
                 "\n".join(json.dumps(x) for x in (
                     _make_verdict("del-001", "CONFIRMED", blind=False, changes_confirmed=None),
@@ -460,11 +452,9 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
 
             report = report_md.read_text(encoding="utf-8")
-            # Warning near top of report (before ## Areas)
             top = report.split("## Areas")[0]
             self.assertIn("canary", top.lower())
             self.assertIn("PLAUSIBLE", top)
-            # lnk-good is capped at PLAUSIBLE and NOT in tickets
             self.assertIn("**`lnk-good`** (`duplicates`, `PLAUSIBLE`", report)
             self.assertNotIn("**`lnk-good`** (`duplicates`, `CONFIRMED`", report)
             tickets = json.loads(tickets_json.read_text(encoding="utf-8"))
@@ -480,7 +470,6 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
 
             lnk = _make_link("lnk-recheck", route="ticket", ticket="Should not be filed after reject")
             (fdir / "s.jsonl").write_text(json.dumps(lnk) + "\n", encoding="utf-8")
-            # Earlier file REJECTED, later file CONFIRMED -> REJECTED must win
             (vdir / "batch_01.jsonl").write_text(
                 json.dumps(_make_verdict("lnk-recheck", "REJECTED", reason="Second check rejected", changes_confirmed=False)) + "\n",
                 encoding="utf-8",

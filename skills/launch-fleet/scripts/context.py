@@ -16,8 +16,10 @@ WORDS = ('Use the words in `GLOSSARY.md`; read it when you name something new, '
 ROLE_SECTIONS = {
     'builder': ('Supporting edits', 'Test commands', 'Approval rules'),
     'reviewer': ('Supporting edits', 'Test commands', 'CI checks', 'Approval rules'),
-    'planner': ('Labels', 'Supporting edits', 'Approval rules'),
+    'planner': ('Labels', 'Supporting edits'),
 }
+PRIVATE_RECORD = re.compile(
+    r'https://github\.com/jparker2006/ClosedWiz/issues/[0-9]+#issuecomment-[0-9]+')
 LEGACY_REVIEWER_MODELS = ('Reviewer for Claude-built', 'Reviewer for GPT-built')
 OPTIONAL_LEGACY_REVIEWER_MODELS = ('Reviewer for Gemini-built',)
 LEGACY_MODELS = {'Builder', 'Builder for small tickets', *LEGACY_REVIEWER_MODELS, *OPTIONAL_LEGACY_REVIEWER_MODELS, 'Fixer'}
@@ -50,6 +52,26 @@ def sections(text):
     return {name: ''.join(lines).strip() for name, lines in result.items()}
 
 
+def lean_provenance(text):
+    paragraphs = text.split('\n\n')
+    kept = []
+    for index, paragraph in enumerate(paragraphs):
+        source_at = paragraph.find('Source:')
+        if source_at < 0:
+            kept.append(paragraph)
+            continue
+        prefix = paragraph[:source_at].strip()
+        if prefix and index != len(paragraphs) - 1:
+            kept.append(paragraph)
+            continue
+        links = list(dict.fromkeys(PRIVATE_RECORD.findall(paragraph[source_at:])))
+        if prefix:
+            kept.append(prefix)
+        if links:
+            kept.append('\n'.join(f'Source: {link}' for link in links))
+    return '\n\n'.join(kept)
+
+
 def selected_sections(path, text, names, role):
     found = sections(text)
     if names is None:
@@ -63,7 +85,16 @@ def selected_sections(path, text, names, role):
             *(name for name in OPTIONAL_LEGACY_REVIEWER_MODELS if name in found),
         )
         names = (*model_sections, *names)
-    return [found.get(name, f'No `{name}` section in `{path}`.') for name in names]
+    chosen = []
+    for name in names:
+        if name not in found:
+            chosen.append(f'No `{name}` section in `{path}`.')
+            continue
+        section = found[name]
+        if role in ('reviewer', 'fleet'):
+            section = lean_provenance(section)
+        chosen.append(section)
+    return chosen
 
 
 def labels_table(text):
@@ -107,10 +138,6 @@ def print_role(role, root):
         blob = git(root, 'rev-parse', '--verify', f'{head}:{path}') if head else ''
         blobs.append(f'{path} {blob or "untracked"}')
         if path == GLOSSARY:
-            if role == 'planner':
-                terms = re.findall(r'^\*\*([^*\n]+)\*\*:', text, re.M)
-                if terms:
-                    parts.append(', '.join(terms))
             parts.append(WORDS)
         elif role == 'planner' and path == AGENTS + 'triage-labels.md':
             parts.append(labels_table(text))

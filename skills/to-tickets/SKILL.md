@@ -8,21 +8,11 @@ version: 0.4.0
 
 The orchestrator takes a spec from [to-spec](../to-spec/SKILL.md) to a plan
 approved by its own checks (J202): no owner question and no human approval in
-between. In OpenWiz,
-[the roads page](https://github.com/openwizdev/OpenWiz/blob/main/docs/agents/roads.md)
-describes when this road applies.
+between.
 
 ## 1. Check the starting point
 
-Run `python3 -I "<this skill's folder>/../launch-fleet/scripts/context.py" planner`
-once per session (and again only when a blob its header lists changes). It prints
-the public-writes card, the planner's fleet sections, the tracker's
-where-things-live and repositories, the triage labels table, the private storage
-rules, the roads page and the glossary's term index. Read a term's definition in
-`GLOSSARY.md` only when you use it, and an ADR only when it touches the area.
-The card's decision-record forms replace reading the open-development contract
-for public decision records; read the full contract only for release, publishing,
-importer and ticket-mover work. You need the spec and its grill confirmation's
+Run `python3 -I "<this skill's folder>/../launch-fleet/scripts/context.py" planner` once per session (again only when a blob its header lists changes). You need the spec and its grill confirmation's
 private-comment URL; read that comment back privately. No confirmed grill: stop
 and use [grill](../grill/SKILL.md). If the plan was already approved,
 [hold before editing](changes.md). Existing contract holds keep their recorded
@@ -34,22 +24,9 @@ handoff it would authorize.
 
 ## 2. Cut the tickets
 
-Cut end-to-end builder tickets to an expected diff of about 200 changed lines
-and 10 files or fewer, judged from first-pass review results on comparable work:
-that range is `Size: S.` (this revises openwizdev/OpenWiz#2484's RR2, which set
-about 400). An M is about 400. Size M is allowed only with a
-`Why M: <reason it can't split>` line in Parent. A ticket of size L is split,
-never cut. For a spec created on or after approve.py's `SIZES_SINCE`, step 4
-refuses an L, and an M without that line. Cut for the shortest critical chain,
-then the widest graph (F6): disjoint
-owned paths and only the arrows a ticket truly needs. To choose between two
-cuts, write each as picture data and run
-`python3 -I "<this skill's folder>/scripts/prefer.py" <cut A> <cut B>`: it keeps
-the shorter critical chain, and the wider graph when the chains are equal.
-Use a contract-first ticket for a shared interface, or say why none is needed.
-Ask yourself the owner's old questions: is each ticket the right size, is each
-arrow right, what should merge or split. The checks in
-step 4 hold you to them. See [the ticket and graph inputs](tickets.md).
+Cut end-to-end builder tickets to an expected diff of about 200 changed lines and 10 files or fewer, judged from first-pass review results on comparable work: that range is `Size: S.`. An M is about 400.
+`python3 -I "<this skill's folder>/scripts/approve.py"` refuses `Size: L`, an M without `Why M: <reason it can't split>` in Parent, overlapping owned paths and an arrow another chain already implies (`approve.py` `check_sizes`, `check_owned`, `check_width`; `test_a_new_spec_refuses_an_l_ticket_and_an_m_without_its_reason`, `test_a_plan_that_fails_any_check_gets_no_record`).
+Cut for the shortest critical chain, then the widest graph (F6). To choose between two cuts, run `python3 -I "<this skill's folder>/scripts/prefer.py" <cut A> <cut B>`: it keeps the shorter chain, and the wider graph when the chains are equal. Use a contract-first ticket for a shared interface, or say why none is needed. See [the ticket and graph inputs](tickets.md).
 
 ## 3. Write and verify the tickets
 
@@ -72,12 +49,8 @@ python3 -I "<this skill's folder>/scripts/approve.py" --graph graph.json --revis
   --grill <confirmation URL> --number <N> [--changed "<what changed>"] --root . > record.md
 ```
 
-Exit 0 prints the record, whose `width: chain` is the critical chain: the
-longest run of open work, open blockers outside the spec included
-([decisions.v1](../../contracts/decisions.v1.md#machine-plan-approval)).
-Exit 1 names each failed check and prints nothing: fix the tickets, then run all
-three again. Exit 2 is an unreadable input: read again. `N` is 1, or the latest
-approval's revision plus one with `--changed`.
+`width: chain` is the longest run of open work, outside blockers included ([decisions.v1](../../contracts/decisions.v1.md#machine-plan-approval)).
+`python3 -I "<this skill's folder>/scripts/approve.py"` prints nothing on exit 1 and names each failed check; exit 2 is unreadable input; `N` is 1, or the latest revision plus one with `--changed` (`approve.py`, `revision.sh`; `test_a_plan_that_fails_any_check_gets_no_record`, `test_revision_two_needs_what_changed`).
 
 Post `record.md` with `gh issue comment <spec> --body-file record.md` as a
 record author, read it back and compare it byte for byte. On an uncertain write,

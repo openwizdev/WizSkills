@@ -10,21 +10,10 @@ The owner's one active step is answering and confirming the grill (J202). From
 there the orchestrator writes the spec, has [to-tickets](../to-tickets/SKILL.md)
 cut and approve the plan by its own checks, and makes one video the owner
 watches, then steers through the orchestrator. Nothing is asked between them.
-In OpenWiz,
-[the roads page](https://github.com/openwizdev/OpenWiz/blob/main/docs/agents/roads.md)
-describes when this road applies.
 
 ## 1. Read the confirmed grill
 
-Run `python3 -I "<this skill's folder>/../launch-fleet/scripts/context.py" planner`
-once per session (and again only when a blob its header lists changes). It prints
-the public-writes card, the planner's fleet sections, the tracker's
-where-things-live and repositories, the triage labels table, the private storage
-rules, the roads page and the glossary's term index. Read a term's definition in
-`GLOSSARY.md` only when you use it, and an ADR only when it touches the area.
-The card's decision-record forms replace reading the open-development contract
-for public decision records; read the full contract only for release, publishing,
-importer and ticket-mover work. Read the grill privately, with its confirmation
+Run `python3 -I "<this skill's folder>/../launch-fleet/scripts/context.py" planner` once per session (again only when a blob its header lists changes). Read the grill privately, with its confirmation
 comment, and the code. An unconfirmed grill, or a decision still open, goes back
 to [grill](../grill/SKILL.md). Keep the confirmation's private-comment URL: it is
 the plan approval's authority.
@@ -58,10 +47,8 @@ confirmed with the spec, in this section:
 
 Early only (`yes`, `no`) is the default. Write `User-visible: yes` when users
 will see the change, `yes, a release` when the spec publishes a release, and
-`One-way door: no` only when the grill settled that it can be undone. Reasons
-go in other sections, never on these lines. to-tickets' approval check refuses
-a spec created on or after its `CHECKPOINTS_SINCE` date without both answers;
-an older spec without the section reads as early only.
+`One-way door: no` only when the grill settled that it can be undone.
+`check-approval.sh --checkpoints` refuses a new spec without both answers, and any other line in that section (`test_machine_approval_needs_a_new_specs_checkpoint_answers`).
 
 ## 3. Cut the plan
 

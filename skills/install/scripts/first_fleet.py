@@ -2423,6 +2423,16 @@ def record_comments(spec, env):
     return [c['body'] for c in comments if c['author'] is not None and c['author'].lower() in authors]
 
 
+def routing_maps(state):
+    """Empty thread, run and loop maps beside the onboarding state. Never overwrite."""
+    script = Path(__file__).resolve().parents[2] / 'launch-fleet' / 'scripts' / 'records.py'
+    done = subprocess.run(
+        [sys.executable, '-I', str(script), 'init', state.value['repo'], str(state.path.parent)],
+        capture_output=True, text=True)
+    if done.returncode != 0:
+        raise Exit(10, 'The private routing maps could not be created; ' + NOTHING)
+
+
 def launch(got):
     state = State(got['--state'])
     spec = int(got['--spec'])
@@ -2620,6 +2630,7 @@ def launch(got):
         print('Confirmation: %s' % digest)
         print("Nothing started. Ask exactly that; on the user's yes, run again with --yes --confirm %s." % digest)
         return 12
+    routing_maps(state)
     starting = teach('The fleet starting', (str(len(starts)),), which=1) if local else None
     state.value['launch'] = {'spec': spec, 'state': 'started' if local else 'authorized', 'effects': digest,
                              'tickets': starts, 'orchestrator': orchestrator}

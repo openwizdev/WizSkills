@@ -65,10 +65,10 @@ def discover():
         return None
 
 
-def choose(key, matches, state, threads):
+def choose(key, matches, state, threads, missing=None):
     saved = state.get(key)
     if threads is None:
-        return (saved, None) if saved else (None, 'thread discovery is out of reach')
+        return (saved, None) if saved else (None, missing or 'thread discovery is out of reach')
     if len(matches) > 1:
         return None, 'two threads match ' + key
     found = matches[0]['id'] if matches else None
@@ -98,7 +98,7 @@ def driver_runs(repo):
         return UNREADABLE
 
 
-def builder_thread(n, branch, threads, state, runs=None):
+def builder_thread(n, branch, threads, state, runs=None, missing=None):
     if runs is UNREADABLE:
         return None, 'the private runs file is unreadable'
     if runs is MISSING:
@@ -111,7 +111,7 @@ def builder_thread(n, branch, threads, state, runs=None):
     matches = [t for t in threads or [] if isinstance(t.get('title'), str)
                and t['title'].startswith(f'#{n}: ')
                and (branch is None or t.get('branch') == branch)]
-    found, error = choose(f'builder:{n}', matches, state, threads)
+    found, error = choose(f'builder:{n}', matches, state, threads, missing)
     if runs is UNSET and error == f'no thread matches builder:{n}':
         error += ', and no private run map LAUNCH_FLEET_RUNS was restored'
     return found, error
@@ -136,7 +136,7 @@ def review_keys(state):
     return keys
 
 
-def reviewer_thread(n, commit, threads, state, claim=None, retired=(), key=None):
+def reviewer_thread(n, commit, threads, state, claim=None, retired=(), key=None, missing=None):
     key = key or str(n)
     saved = state.get(f'review:{key}:claim:{claim}')
     if saved:
@@ -145,7 +145,7 @@ def reviewer_thread(n, commit, threads, state, claim=None, retired=(), key=None)
     pull = f'(?i:{re.escape(key)})' if '#' in key else f'#{n}'
     pattern = re.compile(rf'Review {pull} at ([0-9a-f]{{1,40}})')
     matches = [t for t in threads or [] if (m := pattern.fullmatch(t.get('title') or '')) and commit.startswith(m[1])]
-    return choose(f'review:{key}:{commit}', matches, state, threads)
+    return choose(f'review:{key}:{commit}', matches, state, threads, missing)
 
 
 def reviewer_run(n, runs):
@@ -155,7 +155,7 @@ def reviewer_run(n, runs):
     return None, f'no live private driver run for reviewer #{n}'
 
 
-def annotate(world, repo, private, threads, state):
+def annotate(world, repo, private, threads, state, missing=None):
     runs = driver_runs(repo)
     state = review_keys(state)
 
@@ -186,7 +186,7 @@ def annotate(world, repo, private, threads, state):
                     line = line.replace('review failed ', 'review given up ', 1)
             branch = re.fullmatch(r'start checked, branch ([A-Za-z0-9._/-]+)', line)
             if not legacy and (line == 'started' or branch):
-                c['resolvedThread'], c['recordError'] = builder_thread(obj['number'], branch[1] if branch else None, threads, state, runs)
+                c['resolvedThread'], c['recordError'] = builder_thread(obj['number'], branch[1] if branch else None, threads, state, runs, missing)
             review = re.fullmatch(rf'(review started|re-check sent|review told again|review given up) ({SHA})(?:: .+)?', line)
             if review:
                 kind, commit = review.groups()
@@ -209,7 +209,7 @@ def annotate(world, repo, private, threads, state):
                     if driver_review:
                         identity = None
                     elif identity is None:
-                        identity, _ = reviewer_thread(obj['number'], start or commit, threads, routes, start_claim, retired, key)
+                        identity, _ = reviewer_thread(obj['number'], start or commit, threads, routes, start_claim, retired, key, missing)
                     c['archiveThread'] = identity
                     if identity:
                         retired.add(identity)
@@ -226,7 +226,7 @@ def annotate(world, repo, private, threads, state):
                 elif driver_review and not legacy and not any(record.get('givenUp') for record in span):
                     c['resolvedThread'], c['recordError'] = reviewer_run(obj['number'], runs)
                 elif not legacy and not driver_review:
-                    c['resolvedThread'], c['recordError'] = reviewer_thread(obj['number'], start, threads, routes, start_claim, retired, key)
+                    c['resolvedThread'], c['recordError'] = reviewer_thread(obj['number'], start, threads, routes, start_claim, retired, key, missing)
                 if c.get('resolvedThread') in retired:
                     c['recordError'] = 'reviewer was already given up on this pull request'
                 if any(record.get('givenUp') for record in span):
@@ -335,7 +335,46 @@ def ops_pass(view, effect_boundary, effects=None):
     return results
 
 
+REPO = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}')
+
+
+def init_maps(argv):
+    if len(argv) != 2 or not REPO.fullmatch(argv[0]):
+        print('records: init needs OWNER/NAME and an absolute directory', file=sys.stderr)
+        return 2
+    folder = Path(argv[1])
+    if not folder.is_absolute():
+        print('records: init needs an absolute directory', file=sys.stderr)
+        return 2
+    try:
+        folder = folder.resolve(strict=True)
+    except OSError:
+        print('records: init needs an absolute directory', file=sys.stderr)
+        return 2
+    if not folder.is_dir():
+        print('records: init needs an absolute directory', file=sys.stderr)
+        return 2
+    files = (
+        ('LAUNCH_FLEET_STATE', 'threads.json', {'repo': argv[0], 'threads': {}}),
+        ('LAUNCH_FLEET_RUNS', 'runs.json', {'repo': argv[0], 'runs': {}}),
+        ('LAUNCH_FLEET_LOOPS', 'loops.json', {'repo': argv[0], 'loops': {}}),
+    )
+    for env, name, body in files:
+        path = folder / name
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, 'w') as stream:
+                stream.write(json.dumps(body, separators=(',', ':')) + '\n')
+        print('%s %s' % (env, path))
+    return 0
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == 'init':
+        return init_maps(sys.argv[2:])
     if sys.argv[1:] == ['ops-pass']:
         def refuse(*_):
             raise RuntimeError('OB-A1: effects are disabled')
@@ -374,7 +413,11 @@ def main():
         return 2
     try:
         threads = discover() if os.environ.get('LAUNCH_FLEET_GITHUB_ONLY') != '1' and needed(world) else None
-        json.dump(annotate(world, repo, private == 'true', threads, state), sys.stdout)
+        missing = None
+        if not os.environ.get('LAUNCH_FLEET_STATE'):
+            shape = json.dumps({'repo': repo, 'threads': {}}, separators=(',', ':'))
+            missing = 'thread discovery is out of reach; set LAUNCH_FLEET_STATE to an absolute file ' + shape
+        json.dump(annotate(world, repo, private == 'true', threads, state, missing), sys.stdout)
     except (OSError, ValueError, KeyError, TypeError):
         print('records: private routing state could not be read', file=sys.stderr)
         return 2

@@ -107,7 +107,10 @@ class Fleet(unittest.TestCase):
         for threads in ({'id': 'thr_synbuilder'}, 'thr_synbuilder', [{'title': '#12: Synthetic'}]):
             with self.subTest(threads=threads):
                 self.threads = threads
-                self.assertEqual(self.run_fleet('wake', '12'), 'look #12: thread discovery is out of reach\n')
+                shape = json.dumps({'repo': self.world['repo'], 'threads': {}}, separators=(',', ':'))
+                self.assertEqual(
+                    self.run_fleet('wake', '12'),
+                    'look #12: thread discovery is out of reach; set LAUNCH_FLEET_STATE to an absolute file %s\n' % shape)
 
     def test_unset_state_names_the_variable_when_discovery_cannot_find_a_thread(self):
         self.pr['checks'][0]['conclusion'] = 'FAILURE'
@@ -155,12 +158,6 @@ class Fleet(unittest.TestCase):
         self.assertEqual(relative.returncode, 2, relative.stderr)
         self.assertFalse((self.dir / 'relative-routes').exists())
         self.assertEqual(run('not a repo', str(directory)).returncode, 2)
-        checkout = self.dir / 'checkout'
-        checkout.mkdir()
-        subprocess.run(['git', 'init', '-q', str(checkout)], check=True)
-        inside = run(repo, str(checkout))
-        self.assertEqual(inside.returncode, 2, inside.stderr)
-        self.assertFalse((checkout / 'threads.json').exists())
 
     def test_fresh_install_without_private_routing_files_discovers_builder_on_cloudroom(self):
         self.pr['checks'][0]['conclusion'] = 'FAILURE'

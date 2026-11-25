@@ -1029,7 +1029,7 @@ expect 'a failed claim whose reason names a thread does not retire that reviewer
 re-check #31 for #12 at $S31F: tell its reviewer, thread thr_synrev31 (retry after "review failed $S31F: thread thr_synrev31 never got the message")
 EOF
 expect 'a review record that names no thread: look, since its reviewer cannot be checked' 0 check.json 'pr31 | pr_say(31; 3101; "11:00"; "launch-fleet: review started \(sha(31))")' -- check <<EOF
-look #31: thread discovery is out of reach
+look #31: thread discovery is out of reach; set LAUNCH_FLEET_STATE to an absolute file {"repo":"synthetic-owner/synthetic-repo","threads":{}}
 EOF
 expect 'a review claim with no outcome after 10 minutes is reconciled' 0 check.json 'pr31 | pr_say(31; 3101; "11:40"; "launch-fleet: review starting \(sha(31))")' -- check <<EOF
 reconcile review #31 for #12 at $S31: claimed at 2026-11-01T11:40:00Z, no outcome after 10 minutes

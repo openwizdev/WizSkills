@@ -6,7 +6,7 @@ version: 1.0.0
 
 # Launch fleet
 
-A **fleet** is the agents working one approved plan graph. Each spec has its own loop, and each due run is one fresh, finite **wake**: it reads GitHub and the private routing, does its due lines, records each outcome on GitHub and ends. GitHub holds the fleet's memory; no wake relies on an agent's message, an earlier conversation or anyone's memory. Project settings live in `docs/agents/` (`fleet.md`, `triage-labels.md`, and `host.md`, where builders run): read them through `context.py fleet` in step 1 below, never guess; if they are missing, run `setup` first.
+A **fleet** is the agents working one approved plan graph. Each spec has its own loop, and each due run is one fresh, finite **wake**: it reads GitHub and the private routing, does its due lines, records each outcome on GitHub and ends. GitHub holds the fleet's memory; no wake relies on an agent's message, an earlier conversation or anyone's memory. Read project settings (`docs/agents/`: `fleet.md`, `triage-labels.md`, `host.md`) via `context.py fleet` in step 1, never guess; if missing, run `setup` first.
 
 ## Guards
 

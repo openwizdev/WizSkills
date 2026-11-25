@@ -93,6 +93,13 @@ REVIEW_SORT_CHOICES = {'Gemini Neon Low': dict(provider='antigravity', model=Non
 REVIEW_SORT_LINE = re.compile(r'^Review sort:(.*)$')
 REVIEW_SORT_TABLE = re.compile(r'^\|[ \t]*Review sort[ \t]*(?:\||$)')
 FENCE = re.compile(r'^ {0,3}(`{3,}|~{3,})(.*)$')
+FINDING_ID = re.compile(r'^R[1-9][0-9]*$')
+SORT_LINE = re.compile(r'^(R[1-9][0-9]*):\s*(blocking|polish)$')
+PR_REF = re.compile(r'^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+#[1-9][0-9]{0,8}$')
+COMMIT_SHA = re.compile(r'^[0-9a-f]{40}$')
+POS_INT = re.compile(r'^[1-9][0-9]{0,8}$')
+SPOT_CHECKS = {'match': ' (spot-check: match)', 'mismatch': ' (spot-check: mismatch; revert to off)'}
+DEFAULT_REVIEW_SCRIPT = "<review-ticket's folder>/scripts/review.py"
 
 
 def _lines(text):
@@ -308,6 +315,199 @@ def read_review_sort(text):
     if choice is None:
         raise ValueError(f'fleet settings: unsupported Review sort value {value!r}')
     return dict(choice)
+
+
+def _parse_finding_ids(raw, allow_empty=False):
+    if raw is None or raw == '':
+        if allow_empty:
+            return []
+        raise ValueError('expected one or more finding ids')
+    ids = [part.strip() for part in raw.split(',')]
+    if any(not FINDING_ID.fullmatch(fid) for fid in ids):
+        raise ValueError(f'bad finding id list {raw!r}')
+    if len(set(ids)) != len(ids):
+        raise ValueError(f'duplicate finding id in {raw!r}')
+    return ids
+
+
+def parse_review_sort_output(text, expected_ids):
+    if not isinstance(text, str):
+        return None, 'missing sort output'
+    lines = [line.strip() for line in _lines(text) if line.strip()]
+    if not lines:
+        return None, 'empty sort output'
+    labels = {}
+    expected_set = set(expected_ids)
+    for line in lines:
+        match = SORT_LINE.fullmatch(line)
+        if not match:
+            return None, 'malformed sort output'
+        fid, label = match.groups()
+        if fid in labels:
+            return None, f'duplicate finding {fid}'
+        if fid not in expected_set:
+            return None, f'unknown finding {fid}'
+        labels[fid] = label
+    missing = [fid for fid in expected_ids if fid not in labels]
+    if missing:
+        return None, f'missing finding {", ".join(missing)}'
+    return [(fid, labels[fid]) for fid in expected_ids], None
+
+
+def route_review_sort(pr, head, expected_ids, sort_text, enabled, ticket_repo, ticket, spec,
+                      already_polish=(), spot_check=None, review_script=DEFAULT_REVIEW_SCRIPT,
+                      finding_meta=None, fallback_reason=None):
+    if not isinstance(pr, str) or not PR_REF.fullmatch(pr):
+        raise ValueError(f'bad pull request ref {pr!r}')
+    if not isinstance(head, str) or not COMMIT_SHA.fullmatch(head):
+        raise ValueError(f'bad commit sha {head!r}')
+    if not expected_ids or any(not FINDING_ID.fullmatch(fid) for fid in expected_ids) \
+            or len(set(expected_ids)) != len(expected_ids):
+        raise ValueError(f'bad expected finding ids {expected_ids!r}')
+    if not isinstance(ticket_repo, str) or not REPO.fullmatch(ticket_repo):
+        raise ValueError(f'bad ticket repository {ticket_repo!r}')
+    if not POS_INT.fullmatch(str(ticket)) or not POS_INT.fullmatch(str(spec)):
+        raise ValueError('ticket and spec must be positive integers')
+    already_set = set(already_polish)
+    if any(fid not in expected_ids for fid in already_set):
+        raise ValueError('already-polish ids must be a subset of --ids')
+    if spot_check is not None and spot_check not in SPOT_CHECKS:
+        raise ValueError(f'bad spot-check value {spot_check!r}')
+    if not isinstance(review_script, str) or not review_script.strip():
+        raise ValueError('review-script must be non-empty')
+
+    open_blocking = [fid for fid in expected_ids if fid not in already_set]
+    today_msg = (
+        f'The review of pull request {pr} at {head} asks for changes: read the report there. '
+        'Fix or dispute each open blocking finding once, then hand back a new green head.'
+    )
+
+    def fallback(reason):
+        return dict(
+            mode='fallback',
+            reason=reason,
+            record=None,
+            blocking=open_blocking,
+            polish=[],
+            builder_message=today_msg,
+            follow_ups=[],
+            findings_record=f'launch-fleet: findings sent {head}',
+        )
+
+    if not enabled:
+        return fallback(fallback_reason or 'off')
+
+    ordered, err = parse_review_sort_output(sort_text, expected_ids)
+    if err is not None:
+        return fallback(err)
+
+    labels_str = ', '.join(f'{fid} {label}' for fid, label in ordered)
+    suffix = SPOT_CHECKS[spot_check] if spot_check else ''
+    record = f'launch-fleet: review sort {head}: {labels_str}{suffix}'
+    blocking = [fid for fid, label in ordered if label == 'blocking']
+    polish = [fid for fid, label in ordered if label == 'polish' and fid not in already_set]
+    if blocking:
+        builder_message = (
+            f'The review of pull request {pr} at {head} asks for changes: read the report and the '
+            f'review-sort record there. Fix or dispute only these blocking findings once: '
+            f'{", ".join(blocking)}, then hand back a new green head.'
+        )
+        findings_record = f'launch-fleet: findings sent {head}'
+    else:
+        builder_message = None
+        findings_record = f'launch-fleet: findings sent {head}: sorted polish only'
+
+    meta_map = finding_meta if isinstance(finding_meta, dict) else {}
+    follow_ups = []
+    for fid in polish:
+        meta = meta_map.get(fid) if isinstance(meta_map.get(fid), dict) else {}
+        title = meta.get('title') if isinstance(meta.get('title'), str) and meta.get('title') else f'Follow-up for {fid}'
+        finding_path = (meta.get('finding') if isinstance(meta.get('finding'), str) and meta.get('finding')
+                        else f'<finding file for {fid}>')
+        follow_ups.append(dict(
+            id=fid,
+            argv=[
+                'python3', '-I', review_script, 'follow-up',
+                '--repo', ticket_repo, '--ticket', str(ticket), '--spec', str(spec),
+                '--pr', pr, '--head', head, '--id', fid,
+                '--title', title, '--finding', finding_path,
+            ],
+        ))
+    return dict(
+        mode='sorted',
+        reason=None,
+        record=record,
+        blocking=blocking,
+        polish=polish,
+        builder_message=builder_message,
+        follow_ups=follow_ups,
+        findings_record=findings_record,
+    )
+
+
+def _run_review_sort_route(args):
+    opts = {}
+    i = 0
+    positional = []
+    known = {'--repo', '--pr', '--head', '--ids', '--ticket-repo', '--ticket', '--spec',
+             '--already-polish', '--spot-check', '--review-script', '--finding-meta'}
+    while i < len(args):
+        arg = args[i]
+        if arg in known:
+            if i + 1 >= len(args) or arg in opts:
+                raise ValueError(f'bad option {arg}')
+            opts[arg] = args[i + 1]
+            i += 2
+        elif arg == '-' or not arg.startswith('--'):
+            positional.append(arg)
+            i += 1
+        else:
+            raise ValueError(f'unknown option {arg}')
+    required = ('--repo', '--pr', '--head', '--ids', '--ticket-repo', '--ticket', '--spec')
+    if any(k not in opts for k in required) or len(positional) != 1:
+        raise ValueError('review-sort-route requires --repo --pr --head --ids --ticket-repo --ticket --spec SORT_FILE|-')
+    repo = opts['--repo']
+    if not REPO.fullmatch(repo):
+        raise ValueError(f'not a repository: {repo!r}')
+    expected_ids = _parse_finding_ids(opts['--ids'])
+    already_polish = _parse_finding_ids(opts.get('--already-polish'), allow_empty=True)
+    finding_meta = None
+    if '--finding-meta' in opts:
+        finding_meta = json.loads(Path(opts['--finding-meta']).read_text(), object_pairs_hook=records.unique)
+        if not isinstance(finding_meta, dict):
+            raise ValueError('--finding-meta must be a JSON object')
+    enabled = False
+    fallback_reason = None
+    try:
+        choice = read_review_sort(read_fleet(repo))
+        enabled = choice is not None
+        if not enabled:
+            fallback_reason = 'off'
+    except (OSError, ValueError) as error:
+        enabled = False
+        fallback_reason = f'settings error: {error}'
+    sort_source = positional[0]
+    sort_text = None
+    if enabled:
+        try:
+            sort_text = sys.stdin.read() if sort_source == '-' else Path(sort_source).read_text()
+        except OSError:
+            sort_text = None
+    return route_review_sort(
+        pr=opts['--pr'],
+        head=opts['--head'],
+        expected_ids=expected_ids,
+        sort_text=sort_text,
+        enabled=enabled,
+        ticket_repo=opts['--ticket-repo'],
+        ticket=opts['--ticket'],
+        spec=opts['--spec'],
+        already_polish=already_polish,
+        spot_check=opts.get('--spot-check'),
+        review_script=opts.get('--review-script', DEFAULT_REVIEW_SCRIPT),
+        finding_meta=finding_meta,
+        fallback_reason=fallback_reason,
+    )
 
 
 def read_fleet(repo):
@@ -666,6 +866,9 @@ def main():
             choice = read_review_sort(read_fleet(args[2]))
             print('off' if choice is None else _format_flags(choice))
             return 0
+        elif len(args) >= 1 and args[0] == 'review-sort-route':
+            print(json.dumps(_run_review_sort_route(args[1:]), sort_keys=True))
+            return 0
         elif len(args) == 5 and args[:2] == ['loop-agent', '--repo']:
             if not REPO.fullmatch(args[2]) or not LOOP.fullmatch(args[3]):
                 raise ValueError('a repository and a loop id are required')
@@ -679,8 +882,8 @@ def main():
         else:
             print('usage: ops-starts.py pass WORLD.json [--bench BENCH.json] | flags --repo OWNER/REPO [START] | '
                   'host --repo OWNER/REPO START | reviewer-order --repo OWNER/REPO [--refused FAMILY]... | '
-                  'review-sort --repo OWNER/REPO | loop-agent --repo OWNER/REPO LOOP_ID LIST.json|- | '
-                  'report BENCH.json', file=sys.stderr)
+                  'review-sort --repo OWNER/REPO | review-sort-route ... | '
+                  'loop-agent --repo OWNER/REPO LOOP_ID LIST.json|- | report BENCH.json', file=sys.stderr)
             return 2
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f'ops-starts: refused: {error}', file=sys.stderr)

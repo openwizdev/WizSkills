@@ -1,6 +1,6 @@
 ---
 name: to-tickets
-description: Turn a spec into sized tickets and approve the plan by its own checks (links, relies, sizes, width, owned paths), recording a machine plan approval. Use when to-spec hands over a spec, or to re-cut a changed plan. Send unconfirmed grills to grill.
+description: Split a spec into sized tickets and check the plan. Use when to-spec hands over a spec or when an existing ticket plan needs revision.
 version: 0.4.0
 ---
 
@@ -53,6 +53,9 @@ step 4 hold you to them. See [the ticket and graph inputs](tickets.md).
 
 ## 3. Write and verify the tickets
 
+Before you create or show the tickets, run the
+[fidelity pass](../to-spec/fidelity.md) on the whole drafted set: drop or fix
+each item, or keep it and tell the user why in one line.
 Create each issue without a ready label, blockers first, in the spec's
 milestone, with its native parent and blockers. Read back every issue: title,
 body, parent, milestone, labels and blockers. Draw the read-back graph with

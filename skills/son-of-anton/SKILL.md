@@ -1,6 +1,6 @@
 ---
 name: son-of-anton
-description: Attack your own factory on a schedule through huntr's attack mode and file what is proven. Use when the Son of Anton loop fires, or when someone asks to attack or red-team their own factory. Small code fixes are huntr; one known bug is diagnose.
+description: Attack your own factory through huntr's attack mode and file proven issues. Use when the Son of Anton loop fires or someone asks to attack or red-team their factory.
 version: 0.1.0
 ---
 

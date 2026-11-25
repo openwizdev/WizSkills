@@ -104,14 +104,14 @@ OPTIONS = {
     'progress': ({'--state', '--spec', '--openwiz'}, set(), set()),
     'next': ({'--state'}, set(), {'--setup-state'}),
 }
-FAMILY = {'claude-code': 'claude', 'codex': 'gpt'}
-REVIEWER = {'claude': 'Reviewer for Claude-built', 'gpt': 'Reviewer for GPT-built'}
+FAMILY = {'claude-code': 'claude', 'codex': 'gpt', 'antigravity': 'gemini'}
+REVIEWER = {'claude': 'Reviewer for Claude-built', 'gpt': 'Reviewer for GPT-built', 'gemini': 'Reviewer for Gemini-built'}
 SETTINGS = Path(__file__).resolve().parents[2] / 'setup/scripts/settings.py'
 FLEET_MD = Path('docs/agents/fleet.md')
 OLDER = ('Builder', 'Builder for small tickets', REVIEWER['claude'], REVIEWER['gpt'], 'Fixer')
 RECOMMENDED = {'claude': ('claude-code', 'claude-opus-5-5', 'medium'), 'gpt': ('codex', 'gpt-6.2-sol', 'medium')}
-WRITTEN_NAMES = {'claude-code': 'Claude Code', 'codex': 'Codex', 'claude-opus-5-5': 'Opus 5.5',
-                 'claude-sonnet-5-5': 'Sonnet 5.5', 'gpt-6.2-sol': 'Sol 6.2'}
+WRITTEN_NAMES = {'claude-code': 'Claude Code', 'codex': 'Codex', 'antigravity': 'Antigravity',
+                 'claude-opus-5-5': 'Opus 5.5', 'claude-sonnet-5-5': 'Sonnet 5.5', 'gpt-6.2-sol': 'Sol 6.2'}
 STATES = ('ready', 'building', 'in_review', 'changes_requested', 'merged', 'held', 'blocked')
 NOTHING = 'nothing started.'
 # setup.v1's current-evidence window and its codes that establish `verified`.
@@ -2311,7 +2311,8 @@ def older_rules(text):
             found[name].append(line)
     rules = {key: agent(found[title]) if title in found else None for key, title in (
         ('builder', 'Builder'), ('builder_small', 'Builder for small tickets'),
-        ('reviewer_claude', REVIEWER['claude']), ('reviewer_gpt', REVIEWER['gpt']))}
+        ('reviewer_claude', REVIEWER['claude']), ('reviewer_gpt', REVIEWER['gpt']),
+        ('reviewer_gemini', REVIEWER['gemini']))}
     rules['orchestrator'] = rules['builder']
     return rules
 

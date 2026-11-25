@@ -13,6 +13,9 @@ const PLAYWRIGHT = "playwright-core@1.64.1";
 const HOME = process.env.ANIMATIC_HOME ?? path.join(os.homedir(), ".cache", "animatic");
 const BANNED = /\b(bench(mark)?(s|ed|ing)?|benches|graphs?)\b/i;
 const TEXT_MAX = 70;
+const LOUDNESS_LUFS = -16;
+const PEAK_DBTP = -1.5;
+const AAC_PEAK_OVERSHOOT_DB = 1;
 
 const fail = (reasons, code = 1) => {
   for (const r of [].concat(reasons)) console.error(`animatic: ${r}`);
@@ -180,6 +183,18 @@ const loudest = (f) => {
   return Number(((r.stderr ?? "").match(/max_volume: (-?[\d.]+) dB/) ?? [])[1]);
 };
 
+const loudness = (f) => {
+  const r = spawnSync("ffmpeg", ["-nostdin", "-hide_banner", "-nostats", ...fileProtocol, "-i", f,
+    "-af", `loudnorm=I=${LOUDNESS_LUFS}:TP=${PEAK_DBTP}:LRA=11:print_format=json`, "-vn", "-f", "null", "-"], { encoding: "utf8" });
+  const found = (r.stderr ?? "").match(/\{[^{}]*"input_i"[^{}]*\}/);
+  if (r.status !== 0 || !found) throw new Error("cannot measure the narration's loudness");
+  const m = JSON.parse(found[0]);
+  if (![m.input_i, m.input_tp, m.input_lra, m.input_thresh, m.target_offset].every((v) => Number.isFinite(Number(v)))) {
+    throw new Error("the narration has no measurable loudness");
+  }
+  return m;
+};
+
 const voice = (text, wav) => {
   const base = wav.replace(/\.wav$/, ".src");
   const dir = path.dirname(base);
@@ -266,10 +281,20 @@ try {
     "-frames:v", "1", path.join(build, "sheet.png")]);
 
   const stage = fs.mkdtempSync(path.join(path.dirname(out), `.${path.basename(out, ".mp4")}.partial-`));
+  const stitched = path.join(stage, "stitched.mp4");
   const partial = path.join(stage, "spec.mp4");
+  let loud;
   try {
     run("ffmpeg", [...args, "-filter_complex", filters.join(";"), "-map", "[v]", "-map", "[a]", "-r", "30",
-      "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", partial]);
+      "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k", stitched]);
+    const m = loudness(stitched);
+    run("ffmpeg", ["-nostdin", "-v", "error", "-y", ...fileProtocol, "-i", stitched, "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy",
+      "-af", `loudnorm=I=${LOUDNESS_LUFS}:TP=${PEAK_DBTP - AAC_PEAK_OVERSHOOT_DB}:LRA=11:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}`
+        + `:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true,aformat=sample_rates=48000:channel_layouts=stereo`,
+      "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", partial]);
+    loud = loudness(partial);
+    if (Math.abs(Number(loud.input_i) - LOUDNESS_LUFS) > 1.5) throw new Error(`the narration measures ${loud.input_i} LUFS, not about ${LOUDNESS_LUFS}`);
+    if (Number(loud.input_tp) > PEAK_DBTP + 0.5) throw new Error(`the narration peaks at ${loud.input_tp} dBTP, over ${PEAK_DBTP}`);
     const meta = JSON.parse(run("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", ...fileProtocol, partial]));
     const kinds = meta.streams.map((s) => s.codec_type).sort().join(",");
     if (kinds !== "audio,video") throw new Error(`the MP4 holds ${kinds}, not one video and one audio track`);
@@ -287,7 +312,8 @@ try {
   });
   console.log(summary);
   console.log(timeline.join("\n"));
-  console.log(`${path.basename(out)}: ${total.toFixed(1)} s, ${moments.length} moments, voice ${flags["tts-command"] ? "your command" : engine}; sheet build/sheet.png`);
+  console.log(`${path.basename(out)}: ${total.toFixed(1)} s, ${moments.length} moments, voice ${flags["tts-command"] ? "your command" : engine}, `
+    + `narration ${Number(loud.input_i).toFixed(1)} LUFS, peak ${Number(loud.input_tp).toFixed(1)} dBTP; sheet build/sheet.png`);
   console.log(warnings.length ? warnings.map((w) => `WARN ${w}`).join("\n") : "no warnings");
 } catch (e) {
   fail(e.message);

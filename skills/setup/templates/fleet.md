@@ -90,6 +90,6 @@ Source: <linked source files, or decider, date and plain decision with a Markdow
 | Record authors | `<app-slug>[bot]`, `<the login of the account the fleet falls back to>` |
 | App identity | off |
 
-`App identity` stays `off`: nothing reads this row yet (OpenWiz #2394), so no value lets agents or `loop.sh` mint the App's token (`openwiz github token`).
+The App identity row stays `off` until the user turns it on with exactly `on` (OpenWiz #2835). Any other value, a second such row, or the table moved or wrapped in other markup reads as off, and `settings.py check` names it.
 
 Source: <the App's settings, and `gh api user` on the account the fleet runs as>.

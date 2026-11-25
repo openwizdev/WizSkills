@@ -1,5 +1,3 @@
-"""Setup installs a model server only after an explicit yes."""
-
 import json
 import tempfile
 import unittest

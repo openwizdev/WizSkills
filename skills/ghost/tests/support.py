@@ -1,5 +1,3 @@
-"""Fixture homes and a fake openwiz for the ghost skill's tests."""
-
 import json
 import os
 import subprocess

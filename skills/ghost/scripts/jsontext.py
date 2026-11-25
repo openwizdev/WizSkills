@@ -1,5 +1,3 @@
-"""One JSON reader for the ghost skill: an object, each key once, no trailing junk."""
-
 import json
 
 

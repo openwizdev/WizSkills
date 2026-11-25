@@ -1,5 +1,3 @@
-"""The learn pass keeps a skill-file change only when the bench does not drop."""
-
 import json
 import stat
 import unittest

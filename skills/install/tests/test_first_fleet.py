@@ -1245,6 +1245,9 @@ real.arguments(sys.argv[1:])  # what launch hands over must pass the real sessio
 with open(os.environ['FAKE_SESSION_LOG'], 'a') as log:
     log.write(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'adapters': os.environ.get('OPENWIZ_ADAPTERS'),
                           'github_only': os.environ.get('LAUNCH_FLEET_GITHUB_ONLY'),
+                          'state': os.environ.get('LAUNCH_FLEET_STATE'),
+                          'runs': os.environ.get('LAUNCH_FLEET_RUNS'),
+                          'loops': os.environ.get('LAUNCH_FLEET_LOOPS'),
                           'heartbeat': Path(os.environ['FAKE_HEARTBEAT_ON']).exists()}) + '\n')
 script = json.loads(Path(os.environ['FAKE_SESSION_SCRIPT']).read_text())
 sys.stdout.write(script['stdout'])
@@ -1480,6 +1483,28 @@ class LocalSession(unittest.TestCase):
         self.assertEqual(len(self.log(road, 'session.log')), 1, 'the opt-in starts no session')
         watch = road.tool({'tool': ['progress', '--spec', '900'], 'progress': ['building', 'building', 'blocked']})
         self.assertIn("Spec #900's local heartbeat is active", watch.stdout)
+
+    def test_a_fresh_launch_creates_private_routing_files_and_hands_them_to_the_session(self):
+        road = self.road()
+        _, yes = self.launched(road)
+        self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
+        folder = road.state.parent / 'fleet-routing'
+        expected = {
+            'state': (folder / 'threads.json', {'repo': road.repo, 'threads': {}}),
+            'runs': (folder / 'runs.json', {'repo': road.repo, 'runs': {}}),
+            'loops': (folder / 'loops.json', {'repo': road.repo, 'loops': {}}),
+        }
+        handed = self.log(road, 'session.log')[0]
+        for key, (path, body) in expected.items():
+            self.assertEqual(handed[key], str(path))
+            self.assertEqual(json.loads(path.read_text()), body)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        kept = {'repo': road.repo, 'threads': {'builder:901': 'thr_synthetic'}}
+        expected['state'][0].write_text(json.dumps(kept) + '\n')
+        self.script(road, 0, 'session: tick 1: nothing due\nsession: done: spec #900: every ticket is closed\n')
+        carried = road.helper(['launch', '--spec', '900', '--carry-on'])
+        self.assertEqual(carried.returncode, 0, carried.stdout + carried.stderr)
+        self.assertEqual(json.loads(expected['state'][0].read_text()), kept)
 
     def test_carry_on_runs_the_session_again_with_the_saved_driver_folder_and_github_only(self):
         road = self.road()

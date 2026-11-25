@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -1169,6 +1170,121 @@ class PreferCut(unittest.TestCase):
                 out = self.prefer(valid, cyclic)
                 self.assertEqual((out.returncode, out.stdout), (2, ""))
                 self.assertEqual(out.stderr, "prefer: b.json: a cycle: A B can never start\n")
+
+
+MACHINE_GH = r'''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+w = json.loads(Path(os.environ["FAKE_WORLD"]).read_text())
+spec = str(w["spec"]["number"])
+def issue(num):
+    if str(num) == spec:
+        return None
+    return w["tickets"][str(num)]
+if args == ["repo", "view", "--json", "isPrivate,nameWithOwner"]:
+    print(json.dumps(w["repo"]))
+elif args[:3] == ["api", "-H", "Accept: application/vnd.github.raw+json"]:
+    name = args[3].rsplit("/", 1)[-1]
+    print(w[{"triage-labels.md": "labels_doc", "issue-tracker.md": "tracker_doc", "fleet.md": "fleet_doc"}[name]], end="")
+elif args == ["issue", "view", spec, "--json", "body,createdAt,subIssues"]:
+    s = w["spec"]
+    print(json.dumps({"body": s["body"], "createdAt": s["createdAt"],
+                      "subIssues": {"totalCount": len(s["tickets"]),
+                                    "nodes": [{"number": n} for n in s["tickets"]]}}))
+elif args == ["api", "--paginate", "repos/{owner}/{repo}/issues/" + spec + "/comments?per_page=100"]:
+    for page in w["comments"]:
+        print(json.dumps(page))
+elif args[:2] == ["issue", "view"] and "--jq" in args:
+    num, fields, query = args[2], args[args.index("--json") + 1], args[args.index("--jq") + 1]
+    if num == spec and fields == "subIssues":
+        print(len(w["spec"]["tickets"]))
+        for n in w["spec"]["tickets"]:
+            print(n)
+    elif fields == "body" and query == ".body":
+        body = w["spec"]["body"] if num == spec else issue(num)["body"]
+        sys.stdout.write(body if body.endswith("\n") else body + "\n")
+    elif fields == "number,title,blockedBy":
+        ticket = issue(num)
+        blockers = " ".join("#%d" % n for n in ticket["blockedBy"]) or "none"
+        print("#%d\t%s\t%s" % (ticket["number"], blockers, ticket["title"]))
+    else:
+        sys.exit("unexpected jq: " + repr(args))
+else:
+    sys.exit("unexpected gh call: " + repr(args))
+'''
+
+
+class MachineApproval(unittest.TestCase):
+    def world(self, title="Synthetic ticket 173", user="openwiz[bot]", body=None):
+        spec = {"number": 172, "createdAt": "2026-11-01T00:00:00Z", "body": "Synthetic problem.\n",
+                "tickets": [173]}
+        tickets = {"173": {"number": 173, "title": title, "body": "Synthetic ticket body.\n", "blockedBy": []}}
+        return {
+            "labels_doc": LABELS, "fleet_doc": FLEET,
+            "tracker_doc": "# Tracker\n\n- **Private records:** `jparker2006/ClosedWiz`, permanently private.\n",
+            "repo": {"isPrivate": False, "nameWithOwner": "synthetic-owner/synthetic-repo"},
+            "spec": spec, "tickets": tickets,
+            "comments": [[{"id": 100, "user": {"login": user}, "body": body or ""}]],
+        }
+
+    def check(self, world, status=0, reason=None):
+        with tempfile.TemporaryDirectory(prefix="machine-approval-") as folder:
+            tmp = Path(folder)
+            (tmp / "gh").write_text(MACHINE_GH)
+            (tmp / "gh").chmod(0o700)
+            world_path = tmp / "world.json"
+            world_path.write_text(json.dumps(world))
+            env = dict(os.environ, PATH=str(tmp) + os.pathsep + os.environ["PATH"],
+                       FAKE_WORLD=str(world_path), FAKE_SPEC="172")
+            revision = subprocess.run(["sh", str(HERE.parent / "revision.sh"), "172"], env=env,
+                                      capture_output=True, text=True)
+            self.assertEqual(revision.returncode, 0, revision.stderr)
+            fingerprint = hashlib.sha256(revision.stdout.encode()).hexdigest()
+            if world["comments"][0][0]["body"] == "":
+                rows = "| #173 | %s | none | ready-for-agent |" % world["tickets"]["173"]["title"]
+                posted = (
+                    "**Machine plan approval, 2026-11-19, revision 1:** "
+                    "links, relies, sizes, width and owned paths passed.\n"
+                    "Grill confirmed: https://github.com/synthetic-owner/synthetic-private/issues/1#issuecomment-1\n"
+                    "\n"
+                    "Checks: 1 tickets; links 0; relies 0; sizes S 1, M 0, L 0; width: chain 1, widest 1; "
+                    "owned paths 1.\n"
+                    "\n"
+                    "| Ticket | Title | Blocked by | Label |\n"
+                    "| --- | --- | --- | --- |\n"
+                    + rows + "\n"
+                    "\n"
+                    "Fingerprint: `%s`\n"
+                    "\n"
+                    "<details><summary>Revision text</summary>\n"
+                    "\n"
+                    "```text\n" % fingerprint
+                    + revision.stdout
+                    + "```\n\n</details>\n"
+                )
+                world["comments"][0][0]["body"] = posted
+                world_path.write_text(json.dumps(world))
+            result = subprocess.run(["sh", str(CHECKER), "172"], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, status, result.stdout + result.stderr)
+            if status == 0:
+                self.assertEqual(result.stdout, "check-approval.sh: #172 approval table is valid\n")
+                self.assertEqual(result.stderr, "")
+            else:
+                self.assertIn(reason, result.stderr)
+            return result
+
+    def test_a_current_machine_plan_approval_is_valid(self):
+        self.check(self.world())
+
+    def test_a_machine_plan_approval_for_a_changed_plan_is_stale(self):
+        world = self.world()
+        self.check(world)
+        world["tickets"]["173"]["title"] = "Synthetic ticket 173 renamed"
+        self.check(world, status=1, reason="stale")
+
+    def test_an_outsiders_machine_record_is_not_an_approval(self):
+        self.check(self.world(user="synthetic-outsider"), status=1, reason="no posted plan graph approval")
 
 
 if __name__ == "__main__":

@@ -1338,5 +1338,87 @@ class Session(unittest.TestCase):
              'model': 'synthetic-table-reviewer'}])
 
 
+class OverloadAdmission(unittest.TestCase):
+    def test_a_missing_overload_input_does_not_latch_and_resume_clears_a_pause(self):
+        now = 1800000000
+        with tempfile.TemporaryDirectory(prefix='overload-') as folder:
+            tmp = Path(folder)
+            log = tmp / 'gh.log'
+            bindir = tmp / 'bin'
+            bindir.mkdir()
+            (bindir / 'gh').write_text(
+                '#!/usr/bin/env python3\n'
+                'import os, sys\n'
+                'open(os.environ["GH_LOG"], "a").write(" ".join(sys.argv[1:]) + "\\n")\n'
+                'raise SystemExit(1)\n')
+            (bindir / 'gh').chmod(0o755)
+            env = {key: value for key, value in os.environ.items()
+                   if key not in ('LAUNCH_FLEET_OVERLOAD_SUPPLY', 'LAUNCH_FLEET_OVERLOAD_INPUT',
+                                  'GH_TOKEN', 'GITHUB_TOKEN')}
+            env.update(PATH=str(bindir) + os.pathsep + env.get('PATH', ''),
+                       GH_REPO='example/public', GH_LOG=str(log),
+                       LAUNCH_FLEET_NOW=str(now))
+
+            def observation(remaining, complete=True):
+                return {'repository': 'example/public', 'observed_at': now, 'complete': complete,
+                        'queue': {'complete': complete, 'jobs': [
+                            {'id': 'job-synthetic-1', 'required': False, 'status': 'completed',
+                             'queued_at': now - 10, 'started_at': now - 9}]},
+                        'budgets': {'rest': {'remaining': remaining, 'limit': 1000,
+                                             'reset_at': now + 3600, 'retry_after': 0},
+                                    'graphql': {'remaining': 1000, 'limit': 1000,
+                                                'reset_at': now + 3600, 'retry_after': 0}}}
+
+            def run(action, state, source=None):
+                call = dict(env, LAUNCH_FLEET_OVERLOAD_STATE=str(state))
+                if source is None:
+                    call.pop('LAUNCH_FLEET_OVERLOAD_INPUT', None)
+                else:
+                    path = tmp / ('observation-%s.json' % action)
+                    path.write_text(json.dumps(source))
+                    call['LAUNCH_FLEET_OVERLOAD_INPUT'] = str(path)
+                return subprocess.run(['sh', str(HERE / 'fleet.sh'), 'overload', action],
+                                      env=call, cwd=tmp, capture_output=True, text=True, timeout=30)
+
+            written = tmp / 'written-pause.json'
+            incomplete = run('merge-batch', written, observation(1000, complete=False))
+            self.assertEqual(incomplete.returncode, 1, incomplete.stderr)
+            self.assertIn('observation_unknown', json.loads(incomplete.stdout)['causes'])
+            self.assertTrue(written.is_file())
+
+            fresh = tmp / 'pause.json'
+            log.write_text('')
+            missing = run('merge-batch', fresh)
+            self.assertEqual(missing.returncode, 1, missing.stderr)
+            self.assertIn('observation_unknown', json.loads(missing.stdout)['causes'])
+            self.assertFalse(fresh.exists(), 'missing overload input latched a durable pause')
+            self.assertIn('api', log.read_text())
+
+            healthy = observation(1000)
+            admitted = run('merge-batch', fresh, healthy)
+            self.assertEqual(admitted.returncode, 0, admitted.stderr)
+            decision = json.loads(admitted.stdout)
+            self.assertEqual((decision['allowed'], decision['paused']), (True, False))
+
+            exhausted = run('merge-batch', fresh, observation(0))
+            self.assertEqual(exhausted.returncode, 1, exhausted.stderr)
+            self.assertTrue(fresh.is_file())
+            self.assertFalse(json.loads(exhausted.stdout)['allowed'])
+
+            still = run('merge-batch', fresh, healthy)
+            self.assertEqual(still.returncode, 1, still.stderr)
+            self.assertFalse(json.loads(still.stdout)['allowed'])
+
+            cleared = run('resume', fresh)
+            self.assertEqual(cleared.returncode, 0, cleared.stderr)
+            self.assertEqual(json.loads(cleared.stdout)['paused'], False)
+            self.assertFalse(fresh.exists())
+
+            again = run('merge-batch', fresh, healthy)
+            self.assertEqual(again.returncode, 0, again.stderr)
+            decision = json.loads(again.stdout)
+            self.assertEqual((decision['allowed'], decision['paused']), (True, False))
+
+
 if __name__ == '__main__':
     unittest.main()

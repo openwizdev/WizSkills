@@ -597,7 +597,7 @@ class SkillCommandsMatchPackage(unittest.TestCase):
         text = self.parts()[0]
         step1 = text[text.index('## 1. '):text.index('## 2. ')]
         for words in ('login_gh_missing', 'https://github.com/cli/cli/releases/latest', 'brew install gh',
-                      '~/.local/bin', 'checksums', 'gh --version', 'xcode-select --install'):
+                      'bin/gh', '~/.local/bin', 'checksums', 'gh --version', 'xcode-select --install'):
             self.assertIn(words, text)
         self.assertIn('even on exit 0', step1)
         self.assertIn("I'll install gh, GitHub's free helper tool, so I can set up your project for you. OK?", step1)

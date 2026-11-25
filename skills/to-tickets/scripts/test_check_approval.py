@@ -970,6 +970,121 @@ class MachineApproval(unittest.TestCase):
         self.assertEqual(chain(file_blocked("nothing")), "width: chain 4, widest 3")
         self.assertEqual(chain(file_blocked("`docs/agents/fleet.md`")), "width: chain 5, widest 2")
 
+    def test_intersecting_owned_path_globs_clash_and_disjoint_globs_pass(self):
+        for pair in (("web/exp*/page.ts", "web/*ort/page.ts"),
+                     ("web/a?c/page.ts", "web/?bc/page.ts"),
+                     ("web/[ab]x/page.ts", "web/[bc]x/page.ts")):
+            with self.subTest(clash=pair):
+                tickets = plan()
+                find(tickets, 9104)["body"] = find(tickets, 9104)["body"].replace(
+                    "`docs/agents/fleet.md` (shared: the export row only)", f"`{pair[0]}`")
+                find(tickets, 9105)["body"] = find(tickets, 9105)["body"].replace(
+                    "`docs/agents/fleet.md` (shared: the import row only)", f"`{pair[1]}`")
+                out = self.approve(tickets)
+                self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+                self.assertIn("approve: owned paths: #9104 and #9105", out.stderr)
+        for pair in (("web/exp*/page.ts", "web/imp*/page.ts"),
+                     ("web/*a/page.ts", "web/*b/page.ts")):
+            with self.subTest(disjoint=pair):
+                tickets = plan()
+                find(tickets, 9104)["body"] = find(tickets, 9104)["body"].replace(
+                    "`docs/agents/fleet.md` (shared: the export row only)", f"`{pair[0]}`")
+                find(tickets, 9105)["body"] = find(tickets, 9105)["body"].replace(
+                    "`docs/agents/fleet.md` (shared: the import row only)", f"`{pair[1]}`")
+                out = self.approve(tickets)
+                self.assertEqual(out.returncode, 0, out.stderr)
+
+    def test_hidden_markdown_is_ignored_for_size_done_by_and_owned_paths(self):
+        with self.subTest(case="size-only-in-html-comment"):
+            tickets = plan()
+            find(tickets, 9101)["body"] = find(tickets, 9101)["body"].replace("Size: S.", "<!-- Size: S. -->")
+            out = self.approve(tickets)
+            self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+            self.assertIn("approve: sizes:", out.stderr)
+
+        with self.subTest(case="size-only-in-what-to-build"):
+            tickets = plan()
+            find(tickets, 9101)["body"] = (find(tickets, 9101)["body"]
+                                           .replace("Size: S.", "No size here.")
+                                           .replace("Synthetic work for #9101.", "Synthetic work for #9101. Size: S."))
+            out = self.approve(tickets)
+            self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+            self.assertIn("approve: sizes:", out.stderr)
+
+        with self.subTest(case="hidden-done-by-cannot-hide-owned-path-clash"):
+            tickets = plan()
+            find(tickets, 9104)["body"] = find(tickets, 9104)["body"].replace(
+                "## Owned paths", "<!--\n## Done by\n\nHidden owner.\n-->\n\n## Owned paths").replace(
+                " (shared: the export row only)", "")
+            out = self.approve(tickets)
+            self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+            self.assertIn("approve: owned paths:", out.stderr)
+
+        with self.subTest(case="only-owned-path-bullet-in-code-fence"):
+            tickets = plan()
+            find(tickets, 9103)["body"] = find(tickets, 9103)["body"].replace(
+                "- `cli/export.py`\n", "```md\n- `cli/export.py`\n```\n")
+            out = self.approve(tickets)
+            self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+            self.assertIn("approve: owned paths:", out.stderr)
+
+        with self.subTest(case="hidden-done-by-keeps-ready-for-agent"):
+            tickets = plan()
+            find(tickets, 9104)["body"] = find(tickets, 9104)["body"].replace(
+                "## Owned paths", "<!--\n## Done by\n\nHidden owner.\n-->\n\n## Owned paths")
+            out = self.approve(tickets)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertIn("| #9104 | List export in the fleet settings | none | ready-for-agent |", out.stdout)
+
+    def test_cross_repository_relies_uses_the_dependent_repository_checkout(self):
+        second_repo = "synthetic-owner/second-repo"
+        second_root = self.tmp / "second-root"
+        (second_root / "docs").mkdir(parents=True)
+        (second_root / "docs/contract.md").write_text("Second repo contract.\n")
+
+        def external_tickets(relies, blocker_owns=None):
+            t1 = {"number": 9111, "title": "Second repo blocker", "state": "OPEN", "labels": [],
+                  "milestone": "Synthetic", "parent": SPEC, "blocked_by": [], "start_recorded": False,
+                  "pull_requests": [],
+                  "body": body(9111, "S", [f"`{blocker_owns or 'src/other.py'}` in `{second_repo}`"])}
+            t2 = {"number": 9112, "title": "Second repo consumer", "state": "OPEN", "labels": [],
+                  "milestone": "Synthetic", "parent": SPEC,
+                  "blocked_by": [{"number": 9111, "state": "OPEN"}] if blocker_owns else [],
+                  "start_recorded": False, "pull_requests": [],
+                  "body": body(9112, "S", [f"`src/use.py` in `{second_repo}`"], relies=relies,
+                               links=(["#9111 real: the external contract, which use.py reads"]
+                                      if blocker_owns else ()))}
+            return [t1, t2]
+
+        with self.subTest(case="existing-file-in-supplied-second-checkout-passes"):
+            out = self.approve(external_tickets("`docs/contract.md`"), None, "--checkout", f"{second_repo}={second_root}")
+            self.assertEqual(out.returncode, 0, out.stderr)
+
+        with self.subTest(case="file-only-in-graph-checkout-refused-with-second-checkout"):
+            out = self.approve(external_tickets("`docs/existing.md`"), None, "--checkout", f"{second_repo}={second_root}")
+            self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+            self.assertIn("approve: relies:", out.stderr)
+
+        with self.subTest(case="file-only-in-graph-checkout-refused-without-second-checkout"):
+            out = self.approve(external_tickets("`docs/existing.md`"))
+            self.assertEqual((out.returncode, out.stdout), (1, ""), out.stderr)
+            self.assertIn("approve: relies:", out.stderr)
+
+        with self.subTest(case="planned-external-path-passes-despite-graph-checkout-folder"):
+            (self.root / "contracts/ext.v1.md").mkdir(parents=True)
+            out = self.approve(external_tickets("`contracts/ext.v1.md`", blocker_owns="contracts/ext.v1.md"))
+            self.assertEqual(out.returncode, 0, out.stderr)
+
+        tickets = plan()
+        for bad in (["--checkout", "no-equals"],
+                    ["--checkout", f"not-a-repo={second_root}"],
+                    ["--checkout", f"{second_repo}={self.tmp / 'missing-dir'}"],
+                    ["--checkout", f"{second_repo}={second_root}", "--checkout", f"{second_repo.upper()}={second_root}"]):
+            with self.subTest(bad_checkout=bad):
+                out = self.approve(tickets, None, *bad)
+                self.assertEqual((out.returncode, out.stdout), (2, ""), out.stderr)
+                self.assertIn("approve: usage:", out.stderr)
+
 
 PREFER = HERE / "prefer.py"
 

@@ -61,6 +61,69 @@ import base64
 import json
 import math
 from pathlib import Path
+import struct
+import zlib
+
+
+def require_non_uniform_png(data, filename):
+    if data[:8] != b'\x89PNG\r\n\x1a\n':
+        raise RuntimeError(f'{filename} is not a valid PNG')
+    off, idat, width, height, channels, saw_iend = 8, [], 0, 0, 0, False
+    while off + 8 <= len(data):
+        length, kind = struct.unpack('>I4s', data[off:off + 8])
+        end = off + 12 + length
+        if end > len(data):
+            raise RuntimeError(f'{filename} is a truncated PNG')
+        chunk = data[off + 8:off + 8 + length]
+        if kind == b'IHDR':
+            if length != 13:
+                raise RuntimeError(f'{filename} has an invalid PNG header')
+            width, height, depth, colour, _, _, interlace = struct.unpack('>IIBBBBB', chunk)
+            channels = {0: 1, 2: 3, 4: 2, 6: 4}.get(colour, 0)
+            if width <= 0 or height <= 0 or depth != 8 or interlace or not channels:
+                raise RuntimeError(f'{filename} has an unsupported PNG format')
+        elif kind == b'IDAT':
+            idat.append(chunk)
+        elif kind == b'IEND':
+            saw_iend = True
+            break
+        off = end
+    if not channels or not idat or not saw_iend:
+        raise RuntimeError(f'{filename} is not a complete PNG')
+    try:
+        raw = zlib.decompress(b''.join(idat))
+    except zlib.error as error:
+        raise RuntimeError(f'{filename} has corrupt PNG data: {error}') from error
+    stride = width * channels
+    if len(raw) != height * (stride + 1):
+        raise RuntimeError(f'{filename} has invalid PNG scanline data')
+    first_pixel = raw[1:1 + channels]
+    solid = first_pixel * width
+    zeros_rest = b'\x00' * (stride - channels)
+    zeros_full = b'\x00' * stride
+    avg_half = bytes((b - (b >> 1)) & 0xff for b in first_pixel)
+    expected_row0 = {
+        0: solid,
+        1: first_pixel + zeros_rest,
+        2: solid,
+        3: first_pixel + avg_half * (width - 1),
+        4: first_pixel + zeros_rest,
+    }
+    expected_later = {
+        0: solid,
+        1: first_pixel + zeros_rest,
+        2: zeros_full,
+        3: avg_half + zeros_rest,
+        4: zeros_full,
+    }
+    for y in range(height):
+        base = y * (stride + 1)
+        expected = (expected_row0 if y == 0 else expected_later).get(raw[base])
+        if expected is None:
+            raise RuntimeError(f'{filename} has an unsupported PNG filter')
+        if raw[base + 1:base + 1 + stride] != expected:
+            return
+    raise RuntimeError(f'{filename} is a single-colour PNG (blank first-screen capture)')
 
 
 def evaluate(expression):
@@ -78,10 +141,13 @@ def page_size(width):
     return {'width': width, 'height': metrics['height'], 'contentWidth': metrics['width']}
 
 
-def save_png(filename, width, height, beyond):
+def save_png(filename, width, height, beyond, *, reject_single_colour=False):
     png = cdp('Page.captureScreenshot', format='png', captureBeyondViewport=beyond,
               clip={'x': 0, 'y': 0, 'width': width, 'height': height, 'scale': 1})
-    Path(config['out'], filename).write_bytes(base64.b64decode(png['data'], validate=True))
+    raw_png = base64.b64decode(png['data'], validate=True)
+    if reject_single_colour:
+        require_non_uniform_png(raw_png, filename)
+    Path(config['out'], filename).write_bytes(raw_png)
 
 
 captures = []
@@ -126,7 +192,7 @@ for name, width, height in [('phone', 390, 844), ('desktop', 1440, 900)]:
         first_screen = None
         if config['fixed_at_bottom']:
             first_filename = name + '-first-screen.png'
-            save_png(first_filename, width, height, False)
+            save_png(first_filename, width, height, True, reject_single_colour=True)
             first_screen = {'file': first_filename,
                             'viewport': {'width': width, 'height': height}, 'page': page}
             # Measure at the normal viewport, then resize once. Repeatedly

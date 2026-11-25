@@ -1,6 +1,6 @@
 ---
 name: where-are-we
-description: Answer where things stand across the factory or a requested version, spec, grill, builders, issues or CI. Use for status requests; read GitHub and CloudRoom without changing anything.
+description: Report what is happening and the next useful step. Use when asked for read-only status on a fleet, version, spec, grill, builder, issue or CI.
 version: 0.2.1
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: research
-description: Investigate a question against primary sources and land one checked, cited report. Use when asked for research, when a grill or plan needs facts first, or when a wayfind question needs research. Not for deciding; research informs a grill or plan and approves nothing.
+description: Research a question and write a cited report. Use when asked for research or when a grill, plan or wayfind map needs facts from primary sources.
 version: 0.2.3
 ---
 

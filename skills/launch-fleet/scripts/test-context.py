@@ -42,7 +42,7 @@ class ContextTests(unittest.TestCase):
     def test_role_sections_and_sources(self):
         builder = ['Supporting edits', 'Test commands', 'Approval rules']
         reviewer = ['Supporting edits', 'Test commands', 'CI checks', 'Approval rules']
-        planner = ['Labels', 'Supporting edits', 'Approval rules']
+        planner = ['Labels', 'Supporting edits']
         fleet = ['Models', 'CI checks', 'Labels', 'Other', 'Approval rules']
         legacy = ['Builder', 'Builder for small tickets', 'Reviewer for Claude-built',
                   'Reviewer for GPT-built', 'Fixer']
@@ -72,7 +72,7 @@ class ContextTests(unittest.TestCase):
                                     + section('Repositories').strip()),
                                    (LABELS, TABLE.strip()), (domain, section('Private storage').strip()),
                                    (roads, '# Roads\n\nSynthetic roads.'),
-                                   ('GLOSSARY.md', 'Cherry, Pear\n\n' + glossary)]),
+                                   ('GLOSSARY.md', glossary)]),
         ]
         for role, sections, extras in cases:
             with self.subTest(role=role):
@@ -101,6 +101,36 @@ class ContextTests(unittest.TestCase):
                 glossary,
             ]) + '\n')
             self.assertEqual((result.returncode, result.stderr), (0, ''))
+
+    def test_reviewer_and_fleet_keep_the_private_record_link_only(self):
+        url = 'https://github.com/jparker2006/ClosedWiz/issues/1#issuecomment-1'
+        self.put(CARD, '# Public writes\n\nSynthetic card.\n')
+        self.put(FLEET, '\n'.join([
+            '## Models', '', 'Synthetic models.', '',
+            f'Source: a long provenance note ([private record]({url})).', '',
+            '**Kept for older skills:** keep the five tables.', '',
+            '## Supporting edits', '',
+            f'Keep this rule. Source: Jake ([private record]({url})).', '',
+            '## Test commands', '', 'Run the local proof.', '',
+            'Source: see the workflow.', '',
+            '## CI checks', '', 'Synthetic checks.', '',
+            '## Approval rules', '', 'Synthetic rules.',
+        ]))
+        self.git('add', '.')
+        self.git('commit', '-qm', 'Synthetic project')
+        reviewer = self.run_cli('reviewer')
+        fleet = self.run_cli('fleet')
+        builder = self.run_cli('builder')
+        self.assertEqual((reviewer.returncode, fleet.returncode, builder.returncode), (0, 0, 0))
+        for result in (reviewer, fleet):
+            self.assertIn(f'Source: {url}', result.stdout)
+            self.assertIn('**Kept for older skills:** keep the five tables.', result.stdout)
+            self.assertNotIn('long provenance note', result.stdout)
+        self.assertIn('Keep this rule.', reviewer.stdout)
+        self.assertNotIn('see the workflow', reviewer.stdout)
+        self.assertNotIn('Source: Jake', reviewer.stdout)
+        self.assertIn('see the workflow', builder.stdout)
+        self.assertIn('Source: Jake', builder.stdout)
 
     def test_missing_sources_and_legacy_only_settings(self):
         missing = self.run_cli('builder')

@@ -355,8 +355,24 @@ def main():
                 return True
             return any(needed(v) for v in x.values())
         return isinstance(x, list) and any(needed(v) for v in x)
+    empty = json.dumps({'repo': repo, 'threads': {}})
     try:
         state = private_state(repo)
+    except FileNotFoundError:
+        print(f'records: private thread map LAUNCH_FLEET_STATE is missing; create it with {empty}', file=sys.stderr)
+        return 2
+    except ValueError as error:
+        if str(error) == 'private state needs an absolute path':
+            print(f'records: LAUNCH_FLEET_STATE needs an absolute path; create it outside the checkout with {empty}',
+                  file=sys.stderr)
+        else:
+            print(f'records: private thread map LAUNCH_FLEET_STATE could not be read; expected {empty}',
+                  file=sys.stderr)
+        return 2
+    except (OSError, KeyError, TypeError):
+        print(f'records: private thread map LAUNCH_FLEET_STATE could not be read; expected {empty}', file=sys.stderr)
+        return 2
+    try:
         threads = discover() if os.environ.get('LAUNCH_FLEET_GITHUB_ONLY') != '1' and needed(world) else None
         json.dump(annotate(world, repo, private == 'true', threads, state), sys.stdout)
     except (OSError, ValueError, KeyError, TypeError):

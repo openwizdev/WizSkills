@@ -24,7 +24,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # Each carried skill's own suites, run from the tree's root. The inventory
 # guard below refuses any newly added suite until this list includes it.
 SUITES = {
-    'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py']],
+    'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py'],
+                     ['python3', '-I', 'skills/build-ticket/scripts/test_prove.py']],
     'triage': [['python3', '-I', 'skills/triage/test/test_find_work.py'],
                ['python3', '-I', 'skills/triage/test/test_public_records.py']],
     'feedback': [['python3', '-I', 'skills/feedback/test/test_feedback.py']],
@@ -96,7 +97,8 @@ SUITES = {
               ['python3', '-I', 'check/test_suites.py'],
               ['python3', '-I', 'check/test_bench.py'],
               ['python3', '-I', 'check/test_select.py'],
-              ['python3', '-I', 'check/test_checklist_rules.py']],
+              ['python3', '-I', 'check/test_checklist_rules.py'],
+              ['python3', '-I', 'check/test_context_budget.py']],
 }
 
 PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}
@@ -147,7 +149,7 @@ MATT_COPYRIGHT = 'Copyright (c) 2026 Matt Pocock'
 ASK_WIZ = 'ask-wiz'
 ASK_WIZ_POLICY = 'policy:\n  allow_implicit_invocation: false'
 FRONTMATTER_KEYS = ('name', 'description', 'version')
-DESCRIPTION_MAX = 1024
+DESCRIPTION_MAX = 180
 OPENAI_KEYS = ('display_name', 'short_description')
 
 PLUGIN = '.claude-plugin/plugin.json'

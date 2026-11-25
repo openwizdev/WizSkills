@@ -19,7 +19,8 @@ ROLE_SECTIONS = {
     'planner': ('Labels', 'Supporting edits', 'Approval rules'),
 }
 LEGACY_REVIEWER_MODELS = ('Reviewer for Claude-built', 'Reviewer for GPT-built')
-LEGACY_MODELS = {'Builder', 'Builder for small tickets', *LEGACY_REVIEWER_MODELS, 'Fixer'}
+OPTIONAL_LEGACY_REVIEWER_MODELS = ('Reviewer for Gemini-built',)
+LEGACY_MODELS = {'Builder', 'Builder for small tickets', *LEGACY_REVIEWER_MODELS, *OPTIONAL_LEGACY_REVIEWER_MODELS, 'Fixer'}
 
 
 def git(root, *args):
@@ -57,7 +58,10 @@ def selected_sections(path, text, names, role):
             excluded.update(LEGACY_MODELS)
         names = [name for name in found if name not in excluded]
     elif role == 'reviewer':
-        model_sections = ('Models',) if 'Models' in found else LEGACY_REVIEWER_MODELS
+        model_sections = ('Models',) if 'Models' in found else (
+            *LEGACY_REVIEWER_MODELS,
+            *(name for name in OPTIONAL_LEGACY_REVIEWER_MODELS if name in found),
+        )
         names = (*model_sections, *names)
     return [found.get(name, f'No `{name}` section in `{path}`.') for name in names]
 

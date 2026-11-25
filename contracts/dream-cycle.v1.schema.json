@@ -2,8 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:openwiz:schema:dream-cycle:v1",
   "title": "openwiz:dream-cycle v1",
-  "description": "Data shapes for the dream-cycle.v1 contract: scout findings lines, prover verdict lines, repository inventory output, merged findings, and ticket entries. See dream-cycle.v1.md for report sections, project settings, CLI seams, and guards.",
+  "description": "Data shapes for the dream-cycle.v1 contract: scout findings lines (including kind: link), prover verdict lines, append-only link ledger lines, report link cards, repository inventory output, and merged findings. See dream-cycle.v1.md for report sections, project settings, CLI seams, and guards.",
   "$defs": {
+    "absent": {
+      "not": {}
+    },
     "id": {
       "type": "string",
       "minLength": 1,
@@ -28,9 +31,53 @@
       "maxLength": 500,
       "pattern": "^[^\\u0000-\\u001f\\u007f]+ -> [^\\u0000-\\u001f\\u007f]+$"
     },
+    "iso_date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
     "utc_timestamp": {
       "type": "string",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "link_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f]+$"
+    },
+    "link_type": {
+      "enum": [
+        "says-vs-does",
+        "promise-to-work",
+        "need-to-person",
+        "enemy-move-to-us",
+        "spend-to-use",
+        "answers",
+        "pattern",
+        "duplicates",
+        "drifted-copy",
+        "contradicts",
+        "unknown"
+      ]
+    },
+    "link_route": {
+      "enum": [
+        "ticket",
+        "pillar-inbox",
+        "people-draft",
+        "question-comment",
+        "spec-candidate"
+      ]
+    },
+    "link_end": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "quote", "seen"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/link_ref" },
+        "quote": { "$ref": "#/$defs/non_empty_line" },
+        "seen": { "$ref": "#/$defs/iso_date" }
+      }
     },
     "finding": {
       "description": "One scout finding line (JSONL). Field names are pinned to the contract.",
@@ -75,7 +122,16 @@
               "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
             }
           ]
-        }
+        },
+        "link_type": { "$ref": "#/$defs/link_type" },
+        "ends": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/link_end" }
+        },
+        "changes": { "$ref": "#/$defs/non_empty_line" },
+        "sources": { "type": "integer", "minimum": 1 },
+        "owner": { "$ref": "#/$defs/non_empty_line" },
+        "route": { "$ref": "#/$defs/link_route" }
       },
       "allOf": [
         {
@@ -88,6 +144,91 @@
               "why_keep": { "minLength": 1 }
             }
           }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "const": "link" } }
+          },
+          "then": {
+            "required": ["link_type", "ends", "changes", "sources", "owner", "route"],
+            "properties": {
+              "why_keep": { "minLength": 1 },
+              "ends": { "minItems": 2 }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["kind", "link_type"],
+            "properties": {
+              "kind": { "const": "link" },
+              "link_type": { "const": "pattern" }
+            }
+          },
+          "then": {
+            "properties": {
+              "ends": { "minItems": 3 }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["kind", "link_type"],
+            "properties": {
+              "kind": { "const": "link" },
+              "link_type": { "not": { "const": "pattern" } }
+            }
+          },
+          "then": {
+            "properties": {
+              "ends": { "minItems": 2, "maxItems": 2 }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["kind", "route"],
+            "properties": {
+              "kind": { "const": "link" },
+              "route": { "const": "ticket" }
+            }
+          },
+          "then": {
+            "properties": {
+              "ticket": { "type": "string" }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["kind", "route"],
+            "properties": {
+              "kind": { "const": "link" },
+              "route": { "not": { "const": "ticket" } }
+            }
+          },
+          "then": {
+            "properties": {
+              "ticket": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "properties": { "kind": { "const": "link" } }
+            }
+          },
+          "then": {
+            "properties": {
+              "link_type": { "$ref": "#/$defs/absent" },
+              "ends": { "$ref": "#/$defs/absent" },
+              "changes": { "$ref": "#/$defs/absent" },
+              "sources": { "$ref": "#/$defs/absent" },
+              "owner": { "$ref": "#/$defs/absent" },
+              "route": { "$ref": "#/$defs/absent" }
+            }
+          }
         }
       ]
     },
@@ -95,7 +236,7 @@
       "description": "One prover verdict line (JSONL) re-running a finding's evidence.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "verdict", "reason", "evidence"],
+      "required": ["id", "verdict", "reason", "evidence", "blind", "changes_confirmed"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "verdict": { "enum": ["CONFIRMED", "PLAUSIBLE", "REJECTED"] },
@@ -104,8 +245,188 @@
           "type": "array",
           "minItems": 1,
           "items": { "$ref": "#/$defs/evidence_entry" }
+        },
+        "blind": { "type": "boolean" },
+        "changes_confirmed": { "type": ["boolean", "null"] }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "verdict": { "const": "CONFIRMED" } }
+          },
+          "then": {
+            "properties": {
+              "changes_confirmed": { "enum": [true, null] }
+            }
+          }
         }
-      }
+      ]
+    },
+    "ledger_entry": {
+      "description": "One append-only link ledger line (JSONL). Lines are never deleted; closing a line appends a copy with invalid_at set.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "state",
+        "link_type",
+        "ends",
+        "changes",
+        "owner",
+        "valid_from",
+        "invalid_at",
+        "reason",
+        "superseded_by",
+        "last_cited"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "state": {
+          "enum": [
+            "proposed",
+            "accepted",
+            "rejected",
+            "later",
+            "expired",
+            "superseded"
+          ]
+        },
+        "link_type": { "$ref": "#/$defs/link_type" },
+        "ends": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/link_end" }
+        },
+        "changes": { "$ref": "#/$defs/non_empty_line" },
+        "owner": { "$ref": "#/$defs/non_empty_line" },
+        "valid_from": { "$ref": "#/$defs/iso_date" },
+        "invalid_at": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/iso_date" }
+          ]
+        },
+        "reason": { "$ref": "#/$defs/line_or_empty" },
+        "superseded_by": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/id" }
+          ]
+        },
+        "last_cited": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/iso_date" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "link_type": { "const": "pattern" } }
+          },
+          "then": {
+            "properties": {
+              "ends": { "minItems": 3 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "link_type": { "not": { "const": "pattern" } } }
+          },
+          "then": {
+            "properties": {
+              "ends": { "minItems": 2, "maxItems": 2 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": { "enum": ["rejected", "later", "expired", "superseded"] }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": { "minLength": 1 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "state": { "const": "superseded" } }
+          },
+          "then": {
+            "properties": {
+              "superseded_by": { "$ref": "#/$defs/id" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "state": { "not": { "const": "superseded" } } }
+          },
+          "then": {
+            "properties": {
+              "superseded_by": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "link_card": {
+      "description": "Structured representation of one link card rendered in the report's ## Top links section.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "link_type",
+        "owner",
+        "score",
+        "verdict",
+        "ends",
+        "changes",
+        "why_keep",
+        "route"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "link_type": { "$ref": "#/$defs/link_type" },
+        "owner": { "$ref": "#/$defs/non_empty_line" },
+        "score": { "type": "integer", "minimum": 1 },
+        "verdict": { "enum": ["CONFIRMED", "PLAUSIBLE"] },
+        "ends": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/link_end" }
+        },
+        "changes": { "$ref": "#/$defs/non_empty_line" },
+        "why_keep": { "$ref": "#/$defs/non_empty_line" },
+        "route": { "$ref": "#/$defs/link_route" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "link_type": { "const": "pattern" } }
+          },
+          "then": {
+            "properties": {
+              "ends": { "minItems": 3 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "link_type": { "not": { "const": "pattern" } } }
+          },
+          "then": {
+            "properties": {
+              "ends": { "minItems": 2, "maxItems": 2 }
+            }
+          }
+        }
+      ]
     },
     "inventory_section_ok": {
       "type": "object",

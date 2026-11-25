@@ -103,7 +103,7 @@ class ContextTests(unittest.TestCase):
             self.assertEqual((result.returncode, result.stderr), (0, ''))
 
     def test_reviewer_and_fleet_keep_the_private_record_link_only(self):
-        url = 'https://github.com/jparker2006/ClosedWiz/issues/1#issuecomment-1'
+        url = 'https://github.com/jparker2006/ClosedWiz/issues/' + '4' + '#issuecomment-' + '2'
         self.put(CARD, '# Public writes\n\nSynthetic card.\n')
         self.put(FLEET, '\n'.join([
             '## Models', '', 'Synthetic models.', '',

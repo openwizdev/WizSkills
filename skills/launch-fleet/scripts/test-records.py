@@ -109,6 +109,59 @@ class Fleet(unittest.TestCase):
                 self.threads = threads
                 self.assertEqual(self.run_fleet('wake', '12'), 'look #12: thread discovery is out of reach\n')
 
+    def test_unset_state_names_the_variable_when_discovery_cannot_find_a_thread(self):
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        self.env.pop('LAUNCH_FLEET_STATE', None)
+        self.env['FAKE_ROOM_CLI'] = 'cloud'
+        self.threads = {'not': 'a list'}
+        shape = json.dumps({'repo': self.world['repo'], 'threads': {}}, separators=(',', ':'))
+        self.assertEqual(
+            self.run_fleet('wake', '12'),
+            'look #12: thread discovery is out of reach; set LAUNCH_FLEET_STATE to an absolute file %s\n' % shape)
+        path = self.dir / 'threads-map.json'
+        path.write_text(json.dumps({'repo': self.world['repo'], 'threads': {}}))
+        self.env['LAUNCH_FLEET_STATE'] = str(path)
+        reached = self.run_fleet('wake', '12')
+        self.assertEqual(reached, 'look #12: thread discovery is out of reach\n')
+        self.assertNotIn(str(path), reached)
+
+    def test_init_creates_empty_routing_maps_and_refuses_a_relative_directory(self):
+        repo = 'example/public'
+        directory = self.dir / 'routes'
+        directory.mkdir()
+        script = [sys.executable, '-I', str(HERE / 'records.py'), 'init']
+
+        def run(*args):
+            return subprocess.run([*script, *args], cwd=self.dir, stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True)
+
+        first = run(repo, str(directory))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        for name, key, env in (
+                ('threads.json', 'threads', 'LAUNCH_FLEET_STATE'),
+                ('runs.json', 'runs', 'LAUNCH_FLEET_RUNS'),
+                ('loops.json', 'loops', 'LAUNCH_FLEET_LOOPS')):
+            body = json.loads((directory / name).read_text())
+            self.assertEqual(body, {'repo': repo, key: {}})
+            self.assertIn(env, first.stdout)
+            self.assertIn(str(directory / name), first.stdout)
+        threads = directory / 'threads.json'
+        saved = json.dumps({'repo': repo, 'threads': {'builder:12': 'kept-thread'}})
+        threads.write_text(saved)
+        second = run(repo, str(directory))
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(threads.read_text(), saved)
+        relative = run(repo, 'relative-routes')
+        self.assertEqual(relative.returncode, 2, relative.stderr)
+        self.assertFalse((self.dir / 'relative-routes').exists())
+        self.assertEqual(run('not a repo', str(directory)).returncode, 2)
+        checkout = self.dir / 'checkout'
+        checkout.mkdir()
+        subprocess.run(['git', 'init', '-q', str(checkout)], check=True)
+        inside = run(repo, str(checkout))
+        self.assertEqual(inside.returncode, 2, inside.stderr)
+        self.assertFalse((checkout / 'threads.json').exists())
+
     def test_fresh_install_without_private_routing_files_discovers_builder_on_cloudroom(self):
         self.pr['checks'][0]['conclusion'] = 'FAILURE'
         self.env['FAKE_ROOM_CLI'] = 'cloud'

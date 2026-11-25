@@ -927,6 +927,11 @@ class Launch(unittest.TestCase):
                      '5 tickets: 3 building, 2 blocked', 'Counts are progress, not a first merge'):
             self.assertIn(line, watch)
         self.assertEqual(stat.S_IMODE(j.state.stat().st_mode), 0o600, 'owner-only state')
+        repo = json.loads(j.state.read_text())['repo']
+        for name, key in (('threads.json', 'threads'), ('runs.json', 'runs'), ('loops.json', 'loops')):
+            path = j.state.parent / name
+            self.assertTrue(path.is_file(), name + ' was not created beside the onboarding state')
+            self.assertEqual(json.loads(path.read_text()), {'repo': repo, key: {}})
 
     def test_local_progress_reads_github_only_and_never_cloudroom(self):
         j = Journey(self)

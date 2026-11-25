@@ -147,6 +147,53 @@ if gh repo view --json isPrivate,nameWithOwner > "$work/repo" 2> /dev/null; then
     then .[0].nameWithOwner | ascii_downcase else error("unknown") end' "$work/repo" 2> /dev/null) || repo=''
 fi
 
+# A machine plan approval is checked against revision.sh before the table.
+# Human approvals do not run revision.sh, so their gh call list stays the same.
+jq -r --slurpfile authors "$work/authors.json" '
+  def head: split("\n") | map(select(test("\\S"))) | first // "" | sub("^\\s+"; "") | sub("\\s+$"; "");
+  def machine: test("^\\*\\*Machine plan approval, [0-9]{4}-[0-9]{2}-[0-9]{2}, revision [1-9][0-9]*:\\*\\* links, relies, sizes, width and owned paths passed\\.$");
+  [.[] | select((.user | if type == "object" then .login else null end
+                 | if type == "string" then ascii_downcase else null end) as $l
+                | $l != null and any($authors[0][]; . == $l))
+   | select(.body | head | (startswith("**Plan graph approved by") or machine))]
+  | max_by(.id)
+  | if . == null then ""
+    elif (.body | head | machine) then "machine\n" + .body
+    else "human" end
+' "$work/all-comments" > "$work/picked" 2> /dev/null || fail "cannot read spec #$spec's comments"
+if [ "$(head -n 1 "$work/picked")" = machine ]; then
+  tail -n +2 "$work/picked" > "$work/picked-body"
+  fp=$(jq -Rrs '
+    split("\n") | map(rtrimstr("\r"))
+    | (.[0] | capture("^\\*\\*Machine plan approval, [0-9]{4}-[0-9]{2}-[0-9]{2}, revision (?<n>[1-9][0-9]*):\\*\\* links, relies, sizes, width and owned paths passed\\.$") | .n | tonumber) as $n
+    | select(.[1] | test("^Grill confirmed: https://github\\.com/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/(issues|pull)/[1-9][0-9]*#issuecomment-[1-9][0-9]*$"))
+    | select(.[2] == "" and .[4] == "")
+    | select(.[3] | test("^Checks: [1-9][0-9]* tickets; links [0-9]+; relies [0-9]+; sizes S [0-9]+, M [0-9]+, L [0-9]+; width: chain [0-9]+, widest [0-9]+; owned paths [0-9]+\\.$"))
+    | (if $n > 1 then
+         select(.[5] | test("^Changed since revision \($n - 1): .+\\.$"))
+         | select(.[6] == "")
+         | 7
+       else 5 end) as $k
+    | select(.[$k] == "| Ticket | Title | Blocked by | Label |")
+    | select(.[$k + 1] == "| --- | --- | --- | --- |")
+    | [to_entries[] | select(.value | test("^Fingerprint: `[0-9a-f]{64}`$")) | .value] as $found
+    | select(($found | length) == 1)
+    | select(any(.[]; . == "<details><summary>Revision text</summary>") and any(.[]; . == "</details>"))
+    | $found[0] | sub("^Fingerprint: `"; "") | sub("`$"; "")
+  ' "$work/picked-body" 2> /dev/null) || fail "no posted plan graph approval"
+  [ -n "$fp" ] || fail "machine plan approval has no fingerprint"
+  revision=$(cd "$(dirname "$0")/.." && pwd)/revision.sh
+  sh "$revision" "$spec" > "$work/revision-text" 2> "$work/revision-err" ||
+    fail "cannot read the current plan revision"
+  if command -v sha256sum > /dev/null 2>&1; then
+    got=$(sha256sum "$work/revision-text" | awk 'NR == 1 { print $1 }')
+  elif command -v shasum > /dev/null 2>&1; then
+    got=$(shasum -a 256 "$work/revision-text" | awk 'NR == 1 { print $1 }')
+  else
+    fail "cannot hash the current plan revision"
+  fi
+  [ "$got" = "$fp" ] || fail "the fingerprint does not match revision.sh"
+fi
 jq -er --arg records "$private_records" --arg repo "$repo" --argjson private "$private" --slurpfile tickets "$work/tickets" --slurpfile labels "$work/labels.json" --slurpfile authors "$work/authors.json" '
   def trim: sub("^\\s+"; "") | sub("\\s+$"; "");
   def long_ref: "(?<![A-Za-z0-9_./-])(?<o>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#(?<n>[1-9][0-9]*)";
@@ -188,14 +235,15 @@ jq -er --arg records "$private_records" --arg repo "$repo" --argjson private "$p
       elif ($line.value | test("^\\s*\\|")) then .rows += [$line]
       else . end)
     | .rows;
+  def machine_header: test("^\\*\\*Machine plan approval, [0-9]{4}-[0-9]{2}-[0-9]{2}, revision [1-9][0-9]*:\\*\\* links, relies, sizes, width and owned paths passed\\.$");
   [.[] | select((.user | if type == "object" then .login else null end
                  | if type == "string" then ascii_downcase else null end) as $l
                 | $l != null and any($authors[0][]; . == $l))
-   | select((.body | split("\n") | map(select(test("\\S"))) | first // "" | sub("^\\s+"; ""))
-                | startswith("**Plan graph approved by"))] | max_by(.id)
+   | select((.body | split("\n") | map(select(test("\\S"))) | first // "" | sub("^\\s+"; "")) as $h
+                | $h | (startswith("**Plan graph approved by") or machine_header))] | max_by(.id)
   | if . == null then error("no posted plan graph approval") else .body end
   | split("\n") | map(rtrimstr("\r"))
-  | if $private or public_form then . else error("public approval form requires a decision, date and private pointer, without quotes or thread ids") end
+  | if (.[0] | machine_header) or $private or public_form then . else error("public approval form requires a decision, date and private pointer, without quotes or thread ids") end
   | table
   | if length < 3 then error("approval table is missing") else . end
   | if (map(.key) | . == [range(.[0]; .[0] + length)]) then .

@@ -1667,5 +1667,31 @@ class ReviewRules(unittest.TestCase):
         self.assertEqual(lines, ["report: style-only renames in tests"])
 
 
+def instruction_source_errors(text):
+    errors = []
+    if re.search(r"\bHEAD:", text):
+        errors.append("reads from HEAD:")
+    if "git show origin/<base>:<path>" not in text:
+        errors.append("missing git show origin/<base>:<path>")
+    para = next((p for p in text.split("\n\n") if "git show origin/<base>:<path>" in p), "")
+    for name in ("AGENTS.md", "CLAUDE.md", "docs/agents/fleet.md"):
+        if name not in para:
+            errors.append(f"base-branch instruction rule omits {name}")
+    return errors
+
+
+class InstructionSources(unittest.TestCase):
+
+    def test_skill_reads_instruction_files_from_base_branch_not_head(self):
+        skill = (HELPER.parent.parent / "SKILL.md").read_text(encoding="utf-8")
+        self.assertEqual(instruction_source_errors(skill), [])
+        for bad in (
+            skill + "\nRead `AGENTS.md` with `git rev-parse HEAD:<path>`.\n",
+            skill.replace("origin/<base>:<path>", "HEAD:<path>"),
+            skill + "\nCheck `git show HEAD:AGENTS.md`.\n",
+        ):
+            self.assertIn("reads from HEAD:", instruction_source_errors(bad))
+
+
 if __name__ == "__main__":
     unittest.main()

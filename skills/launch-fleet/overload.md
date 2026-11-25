@@ -4,30 +4,33 @@
 [`scripts/carried/alarm.py`](scripts/carried/alarm.py). It reads one bounded
 snapshot of the orchestrator's existing queue and rate-limit reads, makes no
 network call, starts no controller, cancels nothing and sends no message.
-Supply `GH_REPO`, `LAUNCH_FLEET_OVERLOAD_INPUT` (the observation below) and
-`LAUNCH_FLEET_OVERLOAD_STATE` (the durable pause state below), then:
+Supply `GH_REPO` and `LAUNCH_FLEET_OVERLOAD_STATE` (the durable pause state
+below). Supply `LAUNCH_FLEET_OVERLOAD_INPUT` (the observation below), or leave
+both that and `LAUNCH_FLEET_OVERLOAD_SUPPLY` unset so the shipped supplier runs:
 
 ```sh
 sh skills/launch-fleet/scripts/fleet.sh overload automatic-refresh
 sh skills/launch-fleet/scripts/fleet.sh overload nonessential-poll
 ```
 
-In an OpenWiz checkout, set `LAUNCH_FLEET_OVERLOAD_SUPPLY` to the absolute
-path of that checkout's own overload supplier, the supply script in its CI
-overload tool (MT6, #825), to have `fleet.sh overload`
-read the war room collector's queue fact now, before `merge-batch`,
-`automatic-refresh` and `nonessential-poll`, into a private file of that call's
-own that only its guard reads (`LAUNCH_FLEET_OVERLOAD_INPUT` is then unused, so
-concurrent calls never swap observations). A supplier that fails or can't start
-leaves the guard no input, so it refuses new work as unknown. `completion` and
-`reconciliation` read nothing more. That supplier is the checkout's own, never
-part of this skill; its use and failure handling are in that checkout's CI
-overload guide.
+When neither `LAUNCH_FLEET_OVERLOAD_SUPPLY` nor `LAUNCH_FLEET_OVERLOAD_INPUT`
+is set, `fleet.sh` runs the supplier shipped at
+[`scripts/carried/supply.py`](scripts/carried/supply.py) before `merge-batch`,
+`automatic-refresh` and `nonessential-poll`. An explicitly set supplier or
+input still wins. Set `LAUNCH_FLEET_OVERLOAD_SUPPLY` to an absolute path (in an
+OpenWiz checkout, that checkout's own supply script in its CI overload tool,
+MT6, #825) to read the war room collector's queue fact now, into a private file
+of that call's own that only its guard reads (`LAUNCH_FLEET_OVERLOAD_INPUT` is
+then unused, so concurrent calls never swap observations). A supplier that
+fails or can't start leaves the guard no input, so it refuses new work as
+unknown and does not latch a durable pause. `completion`, `reconciliation` and
+`resume` read nothing more.
 
 The actions are `merge-batch`, `automatic-refresh`, `nonessential-poll`,
-`completion` and `reconciliation`. The output is one JSON decision. Exit 0
-admits that action, 1 refuses it, and 2 means invalid invocation. Errors never
-print input bodies, API responses or credential material. `allowed` supplies no
+`completion`, `reconciliation` and `resume`. The output is one JSON decision.
+Exit 0 admits that action (`resume` clears a pause), 1 refuses it, and 2 means
+invalid invocation. Errors never print input bodies, API responses or credential
+material. `allowed` supplies no
 review, merge, messaging or live authority. Every existing hold, required check
 and admission rule still applies.
 
@@ -69,7 +72,8 @@ completeness is not authenticated live evidence.
 | Either pool has remaining/limit strictly below 10% | alarm and pause |
 | Oldest required queued job waits at least 900 seconds, or either pool is exhausted | escalation due and pause |
 | Either pool has an active secondary backoff | alarm and pause |
-| Missing, stale, partial, invalid or unreadable input/state | unknown and pause |
+| Missing input file | refuse this call; do not latch a durable pause |
+| Stale, partial, invalid or unreadable input, or a bad state file | unknown and pause |
 
 A known alarm/escalation survives an independent incomplete component; unknown
 data never establishes healthy clearance. Waits use the oldest required queued
@@ -101,9 +105,11 @@ persistence is unknown, so admitted jobs and agents can finish. Those allowances
 do not create fresh batch/refresh/poll authority. Keep their reads necessary and
 bounded and honour the underlying reader's reset/backoff; no busy waiting.
 
-There is **no resume/reset command and no automatic resumption**. Bring the
-resumption disposition to Jake before enabling any resume path. Do not delete
-or substitute the state to clear a pause.
+`sh skills/launch-fleet/scripts/fleet.sh overload resume`, with `GH_REPO` and
+`LAUNCH_FLEET_OVERLOAD_STATE`, clears the durable pause and its pending journal
+under the state lock. It does not read an observation. A later healthy snapshot
+still does not clear a pause by itself. Do not delete or substitute the state
+file to clear a pause.
 
 `escalation: due_not_sent` means only that escalation is due. The orchestrator
 uses its existing escalation channel only under its separate messaging authority.

@@ -12,8 +12,10 @@ import tempfile
 import time
 import uuid
 
+DESCRIPTION = """One bounded CS5 observation/admission decision. Never sends notifications."""
+
 ACTIONS = ('merge-batch', 'automatic-refresh', 'nonessential-poll',
-           'completion', 'reconciliation')
+           'completion', 'reconciliation', 'resume')
 ESSENTIAL = ('completion', 'reconciliation')
 MAX_BYTES = 2 * 1024 * 1024
 MAX_PENDING = 10000
@@ -204,9 +206,13 @@ def pending_triggers(path, repository):
 
 def decision(args):
     raw = b''
+    missing_input = False
     try:
         value, raw = read(args.input)
         result = observe(value, args.repository, args.now, args.max_age)
+    except FileNotFoundError:
+        missing_input = True
+        result = dict(level='unknown', oldest_wait_seconds=None, causes=['observation_unknown'])
     except (OSError, ValueError, TypeError, KeyError, UnicodeError):
         result = dict(level='unknown', oldest_wait_seconds=None, causes=['observation_unknown'])
     digest = hashlib.sha256(raw).hexdigest()
@@ -217,7 +223,7 @@ def decision(args):
     try:
         args.state.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         pending = Path(str(args.state) + '.pending')
-        if result['level'] != 'healthy':
+        if result['level'] != 'healthy' and not missing_input:
             journal(pending, dict(repository=args.repository, paused=True, since=args.now, **trigger))
         lock = os.open(str(args.state) + '.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         with os.fdopen(lock, 'r+') as stream:
@@ -239,7 +245,6 @@ def decision(args):
                 save(args.state, state)
             elif records:
                 sync_directory(args.state.parent)
-            # DATA LOSS: delete only this snapshot: concurrent publishers stay pending.
             for path, _ in records:
                 path.unlink()
             if records:
@@ -257,13 +262,42 @@ def decision(args):
                 pause=state)
 
 
-DESCRIPTION = 'One bounded CS5 observation/admission decision. Never sends notifications.'
+def resume(args):
+    cleared_pause = None
+    cleared_pending = 0
+    try:
+        args.state.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        pending = Path(str(args.state) + '.pending')
+        lock = os.open(str(args.state) + '.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(lock, 'r+') as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                cleared_pause = checked_state(read(args.state)[0], args.repository)
+            except FileNotFoundError:
+                pass
+            records = pending_triggers(pending, args.repository)
+            for path, _ in records:
+                path.unlink()
+                cleared_pending += 1
+            if records:
+                sync_directory(pending)
+            if cleared_pause is not None:
+                args.state.unlink()
+                sync_directory(args.state.parent)
+    except (OSError, ValueError, TypeError, KeyError, UnicodeError):
+        return dict(action='resume', allowed=False, paused=True, resumed=False,
+                    cleared_pause=None, cleared_pending=0, state_saved=False,
+                    causes=['state_unknown'])
+    resumed = cleared_pause is not None or cleared_pending > 0
+    return dict(action='resume', allowed=True, paused=False, resumed=resumed,
+                cleared_pause=cleared_pause, cleared_pending=cleared_pending,
+                state_saved=True, causes=[])
 
 
 def main():
     parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument('--repository', required=True)
-    parser.add_argument('--input', required=True, type=Path)
+    parser.add_argument('--input', type=Path)
     parser.add_argument('--state', required=True, type=Path)
     parser.add_argument('--now', type=int, default=int(time.time()))
     parser.add_argument('--max-age', type=int, default=60)
@@ -271,7 +305,9 @@ def main():
     args = parser.parse_args()
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', args.repository) or args.now < 0 or args.max_age < 0:
         parser.error('invalid repository or observation clock')
-    result = decision(args)
+    if args.action != 'resume' and args.input is None:
+        parser.error('--input is required for ' + args.action)
+    result = resume(args) if args.action == 'resume' else decision(args)
     print(json.dumps(result, sort_keys=True))
     return 0 if result['allowed'] else 1
 

@@ -10,7 +10,8 @@ mkdir -p "$work/bin" "$work/plugin cache/skills/launch-fleet/scripts/carried" \
   "$work/plugin cache/skills/to-tickets" "$work/remote" "$work/runtime"
 cp "$HERE/loop.sh" "$HERE/fleet.sh" "$HERE/records.py" "$HERE/budget.py" "$work/plugin cache/skills/launch-fleet/scripts/"
 cp "$HERE/../../to-tickets/revision.sh" "$HERE/../../to-tickets/check-links.sh" "$work/plugin cache/skills/to-tickets/"
-cp "$HERE/carried/alarm.py" "$work/plugin cache/skills/launch-fleet/scripts/carried/"
+cp "$HERE/carried/alarm.py" "$HERE/carried/supply.py" "$HERE/carried/read_queue.py" \
+  "$work/plugin cache/skills/launch-fleet/scripts/carried/"
 mkdir "$work/plugin cache/skills/launch-fleet/scripts/github-app"
 cp "$HERE/github-app/agent-token.py" "$work/plugin cache/skills/launch-fleet/scripts/github-app/"
 mkdir -p "$work/plugin cache/skills/setup/scripts"
@@ -122,7 +123,8 @@ echo 'ok   later runs refresh the consumer while keeping the packaged helpers'
 mkdir -p "$work/installed/skills/launch-fleet/scripts/carried" "$work/installed/skills/to-tickets"
 cp "$HERE/loop.sh" "$HERE/fleet.sh" "$HERE/records.py" "$HERE/budget.py" "$work/installed/skills/launch-fleet/scripts/"
 cp "$HERE/../../to-tickets/revision.sh" "$HERE/../../to-tickets/check-links.sh" "$work/installed/skills/to-tickets/"
-cp "$HERE/carried/alarm.py" "$work/installed/skills/launch-fleet/scripts/carried/"
+cp "$HERE/carried/alarm.py" "$HERE/carried/supply.py" "$HERE/carried/read_queue.py" \
+  "$work/installed/skills/launch-fleet/scripts/carried/"
 mkdir "$work/installed/skills/launch-fleet/scripts/github-app"
 cp "$HERE/github-app/agent-token.py" "$work/installed/skills/launch-fleet/scripts/github-app/"
 mkdir -p "$work/installed/skills/setup/scripts"

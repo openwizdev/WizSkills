@@ -134,6 +134,14 @@ class Repo(unittest.TestCase):
         self.assertEqual(done.returncode, 2)
         self.assertIn('after --', done.stderr)
 
+    def test_command_not_on_path_refuses_with_2_and_leaves_nothing(self):
+        self.build('red-green')
+        done = self.prove('--base', 'HEAD^', '--test', 'test_calc.py', command=['prove-missing-synthetic'])
+        self.assertEqual((done.returncode, done.stdout), (2, ''))
+        self.assertIn('prove: cannot run prove-missing-synthetic:', done.stderr)
+        self.assertNotIn('Traceback', done.stderr)
+        self.assertGone()
+
 
 PYTEST_PASS = """============================= test session starts ==============================
 collected 2 items
@@ -161,12 +169,18 @@ ERROR test_b.py
 PYTEST_QUIET = """FAILED test_a.py::test_bad - assert 1 == 2
 1 failed, 1 passed in 0.01s
 """
+PYTEST_SPACE = """=========================== short test summary info ============================
+FAILED test_a.py::test_bad[hello world] - assert 1 == 2
+============================== 1 failed in 0.02s ===============================
+"""
 UNITTEST_OK = "..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n"
 UNITTEST_FAIL = "F.\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nFAILED (failures=1)\n"
 UNITTEST_ERRORS = "E.\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nFAILED (errors=1)\n"
 UNITTEST_IMPORT = ("E\n======================================================================\nERROR: test_calc (unittest.loader._FailedTest.test_calc)\n"
                    "ImportError: Failed to import test module: test_calc\n\nRan 1 test in 0.000s\n\nFAILED (errors=1)\n")
 UNITTEST_NONE = "\n----------------------------------------------------------------------\nRan 0 tests in 0.000s\n\nOK\n"
+UNITTEST_UNEXPECTED = ("F.\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\n"
+                       "FAILED (failures=1, unexpected successes=1)\n")
 CARGO_OK = "running 2 tests\ntest a ... ok\ntest b ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
 CARGO_FAIL = ("running 2 tests\ntest a ... ok\ntest b ... FAILED\n\nthread 'b' panicked at src/lib.rs:9:5:\nassertion `left == right` failed\n"
               "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
@@ -181,6 +195,17 @@ NODE_IMPORT = ("  code: 'ERR_MODULE_NOT_FOUND',\n✖ b.test.mjs (31ms)\nℹ test
                "ℹ cancelled 0\n\n✖ failing tests:\n\ntest at b.test.mjs:1:1\n✖ b.test.mjs (31ms)\n  'test failed'\n")
 NODE_TAP = ("TAP version 13\nnot ok 1 - bad\n  ---\n  failureType: 'testCodeFailure'\n  error: '1 == 2'\n  code: 'ERR_ASSERTION'\n  ...\n"
             "1..1\n# tests 1\n# suites 0\n# pass 0\n# fail 1\n# cancelled 0\n")
+NODE_SUBTEST = ("▶ parent\n  ✖ inner (1ms)\n✖ parent (2ms)\n"
+                "ℹ tests 2\nℹ suites 0\nℹ pass 0\nℹ fail 2\nℹ cancelled 0\n\n✖ failing tests:\n\n"
+                "test at a.test.mjs:4:11\n✖ inner (1ms)\n  AssertionError [ERR_ASSERTION]: 1 !== 2\n")
+NODE_SUBTEST_TAP = ("TAP version 13\n    not ok 1 - inner\n      ---\n      failureType: 'testCodeFailure'\n"
+                    "      code: 'ERR_ASSERTION'\n      ...\n"
+                    "not ok 1 - parent\n  ---\n  failureType: 'subtestsFailed'\n  error: '1 subtest failed'\n"
+                    "  code: 'ERR_TEST_FAILURE'\n  ...\n"
+                    "# tests 2\n# suites 0\n# pass 0\n# fail 2\n# cancelled 0\n")
+NODE_SUBTEST_THROWS = ("▶ parent\n  ✖ inner (1ms)\n✖ parent (2ms)\n"
+                       "ℹ tests 2\nℹ suites 0\nℹ pass 0\nℹ fail 2\nℹ cancelled 0\n\n✖ failing tests:\n\n"
+                       "test at a.test.mjs:3:11\n✖ inner (1ms)\n  TypeError: nope\n")
 
 
 class Classify(unittest.TestCase):
@@ -198,14 +223,16 @@ class Classify(unittest.TestCase):
                     ('a test that raises is not red', 1, PYTEST_RAISES, 'error'),
                     ('collection error', 2, PYTEST_COLLECT, 'error'),
                     ('no tests ran', 5, '===== no tests ran in 0.01s =====\n', 'error'),
-                    ('passed summary but non-zero exit', 1, PYTEST_PASS, 'error')])
+                    ('passed summary but non-zero exit', 1, PYTEST_PASS, 'error'),
+                    ('parametrized id with a space', 1, PYTEST_SPACE, 'failed')])
 
     def test_unittest(self):
         self.check([('ok', 0, UNITTEST_OK, 'passed'),
                     ('failure', 1, UNITTEST_FAIL, 'failed'),
                     ('errors', 1, UNITTEST_ERRORS, 'error'),
                     ('import failure', 1, UNITTEST_IMPORT, 'error'),
-                    ('zero tests', 0, UNITTEST_NONE, 'error')])
+                    ('zero tests', 0, UNITTEST_NONE, 'error'),
+                    ('unexpected successes', 1, UNITTEST_UNEXPECTED, 'error')])
 
     def test_cargo(self):
         self.check([('ok', 0, CARGO_OK, 'passed'),
@@ -218,7 +245,10 @@ class Classify(unittest.TestCase):
                     ('assertion', 1, NODE_ASSERT, 'failed'),
                     ('a test that throws is not red', 1, NODE_THROWS, 'error'),
                     ('file does not import', 1, NODE_IMPORT, 'error'),
-                    ('tap assertion', 1, NODE_TAP, 'failed')])
+                    ('tap assertion', 1, NODE_TAP, 'failed'),
+                    ('subtest assertion', 1, NODE_SUBTEST, 'failed'),
+                    ('tap subtest assertion', 1, NODE_SUBTEST_TAP, 'failed'),
+                    ('a subtest that throws is not red', 1, NODE_SUBTEST_THROWS, 'error')])
 
     def test_unrecognised_and_timeout_are_error(self):
         self.check([('no summary, exit 1', 1, 'Traceback (most recent call last):\nAssertionError\n', 'error'),

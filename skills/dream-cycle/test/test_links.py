@@ -58,18 +58,15 @@ class DreamCycleLinksTests(unittest.TestCase):
         candidates = data["candidates"]
         self.assertGreater(len(candidates), 0)
 
-        # Ubiquitous name ExampleOrg must never be the reason for a pair.
         for cand in candidates:
             self.assertNotIn("exampleorg", [e.lower() for e in cand.get("entities", [])])
 
-        # Fixed pairings: promise vs open issue, competitor move vs open ticket, scoreboard vs source.
         types = {c["link_type"] for c in candidates}
         self.assertIn("promise-to-work", types)
         self.assertIn("enemy-move-to-us", types)
         self.assertIn("says-vs-does", types)
 
-        # Cross-repo co-mention (CloudBuild across notes/alpha/skills).
-        refs_sets = [frozenset(e["ref"].split("#")[0] for e in c["ends"]) for c in candidates]
+        refs_sets = [frozenset(e["ref"].split("#L", 1)[0] for e in c["ends"]) for c in candidates]
         self.assertTrue(
             any("example/notes:scoreboard.md" in r and "example/alpha:README.md" in r for r in refs_sets),
             f"expected scoreboard-to-source pair in {refs_sets}",
@@ -85,7 +82,6 @@ class DreamCycleLinksTests(unittest.TestCase):
 
     def test_candidates_caps_per_entity_and_link_budget_and_watermarks(self):
         org = self._copy_fixture_org()
-        # Add 7 files in example/alpha mentioning a rare entity "rarewidget" and 1 in notes.
         (org / "org" / "notes" / "people" / "rare.md").write_text(
             "# Rare\nContact: rarewidget\n", encoding="utf-8"
         )
@@ -107,7 +103,6 @@ class DreamCycleLinksTests(unittest.TestCase):
         )
         self.assertLessEqual(rare_count, 5)
 
-        # Future watermark with no changed files yields 0 candidates unless listed in read_since.
         wm_path = self.tmp / "watermarks.json"
         wm_path.write_text(json.dumps({
             "repos": {
@@ -123,7 +118,6 @@ class DreamCycleLinksTests(unittest.TestCase):
         self.assertEqual(code2, 0, err2)
         self.assertEqual(data2["candidates"], [])
 
-        # Adding one file to read_since yields candidates touching that file.
         wm_path.write_text(json.dumps({
             "repos": {
                 "example/notes": {"since": "2099-01-01"},
@@ -180,10 +174,6 @@ class DreamCycleLinksTests(unittest.TestCase):
 
         scored = data["scored"]
         scored_ids = [item["id"] for item in scored]
-        # sc-promise: impact 3 * sources 2 * high(3) = 18
-        # sc-tie-newer: impact 2 * sources 2 * medium(2) = 8 (newest 2030-01-15)
-        # sc-tie-older: impact 2 * sources 2 * medium(2) = 8 (newest 2030-01-06)
-        # sc-info: impact 1 * sources 1 * low(1) = 1
         self.assertEqual(scored_ids, ["sc-promise", "sc-tie-newer", "sc-tie-older", "sc-info"])
         scores = {item["id"]: item["score"] for item in scored}
         self.assertEqual(scores["sc-promise"], 18)
@@ -217,7 +207,6 @@ class DreamCycleLinksTests(unittest.TestCase):
         self.assertEqual(set(expired), {"led-missing-end-001", "led-changed-quote-001", "led-uncited-001"})
         self.assertIn("30", expired["led-uncited-001"])
 
-        # Append-only: original lines are intact at the top and every line validates against schema.
         final_lines = ledger_path.read_text(encoding="utf-8").splitlines()
         self.assertEqual(final_lines[:len(initial_lines)], initial_lines)
         self.assertEqual(len(final_lines), len(initial_lines) + 6)
@@ -225,7 +214,6 @@ class DreamCycleLinksTests(unittest.TestCase):
             record = parse_json_strict(line)
             validate(self.schema, {"$ref": "#/$defs/ledger_entry"}, record)
 
-        # Canaries picks known-true (accepted) and known-junk (rejected) deterministically.
         code_c, canaries, err_c = _run(
             "canaries",
             "--ledger", str(ledger_path),
@@ -251,6 +239,101 @@ class DreamCycleLinksTests(unittest.TestCase):
         self.assertIsNotNone(data)
         sources = [item["source"] for item in data["unconfirmed"]]
         self.assertIn("example/missing", sources)
+
+        ledger_path = self.tmp / "unconfirmed_ledger.jsonl"
+        ledger_path.write_text(
+            json.dumps({
+                "id": "led-unread-001",
+                "state": "accepted",
+                "link_type": "says-vs-does",
+                "ends": [
+                    {"ref": "example/missing:README.md#L1", "quote": "Claim", "seen": "2030-01-14"},
+                    {"ref": "example/alpha:README.md#L4", "quote": "Offline mode is not supported yet.", "seen": "2030-01-14"},
+                ],
+                "changes": "Fix claim.",
+                "owner": "product",
+                "valid_from": "2030-01-14",
+                "invalid_at": None,
+                "reason": "",
+                "superseded_by": None,
+                "last_cited": "2030-01-14",
+            }) + "\n",
+            encoding="utf-8",
+        )
+        code_l, data_l, err_l = _run(
+            "ledger", "--ledger", str(ledger_path), "--settings", str(settings_path), "--recheck", "--date", "2030-01-15"
+        )
+        self.assertEqual(code_l, 2, err_l)
+        self.assertEqual(data_l["expired"], [])
+        self.assertEqual(data_l["kept"], ["led-unread-001"])
+        self.assertIn("example/missing", [u["source"] for u in data_l["unconfirmed"]])
+
+    def test_ledger_append_validates_schema_and_blocks_null_changes_confirmed(self):
+        ledger_path = self.tmp / "append_ledger.jsonl"
+        transitions = self.tmp / "transitions.jsonl"
+        transitions.write_text(
+            "\n".join([
+                json.dumps({
+                    "id": "led-new-001",
+                    "state": "proposed",
+                    "link_type": "says-vs-does",
+                    "ends": [
+                        {"ref": "example/notes:scoreboard.md#L7", "quote": "Supported fully", "seen": "2030-01-14"},
+                        {"ref": "example/alpha:README.md#L4", "quote": "Offline mode is not supported yet.", "seen": "2030-01-14"},
+                    ],
+                    "changes": "Fix scoreboard row.",
+                    "owner": "product",
+                    "reason": "",
+                    "superseded_by": None,
+                    "last_cited": None,
+                }),
+                json.dumps({
+                    "id": "led-bad-verdict",
+                    "state": "accepted",
+                    "link_type": "says-vs-does",
+                    "ends": [
+                        {"ref": "example/notes:scoreboard.md#L7", "quote": "Supported fully", "seen": "2030-01-14"},
+                        {"ref": "example/alpha:README.md#L4", "quote": "Offline mode is not supported yet.", "seen": "2030-01-14"},
+                    ],
+                    "changes": "Fix scoreboard row.",
+                    "owner": "product",
+                    "reason": "",
+                    "superseded_by": None,
+                    "last_cited": "2030-01-15",
+                }),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        verdicts = self.tmp / "verdicts.jsonl"
+        verdicts.write_text(
+            json.dumps({
+                "id": "led-bad-verdict",
+                "verdict": "CONFIRMED",
+                "reason": "Missing changes_confirmed.",
+                "evidence": ["grep -F Offline README.md -> 1 match"],
+                "blind": True,
+                "changes_confirmed": None,
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        code, data, err = _run(
+            "ledger",
+            "--ledger", str(ledger_path),
+            "--append", str(transitions),
+            "--verdicts", str(verdicts),
+            "--date", "2030-01-15",
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(data["appended"], 1)
+        self.assertEqual(len(data["rejected_verdicts"]), 1)
+        self.assertEqual(data["rejected_verdicts"][0]["id"], "led-bad-verdict")
+
+        lines = ledger_path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 1)
+        rec = parse_json_strict(lines[0])
+        validate(self.schema, {"$ref": "#/$defs/ledger_entry"}, rec)
+        self.assertEqual(rec["id"], "led-new-001")
 
 
 if __name__ == "__main__":

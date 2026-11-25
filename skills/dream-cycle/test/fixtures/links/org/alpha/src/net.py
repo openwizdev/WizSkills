@@ -1,3 +1,2 @@
-# Alpha network helper
+ORG = "ExampleOrg"
 raise OfflineError("network required")
-# Organization: ExampleOrg

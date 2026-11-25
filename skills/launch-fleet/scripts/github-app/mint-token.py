@@ -6,18 +6,16 @@ import sys
 
 import app
 
+DESCRIPTION = """Mint one read-only installation token on the PC, downscoped to the selected repositories.
 
-DESCRIPTION = (
-    'Mint one read-only installation token on the PC, downscoped to the selected repositories.\n'
-    '\n'
-    '--repository is required (C8, #2315): the token covers exactly those selected\n'
-    'repositories of one owner. Stdout is two lines: the token, then its expiry in\n'
-    'Unix seconds. Agent reads use this through tools/github-reads/read.py only.\n'
-    '\n'
-    "The installation is read back first (C-G1/J48, #606): a user's own App mints\n"
-    "only on its owner's account; OPENWIZ_GITHUB_APP_MODE=factory is the explicit\n"
-    "setting for the factory's App and its named installations only.\n"
-)
+--repository is required (C8, #2315): the token covers exactly those selected
+repositories of one owner. Stdout is two lines: the token, then its expiry in
+Unix seconds. Agent reads use this through the carried WizSkills reader only.
+
+The installation is read back first (C-G1/J48, #606): a user's own App mints
+only on its owner's account; OPENWIZ_GITHUB_APP_MODE=factory is the explicit
+setting for the factory's App and its named installations only.
+"""
 
 
 def main():
@@ -55,17 +53,21 @@ def main():
                           body, jwt)
     finally:
         os.close(directory)
-    app.permissions(result.get("permissions"))
     token = result.get("token")
-    app.require(isinstance(token, str) and
-                re.fullmatch(r"[A-Za-z0-9._~+/-]+=*", token) is not None)
-    expiry = datetime.fromisoformat(result["expires_at"].replace("Z", "+00:00"))
-    remaining = (expiry - datetime.now(timezone.utc)).total_seconds()
-    app.require(0 < remaining <= 3600 + 300)
-    listed = result.get("repositories")
-    app.require(result.get("repository_selection") == "selected" and isinstance(listed, list))
-    app.require(all(isinstance(r, dict) and isinstance(r.get("full_name"), str) for r in listed))
-    app.require(sorted(r["full_name"].lower() for r in listed) == selected)
+    try:
+        app.permissions(result.get("permissions"))
+        app.require(isinstance(token, str) and
+                    re.fullmatch(r"[A-Za-z0-9._~+/-]+=*", token) is not None)
+        expiry = datetime.fromisoformat(result["expires_at"].replace("Z", "+00:00"))
+        remaining = (expiry - datetime.now(timezone.utc)).total_seconds()
+        app.require(0 < remaining <= 3600 + 300)
+        listed = result.get("repositories")
+        app.require(result.get("repository_selection") == "selected" and isinstance(listed, list))
+        app.require(all(isinstance(r, dict) and isinstance(r.get("full_name"), str) for r in listed))
+        app.require(sorted(r["full_name"].lower() for r in listed) == selected)
+    except Exception:
+        app.revoke(args.api_base, token)
+        raise
     print(token)
     print(int(expiry.timestamp()))
 

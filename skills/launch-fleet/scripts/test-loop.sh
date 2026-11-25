@@ -199,7 +199,8 @@ cp "$work/world-on.json" "$work/world.json"
   [ "$(cat "$work/read.log")" = 'none account' ]
   [ "$(cat "$work/order.log")" = "$(printf 'read\nhelper')" ])
 [ "$(jq -c .legacy_key "$work/service.log")" = false ]
-[ "$(jq -c .request "$work/service.log")" = '{"schema":"openwiz.token-service.v1","kind":"request","requester":"fleet-check","repositories":["synthetic-owner/synthetic-repo"],"permissions":{"metadata":"read","contents":"read","issues":"read","pull_requests":"read","checks":"read","actions":"read"}}' ]
+[ "$(jq -r '.request.answer_key | startswith("-----BEGIN PUBLIC KEY-----\n")' "$work/service.log")" = true ]
+[ "$(jq -c '.request | del(.answer_key)' "$work/service.log")" = '{"schema":"openwiz.token-service.v1","kind":"request","requester":"fleet-check","repositories":["synthetic-owner/synthetic-repo"],"permissions":{"metadata":"read","contents":"read","issues":"read","pull_requests":"read","checks":"read","actions":"read"}}' ]
 [ "$(jq -c .argv "$work/service.log")" = '["mint"]' ]
 ! grep -q "$ga4" "$work/out" "$work/err" "$work/gh.log"
 cp "$work/world-off.json" "$work/world.json"

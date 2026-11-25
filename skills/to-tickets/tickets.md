@@ -14,7 +14,19 @@ the size. A ticket of size L is split, never cut. In Owned paths give each exact
 file or folder in backticks, with
 `in \`owner/repo\`` when it is another repository's.
 Mark a small shared file `(shared)` and name the separate lines each ticket
-owns. `**Relies on:**` lists exact backticked interface-file paths on one line,
+owns.
+
+A ticket that adds a **driver**, a **harness row**, a **skill** or a **loop**
+also owns its market listing. Owned paths gets
+`` `listings/<id>.json` in `openwizdev/WizMarket` ``. The builder opens that
+listing in its own pull request on WizMarket as soon as the ticket starts:
+`stage: being-built`, `status: listed`, and the first link is this ticket,
+under `contracts/listing.v1.md` there. Acceptance criteria gets one line: the
+listing is merged, and when the work ships its listing's `stage` is moved to
+`available` (and its `status` to `verified` once its kit receipt or pinned
+check exists).
+
+`**Relies on:**` lists exact backticked interface-file paths on one line,
 or `nothing`. Use `## Done by` for a person's ticket. Proof names the spec
 claim and how to show it, red first.
 

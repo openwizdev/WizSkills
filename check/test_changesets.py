@@ -264,6 +264,15 @@ class Release(unittest.TestCase):
         self.assertEqual(sorted(status), [' D .changeset/one.md', ' M .claude-plugin/plugin.json',
                                           ' M CHANGELOG.md', ' M skills/alpha/SKILL.md'])
 
+    def test_write_stamps_the_brief_clone_version(self):
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+        repo.write('skills/launch-fleet/scripts/brief.py', "WIZSKILLS_VERSION = '0.2.0'\n")
+        repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
+        code, out = self.release(repo, '--write')
+        self.assertEqual(code, 0, out)
+        self.assertEqual((repo.dir / 'skills/launch-fleet/scripts/brief.py').read_text(),
+                         "WIZSKILLS_VERSION = '0.2.1'\n")
+
 
 IGNORED_NAMES = ('.hidden-fix.md', 'Readme.md', 'AGENTS.md', 'CLAUDE.md', 'GEMINI.md')
 IGNORED_WHY = 'is a name Changesets ignores: rename it (see .changeset/README.md)'

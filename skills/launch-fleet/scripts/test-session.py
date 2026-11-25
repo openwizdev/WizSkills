@@ -1090,9 +1090,10 @@ class Session(unittest.TestCase):
         self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
         self.assertEqual(self.merges(), [])
         self.assertEqual(self.probes(), 0)
-        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 3)
-        self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
-        self.assertEqual(self.merges(), [])
+        self.assertFalse((self.home / 'shared-pause.json').exists(),
+                         'a supplier that leaves no observation must not latch a pause')
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 0)
+        self.assertIn('#12 merged', out)
 
     def test_with_a_healthy_supplier_the_session_makes_no_probe_of_its_own(self):
         self.approved()
@@ -1339,8 +1340,6 @@ class Session(unittest.TestCase):
 
 
 class OverloadAlarm(unittest.TestCase):
-    """A missing observation refuses one batch and leaves no pause. resume clears a real one."""
-
     def setUp(self):
         temp = tempfile.TemporaryDirectory(prefix='overload alarm ')
         self.addCleanup(temp.cleanup)

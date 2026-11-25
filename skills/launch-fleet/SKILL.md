@@ -43,7 +43,7 @@ Done when every line is done and recorded and the check prints no line you could
 
 | Line | Do |
 | --- | --- |
-| `start #N` | Claim `launch-fleet: starting`, start the builder, and edit the claim to `launch-fleet: started`, `start not tried: quota[, resets <UTC>]` or `start refused: <reason>`: read [references/builders.md](references/builders.md#the-due-lines-in-full) on a `start #N` line |
+| `start #N` | Claim `launch-fleet: starting`, start the builder, and edit the claim to `launch-fleet: started` or `start refused: <reason>`: read [references/builders.md](references/builders.md#the-due-lines-in-full) on a `start #N` line |
 | `reconcile start`, `check start`, `resume`, `reconcile resume` | [references/builders.md](references/builders.md). A ticket never gets two builders; never resend without proof the earlier delivery failed |
 | `review #P for #N at <commit>` | Claim `launch-fleet: review starting <commit>`, start the selected reviewer (with usage-limit fallback), and edit the claim: read [references/reviews.md](references/reviews.md#the-due-lines-in-full) on a `review` line |
 | `re-check`, `reconcile review`, `check review`, `findings`, `re-test`, `merge main in`, `reopen` | [references/reviews.md](references/reviews.md): the same reviewer re-checks, one review plus one re-check, at most one fresh round, a parked finding waits for Jake |

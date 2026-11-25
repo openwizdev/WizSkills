@@ -470,6 +470,45 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
             tickets = json.loads(tickets_json.read_text(encoding="utf-8"))
             self.assertEqual([t["id"] for t in tickets], ["del-001"])
 
+    def test_report_second_check_most_conservative_verdict_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            fdir = out_dir / "findings"
+            vdir = out_dir / "verdicts"
+            fdir.mkdir()
+            vdir.mkdir()
+
+            lnk = _make_link("lnk-recheck", route="ticket", ticket="Should not be filed after reject")
+            (fdir / "s.jsonl").write_text(json.dumps(lnk) + "\n", encoding="utf-8")
+            # Earlier file REJECTED, later file CONFIRMED -> REJECTED must win
+            (vdir / "batch_01.jsonl").write_text(
+                json.dumps(_make_verdict("lnk-recheck", "REJECTED", reason="Second check rejected", changes_confirmed=False)) + "\n",
+                encoding="utf-8",
+            )
+            (vdir / "batch_02.jsonl").write_text(
+                json.dumps(_make_verdict("lnk-recheck", "CONFIRMED", reason="First check confirmed", changes_confirmed=True)) + "\n",
+                encoding="utf-8",
+            )
+
+            merged_file = out_dir / "merged.json"
+            report_md = out_dir / "report.md"
+            tickets_json = out_dir / "tickets.json"
+            self.assertEqual(
+                self._run("merge", str(fdir), "--out", str(merged_file), "--batches-dir", str(out_dir / "b"), "--batches", "1").returncode,
+                0,
+            )
+            proc = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--out", str(report_md),
+                "--tickets-out", str(tickets_json),
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(json.loads(tickets_json.read_text(encoding="utf-8")), [])
+            report = report_md.read_text(encoding="utf-8")
+            self.assertIn("Second check rejected", report)
+            self.assertIn("- Second check rejected: 1", report)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

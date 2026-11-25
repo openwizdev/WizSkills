@@ -29,6 +29,7 @@ SUITES = {
     'triage': [['python3', '-I', 'skills/triage/test/test_find_work.py'],
                ['python3', '-I', 'skills/triage/test/test_public_records.py']],
     'feedback': [['python3', '-I', 'skills/feedback/test/test_feedback.py']],
+    'ghost': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/ghost/tests']],
     'install': [['python3', '-I', 'skills/install/tests/test_first_fleet.py'],
                 ['python3', '-I', 'skills/install/tests/test_doctor.py'],
                 ['python3', '-I', 'skills/install/tests/test_onboarding.py']],
@@ -116,6 +117,7 @@ ORIGINAL = "**Source:** new, original to OpenWiz. Not adapted from Matt Pocock's
 SOURCE_LINES = {
     'dream-cycle': ORIGINAL,
     'feedback': ORIGINAL,
+    'ghost': ORIGINAL,
     'hill-climb': ORIGINAL,
     'huntr': ORIGINAL,
     'image': ORIGINAL,

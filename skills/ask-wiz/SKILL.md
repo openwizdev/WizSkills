@@ -51,6 +51,7 @@ Done when the user has one named recommendation with its start words, and nothin
 | `handoff` | Give a fresh orchestrator the project's durable state |
 | `write-driver` | Write and prove an OpenWiz driver for your own host, from one pasted line |
 | `dream-cycle` | Run an organization-wide read-only review into a private report and confirmed tickets |
+| `ghost` | Set up ghost text and keep a phrase change only when the bench does not drop |
 | `ask-wiz` | Choose a skill or flow when unsure, started by the user |
 
 At a phase boundary (a design settled, a plan written, a ticket built, a result checked), read [the CloudRoom thread guide](PHASE-BOUNDARIES.md) to choose whether to keep going, start a fresh thread from a handoff, or send a bounded task to a child thread.

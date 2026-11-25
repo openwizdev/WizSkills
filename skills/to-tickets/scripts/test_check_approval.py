@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -676,6 +677,142 @@ class ApprovalTest(unittest.TestCase):
     def test_bad_arguments_never_read(self):
         for argument in ("0", "-1", "172x", "01", ""):
             self.assertEqual(self.run_check(fixture(172), status=2, reason="usage:", argument=argument), [])
+
+    def test_a_current_machine_plan_approval_is_accepted_and_a_stale_fingerprint_is_refused(self):
+        spec = "401"
+        meta = ('"#\\(.number)\\t\\([.blockedBy.nodes[].number] | sort | map("#" + tostring) | join(" ") | '
+                'if . == "" then "none" else . end)\\t\\(.title)"')
+        fake = '''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with open(os.environ["FAKE_LOG"], "a") as log:
+    log.write(json.dumps(args) + "\\n")
+w = json.loads(Path(os.environ["FAKE_WORLD"]).read_text())
+n = os.environ["FAKE_SPEC"]
+
+def emit(text):
+    sys.stdout.write(text if text.endswith("\\n") else text + "\\n")
+
+if args == ["repo", "view", "--json", "isPrivate,nameWithOwner"]:
+    print(json.dumps(w["repo"]))
+elif args == ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/triage-labels.md"]:
+    print(w["labels_doc"], end="")
+elif args == ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/issue-tracker.md"]:
+    print(w["tracker_doc"], end="")
+elif args == ["api", "-H", "Accept: application/vnd.github.raw+json", "repos/{owner}/{repo}/contents/docs/agents/fleet.md"]:
+    print(w["fleet_doc"], end="")
+elif args == ["issue", "view", n, "--json", "body,createdAt,subIssues"]:
+    print(json.dumps(w["graph"]))
+elif args == ["api", "--paginate", "repos/{owner}/{repo}/issues/" + n + "/comments?per_page=100"]:
+    for page in w["comments"]:
+        print(json.dumps(page))
+elif len(args) >= 6 and args[:2] == ["issue", "view"] and args[3:5] == ["--json", "subIssues"] and args[2] == n:
+    nodes = w["graph"]["subIssues"]
+    print(nodes["totalCount"])
+    for node in nodes["nodes"]:
+        print(node["number"])
+elif len(args) >= 6 and args[:2] == ["issue", "view"] and args[3:5] == ["--json", "body"]:
+    body = w["graph"]["body"] if args[2] == n else w["tickets"][args[2]]["body"]
+    emit(body)
+elif len(args) >= 6 and args[:2] == ["issue", "view"] and args[3:5] == ["--json", "number,title,blockedBy"]:
+    ticket = w["tickets"][args[2]]
+    shown = " ".join("#" + str(item) for item in sorted(ticket["blockedBy"])) or "none"
+    print("#%s\\t%s\\t%s" % (ticket["number"], shown, ticket["title"]))
+else:
+    sys.exit("unexpected gh call: " + repr(args))
+'''
+        with tempfile.TemporaryDirectory(prefix="machine-approval-") as folder:
+            tmp = Path(folder)
+            (tmp / "gh").write_text(fake)
+            (tmp / "gh").chmod(0o700)
+            world = {
+                "graph": {"subIssues": {"totalCount": 1, "nodes": [{"number": 4011}]},
+                          "createdAt": "2026-11-01T00:00:00Z", "body": "Synthetic problem.\n"},
+                "tickets": {"4011": {"number": 4011, "title": "Synthetic ticket 4011", "blockedBy": [],
+                                     "body": "Synthetic ticket body.\n"}},
+                "comments": [[{"id": 100, "user": dict(FACTORY), "body": "placeholder\n"}]],
+                "labels_doc": LABELS,
+                "fleet_doc": FLEET,
+                "tracker_doc": "# Tracker\n\n- **Private records:** `synthetic-records/archive`, permanently private.\n",
+                "repo": {"isPrivate": False, "nameWithOwner": "example/public"},
+            }
+            world_path = tmp / "world.json"
+            log_path = tmp / "calls"
+            world_path.write_text(json.dumps(world))
+            env = dict(os.environ, PATH=str(tmp) + os.pathsep + os.environ["PATH"],
+                       FAKE_WORLD=str(world_path), FAKE_LOG=str(log_path), FAKE_SPEC=spec)
+            revision = subprocess.run(["sh", str(HERE.parent / "revision.sh"), spec],
+                                      env=env, text=True, capture_output=True, timeout=20)
+            self.assertEqual(revision.returncode, 0, revision.stderr)
+            fingerprint = hashlib.sha256(revision.stdout.encode()).hexdigest()
+            record = (
+                "**Machine plan approval, 2026-11-01, revision 1:** "
+                "links, relies, sizes, width and owned paths passed.\n"
+                "Grill confirmed: https://github.com/example/private/issues/1#issuecomment-2\n"
+                "\n"
+                "Checks: 1 tickets; links 0; relies 0; sizes S 1, M 0, L 0; "
+                "width: chain 1, widest 1; owned paths 0.\n"
+                "\n"
+                "| Ticket | Title | Blocked by | Label |\n"
+                "| --- | --- | --- | --- |\n"
+                "| #4011 | Synthetic ticket 4011 | none | ready-for-agent |\n"
+                "\n"
+                "Fingerprint: `%s`\n"
+                "\n"
+                "<details><summary>Revision text</summary>\n"
+                "\n"
+                "```text\n%s```\n"
+                "\n"
+                "</details>\n"
+            )
+
+            def check(body):
+                world["comments"] = [[{"id": 100, "user": dict(FACTORY), "body": body}]]
+                world_path.write_text(json.dumps(world))
+                log_path.write_text("")
+                return subprocess.run(["sh", str(CHECKER), spec], env=env, text=True,
+                                      capture_output=True, timeout=20)
+
+            accepted = check(record % (fingerprint, revision.stdout))
+            self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+            self.assertEqual(accepted.stdout, "check-approval.sh: #401 approval table is valid\n")
+            self.assertEqual(accepted.stderr, "")
+            calls = [json.loads(line) for line in log_path.read_text().splitlines()]
+            self.assertEqual(calls, [
+                ["api", "-H", "Accept: application/vnd.github.raw+json",
+                 "repos/{owner}/{repo}/contents/docs/agents/triage-labels.md"],
+                ["api", "-H", "Accept: application/vnd.github.raw+json",
+                 "repos/{owner}/{repo}/contents/docs/agents/issue-tracker.md"],
+                ["api", "-H", "Accept: application/vnd.github.raw+json",
+                 "repos/{owner}/{repo}/contents/docs/agents/fleet.md"],
+                ["issue", "view", spec, "--json", "body,createdAt,subIssues"],
+                ["api", "--paginate", f"repos/{{owner}}/{{repo}}/issues/{spec}/comments?per_page=100"],
+                ["repo", "view", "--json", "isPrivate,nameWithOwner"],
+                ["issue", "view", spec, "--json", "subIssues", "--jq",
+                 ".subIssues.totalCount, (.subIssues.nodes[].number)"],
+                ["issue", "view", spec, "--json", "body", "--jq", ".body"],
+                ["issue", "view", "4011", "--json", "number,title,blockedBy", "--jq", meta],
+                ["issue", "view", "4011", "--json", "body", "--jq", ".body"],
+            ])
+            flipped = ("b" if fingerprint[0] == "a" else "a") + fingerprint[1:]
+            stale = check(record % (flipped, revision.stdout))
+            self.assertEqual(stale.returncode, 1, stale.stdout + stale.stderr)
+            self.assertEqual(stale.stdout, "")
+            self.assertIn("fingerprint does not match", stale.stderr)
+            outsider = record % (fingerprint, revision.stdout)
+            world["comments"] = [[{"id": 100, "user": dict(OUTSIDER), "body": outsider}]]
+            world_path.write_text(json.dumps(world))
+            log_path.write_text("")
+            refused = subprocess.run(["sh", str(CHECKER), spec], env=env, text=True,
+                                     capture_output=True, timeout=20)
+            self.assertEqual(refused.returncode, 1, refused.stdout + refused.stderr)
+            self.assertIn("no posted plan graph approval", refused.stderr)
+            self.assertNotIn("--jq", log_path.read_text())
+            malformed = check("**Machine plan approval, yesterday:** not a record.\n")
+            self.assertEqual(malformed.returncode, 1, malformed.stdout + malformed.stderr)
+            self.assertIn("no posted plan graph approval", malformed.stderr)
+            self.assertNotIn("--jq", log_path.read_text())
 
 
 APPROVE = HERE / "approve.py"

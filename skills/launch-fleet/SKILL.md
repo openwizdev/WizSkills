@@ -1,6 +1,6 @@
 ---
 name: launch-fleet
-description: Launch a project's fleets and move each approved plan graph's tickets through build, review and merge. Use when a plan graph is approved, when a loop wakes you with due lines or GitHub's messages, when moving a spec to fresh wakes, or to see what a fleet has due. Not for planning (to-tickets), building (build-ticket) or reviewing (review-ticket).
+description: Launch fleets and move approved tickets through build, review and merge. Use when a plan graph is approved, a fleet wakes or you need to see what is due.
 version: 1.0.0
 ---
 
@@ -73,6 +73,6 @@ Starting a spec's fleet thread and its per-wake Orchestrator-row check: read [re
 
 ## GitHub identity
 
-App identity (off for everyone) and `Record authors`: read [references/identity.md](references/identity.md) before acting on a comment or when GitHub identity changes.
+App identity (off unless `fleet.md`'s one `App identity` row says exactly `on`, OpenWiz #2835) and `Record authors`: read [references/identity.md](references/identity.md) before acting on a comment or when GitHub identity changes.
 
 Credit: adapted from Matt Pocock's skills under the MIT License; the notice and sources are in [NOTICE.md](NOTICE.md).

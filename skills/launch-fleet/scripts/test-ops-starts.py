@@ -1044,6 +1044,80 @@ class ModelsTable(unittest.TestCase):
                     self.assertEqual((run.returncode, run.stdout, run.stderr[:21]),
                                      (2, '', 'ops-starts: refused: '))
 
+    def test_gemini_antigravity_cross_family_reviews_both_ways(self):
+        claude = dict(provider='claude-code', model='claude-opus-5-5', effort='medium')
+        gemini = dict(provider='antigravity', model='gemini-4-neon', effort='medium')
+        claude_builder_gemini_reviewer = self.one.replace(
+            '| Reviewer | Codex | Sol 6.2 | Medium | `--provider codex --model gpt-6.2-sol --reasoning-level medium` |',
+            '| Reviewer | Antigravity | Gemini 4 Neon | Medium | `--provider antigravity --model gemini-4-neon --reasoning-level medium` |',
+        )
+        self.assertEqual(
+            self.pass_settings(claude_builder_gemini_reviewer, built_by='claude-code')['review_start'],
+            gemini,
+        )
+        self.assertEqual(
+            self.pass_settings(claude_builder_gemini_reviewer, built_by='antigravity')['review_start'],
+            claude,
+        )
+        gemini_builder_claude_reviewer = self.one.replace(
+            '| Builder | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |',
+            '| Builder | Antigravity | Gemini 4 Neon | Medium | `--provider antigravity --model gemini-4-neon --reasoning-level medium` |',
+        ).replace(
+            '| Reviewer | Codex | Sol 6.2 | Medium | `--provider codex --model gpt-6.2-sol --reasoning-level medium` |',
+            '| Reviewer | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |',
+        )
+        self.assertEqual(
+            self.pass_settings(gemini_builder_claude_reviewer, built_by='antigravity')['review_start'],
+            claude,
+        )
+        self.assertEqual(
+            self.pass_settings(gemini_builder_claude_reviewer, built_by='claude-code')['review_start'],
+            gemini,
+        )
+        same_gemini = gemini_builder_claude_reviewer.replace(
+            '| Reviewer | Claude Code | Opus 5.5 | Medium | `--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |',
+            '| Reviewer | Antigravity | Gemini 4 Neon | Medium | `--provider antigravity --model gemini-4-neon --reasoning-level medium` |',
+        )
+        self.assertEqual(
+            self.pass_settings(same_gemini, built_by='antigravity')['review_start'],
+            'refused: no other-family reviewer: the review waits, never swapped',
+        )
+        five = (MODELS / 'five-tables/fleet.md').read_text()
+        self.assertEqual(
+            self.pass_settings(five, built_by='antigravity')['review_start'],
+            'refused: no other-family reviewer: the review waits, never swapped',
+        )
+        older_with_gemini = five.replace(
+            '| Harness | Codex | `--provider codex` |\n| Model | Sol 6.2 | `--model gpt-6.2-sol` |',
+            '| Harness | Antigravity | `--provider antigravity` |\n| Model | Gemini 4 Neon | `--model gemini-4-neon` |',
+            1,
+        ) + (
+            '\n## Reviewer for Gemini-built\n\n'
+            '| Setting | Value | `room-cli thread spawn` flag |\n'
+            '| --- | --- | --- |\n'
+            '| Harness | Claude Code | `--provider claude-code` |\n'
+            '| Model | Opus 5.5 | `--model claude-opus-5-5` |\n'
+            '| Effort | Medium | `--reasoning-level medium` |\n'
+        )
+        self.assertEqual(
+            self.pass_settings(older_with_gemini, built_by='claude-code')['review_start'],
+            gemini,
+        )
+        self.assertEqual(
+            self.pass_settings(older_with_gemini, built_by='antigravity')['review_start'],
+            claude,
+        )
+        run = self.flags(claude_builder_gemini_reviewer, 'review_of_gemini_built')
+        self.assertEqual(
+            (run.returncode, run.stdout),
+            (0, '--provider claude-code --model claude-opus-5-5 --reasoning-level medium\n'),
+        )
+        run = self.flags(gemini_builder_claude_reviewer, 'fix_round_for_gemini_builder')
+        self.assertEqual(
+            (run.returncode, run.stdout),
+            (0, '--provider antigravity --model gemini-4-neon --reasoning-level medium\n'),
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

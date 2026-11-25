@@ -66,7 +66,7 @@ def digest(value):
                                      allow_nan=False).encode()).hexdigest()
 
 
-FAMILY = {'claude-code': 'claude', 'codex': 'gpt'}
+FAMILY = {'claude-code': 'claude', 'codex': 'gpt', 'antigravity': 'gemini'}
 REFUSAL_ALIASES = {
     'claude-code': ('claude', 'claude-code'),
     'antigravity': ('gemini', 'antigravity'),
@@ -87,6 +87,8 @@ STARTS = {'fleet_thread': ('roles', 'orchestrator'), 'builder': ('roles', 'build
           'small_builder': ('roles', 'small_builder'), 'review_of_claude_built': ('reviews', 'claude'),
           'review_of_gpt_built': ('reviews', 'gpt'), 'fix_round_for_claude_builder': ('fixers', 'claude'),
           'fix_round_for_gpt_builder': ('fixers', 'gpt')}
+NAMED_STARTS = {**STARTS, 'review_of_gemini_built': ('reviews', 'gemini'),
+                'fix_round_for_gemini_builder': ('fixers', 'gemini')}
 REVIEW_SORT_CHOICES = {'Gemini Neon Low': dict(provider='antigravity', model=None, effort='low')}
 REVIEW_SORT_LINE = re.compile(r'^Review sort:(.*)$')
 REVIEW_SORT_TABLE = re.compile(r'^\|[ \t]*Review sort[ \t]*(?:\||$)')
@@ -237,20 +239,33 @@ def _older_tables(text):
             raise ValueError(f'fleet settings: not exactly one Fixer row {family}')
         choice = _choice(mine[0][1:4], *_flags(mine[0][4]))
         fixers.append(choice if FAMILY.get(choice['provider']) == own_family else None)
-    if len(rows) != 2:
+    gemini_rows = [row for row in rows if row[0] == 'Gemini']
+    if len(gemini_rows) > 1 or len(rows) != 2 + len(gemini_rows):
         raise ValueError('fleet settings: a Fixer table without exactly its Claude and GPT rows')
+    gemini_fixer = None
+    if gemini_rows:
+        choice = _choice(gemini_rows[0][1:4], *_flags(gemini_rows[0][4]))
+        gemini_fixer = choice if FAMILY.get(choice['provider']) == 'gemini' else None
+    fixers.append(gemini_fixer)
+    gemini_section = _section(text, 'Reviewer for Gemini-built')
+    for_gemini = _setting_table(gemini_section, 'Reviewer for Gemini-built') if gemini_section is not None else None
     builder, small, for_claude, for_gpt = tables
-    if (for_claude['provider'] != 'codex' or for_gpt['provider'] != 'claude-code'
+    if (FAMILY.get(for_claude['provider']) in (None, 'claude')
+            or FAMILY.get(for_gpt['provider']) in (None, 'gpt')
+            or (for_gemini is not None and FAMILY.get(for_gemini['provider']) in (None, 'gemini'))
             or {builder['provider'], small['provider']} - set(FAMILY)):
         raise ValueError('fleet settings: builder/reviewer tables break the family rule')
-    own = 0 if FAMILY[builder['provider']] == 'claude' else 1
+    own = ('claude', 'gpt', 'gemini').index(FAMILY[builder['provider']])
+    reviewer_choices = (for_claude, for_gpt, for_gemini)
     older = dict(follows=None, choice=None)
     return dict(read='older_tables',
                 roles=dict(orchestrator=dict(older, follows='builder', choice=builder),
-                           builder=dict(older, choice=builder), reviewer=dict(older, choice=tables[2 + own]),
+                           builder=dict(older, choice=builder), reviewer=dict(older, choice=reviewer_choices[own]),
                            small_builder=dict(older, choice=small), fixer=dict(older, choice=fixers[own])),
-                reviews=dict(claude=dict(choice=for_claude, row='Reviewer'), gpt=dict(choice=for_gpt, row='Reviewer')),
-                fixers=dict(claude=dict(choice=fixers[0], row='Fixer'), gpt=dict(choice=fixers[1], row='Fixer')),
+                reviews=dict(claude=dict(choice=for_claude, row='Reviewer'), gpt=dict(choice=for_gpt, row='Reviewer'),
+                             gemini=dict(choice=for_gemini, row='Reviewer' if for_gemini else None)),
+                fixers=dict(claude=dict(choice=fixers[0], row='Fixer'), gpt=dict(choice=fixers[1], row='Fixer'),
+                            gemini=dict(choice=fixers[2], row='Fixer' if fixers[2] else None)),
                 reviewer_fallbacks=[])
 
 
@@ -263,7 +278,7 @@ def read_models(text):
     roles, fallbacks = _models_table(section)
     builder, reviewer, fixer = (roles[k]['choice'] for k in ('builder', 'reviewer', 'fixer'))
     reviews, fixers = {}, {}
-    for family in ('claude', 'gpt'):
+    for family in ('claude', 'gpt', 'gemini'):
         reviews[family] = next((dict(choice=c, row=row) for c, row in ((reviewer, 'Reviewer'), (builder, 'Builder'))
                                 if FAMILY.get(c['provider']) not in (None, family)), dict(choice=None, row=None))
         fixers[family] = next((dict(choice=c, row=row) for c, row in ((fixer, 'Fixer'), (reviewer, 'Reviewer'))
@@ -328,8 +343,8 @@ def _format_flags(c):
     return f'--provider {c["provider"]} --model {c["model"]} --reasoning-level {c["effort"]}'
 
 
-def spawn_flags(models):
-    return {start: _format_flags(models[kind][key]['choice']) for start, (kind, key) in STARTS.items()}
+def spawn_flags(models, table=STARTS):
+    return {start: _format_flags(models[kind][key]['choice']) for start, (kind, key) in table.items()}
 
 
 def refused_families_for_commit(comments, commit):
@@ -356,9 +371,9 @@ def reviewer_order(models, refused=()):
     return out
 
 
-def host_args(models):
+def host_args(models, table=NAMED_STARTS):
     out = {}
-    for start, (kind, key) in STARTS.items():
+    for start, (kind, key) in table.items():
         c = models[kind][key]['choice']
         row = dict((k, name) for name, k in ROLES)[key] if kind == 'roles' else models[kind][key]['row']
         out[start] = None if c is None else '%s %s %s' % (
@@ -427,7 +442,7 @@ def check_review(c, models):
     require(builder['record_branch'] is not None and builder['record_branch'] == c['branch'],
             'builder start record does not match the head branch')
     providers = builder['providers']
-    require(type(providers) is list and len(providers) == 1 and providers[0] in ('claude-code', 'codex'),
+    require(type(providers) is list and len(providers) == 1 and providers[0] in FAMILY,
             'builder family unknown or conflicting')
     selected = models['reviews'][FAMILY[providers[0]]]['choice']
     require(selected is not None, 'no other-family reviewer: the review waits, never swapped')
@@ -617,9 +632,11 @@ def main():
                 raise RuntimeError('OB-A1: starts are disabled')
             out = plan(world, read_fleet(world.get('repository') if type(world) is dict else None), refuse,
                        bench, limits)
-        elif len(args) == 4 and args[:2] == ['host', '--repo'] and args[3] in STARTS or (
-                len(args) in (3, 4) and args[:2] == ['flags', '--repo'] and (len(args) == 3 or args[3] in STARTS)):
-            flags = (host_args if args[0] == 'host' else spawn_flags)(read_models(read_fleet(args[2])))
+        elif len(args) == 4 and args[:2] == ['host', '--repo'] and args[3] in NAMED_STARTS or (
+                len(args) in (3, 4) and args[:2] == ['flags', '--repo'] and (len(args) == 3 or args[3] in NAMED_STARTS)):
+            models = read_models(read_fleet(args[2]))
+            flags = host_args(models) if args[0] == 'host' else spawn_flags(
+                models, STARTS if len(args) == 3 else NAMED_STARTS)
             if len(args) == 3:
                 out = [flags]
             elif flags[args[3]] is None:

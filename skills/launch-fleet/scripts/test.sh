@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=978
+CASES=1051
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -1592,69 +1592,148 @@ fi
 A=$tmp/app-identity
 if { [ -n "${TEST_ONLY:-}" ] && [ "$TEST_ONLY" != 'app identity' ]; } || ! take; then
   :
-elif mkdir -p "$A/remote" "$A/bin" "$A/install/github-app" \
+elif mkdir -p "$A/remote" "$A/bin" "$A/shim" "$A/install/github-app" "$A/fixtures" \
   && printf 'one\n' > "$A/remote/version" && git -C "$A/remote" init -q && git -C "$A/remote" add -A \
   && git -C "$A/remote" -c user.name=synthetic -c user.email=synthetic@example.invalid commit -q -m one \
   && cp "$HERE/loop.sh" "$A/install/loop.sh" \
-  && printf '#!/bin/sh\nprintf "%%s\\n" "${GH_TOKEN:-none}" >> "%s"\nexec "%s" "$@"\n' "$A/gh-token.log" "$tmp/bin/gh" > "$A/bin/gh" \
-  && printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nprintf "%%s\\n" synthetic-app-token-2394\n' "$A/openwiz.log" > "$A/bin/openwiz" \
-  && printf 'import sys\nopen(%s, "a").write(" ".join(sys.argv[1:]) + "\\n")\nsys.exit(9)\n' "'$A/helper.log'" > "$A/install/github-app/agent-token.py" \
-  && chmod +x "$A/bin/gh" "$A/bin/openwiz" \
+  && mkdir -p "$A/runtime/launch-fleet/scripts" "$A/runtime/setup/scripts" \
+  && cp "$HERE/../../setup/scripts/settings.py" "$A/runtime/setup/scripts/" \
+  && printf '#!/bin/sh\n[ "${1:-}" = overload ] && exit 0\ngh api user > /dev/null 2>&1\ncat "%s"\n' "$A/want" \
+    > "$A/runtime/launch-fleet/scripts/fleet.sh" \
+  && printf '%s\n' 'import base64, json, sys' \
+    'data = json.load(open(sys.argv[1]))["files"]["docs/agents/fleet.md"].encode()' \
+    'text = base64.b64encode(data).decode()' \
+    'body = "".join(text[n:n + 60] + "\n" for n in range(0, len(text), 60))' \
+    'print(json.dumps({"type": "file", "encoding": "base64", "size": len(data), "content": body}))' > "$A/contents.py" \
+  && printf '#!/bin/sh\nif [ $# = 2 ] && [ "$1" = api ] && [ "$2" = repos/synthetic-owner/synthetic-repo/contents/docs/agents/fleet.md ]; then\n  printf "read %%s\\n" "${GH_TOKEN:-none}" >> "%s"; echo read >> "%s"\n  "%s" -I "%s" "%s" || exit 1\n  exit "${FAKE_READ_STATUS:-0}"\nfi\nprintf "%%s\\n" "${GH_TOKEN:-none}" >> "%s"\nexec "%s" "$@"\n' \
+    "$A/read.log" "$A/order.log" "$PYTHON" "$A/contents.py" "$A/world.json" "$A/gh-token.log" "$tmp/bin/gh" > "$A/bin/gh" \
+  && printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\necho mint >> "%s"\nprintf "%%s\\n" synthetic-app-token-2394\n' \
+    "$A/openwiz.log" "$A/order.log" > "$A/bin/openwiz" \
+  && printf 'import sys\nopen(%s, "a").write(" ".join(sys.argv[1:]) + "\\n")\nopen(%s, "a").write("helper\\n")\nsys.exit(9)\n' \
+    "'$A/helper.log'" "'$A/order.log'" > "$A/install/github-app/agent-token.py" \
+  && printf '#!/bin/sh\necho "$*" >> "%s"\n"%s" -I "%s" "%s"\n' "$A/shim.log" "$PYTHON" "$A/contents.py" "$A/on.json" > "$A/shim/gh" \
+  && chmod +x "$A/bin/gh" "$A/bin/openwiz" "$A/shim/gh" \
+  && jq -r '.files["docs/agents/fleet.md"] | sub("\\| App \\| Synthetic, for the factory \\|\n"; "")' \
+    "$FIX/check.json" > "$A/base.md" \
+  && "$PYTHON" -I "$HERE/../../setup/scripts/test_settings.py" fixtures "$A/base.md" "$A/fixtures" > "$A/fixtures.list" \
+  && [ -s "$A/fixtures.list" ] \
   && jq --argjson now "$NOW" '.observed_at = $now | .budgets[] |= (.reset_at = ($now + 3600))' \
     "$HERE/carried/healthy.json" > "$A/observation.json"; then
   printf 'start #13: W3: widget page (spec #10)\n' > "$A/want"
-  python3 -I - "$HERE/../references/identity.md" > "$A/block.sh" <<'PY' || bad 'app identity: the block' "can't extract it"
+  python3 -I - "$HERE/../references/identity.md" "$(cd "$HERE/../../setup" && pwd)" > "$A/block.sh" <<'PY' || bad 'app identity: the block' "can't extract it"
 import sys
 text = open(sys.argv[1]).read()
 block = text.split('<!-- GI7 identity -->', 1)[1].split('```sh\n', 1)[1].split('```', 1)[0]
 sys.stdout.write(''.join(line[4:] if line.startswith('    ') else line.lstrip() + '\n' if not line.strip() else line
-                         for line in block.splitlines(True)).replace('<owner>/<repo>', 'synthetic-owner/synthetic-repo'))
+                         for line in block.splitlines(True)).replace('<owner>/<repo>', 'synthetic-owner/synthetic-repo')
+                 .replace("<the setup skill's folder>", sys.argv[2]))
 PY
   printf '%s\nprintf "token=%%s\\n" "$app_token"\n' "$(cat "$A/block.sh")" > "$A/block-run.sh"
   off="loop.sh: the App identity is off; GitHub as today's account"
   block_off="GitHub as today's account: the App identity is off"
-  app_loop() {
-    rm -rf "$A/home" "$A/cache" && : > "$A/gh-token.log" && : > "$A/openwiz.log" && : > "$A/helper.log"
-    (cd "$A" && env -u OPENWIZ_GITHUB_APP_KEY -u OPENWIZ_TOKEN_SERVICE -u GH_TOKEN -u GITHUB_TOKEN \
+  fresh() {
+    rm -rf "$A/home" "$A/cache" && : > "$A/gh-token.log" && : > "$A/openwiz.log" && : > "$A/helper.log" \
+      && : > "$A/read.log" && : > "$A/order.log" && : > "$A/shim.log"
+  }
+  loop_env() {
+    env -u OPENWIZ_GITHUB_APP_KEY -u OPENWIZ_TOKEN_SERVICE -u GH_TOKEN -u GITHUB_TOKEN \
       PATH="$A/bin:$tmp/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo FAKE_GH_WORLD="$A/world.json" FAKE_GH_LOG="$A/gh.log" \
       FAKE_GH_REMOTE="$A/remote" LAUNCH_FLEET_HOME="$A/home" LAUNCH_FLEET_NOW=$NOW LAUNCH_FLEET_CACHE="$A/cache" \
       LAUNCH_FLEET_OVERLOAD_INPUT="$A/observation.json" LAUNCH_FLEET_OVERLOAD_STATE="$A/pause.json" \
-      LAUNCH_FLEET_RUNTIME="$(cd "$HERE/../.." && pwd)" "$@" /bin/sh "$A/install/loop.sh" > "$A/out" 2> "$A/err") \
+      LAUNCH_FLEET_RUNTIME="$A/runtime" "$@"
+  }
+  app_loop() {
+    fresh && (cd "$A" && loop_env "$@" /bin/sh "$A/install/loop.sh" > "$A/out" 2> "$A/err") \
       && cmp -s "$A/want" "$A/out" && [ ! -s "$A/openwiz.log" ] && [ ! -s "$A/helper.log" ] \
+      && [ "$(cat "$A/read.log")" = 'read none' ] \
+      && [ -s "$A/gh-token.log" ] && [ -z "$(grep -vx none "$A/gh-token.log")" ] && grep -qxF "$off" "$A/err"
+  }
+  app_loop_key() {
+    fresh && (cd "$A" && loop_env "$@" /bin/sh "$A/install/loop.sh" > "$A/out" 2> "$A/err") \
+      && cmp -s "$A/want" "$A/out" && [ ! -s "$A/openwiz.log" ] && [ ! -s "$A/helper.log" ] \
+      && [ ! -s "$A/read.log" ] \
       && [ -s "$A/gh-token.log" ] && [ -z "$(grep -vx none "$A/gh-token.log")" ] && grep -qxF "$off" "$A/err"
   }
   app_block() {
-    : > "$A/openwiz.log" \
-      && (cd "$A" && env -u GH_TOKEN -u GITHUB_TOKEN PATH="$A/bin:$tmp/bin:$PATH" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
-        FAKE_GH_WORLD="$A/world.json" FAKE_GH_LOG="$A/gh.log" /bin/sh "$A/block-run.sh" > "$A/out" 2> "$A/err") \
+    fresh && (cd "$A" && env -u GH_TOKEN -u GITHUB_TOKEN PATH="$A/bin:$tmp/bin:$PATH" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
+        FAKE_GH_WORLD="$A/world.json" FAKE_GH_LOG="$A/gh.log" "$@" /bin/sh "$A/block-run.sh" > "$A/out" 2> "$A/err") \
+      && [ "$(cat "$A/read.log")" = 'read none' ] \
       && [ ! -s "$A/openwiz.log" ] && [ "$(cat "$A/out")" = token= ] && [ "$(cat "$A/err")" = "$block_off" ]
   }
-  never_mints() {
-    rm -rf "$A/w" && mkdir "$A/w" && world check.json "merge12 | $1" "$A/w" > "$A/world.json" \
-      && step=key && app_loop OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
-      && step=service && app_loop OPENWIZ_TOKEN_SERVICE="$A/no-service" \
-      && step='key and service' && app_loop OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj OPENWIZ_TOKEN_SERVICE="$A/no-service" \
-      && step=block && app_block
+  on_loop() {
+    want=$1; shift
+    fresh && (cd "$A" && loop_env "$@" /bin/sh "$A/install/loop.sh" > "$A/out" 2> "$A/err"; :) \
+      && [ "$(cat "$A/read.log")" = 'read none' ] && [ "$(cat "$A/order.log")" = "read
+$want" ] && [ ! -s "$A/shim.log" ]
   }
-  app_case() {
-    name="app identity: $1, loop.sh and the identity block never mint"; shift
-    cases=$((cases + 1)) step=world
-    if never_mints "$1"; then echo "ok   $name"; else
-      bad "$name" "($step) $(cat "$A/out" "$A/err" "$A/openwiz.log" "$A/helper.log" | head -c 400)"
+  app_on() {
+    step=key && app_loop_key OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
+      && step=service && on_loop helper OPENWIZ_TOKEN_SERVICE="$A/no-service" \
+      && [ "$(cat "$A/helper.log")" = "run --requester fleet-check --repository synthetic-owner/synthetic-repo --read -- sh $A/install/loop.sh" ] \
+      && step='key and service' && on_loop helper OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj OPENWIZ_TOKEN_SERVICE="$A/no-service" \
+      && [ ! -s "$A/openwiz.log" ] \
+      && step=block && fresh && (cd "$A" && env -u GH_TOKEN -u GITHUB_TOKEN PATH="$A/bin:$tmp/bin:$PATH" \
+        OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj FAKE_GH_WORLD="$A/world.json" /bin/sh "$A/block-run.sh" > "$A/out" 2> "$A/err") \
+      && [ "$(cat "$A/order.log")" = 'read
+mint' ] && [ "$(cat "$A/openwiz.log")" = 'github token --repository synthetic-owner/synthetic-repo' ] \
+      && [ "$(cat "$A/out")" = token=synthetic-app-token-2394 ]
+  }
+  never_mints() {
+    step=key && app_loop_key "$@" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
+      && step=service && app_loop "$@" OPENWIZ_TOKEN_SERVICE="$A/no-service" \
+      && step='key and service' && app_loop "$@" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj OPENWIZ_TOKEN_SERVICE="$A/no-service" \
+      && step=block && app_block "$@"
+  }
+  served() {
+    rm -rf "$A/w" && mkdir "$A/w" && world check.json "merge12 | .files[\"docs/agents/fleet.md\"] = $(jq -Rs . < "$1")" "$A/w" > "$2"
+  }
+  report() {
+    if [ "$1" = 0 ]; then echo "ok   $name"; else
+      bad "$name" "($step) $(cat "$A/out" "$A/err" "$A/read.log" "$A/openwiz.log" "$A/helper.log" "$A/shim.log" | head -c 400)"
     fi
   }
-  row() { printf '.files["docs/agents/fleet.md"] += "%s"' "$1"; }
-  app_case 'with no App identity row' .
-  app_case 'with the row off' "$(row '| App identity | off |\n')"
-  app_case 'with the row on' "$(row '| App identity | on |\n')"
-  app_case 'with the row a backticked on' "$(row '| App identity | `on` |\n')"
-  app_case 'with two on rows' "$(row '| App identity | on |\n| App identity | on |\n')"
-  app_case 'with an on row and an indented duplicate off row (R6)' "$(row '| App identity | on |\n | App identity | off |\n')"
-  app_case 'with an on row inside an HTML comment (R6)' "$(row '\n<!--\n| App identity | on |\n-->\n')"
-  app_case 'with an on row outside the GitHub identity table' "$(row '\n## Elsewhere\n\n| App identity | on |\n')"
-  app_case 'with an on row inside a fenced example' "$(row '\n```md\n## GitHub identity\n\n| App identity | on |\n```\n')"
+  while read -r number state title; do
+    cases=$((cases + 1)) step=world
+    if [ "$state" = on ]; then
+      name="app identity: $title: one account read, then loop.sh and the block mint once or run the helper once"
+      served "$A/fixtures/$number.md" "$A/world.json" && app_on; report $?
+    else
+      name="app identity: $title: one account read, and loop.sh and the identity block never mint"
+      served "$A/fixtures/$number.md" "$A/world.json" && never_mints; report $?
+    fi
+  done < "$A/fixtures.list"
+  on_md=$(sed -n 's/^\([0-9]*\) on one canonical on row$/\1/p' "$A/fixtures.list")
+  off_md=$(sed -n 's/^\([0-9]*\) off the row off$/\1/p' "$A/fixtures.list")
+  served "$A/fixtures/$on_md.md" "$A/on.json"
+  cases=$((cases + 1)) step=world
+  name='app identity: a whole on answer, then gh exits non-zero: loop.sh and the identity block never mint'
+  cp "$A/on.json" "$A/world.json" && never_mints FAKE_READ_STATUS=1; report $?
+  inherited() {
+    printf '%s\n' "PATH=$A/shim:$A/bin:$tmp/bin:$PATH" "OPENWIZ_AGENT_TOKEN_PATH_WAS=1$A/bin:$tmp/bin:$PATH" \
+      OPENWIZ_AGENT_TOKEN_RUN=synthetic-run.json GH_TOKEN=synthetic-installation-token-2835
+  }
+  cases=$((cases + 1)) step=world
+  name="app identity: an inherited token step's gh shim answers on and the account answers off: never mints, never asks the shim"
+  served "$A/fixtures/$off_md.md" "$A/world.json" \
+    && step=service && app_loop $(inherited) OPENWIZ_TOKEN_SERVICE="$A/no-service" && [ ! -s "$A/shim.log" ] \
+    && step=block && app_block $(inherited) && [ ! -s "$A/shim.log" ]; report $?
+  cases=$((cases + 1)) step=world
+  name="app identity: an inherited token step's gh shim and the account both answer on: one account read, never the shim"
+  cp "$A/on.json" "$A/world.json" && step=service && on_loop helper $(inherited) OPENWIZ_TOKEN_SERVICE="$A/no-service"; report $?
+  restore_fails() {
+    fresh && (cd "$A" && loop_env $(inherited) OPENWIZ_TOKEN_SERVICE="$A/no-service" "$1" -c \
+      'readonly GH_TOKEN; script=$1; shift; . "$script"' sh "$2" > "$A/out" 2> "$A/err"; :) \
+      && [ ! -s "$A/read.log" ] && [ ! -s "$A/openwiz.log" ] && [ ! -s "$A/helper.log" ] && [ ! -s "$A/shim.log" ]
+  }
+  cases=$((cases + 1)) step=world
+  name="app identity: with a canonical on row and a restore of today's account that fails, nothing reads fleet.md or mints"
+  cp "$A/on.json" "$A/world.json" \
+    && step='loop.sh under sh' && restore_fails sh "$A/install/loop.sh" \
+    && step='block under sh' && restore_fails sh "$A/block-run.sh" \
+    && step='loop.sh under bash' && restore_fails bash "$A/install/loop.sh" \
+    && step='block under bash' && restore_fails bash "$A/block-run.sh"; report $?
 else
-  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 9))
+  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 82))
 fi
 
 expect 'claim: the only claim goes' 0 check.json 'merge12 | say(13; 1301; "11:58"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
@@ -4498,7 +4577,7 @@ only_reads "$tmp"/case-*/gh*.log "$tmp"/cache-*/gh.log "$tmp"/loop/log[0-9] "$tm
 expected=${TEST_EXPECTED:-1}
 case ${TEST_ONLY:-} in
   loop) expected=4 ;;
-  'app identity') expected=9 ;;
+  'app identity') expected=82 ;;
   fleet-loop) expected=2 ;;
   'contexts:*') expected=31 ;;
   'contexts R1:*') expected=4 ;;

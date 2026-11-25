@@ -6,32 +6,57 @@
   },
   {
     "name": "duplicate-key",
-    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"verdict\": \"REJECTED\", \"reason\": \"ok\", \"evidence\": [\"cmd -> ok\"]}",
+    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"verdict\": \"REJECTED\", \"reason\": \"ok\", \"evidence\": [\"cmd -> ok\"], \"blind\": false, \"changes_confirmed\": null}",
     "expected_reason": "duplicate key"
   },
   {
     "name": "unknown-verdict",
-    "raw": "{\"id\": \"a-1\", \"verdict\": \"MAYBE\", \"reason\": \"unsure\", \"evidence\": [\"cmd -> ok\"]}",
+    "raw": "{\"id\": \"a-1\", \"verdict\": \"MAYBE\", \"reason\": \"unsure\", \"evidence\": [\"cmd -> ok\"], \"blind\": false, \"changes_confirmed\": null}",
     "expected_reason": "enum"
   },
   {
     "name": "empty-reason",
-    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"reason\": \"\", \"evidence\": [\"cmd -> ok\"]}",
+    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"reason\": \"\", \"evidence\": [\"cmd -> ok\"], \"blind\": false, \"changes_confirmed\": null}",
     "expected_reason": "minLength"
   },
   {
     "name": "bad-evidence-format",
-    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"reason\": \"verified\", \"evidence\": [\"no arrow here\"]}",
+    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"reason\": \"verified\", \"evidence\": [\"no arrow here\"], \"blind\": false, \"changes_confirmed\": null}",
     "expected_reason": "pattern"
   },
   {
     "name": "extra-key",
-    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"reason\": \"verified\", \"evidence\": [\"cmd -> ok\"], \"prover\": \"p1\"}",
+    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"reason\": \"verified\", \"evidence\": [\"cmd -> ok\"], \"prover\": \"p1\", \"blind\": false, \"changes_confirmed\": null}",
     "expected_reason": "extra"
   },
   {
     "name": "missing-evidence",
-    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"reason\": \"verified\"}",
+    "raw": "{\"id\": \"a-1\", \"verdict\": \"CONFIRMED\", \"reason\": \"verified\", \"blind\": false, \"changes_confirmed\": null}",
     "expected_reason": "missing"
+  },
+  {
+    "name": "missing-blind",
+    "raw": "{\"id\": \"link-1\", \"verdict\": \"PLAUSIBLE\", \"reason\": \"checked\", \"evidence\": [\"cmd -> ok\"], \"changes_confirmed\": true}",
+    "expected_reason": "'blind'"
+  },
+  {
+    "name": "missing-changes-confirmed",
+    "raw": "{\"id\": \"link-1\", \"verdict\": \"PLAUSIBLE\", \"reason\": \"checked\", \"evidence\": [\"cmd -> ok\"], \"blind\": true}",
+    "expected_reason": "'changes_confirmed'"
+  },
+  {
+    "name": "blind-not-boolean",
+    "raw": "{\"id\": \"link-1\", \"verdict\": \"PLAUSIBLE\", \"reason\": \"checked\", \"evidence\": [\"cmd -> ok\"], \"blind\": \"yes\", \"changes_confirmed\": true}",
+    "expected_reason": "type"
+  },
+  {
+    "name": "changes-confirmed-not-boolean",
+    "raw": "{\"id\": \"link-1\", \"verdict\": \"PLAUSIBLE\", \"reason\": \"checked\", \"evidence\": [\"cmd -> ok\"], \"blind\": true, \"changes_confirmed\": 1}",
+    "expected_reason": "changes_confirmed"
+  },
+  {
+    "name": "confirmed-without-changes",
+    "raw": "{\"id\": \"link-1\", \"verdict\": \"CONFIRMED\", \"reason\": \"checked\", \"evidence\": [\"cmd -> ok\"], \"blind\": true, \"changes_confirmed\": false}",
+    "expected_reason": "enum"
   }
 ]

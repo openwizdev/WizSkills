@@ -4,6 +4,7 @@
 Each case writes a synthetic docs/agents/ folder, runs the public command and
 reads only its exit code and short result.
 """
+import base64
 import importlib.util
 import json
 import os
@@ -582,6 +583,59 @@ class Check(unittest.TestCase):
         code, out = self.check(self.project(**{'fleet.md': with_rules(re.sub(r'<[^>]*>', 'syn-owner', section))}))
         self.assertEqual(code, 0, out)
 
+    def test_gemini_antigravity_is_a_known_model_family_in_models_and_reviewer_tables(self):
+        claude_builder = choice('Builder', 'claude-code', 'syn-claude-1')
+        codex_reviewer = choice('Reviewer', 'codex', 'syn-codex-1')
+        gemini_builder = choice('Builder', 'antigravity', 'syn-gemini-1')
+        gemini_reviewer = choice('Reviewer', 'antigravity', 'syn-gemini-1')
+        claude_reviewer = choice('Reviewer', 'claude-code', 'syn-claude-1')
+        codex_builder = choice('Builder', 'codex', 'syn-codex-1')
+
+        for name, text in (
+            ('claude built reviewed by gemini', NEW.replace(codex_reviewer, gemini_reviewer)),
+            ('gemini built reviewed by claude', NEW.replace(claude_builder, gemini_builder).replace(codex_reviewer, claude_reviewer)),
+            ('gemini built reviewed by codex', NEW.replace(claude_builder, gemini_builder)),
+            ('codex built reviewed by gemini', NEW.replace(claude_builder, codex_builder).replace(codex_reviewer, gemini_reviewer)),
+        ):
+            with self.subTest(name):
+                code, out = self.check(self.project(**{'fleet.md': text}))
+                self.assertEqual(code, 0, out)
+
+        same_gemini = NEW.replace(claude_builder, gemini_builder).replace(codex_reviewer, gemini_reviewer)
+        code, out = self.check(self.project(**{'fleet.md': same_gemini}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Models: Reviewer: antigravity is not from another model family than the Builder',
+                      out.splitlines())
+
+        older_claude_by_gemini = FLEET.replace(
+            table('Reviewer for Claude-built', 'codex', 'syn-codex-1'),
+            table('Reviewer for Claude-built', 'antigravity', 'syn-gemini-1'),
+        )
+        code, out = self.check(self.project(**{'fleet.md': older_claude_by_gemini}))
+        self.assertEqual(code, 0, out)
+
+        older_with_gemini = FLEET + table('Reviewer for Gemini-built', 'claude-code', 'syn-claude-1')
+        code, out = self.check(self.project(**{'fleet.md': older_with_gemini}))
+        self.assertEqual(code, 0, out)
+
+        older_gemini_same = FLEET + table('Reviewer for Gemini-built', 'antigravity', 'syn-gemini-1')
+        code, out = self.check(self.project(**{'fleet.md': older_gemini_same}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Reviewer for Gemini-built: antigravity is not from another model family',
+                      out.splitlines())
+
+        older_gemini_unknown = FLEET + table('Reviewer for Gemini-built', 'syn-harness', 'syn-1')
+        code, out = self.check(self.project(**{'fleet.md': older_gemini_unknown}))
+        self.assertEqual(code, 5, out)
+        self.assertIn('fleet.md: Reviewer for Gemini-built: syn-harness has no known model family',
+                      out.splitlines())
+
+        launch = reader(SKILLS / 'install/scripts/first_fleet.py')
+        claude_gemini = NEW.replace(codex_reviewer, gemini_reviewer)
+        rules = launch.settings_rules(claude_gemini)
+        self.assertEqual(rules['reviewer_claude']['harness'], 'antigravity')
+        self.assertEqual(rules['reviewer_gemini']['harness'], 'claude-code')
+
     def test_usage_errors_exit_2(self):
         # catches: a mistyped command read as a verified project.
         result = subprocess.run([sys.executable, '-I', str(SCRIPT), 'verify'], capture_output=True, text=True)
@@ -589,5 +643,200 @@ class Check(unittest.TestCase):
         self.assertTrue(result.stdout.startswith('usage: settings.py check'), result.stdout)
 
 
+ON, OFF = '| App identity | on |\n', '| App identity | off |\n'
+TABLE = '| Setting | Value |\n| --- | --- |\n'
+NOTE_288 = ("`App identity` stays `off`: nothing reads this row yet (OpenWiz #2394), so no value lets agents or "
+            "`loop.sh` mint the App's token (`openwiz github token`).\n")
+
+
+def identity(base, before='', row='', tail='', table=None, crlf=False):
+    head, mark, rest = base.partition('\n## GitHub identity\n')
+    end = rest.index('\n', rest.index('| Record authors |')) + 1
+    rest = rest[:end] + row + rest[end:]
+    if table is not None:
+        rest = rest.replace(TABLE, table, 1)
+    text = head + '\n' + before + mark[1:] + rest + tail
+    return text.replace('\n', '\r\n') if crlf else text
+
+
+def case(name, on, check, callers=True, **parts):
+    return name, on, check, callers, parts
+
+
+FENCE = '```md\n| Setting | Value |\n| --- | --- |\n| App identity | on |\n```\n'
+APP_IDENTITY = (
+    case('one canonical on row', True, True, row=ON),
+    case('one canonical on row with CRLF line ends', True, True, callers=False, row=ON, crlf=True),
+    case('no App identity row', False, True),
+    case('the row off', False, True, row=OFF),
+    case('the row a backticked off', False, True, row='| App identity | `off` |\n'),
+    case('the row a backticked on', False, True, row='| App identity | `on` |\n'),
+    case('the row ON', False, False, row='| App identity | ON |\n'),
+    case('the row On', False, False, row='| App identity | On |\n'),
+    case('the row yes', False, False, row='| App identity | yes |\n'),
+    case('the row empty', False, False, row='| App identity |  |\n'),
+    case('an on row with a third cell', False, False, row='| App identity | on | extra |\n'),
+    case('an off row with a third cell', False, False, row='| App identity | off | extra |\n'),
+    case('a backticked off row with a third cell', False, False, row='| App identity | `off` | extra |\n'),
+    case('a backticked on row with a third cell', False, False, row='| App identity | `on` | extra |\n'),
+    case('an on row with an escaped pipe', False, False, row='| App identity | on \\| off |\n'),
+    case('an on row without its closing pipe', False, False, row='| App identity | on\n'),
+    case('R6: an on row, then an off row indented one space', False, False, row=ON + ' ' + OFF),
+    case('R6: an on row, then an off row indented by a tab', False, False, row=ON + '\t' + OFF),
+    case('R6: an on row, then an off row indented four spaces', False, False, row=ON + '    ' + OFF),
+    case('R6: an on row in a one-line comment', False, False, tail='\n<!-- | App identity | on | -->\n'),
+    case('R6: an on row in a multi-line comment', False, False, tail='\n<!--\n| App identity | on |\n-->\n'),
+    case('R6: an on row in a comment opened mid-line', False, False,
+         tail='\nA synthetic note. <!-- hidden\n| App identity | on |\n-->\n'),
+    case('an on row in a ``` fence', False, False, tail='\n' + FENCE),
+    case('an on row in a ~~~ fence', False, False, tail='\n' + FENCE.replace('```', '~~~')),
+    case('an on row in a fence indented two spaces', False, False,
+         tail='\n' + ''.join('  ' + line + '\n' for line in FENCE.splitlines())),
+    case('an on row in an unclosed fence', False, False, tail='\n' + FENCE[:-4]),
+    case('an on row in another section', False, True, tail='\n## Elsewhere\n\n' + TABLE + ON),
+    case('an on row after the table ends', False, False, tail='\n' + ON),
+    case('an on row in a second table', False, False, tail='\n' + TABLE + ON),
+    case('an on row under a second GitHub identity heading', False, False,
+         tail='\n## GitHub identity\n\n' + TABLE + ON),
+    case('an on row and another on row', False, False, row=ON + ON),
+    case('an on row and an off row', False, False, row=ON + OFF),
+    case('an off row and an on row', False, False, row=OFF + ON),
+    case('an on row and an indented on row', False, False, row=ON + '  ' + ON),
+    case('an indented on row and an off row', False, False, row='  ' + ON + OFF),
+    case('an on row and a lower-case key off row', False, False, row=ON + '| app identity | off |\n'),
+    case('an on row and an entity-encoded key off row', False, False, row=ON + '| App identit&#121; | off |\n'),
+    case('an on row and a no-break-space key off row', False, False, row=ON + '| App&nbsp;identity | off |\n'),
+    case('an on row and a marked-up key off row', False, False, row=ON + '| **App** identity | off |\n'),
+    case('an on row and a lazy off row', False, False, row=ON + 'App identity | off |\n'),
+    case('an on row and an inline-comment off row', False, False, row=ON + '<!-- | App identity | off | -->\n'),
+    case('an on row and an off row a lone CR hides', False, False, callers=False, row=ON[:-1] + '\r' + OFF),
+    case('an on row and a fenced example with its own heading and an off row', False, False, row=ON,
+         tail='\n```md\n## Example\n\n' + OFF + '```\n'),
+    case('an on row and an HTML comment with its own heading and an off row', False, False, row=ON,
+         tail='\n<!--\n## Example\n\n' + OFF + '-->\n'),
+    case('an on row and a fenced example with an off row before the section', True, True,
+         before='```md\n' + OFF + '```\n\n', row=ON),
+    case('an on row and a fenced example with an off row in a later section', True, True, row=ON,
+         tail='\n## Elsewhere\n\n```md\n' + OFF + '```\n'),
+    case('an off row and a fenced example with an on row in a later section', False, True, row=OFF,
+         tail='\n## Elsewhere\n\n```md\n' + ON + '```\n'),
+    case('an on row and a second GitHub identity heading with no row', False, False, row=ON,
+         tail='\n## GitHub identity\n\nSynthetic.\n'),
+    case('an on row and a ### GitHub identity lookalike', False, False, row=ON, tail='\n### GitHub identity\n\nSynthetic.\n'),
+    case('an on row and a ## Github Identity lookalike', False, False, row=ON, tail='\n## Github Identity\n\nSynthetic.\n'),
+    case('an on row and an underlined GitHub identity lookalike', False, False, row=ON,
+         tail='\nGitHub identity\n---------------\n\nSynthetic.\n'),
+    case('an on row in an upper-case PRE block', False, False, before='<PRE>\n\n', row=ON, tail='\n</PRE>\n'),
+    case('an on row after a pre block with attributes', False, False, before='<pre class="synthetic">\n\n', row=ON,
+         tail='\n</pre>\n'),
+    case('an on row after a processing instruction', False, False, before='<?synthetic\n\n', row=ON, tail='\n?>\n'),
+    case('an on row inside an open comment', False, False, before='<!--\n\n', row=ON, tail='\n-->\n'),
+    case('an on row after a code span that opens a comment', False, False,
+         before='Write `<!--` to hide synthetic text.\n\n', row=ON),
+    case('an off row after a closed fence', False, True, before='```sh\necho synthetic\n```\n\n', row=OFF),
+    case('an on row after a closed fence', True, True, before='```sh\necho synthetic\n```\n\n', row=ON),
+    case('an on row after an unpaired fence', False, False, before='```sh\necho synthetic\n\n', row=ON),
+    case('an on row after a fence closed by a shorter marker', False, False, before='````sh\nx\n```\n\n', row=ON),
+    case('an on row after a fence closed by the other marker', False, False, before='```sh\nx\n~~~\n\n', row=ON),
+    case('an on row after a fence whose closer has trailing text', False, False, before='```sh\nx\n``` x\n\n', row=ON),
+    case('an on row after a fence with a four-space-indented closer inside', False, False,
+         before='```sh\nx\n    ```\n```\n\n', row=ON),
+    case('an on row after an indented fence', False, False, before='  ```sh\nx\n  ```\n\n', row=ON),
+    case("an off row and #288's template note", False, True, row=OFF, tail='\n' + NOTE_288),
+    case("an on row and #288's template note", True, True, row=ON, tail='\n' + NOTE_288),
+    case('an on row and prose with a pipe in a code span', True, True, row=ON,
+         tail='\nThe row reads like `App identity | example` in prose.\n'),
+    case('an on row and a prose line opening with that code span', True, True, row=ON,
+         tail='\n`App identity | example` is prose.\n'),
+    case('an on row and an unsupported key', False, False, row=ON + '| Other | synthetic |\n'),
+    case('an on row with a marked-up key', False, False, row='| **App identity** | on |\n'),
+    case('an on row indented one space', False, False, row=' ' + ON),
+    case('an on row with a blank line between header and delimiter', False, False, row=ON,
+         table='| Setting | Value |\n\n| --- | --- |\n'),
+    case('an on row under a |---|---| delimiter', False, False, row=ON, table='| Setting | Value |\n|---|---|\n'),
+    case('an on row under an aligned delimiter', False, False, row=ON, table='| Setting | Value |\n| :-- | --- |\n'),
+    case('an on row under a three-column delimiter', False, False, row=ON,
+         table='| Setting | Value |\n| --- | --- | --- |\n'),
+    case('R2: an on row wrapped in a fence after a code-span comment opener (catches: code-span <!-- blinding hidden_heading to a fence)', False, False,
+         before='Write `<!--` here.\n\n```md\n-->\n\n', row=ON, tail='\n```\n'),
+    case('R2: an on row then a code-span comment opener and a fenced off row after a heading (catches: code-span <!-- blinding identity_lines to a fence)', False, False, row=ON,
+         tail='\nWrite `<!--` here.\n\n```md\n-->\n## Example\n\n' + OFF + '```\n'),
+    case('R2: an on row wrapped in a pre block after a closed comment on the same line (catches: <pre> after --> bypassing SWALLOWS)', False, False,
+         before='<!-- ok --> <pre>\n\n', row=ON, tail='\n</pre>\n'),
+    case('R2: an on row wrapped in a fence after a self-closing comment (catches: self-closing <!--> blinding hidden_heading to a fence)', False, False,
+         before='<!-->\n\n```md\n-->\n\n', row=ON, tail='\n```\n'),
+    case('R2: an on row then a self-closing comment and a fenced off row after a heading (catches: self-closing <!--> blinding identity_lines to a fence)', False, False, row=ON,
+         tail='\n<!-->\n\n```md\n-->\n## Example\n\n' + OFF + '```\n'),
+)
+
+
+def contents(data, width=60, **changes):
+    encoded = base64.b64encode(data).decode()
+    lines = [encoded[n:n + width] for n in range(0, len(encoded), width)]
+    answer = {'type': 'file', 'encoding': 'base64', 'size': len(data), 'name': 'fleet.md',
+              'path': 'docs/agents/fleet.md', 'content': ''.join(line + '\n' for line in lines)}
+    answer.update(changes)
+    return json.dumps(answer).encode()
+
+
+class AppIdentity(unittest.TestCase):
+    project, check = Check.project, Check.check
+
+    def reads(self, stdin, *args):
+        result = subprocess.run([sys.executable, '-I', str(SCRIPT), 'app-identity', *args], input=stdin,
+                                capture_output=True, timeout=60)
+        return result.returncode
+
+    def test_one_parse_decides_the_reader_and_check_on_every_fixture(self):
+        module = reader(SCRIPT)
+        for name, on, valid, _, parts in APP_IDENTITY:
+            with self.subTest(name):
+                text = identity(FLEET, **parts)
+                self.assertEqual(module.app_identity_on(text), on, 'app_identity_on')
+                root = self.project()
+                (root / 'docs/agents/fleet.md').write_bytes(text.encode())
+                code, out = self.check(root)
+                self.assertEqual(code, 0 if valid else 5, out)
+                named = [line for line in out.splitlines() if line.startswith('fleet.md: GitHub identity: App identity')]
+                self.assertEqual(bool(named), not valid, out)
+                self.assertEqual(self.reads(contents(text.encode())), 0 if on else 1, 'app-identity')
+
+    def test_only_a_whole_successful_read_of_one_on_row_reads_on(self):
+        data = identity(FLEET, row=ON).encode()
+        whole = contents(data)
+        self.assertEqual(self.reads(whole), 0)
+        self.assertEqual(self.reads(whole.replace(b'\\n"', b'"')), 0)
+        encoded = base64.b64encode(data).decode()
+        broken = {
+            'empty stdin': b'',
+            'cut JSON': whole[:len(whole) // 2],
+            'a JSON list': json.dumps([json.loads(whole)]).encode(),
+            'not a file': contents(data, type='dir'),
+            'encoding none': contents(data, encoding='none', content=''),
+            'no content': json.dumps({k: v for k, v in json.loads(whole).items() if k != 'content'}).encode(),
+            'a character outside base64': contents(data, content='*' + encoded[1:60] + '\n' + encoded[60:]),
+            'a 59-character line': contents(data, width=59),
+            'one unwrapped line': contents(data, width=len(encoded)),
+            'a size one more': contents(data, size=len(data) + 1),
+            'a size as text': contents(data, size=str(len(data))),
+            'bytes that are not UTF-8': contents(data + b'\xff'),
+        }
+        for name, stdin in broken.items():
+            with self.subTest(name):
+                self.assertEqual(self.reads(stdin), 1)
+        self.assertEqual(self.reads(whole, 'extra'), 2)
+
+
+def export(base, folder):
+    base = Path(base).read_text(encoding='utf-8')
+    for number, (name, on, _, callers, parts) in enumerate(APP_IDENTITY, 1):
+        if callers:
+            (Path(folder) / ('%d.md' % number)).write_bytes(identity(base, **parts).encode())
+            print('%d %s %s' % (number, 'on' if on else 'off', name))
+
+
 if __name__ == '__main__':
-    unittest.main()
+    if sys.argv[1:2] == ['fixtures'] and len(sys.argv) == 4:
+        export(*sys.argv[2:])
+    else:
+        unittest.main()

@@ -1,6 +1,6 @@
 ---
 name: to-spec
-description: Turn a confirmed grill into a spec issue, run to-tickets on it, and make the spec's narrated steering video. Use when a grill is confirmed or the owner steers a spec through the orchestrator. No human step between grill and fleet.
+description: Turn a confirmed grill into a spec issue. Use when a grill is confirmed or the owner steers an existing spec.
 version: 0.4.0
 ---
 
@@ -38,7 +38,9 @@ unclear read or publication approval stops the related write.
 
 Use the [spec template](spec.md). Name the outcome, proof and seams. Take the
 headline from the grill's words, or `none` for infra. Use the grill's version
-milestone, creating it if missing. Give the spec no ticket label. Create it,
+milestone, creating it if missing. Give the spec no ticket label. Before you
+create or show it, run the [fidelity pass](fidelity.md) on the draft: drop or
+fix each item, or keep it and tell the user why in one line. Create it,
 read it back, and on a resume confirm any uncertain write before retrying. For
 an already approved plan, use [the hold-first procedure](../to-tickets/changes.md)
 before changing the spec.

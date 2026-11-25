@@ -13,8 +13,38 @@ FIXTURES = HERE / "fixtures" / "contract"
 ALLOWED_KEYWORDS = {
     "$schema", "$id", "$defs", "$ref", "title", "description", "type",
     "required", "properties", "additionalProperties", "items", "enum",
-    "const", "oneOf", "allOf", "if", "then", "minimum", "maximum",
+    "const", "oneOf", "allOf", "if", "then", "not", "minimum", "maximum",
     "minLength", "maxLength", "minItems", "maxItems", "pattern",
+}
+
+TEN_LINK_TYPES = [
+    "says-vs-does",
+    "promise-to-work",
+    "need-to-person",
+    "enemy-move-to-us",
+    "spend-to-use",
+    "answers",
+    "pattern",
+    "duplicates",
+    "drifted-copy",
+    "contradicts",
+]
+
+FIVE_LINK_ROUTES = [
+    "ticket",
+    "pillar-inbox",
+    "people-draft",
+    "question-comment",
+    "spec-candidate",
+]
+
+LEDGER_STATES = {
+    "proposed",
+    "accepted",
+    "rejected",
+    "later",
+    "expired",
+    "superseded",
 }
 
 REPORT_SECTIONS = [
@@ -65,7 +95,7 @@ def lint_schema(schema):
         for group in ("oneOf", "allOf"):
             for child in node.get(group, []):
                 walk(child)
-        for key in ("if", "then", "items"):
+        for key in ("if", "then", "not", "items"):
             if key in node:
                 walk(node[key])
     walk(schema)
@@ -97,28 +127,14 @@ def validate(schema, node, value, path="$"):
     if "enum" in node:
         if not any(type(value) is type(item) and value == item for item in node["enum"]):
             raise ValueError(f"{path}: value {value!r} not in enum {node['enum']!r}")
-    if "allOf" in node:
-        for idx, sub in enumerate(node["allOf"]):
-            validate(schema, sub, value, path)
-    if "if" in node and "then" in node:
+    if "not" in node:
         matched = True
         try:
-            validate(schema, node["if"], value, path)
+            validate(schema, node["not"], value, path)
         except ValueError:
             matched = False
         if matched:
-            validate(schema, node["then"], value, path)
-    if "oneOf" in node:
-        matches = 0
-        errors = []
-        for sub in node["oneOf"]:
-            try:
-                validate(schema, sub, value, path)
-                matches += 1
-            except ValueError as exc:
-                errors.append(str(exc))
-        if matches != 1:
-            raise ValueError(f"{path}: oneOf matched {matches} branches ({'; '.join(errors)})")
+            raise ValueError(f"{path}: matched forbidden 'not' schema")
     if type(value) is dict:
         required = node.get("required", [])
         for key in required:
@@ -152,6 +168,28 @@ def validate(schema, node, value, path="$"):
             raise ValueError(f"{path}: minimum {node['minimum']} not met (got {value})")
         if "maximum" in node and value > node["maximum"]:
             raise ValueError(f"{path}: maximum {node['maximum']} exceeded (got {value})")
+    if "allOf" in node:
+        for idx, sub in enumerate(node["allOf"]):
+            validate(schema, sub, value, path)
+    if "if" in node and "then" in node:
+        matched = True
+        try:
+            validate(schema, node["if"], value, path)
+        except ValueError:
+            matched = False
+        if matched:
+            validate(schema, node["then"], value, path)
+    if "oneOf" in node:
+        matches = 0
+        errors = []
+        for sub in node["oneOf"]:
+            try:
+                validate(schema, sub, value, path)
+                matches += 1
+            except ValueError as exc:
+                errors.append(str(exc))
+        if matches != 1:
+            raise ValueError(f"{path}: oneOf matched {matches} branches ({'; '.join(errors)})")
 
 
 class DreamCycleContractTests(unittest.TestCase):
@@ -180,8 +218,51 @@ class DreamCycleContractTests(unittest.TestCase):
             "## Rejected",
             "## Unconfirmed reads",
             "## Tickets filed",
+            "link_budget",
         ):
             self.assertIn(needle, md, f"contract doc missing {needle!r}")
+
+    def test_link_types_and_routes_listed_once_matching_schema(self):
+        self.assertIsNotNone(self.schema, f"missing {SCHEMA_PATH}")
+        defs = self.schema.get("$defs", {})
+        self.assertIn("link_type", defs)
+        self.assertIn("link_route", defs)
+        self.assertEqual(defs["link_type"]["enum"], TEN_LINK_TYPES + ["unknown"])
+        self.assertEqual(defs["link_route"]["enum"], FIVE_LINK_ROUTES)
+
+        md = CONTRACT_MD.read_text(encoding="utf-8")
+        self.assertEqual(md.count("### Link types"), 1)
+        self.assertEqual(md.count("### Link routes"), 1)
+
+        def _table_first_column(heading):
+            match = re.search(
+                rf"^{re.escape(heading)}\n+(.*?)(?=\n##|\Z)",
+                md,
+                flags=re.MULTILINE | re.DOTALL,
+            )
+            self.assertIsNotNone(match, f"missing section {heading!r}")
+            rows = []
+            for line in match.group(1).splitlines():
+                cell = re.match(r"^\|\s*`([^`]+)`\s*\|", line)
+                if cell:
+                    rows.append(cell.group(1))
+            return rows
+
+        type_rows = _table_first_column("### Link types")
+        route_rows = _table_first_column("### Link routes")
+        self.assertEqual(type_rows, TEN_LINK_TYPES + ["unknown"])
+        self.assertEqual(route_rows, FIVE_LINK_ROUTES)
+
+        for path in (ROOT / "skills" / "dream-cycle").rglob("*.md"):
+            text = path.read_text(encoding="utf-8")
+            self.assertFalse(
+                all(t in text for t in TEN_LINK_TYPES),
+                f"link types duplicated outside contract in {path}",
+            )
+            self.assertFalse(
+                all(r in text for r in FIVE_LINK_ROUTES),
+                f"link routes duplicated outside contract in {path}",
+            )
 
     def test_valid_findings_pass_schema(self):
         self.assertIsNotNone(self.schema, f"missing {SCHEMA_PATH}")
@@ -249,6 +330,82 @@ class DreamCycleContractTests(unittest.TestCase):
                     validate(self.schema, {"$ref": "#/$defs/inventory"}, case["value"])
                 self.assertIn(case["expected_reason"], str(ctx.exception))
 
+    def test_valid_links_pass_schema(self):
+        self.assertIsNotNone(self.schema, f"missing {SCHEMA_PATH}")
+        lines = [
+            line for line in (FIXTURES / "valid_links.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertGreaterEqual(len(lines), 5)
+        routes = set()
+        types = set()
+        for idx, raw in enumerate(lines, 1):
+            with self.subTest(line=idx):
+                record = parse_json_strict(raw)
+                self.assertEqual(record["kind"], "link")
+                validate(self.schema, {"$ref": "#/$defs/finding"}, record)
+                routes.add(record["route"])
+                types.add(record["link_type"])
+        self.assertEqual(routes, set(FIVE_LINK_ROUTES))
+        self.assertIn("pattern", types)
+        self.assertIn("unknown", types)
+
+    def test_invalid_links_fail_with_reason(self):
+        self.assertIsNotNone(self.schema, f"missing {SCHEMA_PATH}")
+        cases = json.loads((FIXTURES / "invalid_links.json").read_text(encoding="utf-8"))
+        self.assertGreaterEqual(len(cases), 15)
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                with self.assertRaises(ValueError) as ctx:
+                    record = parse_json_strict(case["raw"])
+                    validate(self.schema, {"$ref": "#/$defs/finding"}, record)
+                self.assertIn(case["expected_reason"], str(ctx.exception))
+
+    def test_valid_ledger_passes_schema(self):
+        self.assertIsNotNone(self.schema, f"missing {SCHEMA_PATH}")
+        lines = [
+            line for line in (FIXTURES / "valid_ledger.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertGreaterEqual(len(lines), 6)
+        states = set()
+        has_closed = False
+        for idx, raw in enumerate(lines, 1):
+            with self.subTest(line=idx):
+                record = parse_json_strict(raw)
+                validate(self.schema, {"$ref": "#/$defs/ledger_entry"}, record)
+                states.add(record["state"])
+                if record["invalid_at"] is not None:
+                    has_closed = True
+        self.assertEqual(states, LEDGER_STATES)
+        self.assertTrue(has_closed)
+
+    def test_invalid_ledger_fails_with_reason(self):
+        self.assertIsNotNone(self.schema, f"missing {SCHEMA_PATH}")
+        cases = json.loads((FIXTURES / "invalid_ledger.json").read_text(encoding="utf-8"))
+        self.assertGreaterEqual(len(cases), 10)
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                with self.assertRaises(ValueError) as ctx:
+                    record = parse_json_strict(case["raw"])
+                    validate(self.schema, {"$ref": "#/$defs/ledger_entry"}, record)
+                self.assertIn(case["expected_reason"], str(ctx.exception))
+
+    def test_valid_and_invalid_link_cards(self):
+        self.assertIsNotNone(self.schema, f"missing {SCHEMA_PATH}")
+        valid = json.loads((FIXTURES / "valid_link_cards.json").read_text(encoding="utf-8"))
+        self.assertGreaterEqual(len(valid), 2)
+        for idx, card in enumerate(valid, 1):
+            with self.subTest(valid=idx):
+                validate(self.schema, {"$ref": "#/$defs/link_card"}, card)
+        invalid = json.loads((FIXTURES / "invalid_link_cards.json").read_text(encoding="utf-8"))
+        self.assertGreaterEqual(len(invalid), 8)
+        for case in invalid:
+            with self.subTest(invalid=case["name"]):
+                with self.assertRaises(ValueError) as ctx:
+                    validate(self.schema, {"$ref": "#/$defs/link_card"}, case["value"])
+                self.assertIn(case["expected_reason"], str(ctx.exception))
+
     def test_sample_report_contains_required_sections_and_loops_area(self):
         self.assertTrue(CONTRACT_MD.is_file(), f"missing {CONTRACT_MD}")
         report = (FIXTURES / "sample_report.md").read_text(encoding="utf-8")
@@ -262,6 +419,16 @@ class DreamCycleContractTests(unittest.TestCase):
             self.assertNotEqual(idx, -1, f"missing section heading {heading!r}")
             positions.append(idx)
         self.assertEqual(positions, sorted(positions), "report sections out of contract order")
+        for card_field in (
+            "score ",
+            "owner `",
+            "route `",
+            "- **End 1:**",
+            "- **End 2:**",
+            "- **Changes:**",
+            "- **Best reason not a link:**",
+        ):
+            self.assertIn(card_field, report, f"sample report link card missing {card_field!r}")
 
 
 if __name__ == "__main__":

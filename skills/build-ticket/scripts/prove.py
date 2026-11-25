@@ -22,7 +22,8 @@ import or collection, no test ran, a timeout, or an outcome it does not recognis
 pytest, unittest, `cargo test` and `node --test` from the exit code and summary lines.
 
 Exit 0 only when base is `failed` 2 of 2 and head is `passed` 2 of 2; exit 1 otherwise, naming
-the side that broke the rule; exit 2 on bad arguments or a git failure before any test ran.
+the side that broke the rule; exit 2 on bad arguments, a git failure before any test ran, or a
+test command that cannot start.
 It prints one JSON line on stdout, a line per run on stderr, and removes both worktrees on
 every exit. Python 3.11+ standard library only.
 """
@@ -51,7 +52,7 @@ def pytest(code, out):
     errors = n.get('error', 0) + n.get('errors', 0)
     if code == 0 and n.get('passed') and not n.get('failed') and not errors:
         return 'passed'
-    reasons = re.findall(r'^FAILED \S+ - (.*)$', out, re.M)
+    reasons = re.findall(r'^FAILED .+? - (.*)$', out, re.M)
     if (code == 1 and n.get('failed') and not errors and len(reasons) == n['failed']
             and all(re.match(r'(assert\b|AssertionError\b|Failed:)', r) for r in reasons)):
         return 'failed'
@@ -64,7 +65,7 @@ def unittest(code, out):
     if not ran or not end:
         return None
     word, detail = end[-1]
-    n = dict((k, int(v)) for k, v in re.findall(r'(\w+)=(\d+)', detail))
+    n = dict((k, int(v)) for k, v in re.findall(r'([a-z]+(?: [a-z]+)*)=(\d+)', detail))
     if int(ran[-1]) == 0:
         return 'error'
     if code == 0 and word == 'OK':
@@ -90,6 +91,14 @@ def cargo(code, out):
     return 'error'
 
 
+def assertion_block(block):
+    return 'ERR_ASSERTION' in block or 'AssertionError' in block
+
+
+def parent_block(block):
+    return "failureType: 'subtestsFailed'" in block or re.search(r'\d+ subtests? failed', block)
+
+
 def node(code, out):
     n = dict((k, int(v)) for k, v in re.findall(r'^[#ℹ] (tests|pass|fail|cancelled) (\d+)\s*$', out, re.M))
     if 'tests' not in n or 'fail' not in n:
@@ -102,10 +111,20 @@ def node(code, out):
         return 'error'
     if '✖ failing tests:' in out:
         blocks = re.split(r'^test at ', out.split('✖ failing tests:', 1)[1], flags=re.M)[1:]
-    else:
-        blocks = [b for b in re.split(r'^\s*not ok \d+', out, flags=re.M)[1:]
-                  if "failureType: 'testCodeFailure'" in b]
-    if len(blocks) == n['fail'] and all('ERR_ASSERTION' in b or 'AssertionError' in b for b in blocks):
+        parents = [b for b in blocks if parent_block(b)]
+        leaves = [b for b in blocks if b not in parents]
+        omitted = n['fail'] - len(blocks)
+        if omitted < 0 or not leaves or any(not assertion_block(b) for b in leaves):
+            return 'error'
+        if omitted and not re.search(r'(?m)^▶ ', out):
+            return 'error'
+        return 'failed'
+    parts = re.split(r'^\s*not ok \d+', out, flags=re.M)[1:]
+    leaves = [b for b in parts if "failureType: 'testCodeFailure'" in b]
+    parents = [b for b in parts if "failureType: 'subtestsFailed'" in b]
+    if len(leaves) + len(parents) != len(parts) or len(leaves) + len(parents) != n['fail']:
+        return 'error'
+    if leaves and all(assertion_block(b) for b in leaves):
         return 'failed'
     return 'error'
 
@@ -120,9 +139,16 @@ def classify(code, out):
     return 'error'
 
 
+class StartError(Exception):
+    pass
+
+
 def run(command, cwd, timeout):
-    proc = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        proc = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+    except OSError as err:
+        raise StartError(err) from err
     try:
         out, _ = proc.communicate(timeout=timeout)
         return proc.returncode, out.decode('utf-8', 'replace')
@@ -195,7 +221,11 @@ def main(argv):
         for side in ('base', 'head'):
             outcomes[side] = []
             for n in range(1, RUNS + 1):
-                code, out = run(args.command, trees[side], args.timeout)
+                try:
+                    code, out = run(args.command, trees[side], args.timeout)
+                except StartError as err:
+                    shown = ' '.join(args.command)
+                    raise SystemExit(f'prove: cannot run {shown}: {err}') from err
                 outcome = classify(code, out)
                 outcomes[side].append(outcome)
                 shown = 'timeout' if code is None else f'exit {code}'

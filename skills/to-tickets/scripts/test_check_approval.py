@@ -1215,7 +1215,7 @@ else:
 '''
 
 
-class MachineApproval(unittest.TestCase):
+class CurrentMachineRecord(unittest.TestCase):
     def world(self, title="Synthetic ticket 173", user="openwiz[bot]", body=None):
         spec = {"number": 172, "createdAt": "2026-11-01T00:00:00Z", "body": "Synthetic problem.\n",
                 "tickets": [173]}

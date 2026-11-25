@@ -73,6 +73,12 @@ def report(rate, chars, source="sent"):
     }
 
 
+def state_of(tmp):
+    state = Path(tmp) / "state"
+    state.mkdir(exist_ok=True)
+    return state
+
+
 def make_home(tmp, sent=SENT, skill=SKILL, lexicon=LEXICON, log=None, logging=False):
     home = Path(tmp) / "home"
     home.mkdir()
@@ -80,10 +86,12 @@ def make_home(tmp, sent=SENT, skill=SKILL, lexicon=LEXICON, log=None, logging=Fa
     (home / "lexicon.json").write_bytes(lexicon)
     (home / "sent.jsonl").write_bytes(sent)
     (home / "replay.json").write_bytes(b'{"schema":"openwiz.ghost.v1"}\n')
-    if log is not None:
-        (home / "log.jsonl").write_bytes(log)
+    ghost = state_of(tmp) / "ghost"
+    ghost.mkdir(exist_ok=True)
     if logging:
-        (home / "logging.on").write_bytes(b"")
+        (ghost / "settings.json").write_text('{"logging":true}\n', encoding="utf-8")
+    if log is not None:
+        (ghost / "events.jsonl").write_bytes(log)
     return home
 
 
@@ -94,14 +102,15 @@ def fake_env(tmp, reports=None, **extra):
     program.write_text(FAKE, encoding="utf-8")
     program.chmod(0o755)
     (Path(tmp) / "reports.json").write_text(json.dumps(reports or []), encoding="utf-8")
-    (Path(tmp) / "state").write_text("0", encoding="utf-8")
+    (Path(tmp) / "bench-count").write_text("0", encoding="utf-8")
     log = Path(tmp) / "calls.jsonl"
     log.write_text("", encoding="utf-8")
     env = os.environ.copy()
     env["PATH"] = str(folder) + os.pathsep + env.get("PATH", "")
     env["FAKE_LOG"] = str(log)
-    env["FAKE_STATE"] = str(Path(tmp) / "state")
+    env["FAKE_STATE"] = str(Path(tmp) / "bench-count")
     env["FAKE_REPORTS"] = str(Path(tmp) / "reports.json")
+    env["OPENWIZ_STATE_DIR"] = str(state_of(tmp).resolve())
     env.update(extra)
     return env, log
 

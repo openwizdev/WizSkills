@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import jsontext
+import state
 
 ANSWERS = ("yes", "no")
 CODE = re.compile(r"^[A-Za-z0-9-]{4,80}$")
@@ -103,13 +104,6 @@ def run(binary, args, home):
         return None
 
 
-def marker(home, name):
-    path = home / name
-    if path.is_symlink():
-        fail("home-refused", 2)
-    return path
-
-
 def main(argv):
     home_text, answers_text = take(argv)
     model, log = answers_of(Path(answers_text))
@@ -123,9 +117,14 @@ def main(argv):
     sys.stdout.write("engine-ok\n")
     if model == "yes":
         installed = run(binary, ["ghost", "model", "install"], home)
-        if installed is None or installed.returncode != 0:
+        if installed is None:
             fail("install-failed", 1)
-        sys.stdout.write("installed\n")
+        if installed.returncode == 0:
+            sys.stdout.write("installed\n")
+        elif installed.returncode == 2:
+            sys.stdout.write("model-absent\n")
+        else:
+            fail("install-failed", 1)
     paired = run(binary, ["ghost", "pair"], home)
     if paired is None or paired.returncode != 0:
         fail("pair-failed", 1)
@@ -134,20 +133,34 @@ def main(argv):
         fail("pair-failed", 1)
     sys.stdout.write("paired\n")
     sys.stdout.write("pairing-code: " + code + "\n")
-    asked = marker(home, "log-asked")
-    flag = marker(home, "logging.on")
-    if flag.is_symlink() or (flag.exists() and not flag.is_file()):
-        fail("home-refused", 2)
-    if asked.exists():
-        sys.stdout.write("log-unchanged\n")
-        return 0
-    if log == "yes" and not flag.exists():
-        fd = os.open(flag, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        os.close(fd)
-    asked_fd = os.open(asked, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    os.close(asked_fd)
-    sys.stdout.write("log-on\n" if log == "yes" else "log-off\n")
+    record_log(log)
     return 0
+
+
+def record_log(log):
+    root = state.state_dir()
+    if root is None:
+        fail("settings-refused", 2)
+    ghost = root / "ghost"
+    if ghost.is_symlink():
+        fail("settings-refused", 2)
+    path = state.settings_path(root)
+    if path.exists():
+        if path.is_symlink() or not path.is_file():
+            fail("settings-refused", 2)
+        current = regular(path)
+        if current is None or state.logging_value(current) is None:
+            fail("settings-refused", 2)
+        sys.stdout.write("log-unchanged\n")
+        return
+    ghost.mkdir(mode=0o700, exist_ok=True)
+    body = b'{"logging":true}\n' if log == "yes" else b'{"logging":false}\n'
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, body)
+    finally:
+        os.close(fd)
+    sys.stdout.write("log-on\n" if log == "yes" else "log-off\n")
 
 
 if __name__ == "__main__":

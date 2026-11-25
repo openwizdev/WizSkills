@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import jsontext
+import state
 
 LIMIT = 1_048_576
 SCHEMA = "openwiz.ghost.v1"
@@ -290,6 +291,16 @@ def bench(binary, home, replay):
         raise Refuse from error
 
 
+def read_settings(root):
+    path = state.settings_path(root)
+    if not path.exists() or path.is_symlink() or not path.is_file():
+        return ""
+    try:
+        return read_file(path, True) or ""
+    except Refuse:
+        return ""
+
+
 def dropped(before, after):
     return (after["acceptance_rate"] < before["acceptance_rate"]
             or after["chars_saved_per_message"] < before["chars_saved_per_message"])
@@ -301,17 +312,17 @@ def main(argv):
     lexicon_path = child(home, "lexicon.json")
     sent_path = child(home, "sent.jsonl")
     replay_path = child(home, "replay.json")
-    flag_path = child(home, "logging.on")
-    log_path = child(home, "log.jsonl")
     skill_text = read_file(skill_path, True)
     lexicon_text = read_file(lexicon_path, True)
     sent_text = read_file(sent_path, True)
     if read_file(replay_path, True) is None:
         raise Refuse
-    logging = flag_path.exists()
-    if logging and (flag_path.is_symlink() or not flag_path.is_file()):
+    root = state.state_dir()
+    if root is None:
         raise Refuse
-    log_text = read_file(log_path, True) if logging else None
+    log_text = None
+    if state.logging_value(read_settings(root) or "") is True:
+        log_text = read_file(state.events_path(root), False)
     try:
         skill = skill_of(skill_text)
         lexicon = lexicon_of(lexicon_text)

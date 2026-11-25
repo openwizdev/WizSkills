@@ -12,8 +12,8 @@ The per-user brain for ghost text. Setup runs on this machine. The learn pass ru
 
 ## Guards
 
-- Install a model server only when the answers file says `model` is exactly `yes`. Any other value, including a repeated key, installs nothing.
-- Read and write only files inside the home directory you were given. Read `log.jsonl` only when `logging.on` is present. Do not open the network, and do not delete a log flag the user already has.
+- Install a model server only when the answers file says `model` is exactly `yes`. Any other value, including a repeated key, installs nothing. If `openwiz ghost model install` exits 2, that command is absent: continue, and ghost text stays on recall.
+- The opt-in log is `ghost/events.jsonl` under the state directory (`OPENWIZ_STATE_DIR`, else `$XDG_STATE_HOME/openwiz` or `~/.local/state/openwiz`). Read it only when `ghost/settings.json` is exactly `{"logging":true}`. `openwiz ghost forget` deletes that events file and nothing else. Do not open the network, and do not delete an events file yourself.
 - After rewriting `skill.json` and `lexicon.json`, keep them only when a second bench report does not drop `acceptance_rate` or `chars_saved_per_message`. Otherwise restore the previous bytes.
 - A bench that fails, or a report that is not a ghost.v1 bench report with `source` `sent`, restores those bytes. One key twice is a bad report.
 
@@ -25,7 +25,7 @@ Ask once, write the answers, then run this from the skill folder. The file has e
 python3 -I scripts/setup.py --home <home> --answers <answers.json>
 ```
 
-The script checks `openwiz ghost --help`, runs `openwiz ghost model install` only for `yes`, runs `openwiz ghost pair`, and records the log answer once in that home.
+The script checks `openwiz ghost --help`, tries `openwiz ghost model install` only for `yes` (exit 2 means recall and setup continues), runs `openwiz ghost pair`, and writes `ghost/settings.json` once under the state directory.
 
 ## Learn
 
@@ -35,7 +35,7 @@ Put the user's own sent messages in `sent.jsonl` (one `{"text":"..."}` line each
 python3 -I scripts/learn.py --home <home>
 ```
 
-The script runs `openwiz ghost bench --source sent --replay` on `replay.json` before the rewrite and again after it, with `OPENWIZ_GHOST_HOME` set to that home. The report is the ghost.v1 bench report. `skill.json` holds `phrases`, `codes`, `tone` and `never_suggest`. A dismissal or typed-over line in the opt-in log adds its suggestion id to `never_suggest`.
+The script runs `openwiz ghost bench --source sent --replay` on `replay.json` before the rewrite and again after it, with `OPENWIZ_GHOST_HOME` set to that home. The report is the ghost.v1 bench report. `skill.json` holds `phrases`, `codes`, `tone` and `never_suggest`. A dismissal or typed-over line in `ghost/events.jsonl` adds its suggestion id to `never_suggest` only while settings say logging is on. After `forget`, that file is gone and those rejections are not read again.
 
 ## Verify
 

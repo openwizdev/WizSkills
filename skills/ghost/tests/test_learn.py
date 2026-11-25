@@ -88,8 +88,12 @@ class LearnPass(unittest.TestCase):
     def test_the_log_is_unread_when_logging_is_off(self):
         folder = self.enterContext(support_tmp())
         house = support.make_home(folder, log=EVENT.encode(), logging=False)
-        log_path = house / "log.jsonl"
-        log_path.chmod(0)
+        events = support.state_of(folder) / "ghost" / "events.jsonl"
+        home_log = house / "log.jsonl"
+        home_log.write_bytes(EVENT.replace("sug-dismissed", "sug-home").encode(), )
+        (house / "logging.on").write_bytes(b"")
+        events.chmod(0)
+        home_log.chmod(0)
         try:
             env, calls = support.fake_env(
                 folder, [support.report(0.4, 6), support.report(0.8, 12)])
@@ -97,10 +101,12 @@ class LearnPass(unittest.TestCase):
             skill = json.loads((house / "skill.json").read_text(encoding="utf-8"))
             self.assertEqual(proc.stdout, "kept\n")
             self.assertNotIn("sug-dismissed", skill["never_suggest"])
+            self.assertNotIn("sug-home", skill["never_suggest"])
             self.assertEqual(proc.returncode, 0)
             self.assertEqual(support.calls(calls)[0]["args"][5], str(house / "replay.json"))
         finally:
-            log_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            events.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            home_log.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
     def test_a_dismissal_in_the_log_is_kept_when_the_bench_improves(self):
         proc, house, _skill, _lexicon, rows = self.run_home(
@@ -113,14 +119,15 @@ class LearnPass(unittest.TestCase):
         self.assertFalse(any("http://" in " ".join(row["args"]) or "https://" in " ".join(row["args"])
                              for row in rows))
 
-    def test_a_log_outside_home_is_not_opened(self):
+    def test_a_log_outside_the_state_directory_is_not_opened(self):
         folder = self.enterContext(support_tmp())
         house = support.make_home(folder, logging=True)
         outside = Path(folder) / "outside.jsonl"
         outside.write_bytes(EVENT.encode())
         outside.chmod(0)
+        events = support.state_of(folder) / "ghost" / "events.jsonl"
         try:
-            (house / "log.jsonl").symlink_to(outside)
+            events.symlink_to(outside)
             env, log = support.fake_env(folder, [support.report(0.8, 12)])
             proc = support.run(support.LEARN, ["--home", str(house)], env)
             self.assertEqual(proc.stdout, "refused\n")
@@ -128,6 +135,27 @@ class LearnPass(unittest.TestCase):
             self.assertEqual((house / "skill.json").read_bytes(), support.SKILL)
         finally:
             outside.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+    def test_forget_removes_the_rejections_the_learn_pass_reads(self):
+        folder = self.enterContext(support_tmp())
+        house = support.make_home(folder, log=EVENT.encode(), logging=True)
+        env, _log = support.fake_env(folder, [
+            support.report(0.4, 6), support.report(0.8, 12),
+            support.report(0.4, 6), support.report(0.8, 12),
+        ])
+        first = support.run(support.LEARN, ["--home", str(house)], env)
+        skill = json.loads((house / "skill.json").read_text(encoding="utf-8"))
+        self.assertEqual(first.stdout, "kept\n")
+        self.assertEqual(skill["never_suggest"], ["sug-dismissed"])
+        events = support.state_of(folder) / "ghost" / "events.jsonl"
+        events.unlink()
+        (house / "skill.json").write_bytes(support.SKILL)
+        (house / "lexicon.json").write_bytes(support.LEXICON)
+        second = support.run(support.LEARN, ["--home", str(house)], env)
+        again = json.loads((house / "skill.json").read_text(encoding="utf-8"))
+        self.assertEqual(second.stdout, "kept\n")
+        self.assertNotIn("sug-dismissed", again["never_suggest"])
+        self.assertFalse(events.exists())
 
     def test_a_repeated_key_in_the_bench_report_is_not_kept(self):
         duplicate = (

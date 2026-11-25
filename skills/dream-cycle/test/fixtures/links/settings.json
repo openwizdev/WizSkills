@@ -1,0 +1,30 @@
+{
+  "repos": [
+    {
+      "name": "example/notes",
+      "path": "org/notes"
+    },
+    {
+      "name": "example/alpha",
+      "path": "org/alpha",
+      "issues_file": "org/alpha/issues.json"
+    },
+    {
+      "name": "example/skills",
+      "path": "org/skills"
+    }
+  ],
+  "files": {
+    "people": ["example/notes:people/*.md"],
+    "promises": ["example/notes:people/*.md"],
+    "competitors": ["example/notes:market/*.md"],
+    "scoreboard": ["example/notes:scoreboard.md"],
+    "money": ["example/notes:spend/*.md"],
+    "skills": ["example/skills:skills/*/SKILL.md"],
+    "contracts": ["example/skills:contracts/*.md"]
+  },
+  "link_budget": 20,
+  "max_per_entity": 5,
+  "ubiquity_threshold": 0.6,
+  "expire_days": 30
+}

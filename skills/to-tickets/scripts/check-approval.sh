@@ -147,6 +147,77 @@ if gh repo view --json isPrivate,nameWithOwner > "$work/repo" 2> /dev/null; then
     then .[0].nameWithOwner | ascii_downcase else error("unknown") end' "$work/repo" 2> /dev/null) || repo=''
 fi
 
+approval_kind=$(jq -er --slurpfile authors "$work/authors.json" '
+  def opening: split("\n") | map(select(test("\\S"))) | first // "" | sub("^\\s+"; "");
+  def login: if (.user | type) == "object" then (.user.login // null) else null end;
+  [ .[] | select((login | if type == "string" then ascii_downcase else null end) as $l
+                 | $l != null and any($authors[0][]; . == $l))
+    | select((.body | opening) as $h
+        | ($h | startswith("**Machine plan approval,")) or ($h | startswith("**Plan graph approved by")))
+  ] | max_by(.id) // null
+  | if . == null then "none"
+    elif (.body | opening | startswith("**Machine plan approval,")) then "machine"
+    else "human" end
+' "$work/all-comments") || fail "cannot read spec #$spec's comments"
+
+if [ "$approval_kind" = machine ]; then
+  jq -er --slurpfile tickets "$work/tickets" --slurpfile authors "$work/authors.json" '
+    def opening: split("\n") | map(select(test("\\S"))) | first // "" | sub("^\\s+"; "");
+    def login: if (.user | type) == "object" then (.user.login // null) else null end;
+    [ .[] | select((login | if type == "string" then ascii_downcase else null end) as $l
+                   | $l != null and any($authors[0][]; . == $l))
+      | select(.body | opening | startswith("**Machine plan approval,"))
+    ] | max_by(.id) | .body | gsub("\r"; "") | split("\n")
+    | until(length == 0 or .[-1] != ""; .[:-1]) as $l
+    | if ($l[0] | test("^\\*\\*Machine plan approval, [0-9]{4}-[0-9]{2}-[0-9]{2}, revision [1-9][0-9]*:\\*\\* links, relies, sizes, width and owned paths passed\\.$"))
+      then . else error("machine plan approval is not the decisions.v1 record") end
+    | ($l[0] | capture("revision (?<n>[1-9][0-9]*):") | .n | tonumber) as $n
+    | if ($l[1] | test("^Grill confirmed: https://github\\.com/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/(issues|pull)/[1-9][0-9]*#issuecomment-[1-9][0-9]*$"))
+         and $l[2] == "" and $l[4] == ""
+         and ($l[3] | test("^Checks: [1-9][0-9]* tickets; links [0-9]+; relies [0-9]+; sizes S [0-9]+, M [0-9]+, L [0-9]+; width: chain [0-9]+, widest [0-9]+; owned paths [0-9]+\\.$"))
+      then . else error("machine plan approval is not the decisions.v1 record") end
+    | ($l[3] | capture("^Checks: (?<t>[1-9][0-9]*) tickets;") | .t | tonumber) as $t
+    | (if $n > 1 then
+         if (($l[5] | test("^Changed since revision \($n - 1): .+\\.$")) and $l[6] == "") then 7
+         else error("machine plan approval is not the decisions.v1 record") end
+       else 5 end) as $k
+    | if ($l[$k] == "| Ticket | Title | Blocked by | Label |" and $l[$k + 1] == "| --- | --- | --- | --- |")
+      then . else error("machine plan approval is not the decisions.v1 record") end
+    | ($k + 2 + $t) as $j
+    | (try ([$l[$k + 2:$j][] | capture("^\\| #(?<n>[1-9][0-9]*) \\| (?<title>.+) \\| (?<b>none|#[1-9][0-9]*(?: #[1-9][0-9]*)*) \\| (?<label>ready-for-agent|ready-for-human|none) \\|$")
+            | {number: (.n | tonumber)}]) catch error("machine plan approval is not the decisions.v1 record")) as $rows
+    | if (($rows | length) == $t and $l[$j] == ""
+          and ($rows | map(.number) | sort) == ($tickets[0] | sort)
+          and (($rows | map(.number) | unique | length) == ($rows | length)))
+      then . else error("approval table tickets must equal the complete sub-issue set, each once") end
+    | if ($l[$j + 1] | test("^Fingerprint: `[0-9a-f]{64}`$"))
+         and $l[$j + 2] == "" and $l[$j + 3] == "<details><summary>Revision text</summary>"
+         and $l[$j + 4] == "" and $l[$j + 5] == "```text"
+         and ($l | length) >= ($j + 9) and $l[-3] == "```" and $l[-2] == "" and $l[-1] == "</details>"
+         and ($l[$j + 6] | startswith("plan-graph revision v2"))
+      then . else error("machine plan approval is not the decisions.v1 record") end
+    | {fingerprint: ($l[$j + 1] | capture("`(?<f>[0-9a-f]{64})`") | .f),
+       revision: (($l[$j + 6:-3] | join("\n")) + "\n")}
+  ' "$work/all-comments" > "$work/machine.json" 2> "$work/error" || {
+    cat "$work/error" >&2
+    fail "spec #$spec's machine plan approval is not a current decisions.v1 record"
+  }
+  jq -j .revision "$work/machine.json" > "$work/posted-revision.txt"
+  fingerprint=$(jq -er .fingerprint "$work/machine.json")
+  if command -v sha256sum > /dev/null 2>&1; then posted_hash=$(sha256sum < "$work/posted-revision.txt" | cut -d' ' -f1)
+  else posted_hash=$(shasum -a 256 < "$work/posted-revision.txt" | cut -d' ' -f1); fi
+  [ "$posted_hash" = "$fingerprint" ] || fail "spec #$spec's machine plan approval revision text is not the plan its fingerprint names"
+  revision_sh=$(cd -P "$(dirname "$0")" && pwd -P)/../revision.sh
+  sh "$revision_sh" "$spec" > "$work/current-revision.txt" 2> "$work/revision-err" || {
+    cat "$work/revision-err" >&2
+    fail "spec #$spec's current revision could not be read"
+  }
+  cmp -s "$work/posted-revision.txt" "$work/current-revision.txt" || fail "spec #$spec's machine plan approval is stale"
+  checkpoints
+  echo "check-approval.sh: #$spec approval table is valid"
+  exit 0
+fi
+
 jq -er --arg records "$private_records" --arg repo "$repo" --argjson private "$private" --slurpfile tickets "$work/tickets" --slurpfile labels "$work/labels.json" --slurpfile authors "$work/authors.json" '
   def trim: sub("^\\s+"; "") | sub("\\s+$"; "");
   def long_ref: "(?<![A-Za-z0-9_./-])(?<o>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#(?<n>[1-9][0-9]*)";

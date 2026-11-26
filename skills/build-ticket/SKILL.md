@@ -23,7 +23,7 @@ You are the **builder** for one ticket: you take it to one merged pull request, 
 ## 1. Read
 
 1. `$T read <repo> <N>`: the title, owned paths with their repositories, relies-on, blockers and blocked tickets. It prints `ready: yes` only once every blocker is closed as completed and the fleet started the ticket; on `ready: no`, report that blocker on the ticket and claim nothing.
-2. Read the ticket and its comments, the whole spec (its parent), and the bodies of the tickets yours blocks, then the rest, for fit, never scope. Read the confirmed grill it names in the private repository; if the ticket disagrees with it, ask using a summary and pointer.
+2. Read the ticket, its comments, the parent spec and tickets it blocks, then the rest, for fit, never scope. Read the confirmed grill's glossary, decision tree and parked list; use its names, leave parked items unbuilt, and ask with a summary and pointer if it disagrees.
 3. Once per session, run `$C builder` from the project checkout and read the project's `AGENTS.md` or `CLAUDE.md` (unless the harness already loaded it); it replaces reading `fleet.md`, `triage-labels.md` and `domain.md` whole. On a later turn run it again only when a blob ID its header lists has changed.
 
 Done when you can name the title, owned paths, every acceptance criterion and what each blocked ticket needs from you. When the spec has a contract-first ticket, build against its contract, types and fixtures, and leave the seams later tickets need, empty or stubbed, inside your owned paths.

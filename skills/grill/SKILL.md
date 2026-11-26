@@ -41,41 +41,44 @@ large gap. Builder limits and approval gates still apply.
 
 ## Map, then ask
 
+Run [role-call](../role-call/SKILL.md) before the first question, fleet mode
+included, and record who is present before any question.
+
 Before any question, read the code, docs, tickets, glossary and ADRs the
 feature touches. Write the decision tree in the private file: every decision,
 what it depends on, and what it unblocks. Record as settled, with the source,
 anything those files already decide. Ask only what they leave open.
 
 The frontier is the open decisions whose prerequisites are settled. One
-substantive question per round, the one that unblocks the most: a stable ID,
-plain context, options, consequences, and one recommendation on its own
-➡️ line so "yes" accepts it. A dependent of a question still open waits.
-Trivial confirmations may share a round, at most three, when none changes a
-dependency. Continue until no frontier decision remains. The install's first
-fleet may set a shorter cap; name the remainder and leave it unsettled.
+question per round, the one that unblocks the most: a stable ID, plain
+context, options, consequences, and one recommendation on its own ➡️ line so
+"yes" accepts it. A dependent of a question still open waits. Continue until
+no frontier decision remains. The install's first fleet may set a shorter
+cap; name the remainder and leave it unsettled.
 
 An ambiguous term gets one agreed name before reuse, including a clash with
 `GLOSSARY.md`, saved under Glossary. A question only a prototype can answer
 goes under Parked, with why, and stays undecided.
 
-Save each round as [recording and recovery](references/records.md) describes,
-show that saved round, and wait. A skip or an ambiguous "yeah" stays open.
-"simplify" keeps the ID and context and is asked more plainly. Answer a
-question back before the next round. On a conflict, ask which meaning stands.
+Post that one question as [posting](references/posting.md) describes, then
+save the round as [recording and recovery](references/records.md) describes.
+A thread reply is the answer. A skip or an ambiguous "yeah" stays open.
+"simplify" keeps the ID and context and is asked more plainly.
+On a conflict, ask which meaning stands.
 A project term or hard-to-reverse decision follows the glossary and ADR steps
 there. Recompute the frontier after the saved reply.
 
 Read [coordination](references/coordination.md) before several grills in one
 message, new IDs beside another grill, or parking and resuming. A parked grill
-is the user stopping. The Parked list is prototype questions in an open grill.
+is the user stopping. The Parked list is prototype questions.
 
 ## Fleet mode
 
 With no person in the chat, and an orchestrator, ticket or spec as the
 counterpart, invent no answer. Keep what the spec, ticket, glossary, ADRs and
-code already decide. Record the rest unresolved, recommendation not settled,
-status open: in the private file when that checkout verifies, otherwise as a
-public-safe ticket comment. Do not confirm or start [to-spec](../to-spec/SKILL.md).
+code already decide. Record the rest unresolved, recommendation not settled, status open. Post
+each question for visibility; its thread settles nothing. Do not confirm or
+start [to-spec](../to-spec/SKILL.md).
 
 ## Exit check
 
@@ -85,7 +88,7 @@ Parked and undecided, and the frontier is empty.
 
 Then save a summary of at most ten numbered decisions, parked items included
 as undecided, and publish its confirmation request as recording and recovery
-describes. Show it and ask whether you are aligned. Save the exact reply
+describes. Post it the same way and ask whether you are aligned. Save the exact reply
 first. A correction needs a new summary and request. A new decision reopens
 the rounds.
 

@@ -1,0 +1,3 @@
+interface:
+  display_name: "Role call"
+  short_description: "Ping the channel and record who replies present"

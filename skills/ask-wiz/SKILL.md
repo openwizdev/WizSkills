@@ -31,6 +31,7 @@ Done when the user has one named recommendation with its start words, and nothin
 | Skill | Use it to |
 | --- | --- |
 | `grill` | Settle a design with the user, ending in a confirmed summary |
+| `role-call` | Record who replies present before a grill |
 | `to-spec` | Turn a confirmed grill into a spec and its narrated video |
 | `to-tickets` | Turn a confirmed spec into tickets and their blocking edges |
 | `launch-fleet` | Run an approved plan through its fleet and merge rules, between sessions too |
@@ -53,7 +54,7 @@ Done when the user has one named recommendation with its start words, and nothin
 | `dream-cycle` | Run an organization-wide read-only review into a private report and confirmed tickets |
 | `ask-wiz` | Choose a skill or flow when unsure, started by the user |
 
-At a phase boundary (a design settled, a plan written, a ticket built, a result checked), read [the CloudRoom thread guide](PHASE-BOUNDARIES.md) to choose whether to keep going, start a fresh thread from a handoff, or send a bounded task to a child thread.
+At a phase boundary, read [the CloudRoom thread guide](PHASE-BOUNDARIES.md) to choose whether to keep going, start a fresh thread from a handoff, or send a bounded task to a child thread.
 
 ## When no skill fits
 

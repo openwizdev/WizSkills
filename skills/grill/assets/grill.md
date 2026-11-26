@@ -4,6 +4,18 @@
 
 Already settled: <decisions this grill relies on and their sources>.
 
+## Decision tree
+
+- <id>: <decision>; depends on <ids or nothing>; unblocks <ids or nothing>; <open, settled from a source, or parked>.
+
+## Glossary
+
+- <Term>: <the one agreed meaning>.
+
+## Parked
+
+- <id>: <a question only a prototype can answer, and why>. Or `none`.
+
 ## Round 1
 Risk: ordinary
 

@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=1051
+CASES=1050
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -201,12 +201,6 @@ selected() { [ -n "$forced" ] && return 0; case $1 in ${TEST_ONLY:-*}) return 0 
 
 bad() { echo "FAIL $1: $2"; fails=$((fails + 1)); }
 
-# world FIXTURE FILTER DIR: the fixture changed by FILTER, on stdout. FILTER
-# is "BEFORE @@then@@ AFTER", or just BEFORE. BEFORE makes the world as the
-# user approved it: then each spec's "@@FP@@" becomes its fingerprint, from
-# to-tickets’ revision.sh (the copy in fixtures/) run on that world, as
-# to-tickets records it. AFTER changes it since. The frontier fixture takes its
-# settings files from check.json. DIR holds the steps.
 world() {
   before=${2%%@@then@@*}
   case $2 in *@@then@@*) after=${2#*@@then@@} ;; *) after=. ;; esac
@@ -237,7 +231,7 @@ fingerprint() {
   # Shared by the workers: each answer is written whole, then renamed.
   if [ ! -s "$SHARED/fp/$key" ]; then
     mkdir -p "$SHARED/fp" \
-      && PATH="$tmp/bin:$PATH" FAKE_GH_WORLD="$1" FAKE_GH_LOG="$3/setup.log" sh "$FIX/revision.sh" "$2" > "$3/revision-$2.txt" \
+      && PATH="$tmp/bin:$PATH" FAKE_GH_WORLD="$1" FAKE_GH_LOG="$3/setup.log" sh "$HERE/../../to-tickets/revision.sh" "$2" > "$3/revision-$2.txt" \
       && fp_new=$(sha256sum < "$3/revision-$2.txt" | cut -c1-64) && [ ${#fp_new} = 64 ] \
       && cp "$3/revision-$2.txt" "$SHARED/fp/$fp_new.rev.$$" && mv "$SHARED/fp/$fp_new.rev.$$" "$SHARED/fp/$fp_new.rev" \
       && printf '%s\n' "$fp_new" > "$SHARED/fp/$key.$$" && mv "$SHARED/fp/$key.$$" "$SHARED/fp/$key" || return 1
@@ -365,7 +359,7 @@ run_case() {
   # shellcheck disable=SC2086 # $envs is a list of VAR=VALUE words
   (cd "$last" && env PATH="$tmp/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo OPENWIZ_STATE_DIR="$last/no-installation" \
     FAKE_GH_WORLD="$last/world$n.json" FAKE_GH_LOG="$lastlog" LAUNCH_FLEET_NOW=$NOW \
-    LAUNCH_FLEET_CACHE="$last/cache" LAUNCH_FLEET_REVISION="$FIX/revision.sh" $envs /bin/sh "$fleet" "$@" > "$last/out$n" 2> "$last/err$n")
+    LAUNCH_FLEET_CACHE="$last/cache" LAUNCH_FLEET_REVISION="$HERE/../../to-tickets/revision.sh" $envs /bin/sh "$fleet" "$@" > "$last/out$n" 2> "$last/err$n")
   got_status=$?
   if [ "$got_status" != "$want_status" ]; then
     bad "$name" "exit $got_status, not $want_status; stdout: $(head -c 400 "$last/out$n"); stderr: $(head -c 400 "$last/err$n")"
@@ -1537,7 +1531,7 @@ if { [ -n "${TEST_ONLY:-}" ] && [ "$TEST_ONLY" != loop ]; } || ! take; then
   : # the loop's script runs only in a full run, in one worker
 elif mkdir -p "$L/remote/skills/launch-fleet/scripts" "$L/remote/skills/to-tickets" "$L/home" \
   && cp "$FLEET" "$L/remote/skills/launch-fleet/scripts/fleet.sh" \
-    && cp "$HERE/records.py" "$L/remote/skills/launch-fleet/scripts/records.py" && cp "$FIX/revision.sh" "$L/remote/skills/to-tickets/revision.sh" \
+    && cp "$HERE/records.py" "$L/remote/skills/launch-fleet/scripts/records.py" && cp "$HERE/../../to-tickets/revision.sh" "$L/remote/skills/to-tickets/revision.sh" \
   && git -C "$L/remote" init -q && git -C "$L/remote" add -A \
   && git -C "$L/remote" -c user.name=synthetic -c user.email=synthetic@example.invalid commit -q -m one \
   && mkdir "$L/w" && world check.json 'merge12' "$L/w" > "$L/world.json"; then
@@ -2342,7 +2336,7 @@ storm_case() {
   storm_run() {
     env PATH="$1:$tmp/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo OPENWIZ_STATE_DIR="$d/no-installation" \
       FAKE_GH_WORLD="$d/world.json" FAKE_GH_LOG="$d/gh.log" LAUNCH_FLEET_NOW=$NOW LAUNCH_FLEET_CACHE="$d/cache" \
-      LAUNCH_FLEET_REVISION="$FIX/revision.sh" sh "$FLEET" spec 10 > "$d/out" 2> "$d/err"
+      LAUNCH_FLEET_REVISION="$HERE/../../to-tickets/revision.sh" sh "$FLEET" spec 10 > "$d/out" 2> "$d/err"
   }
   storm_run "$tmp/bin" || { bad "$name" "the first check failed: $(head -c 300 "$d/err")"; return; }
   printf '#!/bin/sh\n[ "$*" = "api rate_limit" ] && exec "%s/gh" "$@"\necho call >> "%s/failed.log"\necho "gh: synthetic failure" >&2\nexit 1\n' \
@@ -2894,7 +2888,7 @@ look #10: open sub-issue #15 is not in the approved plan
 look #10: planned #14 is not a sub-issue of the spec
 EOF
 log_has 'budget: a damaged cache is not trusted: read again' 1 '^issue view 10 subIssues$'
-{ cat "$FIX/revision.sh" && echo '# changed'; } > "$tmp/revision-changed.sh" || bad 'budget: another revision.sh' "can't copy it"
+{ cat "$HERE/../../to-tickets/revision.sh" && echo '# changed'; } > "$tmp/revision-changed.sh" || bad 'budget: another revision.sh' "can't copy it"
 again 'budget: a fingerprint from another revision.sh is not reused' . LAUNCH_FLEET_REVISION="$tmp/revision-changed.sh" -- check <<EOF
 re-approve #10: changed since revision 1 (fingerprint now $(fp12 check.json "merge12 @@then@@ $C6" 10))
 look #10: open sub-issue #15 is not in the approved plan
@@ -3265,7 +3259,7 @@ hour_run() {
   [ "$regime" = timer ] && fleet=${HOUR_BEFORE:-$FLEET}
   (cd "$H" && env PATH="$tmp/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo FAKE_GH_WORLD="$H/$regime-$k.json" \
     FAKE_GH_LOG="$H/gh-$regime.log" LAUNCH_FLEET_NOW=$((NOW + 60 * ${m#0})) LAUNCH_FLEET_CACHE="$c" \
-    LAUNCH_FLEET_REVISION="$FIX/revision.sh" /bin/sh "$fleet" "$@" > "$H/out-$regime" 2> "$H/err-$regime") || return 1
+    LAUNCH_FLEET_REVISION="$HERE/../../to-tickets/revision.sh" /bin/sh "$fleet" "$@" > "$H/out-$regime" 2> "$H/err-$regime") || return 1
   points_only "$H/err-$regime" || return 1
   sed -E "s/^fleet\.sh: used ([0-9]+) GitHub points in ([0-9]+) questions.*/\1 \2 12:$m $*/" "$H/err-$regime" >> "$H/points-$regime" || return 1
   sed "s/^/12:$m /" "$H/out-$regime" >> "$H/lines-$regime"
@@ -3398,7 +3392,7 @@ cache_case() {
   cache_check() {
     env FAKE_GH_PAGE="$cache_page" FAKE_GH_PULL_HEAD="$cache_head" PATH="$tmp/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo \
       FAKE_GH_WORLD="$d/world.json" FAKE_GH_LOG="$d/gh.log" FAKE_GH_HTTP_LOG="$d/http.log" \
-      LAUNCH_FLEET_NOW=$NOW LAUNCH_FLEET_CACHE="$d/cache" LAUNCH_FLEET_REVISION="$FIX/revision.sh" \
+      LAUNCH_FLEET_NOW=$NOW LAUNCH_FLEET_CACHE="$d/cache" LAUNCH_FLEET_REVISION="$HERE/../../to-tickets/revision.sh" \
       sh "$cache_reader" check > "$d/out$1" 2> "$d/err$1"
   }
   if [ "$mode" = mixed ]; then
@@ -3541,7 +3535,7 @@ parallel_case() {
     env FAKE_GH_PAGE="$parallel_page" PATH="$d/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo FAKE_GH_SCRIPT="$FIX/gh.py" \
       FAKE_GH_TIMING="$d/timing" FAKE_GH_TIMING_GROUP="$mode" FAKE_GH_TIMING_FAIL="$failed_reader" FAKE_GH_HTTP_LOG="$d/http.log" \
       FAKE_GH_WORLD="$d/world.json" FAKE_GH_LOG="$d/gh.log" LAUNCH_FLEET_NOW=$NOW \
-      LAUNCH_FLEET_CACHE="$d/cache" LAUNCH_FLEET_REVISION="$FIX/revision.sh" \
+      LAUNCH_FLEET_CACHE="$d/cache" LAUNCH_FLEET_REVISION="$HERE/../../to-tickets/revision.sh" \
       sh "$FLEET" "$@" > "$d/out" 2> "$d/err"
   }
   if [ "$mode" = failure ]; then
@@ -3838,7 +3832,7 @@ else
   FL=$tmp/case-fleetloop
   if mkdir -p "$FL/remote/skills/launch-fleet/scripts" "$FL/remote/skills/to-tickets" "$FL/home" "$FL/w" \
     && cp "$FLEET" "$FL/remote/skills/launch-fleet/scripts/fleet.sh" \
-    && cp "$HERE/records.py" "$FL/remote/skills/launch-fleet/scripts/records.py" && cp "$FIX/revision.sh" "$FL/remote/skills/to-tickets/revision.sh" \
+    && cp "$HERE/records.py" "$FL/remote/skills/launch-fleet/scripts/records.py" && cp "$HERE/../../to-tickets/revision.sh" "$FL/remote/skills/to-tickets/revision.sh" \
     && git -C "$FL/remote" init -q && git -C "$FL/remote" add -A \
     && git -C "$FL/remote" -c user.name=synthetic -c user.email=synthetic@example.invalid commit -q -m one \
     && world check.json "merge12 | $SPEC40" "$FL/w" > "$FL/world.json"; then
@@ -4239,17 +4233,6 @@ if [ -z "${TEST_ONLY:-}" ] || [ "$TEST_ONLY" = focused-again ]; then
   fi
 fi
 
-### The pinned revision.sh is to-tickets’
-
-if [ -z "${TEST_ONLY:-}" ] && take; then
-  cases=$((cases + 1))
-  if cmp -s "$FIX/revision.sh" "$HERE/../../to-tickets/revision.sh"; then
-    echo "ok   the pinned revision.sh is to-tickets’, byte for byte"
-  else
-    bad "the pinned revision.sh is to-tickets’, byte for byte" "fixtures/revision.sh differs from skills/to-tickets/revision.sh: copy it again"
-  fi
-fi
-
 ### GI1 (#2543): a fleet thread's check skips unchanged reads
 
 # A spec of a real spec's size (fixtures/unchanged/spec.jq: twelve tickets,
@@ -4267,7 +4250,7 @@ gi1_run() { # N DIR CACHE SECONDS: run N of spec 10 on DIR/world.json, SECONDS a
     else export GH_REPO=synthetic-owner/synthetic-repo; fi
     cd "$2" && env PATH="$tmp/bin:$PATH" GH_TOKEN=$GI1_SECRET \
     FAKE_GH_WORLD="$2/world.json" FAKE_GH_LOG="$2/gh-$1.log" FAKE_GH_HTTP_LOG="$2/http-$1.log" \
-    LAUNCH_FLEET_NOW=$((NOW + $4)) LAUNCH_FLEET_CACHE="$3" LAUNCH_FLEET_REVISION="$FIX/revision.sh" \
+    LAUNCH_FLEET_NOW=$((NOW + $4)) LAUNCH_FLEET_CACHE="$3" LAUNCH_FLEET_REVISION="$HERE/../../to-tickets/revision.sh" \
     /bin/sh "$FLEET" spec 10 > "$2/out-$1" 2> "$2/err-$1")
 }
 # gi1_pair N SECONDS: run N on the shared cache and its full-read reference;

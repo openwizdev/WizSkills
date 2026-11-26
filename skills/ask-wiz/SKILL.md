@@ -31,6 +31,7 @@ Done when the user has one named recommendation with its start words, and nothin
 | Skill | Use it to |
 | --- | --- |
 | `grill` | Settle a design with the user, ending in a confirmed summary |
+| `role-call` | Record who replies present before a grill |
 | `to-spec` | Turn a confirmed grill into a spec and its narrated video |
 | `to-tickets` | Turn a confirmed spec into tickets and their blocking edges |
 | `launch-fleet` | Run an approved plan through its fleet and merge rules, between sessions too |

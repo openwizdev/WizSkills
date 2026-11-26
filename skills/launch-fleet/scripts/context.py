@@ -50,6 +50,25 @@ def sections(text):
     return {name: ''.join(lines).strip() for name, lines in result.items()}
 
 
+_MARKDOWN_LINK = re.compile(r'\[[^\]]*\]\([^)]*\)')
+_URL = re.compile(r'https://\S+')
+_PAREN = re.compile(r'\([^)]*\)')
+_PROVENANCE = re.compile(
+    r'\[[^\]]*\]\([^)]*\)|https://|\bJake\b|\b\d{4}-\d{2}-\d{2}\b|\bprivate record\b|\bADR\b',
+    re.I)
+
+
+def source_instruction(tail):
+    masked = _PAREN.sub(' ', _URL.sub(' ', _MARKDOWN_LINK.sub(' ', tail)))
+    if ':' in masked:
+        instruction = masked.rsplit(':', 1)[1].strip()
+        if instruction and not _PROVENANCE.search(instruction):
+            return instruction
+    kept = [sentence.strip() for sentence in re.split(r'(?<=\.)\s+', tail.strip())
+            if sentence.strip() and not _PROVENANCE.search(sentence)]
+    return ' '.join(kept).strip()
+
+
 def compact_sources(text):
     out = []
     links = []
@@ -69,8 +88,10 @@ def compact_sources(text):
                     if url not in links:
                         links.append(url)
                 prefix = line[:match.start()].rstrip()
-                if prefix:
-                    out.append(prefix)
+                instruction = source_instruction(match.group(1))
+                kept = f'{prefix} {instruction}'.strip() if prefix and instruction else prefix or instruction
+                if kept:
+                    out.append(kept)
                 continue
         if line == '' and (not out or out[-1] == ''):
             continue

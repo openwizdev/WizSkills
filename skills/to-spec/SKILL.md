@@ -52,10 +52,15 @@ returning to the owner.
 
 ## 4. Make the steering video
 
-Skip only for install's first fleet (including resets/changes, which get a new
-machine approval and still no video). Every other spec gets one animatic in
-build order (step 1 starts first), in the grill's words, showing user and code
-changes. Write `storyboard.json` outside any repo ([video.md](video.md)), then:
+Skip this step for the install's first fleet, and only for it: when the install
+skill's plan step runs you for that fleet, the spec gets no video and the launch
+follows the machine plan approval straight away. A reset or change of that spec or
+plan gets a new machine approval and still no video: for this fleet that
+replaces step 5's new video. Every other spec gets its video.
+
+One animatic in build order (step 1 starts first), in the grill's words, showing
+user and code changes. Write `storyboard.json` outside any repo
+([video.md](video.md)), then:
 
 - `node "<this skill's folder>/scripts/animatic.mjs" build storyboard.json -o spec.mp4`;
   read `build/sheet.png` until it reads right and ends `no warnings`.

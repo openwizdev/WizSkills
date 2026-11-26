@@ -22,8 +22,14 @@ PATCH_TAILS = ('patch.multiple', 'patch.dict', 'patch.object', 'patch')
 MONKEY = {'monkeypatch.setattr', 'monkeypatch.delattr', 'monkeypatch.setitem'}
 WARN_LINE = re.compile(
     r'(?i)(?:filterwarnings\s*=.*\bignore\b|-W\s*ignore\b|simplefilter\s*=.*\bignore\b)')
+IGNORE_ENTRY = re.compile(r'(?i)^\s*["\']?ignore(?:\s*:|["\'])')
+CONFIG_NAMES = {'pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini', 'pytest.toml'}
+WARN_CALLS = {
+    'warnings.filterwarnings', 'warnings.simplefilter', 'filterwarnings', 'simplefilter',
+    'pytest.mark.filterwarnings',
+}
 HUNK = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
-DEF_LINE = re.compile(r'^(?:async\s+)?def\s+(test[A-Za-z0-9_]*)\s*\(')
+DEF_LINE = re.compile(r'^\s*(?:async\s+)?def\s+(test[A-Za-z0-9_]*)\s*\(')
 SKIP_LINE = re.compile(
     r'^\s*@(?:(pytest\.mark\.(?:skipif|skip|xfail))|(unittest\.skip(?:If|Unless)?)|(pytest\.(?:skip|xfail)))\b')
 TEST_PARTS = {'test', 'tests', '__tests__'}
@@ -116,25 +122,25 @@ def parse_diff(text):
             current['new'] = line[len('rename to '):]
         elif line.startswith('@@'):
             old_line, new_line = hunk_starts(line)
-        elif line.startswith('+') and not line.startswith('+++'):
+        elif old_line is None and new_line is None:
+            continue
+        elif line.startswith('+'):
             if new_line is not None:
                 current['added_lines'].add(new_line)
                 new_line += 1
-        elif line.startswith('-') and not line.startswith('---'):
+        elif line.startswith('-'):
             if old_line is not None:
                 current['removed'].append((old_line, line[1:]))
                 old_line += 1
         elif line.startswith('\\'):
             continue
-        else:
-            if old_line is not None and not line.startswith(('diff ', 'index ', 'old mode', 'new mode',
-                                                             'similarity ', 'rename ', 'deleted ', 'new file',
-                                                             'copy ', 'dissimilarity ')):
+        elif line.startswith(' '):
+            if old_line is not None:
                 old_line += 1
-            if new_line is not None and not line.startswith(('diff ', 'index ', 'old mode', 'new mode',
-                                                             'similarity ', 'rename ', 'deleted ', 'new file',
-                                                             'copy ', 'dissimilarity ')):
+            if new_line is not None:
                 new_line += 1
+        else:
+            raise Unreadable()
     return changes
 
 
@@ -218,8 +224,36 @@ def is_test_target(target):
     return any(part in TEST_PARTS or part.startswith('test_') for part in modules)
 
 
-def mock_label(node):
-    name = dotted(called(node))
+def resolve(name, bound):
+    if not name:
+        return name
+    head, dot, tail = name.partition('.')
+    base = bound.get(head)
+    if not base:
+        return name
+    return base + (dot + tail if dot else '')
+
+
+def bind_stmt(local, stmt):
+    if isinstance(stmt, ast.Import):
+        for alias in stmt.names:
+            if alias.asname:
+                local[alias.asname] = alias.name
+            else:
+                top = alias.name.split('.')[0]
+                local[top] = top
+        return True
+    if isinstance(stmt, ast.ImportFrom) and stmt.module:
+        for alias in stmt.names:
+            if alias.name == '*':
+                continue
+            local[alias.asname or alias.name] = stmt.module + '.' + alias.name
+        return True
+    return False
+
+
+def mock_label(node, bound):
+    name = resolve(dotted(called(node)), bound)
     if not is_patch(name):
         return None
     target = None
@@ -233,30 +267,54 @@ def mock_label(node):
     return f'{label} {target}' if target else label
 
 
-def warning_call(node):
-    if not isinstance(node, ast.Call) or not node.args:
-        return False
-    name = dotted(node.func)
-    if name not in {'warnings.filterwarnings', 'warnings.simplefilter', 'filterwarnings', 'simplefilter',
-                    'pytest.mark.filterwarnings'} and not name.endswith(('.filterwarnings', '.simplefilter')):
-        return False
-    arg = node.args[0]
-    return isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.lower().startswith('ignore')
+def action_expr(node):
+    if node.args:
+        return node.args[0]
+    for keyword in node.keywords:
+        if keyword.arg == 'action':
+            return keyword.value
+    return None
 
 
-def raise_skip(node):
+def changed_line(node, added):
+    start = getattr(node, 'lineno', None)
+    if start is None:
+        return None
+    if start in added:
+        return start
+    end = getattr(node, 'end_lineno', None) or start
+    for line in range(start + 1, end + 1):
+        if line in added:
+            return line
+    return None
+
+
+def warning_line(node, bound, added):
+    if not isinstance(node, ast.Call):
+        return None
+    name = resolve(dotted(node.func), bound)
+    if name not in WARN_CALLS and not name.endswith(('.filterwarnings', '.simplefilter')):
+        return None
+    expr = action_expr(node)
+    if not (isinstance(expr, ast.Constant) and isinstance(expr.value, str)
+            and expr.value.lower().startswith('ignore')):
+        return None
+    return changed_line(expr, added)
+
+
+def raise_skip(node, bound):
     if not isinstance(node, ast.Raise) or node.exc is None:
         return False
     exc = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
-    return dotted(exc) in {'unittest.SkipTest', 'SkipTest'}
+    return resolve(dotted(exc), bound) in {'unittest.SkipTest', 'SkipTest'}
 
 
-def skip_label(node):
+def skip_label(node, bound):
     if isinstance(node, ast.Call):
-        name = dotted(node.func)
+        name = resolve(dotted(node.func), bound)
         if name == 'skipTest' or name.endswith('.skipTest'):
             return 'unittest.skip'
-    return SKIP.get(dotted(called(node)))
+    return SKIP.get(resolve(dotted(called(node)), bound))
 
 
 def text_fallback(source, added):
@@ -272,53 +330,89 @@ def text_fallback(source, added):
     return found
 
 
+def child_blocks(stmt):
+    blocks = []
+    for name in ('body', 'orelse', 'finalbody'):
+        value = getattr(stmt, name, None)
+        if isinstance(value, list) and value and isinstance(value[0], ast.stmt):
+            blocks.append(value)
+    for handler in getattr(stmt, 'handlers', None) or []:
+        if isinstance(getattr(handler, 'body', None), list):
+            blocks.append(handler.body)
+    for case in getattr(stmt, 'cases', None) or []:
+        if isinstance(getattr(case, 'body', None), list):
+            blocks.append(case.body)
+    return blocks
+
+
+def header_nodes(stmt):
+    inside = set()
+    for nested in child_blocks(stmt):
+        for sub in nested:
+            for node in ast.walk(sub):
+                inside.add(id(node))
+    return [node for node in ast.walk(stmt) if id(node) not in inside]
+
+
 def python_marks(source, added):
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return text_fallback(source, added)
-    decorators = []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            decorators.extend(node.decorator_list)
-    decorator_ids = {id(item) for item in decorators}
     found = []
 
-    def take(node):
-        if node.lineno not in added:
-            return
-        label = skip_label(node)
-        if label:
+    def take(node, bound):
+        label = skip_label(node, bound)
+        if label and node.lineno in added:
             found.append(('skip', node.lineno, label))
             return
-        label = mock_label(node)
-        if label:
+        label = mock_label(node, bound)
+        if label and node.lineno in added:
             found.append(('mock', node.lineno, label))
             return
-        if warning_call(node):
-            found.append(('warn', node.lineno, ''))
+        warned = warning_line(node, bound, added)
+        if warned:
+            found.append(('warn', warned, ''))
 
-    for node in decorators:
-        take(node)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and id(node) not in decorator_ids:
-            take(node)
-        elif isinstance(node, ast.Raise) and node.lineno in added and raise_skip(node):
-            found.append(('skip', node.lineno, 'unittest.skip'))
+    def block(stmts, bound):
+        local = dict(bound)
+        for stmt in stmts:
+            if bind_stmt(local, stmt):
+                continue
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                for dec in stmt.decorator_list:
+                    take(dec, local)
+                block(stmt.body, local)
+                continue
+            if isinstance(stmt, ast.Raise) and stmt.lineno in added and raise_skip(stmt, local):
+                found.append(('skip', stmt.lineno, 'unittest.skip'))
+            for node in header_nodes(stmt):
+                if isinstance(node, ast.Call):
+                    take(node, local)
+            for nested in child_blocks(stmt):
+                block(nested, local)
+
+    block(tree.body, {})
     return found
 
 
-def config_warnings(source, added):
+def config_warnings(path, source, added):
+    bare = path.rsplit('/', 1)[-1] in CONFIG_NAMES
     found = []
     for number, line in enumerate(source.splitlines(), 1):
-        if number in added and WARN_LINE.search(line):
+        if number not in added:
+            continue
+        if WARN_LINE.search(line) or (bare and IGNORE_ENTRY.search(line)):
             found.append(number)
     return found
 
 
 def function_lines(path, old_fns, new_fns, removed):
+    if new_fns is None:
+        return []
     if old_fns is None:
-        new_names = set()
+        new_names = {fn.qual for fn in new_fns}
+        new_names.update(name.rsplit('.', 1)[-1] for name in list(new_names))
         lines = []
         for line, text in removed:
             match = DEF_LINE.match(text)
@@ -362,9 +456,10 @@ def findings_for(repo, base, head, change):
     new_source = None if change['deleted'] or not new_path.endswith('.py') else blob(repo, head, new_path)
     if old_test or new_test:
         old_fns = python_functions(old_source) if old_path.endswith('.py') else []
-        new_fns = [] if not new_test or not new_path.endswith('.py') else python_functions(new_source)
-        if new_fns is None:
+        if not new_test or not new_path.endswith('.py'):
             new_fns = []
+        else:
+            new_fns = python_functions(new_source)
         lines.extend(function_lines(old_path, old_fns, new_fns, change['removed']))
     if new_source is not None:
         for kind, line, label in python_marks(new_source, change['added_lines']):
@@ -374,7 +469,7 @@ def findings_for(repo, base, head, change):
     if watched and not watched.endswith('.py'):
         source = blob(repo, head, watched)
         if source is not None:
-            for line in config_warnings(source, change['added_lines']):
+            for line in config_warnings(watched, source, change['added_lines']):
                 lines.append(f'ignored warning: {watched}:{line}')
     return lines
 

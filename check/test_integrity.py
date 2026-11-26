@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -213,6 +214,158 @@ def test_a():
         self.assertNotIn('new skip mark', out)
         self.assertNotIn('new mock', out)
         self.assertNotIn('ignored warning', out)
+
+    def test_keyword_ignore_warning_is_reported(self):
+        repo = Repo(self)
+        repo.write('tests/conftest.py', 'import warnings\nwarnings.filterwarnings(action="ignore")\n')
+        repo.commit('warn')
+        code, out = report(repo, repo.base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), ['ignored warning: tests/conftest.py:2'])
+
+    def test_ignore_argument_on_its_own_line_is_reported(self):
+        repo = Repo(self)
+        repo.write('tests/conftest.py', 'import warnings\nwarnings.filterwarnings(\n    "error",\n)\n')
+        base = repo.commit('error')
+        repo.write('tests/conftest.py', 'import warnings\nwarnings.filterwarnings(\n    "ignore",\n)\n')
+        repo.commit('ignore')
+        code, out = report(repo, base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), ['ignored warning: tests/conftest.py:3'])
+
+    def test_editing_an_existing_ignore_category_is_not_a_new_warning(self):
+        repo = Repo(self)
+        repo.write('tests/conftest.py',
+                   'import warnings\nwarnings.filterwarnings(\n    "ignore",\n'
+                   '    category=DeprecationWarning,\n)\n')
+        base = repo.commit('seed')
+        repo.write('tests/conftest.py',
+                   'import warnings\nwarnings.filterwarnings(\n    "ignore",\n'
+                   '    category=UserWarning,\n)\n')
+        repo.commit('edit')
+        code, out = report(repo, base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), [])
+        self.assertEqual(out, '')
+
+    def test_continued_pytest_ignore_filter_is_reported(self):
+        repo = Repo(self)
+        repo.write('pytest.ini',
+                   '[pytest]\nfilterwarnings =\n    error::UserWarning\n    ignore::DeprecationWarning\n')
+        repo.write('pyproject.toml',
+                   '[tool.pytest.ini_options]\nfilterwarnings = [\n    "error::UserWarning",\n'
+                   '    "ignore::DeprecationWarning",\n]\n')
+        repo.commit('config')
+        code, out = report(repo, repo.base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), [
+            'ignored warning: pyproject.toml:4',
+            'ignored warning: pytest.ini:4',
+        ])
+
+    def test_added_line_of_plus_signs_still_reports_its_warning(self):
+        repo = Repo(self)
+        repo.write('pytest.ini', '[pytest]\n++filterwarnings = ignore\n')
+        repo.commit('plus')
+        code, out = report(repo, repo.base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), ['ignored warning: pytest.ini:2'])
+
+    def test_unparseable_test_file_is_not_reported_as_deleted_functions(self):
+        repo = Repo(self)
+        repo.write('tests/test_keep.py', 'def test_keep():\n    assert True\n\ndef test_also():\n    assert True\n')
+        base = repo.commit('add')
+        repo.write('tests/test_keep.py', 'def test_keep():\n    assert True\n\ndef test_also(\n    assert True\n')
+        repo.commit('break')
+        code, out = report(repo, base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), [])
+        self.assertEqual(out, '')
+
+    def test_repairing_a_syntax_error_is_not_a_deleted_function(self):
+        repo = Repo(self)
+        repo.write('tests/test_keep.py', 'def test_keep(\n    assert True\n')
+        base = repo.commit('bad')
+        repo.write('tests/test_keep.py', 'def test_keep():\n    assert True\n')
+        repo.commit('fix')
+        code, out = report(repo, base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), [])
+        self.assertEqual(out, '')
+
+    def test_deleted_function_in_an_unparseable_file_is_still_reported(self):
+        repo = Repo(self)
+        repo.write('tests/test_keep.py', 'def test_keep(\n    assert 1\ndef test_gone():\n    assert 1\n')
+        base = repo.commit('bad')
+        repo.write('tests/test_keep.py', 'def test_keep():\n    assert 1\n')
+        repo.commit('drop')
+        code, out = report(repo, base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), ['deleted test function: tests/test_keep.py:3 test_gone'])
+
+    def test_aliased_skip_and_patch_are_reported(self):
+        repo = Repo(self)
+        repo.write('tests/test_alias.py',
+                   'from pytest import mark\nfrom unittest.mock import patch as fake_patch\n'
+                   '@mark.skip\n@fake_patch("pkg.widget.spin")\n'
+                   'def test_a(fake):\n    assert fake\n')
+        repo.commit('alias')
+        code, out = report(repo, repo.base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), [
+            'new mock: tests/test_alias.py:4 patch pkg.widget.spin',
+            'new skip mark: tests/test_alias.py:3 pytest.mark.skip',
+        ])
+
+    def test_patch_imported_inside_the_test_is_reported(self):
+        repo = Repo(self)
+        repo.write('tests/test_inner.py',
+                   'def test_inner():\n'
+                   '    from unittest.mock import patch as fake_patch\n'
+                   '    with fake_patch("pkg.widget.spin"):\n'
+                   '        assert True\n')
+        repo.commit('inner')
+        code, out = report(repo, repo.base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), ['new mock: tests/test_inner.py:3 patch pkg.widget.spin'])
+
+    def test_later_import_does_not_hide_an_earlier_patch(self):
+        repo = Repo(self)
+        repo.write('tests/test_shadow.py',
+                   'from unittest.mock import patch as fake_patch\n\n'
+                   '@fake_patch("pkg.widget.spin")\n'
+                   'def test_a(fake):\n'
+                   '    assert fake\n\n'
+                   'def test_b():\n'
+                   '    from tests.helper import fake_patch\n'
+                   '    return fake_patch\n')
+        repo.commit('shadow')
+        code, out = report(repo, repo.base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), ['new mock: tests/test_shadow.py:3 patch pkg.widget.spin'])
+
+    def test_aliased_patch_of_a_test_helper_is_not_reported(self):
+        repo = Repo(self)
+        repo.write('tests/test_helper.py',
+                   'from unittest.mock import patch as fake_patch\n\n'
+                   '@fake_patch("tests.helper.fake")\n'
+                   'def test_helper(fake):\n    assert fake is not None\n')
+        repo.commit('helper')
+        code, out = report(repo, repo.base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), [])
+        self.assertEqual(out, '')
+
+    def test_eval_corpus_has_full_recall_and_no_false_alarms(self):
+        spec = importlib.util.spec_from_file_location('integrity_eval', ROOT / 'check' / 'integrity_eval.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        result = module.score(SCRIPT)
+        self.assertEqual(result['false_negatives'], 0, result['failures'])
+        self.assertEqual(result['false_positives'], 0, result['failures'])
+        self.assertEqual(result['case_failures'], [])
+        self.assertEqual(result['recall'], 1.0)
+        self.assertEqual(result['precision'], 1.0)
 
 
 if __name__ == '__main__':

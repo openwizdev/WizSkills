@@ -15,6 +15,7 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 | [`huntr`](huntr/SKILL.md) |
 | [`image`](image/SKILL.md) |
 | [`install`](install/SKILL.md) |
+| [`jev`](jev/SKILL.md) |
 | [`launch-fleet`](launch-fleet/SKILL.md) |
 | [`research`](research/SKILL.md) |
 | [`review-ticket`](review-ticket/SKILL.md) |

@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=1071
+CASES=1073
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -875,6 +875,12 @@ CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
 EOF
 expect 'base red: both failing checks red on main names both' 0 check.json 'red31 | pull(31; .checks[0].conclusion = "FAILURE") | base_runs([["build", "failure"], ["test", "failure"]])' -- check <<EOF
 base red #31 for #12 at $S31: build, test fail on main at $S77 too; record paused, base red $S77 build, test, and leave its builder be; open issue "Main is red: build" labelled ready-for-agent, naming build, test and its first red run $RUN70
+EOF
+expect 'base red: timed out on main pauses the PR' 0 check.json 'red31 | base_runs([["build", "success"], ["test", "timed_out"]])' -- check <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+EOF
+expect 'base red: a check run with no id is refused' 2 check.json 'red31 | main_red | .baseChecks[1].id = "nope"' -- check <<EOF
+invalid checks on main
 EOF
 expect 'base red: a cross-repository pull request stays CI failed' 0 check.json 'red31 | main_red | pull(31; .repo = "other-owner/other-repo")' -- check <<EOF
 CI failed other-owner/other-repo#31 for #12 at $S31: tell its builder, thread thr_syn12
@@ -4656,7 +4662,7 @@ case ${TEST_ONLY:-} in
   'GI2:*') expected=13 ;;
   'CW-G:*') expected=4 ;;
   'cross-repository PR:*') expected=12 ;;
-  'base red:*') expected=16 ;;
+  'base red:*') expected=18 ;;
   'FR9:*') expected=11 ;;
 esac
 cases=$((cases - support))

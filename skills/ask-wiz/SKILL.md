@@ -59,6 +59,6 @@ At a phase boundary, read [the CloudRoom thread guide](PHASE-BOUNDARIES.md) to c
 
 ## When no skill fits
 
-Read [the external search](EXTERNAL.md) and follow it: trusted sources first, then skills.sh and GitHub, the top three candidates compared, each read and risk-checked before you recommend it. Using a found skill and keeping it are separate: install one only on the user's own yes to installation.
+Read [the external search](EXTERNAL.md) and follow it. Install a found skill only on the user's own yes.
 
 Credit: adapted from Matt Pocock's skills under the MIT License; the notice and sources are in [NOTICE.md](NOTICE.md).

@@ -129,6 +129,14 @@ class Gate(unittest.TestCase):
             r.write('skills/beta/SKILL.md', skill_md('beta', None))
         self.assertEqual(self.pr(change), (0, ['changeset check: pass (no skill changed)']))
 
+    def test_a_mode_only_skill_md_edit_needs_a_changeset(self):
+        def change(r):
+            (r.dir / 'skills/alpha/SKILL.md').chmod(0o755)
+        self.assertEqual(self.pr(change), (1, [
+            'changeset check: `alpha` changed but no new changeset names it: '
+            'add one under .changeset/ (see .changeset/README.md)',
+            'changeset check: fail']))
+
     def test_a_non_skill_change_needs_no_changeset(self):
         self.assertEqual(self.pr(lambda r: r.write('README.md', 'Docs.\n')),
                          (0, ['changeset check: pass (no skill changed)']))
@@ -191,6 +199,24 @@ class Release(unittest.TestCase):
             '- `beta` 0.2.1: Fixes a link.',
         ]))
         self.assertEqual(repo.snapshot(), before)
+
+    def test_one_note_prints_its_summary_once_and_a_second_note_stays(self):
+        repo = Repo(self, {'alpha': '0.2.0', 'beta': '0.2.0'}, plugin='0.2.0')
+        repo.note('both', {'alpha': 'patch', 'beta': 'patch'}, 'Fixes a typo.')
+        repo.note('again', {'beta': 'patch'}, 'Fixes a typo.')
+        code, out = self.release(repo)
+        self.assertEqual((code, out), (0, [
+            'release: wizskills 0.2.0 -> 0.2.1 (patch)',
+            'why: 2 skills changed, all patch',
+            'skill alpha: 0.2.0 -> 0.2.1 (patch)',
+            'skill beta: 0.2.0 -> 0.2.1 (patch)',
+            'dry run: nothing written',
+            '',
+            '## 0.2.1 - 2026-01-02',
+            '',
+            '- `alpha` 0.2.1, `beta` 0.2.1: Fixes a typo.',
+            '- `beta` 0.2.1: Fixes a typo.',
+        ]))
 
     def test_a_new_step_makes_a_minor_bundle(self):
         repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
@@ -263,6 +289,27 @@ class Release(unittest.TestCase):
         status = repo.git('status', '--porcelain').splitlines()
         self.assertEqual(sorted(status), [' D .changeset/one.md', ' M .claude-plugin/plugin.json',
                                           ' M CHANGELOG.md', ' M skills/alpha/SKILL.md'])
+
+    def test_a_bad_marketplace_leaves_versions_and_notes_unchanged(self):
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+        repo.write('.claude-plugin/marketplace.json', '{"plugins":[]}\n')
+        repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
+        repo.commit('pending')
+        before = repo.snapshot()
+        self.assertEqual(repo.run('release', '--date', '2026-01-02')[0], 0)
+        code, _out = repo.run('release', '--date', '2026-01-02', '--write')
+        self.assertNotEqual(code, 0)
+        self.assertEqual(repo.snapshot(), before)
+
+    def test_a_failed_write_restores_versions_and_notes(self):
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+        repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
+        repo.commit('pending')
+        before = repo.snapshot()
+        (repo.dir / 'CHANGELOG.md').chmod(0o444)
+        code, _out = repo.run('release', '--date', '2026-01-02', '--write')
+        self.assertNotEqual(code, 0)
+        self.assertEqual(repo.snapshot(), before)
 
 
 IGNORED_NAMES = ('.hidden-fix.md', 'Readme.md', 'AGENTS.md', 'CLAUDE.md', 'GEMINI.md')
@@ -446,6 +493,16 @@ class Removal(unittest.TestCase):
         repo.commit('pending')
         self.assertEqual(repo.run('release', '--date', '2026-01-02'),
                          (1, ['release: .changeset/typo.md `alpah` is not a skill or `wizskills`']))
+
+
+class GrillRecords(unittest.TestCase):
+    def test_the_grill_records_suite_runs_isolated(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('wizskills_run_grill', ROOT / 'check/run.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(module.SUITES['grill'][1],
+                         ['python3', '-I', 'skills/grill/scripts/test_records.py'])
 
 
 if __name__ == '__main__':

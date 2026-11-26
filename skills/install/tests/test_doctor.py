@@ -476,8 +476,6 @@ SKILL = DOCTOR.parents[1] / 'SKILL.md'
 # flags, against what OpenWiz 0.1.0's own --help prints. PACKAGE_TEXT is that published inventory, the
 # same bytes as fixtures/openwiz-0.1.0-commands.json, read from the published package. A step naming a
 # command the package lacks stops a stranger's install there.
-PINNED_COMMIT = '350887bbc00ca8e11ee6f084e4936b4fabf852fa'  # pinned WizSkills commit for 0.1.0 installs
-PINNED_TREE = '66899e4ffd5c7ca78d53115cbdbcdc69671a655f'  # expected HEAD:skills/install tree OID
 PACKAGE_TEXT = '''{
  "about": "Every command and flag OpenWiz 0.1.0 ships for the install skill, read from each tool's --help in the published package (releases/download/v0.1.0/openwiz-0.1.0-x86_64-unknown-linux-gnu.tar.gz, sha256 47bd514066b409783dc8ecb56f0f1f9f9afc5715fa293c2be536e53c624a7228, source 2abcd5f532c5c2a080a1b876e27dec2b9e7d29ab) and the v0.1.0 tag's tools/install/install. Keys are tool paths, then subcommands ('' for none), then their long flags, --help left out. openwiz's flags come from `openwiz help`; --build-identity from running it. Update only by reading a new release's --help. cloudroom_codes: every code runtime/cloudroom/cloudroom.py prints, from its source. skills: the 18 skills `install skills` copied, from its output. installed_install_skill_version: the `version:` of runtime/skills/install/SKILL.md, the copy `install skills` puts in each agent.",
  "version": "0.1.0",
@@ -755,8 +753,9 @@ class SkillCommandsMatchPackage(unittest.TestCase):
                      ('runtime/setup/github_login.py', 'sign-in')]:
             self.assertLess(order.index(step), skills, step)
         text = SKILL.read_text()
-        self.assertIn('is older than this one; if you are told to install again, follow this skill', text)
-        self.assertIn('https://github.com/openwizdev/WizSkills/blob/%s/skills/install/SKILL.md' % PINNED_COMMIT, text)
+        self.assertIn('fails the `fixed` check above, repeat the overwrite; if you are told to install again, '
+                      'follow this skill', text)
+        self.assertIn('https://github.com/openwizdev/WizSkills/blob/maint/0.3/skills/install/SKILL.md', text)
 
     # catches: a CloudRoom code 0.1.0 prints with no row, so the agent improvises its next step.
     def test_every_cloudroom_code_has_a_row(self):
@@ -786,18 +785,15 @@ class SkillCommandsMatchPackage(unittest.TestCase):
         self.assertNotEqual(mine, json.loads(PACKAGE_TEXT)['installed_install_skill_version'])
         step4 = text[text.index('## 4. '):text.index('## 5. ')]
         self.assertNotIn('maint/0.2', text)
-        for pinned in ('expected_commit=%s' % PINNED_COMMIT,
-                       'expected_tree=%s' % PINNED_TREE,
-                       'git -C "$wizskills" fetch -q --depth 1 https://github.com/openwizdev/WizSkills "$expected_commit"',
-                       'git -C "$wizskills" rev-parse HEAD',
-                       'git -C "$wizskills" rev-parse HEAD:skills/install',
-                       'SOURCE MISMATCH'):
-            self.assertIn(pinned, step4)
-        self.assertLess(step4.index('SOURCE MISMATCH'), step4.index('cp -R "$src"/. "$d/install/"'))
+        self.assertNotIn('version: 0.2.2', text)
+        self.assertIn('git clone --depth 1 --branch maint/0.3 https://github.com/openwizdev/WizSkills "$wizskills"',
+                      step4)
+        self.assertLess(step4.index('if fixed "$src"'), step4.index('cp -R "$src"/. "$d/install/"'))
         for home in ('.claude/skills', '.codex/skills', 'CODEX_HOME'):
             self.assertIn(home, step4)
         for words in ("'install ope[n] '", "'from the setup pag[e]'", "'Restart the OpenWiz serve[r]'",
-                      'cp -R "$src"/. "$d/install/"', 'cmp -s', 'version: %s' % mine):
+                      'cp -R "$src"/. "$d/install/"', 'cmp -s',
+                      "grep -Eq '^version: 0\\.3\\.[0-9]+$' \"$1/SKILL.md\""):
             self.assertIn(words, step4)
         self.assertIn('"continue the OpenWiz install"', step4)
         self.assertNotIn('any words do', text)
@@ -809,7 +805,7 @@ class SkillCommandsMatchPackage(unittest.TestCase):
         self.assertIn('\n## Resume', text)
         resume = text[text.index('## Resume'):text.index('## 1. ')]
         for words in ('first unfinished step', 'readlink <root>/current', '--build-identity', 'setup.py check',
-                      'version: ', 'OPENWIZ_STATE_DIR="$state"', 'identity_unreadable'):
+                      "fails step 4's `fixed` check", 'OPENWIZ_STATE_DIR="$state"', 'identity_unreadable'):
             self.assertIn(words, resume)
         self.assertIn('operation_id', text)
         after = text[text.index('## 5. '):text.index('## Recovery and removal')]

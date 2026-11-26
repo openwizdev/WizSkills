@@ -98,11 +98,11 @@ def case_rename(repo):
 
 def case_skips(repo):
     return added(repo, {
-        'tests/test_skip.py': 'import pytest\n@pytest.mark.skip\ndef test_a():\n    assert True\n',
-        'tests/test_skipif.py': 'import pytest\n@pytest.mark.skipif(True, reason="synthetic")\n'
+        'tests/test_skip.py': 'import pytest\n' '@pytest.mark.skip\n' 'def test_a():\n    assert True\n',
+        'tests/test_skipif.py': 'import pytest\n' '@pytest.mark.skipif(True, reason="synthetic")\n'
                                 'def test_a():\n    assert True\n',
-        'tests/test_xfail.py': 'import pytest\n@pytest.mark.xfail\ndef test_a():\n    assert True\n',
-        'tests/test_unit.py': 'import unittest\n@unittest.skip("synthetic")\ndef test_a():\n    assert True\n',
+        'tests/test_xfail.py': 'import pytest\n' '@pytest.mark.xfail\n' 'def test_a():\n    assert True\n',
+        'tests/test_unit.py': 'import unittest\n' '@unittest.skip("synthetic")\n' 'def test_a():\n    assert True\n',
     })
 
 

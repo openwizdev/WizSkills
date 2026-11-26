@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""Lint an agent issue, pull request, review, branch, or title.
-
-Exit 0 when the record is valid, 1 when it prints findings, 2 on a bad
-invocation. Findings never echo a secret.
-"""
 import json
 import re
 import sys

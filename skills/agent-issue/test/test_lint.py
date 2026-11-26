@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""The issue record and the shared linter."""
 import contextlib
 import importlib.util
 import io

@@ -15,7 +15,7 @@ claude plugin install openwiz@wizskills --scope project
 
 ## Main skills
 
-- [`grill`](skills/grill/SKILL.md): asks you questions and records your answers.
+- [`grill`](skills/grill/SKILL.md): maps every decision, asks until the tree is settled, and records your yes.
 - [`to-spec`](skills/to-spec/SKILL.md) and [`to-tickets`](skills/to-tickets/SKILL.md): turn answers into a spec, then sized tickets.
 - [`launch-fleet`](skills/launch-fleet/SKILL.md) and [`build-ticket`](skills/build-ticket/SKILL.md): one builder per ticket, one pull request each.
 - [`review-ticket`](skills/review-ticket/SKILL.md): a reviewer from another model family checks before merge.

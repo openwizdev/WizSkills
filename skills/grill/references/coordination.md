@@ -2,8 +2,9 @@
 
 Give each new grill one or two letters unused by every open or parked grill.
 Check the index and open private PRs. Confirmed grills release their letters.
-Each grill has its own file, branch, PR, frontier and limit of three questions
-per round, including re-asked questions.
+Each grill has its own file, branch, PR and frontier. A round holds one
+substantive question, or up to three trivial confirmations, and a re-asked
+question counts in that round.
 
 When one message carries several rounds, group them by topic and file. Save,
 push and verify every round before showing them. For an ordinary reply, route

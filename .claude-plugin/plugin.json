@@ -26,6 +26,7 @@
     "./skills/to-spec",
     "./skills/to-tickets",
     "./skills/triage",
+    "./skills/wait-what",
     "./skills/wayfind",
     "./skills/where-are-we",
     "./skills/write-driver"

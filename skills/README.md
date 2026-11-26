@@ -23,6 +23,7 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 | [`to-spec`](to-spec/SKILL.md) |
 | [`to-tickets`](to-tickets/SKILL.md) |
 | [`triage`](triage/SKILL.md) |
+| [`wait-what`](wait-what/SKILL.md) |
 | [`wayfind`](wayfind/SKILL.md) |
 | [`where-are-we`](where-are-we/SKILL.md) |
 | [`write-driver`](write-driver/SKILL.md) |

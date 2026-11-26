@@ -111,11 +111,26 @@ class IntegrityReport(unittest.TestCase):
     def test_new_skip_xfail_and_unittest_skip_marks_are_reported(self):
         repo = Repo(self)
         base = repo.base
-        repo.write('tests/test_skip.py', 'import pytest\n@pytest.mark.skip\ndef test_a():\n    assert True\n')
-        repo.write('tests/test_skipif.py',
-                   'import pytest\n@pytest.mark.skipif(True, reason="synthetic")\ndef test_a():\n    assert True\n')
-        repo.write('tests/test_xfail.py', 'import pytest\n@pytest.mark.xfail\ndef test_a():\n    assert True\n')
-        repo.write('tests/test_unit.py', 'import unittest\n@unittest.skip("synthetic")\ndef test_a():\n    assert True\n')
+        repo.write('tests/test_skip.py', """import pytest
+@pytest.mark.skip
+def test_a():
+    assert True
+""")
+        repo.write('tests/test_skipif.py', """import pytest
+@pytest.mark.skipif(True, reason="synthetic")
+def test_a():
+    assert True
+""")
+        repo.write('tests/test_xfail.py', """import pytest
+@pytest.mark.xfail
+def test_a():
+    assert True
+""")
+        repo.write('tests/test_unit.py', """import unittest
+@unittest.skip("synthetic")
+def test_a():
+    assert True
+""")
         repo.commit('marks')
         code, out = report(repo, base)
         self.assertEqual(code, 0)

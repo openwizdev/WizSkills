@@ -148,4 +148,4 @@ Each string form is matched against a whole line, or for `link_host` and `upload
 
 ## WizSkills copy
 
-WizSkills carries this file byte-identical at `contracts/checkpoints.v1.md`, for RC2 and RC3. Any change here changes both, in the same version.
+This file is the copy the skill readers use, for RC2 and RC3. The Authority line is the public decision source. A rule stated in this copy and in OpenWiz's `contracts/checkpoints.v1.md` has to be edited in both.

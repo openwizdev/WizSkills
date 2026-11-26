@@ -2720,10 +2720,6 @@ foreign_merges() {
     && mv "$TMP/w2.json" "$TMP/world.json"
 }
 
-# base_read (AD3, #3117): after a first pass printed "base read", the latest
-# completed run of each check on the default branch's tip, into $W.base. When
-# one is red, one search for open issues titled "Main is red: ". An incomplete
-# search leaves the titles unknown, so no fix issue is asked for.
 base_read() {
   branch=$(jq -rn --arg b "$DEFAULT" '$b | @uri') || die "can't encode the default branch"
   endpoint="repos/$REPO/commits/$branch/check-runs?per_page=100"
@@ -3019,7 +3015,6 @@ elif [ "$cmd" = spec ]; then
   quiet
   [ -z "$RECORD" ] || keep_read
 fi
-# One fix issue for a red main (AD3): only the first base red line asks for it.
 awk '/^base red / { i = index($0, "; open issue \"Main is red: "); if (i) { if (asked) $0 = substr($0, 1, i - 1); asked = 1 } } { print }' \
   "$TMP/out.txt" > "$TMP/out.next" && mv "$TMP/out.next" "$TMP/out.txt" || die "can't write"
 [ -z "$REPLAY" ] || [ ! -e "$TMP/changed" ] || die "an answer changed since the saved full read"

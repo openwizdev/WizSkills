@@ -1025,7 +1025,6 @@ def rest_read(w, repo, path, page, paginate, include, accept, answer, out):
             lbl = lbl[:-len('%22')]
         cap = argjson(env.get('FAKE_GH_SEARCH_CAP') or '1000')
         if 'in%3Atitle' in encoded:
-            # AD3 (#3117): open issues whose title contains "Main is red".
             if encoded != quote('repo:%s is:issue is:open in:title "Main is red"' % repo, safe='-_.~'):
                 fail('unexpected search: ' + encoded)
             if truthy(w.get('searchIncomplete')):
@@ -1145,7 +1144,6 @@ def rest_read(w, repo, path, page, paginate, include, accept, answer, out):
                 state = 'success'
             out.append(compact({'state': state, 'sha': sha, 'statuses': statuses}) + '\n')
         elif sha == w.get('default'):
-            # AD3 (#3117): the default branch's tip, its check runs as REST lists them.
             runs = each_opt(w.get('baseChecks'))
             out.append(compact({'total_count': len(runs), 'check_runs': runs}) + '\n')
         else:

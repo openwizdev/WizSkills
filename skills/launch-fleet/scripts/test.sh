@@ -835,7 +835,6 @@ expect 'CI failed: tell the builder' 0 check.json 'pr31 | pull(31; .rollup = "FA
 CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
 EOF
 expect 'a CI failure already sent is not sent again' 0 check.json 'pr31 | pull(31; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE") | pr_say(31; 3101; "11:10"; "launch-fleet: CI failure sent \(sha(31))")' -- check < /dev/null
-# AD3 (#3117): a red main pauses a pull request that fails only what main fails.
 RUN70=https://github.com/synthetic-owner/synthetic-repo/actions/runs/70/job/700
 RUN71=https://github.com/synthetic-owner/synthetic-repo/actions/runs/71/job/701
 expect 'base red: a check that also fails on main pauses the PR' 0 check.json 'red31 | main_red' -- check <<EOF

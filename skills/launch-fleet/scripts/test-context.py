@@ -139,6 +139,21 @@ class ContextTests(unittest.TestCase):
         self.assertNotIn('provenance', fleet.stdout)
         self.assertNotIn('Synthetic author', fleet.stdout)
 
+    def test_keeps_ci_rule_sharing_a_source_line_for_reviewer_and_fleet(self):
+        clause = 'no bypass, no force-push, no branch deletion'
+        self.put(CARD, '# Public writes\n\nSynthetic card.\n')
+        self.put(FLEET, (
+            '## CI checks\n\n'
+            'A draft fails the plan and `ci`; marking it ready starts a full run. '
+            'Source: [the workflow](../../.github/workflows/ci.yml) and the repository ruleset '
+            f'"CI must pass": {clause}.\n'
+        ))
+        for role in ('reviewer', 'fleet'):
+            with self.subTest(role=role):
+                result = self.run_cli(role)
+                self.assertEqual((result.returncode, result.stderr), (0, ''))
+                self.assertIn(clause, result.stdout)
+
     def test_missing_sources_and_legacy_only_settings(self):
         missing = self.run_cli('builder')
         self.assertIn('read the open-development contract before your first public write.', missing.stdout)

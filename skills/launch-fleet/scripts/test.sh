@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=1055
+CASES=1071
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -89,7 +89,7 @@ done
 
 # A 40-character commit made of TEXT repeated, as the jq `sha` below makes it.
 sha() { s=''; while [ ${#s} -lt 40 ]; do s=$s$1; done; printf '%.40s' "$s"; }
-S31=$(sha 31) S31F=$(sha 31f) S31E=$(sha 31e) S31B=$(sha 31b) S99=$(sha 99)
+S31=$(sha 31) S31F=$(sha 31f) S31E=$(sha 31e) S31B=$(sha 31b) S99=$(sha 99) S32=$(sha 32) S77=$(sha 77)
 
 # Small changes to a fixture, for the cases' filters.
 LIB='
@@ -169,6 +169,15 @@ def merge12: issue(12; .state = "CLOSED") | say(12; 1202; "11:05"; "launch-fleet
 def all_closed: merge12 | issue(13; .state = "CLOSED") | issue(14; .state = "CLOSED")
   | merged_pr(24; 13; "11:10"; []) | merged_pr(25; 14; "11:20"; []);
 def pr31: open_pr(31; 12; "#12: widget store, green");
+# AD3 (#3117): the tip of the default branch, sha(77), one check run per
+# [name, conclusion]. A null conclusion is still in progress.
+def base_runs($runs): .baseChecks = [$runs | to_entries[] | {id: (700 + .key), name: .value[0],
+  status: (if .value[1] == null then "in_progress" else "completed" end), conclusion: .value[1], head_sha: sha(77),
+  html_url: "https://github.com/synthetic-owner/synthetic-repo/actions/runs/7\(.key)/job/70\(.key)"}];
+def red31: pr31 | pull(31; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE");
+def main_red: base_runs([["build", "success"], ["test", "failure"]]);
+def paused31: pr_say(31; 3101; "11:10"; "launch-fleet: paused, base red \(sha(77)) test");
+def fix_issue($n; $title): .issues += [{number: $n, title: $title, state: "OPEN", parent: null, labels: [], blockedBy: [], body: "", comments: []}];
 # #923: three configured required names; all run IDs and times are synthetic.
 def ci31: pr31
   | .files["docs/agents/fleet.md"] |= sub("\\| `test` \\| 4 \\| `main` \\|"; "| `test` | 4 | `main` |\n| `package` | 5 | `main` |")
@@ -435,7 +444,7 @@ take() {
 
 # only_reads LOG...: every gh call in these logs was one of fleet.sh's reads.
 only_reads() {
-  grep -h -v -E '^(repo view|nightly runs branch=[^ ]+|commit comments [0-9a-f]{40}|contents docs/agents/(fleet|triage-labels)\.md|graphql (Specs|Merged) cursor=[0-9a-z]+|graphql Spec number=[0-9]+( size=[0-9]+)?|graphql (Singles|Search) cursor=[0-9a-z]+|files [0-9]+|refs heads/room/[0-9]+-|graphql (Nodes|Blockers) count=[0-9]+|graphql Writer login=[a-z0-9-]+|graphql Facts count=[0-9]+|graphql Comments number=[0-9]+ before=[0-9a-zA-Z=+/_-]+|rate limit|graphql Checks oid=[0-9a-f]{40} cursor=[0-9]+|graphql Item number=[0-9]+ size=(2|5)( cursor=[0-9]+)?|issue view [0-9]+ (subIssues|body|number,title,blockedBy)|issues page=[0-9]+|search issues page=[0-9]+|issue comments [0-9]+ page=[0-9]+|detail [0-9]+|dependencies [0-9]+ page=[0-9]+|repo clone|repository|user|installation repositories|sub issues [0-9]+ page=[0-9]+|timeline [0-9]+ page=[0-9]+|(check runs|status) [0-9a-f]{40}|ref heads/[A-Za-z0-9._/-]+)$' "$@" 2> /dev/null \
+  grep -h -v -E '^(repo view|nightly runs branch=[^ ]+|commit comments [0-9a-f]{40}|contents docs/agents/(fleet|triage-labels)\.md|graphql (Specs|Merged) cursor=[0-9a-z]+|graphql Spec number=[0-9]+( size=[0-9]+)?|graphql (Singles|Search) cursor=[0-9a-z]+|files [0-9]+|refs heads/room/[0-9]+-|graphql (Nodes|Blockers) count=[0-9]+|graphql Writer login=[a-z0-9-]+|graphql Facts count=[0-9]+|graphql Comments number=[0-9]+ before=[0-9a-zA-Z=+/_-]+|rate limit|graphql Checks oid=[0-9a-f]{40} cursor=[0-9]+|graphql Item number=[0-9]+ size=(2|5)( cursor=[0-9]+)?|issue view [0-9]+ (subIssues|body|number,title,blockedBy)|issues page=[0-9]+|search issues page=[0-9]+|issue comments [0-9]+ page=[0-9]+|detail [0-9]+|dependencies [0-9]+ page=[0-9]+|repo clone|repository|user|installation repositories|sub issues [0-9]+ page=[0-9]+|timeline [0-9]+ page=[0-9]+|(check runs|status) [0-9a-f]{40}|check runs [^ ]+|ref heads/[A-Za-z0-9._/-]+)$' "$@" 2> /dev/null \
     | sed 's/^/    /' > "$tmp/odd-calls"
   if [ -s "$tmp/odd-calls" ]; then bad 'only reads' "unexpected gh calls:"; cat "$tmp/odd-calls"; else echo "ok   every gh call was one of fleet.sh's reads"; fi
 }
@@ -824,6 +833,52 @@ expect 'CI failed: tell the builder' 0 check.json 'pr31 | pull(31; .rollup = "FA
 CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
 EOF
 expect 'a CI failure already sent is not sent again' 0 check.json 'pr31 | pull(31; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE") | pr_say(31; 3101; "11:10"; "launch-fleet: CI failure sent \(sha(31))")' -- check < /dev/null
+# AD3 (#3117): a red main pauses a pull request that fails only what main fails.
+RUN70=https://github.com/synthetic-owner/synthetic-repo/actions/runs/70/job/700
+RUN71=https://github.com/synthetic-owner/synthetic-repo/actions/runs/71/job/701
+expect 'base red: a check that also fails on main pauses the PR' 0 check.json 'red31 | main_red' -- check <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+EOF
+expect 'base red: a wake reads main too' 0 check.json 'red31 | main_red' -- wake 31 <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+EOF
+expect 'base red: a check green on main is still the builder'"'"'s' 0 check.json 'red31 | base_runs([["build", "success"], ["test", "success"]])' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect 'base red: main still running is still the builder'"'"'s' 0 check.json 'red31 | base_runs([["build", "success"], ["test", null]])' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect 'base red: an open fix issue is not opened again' 0 check.json 'red31 | main_red | fix_issue(90; "Main is red: test")' -- check <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be
+EOF
+expect 'base red: two paused PRs ask for one fix issue' 0 check.json 'red31 | open_pr(32; 13; "#13: widget page, green") | pull(32; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE") | main_red' -- check <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+base red #32 for #13 at $S32: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be
+EOF
+expect 'base red: a recorded pause and fix issue write nothing again' 0 check.json 'red31 | main_red | paused31 | fix_issue(90; "Main is red: test")' -- check < /dev/null
+expect 'base red: paused while main still runs, it waits' 0 check.json 'red31 | paused31 | base_runs([["build", "success"], ["test", null]])' -- check < /dev/null
+expect 'base red: a green main resumes the paused PR' 0 check.json 'red31 | paused31 | base_runs([["build", "success"], ["test", "success"]])' -- check <<EOF
+resume #31 for #12 at $S31: main is green again at $S77 (test); tell its builder to merge main in and re-run CI, thread thr_syn12; record resumed $S31, base green $S77
+EOF
+expect 'base red: a resume recorded is not sent again' 0 check.json 'red31 | paused31 | base_runs([["build", "success"], ["test", "success"]]) | pr_say(31; 3102; "11:20"; "launch-fleet: resumed \(sha(31)), base green \(sha(77))")' -- check < /dev/null
+expect 'base red: one green check on main keeps the failure with the builder' 0 check.json 'red31 | pull(31; .checks[0].conclusion = "FAILURE") | base_runs([["build", "success"], ["test", "failure"]])' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect 'base red: cancelled on main is not a red main' 0 check.json 'red31 | base_runs([["build", "success"], ["test", "cancelled"]])' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect 'base red: an incomplete search asks for no fix issue' 0 check.json 'red31 | main_red | .searchIncomplete = true' -- check <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be
+EOF
+expect 'base red: a builder-owned failure while paused is still CI failed' 0 check.json 'red31 | pull(31; .checks[0].conclusion = "FAILURE") | paused31 | main_red' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
+expect 'base red: both failing checks red on main names both' 0 check.json 'red31 | pull(31; .checks[0].conclusion = "FAILURE") | base_runs([["build", "failure"], ["test", "failure"]])' -- check <<EOF
+base red #31 for #12 at $S31: build, test fail on main at $S77 too; record paused, base red $S77 build, test, and leave its builder be; open issue "Main is red: build" labelled ready-for-agent, naming build, test and its first red run $RUN70
+EOF
+expect 'base red: a cross-repository pull request stays CI failed' 0 check.json 'red31 | main_red | pull(31; .repo = "other-owner/other-repo")' -- check <<EOF
+CI failed other-owner/other-repo#31 for #12 at $S31: tell its builder, thread thr_syn12
+EOF
 # #2119: synthetic API windows; required names occur only after 40 contexts.
 expect 'contexts: overflow reads required checks on the third page' 0 check.json 'pr31 | pull(31; .checks = ([range(40) | {name: "optional-\(.)", status: "COMPLETED", conclusion: "SUCCESS"}] + .checks))' -- check <<EOF
 review #31 for #12 at $S31: first review
@@ -4601,6 +4656,7 @@ case ${TEST_ONLY:-} in
   'GI2:*') expected=13 ;;
   'CW-G:*') expected=4 ;;
   'cross-repository PR:*') expected=12 ;;
+  'base red:*') expected=16 ;;
   'FR9:*') expected=11 ;;
 esac
 cases=$((cases - support))

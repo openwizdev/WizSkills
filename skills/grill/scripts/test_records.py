@@ -144,6 +144,19 @@ class Records(unittest.TestCase):
         self.assertEqual(record["answered"], [])
         self.assertEqual(self.state()["writes"], 1)
 
+    def test_tree_glossary_and_parked_leave_the_round_wording(self):
+        source = ROUND.replace(
+            "## Round 1",
+            "## Decision tree\n\n- N1 depends on nothing.\n\n"
+            "## Glossary\n\n- Order: date order.\n\n"
+            "## Parked\n\n- none\n\n## Round 1",
+            1,
+        )
+        self.write_state(source=self.encoded(source))
+        record = self.publish()
+        self.assertEqual([item["id"] for item in record["questions"]], ["N1", "N2"])
+        self.assertEqual(record["risk"], "ordinary")
+
     def test_cold_restart_reuses_post_after_lost_response(self):
         self.write_state(lose=True)
         self.publish()

@@ -5,7 +5,7 @@ user actually asked for, before anyone else sees the draft.
 
 **Setup.** Give the helper no tools and no chat history. Use the cheapest model
 the project's helper settings allow. Its only inputs are the user's verbatim
-request, the confirmed grill's answers if there are any, and the whole draft.
+request, the confirmed grill's answers, glossary, decision tree and parked list if there are any, and the whole draft.
 Paste the brief below with those three inputs. Never include repo notes, your
 own reasoning or earlier drafts.
 

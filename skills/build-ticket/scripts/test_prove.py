@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -40,11 +41,20 @@ class Repo(unittest.TestCase):
     def build(self, case):
         self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
+        for key, value in getattr(self, 'repo_config', ()):
+            self.git('config', key, value)
         for side in ('base', 'head'):
             for old in self.repo.iterdir():
                 if old.name != '.git':
                     shutil.rmtree(old) if old.is_dir() else old.unlink()
             shutil.copytree(FIXTURES / case / side, self.repo, dirs_exist_ok=True)
+            # copy2 keeps the fixture mtimes. Those two calc.py files are the same
+            # size, so a git that compares only the whole-second mtime and the size
+            # commits the base text again. A later mtime is a change even then.
+            stamp = time.time() + (10 if side == 'head' else 5)
+            for path in self.repo.rglob('*'):
+                if path.is_file() and '.git' not in path.parts:
+                    os.utime(path, (stamp, stamp))
             self.git('add', '-A')
             self.git('commit', '-q', '-m', side)
         return self.git('rev-parse', 'HEAD^'), self.git('rev-parse', 'HEAD')
@@ -102,6 +112,20 @@ class Repo(unittest.TestCase):
         self.assertEqual(result['base_runs'], ['failed', 'failed'])
         self.assertEqual(result['head_runs'], ['error', 'error'])
         self.assertIn('head run 1: error (timeout)', done.stderr)
+
+    def test_same_size_edit_is_committed_when_git_ignores_inode_and_ctime(self):
+        self.repo_config = (('core.checkStat', 'minimal'), ('core.trustctime', 'false'))
+        paths = [FIXTURES / 'red-green' / side / 'calc.py' for side in ('base', 'head')]
+        saved = [(path, path.stat().st_atime, path.stat().st_mtime) for path in paths]
+        try:
+            for path, _, _ in saved:
+                os.utime(path, (1_700_000_000, 1_700_000_000))
+            base, head = self.build('red-green')
+        finally:
+            for path, atime, mtime in saved:
+                os.utime(path, (atime, mtime))
+        self.assertEqual(self.git('show', f'{base}:calc.py').splitlines()[-1].strip(), 'return a - b')
+        self.assertEqual(self.git('show', f'{head}:calc.py').splitlines()[-1].strip(), 'return a + b')
 
     def test_new_test_is_copied_but_base_code_is_not_changed(self):
         self.build('red-green')

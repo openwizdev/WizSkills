@@ -46,6 +46,7 @@ class Repo(unittest.TestCase):
                     shutil.rmtree(old) if old.is_dir() else old.unlink()
             shutil.copytree(FIXTURES / case / side, self.repo, dirs_exist_ok=True)
             self.git('add', '-A')
+            self.git('add', '-u', '--renormalize')
             self.git('commit', '-q', '-m', side)
         return self.git('rev-parse', 'HEAD^'), self.git('rev-parse', 'HEAD')
 

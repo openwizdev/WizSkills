@@ -40,11 +40,16 @@ class Repo(unittest.TestCase):
     def build(self, case):
         self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
+        distinct_mtime = 1_700_000_000
         for side in ('base', 'head'):
             for old in self.repo.iterdir():
                 if old.name != '.git':
                     shutil.rmtree(old) if old.is_dir() else old.unlink()
             shutil.copytree(FIXTURES / case / side, self.repo, dirs_exist_ok=True)
+            distinct_mtime += 2
+            for path in self.repo.rglob('*'):
+                if path.is_file():
+                    os.utime(path, (distinct_mtime, distinct_mtime))
             self.git('add', '-A')
             self.git('commit', '-q', '-m', side)
         return self.git('rev-parse', 'HEAD^'), self.git('rev-parse', 'HEAD')

@@ -40,11 +40,6 @@ class Repo(unittest.TestCase):
     def build(self, case):
         self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
-        # Hosted runners set core.checkStat=minimal: Git then trusts a file
-        # whose whole-second mtime and size match the index. copytree keeps
-        # the fixture mtime, so a same-size edit ("+" versus "-") never enters
-        # the head commit and the head worktree still has the base file.
-        # Drop the index first so add hashes the bytes.
         self.git('config', 'core.checkStat', 'minimal')
         for side in ('base', 'head'):
             for old in self.repo.iterdir():

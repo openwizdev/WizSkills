@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=1063
+CASES=1067
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -3958,6 +3958,17 @@ start #70: Fix the broken link in the widget docs (approved on its own; retry af
 EOF
 expect 'quota reset: malformed reset timestamp falls back to 10 minutes' 0 check.json "$BATCH"' | say(13; 1301; "11:55"; "launch-fleet: start not tried: quota, resets 2026-99-99T99:99:99Z") | say(70; 7003; "11:45"; "launch-fleet: start not tried: quota, resets 2026-99-99T99:99:99Z")' -- check <<EOF
 start #70: Fix the broken link in the widget docs (approved on its own; retry after "start not tried: quota, resets 2026-99-99T99:99:99Z")
+EOF
+expect 'quota reset: a record posted after its reset waits 10 minutes' 0 check.json "$BATCH"' | say(13; 1301; "11:55"; "launch-fleet: start not tried: quota, resets 2026-11-01T11:00:00Z") | say(70; 7003; "11:55"; "launch-fleet: start not tried: quota, resets 2026-11-01T11:00:00Z")' -- check < /dev/null
+expect 'quota reset: a record posted after its reset retries after 10 minutes' 0 check.json "$BATCH"' | say(13; 1301; "11:45"; "launch-fleet: start not tried: quota, resets 2026-11-01T11:00:00Z") | say(70; 7003; "11:45"; "launch-fleet: start not tried: quota, resets 2026-11-01T11:00:00Z")' -- check <<EOF
+start #13: W3: widget page (spec #10; retry after "start not tried: quota, resets 2026-11-01T11:00:00Z")
+start #70: Fix the broken link in the widget docs (approved on its own; retry after "start not tried: quota, resets 2026-11-01T11:00:00Z")
+EOF
+expect 'quota reset: claim after a passed reset uses the 10 minute wait' 0 check.json "$BATCH"' | say(70; 7003; "11:55"; "launch-fleet: start not tried: quota, resets 2026-11-01T11:00:00Z") | say(70; 7004; "11:58"; "launch-fleet: starting")' -- claim 70 7004 <<EOF
+withdraw #70: its start was refused less than 10 minutes ago
+EOF
+expect 'quota reset: frontier leaves out a ticket inside the 10 minutes after a passed reset' 0 check.json "$BATCH"' | say(70; 7003; "11:55"; "launch-fleet: start not tried: quota, resets 2026-11-01T11:00:00Z")' -- frontier <<EOF
+#13 W3: widget page
 EOF
 
 ### Token cuts (#694) in the skill: no superseded base-moved text, ticks end,

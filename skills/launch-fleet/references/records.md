@@ -12,7 +12,7 @@ The loop's memory: comments on GitHub, each starting `launch-fleet:`. Edit a cla
 | | `launch-fleet: started` | Its builder started |
 | | `launch-fleet: builder fallback due, branch <branch>` | The single builder fallback is reserved |
 | | `launch-fleet: start checked, branch <branch>` | Thread, ticket and branch checked |
-| | `launch-fleet: start refused: <reason>` / `start not tried: <why>` / `start not tried: quota[, resets <YYYY-MM-DDTHH:MM:SSZ>]` / `start failed: <why>` / `start withdrawn` | No builder: it stays on the frontier (a refused or untried start after 10 minutes, or at the UTC reset time for `start not tried: quota, resets ...`) |
+| | `launch-fleet: start refused: <reason>` / `start not tried: <why>` / `start not tried: quota[, resets <YYYY-MM-DDTHH:MM:SSZ>]` / `start failed: <why>` / `start withdrawn` | No builder: it stays on the frontier (a refused or untried start after 10 minutes, at the UTC reset time for a `start not tried: quota, resets ...` record posted before that time, or 10 minutes after one posted once the reset has passed) |
 | | `launch-fleet: held for ordering: issue #B merges to main` / `held for ordering: PR #P merges to main` | An owned ordering-only hold, after its label change |
 | | `launch-fleet: held manual: <why>` / `held live: <why>` | A manual/live gate, even while already labelled held; its owner supplies separate release evidence |
 | | `launch-fleet: release starting <hold comment id>` / `released ordering C` / `release failed C: <why>` / `release withdrawn C` | A release intent and its verified outcome; unresolved intents block starts |

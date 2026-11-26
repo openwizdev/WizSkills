@@ -1386,7 +1386,8 @@ def quota_reset($last):
 def refused_lately($last; $k):
   if $last == null or ($last.r | test("^" + $k + " (refused|not tried)\\b") | not) then false
   else (if $k == "start" then quota_reset($last) else null end) as $reset
-    | if $reset != null then $W.now < $reset
+    | if $reset != null and $W.now < $reset then true
+      elif $reset != null and ($last.edited | fromdateiso8601) < $reset then false
       else ($W.now - ($last.edited | fromdateiso8601)) < 600 end end;
 # A "look" line for #$n, unless one was raised already (its record "look: <why>").
 def look($n; $rs; $why): ($why | gsub("\\bthr_[A-Za-z0-9][A-Za-z0-9_-]*"; "[private thread]")) as $why | if any($rs[]; (.r | gsub("\\bthr_[A-Za-z0-9][A-Za-z0-9_-]*"; "[private thread]")) == "look: \($why)") then empty else "look #\($n): \($why)" end;
@@ -2256,9 +2257,10 @@ def claim: $W.claim.n as $n | $W.claim.id as $id | $W.claim.repo as $crepo
             elif (open_prs | length) > 0 then "withdraw #\($n): pull request #\(open_prs[0].number) is open"
             elif (looks | length) > 0 then "withdraw #\($n): \(looks[0])"
             elif refused_lately($st.last; "start") then
-              (if quota_reset($st.last) != null then
-                 "withdraw #\($n): its start waits for quota reset at \(quota_reset($st.last) | todateiso8601)"
-               else "withdraw #\($n): its start was refused less than 10 minutes ago" end)
+              (quota_reset($st.last) as $reset
+               | if $reset != null and $W.now < $reset then
+                   "withdraw #\($n): its start waits for quota reset at \($reset | todateiso8601)"
+                 else "withdraw #\($n): its start was refused less than 10 minutes ago" end)
             elif ready_unchecked($s) and approver_why != null then "withdraw #\($n): \(approver_why)"
             elif ready($s) then
               # F6 (#1353): the gate every builder start passes. $W.active is

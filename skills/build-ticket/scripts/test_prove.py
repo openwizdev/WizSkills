@@ -48,13 +48,10 @@ class Repo(unittest.TestCase):
                 if old.name != '.git':
                     shutil.rmtree(old) if old.is_dir() else old.unlink()
             shutil.copytree(FIXTURES / case / side, self.repo, dirs_exist_ok=True)
-            # copy2 keeps the fixture mtimes. Those two calc.py files are the same
-            # size, so a git that compares only the whole-second mtime and the size
-            # commits the base text again. A later mtime is a change even then.
-            stamp = time.time() + (10 if side == 'head' else 5)
+            later_than_the_copied_fixture_mtime = time.time() + (10 if side == 'head' else 5)
             for path in self.repo.rglob('*'):
                 if path.is_file() and '.git' not in path.parts:
-                    os.utime(path, (stamp, stamp))
+                    os.utime(path, (later_than_the_copied_fixture_mtime, later_than_the_copied_fixture_mtime))
             self.git('add', '-A')
             self.git('commit', '-q', '-m', side)
         return self.git('rev-parse', 'HEAD^'), self.git('rev-parse', 'HEAD')

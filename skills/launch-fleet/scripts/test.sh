@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=1059
+CASES=1063
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -2001,6 +2001,18 @@ EOF
 FP=$(fp12 check.json 'merge12 | machine_only @@then@@ issue(14; .blockedBy = [12])' 10)
 expect 'machine: a plan changed since its machine approval starts nothing' 0 check.json 'merge12 | machine_only @@then@@ issue(14; .blockedBy = [12])' -- check <<EOF
 re-approve #10: changed since revision 1 (fingerprint now $FP)
+EOF
+expect 'machine: spec check accepts a valid machine plan approval' 0 check.json 'merge12 | machine_only' -- spec 10 <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'machine: spec check refuses a stale machine plan approval' 0 check.json 'merge12 | machine_only @@then@@ issue(14; .blockedBy = [12])' -- spec 10 <<EOF
+re-approve #10: changed since revision 1 (fingerprint now $FP)
+EOF
+expect 'machine: claim accepts a valid machine plan approval' 0 check.json 'merge12 | machine_only | say(13; 1301; "11:59"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
+go #13
+EOF
+expect 'machine: claim refuses a stale machine plan approval' 0 check.json 'merge12 | machine_only | say(13; 1301; "11:59"; "launch-fleet: starting") @@then@@ issue(14; .blockedBy = [12])' -- claim 13 1301 <<EOF
+withdraw #13: it is not on the frontier now
 EOF
 # R2 (decision 7030919773): video comment steering is off in every mode until
 # #1402's identity separation is verified, whoever posted the video. The hold,

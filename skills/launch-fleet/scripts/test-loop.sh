@@ -47,7 +47,7 @@ jq '(.issues[] | select(.number == 12)) |= (.state = "CLOSED" | .comments += [
   {id: 1202, at: "2026-11-01T11:05:00Z", body: "launch-fleet: archived"}])
   | .pulls += [(.pulls[0] | .number = 22 | .closes = [12] | .mergedAt = "2026-11-01T11:00:00Z"
     | .files = [{filename: "src/store/store.rs", status: "modified"}])]' "$FIX/check.json" > "$work/world.json"
-sh "$FIX/revision.sh" 10 > "$work/revision"
+sh "$HERE/../../to-tickets/revision.sh" 10 > "$work/revision"
 fingerprint=$(sha256sum < "$work/revision" | cut -d' ' -f1)
 jq --arg fp "$fingerprint" '(.issues[].comments[]?.body) |= gsub("@@FP@@"; $fp)' \
   "$work/world.json" > "$work/approved.json"
@@ -383,7 +383,7 @@ sh "$work/incomplete/skills/launch-fleet/scripts/loop.sh" --bundle synthetic-own
 echo 'ok   an incomplete install cannot generate a partial loop'
 
 cp "$HERE/fleet.sh" "$work/incomplete/skills/launch-fleet/scripts/fleet.sh"
-cp "$FIX/revision.sh" "$work/incomplete/skills/to-tickets/revision.sh"
+cp "$HERE/../../to-tickets/revision.sh" "$work/incomplete/skills/to-tickets/revision.sh"
 printf '\nOPENWIZ_BUNDLED_HELPER_EOF\n' >> "$work/incomplete/skills/launch-fleet/scripts/fleet.sh"
 status=0
 sh "$work/incomplete/skills/launch-fleet/scripts/loop.sh" --bundle synthetic-owner/synthetic-repo \

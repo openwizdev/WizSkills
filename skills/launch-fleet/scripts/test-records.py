@@ -57,7 +57,7 @@ class Fleet(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.dir / 'bin') + ':' + os.environ['PATH'],
             GH_REPO=self.world['repo'], FAKE_GH_WORLD=str(self.dir / 'world.json'), FAKE_GH_LOG=str(self.dir / 'gh.log'),
             LAUNCH_FLEET_NOW='1793534400', LAUNCH_FLEET_CACHE=str(self.dir / 'cache'),
-            LAUNCH_FLEET_REVISION=str(HERE / 'fixtures/revision.sh'), FLEET_THREADS=str(self.dir / 'threads.json'))
+            LAUNCH_FLEET_REVISION=str(HERE.parent.parent / 'to-tickets' / 'revision.sh'), FLEET_THREADS=str(self.dir / 'threads.json'))
 
     def issue(self, n):
         return next(i for i in self.world['issues'] if i['number'] == n)

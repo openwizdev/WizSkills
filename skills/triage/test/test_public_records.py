@@ -715,7 +715,7 @@ def admit(title, body, comments):
         env = dict(os.environ, PATH=f"{tmp / 'bin'}:{os.environ['PATH']}", GH_REPO="synthetic-owner/synthetic-repo",
                    OPENWIZ_STATE_DIR=str(tmp / "no-installation"), FAKE_GH_WORLD=str(tmp / "world.json"),
                    FAKE_GH_LOG=str(tmp / "gh.log"), LAUNCH_FLEET_NOW="1793534400",
-                   LAUNCH_FLEET_CACHE=str(tmp / "cache"), LAUNCH_FLEET_REVISION=str(FLEET / "fixtures/revision.sh"))
+                   LAUNCH_FLEET_CACHE=str(tmp / "cache"), LAUNCH_FLEET_REVISION=str(ROOT / "skills/to-tickets/revision.sh"))
         run = subprocess.run(["/bin/sh", str(FLEET / "fleet.sh"), "check"], cwd=tmp, env=env,
                              capture_output=True, text=True, timeout=120)
         if run.returncode != 0:

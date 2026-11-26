@@ -251,7 +251,7 @@ class SpecVideo(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         last_tile = subprocess.check_output([
             'ffmpeg', '-v', 'error', '-i', str(self.tmp / 'build/sheet.png'),
-            '-vf', 'crop=iw/3:ih/2:iw*2/3:ih/2,scale=1:1', '-pix_fmt', 'rgb24',
+            '-vf', 'crop=iw/3:ih/2:iw*2/3:ih/2,scale=1:1:flags=bilinear', '-pix_fmt', 'rgb24',
             '-frames:v', '1', '-f', 'rawvideo', '-'])
         self.assertEqual(last_tile, bytes(3), 'the sixth tile still shows an earlier frame')
 

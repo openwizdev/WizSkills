@@ -31,9 +31,14 @@ find and read back the effect first. Check the sub-issue count and every
 read-back title, body, parent, milestone, label and native blocker.
 
 Run `sh "<this skill's folder>/check-relies.sh" --root . < ticket.md` after a successful body
-read from GitHub. When a declared interface file is not yet written, allow
-its exact path with `--planned` only after verifying the blocking ticket owns it.
-The dependent's start still requires the file. `sh "<this skill's folder>/check-links.sh" <spec>`
+read from GitHub. When a declared interface file is not yet written, pass
+`--planned` for its exact path only when a direct blocker in the dependent
+ticket's repository owns that exact file or a containing folder or pattern.
+The shell check accepts the path without the ticket graph, so this ownership
+check is the planner's. With no single repository, do not pass `--planned`:
+split the ticket or name one repository on its owned paths, then let a direct
+blocker in that repository own the file. The dependent's start still requires
+the file. `sh "<this skill's folder>/check-links.sh" <spec>`
 must separately pass. Keep the link report and explain each file link.
 
 ## Picture data

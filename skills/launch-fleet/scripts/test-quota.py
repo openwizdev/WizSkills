@@ -68,11 +68,11 @@ class QuotaCheckTest(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), 'ok')
 
     def test_private_identifiers_never_echoed(self):
-        r = run_cli('thread thr_secret12345 hit Individual quota reached with token ghp_secret999\n')
+        r = run_cli('thread THREADSECRET hit Individual quota reached with token TOKENSECRET\n')
         self.assertEqual(r.returncode, 1)
         self.assertEqual(r.stdout.strip(), 'launch-fleet: start not tried: quota')
-        self.assertNotIn('thr_secret', r.stdout + r.stderr)
-        self.assertNotIn('ghp_secret', r.stdout + r.stderr)
+        self.assertNotIn('THREADSECRET', r.stdout + r.stderr)
+        self.assertNotIn('TOKENSECRET', r.stdout + r.stderr)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,3 @@
+interface:
+  display_name: "Agent PR"
+  short_description: "Open one proofed pull request and review its exact head"

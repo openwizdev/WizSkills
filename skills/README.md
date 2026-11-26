@@ -4,6 +4,8 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 
 | Skill |
 | --- |
+| [`agent-issue`](agent-issue/SKILL.md) |
+| [`agent-pr`](agent-pr/SKILL.md) |
 | [`ask-wiz`](ask-wiz/SKILL.md) |
 | [`build-ticket`](build-ticket/SKILL.md) |
 | [`diagnose`](diagnose/SKILL.md) |

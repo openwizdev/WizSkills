@@ -3,6 +3,7 @@
 "to-spec": patch
 "to-tickets": patch
 "build-ticket": patch
+"ask-wiz": patch
 "role-call": minor
 "wizskills": minor
 ---

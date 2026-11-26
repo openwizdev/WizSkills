@@ -4,7 +4,7 @@ Each spec answers two questions when it is planned, and the answers decide the o
 
 **Contract only** (#1829, RC1 of spec #1828). It changes no code. RC2 (#1830) makes plan-graph write the answers and the approval check refuse a new spec without them; RC3 (#1831) makes launch-fleet hold a user-visible spec's final merge. Each proves its own part at its own seam, against the fixtures in [`fixtures/checkpoints/`](fixtures/checkpoints/).
 
-Authority: spec #1828 and its confirmed grill, J239 R1 to R3, a private record. It relies on the [open development contract](open-development.v1.md) for the decider, the pointer and the public record forms.
+Authority: Jake, 2026-11-20: planning writes two checkpoint answers, one-way door and user-visible; an early say covers a one-way door, a late look at a preview, screenshots or a short video covers what users see and every release, answering no to both leaves the spec to the agents' checks, and no section means early only ([private record](https://github.com/jparker2006/ClosedWiz/issues/3065#issuecomment-7035053757)). It relies on the [open development contract](open-development.v1.md) for the decider, the pointer and the public record forms.
 
 **Examples.** Every example and fixture is synthetic: the decider `Robin`, every issue, pull request and comment number, commit, date, login, link and word. Only the private repository's name is real, because the pointer form needs it.
 

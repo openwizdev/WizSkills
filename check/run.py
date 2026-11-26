@@ -34,7 +34,7 @@ SUITES = {
                 ['python3', '-I', 'skills/install/tests/test_onboarding.py']],
     'huntr': [['sh', 'skills/huntr/scripts/test.sh']],
     'grill': [['sh', 'skills/grill/scripts/test.sh'],
-              ['python3', 'skills/grill/scripts/test_records.py']],
+              ['python3', '-I', 'skills/grill/scripts/test_records.py']],
     'diagnose': [['node', '--test', 'skills/diagnose/tests/hitl-loop.test.mjs'],
                  ['python3', '-I', 'skills/diagnose/scripts/test_loop.py']],
     'dream-cycle': [['python3', '-I', 'skills/dream-cycle/test/test_contract.py'],

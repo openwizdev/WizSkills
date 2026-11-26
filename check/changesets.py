@@ -92,6 +92,11 @@ def tree_skills(ref):
             if p.count('/') == 2 and p.endswith('/SKILL.md')}
 
 
+def tree_mode(ref, rel):
+    line = git('ls-tree', ref, '--', rel).splitlines()
+    return line[0].split(' ', 1)[0] if line else ''
+
+
 def blobs(ref):
     out = {}
     for line in git('ls-tree', '-z', ref, '--', '.changeset/').split('\0'):
@@ -113,7 +118,9 @@ def check(base):
             continue
         name = parts[1]
         if rel == f'skills/{name}/SKILL.md' and name in head_skills and rel in before:
-            if without_version(git('show', f'{merge_base}:{rel}')) == without_version(git('show', f'HEAD:{rel}')):
+            same_text = without_version(git('show', f'{merge_base}:{rel}')) == without_version(
+                git('show', f'HEAD:{rel}'))
+            if same_text and tree_mode(merge_base, rel) == tree_mode('HEAD', rel):
                 continue
         changed.add(name)
     refusals, named = [], set()
@@ -190,6 +197,71 @@ def bundle_bump(skill_bumps, explicit, added, removed):
         if reasons[bump]:
             return bump, '; '.join(reasons[bump])
     raise AssertionError('a pending changeset always names something')
+
+
+def note_section(notes, versions):
+    lines = []
+    for _name, text in notes:
+        releases, summary = parse_note(text, Anything())
+        summary = ' '.join(summary.split())
+        skills = sorted(name for name in releases if name != BUNDLE)
+        if skills:
+            listed = ', '.join(f'`{name}` {versions[name]}' for name in skills)
+            lines.append(f'- {listed}: {summary}')
+        else:
+            lines.append(f'- {summary}')
+    return lines
+
+
+def market_body(version):
+    path = ROOT / '.claude-plugin/marketplace.json'
+    if not path.is_file():
+        return None, None
+    try:
+        market = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return '.claude-plugin/marketplace.json is not a JSON object', None
+    if not isinstance(market, dict):
+        return '.claude-plugin/marketplace.json is not a JSON object', None
+    if 'plugins' not in market:
+        return None, None
+    plugins = market['plugins']
+    if not (isinstance(plugins, list) and plugins and isinstance(plugins[0], dict)):
+        return '.claude-plugin/marketplace.json `plugins` must start with one plugin object', None
+    if 'version' not in plugins[0]:
+        return None, None
+    plugins[0]['version'] = version
+    return None, json.dumps(market, indent=2, ensure_ascii=False) + '\n'
+
+
+def rewritten_skill(path, version):
+    lines = path.read_text(encoding='utf-8').split('\n')
+    end = lines.index('---', 1)
+    return '\n'.join(f'version: {version}' if 0 < i < end and line.startswith('version:') else line
+                     for i, line in enumerate(lines))
+
+
+def apply_release(pairs):
+    saved = []
+    try:
+        for path, new in pairs:
+            old = path.read_bytes() if path.exists() else None
+            mode = path.stat().st_mode if path.exists() else None
+            if new is None:
+                path.unlink()
+            else:
+                path.write_text(new, encoding='utf-8')
+            saved.append((path, old, mode))
+    except OSError as why:
+        for path, old, mode in reversed(saved):
+            if old is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(old)
+                if mode is not None:
+                    path.chmod(mode)
+        raise Unusable('a release write failed; the previous files were restored '
+                       f'({why.__class__.__name__})')
 
 
 def bullets(changelog):
@@ -309,17 +381,14 @@ def release(since, date, write, first=False):
     else:
         bump, why = bundle_bump(skill_bumps, explicit, added, removed)
         version = bumped(plugin_data['version'], bump)
-    new, notes_by = plan(names, versions, plugin_data['version'], notes)
+    new, _notes_by = plan(names, versions, plugin_data['version'], notes)
     if first:
         new = {}
-        shown = {n: FIRST for n in notes_by if n != BUNDLE}
-    else:
-        shown = new
+    display = {**versions, **new}
     section = [f'## {version} - {date}', '']
     section += [f'- Skills added: {", ".join(f"`{n}`" for n in added)}.'] if added else []
     section += [f'- Skills removed: {", ".join(f"`{n}`" for n in removed)}.'] if removed else []
-    section += [f'- {b}' for b in notes_by.get(BUNDLE, [])]
-    section += [f'- `{n}` {shown[n]}: {b}' for n in sorted(shown) for b in notes_by.get(n, [])]
+    section += note_section(notes, display)
     print(f'release: {BUNDLE} {plugin_data["version"]} -> {version} ({bump})')
     print(f'why: {why}')
     for n in sorted(new):
@@ -333,24 +402,19 @@ def release(since, date, write, first=False):
     header = '# Changelog\n\n'
     if not changelog.startswith(header):
         raise Unusable('CHANGELOG.md does not open with `# Changelog` and a blank line')
-    for n in sorted(new):
-        path = ROOT / 'skills' / n / 'SKILL.md'
-        lines = path.read_text(encoding='utf-8').split('\n')
-        end = lines.index('---', 1)
-        lines = [f'version: {new[n]}' if 0 < i < end and l.startswith('version:') else l
-                 for i, l in enumerate(lines)]
-        path.write_text('\n'.join(lines), encoding='utf-8')
+    problem, market = market_body(version)
+    if problem:
+        print(f'release: {problem}')
+        return 1
+    pairs = [(ROOT / 'skills' / n / 'SKILL.md', rewritten_skill(ROOT / 'skills' / n / 'SKILL.md', new[n]))
+             for n in sorted(new)]
     plugin_data['version'] = version
-    plugin_path.write_text(json.dumps(plugin_data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
-    market_path = ROOT / '.claude-plugin/marketplace.json'
-    if market_path.is_file():
-        market = json.loads(market_path.read_text(encoding='utf-8'))
-        if 'version' in market.get('plugins', [{}])[0]:
-            market['plugins'][0]['version'] = version
-            market_path.write_text(json.dumps(market, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
-    changelog_path.write_text(header + '\n'.join(section) + '\n\n' + changelog[len(header):], encoding='utf-8')
-    for path in note_files:
-        path.unlink()
+    pairs.append((plugin_path, json.dumps(plugin_data, indent=2, ensure_ascii=False) + '\n'))
+    if market is not None:
+        pairs.append((ROOT / '.claude-plugin/marketplace.json', market))
+    pairs.append((changelog_path, header + '\n'.join(section) + '\n\n' + changelog[len(header):]))
+    pairs.extend((path, None) for path in note_files)
+    apply_release(pairs)
     print('\n' + '\n'.join(section))
     s, c = len(new), len(note_files)
     print(f'written: {s} skill{"s" if s != 1 else ""}, plugin.json, CHANGELOG.md; '

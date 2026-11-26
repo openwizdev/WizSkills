@@ -137,6 +137,11 @@ class Gate(unittest.TestCase):
             'add one under .changeset/ (see .changeset/README.md)',
             'changeset check: fail']))
 
+        def noted(r):
+            (r.dir / 'skills/alpha/SKILL.md').chmod(0o755)
+            r.note('mode', {'alpha': 'patch'}, 'Marks the skill executable.')
+        self.assertEqual(self.pr(noted), (0, ['changeset check: pass (alpha)']))
+
     def test_a_non_skill_change_needs_no_changeset(self):
         self.assertEqual(self.pr(lambda r: r.write('README.md', 'Docs.\n')),
                          (0, ['changeset check: pass (no skill changed)']))
@@ -194,8 +199,7 @@ class Release(unittest.TestCase):
             '',
             '## 0.2.1 - 2026-01-02',
             '',
-            '- `alpha` 0.2.1: Fixes a typo.',
-            '- `beta` 0.2.1: Fixes a typo.',
+            '- `alpha` 0.2.1, `beta` 0.2.1: Fixes a typo.',
             '- `beta` 0.2.1: Fixes a link.',
         ]))
         self.assertEqual(repo.snapshot(), before)
@@ -214,8 +218,8 @@ class Release(unittest.TestCase):
             '',
             '## 0.2.1 - 2026-01-02',
             '',
-            '- `alpha` 0.2.1, `beta` 0.2.1: Fixes a typo.',
             '- `beta` 0.2.1: Fixes a typo.',
+            '- `alpha` 0.2.1, `beta` 0.2.1: Fixes a typo.',
         ]))
 
     def test_a_new_step_makes_a_minor_bundle(self):
@@ -250,7 +254,6 @@ class Release(unittest.TestCase):
             '',
             '- Skills added: `omega`.',
             '- Skills removed: `beta`.',
-            '- Swaps beta for omega.',
             '- `omega` 0.1.1: Swaps beta for omega.',
         ]))
 
@@ -292,14 +295,28 @@ class Release(unittest.TestCase):
 
     def test_a_bad_marketplace_leaves_versions_and_notes_unchanged(self):
         repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
-        repo.write('.claude-plugin/marketplace.json', '{"plugins":[]}\n')
         repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
         repo.commit('pending')
-        before = repo.snapshot()
-        self.assertEqual(repo.run('release', '--date', '2026-01-02')[0], 0)
-        code, _out = repo.run('release', '--date', '2026-01-02', '--write')
-        self.assertNotEqual(code, 0)
-        self.assertEqual(repo.snapshot(), before)
+        for text in ('{"plugins":[]}\n', 'not json\n', '{"plugins":[1]}\n', '[]\n'):
+            with self.subTest(text=text):
+                repo.write('.claude-plugin/marketplace.json', text)
+                repo.commit('marketplace')
+                before = repo.snapshot()
+                self.assertEqual(repo.run('release', '--date', '2026-01-02')[0], 0)
+                code, _out = repo.run('release', '--date', '2026-01-02', '--write')
+                self.assertNotEqual(code, 0)
+                self.assertEqual(repo.snapshot(), before)
+
+    def test_write_updates_a_recorded_marketplace_version(self):
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+        repo.write('.claude-plugin/marketplace.json',
+                   json.dumps({'plugins': [{'name': 'openwiz', 'version': '0.2.0'}]}) + '\n')
+        repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
+        code, _out = self.release(repo, '--write')
+        self.assertEqual(code, 0)
+        market = json.loads((repo.dir / '.claude-plugin/marketplace.json').read_text())
+        self.assertEqual(market['plugins'][0]['version'], '0.2.1')
+        self.assertFalse((repo.dir / '.changeset/one.md').exists())
 
     def test_a_failed_write_restores_versions_and_notes(self):
         repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
@@ -373,10 +390,9 @@ class FirstBundle(unittest.TestCase):
         repo = self.wave()
         section = ['## 0.2.0 - 2026-01-02', '',
                    '- Skills removed: `old`.',
-                   '- Removes old.',
                    '- `alpha` 0.2.0: Alpha is rewritten.',
-                   '- `beta` 0.2.0: Beta and gamma are rewritten.',
-                   '- `gamma` 0.2.0: Beta and gamma are rewritten.']
+                   '- `beta` 0.2.0, `gamma` 0.2.0: Beta and gamma are rewritten.',
+                   '- Removes old.']
         head = ['release: wizskills 0.1.2 -> 0.2.0 (first bundle)',
                 'why: the first bundle, every skill at 0.2.0']
         self.assertEqual(repo.run('release', '--first', '--date', '2026-01-02'),
@@ -464,9 +480,9 @@ class Removal(unittest.TestCase):
             '## 0.3.0 - 2026-01-02',
             '',
             '- Skills removed: `beta`.',
-            '- Removes beta.',
             '- Beta gets a fix.',
             '- `alpha` 0.3.0: Alpha and beta learn a step.',
+            '- Removes beta.',
         ]))
 
     def test_release_refuses_a_new_or_edited_note_naming_a_removed_skill(self):

@@ -19,6 +19,7 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 | [`launch-fleet`](launch-fleet/SKILL.md) |
 | [`research`](research/SKILL.md) |
 | [`review-ticket`](review-ticket/SKILL.md) |
+| [`role-call`](role-call/SKILL.md) |
 | [`setup`](setup/SKILL.md) |
 | [`son-of-anton`](son-of-anton/SKILL.md) |
 | [`to-spec`](to-spec/SKILL.md) |

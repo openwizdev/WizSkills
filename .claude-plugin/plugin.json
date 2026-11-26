@@ -22,6 +22,7 @@
     "./skills/launch-fleet",
     "./skills/research",
     "./skills/review-ticket",
+    "./skills/role-call",
     "./skills/setup",
     "./skills/son-of-anton",
     "./skills/to-spec",

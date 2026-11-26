@@ -111,7 +111,9 @@ jobs:
         if: github.event_name != 'push'
         env:
           GATE_BASE: ${{ github.event.merge_group.base_sha }}
-        run: python3 -I tools/comment-check/check.py diff --base "${GATE_BASE:-HEAD^1}"
+        run: |
+          python3 -I tools/comment-check/check.py diff --base "${GATE_BASE:-HEAD^1}"
+          python3 -I tools/comment-check/drift.py
   context-budget:
     name: context budget
     runs-on: ubuntu-24.04

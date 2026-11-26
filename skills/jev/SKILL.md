@@ -6,98 +6,66 @@ version: 0.1.0
 
 # Jev
 
-Jev is TypeSafe's System One model. Send a state and typed questions; the response is structured answers your code can branch on. It does not write text. The live docs are the API: [docs](https://docs.typesafe.ai), [models](https://docs.typesafe.ai/models), and the index at [llms.txt](https://docs.typesafe.ai/llms.txt) (append `.md` to a page path for Markdown). Where this skill and the docs disagree, follow the docs, and leave out any request or response field they do not list.
+Jev is TypeSafe's System One model: a state plus typed questions, structured answers back. It does not write text. Start at [llms.txt](https://docs.typesafe.ai/llms.txt) and append `.md` to a page path. Where this skill and the docs disagree, follow the docs, and add no field they do not list.
 
-Call `POST https://api.typesafe.ai/v1/systemone` with `Authorization: Bearer` the key and `Content-Type: application/json`. The body is `model`, `state`, and `questions`. `GET https://api.typesafe.ai/v1/models` lists the names this key can send. Send `jev-latest` unless thresholds were tuned on one release; then send that version id, such as `jev-1.14.0`, and change it when you mean to. Log the response `model`, which is the version that answered.
+`POST https://api.typesafe.ai/v1/systemone` with `Authorization: Bearer` the key. Body: `model`, `state`, `questions`. Send `jev-latest`, or a version id you tuned against. Log the response `model`.
 
-## When to use it
+## When
 
-Use Jev when the step is a judgment over language or an image and the code will branch on a typed answer:
+Use it instead of a prompt you would parse, keyword or regex matching on language, a brittle heuristic, routing or classification, picking which model handles a ticket, or a done, safe, or which-one judgment.
 
-- a prompt whose reply you then parse
-- keyword or regex matching on what the words mean
-- a heuristic that breaks when the wording changes
-- routing or classification into a list you already have
-- which model should handle this ticket, from a list you supply
-- whether something is done, whether it is safe, or which one of a fixed set it is
+Leave arithmetic, exact lookups, dates, and a written policy in code. An LLM still writes text, code, and explanations.
 
-Choice returns `choice`, `probabilities`, and `confidence`. Score returns `score`, `legend`, `probabilities`, and `confidence`. Noul returns `noul`, the probability the statement is true, from 0 to 1, and no separate confidence. Box returns `box.top`, `box.bottom`, `box.left`, and `box.right`, each a fraction from 0 to 1, plus `confidence`. Box needs a model that lists it (Jev 1.14) and the header `TypeSafe-Danger-Zone-Images: true`.
+## Questions
 
-## When not to use it
+Each question is one gut-check a person could make in a few seconds from this state. Split a multi-factor judgment into one question per factor, then combine the answers in code. The coefficients live in code, so a priority change edits a number, not a question.
 
-Leave the step in ordinary code when the code can already decide: arithmetic, an exact lookup, dates, or a policy applied as written. Leave it to an LLM when you need text, code, or an explanation. Jev is not the model that drives a coding agent.
+| Type | Returns |
+| --- | --- |
+| Choice | `choice`, `probabilities`, `confidence` |
+| Score | `score`, `legend`, `probabilities`, `confidence` |
+| Noul | `noul`, from 0 to 1. No separate `confidence`. |
+| Box | `box.top`, `box.bottom`, `box.left`, `box.right` (fractions from 0 to 1), `confidence` |
 
-Ask Jev for the judgments, and write the decision in code. "Should this be escalated?" is the decision. "Does the customer ask for a refund?" and "How urgent is `message`?" are the judgments.
+Put every question about one state in that one request. They run in parallel and in isolation, so more questions do not add context rot. Ask again only when the next state or the next options depend on an answer.
 
-A Choice always returns one option, and a Box always returns a box. When nothing may fit, add a Noul in the same request that asks whether anything fits, and read the Choice or the Box only when that Noul says yes.
+`state` is a string, an object, or an array; name the fields. `instructions` is the whole question. The question id is for your code and is not sent. Choice `criteria` maps a name to a description. Score `criteria` is an ordered list of levels. Box and images need the header `TypeSafe-Danger-Zone-Images: true`.
 
-Audio and video are not inputs. Images are PNG or JPEG assets, and those requests send `TypeSafe-Danger-Zone-Images: true`. The API rejects WebP and GIF.
+## Act
 
-## Questions and state
+Act when `confidence` is high. A Noul has no `confidence`; use `noul`. On low confidence, and when `TYPESAFE_API_KEY` is missing or empty, run the deterministic logic you already had. Never log the key, the `Authorization` header, or the client config.
 
-One question is one snap judgment: a person with only this state could answer it in a few seconds. Put the whole question in `instructions`. The question id is for your code; it is not sent to the model.
-
-`state` is a string, an object, or an array. Use an object with named fields when there is more than one part. Point a question at a field with its path in backticks, such as `ticket.messages[0].text`. Include the facts a person would need, including facts the code already computed. Leave out fields no question uses.
-
-Choice `criteria` is a map of option name to a description, or `null`. The name should say what the option is (`billing`, `technical`), and each description should stand on its own. Score `criteria` is an ordered list of levels, each a situation. Phrase a Noul so that yes is the case you care about.
-
-Send every question that shares a state in one request. They run in parallel, each against that state alone, and they do not see each other's answers. Make a second request when the next state or the next options depend on an answer. Long context is the header `TypeSafe-Danger-Zone-Long-Context: true` on the requests that need it; the models page has the limits, and the header is slower and less accurate, so leave it off unless the state needs it.
-
-Keep the question text, the criteria, and the thresholds in one module.
-
-## Integrate
-
-Hide the client behind a small interface that returns the decision the rest of the code needs. The TypeSafe client is one implementation. Tests pass a fake of that interface, including the low-probability case. Those tests do not open a socket and do not read a key.
-
-The Python SDK is `typesafe-sdk` (`TypeSafeClient` and `AsyncTypeSafeClient` in `typesafe_sdk`). The JavaScript SDK is `@typesafe-ai/sdk` (`TypeSafeClient`, `choice`, `noul`, `score`, `box`). Construct the client with no key argument so it reads `TYPESAFE_API_KEY`. When that variable is missing or empty, call the old logic and skip the client. Never write the key, the `Authorization` header, or the client config into logs, errors, traces, or fixtures. On a failed call, surface the error (`TypeSafeAPIError` in Python, with `status` and `request_id`). A failure is not a "no", and it does not silently run the old logic.
+The client sits behind a small interface. Python is `typesafe-sdk` (`TypeSafeClient` in `typesafe_sdk`); JavaScript is `@typesafe-ai/sdk` (`new TypeSafeClient()`). Pass no key: the client reads `TYPESAFE_API_KEY`. Tests use a fake of the interface and open no socket. A failed call is an error (`TypeSafeAPIError`, `status`, `request_id`), not a low-confidence answer.
 
 ```python
 import os
 from typesafe_sdk import Choice, TypeSafeClient
 
-class Router:
-    def team(self, ticket: str) -> str:
-        raise NotImplementedError
+MIN_CONFIDENCE = 0.5  # tune on held-out cases
 
 class JevRouter:
-    def team(self, ticket: str) -> str:
+    def team(self, ticket):
         with TypeSafeClient(model="jev-latest") as client:
-            response = client.system_one(
-                state=ticket,
-                questions={
-                    "team": Choice(
-                        instructions="Which team should handle this ticket?",
-                        criteria={
-                            "billing": "Payment or a subscription",
-                            "technical": "A bug or an integration",
-                        },
-                    ),
-                },
-            )
-        chosen = response.answers["team"]
-        if chosen.probabilities[chosen.choice] < 0.67:
-            return "unsure"
-        return chosen.choice
+            answer = client.system_one(state=ticket, questions={
+                "team": Choice(instructions="Which team should handle this ticket?",
+                               criteria={"billing": "Payment", "technical": "A bug"}),
+            }).answers["team"]
+        if answer.confidence < MIN_CONFIDENCE:
+            return LegacyRouter().team(ticket)
+        return answer.choice
 
-def router() -> Router:
+def router():
     if not os.environ.get("TYPESAFE_API_KEY", "").strip():
         return LegacyRouter()
     return JevRouter()
 
 class FakeRouter:
-    def __init__(self, team: str) -> None:
-        self.team_name = team
-
-    def team(self, ticket: str) -> str:
-        return self.team_name
+    def __init__(self, team): self.team_name = team
+    def team(self, ticket): return self.team_name
 ```
-
-The same body over HTTP is `{"model":"jev-latest","state":"<ticket>","questions":{"team":{"type":"choice","instructions":"Which team should handle this ticket?","criteria":{"billing":"Payment or a subscription","technical":"A bug or an integration"}}}}`. In JavaScript, `new TypeSafeClient({ defaultModel: "jev-latest" })` and `client.systemOne({ state, questions })`, then `response.answers.team.choice`.
-
-`0.67` is the confidence page's example of a floor under which the chosen option goes to a person. Raise it when the action is costly; that page's high-stakes example waits for a probability above `0.93`. A Noul starts at above `0.7` for yes and below `0.3` for no, and the band between has its own outcome. A Score whose `confidence` is below `0.5` is that page's example of an unclear score. Each number is a starting point to measure on your cases.
 
 ## Measure
 
-Keep the old path. Label a set of cases with the decision you want, including cases the old path gets wrong and cases it gets right, and hold some back while you write the questions. Run both paths on the held-out cases. Count wrong actions, and count the abstain band on its own. Record the response `model`. Change one of the wording, the state, or a threshold, then run the held-out cases again. The step is better when those cases have fewer wrong actions and the band is handled on purpose. A test of your code uses the fake. It does not assert an exact live probability.
+Keep the old path. On cases you did not use to write the questions, count wrong actions for both. Jev is better when that count falls. A test uses `FakeRouter` and does not assert a live probability.
 
 **Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills.

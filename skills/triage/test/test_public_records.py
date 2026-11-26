@@ -335,16 +335,44 @@ class FeedbackPath(unittest.TestCase):
         rc, _, text = plan(without_label, "verify")
         self.assertEqual(rc, 1, text)
         self.assertIn("ready-for-agent", text.strip().splitlines()[-1])
+        shape = "with or without last_edited_at and ready_labelled"
         one_new_field = json.loads(json.dumps(payload))
         one_new_field["brief"]["last_edited_at"] = "2026-11-01T09:00:00Z"
         rc, _, text = plan(one_new_field, "verify")
         self.assertEqual(rc, 2, text)
+        self.assertIn(shape, text)
+        only_ready = json.loads(json.dumps(payload))
+        only_ready["brief"]["ready_labelled"] = [{"at": "2026-11-01T09:00:01Z", "by": "synthetic-owner"}]
+        rc, _, text = plan(only_ready, "verify")
+        self.assertEqual(rc, 2, text)
+        self.assertIn(shape, text)
+        bad_ready = json.loads(json.dumps(payload))
+        bad_ready["brief"]["last_edited_at"] = "2026-11-01T09:00:00Z"
+        bad_ready["brief"]["ready_labelled"] = "nope"
+        rc, _, text = plan(bad_ready, "verify")
+        self.assertEqual(rc, 2, text)
+        self.assertIn("wrong types", text)
+        fresh = json.loads(json.dumps(payload))
+        fresh["brief"]["last_edited_at"] = "2026-11-01T09:00:00Z"
+        fresh["brief"]["ready_labelled"] = [{"at": "2026-11-01T09:00:01Z", "by": "synthetic-owner"}]
+        rc, out, text = plan(fresh, "verify")
+        self.assertEqual((rc, out), (0, {"verified": 9200, "report": 9101}), text)
         stale = json.loads(json.dumps(payload))
         stale["brief"]["last_edited_at"] = "2026-11-01T09:00:00Z"
         stale["brief"]["ready_labelled"] = [{"at": "2026-11-01T09:00:00Z", "by": "synthetic-owner"}]
         rc, _, text = plan(stale, "verify")
         self.assertEqual(rc, 1, text)
         self.assertIn("after the brief's last edit", text.strip().splitlines()[-1])
+
+    def test_verify_brief_eval_matches_the_shipped_contract(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "eval_verify_brief", ROOT / "skills/triage/test/eval_verify_brief.py")
+        ev = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ev)
+        result = ev.score(FEEDBACK)
+        self.assertEqual(result["passed"], result["total"], result["cases"])
+        self.assertTrue(all(row["ok"] for row in result["cases"]))
 
     def test_only_an_untriaged_report_is_triaged(self):
         for rep, why in [

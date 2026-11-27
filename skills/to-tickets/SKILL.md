@@ -12,10 +12,11 @@ with no owner question or human approval.
 ## 1. Check the starting point
 
 Run `python3 -I "<this skill's folder>/../launch-fleet/scripts/context.py" planner`
-once per session and after a listed blob changes. Verify the grill confirmation
-privately or return to [grill](../grill/SKILL.md). [Hold an approved plan before
-editing](changes.md). Keep existing contract holds' release conditions. A failed
-read or unknown state stops its write or handoff.
+once per session and after a listed blob changes. Before writing, verify the
+configured tracker with `gh repo view --json nameWithOwner`. Stop on a mismatch.
+Verify the grill confirmation privately or return to [grill](../grill/SKILL.md).
+[Hold an approved plan before editing](changes.md). Keep existing contract holds'
+release conditions. A failed read or unknown state stops its write or handoff.
 
 ## 2. Cut the tickets
 
@@ -28,8 +29,7 @@ See [tickets.md](tickets.md).
 
 ## 3. Write and verify the tickets
 
-Before writing, verify the configured tracker with `gh repo view --json nameWithOwner`.
-Stop on a mismatch. Run [fidelity.md](../to-spec/fidelity.md) before creating or
+Run [fidelity.md](../to-spec/fidelity.md) before creating or
 showing tickets (drop, fix, or explain in one line). Create each issue without
 a ready label, blockers first, with the spec milestone, native parent and
 blockers. Read each back. Post the agents' graph on the spec using

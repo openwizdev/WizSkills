@@ -127,13 +127,13 @@ class ApprovalTest(unittest.TestCase):
         self.assertIn("`gh repo view --json nameWithOwner` must match the configured tracker before a write.",
                       before_create)
 
-    def test_step_three_verifies_the_tracker_before_creating_tickets(self):
-        text = (HERE.parent / "SKILL.md").read_text()
-        step = text.split("## 3. Write and verify the tickets", 1)[1].split("\n## 4.", 1)[0]
-        before_create, action, _ = " ".join(step.split()).partition("Create each issue")
-        self.assertTrue(action)
+    def test_to_tickets_verifies_the_tracker_before_holding_or_creating_tickets(self):
+        text = " ".join((HERE.parent / "SKILL.md").read_text().split())
+        before_hold, hold, after_hold = text.partition("[Hold an approved plan before editing](changes.md)")
+        self.assertTrue(hold)
         self.assertIn("Before writing, verify the configured tracker with "
-                      "`gh repo view --json nameWithOwner`. Stop on a mismatch.", before_create)
+                      "`gh repo view --json nameWithOwner`. Stop on a mismatch.", before_hold)
+        self.assertIn("Create each issue", after_hold)
 
     def test_step_four_uses_the_first_or_next_revision_number(self):
         text = (HERE.parent / "SKILL.md").read_text()

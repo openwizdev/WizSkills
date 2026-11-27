@@ -14,15 +14,18 @@ SKIP = {
     'unittest.skip': 'unittest.skip',
     'unittest.skipIf': 'unittest.skipIf',
     'unittest.skipUnless': 'unittest.skipUnless',
+    'unittest.expectedFailure': 'unittest.expectedFailure',
     'pytest.skip': 'pytest.skip',
     'pytest.xfail': 'pytest.xfail',
     'pytest.importorskip': 'pytest.importorskip',
 }
 PATCH_TAILS = ('patch.multiple', 'patch.dict', 'patch.object', 'patch')
+MOCK_ROOTS = ('', 'unittest.mock.', 'mock.', 'mocker.')
 MONKEY = {'monkeypatch.setattr', 'monkeypatch.delattr', 'monkeypatch.setitem'}
 WARN_LINE = re.compile(
     r'(?i)(?:filterwarnings\s*=.*\bignore\b|-W\s*ignore\b|simplefilter\s*=.*\bignore\b)')
-IGNORE_ENTRY = re.compile(r'(?i)^\s*["\']?ignore(?:\s*:|["\'])')
+IGNORE_ENTRY = re.compile(r'(?i)^\s*["\']?ignore(?:\s*:|["\']|\s*$)')
+DOC_SUFFIXES = ('.md', '.markdown', '.rst', '.txt')
 CONFIG_NAMES = {'pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini', 'pytest.toml'}
 WARN_CALLS = {
     'warnings.filterwarnings', 'warnings.simplefilter', 'filterwarnings', 'simplefilter',
@@ -31,8 +34,11 @@ WARN_CALLS = {
 HUNK = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
 DEF_LINE = re.compile(r'^\s*(?:async\s+)?def\s+(test[A-Za-z0-9_]*)\s*\(')
 SKIP_LINE = re.compile(
-    r'^\s*@(?:(pytest\.mark\.(?:skipif|skip|xfail))|(unittest\.skip(?:If|Unless)?)|(pytest\.(?:skip|xfail)))\b')
+    r'^\s*@(?:(pytest\.mark\.(?:skipif|skip|xfail))|(unittest\.(?:skip(?:If|Unless)?|expectedFailure))'
+    r'|(pytest\.(?:skip|xfail)))\b')
 TEST_PARTS = {'test', 'tests', '__tests__'}
+# As check/run.py finds suites: test.py, test.sh, test_*.py/.sh and test-*.py/.sh.
+TEST_SCRIPT = re.compile(r'test(?:[_-][^/]*)?\.(?:py|sh)')
 
 
 class Unreadable(Exception):
@@ -50,11 +56,24 @@ def git(repo, *args, check=True):
     run = subprocess.run(
         ['git', '-C', str(repo), '-c', 'core.autocrlf=false', '-c', 'core.quotepath=false',
          '-c', 'diff.noprefix=false', '-c', 'diff.mnemonicPrefix=false', *args],
-        capture_output=True, text=True, encoding='utf-8', errors='replace',
+        capture_output=True,
     )
     if check and run.returncode != 0:
         raise Unreadable()
+    run.stdout = run.stdout.decode('utf-8', errors='replace')
     return run
+
+
+def lines_of(text):
+    lines = text.split('\n')
+    if lines and lines[-1] == '':
+        lines.pop()
+    return lines
+
+
+def python_source(text):
+    # Python also ends a line at a bare \r; git doesn't, so keep git's line numbers.
+    return text.replace('\r\n', '\n').replace('\r', ' ')
 
 
 def unprefix(path):
@@ -105,7 +124,7 @@ def hunk_starts(line):
 def parse_diff(text):
     changes, current = [], None
     old_line = new_line = None
-    for line in text.splitlines():
+    for line in lines_of(text):
         if line.startswith('diff --git '):
             old, new = git_paths(line)
             current = {'old': old, 'new': new, 'deleted': False,
@@ -148,7 +167,7 @@ def is_test_path(path):
     if not path:
         return False
     name = path.rsplit('/', 1)[-1]
-    if name.startswith('test_') and name.endswith(('.py', '.sh')):
+    if TEST_SCRIPT.fullmatch(name):
         return True
     if name.endswith('_test.py') or name.endswith(('.test.py', '.test.mjs', '.test.js', '.spec.js', '.spec.mjs')):
         return True
@@ -175,8 +194,8 @@ def python_functions(source):
     if source is None:
         return []
     try:
-        tree = ast.parse(source)
-    except SyntaxError:
+        tree = ast.parse(python_source(source))
+    except (SyntaxError, ValueError):
         return None
     found = []
     for node in tree.body:
@@ -203,19 +222,13 @@ def called(node):
     return node.func if isinstance(node, ast.Call) else node
 
 
-def is_patch(name):
-    if name in MONKEY:
-        return True
-    return any(name == tail or name.endswith('.' + tail) for tail in PATCH_TAILS)
-
-
 def short_patch(name):
     if name in MONKEY:
         return name
-    for tail in PATCH_TAILS:
-        if name == tail or name.endswith('.' + tail):
-            return tail
-    return name
+    for root in MOCK_ROOTS:
+        if name.startswith(root) and name[len(root):] in PATCH_TAILS:
+            return name[len(root):]
+    return None
 
 
 def is_test_target(target):
@@ -253,8 +266,8 @@ def bind_stmt(local, stmt):
 
 
 def mock_label(node, bound):
-    name = resolve(dotted(called(node)), bound)
-    if not is_patch(name):
+    label = short_patch(resolve(dotted(called(node)), bound))
+    if not label:
         return None
     target = None
     if isinstance(node, ast.Call) and node.args:
@@ -263,7 +276,6 @@ def mock_label(node, bound):
             target = arg.value
     if target and is_test_target(target):
         return None
-    label = short_patch(name)
     return f'{label} {target}' if target else label
 
 
@@ -319,7 +331,7 @@ def skip_label(node, bound):
 
 def text_fallback(source, added):
     found = []
-    for number, line in enumerate(source.splitlines(), 1):
+    for number, line in enumerate(lines_of(source), 1):
         if number not in added:
             continue
         match = SKIP_LINE.match(line)
@@ -356,8 +368,8 @@ def header_nodes(stmt):
 
 def python_marks(source, added):
     try:
-        tree = ast.parse(source)
-    except SyntaxError:
+        tree = ast.parse(python_source(source))
+    except (SyntaxError, ValueError):
         return text_fallback(source, added)
     found = []
 
@@ -374,6 +386,17 @@ def python_marks(source, added):
         if warned:
             found.append(('warn', warned, ''))
 
+    def scan(nodes, bound):
+        funcs = {id(node.func) for node in nodes if isinstance(node, ast.Call)}
+        for node in nodes:
+            if isinstance(node, ast.Call):
+                take(node, bound)
+            elif isinstance(node, (ast.Attribute, ast.Name)) and id(node) not in funcs:
+                # A mark used as a value: a decorator, pytestmark = ..., or marks=...
+                label = SKIP.get(resolve(dotted(node), bound))
+                if label and node.lineno in added:
+                    found.append(('skip', node.lineno, label))
+
     def block(stmts, bound):
         local = dict(bound)
         for stmt in stmts:
@@ -381,14 +404,12 @@ def python_marks(source, added):
                 continue
             if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 for dec in stmt.decorator_list:
-                    take(dec, local)
+                    scan(list(ast.walk(dec)), local)
                 block(stmt.body, local)
                 continue
             if isinstance(stmt, ast.Raise) and stmt.lineno in added and raise_skip(stmt, local):
                 found.append(('skip', stmt.lineno, 'unittest.skip'))
-            for node in header_nodes(stmt):
-                if isinstance(node, ast.Call):
-                    take(node, local)
+            scan(header_nodes(stmt), local)
             for nested in child_blocks(stmt):
                 block(nested, local)
 
@@ -399,7 +420,9 @@ def python_marks(source, added):
 def config_warnings(path, source, added):
     bare = path.rsplit('/', 1)[-1] in CONFIG_NAMES
     found = []
-    for number, line in enumerate(source.splitlines(), 1):
+    if path.lower().endswith(DOC_SUFFIXES):
+        return found
+    for number, line in enumerate(lines_of(source), 1):
         if number not in added:
             continue
         if WARN_LINE.search(line) or (bare and IGNORE_ENTRY.search(line)):
@@ -509,9 +532,14 @@ def write_summary(lines):
     path = os.environ.get('GITHUB_STEP_SUMMARY')
     if not path:
         return
-    body = '\n'.join(lines) if lines else 'No findings.'
+    if lines:
+        text = ''.join(line + '\n' for line in lines)
+        fence = '`' * max([3] + [len(run) + 1 for run in re.findall('`+', text)])
+        body = f'{fence}text\n{text}{fence}\n'
+    else:
+        body = 'No findings.\n'
     with open(path, 'a', encoding='utf-8') as handle:
-        handle.write('## Test integrity\n\n' + body + '\n')
+        handle.write('## Test integrity\n\n' + body)
 
 
 def main(argv):

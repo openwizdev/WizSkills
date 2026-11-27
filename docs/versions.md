@@ -8,8 +8,9 @@ same version in `.claude-plugin/plugin.json`. A released tag never moves.
 
 Each skill also has its own semantic version, the `version:` line of its
 `SKILL.md` front matter (J205): patch for wording or a fix, minor for a new
-step or ability, major for changed inputs, outputs or records. Every skill
-starts at 0.2.0, the release that rewrote them all.
+step or ability, major for changed inputs, outputs or records. Every skill in
+the 0.2.0 release, which rewrote them all, started at 0.2.0; the skills added
+since started at 0.1.0.
 
 A release is a bundle of skill versions (J206). Each pull request that changes
 a skill adds one note under [.changeset/](../.changeset/README.md), and CI fails

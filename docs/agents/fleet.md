@@ -49,7 +49,7 @@ Only its own lines. The pull request lists each use with its kind and path, and 
 
 Locally, run only the shards your change can affect (`python3 check/run.py --shard <name>`, named by `check/select.py` or `--list`) and the red/green proof; never the full suite locally. CI's `check` at the exact head is the full run, for builders and reviewers alike.
 
-Run `python3 check/run.py` at the repository root, or `python3 check/run.py --shard <name>[,<name>...]` for the shards `python3 check/run.py --list` names ([check shards contract](../../contracts/check-shards.v1.md)). The hosted workflow runs one job per listed shard with `TEST_JOBS=2` (on a pull request, only the shards `check/select.py` picks for its changed files; merge groups and pushes to `main` run every shard), installing the pinned test-only browser tools only in the shards whose skill names `playwright-core`, and the changeset and comment gates in their own job. Source: [WizSkills CI](../../.github/workflows/ci.yml).
+Run `python3 check/run.py` at the repository root, or `python3 check/run.py --shard <name>[,<name>...]` for the shards `python3 check/run.py --list` names ([check shards contract](../../contracts/check-shards.v1.md)). The hosted workflow runs one job per listed shard with `TEST_JOBS=2` (on a pull request, only the shards `check/select.py` picks for its changed files; merge groups and pushes to `main` run every shard), installing the pinned test-only browser tools only in the shards whose skill names `playwright-core`, the changeset and comment gates in their own job, and the context budget check in another (on a pull request, no skill's `SKILL.md` grows above its base without the `context-increase` label). Source: [WizSkills CI](../../.github/workflows/ci.yml).
 
 Evidence (red and green runs, logs, screenshots, review captures) goes in the pull request's description or comments, never in the tree.
 
@@ -57,7 +57,7 @@ Evidence (red and green runs, logs, screenshots, review captures) goes in the pu
 
 | Check | Runs | Required by fleet on |
 | --- | --- | --- |
-| `check` | Passes only when every job passed: one job per shard from `run.py --list` (skill rules, standalone check and every skill suite; on a pull request, every shard `check/select.py` selects) and the gates job; on pull requests, merge groups and pushes to `main` | Pull requests and merge groups to `main` at the exact proposed head |
+| `check` | Passes only when every job passed: one job per shard from `run.py --list` (skill rules, standalone check and every skill suite; on a pull request, every shard `check/select.py` selects), the shard list job, the gates job and the context budget job; on pull requests, merge groups and pushes to `main` | Pull requests and merge groups to `main` at the exact proposed head |
 
 ## Standing merge rules
 

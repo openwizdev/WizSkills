@@ -48,12 +48,12 @@ The orchestrator launches a fleet when a plan graph is approved, by its machine 
      | python3 -I "<this skill's folder>/scripts/route.py" gh api --method PATCH 'repos/{owner}/{repo}/hooks/<webhook id>' --input - --jq '{id, events, active}'
    ```
 
-   It needs owner or admin access to the repository. GitHub sends a `ping` when a webhook is added (its documentation), which wakes one tick with nothing to read. Write the webhook's id in the handoff file. Then slow the safety net and every fleet thread's loop to every 30 minutes, as messages now wake them: `room-cli loop update <id> --cron '*/30 * * * *'`, for the safety net and for each open spec's fleet loop (the real loop id under its `S` key in the private loop file; the public record names only `fleet-<S>`), and read them back with `room-cli loop list`. If that approver says no, the safety net and the fleet loops stay at every 10 minutes, and the wake loop, which nothing calls, can be deleted.
+   It needs owner or admin access to the repository. GitHub sends a `ping` when a webhook is added (its documentation), which wakes one tick with nothing to read. Write the webhook's id in the handoff file. Then slow the safety net and every fleet thread's loop to every 30 minutes, as messages now wake them: `room-cli loop update <id> --cron '*/30 * * * *'` for the safety net, and for each open spec's fleet loop (the real loop id under its `S` key in the private loop file; the public record names only `fleet-<S>`) `room-cli loop update <id> --cron "$(room-cli loop list | GH_REPO=<owner>/<repo> python3 -I "<this skill's folder>/scripts/route.py" cron <S> 30 -)"`, one loop at a time so each keeps a minute of its own; read them back with `room-cli loop list`. If that approver says no, the safety net and the fleet loops stay at every 10 minutes, and the wake loop, which nothing calls, can be deleted.
 4. **Start the spec's fleet loop** ("Starting one", below). Run it once after publishing its record. If a fresh loop cannot be set up, record the reason on the spec and keep its existing routing. For a spec with no loop record, run the project's safety net once.
 
 Done when both loops exist, step 3's approver (the user when the Approval rules section is absent) has said yes or no to GitHub's messages, and the spec has a verified fleet loop record (or a look record explains why it could not be set up).
 
-**Turning GitHub's messages off** (the user asks, or they misbehave): delete the webhook (`python3 -I "<this skill's folder>/scripts/route.py" gh api 'repos/{owner}/{repo}/hooks' --jq '.[] | {id, events, active}'` lists them without their addresses, with tracing dropped as in step 3; `python3 -I "<this skill's folder>/scripts/route.py" gh api --method DELETE 'repos/{owner}/{repo}/hooks/<id>'`), delete the wake loop (`room-cli loop delete <id>`), and set the safety net and every open spec's fleet loop back to every 10 minutes (`room-cli loop update <id> --cron '*/10 * * * *'` for each, the same loops as step 3; read them back with `room-cli loop list`). Nothing else changes, and nothing else needs undoing: with no messages, no tick runs a fleet loop early; the fleet's records are all on GitHub, so the check finds where everything stands. Record it in the handoff file.
+**Turning GitHub's messages off** (the user asks, or they misbehave): delete the webhook (`python3 -I "<this skill's folder>/scripts/route.py" gh api 'repos/{owner}/{repo}/hooks' --jq '.[] | {id, events, active}'` lists them without their addresses, with tracing dropped as in step 3; `python3 -I "<this skill's folder>/scripts/route.py" gh api --method DELETE 'repos/{owner}/{repo}/hooks/<id>'`), delete the wake loop (`room-cli loop delete <id>`), and set the safety net and every open spec's fleet loop back to every 10 minutes (`room-cli loop update <id> --cron '*/10 * * * *'` for the safety net, and `--cron "$(room-cli loop list | GH_REPO=<owner>/<repo> python3 -I "<this skill's folder>/scripts/route.py" cron <S> 10 -)"` for each spec's loop, one at a time, the same loops as step 3; read them back with `room-cli loop list`). Nothing else changes, and nothing else needs undoing: with no messages, no tick runs a fleet loop early; the fleet's records are all on GitHub, so the check finds where everything stands. Record it in the handoff file.
 
 ### Starting one (the orchestrator, after plan approval)
 
@@ -67,7 +67,8 @@ thread-free `launch-fleet: look:` on the spec and keep its current routing.
 ```sh
 sh "<this skill's folder>/scripts/loop.sh" --bundle "<owner>/<repo>" "<S>" \
   > /tmp/launch-fleet-<S>.sh
-room-cli loop create --name "launch-fleet #<S> <owner>/<repo>" --cron '*/10 * * * *' --new-thread \
+room-cli loop create --name "launch-fleet #<S> <owner>/<repo>" --new-thread \
+  --cron "$(room-cli loop list | GH_REPO=<owner>/<repo> python3 -I "<this skill's folder>/scripts/route.py" cron <S> 10 -)" \
   --parent "<open Cloud manager in this project>" \
   --script-file /tmp/launch-fleet-<S>.sh --priority 2 \
   --prompt "$(python3 -I "<this skill's folder>/scripts/brief.py" wake "<S>" "<owner>/<repo>")"
@@ -78,7 +79,9 @@ project's fleet agent settings. Set the parent to the open Cloud planner or flee
 project and read it back before activation. Keep any old manager that still
 parents active agents open. The scheduler's sandbox can keep its check cache.
 The brief names the repository, spec number and installed skill. The project's private configuration supplies routing.
-Use the 30-minute schedule only when GitHub's messages are verified on.
+Use the 30-minute schedule (`cron <S> 30`) only when GitHub's messages are verified on.
+`route.py cron` gives each spec's loop the minute the account's other
+`launch-fleet` loops use least, so fleets don't all wake, and read GitHub, in the same minute.
 
 Save the loop id in the configured private repository's loop map and read it
 back. Post this record on the spec as a single comment and read it back

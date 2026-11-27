@@ -168,6 +168,55 @@ class Loop(unittest.TestCase):
             self.assertEqual(w.run('loop', path, s)[:2], (2, ''), s)
 
 
+def fired(cron):
+    field = cron.split(' ')[0]
+    start, every = field.split('-59/')
+    return set(range(int(start), 60, int(every)))
+
+
+class Cron(unittest.TestCase):
+    NET = {'id': 'net', 'name': 'launch-fleet ' + HOME, 'cron': '*/10 * * * *'}
+
+    def schedule(self, w, loops, spec, every):
+        path = w.loops({'automations': loops})
+        code, out, err = w.run('cron', str(spec), str(every), path)
+        self.assertEqual((code, err), (0, ''), spec)
+        return out.strip()
+
+    def test_new_spec_loops_never_share_a_minute(self):
+        w = World(self)
+        loops = [self.NET, {'id': 'other', 'name': 'launch-fleet #10 ' + SAT, 'cron': '7-59/10 * * * *'}]
+        for spec in (10, 20, 30, 40, 50):
+            cron = self.schedule(w, loops, spec, 10)
+            loops.append({'id': 'fleet-%d' % spec, 'name': 'launch-fleet #%d %s' % (spec, HOME), 'cron': cron})
+        taken = [fired(x['cron']) if '-59/' in x['cron'] else set(range(0, 60, 10)) for x in loops]
+        for i, a in enumerate(taken):
+            for b in taken[i + 1:]:
+                self.assertFalse(a & b, [x['cron'] for x in loops])
+        self.assertEqual(w.calls(), [], 'the schedule is worked out from the listing alone')
+
+    def test_moving_every_spec_loop_to_thirty_minutes_keeps_them_apart(self):
+        w = World(self)
+        loops = [dict(self.NET, cron='*/30 * * * *')] + [
+            {'id': 'fleet-%d' % s, 'name': 'launch-fleet #%d %s' % (s, HOME), 'cron': '%d-59/10 * * * *' % o}
+            for s, o in ((10, 1), (20, 2), (30, 3))]
+        for loop in loops[1:]:
+            loop['cron'] = self.schedule(w, loops, int(loop['name'].split('#')[1].split(' ')[0]), 30)
+        taken = [set(range(0, 60, 30))] + [fired(x['cron']) for x in loops[1:]]
+        for i, a in enumerate(taken):
+            for b in taken[i + 1:]:
+                self.assertFalse(a & b, [x['cron'] for x in loops])
+
+    def test_an_unreadable_listing_or_schedule_is_refused(self):
+        w = World(self)
+        for listing in ('{"automations": ', {'loops': []}, {'automations': {}}):
+            code, out, err = w.run('cron', '10', '10', w.loops(listing))
+            self.assertEqual((code, out), (2, ''), listing)
+            self.assertIn('loop list', err, listing)
+        for spec, every in (('10', '7'), ('10', '0'), ('0', '10')):
+            self.assertEqual(w.run('cron', spec, every, w.loops({'automations': []}))[:2], (2, ''), (spec, every))
+
+
 class Tick(unittest.TestCase):
     ID = '0f1e2d3c-synthetic-loop'
 

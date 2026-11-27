@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=1056
+CASES=1057
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -4459,7 +4459,7 @@ gi1_case 'B24: a changed installation-repository representation gets a full read
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
 gi1_case "GI7: a switch from the account to the App gets a full read" switch
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
-gi1_rest_calls() { grep -cv '^graphql \|^issue view \|^repo view$' "$d/gh-$1.log"; }
+gi1_rest_calls() { grep -cv '^graphql \|^issue view \|^repo view$\|^rate limit$' "$d/gh-$1.log"; }
 rest_wake_case() {
   name=$1 setup=$2
   selected "$name" || return 0
@@ -4479,6 +4479,22 @@ rest_wake_case() {
   echo "ok   $name"
 }
 rest_wake_case '#1324: every wake of a twelve-ticket spec with open pull requests stays within 30 REST calls' "$GI1"
+fitting_probe_case() {
+  name=$1 setup=$2
+  selected "$name" || return 0
+  take heavy || return 0
+  cases=$((cases + 1))
+  d=$tmp/fitting-probe-$cases gi1_why='' GI1_REST=''
+  mkdir "$d" && world check.json "$setup" "$d" > "$d/world.json" \
+    && gi1_pair 1 0 && gi1_pair 2 60 && gi1_pair 3 120 && gi1_pair 4 180 && gi1_unchanged 4 \
+    || { GI1_REST=500; bad "$name" "${gi1_why:-setup}"; return; }
+  GI1_REST=500
+  for run in 1 2 3 4; do
+    [ "$(gi1_rest_calls "$run")" -le 30 ] || { bad "$name" "wake $run made $(gi1_rest_calls "$run") REST calls, over 30"; return; }
+  done
+  echo "ok   $name"
+}
+fitting_probe_case '#1324: a four-ticket spec whose probe fits the REST budget still replays an unchanged wake with no GraphQL' 'merge12'
 gi1_tools_case() {
   name=$1 change=$2 start=${3:-"$GI1 | pull(35; .repo = \"synthetic-owner/synthetic-tools\")"} tools_before=${4:-} tools_after=${5:-}
   selected "$name" || return 0

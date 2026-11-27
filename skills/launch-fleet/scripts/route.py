@@ -9,6 +9,7 @@ REPO = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}')
 NUMBER = re.compile(r'[1-9][0-9]{0,8}')
 LOOP_ID = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_-]{0,127}')
 WAKE_FLEET = re.compile(r'wake fleet #([1-9][0-9]{0,8}): room-cli loop run fleet-\1')
+MINUTES = re.compile(r'(\*|([0-9]{1,2})(?:-([0-9]{1,2}))?)(?:/([1-9][0-9]?))?')
 QUERY = ('query($o: String!, $n: String!) { repository(owner: $o, name: $n) { %s } }')
 ITEM = ('i%d: issueOrPullRequest(number: %d) { __typename ... on PullRequest { closingIssuesReferences(first: 50) '
         '{ pageInfo { hasNextPage } nodes { number repository { nameWithOwner } } } } }')
@@ -61,6 +62,37 @@ def loop(home, path, spec):
         return None
 
 
+def minutes(cron):
+    found = set()
+    for part in (cron.split(' ')[0] if isinstance(cron, str) else '').split(','):
+        m = MINUTES.fullmatch(part)
+        if not m:
+            return set()
+        step = int(m.group(4) or 1)
+        low = 0 if m.group(1) == '*' else int(m.group(2))
+        high = 59 if m.group(1) == '*' or (m.group(4) and not m.group(3)) else int(m.group(3) or low)
+        found.update(range(low, min(high, 59) + 1, step))
+    return found
+
+
+def cron(home, spec, every, text):
+    try:
+        items = json.loads(text).get('automations')
+    except (ValueError, AttributeError):
+        items = None
+    if not isinstance(items, list):
+        raise Refused('the loop list is unreadable: give it `room-cli loop list` as it prints it')
+    own = ('launch-fleet #%d %s' % (spec, home)).lower()
+    used = [0] * 60
+    for item in items:
+        name = item.get('name') if isinstance(item, dict) else None
+        if isinstance(name, str) and name.lower().startswith('launch-fleet') and name.lower() != own:
+            for minute in minutes(item.get('cron')):
+                used[minute] += 1
+    offset = min(range(every), key=lambda o: (sum(used[o::every]), (o - spec) % every))
+    return '%d-59/%d * * * *' % (offset, every)
+
+
 def tick(home, source, path, numbers):
     found = refs(home, source, numbers)
     if not found:
@@ -111,7 +143,17 @@ def main(argv):
         return 0
     if len(argv) >= 4 and argv[0] == 'tick' and REPO.fullmatch(argv[1]) and all(NUMBER.fullmatch(a) for a in argv[3:]):
         return tick(home, argv[1], argv[2], [int(a) for a in argv[3:]])
-    raise Refused('usage: route.py refs OWNER/NAME N... | route.py loop FILE S | route.py tick OWNER/NAME FILE N... | route.py gh api ARGS...')
+    if len(argv) == 4 and argv[0] == 'cron' and NUMBER.fullmatch(argv[1]) and NUMBER.fullmatch(argv[2]) \
+            and 60 % int(argv[2]) == 0:
+        try:
+            with (sys.stdin if argv[3] == '-' else open(argv[3])) as f:
+                text = f.read()
+        except OSError:
+            raise Refused('the loop list is unreadable: give it `room-cli loop list` as it prints it')
+        print(cron(home, int(argv[1]), int(argv[2]), text))
+        return 0
+    raise Refused('usage: route.py refs OWNER/NAME N... | route.py loop FILE S | route.py tick OWNER/NAME FILE N... | '
+                  'route.py cron S EVERY LIST|- | route.py gh api ARGS...')
 
 
 if __name__ == '__main__':

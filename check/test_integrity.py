@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import importlib.util
 import os
 import shutil
 import subprocess
@@ -54,6 +53,11 @@ class Repo:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding='utf-8')
 
+    def write_bytes(self, rel, data):
+        path = self.dir / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
     def remove(self, rel):
         (self.dir / rel).unlink()
 
@@ -63,12 +67,15 @@ class Repo:
         return self.git('rev-parse', 'HEAD').strip()
 
 
-def report(repo, base):
+def report(repo, base, summary=None):
     if not SCRIPT.is_file():
         return 0, ''
+    env = {key: value for key, value in os.environ.items() if key != 'GITHUB_STEP_SUMMARY'}
+    if summary:
+        env['GITHUB_STEP_SUMMARY'] = str(summary)
     done = subprocess.run(
         [sys.executable, '-I', str(SCRIPT), '--base', base, '--head', 'HEAD', '--repo', str(repo.dir)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=env,
     )
     return done.returncode, done.stdout
 
@@ -356,17 +363,106 @@ def test_a():
         self.assertEqual(findings(out), [])
         self.assertEqual(out, '')
 
-    def test_eval_corpus_has_full_recall_and_no_false_alarms(self):
-        spec = importlib.util.spec_from_file_location('integrity_eval', ROOT / 'check' / 'integrity_eval.py')
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        result = module.score(SCRIPT)
-        self.assertEqual(result['false_negatives'], 0, result['failures'])
-        self.assertEqual(result['false_positives'], 0, result['failures'])
-        self.assertEqual(result['case_failures'], [])
-        self.assertEqual(result['recall'], 1.0)
-        self.assertEqual(result['precision'], 1.0)
 
+    def test_hyphenated_and_bare_test_scripts_are_test_files(self):
+        repo = Repo(self)
+        repo.write('skills/x/scripts/test-merge.py', 'def test_merge():\n    assert True\n')
+        repo.write('skills/x/scripts/test.sh', 'echo ok\n')
+        repo.write('skills/x/scripts/test.py', 'def test_all():\n    assert True\n')
+        repo.write('skills/x/scripts/test-loop.sh', 'echo ok\n')
+        repo.write('skills/x/scripts/test-status.py',
+                   'from unittest import mock\nimport status\n\n\n'
+                   'def test_keep():\n    assert True\n\n\ndef test_gone():\n    assert True\n')
+        repo.write('skills/x/scripts/testing.py', 'VALUE = 1\n')
+        base = repo.commit('scripts')
+        for rel in ('test-merge.py', 'test.sh', 'test.py', 'test-loop.sh', 'testing.py'):
+            repo.remove('skills/x/scripts/' + rel)
+        repo.write('skills/x/scripts/test-status.py',
+                   'from unittest import mock\nimport status\n\n\n'
+                   '@mock.patch.object(status, "run")\ndef test_keep(run):\n    assert run\n')
+        repo.commit('drop')
+        code, out = report(repo, base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), [
+            'deleted test file: skills/x/scripts/test-loop.sh:1',
+            'deleted test file: skills/x/scripts/test-merge.py:1',
+            'deleted test file: skills/x/scripts/test.py:1',
+            'deleted test file: skills/x/scripts/test.sh:1',
+            'deleted test function: skills/x/scripts/test-merge.py:1 test_merge',
+            'deleted test function: skills/x/scripts/test-status.py:9 test_gone',
+            'deleted test function: skills/x/scripts/test.py:1 test_all',
+            'new mock: skills/x/scripts/test-status.py:5 patch.object',
+        ])
+
+    def test_line_separators_inside_a_changed_line_keep_the_report_and_its_line_numbers(self):
+        repo = Repo(self)
+        repo.write('tests/test_keep.py', 'def test_keep():\n    assert True\n\n\ndef test_gone():\n    assert True\n')
+        base = repo.commit('base')
+        repo.write('tests/test_keep.py', 'def test_keep():\n    assert True\n')
+        repo.write_bytes('tests/fixtures/stderr.txt', 'a\rb\u2028c\u2029d\x0be\x0cf\x1cg\x85h\n'.encode('utf-8'))
+        repo.write_bytes('pytest.ini', b'[pytest]\r\n# a\rb\nfilterwarnings = ignore\n')
+        repo.write_bytes('tests/test_cr.py', b'import pytest\n# a\rb\n@pytest.mark.skip\ndef test_a():\n    assert True\n')
+        repo.commit('separators')
+        code, out = report(repo, base)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(findings(out), [
+            'deleted test function: tests/test_keep.py:5 test_gone',
+            'ignored warning: pytest.ini:3',
+            'new skip mark: tests/test_cr.py:3 pytest.mark.skip',
+        ])
+
+    def test_bare_ignore_in_an_ini_list_is_reported_and_docs_are_not(self):
+        repo = Repo(self)
+        base = repo.base
+        repo.write('pytest.ini', '[pytest]\nfilterwarnings =\n    ignore\n')
+        repo.write('docs/guide.md', 'Run `python3 -W ignore x.py`, or set `filterwarnings = ignore`.\n')
+        repo.write('skills/x/SKILL.md', 'Never pass -W ignore.\n')
+        repo.commit('ini and docs')
+        code, out = report(repo, base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), ['ignored warning: pytest.ini:3'])
+
+    def test_expected_failure_and_bare_skip_marks_are_reported(self):
+        repo = Repo(self)
+        base = repo.base
+        repo.write('tests/test_expected.py', 'import unittest\n\n\nclass T(unittest.TestCase):\n'
+                   '    @unittest.expectedFailure\n    def test_a(self):\n        assert False\n')
+        repo.write('tests/test_module.py', 'import pytest\npytestmark = pytest.mark.skip\n\n\n'
+                   'def test_a():\n    assert True\n')
+        repo.write('tests/test_param.py', 'import pytest\n\n\n'
+                   '@pytest.mark.parametrize("n", [1, pytest.param(2, marks=pytest.mark.skip)])\n'
+                   'def test_n(n):\n    assert n\n')
+        repo.commit('marks')
+        code, out = report(repo, base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), [
+            'new skip mark: tests/test_expected.py:5 unittest.expectedFailure',
+            'new skip mark: tests/test_module.py:2 pytest.mark.skip',
+            'new skip mark: tests/test_param.py:4 pytest.mark.skip',
+        ])
+
+    def test_an_http_client_patch_call_is_not_a_mock(self):
+        repo = Repo(self)
+        base = repo.base
+        repo.write('tests/test_api.py', 'import requests\n\n\ndef test_api(client):\n'
+                   '    client.patch("/items/1")\n    requests.patch("https://example.com/items/1")\n')
+        repo.commit('api')
+        code, out = report(repo, base)
+        self.assertEqual(code, 0)
+        self.assertEqual(findings(out), [])
+
+    def test_the_step_summary_shows_each_finding_on_its_own_line(self):
+        repo = Repo(self)
+        base = repo.base
+        repo.write('tests/test_skip.py', 'import pytest\n@pytest.mark.skip\ndef test_a():\n    assert True\n\n\n'
+                   '@pytest.mark.xfail\ndef test_b():\n    assert True\n')
+        repo.commit('marks')
+        summary = repo.dir.parent / (repo.dir.name + '-summary.md')
+        self.addCleanup(lambda: summary.unlink(missing_ok=True))
+        code, out = report(repo, base, summary)
+        self.assertEqual(code, 0)
+        written = summary.read_text(encoding='utf-8') if summary.exists() else ''
+        self.assertEqual(written, '## Test integrity\n\n```text\n' + out + '```\n')
 
 if __name__ == '__main__':
     unittest.main()

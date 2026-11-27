@@ -907,10 +907,37 @@ def retried(repo, p, line, claimed, before=None):
             and isinstance(login, str) and post.ours({'user': {'login': login}}, post.authors(repo)))
 
 
-def tied(repo, p, head):
+VERDICT = re.compile(r'VERDICT: (APPROVE|CHANGES) at ([0-9a-f]{40})[ \t]*')
+
+
+def approved_after(repo, number, head, after):
+    if number is None or not (isinstance(after, str) and TIME.fullmatch(after)):
+        return False
+    try:
+        ours = mine(repo, number)
+    except Stop:
+        return False
+    verdicts = [c for c in ours if first_line(c).startswith('VERDICT: ')]
+    if not verdicts:
+        return False
+    latest = verdicts[-1]
+    m = VERDICT.fullmatch(first_line(latest))
+    at = latest.get('created_at')
+    return bool(m and m.group(1) == 'APPROVE' and m.group(2) == head
+                and isinstance(at, str) and TIME.fullmatch(at) and at > after)
+
+
+def tied(repo, p, head, number=None):
     nodes = [n if isinstance(n, dict) else {} for n in (p.get('timelineItems') or {}).get('nodes') or []]
-    oid = (nodes[-1].get('beforeCommit') or {}).get('oid') if nodes else head
+    before = nodes[-1].get('beforeCommit') if nodes else None
+    oid = before.get('oid') if isinstance(before, dict) else (head if not nodes else None)
     if not (isinstance(oid, str) and SHA.fullmatch(oid)):
+        null_before = before is None or (isinstance(before, dict) and before.get('oid') is None)
+        if (null_before
+                and not any(isinstance(n.get('beforeCommit'), dict) and n['beforeCommit'].get('oid') == head
+                            for n in nodes)
+                and approved_after(repo, number, head, nodes[-1].get('createdAt'))):
+            return None
         return ('pending: the commit that last left the merge queue does not read; nothing was written, '
                 'so read it again next wake')
     exact = [n for n in nodes if (n.get('beforeCommit') or {}).get('oid') == head]
@@ -1081,7 +1108,7 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
         return 'queued; recorded ' + str(receipt('queued; receipt unconfirmed'))
     if state.startswith('stop: '):
         blocked(state[6:])
-    since = tied(repo, p, head)
+    since = tied(repo, p, head, number)
     on = p['isMergeQueueEnabled'] is True or since is not None
     kept, drops, claims = records_at(repo, number, head) if on else ([], [], [])
     if (kept or drops or claims) and '; it left the queue at ' in state:
@@ -1129,7 +1156,7 @@ def merge(repo, number, head, checks, body, ticket, checked, extra):
         return written(reason_of(state), 'its enqueue was sent' if admit.startswith('admit: ') else
                        'its merge was sent')
     if admit.startswith('admit: ') and state.startswith('open'):
-        since = tied(repo, back, head)
+        since = tied(repo, back, head, number)
         if since and since.startswith('pending: '):
             return written(reason_of(since), 'its enqueue was sent')
         line = verdict(repo, number, head, checks, since)

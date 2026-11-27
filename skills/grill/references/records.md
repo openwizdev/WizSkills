@@ -8,6 +8,16 @@ and a counter that increases across rounds. A repeated question uses the
 same ID with `, re-asked` appended before the separator. Use
 `## Summary, corrected (shown to <User> for confirmation)` for a correction.
 
+Keep `## Decision tree`, `## Glossary` and `## Parked` updated in place, and
+`## Unresolved` for a fleet-mode grill, and `## Present` for the role call.
+Those headings must not start with `Round` or `Summary`. A round holds one
+question. The helper still accepts up to three for an older round, and refuses
+a round outside one to three questions.
+
+Match a cockpit reply to the current unanswered request before reading its
+payload. Stale, malformed or uncertain context settles nothing. Apply the risk
+gates when the context matches.
+
 The template's risk lines are examples. Classify each round and summary
 independently as ordinary, live, release or publish on the first physical line
 after its heading. If risk is unknown, omit the locator and keep cockpit

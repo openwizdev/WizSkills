@@ -1,6 +1,6 @@
 ---
 name: triage
-description: Sort issues that arrive outside a plan graph (new bugs and ideas, a reviewer's low findings, a builder's needs-info question) with the project's triage labels, and give each a brief, a question, a road or an answer. Use when the five-minute check finds triage work, or when the user asks what needs their attention or names an issue to look at. Not for specs or their tickets, which belong to to-tickets. Starts nothing; only the user's approval does.
+description: Sort reported bugs, ideas and builder questions outside a plan graph. Use when the triage check finds work or the user asks which issues need attention.
 version: 0.5.0
 ---
 

@@ -1,0 +1,51 @@
+[
+  {
+    "id": "link-says-001",
+    "link_type": "says-vs-does",
+    "owner": "product",
+    "score": 9,
+    "verdict": "CONFIRMED",
+    "ends": [
+      {
+        "ref": "example/alpha:README.md#L12",
+        "quote": "Works fully offline.",
+        "seen": "2030-01-14"
+      },
+      {
+        "ref": "example/alpha:src/net.py#L40",
+        "quote": "raise OfflineError(\"network required\")",
+        "seen": "2030-01-14"
+      }
+    ],
+    "changes": "README line 12 must change or ticket example/alpha#88 must ship offline mode.",
+    "why_keep": "Offline mode may exist behind a flag the scout did not read.",
+    "route": "ticket"
+  },
+  {
+    "id": "link-pattern-001",
+    "link_type": "pattern",
+    "owner": "platform",
+    "score": 12,
+    "verdict": "PLAUSIBLE",
+    "ends": [
+      {
+        "ref": "example/alpha:src/gh.py#L20",
+        "quote": "sleep(2 ** attempt)",
+        "seen": "2030-01-14"
+      },
+      {
+        "ref": "example/beta:tools/gh.sh#L9",
+        "quote": "sleep 5",
+        "seen": "2030-01-14"
+      },
+      {
+        "ref": "example/gamma:lib/api.rs#L77",
+        "quote": "Duration::from_secs(attempt * 3)",
+        "seen": "2030-01-14"
+      }
+    ],
+    "changes": "Spec candidate: one shared retry rule before a fourth copy lands.",
+    "why_keep": "Each repository may have a different rate limit, so one rule could be wrong for some.",
+    "route": "spec-candidate"
+  }
+]

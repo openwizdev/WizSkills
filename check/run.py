@@ -553,6 +553,7 @@ def marketplace(root, version, out):
         out.add('manifest', MARKETPLACE, '`plugins[0].source` is `./`, the repository root')
     if 'version' in entry and entry['version'] != version:
         out.add('manifest', MARKETPLACE, f'`plugins[0].version` agrees with {PLUGIN}')
+    return data
 
 
 # ---- The standalone check and the suites ----

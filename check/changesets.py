@@ -4,10 +4,13 @@ import datetime
 import json
 import os
 import re
+import runpy
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +25,7 @@ CHANGESETS = 'node_modules/@changesets/cli/bin.js'
 IGNORED = ('AGENTS.md', 'CLAUDE.md', 'GEMINI.md')
 IGNORED_WHY = 'is a name Changesets ignores: rename it (see .changeset/README.md)'
 FIRST = '0.2.0'
+RELEASE_STAGE = '.wizskills-release'
 
 
 class Unusable(Exception):
@@ -213,24 +217,19 @@ def note_section(notes, versions):
     return lines
 
 
-def market_body(version):
+def market_body(previous, version):
     path = ROOT / '.claude-plugin/marketplace.json'
-    if not path.is_file():
+    if not os.path.lexists(path):
         return None, None
-    try:
-        market = json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return '.claude-plugin/marketplace.json is not a JSON object', None
-    if not isinstance(market, dict):
-        return '.claude-plugin/marketplace.json is not a JSON object', None
-    if 'plugins' not in market:
+    checker = runpy.run_path(str(Path(__file__).with_name('run.py')))
+    out = checker['Findings']()
+    market = checker['marketplace'](ROOT, previous, out)
+    if out:
+        return f'{out[0][1]}: {out[0][3]}', None
+    entry = market['plugins'][0]
+    if 'version' not in entry:
         return None, None
-    plugins = market['plugins']
-    if not (isinstance(plugins, list) and plugins and isinstance(plugins[0], dict)):
-        return '.claude-plugin/marketplace.json `plugins` must start with one plugin object', None
-    if 'version' not in plugins[0]:
-        return None, None
-    plugins[0]['version'] = version
+    entry['version'] = version
     return None, json.dumps(market, indent=2, ensure_ascii=False) + '\n'
 
 
@@ -241,41 +240,76 @@ def rewritten_skill(path, version):
                      for i, line in enumerate(lines))
 
 
-def apply_release(pairs):
-    saved = []
+@contextmanager
+def release_stage(write):
+    stage = ROOT / RELEASE_STAGE
+    pending = (f'{RELEASE_STAGE} already exists: wait for the running release. After an interruption, '
+               f'if {RELEASE_STAGE}/applying exists, restore the remaining originals from {RELEASE_STAGE}/before. '
+               f'Then remove {RELEASE_STAGE} and retry.')
+    if not write:
+        if os.path.lexists(stage):
+            raise Unusable(pending)
+        yield None
+        return
+    try:
+        stage.mkdir(mode=0o700)
+    except FileExistsError:
+        raise Unusable(pending) from None
+    except OSError as why:
+        raise Unusable(f'cannot create release staging ({why.__class__.__name__})') from why
+    try:
+        yield stage
+    finally:
+        if not (stage / 'applying').exists():
+            try:
+                shutil.rmtree(stage)
+            except OSError as why:
+                raise Unusable(f'release files are settled but {RELEASE_STAGE} could not be removed') from why
+
+
+def apply_release(pairs, stage):
+    applying = stage / 'applying'
+    staged = []
     try:
         for path, new in pairs:
-            old = path.read_bytes() if path.exists() else None
-            mode = path.stat().st_mode if path.exists() else None
-            if new is None:
+            mode = path.lstat().st_mode
+            if not stat.S_ISREG(mode):
+                raise OSError('release destination is not a regular file')
+            relative = path.relative_to(ROOT)
+            before = stage / 'before' / relative
+            before.parent.mkdir(parents=True, exist_ok=True)
+            os.link(path, before)
+            after = None
+            if new is not None:
+                if not (mode & 0o222 and os.access(path, os.W_OK)):
+                    raise PermissionError('release destination is not writable')
+                after = stage / 'after' / relative
+                after.parent.mkdir(parents=True, exist_ok=True)
+                after.write_text(new, encoding='utf-8')
+                after.chmod(stat.S_IMODE(mode))
+            staged.append((path, before, after))
+        applying.touch()
+    except (OSError, KeyboardInterrupt) as why:
+        raise Unusable('could not prepare release files; no release files were changed '
+                       f'({why.__class__.__name__})') from why
+    attempted = []
+    try:
+        for path, before, after in staged:
+            attempted.append((path, before))
+            if after is None:
                 path.unlink()
             else:
-                path.write_text(new, encoding='utf-8')
-            saved.append((path, old, mode))
-    except OSError as why:
-        for path, old, mode in reversed(saved):
-            if old is None:
-                path.unlink(missing_ok=True)
-            else:
-                path.write_bytes(old)
-                if mode is not None:
-                    path.chmod(mode)
-        raise Unusable('a release write failed; the previous files were restored '
-                       f'({why.__class__.__name__})')
-
-
-def bullets(changelog):
-    out, seen = [], 0
-    for line in changelog.read_text(encoding='utf-8').split('\n'):
-        if line.startswith('## '):
-            seen += 1
-            if seen > 1:
-                break
-        elif seen and line.startswith('- '):
-            out.append(line[2:].strip())
-        elif seen and line.startswith('  ') and out:
-            out[-1] += ' ' + line.strip()
-    return [' '.join(b.split()) for b in out]
+                os.replace(after, path)
+    except (OSError, KeyboardInterrupt) as why:
+        try:
+            for path, before in reversed(attempted):
+                os.replace(before, path)
+        except (OSError, KeyboardInterrupt) as rollback:
+            raise Unusable(f'release rollback could not finish ({rollback.__class__.__name__}); '
+                           f'restore the remaining originals from {RELEASE_STAGE}/before before retrying') from rollback
+        applying.unlink()
+        raise Unusable(f'a release write failed; the previous files were restored ({why.__class__.__name__})') from why
+    applying.unlink()
 
 
 def plan(names, versions, plugin_version, notes):
@@ -306,14 +340,12 @@ def plan(names, versions, plugin_version, notes):
         if left:
             raise Unusable('Changesets did not process ' + ', '.join(f'.changeset/{n}' for n in left)
                            + ': nothing written')
-        new, notes_by = {}, {}
+        new = {}
         for name, folder in packages.items():
             version = json.loads((folder / 'package.json').read_text())['version']
             if name != BUNDLE and version != versions[name]:
                 new[name] = version
-            if (folder / 'CHANGELOG.md').is_file():
-                notes_by[name] = bullets(folder / 'CHANGELOG.md')
-        return new, notes_by
+        return new
 
 
 def older_skills(path, text):
@@ -327,7 +359,7 @@ def older_skills(path, text):
     return tree_skills(commit)
 
 
-def release(since, date, write, first=False):
+def release(since, date, stage, first=False):
     names = sorted(e.name for e in (ROOT / 'skills').iterdir() if (e / 'SKILL.md').is_file())
     if BUNDLE in names:
         raise Unusable(f'a skill may not be named `{BUNDLE}`, the bundle')
@@ -381,7 +413,7 @@ def release(since, date, write, first=False):
     else:
         bump, why = bundle_bump(skill_bumps, explicit, added, removed)
         version = bumped(plugin_data['version'], bump)
-    new, _notes_by = plan(names, versions, plugin_data['version'], notes)
+    new = plan(names, versions, plugin_data['version'], notes)
     if first:
         new = {}
     display = {**versions, **new}
@@ -393,7 +425,7 @@ def release(since, date, write, first=False):
     print(f'why: {why}')
     for n in sorted(new):
         print(f'skill {n}: {versions[n]} -> {new[n]} ({skill_bumps[n]})')
-    if not write:
+    if stage is None:
         print('dry run: nothing written')
         print('\n' + '\n'.join(section))
         return 0
@@ -402,7 +434,7 @@ def release(since, date, write, first=False):
     header = '# Changelog\n\n'
     if not changelog.startswith(header):
         raise Unusable('CHANGELOG.md does not open with `# Changelog` and a blank line')
-    problem, market = market_body(version)
+    problem, market = market_body(plugin_data['version'], version)
     if problem:
         print(f'release: {problem}')
         return 1
@@ -414,7 +446,7 @@ def release(since, date, write, first=False):
         pairs.append((ROOT / '.claude-plugin/marketplace.json', market))
     pairs.append((changelog_path, header + '\n'.join(section) + '\n\n' + changelog[len(header):]))
     pairs.extend((path, None) for path in note_files)
-    apply_release(pairs)
+    apply_release(pairs, stage)
     print('\n' + '\n'.join(section))
     s, c = len(new), len(note_files)
     print(f'written: {s} skill{"s" if s != 1 else ""}, plugin.json, CHANGELOG.md; '
@@ -446,7 +478,8 @@ def main(argv):
     try:
         if args.command == 'check':
             return check(args.base)
-        return release(args.since, args.date, args.write, args.first)
+        with release_stage(args.write) as stage:
+            return release(args.since, args.date, stage, args.first)
     except Unusable as why:
         print(f'changesets: {why}', file=sys.stderr)
         return 2

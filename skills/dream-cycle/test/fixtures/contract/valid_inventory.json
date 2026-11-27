@@ -1,0 +1,76 @@
+{
+  "confirmed": {
+    "schema": "openwiz.dream-cycle.inventory.v1",
+    "repo": "example/alpha",
+    "days": 14,
+    "pr_idle_days": 7,
+    "generated_at": "2030-01-15T00:00:00Z",
+    "sections": {
+      "stale_paths": {
+        "status": "ok",
+        "total": 2,
+        "items": [{"folder": "src/legacy", "count": 2, "oldest": "2029-11-01"}],
+        "reason": null
+      },
+      "orphan_branches": {
+        "status": "ok",
+        "total": 1,
+        "items": [{"branch": "old-experiment", "merged": false, "last_commit": "2029-12-01"}],
+        "reason": null
+      },
+      "idle_issues": {
+        "status": "ok",
+        "total": 1,
+        "items": [{"number": 12, "title": "Old cleanup", "updated_at": "2029-12-10T00:00:00Z"}],
+        "reason": null
+      },
+      "idle_prs": {
+        "status": "ok",
+        "total": 0,
+        "items": [],
+        "reason": null
+      },
+      "empty_milestones": {
+        "status": "ok",
+        "total": 0,
+        "items": [],
+        "reason": null
+      },
+      "skipped_tests": {
+        "status": "ok",
+        "total": 1,
+        "items": [{"path": "tests/test_old.py", "line": 14, "marker": "skip"}],
+        "reason": null
+      },
+      "generated_files": {
+        "status": "ok",
+        "total": 1,
+        "items": [{"path": "src/__pycache__/old.pyc", "kind": ".pyc"}],
+        "reason": null
+      }
+    },
+    "unconfirmed": []
+  },
+  "partial_unconfirmed": {
+    "schema": "openwiz.dream-cycle.inventory.v1",
+    "repo": "example/alpha",
+    "days": 14,
+    "pr_idle_days": 7,
+    "generated_at": "2030-01-15T00:00:00Z",
+    "sections": {
+      "stale_paths": {"status": "ok", "total": 0, "items": [], "reason": null},
+      "orphan_branches": {"status": "unconfirmed", "total": null, "items": [], "reason": "gh api failed: exit 1"},
+      "idle_issues": {"status": "unconfirmed", "total": null, "items": [], "reason": "gh api failed: exit 1"},
+      "idle_prs": {"status": "unconfirmed", "total": null, "items": [], "reason": "gh api failed: exit 1"},
+      "empty_milestones": {"status": "unconfirmed", "total": null, "items": [], "reason": "gh api failed: exit 1"},
+      "skipped_tests": {"status": "ok", "total": 0, "items": [], "reason": null},
+      "generated_files": {"status": "ok", "total": 0, "items": [], "reason": null}
+    },
+    "unconfirmed": [
+      {"source": "orphan_branches", "reason": "gh api failed: exit 1"},
+      {"source": "idle_issues", "reason": "gh api failed: exit 1"},
+      {"source": "idle_prs", "reason": "gh api failed: exit 1"},
+      {"source": "empty_milestones", "reason": "gh api failed: exit 1"}
+    ]
+  }
+}

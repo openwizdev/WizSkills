@@ -658,6 +658,56 @@ def follow_up(a):
     raise Stop("unknown: not found on read-back; list the issues before filing again")
 
 
+RULES_FILE = "docs/agents/review-rules.md"
+NEVER_LINE = re.compile(r"- (.+?): declined ([1-9][0-9]*), ([0-9]{4}-[0-9]{2}-[0-9]{2})")
+PATH_LINE = re.compile(r"- `([^`]+)`: (\S.*)")
+
+
+def glob_regex(glob):
+    out, i = [], 0
+    while i < len(glob):
+        if glob.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif glob.startswith("**", i):
+            out.append(".*")
+            i += 2
+        else:
+            out.append({"*": "[^/]*", "?": "[^/]"}.get(glob[i], re.escape(glob[i])))
+            i += 1
+    return re.compile("".join(out))
+
+
+def review_rules(base, head, findings):
+    def git(*args):
+        return subprocess.run(["git", *args], text=True, capture_output=True)
+    shown = git("show", f"{base}:{RULES_FILE}")
+    if shown.returncode != 0:
+        if git("rev-parse", "--verify", "-q", f"{base}^{{commit}}").returncode != 0:
+            raise Refusal(f"no commit {base} in this checkout")
+        return [f"review rules: none at {base}"] + [f"report: {f}" for f in findings]
+    diff = git("diff", "--name-only", "-z", f"{base}...{head}")
+    if diff.returncode != 0:
+        raise Refusal(f"git diff {base}...{head} failed")
+    changed = [path for path in diff.stdout.split("\0") if path]
+    never, lines, section = {}, [], None
+    for raw in shown.stdout.splitlines():
+        line = raw.strip()
+        if line.startswith("## "):
+            section = line[3:]
+        elif section in ("Never flag", "Path rules") and line.startswith("- "):
+            if section == "Never flag" and (m := NEVER_LINE.fullmatch(line)):
+                name = m[1].strip("`").strip()
+                never[name.casefold()] = name
+                lines.append(f"never flag: {name} (declined {m[2]}, {m[3]})")
+            elif section == "Path rules" and (m := PATH_LINE.fullmatch(line)):
+                if any(glob_regex(m[1]).fullmatch(path) for path in changed):
+                    lines.append(f"path rule: `{m[1]}`: {m[2]}")
+            else:
+                raise Refusal(f"{RULES_FILE} at {base}: unreadable {section} line: {line}")
+    return lines + [("skip: " if f.strip().casefold() in never else "report: ") + f for f in findings]
+
+
 DESCRIPTION = (
     'Review mechanics for review-ticket: pin the head, check and post the report, file a follow-up.\n'
     '\n'
@@ -783,6 +833,10 @@ def main(argv=None):
     for name in ("snapshot", "verify"):
         c = sub.add_parser(name, help=f"{name} the reviewer's checkout: HEAD and the working tree")
         c.add_argument("file", help="the snapshot file, in the run's temp folder outside the checkout")
+    r = sub.add_parser("rules")
+    r.add_argument("--base", default="origin/main")
+    r.add_argument("--head", default="HEAD")
+    r.add_argument("--finding", action="append", default=[], help="a candidate finding's class; repeat")
     a = p.parse_args(argv)
     try:
         if a.command in ("snapshot", "verify"):
@@ -792,6 +846,9 @@ def main(argv=None):
             lines = self_check(a.description, a.base)
             print("\n".join(lines))
             return 0 if lines == ["self-check: ok"] else 1
+        if a.command == "rules":
+            print("\n".join(review_rules(a.base, a.head, a.finding)))
+            return 0
         if a.command == "pin":
             print(pin(a.repo, a.pr, a.head, a.ticket))
         elif a.command == "check":

@@ -69,7 +69,7 @@ if [ "${1:-}" = --bundle ]; then
   repository "$2" || die 'GH_REPO must be owner/name'
   [ $# = 2 ] || spec_number "$3" || die "FLEET_SPEC must be a spec's number"
   source=$(cd -P "$(dirname "$0")/../.." && pwd) || die "can't find the installed skills"
-  files='launch-fleet/scripts/loop.sh launch-fleet/scripts/fleet.sh launch-fleet/scripts/records.py launch-fleet/scripts/budget.py to-tickets/revision.sh to-tickets/check-links.sh launch-fleet/scripts/carried/alarm.py launch-fleet/scripts/github-app/agent-token.py'
+  files='launch-fleet/scripts/loop.sh launch-fleet/scripts/fleet.sh launch-fleet/scripts/records.py launch-fleet/scripts/budget.py to-tickets/revision.sh to-tickets/check-links.sh launch-fleet/scripts/carried/alarm.py launch-fleet/scripts/github-app/agent-token.py setup/scripts/settings.py'
   for file in $files; do
     [ -r "$source/$file" ] || die "can't read installed $file"
     # The quoted heredoc must preserve every byte, without interpreting shell
@@ -89,7 +89,7 @@ runtime=$(mktemp -d) || { echo "loop.sh: can't unpack the bundled loop" >&2; exi
 trap 'rm -rf "$runtime"' EXIT
 trap 'exit 2' HUP INT TERM
 mkdir -p "$runtime/skills/launch-fleet/scripts/carried" "$runtime/skills/launch-fleet/scripts/github-app" \
-  "$runtime/skills/to-tickets" || exit 2
+  "$runtime/skills/to-tickets" "$runtime/skills/setup/scripts" || exit 2
 OPENWIZ_BUNDLE_BOOTSTRAP
     for file in $files; do
       printf 'cat > "$runtime/skills/%s" <<%s || exit 2\n' "$file" "'OPENWIZ_BUNDLED_HELPER_EOF'"
@@ -111,8 +111,19 @@ export GH_REPO
 inside=
 case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
 unset LAUNCH_FLEET_TOKEN_STEP
+app_identity() {
+  restore_today_account || return 1
+  app_settings=$(gh api "repos/$GH_REPO/contents/docs/agents/fleet.md" 2> /dev/null < /dev/null) || return 1
+  printf '%s' "$app_settings" \
+    | python3 -I "${LAUNCH_FLEET_RUNTIME:-$(cd -P "$(dirname "$0")/../.." && pwd)}/setup/scripts/settings.py" app-identity \
+      > /dev/null 2>&1
+}
 identity_off=
-if [ -n "$inside" ] || [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] || [ -n "$app_key_set" ]; then
+if [ -n "$inside" ]; then
+  identity_off=1
+elif [ -z "${OPENWIZ_TOKEN_SERVICE:-}" ]; then
+  if [ -n "$app_key_set" ]; then identity_off=1; fi
+elif ! app_identity; then
   identity_off=1
 fi
 if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ] && [ -z "$identity_off" ]; then

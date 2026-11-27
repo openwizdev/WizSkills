@@ -1,6 +1,6 @@
 ---
 name: ask-wiz
-description: Recommend the skill or flow for the user's question, including OpenWiz, installed and discoverable skills. User-started only; agents may suggest ask-wiz when the user seems confused, but never run it in their own workflows.
+description: Recommend the next skill or workflow. Use when the user starts Ask Wiz to ask what skill to use or what to do next.
 disable-model-invocation: true
 version: 0.2.2
 ---
@@ -31,6 +31,7 @@ Done when the user has one named recommendation with its start words, and nothin
 | Skill | Use it to |
 | --- | --- |
 | `grill` | Settle a design with the user, ending in a confirmed summary |
+| `role-call` | Record who replies present before a grill |
 | `to-spec` | Turn a confirmed grill into a spec and its narrated video |
 | `to-tickets` | Turn a confirmed spec into tickets and their blocking edges |
 | `launch-fleet` | Run an approved plan through its fleet and merge rules, between sessions too |
@@ -41,6 +42,7 @@ Done when the user has one named recommendation with its start words, and nothin
 | `diagnose` | Find a hard bug's cause from a tight failing loop, in the caller's scope |
 | `feedback` | Report an OpenWiz problem as one public issue, after its exact preview and your yes |
 | `huntr` | Find and prove small unplanned work under its configured approval gate |
+| `son-of-anton` | Attack your own factory on a schedule through `huntr`'s attack mode and file what is proven |
 | `wayfind` | Map an effort too big or unclear for one grill, then hand it to `to-spec` |
 | `hill-climb` | Improve an outcome through judged candidates and human checkpoints |
 | `image` | Make a picture, a UI target or evidence from a real page |
@@ -49,9 +51,10 @@ Done when the user has one named recommendation with its start words, and nothin
 | `setup` | Configure a project's issue tracker, labels and fleet settings |
 | `handoff` | Give a fresh orchestrator the project's durable state |
 | `write-driver` | Write and prove an OpenWiz driver for your own host, from one pasted line |
+| `dream-cycle` | Run an organization-wide read-only review into a private report and confirmed tickets |
 | `ask-wiz` | Choose a skill or flow when unsure, started by the user |
 
-At a phase boundary (a design settled, a plan written, a ticket built, a result checked), read [the CloudRoom thread guide](PHASE-BOUNDARIES.md) to choose whether to keep going, start a fresh thread from a handoff, or send a bounded task to a child thread.
+At a phase boundary, read [the CloudRoom thread guide](PHASE-BOUNDARIES.md) to choose whether to keep going, start a fresh thread from a handoff, or send a bounded task to a child thread.
 
 ## When no skill fits
 

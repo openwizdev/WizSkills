@@ -1,0 +1,550 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:openwiz:schema:dream-cycle:v1",
+  "title": "openwiz:dream-cycle v1",
+  "description": "Data shapes for the dream-cycle.v1 contract: scout findings lines (including kind: link), prover verdict lines, append-only link ledger lines, report link cards, repository inventory output, and merged findings. See dream-cycle.v1.md for report sections, project settings, CLI seams, and guards.",
+  "$defs": {
+    "absent": {
+      "not": {}
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "non_empty_line": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "line_or_empty": {
+      "type": "string",
+      "maxLength": 500,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+    },
+    "evidence_entry": {
+      "description": "One verifiable command and its short result, formatted as '<command> -> <short result>'.",
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 500,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+ -> [^\\u0000-\\u001f\\u007f]+$"
+    },
+    "iso_date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "utc_timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "link_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f]+$"
+    },
+    "link_type": {
+      "enum": [
+        "says-vs-does",
+        "promise-to-work",
+        "need-to-person",
+        "enemy-move-to-us",
+        "spend-to-use",
+        "answers",
+        "pattern",
+        "duplicates",
+        "drifted-copy",
+        "contradicts",
+        "unknown"
+      ]
+    },
+    "link_route": {
+      "enum": [
+        "ticket",
+        "pillar-inbox",
+        "people-draft",
+        "question-comment",
+        "spec-candidate"
+      ]
+    },
+    "link_end": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "quote", "seen"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/link_ref" },
+        "quote": { "$ref": "#/$defs/non_empty_line" },
+        "seen": { "$ref": "#/$defs/iso_date" }
+      }
+    },
+    "finding": {
+      "description": "One scout finding line (JSONL). Field names are pinned to the contract.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "repo",
+        "paths",
+        "what",
+        "evidence",
+        "why_keep",
+        "confidence",
+        "size",
+        "ticket"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["delete", "fix", "link", "summary"] },
+        "repo": { "$ref": "#/$defs/non_empty_line" },
+        "paths": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/non_empty_line" }
+        },
+        "what": { "$ref": "#/$defs/non_empty_line" },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/evidence_entry" }
+        },
+        "why_keep": { "$ref": "#/$defs/line_or_empty" },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "size": { "enum": ["S", "M", "L"] },
+        "ticket": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            }
+          ]
+        },
+        "link_type": { "$ref": "#/$defs/link_type" },
+        "ends": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/link_end" }
+        },
+        "changes": { "$ref": "#/$defs/non_empty_line" },
+        "sources": { "type": "integer", "minimum": 1 },
+        "owner": { "$ref": "#/$defs/non_empty_line" },
+        "route": { "$ref": "#/$defs/link_route" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "kind": { "const": "delete" } }
+          },
+          "then": {
+            "properties": {
+              "paths": { "minItems": 1 },
+              "why_keep": { "minLength": 1 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "const": "link" } }
+          },
+          "then": {
+            "required": ["link_type", "ends", "changes", "sources", "owner", "route"],
+            "properties": {
+              "why_keep": { "minLength": 1 },
+              "ends": { "minItems": 2 }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["kind", "link_type"],
+            "properties": {
+              "kind": { "const": "link" },
+              "link_type": { "const": "pattern" }
+            }
+          },
+          "then": {
+            "properties": {
+              "ends": { "minItems": 3 }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["kind", "link_type"],
+            "properties": {
+              "kind": { "const": "link" },
+              "link_type": { "not": { "const": "pattern" } }
+            }
+          },
+          "then": {
+            "properties": {
+              "ends": { "minItems": 2, "maxItems": 2 }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["kind", "route"],
+            "properties": {
+              "kind": { "const": "link" },
+              "route": { "const": "ticket" }
+            }
+          },
+          "then": {
+            "properties": {
+              "ticket": { "type": "string" }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["kind", "route"],
+            "properties": {
+              "kind": { "const": "link" },
+              "route": { "not": { "const": "ticket" } }
+            }
+          },
+          "then": {
+            "properties": {
+              "ticket": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "properties": { "kind": { "const": "link" } }
+            }
+          },
+          "then": {
+            "properties": {
+              "link_type": { "$ref": "#/$defs/absent" },
+              "ends": { "$ref": "#/$defs/absent" },
+              "changes": { "$ref": "#/$defs/absent" },
+              "sources": { "$ref": "#/$defs/absent" },
+              "owner": { "$ref": "#/$defs/absent" },
+              "route": { "$ref": "#/$defs/absent" }
+            }
+          }
+        }
+      ]
+    },
+    "verdict": {
+      "description": "One prover verdict line (JSONL) re-running a finding's evidence.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "verdict", "reason", "evidence", "blind", "changes_confirmed"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "verdict": { "enum": ["CONFIRMED", "PLAUSIBLE", "REJECTED"] },
+        "reason": { "$ref": "#/$defs/non_empty_line" },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/evidence_entry" }
+        },
+        "blind": { "type": "boolean" },
+        "changes_confirmed": { "type": ["boolean", "null"] }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "verdict": { "const": "CONFIRMED" } }
+          },
+          "then": {
+            "properties": {
+              "changes_confirmed": { "enum": [true, null] }
+            }
+          }
+        }
+      ]
+    },
+    "ledger_entry": {
+      "description": "One append-only link ledger line (JSONL). Lines are never deleted; closing a line appends a copy with invalid_at set.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "state",
+        "link_type",
+        "ends",
+        "changes",
+        "owner",
+        "valid_from",
+        "invalid_at",
+        "reason",
+        "superseded_by",
+        "last_cited"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "state": {
+          "enum": [
+            "proposed",
+            "accepted",
+            "rejected",
+            "later",
+            "expired",
+            "superseded"
+          ]
+        },
+        "link_type": { "$ref": "#/$defs/link_type" },
+        "ends": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/link_end" }
+        },
+        "changes": { "$ref": "#/$defs/non_empty_line" },
+        "owner": { "$ref": "#/$defs/non_empty_line" },
+        "valid_from": { "$ref": "#/$defs/iso_date" },
+        "invalid_at": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/iso_date" }
+          ]
+        },
+        "reason": { "$ref": "#/$defs/line_or_empty" },
+        "superseded_by": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/id" }
+          ]
+        },
+        "last_cited": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/iso_date" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "link_type": { "const": "pattern" } }
+          },
+          "then": {
+            "properties": {
+              "ends": { "minItems": 3 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "link_type": { "not": { "const": "pattern" } } }
+          },
+          "then": {
+            "properties": {
+              "ends": { "minItems": 2, "maxItems": 2 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": { "enum": ["rejected", "later", "expired", "superseded"] }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": { "minLength": 1 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "state": { "const": "superseded" } }
+          },
+          "then": {
+            "properties": {
+              "superseded_by": { "$ref": "#/$defs/id" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "state": { "not": { "const": "superseded" } } }
+          },
+          "then": {
+            "properties": {
+              "superseded_by": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "link_card": {
+      "description": "Structured representation of one link card rendered in the report's ## Top links section.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "link_type",
+        "owner",
+        "score",
+        "verdict",
+        "ends",
+        "changes",
+        "why_keep",
+        "route"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "link_type": { "$ref": "#/$defs/link_type" },
+        "owner": { "$ref": "#/$defs/non_empty_line" },
+        "score": { "type": "integer", "minimum": 1 },
+        "verdict": { "enum": ["CONFIRMED", "PLAUSIBLE"] },
+        "ends": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/link_end" }
+        },
+        "changes": { "$ref": "#/$defs/non_empty_line" },
+        "why_keep": { "$ref": "#/$defs/non_empty_line" },
+        "route": { "$ref": "#/$defs/link_route" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "link_type": { "const": "pattern" } }
+          },
+          "then": {
+            "properties": {
+              "ends": { "minItems": 3 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "link_type": { "not": { "const": "pattern" } } }
+          },
+          "then": {
+            "properties": {
+              "ends": { "minItems": 2, "maxItems": 2 }
+            }
+          }
+        }
+      ]
+    },
+    "inventory_section_ok": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "total", "items", "reason"],
+      "properties": {
+        "status": { "const": "ok" },
+        "total": { "type": "integer", "minimum": 0 },
+        "items": { "type": "array" },
+        "reason": { "type": "null" }
+      }
+    },
+    "inventory_section_unconfirmed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "total", "items", "reason"],
+      "properties": {
+        "status": { "const": "unconfirmed" },
+        "total": { "type": "null" },
+        "items": { "type": "array", "maxItems": 0 },
+        "reason": { "$ref": "#/$defs/non_empty_line" }
+      }
+    },
+    "inventory_section": {
+      "oneOf": [
+        { "$ref": "#/$defs/inventory_section_ok" },
+        { "$ref": "#/$defs/inventory_section_unconfirmed" }
+      ]
+    },
+    "unconfirmed_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "reason"],
+      "properties": {
+        "source": { "$ref": "#/$defs/non_empty_line" },
+        "reason": { "$ref": "#/$defs/non_empty_line" }
+      }
+    },
+    "inventory": {
+      "description": "Compact read-only repository inventory printed by scripts/inventory.py.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "repo",
+        "days",
+        "pr_idle_days",
+        "generated_at",
+        "sections",
+        "unconfirmed"
+      ],
+      "properties": {
+        "schema": { "const": "openwiz.dream-cycle.inventory.v1" },
+        "repo": { "$ref": "#/$defs/non_empty_line" },
+        "days": { "type": "integer", "minimum": 1 },
+        "pr_idle_days": { "type": "integer", "minimum": 1 },
+        "generated_at": { "$ref": "#/$defs/utc_timestamp" },
+        "sections": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stale_paths",
+            "orphan_branches",
+            "idle_issues",
+            "idle_prs",
+            "empty_milestones",
+            "skipped_tests",
+            "generated_files"
+          ],
+          "properties": {
+            "stale_paths": { "$ref": "#/$defs/inventory_section" },
+            "orphan_branches": { "$ref": "#/$defs/inventory_section" },
+            "idle_issues": { "$ref": "#/$defs/inventory_section" },
+            "idle_prs": { "$ref": "#/$defs/inventory_section" },
+            "empty_milestones": { "$ref": "#/$defs/inventory_section" },
+            "skipped_tests": { "$ref": "#/$defs/inventory_section" },
+            "generated_files": { "$ref": "#/$defs/inventory_section" }
+          }
+        },
+        "unconfirmed": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/unconfirmed_entry" }
+        }
+      }
+    },
+    "merged": {
+      "description": "Merged, validated, deduplicated, and ranked findings written by scripts/dream.py merge.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "findings", "dropped", "counts"],
+      "properties": {
+        "schema": { "const": "openwiz.dream-cycle.merged.v1" },
+        "findings": { "type": "array" },
+        "dropped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["file", "line", "reason"],
+            "properties": {
+              "file": { "$ref": "#/$defs/non_empty_line" },
+              "line": { "type": "integer", "minimum": 1 },
+              "reason": { "$ref": "#/$defs/non_empty_line" }
+            }
+          }
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input", "valid", "dropped", "merged"],
+          "properties": {
+            "input": { "type": "integer", "minimum": 0 },
+            "valid": { "type": "integer", "minimum": 0 },
+            "dropped": { "type": "integer", "minimum": 0 },
+            "merged": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}

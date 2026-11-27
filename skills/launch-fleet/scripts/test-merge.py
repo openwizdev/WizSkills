@@ -668,7 +668,7 @@ class Documented(unittest.TestCase):
     (the installed skill lives outside it), so the project's FM4 command resolves there."""
 
     def commands(self):
-        text = (HERE.parent / 'SKILL.md').read_text()
+        text = (HERE.parent / 'references/merging.md').read_text()
         found = re.findall(r'`(python3 -I [^`]*merge\.py"? (?:admit|merge) [^`]*)`', text)
         self.assertEqual(len(found), 2, found)
         values = {"<this skill's folder>": str(HERE.parent), '<owner>/<repo>': REPO, '<P>': '7',
@@ -698,7 +698,7 @@ class Documented(unittest.TestCase):
 
     def archive_rule(self):
         """The archive row's settle command, filled, and the results it may archive after."""
-        row = next(x for x in (HERE.parent / 'SKILL.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
+        row = next(x for x in (HERE.parent / 'references/merging.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
         found = re.findall(r'`(python3 -I [^`]*merge\.py"? settle [^`]*)`', row)
         self.assertEqual(len(found), 1, row)
         command = found[0]
@@ -1642,7 +1642,7 @@ class Landed(unittest.TestCase):
 
     def archive(self, w):
         """One wake's archive row, filled for this fix: (archives, its output) (#1848 R1)."""
-        row = next(x for x in (HERE.parent / 'SKILL.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
+        row = next(x for x in (HERE.parent / 'references/merging.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
         command = re.findall(r'`(python3 -I [^`]*merge\.py"? settle [^`]*)`', row)[0]
         for name, value in {"<this skill's folder>": str(HERE.parent), '<owner>/<repo>': DEST, '<P>': '9201',
                             '<N>': '9106'}.items():
@@ -1676,7 +1676,7 @@ class Landed(unittest.TestCase):
                 self.assertEqual(self.archive(w)[0], True)
                 self.assertEqual(w.bodies(9101), [LANDED])
         # The row settles every merged pull request, so a direct merge's landed comment is retried too.
-        row = next(x for x in (HERE.parent / 'SKILL.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
+        row = next(x for x in (HERE.parent / 'references/merging.md').read_text().splitlines() if x.startswith('| `archive #N` |'))
         self.assertNotIn('through the merge queue', row)
 
     def test_two_runs_racing_on_one_report_leave_the_earliest_comment_only(self):
@@ -2395,6 +2395,57 @@ class Drops(unittest.TestCase):
         blocked = 'launch-fleet: merge blocked %s: not mergeable: CONFLICTING' % HEAD
         self.assertEqual(w.bodies(7)[-2:], [CLAIMED, blocked])
         self.assertEqual(self.enqueues(w), [{'enqueue': 'PR_synthetic7', 'head': HEAD}])
+
+    def test_3131_null_before_commit_removal_requeues_newer_approved_head(self):
+        green = [run_of('SUCCESS', '2026-11-22T10:10:00Z')]
+        approve = dict(comment(4010, 'VERDICT: APPROVE at %s\n\nNext: none open.' % HEAD),
+                       created_at='2026-11-22T10:15:00Z')
+        null_removal = {'createdAt': REMOVED_AT, 'reason': 'merge_conflict', 'actor': BOT, 'beforeCommit': None}
+        pending = ('pending: the commit that last left the merge queue does not read; nothing was written, '
+                   'so read it again next wake')
+        for name, removals in [
+                ('null beforeCommit', [null_removal]),
+                ('null beforeCommit.oid', [dict(null_removal, beforeCommit={'oid': None})]),
+                ('earlier other-head removal then null removal',
+                 [{'createdAt': '2026-11-22T09:55:00Z', 'reason': 'failed_checks', 'actor': BOT,
+                   'beforeCommit': {'oid': OTHER}}, null_removal])]:
+            with self.subTest(case=name):
+                w = World(self, pr=pr(isMergeQueueEnabled=True, checks=green, removals=removals),
+                          comments={'7': [approve]})
+                project(w, PRINTS)
+                self.assertEqual(self.merge(w), (0, 'queued; recorded 5001'))
+                self.assertEqual(w.writes(), [{'enqueue': 'PR_synthetic7', 'head': HEAD},
+                                              {'post': 7, 'body': self.receipt}])
+                self.assertEqual(w.bodies(7), [approve['body'], self.receipt])
+        for name, removals, comments in [
+                ('older approval', [null_removal],
+                 [dict(comment(4010, 'VERDICT: APPROVE at ' + HEAD), created_at='2026-11-22T09:50:00Z')]),
+                ('same-second approval', [null_removal],
+                 [dict(comment(4010, 'VERDICT: APPROVE at ' + HEAD), created_at=REMOVED_AT)]),
+                ('outsider approval', [null_removal],
+                 [dict(comment(4010, 'VERDICT: APPROVE at ' + HEAD, login='someone-else'),
+                       created_at='2026-11-22T10:15:00Z')]),
+                ('approval at another head', [null_removal],
+                 [dict(comment(4010, 'VERDICT: APPROVE at ' + OTHER), created_at='2026-11-22T10:15:00Z')]),
+                ('newer changes after approval', [null_removal],
+                 [approve, dict(comment(4011, 'VERDICT: CHANGES at ' + HEAD), created_at='2026-11-22T10:16:00Z')]),
+                ('earlier removal named this head',
+                 [{'createdAt': '2026-11-22T09:55:00Z', 'reason': 'failed_checks', 'actor': BOT,
+                   'beforeCommit': {'oid': HEAD}}, null_removal],
+                 [approve]),
+                ('malformed non-null oid', [dict(null_removal, beforeCommit={'oid': 'not-a-sha'})], [approve])]:
+            with self.subTest(refused=name):
+                w = World(self, pr=pr(isMergeQueueEnabled=True, checks=green, removals=removals),
+                          comments={'7': comments})
+                project(w, PRINTS)
+                self.assertEqual(self.merge(w), (0, pending))
+                self.assertEqual(w.writes(), [])
+        w = World(self, pr=pr(isMergeQueueEnabled=True, checks=green, removals=[null_removal]),
+                  comments={'7': [dict(comment(4000, self.receipt), created_at='2026-11-22T09:49:10Z'), approve]})
+        project(w, PRINTS)
+        self.assertEqual(self.merge(w), (1, 'unknown: the commit that left the merge queue could not be read; '
+                                            'nothing was enqueued or recorded, so run it again next wake'))
+        self.assertEqual(w.writes(), [])
 
 
 if __name__ == '__main__':

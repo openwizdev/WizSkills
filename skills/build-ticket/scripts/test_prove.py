@@ -33,6 +33,12 @@ class Repo(unittest.TestCase):
         self.scratch.mkdir()
         self.env = {**ENV, 'TMPDIR': str(self.scratch)}
 
+    def stamp(self, when):
+        for path in self.repo.rglob('*'):
+            if '.git' in path.parts or not path.is_file():
+                continue
+            os.utime(path, (when, when))
+
     def git(self, *args):
         return subprocess.run(['git', '-C', str(self.repo), *args], env=self.env, check=True,
                               capture_output=True, text=True).stdout.strip()
@@ -40,16 +46,12 @@ class Repo(unittest.TestCase):
     def build(self, case):
         self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
-        distinct_mtime = 1_700_000_000
-        for side in ('base', 'head'):
+        for nth, side in enumerate(('base', 'head')):
             for old in self.repo.iterdir():
                 if old.name != '.git':
                     shutil.rmtree(old) if old.is_dir() else old.unlink()
             shutil.copytree(FIXTURES / case / side, self.repo, dirs_exist_ok=True)
-            distinct_mtime += 2
-            for path in self.repo.rglob('*'):
-                if path.is_file():
-                    os.utime(path, (distinct_mtime, distinct_mtime))
+            self.stamp(1_800_000_000 + nth)
             self.git('add', '-A')
             self.git('commit', '-q', '-m', side)
         return self.git('rev-parse', 'HEAD^'), self.git('rev-parse', 'HEAD')
@@ -107,6 +109,18 @@ class Repo(unittest.TestCase):
         self.assertEqual(result['base_runs'], ['failed', 'failed'])
         self.assertEqual(result['head_runs'], ['error', 'error'])
         self.assertIn('head run 1: error (timeout)', done.stderr)
+
+    def test_same_stat_edit_is_still_committed(self):
+        self.repo.mkdir()
+        self.git('init', '-q', '-b', 'main')
+        shutil.copytree(FIXTURES / 'red-green' / 'base', self.repo, dirs_exist_ok=True)
+        self.git('add', '-A')
+        self.git('commit', '-q', '-m', 'base')
+        shutil.copy2(FIXTURES / 'red-green' / 'head' / 'calc.py', self.repo / 'calc.py')
+        self.stamp(1_800_000_001)
+        self.git('add', '-A')
+        self.git('commit', '-q', '-m', 'head')
+        self.assertIn('a + b', self.git('show', 'HEAD:calc.py'))
 
     def test_new_test_is_copied_but_base_code_is_not_changed(self):
         self.build('red-green')

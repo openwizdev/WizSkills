@@ -27,7 +27,7 @@ Sol 6.2 Medium; Jake, 2026-11-19, recorded in `docs/agents/fleet.md`).
 | Role | One of five: Orchestrator, Builder, Reviewer (each always has its own row), Small builder and Fixer (each may follow the Builder) |
 | Choice | One harness, model and effort: the `--provider`, `--model` and `--reasoning-level` ids `room-cli thread spawn` takes, with the names people read. A harness that takes no model has no `--model` id |
 | Fall-back | A choice that reviews, in order, when the Reviewer, and each fall-back before it, is refused on a usage limit. It is a row of the table, not a role |
-| Family | A provider's model family: `claude-code` is `claude`, `codex` is `gpt`; any other provider's family is unknown |
+| Family | A provider's model family: `claude-code` is `claude`, `codex` is `gpt`, `antigravity` is `gemini`; any other provider's family is unknown |
 | Follow | An optional role that follows takes the Builder's choice, whatever it is now |
 
 JSON spells the roles `orchestrator`, `builder`, `reviewer`,
@@ -86,8 +86,8 @@ table; the section's first table is the Models table and must be exactly:
   `| Small builder | follows Builder | | | |`, and change nothing outside
   the rows they set.
 
-**Names `set` writes.** The Harness cell is `Claude Code` for `claude-code`
-and `Codex` for `codex`; the Model cell is `Opus 5.5` for
+**Names `set` writes.** The Harness cell is `Claude Code` for `claude-code`,
+`Codex` for `codex` and `Antigravity` for `antigravity`; the Model cell is `Opus 5.5` for
 `claude-opus-5-5`, `Sonnet 5.5` for `claude-sonnet-5-5` and `Sol 6.2` for
 `gpt-6.2-sol`; any other id is written as the id itself. The Effort cell is
 the level with its first letter upper-cased (`medium` is `Medium`, `xhigh`
@@ -145,7 +145,7 @@ A pull request is reviewed by a model of the other family than its builder
 The builder's family comes from the ticket's branch-matching
 `launch-fleet: start checked` record and that exact thread's provider, as
 today. When the Reviewer and the Builder share a known family, `show` and
-`set` warn, with exactly (for `Claude`, or `GPT`):
+`set` warn, with exactly (for `Claude`, `GPT` or `Gemini`):
 
 ```text
 The Reviewer and the Builder are both Claude models, so reviews of Claude-built work wait (ADR 0008).
@@ -160,12 +160,13 @@ the warning).
 
 A `fleet.md` without a `## Models` heading is read from the older tables, as
 today: `## Builder`, `## Builder for small tickets`,
-`## Reviewer for Claude-built` and `## Reviewer for GPT-built`, each a
+`## Reviewer for Claude-built` and `## Reviewer for GPT-built` (and
+optionally `## Reviewer for Gemini-built`), each a
 `| Setting | Value | \`room-cli thread spawn\` flag |` table of exactly the
 Harness, Model and Effort rows, with the flag cells `` `--provider <id>` ``,
 `` `--model <model id>` `` and `` `--reasoning-level <id>` ``; and `## Fixer`, a
 `| Builder family | Harness | Model | Effort | \`room-cli thread spawn\` flags |`
-table with a `Claude` and a `GPT` row. All five must be present and whole,
+table with a `Claude` and a `GPT` row (and optionally a `Gemini` row). All five base tables must be present and whole,
 and the Builder's family known, or the reader refuses.
 
 | Role or rule | Read from the older tables |

@@ -23,7 +23,7 @@ class PublicRecords(unittest.TestCase):
         section = contract.split('## Fleet records\n')[1].split('\n**Finding')[0]
         forms = re.findall(r'^\| `[^`]+` \| `([^`]+)` \|$', section, re.M)
         self.assertEqual(len(forms), 9)
-        table = (HERE.parent / 'SKILL.md').read_text().split('## Records\n')[1].split('\n## ')[0]
+        table = (HERE.parent / 'references/records.md').read_text().split('## Records\n')[1].split('\n## ')[0]
         for form in forms:
             with self.subTest(form=form):
                 self.assertIn('`' + form.removeprefix('launch-fleet: ') + '`', table.replace('`launch-fleet: ', '`'))
@@ -108,6 +108,56 @@ class Fleet(unittest.TestCase):
             with self.subTest(threads=threads):
                 self.threads = threads
                 self.assertEqual(self.run_fleet('wake', '12'), 'look #12: thread discovery is out of reach\n')
+
+    def test_fresh_install_without_private_routing_files_discovers_builder_on_cloudroom(self):
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        self.env['FAKE_ROOM_CLI'] = 'cloud'
+        self.env.pop('LAUNCH_FLEET_STATE', None)
+        self.env.pop('LAUNCH_FLEET_RUNS', None)
+        builder = self.threads[0]['id']
+        self.assertEqual(self.run_fleet('wake', '12'),
+                         f'CI failed #31 for #12 at {SHA}: tell its builder, thread {builder}\n')
+
+    def test_missing_or_unreadable_private_thread_map_names_file_and_creation_shape(self):
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        (self.dir / 'world.json').write_text(json.dumps(self.world))
+        (self.dir / 'threads.json').write_text(json.dumps(self.threads))
+        expected_json = json.dumps({'repo': self.world['repo'], 'threads': {}})
+        missing = self.dir / 'missing-state.json'
+        self.env['LAUNCH_FLEET_STATE'] = str(missing)
+        r = subprocess.run(['sh', os.environ.get('FLEET_SH', str(HERE / 'fleet.sh')), 'wake', '12'],
+                           env=self.env, cwd=self.dir, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(f'records: private thread map LAUNCH_FLEET_STATE is missing; create it with {expected_json}',
+                      r.stderr)
+        self.assertNotIn(str(missing), r.stderr)
+
+        missing.write_text(expected_json)
+        builder = self.threads[0]['id']
+        self.assertEqual(self.run_fleet('wake', '12'),
+                         f'CI failed #31 for #12 at {SHA}: tell its builder, thread {builder}\n')
+
+        self.env['LAUNCH_FLEET_STATE'] = 'relative-state.json'
+        r = subprocess.run(['sh', os.environ.get('FLEET_SH', str(HERE / 'fleet.sh')), 'wake', '12'],
+                           env=self.env, cwd=self.dir, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(
+            f'records: LAUNCH_FLEET_STATE needs an absolute path; create it outside the checkout with {expected_json}',
+            r.stderr)
+        self.assertNotIn('relative-state.json', r.stderr)
+
+        for bad_content in ('not-json-secret-value', json.dumps({'repo': 'example/other', 'threads': {}})):
+            with self.subTest(bad_content=bad_content):
+                missing.write_text(bad_content)
+                self.env['LAUNCH_FLEET_STATE'] = str(missing)
+                r = subprocess.run(['sh', os.environ.get('FLEET_SH', str(HERE / 'fleet.sh')), 'wake', '12'],
+                                   env=self.env, cwd=self.dir, capture_output=True, text=True)
+                self.assertEqual(r.returncode, 2)
+                self.assertIn(
+                    f'records: private thread map LAUNCH_FLEET_STATE could not be read; expected {expected_json}',
+                    r.stderr)
+                self.assertNotIn(str(missing), r.stderr)
+                self.assertNotIn('not-json-secret-value', r.stderr)
 
     def test_driver_review_rechecks_nudges_and_archives_the_pull_request_run(self):
         runs = self.dir / 'runs.json'
@@ -681,7 +731,7 @@ class Dispatcher(unittest.TestCase):
 
 
     def test_the_archive_settles_with_the_flow_inputs_and_never_archives_on_a_refused_settlement(self):
-        lines = (HERE.parent / 'SKILL.md').read_text().splitlines()
+        lines = (HERE.parent / 'references/merging.md').read_text().splitlines()
         row = next(x for x in lines if x.startswith('| `archive #N` |'))
         merge = next(x for x in lines if x.startswith('4. **Merge:**'))
         self.assertIn("private flow files after `--`", merge)

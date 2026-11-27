@@ -24,7 +24,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # Each carried skill's own suites, run from the tree's root. The inventory
 # guard below refuses any newly added suite until this list includes it.
 SUITES = {
-    'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py']],
+    'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py'],
+                     ['python3', '-I', 'skills/build-ticket/scripts/test_prove.py']],
     'triage': [['python3', '-I', 'skills/triage/test/test_find_work.py'],
                ['python3', '-I', 'skills/triage/test/test_public_records.py']],
     'feedback': [['python3', '-I', 'skills/feedback/test/test_feedback.py']],
@@ -34,8 +35,12 @@ SUITES = {
     'huntr': [['sh', 'skills/huntr/scripts/test.sh']],
     'grill': [['sh', 'skills/grill/scripts/test.sh'],
               ['python3', 'skills/grill/scripts/test_records.py']],
+    'role-call': [['python3', '-I', 'skills/role-call/scripts/test_channel.py']],
     'diagnose': [['node', '--test', 'skills/diagnose/tests/hitl-loop.test.mjs'],
                  ['python3', '-I', 'skills/diagnose/scripts/test_loop.py']],
+    'dream-cycle': [['python3', '-I', 'skills/dream-cycle/test/test_contract.py'],
+                    ['python3', '-I', 'skills/dream-cycle/test/test_inventory.py'],
+                    ['python3', '-I', 'skills/dream-cycle/test/test_dream.py']],
     'where-are-we': [['python3', '-I', 'skills/where-are-we/test/test_read_github.py']],
     'handoff': [['python3', '-I', 'skills/handoff/test/test_handoff.py']],
     'ask-wiz': [['python3', '-I', 'skills/ask-wiz/test/test_routes.py']],
@@ -64,6 +69,7 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-inbox.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-records.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-status.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-context.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-ops-starts.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-on1.py'],
                      ['sh', 'skills/launch-fleet/scripts/test-loop.sh'],
@@ -91,7 +97,9 @@ SUITES = {
               ['python3', '-I', 'check/test_suites.py'],
               ['python3', '-I', 'check/test_bench.py'],
               ['python3', '-I', 'check/test_select.py'],
-              ['python3', '-I', 'check/test_checklist_rules.py']],
+              ['python3', '-I', 'check/test_checklist_rules.py'],
+              ['python3', '-I', 'check/test_context_budget.py'],
+              ['python3', '-I', 'check/test_packaged_imports.py']],
 }
 
 PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}
@@ -108,11 +116,14 @@ def rows():
 # SKILL.md carries exactly, on a line of its own, instead of his notice.
 ORIGINAL = "**Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills."
 SOURCE_LINES = {
+    'dream-cycle': ORIGINAL,
+    'role-call': ORIGINAL,
     'feedback': ORIGINAL,
     'hill-climb': ORIGINAL,
     'huntr': ORIGINAL,
     'image': ORIGINAL,
     'install': ORIGINAL,
+    'son-of-anton': ORIGINAL,
     'write-driver': ORIGINAL,
     'where-are-we': "**Source:** dot-context's written plan. Not adapted from Matt Pocock's skills.",
 }
@@ -140,7 +151,7 @@ MATT_COPYRIGHT = 'Copyright (c) 2026 Matt Pocock'
 ASK_WIZ = 'ask-wiz'
 ASK_WIZ_POLICY = 'policy:\n  allow_implicit_invocation: false'
 FRONTMATTER_KEYS = ('name', 'description', 'version')
-DESCRIPTION_MAX = 1024
+DESCRIPTION_MAX = 180
 OPENAI_KEYS = ('display_name', 'short_description')
 
 PLUGIN = '.claude-plugin/plugin.json'
@@ -630,7 +641,8 @@ def unlisted_tests(root):
                 covered.add(rel)
     # Huntr's public shell entrypoint executes its four Node test modules.
     covered.update('skills/huntr/scripts/' + name for name in
-                   ('gate.test.mjs', 'manifest.test.mjs', 'records.test.mjs', 'controller.test.mjs'))
+                   ('gate.test.mjs', 'manifest.test.mjs', 'records.test.mjs', 'controller.test.mjs',
+                    'targets.test.mjs', 'findings.test.mjs'))
     discovered = {p.relative_to(root).as_posix() for p in (root / 'skills').rglob('*')
                   if p.is_file() and 'fixtures' not in p.parts and
                   ((p.name.startswith('test') and p.suffix in ('.py', '.sh'))

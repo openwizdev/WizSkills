@@ -1,0 +1,181 @@
+[
+  {
+    "name": "missing-changes",
+    "value": {
+      "id": "link-says-001",
+      "link_type": "says-vs-does",
+      "owner": "product",
+      "score": 9,
+      "verdict": "CONFIRMED",
+      "ends": [
+        {"ref": "example/alpha:README.md#L12", "quote": "Works fully offline.", "seen": "2030-01-14"},
+        {"ref": "example/alpha:src/net.py#L40", "quote": "raise OfflineError(\"network required\")", "seen": "2030-01-14"}
+      ],
+      "why_keep": "Offline mode may exist behind a flag.",
+      "route": "ticket"
+    },
+    "expected_reason": "'changes'"
+  },
+  {
+    "name": "empty-changes",
+    "value": {
+      "id": "link-says-001",
+      "link_type": "says-vs-does",
+      "owner": "product",
+      "score": 9,
+      "verdict": "CONFIRMED",
+      "ends": [
+        {"ref": "example/alpha:README.md#L12", "quote": "Works fully offline.", "seen": "2030-01-14"},
+        {"ref": "example/alpha:src/net.py#L40", "quote": "raise OfflineError(\"network required\")", "seen": "2030-01-14"}
+      ],
+      "changes": "",
+      "why_keep": "Offline mode may exist behind a flag.",
+      "route": "ticket"
+    },
+    "expected_reason": "changes"
+  },
+  {
+    "name": "rejected-verdict",
+    "value": {
+      "id": "link-says-001",
+      "link_type": "says-vs-does",
+      "owner": "product",
+      "score": 9,
+      "verdict": "REJECTED",
+      "ends": [
+        {"ref": "example/alpha:README.md#L12", "quote": "Works fully offline.", "seen": "2030-01-14"},
+        {"ref": "example/alpha:src/net.py#L40", "quote": "raise OfflineError(\"network required\")", "seen": "2030-01-14"}
+      ],
+      "changes": "README line 12 must change.",
+      "why_keep": "Offline mode may exist behind a flag.",
+      "route": "ticket"
+    },
+    "expected_reason": "enum"
+  },
+  {
+    "name": "score-zero",
+    "value": {
+      "id": "link-says-001",
+      "link_type": "says-vs-does",
+      "owner": "product",
+      "score": 0,
+      "verdict": "CONFIRMED",
+      "ends": [
+        {"ref": "example/alpha:README.md#L12", "quote": "Works fully offline.", "seen": "2030-01-14"},
+        {"ref": "example/alpha:src/net.py#L40", "quote": "raise OfflineError(\"network required\")", "seen": "2030-01-14"}
+      ],
+      "changes": "README line 12 must change.",
+      "why_keep": "Offline mode may exist behind a flag.",
+      "route": "ticket"
+    },
+    "expected_reason": "minimum"
+  },
+  {
+    "name": "score-not-integer",
+    "value": {
+      "id": "link-says-001",
+      "link_type": "says-vs-does",
+      "owner": "product",
+      "score": "high",
+      "verdict": "CONFIRMED",
+      "ends": [
+        {"ref": "example/alpha:README.md#L12", "quote": "Works fully offline.", "seen": "2030-01-14"},
+        {"ref": "example/alpha:src/net.py#L40", "quote": "raise OfflineError(\"network required\")", "seen": "2030-01-14"}
+      ],
+      "changes": "README line 12 must change.",
+      "why_keep": "Offline mode may exist behind a flag.",
+      "route": "ticket"
+    },
+    "expected_reason": "type"
+  },
+  {
+    "name": "one-end",
+    "value": {
+      "id": "link-says-001",
+      "link_type": "says-vs-does",
+      "owner": "product",
+      "score": 9,
+      "verdict": "CONFIRMED",
+      "ends": [
+        {"ref": "example/alpha:README.md#L12", "quote": "Works fully offline.", "seen": "2030-01-14"}
+      ],
+      "changes": "README line 12 must change.",
+      "why_keep": "Offline mode may exist behind a flag.",
+      "route": "ticket"
+    },
+    "expected_reason": "ends"
+  },
+  {
+    "name": "pattern-with-two-ends",
+    "value": {
+      "id": "link-pattern-001",
+      "link_type": "pattern",
+      "owner": "platform",
+      "score": 12,
+      "verdict": "PLAUSIBLE",
+      "ends": [
+        {"ref": "example/alpha:src/gh.py#L20", "quote": "sleep(2 ** attempt)", "seen": "2030-01-14"},
+        {"ref": "example/beta:tools/gh.sh#L9", "quote": "sleep 5", "seen": "2030-01-14"}
+      ],
+      "changes": "Spec candidate: one shared retry rule.",
+      "why_keep": "Rate limits may differ.",
+      "route": "spec-candidate"
+    },
+    "expected_reason": "ends"
+  },
+  {
+    "name": "empty-why-keep",
+    "value": {
+      "id": "link-says-001",
+      "link_type": "says-vs-does",
+      "owner": "product",
+      "score": 9,
+      "verdict": "CONFIRMED",
+      "ends": [
+        {"ref": "example/alpha:README.md#L12", "quote": "Works fully offline.", "seen": "2030-01-14"},
+        {"ref": "example/alpha:src/net.py#L40", "quote": "raise OfflineError(\"network required\")", "seen": "2030-01-14"}
+      ],
+      "changes": "README line 12 must change.",
+      "why_keep": "",
+      "route": "ticket"
+    },
+    "expected_reason": "why_keep"
+  },
+  {
+    "name": "unknown-route",
+    "value": {
+      "id": "link-says-001",
+      "link_type": "says-vs-does",
+      "owner": "product",
+      "score": 9,
+      "verdict": "CONFIRMED",
+      "ends": [
+        {"ref": "example/alpha:README.md#L12", "quote": "Works fully offline.", "seen": "2030-01-14"},
+        {"ref": "example/alpha:src/net.py#L40", "quote": "raise OfflineError(\"network required\")", "seen": "2030-01-14"}
+      ],
+      "changes": "README line 12 must change.",
+      "why_keep": "Offline mode may exist behind a flag.",
+      "route": "slack"
+    },
+    "expected_reason": "enum"
+  },
+  {
+    "name": "extra-key",
+    "value": {
+      "id": "link-says-001",
+      "link_type": "says-vs-does",
+      "owner": "product",
+      "score": 9,
+      "verdict": "CONFIRMED",
+      "ends": [
+        {"ref": "example/alpha:README.md#L12", "quote": "Works fully offline.", "seen": "2030-01-14"},
+        {"ref": "example/alpha:src/net.py#L40", "quote": "raise OfflineError(\"network required\")", "seen": "2030-01-14"}
+      ],
+      "changes": "README line 12 must change.",
+      "why_keep": "Offline mode may exist behind a flag.",
+      "route": "ticket",
+      "priority": 1
+    },
+    "expected_reason": "extra"
+  }
+]

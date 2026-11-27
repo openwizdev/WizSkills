@@ -40,7 +40,11 @@ def code_in(folder):
 
 def reads(root, shards):
     rows = suite_folders(shards)
-    skills = sorted(name for name in rows if (root / 'skills' / name).is_dir())
+    skills_dir = root / 'skills'
+    carried = ({p.name for p in skills_dir.iterdir()
+                if p.is_dir() and not p.is_symlink() and (p / 'SKILL.md').is_file()}
+               if skills_dir.is_dir() and not skills_dir.is_symlink() else set())
+    skills = sorted({name for name in rows if (skills_dir / name).is_dir()} | carried)
     names = '|'.join(map(re.escape, sorted(skills, key=len, reverse=True)))
     found = {}
     for row, home in rows.items():

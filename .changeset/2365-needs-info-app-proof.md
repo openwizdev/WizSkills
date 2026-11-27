@@ -3,4 +3,4 @@
 "review-ticket": patch
 ---
 
-A builder or reviewer clears needs-info only with local proof that its own App write added that label, and a person clears it when the shared login is used.
+Document that `status.py` clears `needs-info` only with local proof its own App write added that label event, or under a shared login when the asking note moves to `working` or `done` and its edit history and label event prove ownership; when it leaves the label on for lack of proof, a person clears it.

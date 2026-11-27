@@ -1,3 +1,6 @@
+import contextlib
+import importlib.util
+import io
 import json
 import os
 import shutil
@@ -6,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 GIT_ENV = {'GIT_AUTHOR_NAME': 'Synthetic', 'GIT_AUTHOR_EMAIL': 'synthetic@example.invalid',
@@ -26,6 +30,7 @@ class Repo:
         test.addCleanup(shutil.rmtree, self.dir, True)
         (self.dir / 'check').mkdir()
         shutil.copy(ROOT / 'check/changesets.py', self.dir / 'check/changesets.py')
+        shutil.copy(ROOT / 'check/run.py', self.dir / 'check/run.py')
         (self.dir / '.changeset').mkdir()
         shutil.copy(ROOT / '.changeset/config.json', self.dir / '.changeset/config.json')
         (self.dir / '.changeset/README.md').write_text('# Changesets\n')
@@ -294,13 +299,13 @@ class Release(unittest.TestCase):
                                           ' M CHANGELOG.md', ' M skills/alpha/SKILL.md'])
 
     def test_a_bad_marketplace_leaves_versions_and_notes_unchanged(self):
-        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
-        repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
-        repo.commit('pending')
-        for text in ('{"plugins":[]}\n', 'not json\n', '{"plugins":[1]}\n', '[]\n'):
+        for text in ('{}\n', '{"plugins":[]}\n', 'not json\n', '{"plugins":[1]}\n', '[]\n',
+                     marketplace_json(source='./other'), marketplace_json(version='0.2.1')):
             with self.subTest(text=text):
+                repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+                repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
                 repo.write('.claude-plugin/marketplace.json', text)
-                repo.commit('marketplace')
+                repo.commit('pending')
                 before = repo.snapshot()
                 self.assertEqual(repo.run('release', '--date', '2026-01-02')[0], 0)
                 code, _out = repo.run('release', '--date', '2026-01-02', '--write')
@@ -309,8 +314,7 @@ class Release(unittest.TestCase):
 
     def test_write_updates_a_recorded_marketplace_version(self):
         repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
-        repo.write('.claude-plugin/marketplace.json',
-                   json.dumps({'plugins': [{'name': 'openwiz', 'version': '0.2.0'}]}) + '\n')
+        repo.write('.claude-plugin/marketplace.json', marketplace_json())
         repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
         code, _out = self.release(repo, '--write')
         self.assertEqual(code, 0)
@@ -327,6 +331,110 @@ class Release(unittest.TestCase):
         code, _out = repo.run('release', '--date', '2026-01-02', '--write')
         self.assertNotEqual(code, 0)
         self.assertEqual(repo.snapshot(), before)
+
+    def test_a_short_write_never_truncates_the_previous_changelog(self):
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+        repo.note('one', {'alpha': 'patch'})
+        before = repo.snapshot()
+        write_text, reached = Path.write_text, []
+
+        def short_write(path, text, **kwargs):
+            if path.name == 'CHANGELOG.md' and repo.dir in path.parents:
+                write_text(path, text[:10], **kwargs)
+                reached.append(path)
+                raise OSError('synthetic short write')
+            return write_text(path, text, **kwargs)
+
+        with patch.object(Path, 'write_text', short_write):
+            self.assertEqual(run_release_here(repo), 2)
+        self.assertEqual(len(reached), 1)
+        self.assertEqual(repo.snapshot(), before)
+
+    def test_an_interrupt_restores_versions_and_consumed_notes_before_retry(self):
+        for rel in ('.claude-plugin/plugin.json', '.changeset/one.md'):
+            with self.subTest(interrupted=rel):
+                repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+                repo.note('one', {'alpha': 'patch'})
+                repo.note('two', {'alpha': 'patch'})
+                before = repo.snapshot()
+                target = repo.dir / rel
+                write_text, replace, unlink = Path.write_text, os.replace, Path.unlink
+                reached = []
+
+                def interrupt(path):
+                    if path == target and not reached:
+                        reached.append(path)
+                        raise KeyboardInterrupt
+
+                def write_then_interrupt(path, *args, **kwargs):
+                    written = write_text(path, *args, **kwargs)
+                    interrupt(path)
+                    return written
+
+                def replace_then_interrupt(source, destination):
+                    replace(source, destination)
+                    interrupt(Path(destination))
+
+                def unlink_then_interrupt(path, *args, **kwargs):
+                    unlink(path, *args, **kwargs)
+                    interrupt(path)
+
+                with patch.object(Path, 'write_text', write_then_interrupt), \
+                        patch.object(os, 'replace', replace_then_interrupt), \
+                        patch.object(Path, 'unlink', unlink_then_interrupt):
+                    try:
+                        code = run_release_here(repo)
+                    except KeyboardInterrupt:
+                        code = 130
+                self.assertNotEqual(code, 0)
+                self.assertEqual(reached, [target])
+                self.assertEqual(repo.snapshot(), before)
+                self.assertEqual(self.release(repo, '--write')[0], 0)
+                self.assertEqual((repo.dir / 'skills/alpha/SKILL.md').read_text(), skill_md('alpha', '0.2.1'))
+                self.assertFalse((repo.dir / '.changeset/one.md').exists())
+                self.assertFalse((repo.dir / '.changeset/two.md').exists())
+
+    def test_a_retry_refuses_when_an_earlier_write_still_needs_recovery(self):
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+        repo.note('one', {'alpha': 'patch'})
+        repo.write('.wizskills-release/before/skills/alpha/SKILL.md', skill_md('alpha', '0.2.0'))
+        repo.write('.wizskills-release/applying', '')
+        repo.write('skills/alpha/SKILL.md', skill_md('alpha', '0.2.1'))
+        before = repo.snapshot()
+        for args in ((), ('--write',)):
+            with self.subTest(args=args):
+                self.assertEqual(repo.run('release', '--date', '2026-01-02', *args)[0], 2)
+                self.assertEqual(repo.snapshot(), before)
+
+    def test_the_version_plan_does_not_read_generated_package_changelogs(self):
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+        repo.note('one', {'alpha': 'patch'})
+        read_text = Path.read_text
+
+        def read_without_generated_changelog(path, *args, **kwargs):
+            if path.name == 'CHANGELOG.md' and any(p.startswith('wizskills-release-') for p in path.parts):
+                raise AssertionError('the version plan read a generated package changelog')
+            return read_text(path, *args, **kwargs)
+
+        with patch.object(Path, 'read_text', read_without_generated_changelog):
+            self.assertEqual(run_release_here(repo, write=False), 0)
+
+
+def marketplace_json(**entry):
+    return json.dumps({'name': 'wizskills', 'owner': {'name': 'Synthetic'},
+                       'plugins': [dict({'name': 'openwiz', 'source': './', 'version': '0.2.0'}, **entry)]}) + '\n'
+
+
+def run_release_here(repo, write=True):
+    spec = importlib.util.spec_from_file_location('synthetic_changesets', repo.dir / 'check/changesets.py')
+    changesets = importlib.util.module_from_spec(spec)
+    with patch.object(sys, 'dont_write_bytecode', True):
+        spec.loader.exec_module(changesets)
+    argv = ['release', '--date', '2026-01-02']
+    if write:
+        argv.append('--write')
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        return changesets.main(argv)
 
 
 IGNORED_NAMES = ('.hidden-fix.md', 'Readme.md', 'AGENTS.md', 'CLAUDE.md', 'GEMINI.md')

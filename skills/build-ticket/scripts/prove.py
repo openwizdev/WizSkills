@@ -24,8 +24,8 @@ pytest, unittest, `cargo test` and `node --test` from the exit code and summary 
 Exit 0 only when base is `failed` 2 of 2 and head is `passed` 2 of 2; exit 1 otherwise, naming
 the side that broke the rule; exit 2 on bad arguments, a git failure before any test ran, or a
 test command that cannot start.
-It prints one JSON line on stdout, a line per run on stderr, and removes both worktrees on
-every exit. Python 3.11+ standard library only.
+Exit 2 leaves stdout empty. Completed proofs print one JSON line on stdout, with a line per
+run on stderr. Both worktrees are removed on every exit. Python 3.11+ standard library only.
 """
 
 
@@ -52,7 +52,7 @@ def pytest(code, out):
     errors = n.get('error', 0) + n.get('errors', 0)
     if code == 0 and n.get('passed') and not n.get('failed') and not errors:
         return 'passed'
-    reasons = re.findall(r'^FAILED .+? - (.*)$', out, re.M)
+    reasons = re.findall(r'^FAILED [^\[\n]+?(?:\[.*?\])? - (.*)$', out, re.M)
     if (code == 1 and n.get('failed') and not errors and len(reasons) == n['failed']
             and all(re.match(r'(assert\b|AssertionError\b|Failed:)', r) for r in reasons)):
         return 'failed'
@@ -91,12 +91,36 @@ def cargo(code, out):
     return 'error'
 
 
-def assertion_block(block):
-    return 'ERR_ASSERTION' in block or 'AssertionError' in block
+def node_spec_assertions(progress, details, failed):
+    intro, *blocks = re.split(r'^test at [^\n]+:\d+:\d+\n', details, flags=re.M)
+    parent_markers = re.findall(r'^ *▶ ', progress, flags=re.M)
+    omitted_parents = failed - len(blocks)
+    hook_frame = re.compile(r'^ +at (?:async )?TestHook\.\w+ \(node:internal/test_runner/test:', re.M)
+    return (not intro.strip() and bool(blocks) and 0 <= omitted_parents <= len(parent_markers)
+            and all(re.match(r'^✖ [^\n]+\n  AssertionError\b', block) and not hook_frame.search(block)
+                    for block in blocks))
 
 
-def parent_block(block):
-    return "failureType: 'subtestsFailed'" in block or re.search(r'\d+ subtests? failed', block)
+def node_tap_assertions(out, failed):
+    parts = re.split(r'^([ ]*)not ok \d+[^\n]*\n', out, flags=re.M)
+    count, assertions = 0, 0
+    for nesting, body in zip(parts[1::2], parts[2::2]):
+        indent = nesting + '  '
+        diagnostics = re.match(rf'{indent}---\n(.*?)^{indent}\.\.\.(?:\n|$)', body, flags=re.S | re.M)
+        if diagnostics is None:
+            return False
+        fields = dict(re.findall(rf"^{indent}(type|failureType|code|name): '([^'\n]+)'$", diagnostics[1], re.M))
+        suite = fields.get('type') == 'suite'
+        failure = fields.get('failureType')
+        if failure == 'subtestsFailed':
+            count += not suite
+        elif not suite and failure == 'testCodeFailure' and (
+                fields.get('code') == 'ERR_ASSERTION' or fields.get('name') == 'AssertionError'):
+            count += 1
+            assertions += 1
+        else:
+            return False
+    return bool(assertions) and count == failed
 
 
 def node(code, out):
@@ -109,24 +133,10 @@ def node(code, out):
         return 'passed'
     if code != 1 or not n['fail']:
         return 'error'
-    if '✖ failing tests:' in out:
-        blocks = re.split(r'^test at ', out.split('✖ failing tests:', 1)[1], flags=re.M)[1:]
-        parents = [b for b in blocks if parent_block(b)]
-        leaves = [b for b in blocks if b not in parents]
-        omitted = n['fail'] - len(blocks)
-        if omitted < 0 or not leaves or any(not assertion_block(b) for b in leaves):
-            return 'error'
-        if omitted and not re.search(r'(?m)^▶ ', out):
-            return 'error'
-        return 'failed'
-    parts = re.split(r'^\s*not ok \d+', out, flags=re.M)[1:]
-    leaves = [b for b in parts if "failureType: 'testCodeFailure'" in b]
-    parents = [b for b in parts if "failureType: 'subtestsFailed'" in b]
-    if len(leaves) + len(parents) != len(parts) or len(leaves) + len(parents) != n['fail']:
-        return 'error'
-    if leaves and all(assertion_block(b) for b in leaves):
-        return 'failed'
-    return 'error'
+    progress, marker, details = out.partition('\n✖ failing tests:\n')
+    assertions = (node_spec_assertions(progress, details, n['fail']) if marker
+                  else node_tap_assertions(out, n['fail']))
+    return 'failed' if assertions else 'error'
 
 
 def classify(code, out):

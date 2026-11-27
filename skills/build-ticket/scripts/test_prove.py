@@ -143,6 +143,13 @@ class Repo(unittest.TestCase):
         self.assertGone()
 
 
+    def test_help_says_refusals_leave_stdout_empty(self):
+        done = subprocess.run([sys.executable, '-I', str(SCRIPT), '--help'],
+                              env=self.env, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('exit 2 leaves stdout empty', ' '.join(done.stdout.lower().split()))
+
+
 PYTEST_PASS = """============================= test session starts ==============================
 collected 2 items
 
@@ -208,6 +215,86 @@ NODE_SUBTEST_THROWS = ("▶ parent\n  ✖ inner (1ms)\n✖ parent (2ms)\n"
                        "test at a.test.mjs:3:11\n✖ inner (1ms)\n  TypeError: nope\n")
 
 
+NODE_MIXED_SUBTEST = """▶ parent
+  ✖ asserting leaf (1ms)
+  ✖ throwing leaf (1ms)
+✖ parent (2ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 0
+ℹ fail 3
+ℹ cancelled 0
+
+✖ failing tests:
+
+test at a.test.mjs:4:11
+✖ asserting leaf (1ms)
+  AssertionError [ERR_ASSERTION]: 1 !== 2
+
+test at a.test.mjs:5:11
+✖ throwing leaf (1ms)
+  TypeError [Error]: 1 subtest failed
+"""
+NODE_SPEC_HOOK = """▶ suite
+  ▶ parent
+    ✖ leaf (1ms)
+  ✖ parent (2ms)
+✖ suite (3ms)
+ℹ tests 2
+ℹ suites 1
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+
+✖ failing tests:
+
+test at a.test.mjs:4:11
+✖ leaf (1ms)
+  AssertionError [ERR_ASSERTION]: 1 !== 2
+
+test at a.test.mjs:1:1
+✖ suite (3ms)
+  AssertionError [ERR_ASSERTION]: 3 !== 4
+      at SuiteContext.<anonymous> (file:///synthetic/a.test.mjs:2:22)
+      at TestHook.run (node:internal/test_runner/test:1402:25)
+"""
+NODE_SUITE_TAP = """TAP version 13
+# Subtest: suite
+    # Subtest: parent
+        # Subtest: leaf
+        not ok 1 - leaf
+          ---
+          type: 'test'
+          failureType: 'testCodeFailure'
+          error: '1 !== 2'
+          code: 'ERR_ASSERTION'
+          name: 'AssertionError'
+          ...
+        1..1
+    not ok 1 - parent
+      ---
+      type: 'test'
+      failureType: 'subtestsFailed'
+      error: '1 subtest failed'
+      code: 'ERR_TEST_FAILURE'
+      ...
+    1..1
+not ok 1 - suite
+  ---
+  type: 'suite'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 2
+# suites 1
+# pass 0
+# fail 2
+# cancelled 0
+"""
+
+
 class Classify(unittest.TestCase):
     def check(self, rows):
         self.assertTrue(SCRIPT.is_file(), 'prove.py is missing')
@@ -224,7 +311,13 @@ class Classify(unittest.TestCase):
                     ('collection error', 2, PYTEST_COLLECT, 'error'),
                     ('no tests ran', 5, '===== no tests ran in 0.01s =====\n', 'error'),
                     ('passed summary but non-zero exit', 1, PYTEST_PASS, 'error'),
-                    ('parametrized id with a space', 1, PYTEST_SPACE, 'failed')])
+                    ('parametrized id with a space', 1, PYTEST_SPACE, 'failed'),
+                    ('separator in the id and the assertion', 1,
+                     PYTEST_SPACE.replace('hello world', 'New York - Boston').replace('1 == 2', '5 - 3 == 0'),
+                     'failed'),
+                    ('exception after an id with the separator', 1,
+                     PYTEST_SPACE.replace('hello world', 'New York - Boston')
+                     .replace('assert 1 == 2', 'TypeError: a - b'), 'error')])
 
     def test_unittest(self):
         self.check([('ok', 0, UNITTEST_OK, 'passed'),
@@ -248,7 +341,15 @@ class Classify(unittest.TestCase):
                     ('tap assertion', 1, NODE_TAP, 'failed'),
                     ('subtest assertion', 1, NODE_SUBTEST, 'failed'),
                     ('tap subtest assertion', 1, NODE_SUBTEST_TAP, 'failed'),
-                    ('a subtest that throws is not red', 1, NODE_SUBTEST_THROWS, 'error')])
+                    ('a subtest that throws is not red', 1, NODE_SUBTEST_THROWS, 'error'),
+                    ('an assertion can mention a failed subtest', 1,
+                     NODE_SUBTEST.replace('1 !== 2', '1 subtest failed'), 'failed'),
+                    ('a thrown exception can mention a failed subtest', 1, NODE_MIXED_SUBTEST, 'error'),
+                    ('spec suite hook mixed with a test assertion is an error', 1, NODE_SPEC_HOOK, 'error'),
+                    ('tap suite aggregate is outside the test failure count', 1, NODE_SUITE_TAP, 'failed'),
+                    ('tap suite hook failures are errors', 1,
+                     NODE_SUITE_TAP.replace("type: 'suite'\n  failureType: 'subtestsFailed'",
+                                            "type: 'suite'\n  failureType: 'hookFailed'"), 'error')])
 
     def test_unrecognised_and_timeout_are_error(self):
         self.check([('no summary, exit 1', 1, 'Traceback (most recent call last):\nAssertionError\n', 'error'),

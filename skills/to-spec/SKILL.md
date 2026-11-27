@@ -8,17 +8,17 @@ version: 0.4.0
 
 The owner's one active step is confirming the grill (J202). From there the
 orchestrator writes the spec, has [to-tickets](../to-tickets/SKILL.md) cut and
-approve the plan by its own checks, and makes one steering video; nothing is
-asked between them.
+approve the plan by its own checks, and makes one video, then the owner steers.
 
 ## 1. Read the confirmed grill
 
 Run `python3 -I "<this skill's folder>/../launch-fleet/scripts/context.py" planner`
-once per session (rerun only when a listed blob changes). Read the grill and
-confirmation comment privately, plus the code; an unconfirmed grill or open
-decision returns to [grill](../grill/SKILL.md). Keep the confirmation URL as
-the plan approval's authority. An unclear read or publication approval stops
-the related write.
+once per session (rerun only when a listed blob changes). Read the grill
+privately, with its confirmation comment, glossary, decision tree, parked list,
+and the code. Copy them into the spec. An unconfirmed grill or open decision
+returns to [grill](../grill/SKILL.md). Keep the confirmation URL as the plan
+approval's authority. An unclear read or publication approval stops the related
+write.
 
 ## 2. Write the spec
 

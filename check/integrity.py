@@ -37,8 +37,7 @@ SKIP_LINE = re.compile(
     r'^\s*@(?:(pytest\.mark\.(?:skipif|skip|xfail))|(unittest\.(?:skip(?:If|Unless)?|expectedFailure))'
     r'|(pytest\.(?:skip|xfail)))\b')
 TEST_PARTS = {'test', 'tests', '__tests__'}
-# As check/run.py finds suites: test.py, test.sh, test_*.py/.sh and test-*.py/.sh.
-TEST_SCRIPT = re.compile(r'test(?:[_-][^/]*)?\.(?:py|sh)')
+RUN_PY_SUITE_NAME = re.compile(r'test(?:[_-][^/]*)?\.(?:py|sh)')
 
 
 class Unreadable(Exception):
@@ -71,8 +70,7 @@ def lines_of(text):
     return lines
 
 
-def python_source(text):
-    # Python also ends a line at a bare \r; git doesn't, so keep git's line numbers.
+def python_on_git_lines(text):
     return text.replace('\r\n', '\n').replace('\r', ' ')
 
 
@@ -167,7 +165,7 @@ def is_test_path(path):
     if not path:
         return False
     name = path.rsplit('/', 1)[-1]
-    if TEST_SCRIPT.fullmatch(name):
+    if RUN_PY_SUITE_NAME.fullmatch(name):
         return True
     if name.endswith('_test.py') or name.endswith(('.test.py', '.test.mjs', '.test.js', '.spec.js', '.spec.mjs')):
         return True
@@ -194,7 +192,7 @@ def python_functions(source):
     if source is None:
         return []
     try:
-        tree = ast.parse(python_source(source))
+        tree = ast.parse(python_on_git_lines(source))
     except (SyntaxError, ValueError):
         return None
     found = []
@@ -368,7 +366,7 @@ def header_nodes(stmt):
 
 def python_marks(source, added):
     try:
-        tree = ast.parse(python_source(source))
+        tree = ast.parse(python_on_git_lines(source))
     except (SyntaxError, ValueError):
         return text_fallback(source, added)
     found = []
@@ -392,7 +390,6 @@ def python_marks(source, added):
             if isinstance(node, ast.Call):
                 take(node, bound)
             elif isinstance(node, (ast.Attribute, ast.Name)) and id(node) not in funcs:
-                # A mark used as a value: a decorator, pytestmark = ..., or marks=...
                 label = SKIP.get(resolve(dotted(node), bound))
                 if label and node.lineno in added:
                     found.append(('skip', node.lineno, label))

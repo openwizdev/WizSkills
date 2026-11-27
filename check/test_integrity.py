@@ -401,7 +401,8 @@ def test_a():
         repo.write('tests/test_keep.py', 'def test_keep():\n    assert True\n')
         repo.write_bytes('tests/fixtures/stderr.txt', 'a\rb\u2028c\u2029d\x0be\x0cf\x1cg\x85h\n'.encode('utf-8'))
         repo.write_bytes('pytest.ini', b'[pytest]\r\n# a\rb\nfilterwarnings = ignore\n')
-        repo.write_bytes('tests/test_cr.py', b'import pytest\n# a\rb\n@pytest.mark.skip\ndef test_a():\n    assert True\n')
+        repo.write_bytes('tests/test_cr.py', b'import pytest\n# a\rb\n'
+                         b'@pytest.mark.skip\ndef test_a():\n    assert True\n')
         repo.commit('separators')
         code, out = report(repo, base)
         self.assertEqual(code, 0, out)
@@ -454,7 +455,8 @@ def test_a():
     def test_the_step_summary_shows_each_finding_on_its_own_line(self):
         repo = Repo(self)
         base = repo.base
-        repo.write('tests/test_skip.py', 'import pytest\n@pytest.mark.skip\ndef test_a():\n    assert True\n\n\n'
+        repo.write('tests/test_skip.py', 'import pytest\n'
+                   '@pytest.mark.skip\ndef test_a():\n    assert True\n\n\n'
                    '@pytest.mark.xfail\ndef test_b():\n    assert True\n')
         repo.commit('marks')
         summary = repo.dir.parent / (repo.dir.name + '-summary.md')

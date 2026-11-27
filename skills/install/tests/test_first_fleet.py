@@ -920,7 +920,7 @@ class Launch(unittest.TestCase):
         self.assertNotIn('#904', preview)
         started = results[-2][1].stdout
         for line in ("Spec #900 has its fleet record: launch-fleet's loop runs the spec.",
-                     'The plan passed its checks, so the fleet started: 3 builders'):
+                     'The plan passed its checks, so the helpers started: 3 AI helpers'):
             self.assertIn(line, started)
         watch = results[-1][1].stdout
         for line in ('Spec #900 has its fleet record', '#901 building', '#904 blocked',
@@ -979,7 +979,7 @@ class Launch(unittest.TestCase):
         self.assertEqual(j.tool(PREVIEW).returncode, 12)
         first = j.tool(YES)
         self.assertEqual(first.returncode, 0, first.stdout)
-        self.assertNotIn('so the fleet started', first.stdout)
+        self.assertNotIn('so the helpers started', first.stdout)
         second = j.tool(YES)
         self.assertEqual(second.returncode, 6, second.stdout)
         self.assertIn('no fleet record yet', second.stdout)
@@ -991,7 +991,7 @@ class Launch(unittest.TestCase):
         third = j.tool(YES)
         self.assertEqual(third.returncode, 0, third.stdout)
         self.assertIn('has its fleet record', third.stdout)
-        self.assertIn('so the fleet started', third.stdout)
+        self.assertIn('so the helpers started', third.stdout)
         self.assertEqual(j.spawns(), [], 'never a start of its own')
 
     def test_uncertain_launch_accepts_only_configured_record_authors(self):
@@ -1376,10 +1376,10 @@ class LocalSession(unittest.TestCase):
         lines = yes.stdout.splitlines()
         for line in NEEDS_YOU.splitlines():
             self.assertIn(line, lines, "the session's own ticks and stop are shown in the chat")
-        self.assertLess(lines.index('The plan passed its checks, so the fleet started in this chat: 3 builders, '
-                                    'each on one small ticket, and each next step starts the moment a run ends. Watch '
-                                    'them here and at openwiz.dev/app; keep this chat open: it stops here when it '
-                                    'needs you, such as an approved pull request for you to merge.'),
+        self.assertLess(lines.index('The plan passed its checks, so the helpers started right here in this chat: 3 AI helpers, '
+                                    'each building one small task, and each next step starts as soon as one finishes. Watch '
+                                    'them here and at openwiz.dev/app, and keep this chat open: it stops here when it '
+                                    'needs you, for example to add a checked change to your project.'),
                         lines.index(NEEDS_YOU.splitlines()[0]))
         self.assertNotIn("launch-fleet's Launch section", yes.stdout, 'no handoff for the orchestrator to follow')
         self.assertIn('launch --spec 900 --heartbeat', yes.stdout, 'the opt-in is offered after the session')
@@ -1433,7 +1433,7 @@ class LocalSession(unittest.TestCase):
         self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
         lines = yes.stdout.splitlines()
         teach_line = next(line for line in lines if line.startswith('The plan passed its checks'))
-        self.assertNotIn('nothing for you to do until the first merge', teach_line)
+        self.assertNotIn("there's nothing for you to do until the first piece is added to your project", teach_line)
         said = lines[lines.index("Spec #900's session in this chat stopped: it needs you. What it said, to show the "
                                  'user as it is:') + 1:]
         self.assertEqual(said[:3], stop, "the session's own stop lines, every one, verbatim and in order")
@@ -2109,7 +2109,7 @@ class ModelsTable(unittest.TestCase):
         j.save_world()
         started = j.tool(YES)
         self.assertEqual(started.returncode, 0, 'after activation the read stays reconciliation\n' + started.stdout)
-        self.assertIn('so the fleet started', started.stdout)
+        self.assertIn('so the helpers started', started.stdout)
         saved = j.state.read_bytes()
         repeat = j.tool(YES)
         self.assertEqual(repeat.returncode, 0, repeat.stdout)

@@ -1,6 +1,6 @@
 # Installing WizSkills
 
-Every install below names release 0.1.2; none follows a branch.
+Every install below names release 0.4.2; none follows a branch.
 
 ## What you need
 
@@ -16,14 +16,14 @@ from `main`, for browsing only. For an install, add the marketplace pinned to
 this release instead, then install the plugin from it:
 
 ```sh
-claude plugin marketplace add https://github.com/openwizdev/WizSkills.git#v0.1.2
+claude plugin marketplace add https://github.com/openwizdev/WizSkills.git#v0.4.2
 claude plugin install openwiz@wizskills --scope project
 ```
 
 Installing does not pin a marketplace that is already registered at another
 ref: remove that registration first. Check that `claude plugin marketplace list`
-shows the `wizskills` marketplace at `v0.1.2` and that
-`claude plugin list` shows `openwiz@wizskills` at version 0.1.2.
+shows the `wizskills` marketplace at `v0.4.2` and that
+`claude plugin list` shows `openwiz@wizskills` at version 0.4.2.
 Then start a new Claude Code session so the `openwiz:` skills load: a plugin
 installed during a session is not available in that session.
 
@@ -34,8 +34,8 @@ release. Check out the tag, and check the checkout before running anything in
 it:
 
 ```sh
-git clone --quiet --depth 1 --branch v0.1.2 https://github.com/openwizdev/WizSkills.git wizskills-installer
-git -C wizskills-installer cat-file tag v0.1.2
+git clone --quiet --depth 1 --branch v0.4.2 https://github.com/openwizdev/WizSkills.git wizskills-installer
+git -C wizskills-installer cat-file tag v0.4.2
 git -C wizskills-installer rev-parse HEAD 'HEAD^{tree}'
 git -C wizskills-installer status --porcelain --ignored
 ```
@@ -47,7 +47,7 @@ print exactly that commit and tree, and the last must print nothing.
 ## Install with install.sh
 
 ```sh
-sh wizskills-installer/install.sh --version 0.1.2 --dest "$HOME/wizskills"
+sh wizskills-installer/install.sh --version 0.4.2 --dest "$HOME/wizskills"
 ```
 
 `install.sh --version <version> --dest <dir>` fetches only the tag
@@ -83,7 +83,7 @@ mkdir -p .agents/skills
 ```
 
 Check that `"$HOME/wizskills/.claude-plugin/plugin.json"` shows version
-0.1.2. Then start a new Codex session so the linked OpenWiz skills load,
+0.4.2. Then start a new Codex session so the linked OpenWiz skills load,
 and ask Codex to read the exact skill, for example
 `.agents/skills/build-ticket/SKILL.md`.
 

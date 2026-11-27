@@ -1,0 +1,80 @@
+[
+  {
+    "name": "wrong-schema",
+    "value": {
+      "schema": "openwiz.dream-cycle.inventory.v2",
+      "repo": "example/alpha",
+      "days": 14,
+      "pr_idle_days": 7,
+      "generated_at": "2030-01-15T00:00:00Z",
+      "sections": {
+        "stale_paths": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "orphan_branches": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "idle_issues": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "idle_prs": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "empty_milestones": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "skipped_tests": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "generated_files": {"status": "ok", "total": 0, "items": [], "reason": null}
+      },
+      "unconfirmed": []
+    },
+    "expected_reason": "const"
+  },
+  {
+    "name": "unconfirmed-reports-zero-total",
+    "value": {
+      "schema": "openwiz.dream-cycle.inventory.v1",
+      "repo": "example/alpha",
+      "days": 14,
+      "pr_idle_days": 7,
+      "generated_at": "2030-01-15T00:00:00Z",
+      "sections": {
+        "stale_paths": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "orphan_branches": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "idle_issues": {"status": "unconfirmed", "total": 0, "items": [], "reason": "gh failed"},
+        "idle_prs": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "empty_milestones": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "skipped_tests": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "generated_files": {"status": "ok", "total": 0, "items": [], "reason": null}
+      },
+      "unconfirmed": [{"source": "idle_issues", "reason": "gh failed"}]
+    },
+    "expected_reason": "oneOf"
+  },
+  {
+    "name": "missing-section",
+    "value": {
+      "schema": "openwiz.dream-cycle.inventory.v1",
+      "repo": "example/alpha",
+      "days": 14,
+      "pr_idle_days": 7,
+      "generated_at": "2030-01-15T00:00:00Z",
+      "sections": {
+        "stale_paths": {"status": "ok", "total": 0, "items": [], "reason": null}
+      },
+      "unconfirmed": []
+    },
+    "expected_reason": "missing"
+  },
+  {
+    "name": "days-zero",
+    "value": {
+      "schema": "openwiz.dream-cycle.inventory.v1",
+      "repo": "example/alpha",
+      "days": 0,
+      "pr_idle_days": 7,
+      "generated_at": "2030-01-15T00:00:00Z",
+      "sections": {
+        "stale_paths": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "orphan_branches": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "idle_issues": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "idle_prs": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "empty_milestones": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "skipped_tests": {"status": "ok", "total": 0, "items": [], "reason": null},
+        "generated_files": {"status": "ok", "total": 0, "items": [], "reason": null}
+      },
+      "unconfirmed": []
+    },
+    "expected_reason": "minimum"
+  }
+]

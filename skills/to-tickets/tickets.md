@@ -18,7 +18,9 @@ owns. `**Relies on:**` lists exact backticked interface-file paths on one line,
 or `nothing`. Use `## Done by` for a person's ticket. Proof names the spec
 claim and how to show it, red first.
 
-A ticket whose change can't be undone by reverting its merge gets the line
+Use the spec's glossary names in the ticket text. A parked question is out of
+scope: leave it out of every ticket. A ticket whose change can't be undone by
+reverting its merge gets the line
 `One-way door: yes` on its own at the end of Parent; its builder agrees an
 approach note first (build-ticket). Every other ticket gets no such line.
 

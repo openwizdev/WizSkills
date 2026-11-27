@@ -8,9 +8,7 @@ version: 0.4.0
 
 The owner's one active step is answering and confirming the grill (J202). From
 there the orchestrator writes the spec, has [to-tickets](../to-tickets/SKILL.md)
-cut and approve the plan by its own checks, and makes one video the owner
-watches, then steers through the orchestrator. Nothing is asked between them.
-In OpenWiz,
+cut and approve the plan by its own checks, and makes one video, then the owner steers. In OpenWiz,
 [the roads page](https://github.com/openwizdev/OpenWiz/blob/main/docs/agents/roads.md)
 describes when this road applies.
 
@@ -25,7 +23,8 @@ rules, the roads page and the glossary's term index. Read a term's definition in
 The card's decision-record forms replace reading the open-development contract
 for public decision records; read the full contract only for release, publishing,
 importer and ticket-mover work. Read the grill privately, with its confirmation
-comment, and the code. An unconfirmed grill, or a decision still open, goes back
+comment, glossary, decision tree, parked list, and the code.
+Copy them into the spec. An unconfirmed grill, or a decision still open, goes back
 to [grill](../grill/SKILL.md). Keep the confirmation's private-comment URL: it is
 the plan approval's authority.
 

@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=1055
+CASES=1056
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -4273,6 +4273,7 @@ fi
 # counts the 304s. GH_TOKEN is a synthetic secret no output may contain.
 GI1=$(cat "$FIX/unchanged/spec.jq") || { echo "FAIL setup: the GI1 fixture"; exit 1; }
 GI1_SECRET=synthetic-token-gi1-0000
+GI1_REST=500
 gi1_run() { # N DIR CACHE SECONDS: run N of spec 10 on DIR/world.json, SECONDS after NOW
   (
     if [ "${5:-}" = discovery ]; then unset GH_REPO
@@ -4280,7 +4281,7 @@ gi1_run() { # N DIR CACHE SECONDS: run N of spec 10 on DIR/world.json, SECONDS a
     cd "$2" && env PATH="$tmp/bin:$PATH" GH_TOKEN=$GI1_SECRET \
     FAKE_GH_WORLD="$2/world.json" FAKE_GH_LOG="$2/gh-$1.log" FAKE_GH_HTTP_LOG="$2/http-$1.log" \
     LAUNCH_FLEET_NOW=$((NOW + $4)) LAUNCH_FLEET_CACHE="$3" LAUNCH_FLEET_REVISION="$FIX/revision.sh" \
-    /bin/sh "$FLEET" spec 10 > "$2/out-$1" 2> "$2/err-$1")
+    LAUNCH_FLEET_REST_PER_WAKE=$GI1_REST /bin/sh "$FLEET" spec 10 > "$2/out-$1" 2> "$2/err-$1")
 }
 # gi1_pair N SECONDS: run N on the shared cache and its full-read reference;
 # the same exit 0 and the same lines.
@@ -4458,6 +4459,26 @@ gi1_case 'B24: a changed installation-repository representation gets a full read
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
 gi1_case "GI7: a switch from the account to the App gets a full read" switch
 unset LAUNCH_FLEET_GITHUB_AUTH FAKE_GH_FAIL
+gi1_rest_calls() { grep -cv '^graphql \|^issue view \|^repo view$' "$d/gh-$1.log"; }
+rest_wake_case() {
+  name=$1 setup=$2
+  selected "$name" || return 0
+  take heavy || return 0
+  cases=$((cases + 1))
+  d=$tmp/rest-wake-$cases gi1_why='' GI1_REST=''
+  mkdir "$d" && world check.json "$setup" "$d" > "$d/world.json" \
+    && gi1_pair 1 0 && gi1_pair 2 60 && gi1_pair 3 120 \
+    && gi1_change 'say(13; 1301; "11:59"; "Synthetic question")' && gi1_pair 4 180 && gi1_pair 5 240 \
+    || { GI1_REST=500; bad "$name" "${gi1_why:-setup}"; return; }
+  GI1_REST=500 calls=''
+  for run in 1 2 3 4 5; do calls="$calls $(gi1_rest_calls "$run")"; done
+  printf '#1324 REST calls by wake (cold, warm, unchanged, changed, unchanged):%s\n' "$calls"
+  for n in $calls; do
+    [ "$n" -le 30 ] || { bad "$name" "a wake made $n REST calls, over 30:$calls"; return; }
+  done
+  echo "ok   $name"
+}
+rest_wake_case '#1324: every wake of a twelve-ticket spec with open pull requests stays within 30 REST calls' "$GI1"
 gi1_tools_case() {
   name=$1 change=$2 start=${3:-"$GI1 | pull(35; .repo = \"synthetic-owner/synthetic-tools\")"} tools_before=${4:-} tools_after=${5:-}
   selected "$name" || return 0

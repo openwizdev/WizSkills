@@ -312,8 +312,11 @@ class Classify(unittest.TestCase):
                     ('no tests ran', 5, '===== no tests ran in 0.01s =====\n', 'error'),
                     ('passed summary but non-zero exit', 1, PYTEST_PASS, 'error'),
                     ('parametrized id with a space', 1, PYTEST_SPACE, 'failed'),
+                    ('brackets in the test path', 1,
+                     PYTEST_ASSERT.replace('test_a.py', 'tests[legacy]/test_a.py'), 'failed'),
                     ('separator in the id and the assertion', 1,
-                     PYTEST_SPACE.replace('hello world', 'New York - Boston').replace('1 == 2', '5 - 3 == 0'),
+                     PYTEST_SPACE.replace('test_a.py', 'tests[legacy]/test_a.py')
+                     .replace('hello world', 'New York - Boston').replace('1 == 2', '5 - 3 == 0'),
                      'failed'),
                     ('exception after an id with the separator', 1,
                      PYTEST_SPACE.replace('hello world', 'New York - Boston')

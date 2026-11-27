@@ -52,7 +52,7 @@ def pytest(code, out):
     errors = n.get('error', 0) + n.get('errors', 0)
     if code == 0 and n.get('passed') and not n.get('failed') and not errors:
         return 'passed'
-    reasons = re.findall(r'^FAILED [^\[\n]+?(?:\[.*?\])? - (.*)$', out, re.M)
+    reasons = re.findall(r'^FAILED (?:\[[^\]\n]*\]|(?! - ).)+? - (.*)$', out, re.M)
     if (code == 1 and n.get('failed') and not errors and len(reasons) == n['failed']
             and all(re.match(r'(assert\b|AssertionError\b|Failed:)', r) for r in reasons)):
         return 'failed'

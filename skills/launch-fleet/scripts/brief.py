@@ -53,7 +53,6 @@ HARNESS_SKILL_PATHS = (
 )
 WIZSKILLS_REPO = 'https://github.com/openwizdev/WizSkills.git'
 SEMVER = r'[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?'
-# Release copies .claude-plugin/plugin.json "version" here. test-brief.py refuses a mismatch.
 WIZSKILLS_VERSION = '0.5.0'
 SHARED_SKILL_ROOTS = ("Every harness also reads HOME/.agents/skills, the project's .agents/skills, "
                       'and $HOME/wizskills/skills.')

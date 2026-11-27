@@ -51,22 +51,53 @@ def sections(text):
 
 
 _MARKDOWN_LINK = re.compile(r'\[[^\]]*\]\([^)]*\)')
-_URL = re.compile(r'https://\S+')
-_PAREN = re.compile(r'\([^)]*\)')
-_PROVENANCE = re.compile(
-    r'\[[^\]]*\]\([^)]*\)|https://|\bJake\b|\b\d{4}-\d{2}-\d{2}\b|\bprivate record\b|\bADR\b',
-    re.I)
+_PRIVATE_RECORD = re.compile(r'\[private record\]\((https://[^)\s]+)\)')
+_CITATION_LINK = re.compile(
+    r'\[(?:AGENTS\.md(?:, Commands|, Live work and approvals)?'
+    r'|ci\.yml|the CI workflow|ADR(?: \d+)?)\]\([^)]*\)'
+)
+_SOURCE = re.compile(r'(?:^|(?<=[.!?])[ \t]+)Source:[ \t]+(.*)$')
+_DATE = r'\d{4}-\d{2}-\d{2}'
+_RECORDS = r'\((?:(?:J\d+|ADR \d+|spec #\d+|' + _DATE + r')(?:: [^()]*)?; )?@record(?:; @record)*\)'
+_CITATION = re.compile(
+    rf'(?:@link(?:(?:,?(?: and)?|;) @link)*'
+    rf'|(?:[A-Z][A-Za-z -]*, {_DATE}(?:(?:,| and) {_DATE})*|provenance) {_RECORDS}'
+    rf'(?:; (?:also|the Fixer as J\d+) {_RECORDS})*'
+    r'(?:; the Orchestrator as the Builder, which starts the fleet thread today)?'
+    r'(?:; (?:release rules in )?@link)?'
+    r'|the first six rows are the fleet\'s action gates; the next three are the "Jake approves first" '
+    r'list in @link; the last two are @link)\.?'
+)
+_CI_SOURCE = re.compile(
+    r'\[the workflow\]\([^)]*\) and the repository ruleset "CI must pass":[ \t]+'
+)
 
 
-def source_instruction(tail):
-    masked = _PAREN.sub(' ', _URL.sub(' ', _MARKDOWN_LINK.sub(' ', tail)))
-    if ':' in masked:
-        instruction = masked.rsplit(':', 1)[1].strip()
-        if instruction and not _PROVENANCE.search(instruction):
-            return instruction
-    kept = [sentence.strip() for sentence in re.split(r'(?<=\.)\s+', tail.strip())
-            if sentence.strip() and not _PROVENANCE.search(sentence)]
-    return ' '.join(kept).strip()
+def source_sentences(text):
+    masked = _MARKDOWN_LINK.sub(lambda link: 'x' * len(link[0]), text)
+    start = 0
+    for end in re.finditer(r'(?<=\.)[ \t]+', masked):
+        yield text[start:end.start()]
+        start = end.end()
+    yield text[start:]
+
+
+def split_source(text):
+    match = _CI_SOURCE.match(text)
+    if match:
+        return text[match.end():], []
+    kept = []
+    links = []
+    shortened = False
+    for sentence in source_sentences(text):
+        form = _PRIVATE_RECORD.sub('@record', sentence)
+        form = _CITATION_LINK.sub('@link', form)
+        if _CITATION.fullmatch(form):
+            links.extend(_PRIVATE_RECORD.findall(sentence))
+            shortened = True
+        else:
+            kept.append(sentence)
+    return (' '.join(kept), links) if shortened else (None, [])
 
 
 def compact_sources(text):
@@ -81,24 +112,24 @@ def compact_sources(text):
                 fence = run
             elif run.startswith(fence) and not tail.strip():
                 fence = ''
-        if not fence:
-            match = re.search(r'(?:^|[ \t]+)Source:[ \t]*(.*)$', line)
+        if not fence and '|' not in line:
+            match = _SOURCE.search(line)
             if match:
-                for url in re.findall(r'\[private record\]\((https://[^)\s]+)\)', match.group(1)):
-                    if url not in links:
-                        links.append(url)
-                prefix = line[:match.start()].rstrip()
-                instruction = source_instruction(match.group(1))
-                kept = f'{prefix} {instruction}'.strip() if prefix and instruction else prefix or instruction
-                if kept:
-                    out.append(kept)
-                continue
+                instruction, records = split_source(match[1])
+                if instruction is not None:
+                    links.extend(records)
+                    prefix = line[:match.start()].rstrip()
+                    kept = ' '.join(part for part in (prefix, instruction) if part)
+                    if kept:
+                        out.append(kept)
+                    continue
         if line == '' and (not out or out[-1] == ''):
             continue
         out.append(line)
     body = '\n'.join(out).strip()
     if links:
-        body = f'{body}\n\nSource: {", ".join(links)}' if body else f'Source: {", ".join(links)}'
+        source = 'Source: ' + ', '.join(dict.fromkeys(links))
+        body = f'{body}\n\n{source}' if body else source
     return body
 
 

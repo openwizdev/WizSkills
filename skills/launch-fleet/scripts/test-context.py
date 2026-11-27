@@ -113,7 +113,7 @@ class ContextTests(unittest.TestCase):
             'Source: Synthetic author, 2030-01-02 ([private record](https://github.com/example/private/issues/3#issuecomment-300)).',
             '## Test commands\n\n```sh\nSource: keep inside fence\n```\n\n'
             'Source: [AGENTS.md](../../AGENTS.md).',
-            '## CI checks\n\nDraft rule. Source: [ci.yml](../../.github/workflows/ci.yml) prose.',
+            '## CI checks\n\nDraft rule. Source: [ci.yml](../../.github/workflows/ci.yml).',
             '## Approval rules\n\nApproval table.\n\n'
             'Source: provenance ([private record](https://github.com/example/private/issues/4#issuecomment-400)).',
             '## Standing merge rules\n\nMerge rule.\n\n'
@@ -153,6 +153,26 @@ class ContextTests(unittest.TestCase):
                 result = self.run_cli(role)
                 self.assertEqual((result.returncode, result.stderr), (0, ''))
                 self.assertIn(clause, result.stdout)
+
+    def test_keeps_approval_rows_and_linked_rules_alongside_sources(self):
+        row = ('| Read the release policy. Source: [policy](https://example.com/policy) '
+               '| Release lead |')
+        rule = '[Release approval](https://example.com/approval) is required before publishing.'
+        standalone = 'Source: [Use the release checklist before publishing](https://example.com/checklist).'
+        pointer = 'https://github.com/example/private/issues/1#issuecomment-100'
+        self.put(FLEET, (
+            '## Approval rules\n\n| Rule | Approver |\n| --- | --- |\n'
+            f'{row}\n\n'
+            f'Source: Synthetic author, 2030-01-01 ([private record]({pointer})). {rule}\n\n'
+            f'{standalone}\n'
+        ))
+        for role in ('reviewer', 'fleet'):
+            result = self.run_cli(role)
+            self.assertEqual((result.returncode, result.stderr), (0, ''))
+            for kept in (row, rule, standalone, f'Source: {pointer}'):
+                with self.subTest(role=role, kept=kept):
+                    self.assertIn(kept, result.stdout)
+            self.assertNotIn('Synthetic author', result.stdout)
 
     def test_missing_sources_and_legacy_only_settings(self):
         missing = self.run_cli('builder')

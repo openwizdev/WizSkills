@@ -119,6 +119,28 @@ else:
 
 
 class ApprovalTest(unittest.TestCase):
+    def test_to_spec_verifies_the_tracker_before_creating_the_spec(self):
+        text = (HERE.parent.parent / "to-spec" / "SKILL.md").read_text()
+        step = text.split("## 2. Write the spec", 1)[1].split("\n## 3.", 1)[0]
+        before_create, action, _ = " ".join(step.split()).partition("Create")
+        self.assertTrue(action)
+        self.assertIn("`gh repo view --json nameWithOwner` must match the configured tracker before a write.",
+                      before_create)
+
+    def test_step_three_verifies_the_tracker_before_creating_tickets(self):
+        text = (HERE.parent / "SKILL.md").read_text()
+        step = text.split("## 3. Write and verify the tickets", 1)[1].split("\n## 4.", 1)[0]
+        before_create, action, _ = " ".join(step.split()).partition("Create each issue")
+        self.assertTrue(action)
+        self.assertIn("Before writing, verify the configured tracker with "
+                      "`gh repo view --json nameWithOwner`. Stop on a mismatch.", before_create)
+
+    def test_step_four_uses_the_first_or_next_revision_number(self):
+        text = (HERE.parent / "SKILL.md").read_text()
+        step = text.split("## 4. Approve by the checks", 1)[1].split("\n## 5.", 1)[0]
+        self.assertIn("`N` is 1 for the first approval, otherwise the latest revision plus one.",
+                      " ".join(step.split()))
+
     def test_documented_handoff_from_plugin_consumer(self):
         with tempfile.TemporaryDirectory(prefix="approval-consumer-") as folder:
             tmp = Path(folder)

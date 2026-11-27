@@ -6,35 +6,33 @@ version: 0.4.0
 
 # To tickets
 
-The orchestrator takes a spec from [to-spec](../to-spec/SKILL.md) to a plan
-approved by its own checks (J202): no owner question or human approval between.
+Take a [to-spec](../to-spec/SKILL.md) spec through machine plan approval (J202)
+with no owner question or human approval.
 
 ## 1. Check the starting point
 
 Run `python3 -I "<this skill's folder>/../launch-fleet/scripts/context.py" planner`
-once per session (rerun only when a listed blob changes). Read the grill
-confirmation comment back privately; no confirmed grill stops and returns to
-[grill](../grill/SKILL.md). If already approved, [hold before editing](changes.md);
-existing contract holds keep their release conditions. A failed read or unknown
-state stops the write or handoff it would authorize.
+once per session and after a listed blob changes. Verify the grill confirmation
+privately or return to [grill](../grill/SKILL.md). [Hold an approved plan before
+editing](changes.md). Keep existing contract holds' release conditions. A failed
+read or unknown state stops its write or handoff.
 
 ## 2. Cut the tickets
 
-Cut end-to-end builder tickets to `Size: S.` (~200 changed lines, `<=10` files);
-`approve.py` refuses `L` and any `M` (~400 lines) without `Why M:` in Parent.
-Cut for shortest critical chain then widest graph (F6) with disjoint owned
-paths; compare two cuts with
-`python3 -I "<this skill's folder>/scripts/prefer.py" <cut A> <cut B>`. Use a
-contract-first ticket for a shared interface, or say why none is needed. See
-[tickets.md](tickets.md).
+Cut end-to-end `Size: S.` tickets (~200 changed lines, `<=10` files). `approve.py`
+refuses `L` and any `M` (~400 lines) without `Why M:` in Parent. Use disjoint
+owned paths and prefer the shortest critical chain, then widest graph (F6). Compare
+cuts with `python3 -I "<this skill's folder>/scripts/prefer.py" <cut A> <cut B>`. Use a
+contract-first ticket for shared interfaces or explain why none is needed.
+See [tickets.md](tickets.md).
 
 ## 3. Write and verify the tickets
 
-Run [fidelity.md](../to-spec/fidelity.md) on the drafted set before creating or
-showing tickets (drop, fix, or explain kept items in one line). Create each
-issue without a ready label, blockers first, in the spec's milestone, with
-native parent and blockers, then read back every issue. Draw and post the graph
-on the spec (agents' document, never the owner's) with
+Before writing, verify the configured tracker with `gh repo view --json nameWithOwner`.
+Stop on a mismatch. Run [fidelity.md](../to-spec/fidelity.md) before creating or
+showing tickets (drop, fix, or explain in one line). Create each issue without
+a ready label, blockers first, with the spec milestone, native parent and
+blockers. Read each back. Post the agents' graph on the spec using
 `python3 -I "<this skill's folder>/scripts/picture.py" < graph.json > picture.md`.
 
 ## 4. Approve by the checks
@@ -47,20 +45,20 @@ python3 -I "<this skill's folder>/scripts/approve.py" --graph graph.json --revis
   --grill <confirmation URL> --number <N> [--changed "<what changed>"] --root . > record.md
 ```
 
-Exit 0 prints `record.md` (exit 1: fix and rerun; exit 2: re-read);
-`approve.py` checks the plan and requires `--changed` when `N > 1`
+`N` is 1 for the first approval, otherwise the latest revision plus one.
+`approve.py` requires `--changed` for successors. Exit 0 writes `record.md`.
+Fix and rerun on 1 and re-read on 2
 ([decisions.v1](../../contracts/decisions.v1.md#machine-plan-approval)).
 
-Post `record.md` with `gh issue comment <spec> --body-file record.md` as a
-record author, read it back byte for byte (on uncertain writes, read comments
-before retrying), then apply each row's ready label and read labels back.
+As a record author, post `gh issue comment <spec> --body-file record.md` and
+verify the bytes. Read comments before retrying an uncertain write. Then apply
+and read back each row's ready label.
 
 ## 5. Hand off
 
-[launch-fleet](../launch-fleet/SKILL.md) starts the fleet from the machine
-approval; hand back to to-spec for the steering video. Builders and other-family
-reviewers stay independent; the fleet owns exact-head checks and merge. Measure
-spec lead time with
+[launch-fleet](../launch-fleet/SKILL.md) starts from machine approval. Hand back
+to to-spec for the steering video. Builders and other-family reviewers stay
+independent. The fleet owns exact-head checks and merge. Measure spec lead time with
 `python3 -I "<this skill's folder>/scripts/lead_time.py" <collector JSON> --spec <spec>`.
 Planning and machine approval grant no `fleet.md` Approval rule (each asks its
 named approver first; default: publishing, spending, secrets, deleting user

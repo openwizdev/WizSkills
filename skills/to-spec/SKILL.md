@@ -6,32 +6,31 @@ version: 0.4.0
 
 # To spec
 
-The owner's one active step is confirming the grill (J202). From there the
-orchestrator writes the spec, has [to-tickets](../to-tickets/SKILL.md) cut and
-approve the plan by its own checks, and makes one video, then the owner steers.
+The owner confirms the grill (J202), then steers. The orchestrator writes the
+spec, runs [to-tickets](../to-tickets/SKILL.md) for machine approval and makes
+the steering video.
 
 ## 1. Read the confirmed grill
 
 Run `python3 -I "<this skill's folder>/../launch-fleet/scripts/context.py" planner`
-once per session (rerun only when a listed blob changes). Read the grill
-privately, with its confirmation comment, glossary, decision tree, parked list,
-and the code. Copy them into the spec. An unconfirmed grill or open decision
-returns to [grill](../grill/SKILL.md). Keep the confirmation URL as the plan
-approval's authority. An unclear read or publication approval stops the related
-write.
+once per session and after a listed blob changes. Read the grill and its
+confirmation privately, plus the glossary, decision tree, parked list and code.
+Carry the glossary, decision tree and parked list into the spec in public-safe form.
+Return open decisions or an unconfirmed grill to [grill](../grill/SKILL.md).
+Keep the confirmation URL for plan approval. Stop the affected write on an
+unclear read or missing publication approval.
 
 ## 2. Write the spec
 
-Use [spec.md](spec.md): name outcome, proof and seams; headline from the grill
-or `none` for infra; use the grill's version milestone (create if missing); no
-ticket label. Run [fidelity.md](fidelity.md) before creating or showing it
-(drop, fix, or explain kept items in one line). Create, read back, and on
-resume confirm uncertain writes before retrying. For an already approved plan,
-use [changes.md](../to-tickets/changes.md) first.
+`gh repo view --json nameWithOwner` must match the configured tracker before a write.
+Use [spec.md](spec.md) for outcome, proof and seams. Take the grill headline
+(`none` for infra) and version milestone (create if needed). Omit ticket labels.
+Run [fidelity.md](fidelity.md) before creating or showing the spec (drop, fix,
+or explain in one line). Create and read back. On resume, verify uncertain
+writes before retrying. [Hold an approved plan first](../to-tickets/changes.md).
 
-Every spec carries its two checkpoint answers
-([checkpoints.v1](../../contracts/checkpoints.v1.md)), filled from the grill and
-confirmed with the spec:
+Confirm both [checkpoint answers](../../contracts/checkpoints.v1.md) from the
+grill with the spec:
 
 ```text
 ## Checkpoints
@@ -46,9 +45,8 @@ refuses missing or malformed lines.
 
 ## 3. Cut the plan
 
-Run [to-tickets](../to-tickets/SKILL.md) with the grill confirmation URL. It
-ends with a machine plan approval or fixes and re-checks refusals without
-returning to the owner.
+Run [to-tickets](../to-tickets/SKILL.md) with the confirmation URL for machine
+approval. Fix and re-check refusals without returning to the owner.
 
 ## 4. Make the steering video
 
@@ -58,9 +56,8 @@ follows the machine plan approval straight away. A reset or change of that spec 
 plan gets a new machine approval and still no video: for this fleet that
 replaces step 5's new video. Every other spec gets its video.
 
-One animatic in build order (step 1 starts first), in the grill's words, showing
-user and code changes. Write `storyboard.json` outside any repo
-([video.md](video.md)), then:
+Show user and code changes in one animatic, in the grill's words, in build order
+(step 1 first). Write `storyboard.json` outside any repo ([video.md](video.md)).
 
 - `node "<this skill's folder>/scripts/animatic.mjs" build storyboard.json -o spec.mp4`;
   read `build/sheet.png` until it reads right and ends `no warnings`.
@@ -71,11 +68,9 @@ user and code changes. Write `storyboard.json` outside any repo
 
 ## 5. Steer
 
-Steering by comment is off for now (until OpenWiz #1402), so the owner steers
-through their orchestrator: stop holds the fleet, reset re-cuts via
-[changes.md](../to-tickets/changes.md) and makes a new video, anything else is
-a steer to act on. A changed spec or plan always gets a new machine approval
-and new video.
+Until OpenWiz #1402 the owner steers through their orchestrator. Stop holds the fleet.
+Reset re-cuts via [changes.md](../to-tickets/changes.md) and makes a new video.
+Act on other steers. A changed spec or plan gets fresh machine approval and video.
 
 Planning grants only what the machine approval records, never `fleet.md`'s
 Approval rules (each asks its named approver first; default: publishing,

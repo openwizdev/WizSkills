@@ -44,6 +44,114 @@ class DreamCycleLinksTests(unittest.TestCase):
         shutil.copytree(FIXTURES, dest)
         return dest
 
+    def _json_file(self, name, value):
+        path = self.tmp / name
+        path.write_text(json.dumps(value) + "\n", encoding="utf-8")
+        return str(path)
+
+    def test_unread_issue_export_preserves_the_accepted_entry(self):
+        org = self._copy_fixture_org()
+        (org / "org/alpha/issues.json").unlink()
+        entry = json.loads((org / "ledger_seed.jsonl").read_text().splitlines()[0])
+        ledger = self._json_file("ledger.jsonl", entry)
+        before = Path(ledger).read_bytes()
+        code, data, err = _run("ledger", "--ledger", ledger, "--settings", str(org / "settings.json"),
+                               "--recheck", "--date", "2030-01-15")
+        self.assertEqual(code, 2, err)
+        self.assertEqual([item["source"] for item in data["unconfirmed"]], ["example/alpha:issues_file"])
+        self.assertEqual(data["kept"], [entry["id"]])
+        self.assertEqual(Path(ledger).read_bytes(), before)
+
+    def test_same_day_ledger_update_replays_the_new_entry(self):
+        entry = json.loads((FIXTURES / "ledger_seed.jsonl").read_text().splitlines()[0])
+        update = {"id": entry["id"], "state": "accepted", "changes": "Assign the confirmed owner."}
+        ledger = str(self.tmp / "ledger.jsonl")
+        transitions = self._json_file("transitions.json", [entry, update])
+        code, _, err = _run("ledger", "--ledger", ledger, "--append", transitions, "--date", "2030-01-15")
+        self.assertEqual(code, 0, err)
+        code, data, err = _run("canaries", "--ledger", ledger, "--settings", str(FIXTURES / "settings.json"))
+        self.assertEqual(code, 0, err)
+        self.assertEqual([(row["id"], row["changes"]) for row in data["known_true"]],
+                         [(entry["id"], update["changes"])])
+
+    def test_invalid_ledger_transition_leaves_the_whole_batch_unwritten(self):
+        entry = json.loads((FIXTURES / "ledger_seed.jsonl").read_text().splitlines()[0])
+        ledger = self._json_file("ledger.jsonl", entry)
+        before = Path(ledger).read_bytes()
+        update = {"id": entry["id"], "state": "accepted", "last_cited": "2030-01-15"}
+        for invalid in ({"id": "missing-evidence", "state": "accepted"},
+                        {"id": entry["id"], "state": "accepted", "ends": []},
+                        {"id": entry["id"], "state": "accepted", "last_cited": "tomorrow"}):
+            with self.subTest(invalid=invalid):
+                transitions = self._json_file("transitions.json", [update, invalid])
+                code, _, err = _run("ledger", "--ledger", ledger, "--append", transitions, "--date", "2030-01-15")
+                self.assertEqual(code, 1, err)
+                self.assertEqual(Path(ledger).read_bytes(), before)
+        legacy = self._json_file("legacy.jsonl", dict(entry, ends=[], changes="", owner=""))
+        code, data, err = _run("canaries", "--ledger", legacy, "--settings", str(FIXTURES / "settings.json"))
+        self.assertEqual(code, 2, err)
+        self.assertEqual(data["known_true"], [])
+
+    def test_gate_a_compares_rejected_end_content_even_if_old_quote_still_matches(self):
+        org = self._copy_fixture_org()
+        settings = str(org / "settings.json")
+        entry = json.loads((org / "ledger_seed.jsonl").read_text().splitlines()[4])
+        ledger = str(self.tmp / "ledger.jsonl")
+        transition = self._json_file("reject.json", entry)
+        code, _, err = _run("ledger", "--ledger", ledger, "--settings", settings, "--append", transition)
+        self.assertEqual(code, 0, err)
+        first, second = entry["ends"]
+        candidate = dict(entry, ends=[first, dict(second, quote="CloudBuild integration.")])
+        candidates = self._json_file("candidate.json", candidate)
+        code, data, err = _run("check", candidates, "--settings", settings, "--ledger", ledger)
+        self.assertEqual(code, 0, err)
+        self.assertIn("repeat rejection", data["dropped"][0]["reason"])
+
+        path = org / "org/alpha/README.md"
+        path.write_text(path.read_text().replace(second["quote"], second["quote"] + " New verified use."))
+        code, data, err = _run("check", candidates, "--settings", settings, "--ledger", ledger)
+        self.assertEqual(code, 0, err)
+        self.assertEqual([row["id"] for row in data["passed"]], [entry["id"]])
+
+    def test_scoreboard_candidates_keep_verbatim_evidence_and_parse_inline_code(self):
+        org = self._copy_fixture_org()
+        settings = str(org / "settings.json")
+        path = org / "org/notes/scoreboard.md"
+        original = path.read_text()
+        ref = "example/alpha:README.md#L4"
+        for text in (original.replace("Supported fully", "Supported " * 24),
+                     original.replace(ref, f"`{ref}`")):
+            with self.subTest(text=text.splitlines()[-1][:65]):
+                path.write_text(text)
+                code, data, err = _run("candidates", "--settings", settings)
+                self.assertEqual(code, 0, err)
+                scoreboard = [row for row in data["candidates"] if row["reason"] == "fixed:scoreboard-to-source"]
+                self.assertEqual(len(scoreboard), 1)
+                self.assertIn(ref, [end["ref"] for end in scoreboard[0]["ends"]])
+                candidates = self._json_file("candidate.json", dict(scoreboard[0], changes="Correct the row."))
+                code, data, err = _run("check", candidates, "--settings", settings)
+                self.assertEqual(code, 0, err)
+                self.assertEqual(len(data["passed"]), 1, data["dropped"])
+
+    def test_candidate_watermarks_exclude_unchanged_pairs_before_ranking(self):
+        refs = {}
+        for name in ("alpha", "beta"):
+            folder = self.tmp / name
+            folder.mkdir()
+            refs[f"example/{name}"] = {"since": "2099-01-01"}
+            for index in range(80):
+                (folder / f"note-{index}.md").write_text("Contact: sharedname\n" if index < 40 else "Other notes.\n")
+        settings = self._json_file("settings.json", {"repos": {repo: repo.split("/")[1] for repo in refs},
+                                                     "link_budget": 5})
+        watermarks = self._json_file("watermarks.json", {"repos": refs})
+        code, data, err = _run("candidates", "--settings", settings, "--watermarks", watermarks)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(data["counts"]["raw_pairs"], 0)
+        watermarks = self._json_file("watermarks.json", {"repos": refs, "read_since": ["example/alpha:note-0.md"]})
+        code, data, err = _run("candidates", "--settings", settings, "--watermarks", watermarks)
+        self.assertEqual(code, 0, err)
+        self.assertEqual((data["counts"]["raw_pairs"], data["counts"]["emitted"]), (40, 5))
+
     def test_candidates_pairs_org_and_suppresses_ubiquitous_name(self):
         code, data, err = _run(
             "candidates",

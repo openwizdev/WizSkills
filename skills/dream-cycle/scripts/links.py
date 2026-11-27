@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import fnmatch
+import hashlib
 import json
 import math
 import os
@@ -9,6 +10,7 @@ import re
 import subprocess
 import sys
 from datetime import date, datetime, timezone
+from itertools import combinations, product
 from pathlib import Path
 
 SCHEMAS = {
@@ -22,7 +24,7 @@ SCHEMAS = {
 CONFIDENCE_WEIGHT = {"high": 3, "medium": 2, "low": 1}
 ISSUE_REF_RE = re.compile(r"^([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+)$")
 FILE_REF_RE = re.compile(r"^([A-Za-z0-9._-]+/[A-Za-z0-9._-]+):([^#\s]+?)(?:#L([0-9]+)(?:-L?([0-9]+))?)?$")
-TEXT_REF_RE = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?::[^\s|,)>\]]+|#[0-9]+)")
+TEXT_REF_RE = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?::[^\s|`,)>\]]+|#[0-9]+)")
 ISO_DATE_RE = re.compile(r"\b([0-9]{4}-[0-9]{2}-[0-9]{2})\b")
 REPO_MENTION_RE = re.compile(r"\b([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)\b")
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".pytest_cache", "dist", "build", "target"}
@@ -90,6 +92,11 @@ def quote_matches(quote, text):
     norm_q = " ".join(quote.split())
     norm_t = " ".join(text.split())
     return bool(norm_q) and norm_q in norm_t
+
+
+def evidence_excerpt(text):
+    normalised = " ".join(text.split())
+    return next((part[:200].strip() for part in re.split(r"[\x00-\x1f\x7f]", normalised) if part.strip()), "")
 
 
 def load_records(path):
@@ -184,6 +191,7 @@ class OrgStore:
         self._unconfirmed_keys = set()
         self._repo_errors = {}
         self._issues = {}
+        self._issue_errors = {}
         self._file_cache = {}
         self._validate_repos()
 
@@ -212,22 +220,27 @@ class OrgStore:
 
     def _load_issue_like(self, repo_name, info):
         combined = {}
+        failures = []
         for key in ("issues_file", "prs_file"):
             fp = info.get(key)
             if not fp:
                 continue
             try:
                 rows = parse_json_strict(fp.read_text(encoding="utf-8"))
-                if not isinstance(rows, list):
-                    raise ValueError("expected JSON list")
+                if not isinstance(rows, list) or any(
+                    not isinstance(row, dict) or type(row.get("number")) is not int for row in rows
+                ):
+                    raise ValueError("expected a JSON list of numbered records")
             except (OSError, ValueError) as exc:
                 msg = f"{key} unreadable: {exc}"
                 self.add_unconfirmed(f"{repo_name}:{key}", msg)
+                failures.append(msg)
                 continue
             for row in rows:
-                if isinstance(row, dict) and isinstance(row.get("number"), int):
-                    combined[row["number"]] = row
+                combined[row["number"]] = row
         self._issues[repo_name] = combined
+        if failures:
+            self._issue_errors[repo_name] = "; ".join(failures)
 
     def repo_error(self, repo_name):
         return self._repo_errors.get(repo_name)
@@ -283,6 +296,12 @@ class OrgStore:
                 return "unconfirmed", self._repo_errors[repo_name]
             issue = self._issues.get(repo_name, {}).get(num)
             if issue is None:
+                if repo_name in self._issue_errors:
+                    return "unconfirmed", self._issue_errors[repo_name]
+                if not any(self.settings["repos"][repo_name].get(key) for key in ("issues_file", "prs_file")):
+                    reason = "no issue or PR export configured"
+                    self.add_unconfirmed(f"{repo_name}:issues", reason)
+                    return "unconfirmed", reason
                 return "missing", f"issue/PR #{num} not found in {repo_name}"
             state = str(issue.get("state", "open")).lower()
             if state != "open":
@@ -329,24 +348,36 @@ def read_ledger_state(ledger_path):
         return [], {}, []
     entries = load_records(ledger_path)
     open_by_id = {}
-    closed_keys = set()
     rejected = []
-    for entry in entries:
+    for position, entry in enumerate(entries):
         eid = entry.get("id")
-        key = (eid, entry.get("state"), entry.get("valid_from"))
         if entry.get("invalid_at") is not None:
-            closed_keys.add(key)
-            if open_by_id.get(eid) and (
-                open_by_id[eid].get("state") == entry.get("state")
-                and open_by_id[eid].get("valid_from") == entry.get("valid_from")
-            ):
+            if open_by_id.get(eid) == dict(entry, invalid_at=None):
                 del open_by_id[eid]
         else:
-            if key not in closed_keys:
-                open_by_id[eid] = entry
-        if entry.get("state") == "rejected":
-            rejected.append(entry)
+            open_by_id[eid] = entry
+            if entry.get("state") == "rejected":
+                rejected.append((position, entry))
     return entries, open_by_id, rejected
+
+
+def rejection_snapshot_path(ledger_path):
+    return Path(str(ledger_path) + ".rejections.jsonl")
+
+
+def digest(value):
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def snapshot_rejection(store, position, entry):
+    texts = {}
+    for end in entry["ends"]:
+        status, text = store.resolve_end(end["ref"])
+        if status != "ok":
+            return None
+        texts[end["ref"]] = text
+    return {"position": position, "entry": digest(entry), "content": digest(texts)}
 
 
 def _matches_file_patterns(repo_name, rel, patterns):
@@ -475,6 +506,19 @@ def _token_overlap(text_a, text_b):
     return toks_a & toks_b
 
 
+def _co_mentions(hits, changed):
+    if changed == set():
+        return
+    by_repo = {}
+    for hit in hits:
+        recent, older = by_repo.setdefault(hit["repo"], ([], []))
+        (recent if changed is None or hit["record"] in changed else older).append(hit)
+    for (recent_a, older_a), (recent_b, older_b) in combinations(by_repo.values(), 2):
+        yield from product(recent_a, recent_b)
+        yield from product(recent_a, older_b)
+        yield from product(older_a, recent_b)
+
+
 def cmd_candidates(args):
     settings = load_settings(args.settings)
     store = OrgStore(settings)
@@ -486,6 +530,7 @@ def cmd_candidates(args):
         except (OSError, ValueError) as exc:
             raise InputError(f"invalid watermarks file: {exc}") from exc
 
+    changed = _changed_set(store, watermarks)
     _, open_ledger, _ = read_ledger_state(args.ledger)
     linked_pairs = {
         canonical_refs(entry.get("ends", []))
@@ -494,8 +539,9 @@ def cmd_candidates(args):
     }
 
     entities = _extract_declared_entities(store)
-    records = {}
+    total_records = 0
     entity_records = {k: [] for k in entities}
+    patterns = {key: re.compile(rf"(?<![A-Za-z0-9_]){re.escape(key)}(?![A-Za-z0-9_])") for key in entities}
 
     for repo_name in sorted(store.settings["repos"]):
         if store.repo_error(repo_name):
@@ -507,25 +553,20 @@ def cmd_candidates(args):
                 store.add_unconfirmed(f"{repo_name}:{rel}", str(exc))
                 continue
             rec_key = f"{repo_name}:{rel}"
-            records[rec_key] = {"repo": repo_name, "ref_base": rec_key, "text": text, "lines": lines, "seen": run_date}
+            total_records += 1
             low_text = text.lower()
-            for ekey, (disp, _) in entities.items():
-                pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(ekey)}(?![A-Za-z0-9_])")
+            for ekey, pattern in patterns.items():
                 if pattern.search(low_text):
-                    line_no = 1
-                    quote = clean_line(lines[0], 200) if lines else disp
                     for idx, ln in enumerate(lines, 1):
                         if pattern.search(ln.lower()):
-                            line_no = idx
-                            quote = clean_line(ln, 200)
+                            entity_records[ekey].append({
+                                "record": rec_key,
+                                "repo": repo_name,
+                                "ref": f"{rec_key}#L{idx}",
+                                "quote": evidence_excerpt(ln),
+                                "seen": run_date,
+                            })
                             break
-                    entity_records[ekey].append({
-                        "record": rec_key,
-                        "repo": repo_name,
-                        "ref": f"{rec_key}#L{line_no}",
-                        "quote": quote,
-                        "seen": run_date,
-                    })
 
         for num, issue in sorted(store.issues_for(repo_name).items()):
             if str(issue.get("state", "open")).lower() != "open":
@@ -537,12 +578,11 @@ def cmd_candidates(args):
             seen = str(issue.get("updated_at", ""))[:10]
             if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", seen):
                 seen = run_date
-            records[rec_key] = {"repo": repo_name, "ref_base": rec_key, "text": full, "lines": full.splitlines(), "seen": seen}
+            total_records += 1
             low_text = full.lower()
-            for ekey, (disp, _) in entities.items():
-                pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(ekey)}(?![A-Za-z0-9_])")
+            quote = evidence_excerpt(body if body.strip() else title)
+            for ekey, pattern in patterns.items():
                 if pattern.search(low_text):
-                    quote = clean_line(body.splitlines()[0] if body.strip() else title, 200)
                     entity_records[ekey].append({
                         "record": rec_key,
                         "repo": repo_name,
@@ -551,7 +591,7 @@ def cmd_candidates(args):
                         "seen": seen,
                     })
 
-    total_records = max(len(records), 1)
+    total_records = max(total_records, 1)
     ubiq = settings["ubiquity_threshold"]
     entity_weights = {}
     for ekey, hits in entity_records.items():
@@ -565,7 +605,12 @@ def cmd_candidates(args):
 
     raw_by_pair = {}
 
+    def in_window(ref_a, ref_b):
+        return changed is None or any(ref.split("#L", 1)[0] in changed for ref in (ref_a, ref_b))
+
     def register_pair(end_a, end_b, link_type, reason, ent_list, weight, fixed=False):
+        if not end_a["quote"] or not end_b["quote"] or not in_window(end_a["ref"], end_b["ref"]):
+            return
         pair_key = canonical_refs([end_a, end_b])
         if pair_key in linked_pairs:
             return
@@ -595,13 +640,10 @@ def cmd_candidates(args):
         if w <= 0.0:
             continue
         disp = entities[ekey][0]
-        for i in range(len(hits)):
-            for j in range(i + 1, len(hits)):
-                if hits[i]["repo"] == hits[j]["repo"]:
-                    continue
-                end_a = {"ref": hits[i]["ref"], "quote": hits[i]["quote"], "seen": hits[i]["seen"]}
-                end_b = {"ref": hits[j]["ref"], "quote": hits[j]["quote"], "seen": hits[j]["seen"]}
-                register_pair(end_a, end_b, "unknown", f"co-mention:{disp}", [disp], w, fixed=False)
+        for a, b in _co_mentions(hits, changed):
+            end_a = {key: a[key] for key in ("ref", "quote", "seen")}
+            end_b = {key: b[key] for key in ("ref", "quote", "seen")}
+            register_pair(end_a, end_b, "unknown", f"co-mention:{disp}", [disp], w)
 
     open_issues = []
     for repo_name in sorted(store.settings["repos"]):
@@ -619,7 +661,7 @@ def cmd_candidates(args):
                 "repo": repo_name,
                 "ref": f"{repo_name}#{num}",
                 "text": f"{title}\n{body}",
-                "quote": clean_line(body.splitlines()[0] if body.strip() else title, 200),
+                "quote": evidence_excerpt(body if body.strip() else title),
                 "seen": seen,
             })
 
@@ -637,9 +679,9 @@ def cmd_candidates(args):
                 stem = Path(rel).stem
                 for idx, ln in enumerate(lines, 1):
                     if re.search(r"\b(promise|owed|will send|committed)\b", ln, re.IGNORECASE) or ln.lstrip().startswith("- [ ]"):
-                        end_a = {"ref": f"{repo_name}:{rel}#L{idx}", "quote": clean_line(ln, 200), "seen": run_date}
+                        end_a = {"ref": f"{repo_name}:{rel}#L{idx}", "quote": evidence_excerpt(ln), "seen": run_date}
                         for iss in open_issues:
-                            if _token_overlap(f"{stem} {ln}", iss["text"]):
+                            if in_window(end_a["ref"], iss["ref"]) and _token_overlap(f"{stem} {ln}", iss["text"]):
                                 end_b = {"ref": iss["ref"], "quote": iss["quote"], "seen": iss["seen"]}
                                 register_pair(end_a, end_b, "promise-to-work", "fixed:promise-to-open-issue", [stem], 3.0, fixed=True)
 
@@ -653,32 +695,27 @@ def cmd_candidates(args):
                 if dated:
                     dated.sort(key=lambda t: (t[0], t[1]))
                     move_date, idx, ln = dated[-1]
-                    end_a = {"ref": f"{repo_name}:{rel}#L{idx}", "quote": clean_line(ln, 200), "seen": move_date}
+                    end_a = {"ref": f"{repo_name}:{rel}#L{idx}", "quote": evidence_excerpt(ln), "seen": move_date}
                     for iss in open_issues:
-                        if _token_overlap(f"{stem} {ln}", iss["text"]):
+                        if in_window(end_a["ref"], iss["ref"]) and _token_overlap(f"{stem} {ln}", iss["text"]):
                             end_b = {"ref": iss["ref"], "quote": iss["quote"], "seen": iss["seen"]}
                             register_pair(end_a, end_b, "enemy-move-to-us", "fixed:competitor-move-to-open-ticket", [stem], 2.5, fixed=True)
 
             if _matches_file_patterns(repo_name, rel, file_groups.get("scoreboard", [])):
                 for idx, ln in enumerate(lines, 1):
+                    row_ref = f"{repo_name}:{rel}#L{idx}"
                     for m_ref in TEXT_REF_RE.finditer(ln):
                         target_ref = m_ref.group(0)
+                        if not in_window(row_ref, target_ref):
+                            continue
                         status, target_text = store.resolve_end(target_ref)
                         if status == "ok":
-                            end_a = {"ref": f"{repo_name}:{rel}#L{idx}", "quote": clean_line(ln, 200), "seen": run_date}
-                            end_b = {"ref": target_ref, "quote": clean_line(target_text.splitlines()[0], 200), "seen": run_date}
+                            end_a = {"ref": row_ref, "quote": evidence_excerpt(ln), "seen": run_date}
+                            end_b = {"ref": target_ref, "quote": evidence_excerpt(target_text), "seen": run_date}
                             register_pair(end_a, end_b, "says-vs-does", "fixed:scoreboard-to-source", ["scoreboard"], 3.0, fixed=True)
 
-    changed = _changed_set(store, watermarks)
-    filtered = []
-    for item in raw_by_pair.values():
-        if changed is not None:
-            bases = {e["ref"].split("#L", 1)[0] for e in item["ends"]}
-            if not (bases & changed):
-                continue
-        filtered.append(item)
-
-    filtered.sort(
+    ranked = sorted(
+        raw_by_pair.values(),
         key=lambda c: (
             0 if c["fixed"] else 1,
             -c["rarity_score"],
@@ -692,10 +729,10 @@ def cmd_candidates(args):
     entity_counts = {}
     emitted = []
     capped = 0
-    for item in filtered:
+    for index, item in enumerate(ranked):
         if len(emitted) >= budget:
-            capped += 1
-            continue
+            capped += len(ranked) - index
+            break
         ents = [e.lower() for e in item["entities"]]
         if any(entity_counts.get(e, 0) >= max_per_entity for e in ents):
             capped += 1
@@ -733,6 +770,17 @@ def cmd_check(args):
     store = OrgStore(settings)
     candidates = load_records(args.candidates_file)
     _, open_ledger, rejected_entries = read_ledger_state(args.ledger)
+    snapshots = {}
+    if args.ledger:
+        path = rejection_snapshot_path(args.ledger)
+        if path.exists():
+            for row in load_records(path):
+                if not isinstance(row, dict) or type(row.get("position")) is not int or any(
+                    not isinstance(row.get(field), str) or not re.fullmatch(r"[0-9a-f]{64}", row[field])
+                    for field in ("entry", "content")
+                ):
+                    raise InputError(f"invalid rejection snapshot in {path}")
+                snapshots[row["position"], row["entry"]] = row["content"]
 
     active_by_refs = {}
     for entry in open_ledger.values():
@@ -740,8 +788,9 @@ def cmd_check(args):
             active_by_refs[canonical_refs(entry.get("ends", []))] = entry
 
     rejected_by_refs = {}
-    for entry in rejected_entries:
-        rejected_by_refs.setdefault(canonical_refs(entry.get("ends", [])), []).append(entry)
+    for position, entry in rejected_entries:
+        snapshot = snapshots.get((position, digest(entry)))
+        rejected_by_refs.setdefault(canonical_refs(entry.get("ends", [])), []).append((entry, snapshot))
 
     passed = []
     dropped = []
@@ -799,12 +848,16 @@ def cmd_check(args):
 
         prior_rejects = rejected_by_refs.get(pair_key, [])
         repeat_hit = None
-        for rej in prior_rejects:
+        current_content = digest(resolved_texts) if prior_rejects else None
+        quotes = {end["ref"]: end["quote"] for end in ends}
+        for rej, snapshot in prior_rejects:
             rej_ends = rej.get("ends", [])
-            if rej_ends and all(
-                quote_matches(re_end.get("quote", ""), resolved_texts.get(re_end.get("ref", ""), ""))
-                for re_end in rej_ends
-            ):
+            unchanged = snapshot == current_content if snapshot is not None else all(
+                quote_matches(quotes.get(end["ref"], ""), end.get("quote", ""))
+                and quote_matches(end.get("quote", ""), resolved_texts.get(end["ref"], ""))
+                for end in rej_ends
+            )
+            if rej_ends and unchanged:
                 repeat_hit = rej
                 break
         if repeat_hit is not None:
@@ -855,19 +908,16 @@ def compute_impact(link):
     ends = link.get("ends", []) or []
 
     if (
-        "one-way door" in combined
-        or "one-way" in combined
+        re.search(r"\bone-way door\b", combined)
         or link_type == "promise-to-work"
-        or route == "people-draft"
-        or (link_type == "says-vs-does" and ("scoreboard" in combined or any("scoreboard" in str(e.get("ref", "")).lower() for e in ends)))
+        or (link_type == "says-vs-does" and any(
+            re.search(r"(?:[:/])scoreboard\b", str(end.get("ref", "")).lower()) for end in ends
+        ))
     ):
         return 3
     if (
-        route in ("ticket", "spec-candidate")
-        or link_type in ("says-vs-does", "enemy-move-to-us", "contradicts", "spend-to-use")
+        (route == "ticket" and isinstance(link.get("ticket"), str) and link["ticket"].strip())
         or any(ISSUE_REF_RE.fullmatch(str(e.get("ref", ""))) for e in ends)
-        or "spec" in combined
-        or "ticket" in combined
     ):
         return 2
     return 1
@@ -940,53 +990,117 @@ def cmd_score(args):
 
 LEDGER_STATES = {"proposed", "accepted", "rejected", "later", "expired", "superseded"}
 REASON_REQUIRED_STATES = {"rejected", "later", "expired", "superseded"}
+LINK_TYPES = {
+    "says-vs-does", "promise-to-work", "need-to-person", "enemy-move-to-us", "spend-to-use",
+    "answers", "pattern", "duplicates", "drifted-copy", "contradicts", "unknown",
+}
+LEDGER_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def _line_ok(value, required=True):
+    return isinstance(value, str) and len(value) <= 500 and (
+        not required or bool(value.strip())
+    ) and not re.search(r"[\x00-\x1f\x7f]", value)
+
+
+def _validate_ledger_entry(entry):
+    required = {"id", "state", "link_type", "ends", "changes", "owner",
+                "valid_from", "invalid_at", "reason", "superseded_by", "last_cited"}
+    if set(entry) != required:
+        raise InputError("invalid ledger entry fields")
+    eid, state, link_type = entry["id"], entry["state"], entry["link_type"]
+    if not isinstance(eid, str) or not LEDGER_ID_RE.fullmatch(eid):
+        raise InputError("invalid ledger id")
+    if not isinstance(state, str) or state not in LEDGER_STATES:
+        raise InputError(f"invalid ledger state for {eid}")
+    if not isinstance(link_type, str) or link_type not in LINK_TYPES:
+        raise InputError(f"invalid ledger link_type for {eid}")
+    ends = entry["ends"]
+    if not isinstance(ends, list) or (len(ends) < 3 if link_type == "pattern" else len(ends) != 2):
+        raise InputError(f"invalid ledger ends for {eid}")
+    for end in ends:
+        if not isinstance(end, dict) or set(end) != {"ref", "quote", "seen"}:
+            raise InputError(f"invalid ledger end fields for {eid}")
+        ref = end["ref"]
+        if not isinstance(ref, str) or not re.fullmatch(r"[^\s\x00-\x1f\x7f]{1,300}", ref) or not _line_ok(end["quote"]):
+            raise InputError(f"invalid ledger end ref or quote for {eid}")
+        parse_iso_date(end["seen"])
+    if not all(_line_ok(entry[key]) for key in ("changes", "owner")):
+        raise InputError(f"ledger entry requires non-empty changes and owner for {eid}")
+    if not _line_ok(entry["reason"], required=state in REASON_REQUIRED_STATES):
+        raise InputError(f"invalid ledger reason for {eid}")
+    successor = entry["superseded_by"]
+    if state == "superseded":
+        if not isinstance(successor, str) or not LEDGER_ID_RE.fullmatch(successor):
+            raise InputError(f"ledger entry requires a valid superseded_by for {eid}")
+    elif successor is not None:
+        raise InputError(f"only a superseded ledger entry can name superseded_by for {eid}")
+    parse_iso_date(entry["valid_from"])
+    for field in ("last_cited", "invalid_at"):
+        if entry[field] is not None:
+            parse_iso_date(entry[field])
 
 
 def _append_transition(open_by_id, lines_to_append, record, run_date):
     eid = record["id"]
-    state = record["state"]
-    if state not in LEDGER_STATES:
-        raise InputError(f"invalid ledger state {state!r} for {eid}")
-    reason = str(record.get("reason", ""))
-    if state in REASON_REQUIRED_STATES and not reason.strip():
-        raise InputError(f"ledger state {state!r} requires a non-empty reason for {eid}")
-    superseded_by = record.get("superseded_by") if state == "superseded" else None
-    if state == "superseded" and not superseded_by:
-        raise InputError(f"ledger state 'superseded' requires superseded_by for {eid}")
-    prev = open_by_id.get(eid)
-    if prev is not None:
-        closed = dict(prev)
-        closed["invalid_at"] = run_date
-        lines_to_append.append(closed)
+    if not isinstance(eid, str):
+        raise InputError("invalid ledger id")
+    prev = open_by_id.get(eid, {})
     new_entry = {
         "id": eid,
-        "state": state,
-        "link_type": record.get("link_type") or (prev["link_type"] if prev else "unknown"),
-        "ends": record.get("ends") or (prev["ends"] if prev else []),
-        "changes": record.get("changes") or (prev["changes"] if prev else ""),
-        "owner": record.get("owner") or (prev["owner"] if prev else ""),
+        "state": record["state"],
+        "link_type": record.get("link_type", prev.get("link_type", "unknown")),
+        "ends": record.get("ends", prev.get("ends", [])),
+        "changes": record.get("changes", prev.get("changes", "")),
+        "owner": record.get("owner", prev.get("owner", "")),
         "valid_from": run_date,
         "invalid_at": None,
-        "reason": reason,
-        "superseded_by": superseded_by,
-        "last_cited": record.get("last_cited", prev["last_cited"] if prev else None),
+        "reason": record.get("reason", ""),
+        "superseded_by": record.get("superseded_by"),
+        "last_cited": record.get("last_cited", prev.get("last_cited")),
     }
+    _validate_ledger_entry(new_entry)
+    if prev:
+        closed = dict(prev, invalid_at=run_date)
+        _validate_ledger_entry(closed)
+        lines_to_append.append(closed)
     lines_to_append.append(new_entry)
     open_by_id[eid] = new_entry
+    return new_entry
+
+
+def _append_records(path, rows):
+    payload = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode("utf-8")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a+b") as fh:
+            prefix = b""
+            if fh.tell():
+                fh.seek(-1, os.SEEK_END)
+                if fh.read(1) != b"\n":
+                    prefix = b"\n"
+            fh.write(prefix + payload)
+    except OSError as exc:
+        raise InputError(f"cannot append to {path}: {exc}") from exc
 
 
 def cmd_ledger(args):
     ledger_path = Path(args.ledger)
     run_date = today_iso(args.date)
     run_d = date.fromisoformat(run_date)
-    _, open_by_id, _ = read_ledger_state(ledger_path)
+    entries, open_by_id, _ = read_ledger_state(ledger_path)
 
     lines_to_append = []
     rejected_verdicts = []
     rejected_verdict_ids = set()
     expired = []
     kept = []
-    unconfirmed = []
+    if args.recheck and not args.settings:
+        raise InputError("--recheck requires --settings")
+    settings = load_settings(args.settings) if args.settings else None
+    store = OrgStore(settings) if settings is not None else None
+    snapshots = []
 
     if args.verdicts:
         for v in load_records(args.verdicts):
@@ -998,17 +1112,17 @@ def cmd_ledger(args):
 
     if args.append:
         for tr in load_records(args.append):
-            if not tr.get("id") or not tr.get("state"):
+            if not isinstance(tr, dict) or not tr.get("id") or not tr.get("state"):
                 raise InputError("each ledger transition requires 'id' and 'state'")
             if tr.get("state") == "accepted" and str(tr["id"]) in rejected_verdict_ids:
                 continue
-            _append_transition(open_by_id, lines_to_append, tr, run_date)
+            entry = _append_transition(open_by_id, lines_to_append, tr, run_date)
+            if entry["state"] == "rejected" and store is not None:
+                snapshot = snapshot_rejection(store, len(entries) + len(lines_to_append) - 1, entry)
+                if snapshot is not None:
+                    snapshots.append(snapshot)
 
     if args.recheck:
-        if not args.settings:
-            raise InputError("--recheck requires --settings")
-        settings = load_settings(args.settings)
-        store = OrgStore(settings)
         expire_days = args.expire_days if args.expire_days is not None else settings["expire_days"]
 
         for eid, entry in sorted(list(open_by_id.items())):
@@ -1017,13 +1131,10 @@ def cmd_ledger(args):
 
             ref_date_s = entry.get("last_cited") or entry.get("valid_from")
             ref_d = parse_iso_date(ref_date_s)
-            if (run_d - ref_d).days >= expire_days:
-                reason = f"Not cited in {expire_days} days (last_cited={ref_date_s})."
-                _append_transition(open_by_id, lines_to_append, {"id": eid, "state": "expired", "reason": reason}, run_date)
-                expired.append({"id": eid, "reason": reason})
-                continue
-
             expire_reason = None
+            if (run_d - ref_d).days >= expire_days:
+                expire_reason = f"Not cited in {expire_days} days (last_cited={ref_date_s})."
+
             has_unconfirmed = False
             for end in entry.get("ends", []):
                 ref = str(end.get("ref", ""))
@@ -1032,30 +1143,24 @@ def cmd_ledger(args):
                     has_unconfirmed = True
                     break
                 if status != "ok":
-                    expire_reason = f"End no longer resolves: {ref} ({payload})."
-                    break
-                if not quote_matches(end.get("quote", ""), payload):
-                    expire_reason = f"Quote no longer found in {ref}."
-                    break
+                    expire_reason = expire_reason or f"End no longer resolves: {ref} ({payload})."
+                elif not quote_matches(end.get("quote", ""), payload):
+                    expire_reason = expire_reason or f"Quote no longer found in {ref}."
 
             if has_unconfirmed:
                 kept.append(eid)
             elif expire_reason:
+                expire_reason = clean_line(expire_reason, 500)
                 _append_transition(open_by_id, lines_to_append, {"id": eid, "state": "expired", "reason": expire_reason}, run_date)
                 expired.append({"id": eid, "reason": expire_reason})
             else:
                 kept.append(eid)
-        unconfirmed = store.unconfirmed
-
+    if snapshots:
+        _append_records(rejection_snapshot_path(ledger_path), snapshots)
     if lines_to_append:
-        ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        needs_newline = ledger_path.is_file() and ledger_path.stat().st_size > 0 and not ledger_path.read_text(encoding="utf-8").endswith("\n")
-        with ledger_path.open("a", encoding="utf-8") as fh:
-            if needs_newline:
-                fh.write("\n")
-            for item in lines_to_append:
-                fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+        _append_records(ledger_path, lines_to_append)
 
+    unconfirmed = store.unconfirmed if store is not None else []
     out = {
         "schema": SCHEMAS["ledger"],
         "appended": len(lines_to_append),
@@ -1080,6 +1185,13 @@ def cmd_canaries(args):
     junk_pool = []
     for eid, entry in sorted(open_by_id.items()):
         state = entry.get("state")
+        if state not in ("accepted", "rejected"):
+            continue
+        try:
+            _validate_ledger_entry(entry)
+        except InputError as exc:
+            unconfirmed.append({"source": clean_line(f"ledger:{eid}", 200), "reason": clean_line(exc)})
+            continue
         if state == "accepted":
             if store is not None:
                 ok = True
@@ -1167,7 +1279,7 @@ def main(argv=None):
 
     led_p = sub.add_parser("ledger", help="Append state changes, re-check accepted links, and expire stale links.")
     led_p.add_argument("--ledger", required=True, help="Path to append-only link ledger JSONL.")
-    led_p.add_argument("--settings", help="Path to organization settings JSON (required for --recheck).")
+    led_p.add_argument("--settings", help="Organization settings for rechecks and rejected-end snapshots (required for --recheck).")
     led_p.add_argument("--append", help="Optional JSONL/JSON of state transitions to append.")
     led_p.add_argument("--verdicts", help="Optional prover verdicts JSONL to validate.")
     led_p.add_argument("--recheck", action="store_true", help="Re-check accepted links and expire stale or broken ones.")

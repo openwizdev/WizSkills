@@ -377,6 +377,50 @@ done
   absent -F synthetic-step-sentinel-2869 "$work/trace")
 echo "ok   inherited or forged continuation tokens are rejected and re-read, while approved-read continuations verify and consume their private token (#2869)"
 
+cp -R "$work/installed" "$work/hyphen-installed"
+printf '%s\n' \
+  'import os, pathlib, subprocess, sys' \
+  "log = pathlib.Path('$work/hyphen-launches.log')" \
+  'count = len(log.read_text().splitlines()) if log.exists() else 0' \
+  'log.open("a").write(f"launch {count + 1}\n")' \
+  'if count >= 1:' \
+  '    sys.stderr.write("recursive helper relaunch\n")' \
+  '    sys.exit(99)' \
+  'priv = pathlib.Path(os.environ["OPENWIZ_AGENT_TOKEN_DIR"])' \
+  'snap = priv / "run-0123456789abcdef-fedcba9876543210.json"' \
+  'snap.write_text("{\"token\":\"synthetic\",\"expires_at\":1793538000}\n")' \
+  'os.chmod(snap, 0o600)' \
+  'env = dict(os.environ)' \
+  'env["OPENWIZ_AGENT_TOKEN_RUN"] = str(snap)' \
+  'env["OPENWIZ_AGENT_TOKEN_PATH_WAS"] = "1" + env["PATH"]' \
+  'sys.exit(subprocess.call(sys.argv[sys.argv.index("--") + 1:], env=env))' \
+  > "$work/hyphen-installed/skills/launch-fleet/scripts/github-app/agent-token.py"
+cp "$work/world-on.json" "$work/world.json"
+(service; rm -rf "$work/cache"; : > "$work/read.log"; : > "$work/hyphen-launches.log"
+  sh "$work/hyphen-installed/skills/launch-fleet/scripts/loop.sh" > "$work/out" 2> "$work/err" \
+    || { cat "$work/err" >&2; exit 1; }
+  cmp "$work/want" "$work/out"
+  [ "$(wc -l < "$work/hyphen-launches.log" | tr -d ' ')" = 1 ]
+  [ "$(cat "$work/read.log")" = 'none account' ]
+  [ -z "$(find "$work/token-private" -name 'step-*.json')" ])
+cp "$work/world-off.json" "$work/world.json"
+(service; inherit; rm -rf "$work/cache"; : > "$work/read.log"
+  sid=0123456789abcdef0123456789abcdef
+  nonce=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  sfile="$work/token-private/step-$sid.json"
+  rfile="$work/token-private/run-0123456789abcdef-bad.json"
+  printf '{"token":"%s","expires_at":1793538000}\n' "$ga4" > "$rfile"
+  chmod 600 "$rfile"
+  export OPENWIZ_AGENT_TOKEN_RUN="$rfile"
+  sh -c 'printf "{\"pid\":%s,\"nonce\":\"%s\",\"repo\":\"synthetic-owner/synthetic-repo\"}\n" "$$" "$2" > "$1"; chmod 600 "$1"; LAUNCH_FLEET_TOKEN_STEP="$3:$2"; export LAUNCH_FLEET_TOKEN_STEP; sh "$4"' \
+    sh "$sfile" "$nonce" "$sid" "$direct_loop" > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; exit 1; }
+  cmp "$work/want" "$work/out"
+  [ "$(head -n 1 "$work/err")" = "$off" ]
+  [ "$(cat "$work/read.log")" = 'none account' ]
+  dropped
+  [ ! -s "$work/service.log" ])
+echo "ok   hyphenated #2872 run snapshot names verify without recursive relaunch while malformed names stay rejected"
+
 sed -n '/<!-- GI7 identity -->/,/^  ```$/p' "$HERE/../references/identity.md" | sed '1,2d;$d;s/^  //' > "$work/block.sh"
 (inherit
   sh -c '. "$1"; app gh --version > /dev/null 2>&1 || :; app_git -C "$2" rev-parse HEAD > /dev/null' \

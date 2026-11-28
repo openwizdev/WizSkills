@@ -216,7 +216,7 @@ if mode == "verify":
             rname = os.path.basename(run_mark)
             if (data["pid"] != loop_ppid
                     or os.path.dirname(run_mark) != priv
-                    or not re.fullmatch(r"run-[0-9a-f]{32}\.json", rname)):
+                    or not re.fullmatch(r"run-(?:[0-9a-f]{32}|[0-9a-f]{16}-[0-9a-f]{16})\.json", rname)):
                 sys.exit(1)
             try:
                 rfd = os.open(rname, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)

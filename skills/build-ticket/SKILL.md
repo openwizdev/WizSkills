@@ -57,6 +57,7 @@ Only when the ticket's Parent has the line `One-way door: yes`; any other ticket
 6. **Prove:** commit, then `python3 -I <this skill's folder>/scripts/prove.py --base origin/<default branch> --test <each proof's test path>... -- <its test command>` must exit 0: base `failed` 2 of 2, head `passed` 2 of 2. Paste the JSON line it prints in the pull request's Evidence, with the command.
 7. Log each choice inside the ticket's intent as a ruling: `<n>. <ruling> Why: <reason> Cost if wrong: high|low: <consequence>`.
 8. A product change adds `changes/<N>.md` per `changes/README.md` when owned or covered; infra, docs and tests use the `no-changelog` label, or say why no line is needed when the label is absent.
+- **Requested by.** For a `subscriber-request` ticket, run `python3 -I <this skill's folder>/scripts/requested_by.py --help` and follow its source checks. Apply its credit to the PR body, changelog summary line and any market listing links before their usual checks.
 
 Done when every proof passes and every red run is kept.
 

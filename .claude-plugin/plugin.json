@@ -7,6 +7,8 @@
   },
   "repository": "https://github.com/openwizdev/WizSkills",
   "skills": [
+    "./skills/agent-issue",
+    "./skills/agent-pr",
     "./skills/ask-wiz",
     "./skills/build-ticket",
     "./skills/diagnose",

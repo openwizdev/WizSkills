@@ -37,6 +37,8 @@ Done when the user has one named recommendation with its start words, and nothin
 | `launch-fleet` | Run an approved plan through its fleet and merge rules, between sessions too |
 | `build-ticket` | Build one ticket as its builder, proof first, inside its owned paths |
 | `review-ticket` | Check a green pull request's exact head as the independent reviewer |
+| `agent-issue` | File one machine-readable issue any repository's agents can execute |
+| `agent-pr` | Open that issue's one pull request, with proof and a review of its exact head |
 | `where-are-we` | Read the current status and get one next move, at any point |
 | `triage` | Sort incoming bugs and ideas; approved work enters the fleet |
 | `diagnose` | Find a hard bug's cause from a tight failing loop, in the caller's scope |

@@ -1,6 +1,6 @@
 # Notices
 
-`review-ticket` adapts Theo Browne's `sol-loop` (`github.com/t3dotgg/tstack` @ `1085050`) and Lauren Tan's `interrogate` (`github.com/cursor/plugins`, its `pstack` folder, @ `4dd1d05`), both under the MIT License. Matt Pocock's notice is in [SKILL.md](SKILL.md).
+`review-ticket` adapts Theo Browne's `sol-loop` (`github.com/t3dotgg/tstack` @ `1085050`) and Lauren Tan's `interrogate` (`github.com/cursor/plugins`, its `pstack` folder, @ `4dd1d05`), both under the MIT License. Matt Pocock's notice is in [NOTICE.md](NOTICE.md).
 
 Theo Browne's notice:
 

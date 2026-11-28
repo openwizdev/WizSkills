@@ -6,10 +6,10 @@ Part of [OpenWiz](https://openwiz.dev), the open source agent factory.
 
 The skills coding agents follow to run an [OpenWiz](https://github.com/openwizdev/OpenWiz) agent factory: grill, spec, tickets, build, review, merge. Each skill is a `SKILL.md` that Claude Code, Codex or any agent can read.
 
-## Install (Claude Code, release v0.4.2)
+## Install (Claude Code, release v0.5.0)
 
 ```sh
-claude plugin marketplace add https://github.com/openwizdev/WizSkills.git#v0.4.2
+claude plugin marketplace add https://github.com/openwizdev/WizSkills.git#v0.5.0
 claude plugin install openwiz@wizskills --scope project
 ```
 

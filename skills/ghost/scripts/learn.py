@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -280,14 +281,14 @@ def bench(binary, home, replay):
     try:
         proc = subprocess.run(
             [binary, "ghost", "bench", "--source", "sent", "--replay", str(replay)],
-            capture_output=True, text=True, timeout=30, env=env, check=False)
+            capture_output=True, timeout=30, env=env, check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise Refuse from error
     if proc.returncode != 0:
         raise Refuse
     try:
-        return report_of(proc.stdout)
-    except ValueError as error:
+        return report_of(proc.stdout.decode("utf-8"))
+    except (UnicodeError, ValueError) as error:
         raise Refuse from error
 
 
@@ -299,6 +300,19 @@ def read_settings(root):
         return read_file(path, True) or ""
     except Refuse:
         return ""
+
+
+def publish(files):
+    done = []
+    try:
+        for path, old, new in files:
+            if new != old:
+                atomic(path, new)
+                done.append((path, old))
+    except BaseException:
+        for path, old in reversed(done):
+            atomic(path, old)
+        raise
 
 
 def dropped(before, after):
@@ -339,31 +353,32 @@ def main(argv):
     lexicon_bytes = lexicon_text.encode("utf-8")
     new_skill_bytes = dump(new_skill)
     new_lexicon_bytes = dump(new_lexicon)
-    wrote = []
+    stage = Path(tempfile.mkdtemp(prefix=".learn-", dir=home))
     try:
-        if new_skill_bytes != skill_bytes:
-            atomic(skill_path, new_skill_bytes)
-            wrote.append((skill_path, skill_bytes))
-        if new_lexicon_bytes != lexicon_bytes:
-            atomic(lexicon_path, new_lexicon_bytes)
-            wrote.append((lexicon_path, lexicon_bytes))
-        after = bench(binary, home, replay_path)
-        if dropped(before, after):
-            raise Refuse
-    except (Refuse, OSError):
         try:
-            for path, old in reversed(wrote):
-                atomic(path, old)
-        except OSError:
-            say("refused", 1)
-        say("restored" if wrote else "refused", 0 if wrote else 1)
+            atomic(stage / "skill.json", new_skill_bytes)
+            atomic(stage / "lexicon.json", new_lexicon_bytes)
+            after = bench(binary, stage, replay_path)
+        except (Refuse, OSError):
+            say("restored", 0)
+        if dropped(before, after):
+            say("restored", 0)
+        if (read_file(skill_path, True) != skill_text
+                or read_file(lexicon_path, True) != lexicon_text):
+            raise Refuse
+        publish([(skill_path, skill_bytes, new_skill_bytes),
+                 (lexicon_path, lexicon_bytes, new_lexicon_bytes)])
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
     say("kept", 0)
 
 
 if __name__ == "__main__":
     try:
         main(sys.argv)
-    except Refuse:
+    except (Refuse, OSError):
         say("refused", 1)
+    except KeyboardInterrupt:
+        say("cancelled", 130)
     except BrokenPipeError:
         raise SystemExit(1)

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "openwiz.github-events.v1 expected output",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["exit_code", "stdout"],
+  "oneOf": [
+    { "properties": { "exit_code": { "const": 0 } } },
+    { "properties": { "exit_code": { "const": 2 }, "stdout": { "maxItems": 0 } } }
+  ],
+  "properties": {
+    "exit_code": { "type": "integer" },
+    "stdout": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^check spec [1-9][0-9]*(?![\\s\\S])" }
+    }
+  }
+}

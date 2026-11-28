@@ -7,8 +7,8 @@ FIXTURES = Path(__file__).resolve().parent
 CONTRACTS = FIXTURES.parents[1]
 REPO = "example-org/example-repo"
 
-# Use the repository's existing standard-library schema validator for the schema proof.
-VALIDATE = runpy.run_path(str(CONTRACTS.parent / "skills/dream-cycle/test/test_contract.py"))["validate"]
+VALIDATOR_SOURCE = CONTRACTS.parent / "skills/dream-cycle/test/test_contract.py"
+VALIDATE = runpy.run_path(str(VALIDATOR_SOURCE))["validate"]
 
 
 class GitHubEventsContractTests(unittest.TestCase):
@@ -49,6 +49,7 @@ class GitHubEventsContractTests(unittest.TestCase):
         for malformed in (
             {"exit_code": 0},
             {"exit_code": 0, "stdout": "check spec 82"},
+            {"exit_code": 0, "stdout": ["check spec 82\n"]},
             {"exit_code": 0, "stdout": ["check spec 82\ncheck spec 1008"]},
             {"exit_code": 0, "stdout": ["check spec 0"]},
             {"exit_code": 2, "stdout": ["check spec 82"]},

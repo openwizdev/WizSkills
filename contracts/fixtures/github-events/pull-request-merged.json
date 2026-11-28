@@ -1,0 +1,34 @@
+{
+  "closing_tickets": {
+    "example-org/example-repo#19005": [
+      "example-org/example-repo#18005"
+    ]
+  },
+  "parents": {
+    "example-org/example-repo#18005": "example-org/example-repo#1008"
+  },
+  "deliveries": [
+    {
+      "headers": {
+        "X-GitHub-Event": "pull_request",
+        "X-GitHub-Delivery": "example-pull-request-merged"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "pull_request": {
+          "number": 19005,
+          "merged": true
+        },
+        "action": "closed"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": [
+          "check spec 1008"
+        ]
+      }
+    }
+  ]
+}

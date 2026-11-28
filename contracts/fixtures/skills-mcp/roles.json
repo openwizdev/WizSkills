@@ -1,0 +1,32 @@
+{
+  "inventory": ["syn-alpha", "syn-beta"],
+  "files": {
+    "all-roles": {"contract": "openwiz.skills-roles.v1", "roles": {
+      "orchestrator": ["syn-beta", "syn-alpha"], "builder": ["syn-alpha"], "reviewer": ["syn-beta"], "helper": []
+    }},
+    "builder-only": {"contract": "openwiz.skills-roles.v1", "roles": {"builder": ["syn-alpha"]}},
+    "wrong-contract": {"contract": "openwiz.skills-roles.v2", "roles": {}},
+    "missing-roles": {"contract": "openwiz.skills-roles.v1"},
+    "other-role": {"contract": "openwiz.skills-roles.v1", "roles": {"operator": ["syn-alpha"]}},
+    "wrong-type": {"contract": "openwiz.skills-roles.v1", "roles": {"builder": "syn-alpha"}},
+    "duplicate-skill": {"contract": "openwiz.skills-roles.v1", "roles": {"builder": ["syn-alpha", "syn-alpha"]}},
+    "bad-skill-name": {"contract": "openwiz.skills-roles.v1", "roles": {"builder": ["Syn_Alpha"]}},
+    "extra-field": {"contract": "openwiz.skills-roles.v1", "roles": {}, "extra": true},
+    "missing-skill": {"contract": "openwiz.skills-roles.v1", "roles": {"builder": ["syn-absent"]}}
+  },
+  "cases": [
+    {"file": "all-roles", "role": null, "schemaValid": true, "skills": ["syn-alpha", "syn-beta"]},
+    {"file": "all-roles", "role": "builder", "schemaValid": true, "skills": ["syn-alpha"], "hidden": "syn-beta"},
+    {"file": "all-roles", "role": "helper", "schemaValid": true, "skills": []},
+    {"file": "builder-only", "role": "reviewer", "schemaValid": true, "refusal": "unknown-role"},
+    {"file": "builder-only", "role": "operator", "schemaValid": true, "refusal": "unknown-role"},
+    {"file": "wrong-contract", "role": "builder", "schemaValid": false, "refusal": "invalid-roles"},
+    {"file": "missing-roles", "role": "builder", "schemaValid": false, "refusal": "invalid-roles"},
+    {"file": "other-role", "role": "builder", "schemaValid": false, "refusal": "invalid-roles"},
+    {"file": "wrong-type", "role": "builder", "schemaValid": false, "refusal": "invalid-roles"},
+    {"file": "duplicate-skill", "role": "builder", "schemaValid": false, "refusal": "invalid-roles"},
+    {"file": "bad-skill-name", "role": "builder", "schemaValid": false, "refusal": "invalid-roles"},
+    {"file": "extra-field", "role": "builder", "schemaValid": false, "refusal": "invalid-roles"},
+    {"file": "missing-skill", "role": "builder", "schemaValid": true, "refusal": "unknown-skill"}
+  ]
+}

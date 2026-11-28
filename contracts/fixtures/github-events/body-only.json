@@ -1,0 +1,27 @@
+{
+  "closing_tickets": {},
+  "parents": {
+    "example-org/example-repo#18016": "example-org/example-repo#82"
+  },
+  "secret_configured": true,
+  "deliveries": [
+    {
+      "headers": null,
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 18016
+        },
+        "action": "labeled"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": [
+          "check spec 82"
+        ]
+      }
+    }
+  ]
+}

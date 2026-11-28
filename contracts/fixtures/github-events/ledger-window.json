@@ -1,0 +1,70 @@
+{
+  "closing_tickets": {},
+  "parents": {
+    "example-org/example-repo#18019": "example-org/example-repo#1008"
+  },
+  "ledger_fill": 1000,
+  "deliveries": [
+    {
+      "headers": {
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "example-new-delivery"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 18019
+        },
+        "action": "labeled"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": [
+          "check spec 1008"
+        ]
+      }
+    },
+    {
+      "headers": {
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "example-history-2"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 18019
+        },
+        "action": "labeled"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": []
+      }
+    },
+    {
+      "headers": {
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "example-history-1"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 18019
+        },
+        "action": "labeled"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": [
+          "check spec 1008"
+        ]
+      }
+    }
+  ]
+}

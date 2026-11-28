@@ -1,0 +1,34 @@
+{
+  "closing_tickets": {
+    "example-org/example-repo#19009": [
+      "example-org/example-repo#18009"
+    ]
+  },
+  "parents": {
+    "example-org/example-repo#18009": "example-org/example-repo#1008"
+  },
+  "deliveries": [
+    {
+      "headers": {
+        "X-GitHub-Event": "issue_comment",
+        "X-GitHub-Delivery": "example-issue-comment-created-on-pr"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 19009,
+          "pull_request": {}
+        },
+        "action": "created"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": [
+          "check spec 1008"
+        ]
+      }
+    }
+  ]
+}

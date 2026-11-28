@@ -43,6 +43,19 @@ def counts(text, words):
     return found
 
 
+def pytest_reason(line):
+    depth = 0
+    for token in re.finditer(r'\[|\]| - ', line):
+        word = token[0]
+        if word == '[':
+            depth += 1
+        elif word == ']':
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            return line[token.end():]
+    return ''
+
+
 def pytest(code, out):
     lines = [l for l in out.splitlines()
              if re.fullmatch(r'=*\s*(\d+ \w+(, \d+ \w+)*|no tests ran) in [\d.]+s(\s*\(.*\))?\s*=*', l.strip())]
@@ -52,7 +65,7 @@ def pytest(code, out):
     errors = n.get('error', 0) + n.get('errors', 0)
     if code == 0 and n.get('passed') and not n.get('failed') and not errors:
         return 'passed'
-    reasons = re.findall(r'^FAILED (?:\[[^\]\n]*\]|(?! - ).)+? - (.*)$', out, re.M)
+    reasons = [pytest_reason(line) for line in out.splitlines() if line.startswith('FAILED ')]
     if (code == 1 and n.get('failed') and not errors and len(reasons) == n['failed']
             and all(re.match(r'(assert\b|AssertionError\b|Failed:)', r) for r in reasons)):
         return 'failed'
@@ -93,6 +106,7 @@ def cargo(code, out):
 
 def node_spec_assertions(progress, details, failed):
     intro, *blocks = re.split(r'^test at [^\n]+:\d+:\d+\n', details, flags=re.M)
+    blocks = [block for block in blocks if not block.startswith('⚠ ')]
     parent_markers = re.findall(r'^ *▶ ', progress, flags=re.M)
     omitted_parents = failed - len(blocks)
     hook_frame = re.compile(r'^ +at (?:async )?TestHook\.\w+ \(node:internal/test_runner/test:', re.M)
@@ -102,9 +116,11 @@ def node_spec_assertions(progress, details, failed):
 
 
 def node_tap_assertions(out, failed):
-    parts = re.split(r'^([ ]*)not ok \d+[^\n]*\n', out, flags=re.M)
+    parts = re.split(r'^([ ]*)not ok \d+\b([^\n]*)\n', out, flags=re.M)
     count, assertions = 0, 0
-    for nesting, body in zip(parts[1::2], parts[2::2]):
+    for nesting, header, body in zip(parts[1::3], parts[2::3], parts[3::3]):
+        if re.search(r' # TODO(?: |$)', header):
+            continue
         indent = nesting + '  '
         diagnostics = re.match(rf'{indent}---\n(.*?)^{indent}\.\.\.(?:\n|$)', body, flags=re.S | re.M)
         if diagnostics is None:
@@ -158,7 +174,7 @@ def run(command, cwd, timeout):
         proc = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, start_new_session=True)
     except OSError as err:
-        raise StartError(err) from err
+        raise StartError(err.strerror or str(err)) from err
     try:
         out, _ = proc.communicate(timeout=timeout)
         return proc.returncode, out.decode('utf-8', 'replace')
@@ -234,8 +250,7 @@ def main(argv):
                 try:
                     code, out = run(args.command, trees[side], args.timeout)
                 except StartError as err:
-                    shown = ' '.join(args.command)
-                    raise SystemExit(f'prove: cannot run {shown}: {err}') from err
+                    raise SystemExit(f'prove: cannot run {args.command[0]}: {err}') from err
                 outcome = classify(code, out)
                 outcomes[side].append(outcome)
                 shown = 'timeout' if code is None else f'exit {code}'

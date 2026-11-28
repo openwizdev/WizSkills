@@ -136,12 +136,14 @@ class Repo(unittest.TestCase):
 
     def test_command_not_on_path_refuses_with_2_and_leaves_nothing(self):
         self.build('red-green')
-        done = self.prove('--base', 'HEAD^', '--test', 'test_calc.py', command=['prove-missing-synthetic'])
+        done = self.prove('--base', 'HEAD^', '--test', 'test_calc.py',
+                          command=['prove-missing-synthetic', '--auth-token', 'synthetic-argument-value'])
         self.assertEqual((done.returncode, done.stdout), (2, ''))
         self.assertIn('prove: cannot run prove-missing-synthetic:', done.stderr)
+        self.assertNotIn('--auth-token', done.stderr)
+        self.assertNotIn('synthetic-argument-value', done.stderr)
         self.assertNotIn('Traceback', done.stderr)
         self.assertGone()
-
 
     def test_help_says_refusals_leave_stdout_empty(self):
         done = subprocess.run([sys.executable, '-I', str(SCRIPT), '--help'],
@@ -210,6 +212,14 @@ NODE_SUBTEST_TAP = ("TAP version 13\n    not ok 1 - inner\n      ---\n      fail
                     "not ok 1 - parent\n  ---\n  failureType: 'subtestsFailed'\n  error: '1 subtest failed'\n"
                     "  code: 'ERR_TEST_FAILURE'\n  ...\n"
                     "# tests 2\n# suites 0\n# pass 0\n# fail 2\n# cancelled 0\n")
+NODE_TODO = NODE_SUBTEST.replace("▶ parent\n", "▶ parent\n  ⚠ planned (1ms) # TODO\n").replace(
+    "ℹ tests 2", "ℹ tests 3").replace("ℹ cancelled 0\n", "ℹ cancelled 0\nℹ todo 1\n") + (
+    "\ntest at a.test.mjs:3:11\n⚠ planned (1ms) # TODO\n  AssertionError [ERR_ASSERTION]: 3 !== 4\n")
+NODE_TODO_TAP = NODE_SUBTEST_TAP.replace(
+    "    not ok 1 - inner",
+    "    not ok 1 - planned # TODO deferred\n      ---\n      failureType: 'testCodeFailure'\n"
+    "      name: 'TypeError'\n      ...\n    not ok 2 - inner").replace(
+    "# tests 2", "# tests 3").replace("# cancelled 0\n", "# cancelled 0\n# todo 1\n")
 NODE_SUBTEST_THROWS = ("▶ parent\n  ✖ inner (1ms)\n✖ parent (2ms)\n"
                        "ℹ tests 2\nℹ suites 0\nℹ pass 0\nℹ fail 2\nℹ cancelled 0\n\n✖ failing tests:\n\n"
                        "test at a.test.mjs:3:11\n✖ inner (1ms)\n  TypeError: nope\n")
@@ -320,7 +330,12 @@ class Classify(unittest.TestCase):
                      'failed'),
                     ('exception after an id with the separator', 1,
                      PYTEST_SPACE.replace('hello world', 'New York - Boston')
-                     .replace('assert 1 == 2', 'TypeError: a - b'), 'error')])
+                     .replace('assert 1 == 2', 'TypeError: a - b'), 'error'),
+                    ('nested brackets and a separator in the id', 1,
+                     PYTEST_SPACE.replace('hello world', '[en] - [fr]'), 'failed'),
+                    ('an exception after a bracketed id still is not red', 1,
+                     PYTEST_SPACE.replace('hello world', '[en] - [fr]')
+                     .replace('assert 1 == 2', 'TypeError: [detail] - assert 1 == 2'), 'error')])
 
     def test_unittest(self):
         self.check([('ok', 0, UNITTEST_OK, 'passed'),
@@ -344,6 +359,12 @@ class Classify(unittest.TestCase):
                     ('tap assertion', 1, NODE_TAP, 'failed'),
                     ('subtest assertion', 1, NODE_SUBTEST, 'failed'),
                     ('tap subtest assertion', 1, NODE_SUBTEST_TAP, 'failed'),
+                    ('spec todo does not count as a failure', 1, NODE_TODO, 'failed'),
+                    ('tap todo does not count as a failure', 1, NODE_TODO_TAP, 'failed'),
+                    ('spec non-todo exception is still an error', 1,
+                     NODE_TODO.replace('AssertionError [ERR_ASSERTION]: 1 !== 2', 'TypeError: nope'), 'error'),
+                    ('tap non-todo exception is still an error', 1,
+                     NODE_TODO_TAP.replace("code: 'ERR_ASSERTION'", "name: 'TypeError'"), 'error'),
                     ('a subtest that throws is not red', 1, NODE_SUBTEST_THROWS, 'error'),
                     ('an assertion can mention a failed subtest', 1,
                      NODE_SUBTEST.replace('1 !== 2', '1 subtest failed'), 'failed'),

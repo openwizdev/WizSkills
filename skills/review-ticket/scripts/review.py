@@ -39,6 +39,7 @@ ROUNDS = {"full": ("Full review by ", ("builder", "merge"), "the builder line or
           "re-check": ("Re-check of ", ("fresh", "merge"), "the fresh line or none open"),
           "final": ("Final check of ", ("park", "merge"), "the park line or none open"),
           "log-and-merge": ("Final check of ", ("merge",), "none open")}
+RISK_TIER = re.compile(r"Risk tier: [0-3] \([^()\s](?:[^()]*[^()\s])?\): \S.*")
 DECISION = re.compile(rf"\*\*Orchestrator decision:\*\* (fix once more|log and merge): ({IDS}) at ([0-9a-f]{{40}})\."
                       r"(?: Polish issues: (#[1-9][0-9]*(?:, #[1-9][0-9]*)*)\.)? Why: \S.*", re.S)
 ADDITIONAL = re.compile(r"\*\*Additional\b[^*\n]*? check: `([^`]+)`")
@@ -192,6 +193,15 @@ def check(text, description, mode, head, earlier, decision=None, changed=None, c
         problems.append(f"the second paragraph starts {start.strip()}")
     elif "CI green on this commit: " not in second:
         problems.append("the second paragraph says CI green on this commit: <the required checks>")
+    tiers = [line.rstrip() for _, line in unfenced(text.replace("\r\n", "\n"))
+             if line.lstrip().startswith("Risk tier:")]
+    if mode == "full" or tiers:
+        if len(tiers) != 1:
+            problems.append("write exactly one Risk tier: line")
+        elif not RISK_TIER.fullmatch(tiers[0]):
+            problems.append("the Risk tier: line reads Risk tier: <0-3> (<tier name>): <reason>")
+        elif tiers != second.splitlines()[1:2]:
+            problems.append("the Risk tier: line goes directly after the reviewer line")
     if not any(p.startswith("Intent: ") for p in r["paras"]):
         problems.append("no Intent: paragraph")
     ids = [f["id"] for f in r["findings"]]

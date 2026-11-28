@@ -46,6 +46,10 @@ When the fleet starts or tells you about a ticket's `Approach note:` comment, th
 
 Run `python3 -I "$review" rules --base origin/<base> --head <head> --finding <class>...`, one `--finding` per candidate finding's class, once your candidates are written (before Disprove). It reads `docs/agents/review-rules.md` from the base, never the head, so a pull request can't change its own rules, and prints `review rules: none at <base>` when there is no file. Report no finding it prints as `skip:` unless it carries a `Risk:` line; apply only the `path rule:` lines it prints, the ones whose glob a changed path matches (`*` within one folder, `**` across folders); use the file's **Severity examples** to grade. Exit 2 is an unreadable line: report every finding and name the line in `Checked:`. When the owner or builder declines a finding with a reason, propose one line for the owner in your next report, `Proposed never-flag: <class>: declined <n>, <YYYY-MM-DD>`, and never write the file yourself.
 
+## Risk stage
+
+Before the three checks, apply the [risk stage](references/verdict.md#risk-tier) to the whole diff. Read the base project's `docs/agents/huntr.md` or use the documented defaults if it is absent.
+
 ## 2. Run three checks, apart
 
 Read `git diff --find-renames origin/<base>...<head>` and the code around it. Keep each check's findings apart. Follow `fleet.md`'s test-command rule; a parallel or scratch run, such as undoing the change, goes in a separate worktree with its own build output and is never committed.
@@ -95,6 +99,7 @@ Synthetic report: Pantry ticket #41 under spec #38, pull request #57, whose desc
 VERDICT: CHANGES at 4b1f0c9e2d7a5b3c8f6e1d0a9b2c4e7f5a3d1c08
 
 Full review by Codex, Sol 6.2, Medium. CI green on this commit: build, test.
+Risk tier: 3 (Behaviour change): export writes a zip.
 
 Intent: `pantry export` writes the whole cookbook to one zip and refuses to overwrite an existing file.
 

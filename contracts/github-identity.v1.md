@@ -2,8 +2,8 @@
 
 GI3 of spec #2537, the App work's contract-first ticket (#2545). This contract
 covers the factory's own GitHub identity: one OpenWiz App and where it is
-installed, the Cloudroom secret that holds its key, the `openwiz github token`
-command, who authors commits, and what each role does as the App. GI4 (#2546)
+installed, where its key lives (the home machine's token service), the
+`openwiz github token` command, who authors commits, and what each role does as the App. GI4 (#2546)
 builds the setup, GI5 (#2547) the token command, GI6 (#2548) is Jake's install
 and GI7 (#2549) the switch. They build to this contract.
 
@@ -126,8 +126,8 @@ It binds no one else's, and no other repository is in scope.
 install only on the account that owns it. One App on two accounts, as above,
 must therefore be public. Public changes only who *may* install it, never
 what it can do. It keeps the same permissions and installs on selected
-repositories only. Only the owner's key, the Cloudroom secret below, mints
-its tokens. An installation by any other account gives that account nothing,
+repositories only. Only the owner's key, kept as the next section says,
+mints its tokens. An installation by any other account gives that account nothing,
 and our factory uses only the installations it names here. The registered
 manifest still says `"public": false`; reconciling that line is GI4's
 (#2546). If Jake decides otherwise, this pin flips back to private, and the
@@ -139,19 +139,30 @@ and repositories it names, also selected only.
 
 ## The secret and the public ids
 
-The App's private key lives once, as the Cloudroom secret named
-**`OPENWIZ_GITHUB_APP_KEY`**. It holds the private key only, nothing else.
-The value is the PEM file GitHub returns, base64-encoded (standard alphabet,
-no line breaks), so it fits one dotenv line. The user gives it once and never
-replaces it. Rotating or revoking it follows the existing protected secret
-handling.
+The App's private key lives once, on the owner's machine, which in 0.2.0 is
+the always-on home machine: in the token service's key file,
+`<state>/service/app/private-key.pem`, mode 0600 in 0700 directories, where
+[`token-service.v1`](token-service.v1.md) puts it. The file holds the private
+key only, nothing else: the PEM file GitHub returns. The user gives it once,
+through the keys skill's secret card, and never replaces it. Only the token
+service reads it. Rotating or revoking it follows the existing protected
+secret handling.
 
-`openwiz` reads the key only from that secret as Cloudroom delivers it: the
-environment variable of that name in the agent's process, from Cloudroom's
-owner-only (0600) dotenv file. That file lives outside any Git working tree.
+**A hosting tool's secret store is opt-in, never the default.** The owner may
+pick one (today, a Cloudroom secret) as the key's place instead. Only then
+does the key live there, as the secret named **`OPENWIZ_GITHUB_APP_KEY`**:
+the PEM file base64-encoded (standard alphabet, no line breaks), so it fits
+one dotenv line, delivered as the environment variable of that name in the
+agent's process, from that tool's owner-only (0600) dotenv file outside any
+Git working tree. Nothing falls back to it: where the owner hasn't picked
+one, nothing reads, asks for or tries a hosting tool's secret store, and a
+missing key file is a failure, never a reason to look there. The token
+service's `actions` route keeps the same name, `OPENWIZ_GITHUB_APP_KEY`, for
+its own secret (token-service.v1).
+
 The key never enters chat, an issue, a pull request, a prompt, a process
 argument, a URL, a log, an error, a fixture or the repository. Nothing writes
-it to disk anywhere else, and no copy remains after setup.
+it to disk anywhere else, and no other copy remains after setup.
 
 The App id and the installation ids are **public identifiers, not secrets**.
 They are still never written into this contract or its fixtures.
@@ -190,14 +201,16 @@ Private record: https://github.com/jparker2006/ClosedWiz/issues/325#issuecomment
   (setup.v1). That is a separate, visible choice: this command still never
   falls back to another identity, and an App failure or revocation never
   selects the login path.
-- **Key delivery and the one temporary key file.** The preferred route hands
-  the converted key straight to the protected secret through the CloudRoom
-  agent-side save-secret contribution, once it ships and is observed; it leaves
-  no key file. Until then the supported route is one protected paste
-  (`docs/agents/github-app.md`, step 4): the converted key is discarded, GitHub
+- **Key delivery and the one temporary key file.** The key arrives through
+  the keys skill's secret card: the converted key is discarded, GitHub
   generates a replacement key that the owner's browser downloads, the owner
-  encodes it to one line, pastes it into CloudRoom's own protected prompt and
-  deletes the download. That owner download is the one explicit exception to
+  gives it to the secret card, which puts it straight into the token
+  service's key file on the home machine, never through chat, and the owner
+  deletes the download. An owner who picked a hosting tool's secret store
+  instead encodes the download to one line and pastes it into that tool's own
+  protected prompt (`docs/agents/github-app.md`, step 4); that route is
+  opt-in, and nothing tries it otherwise. That owner download is the one
+  explicit exception to
   "nothing writes it to disk anywhere else": it is outside every OpenWiz
   component and Git tree, temporary, deleted after provisioning and counted
   among the owner's actions. No OpenWiz component writes, reads or keeps it,

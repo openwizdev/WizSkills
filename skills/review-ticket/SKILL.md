@@ -99,6 +99,7 @@ Synthetic report: Pantry ticket #41 under spec #38, pull request #57, whose desc
 VERDICT: CHANGES at 4b1f0c9e2d7a5b3c8f6e1d0a9b2c4e7f5a3d1c08
 
 Full review by Codex, Sol 6.2, Medium. CI green on this commit: build, test.
+Risk tier: 3 (Behaviour change): export writes a zip.
 
 Intent: `pantry export` writes the whole cookbook to one zip and refuses to overwrite an existing file.
 

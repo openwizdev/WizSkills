@@ -2,6 +2,27 @@
 
 This page is the contract for four additions to the report of [the skill's step 4](../SKILL.md#4-report) and of [re-checks](re-checks.md). It adds line forms and one grade; it changes nothing about when a finding blocks. A finding still blocks only with its `User path:` or `Risk:` line, and there are no other blocker grades.
 
+## Risk tier
+
+A full review has exactly one `Risk tier: <0-3> (<tier name>): <why>` line immediately after the `Full review by ...` line. Use the project's huntr tier name and a short reason tied to the whole diff. When the project has no `docs/agents/huntr.md`, use these defaults.
+
+| Tier | Name | What the diff shows |
+| --- | --- | --- |
+| 0 | Report only | An audit or finding with no changes |
+| 1 | Tests and docs | Tests or documentation change while the product runs the same code |
+| 2 | Same behaviour, better inside | An internal improvement preserves externally visible behaviour |
+| 3 | Behaviour change | Something the product does changes, including a bug fix |
+
+For example, insert this line in the first verdict below directly after the reviewer line.
+
+```text
+Risk tier: 3 (Behaviour change): export writes a zip.
+```
+
+A claim of a lower tier than the diff shows is a Standards finding. The tier describes the pull request. The existing blocking rules still grade each finding, and tier 3 still needs its failing-first proof.
+
+A re-check inherits the tier already recorded for the pull request. If the changed diff warrants a new tier, put the updated line and reason immediately after the re-check's reviewer line. A re-check of a report from before this field was introduced can omit the line.
+
 ## Class
 
 Every `[blocking]` finding carries exactly one line under it, among its indented lines:

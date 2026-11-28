@@ -46,6 +46,10 @@ When the fleet starts or tells you about a ticket's `Approach note:` comment, th
 
 Run `python3 -I "$review" rules --base origin/<base> --head <head> --finding <class>...`, one `--finding` per candidate finding's class, once your candidates are written (before Disprove). It reads `docs/agents/review-rules.md` from the base, never the head, so a pull request can't change its own rules, and prints `review rules: none at <base>` when there is no file. Report no finding it prints as `skip:` unless it carries a `Risk:` line; apply only the `path rule:` lines it prints, the ones whose glob a changed path matches (`*` within one folder, `**` across folders); use the file's **Severity examples** to grade. Exit 2 is an unreadable line: report every finding and name the line in `Checked:`. When the owner or builder declines a finding with a reason, propose one line for the owner in your next report, `Proposed never-flag: <class>: declined <n>, <YYYY-MM-DD>`, and never write the file yourself.
 
+## Risk stage
+
+Before the three checks, read the project's tier definitions in `docs/agents/huntr.md` from the base branch, or use the [four defaults](references/verdict.md#risk-tier) when the file is absent. Classify the whole pinned diff, including both sides of renames. If the ticket or pull request claims a lower tier than the diff shows, record a Standards finding with the changed path and what it does. For tier 3, check the failing-first proof. Grade each finding under step 3. In the report template below, insert `Risk tier: <0-3> (<tier name>): <why>` on the line immediately after the reviewer line. On a re-check, keep the first review's tier unless changes to the diff warrant reclassifying it, as the [verdict format](references/verdict.md#risk-tier) explains.
+
 ## 2. Run three checks, apart
 
 Read `git diff --find-renames origin/<base>...<head>` and the code around it. Keep each check's findings apart. Follow `fleet.md`'s test-command rule; a parallel or scratch run, such as undoing the change, goes in a separate worktree with its own build output and is never committed.

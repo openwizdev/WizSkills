@@ -18,7 +18,7 @@ The user asks "what skill should I use?" and gets one next step that fits their 
 ## Recommend
 
 1. Find the outcome the user wants from their question and context. If a missing decision changes the answer, ask one plain question.
-2. Take candidates from the catalog below and the skills actually installed in this session (its real catalog, not a guess). Read a candidate's SKILL.md before recommending it. OpenWiz skills sit beside this skill's folder (`../<name>/SKILL.md`), not in the project's working directory; read other skills through their catalog paths. An unreadable candidate is unverified.
+2. Take candidates from the catalog below and the skills installed in this session (real catalog, not a guess). Read a candidate's SKILL.md before recommending it or saying a step can be skipped. OpenWiz skills sit beside this folder (`../<name>/SKILL.md`), not in the working directory; read others via their catalog paths. An unreadable candidate is unverified: find a readable one.
 3. Recommend the best fit: its name, why it fits, where it enters the flow, and the exact words to start it (for example, "Read the grill skill and grill this idea"). The chosen skill's own text decides its prerequisites, role and gates.
 4. Wait for the yes, then read and follow the chosen skill.
 
@@ -40,7 +40,7 @@ Done when the user has one named recommendation with its start words, and nothin
 | `where-are-we` | Read the current status and get one next move, at any point |
 | `triage` | Sort incoming bugs and ideas; approved work enters the fleet |
 | `diagnose` | Find a hard bug's cause from a tight failing loop, in the caller's scope |
-| `jev` | Use Jev for a typed judgment |
+| `jev` | Use Jev for typed judgments |
 | `feedback` | Report an OpenWiz problem as one public issue, after its exact preview and your yes |
 | `huntr` | Find and prove small unplanned work under its configured approval gate |
 | `son-of-anton` | Attack your own factory on a schedule through `huntr`'s attack mode and file what is proven |

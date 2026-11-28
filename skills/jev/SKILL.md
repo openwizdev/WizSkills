@@ -25,15 +25,17 @@ Each question is one gut-check a person could make in a few seconds from this st
 | Choice | `choice`, `probabilities`, `confidence` |
 | Score | `score`, `legend`, `probabilities`, `confidence` |
 | Noul | `noul`, from 0 to 1. No separate `confidence`. |
-| Box | `box.top`, `box.bottom`, `box.left`, `box.right` (fractions from 0 to 1), `confidence` |
+| Box | `box.top`, `box.bottom`, `box.left`, `box.right` (fractions from 0 to 1), `confidence` (`null` when unavailable) |
 
 Put every question about one state in that one request. They run in parallel and in isolation, so more questions do not add context rot. Ask again only when the next state or the next options depend on an answer.
 
-`state` is a string, an object, or an array; name the fields. `instructions` is the whole question. The question id is for your code and is not sent. Choice `criteria` maps a name to a description. Score `criteria` is an ordered list of levels. Box and images need the header `TypeSafe-Danger-Zone-Images: true`.
+`state` is a string, an object, or an array; name the fields. Each question name is sent on the wire as the key in `questions` and comes back as the key in `answers`, though the model reads only `instructions`: write the whole question in `instructions`, and use a plain wire key rather than an internal identifier. Choice `criteria` maps a name to a description. Score `criteria` is an ordered list of levels. Box and images need the header `TypeSafe-Danger-Zone-Images: true`.
 
 ## Act
 
-Act when `confidence` is high. A Noul has no `confidence`; use `noul`. On low confidence, and when `TYPESAFE_API_KEY` is missing or empty, run the deterministic logic you already had. Never log the key, the `Authorization` header, or the client config.
+Before calling the API, verify external processing is authorized for the record and send only the minimum approved fields in `state`; keep the local deterministic route for private records or anything that cannot be shared.
+
+Act when `confidence` is available and high; check for `null` or unavailable `confidence` (such as on a Box answer) before comparing it with a threshold. A Noul has no `confidence`; use `noul`. On unavailable or low confidence, and when `TYPESAFE_API_KEY` is missing or empty, run the deterministic logic you already had. Never log the key, the `Authorization` header, or the client config.
 
 The client sits behind a small interface. Python is `typesafe-sdk` (`TypeSafeClient` in `typesafe_sdk`); JavaScript is `@typesafe-ai/sdk` (`new TypeSafeClient()`). Pass no key: the client reads `TYPESAFE_API_KEY`. Tests use a fake of the interface and open no socket. A failed call is an error (`TypeSafeAPIError`, `status`, `request_id`), not a low-confidence answer.
 
@@ -43,14 +45,23 @@ from typesafe_sdk import Choice, TypeSafeClient
 
 MIN_CONFIDENCE = 0.5  # tune on held-out cases
 
+def approved_state(ticket):
+    if ticket.get("allow_external") is not True:
+        return None
+    fields = {k: ticket[k] for k in ("title", "category") if k in ticket}
+    return fields or None
+
 class JevRouter:
     def team(self, ticket):
+        state = approved_state(ticket)
+        if state is None:
+            return LegacyRouter().team(ticket)
         with TypeSafeClient(model="jev-latest") as client:
-            answer = client.system_one(state=ticket, questions={
+            answer = client.system_one(state=state, questions={
                 "team": Choice(instructions="Which team should handle this ticket?",
                                criteria={"billing": "Payment", "technical": "A bug"}),
             }).answers["team"]
-        if answer.confidence < MIN_CONFIDENCE:
+        if answer.confidence is None or answer.confidence < MIN_CONFIDENCE:
             return LegacyRouter().team(ticket)
         return answer.choice
 

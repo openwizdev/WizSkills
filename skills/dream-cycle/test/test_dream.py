@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -497,6 +498,396 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
             report = report_md.read_text(encoding="utf-8")
             self.assertIn("Second check rejected", report)
             self.assertIn("- Second check rejected: 1", report)
+
+    def test_report_checks_individual_canary_verdicts_across_two_provers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            fdir = out_dir / "findings"
+            vdir = out_dir / "verdicts"
+            fdir.mkdir()
+            vdir.mkdir()
+
+            lnk = _make_link("lnk-good", route="ticket", ticket="Should be capped on canary miss")
+            canary_junk = _make_link("canary-junk-01", route="ticket", ticket="Canary junk")
+            (fdir / "s.jsonl").write_text(
+                json.dumps(lnk) + "\n" + json.dumps(canary_junk) + "\n",
+                encoding="utf-8",
+            )
+            (vdir / "prover_1.jsonl").write_text(
+                json.dumps(_make_verdict("lnk-good", "CONFIRMED", changes_confirmed=True)) + "\n"
+                + json.dumps(_make_verdict("canary-junk-01", "REJECTED", reason="Known junk", changes_confirmed=False)) + "\n",
+                encoding="utf-8",
+            )
+            (vdir / "prover_2.jsonl").write_text(
+                json.dumps(_make_verdict("canary-junk-01", "CONFIRMED", reason="False confirmation", changes_confirmed=True)) + "\n",
+                encoding="utf-8",
+            )
+            canaries_file = out_dir / "canaries.json"
+            canaries_file.write_text(
+                json.dumps([{"id": "canary-junk-01", "expected": "REJECTED"}]),
+                encoding="utf-8",
+            )
+            merged_file = out_dir / "merged.json"
+            report_md = out_dir / "report.md"
+            tickets_json = out_dir / "tickets.json"
+            self.assertEqual(
+                self._run("merge", str(fdir), "--out", str(merged_file), "--batches-dir", str(out_dir / "b"), "--batches", "1").returncode,
+                0,
+            )
+            proc = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--canaries", str(canaries_file),
+                "--out", str(report_md),
+                "--tickets-out", str(tickets_json),
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            report = report_md.read_text(encoding="utf-8")
+            top = report.split("## Areas")[0]
+            self.assertIn("canary-junk-01", top)
+            self.assertIn("PLAUSIBLE", top)
+            self.assertIn("**`lnk-good`** (`duplicates`, `PLAUSIBLE`", report)
+            self.assertEqual(json.loads(tickets_json.read_text(encoding="utf-8")), [])
+
+            (vdir / "prover_2.jsonl").write_text(
+                json.dumps(_make_verdict("canary-junk-01", "REJECTED", reason="Both provers reject junk", changes_confirmed=False)) + "\n",
+                encoding="utf-8",
+            )
+            proc_ok = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--canaries", str(canaries_file),
+                "--out", str(report_md),
+                "--tickets-out", str(tickets_json),
+            )
+            self.assertEqual(proc_ok.returncode, 0, proc_ok.stderr)
+            report_ok = report_md.read_text(encoding="utf-8")
+            self.assertNotIn("Prover missed canary check", report_ok)
+            self.assertEqual([t["id"] for t in json.loads(tickets_json.read_text(encoding="utf-8"))], ["lnk-good"])
+
+    def test_report_requires_verdict_for_winning_action_not_merged_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            fdir = out_dir / "findings"
+            vdir = out_dir / "verdicts"
+            fdir.mkdir()
+            vdir.mkdir()
+
+            fix_docs = {
+                "id": "fix-docs-01",
+                "kind": "fix",
+                "repo": "example/alpha",
+                "paths": ["docs/cli.md"],
+                "what": "Correct typo in docs/cli.md.",
+                "evidence": ["grep typo docs/cli.md -> 1 match"],
+                "why_keep": "Main CLI doc.",
+                "confidence": "medium",
+                "size": "S",
+                "ticket": "Correct typo in docs/cli.md",
+            }
+            del_docs = {
+                "id": "del-docs-01",
+                "kind": "delete",
+                "repo": "example/alpha",
+                "paths": ["docs/cli.md"],
+                "what": "Delete obsolete docs/cli.md.",
+                "evidence": ["git log -1 docs/cli.md -> 2020-01-01"],
+                "why_keep": "Users might bookmark it.",
+                "confidence": "high",
+                "size": "S",
+                "ticket": "Delete docs/cli.md",
+            }
+            (fdir / "s1.jsonl").write_text(json.dumps(fix_docs) + "\n", encoding="utf-8")
+            (fdir / "s2.jsonl").write_text(json.dumps(del_docs) + "\n", encoding="utf-8")
+            (vdir / "v1.jsonl").write_text(
+                json.dumps(_make_verdict("fix-docs-01", "CONFIRMED", reason="Confirmed typo in docs/cli.md.", blind=False, changes_confirmed=None)) + "\n",
+                encoding="utf-8",
+            )
+
+            merged_file = out_dir / "merged.json"
+            report_md = out_dir / "report.md"
+            tickets_json = out_dir / "tickets.json"
+            self.assertEqual(
+                self._run("merge", str(fdir), "--out", str(merged_file), "--batches-dir", str(out_dir / "b"), "--batches", "1").returncode,
+                0,
+            )
+            merged = json.loads(merged_file.read_text(encoding="utf-8"))
+            self.assertEqual(len(merged["findings"]), 1)
+            self.assertEqual(merged["findings"][0]["id"], "del-docs-01")
+            self.assertEqual(merged["findings"][0]["merged_ids"], ["del-docs-01", "fix-docs-01"])
+
+            proc = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--out", str(report_md),
+                "--tickets-out", str(tickets_json),
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(json.loads(tickets_json.read_text(encoding="utf-8")), [])
+            report = report_md.read_text(encoding="utf-8")
+            self.assertIn("0 confirmed, 0 plausible, 0 rejected, 1 unproven", report)
+            self.assertNotIn("Delete docs/cli.md", report)
+
+            (vdir / "v2.jsonl").write_text(
+                json.dumps(_make_verdict("del-docs-01", "CONFIRMED", reason="Confirmed docs/cli.md is obsolete.", blind=False, changes_confirmed=None)) + "\n",
+                encoding="utf-8",
+            )
+            proc2 = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--out", str(report_md),
+                "--tickets-out", str(tickets_json),
+            )
+            self.assertEqual(proc2.returncode, 0, proc2.stderr)
+            tickets = json.loads(tickets_json.read_text(encoding="utf-8"))
+            self.assertEqual(len(tickets), 1)
+            self.assertEqual(tickets[0]["id"], "del-docs-01")
+            self.assertEqual(tickets[0]["verdict_reason"], "Confirmed docs/cli.md is obsolete.")
+            self.assertEqual(tickets[0]["merged_ids"], ["del-docs-01", "fix-docs-01"])
+
+    def test_report_refreshes_owner_inboxes_removing_stale_files_on_rerender(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            fdir = out_dir / "findings"
+            vdir = out_dir / "verdicts"
+            inboxes_dir = out_dir / "inboxes"
+            fdir.mkdir()
+            vdir.mkdir()
+
+            plat = _make_link("plat-01", route="pillar-inbox", owner="platform")
+            strat = _make_link("strat-01", route="pillar-inbox", owner="strategy")
+            (fdir / "s.jsonl").write_text(json.dumps(plat) + "\n" + json.dumps(strat) + "\n", encoding="utf-8")
+            (vdir / "v1.jsonl").write_text(
+                json.dumps(_make_verdict("plat-01", "CONFIRMED", changes_confirmed=True)) + "\n"
+                + json.dumps(_make_verdict("strat-01", "CONFIRMED", changes_confirmed=True)) + "\n",
+                encoding="utf-8",
+            )
+
+            merged_file = out_dir / "merged.json"
+            report_md = out_dir / "report.md"
+            tickets_json = out_dir / "tickets.json"
+            self.assertEqual(
+                self._run("merge", str(fdir), "--out", str(merged_file), "--batches-dir", str(out_dir / "b"), "--batches", "1").returncode,
+                0,
+            )
+            proc1 = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--out", str(report_md),
+                "--tickets-out", str(tickets_json),
+            )
+            self.assertEqual(proc1.returncode, 0, proc1.stderr)
+            self.assertEqual(sorted(p.name for p in inboxes_dir.glob("*.md")), ["platform.md", "strategy.md"])
+
+            (vdir / "v2.jsonl").write_text(
+                json.dumps(_make_verdict("plat-01", "REJECTED", reason="Second prover rejected platform link", changes_confirmed=False)) + "\n",
+                encoding="utf-8",
+            )
+            proc2 = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--out", str(report_md),
+                "--tickets-out", str(tickets_json),
+            )
+            self.assertEqual(proc2.returncode, 0, proc2.stderr)
+            self.assertEqual(sorted(p.name for p in inboxes_dir.glob("*.md")), ["strategy.md"])
+
+            (vdir / "v3.jsonl").write_text(
+                json.dumps(_make_verdict("strat-01", "REJECTED", reason="Second prover rejected strategy link", changes_confirmed=False)) + "\n",
+                encoding="utf-8",
+            )
+            proc3 = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--out", str(report_md),
+                "--tickets-out", str(tickets_json),
+            )
+            self.assertEqual(proc3.returncode, 0, proc3.stderr)
+            self.assertEqual(sorted(p.name for p in inboxes_dir.glob("*.md")), [])
+
+    def test_report_refuses_inbox_paths_escaping_private_run_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            run_dir = base / "private-run"
+            pillar_dir = base / "pillar-repo"
+            fdir = base / "findings"
+            vdir = base / "verdicts"
+            for d in (run_dir, pillar_dir, fdir, vdir):
+                d.mkdir()
+
+            original_text = "Existing pillar owner file — must stay intact.\n"
+            pillar_file = pillar_dir / "platform.md"
+            pillar_file.write_text(original_text, encoding="utf-8")
+
+            plat = _make_link("plat-01", route="pillar-inbox", owner="platform")
+            (fdir / "s.jsonl").write_text(json.dumps(plat) + "\n", encoding="utf-8")
+            (vdir / "v.jsonl").write_text(
+                json.dumps(_make_verdict("plat-01", "CONFIRMED", changes_confirmed=True)) + "\n",
+                encoding="utf-8",
+            )
+            merged_file = base / "merged.json"
+            self.assertEqual(
+                self._run("merge", str(fdir), "--out", str(merged_file), "--batches-dir", str(base / "b"), "--batches", "1").returncode,
+                0,
+            )
+
+            default_inboxes = run_dir / "inboxes"
+            os.symlink(pillar_dir, default_inboxes)
+            proc_symlink_dir = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--out", str(run_dir / "2030-01-15.md"),
+                "--tickets-out", str(run_dir / "tickets.json"),
+            )
+            self.assertNotEqual(proc_symlink_dir.returncode, 0)
+            self.assertEqual(pillar_file.read_text(encoding="utf-8"), original_text)
+
+            default_inboxes.unlink()
+            default_inboxes.mkdir()
+            os.symlink(pillar_file, default_inboxes / "platform.md")
+            proc_symlink_file = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--out", str(run_dir / "2030-01-15.md"),
+                "--tickets-out", str(run_dir / "tickets.json"),
+            )
+            self.assertNotEqual(proc_symlink_file.returncode, 0)
+            self.assertEqual(pillar_file.read_text(encoding="utf-8"), original_text)
+
+            (default_inboxes / "platform.md").unlink()
+            proc_outside_arg = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--inboxes-dir", str(pillar_dir),
+                "--out", str(run_dir / "2030-01-15.md"),
+                "--tickets-out", str(run_dir / "tickets.json"),
+            )
+            self.assertNotEqual(proc_outside_arg.returncode, 0)
+            self.assertEqual(pillar_file.read_text(encoding="utf-8"), original_text)
+
+    def test_report_handles_single_row_jsonl_link_scores_and_rejected_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            fdir = out_dir / "findings"
+            vdir = out_dir / "verdicts"
+            fdir.mkdir()
+            vdir.mkdir()
+
+            lnk1 = _make_link("lnk-01", route="ticket", ticket="First by id")
+            lnk2 = _make_link("lnk-02", route="ticket", ticket="Higher score link")
+            (fdir / "s.jsonl").write_text(json.dumps(lnk1) + "\n" + json.dumps(lnk2) + "\n", encoding="utf-8")
+            (vdir / "v.jsonl").write_text(
+                json.dumps(_make_verdict("lnk-01", "CONFIRMED", changes_confirmed=True)) + "\n"
+                + json.dumps(_make_verdict("lnk-02", "CONFIRMED", changes_confirmed=True)) + "\n",
+                encoding="utf-8",
+            )
+            scores_jsonl = out_dir / "scores.jsonl"
+            scores_jsonl.write_text(json.dumps({"id": "lnk-02", "score": 301}) + "\n", encoding="utf-8")
+            rejected_jsonl = out_dir / "rejected.jsonl"
+            rejected_jsonl.write_text(
+                json.dumps({"id": "gate-a-01", "reason": "Gate A: paraphrased quote"}) + "\n",
+                encoding="utf-8",
+            )
+
+            merged_file = out_dir / "merged.json"
+            report_md = out_dir / "report.md"
+            tickets_json = out_dir / "tickets.json"
+            self.assertEqual(
+                self._run("merge", str(fdir), "--out", str(merged_file), "--batches-dir", str(out_dir / "b"), "--batches", "1").returncode,
+                0,
+            )
+            proc = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--link-scores", str(scores_jsonl),
+                "--rejected-links", str(rejected_jsonl),
+                "--out", str(report_md),
+                "--tickets-out", str(tickets_json),
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            report = report_md.read_text(encoding="utf-8")
+            top_links = report.split("## Top links")[1].split("\n## Rejected\n")[0]
+            self.assertIn("1. **`lnk-02`** (`duplicates`, `CONFIRMED`, score 301", top_links)
+            self.assertIn("### Rejected links by reason", top_links)
+            self.assertIn("- Gate A: paraphrased quote: 1", top_links)
+
+    def test_merge_and_report_skip_invalid_utf8_rows_and_record_file_line_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            fdir = out_dir / "findings"
+            vdir = out_dir / "verdicts"
+            fdir.mkdir()
+            vdir.mkdir()
+
+            f1 = {
+                "id": "utf8-ok-1",
+                "kind": "fix",
+                "repo": "example/alpha",
+                "paths": ["src/a.py"],
+                "what": "Valid row before bad UTF-8.",
+                "evidence": ["grep a src/a.py -> 1 match"],
+                "why_keep": "",
+                "confidence": "high",
+                "size": "S",
+                "ticket": "Fix src/a.py",
+            }
+            f2 = {
+                "id": "utf8-ok-2",
+                "kind": "fix",
+                "repo": "example/alpha",
+                "paths": ["src/b.py"],
+                "what": "Valid row after bad UTF-8.",
+                "evidence": ["grep b src/b.py -> 1 match"],
+                "why_keep": "",
+                "confidence": "high",
+                "size": "S",
+                "ticket": "Fix src/b.py",
+            }
+            (fdir / "scout_utf8.jsonl").write_bytes(
+                json.dumps(f1).encode("utf-8") + b"\n"
+                + b'{"id": "utf8-bad", "what": "bad byte \xff"}\n'
+                + json.dumps(f2).encode("utf-8") + b"\n"
+            )
+
+            merged_file = out_dir / "merged.json"
+            batches_dir = out_dir / "batches"
+            merge_proc = self._run(
+                "merge", str(fdir),
+                "--out", str(merged_file),
+                "--batches-dir", str(batches_dir),
+                "--batches", "1",
+            )
+            self.assertEqual(merge_proc.returncode, 0, merge_proc.stderr)
+            merged = json.loads(merged_file.read_text(encoding="utf-8"))
+            self.assertEqual(merged["counts"], {"input": 3, "valid": 2, "dropped": 1, "merged": 2})
+            self.assertEqual([f["id"] for f in merged["findings"]], ["utf8-ok-1", "utf8-ok-2"])
+            self.assertEqual(len(merged["dropped"]), 1)
+            self.assertEqual(merged["dropped"][0]["file"], "scout_utf8.jsonl")
+            self.assertEqual(merged["dropped"][0]["line"], 2)
+            self.assertIn("utf-8", merged["dropped"][0]["reason"].lower())
+
+            (vdir / "verdicts_utf8.jsonl").write_bytes(
+                json.dumps(_make_verdict("utf8-ok-1", "CONFIRMED", blind=False, changes_confirmed=None)).encode("utf-8") + b"\n"
+                + b'{"id": "utf8-bad", "reason": "\xff"}\n'
+                + json.dumps(_make_verdict("utf8-ok-2", "CONFIRMED", blind=False, changes_confirmed=None)).encode("utf-8") + b"\n"
+            )
+            report_md = out_dir / "report.md"
+            tickets_json = out_dir / "tickets.json"
+            report_proc = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--out", str(report_md),
+                "--tickets-out", str(tickets_json),
+            )
+            self.assertEqual(report_proc.returncode, 0, report_proc.stderr)
+            self.assertEqual(
+                [t["id"] for t in json.loads(tickets_json.read_text(encoding="utf-8"))],
+                ["utf8-ok-1", "utf8-ok-2"],
+            )
+            report = report_md.read_text(encoding="utf-8")
+            unconfirmed_section = report.split("## Unconfirmed reads")[1].split("## Tickets filed")[0]
+            self.assertIn("verdicts_utf8.jsonl:2", unconfirmed_section)
+            self.assertIn("utf-8", unconfirmed_section.lower())
 
 
 if __name__ == "__main__":

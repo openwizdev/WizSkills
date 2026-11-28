@@ -87,6 +87,16 @@ def parse_json_strict(raw):
     return json.loads(raw, object_pairs_hook=_no_duplicates)
 
 
+def _iter_jsonl_lines(path):
+    for lineno, raw_bytes in enumerate(path.read_bytes().splitlines(), 1):
+        if not raw_bytes.strip():
+            continue
+        try:
+            yield lineno, raw_bytes.decode("utf-8"), None
+        except UnicodeDecodeError as exc:
+            yield lineno, None, f"invalid UTF-8: {exc}"
+
+
 def _valid_iso_date(val):
     if not isinstance(val, str) or ISO_DATE_RE.fullmatch(val) is None:
         return False
@@ -288,11 +298,11 @@ def cmd_merge(args):
     for path in sorted(findings_dir.glob("*.jsonl")):
         if not path.is_file():
             continue
-        text = path.read_text(encoding="utf-8")
-        for lineno, raw in enumerate(text.splitlines(), 1):
-            if not raw.strip():
-                continue
+        for lineno, raw, decode_err in _iter_jsonl_lines(path):
             input_count += 1
+            if decode_err:
+                dropped.append({"file": path.name, "line": lineno, "reason": decode_err})
+                continue
             try:
                 record = parse_json_strict(raw)
             except (ValueError, json.JSONDecodeError) as exc:
@@ -388,17 +398,21 @@ def _load_link_scores(path_str):
             if not line.strip():
                 continue
             item = parse_json_strict(line)
-            if isinstance(item, dict) and "id" in item and type(item.get("score")) is int and item["score"] >= 1:
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and type(item.get("score")) is int and item["score"] >= 1:
                 scores[item["id"]] = item["score"]
         return scores
 
     if isinstance(data, dict):
-        for k, v in data.items():
-            if type(v) is int and v >= 1:
-                scores[k] = v
+        if isinstance(data.get("id"), str):
+            if type(data.get("score")) is int and data["score"] >= 1:
+                scores[data["id"]] = data["score"]
+        else:
+            for k, v in data.items():
+                if type(v) is int and v >= 1:
+                    scores[k] = v
     elif isinstance(data, list):
         for item in data:
-            if isinstance(item, dict) and "id" in item and type(item.get("score")) is int and item["score"] >= 1:
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and type(item.get("score")) is int and item["score"] >= 1:
                 scores[item["id"]] = item["score"]
     return scores
 
@@ -437,17 +451,20 @@ def _load_rejected_links(path_str):
         return []
     try:
         data = parse_json_strict(text)
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict) and isinstance(data.get("rejected"), list):
-            return data["rejected"]
-        return []
     except ValueError:
         out = []
         for line in text.splitlines():
             if line.strip():
                 out.append(parse_json_strict(line))
         return out
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        if isinstance(data.get("rejected"), list):
+            return data["rejected"]
+        if isinstance(data.get("reason"), str) and data["reason"]:
+            return [data]
+    return []
 
 
 def _load_expired_links(ledger_path_str):
@@ -470,21 +487,21 @@ def _load_expired_links(ledger_path_str):
     return expired
 
 
-def _evaluate_canaries(canaries_path_str, verdicts_by_id):
+def _load_canaries(canaries_path_str):
     if not canaries_path_str:
-        return set(), []
+        return set(), [], []
     data = parse_json_strict(Path(canaries_path_str).read_text(encoding="utf-8"))
     canary_ids = set()
-    missed = []
+    preset_missed = []
 
     if isinstance(data, dict) and isinstance(data.get("missed"), list):
         for item in data["missed"]:
             if isinstance(item, str):
                 canary_ids.add(item)
-                missed.append({"id": item, "expected": "expected", "actual": "missed"})
+                preset_missed.append({"id": item, "expected": "expected", "actual": "missed"})
             elif isinstance(item, dict) and "id" in item:
                 canary_ids.add(item["id"])
-                missed.append({
+                preset_missed.append({
                     "id": item["id"],
                     "expected": item.get("expected", "expected"),
                     "actual": item.get("actual", "missed"),
@@ -497,7 +514,7 @@ def _evaluate_canaries(canaries_path_str, verdicts_by_id):
     else:
         raise ValueError("canaries file must be a JSON array or object")
 
-    already_missed = {m["id"] for m in missed}
+    checks = []
     for entry in entries:
         if not isinstance(entry, dict) or "id" not in entry:
             continue
@@ -507,13 +524,28 @@ def _evaluate_canaries(canaries_path_str, verdicts_by_id):
         if expected is None:
             kind = entry.get("kind")
             expected = "CONFIRMED" if kind == "true" else "REJECTED" if kind == "junk" else None
-        if expected is None or cid in already_missed:
+        if expected is not None:
+            checks.append((cid, expected))
+    return canary_ids, preset_missed, checks
+
+
+def _evaluate_canaries(preset_missed, canary_checks, canary_verdicts):
+    missed = list(preset_missed)
+    already_missed = {m["id"] for m in missed}
+    for cid, expected in canary_checks:
+        if cid in already_missed:
             continue
-        actual_rec = verdicts_by_id.get(cid)
-        actual = actual_rec["verdict"] if actual_rec else "MISSING"
-        if actual != expected:
+        seen = canary_verdicts.get(cid, [])
+        if not seen:
+            missed.append({"id": cid, "expected": expected, "actual": "MISSING"})
+            already_missed.add(cid)
+            continue
+        wrong = [v for v in seen if v != expected]
+        if wrong:
+            actual = ", ".join(dict.fromkeys(wrong))
             missed.append({"id": cid, "expected": expected, "actual": actual})
-    return canary_ids, missed
+            already_missed.add(cid)
+    return missed
 
 
 def _sanitize_owner_filename(owner):
@@ -550,16 +582,24 @@ def _render_standard_item(index, finding, verdict_str):
     return "\n".join(lines)
 
 
-def _write_owner_inboxes(inboxes_dir, inbox_items, report_date, canary_missed):
-    if not inbox_items:
-        return 0
-    inboxes_dir.mkdir(parents=True, exist_ok=True)
-    base_resolved = inboxes_dir.resolve()
+def _check_inbox_dir(inboxes_dir, run_root):
+    if inboxes_dir.is_symlink():
+        raise ValueError(f"refused symlinked inbox directory: {inboxes_dir}")
+    resolved = inboxes_dir.resolve()
+    if not resolved.is_relative_to(run_root):
+        raise ValueError(f"refused inbox directory outside private run folder: {inboxes_dir}")
+    if inboxes_dir.exists() and not inboxes_dir.is_dir():
+        raise ValueError(f"refused non-directory inbox path: {inboxes_dir}")
+    return resolved
+
+
+def _plan_owner_inboxes(inboxes_dir, run_root, report_resolved, inbox_items, report_date, canary_missed):
+    base_resolved = _check_inbox_dir(inboxes_dir, run_root)
     by_owner = defaultdict(list)
     for item in inbox_items:
         by_owner[item["finding"]["owner"]].append(item)
 
-    written = 0
+    planned = []
     used_names = set()
     for owner in sorted(by_owner):
         safe = _sanitize_owner_filename(owner)
@@ -569,9 +609,14 @@ def _write_owner_inboxes(inboxes_dir, inbox_items, report_date, canary_missed):
             candidate = f"{safe}-{suffix}"
             suffix += 1
         used_names.add(candidate)
-        target = (inboxes_dir / f"{candidate}.md").resolve()
-        if not target.is_relative_to(base_resolved):
+        target_path = inboxes_dir / f"{candidate}.md"
+        if target_path.is_symlink():
+            raise ValueError(f"refused symlinked inbox file for owner {owner!r}: {target_path}")
+        target = target_path.resolve()
+        if not target.is_relative_to(base_resolved) or not target.is_relative_to(run_root):
             raise ValueError(f"refused inbox path outside run folder for owner {owner!r}")
+        if target == report_resolved:
+            raise ValueError(f"refused inbox path colliding with report file for owner {owner!r}")
         lines = [
             f"# Dream cycle inbox — {owner} ({report_date})",
             "",
@@ -586,9 +631,37 @@ def _write_owner_inboxes(inboxes_dir, inbox_items, report_date, canary_missed):
             lines.append(_render_link_card(idx, f, item["verdict"], item["score"]))
             if f["route"] == "people-draft":
                 lines.append("   - **Draft status:** DRAFT ONLY — never sent automatically.")
-        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        written += 1
-    return written
+        planned.append((target, "\n".join(lines) + "\n"))
+    return base_resolved, planned
+
+
+def _write_owner_inboxes(inboxes_dir, base_resolved, run_root, report_resolved, planned):
+    written_targets = set()
+    if planned:
+        inboxes_dir.mkdir(parents=True, exist_ok=True)
+        for target, content in planned:
+            target.write_text(content, encoding="utf-8")
+            written_targets.add(target)
+
+    if inboxes_dir.is_dir():
+        same_as_root = base_resolved == run_root
+        for existing in sorted(inboxes_dir.glob("*.md")):
+            if existing.is_symlink() or not existing.is_file():
+                continue
+            resolved = existing.resolve()
+            if resolved in written_targets or resolved == report_resolved:
+                continue
+            if not resolved.is_relative_to(base_resolved) or not resolved.is_relative_to(run_root):
+                continue
+            if same_as_root:
+                try:
+                    first_line = existing.read_text(encoding="utf-8").splitlines()[:1]
+                except (OSError, UnicodeDecodeError):
+                    continue
+                if not first_line or not first_line[0].startswith("# Dream cycle inbox — "):
+                    continue
+            existing.unlink()
+    return len(written_targets)
 
 
 def cmd_report(args):
@@ -618,21 +691,26 @@ def cmd_report(args):
         print(f"report: failed to load input: {exc}", file=sys.stderr)
         return 1
 
-    finding_by_id = {}
-    alias_to_id = {}
-    for f in findings:
-        finding_by_id[f["id"]] = f
-        alias_to_id[f["id"]] = f["id"]
-        for mid in f.get("merged_ids", []):
-            alias_to_id.setdefault(mid, f["id"])
+    try:
+        canary_ids, preset_missed, canary_checks = _load_canaries(args.canaries)
+    except (OSError, ValueError) as exc:
+        print(f"report: failed to evaluate canaries: {exc}", file=sys.stderr)
+        return 1
 
+    finding_by_id = {f["id"]: f for f in findings}
+
+    canary_verdicts = defaultdict(list)
     verdicts_by_id = {}
     invalid_verdicts = []
     for path in sorted(verdicts_dir.glob("*.jsonl")):
         if not path.is_file():
             continue
-        for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if not raw.strip():
+        for lineno, raw, decode_err in _iter_jsonl_lines(path):
+            if decode_err:
+                invalid_verdicts.append({
+                    "source": f"verdict {path.name}:{lineno}",
+                    "reason": decode_err,
+                })
                 continue
             try:
                 rec = parse_json_strict(raw)
@@ -648,9 +726,11 @@ def cmd_report(args):
                     "source": f"verdict {path.name}:{lineno}",
                     "reason": err,
                 })
+                if isinstance(rec, dict) and isinstance(rec.get("id"), str) and rec["id"] in canary_ids:
+                    canary_verdicts[rec["id"]].append("INVALID")
                 continue
 
-            target_id = alias_to_id.get(rec["id"], rec["id"])
+            target_id = rec["id"]
             target_finding = finding_by_id.get(target_id)
             if (
                 target_finding is not None
@@ -662,17 +742,22 @@ def cmd_report(args):
                     "source": f"verdict {rec['id']} ({path.name}:{lineno})",
                     "reason": "rejected CONFIRMED link verdict: changes_confirmed must be true, got null",
                 })
+                if target_id in canary_ids:
+                    canary_verdicts[target_id].append("INVALID")
+                continue
+
+            if target_id in canary_ids:
+                canary_verdicts[target_id].append(rec["verdict"])
+                continue
+
+            if target_finding is None:
                 continue
 
             existing = verdicts_by_id.get(target_id)
             if existing is None or VERDICT_RANK[rec["verdict"]] > VERDICT_RANK[existing["verdict"]]:
                 verdicts_by_id[target_id] = rec
 
-    try:
-        canary_ids, canary_missed = _evaluate_canaries(args.canaries, verdicts_by_id)
-    except (OSError, ValueError) as exc:
-        print(f"report: failed to evaluate canaries: {exc}", file=sys.stderr)
-        return 1
+    canary_missed = _evaluate_canaries(preset_missed, canary_checks, canary_verdicts)
 
     active_findings = [f for f in findings if f["id"] not in canary_ids]
 
@@ -763,7 +848,7 @@ def cmd_report(args):
             tickets.append(t_entry)
 
     for rej in extra_rejected_links:
-        if isinstance(rej, dict) and rej.get("reason"):
+        if isinstance(rej, dict) and isinstance(rej.get("reason"), str) and rej["reason"]:
             rejected_link_reasons[rej["reason"]] += 1
 
     deletes.sort(key=lambda x: (VERDICT_RANK[x[1]], _rank_key(x[0])))
@@ -902,6 +987,17 @@ def cmd_report(args):
         lines.append("_None._")
 
     report_path = Path(args.out)
+    run_root = report_path.parent.resolve()
+    report_resolved = report_path.resolve()
+    inboxes_dir = Path(args.inboxes_dir) if args.inboxes_dir else report_path.parent / "inboxes"
+    try:
+        inboxes_base, planned_inboxes = _plan_owner_inboxes(
+            inboxes_dir, run_root, report_resolved, inbox_items, args.date, bool(canary_missed)
+        )
+    except (OSError, ValueError) as exc:
+        print(f"report: {exc}", file=sys.stderr)
+        return 1
+
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -909,8 +1005,9 @@ def cmd_report(args):
     tickets_path.parent.mkdir(parents=True, exist_ok=True)
     tickets_path.write_text(json.dumps(tickets, indent=2) + "\n", encoding="utf-8")
 
-    inboxes_dir = Path(args.inboxes_dir) if args.inboxes_dir else report_path.parent / "inboxes"
-    inboxes_written = _write_owner_inboxes(inboxes_dir, inbox_items, args.date, bool(canary_missed))
+    inboxes_written = _write_owner_inboxes(
+        inboxes_dir, inboxes_base, run_root, report_resolved, planned_inboxes
+    )
 
     if args.routes_out:
         routes_path = Path(args.routes_out)

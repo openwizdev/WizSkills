@@ -1,4 +1,3 @@
-"""SM-A exercises the contract's JSON Schema with Python's standard library."""
 import json
 import math
 from pathlib import Path
@@ -35,7 +34,8 @@ def equal(left, right):
 
 
 def matches(root, rule, value):
-    """Evaluate the Draft 2020-12 keywords used by this schema."""
+    if type(rule) is bool:
+        return rule
     assert not (rule.keys() - KEYWORDS), rule.keys() - KEYWORDS
     if "$ref" in rule:
         prefix = "#/$defs/"
@@ -56,11 +56,7 @@ def matches(root, rule, value):
         return (
             value.keys() >= set(rule.get("required", []))
             and all(matches(root, rule.get("propertyNames", {}), key) for key in value)
-            and all(
-                child is not False and matches(root, child, item)
-                for key, item in value.items()
-                for child in [properties.get(key, extra)]
-            )
+            and all(matches(root, properties.get(key, extra), item) for key, item in value.items())
         )
     if type(value) is list:
         return (
@@ -83,8 +79,9 @@ def model_matches(schema, model):
         return False
     if "variableName" not in schema.get("$defs", {}):
         return True
-    names = {**schema["$defs"]["variableName"], "enum": list(model["variables"])}
-    bound_schema = {**schema, "$defs": {**schema["$defs"], "variableName": names}}
+    names = list(model["variables"])
+    declaration = {**schema["$defs"]["variableName"], "enum": names} if names else False
+    bound_schema = {**schema, "$defs": {**schema["$defs"], "variableName": declaration}}
     return matches(bound_schema, bound_schema, model)
 
 

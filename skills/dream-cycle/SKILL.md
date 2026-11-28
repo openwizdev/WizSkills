@@ -1,26 +1,53 @@
 ---
 name: dream-cycle
-description: Run a read-only org-wide dream cycle into a private report and confirmed tickets. Use on a dream-cycle loop or org-wide review; not for single-issue triage or hunts.
+description: Run a dream-cycle wake or org-wide review into a private report and proven tickets. Use triage for one issue.
 version: 0.1.0
 ---
 
 # Dream cycle
 
-Skeleton entrypoint for `dream-cycle` (DC1 `#3089`). DC4 (`#3092`) fills the full controller procedure and the `scout.md` and `prover.md` role briefs.
-
 **Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills.
 
 ## Guards
 
-- **Scouts read only.** No scout deletes, closes, archives, or edits anything.
-- **Only the controller writes** the dated private report and confirmed tickets.
-- **Unproven findings are never ticketed.** Only `CONFIRMED` findings with a `ticket` title are filed.
-- **Records kept by rule are never delete candidates.**
+- Scouts and provers read only.
+- Only the controller writes.
+- Verify the private target before writing.
+- Never delete, close, archive or edit existing work.
+- Records kept by rule may only be fixed.
 
-## Contract and commands
+## 1. Scope
 
-Read [dream-cycle.v1](../../contracts/dream-cycle.v1.md) and its schema [dream-cycle.v1.schema.json](../../contracts/dream-cycle.v1.schema.json), plus the project's `docs/agents/dream-cycle.md`.
+Read settings. Use [the controller steps](agents/controller.md).
+Resume the next missing step in the dated private run.
+Done when scope and privacy are verified.
 
-- Inventory (DC2 `#3090`): `python3 -I scripts/inventory.py <repo> --days 14`
-- Merge (DC3 `#3091`): `python3 -I scripts/dream.py merge <findings_dir> --out <merged.json> --batches-dir <dir>`
-- Report (DC3 `#3091`): `python3 -I scripts/dream.py report <merged.json> <verdicts_dir> --date <YYYY-MM-DD> --out <report.md> --tickets-out <tickets.json>`
+## 2. Scout
+
+Inventory each repo.
+Fan out [scout.md](scout.md) with inventory slices.
+Re-tell a scout without its findings file.
+Done when each slice has a file or gap.
+
+## 3. Prove
+
+Run the link funnel in [prover.md](prover.md).
+Merge and verify in waves within `link_budget`.
+Done when verdicts and gaps are saved.
+
+## 4. Report
+
+Render and read back the private report.
+Done when the report and ticket list are saved.
+
+## 5. File
+
+File `CONFIRMED` wins as `ready-for-agent` briefs.
+Look up the exact title first.
+Use a private-record link and neutral wording.
+Done when issue receipts are saved.
+
+## 6. Summarize
+
+Send the owner the top ten deletes, fixes and links.
+Done when delivery is recorded.

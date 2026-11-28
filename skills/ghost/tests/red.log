@@ -1,0 +1,44 @@
+FFF
+======================================================================
+FAIL: test_a_cancelled_second_bench_leaves_the_live_files (test_learn.LearnPass.test_a_cancelled_second_bench_leaves_the_live_files)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/work/wizskills/skills/ghost/tests/test_learn.py", line 112, in test_a_cancelled_second_bench_leaves_the_live_files
+    self.assert_live_untouched(house)
+  File "~/work/wizskills/skills/ghost/tests/test_learn.py", line 96, in assert_live_untouched
+    self.assertEqual((house / "skill.json").read_bytes(), support.SKILL)
+AssertionError: b'{"phrases":["all recs","j381 all","j381 all recs"],"c[47 chars]]}\n' != b'{"phrases":[],"codes":[],"tone":"","never_suggest":[]}\n'
+
+======================================================================
+FAIL: test_an_unreadable_second_report_leaves_the_live_files (test_learn.LearnPass.test_an_unreadable_second_report_leaves_the_live_files)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/work/wizskills/skills/ghost/tests/test_learn.py", line 118, in test_an_unreadable_second_report_leaves_the_live_files
+    self.assert_live_untouched(house)
+  File "~/work/wizskills/skills/ghost/tests/test_learn.py", line 96, in assert_live_untouched
+    self.assertEqual((house / "skill.json").read_bytes(), support.SKILL)
+AssertionError: b'{"phrases":["all recs","j381 all","j381 all recs"],"c[47 chars]]}\n' != b'{"phrases":[],"codes":[],"tone":"","never_suggest":[]}\n'
+
+======================================================================
+FAIL: test_the_second_bench_reads_a_staged_candidate_not_the_live_files (test_learn.LearnPass.test_the_second_bench_reads_a_staged_candidate_not_the_live_files)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/work/wizskills/skills/ghost/tests/test_learn.py", line 104, in test_the_second_bench_reads_a_staged_candidate_not_the_live_files
+    self.assertEqual([row["live"] for row in rows], ["old", "old"],
+AssertionError: Lists differ: ['old', 'new'] != ['old', 'old']
+
+First differing element 1:
+'new'
+'old'
+
+- ['old', 'new']
+?          ^^^
+
++ ['old', 'old']
+?          ^^^
+ : the live files must not change before the second report passes
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.737s
+
+FAILED (failures=3)

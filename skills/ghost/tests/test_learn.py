@@ -85,6 +85,41 @@ class LearnPass(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(len(rows), 1)
 
+    def run_live(self, reports):
+        folder = self.enterContext(support_tmp())
+        house = support.make_home(folder)
+        env, log = support.fake_env(folder, reports, FAKE_LIVE=str(house / "skill.json"))
+        proc = support.run(support.LEARN, ["--home", str(house)], env)
+        return proc, house, support.calls(log)
+
+    def assert_live_untouched(self, house):
+        self.assertEqual((house / "skill.json").read_bytes(), support.SKILL)
+        self.assertEqual((house / "lexicon.json").read_bytes(), support.LEXICON)
+        self.assertEqual(sorted(path.name for path in house.iterdir()),
+                         ["lexicon.json", "replay.json", "sent.jsonl", "skill.json"])
+
+    def test_the_second_bench_reads_a_staged_candidate_not_the_live_files(self):
+        proc, house, rows = self.run_live([support.report(0.4, 6), support.report(0.8, 12)])
+        self.assertEqual([row["skill"] for row in rows], ["old", "new"])
+        self.assertEqual([row["live"] for row in rows], ["old", "old"],
+                         "the live files must not change before the second report passes")
+        self.assertEqual(proc.stdout, "kept\n")
+        self.assertIn(b"all recs", (house / "skill.json").read_bytes())
+
+    def test_a_cancelled_second_bench_leaves_the_live_files(self):
+        proc, house, rows = self.run_live([support.report(0.4, 6), {"sigint": 1}])
+        self.assertEqual(len(rows), 2)
+        self.assert_live_untouched(house)
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_an_unreadable_second_report_leaves_the_live_files(self):
+        proc, house, rows = self.run_live([support.report(0.4, 6), {"raw": "ff0a"}])
+        self.assertEqual(len(rows), 2)
+        self.assert_live_untouched(house)
+        self.assertEqual(proc.stdout, "restored\n")
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stderr, "")
+
     def test_the_log_is_unread_when_logging_is_off(self):
         folder = self.enterContext(support_tmp())
         house = support.make_home(folder, log=EVENT.encode(), logging=False)

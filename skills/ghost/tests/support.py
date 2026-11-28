@@ -22,8 +22,14 @@ if home:
         skill = "new" if b"all recs" in path.read_bytes() else "old"
     except OSError:
         skill = "unreadable"
+live = "absent"
+if os.environ.get("FAKE_LIVE"):
+    try:
+        live = "new" if b"all recs" in Path(os.environ["FAKE_LIVE"]).read_bytes() else "old"
+    except OSError:
+        live = "unreadable"
 with log.open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps({"args": args, "skill": skill}) + "\n")
+    handle.write(json.dumps({"args": args, "skill": skill, "live": live}) + "\n")
 if args[:2] == ["ghost", "--help"]:
     raise SystemExit(int(os.environ.get("FAKE_HELP", "0")))
 if args[:3] == ["ghost", "model", "install"]:
@@ -39,6 +45,14 @@ if args[:4] == ["ghost", "bench", "--source", "sent"]:
     report = reports[count] if count < len(reports) else reports[-1]
     if isinstance(report, dict) and "exit" in report:
         raise SystemExit(int(report["exit"]))
+    if isinstance(report, dict) and "sigint" in report:
+        import signal, time
+        os.kill(os.getppid(), signal.SIGINT)
+        time.sleep(20)
+        raise SystemExit(0)
+    if isinstance(report, dict) and "raw" in report:
+        sys.stdout.buffer.write(bytes.fromhex(report["raw"]))
+        raise SystemExit(0)
     if isinstance(report, str):
         sys.stdout.write(report)
     else:

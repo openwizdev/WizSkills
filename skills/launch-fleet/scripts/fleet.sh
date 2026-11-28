@@ -82,23 +82,29 @@ if [ "$cmd" = overload ]; then
   [ $# -eq 1 ] || die "overload needs one action"
   [ -n "${GH_REPO:-}" ] && [ -n "${LAUNCH_FLEET_OVERLOAD_STATE:-}" ] \
     || die "overload needs GH_REPO and LAUNCH_FLEET_OVERLOAD_STATE"
-  # MT6 (#825): with LAUNCH_FLEET_OVERLOAD_SUPPLY (an OpenWiz checkout's
-  # absolute tools/ci-overload/supply.py), new work reads the collector's queue
-  # now into this call's own private file, which only this call's guard reads;
-  # the caller's input is never used then. A supplier that fails, or can't
-  # start, leaves the guard a missing input, so it refuses as unknown.
-  # Completion and reconciliation read nothing more.
+  if [ "$1" = resume ]; then
+    python3 -I "$(dirname "$0")/carried/alarm.py" \
+      --repository "$GH_REPO" --state "$LAUNCH_FLEET_OVERLOAD_STATE" \
+      --now "${LAUNCH_FLEET_NOW:-$(date -u +%s)}" --action resume
+    exit $?
+  fi
   input=${LAUNCH_FLEET_OVERLOAD_INPUT:-/nonexistent-overload-observation}
   case $1 in merge-batch | automatic-refresh | nonessential-poll)
-    if [ -n "${LAUNCH_FLEET_OVERLOAD_SUPPLY:-}" ]; then
-      case $LAUNCH_FLEET_OVERLOAD_SUPPLY in /*) ;;
+    supply=${LAUNCH_FLEET_OVERLOAD_SUPPLY:-}
+    if [ -n "$supply" ]; then
+      case $supply in /*) ;;
         *) die "LAUNCH_FLEET_OVERLOAD_SUPPLY must be absolute" ;;
       esac
+    elif [ -z "${LAUNCH_FLEET_OVERLOAD_INPUT:-}" ]; then
+      default_supply=$(dirname "$0")/overload-supply.py
+      [ -r "$default_supply" ] && supply=$default_supply
+    fi
+    if [ -n "$supply" ]; then
       input=/nonexistent-overload-observation
       if own=$(mktemp -d 2> /dev/null); then
         trap 'rm -rf "$own"' EXIT
         trap 'exit 2' HUP INT TERM
-        python3 -I "$LAUNCH_FLEET_OVERLOAD_SUPPLY" --repository "$GH_REPO" \
+        python3 -I "$supply" --repository "$GH_REPO" \
           --output "$own/observation.json" < /dev/null > /dev/null 2>&1 \
           && input=$own/observation.json
       fi
@@ -2003,10 +2009,15 @@ def ticket_lines_now($s): . as $t
            ($c.statusCheckRollup | required_ci) as $ci
            | ([$p.comments.nodes[] | select(.body | startswith("VERDICT: "))] | max_by(.databaseId)) as $v
            | ([$v.body // "" | first_line | capture("^VERDICT: (?<verdict>APPROVE|CHANGES) at (?<commit>[0-9a-f]{40})\\s*$")] | first) as $verdict
-           | if $ci == "failed" then
-               (if any($rs[]; (.r | test("^CI failure sent\\b")) and (.r | names($head))) then empty
-                else "CI failed \($at): tell its builder\($t | bthread)" end)
-             elif $ci != "green" then empty
+           | if $ci != "green" then
+               (if $ci == "failed" and (any($rs[]; (.r | test("^CI failure sent\\b")) and (.r | names($head))) | not) then
+                  "CI failed \($at): tell its builder\($t | bthread)"
+                else empty end),
+               (if $p.isMergeQueueEnabled == true and $verdict.verdict == "APPROVE" and $verdict.commit == $head
+                   and any($p.comments.nodes[]; .body | split("\n")[0] | test("^launch-fleet: merge queued " + $head + "\\b"))
+                   and (any($rs[]; kind("merge blocked") | .r | names($head)) | not) then
+                  "merge \($at): exact-head queue receipt; run merge.py merge to read the drop, skipping merge.py admit"
+                else empty end)
              elif $v != null and $verdict == null then look($p.number; $rs; "its latest VERDICT line is not \"VERDICT: APPROVE|CHANGES at <the full commit>\"")
              elif $verdict != null and $verdict.commit == $head then
                (if $verdict.verdict == "APPROVE" then

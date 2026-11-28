@@ -1,0 +1,52 @@
+{
+  "closing_tickets": {
+    "example-org/example-repo#19001": [
+      "example-org/example-repo#18001"
+    ],
+    "example-org/example-repo#19002": [
+      "example-org/example-repo#18002"
+    ],
+    "example-org/example-repo#19003": [
+      "example-org/example-repo#18003"
+    ]
+  },
+  "parents": {
+    "example-org/example-repo#18001": "example-org/example-repo#1008",
+    "example-org/example-repo#18002": "example-org/example-repo#82",
+    "example-org/example-repo#18003": "example-org/example-repo#1008"
+  },
+  "deliveries": [
+    {
+      "headers": {
+        "X-GitHub-Event": "check_suite",
+        "X-GitHub-Delivery": "example-check-suite-completed"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "check_suite": {
+          "pull_requests": [
+            {
+              "number": 19001
+            },
+            {
+              "number": 19002
+            },
+            {
+              "number": 19003
+            }
+          ]
+        },
+        "action": "completed"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": [
+          "check spec 82",
+          "check spec 1008"
+        ]
+      }
+    }
+  ]
+}

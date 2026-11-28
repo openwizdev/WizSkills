@@ -1,0 +1,33 @@
+{
+  "source": "openwizdev/OpenWiz fae200fc89303c2b4872db1164b42813e5b2e6a8",
+  "read_from": [
+    "adapters/local/driver HARNESSES",
+    "adapters/local/harnesses/*/row.json",
+    "adapters/boat/driver HARNESSES",
+    "adapters/hermes/driver HERMES_SKILL_FOR_HARNESS",
+    "adapters/factory/driver HARNESS",
+    "adapters/devin/driver harness devin"
+  ],
+  "harnesses": [
+    "agy",
+    "amp",
+    "auggie",
+    "claude",
+    "codex",
+    "copilot",
+    "devin",
+    "droid",
+    "gemini",
+    "goose",
+    "hermes",
+    "junie",
+    "kilo",
+    "kimi",
+    "mistral",
+    "opencode",
+    "oz",
+    "pi",
+    "prime",
+    "qwen"
+  ]
+}

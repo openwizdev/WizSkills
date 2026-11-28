@@ -99,6 +99,30 @@ class SavedLogs(unittest.TestCase):
         self.assertEqual(rows[ALPHA], ['80.0', '1/1', '80.0'])
         self.assertEqual(rows[BETA], ['40.0', '1/1', '40.0'])
 
+    def test_a_diagnostic_only_rules_log_stays_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / '105'
+            root.mkdir()
+            (root / 'run.json').write_text(json.dumps({
+                'id': 105, 'event': 'pull_request', 'status': 'completed', 'conclusion': 'cancelled',
+                'created_at': '2026-01-05T12:00:00Z', 'run_started_at': '2026-01-05T12:00:00Z',
+                'run_attempt': 1,
+            }), encoding='utf-8')
+            (root / 'jobs.json').write_text(json.dumps({'jobs': [{
+                'id': 1050, 'run_id': 105, 'name': 'check', 'status': 'completed', 'conclusion': 'cancelled',
+                'created_at': '2026-01-05T12:00:00Z', 'started_at': '2026-01-05T12:00:02Z',
+                'completed_at': '2026-01-05T12:00:10Z', 'steps': [],
+            }]}), encoding='utf-8')
+            (root / '1050.log').write_text(
+                '2026-01-05T12:00:04.0000000Z ##[group]Run python3 check/run.py\n'
+                '2026-01-05T12:00:04.1000000Z rules: frontmatter skills/alpha/SKILL.md:12: synthetic\n'
+                '2026-01-05T12:00:04.2000000Z ##[error]The operation was canceled.\n',
+                encoding='utf-8')
+            code, out, err = bench('--saved', tmp, '--window', 'diagnostic only')
+        self.assertEqual(code, 0, err)
+        _, rows = table(out)
+        self.assertEqual(rows['rules'], ['unknown', '0/1', 'unknown'])
+
 
 def with_fake_gh(*args):
     with tempfile.TemporaryDirectory() as tmp:

@@ -1,0 +1,27 @@
+{
+  "closing_tickets": {},
+  "parents": {
+    "example-org/example-repo#18015": null
+  },
+  "deliveries": [
+    {
+      "headers": {
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "example-ticket-without-parent"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 18015
+        },
+        "action": "labeled"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": []
+      }
+    }
+  ]
+}

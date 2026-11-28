@@ -1,0 +1,120 @@
+{
+  "schema": "openwiz.state-model.v1",
+  "machine": "toy switch",
+  "sources": {
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "files": [
+      "synthetic/toy-machine.txt"
+    ]
+  },
+  "variables": {
+    "phase": {
+      "type": "enum",
+      "values": [
+        "idle",
+        "detour",
+        "broken"
+      ]
+    }
+  },
+  "init": {
+    "phase": "idle"
+  },
+  "actions": [
+    {
+      "name": "take-detour",
+      "guard": {
+        "op": "eq",
+        "args": [
+          {
+            "var": "phase"
+          },
+          "idle"
+        ]
+      },
+      "effect": [
+        {
+          "op": "assign",
+          "var": "phase",
+          "value": "detour"
+        }
+      ],
+      "cites": [
+        {
+          "file": "synthetic/toy-machine.txt",
+          "start": 1,
+          "end": 2
+        }
+      ]
+    },
+    {
+      "name": "direct",
+      "guard": {
+        "op": "eq",
+        "args": [
+          {
+            "var": "phase"
+          },
+          "idle"
+        ]
+      },
+      "effect": [
+        {
+          "op": "assign",
+          "var": "phase",
+          "value": "broken"
+        }
+      ],
+      "cites": [
+        {
+          "file": "synthetic/toy-machine.txt",
+          "start": 1,
+          "end": 2
+        }
+      ]
+    },
+    {
+      "name": "after-detour",
+      "guard": {
+        "op": "eq",
+        "args": [
+          {
+            "var": "phase"
+          },
+          "detour"
+        ]
+      },
+      "effect": [
+        {
+          "op": "assign",
+          "var": "phase",
+          "value": "broken"
+        }
+      ],
+      "cites": [
+        {
+          "file": "synthetic/toy-machine.txt",
+          "start": 1,
+          "end": 2
+        }
+      ]
+    }
+  ],
+  "invariants": {
+    "intact": {
+      "op": "not",
+      "args": [
+        {
+          "op": "eq",
+          "args": [
+            {
+              "var": "phase"
+            },
+            "broken"
+          ]
+        }
+      ]
+    }
+  },
+  "bound": 10
+}

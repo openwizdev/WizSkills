@@ -46,13 +46,16 @@ class Repo(unittest.TestCase):
     def build(self, case):
         self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
+        self.git('config', 'core.checkStat', 'minimal')
         for nth, side in enumerate(('base', 'head')):
             for old in self.repo.iterdir():
                 if old.name != '.git':
                     shutil.rmtree(old) if old.is_dir() else old.unlink()
             shutil.copytree(FIXTURES / case / side, self.repo, dirs_exist_ok=True)
             self.stamp(1_800_000_000 + nth)
+            self.git('rm', '-r', '-q', '--cached', '--ignore-unmatch', '.')
             self.git('add', '-A')
+            self.git('add', '-u', '--renormalize')
             self.git('commit', '-q', '-m', side)
         return self.git('rev-parse', 'HEAD^'), self.git('rev-parse', 'HEAD')
 
@@ -153,6 +156,23 @@ class Repo(unittest.TestCase):
         self.assertEqual(done.returncode, 2)
         self.assertIn('after --', done.stderr)
 
+    def test_command_not_on_path_refuses_with_2_and_leaves_nothing(self):
+        self.build('red-green')
+        done = self.prove('--base', 'HEAD^', '--test', 'test_calc.py',
+                          command=['prove-missing-synthetic', '--auth-token', 'synthetic-argument-value'])
+        self.assertEqual((done.returncode, done.stdout), (2, ''))
+        self.assertIn('prove: cannot run prove-missing-synthetic:', done.stderr)
+        self.assertNotIn('--auth-token', done.stderr)
+        self.assertNotIn('synthetic-argument-value', done.stderr)
+        self.assertNotIn('Traceback', done.stderr)
+        self.assertGone()
+
+    def test_help_says_refusals_leave_stdout_empty(self):
+        done = subprocess.run([sys.executable, '-I', str(SCRIPT), '--help'],
+                              env=self.env, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('exit 2 leaves stdout empty', ' '.join(done.stdout.lower().split()))
+
 
 PYTEST_PASS = """============================= test session starts ==============================
 collected 2 items
@@ -180,12 +200,18 @@ ERROR test_b.py
 PYTEST_QUIET = """FAILED test_a.py::test_bad - assert 1 == 2
 1 failed, 1 passed in 0.01s
 """
+PYTEST_SPACE = """=========================== short test summary info ============================
+FAILED test_a.py::test_bad[hello world] - assert 1 == 2
+============================== 1 failed in 0.02s ===============================
+"""
 UNITTEST_OK = "..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n"
 UNITTEST_FAIL = "F.\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nFAILED (failures=1)\n"
 UNITTEST_ERRORS = "E.\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nFAILED (errors=1)\n"
 UNITTEST_IMPORT = ("E\n======================================================================\nERROR: test_calc (unittest.loader._FailedTest.test_calc)\n"
                    "ImportError: Failed to import test module: test_calc\n\nRan 1 test in 0.000s\n\nFAILED (errors=1)\n")
 UNITTEST_NONE = "\n----------------------------------------------------------------------\nRan 0 tests in 0.000s\n\nOK\n"
+UNITTEST_UNEXPECTED = ("F.\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\n"
+                       "FAILED (failures=1, unexpected successes=1)\n")
 CARGO_OK = "running 2 tests\ntest a ... ok\ntest b ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
 CARGO_FAIL = ("running 2 tests\ntest a ... ok\ntest b ... FAILED\n\nthread 'b' panicked at src/lib.rs:9:5:\nassertion `left == right` failed\n"
               "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
@@ -200,6 +226,105 @@ NODE_IMPORT = ("  code: 'ERR_MODULE_NOT_FOUND',\n✖ b.test.mjs (31ms)\nℹ test
                "ℹ cancelled 0\n\n✖ failing tests:\n\ntest at b.test.mjs:1:1\n✖ b.test.mjs (31ms)\n  'test failed'\n")
 NODE_TAP = ("TAP version 13\nnot ok 1 - bad\n  ---\n  failureType: 'testCodeFailure'\n  error: '1 == 2'\n  code: 'ERR_ASSERTION'\n  ...\n"
             "1..1\n# tests 1\n# suites 0\n# pass 0\n# fail 1\n# cancelled 0\n")
+NODE_SUBTEST = ("▶ parent\n  ✖ inner (1ms)\n✖ parent (2ms)\n"
+                "ℹ tests 2\nℹ suites 0\nℹ pass 0\nℹ fail 2\nℹ cancelled 0\n\n✖ failing tests:\n\n"
+                "test at a.test.mjs:4:11\n✖ inner (1ms)\n  AssertionError [ERR_ASSERTION]: 1 !== 2\n")
+NODE_SUBTEST_TAP = ("TAP version 13\n    not ok 1 - inner\n      ---\n      failureType: 'testCodeFailure'\n"
+                    "      code: 'ERR_ASSERTION'\n      ...\n"
+                    "not ok 1 - parent\n  ---\n  failureType: 'subtestsFailed'\n  error: '1 subtest failed'\n"
+                    "  code: 'ERR_TEST_FAILURE'\n  ...\n"
+                    "# tests 2\n# suites 0\n# pass 0\n# fail 2\n# cancelled 0\n")
+NODE_TODO = NODE_SUBTEST.replace("▶ parent\n", "▶ parent\n  ⚠ planned (1ms) # TODO\n").replace(
+    "ℹ tests 2", "ℹ tests 3").replace("ℹ cancelled 0\n", "ℹ cancelled 0\nℹ todo 1\n") + (
+    "\ntest at a.test.mjs:3:11\n⚠ planned (1ms) # TODO\n  AssertionError [ERR_ASSERTION]: 3 !== 4\n")
+NODE_TODO_TAP = NODE_SUBTEST_TAP.replace(
+    "    not ok 1 - inner",
+    "    not ok 1 - planned # TODO deferred\n      ---\n      failureType: 'testCodeFailure'\n"
+    "      name: 'TypeError'\n      ...\n    not ok 2 - inner").replace(
+    "# tests 2", "# tests 3").replace("# cancelled 0\n", "# cancelled 0\n# todo 1\n")
+NODE_SUBTEST_THROWS = ("▶ parent\n  ✖ inner (1ms)\n✖ parent (2ms)\n"
+                       "ℹ tests 2\nℹ suites 0\nℹ pass 0\nℹ fail 2\nℹ cancelled 0\n\n✖ failing tests:\n\n"
+                       "test at a.test.mjs:3:11\n✖ inner (1ms)\n  TypeError: nope\n")
+
+
+NODE_MIXED_SUBTEST = """▶ parent
+  ✖ asserting leaf (1ms)
+  ✖ throwing leaf (1ms)
+✖ parent (2ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 0
+ℹ fail 3
+ℹ cancelled 0
+
+✖ failing tests:
+
+test at a.test.mjs:4:11
+✖ asserting leaf (1ms)
+  AssertionError [ERR_ASSERTION]: 1 !== 2
+
+test at a.test.mjs:5:11
+✖ throwing leaf (1ms)
+  TypeError [Error]: 1 subtest failed
+"""
+NODE_SPEC_HOOK = """▶ suite
+  ▶ parent
+    ✖ leaf (1ms)
+  ✖ parent (2ms)
+✖ suite (3ms)
+ℹ tests 2
+ℹ suites 1
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+
+✖ failing tests:
+
+test at a.test.mjs:4:11
+✖ leaf (1ms)
+  AssertionError [ERR_ASSERTION]: 1 !== 2
+
+test at a.test.mjs:1:1
+✖ suite (3ms)
+  AssertionError [ERR_ASSERTION]: 3 !== 4
+      at SuiteContext.<anonymous> (file:///synthetic/a.test.mjs:2:22)
+      at TestHook.run (node:internal/test_runner/test:1402:25)
+"""
+NODE_SUITE_TAP = """TAP version 13
+# Subtest: suite
+    # Subtest: parent
+        # Subtest: leaf
+        not ok 1 - leaf
+          ---
+          type: 'test'
+          failureType: 'testCodeFailure'
+          error: '1 !== 2'
+          code: 'ERR_ASSERTION'
+          name: 'AssertionError'
+          ...
+        1..1
+    not ok 1 - parent
+      ---
+      type: 'test'
+      failureType: 'subtestsFailed'
+      error: '1 subtest failed'
+      code: 'ERR_TEST_FAILURE'
+      ...
+    1..1
+not ok 1 - suite
+  ---
+  type: 'suite'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 2
+# suites 1
+# pass 0
+# fail 2
+# cancelled 0
+"""
 
 
 class Classify(unittest.TestCase):
@@ -217,14 +342,30 @@ class Classify(unittest.TestCase):
                     ('a test that raises is not red', 1, PYTEST_RAISES, 'error'),
                     ('collection error', 2, PYTEST_COLLECT, 'error'),
                     ('no tests ran', 5, '===== no tests ran in 0.01s =====\n', 'error'),
-                    ('passed summary but non-zero exit', 1, PYTEST_PASS, 'error')])
+                    ('passed summary but non-zero exit', 1, PYTEST_PASS, 'error'),
+                    ('parametrized id with a space', 1, PYTEST_SPACE, 'failed'),
+                    ('brackets in the test path', 1,
+                     PYTEST_ASSERT.replace('test_a.py', 'tests[legacy]/test_a.py'), 'failed'),
+                    ('separator in the id and the assertion', 1,
+                     PYTEST_SPACE.replace('test_a.py', 'tests[legacy]/test_a.py')
+                     .replace('hello world', 'New York - Boston').replace('1 == 2', '5 - 3 == 0'),
+                     'failed'),
+                    ('exception after an id with the separator', 1,
+                     PYTEST_SPACE.replace('hello world', 'New York - Boston')
+                     .replace('assert 1 == 2', 'TypeError: a - b'), 'error'),
+                    ('nested brackets and a separator in the id', 1,
+                     PYTEST_SPACE.replace('hello world', '[en] - [fr]'), 'failed'),
+                    ('an exception after a bracketed id still is not red', 1,
+                     PYTEST_SPACE.replace('hello world', '[en] - [fr]')
+                     .replace('assert 1 == 2', 'TypeError: [detail] - assert 1 == 2'), 'error')])
 
     def test_unittest(self):
         self.check([('ok', 0, UNITTEST_OK, 'passed'),
                     ('failure', 1, UNITTEST_FAIL, 'failed'),
                     ('errors', 1, UNITTEST_ERRORS, 'error'),
                     ('import failure', 1, UNITTEST_IMPORT, 'error'),
-                    ('zero tests', 0, UNITTEST_NONE, 'error')])
+                    ('zero tests', 0, UNITTEST_NONE, 'error'),
+                    ('unexpected successes', 1, UNITTEST_UNEXPECTED, 'error')])
 
     def test_cargo(self):
         self.check([('ok', 0, CARGO_OK, 'passed'),
@@ -237,7 +378,24 @@ class Classify(unittest.TestCase):
                     ('assertion', 1, NODE_ASSERT, 'failed'),
                     ('a test that throws is not red', 1, NODE_THROWS, 'error'),
                     ('file does not import', 1, NODE_IMPORT, 'error'),
-                    ('tap assertion', 1, NODE_TAP, 'failed')])
+                    ('tap assertion', 1, NODE_TAP, 'failed'),
+                    ('subtest assertion', 1, NODE_SUBTEST, 'failed'),
+                    ('tap subtest assertion', 1, NODE_SUBTEST_TAP, 'failed'),
+                    ('spec todo does not count as a failure', 1, NODE_TODO, 'failed'),
+                    ('tap todo does not count as a failure', 1, NODE_TODO_TAP, 'failed'),
+                    ('spec non-todo exception is still an error', 1,
+                     NODE_TODO.replace('AssertionError [ERR_ASSERTION]: 1 !== 2', 'TypeError: nope'), 'error'),
+                    ('tap non-todo exception is still an error', 1,
+                     NODE_TODO_TAP.replace("code: 'ERR_ASSERTION'", "name: 'TypeError'"), 'error'),
+                    ('a subtest that throws is not red', 1, NODE_SUBTEST_THROWS, 'error'),
+                    ('an assertion can mention a failed subtest', 1,
+                     NODE_SUBTEST.replace('1 !== 2', '1 subtest failed'), 'failed'),
+                    ('a thrown exception can mention a failed subtest', 1, NODE_MIXED_SUBTEST, 'error'),
+                    ('spec suite hook mixed with a test assertion is an error', 1, NODE_SPEC_HOOK, 'error'),
+                    ('tap suite aggregate is outside the test failure count', 1, NODE_SUITE_TAP, 'failed'),
+                    ('tap suite hook failures are errors', 1,
+                     NODE_SUITE_TAP.replace("type: 'suite'\n  failureType: 'subtestsFailed'",
+                                            "type: 'suite'\n  failureType: 'hookFailed'"), 'error')])
 
     def test_unrecognised_and_timeout_are_error(self):
         self.check([('no summary, exit 1', 1, 'Traceback (most recent call last):\nAssertionError\n', 'error'),

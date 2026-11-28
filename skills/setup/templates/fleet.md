@@ -58,6 +58,21 @@ Source: <the instructions file's commands, linked>, and <the CI workflow, linked
 
 Source: <the CI workflow, linked>, and the branch rules (`gh api 'repos/{owner}/{repo}/rulesets'`).
 
+## Approval rules
+
+What the fleet's agents must ask before doing: each rule asks its named approver first, and a plan or machine approval grants none. To change a rule or add one, edit its line by hand; each starts `Ask before` and names a person, never "the user".
+
+| Rule | Approver |
+| --- | --- |
+| Ask before publishing a release, a tag or a package | <the person's name or GitHub login> |
+| Ask before spending money or credits beyond the recorded limits | <the person's name or GitHub login> |
+| Ask before adding, reading or changing a secret | <the person's name or GitHub login> |
+| Ask before deleting user data | <the person's name or GitHub login> |
+| Ask before a cut-over | <the person's name or GitHub login> |
+| Ask before installing the repository webhook | <the person's name or GitHub login> |
+
+Source: <decider, date and plain decision with a Markdown private-record comment link>.
+
 ## Standing merge rules
 
 | Pull request | Review | Merged by, and when |
@@ -73,5 +88,8 @@ Source: <linked source files, or decider, date and plain decision with a Markdow
 | Setting | Value |
 | --- | --- |
 | Record authors | `<app-slug>[bot]`, `<the login of the account the fleet falls back to>` |
+| App identity | off |
+
+The App identity row stays `off` until the user turns it on with exactly `on` (OpenWiz #2835). Any other value, a second such row, or the table moved or wrapped in other markup reads as off, and `settings.py check` names it.
 
 Source: <the App's settings, and `gh api user` on the account the fleet runs as>.

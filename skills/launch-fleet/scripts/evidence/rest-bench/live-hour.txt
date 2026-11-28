@@ -1,0 +1,7 @@
+core: 19 samples over 60 minutes, 2303 used (a lower bound across 2 reset windows), min remaining 2860 of 5000
+  left out: 2026-11-23T01:37:35Z, used 337, reset 1795399989, unlike both neighbours (another allowance window)
+  left out: 2026-11-23T02:16:41Z, used 65, reset 1795403627, unlike both neighbours (another allowance window)
+graphql: 19 samples over 60 minutes, 556 used (a lower bound across 2 reset windows), min remaining 4456 of 5000
+  left out: 2026-11-23T01:37:35Z, used 82, reset 1795401394, unlike both neighbours (another allowance window)
+  left out: 2026-11-23T02:16:41Z, used 1547, reset 1795401394, unlike both neighbours (another allowance window)
+unreadable samples: 0

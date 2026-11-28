@@ -7,6 +7,7 @@ import re
 HERE = Path(__file__).resolve().parent
 SHA = re.compile(r'[0-9a-f]{40}')
 STAGES = ('fix_after_changes', 'builder_question_answer')
+UNCERTAIN = {('transport', 'uncertain'), ('completion', 'uncertain')}
 
 
 def _load(path, name):
@@ -89,13 +90,13 @@ def spans(records):
             continue
         kind, commit = match.groups()
         if kind == 'review started':
-            span = {'start': r['comment'], 'open': True, 'sent': set()}
+            span = {'start': r['comment'], 'open': True, 'sent': {}}
         elif span is None:
             return None
         elif kind == 'review given up':
             span['open'] = False
         elif kind == 're-check sent':
-            span['sent'].add(commit)
+            span['sent'][commit] = r['comment']
     return span
 
 
@@ -124,7 +125,7 @@ def recheck(view):
     ci = view['ci']
     if not ci or ci['head'] != view['head'] or ci['state'] != 'success':
         return 'none', 'ci not green at the head'
-    if view['head'] in span['sent']:
+    if span['sent'].get(view['head'], 0) > verdict['comment']:
         return 'none', 'recheck already sent'
     try:
         return message(view, 'reviewer', f'review-span-{span["start"]}', verdict['comment'], view['head'],
@@ -172,6 +173,13 @@ def pull(view, recipient, assignment, own):
     if not view['complete']:
         return stop
     try:
+        current_assignments = view['assignments']
+        if not isinstance(current_assignments, dict) or any(
+                current_assignments[role] is not None
+                and (type(current_assignments[role]) is not str
+                     or not re.fullmatch(r'[a-z][a-z0-9-]{0,79}', current_assignments[role]))
+                for role in ('builder', 'reviewer')):
+            return stop
         records = _unique(view['records'])
         if any((r['repository'], r['spec'], r['ticket']) != (view['repository'], view['spec'], view['ticket'])
                for r in records):
@@ -187,7 +195,8 @@ def pull(view, recipient, assignment, own):
         events = [r for r in records if _belongs(r, intent)]
         states = {(r['kind'], r.get('state')) for r in events}
         stream = json.dumps(intent['approval'], sort_keys=True)
-        if states & {('transport', 'uncertain'), ('completion', 'uncertain')}:
+        destination = intent['destination']
+        if states & UNCERTAIN:
             state = 'reconcile', 'uncertain_outcome'
         elif any(_acked(r, intent, verified) for r in events):
             state = 'acknowledged', 'record_only'
@@ -195,8 +204,10 @@ def pull(view, recipient, assignment, own):
             state = 'complete', 'already_complete'
         elif (('completion', 'superseded') in states or intent['approval'] != view['approval']
               or intent['head'] not in (None, view['head'])
-              or (intent['destination'] in ('builder', 'reviewer') and intent['prior_verdict'] is not None
-                  and intent['prior_verdict'] != latest)):
+              or (destination in ('builder', 'reviewer')
+                  and (current_assignments[destination] is None
+                       or intent['assignment'] != current_assignments[destination]
+                       or intent['prior_verdict'] not in (None, latest)))):
             state = 'superseded', 'superseded'
         elif stream in blocked:
             state = 'deferred', 'out_of_order'
@@ -236,10 +247,8 @@ def recovery(wakes):
 
 
 def _ungated(start, end, held):
-    if any(type(on) is not int or type(off) is not int or on > off for on, off in held):
-        raise ValueError('malformed held interval')
     total, cursor = end - start, start
-    for on, off in sorted(held):
+    for on, off in held:
         on, off = max(on, cursor), min(off, end)
         if off > on:
             total -= off - on
@@ -248,28 +257,35 @@ def _ungated(start, end, held):
 
 
 def measure(records, own, now, eligible, held):
+    try:
+        held = [(on, off) for on, off in held]
+    except (TypeError, ValueError):
+        raise ValueError('malformed held interval') from None
+    if any(type(on) is not int or type(off) is not int or on > off for on, off in held):
+        raise ValueError('malformed held interval')
+    held.sort()
+
     records = _unique(records)
     intents = [r for r in records if r['kind'] == 'intent']
-    acks = {}
-    for intent in intents:
-        found = [r for r in records if _acked(r, intent, own)]
-        if found:
-            acks[intent['id']] = min(found, key=lambda r: r['created_at'])
-    settled = set(acks) | {i['id'] for i in intents for r in records
-                           if r['kind'] == 'completion' and _belongs(r, i) and r['state'] in ('completed', 'superseded')}
     delay = {'eligible': 0, 'measured': 0, 'open': 0, 'unknown': 0, 'minutes': []}
+    pending = []
     for intent in intents:
+        events = [r for r in records if _belongs(r, intent)]
+        states = {(r['kind'], r.get('state')) for r in events}
+        ack = min((r for r in events if _acked(r, intent, own)), key=lambda r: r['created_at'], default=None)
+        settled = ack is not None or bool(states & {('completion', 'completed'), ('completion', 'superseded')})
+        if states & UNCERTAIN or not settled:
+            pending.append(intent)
         if intent['destination'] != 'reviewer' or intent['prior_verdict'] is None:
             continue
         delay['eligible'] += 1
         if intent['head'] not in eligible:
             delay['unknown'] += 1
-        elif intent['id'] in acks:
+        elif ack is not None:
             delay['measured'] += 1
-            delay['minutes'].append(_ungated(eligible[intent['head']], acks[intent['id']]['created_at'], held))
+            delay['minutes'].append(_ungated(eligible[intent['head']], ack['created_at'], held))
         else:
             delay['open'] += 1
-    pending = [i for i in intents if i['id'] not in settled]
     oldest = max((_ungated(i['created_at'], now, held) for i in pending), default=None)
     return {'recheck_delay': delay, 'pending': {'count': len(pending), 'oldest_minutes': oldest}}
 

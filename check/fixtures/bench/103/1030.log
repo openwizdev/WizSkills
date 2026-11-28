@@ -1,0 +1,8 @@
+﻿2026-01-05T12:00:46.0000000Z ##[group]Run python3 check/run.py
+2026-01-05T12:00:47.0000000Z rules: pass
+2026-01-05T12:00:49.5000000Z standalone: pass
+2026-01-05T12:00:49.6000000Z suite alpha: python3 -I skills/alpha/test_alpha.py: running
+2026-01-05T12:02:09.6000000Z suite alpha: python3 -I skills/alpha/test_alpha.py: fail (1)
+2026-01-05T12:02:09.7000000Z suite beta: sh skills/beta/test.sh: running
+2026-01-05T12:02:49.7000000Z suite beta: sh skills/beta/test.sh: pass
+2026-01-05T12:02:49.8000000Z check: fail

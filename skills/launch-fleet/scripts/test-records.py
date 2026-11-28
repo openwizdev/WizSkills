@@ -23,7 +23,7 @@ class PublicRecords(unittest.TestCase):
         section = contract.split('## Fleet records\n')[1].split('\n**Finding')[0]
         forms = re.findall(r'^\| `[^`]+` \| `([^`]+)` \|$', section, re.M)
         self.assertEqual(len(forms), 9)
-        table = (HERE.parent / 'SKILL.md').read_text().split('## Records\n')[1].split('\n## ')[0]
+        table = (HERE.parent / 'references/records.md').read_text().split('## Records\n')[1].split('\n## ')[0]
         for form in forms:
             with self.subTest(form=form):
                 self.assertIn('`' + form.removeprefix('launch-fleet: ') + '`', table.replace('`launch-fleet: ', '`'))
@@ -97,6 +97,7 @@ class Fleet(unittest.TestCase):
         for cli in ('local', 'cloud'):
             with self.subTest(cli=cli):
                 self.env['FAKE_ROOM_CLI'] = cli
+                self.threads[0]['hidden'] = cli == 'local'
                 self.assertEqual(self.run_fleet('wake', '12'),
                                  f'CI failed #31 for #12 at {SHA}: tell its builder, thread thr_synbuilder\n')
 
@@ -106,7 +107,60 @@ class Fleet(unittest.TestCase):
         for threads in ({'id': 'thr_synbuilder'}, 'thr_synbuilder', [{'title': '#12: Synthetic'}]):
             with self.subTest(threads=threads):
                 self.threads = threads
-                self.assertEqual(self.run_fleet('wake', '12'), 'look #12: thread discovery is out of reach\n')
+                empty = json.dumps({'repo': self.world['repo'], 'threads': {}})
+                self.assertEqual(self.run_fleet('wake', '12'),
+                                 'look #12: private thread map LAUNCH_FLEET_STATE is unset; create it outside the '
+                                 f'checkout with {empty}\n')
+
+    def test_fresh_install_without_private_routing_files_discovers_builder_on_cloudroom(self):
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        self.env['FAKE_ROOM_CLI'] = 'cloud'
+        self.env.pop('LAUNCH_FLEET_STATE', None)
+        self.env.pop('LAUNCH_FLEET_RUNS', None)
+        builder = self.threads[0]['id']
+        self.assertEqual(self.run_fleet('wake', '12'),
+                         f'CI failed #31 for #12 at {SHA}: tell its builder, thread {builder}\n')
+
+    def test_missing_or_unreadable_private_thread_map_names_file_and_creation_shape(self):
+        self.pr['checks'][0]['conclusion'] = 'FAILURE'
+        (self.dir / 'world.json').write_text(json.dumps(self.world))
+        (self.dir / 'threads.json').write_text(json.dumps(self.threads))
+        expected_json = json.dumps({'repo': self.world['repo'], 'threads': {}})
+        missing = self.dir / 'missing-state.json'
+        self.env['LAUNCH_FLEET_STATE'] = str(missing)
+        r = subprocess.run(['sh', os.environ.get('FLEET_SH', str(HERE / 'fleet.sh')), 'wake', '12'],
+                           env=self.env, cwd=self.dir, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(f'records: private thread map LAUNCH_FLEET_STATE is missing; create it with {expected_json}',
+                      r.stderr)
+        self.assertNotIn(str(missing), r.stderr)
+
+        missing.write_text(expected_json)
+        builder = self.threads[0]['id']
+        self.assertEqual(self.run_fleet('wake', '12'),
+                         f'CI failed #31 for #12 at {SHA}: tell its builder, thread {builder}\n')
+
+        self.env['LAUNCH_FLEET_STATE'] = 'relative-state.json'
+        r = subprocess.run(['sh', os.environ.get('FLEET_SH', str(HERE / 'fleet.sh')), 'wake', '12'],
+                           env=self.env, cwd=self.dir, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(
+            f'records: LAUNCH_FLEET_STATE needs an absolute path; create it outside the checkout with {expected_json}',
+            r.stderr)
+        self.assertNotIn('relative-state.json', r.stderr)
+
+        for bad_content in ('not-json-secret-value', json.dumps({'repo': 'example/other', 'threads': {}})):
+            with self.subTest(bad_content=bad_content):
+                missing.write_text(bad_content)
+                self.env['LAUNCH_FLEET_STATE'] = str(missing)
+                r = subprocess.run(['sh', os.environ.get('FLEET_SH', str(HERE / 'fleet.sh')), 'wake', '12'],
+                                   env=self.env, cwd=self.dir, capture_output=True, text=True)
+                self.assertEqual(r.returncode, 2)
+                self.assertIn(
+                    f'records: private thread map LAUNCH_FLEET_STATE could not be read; expected {expected_json}',
+                    r.stderr)
+                self.assertNotIn(str(missing), r.stderr)
+                self.assertNotIn('not-json-secret-value', r.stderr)
 
     def test_driver_review_rechecks_nudges_and_archives_the_pull_request_run(self):
         runs = self.dir / 'runs.json'
@@ -322,6 +376,38 @@ class Fleet(unittest.TestCase):
         self.world['commitComments'].append(dict(id=9002, commit_id='81' * 20, body='launch-fleet: nightly uncertain 801 attempt 1'))
         self.assertNotIn('nightly red', self.run_fleet('check'))
 
+    def test_interrupted_parked_review_gets_one_claimed_retry(self):
+        self.say(f'review started {SHA}')
+        self.pr['comments'] += [
+            dict(id=3102, at='2026-11-01T10:30:00Z',
+                 body=f'VERDICT: CHANGES at {SHA}\n\nNext: park R2 as a decision for Jake.'),
+            dict(id=3103, at='2026-11-01T10:35:00Z',
+                 body=f'**Orchestrator decision:** log and merge: R2 at {SHA}. Polish issues: #64. Why: synthetic.'),
+        ]
+        due = f"decision #31 for #12 at {SHA}: Jake's answer in comment 3103"
+        self.assertIn(due + '; act on it', self.run_fleet('wake', '31'))
+
+        self.say(f'findings sent {SHA}: decision 3103: log and merge', 3104, '11:40')
+        self.assertEqual(self.run_fleet('wake', '31'), '')
+        self.env['LAUNCH_FLEET_NOW'] = str(1793534400 + 600)
+        self.assertEqual(self.run_fleet('wake', '31'),
+                         f're-check #31 for #12 at {SHA}: parked decision 3103 still needs a replacement report\n')
+
+        self.say(f'review starting {SHA}\nDecision retry: 3103', 3105, '12:10')
+        self.assertEqual(self.run_fleet('claim', '31', '3105'), 'go #31\n')
+        self.say(f'review starting {SHA}\nDecision retry: 3103', 3106, '12:11')
+        self.assertIn('withdraw #31:', self.run_fleet('claim', '31', '3106'))
+        self.assertEqual(self.run_fleet('wake', '31'), '')
+
+        self.env['LAUNCH_FLEET_NOW'] = str(1793534400 + 2400)
+        self.assertEqual(self.run_fleet('wake', '31'),
+                         f'look #31: decision 3103 still needs a replacement review at {SHA} after its retry\n')
+
+        self.pr['comments'] = self.pr['comments'][:4]
+        self.pr['comments'].append(dict(id=3107, at='2026-11-01T12:11:00Z',
+                                        body=f'VERDICT: APPROVE at {SHA}'))
+        self.assertNotIn('decision #31', self.run_fleet('wake', '31'))
+
     def test_public_resume_claim_wins_once(self):
         self.issue(12)['comments'] += [dict(id=1202, at='2026-11-01T11:00:00Z', body='launch-fleet: waiting for #11'),
             dict(id=1203, at='2026-11-01T11:59:00Z', body='launch-fleet: resume starting 1202 for #11')]
@@ -536,8 +622,19 @@ class OpsPass(unittest.TestCase):
             self.assertEqual(self.records.builder_thread(12, 'room/12-synthetic', discovered, saved),
                              ('thr_synbuilder', None))
             self.assertEqual(self.records.reviewer_thread(31, SHA, discovered, saved), (THREAD, None))
-        self.assertEqual(self.records.builder_thread(12, 'room/12-synthetic', None, {}),
-                         (None, 'thread discovery is out of reach'))
+        unset = ('private thread map LAUNCH_FLEET_STATE is unset; create it outside the checkout with '
+                 + json.dumps({'repo': '<owner/name>', 'threads': {}}))
+        self.assertEqual(self.records.builder_thread(12, 'room/12-synthetic', None, {}), (None, unset))
+        self.env_state = os.environ.get('LAUNCH_FLEET_STATE')
+        os.environ['LAUNCH_FLEET_STATE'] = '/tmp/openwiz-routing-present.json'
+        try:
+            self.assertEqual(self.records.builder_thread(12, 'room/12-synthetic', None, {}),
+                             (None, 'thread discovery is out of reach'))
+        finally:
+            if self.env_state is None:
+                os.environ.pop('LAUNCH_FLEET_STATE', None)
+            else:
+                os.environ['LAUNCH_FLEET_STATE'] = self.env_state
 
     def test_command_line_pass_prints_one_result_per_operation(self):
         view = {'pass': {'generation': 1, 'owner': 'primary'}, 'generations': self.generations,
@@ -571,6 +668,61 @@ def step_with(text):
     return found[0]
 
 
+class CrossRepositoryReviews(unittest.TestCase):
+    TOOLS, LOCAL = 'thr_t-tools31', 'thr_l-local31'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.records = load(HERE / 'records.py', 'fleet_records_cross')
+
+    def pull(self, repository, records):
+        return dict(number=31, repository=dict(nameWithOwner=repository), commits={'nodes': []},
+                    comments={'nodes': [dict(databaseId=i, createdAt=f'2026-11-01T11:{i % 100:02d}:00Z', body=b)
+                                        for i, b in records]})
+
+    def routes(self, state, *pulls, threads=None):
+        ticket = dict(number=12, comments={'nodes': []}, closedByPullRequestsReferences={'nodes': list(pulls)})
+        world = self.records.annotate({'specs': [], 'singles': [ticket]}, 'example/public', False, threads, state)
+        return [[(c['resolvedThread'], c['recordError']) for c in p['comments']['nodes'][1:]]
+                for p in world['singles'][0]['closedByPullRequestsReferences']['nodes']]
+
+    def test_another_repositorys_pull_request_reads_its_own_qualified_key(self):
+        started = [(3101, 'launch-fleet: review started ' + SHA), (3102, 'launch-fleet: re-check sent ' + NEW)]
+        state = {f'review:31:{SHA}': self.LOCAL, f'review:Example/Tools#31:{SHA}': self.TOOLS}
+        self.assertEqual(self.routes(state, self.pull('example/public', started), self.pull('example/tools', started)),
+                         [[(self.LOCAL, None)], [(self.TOOLS, None)]])
+
+    def test_this_repositorys_bare_key_never_routes_a_same_numbered_pull_request_elsewhere(self):
+        started = [(3101, 'launch-fleet: review started ' + SHA), (3102, 'launch-fleet: re-check sent ' + NEW)]
+        unset = ('private thread map LAUNCH_FLEET_STATE is unset; create it outside the checkout with '
+                 + json.dumps({'repo': 'example/public', 'threads': {}}))
+        self.assertEqual(self.routes({f'review:31:{SHA}': self.LOCAL}, self.pull('example/tools', started)),
+                         [[(None, unset)]])
+        self.assertEqual(self.routes({f'review:31:{SHA}': self.LOCAL}, self.pull('Example/Public', started)),
+                         [[(self.LOCAL, None)]])
+
+    def test_discovery_never_gives_another_repositorys_pull_request_this_repositorys_reviewer(self):
+        started = [(3101, 'launch-fleet: review started ' + SHA), (3102, 'launch-fleet: re-check sent ' + NEW)]
+        local = dict(id=self.LOCAL, title='Review #31 at ' + SHA[:8], branch=None)
+        tools = dict(id=self.TOOLS, title='Review Example/Tools#31 at ' + SHA[:8], branch=None)
+        self.assertEqual(self.routes({}, self.pull('example/public', started), self.pull('example/tools', started),
+                                     threads=[local]),
+                         [[(self.LOCAL, None)], [(None, f'no thread matches review:example/tools#31:{SHA}')]])
+        self.assertEqual(self.routes({}, self.pull('example/public', started), self.pull('example/tools', started),
+                                     threads=[local, tools]),
+                         [[(self.LOCAL, None)], [(self.TOOLS, None)]])
+
+    def test_another_repositorys_edited_give_up_archives_from_its_own_claim_key(self):
+        gave_up = [(3101, f'launch-fleet: review given up {SHA}: no verdict'),
+                   (3102, f'launch-fleet: review told again {SHA}')]
+        state = {'review:31:claim:3101': self.LOCAL, 'review:example/tools#31:claim:3101': self.TOOLS}
+        ticket = dict(number=12, comments={'nodes': []},
+                      closedByPullRequestsReferences={'nodes': [self.pull('example/tools', gave_up)]})
+        world = self.records.annotate({'specs': [], 'singles': [ticket]}, 'example/public', False, [], state)
+        first = world['singles'][0]['closedByPullRequestsReferences']['nodes'][0]['comments']['nodes'][0]
+        self.assertEqual(first.get('archiveThread'), self.TOOLS)
+
+
 class Dispatcher(unittest.TestCase):
 
     def test_a_nightly_only_tick_reaches_its_alert_and_the_status_check_before_any_no_work_exit(self):
@@ -595,7 +747,7 @@ class Dispatcher(unittest.TestCase):
 
 
     def test_the_archive_settles_with_the_flow_inputs_and_never_archives_on_a_refused_settlement(self):
-        lines = (HERE.parent / 'SKILL.md').read_text().splitlines()
+        lines = (HERE.parent / 'references/merging.md').read_text().splitlines()
         row = next(x for x in lines if x.startswith('| `archive #N` |'))
         merge = next(x for x in lines if x.startswith('4. **Merge:**'))
         self.assertIn("private flow files after `--`", merge)
@@ -606,6 +758,30 @@ class Dispatcher(unittest.TestCase):
         self.assertNotIn('archive goes ahead', refused)
         self.assertRegex(refused, r'leaves? the `archive` line for a later wake',
                          'a refused settlement keeps its retry: the archive waits')
+
+
+class RoutedStartedClaim(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.records = load(HERE / 'records.py', 'fleet_records_routed')
+
+    def test_routed_model_on_line_two_still_resolves_builder_thread(self):
+        builder = 'thr_b-routed7'
+        thread = dict(id=builder, title='#7: synthetic ticket', branch=None)
+        routed = dict(number=7, comments={'nodes': [
+            dict(databaseId=701, createdAt='2026-11-01T11:01:00Z', body='launch-fleet: started\nrouted: neon')
+        ]}, closedByPullRequestsReferences={'nodes': []})
+        world = self.records.annotate({'specs': [], 'singles': [routed]}, 'example/public', False, [thread], {})
+        comment = world['singles'][0]['comments']['nodes'][0]
+        self.assertEqual(comment['resolvedThread'], builder)
+        self.assertIsNone(comment['recordError'])
+
+        inline = dict(number=7, comments={'nodes': [
+            dict(databaseId=702, createdAt='2026-11-01T11:02:00Z', body='launch-fleet: started (routed: neon)')
+        ]}, closedByPullRequestsReferences={'nodes': []})
+        bad = self.records.annotate({'specs': [], 'singles': [inline]}, 'example/public', False, [thread], {})
+        self.assertIsNone(bad['singles'][0]['comments']['nodes'][0].get('resolvedThread'))
 
 
 if __name__ == '__main__':

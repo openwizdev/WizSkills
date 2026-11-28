@@ -3,7 +3,7 @@ set -f
 LC_ALL=C
 export LC_ALL
 fail() { printf 'Relies on: %s\n' "$*" >&2; exit 1; }
-usage() { printf 'usage: sh check-relies.sh [--root DIR] [--planned PATH]... < ticket.md\n' >&2; exit 2; }
+usage() { printf 'usage: sh check-relies.sh [--root DIR] [--planned PATH]... [--elsewhere OWNER/REPO PATH]... < ticket.md\n' >&2; exit 2; }
 lexical_path() {
   case "$1" in
     '' | /* | */ | *//* | *[!A-Za-z0-9_./-]*) fail 'use full repository-relative file paths, without patterns' ;;
@@ -12,6 +12,7 @@ lexical_path() {
 }
 root=.
 planned=''
+elsewhere=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --root) [ "$#" -ge 2 ] || usage; root=$2; shift 2 ;;
@@ -21,6 +22,18 @@ while [ "$#" -gt 0 ]; do
       planned="$planned
 $2"
       shift 2 ;;
+    --elsewhere)
+      [ "$#" -ge 3 ] || usage
+      case "$2" in
+        */*/* | */ | *[!A-Za-z0-9_./-]*) fail 'name another repository as owner/repo' ;;
+        [A-Za-z0-9-]*/*) ;;
+        *) fail 'name another repository as owner/repo' ;;
+      esac
+      case "${2%%/*}" in *[!A-Za-z0-9-]*) fail 'name another repository as owner/repo' ;; esac
+      lexical_path "$3"
+      elsewhere="$elsewhere$2:$3
+"
+      shift 3 ;;
     -h | --help) printf 'Check one inline Relies on declaration; sh and jq only.\n'; exit 0 ;;
     *) usage ;;
   esac
@@ -28,7 +41,7 @@ done
 case "$root" in /*) ;; *) root="$(pwd -P)/$root" ;; esac
 root=$(CDPATH='' cd -P -- "$root" 2>/dev/null && pwd -P) || fail 'repository root must be a directory'
 
-parsed=$(jq -rRs '
+parsed=$(jq -rRs --arg elsewhere "$elsewhere" '
   def refuse($why): error($why);
   try (
     gsub("\r\n"; "\n") as $body
@@ -64,10 +77,21 @@ parsed=$(jq -rRs '
         else . end
       )
     | if $value == "nothing" then ["ok"]
-      elif ($value | test("^`[^`]+`(, `[^`]+`)*$")) then
-        [$value | scan("`([^`]+)`") | .[0]] as $paths
-        | if all($paths[]; test("^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$")) then ["ok"] + $paths
-          else refuse("use full repository-relative file paths, without patterns") end
+      elif ($value | test("^`[^`]+`( in `[^`]+`)?(, `[^`]+`( in `[^`]+`)?)*$")) then
+        [$value | scan("`([^`]+)`( in `([^`]+)`)?") | {path: .[0], repo: .[2]}] as $items
+        | [$elsewhere | split("\n")[] | select(. != "") | split(":") | (.[0] | ascii_downcase) + ":" + .[1]]
+          as $vouched
+        | if all($items[]; .path | test("^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$")) | not then
+            refuse("use full repository-relative file paths, without patterns")
+          elif any($items[]; .repo != null and (.repo | test("^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$") | not)) then
+            refuse("name another repository as `owner/repo`")
+          else ([$items[] | select(.repo != null and
+                  (((.repo | ascii_downcase) + ":" + .path) as $key | $vouched | index([$key]) | not))][0]) as $out
+            | if $out != null then
+                refuse("`" + $out.path + "` is in `" + $out.repo + "`, which --root is not; "
+                       + "a direct blocker must own it or its default branch hold it")
+              else ["ok"] + [$items[] | select(.repo == null) | .path] end
+          end
       else refuse("use comma-separated backticked paths or exactly nothing; no prose") end
     | .[]
   ) catch ("error\n" + .)

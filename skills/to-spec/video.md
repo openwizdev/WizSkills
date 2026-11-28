@@ -34,9 +34,13 @@ over it by more than 10% is refused.
 
 `build` renders frames with playwright-core's Chromium (`OPENWIZ_CHROMIUM`, or
 `chromium` on PATH), voices each line, and stitches a 30 fps H.264/AAC MP4 with
-ffmpeg, verifying its tracks, length and sound. The default voice is the
-machine's (espeak-ng, espeak or say); a better one is
+ffmpeg, verifying its tracks, length and sound. It normalizes the narration in two
+passes to -16 LUFS integrated, true peak at or under -1.5 dBTP, so every spec video
+is as loud as a launch film, and it refuses a video that misses that loudness. The default voice is the local
+machine voice (espeak-ng, espeak or say). A better voice is
 `--tts-command "<cmd>"`, which reads the line on stdin or as `{text}` and writes
-`{out}.wav` (or `.mp3`). Frames, voice files and `sheet.png` land in `build/`
-beside the storyboard. The output path must be new. Keep authorization tokens
-and private-media URLs out of a public issue.
+`{out}.wav` (or `.mp3`); before delegating narration to a nonlocal voice command,
+confirm an authorized provider and give it only public-safe input. Frames, voice
+files and `sheet.png` land in `build/` beside the storyboard. The output path
+must be new. Keep authorization tokens and private-media URLs out of a public
+issue.

@@ -1,0 +1,15 @@
+test_changed_fact_voids_preview (__main__.ReportInputAndFacts.test_changed_fact_voids_preview) ... ok
+test_dropping_every_fact_leaves_no_facts_line (__main__.ReportInputAndFacts.test_dropping_every_fact_leaves_no_facts_line) ... ok
+test_invalid_fact_values_are_refused_naming_the_key (__main__.ReportInputAndFacts.test_invalid_fact_values_are_refused_naming_the_key) ... ok
+test_no_private_env_or_hostname_reaches_preview_or_request (__main__.ReportInputAndFacts.test_no_private_env_or_hostname_reaches_preview_or_request) ... ok
+test_report_with_all_fields_previews_and_sends_exact_body (__main__.ReportInputAndFacts.test_report_with_all_fields_previews_and_sends_exact_body) ... ok
+test_home_path_and_email_in_happened_warn_without_altering_body (__main__.SecretsAndWarnings.test_home_path_and_email_in_happened_warn_without_altering_body) ... ok
+test_log_scrub_limits_40_lines_200_chars_indent_and_replacements (__main__.SecretsAndWarnings.test_log_scrub_limits_40_lines_200_chars_indent_and_replacements) ... ok
+test_private_key_block_in_title_or_section_refused (__main__.SecretsAndWarnings.test_private_key_block_in_title_or_section_refused) ... ok
+test_token_in_happened_refused_and_in_log_scrubbed_and_counted (__main__.SecretsAndWarnings.test_token_in_happened_refused_and_in_log_scrubbed_and_counted) ... ok
+test_no_person_name_in_helper_say_refusals_or_skill_md (__main__.NoPersonName.test_no_person_name_in_helper_say_refusals_or_skill_md) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 3.309s
+
+OK

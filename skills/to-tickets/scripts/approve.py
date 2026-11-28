@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 HERE = Path(__file__).resolve().parent
 LINKS = HERE.parent / 'check-links.sh'
@@ -34,8 +35,46 @@ def unticked_sha256(text):
     return hashlib.sha256(b'\n'.join(out)).hexdigest()
 
 
+def visible_lines(body):
+    out = []
+    fence = None
+    in_comment = False
+    for line in body.replace('\r\n', '\n').split('\n'):
+        if fence is not None:
+            if re.fullmatch(rf' {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}[ \t]*', line):
+                fence = None
+            continue
+        if not in_comment:
+            m = re.match(r'^ {0,3}(`{3,}|~{3,})(.*)$', line)
+            if m and (m.group(1)[0] == '~' or '`' not in m.group(2)):
+                fence = m.group(1)
+                continue
+        pos = 0
+        parts = []
+        while pos < len(line):
+            if in_comment:
+                end = line.find('-->', pos)
+                if end == -1:
+                    pos = len(line)
+                else:
+                    in_comment = False
+                    pos = end + 3
+            else:
+                start = line.find('<!--', pos)
+                if start == -1:
+                    parts.append(line[pos:])
+                    pos = len(line)
+                else:
+                    parts.append(line[pos:start])
+                    in_comment = True
+                    pos = start + 4
+        if parts:
+            out.append(''.join(parts))
+    return out
+
+
 def section(body, heading):
-    lines = body.split('\n')
+    lines = visible_lines(body)
     for i, line in enumerate(lines):
         if line.rstrip() == '## ' + heading:
             rest = []
@@ -77,9 +116,42 @@ def owned(ticket, default_repo):
     return out
 
 
+def segments_overlap(p, q):
+    if '[' in p or '[' in q:
+        return True
+    m, n = len(p), len(q)
+    stack, seen = [(0, 0)], {(0, 0)}
+    while stack:
+        i, j = stack.pop()
+        if i == m and j == n:
+            return True
+        next_states = []
+        if i < m and p[i] == '*':
+            next_states.append((i + 1, j))
+            if j < n and q[j] != '*':
+                next_states.append((i, j + 1))
+        if j < n and q[j] == '*':
+            next_states.append((i, j + 1))
+            if i < m and p[i] != '*':
+                next_states.append((i + 1, j))
+        if i < m and j < n and p[i] != '*' and q[j] != '*':
+            if p[i] == '?' or q[j] == '?' or p[i] == q[j]:
+                next_states.append((i + 1, j + 1))
+        for state in next_states:
+            if state not in seen:
+                seen.add(state)
+                stack.append(state)
+    return False
+
+
 def overlap(a, b):
     x, y = a.rstrip('/').split('/'), b.rstrip('/').split('/')
-    return all(fnmatch.fnmatchcase(p, q) or fnmatch.fnmatchcase(q, p) for p, q in zip(x, y))
+    for p, q in zip(x, y):
+        if p == '**' or q == '**':
+            return True
+        if not segments_overlap(p, q):
+            return False
+    return True
 
 
 def contains(own, path):
@@ -88,9 +160,43 @@ def contains(own, path):
     return len(x) <= longest and all(fnmatch.fnmatchcase(q, p) for p, q in zip(x, y))
 
 
+def relies_items(body):
+    lines = [line for line in visible_lines(body) if line.startswith('**Relies on:**')]
+    found = re.findall(r'`([^`]+)`(?: in `([^`]+)`)?', lines[0]) if len(lines) == 1 else []
+    return [(repo.lower() or None, path) for path, repo in found]
+
+
 def relies_paths(body):
-    lines = [line for line in body.split('\n') if line.startswith('**Relies on:**')]
-    return re.findall(r'`([^`]+)`', lines[0]) if len(lines) == 1 else []
+    return [path for _, path in relies_items(body)]
+
+
+REMOTE_PATH = re.compile(r'[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*')
+FILE_QUERY = ('query($owner: String!, $name: String!, $path: String!) { repository(owner: $owner, name: $name) '
+              '{ nameWithOwner defaultBranchRef { target { ... on Commit { file(path: $path) { mode } } } } } }')
+MODES = {0o100644: True, 0o100755: True, 0o040000: False, 0o120000: False, 0o160000: False}
+NOT_FOUND = {'type': 'NOT_FOUND', 'path': ['repository', 'defaultBranchRef', 'target', 'file']}
+
+
+def on_default_branch(repo, path):
+    if not REPO.fullmatch(repo) or not REMOTE_PATH.fullmatch(path) or {'.', '..'} & set(path.split('/')):
+        return False
+    owner, name = repo.split('/')
+    out = subprocess.run(['gh', 'api', 'graphql', '-f', f'owner={owner}', '-f', f'name={name}', '-f', f'path={path}',
+                          '-f', f'query={FILE_QUERY}'], capture_output=True, text=True)
+    try:
+        answer = json.loads(out.stdout)
+        found = answer['data']['repository']
+        entry, errors = found['defaultBranchRef']['target']['file'], answer.get('errors', [])
+        same = found['nameWithOwner'].lower() == repo.lower()
+    except (ValueError, TypeError, KeyError, AttributeError):
+        same = False
+    if same and entry is None and out.returncode != 0 and isinstance(errors, list) and errors and all(
+            isinstance(e, dict) and {k: e.get(k) for k in NOT_FOUND} == NOT_FOUND for e in errors):
+        return False
+    if (same and out.returncode == 0 and 'errors' not in answer and isinstance(entry, dict)
+            and type(entry.get('mode')) is int and entry['mode'] in MODES):
+        return MODES[entry['mode']]
+    raise Unreadable(f'cannot read `{path}` in `{repo}` from its default branch')
 
 
 def read_revision(text, graph):
@@ -147,39 +253,70 @@ def check_checkpoints(spec_text, graph, revision):
     return (why or ['check-approval.sh refused']) if out.returncode != 0 else []
 
 
-def check_relies(tickets, owners, root, root_repo):
+def run_relies(root, body, args):
+    return subprocess.run(['sh', str(RELIES), '--root', str(root), *args], input=body, capture_output=True, text=True)
+
+
+def check_relies(tickets, owners, checkouts):
     why = []
-    for t in tickets:
-        blockers = [b['number'] for b in t['blocked_by']]
-        repos = {repo for repo, _, _ in owners.get(t['number'], [])}
-        planned, unplanned = [], []
-        for path in relies_paths(t['body']):
-            if len(repos) == 1 and any(repo in repos and contains(own, path)
-                                       for b in blockers for repo, own, _ in owners.get(b, [])):
-                planned += ['--planned', path]
-            else:
-                unplanned.append(path)
-        in_root = repos == {root_repo}
-        checked = planned if in_root else planned + [a for p in unplanned for a in ('--planned', p)]
-        out = subprocess.run(['sh', str(RELIES), '--root', str(root), *checked], input=t['body'],
-                             capture_output=True, text=True)
-        if out.returncode != 0:
-            why.append(f'#{t["number"]}: ' + (out.stderr.strip().splitlines() or ['refused'])[-1])
-        elif unplanned and not in_root:
-            where = f'`{next(iter(repos))}`' if len(repos) == 1 else 'more than one repository'
-            why.append(f'#{t["number"]}: Relies on: `{unplanned[0]}` is in {where}, which --root is not; '
-                       'a direct blocker there must own it')
+    with tempfile.TemporaryDirectory() as empty_root:
+        for t in tickets:
+            blockers = [b['number'] for b in t['blocked_by']]
+            repos = {repo for repo, _, _ in owners.get(t['number'], [])}
+            planned, unplanned, vouched, remote = [], [], [], []
+            for elsewhere, path in relies_items(t['body']):
+                if elsewhere is not None:
+                    vouched.append((elsewhere, path))
+                    if not any(repo == elsewhere and contains(own, path)
+                               for b in blockers for repo, own, _ in owners.get(b, [])):
+                        remote.append((elsewhere, path))
+                    continue
+                if len(repos) == 1 and any(repo in repos and contains(own, path)
+                                           for b in blockers for repo, own, _ in owners.get(b, [])):
+                    planned += ['--planned', path]
+                else:
+                    unplanned.append(path)
+            checkout = checkouts.get(next(iter(repos))) if len(repos) == 1 else None
+            relies_root = checkout if checkout is not None else empty_root
+            checked = planned if checkout is not None else planned + [a for p in unplanned for a in ('--planned', p)]
+            out = run_relies(relies_root, t['body'], checked + [a for item in vouched for a in ('--elsewhere', *item)])
+            if out.returncode == 0 and remote:
+                missing = {item for item in remote if not on_default_branch(*item)}
+                if missing:
+                    out = run_relies(relies_root, t['body'],
+                                     checked + [a for item in vouched if item not in missing
+                                                for a in ('--elsewhere', *item)])
+            if out.returncode != 0:
+                why.append(f'#{t["number"]}: ' + (out.stderr.strip().splitlines() or ['refused'])[-1])
+            elif unplanned and checkout is None:
+                where = f'`{next(iter(repos))}`' if len(repos) == 1 else 'more than one repository'
+                why.append(f'#{t["number"]}: Relies on: `{unplanned[0]}` is in {where}, which has no supplied checkout; '
+                           'a direct blocker there must own it')
     return why
 
 
-def check_sizes(tickets):
+SIZES_SINCE = '2026-11-23T00:00:00Z'
+
+
+def check_sizes(tickets, spec_text):
+    spec = json.loads(spec_text)
+    created = spec.get('createdAt') if isinstance(spec, dict) else None
+    if not isinstance(created, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', created):
+        raise Unreadable('the spec has no createdAt')
     why, counts = [], {'S': 0, 'M': 0, 'L': 0}
     for t in tickets:
-        sizes = re.findall(r'\bSize: ([A-Za-z]+)\b', t['body'])
+        parent = section(t['body'], 'Parent') or []
+        sizes = re.findall(r'\bSize: ([A-Za-z]+)\b', '\n'.join(parent))
         if len(sizes) != 1 or sizes[0] not in counts:
-            why.append(f'#{t["number"]} needs exactly one `Size: S`, `M` or `L`')
-        else:
-            counts[sizes[0]] += 1
+            why.append(f'#{t["number"]} needs exactly one `Size: S`, `M` or `L` in Parent')
+            continue
+        counts[sizes[0]] += 1
+        if created < SIZES_SINCE:
+            continue
+        if sizes[0] == 'L':
+            why.append(f'#{t["number"]} is `Size: L`; split it into tickets of S or M')
+        elif sizes[0] == 'M' and not any(re.fullmatch(r'Why M: *\S.*', line.rstrip()) for line in parent):
+            why.append(f'#{t["number"]} is `Size: M` without a `Why M: <reason it can\'t split>` line in Parent')
     return why, counts
 
 
@@ -336,6 +473,22 @@ def record(args, graph, revision, counts):
 DESCRIPTION = 'The machine plan approval (#1339, J202): check a plan graph and print its record.'
 
 
+def parse_checkouts(items):
+    out = {}
+    for item in items:
+        repo, sep, path = item.partition('=')
+        if not sep or not REPO.fullmatch(repo) or not path:
+            return None
+        folder = Path(path)
+        if not folder.is_dir():
+            return None
+        key = repo.lower()
+        if key in out:
+            return None
+        out[key] = folder.resolve()
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument('--graph', type=Path, required=True)
@@ -346,12 +499,15 @@ def main():
     parser.add_argument('--changed')
     parser.add_argument('--date', default=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d'))
     parser.add_argument('--root', type=Path, default=Path('.'))
+    parser.add_argument('--checkout', action='append', default=[])
     args = parser.parse_args()
+    extra_checkouts = parse_checkouts(args.checkout)
     if (not GRILL.fullmatch(args.grill) or args.number < 1 or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', args.date)
             or (args.number > 1) != bool(args.changed and args.changed.strip())
-            or (args.changed and '\n' in args.changed) or not args.root.is_dir()):
+            or (args.changed and '\n' in args.changed) or not args.root.is_dir() or extra_checkouts is None):
         print('approve: usage: a grill confirmation comment URL, revision number >= 1, a YYYY-MM-DD date, '
-              'a root folder, and --changed exactly when the number is above 1', file=sys.stderr)
+              'a root folder, optional --checkout OWNER/REPO=DIR folders (one per repo), '
+              'and --changed exactly when the number is above 1', file=sys.stderr)
         return 2
     try:
         graph_text = args.graph.read_text(encoding='utf-8')
@@ -370,8 +526,9 @@ def main():
         open_tickets = [t for t in graph['tickets'] if t['state'] == 'OPEN']
         agents = [t for t in open_tickets if not human(t)]
         owned_why, owners = check_owned(graph, agents)
-        failures += [('relies', why) for why in check_relies(agents, owners, args.root.resolve(), graph['repo'].lower())]
-        size_why, sizes = check_sizes(open_tickets)
+        checkouts = {graph['repo'].lower(): args.root.resolve(), **extra_checkouts}
+        failures += [('relies', why) for why in check_relies(agents, owners, checkouts)]
+        size_why, sizes = check_sizes(open_tickets, spec_text)
         failures += [('sizes', why) for why in size_why]
         width_why, chain, widest = check_width(graph)
         failures += [('width', why) for why in width_why]

@@ -86,7 +86,19 @@ BACKOFF = (1, 2)                                  # #1446: seconds before the se
 RETRIED = ('start', 'wake')
 FAILED = 'driver start failed'                    # the fleet note's stopped reason
 MARK = 'launch-fleet: driver start failed'        # the failure comment's first line
-CLEARED = MARK + ', cleared'
+CLEARED = ', cleared'
+CANT = "driver can't set effort"
+CANT_MARK = 'launch-fleet: ' + CANT
+REASONS = {FAILED: MARK, CANT: CANT_MARK}
+EFFORT = re.compile(r'[a-z][a-z0-9-]{0,19}')
+EFFORT_NEXT = ("this host can't set effort: remove the effort for this harness in your Models table or Roster to "
+               "run it at the host's default")
+CAN = ('start', 'wake', 'stop', 'many-at-once', 'own-sandbox', 'effort')
+WORKER_ROWS = ('Builder', 'Small builder', 'Fixer', 'Reviewer')
+ROLE_ROWS = {'builder': WORKER_ROWS, 'reviewer': WORKER_ROWS, 'orchestrator': ('Orchestrator',)}
+RECORDS = re.compile(r'openwiz:records v[1-9][0-9]{0,2}')
+MODELS_ROWS = WORKER_ROWS + ('Orchestrator',)
+ROWLESS = 'refused: a Roster start needs --row, naming the Models row its harness and model were picked from'
 FLEET = ('LAUNCH_FLEET_HARNESS', 'LAUNCH_FLEET_MODEL', 'LAUNCH_FLEET_SKILLS')
 WITHHELD = 'withheld, as it held a credential, a private id or a machine path; run the driver by hand'
 SECRET_NAME = re.compile(r'TOKEN|SECRET|PASSWORD|CREDENTIAL|_KEY$|^KEY')  # the driver kit's rule
@@ -299,31 +311,72 @@ def pick(entries, repo, ticket, role, choice):
             'waits': None, 'look': None}
 
 
-def model_name(text, provider, model):
-    for line in ops._section(text, 'Models') or []:
-        row = roster_cells(line)
-        if row and len(row) == 5:
-            try:
-                flags = ops._flags(row[4])
-            except ValueError:
-                continue
-            if flags[:2] == [provider, model]:
-                return row[2]
-    return None
+def models_row(text, provider, model, taking, picked):
+    rows = [row for row in (roster_cells(line) for line in ops._section(text, 'Models') or []) if row]
+    header = rows[0] if rows else []
+    own = ROLE_ROWS.get(taking, ())
+    if picked not in own:
+        raise Outcome("refused: --row %s is not one of the %s role's Models rows: %s" % (picked, taking, ', '.join(own)))
+    if not ('Role' in header and 'Model' in header and len(rows) > 2):
+        return None
+    found = {}
+    for row in rows[2:]:
+        if len(row) != len(header):
+            continue
+        role = row[header.index('Role')]
+        if [c for i, c in enumerate(row) if c and i != header.index('Role')] == ['follows Builder']:
+            found.setdefault(role, 'Builder')
+            continue
+        words = row[-1][1:-1].split(' ') if len(row[-1]) > 1 and row[-1][0] == row[-1][-1] == '`' else []
+        starts = words[:4] == ['--provider', provider, '--model', model] and (
+            len(words) == 4 or (len(words) == 6 and words[4] == '--reasoning-level'))
+        effort = row[header.index('Effort')].lower() if 'Effort' in header else ''
+        found.setdefault(role, (starts, row[header.index('Model')], effort or None))
+    chosen = found.get(picked, 'Builder' if picked in ('Small builder', 'Fixer') else None)
+    chosen = found.get(chosen) if isinstance(chosen, str) else chosen
+    return chosen[1:] if chosen and chosen[0] else None
 
 
-def roster_start(text, entries, repo, n, harness, model, skill):
+def roster_start(text, entries, repo, n, harness, model, skill, picked):
     taking = SKILL_ROLES.get(skill)
     if taking is None:
         raise Outcome('refused: the Roster gives no role to the %s skill' % skill)
+    if picked is None:
+        raise Outcome(ROWLESS)
     provider = 'claude-code' if harness == 'claude' else harness
-    name = model_name(text, provider, model)
-    chosen = pick(entries, repo, int(n), taking, {'provider': provider, 'model': model, 'model_name': name or model})
+    row = models_row(text, provider, model, taking, picked)
+    chosen = pick(entries, repo, int(n), taking, {'provider': provider, 'model': model,
+                                                  'model_name': row[0] if row else model})
     if chosen['look']:
         raise Outcome(chosen['look'])
-    if name is None:
-        raise Outcome('refused: no Models table row starts %s %s' % (provider, model))
-    return taking, chosen['pick']
+    if row is None:
+        raise Outcome("refused: the Models table's %s row does not start %s %s" % (picked, provider, model))
+    if row[1] is not None and not EFFORT.fullmatch(row[1]):
+        raise Outcome("refused: the Models table's Effort for %s %s is not one plain word driver v1 takes: %s"
+                      % (provider, model, row[1]))
+    return taking, chosen['pick'], row[1]
+
+
+def can(host):
+    try:
+        r = subprocess.run([str(driver(host)), 'version'], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                           timeout=TIMEOUT, env=DRIVER_ENV)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise Unreadable('the %s driver did not answer version (%s); nothing was started' % (host, type(e).__name__))
+    answer = strict(r.stdout)
+    if not isinstance(answer, dict):
+        answer = {}
+    listed, records = answer.get('can'), answer.get('records')
+    if r.returncode != 0 or set(answer) != {'driver', 'records', 'can'} \
+            or not (isinstance(answer['driver'], str) and len(answer['driver']) <= 40
+                    and NAME.fullmatch(answer['driver'])) \
+            or not (isinstance(records, list) and records and all(isinstance(v, str) and RECORDS.fullmatch(v)
+                                                                  for v in records)
+                    and len(set(records)) == len(records)) \
+            or not (isinstance(listed, list) and all(isinstance(v, str) and v in CAN for v in listed)
+                    and len(set(listed)) == len(listed) and {'start', 'wake', 'stop'} <= set(listed)):
+        raise Unreadable("the %s driver's version answer is not driver v1's; nothing was started" % host)
+    return listed
 
 
 ANSWERS = {'start': {'run'}, 'wake': {'run', 'woke'}, 'stop': {'run', 'stopped'}}
@@ -377,12 +430,13 @@ def configured():
 
 
 def builder_env(repo, n, requester):
-    own = n if requester == 'builder-%s' % n else requester
-    folder = runs_path().parent / 'agent-token-bin' / ('%s-%s' % (repo.replace('/', '--'), own))
+    role, owner, name = requester.rsplit('-', 1)[0], *repo.split('/')
+    top = runs_path().parent / 'agent-token-bin'
+    folder = top / role / owner / ('%s-%s' % (name, n))
     try:
-        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(folder.parent, 0o700)
-        os.chmod(folder, 0o700)
+        for level in (top, top / role, top / role / owner, folder):
+            level.mkdir(mode=0o700, exist_ok=True)
+            os.chmod(level, 0o700)
         for name in ('gh', 'git'):
             fd, tmp = tempfile.mkstemp(dir=folder, prefix='.shim-')
             with os.fdopen(fd, 'w') as f:
@@ -424,9 +478,15 @@ def tried(host, command, given):
     for wait in BACKOFF if command in RETRIED else ():
         try:
             return call(host, command, given)
-        except Refused:
+        except Refused as refusal:
+            if cant_set(given, refusal):
+                raise
             time.sleep(wait)
     return call(host, command, given)
+
+
+def cant_set(given, refusal):
+    return 'effort' in given and refusal.next == EFFORT_NEXT
 
 
 def fleet():
@@ -442,7 +502,11 @@ def fleet():
 
 
 def reports(repo, n):
-    """#N's newest record-author fleet note is stopped by a failed start, and its uncleared failure comments."""
+    stopped, comments = stops(repo, n)
+    return stopped is not None, comments
+
+
+def stops(repo, n):
     authors = post.authors(repo)
     items = post.thread(repo, int(n))
     if items is None:
@@ -450,16 +514,16 @@ def reports(repo, n):
     ours = [c for c in items if post.ours(c, authors) and isinstance(c.get('body'), str)]
     notes = [f for f in (status.parse(c['body']) for c in sorted(ours, key=lambda c: c.get('id', 0)))
              if f and f['agent'] == 'fleet']
-    stopped = bool(notes) and notes[-1]['state'] == 'stopped (%s)' % FAILED
-    return stopped, [c for c in ours if c['body'].split('\n', 1)[0] == MARK]
+    stopped = next((r for r in REASONS if notes and notes[-1]['state'] == 'stopped (%s)' % r), None)
+    return stopped, [c for c in ours if c['body'].split('\n', 1)[0] in REASONS.values()]
 
 
-def note(repo, n, state, step):
+def note(repo, n, state, step, reason=FAILED):
     identity = fleet()
     if identity is None:
         return
     harness, model, skills = identity
-    why = ['--why', FAILED] if state == 'stopped' else []
+    why = ['--why', reason] if state == 'stopped' else []
     r = subprocess.run([sys.executable, '-I', str(HERE / 'status.py'), 'write', '--repo', repo, '--ticket', n,
                         '--agent', 'fleet', '--state', state, *why, '--harness', harness, '--model', model,
                         '--skills', skills, '--step', step], capture_output=True, text=True, timeout=TIMEOUT)
@@ -488,29 +552,38 @@ def role(skill):
     return ROLES.get(skill, ('builder', 'ticket', 'builder'))
 
 
-def report(repo, n, host, command, entry, skill='build-ticket'):
-    """After the third refusal: the fleet note and one comment on #N, each only when #N lacks it.
+def where(n, entry):
+    return ("the fleet's owner can read them in the private driver log, `%s` beside `LAUNCH_FLEET_RUNS`, entry "
+            "%s for #%s." % (LOG, entry, n)) if entry else \
+        "they could not be saved to the fleet owner's private driver log, so run the driver by hand to read them."
 
-    The comment never carries the driver's words (the orchestrator's decision on R3 at 90aed73): a fixed
-    reason, the exit category and a pointer to the owner-only log's entry. Each write is tried even when the
-    other failed (R1 of the review at 1f9c7f6); post.Stop names every failure."""
+
+def report(repo, n, host, command, entry, skill='build-ticket', effort=None):
     agent, item, named = role(skill)
-    stopped, comments = reports(repo, n)
-    failed = [] if entry else ['the driver log %s could not be written' % LOG]
-    if not stopped:
+    reason = CANT if effort else FAILED
+    stopped, comments = stops(repo, n)
+    failed = [] if entry is not None else ['the driver log %s could not be written' % LOG]
+    if stopped != reason:
         try:
-            note(repo, n, 'stopped', "the %s driver refused this %s's %s 3 times; the reason is in a comment "
-                                     "here" % (host, named, command))
+            note(repo, n, 'stopped', "the %s driver can't run %s at %s effort; nothing was started" % (host, *effort)
+                 if effort else "the %s driver refused this %s's %s 3 times; the reason is in a comment here"
+                 % (host, named, command), reason)
         except Exception as e:
             failed.append(why(e))
-    if not comments:
-        where = ("the fleet's owner can read them in the private driver log, `%s` beside `LAUNCH_FLEET_RUNS`, entry "
-                 "%s for #%s." % (LOG, entry, n)) if entry else \
-            "they could not be saved to the fleet owner's private driver log, so run the driver by hand to read them."
+    if not any(c['body'].split('\n', 1)[0] == REASONS[reason] for c in comments):
+        if effort:
+            said = (" (exit 1: refused, with driver v1's effort refusal). Its own words are kept off this public "
+                    "%s: %s" % (item, where(n, entry))) if entry is not False else \
+                " (its version leaves effort out of what it can do)."
+            body = ("%s\n\nThe %s driver can't run %s at %s effort, so this %s's %s was not started%s Nothing "
+                    "starts it without that effort: remove the Effort for this role in the Models table to run it "
+                    "at the host's default, or give the role a Roster entry whose driver can set it."
+                    % (CANT_MARK, host, effort[0], effort[1], item, agent, said))
+        else:
+            body = ("%s\n\nThe %s driver refused to %s this %s's %s 3 times (exit 1: refused). Its own words are "
+                    "kept off this public %s: %s" % (MARK, host, command, item, agent, item, where(n, entry)))
         try:
-            post.comment(repo, int(n), "%s\n\nThe %s driver refused to %s this %s's %s 3 times (exit 1: "
-                                       "refused). Its own words are kept off this public %s: %s"
-                                       % (MARK, host, command, item, agent, item, where))
+            post.comment(repo, int(n), body)
         except Exception as e:
             failed.append(why(e))
     if failed:
@@ -524,9 +597,10 @@ def clear(repo, n, host, done, skill='build-ticket'):
     stopped, comments = reports(repo, n)
     failed = []
     for c in comments:
+        first, rest = (c['body'].split('\n', 1) + [''])[:2]
         try:
-            post.edit(repo, c['id'], CLEARED + c['body'][len(MARK):] + '\n\nCleared: the %s driver %s it later.'
-                      % (host, done))
+            post.edit(repo, c['id'], first + CLEARED + ('\n' + rest if '\n' in c['body'] else '')
+                      + '\n\nCleared: the %s driver %s it later.' % (host, done))
         except Exception as e:
             failed.append(why(e))
     if stopped:
@@ -543,6 +617,8 @@ def attempt(repo, n, host, command, given):
     try:
         return tried(host, command, given)
     except Refused as refusal:
+        if cant_set(given, refusal):
+            told(repo, n, host, given, logged(repo, n, host, command, refusal))
         line = "stopped (%s): the %s driver refused #%s's %s 3 times; next: %s" % (FAILED, host, n, command,
                                                                                 public(refusal.next))
         try:
@@ -550,6 +626,15 @@ def attempt(repo, n, host, command, given):
         except Exception as e:  # nothing started: the next refusal writes what is missing
             line += "; unknown: the ticket's report is incomplete (%s)" % why(e)
         raise Outcome(line)
+
+
+def told(repo, n, host, given, entry):
+    line = "stopped (%s): the %s driver can't run %s at %s effort" % (CANT, host, given['harness'], given['effort'])
+    try:
+        report(repo, n, host, 'start', entry, given['skill'], (given['harness'], given['effort']))
+    except Exception as e:
+        line += "; unknown: the ticket's report is incomplete (%s)" % why(e)
+    raise Outcome(line)
 
 
 def cleared(repo, n, host, done, skill='build-ticket'):
@@ -668,20 +753,23 @@ def main(argv):
         text = setting_text(FLEET_SETTINGS)
         print(WHICH_ROSTER if text is not None and roster(text) is not None else 'roster: none')
         return 0
+    row = None
+    if kind == 'start' and len(argv) in (7, 8) and argv[-2] == '--row':
+        argv, row = argv[:-2], argv[-1]
     shapes = {'start': (5, 6), 'wake': (3,), 'stop': (3,)}
     skill = argv[5] if kind == 'start' and len(argv) == 6 else 'build-ticket'
     if (len(argv) not in shapes.get(kind, ()) or not REPO.fullmatch(argv[1]) or not TICKET.fullmatch(argv[2])
-            or not NAME.fullmatch(skill) or len(skill) > 60):
-        raise Unreadable('usage: which | roster | start OWNER/NAME N HARNESS MODEL [SKILL] | wake OWNER/NAME N | '
-                         'stop OWNER/NAME N')
+            or not NAME.fullmatch(skill) or len(skill) > 60 or row not in (None, *MODELS_ROWS)):
+        raise Unreadable('usage: which | roster | start OWNER/NAME N HARNESS MODEL [SKILL] [--row ROW] | '
+                         'wake OWNER/NAME N | stop OWNER/NAME N')
     repo, n = argv[1], argv[2]
     run = load(repo)['runs'].get(n)
-    taking = picked = None
+    taking = picked = effort = None
     if kind == 'start':
         text = setting_text(FLEET_SETTINGS)
         entries = roster(text) if text is not None else None
         if entries is not None:
-            taking, picked = roster_start(text, entries, repo, n, argv[3], argv[4], skill)
+            taking, picked, effort = roster_start(text, entries, repo, n, argv[3], argv[4], skill, row)
     elif run:
         taking = run.get('role')
     if kind == 'start':
@@ -701,11 +789,14 @@ def main(argv):
         ready(repo)
         if run and not run.get('stopped'):
             raise Outcome(live % (n, run['host']))
+        given = dict({'repository': repo, 'ticket': int(n), 'skill': skill, 'harness': argv[3], 'model': argv[4]},
+                     **({'effort': effort} if effort else {}))
+        if effort and 'effort' not in can(host):
+            told(repo, n, host, given, False)
         if configured():
             DRIVER_ENV = builder_env(repo, n, requester)
         token_step(repo, n, requester)
-        new = attempt(repo, n, host, 'start', {'repository': repo, 'ticket': int(n), 'skill': skill,
-                                                'harness': argv[3], 'model': argv[4]})
+        new = attempt(repo, n, host, 'start', given)
 
         def add(runs):
             if runs.get(n) != run:  # another start saved a run for #N meanwhile
@@ -720,8 +811,9 @@ def main(argv):
         if not record(repo, add, label):
             raise Outcome('unknown: #%s started on %s but its run was not saved; save run %s on host %s for #%s '
                           'privately before anything else' % (n, host, new, host, n))
-        print('started #%s on %s%s' % (n, host, ' as %s, %s' % (picked['note']['harness'], picked['note']['model'])
-                                          if picked else ''))
+        print('started #%s on %s%s' % (n, host, ' as %s, %s' % (
+            picked['note']['harness'], picked['note']['model'][:-len('default effort')] + effort + ' effort'
+            if effort else picked['note']['model']) if picked else ''))
         unclear = cleared(repo, n, host, 'started', skill)
         if unclear:
             print(unclear)

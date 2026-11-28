@@ -13,19 +13,27 @@ in the tracker exactly once. It writes nothing and runs nothing.
 
 Exits: 0 verified; 2 usage; 5 refused, each problem on its own line.
 """
+import base64
+import html
 import json
 import os
 from pathlib import Path
 import re
 import stat
 import sys
+import unicodedata
 
 FILES = ('issue-tracker.md', 'triage-labels.md', 'domain.md', 'fleet.md')
 TABLES = ('Builder', 'Builder for small tickets', 'Reviewer for Claude-built', 'Reviewer for GPT-built')
+OPTIONAL_TABLES = ('Reviewer for Gemini-built',)
 SECTIONS = TABLES + ('Test commands', 'CI checks', 'Standing merge rules', 'GitHub identity')
 FLAGS = ('provider', 'model', 'reasoning-level')
-FAMILY = {'claude-code': 'claude', 'codex': 'gpt'}
-REVIEWS = {'Reviewer for Claude-built': 'claude', 'Reviewer for GPT-built': 'gpt'}
+FAMILY = {'claude-code': 'claude', 'codex': 'gpt', 'antigravity': 'gemini'}
+REVIEWS = {
+    'Reviewer for Claude-built': 'claude',
+    'Reviewer for GPT-built': 'gpt',
+    'Reviewer for Gemini-built': 'gemini',
+}
 ROLES = ('needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix')
 # The whole Record authors cell, as the review and launch-fleet readers take it.
 LOGIN = r'`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`'
@@ -37,7 +45,7 @@ FLAGS_CELL = re.compile(r'`--provider (%s) --model (%s(?:/%s)*) --reasoning-leve
 ROSTER_HEADER = ['Name', 'Kind', 'Driver', 'Roles', 'Writes as']
 KINDS = ('harness', 'host', 'bot')
 ROSTER_ROLES = ('orchestrator', 'builder', 'reviewer', 'helper')
-USAGE = 'usage: settings.py check [--root DIR] [--labels FILE]'
+USAGE = 'usage: settings.py check [--root DIR] [--labels FILE] | settings.py app-identity < contents.json'
 
 
 def read(path, problems):
@@ -216,15 +224,37 @@ def fixer(body, problems):
     rows = [line for line in body.splitlines() if line.startswith('|')
             and not re.fullmatch(r'\|[\s|:-]*', line)][1:]
     for row in rows:
-        family = row.split('|')[1].strip()
+        parsed = cells(row)
+        if not parsed or len(parsed) != 5:
+            problems.append('fleet.md: Fixer: row has %d cells, not 5' % (len(parsed or [])))
+            continue
+        family, _, _, _, flags = parsed
+        matched = FLAGS_CELL.fullmatch(flags)
+        if matched:
+            bad = [(flag, value) for flag, value in zip(FLAGS, matched.groups()) if value.startswith('--')]
+            if bad:
+                for flag, value in bad:
+                    problems.append('fleet.md: Fixer: %s: malformed --%s value %s' % (family, flag, value))
+                continue
+            continue
+        broken = []
         for flag in FLAGS:
             found = list(re.finditer(token(flag), row))
             if not found:
-                problems.append('fleet.md: Fixer: %s: no --%s' % (family, flag))
+                broken.append('fleet.md: Fixer: %s: no --%s' % (family, flag))
             elif len(found) > 1:
-                problems.append('fleet.md: Fixer: %s: --%s appears %d times' % (family, flag, len(found)))
+                broken.append('fleet.md: Fixer: %s: --%s appears %d times' % (family, flag, len(found)))
             elif not re.match(r' (?!--)[^\s`|]+(?=[ `|])', row[found[0].end():]):
-                problems.append('fleet.md: Fixer: %s: malformed --%s' % (family, flag))
+                tail = row[found[0].end():].lstrip()
+                value = tail.split(None, 1)[0] if tail else ''
+                if value.startswith('--'):
+                    broken.append('fleet.md: Fixer: %s: malformed --%s value %s' % (family, flag, value))
+                else:
+                    broken.append('fleet.md: Fixer: %s: malformed --%s' % (family, flag))
+        if broken:
+            problems.extend(broken)
+        else:
+            problems.append('fleet.md: Fixer: %s: malformed %s' % (family, flags))
 
 
 def fleet(text, problems):
@@ -248,7 +278,7 @@ def fleet(text, problems):
     for title in SECTIONS if table is None else SECTIONS[len(TABLES):]:
         if title not in (exact if title == 'GitHub identity' else found):
             problems.append('fleet.md: no ## %s section' % title)
-    for title in TABLES:
+    for title in TABLES + OPTIONAL_TABLES:
         body = found.get(title)
         if body is None:
             continue
@@ -275,6 +305,7 @@ def fleet(text, problems):
                 problems.append('fleet.md: %s: %s is not from another model family' % (title, provider))
     if 'Fixer' in found:
         fixer(found['Fixer'], problems)
+    approval(text, problems)
     identity = exact.get('GitHub identity')
     if identity is not None:
         rows = re.findall(r'^\| *Record authors *\|.*$', identity, re.M)
@@ -287,6 +318,237 @@ def fleet(text, problems):
                                 % (number, len(rows), row.strip()))
         elif len(cells) != 4 or cells[3].strip() or not CELL.fullmatch(cells[2]):
             problems.append('fleet.md: GitHub identity: Record authors needs one or more exact logins')
+    state, reasons = app_identity(text)
+    if state == 'refused':
+        problems.extend('fleet.md: GitHub identity: ' + reason for reason in reasons)
+
+
+APP_KEYS = ('Record authors', 'App identity')
+FENCE_LIKE = re.compile(r'[ \t>]*(?:(?:[-*+]|[0-9]+[.)])[ \t]+)?(`{3,}|~{3,})')
+FENCE_OPEN = re.compile(r' {0,3}(`{3,}|~{3,})(.*)')
+SECTION_END = re.compile(r' {0,3}#{1,6}(?:[ \t]|$)')
+SWALLOWS = re.compile(r'<(?:(?:pre|script|style|textarea)(?:[\s>]|$)|\?|![A-Za-z]|!\[CDATA\[)', re.I)
+HEADING = re.compile(r'[ \t>]*#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*')
+CANONICAL_ROW = re.compile(r'\|([^|\\]*)\|([^|\\]*)\|')
+
+
+def plain(cell):
+    cell = re.sub(r'<[^>]*>', '', html.unescape(cell))
+    cell = ''.join(c for c in cell if unicodedata.category(c) not in ('Cf', 'Cc') or c in ' \t')
+    cell = re.sub(r'\\(?=[!-/:-@\[-`{-~])', '', cell)
+    return ' '.join(re.sub(r'[`*_~]', '', cell).split()).casefold()
+
+
+def split_cells(line):
+    line = re.sub(r'^(?:[ \t>]|<!--|(?:[-*+]|[0-9]+[.)])[ \t])*', '', line)
+    if not line.startswith('|') and '|' not in re.sub(r'(`+)(?:(?!\1).)+?\1', '', line):
+        return None
+    cells = re.split(r'(?<!\\)\|', line)
+    if len(cells) < 2:
+        return None
+    return cells[1:] if line.startswith('|') else cells
+
+
+def identity_lines(lines):
+    found, inside, fence, comment = [], False, None, False
+    for number, line in enumerate(lines):
+        if line == '## GitHub identity':
+            inside, fence, comment = True, None, False
+            continue
+        if not inside:
+            continue
+        if fence:
+            mark = FENCE_OPEN.match(line)
+            if mark and mark.group(1)[0] == fence[0] and len(mark.group(1)) >= len(fence) and not mark.group(2).strip():
+                fence = None
+            found.append(number)
+            continue
+        mark = FENCE_OPEN.match(line)
+        if mark and (mark.group(1)[0] == '~' or '`' not in mark.group(2)):
+            fence = mark.group(1)
+            found.append(number)
+            continue
+        if not comment and SECTION_END.match(line):
+            inside = False
+            continue
+        found.append(number)
+        rest = line
+        while rest:
+            pos = rest.find('-->' if comment else '<!--')
+            if pos < 0:
+                break
+            comment, rest = not comment, rest[pos + (3 if comment else 4):]
+    return found
+
+
+def app_rows(lines):
+    rows = []
+    for number in identity_lines(lines):
+        cells = split_cells(lines[number])
+        if cells and plain(cells[0]) == 'app identity':
+            rows.append(number)
+    return rows
+
+
+def hidden_heading(lines, at):
+    fence, comment = None, False
+    for line in lines[:at]:
+        mark = FENCE_LIKE.match(line)
+        if fence:
+            if line == fence:
+                fence = None
+            elif mark:
+                return 'a fence-like line inside a fence: ' + line
+            continue
+        if mark:
+            if comment:
+                return 'a fence-like line while an HTML comment is open: ' + line
+            opener = re.fullmatch(r'(`{3,})[^`]*|(~{3,}).*', line)
+            if not opener:
+                return 'a fence that does not open at column 0: ' + line
+            fence = opener.group(1) or opener.group(2)
+            continue
+        if SWALLOWS.search(line):
+            return 'raw HTML that can run past the heading: ' + line
+        rest = line
+        while rest:
+            mark = rest.find('-->' if comment else '<!--')
+            if mark < 0:
+                break
+            comment, rest = not comment, rest[mark + (3 if comment else 4):]
+    if fence:
+        return 'a fence still open: ' + fence
+    if comment:
+        return 'an HTML comment still open'
+    return None
+
+
+def canonical(lines, row):
+    at = [n for n, line in enumerate(lines) if line == '## GitHub identity']
+    named = [n for n, line in enumerate(lines)
+             if (HEADING.fullmatch(line) and plain(HEADING.fullmatch(line).group(1) or '') == 'github identity')
+             or (plain(line) == 'github identity' and n + 1 < len(lines)
+                 and re.fullmatch(r'[ \t]{0,3}(=+|-+)[ \t]*', lines[n + 1]))]
+    if len(at) != 1 or named != at:
+        return 'the heading is not one exact ## GitHub identity'
+    at = at[0]
+    if at and lines[at - 1]:
+        return 'no blank line before ## GitHub identity'
+    why = hidden_heading(lines, at)
+    if why:
+        return why
+    if lines[at + 1:at + 4] != ['', '| Setting | Value |', '| --- | --- |']:
+        return 'the table under ## GitHub identity is not | Setting | Value | then | --- | --- |'
+    keys, number = [], at + 4
+    while number < len(lines) and lines[number]:
+        match = CANONICAL_ROW.fullmatch(lines[number])
+        key = match.group(1).strip() if match else None
+        if key not in APP_KEYS or key in keys:
+            return 'a table line that is not one | Record authors | or | App identity | row: ' + lines[number]
+        keys.append(key)
+        number += 1
+    return None if at + 4 <= row < number else 'the App identity row is not in the ## GitHub identity table'
+
+
+def app_identity(raw):
+    try:
+        text = raw.decode('utf-8') if isinstance(raw, bytes) else raw
+    except UnicodeDecodeError:
+        return 'refused', ['fleet.md is not UTF-8']
+    lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+    rows = app_rows(lines)
+    if not rows:
+        return 'off', ['no App identity row']
+    if len(rows) > 1:
+        return 'refused', ['App identity row %d of %d: %s' % (n, len(rows), lines[row].strip())
+                           for n, row in enumerate(rows[1:], 2)]
+    line = lines[rows[0]]
+    cells = split_cells(line)
+    value = cells[1].strip() if len(cells) == 3 and not cells[2].strip() and '\\|' not in line else None
+    if value in ('off', '`off`', '`on`'):
+        return 'off', ['the App identity row is ' + value]
+    if value != 'on':
+        return 'refused', ['App identity must be exactly on or off: ' + line.strip()]
+    why = canonical(lines, rows[0])
+    if why:
+        return 'refused', ['App identity on is refused: ' + why]
+    return 'on', ['one App identity on row in the ## GitHub identity table']
+
+
+def app_identity_on(text):
+    return app_identity(text)[0] == 'on'
+
+
+def contents(stdin):
+    try:
+        answer = json.loads(stdin.decode('utf-8'))
+        content, size = answer['content'], answer['size']
+        if (not isinstance(answer, dict) or answer['type'] != 'file' or answer['encoding'] != 'base64'
+                or not isinstance(content, str) or type(size) is not int):
+            return None
+        lines = content.split('\n')
+        if lines[-1] == '':
+            lines.pop()
+        if any(len(line) != 60 for line in lines[:-1]) or (lines and not 0 < len(lines[-1]) <= 60):
+            return None
+        data = base64.b64decode(''.join(lines).encode('ascii'), validate=True)
+    except (ValueError, TypeError, KeyError, UnicodeError):
+        return None
+    return data if len(data) == size else None
+
+
+def approval(text, problems):
+    lines = text.split('\n')
+    at = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Approval rules']
+    here = 'fleet.md: Approval rules: '
+    for n, line in enumerate(lines):
+        atx = re.fullmatch(r'\s*#{1,6}(?:\s+(.*?))?(?:\s+#+)?\s*', line)
+        below = lines[n + 1].strip() if n + 1 < len(lines) else ''
+        title = (atx.group(1) or '') if atx else (line if below and set(below) in ({'='}, {'-'}) else '')
+        if line != '## Approval rules' and ' '.join(title.split()).lower() == 'approval rules':
+            problems.append(here + 'the heading must be exactly ## Approval rules: ' + line)
+    if len(at) > 1:
+        problems.append(here + 'more than one ## Approval rules heading')
+    if len(at) != 1:
+        return
+    table, fence = [], None
+    for line in lines[at[0] + 1:]:
+        mark = re.match(r' {0,3}(`{3,}|~{3,})(.*)', line)
+        if line.startswith(('# ', '## ')):
+            break
+        if fence:
+            if mark and mark.group(1)[0] == fence[0] and len(mark.group(1)) >= len(fence) and not mark.group(2).strip():
+                fence = None
+        elif re.match(r' {0,3}\|', line):
+            table.append(cells(line))
+        elif table and line.lstrip().startswith('|'):
+            problems.append(here + 'a row indented as code ends the table: ' + line.strip())
+            break
+        elif table:
+            break
+        elif mark:
+            fence = mark.group(1)
+    if len(table) < 3 or table[0] != ['Rule', 'Approver'] or table[1] != ['---', '---']:
+        problems.append(here + 'the table is not | Rule | Approver |')
+        return
+    seen = []
+    for n, row in enumerate(table[2:], 1):
+        if not row or len(row) != 2:
+            problems.append(here + 'row %d: not two cells' % n)
+            continue
+        rule, approver = row[0], ' '.join(row[1].strip('`*_ .').split())
+        name, key = 'row %d (%s): ' % (n, rule), ' '.join(rule.lower().split())
+        if not rule.startswith('Ask before '):
+            problems.append(here + name + 'the rule does not start "Ask before"')
+        elif key in seen:
+            problems.append(here + name + 'repeats row %d' % (seen.index(key) + 1))
+        elif not approver:
+            problems.append(here + name + 'no approver')
+        elif re.search(r'<[^>]*>', approver):
+            problems.append(here + name + 'unfilled approver ' + row[1])
+        elif approver.lower() == 'the user':
+            problems.append(here + name + 'the approver is "the user", not a person')
+        seen.append(key)
 
 
 def triage(text, labels, problems):
@@ -304,6 +566,14 @@ def triage(text, labels, problems):
 
 
 def main(argv):
+    if argv[:1] == ['app-identity']:
+        if len(argv) != 1:
+            print(USAGE)
+            return 2
+        data = contents(sys.stdin.buffer.read())
+        state, reasons = app_identity(data) if data is not None else ('refused', ['not one whole Contents API file'])
+        print('App identity: %s: %s' % (state, '; '.join(reasons)))
+        return 0 if state == 'on' else 1
     if not argv or argv[0] != 'check':
         print(USAGE)
         return 2

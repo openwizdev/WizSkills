@@ -286,6 +286,104 @@ class Scope(Case):
         self.assertIn('cannot read', err)
 
 
+SIZED = BODY.replace('Ticket X1 of spec #40.', 'Ticket X1 of spec #40. Size: S.')
+S_PLAN = 'S: about 200 lines and 10 files'
+
+
+def lines(n, tag='x'):
+    return ''.join(f'{tag}{i} = {i}\n' for i in range(n))
+
+
+class Size(Case):
+    def test_size_counts_tests_apart_and_passes_a_small_change(self):
+        self.set_issue(41, issue(body=SIZED))
+        self.write('src/export/run.py', lines(150))
+        self.write('src/export/test_run.py', lines(300))
+        self.write('tests/fixtures/big.json', lines(500))
+        self.commit()
+        code, out, err = self.run_ticket('size', REPO, '41')
+        self.assertEqual(code, 0, out + err)
+        self.assertIn('changed: 151 lines in 1 files; tests apart: 800 lines in 2 files', out.splitlines())
+        self.assertIn(f'plan: {S_PLAN}', out.splitlines())
+        self.assertEqual(last(out), 'size: ok')
+
+    def test_size_is_over_on_lines_or_files_against_an_s_plan(self):
+        self.set_issue(41, issue(body=SIZED))
+        self.write('src/export/run.py', lines(201))
+        self.commit()
+        code, out, _ = self.run_ticket('size', REPO, '41')
+        self.assertEqual(code, 1, out)
+        self.assertEqual(last(out), f'size: over (202 lines, 1 files against {S_PLAN})')
+        self.git('reset', '-q', '--soft', 'main')
+        self.git('checkout', '-q', 'main', '--', 'src/export/run.py')
+        for i in range(11):
+            self.write(f'src/export/part{i}.py', 'v = 1\n')
+        self.commit()
+        code, out, _ = self.run_ticket('size', REPO, '41')
+        self.assertEqual(code, 1, out)
+        self.assertEqual(last(out), f'size: over (11 lines, 11 files against {S_PLAN})')
+
+    def test_size_allows_about_400_lines_only_for_an_m_with_its_why_line(self):
+        self.write('src/export/run.py', lines(300))
+        self.commit()
+        why = SIZED.replace('Size: S.', 'Size: M.\nWhy M: one parser and its only caller.')
+        self.set_issue(41, issue(body=why))
+        code, out, err = self.run_ticket('size', REPO, '41')
+        self.assertEqual(code, 0, out + err)
+        self.assertIn('plan: M: about 400 lines and 10 files', out.splitlines())
+        self.assertEqual(last(out), 'size: ok')
+        self.set_issue(41, issue(body=SIZED.replace('Size: S.', 'Size: M.')))
+        code, out, _ = self.run_ticket('size', REPO, '41')
+        self.assertEqual(code, 1, out)
+        self.assertIn('plan: M without a `Why M:` line, judged as S', out.splitlines())
+        self.assertEqual(last(out), f'size: over (301 lines, 1 files against {S_PLAN})')
+
+    def test_size_counts_only_this_branch_against_origin_main(self):
+        self.set_issue(41, issue(body=SIZED))
+        self.git('checkout', '-q', 'main')
+        self.write('src/other.py', lines(400))
+        self.commit('main moves on')
+        self.git('push', '-q', 'origin', 'main')
+        self.git('fetch', '-q', 'origin')
+        self.git('checkout', '-q', 'work')
+        self.git('mv', 'src/export/run.py', 'src/export/moved.py')
+        self.commit()
+        code, out, err = self.run_ticket('size', REPO, '41')
+        self.assertEqual(code, 0, out + err)
+        self.assertIn('changed: 0 lines in 1 files; tests apart: 0 lines in 0 files', out.splitlines())
+
+    def test_size_counts_a_rename_by_both_paths_across_production_and_tests(self):
+        self.set_issue(41, issue(body=SIZED))
+        self.git('checkout', '-q', 'main')
+        self.write('src/export/legacy.py', lines(600))
+        self.write('tests/fixtures/sample.py', lines(300, 'y'))
+        self.commit('main grows')
+        self.git('push', '-q', 'origin', 'main')
+        self.git('fetch', '-q', 'origin')
+        self.git('checkout', '-q', 'work')
+        self.git('merge', '-q', '--ff-only', 'origin/main')
+        self.git('mv', 'src/export/legacy.py', 'tests/fixtures/legacy.py')
+        self.write('tests/fixtures/legacy.py', lines(390))
+        self.commit()
+        self.assertIn('R', self.git('diff', '--name-status', '--find-renames', 'origin/main...HEAD'))
+        code, out, _ = self.run_ticket('size', REPO, '41')
+        self.assertEqual(code, 1, out)
+        self.assertIn('changed: 210 lines in 1 files; tests apart: 0 lines in 1 files', out.splitlines())
+        self.assertEqual(last(out), f'size: over (210 lines, 1 files against {S_PLAN})')
+        self.git('mv', 'tests/fixtures/sample.py', 'src/export/sample.py')
+        self.write('src/export/sample.py', lines(200, 'y') + lines(50, 'z'))
+        self.commit()
+        code, out, _ = self.run_ticket('size', REPO, '41')
+        self.assertIn('changed: 260 lines in 2 files; tests apart: 100 lines in 2 files', out.splitlines())
+
+    def test_size_refuses_a_ticket_without_one_s_or_m_size(self):
+        for body in (BODY, SIZED.replace('Size: S.', 'Size: L.'), SIZED.replace('Size: S.', 'Size: S. Size: M.')):
+            self.set_issue(41, issue(body=body))
+            code, _, err = self.run_ticket('size', REPO, '41')
+            self.assertEqual(code, 2, err)
+            self.assertIn('Size: S', err)
+
+
 class Records(Case):
     def test_records_trusts_only_record_authors(self):
         self.comments(7, ('example[bot]', f'VERDICT: CHANGES at {HEAD}\n\nNext: the builder fixes R1.'),
@@ -757,6 +855,32 @@ class Identity(Case):
             with self.subTest(command=command):
                 code, out, err = self.run_ticket('push', str(self.dir / 'ok.txt'), '--', *command)
                 self.assertEqual(code, 0, out + err)
+
+
+class SkillText(unittest.TestCase):
+    def test_the_one_allowed_wait_finishes_push_and_matches_the_remote_tip(self):
+        lines = (HERE.parent / 'SKILL.md').read_text(encoding='utf-8').splitlines()
+        rule = [line for line in lines if '**Never wait awake:**' in line]
+        step = [line for line in lines if line.startswith('3. Push every checkpoint')]
+        self.assertEqual((len(rule), len(step)), (1, 1))
+        duty = ('The one wait this rule allows is finishing `git push` and its pre-push hook '
+                'in the same turn, then confirming the remote tip equals its local head before the turn ends.')
+        self.assertIn(duty, rule[0])
+        self.assertIn('no watcher, poll loop or `sleep` for CI, a review or another thread', rule[0])
+        self.assertIn('In the same turn, finish that push and its pre-push hook, then confirm '
+                      'the remote tip equals its local head before the turn ends.', step[0])
+
+    def test_identity_repair_is_gated_on_refusal_and_not_after_verified_push(self):
+        lines = (HERE.parent / 'SKILL.md').read_text(encoding='utf-8').splitlines()
+        step = [line for line in lines if line.startswith('3. Push every checkpoint')]
+        self.assertEqual(len(step), 1)
+        repair = 'Only on an identity refusal, run `$T author` and redo only those commits'
+        finish = ('In the same turn, finish that push and its pre-push hook, then confirm '
+                  'the remote tip equals its local head before the turn ends.')
+        self.assertNotIn('Then run `$T author`', step[0])
+        self.assertIn(repair, step[0])
+        self.assertIn(finish, step[0])
+        self.assertLess(step[0].index(repair), step[0].index(finish))
 
 
 if __name__ == '__main__':

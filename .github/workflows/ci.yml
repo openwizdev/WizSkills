@@ -1,3 +1,27 @@
+# The context-budget job is adapted from T3 Code's
+# .github/workflows/agent-context-budget.yml (github.com/pingdotgg/t3code
+# @ 90e6e3e69d82d95796edb6777dfeaf2f43ed181e), under the MIT License:
+#
+# Copyright (c) 2026 T3 Tools Inc.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 # Test-only dependency record (WZ15/J53):
 # playwright-core 1.64.1 (Apache-2.0); no transitive npm dependencies.
 # Chrome for Testing and Chrome Headless Shell 156.0.8078.4, revision 1248,
@@ -7,40 +31,179 @@
 # Release-tool dependency record (WS18/J187): @changesets/cli 3.0.3 (MIT),
 # pinned with package-lock.json (40 packages, MIT or ISC), installed by
 # `npm ci --ignore-scripts`. Used only by check/changesets.py; never shipped.
+
+# comment-ok: dependency record, the same kind as the two records above.
+# CI cache dependency record (J187, WQ3/#2272): actions/cache 6.1.0 (MIT), pinned
+# by commit 55cc8345863c7cc4c66a329aec7e433d2d1c52a9. Used only by CI to cache
+# ~/.npm and the pinned Playwright browser; never shipped. No skill gains a dependency.
 name: WizSkills check
 on:
-  push:
   pull_request:
+  merge_group:
+  push:
+    branches: [main]
 permissions:
   contents: read
+env:
+  PLAYWRIGHT_CORE_VERSION: 1.64.1
 jobs:
-  check:
-    name: check
+  list:
+    name: list shards
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 10
+    outputs:
+      shards: ${{ steps.list.outputs.shards }}
+      skipped: ${{ steps.list.outputs.skipped }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # The pull request's merge commit and its first parent, main's tip.
           fetch-depth: 2
+      - name: List the shards; a pull request keeps only those its changes need (check/select.py), a merge group or push keeps every one; a shard needs the browser when its skill's folder names playwright-core (the inventory guard fails this job on an unlisted test)
+        id: list
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          python3 check/run.py --list > "$RUNNER_TEMP/all.json"
+          python3 -I check/select.py --event "$EVENT" --base HEAD^1 < "$RUNNER_TEMP/all.json" > "$RUNNER_TEMP/shards.json"
+          python3 -I - "$RUNNER_TEMP/shards.json" "$RUNNER_TEMP/all.json" >> "$GITHUB_OUTPUT" <<'PY'
+          import json, pathlib, sys
+          shards = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          kept = {s['name'] for s in shards}
+          skipped = [s['name'] for s in json.loads(pathlib.Path(sys.argv[2]).read_text()) if s['name'] not in kept]
+          def browser(skill):
+              folder = pathlib.Path('skills', skill or '')
+              return bool(skill) and folder.is_dir() and any(
+                  'playwright-core' in path.read_text(errors='ignore')
+                  for path in folder.rglob('*') if path.is_file())
+          matrix = [{'shard': s['name'], 'browser': browser(s['skill'])} for s in shards]
+          for row in matrix:
+              print(f"shard {row['shard']}: browser {'yes' if row['browser'] else 'no'}", file=sys.stderr)
+          print('shards=' + json.dumps(matrix))
+          print('skipped=' + json.dumps(skipped))
+          PY
+  gates:
+    name: gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-browser-false
       - name: Install the pinned Changesets
         run: npm ci --ignore-scripts
-      - name: Changeset gate (a pull request that changes a skill names it in a new changeset)
-        if: github.event_name == 'pull_request'
-        run: python3 -I check/changesets.py check --base HEAD^1
-      - name: Comment check
-        if: github.event_name == 'pull_request'
+      - name: Changeset gate (a pull request that changes a skill names it in a new changeset; base is the merge group's base, or the pull request merge commit's first parent)
+        if: github.event_name != 'push'
+        env:
+          GATE_BASE: ${{ github.event.merge_group.base_sha || 'HEAD^1' }}
+        run: python3 -I check/changesets.py check --base "$GATE_BASE"
+      - name: Comment check's own tests
+        if: github.event_name != 'push'
         run: |
           python3 -I tools/comment-check/test_ci.py
           python3 -I tools/comment-check/test_commands.py
-          python3 -I tools/comment-check/check.py diff --base HEAD^1
-      - name: Install pinned test-only browser tools
+      - name: Comment check
+        if: github.event_name != 'push'
+        env:
+          GATE_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
-          npm install --no-save --ignore-scripts playwright-core@1.64.1
+          python3 -I tools/comment-check/check.py diff --base "${GATE_BASE:-HEAD^1}"
+          python3 -I tools/comment-check/drift.py
+  context-budget:
+    name: context budget
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: No skill's SKILL.md grows above the base unless the pull request has the context-increase label, read live so a rerun after labelling sees it (base is the pull request merge commit's first parent; python3 -I check/context_budget.py --help says when to ask for the label)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          labels=$(gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name')
+          allow=
+          if printf '%s\n' "$labels" | grep -qx context-increase; then
+            allow=--allow-increase
+          fi
+          python3 -I check/context_budget.py compare HEAD^1 HEAD $allow
+  shard:
+    name: shard ${{ matrix.shard }}
+    needs: list
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.list.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-browser-${{ matrix.browser }}-playwright-core-${{ env.PLAYWRIGHT_CORE_VERSION }}
+      - name: Install the pinned Changesets
+        run: npm ci --ignore-scripts
+      - if: matrix.browser
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ env.PLAYWRIGHT_CORE_VERSION }}-chromium-${{ hashFiles('.github/workflows/ci.yml') }}
+      - name: Install pinned test-only browser tools
+        if: matrix.browser
+        run: |
+          npm install --no-save --ignore-scripts "playwright-core@$PLAYWRIGHT_CORE_VERSION"
           node node_modules/playwright-core/cli.js install --with-deps chromium
           node --input-type=module -e "import { chromium } from 'playwright-core'; console.log('OPENWIZ_CHROMIUM=' + chromium.executablePath())" >> "$GITHUB_ENV"
-      - name: Skill rules, standalone check and every skill's suites
+      - name: Install distro ffmpeg for the to-spec render proof
+        if: matrix.shard == 'to-spec'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg
+          dpkg-query -W -f 'ffmpeg ${Version}\n' ffmpeg
+          command -v ffmpeg
+          command -v ffprobe
+      - name: Run shard ${{ matrix.shard }}
         env:
           TEST_JOBS: 2
-        run: python3 check/run.py
+          SHARD: ${{ matrix.shard }}
+        run: python3 check/run.py --shard "$SHARD"
+  check:
+    name: check
+    needs: [list, gates, context-budget, shard]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          SKIPPED: ${{ needs.list.outputs.skipped || '[]' }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, sys
+          results = {job: need['result'] for job, need in json.loads(os.environ['RESULTS']).items()}
+          for job, result in results.items():
+              print(f'{job}: {result}')
+          skipped = [f"shard {name}: skipped (this pull request's changes don't need it)"
+                     for name in json.loads(os.environ['SKIPPED'])]
+          for line in skipped:
+              print(line)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(''.join(f'- {line}\n' for line in skipped))
+          sys.exit(0 if all(result == 'success' for result in results.values()) else 1)
+          PY

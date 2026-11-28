@@ -85,6 +85,10 @@ class Stop(Exception):
     pass
 
 
+class LeaseExpired(Exception):
+    pass
+
+
 def refuse(field, why):
     raise Refused(f'{field}: {why}')
 
@@ -197,10 +201,46 @@ def gh(method, path, payload=None, accept=None, raw=False):
         raise Failed(f'{method} {path}: not JSON')
 
 
+def load_read_helper(name):
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / f'{name}.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+ghcache = load_read_helper('ghcache')
+gitread = load_read_helper('gitread')
+post = load_read_helper('post')
+
+
+def send(method, path, payload=None):
+    args = ['--method', method, path]
+    for key, value in (payload or {}).items():
+        pairs = [(key, value)] if isinstance(value, str) else [(f'{key}[]', v) for v in value]
+        args += [x for k, v in pairs for x in ('-f', f'{k}={v}')]
+    try:
+        text = post.write(path, *args, paced=method == 'POST')
+    except post.Stop as error:
+        raise Failed(str(error)) from None
+    if text is None:
+        raise Failed(f'{method} {path}: the write failed')
+    try:
+        return json.loads(text) if text.strip() else None
+    except ValueError:
+        raise Failed(f'{method} {path}: not JSON')
+
+
+def get(path):
+    try:
+        return ghcache.get(path)
+    except ghcache.Error as error:
+        raise Failed(str(error)) from None
+
+
 def pages(path):
     items, page = [], 1
     while True:
-        chunk = gh('GET', f'{path}?per_page=100&page={page}')
+        chunk = get(f'{path}?per_page=100&page={page}')
         if not isinstance(chunk, list):
             raise Failed(f'GET {path}: not a list')
         if not chunk:
@@ -214,10 +254,8 @@ def record_authors(repo):
     grants = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(grants)
     try:
-        text = gh('GET', f'repos/{repo}/contents/docs/agents/fleet.md',
-                  accept='Accept: application/vnd.github.raw', raw=True)
-        return grants.record_authors(text)
-    except (Failed, ValueError) as error:
+        return grants.record_authors(gitread.show(repo, 'docs/agents/fleet.md'))
+    except (gitread.Error, ValueError) as error:
         raise Failed(f'no record authors in docs/agents/fleet.md: {error}')
 
 
@@ -294,7 +332,7 @@ def step_down(found, note_id, kind, fields, repo):
     other = next((x for x in found if x[0] != note_id and x[1]['agent'] == kind
                   and live(x, datetime.now(timezone.utc))), None)
     if other:
-        gh('PATCH', f'repos/{repo}/issues/comments/{note_id}',
+        send('PATCH', f'repos/{repo}/issues/comments/{note_id}',
            {'body': body(dict(fields, state='stopped (lost claim)'))})
         raise Stop(f'note {other[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
 
@@ -344,15 +382,15 @@ def proof(repo, n):
 def settling(repo, n):
     lock = None
     try:
-        import fcntl
-        proof(repo, n).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        lock = open(proof(repo, n).with_suffix('.lock'), 'a')
-        fcntl.flock(lock, fcntl.LOCK_EX)
-    except (ImportError, OSError):
-        if lock is not None:
-            lock.close()
-            lock = None
-    try:
+        try:
+            import fcntl
+            proof(repo, n).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            lock = open(proof(repo, n).with_suffix('.lock'), 'a')
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            if lock is not None:
+                lock.close()
+                lock = None
         yield lock is not None
     finally:
         if lock is not None:
@@ -367,13 +405,16 @@ def forget(repo, n):
 
 
 def add_own(repo, n, login, locked):
+    if not locked:
+        send('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+        return
     forget(repo, n)
     try:
         before = len(label_events(repo, n))
     except Failed:
         before = None
-    gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
-    if before is None or not app(login) or not locked:
+    send('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+    if before is None or not app(login):
         return
     try:
         new = label_events(repo, n)[before:]
@@ -403,7 +444,7 @@ def held(repo, n, comments, authors):
     now = datetime.now(timezone.utc)
     if any(x[1]['state'] == 'asking' and live(x, now) for x in notes(pages(comments), authors)):
         return []
-    labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+    labels = [label['name'] for label in get(f'repos/{repo}/issues/{n}')['labels']]
     return left_on(n) if ASKING_LABEL in labels else []
 
 
@@ -432,7 +473,10 @@ def asked_label(repo, n, made, fields, author):
 
 def take_own(repo, n, login, labels, asked=None, locked=False):
     def labelled():
-        return ASKING_LABEL in [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+        return ASKING_LABEL in [label['name'] for label in get(f'repos/{repo}/issues/{n}')['labels']]
+    left = left_on(n)
+    if not locked:
+        return left if ASKING_LABEL in labels else []
     def once(pairs):
         if len({k for k, _ in pairs}) != len(pairs):
             raise ValueError('a repeated key')
@@ -443,26 +487,36 @@ def take_own(repo, n, login, labels, asked=None, locked=False):
         own = None
     exact = isinstance(own, dict) and set(own) == {'login', 'event'} and own['login'] == login.lower()
     mine = own['event'] if exact and type(own['event']) is int and own['event'] >= 0 else None
-    left = left_on(n)
     if mine is None and asked is not None and not app(asked[2]) and ASKING_LABEL in labels:
         found = asked_label(repo, n, *asked)
-        mine = found if found is not None and locked and keep(repo, n, login, found) else None
+        mine = found if found is not None and keep(repo, n, login, found) else None
     if mine is None:
         forget(repo, n)
         return left if ASKING_LABEL in labels else []
-    report = cleanup(repo, n, login, mine, labelled, 'this write')
+    report = cleanup(repo, n, login, mine, labelled, 'this write', any_login=True)
     report = report or (left if labelled() else [])
     forget(repo, n)
     return report
 
 
-def write(args, now, beat=False, out=sys.stdout, retried=False):
+@contextlib.contextmanager
+def retry_post(note_id):
+    try:
+        yield
+    except Failed as error:
+        raise Failed(f'note {note_id} posted; retry with --note {note_id}: {error}') from error
+    except (KeyError, TypeError, IndexError, ValueError) as error:
+        raise Failed(f'note {note_id} posted; retry with --note {note_id}: unexpected GitHub answer') from error
+
+
+def write(args, now, beat=False, out=sys.stdout, retry_of=None):
     if not beat:
         state = args.state if args.why is None else f'{args.state} ({args.why})'
         if args.why is not None and args.state != 'stopped':
             refuse('state', 'only stopped carries a reason')
+        supplied_time = args.time if retry_of is None else None
         fields = {'agent': args.agent, 'state': state, 'harness': args.harness, 'model': args.model,
-                  'step': args.step, 'time': args.time or now.strftime('%Y-%m-%dT%H:%M:%SZ')}
+                  'step': args.step, 'time': supplied_time or now.strftime('%Y-%m-%dT%H:%M:%SZ')}
         for key in ('skills', 'pr', 'preview'):
             if getattr(args, key) is not None:
                 fields[key] = getattr(args, key)
@@ -476,7 +530,8 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
     if login is not None and login.lower() not in authors:
         raise Failed(f'the acting login {login} is not a record author in docs/agents/fleet.md')
     comments = f'repos/{repo}/issues/{n}/comments'
-    found = notes(pages(comments), authors)
+    listing = pages(comments)
+    found = notes(listing, authors)
     if args.note is not None:
         own = next((x for x in found if x[0] == int(args.note)), None)
         if own is None:
@@ -489,75 +544,103 @@ def write(args, now, beat=False, out=sys.stdout, retried=False):
             if own[1]['state'] not in CLAIMING:
                 raise Stop(f'note {args.note} is {own[1]["state"]}: a heartbeat never reopens it')
             fields = dict(own[1], time=now.strftime('%Y-%m-%dT%H:%M:%SZ'))
-            if fields == own[1]:
-                if retried:
-                    raise Failed(f'note {args.note} already holds this second; nothing to beat')
-                time.sleep(1)
-                return write(args, datetime.now(timezone.utc), beat, out, retried=True)
-            if args.floor is None:
-                args.floor = own[1]['time']
-            state = args.state = fields['state']
         first = holder(found, kind, now)
         if first and first[0] != own[0]:
             raise Stop(f'note {first[0]} holds the {kind} claim')
-        made = gh('PATCH', f'repos/{repo}/issues/comments/{own[0]}', {'body': body(fields)})
+        if retry_of and not beat and own != retry_of:
+            raise Failed(f'note {args.note} changed while waiting to edit; read it again')
+        text = body(fields)
+        current = next((c.get('body') for c in listing if c.get('id') in (own[0], args.note)), None)
+        if text == current:
+            if retry_of:
+                raise Failed(f'note {args.note} already holds this second; nothing to {"beat" if beat else "edit"}')
+            time.sleep(1)
+            return write(args, datetime.now(timezone.utc), beat, out, retry_of=own)
+        if beat:
+            if args.floor is None:
+                args.floor = own[1]['time']
+            state = args.state = fields['state']
+        made = send('PATCH', f'repos/{repo}/issues/comments/{own[0]}', {'body': text})
         note_id, verb = own[0], 'edited'
     else:
         first = holder(found, kind, now)
         if args.state in CLAIMING and first:
             raise Stop(f'note {first[0]} holds the {kind} claim')
-        made = gh('POST', comments, {'body': body(fields)})
+        made = send('POST', comments, {'body': body(fields)})
         note_id, verb = int(made['id']), 'posted'
     author = made['user']['login'] if isinstance(made.get('user'), dict) else None
     if not (isinstance(author, str) and author.lower() in authors):
         if verb == 'posted':
-            gh('DELETE', f'repos/{repo}/issues/comments/{note_id}')
+            send('DELETE', f'repos/{repo}/issues/comments/{note_id}')
         raise Failed(f'note {note_id} was written by {author}, not a record author; it was deleted')
     login = login or author
-    found = notes(pages(comments), authors)
-    mine = next((x for x in found if x[0] == note_id), None)
-    if verb == 'edited' and args.state in CLAIMING:
-        try:
-            prior = parse(replaced(made, fields, args.floor if beat else None))
-        except Failed:
-            step_down(found, note_id, kind, fields, repo)
-            if not beat and own[1]['state'] == 'asking':
-                with contextlib.suppress(Failed, KeyError, TypeError, IndexError, ValueError):
-                    for line in held(repo, n, comments, authors):
-                        print(line, file=out)
-            raise
-        if prior and prior['state'] not in CLAIMING and prior != own[1]:
-            if mine is None:
-                raise Failed(f'note {note_id} was edited over a release but not read back')
-            if mine[1]['state'] in CLAIMING:
-                gh('PATCH', f'repos/{repo}/issues/comments/{note_id}', {'body': body(prior)})
-            raise Stop(f'note {note_id} was {prior["state"].split(" ")[0]} before this edit landed; '
-                       'the release is put back')
-    if mine is None or mine[1] != fields:
-        raise Failed(f'note {note_id} was {verb} but not read back')
-    if verb == 'posted' and args.state in CLAIMING:
-        first = holder(found, kind, datetime.now(timezone.utc))
-        if first and first[0] < note_id:
-            gh('PATCH', f'repos/{repo}/issues/comments/{note_id}',
-               {'body': body(dict(fields, state='stopped (lost claim)'))})
-            raise Stop(f'note {first[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
-    if verb == 'edited' and args.state in CLAIMING:
-        step_down(found, note_id, kind, fields, repo)
-    report = []
-    with settling(repo, n) as locked:
+    retry = retry_post(note_id) if verb == 'posted' else contextlib.nullcontext()
+    with retry:
         found = notes(pages(comments), authors)
-        labels = [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
-        asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)
-        if asking and ASKING_LABEL not in labels:
-            add_own(repo, n, login, locked)
-        elif not beat and not asking:
-            asked = (made, fields, author) if (verb == 'edited' and own[1]['state'] == 'asking'
-                                               and args.state in ('working', 'done')) else None
-            report = take_own(repo, n, login, labels, asked, locked)
+        mine = next((x for x in found if x[0] == note_id), None)
+        if verb == 'edited' and args.state in CLAIMING:
+            try:
+                prior = parse(replaced(made, fields, args.floor if beat else None))
+            except Failed:
+                step_down(found, note_id, kind, fields, repo)
+                if not beat and own[1]['state'] == 'asking':
+                    with contextlib.suppress(Failed, KeyError, TypeError, IndexError, ValueError):
+                        for line in held(repo, n, comments, authors):
+                            print(line, file=out)
+                raise
+            if prior and prior['state'] not in CLAIMING and prior != own[1]:
+                if mine is None:
+                    raise Failed(f'note {note_id} was edited over a release but not read back')
+                if mine[1]['state'] in CLAIMING:
+                    send('PATCH', f'repos/{repo}/issues/comments/{note_id}', {'body': body(prior)})
+                raise Stop(f'note {note_id} was {prior["state"].split(" ")[0]} before this edit landed; '
+                           'the release is put back')
+        if mine is None or mine[1] != fields:
+            raise Failed(f'note {note_id} was {verb} but not read back')
+        if verb == 'posted' and args.state in CLAIMING:
+            first = holder(found, kind, datetime.now(timezone.utc))
+            if first and first[0] < note_id:
+                send('PATCH', f'repos/{repo}/issues/comments/{note_id}',
+                   {'body': body(dict(fields, state='stopped (lost claim)'))})
+                raise Stop(f'note {first[0]} holds the {kind} claim; note {note_id} is stopped (lost claim)')
+        if verb == 'edited' and args.state in CLAIMING:
+            step_down(found, note_id, kind, fields, repo)
+        report = []
+        with settling(repo, n) as locked:
+            found = notes(pages(comments), authors)
+            labels = [label['name'] for label in get(f'repos/{repo}/issues/{n}')['labels']]
+            asking = any(x[1]['state'] == 'asking' and live(x, datetime.now(timezone.utc)) for x in found)
+            if asking and ASKING_LABEL not in labels:
+                add_own(repo, n, login, locked)
+            elif not beat and not asking:
+                asked = (made, fields, author) if (verb == 'edited' and own[1]['state'] == 'asking'
+                                                   and args.state in ('working', 'done')) else None
+                report = take_own(repo, n, login, labels, asked, locked)
     print(f'#{n}: {kind} {state}, status note {note_id} {verb}', file=out)
     for line in report:
         print(line, file=out)
     return fields
+
+
+def heartbeat(args, ok_at):
+    def expired(_number, _frame):
+        raise LeaseExpired
+
+    github_timestamp_precision = 1
+    deadline = ok_at + LEASE.total_seconds() - GRACE - github_timestamp_precision
+    old = signal.signal(signal.SIGALRM, expired)
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise LeaseExpired
+        signal.setitimer(signal.ITIMER_REAL, remaining)
+        fields = write(args, datetime.now(timezone.utc), beat=True, out=sys.stderr)
+        if time.monotonic() >= deadline:
+            raise LeaseExpired
+        return fields['time']
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)
 
 
 def run(args):
@@ -572,7 +655,9 @@ def run(args):
     args.floor = None
     ok_at = time.monotonic()
     try:
-        args.floor = write(args, datetime.now(timezone.utc), beat=True, out=sys.stderr)['time']
+        args.floor = heartbeat(args, ok_at)
+    except LeaseExpired:
+        raise Stop(f'note {args.note} could not be kept live inside the lease; the command was not started')
     except Stop as error:
         raise Stop(f'{error}; the command was not started')
     try:
@@ -586,7 +671,7 @@ def run(args):
         while True:
             wait = next_beat(time.monotonic(), ok_at, every, failed)
             if wait is None:
-                raise Stop(f'note {args.note} could not be kept live inside the lease; the command is stopped')
+                raise LeaseExpired
             try:
                 code = proc.wait(timeout=wait)
                 finished = True
@@ -595,7 +680,7 @@ def run(args):
                 pass
             started = time.monotonic()
             try:
-                args.floor = write(args, datetime.now(timezone.utc), beat=True, out=sys.stderr)['time']
+                args.floor = heartbeat(args, ok_at)
                 ok_at, failed = started, False
             except Stop as error:
                 raise Stop(f'{error}; the command is stopped')
@@ -603,6 +688,8 @@ def run(args):
                 failed = True
                 print(f'status.py: heartbeat failed, trying again in {min(RETRY, every)}s: {error}',
                       file=sys.stderr)
+    except LeaseExpired:
+        raise Stop(f'note {args.note} could not be kept live inside the lease; the command is stopped')
     finally:
         if not finished:
             stop_group(proc)
@@ -643,7 +730,7 @@ def mismatches(number, labels, found, prs, now):
     return lines
 
 
-def scan(repo, authors, now):
+def scan(repo, authors, now, check_stranded=False):
     owner, name = repo.split('/')
     cursor, found = None, []
     while True:
@@ -657,9 +744,17 @@ def scan(repo, authors, now):
                 comments = [{'id': c['databaseId'], 'user': c['author'], 'body': c['body'],
                              'updated_at': c['updatedAt']} for c in issue['comments']['nodes']]
             own = notes(comments, authors)
-            found.append((issue['number'], own, mismatches(
-                issue['number'], [label['name'] for label in issue['labels']['nodes']],
-                own, issue['closedByPullRequestsReferences']['nodes'], now)))
+            number = issue['number']
+            labels = [label['name'] for label in issue['labels']['nodes']]
+            lines = mismatches(number, labels, own, issue['closedByPullRequestsReferences']['nodes'], now)
+            if check_stranded and ASKING_LABEL in labels and not any(
+                    x[1]['state'] == 'asking' and live(x, now) for x in own):
+                events = label_events(repo, number)
+                last = events[-1] if events else None
+                login = actor(last) if last else None
+                if last and last['event'] == 'labeled' and login is not None and login.lower() in authors:
+                    lines.append(f'#{number}: {ASKING_LABEL} last added by a record author, but no live note asks')
+            found.append((number, own, lines, comments))
         if not issues['pageInfo']['hasNextPage']:
             break
         cursor = issues['pageInfo']['endCursor']
@@ -667,13 +762,17 @@ def scan(repo, authors, now):
 
 
 def check(args, now):
-    found = [line for _, _, lines in scan(args.repo, record_authors(args.repo), now) for line in lines]
+    issues = scan(args.repo, record_authors(args.repo), now, check_stranded=True)
+    found = [line for _, _, lines, _ in issues for line in lines]
     for line in found:
         print(line)
     return 1 if found else 0
 
 
 REPAIRING = 'adding needs-info for an asking note'
+PENDING = '<!-- openwiz:needs-info-repair v1 -->'
+PENDING_BODY = (PENDING + '\nlaunch-fleet is adding needs-info for an asking note beside a stopped fleet note; '
+                'this comment goes once the label is settled.')
 REPAIRED = 'settled needs-info'
 
 
@@ -684,9 +783,9 @@ def stamp():
 def record(repo, n, base, state, step, note_id=None):
     fields = dict(base, state=state, step=step, time=stamp())
     if note_id is None:
-        made = gh('POST', f'repos/{repo}/issues/{n}/comments', {'body': body(fields)})
+        made = send('POST', f'repos/{repo}/issues/{n}/comments', {'body': body(fields)})
     else:
-        made = gh('PATCH', f'repos/{repo}/issues/comments/{note_id}', {'body': body(fields)})
+        made = send('PATCH', f'repos/{repo}/issues/comments/{note_id}', {'body': body(fields)})
     if not (isinstance(made.get('updated_at'), str) and TIME.fullmatch(made['updated_at'])):
         raise Failed(f'the repair note on #{n} was written but GitHub gave no time for it')
     return int(made['id']), made['updated_at']
@@ -697,28 +796,38 @@ def label_events(repo, n):
             if e.get('event') in ('labeled', 'unlabeled') and (e.get('label') or {}).get('name') == ASKING_LABEL]
 
 
+def actor(event):
+    login = (event.get('actor') or {}).get('login')
+    return login if isinstance(login, str) else None
+
+
+def pending_marks(comments, login):
+    return [int(c['id']) for c in comments if isinstance(c.get('user'), dict)
+            and isinstance(c['user'].get('login'), str) and c['user']['login'].lower() == login.lower()
+            and (c.get('body') or '').split('\n', 1)[0] == PENDING]
+
+
 def by(event, login):
-    actor = (event.get('actor') or {}).get('login')
-    return isinstance(actor, str) and actor.lower() == login.lower()
+    return actor(event) is not None and actor(event).lower() == login.lower()
 
 
-def cleanup(repo, n, login, mine, labelled, taker='the repair'):
+def cleanup(repo, n, login, mine, labelled, taker='the repair', any_login=False):
     events = label_events(repo, n)
     if labelled():
         last = max((k for k, e in enumerate(events) if e['event'] == 'labeled'), default=None)
         if last != mine:
             return []
-        gh('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
+        send('DELETE', f'repos/{repo}/issues/{n}/labels/{ASKING_LABEL}')
         events = label_events(repo, n)
     after = events[mine + 1:]
     off = [k for k, e in enumerate(after) if e['event'] == 'unlabeled' and by(e, login)]
     if not off:
         return []
-    people = [e for e in after[:off[-1]] if e['event'] == 'labeled' and not by(e, login)]
+    people = [e for e in after[:off[-1]] if e['event'] == 'labeled' and (any_login or not by(e, login))]
     if not people or labelled():
         return []
-    gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
-    who = people[-1]['actor']['login']
+    send('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+    who = actor(people[-1]) or 'an account GitHub does not name'
     return [f'#{n}: {ASKING_LABEL} put back: {who} applied it as {taker} took it off; check whose it is']
 
 
@@ -730,7 +839,7 @@ def left(repo, n, login, labelled):
     if not labelled():
         return []
     applied = [e for e in label_events(repo, n) if e['event'] == 'labeled']
-    if applied and not by(applied[-1], login):
+    if applied and actor(applied[-1]) is not None and not by(applied[-1], login):
         return []
     return [f'#{n}: {ASKING_LABEL} left on: no note asks, and the repair can\'t tell whether it or a person '
             'added it; check whose it is']
@@ -744,20 +853,26 @@ def settle(repo, n, authors, login, base, pending):
         return next((x for x in notes(pages(comments), authors) if x[1]['state'] == 'asking' and live(x, now)), None)
 
     def labelled():
-        return ASKING_LABEL in [label['name'] for label in gh('GET', f'repos/{repo}/issues/{n}')['labels']]
+        return ASKING_LABEL in [label['name'] for label in get(f'repos/{repo}/issues/{n}')['labels']]
 
     still = asking()
     if pending is None:
         if still is None or labelled():
             return []
-        fleet = [x for x in notes(pages(comments), authors) if x[1]['agent'] == 'fleet' and x[3] == login.lower()]
-        note_id = record(repo, n, base, 'working', REPAIRING, fleet[-1][0] if fleet else None)[0]
+        everyone = [x for x in notes(pages(comments), authors) if x[1]['agent'] == 'fleet']
+        fleet = [x for x in everyone if x[3] == login.lower()]
+        reuse = fleet[-1][0] if fleet and not fleet[-1][1]['state'].startswith('stopped') else None
+        stopped = reuse is None and bool(everyone) and everyone[-1][1]['state'].startswith('stopped')
+        if stopped:
+            note_id, marked = int(send('POST', comments, {'body': PENDING_BODY})['id']), True
+        else:
+            note_id, marked = record(repo, n, base, 'working', REPAIRING, reuse)[0], False
     else:
-        note_id = pending[0]
+        note_id, marked = pending
     report, mine = [], None
     if still is not None and not labelled():
         before = len(label_events(repo, n))
-        gh('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
+        send('POST', f'repos/{repo}/issues/{n}/labels', {'labels': [ASKING_LABEL]})
         new = label_events(repo, n)[before:]
         if app(login) and len(new) == 1 and new[0]['event'] == 'labeled' and by(new[0], login):
             mine = before
@@ -766,7 +881,10 @@ def settle(repo, n, authors, login, base, pending):
             report.append(f'#{n} note {still[0]} {still[1]["agent"]} asking: {ASKING_LABEL} added')
     if still is None:
         report += left(repo, n, login, labelled) if mine is None else cleanup(repo, n, login, mine, labelled)
-    record(repo, n, base, 'done', REPAIRED, note_id)
+    if marked:
+        send('DELETE', f'repos/{repo}/issues/comments/{note_id}')
+    else:
+        record(repo, n, base, 'done', REPAIRED, note_id)
     return report
 
 
@@ -794,10 +912,13 @@ def repair(args, now):
     authors, found = guarded('could not read', read)
     login = viewer()
     reported = 0
-    for n, own, lines in found:
-        pending = None if login is None else next(
-            (x for x in reversed(own) if x[1]['agent'] == 'fleet' and x[3] == login.lower()
-             and x[1]['state'] == 'working' and x[1]['step'] == REPAIRING), None)
+    for n, own, lines, comments in found:
+        pending = None
+        if login is not None:
+            note = next((x for x in reversed(own) if x[1]['agent'] == 'fleet' and x[3] == login.lower()
+                         and x[1]['state'] == 'working' and x[1]['step'] == REPAIRING), None)
+            marks = pending_marks(comments, login)
+            pending = (note[0], False) if note else (marks[-1], True) if marks else None
         asks = any(line.endswith(f': no {ASKING_LABEL} label') for line in lines)
         if login is not None and (asks or pending):
             settled = guarded(f'could not repair #{n}', lambda: settle(args.repo, n, authors, login, base, pending))

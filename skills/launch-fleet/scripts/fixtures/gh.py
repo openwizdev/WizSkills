@@ -245,6 +245,23 @@ def keep(o, *keys):
     return {k: get(o, k) for k in keys}
 
 
+def pull_repo(w, p):
+    return p.get('repo') or w['repo'] if isinstance(p, dict) else w['repo']
+
+
+def foreign_repos(w):
+    return sorted({pull_repo(w, p) for p in each_opt(w.get('pulls'))} - {w['repo']})
+
+
+def repo_id(w, r):
+    return 1 if r == w['repo'] else 2 + foreign_repos(w).index(r)
+
+
+def view(w, r):
+    return dict(w, repo=r, issues=each_opt(w.get('issues')) if r == w['repo'] else [],
+                pulls=[p for p in each_opt(w.get('pulls')) if pull_repo(w, p) == r])
+
+
 # --- the call ---------------------------------------------------------------
 
 def main(argv):
@@ -330,8 +347,9 @@ def main(argv):
     args = args[1:]
 
     o = {'query': '', 'owner': '', 'name': '', 'number': '', 'cursor': '', 'label': '',
-         'state': '', 'size': '', 'q': '', 'oid': '', 'login': ''}
+         'state': '', 'size': '', 'q': '', 'oid': '', 'login': '', 'before': ''}
     ids = []
+    items = {}
     accept = paginate = include = ''
     conditional = path = ''
     while args:
@@ -345,6 +363,8 @@ def main(argv):
                 o[key] = value
             elif v.startswith('ids[]='):
                 ids.append(v[len('ids[]='):])
+            elif eq and re.fullmatch(r'[ic][0-9]+', key):
+                items[key] = value
             else:
                 fail('unexpected field: ' + v)
             args = args[2:]
@@ -374,7 +394,14 @@ def main(argv):
             args = args[1:]
 
     if path == 'graphql':
+        if items:
+            o['items'] = items
         sys.stdout.write(graphql(w, repo, o, ids, page, answer))
+        return 0
+    if path == 'rate_limit':
+        answer('rate limit')
+        pools = {'core': rest_rate(), 'graphql': dict(rest_rate(), remaining=5000, resource='graphql')}
+        sys.stdout.write(compact({'resources': pools, 'rate': pools['core']}) + '\n')
         return 0
     return rest(w, repo, path, page, paginate, include, accept, conditional, answer)
 
@@ -390,6 +417,11 @@ def pages(a, page):
     return ''.join(out)
 
 
+def rest_rate():
+    return {'limit': 5000, 'remaining': tonumber(env.get('FAKE_GH_REST_REMAINING') or '5000'),
+            'reset': 1793538000, 'used': 0, 'resource': 'core'}
+
+
 def graphql(w, repo, o, ids, page, answer):
     query, owner, name, number, cursor = o['query'], o['owner'], o['name'], o['number'], o['cursor']
     size, q = o['size'], o['q']
@@ -399,10 +431,10 @@ def graphql(w, repo, o, ids, page, answer):
         if m:
             op = m[1]
             break
-    if op in ('Singles', 'Nodes', 'Blockers'):
+    if op in ('Singles', 'Search', 'Nodes', 'Blockers'):
         if owner + name:
             fail(op + ' takes no owner or name')
-    elif owner + '/' + name != repo:
+    elif owner + '/' + name != repo and not (op in ('Checks', 'Merged', 'Facts', 'Comments') and owner + '/' + name in foreign_repos(w)):
         fail('graphql for %s/%s, not %s' % (owner, name, repo))
     label = ''
     if op == 'Singles':
@@ -412,6 +444,8 @@ def graphql(w, repo, o, ids, page, answer):
             fail('unexpected search: ' + q)
         label = q[len(prefix):]
         label = label[:len(label) - len(suffix)]
+    elif op == 'Search':
+        answer('graphql Search cursor=' + (cursor or 'none'))
     elif op in ('Nodes', 'Blockers'):
         answer('graphql %s count=%d' % (op, len(ids)))
     elif op in ('Specs', 'Merged'):
@@ -424,9 +458,14 @@ def graphql(w, repo, o, ids, page, answer):
         answer('graphql Item number=%s size=%s%s' % (number, size, ' cursor=' + cursor if cursor else ''))
     elif op == 'Writer':
         answer('graphql Writer login=%s' % o['login'])
+    elif op == 'Facts':
+        answer('graphql Facts count=%d' % len(o.get('items', {})))
+    elif op == 'Comments':
+        answer('graphql Comments number=%s before=%s' % (number, o['before'] or 'none'))
     else:
         fail('unknown query: ' + query.split('\n')[0])
-    if env.get('FAKE_GH_ERRORS', '') == op:
+    error = env.get('FAKE_GH_ERRORS', '')
+    if error == op or (op == 'Spec' and error == f'Spec:{number}'):
         return '{"data":null,"errors":[{"message":"planted GraphQL error"}]}\n'
     if env.get('FAKE_GH_RATE_LIMITED', '') == op:
         sys.stdout.write(compact({'errors': [{'type': env.get('FAKE_GH_RATE_TYPE') or 'RATE_LIMIT',
@@ -435,12 +474,13 @@ def graphql(w, repo, o, ids, page, answer):
         raise Status(1)
     remaining = tonumber(env.get('FAKE_GH_REMAINING') or '5000')
     issues, pulls = each(w.get('issues')), each(w.get('pulls'))
+    own_pulls = view(w, repo)['pulls']
     # Item (ClosedWiz#259): a number that is neither an issue nor a pull request
     # answers as GitHub does: the item null, an `errors` entry of type NOT_FOUND
     # (observed live, 2026-11-01), and `gh` exits 1.
     if op == 'Item':
         n = argjson(number)
-        if not any(get(x, 'number') == n for x in issues + pulls):
+        if not any(get(x, 'number') == n for x in issues + own_pulls):
             default = w.get('default')
             sys.stdout.write(compact({
                 'data': {'rateLimit': {'cost': 1, 'remaining': remaining, 'limit': 5000, 'resetAt': '2026-11-01T13:00:00Z'},
@@ -478,6 +518,8 @@ def graphql(w, repo, o, ids, page, answer):
         cost = round_cost(weight * len(ids))
     elif op == 'Item':
         cost = 1 if tickets <= 2 else 2
+    elif op == 'Facts':
+        cost = round_cost(3 * len(o.get('items', {})))
     else:
         cost = 1
     rate = {'rateLimit': {'cost': cost, 'remaining': remaining, 'limit': 5000, 'resetAt': '2026-11-01T13:00:00Z'}}
@@ -539,6 +581,7 @@ def graphql(w, repo, o, ids, page, answer):
                 'merged': get(p, 'state') == 'MERGED', 'mergedAt': get(p, 'mergedAt'),
                 'closedAt': get(p, 'closedAt'),  # K9 (#337): when a closed one closed
                 'baseRefName': get(p, 'base'), 'headRefOid': get(p, 'head'),
+                'repository': {'databaseId': repo_id(w, pull_repo(w, p)), 'nameWithOwner': pull_repo(w, p)},
                 'commits': {'nodes': [{'commit': {'oid': get(p, 'head'),
                                                   # The full message is returned only when requested;
                                                   # GitHub's display headline can be truncated.
@@ -573,7 +616,82 @@ def graphql(w, repo, o, ids, page, answer):
     def subs_total(n):
         return len([i for i in issues if get(i, 'parent') == n])
 
-    if op == 'Writer':
+    def history(x):
+        old = ([{'id': 1 + k, 'at': '2026-01-01T00:00:00Z', 'body': 'Synthetic old comment'} for k in range(51)]
+               if truthy(get(x, 'commentsTruncated')) else [])
+        cs = alt(get(x, 'comments'), [])
+        if not isinstance(cs, list):
+            fail('the world is not valid')
+        return old + cs
+
+    def comment_page(x, before):
+        all_ = history(x)
+        end = len(all_) if before == '' else number_of(before)
+        start = max(0, end - min(page, 100))
+        nodes = [{'fullDatabaseId': str(get(c, 'id')) if type(get(c, 'id')) is int else get(c, 'id'),
+                  'createdAt': get(c, 'at'), 'updatedAt': alt(get(c, 'edited'), get(c, 'at')),
+                  'body': get(c, 'body'), 'author': actor(c.get('author', FACTORY))} for c in all_[start:end]]
+        return {'pageInfo': {'hasPreviousPage': start > 0, 'startCursor': tostring(start) if nodes else None},
+                'nodes': nodes}
+
+    def issue_facts(i):
+        n = get(i, 'number')
+        responses = alt(w.get('dependencyResponses'), {})
+        if not isinstance(responses, dict):
+            fail('the world is not valid')
+        if tostring(n) in responses:
+            deps = responses[tostring(n)]
+            if not truthy(deps):
+                return None
+            deps = [{'number': get(d, 'number'), 'id': get(d, 'node_id'),
+                     'state': get(d, 'state').upper() if isinstance(get(d, 'state'), str) else get(d, 'state')} for d in deps]
+        else:
+            deps = [{'number': get(x, 'number'), 'id': sha_text(get(x, 'number')), 'state': get(x, 'state')}
+                    for b in each_opt(get(i, 'blockedBy')) for x in issues if get(x, 'number') == b]
+            if truthy(get(i, 'blockersTruncated')):
+                deps += [{'number': 900000 + k, 'id': 'I_unused', 'state': 'OPEN'} for k in range(1, 22)]
+        labels = [{'name': l} for l in each_opt(get(i, 'labels'))]
+        return {'number': n, 'id': sha_text(n), 'title': get(i, 'title'), 'state': get(i, 'state'),
+                'stateReason': state_reason(i, lambda r: r), 'body': alt(get(i, 'body'), ''), 'updatedAt': updated(i),
+                'labels': {'pageInfo': {'hasNextPage': len(labels) > 20}, 'nodes': labels[:20]},
+                'blockedBy': {'pageInfo': {'hasNextPage': len(deps) > 20}, 'nodes': deps[:20]},
+                'comments': comment_page(i, '')}
+
+    def find(n):
+        here = view(w, owner + '/' + name)
+        return ([x for x in each_opt(here['issues']) if get(x, 'number') == n]
+                + [p for p in here['pulls'] if get(p, 'number') == n] + [None])[0]
+
+    if op == 'Facts':
+        found, errors = {}, []
+        for alias, value in sorted(o.get('items', {}).items(), key=lambda kv: int(kv[0][1:])):
+            if not re.search(r'\b%s: %s\(number: \$%s\)' % (alias, 'issue' if alias[0] == 'i' else 'issueOrPullRequest', alias), query):
+                fail('an item the query does not read: ' + alias)
+            x = find(number_of(value))
+            if alias[0] == 'i' and x is not None and x in issues:
+                found[alias] = issue_facts(x)
+                if found[alias] is None:
+                    errors.append({'type': 'SYNTHETIC', 'path': ['repository', alias], 'message': 'planted blocker failure'})
+            elif alias[0] == 'c' and x is not None:
+                found[alias] = {'__typename': 'Issue' if x in issues else 'PullRequest', 'comments': comment_page(x, '')}
+            else:
+                found[alias] = None
+                errors.append({'type': 'NOT_FOUND', 'path': ['repository', alias],
+                               'message': 'Could not resolve to an issue or pull request with the number of %s.' % value})
+        out = {'data': {'repository': found}}
+        if errors:
+            out['errors'] = errors
+            out['data'].update(rate)
+            sys.stdout.write(compact(out) + '\n')
+            sys.stderr.write('gh: %s\n' % errors[0]['message'])
+            raise Status(1)
+    elif op == 'Comments':
+        x = find(number_of(number))
+        if x is None:
+            fail('Could not resolve to an issue or pull request with the number of %s.' % number)
+        out = {'data': {'repository': {'issueOrPullRequest': {
+            '__typename': 'Issue' if x in issues else 'PullRequest', 'comments': comment_page(x, o['before'])}}}}
+    elif op == 'Writer':
         # KN13 (#1448): a repository's collaborators matching a login, with
         # their permission ($world.collaborators: {login: permission}).
         found = [{'permission': v, 'node': {'login': k}} for k, v in (w.get('collaborators') or {}).items()
@@ -583,9 +701,10 @@ def graphql(w, repo, o, ids, page, answer):
         ps = [p for p in pulls if get(p, 'head') == o['oid']]
         if not ps:
             fail('unknown commit: ' + o['oid'])
-        p = ps[0]
+        ps = [p for p in ps if pull_repo(w, p) == owner + '/' + name]
+        p = ps[0] if ps else None
         start = int(cursor or '0')
-        out = {'data': {'repository': {'object': {
+        out = {'data': {'repository': {'object': None}}} if p is None else {'data': {'repository': {'object': {
             'oid': p.get('contextOids', {}).get(str(start), get(p, 'head')),
             'statusCheckRollup': {'state': get(p, 'rollup'), 'contexts': context_page(p, start)}}}}}
     elif op == 'Singles':
@@ -594,6 +713,33 @@ def graphql(w, repo, o, ids, page, answer):
         nodes = [{'id': sha_text(get(i, 'number')), 'number': get(i, 'number'), 'state': get(i, 'state'),
                   'comments': {'nodes': [{'body': get(c, 'body')} for c in each(jq_slice_last(get(i, 'comments')))]}}
                  for i in found[:cap]]
+        out = {'data': {'search': dict({'issueCount': len(found)}, **window(nodes))}}
+    elif op == 'Search':
+        prefix = 'repo:%s is:issue ' % repo
+        if not q.startswith(prefix):
+            fail('unexpected search: ' + q)
+        terms = q[len(prefix):]
+        whole = not terms.endswith(' no:parent-issue')
+        terms = terms if whole else terms[:-len(' no:parent-issue')]
+        only_open = terms.startswith('is:open ')
+        terms = terms[len('is:open '):] if only_open else terms
+        wanted = re.fullmatch(r'label:"([^"]*)"', terms)
+        if terms == '"launch-fleet" in:comments':
+            def hit(i):
+                return any('launch-fleet' in alt(get(c, 'body'), '') for c in each_opt(get(i, 'comments')))
+        elif terms == 'linked:pr':
+            def hit(i):
+                return any(get(i, 'number') in each_opt(get(p, 'closes')) for p in pulls)
+        elif wanted:
+            def hit(i):
+                return any(l == wanted[1] for l in each_opt(get(i, 'labels')))
+        else:
+            fail('unexpected search: ' + q)
+        found = [i for i in issues if (whole or get(i, 'parent') is None)
+                 and (not only_open or get(i, 'state') == 'OPEN') and hit(i)]
+        found = sort_by(found, lambda i: alt(get(i, 'updatedAt'), ''))[::-1]
+        nodes = [{'__typename': 'Issue', 'id': sha_text(get(i, 'number')), 'number': get(i, 'number'),
+                  'state': get(i, 'state')} for i in found[:cap]]
         out = {'data': {'search': dict({'issueCount': len(found)}, **window(nodes))}}
     elif op in ('Nodes', 'Blockers'):
         nodes = []
@@ -617,7 +763,7 @@ def graphql(w, repo, o, ids, page, answer):
                           'subIssuesSummary': {'total': max(len(subs) - lag, 0),
                                                'completed': len([s for s in subs if get(s, 'state') == 'CLOSED'])}})
         out = {'data': {'repository': {'databaseId': 1, 'defaultBranchRef': {'name': w.get('default')},
-                                       'issues': window(specs)}}}
+                                       'issues': dict({'totalCount': len(specs)}, **window(specs))}}}
     elif op == 'Item':
         def item(i):
             t = ticket(i)
@@ -631,7 +777,7 @@ def graphql(w, repo, o, ids, page, answer):
                                'subIssuesSummary': {'total': subs_total(get(s, 'number'))}}
             return t
         n = number_of(number)
-        ps = [p for p in pulls if get(p, 'number') == n]
+        ps = [p for p in own_pulls if get(p, 'number') == n]
         if ps:
             p = ps[0]
             start = 0 if cursor == '' else number_of(cursor)
@@ -662,7 +808,7 @@ def graphql(w, repo, o, ids, page, answer):
                 'subIssues': {'pageInfo': {'hasNextPage': truthy(alt(get(s, 'subIssuesTruncated'), False)) or len(subs) > tickets},
                               'nodes': [ticket(t) for t in subs[:tickets]]}}}}}
     else:
-        merged = sort_by([p for p in pulls if get(p, 'state') == 'MERGED'], lambda p: get(p, 'updatedAt'))[::-1]
+        merged = sort_by([p for p in view(w, owner + '/' + name)['pulls'] if get(p, 'state') == 'MERGED'], lambda p: get(p, 'updatedAt'))[::-1]
         out = {'data': {'repository': {'pullRequests': window([
             {'number': get(p, 'number'), 'mergedAt': get(p, 'mergedAt'), 'updatedAt': get(p, 'updatedAt'),
              'baseRefName': get(p, 'base'),
@@ -670,6 +816,11 @@ def graphql(w, repo, o, ids, page, answer):
              'mergeCommit': None if get(p, 'mergeCommit') is None else {'oid': get(p, 'mergeCommit')},
              'closingIssuesReferences': {'nodes': [{'number': c} for c in each(get(p, 'closes'))]}}
             for p in merged])}}}
+    listed = out['data'].get('search') if op == 'Search' else out['data']['repository'].get('issues') if op == 'Specs' else None
+    if listed is not None and env.get('FAKE_GH_SHORT', '') == op and listed['nodes']:
+        listed['nodes'] = listed['nodes'][:-1]
+    if listed is not None and env.get('FAKE_GH_NULL', '') == op and listed['nodes']:
+        listed['nodes'][0] = None
     data = out['data']
     for k, v in rate.items():
         data[k] = v
@@ -677,7 +828,8 @@ def graphql(w, repo, o, ids, page, answer):
         nodes = [{'id': sha_text(get(t, 'number')), 'number': get(t, 'number'),
                   'repository': {'nameWithOwner': w['repo']}, 'labels': t['labels'], 'stateReason': t['stateReason'],
                   'closedByPullRequestsReferences': {'nodes': [
-                      {'number': get(p, 'number'), 'merged': get(p, 'merged'), 'baseRefName': get(p, 'baseRefName')}
+                      {'number': get(p, 'number'), 'merged': get(p, 'merged'), 'baseRefName': get(p, 'baseRefName'),
+                       'repository': get(p, 'repository')}
                       for p in t['closedByPullRequestsReferences']['nodes']]}} for t in data['nodes']]
         data['nodes'] = nodes + [b for b in each_opt(w.get('blockerNodes')) if get(b, 'id') in ids]
     for needle, key in (('blockedBy(first:', 'blockedBy'), ('comments(last:', 'comments'), ('labels(first:', 'labels')):
@@ -708,6 +860,13 @@ def rest(w, repo, path, page, paginate, include, accept, conditional, answer):
     # HTTP fixtures keep transport metadata separate from the logical-read log.
     if path.startswith('repositories/1/'):
         path = 'repos/%s/%s' % (repo, path[len('repositories/1/'):])
+    for r in foreign_repos(w):
+        prefix = 'repositories/%d/' % repo_id(w, r)
+        if path.startswith(prefix):
+            path = 'repos/%s/%s' % (r, path[len(prefix):])
+    home = ([r for r in foreign_repos(w) if path.startswith('repos/%s/' % r)] + [repo])[0]
+    home_id = repo_id(w, home)
+    w, repo = view(w, home), home
     rest_page = path.rsplit('&page=', 1)[1] if '&page=' in path else '1'
     if not re.fullmatch(r'[0-9]+', rest_page):
         fail('bad REST page')
@@ -744,7 +903,7 @@ def rest(w, repo, path, page, paginate, include, accept, conditional, answer):
         if count > offset + n:
             base = path.split('&page=', 1)[0]
             if base.startswith('repos/%s/' % repo):
-                base = 'repositories/1/' + base[len('repos/%s/' % repo):]
+                base = 'repositories/%d/' % home_id + base[len('repos/%s/' % repo):]
             link = 'https://api.github.com/%s&page=%d' % (base, rest_page + 1)
         if isinstance(v, list):
             v = v[offset:offset + n]
@@ -759,6 +918,10 @@ def rest(w, repo, path, page, paginate, include, accept, conditional, answer):
             with open(env['FAKE_GH_HTTP_LOG'], 'a') as log:
                 log.write('%s %s %s\n' % (path, 'conditional' if conditional else 'unconditional', http))
         sys.stdout.write('HTTP/2.0 %s Synthetic\r\nETag: %s\r\n' % (http, etag))
+        allowance = ({'limit': 30, 'remaining': 30, 'reset': 1793538000, 'resource': 'search'}
+                     if path.startswith('search/') else rest_rate())
+        sys.stdout.write(''.join('X-RateLimit-%s: %s\r\n' % (k.capitalize(), allowance[k])
+                                 for k in ('limit', 'remaining', 'reset', 'resource')))
         if link:
             sys.stdout.write('Link: <%s>; rel="next"\r\n' % link)
         sys.stdout.write('\r\n')
@@ -921,12 +1084,10 @@ def rest_read(w, repo, path, page, paginate, include, accept, answer, out):
         answer('user')
         out.append(compact({'login': alt(w.get('login'), 'synthetic-user'), 'id': 1}) + '\n')
     elif path == 'installation/repositories?per_page=100':
-        # GI7 (#2549): what an App installation token covers; a world's
-        # "installation" stands for another installation.
         answer('installation repositories')
         out.append(compact({'total_count': 1, 'repository_selection': 'selected',
                             'repositories': [{'id': 1, 'full_name': repo,
-                                              'installation': alt(w.get('installation'), 'synthetic-installation')}]}) + '\n')
+                                              'description': w.get('installation_repository_description')}]}) + '\n')
     elif after(r + 'issues/', '/sub_issues?per_page=100'):
         n = path[len(r + 'issues/'):].split('/', 1)[0]
         answer('sub issues %s page=%s' % (n, path_page(path)))
@@ -953,8 +1114,24 @@ def rest_read(w, repo, path, page, paginate, include, accept, answer, out):
         ps = [p for p in pulls() if get(p, 'head') == sha]
         cs = [c for p in ps for c in (each_opt(get(p, 'checks')))]
         if kind == 'status':
-            out.append(compact({'state': get(ps[0], 'rollup') if ps else None, 'sha': sha,
-                                'statuses': [c for c in cs if get(c, 'type') == 'StatusContext']}) + '\n')
+            by_context = {}
+            for check in cs:
+                if get(check, 'type') != 'StatusContext':
+                    continue
+                context = get(check, 'context')
+                created = get(check, 'createdAt')
+                if context not in by_context or (created or '') > (by_context[context]['created_at'] or ''):
+                    by_context[context] = {'context': context, 'created_at': created,
+                                           'state': ascii_downcase(get(check, 'state'))}
+            statuses = list(by_context.values())
+            states = {status['state'] for status in statuses}
+            if states & {'error', 'failure'}:
+                state = 'failure'
+            elif not states or 'pending' in states:
+                state = 'pending'
+            else:
+                state = 'success'
+            out.append(compact({'state': state, 'sha': sha, 'statuses': statuses}) + '\n')
         else:
             runs = [c for c in cs if get(c, 'type') != 'StatusContext']
             out.append(compact({'total_count': len(runs), 'check_runs': runs}) + '\n')

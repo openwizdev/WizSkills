@@ -106,6 +106,8 @@ class Road(Journey):
         gh.chmod(0o755)
 
     def tool(self, turn):
+        if 'session' in turn:
+            (self.dir / 'session.json').write_text(json.dumps(turn['session']))
         if 'progress' in turn:
             note = '<!-- openwiz:status v1 -->\nagent: builder\nstate: working\n'
             shapes = {'merged': ('CLOSED', 'COMPLETED', [1], [], []), 'in_review': ('OPEN', None, [1], [], []),
@@ -141,6 +143,12 @@ class Road(Journey):
                 f"assert sys.argv[1:] == ['status', {self.repo!r}, '900'], sys.argv[1:]\n"
                 "path = Path('heartbeat-status')\n"
                 "print(path.read_text() if path.exists() else 'heartbeat: not installed')\n")
+            (home / 'launch-fleet/scripts/session.py').write_text(
+                "import json, os, sys\nfrom pathlib import Path\n"
+                f"with open({str(self.dir / 'session.log')!r}, 'a') as log:\n"
+                "    log.write(json.dumps({'argv': sys.argv[1:], 'adapters': os.environ.get('OPENWIZ_ADAPTERS')}) + '\\n')\n"
+                f"script = json.loads(Path({str(self.dir / 'session.json')!r}).read_text())\n"
+                "sys.stdout.write(script['stdout'])\nsys.exit(script['exit'])\n")
         with patch('test_first_fleet.HELPER', helper):
             return super().helper(args)
 
@@ -167,8 +175,6 @@ class Road(Journey):
             self.save_world()
         elif what == 'fleet_record':
             self.fleet_record()
-        elif what == 'heartbeat_active':
-            (self.dir / 'heartbeat-status').write_text('heartbeat: active (cron)')
         elif what == 'merged':
             pull = turn['pull']
             self.world.setdefault('onboard_pulls', []).append({
@@ -269,12 +275,17 @@ class Conversation(unittest.TestCase):
                 self.assertEqual(spoken, ORDER)
                 for turn in said:
                     if journey['host'] == 'local' and turn['say'] == 'fleet-start':
-                        self.assertIn('local heartbeat is active', turn['agent'])
+                        self.assertTrue(pattern(lines['The fleet starting'][1]).fullmatch(turn['agent']), turn['agent'])
                     else:
                         self.assertTrue(says(turn['agent'], turn['say'], lines), (turn['say'], turn['agent']))
                     self.assertNotRegex(turn['agent'], r'<[^>]+>')
                 self.assertEqual([t['agent'] for t in said[:3]], lines['Up front'])
         self.assertTrue(any(t.get('say') == 'missing' for j in ROAD['journeys'] for t in j['turns']))
+
+    def test_teach_has_plain_words_section_with_help_line(self):
+        self.assertIn('\n## Plain words\n', TEACH)
+        plain = TEACH.split('\n## Plain words\n', 1)[1].split('\n## ', 1)[0]
+        self.assertIn("Stuck? I'll set it up with you, free 15 min: https://openwiz.dev/help/", plain)
 
     def test_after_the_grills_yes_only_the_gates_and_the_mode_ask_until_the_closing_offer(self):
         for journey in ROAD['journeys']:
@@ -292,8 +303,8 @@ class Conversation(unittest.TestCase):
                 self.assertFalse([t for t in turns if re.search(r'(?i)\bapprove\b', t.get('agent', ''))])
                 launch = [t['tool'] for t in turns if t.get('tool', [''])[0] == 'launch']
                 self.assertEqual(launch, [['launch', '--spec', '900'],
-                                          ['launch', '--spec', '900', '--yes', '--confirm', '@preview'],
-                                          ['launch', '--spec', '900']])
+                                          ['launch', '--spec', '900', '--yes', '--confirm', '@preview']]
+                                 + ([] if local else [['launch', '--spec', '900']]))
 
     def test_every_gate_is_asked_before_its_effect(self):
         for journey in ROAD['journeys']:
@@ -340,13 +351,18 @@ class Replay(unittest.TestCase):
                 self.assertIn(ask, launches[0].splitlines())
                 yes = next(result.stdout for args, result in road.calls if args[:4] == ['launch', '--spec', '900', '--yes'])
                 fleet = next(t['agent'] for t in journey['turns'] if t.get('say') == 'fleet-start')
-                self.assertNotIn(fleet, yes.splitlines(), 'not before the activation record reads back')
-                self.assertIn(fleet, launches[-1].splitlines())
                 if journey['host'] == 'local':
-                    self.assertIn("launch-fleet's Launch section", yes)
-                    self.assertIn('local heartbeat', yes)
-                    self.assertIn('driver harness `claude`', yes)
+                    self.assertIn(fleet, yes.splitlines(), 'the session in this chat is the start')
+                    sessions = [json.loads(line) for line in (road.dir / 'session.log').read_text().splitlines()]
+                    self.assertEqual(sessions, [{'argv': ['run', road.repo, '--spec', '900', '--harness', 'claude',
+                                                          '--model', 'syn-claude-model-01'],
+                                                 'adapters': str(road.dir / 'adapters')}])
+                    self.assertNotIn("launch-fleet's Launch section", yes)
                     self.assertNotIn('Starting one', yes)
+                else:
+                    self.assertNotIn(fleet, yes.splitlines(), 'not before the activation record reads back')
+                    self.assertIn(fleet, launches[-1].splitlines())
+                if journey['host'] == 'local':
                     self.assertEqual(sum(args == ['mode'] for args, _ in road.calls), 1)
                     self.assertEqual(road.saved()['mode']['mode'], 'acceptEdits')
                     self.assertIn('Host: local', road.world['files']['docs/agents/host.md'])
@@ -355,7 +371,7 @@ class Replay(unittest.TestCase):
                     watched = [r.stdout for args, r in road.calls if args[:1] == ['progress']]
                     self.assertIn('#%d merged' % road.tickets[0]['number'], watched[-1].splitlines())
                 adapters = 'OPENWIZ_ADAPTERS=%s' % (road.dir / 'adapters')
-                self.assertEqual(adapters in yes, journey['host'] == 'local', 'the loop finds the local driver (R2)')
+                self.assertNotIn(adapters, yes, 'the session gets the local driver itself; no loop to give it to')
                 merged = outputs[('first-merge', '--pr', '911')].splitlines()
                 for moment in ('merged', 'offer'):
                     said = next(t['agent'] for t in journey['turns'] if t.get('say') == moment)
@@ -525,6 +541,7 @@ class LaunchYes(unittest.TestCase):
                 road = Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
                 road.replay_road(stop=lambda t: t.get('tool', [''])[0] == 'launch')
                 road.room_script.write_text(json.dumps({'spawn': [{'exit': 0, 'stdout': ''}]}))
+                (road.dir / 'session.json').write_text(json.dumps({'exit': 130, 'stdout': ''}))
                 preview = road.helper(['launch', '--spec', '900'])
                 self.assertEqual(preview.returncode, 12, preview.stdout)
                 self.assertEqual(road.spawns(), [])
@@ -541,7 +558,9 @@ class LaunchYes(unittest.TestCase):
                 self.assertEqual(road.spawns(), [], 'no fleet starts without the yes to this preview')
                 said_yes = road.helper(['launch', '--spec', '900', '--yes', '--confirm', digest[0]])
                 self.assertEqual(said_yes.returncode, 0, said_yes.stdout)
-                self.assertEqual(road.saved()['launch']['state'], 'authorized', 'only that yes hands the start over')
+                self.assertEqual(road.saved()['launch']['state'], 'started' if where == 'on this machine'
+                                 else 'authorized', 'only that yes hands the start over')
+                self.assertEqual((road.dir / 'session.log').exists(), where == 'on this machine')
                 self.assertEqual(road.spawns(), [])
 
 
@@ -906,13 +925,26 @@ class ReviewRound(unittest.TestCase):
     def road(self, name='always-wanted'):
         return Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
 
-    def test_r1_the_road_never_runs_a_sign_in_itself(self):
+    def test_r1_the_road_starts_sign_in_only_after_a_clear_yes_and_never_reads_a_token(self):
         text = (SKILL_DIR / 'SKILL.md').read_text()
+        guards = text[text.index('## Guards'):text.index('## Where your agents run')]
+        yes_prompt = ("I'll open GitHub's sign-in page and give you a short code; "
+                      "you type your password only on GitHub's own page. OK?")
+        self.assertIn('Never touch a login without a clear yes, and never see it.', guards)
+        self.assertIn(yes_prompt, guards)
+        self.assertLess(guards.index(yes_prompt), guards.index('github_login.py sign-in --state-dir <state> --yes'))
+        for words in ('in the background', 'https://github.com/login/device', 'never read, pass or store a token',
+                      'cloudroom.py sign-in'):
+            self.assertIn(words, guards)
         lines = [line for line in text.splitlines() if 'github_login.py sign-in' in line or 'auth login' in line]
         self.assertTrue(lines)
         for line in lines:
-            self.assertRegex(line, r'\b(themselves|yourself)\b', line)
+            self.assertRegex(line, r'clear yes|without.*yes', line)
+            self.assertIn('in the background', line)
         self.assertIn('github_login.py status', text, "the agent's own step is the read-only check")
+        self.assertIn('https://github.com/signup', text)
+        self.assertIn("I'll add the setup to your project now. OK?", text)
+        self.assertIn('gh pr merge <number> --merge', text)
         road = self.road('fresh-project')
         road.change({'world': 'signed_out'})
         result = road.helper(['where', '--agents', 'cloud', '--yes'])
@@ -1098,6 +1130,186 @@ class FirstMerge(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertTrue(says(result.stdout.splitlines()[-2], 'merged'), result.stdout)
         self.assertTrue(says(result.stdout.splitlines()[-1], 'offer'), result.stdout)
+
+
+def step_block(heading, end, keep, listed=False):
+    text = (SKILL_DIR / 'SKILL.md').read_text()
+    part = text[text.index(heading):text.index(end, text.index(heading))]
+    if listed:
+        part = '\n'.join(l[3:] if l.startswith('   ') else l for l in part.split('\n'))
+    return part, next(b for b in re.findall(r'```sh\n(.*?)```', part, re.S) if keep in b)
+
+
+class StepFourReadsTheInstallerOutput(unittest.TestCase):
+
+    def run_step(self, output, code):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        home = tmp / 'home'
+        rows = json.loads(json.dumps(output).replace('HOME', str(home)))
+        for row in rows['harnesses']:
+            on_disk = row.pop('on_disk', [])
+            for name in on_disk:
+                (Path(row['path']) / name).mkdir(parents=True)
+                source = on_disk[name] if isinstance(on_disk, dict) else rows['source']
+                (Path(row['path']) / name / '.openwiz-skill').write_text('openwiz.skill-copy.v1\n%s\n' % source)
+        fake = tmp / 'openwiz/tools/install/install'
+        fake.parent.mkdir(parents=True)
+        (tmp / 'output.json').write_text(json.dumps(rows))
+        fake.write_text('import sys\nsys.stdout.write(open(%r).read())\nsys.exit(%d)\n' % (str(tmp / 'output.json'), code))
+        step4, block = step_block('## 4. ', '## 5. ', 'install skills')
+        block = (block.replace('"$openwiz"', shlex.quote(str(tmp / 'openwiz'))).replace('<root>', str(tmp / 'root'))
+                 .replace('<private file>', str(tmp / 'skills.json')))
+        out = subprocess.run(['sh', '-c', block], env={'HOME': str(home), 'PATH': os.environ['PATH']},
+                             capture_output=True, text=True)
+        return step4, [l.replace(str(home), '~') for l in out.stdout.split('\n') if l]
+
+    def test_partial_counts_as_done_and_each_skip_and_missing_skill_is_named(self):
+        skip = 'Move or rename your own grill, then run this again.'
+        step4, lines = self.run_step({
+            'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'partial',
+            'canonical': 'HOME/root/skills', 'skills': ['grill', 'install', 'write-driver'],
+            'harnesses': [
+                {'id': 'claude-code', 'path': 'HOME/.claude/skills', 'state': 'partial', 'next': 'see below',
+                 'skipped': [{'skill': 'grill', 'path': 'HOME/.claude/skills/grill', 'next': skip}],
+                 'on_disk': ['grill', 'install', 'write-driver']},
+                {'id': 'codex', 'path': 'HOME/.codex/skills', 'state': 'installed', 'next': 'ok',
+                 'on_disk': ['grill', 'install']},
+                {'id': 'cursor', 'path': 'HOME/.cursor/skills', 'state': 'absent', 'next': 'Install Cursor first.'}]}, 0)
+        self.assertEqual(lines, ['exit: 0',
+                                 'partial: claude-code ~/.claude/skills (next: see below)',
+                                 'skipped: grill in claude-code (next: %s)' % skip,
+                                 'installed: codex ~/.codex/skills',
+                                 'missing: write-driver in codex',
+                                 'absent: cursor ~/.cursor/skills (next: Install Cursor first.)',
+                                 'outcome: partial, 3 skills'])
+        self.assertNotIn('refuses the whole step', step4)
+        self.assertNotRegex(step4 + step_block('## Resume', '## 1. ', '')[0], r'\b1[0-9] skills|ask-wiz')
+        for words in ('`installed` or `partial`', 'each `skipped:` line', 'never delete or overwrite it',
+                      'A `missing:` line'):
+            self.assertIn(words, step4)
+
+    def test_an_older_copy_left_by_a_failed_write_is_not_done(self):
+        failed = ('OpenWiz could not write HOME/.codex/skills (File too large), so Codex got 1 of 2 skills. '
+                  'Make it writable, then run this again.')
+        step4, lines = self.run_step({
+            'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'partial',
+            'canonical': 'HOME/root/skills', 'skills': ['install', 'review-ticket'],
+            'harnesses': [{'id': 'codex', 'path': 'HOME/.codex/skills', 'state': 'partial', 'next': failed,
+                           'on_disk': {'install': 'f' * 40, 'review-ticket': 'e' * 40}}]}, 0)
+        self.assertEqual(lines, ['exit: 0', 'partial: codex ~/.codex/skills (next: %s)' % failed.replace('HOME', '~'),
+                                 "missing: review-ticket in codex (not this release's copy)",
+                                 'outcome: partial, 2 skills'])
+
+    def test_refused_means_nothing_was_installed(self):
+        step4, lines = self.run_step({
+            'schema': 'openwiz.skills-install.v1', 'version': '9.9.9', 'source': 'f' * 40, 'outcome': 'refused',
+            'canonical': 'HOME/root/skills', 'skills': ['install'],
+            'harnesses': [{'id': 'claude-code', 'path': 'HOME/.claude/skills', 'state': 'absent', 'next': 'No ~/.claude.'},
+                          {'id': 'codex', 'path': 'HOME/.codex/skills', 'state': 'absent', 'next': 'No ~/.codex.'}]}, 5)
+        self.assertEqual(lines, ['exit: 5', 'absent: claude-code ~/.claude/skills (next: No ~/.claude.)',
+                                 'absent: codex ~/.codex/skills (next: No ~/.codex.)', 'outcome: refused, 1 skills'])
+        self.assertIn('`outcome: refused` (exit 5) means nothing was installed', step4)
+
+
+class UninstallListsEveryHeartbeatJob(unittest.TestCase):
+
+    def test_a_nested_second_install_is_listed_like_any_job_and_nothing_is_touched(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        jobs = tmp / 'home/.local/state/openwiz-heartbeat'
+        first = tmp / ('first/state/service/builds/%s/runtime/adapters' % ('a' * 40))
+        nested = tmp / ('first/state/second/state/service/builds/%s/runtime/adapters' % ('b' * 40))
+        for name, repo, spec, adapters in (('openwiz-heartbeat-a', 'synthetic-owner/first', '7', first),
+                                           ('openwiz-heartbeat-b', 'synthetic-owner/second', '8', nested),
+                                           ('openwiz-heartbeat-c', 'synthetic-owner/third', '9', None)):
+            (jobs / name).mkdir(parents=True)
+            (jobs / name / 'config.json').write_text(json.dumps({
+                'backend': 'cron', 'argv': ['python3', '-I', '/shared/heartbeat.py', 'run', repo, spec],
+                'environment': {'OPENWIZ_ADAPTERS': str(adapters)} if adapters else {}}))
+        before = sorted(str(p) for p in tmp.rglob('*'))
+        removal, block = step_block('## Recovery and removal', '\nRemoval revokes', 'openwiz-heartbeat', listed=True)
+        block = block.replace('<state>', str(tmp / 'first/state')).replace('<root>', str(tmp / 'first'))
+        out = subprocess.run(['sh', '-c', block], env={'HOME': str(tmp / 'home'), 'PATH': '/usr/bin:/bin'},
+                             capture_output=True, text=True).stdout.split('\n')
+        self.assertEqual(sorted(str(p) for p in tmp.rglob('*')), before)
+        self.assertEqual([l for l in out if l], ['job: synthetic-owner/first 7 (adapters: %s)' % first,
+                                                 'job: synthetic-owner/second 8 (adapters: %s)' % nested,
+                                                 'job: synthetic-owner/third 9 (adapters: none)'])
+        self.assertNotIn('this install:', removal)
+        self.assertIn('remove only the jobs the user names', removal)
+        self.assertIn('Never decide which jobs are this install\'s', removal)
+
+
+class ExpressFirstFleet(unittest.TestCase):
+
+    def section(self, text, heading):
+        return text.split(heading + '\n', 1)[1].split('\n#', 1)[0]
+
+    def test_the_first_fleet_is_one_grill_round_of_about_three_parallel_tickets_and_no_video(self):
+        skill = (SKILL_DIR / 'SKILL.md').read_text()
+        with self.subTest('6.4 Grill'):
+            grill = self.section(skill, '### 4. Grill')
+            self.assertRegex(grill, r'\bone short round\b')
+            self.assertRegex(grill, r'about three small tickets[^.]*no blockers between them[^.]*no shared owned paths'
+                                    r'[^.]*all three build in parallel')
+            self.assertNotRegex(grill, r'(?i)\btwo rounds\b|\b4 to 7\b')
+            start = teach_lines()['The grill'][0]
+            self.assertRegex(start, r'\bfew quick questions\b')
+            self.assertRegex(start, r'\bfirst version is small enough to build quickly\b')
+        with self.subTest('6.7 Plan'):
+            plan = self.section(skill, '### 7. Plan')
+            self.assertRegex(plan, r"install's first fleet[^.]*straight to the launch with no video")
+            self.assertRegex(plan, r'for this fleet only; a later spec[^.]*gets its video')
+            self.assertRegex(plan, r'reset or change of this spec or plan[^.]*no video')
+            self.assertNotIn('video link', plan)
+        with self.subTest('The spec and its video'):
+            spec = teach_lines()['The spec and its video']
+            self.assertEqual(len(spec), 1)
+            self.assertNotIn('<video link>', spec[0])
+            self.assertNotRegex(spec[0], r'(?i)\bvideo\b')
+            self.assertNotRegex(spec[0], r'(?i)starts as soon as|nothing for you to do')
+            self.assertRegex(spec[0], r'ask for your yes')
+        with self.subTest('to-spec step 4'):
+            step = self.section((SKILL_DIR.parent / 'to-spec' / 'SKILL.md').read_text(),
+                                '## 4. Make the steering video')
+            first = step.strip().split('\n\n', 1)[0].replace('\n', ' ')
+            self.assertRegex(first, r"^Skip this step for the install's first fleet, and only for it:")
+            self.assertRegex(first, r'reset or change of that spec or plan[^.]*new machine approval[^.]*no video'
+                                    r"[^.]*step 5's new video")
+            self.assertRegex(first, r'Every other spec gets its video\.$')
+
+
+class WatchPagesOffer(unittest.TestCase):
+
+    def section(self, text, heading):
+        return text.split(heading + '\n', 1)[1].split('\n#', 1)[0]
+
+    def test_watch_offers_github_pages_between_merged_and_closing_offer(self):
+        watch = self.section((SKILL_DIR / 'SKILL.md').read_text(), '### 9. Watch')
+        offer = '"I can put it online for free with GitHub Pages, so you get a link you can open on your phone. Shall I?"'
+        enable = ("`gh api -X POST repos/<owner>/<name>/pages -f 'source[branch]=<default branch>' "
+                  "-f 'source[path]=</ or /docs>'`")
+        readback = '`gh api repos/<owner>/<name>/pages --jq .html_url`'
+        live = ('"It\'s online: <link>. Open it on your phone; it updates by itself each time the helpers '
+                'add a change."')
+        private_line = "A private repository on a free GitHub plan can't use Pages:"
+
+        for snippet in (offer, '`index.html`', '`docs/`', enable, 'an existing Pages site is read, not changed',
+                        readback, '20 seconds', '5 minutes', live, private_line,
+                        'offer nothing that costs money', 'help line from [teach.md](teach.md)',
+                        'No yes, nothing changes.', 'not a gate for the merge or the closing offer'):
+            self.assertIn(snippet, watch)
+
+        merged_at = watch.index('**Merged**')
+        offer_at = watch.index(offer)
+        readback_at = watch.index(readback)
+        private_at = watch.index(private_line)
+        closing_at = watch.index('**The closing offer**')
+        self.assertLess(merged_at, offer_at)
+        self.assertLess(offer_at, readback_at)
+        self.assertLess(readback_at, private_at)
+        self.assertLess(private_at, closing_at)
 
 
 if __name__ == '__main__':

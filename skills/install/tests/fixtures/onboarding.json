@@ -12,22 +12,22 @@
     {
      "step": "teach",
      "say": "up-front",
-     "agent": "OpenWiz is a factory of coding agents: they turn one thing you want into small tickets, build each one, review each other's work and merge it."
+     "agent": "OpenWiz is a team of AI helpers that builds software for you: you tell me your idea in your own words, and they split it into small tasks, build each one, check each other's work and add it to your project."
     },
     {
      "step": "teach",
      "say": "up-front",
-     "agent": "First I ask you a few short questions, you say yes here when the summary matches, and the agents build it, aiming for your first merged pull request within the hour."
+     "agent": "First I ask you a few short questions, one at a time, each with my suggested answer; when my summary matches what you want, you say yes, and the helpers start building, usually with the first piece done within the hour."
     },
     {
      "step": "teach",
      "say": "up-front",
-     "agent": "Watch everything at openwiz.dev/app; nothing is created, written, spent or published without your yes here in this chat."
+     "agent": "You can watch everything at openwiz.dev/app, and nothing is created, changed, paid for or made public without your yes here in this chat."
     },
     {
      "step": "teach",
      "say": "install-done",
-     "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is at /home/synthetic/.local/lib/openwiz/current/openwiz (not on `PATH`). Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
+     "agent": "OpenWiz is installed on this computer, and Claude Code now knows how to use it (it lives at /home/synthetic/.local/lib/openwiz/current/openwiz; you never need to open it). Next, I'll set up where your AI helpers work; your project shows up at openwiz.dev/app once it's connected."
     },
     {
      "step": "run",
@@ -42,7 +42,7 @@
     {
      "step": "run",
      "say": "missing",
-     "agent": "You need a GitHub sign-in first: open https://github.com/login and sign in yourself, because I never touch your login. Say done here when you're in."
+     "agent": "You need a GitHub sign-in first: open https://github.com/login and follow the steps there; it takes a few minutes. Type your own email and password only on that website's page: I never see or touch your login. Say done here when it's finished, and I'll carry on from there."
     },
     {
      "step": "run",
@@ -64,7 +64,7 @@
     {
      "step": "run",
      "say": "where",
-     "agent": "Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom."
+     "agent": "Where should your AI helpers work? I recommend this computer, because you already have Claude Code here and need nothing new. The choices are this computer (with the Claude Code or Codex you already use), boat.dev (a service that runs them online) or CloudRoom (an app that runs them for you). Shall I go with this computer?"
     },
     {
      "step": "run",
@@ -152,7 +152,7 @@
     {
      "step": "grill",
      "say": "grill-start",
-     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+     "agent": "Now a few quick questions about your idea, one at a time, each with my suggested answer, so the first version is small enough to build quickly and is what you mean. Just answer here; once you say yes to my summary, you can follow it at openwiz.dev/app."
     },
     {
      "step": "grill",
@@ -169,7 +169,7 @@
     {
      "step": "grill",
      "say": "grill-summary",
-     "agent": "That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off."
+     "agent": "That's my summary of what you want. If it's right, say yes here, and the helpers start planning and building; you can follow them at openwiz.dev/app. If anything is off, just tell me in your own words."
     },
     {
      "step": "grill",
@@ -280,11 +280,8 @@
        },
        {
         "number": 903,
-        "title": "E3: a test for both messages",
-        "blockers": [
-         901,
-         902
-        ]
+        "title": "E3: the save error names the file, with a test",
+        "blockers": []
        }
       ]
      }
@@ -296,7 +293,7 @@
     {
      "step": "plan",
      "say": "spec",
-     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. Watch its short video at https://openwiz.dev/app/videos/syn-900 or see it at openwiz.dev/app; nothing for you to do while the plan checks itself."
+     "agent": "I've written your idea up as a plan (what's missing today, what we'll build, and how we'll know it works): see it at https://github.com/synthetic-owner/synthetic-notes/issues/900 or at openwiz.dev/app. Once the plan has checked itself, I'll tell you what starting the helpers does and ask for your yes."
     },
     {
      "step": "plan",
@@ -340,25 +337,16 @@
       "--confirm",
       "@preview"
      ],
-     "exit": 0
-    },
-    {
-     "step": "launch",
-     "world": "heartbeat_active"
-    },
-    {
-     "step": "launch",
-     "tool": [
-      "launch",
-      "--spec",
-      "900"
-     ],
-     "exit": 0
+     "exit": 0,
+     "session": {
+      "exit": 3,
+      "stdout": "session: tick 1: started #901, #902\nsession: stopped at tick 3: needs you: look #901: a look for the orchestrator\ncarry on: python3 -I synthetic-session.py run --spec 900\n"
+     }
     },
     {
      "step": "launch",
      "say": "fleet-start",
-     "agent": "Spec #900's local heartbeat is active. It checks GitHub every 10 minutes."
+     "agent": "The plan passed its checks, so the helpers started right here in this chat: 3 AI helpers, each building one small task, and each next step starts as soon as one finishes. Watch them here and at openwiz.dev/app, and keep this chat open: it stops here when it needs you, for example to add a checked change to your project."
     },
     {
      "step": "watch",
@@ -377,7 +365,7 @@
     {
      "step": "watch",
      "say": "pr-opened",
-     "agent": "A builder opened https://github.com/synthetic-owner/synthetic-notes/pull/911 for #901 E1: the save error says what went wrong: the change plus its proof that it works. See it at openwiz.dev/app; another agent reviews it next, nothing needed from you."
+     "agent": "A helper proposed a change at https://github.com/synthetic-owner/synthetic-notes/pull/911 for #901 E1: the save error says what went wrong (a pull request: a proposed change, with its proof that it works, checked before it's added). Another helper checks it next; nothing needed from you."
     },
     {
      "step": "watch",
@@ -396,7 +384,7 @@
     {
      "step": "watch",
      "say": "reviewed",
-     "agent": "https://github.com/synthetic-owner/synthetic-notes/pull/911 was reviewed: approved, so it merges next. Follow it at openwiz.dev/app; still nothing for you to do."
+     "agent": "The proposed change at https://github.com/synthetic-owner/synthetic-notes/pull/911 was checked: approved, so it is added to your project next. Follow it at openwiz.dev/app; still nothing for you to do."
     },
     {
      "step": "watch",
@@ -433,12 +421,12 @@
     {
      "step": "watch",
      "say": "merged",
-     "agent": "https://github.com/synthetic-owner/synthetic-notes/pull/911 merged: #901: E1: the save error says what went wrong. That's your first build, now in synthetic-owner/synthetic-notes; see it at openwiz.dev/app, where the other tickets keep going without you."
+     "agent": "Done: the change at https://github.com/synthetic-owner/synthetic-notes/pull/911 is added to your project: #901: E1: the save error says what went wrong. That's your first build, now part of synthetic-owner/synthetic-notes; see it at openwiz.dev/app, where the other tasks keep going without you."
     },
     {
      "step": "watch",
      "say": "offer",
-     "agent": "From here this chat can stay on as synthetic-notes's orchestrator, start a new project with you, or keep building this one. Which would you like? Come back anytime: open openwiz.dev/app or ask me where we are."
+     "agent": "From here I can keep watching over synthetic-notes for you, start a new idea with you, or keep building this one. Which would you like? Come back anytime: open openwiz.dev/app or just ask me where things stand."
     },
     {
      "step": "watch",
@@ -457,22 +445,22 @@
     {
      "step": "teach",
      "say": "up-front",
-     "agent": "OpenWiz is a factory of coding agents: they turn one thing you want into small tickets, build each one, review each other's work and merge it."
+     "agent": "OpenWiz is a team of AI helpers that builds software for you: you tell me your idea in your own words, and they split it into small tasks, build each one, check each other's work and add it to your project."
     },
     {
      "step": "teach",
      "say": "up-front",
-     "agent": "First I ask you a few short questions, you say yes here when the summary matches, and the agents build it, aiming for your first merged pull request within the hour."
+     "agent": "First I ask you a few short questions, one at a time, each with my suggested answer; when my summary matches what you want, you say yes, and the helpers start building, usually with the first piece done within the hour."
     },
     {
      "step": "teach",
      "say": "up-front",
-     "agent": "Watch everything at openwiz.dev/app; nothing is created, written, spent or published without your yes here in this chat."
+     "agent": "You can watch everything at openwiz.dev/app, and nothing is created, changed, paid for or made public without your yes here in this chat."
     },
     {
      "step": "teach",
      "say": "install-done",
-     "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is at /home/synthetic/.local/lib/openwiz/current/openwiz (not on `PATH`). Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
+     "agent": "OpenWiz is installed on this computer, and Claude Code now knows how to use it (it lives at /home/synthetic/.local/lib/openwiz/current/openwiz; you never need to open it). Next, I'll set up where your AI helpers work; your project shows up at openwiz.dev/app once it's connected."
     },
     {
      "step": "run",
@@ -486,7 +474,7 @@
     {
      "step": "run",
      "say": "where",
-     "agent": "Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom."
+     "agent": "Where should your AI helpers work? I recommend this computer, because you already have Claude Code here and need nothing new. The choices are this computer (with the Claude Code or Codex you already use), boat.dev (a service that runs them online) or CloudRoom (an app that runs them for you). Shall I go with this computer?"
     },
     {
      "step": "run",
@@ -593,7 +581,7 @@
     {
      "step": "grill",
      "say": "grill-start",
-     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+     "agent": "Now a few quick questions about your idea, one at a time, each with my suggested answer, so the first version is small enough to build quickly and is what you mean. Just answer here; once you say yes to my summary, you can follow it at openwiz.dev/app."
     },
     {
      "step": "grill",
@@ -610,7 +598,7 @@
     {
      "step": "grill",
      "say": "grill-summary",
-     "agent": "That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off."
+     "agent": "That's my summary of what you want. If it's right, say yes here, and the helpers start planning and building; you can follow them at openwiz.dev/app. If anything is off, just tell me in your own words."
     },
     {
      "step": "grill",
@@ -663,13 +651,6 @@
         "number": 903,
         "title": "T3: delete a task",
         "blockers": []
-       },
-       {
-        "number": 904,
-        "title": "T4: tasks saved on this machine",
-        "blockers": [
-         901
-        ]
        }
       ]
      }
@@ -681,7 +662,7 @@
     {
      "step": "plan",
      "say": "spec",
-     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. Watch its short video at https://openwiz.dev/app/videos/syn-900 or see it at openwiz.dev/app; nothing for you to do while the plan checks itself."
+     "agent": "I've written your idea up as a plan (what's missing today, what we'll build, and how we'll know it works): see it at https://github.com/synthetic-owner/synthetic-todo/issues/900 or at openwiz.dev/app. Once the plan has checked itself, I'll tell you what starting the helpers does and ask for your yes."
     },
     {
      "step": "plan",
@@ -743,7 +724,7 @@
     {
      "step": "launch",
      "say": "fleet-start",
-     "agent": "The plan passed its checks, so the fleet started: 3 builders, each on one small ticket. Watch them work at openwiz.dev/app; nothing for you to do until the first merge."
+     "agent": "The plan passed its checks, so the helpers started: 3 AI helpers, each building one small task. Watch them work at openwiz.dev/app; there's nothing for you to do until the first piece is added to your project."
     },
     {
      "step": "watch",
@@ -763,7 +744,7 @@
     {
      "step": "watch",
      "say": "pr-opened",
-     "agent": "A builder opened https://github.com/synthetic-owner/synthetic-todo/pull/911 for #901 T1: add a task: the change plus its proof that it works. See it at openwiz.dev/app; another agent reviews it next, nothing needed from you."
+     "agent": "A helper proposed a change at https://github.com/synthetic-owner/synthetic-todo/pull/911 for #901 T1: add a task (a pull request: a proposed change, with its proof that it works, checked before it's added). Another helper checks it next; nothing needed from you."
     },
     {
      "step": "watch",
@@ -783,7 +764,7 @@
     {
      "step": "watch",
      "say": "reviewed",
-     "agent": "https://github.com/synthetic-owner/synthetic-todo/pull/911 was reviewed: approved, so it merges next. Follow it at openwiz.dev/app; still nothing for you to do."
+     "agent": "The proposed change at https://github.com/synthetic-owner/synthetic-todo/pull/911 was checked: approved, so it is added to your project next. Follow it at openwiz.dev/app; still nothing for you to do."
     },
     {
      "step": "watch",
@@ -821,12 +802,12 @@
     {
      "step": "watch",
      "say": "merged",
-     "agent": "https://github.com/synthetic-owner/synthetic-todo/pull/911 merged: #901: T1: add a task. That's your first build, now in synthetic-owner/synthetic-todo; see it at openwiz.dev/app, where the other tickets keep going without you."
+     "agent": "Done: the change at https://github.com/synthetic-owner/synthetic-todo/pull/911 is added to your project: #901: T1: add a task. That's your first build, now part of synthetic-owner/synthetic-todo; see it at openwiz.dev/app, where the other tasks keep going without you."
     },
     {
      "step": "watch",
      "say": "offer",
-     "agent": "From here this chat can stay on as synthetic-todo's orchestrator, start a new project with you, or keep building this one. Which would you like? Come back anytime: open openwiz.dev/app or ask me where we are."
+     "agent": "From here I can keep watching over synthetic-todo for you, start a new idea with you, or keep building this one. Which would you like? Come back anytime: open openwiz.dev/app or just ask me where things stand."
     },
     {
      "step": "watch",
@@ -845,22 +826,22 @@
     {
      "step": "teach",
      "say": "up-front",
-     "agent": "OpenWiz is a factory of coding agents: they turn one thing you want into small tickets, build each one, review each other's work and merge it."
+     "agent": "OpenWiz is a team of AI helpers that builds software for you: you tell me your idea in your own words, and they split it into small tasks, build each one, check each other's work and add it to your project."
     },
     {
      "step": "teach",
      "say": "up-front",
-     "agent": "First I ask you a few short questions, you say yes here when the summary matches, and the agents build it, aiming for your first merged pull request within the hour."
+     "agent": "First I ask you a few short questions, one at a time, each with my suggested answer; when my summary matches what you want, you say yes, and the helpers start building, usually with the first piece done within the hour."
     },
     {
      "step": "teach",
      "say": "up-front",
-     "agent": "Watch everything at openwiz.dev/app; nothing is created, written, spent or published without your yes here in this chat."
+     "agent": "You can watch everything at openwiz.dev/app, and nothing is created, changed, paid for or made public without your yes here in this chat."
     },
     {
      "step": "teach",
      "say": "install-done",
-     "agent": "OpenWiz is installed: its skills are in Claude Code and the `openwiz` command is at /home/synthetic/.local/lib/openwiz/current/openwiz (not on `PATH`). Next, where your agents run; your project shows up at openwiz.dev/app once it's connected."
+     "agent": "OpenWiz is installed on this computer, and Claude Code now knows how to use it (it lives at /home/synthetic/.local/lib/openwiz/current/openwiz; you never need to open it). Next, I'll set up where your AI helpers work; your project shows up at openwiz.dev/app once it's connected."
     },
     {
      "step": "run",
@@ -874,7 +855,7 @@
     {
      "step": "run",
      "say": "where",
-     "agent": "Where should your agents run? This computer (Claude Code or Codex you're signed in to), boat.dev, or CloudRoom."
+     "agent": "Where should your AI helpers work? I recommend this computer, because you already have Claude Code here and need nothing new. The choices are this computer (with the Claude Code or Codex you already use), boat.dev (a service that runs them online) or CloudRoom (an app that runs them for you). Shall I go with this computer?"
     },
     {
      "step": "run",
@@ -981,7 +962,7 @@
     {
      "step": "grill",
      "say": "grill-start",
-     "agent": "Now a short grill: a few questions, one at a time, so what gets built is what you mean. Just answer here; once you confirm, it shows up at openwiz.dev/app."
+     "agent": "Now a few quick questions about your idea, one at a time, each with my suggested answer, so the first version is small enough to build quickly and is what you mean. Just answer here; once you say yes to my summary, you can follow it at openwiz.dev/app."
     },
     {
      "step": "grill",
@@ -998,7 +979,7 @@
     {
      "step": "grill",
      "say": "grill-summary",
-     "agent": "That's your grill. If it matches what you want, say yes here and the plan builds and checks itself; if not, tell me what's off."
+     "agent": "That's my summary of what you want. If it's right, say yes here, and the helpers start planning and building; you can follow them at openwiz.dev/app. If anything is off, just tell me in your own words."
     },
     {
      "step": "grill",
@@ -1122,7 +1103,7 @@
     {
      "step": "plan",
      "say": "spec",
-     "agent": "Your grill is now a spec: what's wrong today, what we'll build and how we'll know it works. Watch its short video at https://openwiz.dev/app/videos/syn-900 or see it at openwiz.dev/app; nothing for you to do while the plan checks itself."
+     "agent": "I've written your idea up as a plan (what's missing today, what we'll build, and how we'll know it works): see it at https://github.com/synthetic-owner/synthetic-quiz/issues/900 or at openwiz.dev/app. Once the plan has checked itself, I'll tell you what starting the helpers does and ask for your yes."
     },
     {
      "step": "plan",
@@ -1166,25 +1147,16 @@
       "--confirm",
       "@preview"
      ],
-     "exit": 0
-    },
-    {
-     "step": "launch",
-     "world": "heartbeat_active"
-    },
-    {
-     "step": "launch",
-     "tool": [
-      "launch",
-      "--spec",
-      "900"
-     ],
-     "exit": 0
+     "exit": 0,
+     "session": {
+      "exit": 3,
+      "stdout": "session: tick 1: started #901, #902, #903\nsession: stopped at tick 3: needs you: look #901: a look for the orchestrator\ncarry on: python3 -I synthetic-session.py run --spec 900\n"
+     }
     },
     {
      "step": "launch",
      "say": "fleet-start",
-     "agent": "Spec #900's local heartbeat is active. It checks GitHub every 10 minutes."
+     "agent": "The plan passed its checks, so the helpers started right here in this chat: 3 AI helpers, each building one small task, and each next step starts as soon as one finishes. Watch them here and at openwiz.dev/app, and keep this chat open: it stops here when it needs you, for example to add a checked change to your project."
     },
     {
      "step": "watch",
@@ -1203,7 +1175,7 @@
     {
      "step": "watch",
      "say": "pr-opened",
-     "agent": "A builder opened https://github.com/synthetic-owner/synthetic-quiz/pull/911 for #901 Q1: ten questions on one page: the change plus its proof that it works. See it at openwiz.dev/app; another agent reviews it next, nothing needed from you."
+     "agent": "A helper proposed a change at https://github.com/synthetic-owner/synthetic-quiz/pull/911 for #901 Q1: ten questions on one page (a pull request: a proposed change, with its proof that it works, checked before it's added). Another helper checks it next; nothing needed from you."
     },
     {
      "step": "watch",
@@ -1222,7 +1194,7 @@
     {
      "step": "watch",
      "say": "reviewed",
-     "agent": "https://github.com/synthetic-owner/synthetic-quiz/pull/911 was reviewed: approved, so it merges next. Follow it at openwiz.dev/app; still nothing for you to do."
+     "agent": "The proposed change at https://github.com/synthetic-owner/synthetic-quiz/pull/911 was checked: approved, so it is added to your project next. Follow it at openwiz.dev/app; still nothing for you to do."
     },
     {
      "step": "watch",
@@ -1259,12 +1231,12 @@
     {
      "step": "watch",
      "say": "merged",
-     "agent": "https://github.com/synthetic-owner/synthetic-quiz/pull/911 merged: #901: Q1: ten questions on one page. That's your first build, now in synthetic-owner/synthetic-quiz; see it at openwiz.dev/app, where the other tickets keep going without you."
+     "agent": "Done: the change at https://github.com/synthetic-owner/synthetic-quiz/pull/911 is added to your project: #901: Q1: ten questions on one page. That's your first build, now part of synthetic-owner/synthetic-quiz; see it at openwiz.dev/app, where the other tasks keep going without you."
     },
     {
      "step": "watch",
      "say": "offer",
-     "agent": "From here this chat can stay on as synthetic-quiz's orchestrator, start a new project with you, or keep building this one. Which would you like? Come back anytime: open openwiz.dev/app or ask me where we are."
+     "agent": "From here I can keep watching over synthetic-quiz for you, start a new idea with you, or keep building this one. Which would you like? Come back anytime: open openwiz.dev/app or just ask me where things stand."
     },
     {
      "step": "watch",

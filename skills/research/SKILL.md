@@ -1,7 +1,7 @@
 ---
 name: research
-description: Investigate a question against primary sources and land one checked, cited report. Use when asked for research, when a grill or plan needs facts first, or when a wayfind question needs research. Not for deciding; research informs a grill or plan and approves nothing.
-version: 0.2.2
+description: Research a question and write a cited report. Use when asked for research or when a grill, plan or wayfind map needs facts from primary sources.
+version: 0.2.3
 ---
 
 The **asker** sends fresh workers to read primary sources, writes one cited report and lands it through a docs-only pull request in the private repository. A **worker** given a fixed brief follows only "Worker: return cited notes" and never dispatches another agent.

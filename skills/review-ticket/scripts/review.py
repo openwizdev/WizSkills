@@ -1,23 +1,31 @@
 import argparse
 import base64
+import importlib.util
 import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote
 
 SHA = re.compile(r"[0-9a-f]{40}")
 VERDICT = re.compile(r"VERDICT: (APPROVE|CHANGES) at ([0-9a-f]{40})")
-FINDING = re.compile(r"- \*\*(R[1-9][0-9]*) \[([a-z]+)\]\*\* (.*)")
+FINDING = re.compile(r"- \*\*(R[1-9][0-9]*) \[([a-z-]+)\]\*\* (.*)")
 NEW = re.compile(r"`[^`\s]+:[1-9][0-9]*` \((?:Standards|Spec|Sweep)\) \S")
-STATUSES = ("resolved at ", "withdrawn: ", "still open after the ", "disputed, kept: ", "Polish issue: #")
+STATUSES = ("resolved at ", "withdrawn: ", "still open after the ", "disputed, kept: ", "Polish issue: #",
+            "Pre-existing issue: #")
 BLOCKER_STATUSES = ("resolved at ", "withdrawn: ", "still open after the ", "disputed, kept: ")
 POLISH_STATUSES = ("Polish issue: #", "withdrawn: ")
 OPEN = ("still open after the ", "disputed, kept: ")
 USER = re.compile(r"User path: \S.*")
+CLASS = re.compile(r"Class: (.*)")
+CLASS_WORD = re.compile(r"input|error-path|guard|output|state|files|process|credential|other: [a-z]+(?:-[a-z]+)*")
 RISK = re.compile(r"Risk: (?:security|privacy|data loss): \S.*")
 POLISH = re.compile(r"Polish issue: #[1-9][0-9]*\.?$")
+PRE = re.compile(r"Pre-existing issue: #[1-9][0-9]*\.?$")
+LATE = re.compile(r"Late: \S.*")
+HELD = re.compile(r"[0-9]+ findings on unchanged code held back as pre-existing\.")
 LOGGED = re.compile(r".*\bLogged as follow-up #[1-9][0-9]*\.$")
 MARK = re.compile(r"- \*\*Ruling ([1-9][0-9]*)\*\* (?:upheld|overturned as (R[1-9][0-9]*)): \S.*")
 IDS = r"R[1-9][0-9]*(?:(?:, R[1-9][0-9]*)* and R[1-9][0-9]*)?"
@@ -33,10 +41,15 @@ DECISION = re.compile(rf"\*\*Orchestrator decision:\*\* (fix once more|log and m
                       r"(?: Polish issues: (#[1-9][0-9]*(?:, #[1-9][0-9]*)*)\.)? Why: \S.*", re.S)
 ADDITIONAL = re.compile(r"\*\*Additional\b[^*\n]*? check: `([^`]+)`")
 CLOSES = re.compile(r"(?im)^\s*(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+((?:[\w.-]+/[\w.-]+)?#[1-9][0-9]*)\b")
-TICKET = re.compile(r"[\w.-]+/[\w.-]+#[1-9][0-9]*")
+TICKET = re.compile(r"[A-Za-z0-9](?:-?[A-Za-z0-9])*/[A-Za-z0-9._-]+#[1-9][0-9]*")
 LOGIN = r"`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`"
 AUTHORS_CELL = re.compile(rf"\s*{LOGIN}(?:\s*,\s*{LOGIN})*\s*")
+FACT_FIELD = re.compile(r"(?:[-*+] +)?(\*\*[A-Za-z][A-Za-z /-]*:\*\*|[A-Za-z][A-Za-z /-]*:)[ \t]*(.*)")
 TEST_RULE = re.compile(r"\b(?:catches|no new test): \S")
+SELF_CHECK = re.compile(r"(?i) {0,3}##[ \t]+self-check[ \t]*")
+SECTION_END = re.compile(r" {0,3}#{1,2}(?:[ \t]|$)")
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
+PROBE = re.compile(r"`[^`]+`.*\bprinted\b[^A-Za-z0-9`]*[A-Za-z0-9`]|\bn/a:[^A-Za-z0-9]*[A-Za-z0-9]")
 PRIVATE = re.compile(r"\b(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_-]{8,}|\bthr_[A-Za-z0-9]{4,}|(?i:\bbearer\s+[A-Za-z0-9._-]{8,})")
 
 
@@ -137,7 +150,9 @@ def parse(text):
         findings.append({"id": m[1], "grade": m[2], "new": bool(NEW.match(rest)), "text": rest,
                          "status": next((s for s in STATUSES if rest.startswith(s)), None),
                          "user": any(USER.fullmatch(x) for x in more), "risk": any(RISK.fullmatch(x) for x in more),
-                         "polish": bool(POLISH.search(rest)), "logged": bool(LOGGED.fullmatch(rest))})
+                         "polish": bool(POLISH.search(rest)), "pre": bool(PRE.search(rest)),
+                         "late": any(LATE.fullmatch(x) for x in more), "logged": bool(LOGGED.fullmatch(rest)),
+                         "classes": [c[1] for x in more if (c := CLASS.fullmatch(x))]})
     nxt = paras[-1] if paras and paras[-1].startswith("Next:") else None
     state = next((s for s, p in NEXT.items() if nxt and re.fullmatch(p, nxt)), None)
     named = re.findall(r"R[1-9][0-9]*", nxt or "") if state != "merge" else []
@@ -154,28 +169,17 @@ def open_blockers(report):
 
 
 def rulings_lines(text):
-    lines, fenced, fence = text.splitlines(), [], False
-    for line in lines:
-        if line.lstrip().startswith(("```", "~~~")):
-            fence = not fence
-        fenced.append(fence)
-    heads = [i for i, x in enumerate(lines) if x.strip() == "## Rulings" and not fenced[i]]
-    if not heads:
-        return None
-    out = []
-    for line, quoted in zip(lines[heads[0] + 1:], fenced[heads[0] + 1:]):
-        if re.match(r"#{1,2} ", line) and not quoted:
-            break
-        out.append(line.strip())
-    return out
+    lines = description_section(text, "## Rulings")
+    return None if lines is None else [line.strip() for line in lines]
 
 
 def description_rulings(text):
     return [int(m[1]) for line in rulings_lines(text) or [] if (m := re.match(r"([1-9][0-9]*)\. ", line))]
 
 
-def check(text, description, mode, head, earlier, decision=None, changed=None):
-    r, problems = parse(text), []
+def check(text, description, mode, head, earlier, decision=None, changed=None, counts=None, untouched=None,
+          first=None):
+    r, problems, late = parse(text), [], []
     if r["verdict"] is None:
         problems.append("the first line is VERDICT: APPROVE or CHANGES at the 40-character head")
     elif r["head"] != head:
@@ -199,8 +203,8 @@ def check(text, description, mode, head, earlier, decision=None, changed=None):
                  for i in sorted(set(before) - set(ids), key=lambda x: int(x[1:]))]
     for f in r["findings"]:
         i, blocking = f["id"], f["grade"] == "blocking"
-        if f["grade"] not in ("blocking", "polish"):
-            problems.append(f"{i}: the grade is blocking or polish")
+        if f["grade"] not in ("blocking", "polish", "pre-existing"):
+            problems.append(f"{i}: the grade is blocking, polish or pre-existing")
         elif i in before and f["new"]:
             problems.append(f"{i}: an earlier id takes a status, not a new finding")
         elif i in before and not (f["status"] or f["logged"]):
@@ -209,10 +213,34 @@ def check(text, description, mode, head, earlier, decision=None, changed=None):
             problems.append(f"{i}: a new finding names `file:line` and its check (Standards, Spec or Sweep)")
         elif f["new"] and blocking and not (f["user"] or f["risk"]):
             problems.append(f"{i}: a new blocking finding needs its User path: or Risk: line")
-        elif f["new"] and not blocking and not f["polish"]:
+        elif f["new"] and f["grade"] == "polish" and not f["polish"]:
             problems.append(f"{i}: a new polish finding ends with Polish issue: #<n>")
-        where = re.match(r"`([^`\s]+):[1-9][0-9]*`", f["text"]) if f["new"] and i not in before else None
-        if where and changed is not None and where[1] not in changed and not f["risk"]:
+        elif f["new"] and f["grade"] == "pre-existing" and not f["pre"]:
+            problems.append(f"{i}: a new pre-existing finding ends with Pre-existing issue: #<n>")
+        if f["new"] and f["risk"] and not blocking:
+            problems.append(f"{i}: a finding with a Risk: line is graded blocking")
+        words, kept = f["classes"], (before.get(i) or {}).get("classes", [])
+        if blocking and not words:
+            problems.append(f"{i}: a blocker names its class: one Class: line from references/verdict.md")
+        elif blocking and len(words) > 1:
+            problems.append(f"{i}: a blocker carries exactly one Class: line")
+        elif blocking and not CLASS_WORD.fullmatch(words[0]):
+            problems.append(f"{i}: Class: {words[0]} is not a word from references/verdict.md; "
+                            "use Class: other: <word> when none fits")
+        elif blocking and len(kept) == 1 and before[i]["grade"] == "blocking" and words != kept:
+            problems.append(f"{i}: keeps its earlier class, {kept[0]}")
+        where = re.match(r"`([^`\s]+):([1-9][0-9]*)`", f["text"]) if f["new"] and i not in before else None
+        spot = where and untouched and untouched(where[1], int(where[2]))
+        if spot:
+            late.append(f)
+            if not (f["grade"] == "pre-existing" or (blocking and f["risk"])):
+                problems.append(f"{i}: `{spot}` is unchanged since {first[:7]}; a re-check raises a "
+                                "new finding there only as a Risk: security, privacy or data-loss blocker")
+            elif not f["late"]:
+                problems.append(f"{i}: a new finding on code unchanged since {first[:7]} needs its Late: line")
+        elif where and (f["late"] or f["grade"] == "pre-existing"):
+            problems.append(f"{i}: Late: and [pre-existing] are only for a re-check's new finding on unchanged code")
+        elif where and changed is not None and where[1] not in changed and not (blocking and f["risk"]):
             problems.append(f"{i}: `{where[1]}` is unchanged since {earlier['head'][:7]}; a re-check raises a new "
                             "finding there only as a Risk: security, privacy or data-loss blocker")
         old = before.get(i)
@@ -221,11 +249,13 @@ def check(text, description, mode, head, earlier, decision=None, changed=None):
                     and re.search(r"#[1-9][0-9]*", f["text"])[0] in decision["polish"]):
                 problems.append(f"{i}: the decision grades it polish with Polish issue: {' or '.join(decision['polish'])}")
             continue
-        if old and f["grade"] != old["grade"] and f["grade"] in ("blocking", "polish"):
+        if old and f["grade"] != old["grade"] and f["grade"] in ("blocking", "polish", "pre-existing"):
             problems.append(f"{i}: keeps its earlier grade, {old['grade']}")
+        elif old and f["grade"] == "pre-existing" and f["status"] != "Pre-existing issue: #":
+            problems.append(f"{i}: a pre-existing finding's status is Pre-existing issue: #<n>")
         elif old and blocking and f["status"] and f["status"] not in BLOCKER_STATUSES:
             problems.append(f"{i}: a blocker's status is resolved, withdrawn, still open, disputed or logged")
-        elif old and not blocking and f["status"] and f["status"] not in POLISH_STATUSES:
+        elif old and f["grade"] == "polish" and f["status"] and f["status"] not in POLISH_STATUSES:
             problems.append(f"{i}: a polish finding's status is Polish issue: #<n> or withdrawn")
         if old and old["risk"] and f["user"] and not f["risk"]:
             problems.append(f"{i}: keeps its Risk: line")
@@ -234,6 +264,13 @@ def check(text, description, mode, head, earlier, decision=None, changed=None):
         elif blocking and not f["new"] and (f["logged"] or (f["status"] or "").startswith(OPEN)) \
                 and not (f["user"] or f["risk"]):
             problems.append(f"{i}: an open or logged blocker restates its User path: or Risk: line")
+    held = sum(f["grade"] == "pre-existing" for f in late)
+    line = f"{held} findings on unchanged code held back as pre-existing."
+    shown = [p for p in r["paras"] if HELD.fullmatch(p)]
+    if (held or shown) and shown != [line]:
+        problems.append(f"the report says `{line}`")
+    if counts is not None:
+        counts.update(late=len(late), held=held)
     opened = open_blockers(r)
     risky = {f["id"] for f in r["findings"] if f["risk"]}
     if mode != "full":
@@ -259,6 +296,16 @@ def check(text, description, mode, head, earlier, decision=None, changed=None):
         problems.append("Rulings: none. stands beside a ruling mark")
     if not listed and not r["no_rulings"]:
         problems.append("with no rulings listed, the report says Rulings: none.")
+    disproved = [x.strip() for x in text.replace("\r\n", "\n").split("\n") if x.strip().startswith("Disproved:")]
+    checked = next((n for n, p in enumerate(r["paras"]) if p.startswith("Checked:")), None)
+    if not disproved:
+        problems.append("no Disproved: line; write Disproved: <n> candidate findings dropped. before Checked:")
+    elif len(disproved) > 1:
+        problems.append(f"{len(disproved)} Disproved: lines; write exactly one")
+    elif not re.fullmatch(r"Disproved: (?:0|[1-9][0-9]*) candidate findings dropped\.", disproved[0]):
+        problems.append("the Disproved: line reads Disproved: <n> candidate findings dropped.")
+    elif disproved[0] not in r["paras"] or checked is None or r["paras"].index(disproved[0]) > checked:
+        problems.append("the Disproved: line is its own paragraph before Checked:")
     if PRIVATE.search(text):
         problems.append("private material: a token or thread id")
     return problems
@@ -272,7 +319,7 @@ def same(comment, text):
     return (comment.get("body") or "").replace("\r\n", "\n").strip() == text.strip()
 
 
-def admit(repo, number, assigned, skip=None, ticket=None):
+def pull_snapshot(repo, number, assigned, ticket):
     if ticket is not None and not TICKET.fullmatch(ticket):
         raise Refusal(f"--ticket must be OWNER/NAME#N, not {ticket!r}")
     pr = get(f"repos/{repo}/pulls/{number}")
@@ -291,8 +338,10 @@ def admit(repo, number, assigned, skip=None, ticket=None):
         ticket = closes[1] if not closes[1].startswith("#") else repo + closes[1]
     if head != assigned:
         raise Stop(f"stop: the head is {head}, not the assigned {assigned}")
-    fleet = setting(repo, pr["base"]["ref"], "docs/agents/fleet.md")
-    authors, names = record_authors(fleet), required_checks(fleet)
+    return pr, ticket
+
+
+def require_green(repo, head, names):
     runs = get(f"repos/{repo}/commits/{head}/check-runs?per_page=100").get("check_runs", [])
     bad = []
     for name in names:
@@ -302,6 +351,14 @@ def admit(repo, number, assigned, skip=None, ticket=None):
             bad.append(name)
     if bad:
         raise Stop(f"stop: {', '.join(bad)} is not green at {head}")
+
+
+def admit(repo, number, assigned, skip=None, ticket=None):
+    pr, ticket = pull_snapshot(repo, number, assigned, ticket)
+    head = pr["head"]["sha"]
+    fleet = setting(repo, pr["base"]["ref"], "docs/agents/fleet.md")
+    authors, names = record_authors(fleet), required_checks(fleet)
+    require_green(repo, head, names)
     comments = pages(f"repos/{repo}/issues/{number}/comments?per_page=100")
     records = [c for c in comments if authored(c, authors)]
     reports = [(n, parse(c["body"].replace("\r\n", "\n"))) for n, c in enumerate(records)
@@ -329,7 +386,8 @@ def admit(repo, number, assigned, skip=None, ticket=None):
     if last is not None and last["head"] == head and mode != "log-and-merge":
         raise Stop(f"stop: already reported at {head}")
     return {"pr": pr, "head": head, "ticket": ticket, "checks": names, "authors": authors,
-            "comments": comments, "last": last, "mode": mode, "decision": decision}
+            "comments": comments, "last": last, "first": reports[0][1] if reports else None, "mode": mode,
+            "decision": decision}
 
 
 def pin(repo, number, assigned, ticket=None):
@@ -370,15 +428,39 @@ def changed_since(base, last, head):
     return names(last, head) & (names(f"{base}...{last}") | names(f"{base}...{head}"))
 
 
-def report_problems(path, repo, number, assigned, ticket=None):
+def report_problems(path, repo, number, assigned, ticket=None, counts=None):
     text = Path(path).read_text(encoding="utf-8").replace("\r\n", "\n")
     s = admit(repo, number, assigned, skip=text, ticket=ticket)
-    changed = None
-    if s["mode"] in ("re-check", "final"):
-        changed = changed_since(s["pr"]["base"].get("sha"), s["last"]["head"], s["head"])
-    elif s["mode"] == "log-and-merge":
-        changed = set()
-    return text, s, check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"], s["decision"], changed)
+    changed = untouched = first = None
+    if s["mode"] != "full":
+        base, first = s["pr"]["base"].get("sha"), s["first"]["head"]
+        changed = changed_since(base, s["last"]["head"], s["head"]) if s["mode"] != "log-and-merge" else set()
+        untouched = untouched_lines(first, s["head"], changed_since(base, first, s["head"]))
+    return text, s, check(text, s["pr"].get("body") or "", s["mode"], s["head"], s["last"], s["decision"], changed,
+                          counts, untouched, first)
+
+
+def untouched_lines(first, head, touched):
+    seen = {}
+
+    def edits(path):
+        try:
+            size = len(git("cat-file", "blob", f"{head}:{path}").splitlines())
+            diff = git("--literal-pathspecs", "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", first, head,
+                       "--", path, what=f"cannot read the pull request's own changes: git diff {first} {head}")
+        except (Refusal, UnicodeDecodeError):
+            return None
+        spans = [(int(m[1]), int(m[1]) + int(m[2] or 1)) for m in re.finditer(r"(?m)^@@ -\S+ \+(\d+)(?:,(\d+))? @@", diff)]
+        return size, spans
+
+    def spot(path, line):
+        if path not in touched:
+            return path
+        info = seen[path] = seen[path] if path in seen else edits(path)
+        if info is None or line > info[0] or any(a <= line < b for a, b in info[1]):
+            return None
+        return f"{path}:{line}"
+    return spot
 
 
 def git(*args, what=None):
@@ -390,6 +472,62 @@ def git(*args, what=None):
         why = (out.stderr.strip().splitlines() or [f"exit {out.returncode}"])[-1] if out else why
         raise Refusal(f"{what} failed: {why}" if what else f"cannot read {args[-1]} with git")
     return out.stdout
+
+
+def unfenced(description):
+    fence = None
+    for number, line in enumerate(description.split("\n"), 1):
+        mark = FENCE.match(line)
+        if fence is None and mark:
+            fence = mark[1]
+        elif fence is None:
+            yield number, line
+        elif mark and mark[1][0] == fence[0] and len(mark[1]) >= len(fence) and not line.strip().strip(fence[0]):
+            fence = None
+
+
+def description_section(description, heading):
+    lines = None
+    for _, line in unfenced(description):
+        if lines is None:
+            if line.strip() == heading:
+                lines = []
+        elif SECTION_END.match(line):
+            break
+        else:
+            lines.append(line)
+    return lines
+
+
+def facts_fields(description):
+    fields = {}
+    name = None
+    for line in description_section(description, "## Facts") or []:
+        if field := FACT_FIELD.fullmatch(line):
+            name = field[1].strip("*").removesuffix(":")
+            fields.setdefault(name, []).append(field[2].strip())
+        elif name in ("Test", "Tests") and line.startswith(("  ", "\t")):
+            fields[name][-1] += "\n" + line
+        elif line.strip():
+            name = None
+    return fields
+
+
+def self_check_misses(description):
+    lines, inside, found = [], False, False
+    for number, line in unfenced(description):
+        if SELF_CHECK.fullmatch(line) and not found:
+            inside = found = True
+        elif inside and SECTION_END.match(line):
+            inside = False
+        elif inside and line.strip():
+            lines.append((number, line))
+    if not found:
+        return ["no ## Self-check section with one line per probe"]
+    if not lines:
+        return ["the ## Self-check section has no probe lines"]
+    return [f"the ## Self-check line at description line {n} has neither a `command` with what it printed "
+            "nor n/a: <why>" for n, x in lines if not PROBE.search(x)]
 
 
 def self_check(path, base):
@@ -404,10 +542,12 @@ def self_check(path, base):
         misses.append("no Closes line names the ticket; the review cannot start")
     if rulings is None or not (description_rulings(description) or {"none", "`none`"} & set(rulings)):
         misses.append("no ## Rulings section with numbered rulings or exactly none")
-    if head not in description:
+    facts = facts_fields(description)
+    if facts.get("Head") not in ([head], [f"`{head}`"]):
         misses.append(f"the description does not name the head {head}")
-    if not TEST_RULE.search(description):
+    if not any(TEST_RULE.search(entry) for key in ("Test", "Tests") for entry in facts.get(key, [])):
         misses.append("no `catches: <the bug>` or `no new test: <why>` line")
+    misses += self_check_misses(description)
     leaks = ["the description"] if PRIVATE.search(description) else []
     name, header = None, False
     for line in diff.splitlines():
@@ -427,11 +567,18 @@ def self_check(path, base):
 def post(path, repo, number, assigned, ticket=None):
     text, s, problems = report_problems(path, repo, number, assigned, ticket)
     mine = [c for c in s["comments"] if authored(c, s["authors"]) and same(c, text)]
-    if mine:
+    if mine and parse(text)["head"] == assigned:
         return f"already posted {mine[0]['id']}"
     if problems:
         raise Stop("\n".join(problems))
     before = {c.get("id") for c in s["comments"]}
+    current, current_ticket = pull_snapshot(repo, number, assigned, ticket)
+    if current_ticket != s["ticket"]:
+        raise Stop("stop: the ticket changed")
+    base_changed = any(current["base"].get(key) != s["pr"]["base"].get(key) for key in ("ref", "sha"))
+    if base_changed or current.get("body") != s["pr"].get("body"):
+        raise Stop("stop: the base or description changed")
+    require_green(repo, assigned, s["checks"])
     code, made = gh("-X", "POST", f"repos/{repo}/issues/{number}/comments", "--input", "-",
                     data=json.dumps({"body": text}))
     if code == 0 and isinstance(made, dict) and made.get("id") is not None:
@@ -447,6 +594,20 @@ def post(path, repo, number, assigned, ticket=None):
     return f"posted {found['id']}"
 
 
+def paced(where, *args):
+    spec = importlib.util.spec_from_file_location(
+        "launch_fleet_post", Path(__file__).resolve().parents[2] / "launch-fleet" / "scripts" / "post.py")
+    post = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(post)
+    except (OSError, ImportError):
+        raise Refusal("launch-fleet's write pacer (scripts/post.py) cannot be loaded; nothing was filed")
+    try:
+        return post.write(where, *args)
+    except post.Stop as e:
+        raise Stop(str(e)) from None
+
+
 def follow_up(a):
     repo = a.repo
     labels = setting(repo, get(f"repos/{repo}")["default_branch"], "docs/agents/triage-labels.md")
@@ -458,13 +619,16 @@ def follow_up(a):
         raise Refusal("keep backticks, $ and double quotes out of the title")
     finding = Path(a.finding).read_text(encoding="utf-8").strip()
     finding += "" if finding.endswith(".") else "."
-    head = f"Follow-up of #{a.ticket} (spec #{a.spec})\n\n"
+    marker = f"Follow-up of #{a.ticket} (spec #{a.spec})"
+    head = marker + "\n\n"
+    legacy_title = None
     if a.logged:
         if not a.user_path:
             raise Refusal("a logged blocker carries its --user-path")
-        title = f"{a.title} (follow-up for #{a.ticket}, {a.id})"
+        title = marker
+        legacy_title = f"{a.title} (follow-up for #{a.ticket}, {a.id})"
         body = (head + f"{finding}\nUser path: {a.user_path}\n\nStill open after the {a.logged} of pull request "
-                f"{a.pr} at {a.head}; logged, so it did not block the merge.\n")
+                f"{a.pr} at {a.head}; logged, so it did not block the merge.\n\nFinding: {a.id}.\n")
     else:
         title = f"{a.title} (polish for #{a.ticket}, {a.id})"
         body = head + f"{finding} Found in pull request {a.pr} at {a.head}; it is polish and did not block the merge.\n"
@@ -473,14 +637,73 @@ def follow_up(a):
     url = f"repos/{repo}/issues?state=all&per_page=100&labels={quote(found[0], safe='')}"
 
     def existing():
-        return next((i for i in pages(url) if i.get("title") == title), None)
+        for issue in pages(url):
+            issue_title = issue.get("title")
+            if issue_title == title and (not a.logged or same(issue, body)):
+                return issue
+            if legacy_title and issue_title == legacy_title:
+                return issue
+        return None
     if issue := existing():
         return f"already filed #{issue['number']}"
-    gh("-X", "POST", f"repos/{repo}/issues", "--input", "-",
-       data=json.dumps({"title": title, "body": body, "labels": [found[0]]}))
-    if issue := existing():
-        return f"filed #{issue['number']}"
+    paced(f"{repo}'s issues", "--method", "POST", f"repos/{repo}/issues", "-f", f"title={title}", "-f", f"body={body}",
+          "-f", f"labels[]={found[0]}")
+    for delay in (0, 1, 2):
+        if delay:
+            time.sleep(delay)
+        if issue := existing():
+            return f"filed #{issue['number']}"
     raise Stop("unknown: not found on read-back; list the issues before filing again")
+
+
+RULES_FILE = "docs/agents/review-rules.md"
+NEVER_LINE = re.compile(r"- (.+?): declined ([1-9][0-9]*), ([0-9]{4}-[0-9]{2}-[0-9]{2})")
+PATH_LINE = re.compile(r"- `([^`]+)`: (\S.*)")
+
+
+def glob_regex(glob):
+    out, i = [], 0
+    while i < len(glob):
+        if glob.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif glob.startswith("**", i):
+            out.append(".*")
+            i += 2
+        else:
+            out.append({"*": "[^/]*", "?": "[^/]"}.get(glob[i], re.escape(glob[i])))
+            i += 1
+    return re.compile("".join(out))
+
+
+def review_rules(base, head, findings):
+    def git(*args):
+        return subprocess.run(["git", *args], text=True, capture_output=True)
+    shown = git("show", f"{base}:{RULES_FILE}")
+    if shown.returncode != 0:
+        if git("rev-parse", "--verify", "-q", f"{base}^{{commit}}").returncode != 0:
+            raise Refusal(f"no commit {base} in this checkout")
+        return [f"review rules: none at {base}"] + [f"report: {f}" for f in findings]
+    diff = git("diff", "--name-only", "-z", f"{base}...{head}")
+    if diff.returncode != 0:
+        raise Refusal(f"git diff {base}...{head} failed")
+    changed = [path for path in diff.stdout.split("\0") if path]
+    never, lines, section = {}, [], None
+    for raw in shown.stdout.splitlines():
+        line = raw.strip()
+        if line.startswith("## "):
+            section = line[3:]
+        elif section in ("Never flag", "Path rules") and line.startswith("- "):
+            if section == "Never flag" and (m := NEVER_LINE.fullmatch(line)):
+                name = m[1].strip("`").strip()
+                never[name.casefold()] = name
+                lines.append(f"never flag: {name} (declined {m[2]}, {m[3]})")
+            elif section == "Path rules" and (m := PATH_LINE.fullmatch(line)):
+                if any(glob_regex(m[1]).fullmatch(path) for path in changed):
+                    lines.append(f"path rule: `{m[1]}`: {m[2]}")
+            else:
+                raise Refusal(f"{RULES_FILE} at {base}: unreadable {section} line: {line}")
+    return lines + [("skip: " if f.strip().casefold() in never else "report: ") + f for f in findings]
 
 
 DESCRIPTION = (
@@ -490,14 +713,16 @@ DESCRIPTION = (
     "  check REPORT --repo O/R --pr N --head SHA  admission, then the report's contract lines\n"
     '  post REPORT --repo O/R --pr N --head SHA   admission and check again, post once, read back\n'
     '  follow-up --repo TICKET_REPO ...   file one polish issue or logged blocker for triage, once\n'
-    "  self-check DESCRIPTION [--base REF]       the builder's own pass on its checkout, before any review\n"
+    "  self-check DESCRIPTION [--base REF]       the builder's own pass on its checkout, before any review:\n"
+    "                                            the description's form, one ## Self-check line per probe\n"
+    "                                            (a `command` with what it printed, or n/a: <why>), no leaks\n"
     '\n'
     'pin, check and post take --ticket OWNER/NAME#N for an explicitly assigned\n'
     "ticket, admitted only by an exact `Refs OWNER/NAME#N` line; without it a Closes line names it.\n"
-    'Each command reads one pull-request snapshot and admits it (open, ready, a\n'
-    'ticket, the assigned head, every required check green there) before anything\n'
-    'else (self-check reads only the local checkout and description, before a pull\n'
-    "request exists). Settings are read from the base branch, never the pull request's head.\n"
+    'Each review command admits the pull request (open, ready, a ticket, the assigned\n'
+    'head, every required check green there). Post checks these again before writing.\n'
+    'Self-check reads only the local checkout and description. Settings are read from\n'
+    "the base branch, never the pull request's head.\n"
     "A re-check's changed files come from git in this checkout, never GitHub's capped compare.\n"
     'Only comments by the `Record authors` row of docs/agents/fleet.md count. Exit 0\n'
     'done, 1 a stop, report problems or an unknown write, 2 a refusal (unreadable\n'
@@ -525,17 +750,26 @@ def main(argv=None):
     c = sub.add_parser("self-check")
     c.add_argument("description", help="the pull request description you will hand back, as a file")
     c.add_argument("--base", default="origin/main")
+    r = sub.add_parser("rules")
+    r.add_argument("--base", default="origin/main")
+    r.add_argument("--head", default="HEAD")
+    r.add_argument("--finding", action="append", default=[], help="a candidate finding's class; repeat")
     a = p.parse_args(argv)
     try:
         if a.command == "self-check":
             lines = self_check(a.description, a.base)
             print("\n".join(lines))
             return 0 if lines == ["self-check: ok"] else 1
+        if a.command == "rules":
+            print("\n".join(review_rules(a.base, a.head, a.finding)))
+            return 0
         if a.command == "pin":
             print(pin(a.repo, a.pr, a.head, a.ticket))
         elif a.command == "check":
-            problems = report_problems(a.report, a.repo, a.pr, a.head, a.ticket)[2]
-            print("\n".join(problems) if problems else "report ok")
+            counts = {}
+            problems = report_problems(a.report, a.repo, a.pr, a.head, a.ticket, counts)[2]
+            ok = "report ok" + (f"; late: {counts['late']}; held back: {counts['held']}" if counts.get("late") else "")
+            print("\n".join(problems) if problems else ok)
             return 1 if problems else 0
         elif a.command == "post":
             print(post(a.report, a.repo, a.pr, a.head, a.ticket))

@@ -4,32 +4,37 @@
 [`scripts/carried/alarm.py`](scripts/carried/alarm.py). It reads one bounded
 snapshot of the orchestrator's existing queue and rate-limit reads, makes no
 network call, starts no controller, cancels nothing and sends no message.
-Supply `GH_REPO`, `LAUNCH_FLEET_OVERLOAD_INPUT` (the observation below) and
-`LAUNCH_FLEET_OVERLOAD_STATE` (the durable pause state below), then:
+Supply `GH_REPO` and `LAUNCH_FLEET_OVERLOAD_STATE` (the durable pause state
+below), then:
 
 ```sh
+sh skills/launch-fleet/scripts/fleet.sh overload merge-batch
 sh skills/launch-fleet/scripts/fleet.sh overload automatic-refresh
 sh skills/launch-fleet/scripts/fleet.sh overload nonessential-poll
 ```
 
-In an OpenWiz checkout, set `LAUNCH_FLEET_OVERLOAD_SUPPLY` to the absolute
-path of that checkout's own overload supplier, the supply script in its CI
-overload tool (MT6, #825), to have `fleet.sh overload`
-read the war room collector's queue fact now, before `merge-batch`,
-`automatic-refresh` and `nonessential-poll`, into a private file of that call's
-own that only its guard reads (`LAUNCH_FLEET_OVERLOAD_INPUT` is then unused, so
-concurrent calls never swap observations). A supplier that fails or can't start
-leaves the guard no input, so it refuses new work as unknown. `completion` and
-`reconciliation` read nothing more. That supplier is the checkout's own, never
-part of this skill; its use and failure handling are in that checkout's CI
-overload guide.
+When neither `LAUNCH_FLEET_OVERLOAD_SUPPLY` nor `LAUNCH_FLEET_OVERLOAD_INPUT`
+is set, `fleet.sh overload` runs the shipped default supplier
+[`scripts/overload-supply.py`](scripts/overload-supply.py) before
+`merge-batch`, `automatic-refresh` and `nonessential-poll`, writing one
+private snapshot of active workflow runs, jobs (classified from the default
+branch's required status checks and `docs/agents/fleet.md`'s `## CI checks`)
+and REST/GraphQL rate limits within the 60-second observation deadline for
+that call alone. Set `LAUNCH_FLEET_OVERLOAD_INPUT` to supply an existing
+snapshot without network calls, or set `LAUNCH_FLEET_OVERLOAD_SUPPLY` to the
+absolute path of a repository's own supplier (such as an OpenWiz checkout's
+CI overload supply script; `LAUNCH_FLEET_OVERLOAD_INPUT` is then unused,
+so concurrent calls never swap observations). A supplier that fails or can't
+start leaves the guard with no input file, so it refuses that call as
+`observation_unknown` without latching a durable pause. `completion`,
+`reconciliation` and `resume` read nothing from the supplier.
 
 The actions are `merge-batch`, `automatic-refresh`, `nonessential-poll`,
-`completion` and `reconciliation`. The output is one JSON decision. Exit 0
-admits that action, 1 refuses it, and 2 means invalid invocation. Errors never
-print input bodies, API responses or credential material. `allowed` supplies no
-review, merge, messaging or live authority. Every existing hold, required check
-and admission rule still applies.
+`completion`, `reconciliation` and `resume`. The output is one JSON decision.
+Exit 0 admits that action, 1 refuses it, and 2 means invalid invocation. Errors
+never print input bodies, API responses or credential material. `allowed`
+supplies no review, merge, messaging or live authority. Every existing hold,
+required check and admission rule still applies.
 
 ## Inputs and source completeness
 
@@ -69,7 +74,8 @@ completeness is not authenticated live evidence.
 | Either pool has remaining/limit strictly below 10% | alarm and pause |
 | Oldest required queued job waits at least 900 seconds, or either pool is exhausted | escalation due and pause |
 | Either pool has an active secondary backoff | alarm and pause |
-| Missing, stale, partial, invalid or unreadable input/state | unknown and pause |
+| Missing input file | unknown (refuses this call; does not latch durable pause) |
+| Stale, partial, invalid or unreadable input/state | unknown and pause |
 
 A known alarm/escalation survives an independent incomplete component; unknown
 data never establishes healthy clearance. Waits use the oldest required queued
@@ -101,12 +107,65 @@ persistence is unknown, so admitted jobs and agents can finish. Those allowances
 do not create fresh batch/refresh/poll authority. Keep their reads necessary and
 bounded and honour the underlying reader's reset/backoff; no busy waiting.
 
-There is **no resume/reset command and no automatic resumption**. Bring the
-resumption disposition to Jake before enabling any resume path. Do not delete
-or substitute the state to clear a pause.
+There is **no automatic resumption**: a later healthy snapshot never clears a
+durable pause. Once the operator confirms the overload is resolved (or
+authorizes resuming), clear the durable pause and its pending journal under the
+state lock with:
+
+```sh
+sh skills/launch-fleet/scripts/fleet.sh overload resume
+```
+
+Do not delete or substitute state files manually. `resume` validates that the
+state and pending entries belong to `GH_REPO` before removing them, refuses on
+corrupt or foreign state or a busy lock without deleting anything, and is
+idempotent when no pause is active.
 
 `escalation: due_not_sent` means only that escalation is due. The orchestrator
 uses its existing escalation channel only under its separate messaging authority.
 Transport acceptance, recipient acknowledgement and work completion are separate
 evidence. No delivery or acknowledgement is inferred here, and private response
 payloads stay private. Offline tests never send a page.
+
+## REST read budget (FR3, #2433)
+
+[`scripts/budget.py`](scripts/budget.py) admits or refuses the next batch of
+reads, so a wake backs off before the account's shared REST or GraphQL
+allowance runs out. It is a gate a reader calls before each batch, not an
+observer: it decides for that one batch and keeps no state.
+
+```sh
+python3 -I skills/launch-fleet/scripts/budget.py admit 12 headers-1.txt headers-2.txt
+python3 -I skills/launch-fleet/scripts/budget.py admit 3 --resource graphql --floor 2000
+```
+
+Each file holds one earlier response as `gh api -i` writes it: the status line
+first, then the headers up to the first blank line. Only that header block is
+read; the body after it never counts. A file that doesn't start with its status
+line, or whose headers don't end, is unknown. For a paginated read, save each
+page's response in its own file (`gh api -i --paginate` puts every page in one
+stream, and only the first page's headers would count). It reads the
+`x-ratelimit-limit`, `-remaining`, `-reset` and `-resource` headers of every
+file and takes the newest: the latest reset window (resets within ten
+minutes of the latest are one window), and in it the lowest remaining,
+whatever the files' order. The files must all count one allowance, `core`
+(REST) or `graphql`, and `--resource` must match it when given. With no file,
+or when that answer is past its reset, it reads `gh api rate_limit`, which
+costs no allowance, for `--resource` (`core` by default). It admits the batch
+when `remaining - N` stays at or above the reserve kept for builders and
+reviewers: the larger of a quarter of the limit and 1,500 (1,500 for a limit
+of 5,000). `--floor N` puts N in place of the 1,500.
+
+It prints one JSON line,
+`{"allowed": bool, "remaining": n, "limit": n, "reset": unix, "resource": "core"|"graphql", "reason": "..."}`.
+Exit 0 admits, 1 backs off (the reason names the reset time) and 2 is unknown,
+which also refuses: a missing, malformed or contradictory header, an answer
+from another pool (such as `search`), answers from both pools, one unreadable
+answer among several, or an unreadable `rate_limit`. It never prints a token
+or a response body. Bad arguments are exit 2 with nothing on stdout.
+`$LAUNCH_FLEET_NOW` (seconds since 1970) stands in for the clock in tests.
+
+Beside the overload admission: the observer above pauses whole actions on a
+complete snapshot of both pools at under 10%; the read budget refuses one
+batch while its reserve is still left, so a wake's own reads stop well before
+the observer's alarm. Neither clears or replaces the other.

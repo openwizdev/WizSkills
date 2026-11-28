@@ -122,6 +122,17 @@ def recorded(args, value, why, component):
                 "switch OpenWiz's GitHub App installation on %s to Only select repositories, including %s "
                 "(Settings > Applications > Installed GitHub Apps > Configure, or the organization's Settings > "
                 'GitHub Apps), then %s' % (args.repo.split('/')[0], args.repo, check))
+    app_repairs = {
+        'app_wrong_repository': 'add %s to the selected repositories' % args.repo,
+        'app_suspended': 'unsuspend the installation',
+        'app_read_only': 'grant the required write permissions by approving the permission request',
+        'app_permissions_mismatch': 'accept the updated permissions requested by the App',
+    }
+    if component == 'github_app' and code in app_repairs:
+        return ('not verified (%s)' % code,
+                'in GitHub, go to Settings > Applications > Installed GitHub Apps > Configure '
+                "(or the organization's Settings > GitHub Apps), select OpenWiz, %s, then %s"
+                % (app_repairs[code], check))
     if component == 'github_app':
         return ('not verified (%s)' % code,
                 "set up OpenWiz's GitHub App for %s with %s, as the setup skill's \"The App\" says, then %s" % (

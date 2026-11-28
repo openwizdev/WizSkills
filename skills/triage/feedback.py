@@ -5,11 +5,24 @@ import sys
 
 CODES = ("defect", "reproducible", "small", "no_guarded_change", "no_instructions", "nothing_private")
 MARKER = re.compile(r"^OpenWiz feedback operation [0-9a-f]{32}$")
+FACTS_PREFIX = "OpenWiz feedback facts "
+FACTS_MAX = 1024
+FACTS_KEYS = (
+    "v", "kind", "area", "openwiz", "wizskills", "skill", "os", "arch",
+    "host", "driver", "harness", "model", "log_lines", "redactions",
+)
+SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$", re.ASCII)
+SKILL_VER = re.compile(r"^feedback@[0-9]+\.[0-9]+\.[0-9]+$", re.ASCII)
+MODEL = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$", re.ASCII)
+KINDS = ("bug", "idea", "question")
+OSES = ("linux", "macos", "windows", "other")
+ARCHES = ("x86_64", "arm64", "other")
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 LINK_LINE = re.compile(r"^Report: #", re.M)
 DESTINATION = "openwizdev/OpenWiz"
 CLOSING = re.compile(r"^Closes openwizdev/OpenWiz#", re.M)
 DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 POINTER = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/[1-9][0-9]*#issuecomment-[1-9][0-9]*$")
 REPO = re.compile(r"^openwizdev/[A-Za-z0-9_.-]+$")
 APPROVAL_LINE = re.compile(r"^\*\*Approved on its own by [^\n\"“”]+, [0-9]{4}-[0-9]{2}-[0-9]{2}:\*\* [^\n\"“”]+\n"
@@ -43,10 +56,102 @@ def is_report(report):
     return "feedback" in report["labels"] or marked
 
 
-def words(report):
+def valid_fact(key, value):
+    if key == "v":
+        return type(value) is int and value == 1
+    if key == "kind":
+        return type(value) is str and value in KINDS
+    if key in ("area", "host", "driver", "harness"):
+        return type(value) is str and SLUG.fullmatch(value) is not None and PRIVATE.search(value) is None
+    if key in ("openwiz", "wizskills"):
+        return type(value) is str and VERSION.fullmatch(value) is not None
+    if key == "skill":
+        return type(value) is str and SKILL_VER.fullmatch(value) is not None
+    if key == "os":
+        return type(value) is str and value in OSES
+    if key == "arch":
+        return type(value) is str and value in ARCHES
+    if key == "model":
+        return type(value) is str and MODEL.fullmatch(value) is not None and PRIVATE.search(value) is None
+    if key == "log_lines":
+        return type(value) is int and 0 <= value <= 40
+    if key == "redactions":
+        return type(value) is int and 0 <= value <= 9999
+    return False
+
+
+def read_facts(body):
+    lines = body.split("\n")
+    if len(lines) < 5 or not MARKER.match(lines[-1]) or lines[-2] != "" or lines[-4] != "":
+        return None
+    if any(line.startswith(FACTS_PREFIX) for line in lines[:-3]):
+        return None
+    line = lines[-3]
+    if not line.startswith(FACTS_PREFIX) or len(line) > FACTS_MAX or not line.isascii() or INSTRUCTION.search(line):
+        return None
+    raw = line[len(FACTS_PREFIX):]
+    try:
+        parsed = json.loads(raw, object_pairs_hook=unique)
+    except (ValueError, Unreadable):
+        return None
+    if not isinstance(parsed, dict) or "v" not in parsed:
+        return None
+    keys = list(parsed)
+    if any(k not in FACTS_KEYS for k in keys):
+        return None
+    indices = [FACTS_KEYS.index(k) for k in keys]
+    if indices != sorted(indices):
+        return None
+    if not all(valid_fact(k, v) for k, v in parsed.items()):
+        return None
+    if json.dumps(parsed, separators=(",", ":"), ensure_ascii=True) != raw:
+        return None
+    return parsed
+
+
+def format_facts(facts):
+    parts = []
+    if "openwiz" in facts:
+        parts.append(f"OpenWiz {facts['openwiz']}")
+    if "wizskills" in facts:
+        parts.append(f"WizSkills {facts['wizskills']}")
+    if "skill" in facts:
+        parts.append(f"via {facts['skill']}")
+    if "os" in facts and "arch" in facts:
+        parts.append(f"{facts['os']} {facts['arch']}")
+    elif "os" in facts:
+        parts.append(f"os {facts['os']}")
+    elif "arch" in facts:
+        parts.append(f"arch {facts['arch']}")
+    if "host" in facts:
+        parts.append(f"host {facts['host']}")
+    if "driver" in facts:
+        parts.append(f"driver {facts['driver']}")
+    if "harness" in facts and "model" in facts:
+        parts.append(f"{facts['harness']} with {facts['model']}")
+    elif "harness" in facts:
+        parts.append(f"harness {facts['harness']}")
+    elif "model" in facts:
+        parts.append(f"model {facts['model']}")
+    if "kind" in facts:
+        parts.append(f"kind {facts['kind']}")
+    if "area" in facts:
+        parts.append(f"area {facts['area']}")
+    if "log_lines" in facts:
+        parts.append(f"log lines {facts['log_lines']}")
+    if "redactions" in facts:
+        parts.append(f"redactions {facts['redactions']}")
+    if not parts:
+        return "Reporter's claim: reported with no environment facts."
+    return "Reporter's claim: reported on " + ", ".join(parts) + "."
+
+
+def words(report, has_facts=False):
     body = report["body"]
     lines = body.split("\n")
-    if lines and MARKER.match(lines[-1]):
+    if has_facts:
+        body = "\n".join(lines[:-3])
+    elif lines and MARKER.match(lines[-1]):
         body = "\n".join(lines[:-1])
     return "\n".join([report["title"], body] + [c["body"] for c in report.get("comments", [])])
 
@@ -61,8 +166,11 @@ def plan(case):
         raise Refused(f"#{report['number']} is not a report: no feedback label and no marker line last")
     if report["milestone"] is not None or "needs-triage" in report["labels"]:
         raise Refused(f"#{report['number']} is already triaged: it has a milestone or needs-triage")
+    facts = read_facts(report["body"])
     failed = [code for code in CODES if criteria.get(code) is not True]
-    text = words(report)
+    if facts is not None and "kind" in facts and facts["kind"] != "bug" and "defect" not in failed:
+        failed.append("defect")
+    text = words(report, has_facts=facts is not None)
     if INSTRUCTION.search(text) and "no_instructions" not in failed:
         failed.append("no_instructions")
     if PRIVATE.search(text) and "nothing_private" not in failed:
@@ -71,7 +179,7 @@ def plan(case):
         failed.append("scoped (no owned paths)")
     if failed:
         return {"outcome": "held", "report": report["number"], "report_labels": ["feedback", "needs-triage"],
-                "report_milestone": None, "report_comments": [], "brief": None,
+                "report_milestone": None, "report_comments": [], "facts": facts, "brief": None,
                 "note": f"#{report['number']} held for the owner: not " + ", ".join(failed)}
     version, brief = case.get("version"), case.get("brief")
     if not isinstance(version, str) or not VERSION.match(version):
@@ -97,13 +205,14 @@ def plan(case):
     relies = relied(case.get("relies_on", []))
     approval = approval_record(case.get("approval"), paths, relies)
     n = report["number"]
-    body = (f"{words_}\n\n## Owned paths\n\n" + "\n".join(f"- {p}" for p in paths) + "\n\n"
+    intro = f"{words_}\n\n{format_facts(facts)}" if facts is not None else words_
+    body = (f"{intro}\n\n## Owned paths\n\n" + "\n".join(f"- {p}" for p in paths) + "\n\n"
             f"**Relies on:** {relies}\n\n"
             "## Closing\n\nThe fix's pull request description carries both of these lines, each on its own line, "
             f"with this brief's number in the first:\n\nCloses {DESTINATION}#<this brief>\n"
             f"Closes {DESTINATION}#{n}\n\nReport: #{n}")
     return {"outcome": "fleet", "report": n, "report_labels": ["feedback"],
-            "report_milestone": version, "report_comments": [], "note": None,
+            "report_milestone": version, "report_comments": [], "note": None, "facts": facts,
             "brief": {"title": title, "body": body, "labels": ["ready-for-agent"], "milestone": version,
                       "approval": approval}}
 
@@ -180,6 +289,12 @@ def verify(case):
         missing.append("both closing lines in full")
     if "ready-for-agent" not in brief["labels"]:
         missing.append("the ready-for-agent label")
+    newest = max(reversed(brief["ready_labelled"]), key=lambda e: e["at"], default=None)
+    if newest is None or (newest["by"] or "").lower() not in authors:
+        missing.append("the ready-for-agent label last added by a record author")
+    elif brief["last_edited_at"] is not None and newest["at"] <= brief["last_edited_at"]:
+        missing.append(f"the ready-for-agent label added after the brief's last edit at {brief['last_edited_at']} "
+                       "(remove it and add it again; an edit in the label's own second can't be ordered)")
     if brief["milestone"] != case["version"]:
         missing.append(f"the milestone {case['version']}")
     if not any(c["author"].lower() in authors and APPROVAL_LINE.search(c["body"]) for c in brief["comments"]):
@@ -233,6 +348,13 @@ def read(path):
     return case
 
 
+BRIEF_KEYS = {"number", "author", "body", "labels", "milestone", "comments", "last_edited_at", "ready_labelled"}
+
+
+def is_time(value):
+    return isinstance(value, str) and TIME.fullmatch(value) is not None
+
+
 def read_brief(path):
     try:
         raw = sys.stdin.read() if path == "-" else open(path, encoding="utf-8").read()
@@ -245,14 +367,18 @@ def read_brief(path):
     if type(case["report"]) is not int or not isinstance(case["version"], str) or not isinstance(authors, list) \
             or not authors or not all(isinstance(a, str) and a for a in authors):
         raise Unreadable("verify needs a report number, a version and the record authors")
-    if not isinstance(brief, dict) or set(brief) != {"number", "author", "body", "labels", "milestone", "comments"}:
-        raise Unreadable("the brief holds exactly number, author, body, labels, milestone and comments")
+    if not isinstance(brief, dict) or set(brief) != BRIEF_KEYS:
+        raise Unreadable("the brief holds exactly " + ", ".join(sorted(BRIEF_KEYS)))
     if type(brief["number"]) is not int or not isinstance(brief["author"], str) or not isinstance(brief["body"], str) \
             or not isinstance(brief["labels"], list) or not all(isinstance(x, str) for x in brief["labels"]) \
             or not (brief["milestone"] is None or isinstance(brief["milestone"], str)) \
             or not isinstance(brief["comments"], list) or not all(
                 isinstance(c, dict) and set(c) == {"author", "body"} and all(isinstance(v, str) for v in c.values())
-                for c in brief["comments"]):
+                for c in brief["comments"]) \
+            or not (brief["last_edited_at"] is None or is_time(brief["last_edited_at"])) \
+            or not isinstance(brief["ready_labelled"], list) or not all(
+                isinstance(e, dict) and set(e) == {"at", "by"} and is_time(e["at"])
+                and (e["by"] is None or isinstance(e["by"], str)) for e in brief["ready_labelled"]):
         raise Unreadable("the brief's fields have the wrong types")
     return case
 

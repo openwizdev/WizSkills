@@ -24,7 +24,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # Each carried skill's own suites, run from the tree's root. The inventory
 # guard below refuses any newly added suite until this list includes it.
 SUITES = {
-    'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py']],
+    'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py'],
+                     ['python3', '-I', 'skills/build-ticket/scripts/test_prove.py']],
     'triage': [['python3', '-I', 'skills/triage/test/test_find_work.py'],
                ['python3', '-I', 'skills/triage/test/test_public_records.py']],
     'feedback': [['python3', '-I', 'skills/feedback/test/test_feedback.py']],
@@ -33,11 +34,18 @@ SUITES = {
                 ['python3', '-I', 'skills/install/tests/test_onboarding.py']],
     'huntr': [['sh', 'skills/huntr/scripts/test.sh']],
     'grill': [['sh', 'skills/grill/scripts/test.sh'],
-              ['python3', 'skills/grill/scripts/test_records.py']],
+              ['python3', '-I', 'skills/grill/scripts/test_records.py']],
+    'role-call': [['python3', '-I', 'skills/role-call/scripts/test_channel.py']],
     'diagnose': [['node', '--test', 'skills/diagnose/tests/hitl-loop.test.mjs'],
                  ['python3', '-I', 'skills/diagnose/scripts/test_loop.py']],
+    'dream-cycle': [['python3', '-I', 'skills/dream-cycle/test/test_contract.py'],
+                    ['python3', '-I', 'skills/dream-cycle/test/test_inventory.py'],
+                    ['python3', '-I', 'skills/dream-cycle/test/test_dream.py'],
+                    ['python3', '-I', 'skills/dream-cycle/test/test_links.py']],
     'where-are-we': [['python3', '-I', 'skills/where-are-we/test/test_read_github.py']],
     'handoff': [['python3', '-I', 'skills/handoff/test/test_handoff.py']],
+    'agent-issue': [['python3', '-I', 'skills/agent-issue/test/test_lint.py']],
+    'agent-pr': [['python3', '-I', 'skills/agent-pr/test/test_pr.py']],
     'ask-wiz': [['python3', '-I', 'skills/ask-wiz/test/test_routes.py']],
     'hill-climb': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/hill-climb/tests']],
     'setup': [['python3', '-I', 'skills/setup/scripts/test_settings.py']],
@@ -45,11 +53,13 @@ SUITES = {
               ['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/image/references']],
     'to-spec': [['python3', '-I', 'skills/to-spec/test/test_video.py']],
     'to-tickets': [['python3', '-I', 'skills/to-tickets/scripts/test_check_approval.py'],
+                   ['python3', '-I', 'skills/to-tickets/scripts/test_approve.py'],
                    ['sh', 'skills/to-tickets/test/test-revision.sh'],
                    ['python3', '-I', 'skills/to-tickets/test/test_relies.py'],
                    ['python3', '-I', 'skills/to-tickets/test/test_picture.py'],
                    ['python3', '-I', 'skills/to-tickets/test/test_request.py'],
-                   ['python3', '-I', 'skills/to-tickets/test/test_lead_time.py']],
+                   ['python3', '-I', 'skills/to-tickets/test/test_lead_time.py'],
+                   ['python3', '-I', 'skills/to-tickets/test/test_links.py']],
     'review-ticket': [['python3', '-I', 'skills/review-ticket/scripts/test_review.py']],
     'wayfind': [['python3', '-I', 'skills/wayfind/test/test_frontier.py']],
     'research': [['python3', '-I', 'skills/research/test/test_workers.py'],
@@ -62,6 +72,7 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-inbox.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-records.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-status.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-context.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-ops-starts.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-on1.py'],
                      ['sh', 'skills/launch-fleet/scripts/test-loop.sh'],
@@ -69,27 +80,59 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-limit-recovery.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-post.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-merge.py'],
+                     ['env', '-u', 'OPENWIZ_GITHUB_APP_KEY', 'python3', '-I', 'skills/launch-fleet/scripts/test-queue.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-brief.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-heartbeat.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-ledger.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-host.py'],
-                     ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py']],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-session.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-stop-all.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-budget.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-overload.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-snapshot.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-gitread.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-ghcache.py'],
+                     ['env', '-u', 'OPENWIZ_GITHUB_APP_KEY', 'python3', '-I', 'skills/launch-fleet/scripts/test-gh-meter.py']],
     # Not a skill: the check's own version rule and changesets (WS18).
     'check': [['python3', '-I', 'check/test_notice.py'],
               ['python3', '-I', 'check/test_versions.py'],
               ['python3', '-I', 'check/test_changesets.py'],
-              ['python3', '-I', 'check/test_suites.py']],
+              ['python3', '-I', 'check/test_suites.py'],
+              ['python3', '-I', 'check/test_bench.py'],
+              ['python3', '-I', 'check/test_select.py'],
+              ['python3', '-I', 'check/test_checklist_rules.py'],
+              ['python3', '-I', 'check/test_context_budget.py'],
+              ['python3', '-I', 'check/test_packaged_imports.py'],
+              ['python3', '-I', 'check/test_packaged_scripts.py'],
+              ['python3', '-I', 'check/test_checkpoints_authority.py']],
 }
+
+PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}
+
+
+def rows():
+    for name, commands in SUITES.items():
+        split, count = PARTS.get(name, (None, 0))
+        yield name, name, [c for c in commands if c != split], {}
+        for n in range(1, count + 1):
+            yield f'{name}.{n}', name, [split], {'TEST_SHARD': f'{n}/{count}'}
 
 # The skills not adapted from Matt Pocock's, each with the source line its
 # SKILL.md carries exactly, on a line of its own, instead of his notice.
 ORIGINAL = "**Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills."
 SOURCE_LINES = {
+    'agent-issue': ORIGINAL,
+    'agent-pr': ORIGINAL,
+    'dream-cycle': ORIGINAL,
+    'role-call': ORIGINAL,
     'feedback': ORIGINAL,
     'hill-climb': ORIGINAL,
     'huntr': ORIGINAL,
     'image': ORIGINAL,
     'install': ORIGINAL,
+    'jev': ORIGINAL,
+    'son-of-anton': ORIGINAL,
     'write-driver': ORIGINAL,
     'where-are-we': "**Source:** dot-context's written plan. Not adapted from Matt Pocock's skills.",
 }
@@ -117,7 +160,7 @@ MATT_COPYRIGHT = 'Copyright (c) 2026 Matt Pocock'
 ASK_WIZ = 'ask-wiz'
 ASK_WIZ_POLICY = 'policy:\n  allow_implicit_invocation: false'
 FRONTMATTER_KEYS = ('name', 'description', 'version')
-DESCRIPTION_MAX = 1024
+DESCRIPTION_MAX = 180
 OPENAI_KEYS = ('display_name', 'short_description')
 
 PLUGIN = '.claude-plugin/plugin.json'
@@ -519,6 +562,7 @@ def marketplace(root, version, out):
         out.add('manifest', MARKETPLACE, '`plugins[0].source` is `./`, the repository root')
     if 'version' in entry and entry['version'] != version:
         out.add('manifest', MARKETPLACE, f'`plugins[0].version` agrees with {PLUGIN}')
+    return data
 
 
 # ---- The standalone check and the suites ----
@@ -607,7 +651,8 @@ def unlisted_tests(root):
                 covered.add(rel)
     # Huntr's public shell entrypoint executes its four Node test modules.
     covered.update('skills/huntr/scripts/' + name for name in
-                   ('gate.test.mjs', 'manifest.test.mjs', 'records.test.mjs', 'controller.test.mjs'))
+                   ('gate.test.mjs', 'manifest.test.mjs', 'records.test.mjs', 'controller.test.mjs',
+                    'targets.test.mjs', 'findings.test.mjs'))
     discovered = {p.relative_to(root).as_posix() for p in (root / 'skills').rglob('*')
                   if p.is_file() and 'fixtures' not in p.parts and
                   ((p.name.startswith('test') and p.suffix in ('.py', '.sh'))
@@ -645,12 +690,12 @@ def suites(root, names=None):
     for rel in unlisted:
         print(f'suite inventory: {rel}: unlisted', flush=True)
     failed = bool(unlisted)
-    for name, commands in SUITES.items():
+    for name, row, commands, env in rows():
         if names is not None and name not in names:
             continue
         for command in commands:
             shown = ' '.join(command)
-            run = invocation(root, name, command)
+            run = invocation(root, row, command)
             if isinstance(run, str):
                 print(run, flush=True)
                 failed = True
@@ -659,7 +704,7 @@ def suites(root, names=None):
             print(f'suite {name}: {shown}: running', flush=True)
             started = time.monotonic()
             try:
-                code = subprocess.run(argv, cwd=root / run['cwd'], env=clean_env()).returncode
+                code = subprocess.run(argv, cwd=root / run['cwd'], env={**clean_env(), **env}).returncode
             except OSError:
                 print(f'suite {name}: {shown}: cannot start', flush=True)
                 failed = True
@@ -690,12 +735,12 @@ def shards(root):
     return [{'name': 'rules', 'skill': None, 'commands': [], 'env': {}},
             {'name': 'standalone', 'skill': None,
              'commands': [{'suite': STANDALONE, 'argv': STANDALONE, 'cwd': '.'}], 'env': {}},
-            *({'name': name, 'skill': name, 'commands': [invocation(root, name, c) for c in commands], 'env': {}}
-              for name, commands in SUITES.items())]
+            *({'name': name, 'skill': row, 'commands': [invocation(root, row, c) for c in commands], 'env': env}
+              for name, row, commands, env in rows())]
 
 
 def selection(argv):
-    known = ['rules', 'standalone', *SUITES]
+    known = ['rules', 'standalone', *(name for name, *_ in rows())]
     if not argv:
         return known
     if argv == ['--list']:

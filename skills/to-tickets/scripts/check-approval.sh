@@ -147,11 +147,9 @@ if gh repo view --json isPrivate,nameWithOwner > "$work/repo" 2> /dev/null; then
     then .[0].nameWithOwner | ascii_downcase else error("unknown") end' "$work/repo" 2> /dev/null) || repo=''
 fi
 
-jq -er --arg records "$private_records" --arg repo "$repo" --argjson private "$private" --slurpfile tickets "$work/tickets" --slurpfile labels "$work/labels.json" --slurpfile authors "$work/authors.json" '
+jq -er --arg spec "$spec" --arg records "$private_records" --arg repo "$repo" --argjson private "$private" --slurpfile tickets "$work/tickets" --slurpfile labels "$work/labels.json" --slurpfile authors "$work/authors.json" '
   def trim: sub("^\\s+"; "") | sub("\\s+$"; "");
-  # #2096: OWNER/NAME#N in a row'"'"'s Ticket or Blocked by cell, naming this
-  # repository ($repo, case-insensitively), reads as #N; another
-  # repository'"'"'s long form there refuses its line. A title may name anything.
+  def at_($l; $i): $l[$i] // "";
   def long_ref: "(?<![A-Za-z0-9_./-])(?<o>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)#(?<n>[1-9][0-9]*)";
   def short: gsub(long_ref; if $repo != "" and (.o | ascii_downcase) == $repo then "#\(.n)" else "\(.o)#\(.n)" end);
   def foreign: [scan(long_ref) | select($repo == "" or (.[0] | ascii_downcase) != $repo) | "\(.[0])#\(.[1])"] | unique;
@@ -191,35 +189,106 @@ jq -er --arg records "$private_records" --arg repo "$repo" --argjson private "$p
       elif ($line.value | test("^\\s*\\|")) then .rows += [$line]
       else . end)
     | .rows;
+  def human_check:
+    if $private or public_form then . else error("public approval form requires a decision, date and private pointer, without quotes or thread ids") end
+    | table
+    | if length < 3 then error("approval table is missing") else . end
+    | if (map(.key) | . == [range(.[0]; .[0] + length)]) then .
+      else error("approval table rows are not contiguous") end
+    | ([.[2:][] | .value as $line | ($line | cells) as $c
+        | select(($c | length) == 4) | [($c[0], $c[2]) | foreign[]] | unique | select(length > 0)
+        | {line: $line, refs: .}] | first) as $bad
+    | if $bad != null then error("approval table line `\($bad.line | sub("\\s+$"; "") | short)` names \($bad.refs | join(", ")), not this repository")
+      else map(.value | cells | (if length == 4 then .[0] |= short | .[2] |= short else . end)) end
+    | if .[0] == ["Ticket", "Title", "Blocked by", "Label"] then .
+      else error("approval table columns must be Ticket | Title | Blocked by | Label") end
+    | if (.[1] | length) == 4 and all(.[1][]; test("^:?-{3,}:?$")) then .[2:]
+      else error("approval table separator must have four columns") end
+    | map(if length == 4 and (.[0] | test("^#[1-9][0-9]*$")) and .[1] != "" and .[2] != ""
+                and (.[3] == "held" or .[3] == $labels[0]["ready-for-agent"] or .[3] == $labels[0]["ready-for-human"])
+          then .[0][1:] | tonumber else error("approval table row needs a ticket, title, blockers and valid ready label or held") end)
+    | if length == (unique | length) and sort == $tickets[0] then {machine: false}
+      else error("approval table tickets must equal the complete sub-issue set, each once") end;
+  def machine_check:
+    (. | until(length == 0 or .[-1] != ""; .[:-1])) as $l
+    | (at_($l; 0) | capture("^\\*\\*Machine plan approval, [0-9]{4}-[0-9]{2}-[0-9]{2}, revision (?<n>[1-9][0-9]*):\\*\\* links, relies, sizes, width and owned paths passed\\.$") // null) as $hdr
+    | if $hdr == null then error("invalid machine plan approval header") else . end
+    | ($hdr.n | tonumber) as $n
+    | (at_($l; 1) | capture("^Grill confirmed: https://github\\.com/(?<repository>[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)/(issues|pull)/[1-9][0-9]*#issuecomment-[1-9][0-9]*$") // null) as $grill
+    | if $grill == null then error("invalid machine plan approval grill pointer")
+      elif ($private | not) and $grill.repository != $records then error("invalid machine plan approval private records pointer")
+      elif ($private | not) and any($l[]; test("thr_[A-Za-z0-9][A-Za-z0-9_-]*") or test("^ {0,3}>")) then error("invalid machine plan approval public form")
+      else . end
+    | (at_($l; 3) | capture("^Checks: (?<t>[1-9][0-9]*) tickets; links [0-9]+; relies [0-9]+; sizes S [0-9]+, M [0-9]+, L [0-9]+; width: chain [0-9]+, widest [0-9]+; owned paths [0-9]+\\.$") // null) as $chk
+    | if $chk == null or at_($l; 2) != "" or at_($l; 4) != "" then error("invalid machine plan approval checks summary") else . end
+    | ($chk.t | tonumber) as $t
+    | (if $n > 1 then
+         if (at_($l; 5) | test("^Changed since revision \($n - 1): .+\\.$")) and at_($l; 6) == "" then 7
+         else error("invalid machine plan approval changed line") end
+       else 5 end) as $k
+    | if at_($l; $k) != "| Ticket | Title | Blocked by | Label |" or at_($l; $k + 1) != "| --- | --- | --- | --- |"
+      then error("invalid machine plan approval table header") else . end
+    | ($k + 2 + $t) as $j
+    | if ($l | length) < $j + 9 or at_($l; $j) != "" then error("invalid machine plan approval layout") else . end
+    | [$l[$k + 2:$j][] | . as $line | ($line | cells) as $c
+       | if ($c | length) != 4 then error("invalid machine plan approval table row") else . end
+       | ([($c[0], $c[2]) | foreign[]] | unique) as $f
+       | if ($f | length) > 0 then error("approval table line `\($line | sub("\\s+$"; "") | short)` names \($f | join(", ")), not this repository") else . end
+       | ($c[0] | short) as $ref | ($c[2] | short) as $b
+       | if ($ref | test("^#[1-9][0-9]*$")) and $c[1] != "" and ($b | test("^(none|#[1-9][0-9]*(?: #[1-9][0-9]*)*)$"))
+            and ($c[3] == "ready-for-agent" or $c[3] == "ready-for-human" or $c[3] == "none"
+                 or $c[3] == $labels[0]["ready-for-agent"] or $c[3] == $labels[0]["ready-for-human"])
+         then {number: ($ref[1:] | tonumber), title: ($c[1] | gsub("\\\\\\|"; "|")), blockers: $b}
+         else error("invalid machine plan approval table row") end] as $rows
+    | if ([$rows[].number] | length == (unique | length) and sort == $tickets[0]) then .
+      else error("approval table tickets must equal the complete sub-issue set, each once") end
+    | (at_($l; $j + 1) | capture("^Fingerprint: `(?<f>[0-9a-f]{64})`$") // null) as $fp
+    | if $fp == null then error("invalid machine plan approval fingerprint") else . end
+    | if at_($l; $j + 2) != "" or at_($l; $j + 3) != "<details><summary>Revision text</summary>"
+         or at_($l; $j + 4) != "" or at_($l; $j + 5) != "```text"
+         or $l[-3] != "```" or $l[-2] != "" or $l[-1] != "</details>"
+      then error("invalid machine plan approval revision block") else . end
+    | $l[$j + 6:-3] as $rev
+    | if at_($rev; 0) != "plan-graph revision v2"
+         or (at_($rev; 1) | test("^spec #\($spec) body sha256 [0-9a-f]{64}$") | not)
+      then error("invalid machine plan approval revision header") else . end
+    | [$rev[2:][] | capture("^ticket #(?<n>[1-9][0-9]*) blocked-by (?<b>none|#[1-9][0-9]*(?: #[1-9][0-9]*)*) body sha256 [0-9a-f]{64} title (?<title>.+)$")
+       | {number: (.n | tonumber), title, blockers: .b}] as $named
+    | if ($named | length) != ($rev | length) - 2
+         or ($named | sort_by(.number)) != ($rows | sort_by(.number))
+      then error("machine plan approval table does not match revision text") else . end
+    | {machine: true, fingerprint: $fp.f, text: (($rev | join("\n")) + "\n")};
   [.[] | select((.user | if type == "object" then .login else null end
                  | if type == "string" then ascii_downcase else null end) as $l
                 | $l != null and any($authors[0][]; . == $l))
    | select((.body | split("\n") | map(select(test("\\S"))) | first // "" | sub("^\\s+"; ""))
-                | startswith("**Plan graph approved by"))] | max_by(.id)
+                | startswith("**Plan graph approved by") or startswith("**Machine plan approval, "))] | max_by(.id)
   | if . == null then error("no posted plan graph approval") else .body end
   | split("\n") | map(rtrimstr("\r"))
-  | if $private or public_form then . else error("public approval form requires a decision, date and private pointer, without quotes or thread ids") end
-  | table
-  | if length < 3 then error("approval table is missing") else . end
-  | if (map(.key) | . == [range(.[0]; .[0] + length)]) then .
-    else error("approval table rows are not contiguous") end
-  | ([.[2:][] | .value as $line | ($line | cells) as $c
-      | select(($c | length) == 4) | [($c[0], $c[2]) | foreign[]] | unique | select(length > 0)
-      | {line: $line, refs: .}] | first) as $bad
-  | if $bad != null then error("approval table line `\($bad.line | sub("\\s+$"; "") | short)` names \($bad.refs | join(", ")), not this repository")
-    else map(.value | cells | (if length == 4 then .[0] |= short | .[2] |= short else . end)) end
-  | if .[0] == ["Ticket", "Title", "Blocked by", "Label"] then .
-    else error("approval table columns must be Ticket | Title | Blocked by | Label") end
-  | if (.[1] | length) == 4 and all(.[1][]; test("^:?-{3,}:?$")) then .[2:]
-    else error("approval table separator must have four columns") end
-  | map(if length == 4 and (.[0] | test("^#[1-9][0-9]*$")) and .[1] != "" and .[2] != ""
-              and (.[3] == "held" or .[3] == $labels[0]["ready-for-agent"] or .[3] == $labels[0]["ready-for-human"])
-        then .[0][1:] | tonumber else error("approval table row needs a ticket, title, blockers and valid ready label or held") end)
-  | if length == (unique | length) and sort == $tickets[0] then true
-    else error("approval table tickets must equal the complete sub-issue set, each once") end
-' "$work/all-comments" > /dev/null 2> "$work/error" || {
+  | if ((map(select(test("\\S"))) | first // "" | sub("^\\s+"; "")) | startswith("**Machine plan approval, "))
+    then machine_check else human_check end
+' "$work/all-comments" > "$work/approval.json" 2> "$work/error" || {
   cat "$work/error" >&2
   fail "spec #$spec's posted approval table is invalid; correct it before labelling or handoff"
 }
+if jq -e '.machine == true' "$work/approval.json" > /dev/null 2>&1; then
+  if command -v sha256sum > /dev/null 2>&1; then
+    sha256() { sha256sum < "$1" | cut -d' ' -f1; }
+  elif command -v shasum > /dev/null 2>&1; then
+    sha256() { shasum -a 256 < "$1" | cut -d' ' -f1; }
+  else
+    fail 'needs sha256sum or shasum'
+  fi
+  here=$(cd -P "$(dirname "$0")" && pwd -P) || fail 'cannot find this script'
+  revision_sh=${CHECK_APPROVAL_REVISION:-$here/../revision.sh}
+  [ -f "$revision_sh" ] || fail "cannot find revision.sh at $revision_sh"
+  fingerprint=$(jq -r '.fingerprint' "$work/approval.json") || fail "cannot read machine approval fingerprint"
+  jq -rj '.text' "$work/approval.json" > "$work/embedded-revision" || fail "cannot read machine approval revision text"
+  embedded_hash=$(sha256 "$work/embedded-revision") || fail "cannot hash machine approval revision text"
+  [ "$embedded_hash" = "$fingerprint" ] || fail "spec #$spec's machine plan approval revision text does not match its fingerprint"
+  sh "$revision_sh" "$spec" > "$work/current-revision" || fail "cannot run revision.sh for spec #$spec"
+  current_hash=$(sha256 "$work/current-revision") || fail "cannot hash current revision for spec #$spec"
+  [ "$current_hash" = "$fingerprint" ] || fail "spec #$spec's machine plan approval is stale (fingerprint $fingerprint does not match current revision $current_hash)"
+fi
 checkpoints
 echo "check-approval.sh: #$spec approval table is valid"

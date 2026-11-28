@@ -59,12 +59,12 @@ Distribution (all reviewed PRs) of 1, 2, 3, 4, and 5 or more rounds: BEFORE 200,
 
 **Blocking findings**
 
-| Cohort | First-review blockers (Spec/Sweep/Standards) | Per reviewed PR | Re-checks with a new blocker |
-| --- | --- | --- | --- |
-| All PRs, BEFORE | 480 (310/136/34) | 1.01 | 73 of 432 (17%) |
-| All PRs, AFTER | 73 (53/19/1) | 1.12 | 7 of 46 (15%) |
-| Ticket PRs, BEFORE | 239 (156/65/18) | 1.55 | 52 of 217 (24%) |
-| Ticket PRs, AFTER | 63 (44/18/1) | 1.31 | 7 of 38 (18%) |
+| Cohort | First-review blockers (Spec/Sweep/Standards) | Per reviewed PR | Re-checks with a new blocker | Re-check blockers (Spec/Sweep/Standards) |
+| --- | --- | --- | --- | --- |
+| All PRs, BEFORE | 480 (310/136/34) | 1.01 | 73 of 432 (17%) | 112 (49/61/2) |
+| All PRs, AFTER | 73 (53/19/1) | 1.12 | 7 of 46 (15%) | 8 (2/5/1) |
+| Ticket PRs, BEFORE | 239 (156/65/18) | 1.55 | 52 of 217 (24%) | 77 (37/39/1) |
+| Ticket PRs, AFTER | 63 (44/18/1) | 1.31 | 7 of 38 (18%) | 8 (2/5/1) |
 
 **Ticket PRs by diff lines**, BEFORE → AFTER
 

@@ -372,9 +372,34 @@ def body_nonce(snap, number, body):
     return nonce
 
 
-def escape_headings(text):
-    normalized = text.replace('\r\n', '\n').replace('\r', '\n')
-    return re.sub(r'(?m)^([ \t]*)(#+)', r'\1\\\2', normalized)
+def literal_fence(text):
+    tildes = max((len(m.group(0)) for m in re.finditer(r'~+', text)), default=0)
+    ticks = max((len(m.group(0)) for m in re.finditer(r'`+', text)), default=0)
+    if tildes <= ticks:
+        return '~' * max(4, tildes + 1)
+    return '`' * max(4, ticks + 1)
+
+
+def quote_body(nonce, text):
+    fence = literal_fence(text)
+    sep = '\n' if text and not text.endswith('\n') else ''
+    return (f'### Body (untrusted)\n\n<<<untrusted-body:{nonce}>>>\n{fence}text\n'
+            f'{text}{sep}{fence}\n<<<end-untrusted-body:{nonce}>>>\n\n')
+
+
+def fit_quoted_body(nonce, text, room):
+    encoded = text.encode()
+    lo, hi = 0, len(encoded)
+    best = quote_body(nonce, '')
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = quote_body(nonce, encoded[:mid].decode(errors='ignore'))
+        if len(candidate.encode()) <= room:
+            best = candidate
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
 
 
 def facts(out, number):
@@ -394,12 +419,9 @@ def facts(out, number):
         closes = 'closing issues unavailable (read by REST)' if refs is None else f"closes {', '.join(refs) or 'none'}"
         head.append(f"head {item.get('head')}; {closes}")
     head.append('')
-    raw_body = item.get('body') or ''
-    safe_body = escape_headings(raw_body)
-    nonce = body_nonce(snap, number, safe_body)
-    body_prefix = f'### Body (untrusted)\n\n<<<untrusted-body:{nonce}>>>\n'
-    body_suffix = f'\n<<<end-untrusted-body:{nonce}>>>\n\n'
-    parts = ['\n'.join(head) + '\n', body_prefix + safe_body + body_suffix,
+    raw_body = (item.get('body') or '').replace('\r\n', '\n').replace('\r', '\n')
+    nonce = body_nonce(snap, number, raw_body)
+    parts = ['\n'.join(head) + '\n', quote_body(nonce, raw_body),
              f'### Record-author comments, newest first ({len(records)} of {len(every)} comments)\n\n']
     parts += [f"#### {c.get('author')} at {c.get('created_at')} (comment {c.get('id')}, "
               f"updated {c.get('updated_at')})\n\n{c.get('body')}\n\n" for c in records]
@@ -414,9 +436,7 @@ def facts(out, number):
             shown += k >= 3
             continue
         if k == 1:
-            avail = max(room - len(body_prefix.encode()) - len(body_suffix.encode()), 0)
-            trimmed = safe_body.encode()[:avail].decode(errors='ignore')
-            text.append(body_prefix + trimmed + body_suffix)
+            text.append(fit_quoted_body(nonce, raw_body, max(room, 0)))
         cut = (f'[cut: this block is capped at 60 KB; {shown} of {len(records)} record-author comments shown'
                f'{", the body cut short" if k == 1 else ""}; read GitHub for the rest]')
         break

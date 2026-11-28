@@ -216,7 +216,7 @@ class ShellRead:
         self.s, self.lines, self.out, self.first, self.lost = s, Lines(s), [], None, False
 
 
-def shell_quoted(r, i):
+def shell_quoted(r, i, nested=False):
     s, n, j, sure = r.s, len(r.s), i + 1, True
     while j < n:
         if s[j] == '\\':
@@ -233,16 +233,24 @@ def shell_quoted(r, i):
             sure = sure and inner
         elif s[j] == '`':
             j = skip_quoted(s, j, '`', newline_ends=False)
+            sure = sure and not nested
         else:
             j += 1
     r.lost = True
     return n, False
 
 
+def continued(s, j, start):
+    k = j - 1
+    while k > start and s[k - 1] == '\\':
+        k -= 1
+    return s[j - 1] == '\n' and (j - 1 - k) % 2 == 1
+
+
 def command_start(s, i, start):
     j = i
-    while j > start and s[j - 1] in ' \t':
-        j -= 1
+    while j > start and (s[j - 1] in ' \t' or continued(s, j, start)):
+        j -= 2 if s[j - 1] == '\n' else 1
     if j == start or s[j - 1] in ';&|()\n':
         return True
     k = j
@@ -313,23 +321,22 @@ def shell_words(r, i, nested=False):
         elif c == '$' and s.startswith("$'", i):
             i, boundary = skip_quoted(s, i + 1, "'", newline_ends=False), False
         elif c == '"':
-            i, inner = shell_quoted(r, i)
+            i, inner = shell_quoted(r, i, nested)
             sure, boundary = sure and inner, False
             quiet = quiet if inner else lines.at(i - 1)[0]
         elif c == '`':
             i, boundary = skip_quoted(s, i, c, newline_ends=False), False
             sure = sure and not nested
         elif c == '\\':
-            i, boundary = i + 2, False
+            i, boundary = i + 2, boundary and s.startswith('\\\n', i)
         elif nested and boundary and SHELL_WORD.match(s, i):
             word = SHELL_WORD.match(s, i).group()
-            if word in ('case', 'esac'):
+            if word in ('case', 'esac') and command_start(s, i, start):
                 sure = False
-                if command_start(s, i, start):
-                    if word == 'case':
-                        cases.append(depth)
-                    elif cases:
-                        cases.pop()
+                if word == 'case':
+                    cases.append(depth)
+                elif cases:
+                    cases.pop()
             i, boundary = i + len(word), False
         else:
             i, boundary = i + 1, False
@@ -531,13 +538,13 @@ def scan_html(s):
             else:
                 k += 1
         i, tag = min(k + 1, n), m.group(2).lower()
-        if m.group(1) or tag not in ('script', 'style'):
+        if m.group(1) or tag not in ('script', 'style', 'title', 'textarea'):
             continue
-        close = re.compile(r'</' + tag + r'\b', re.I).search(s, i)
+        close = re.compile(r'</' + tag + r'(?=[\t\n\f\r />])', re.I).search(s, i)
         stop = n if not close else close.start()
         if tag == 'style':
             scan_css(s[:stop], i, lines, out)
-        elif JS_TYPES.match(attrs.get('type', '')):
+        elif tag == 'script' and JS_TYPES.match(attrs.get('type', '')):
             scan_js(s[:stop], i, lines, out)
         i = stop
 

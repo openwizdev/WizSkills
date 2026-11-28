@@ -4007,11 +4007,11 @@ ROOM
   out=$(quota_wake "$NOW" fresh 2> "$d/err") && points_only "$d/err" \
     && [ "$out" = 'check start #70: thread thr_syn70, no branch 30 minutes after the start; verify the outcome with its starter' ] \
     || { bad "$name" "fresh wake should ask the starter: $out $(cat "$d/err")"; return; }
-  # The child completed at 11:30. Its parent handles the report at noon.
+  error_at=$((NOW - 1800))
   quota_report() {
     printf '%s\n' 'Individual quota reached. Try again in 45m.' | \
       env PATH="$d/bin:$PATH" ARCHIVE_STATE="$1" LAUNCH_FLEET_NOW="$NOW" \
-      "$PYTHON" -I "$HERE/quota.py" retire thr_syn70 --now "$((NOW - 1800))"
+      "$PYTHON" -I "$HERE/quota.py" retire thr_syn70 --now "$error_at"
   }
   record=$(quota_report queued 2> "$d/err")
   [ "$?" = 2 ] && [ -z "$record" ] || { bad "$name" "a queued archive allowed a retry record"; return; }

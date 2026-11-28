@@ -83,9 +83,11 @@ Export writes one zip.
 
 - **Head:** `bbbb`
 """
+TIER = "Risk tier: 3 (Behaviour change): export writes a zip."
 FULL = f"""VERDICT: CHANGES at {OLD}
 
 Full review by Codex, Sol 6.2, Medium. CI green on this commit: check.
+{TIER}
 
 Intent: export writes the whole cookbook to one zip and refuses to overwrite.
 
@@ -422,6 +424,32 @@ class Review(unittest.TestCase):
         self.world({}, comments=[report(FULL)])
         out = self.run_helper("check", self.file("recheck.md", RECHECK), "--repo", SKILLS, "--pr", "7")
         self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stdout + out.stderr)
+
+    def test_full_review_requires_one_valid_risk_tier_in_the_header(self):
+        self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})
+        invalid = {
+            "missing": FULL.replace(TIER + "\n", ""),
+            "duplicate": FULL.replace(TIER, f"{TIER}\n{TIER}"),
+            "out of range": FULL.replace("Risk tier: 3", "Risk tier: 4"),
+            "missing name": FULL.replace("(Behaviour change)", "()"),
+            "blank name": FULL.replace("(Behaviour change)", "( )"),
+            "missing reason": FULL.replace("export writes a zip.", ""),
+            "outside header": FULL.replace(TIER + "\n", "").replace("Intent: ", TIER + "\n\nIntent: "),
+            "quoted as code": FULL.replace(TIER + "\n", "").replace("Intent: ", f"```text\n{TIER}\n```\n\nIntent: "),
+        }
+        for name, body in invalid.items():
+            with self.subTest(name):
+                out = self.run_helper("check", self.file("full.md", body), "--repo", SKILLS, "--pr", "7")
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn("Risk tier:", out.stdout)
+
+        for line in (TIER, "Risk tier: 0 (Report only): an audit.",
+                     "Risk tier: 1 (Documentation): an example changed.",
+                     "Risk tier: 2 (Same behaviour): fewer allocations."):
+            with self.subTest(line):
+                out = self.run_helper("check", self.file("full.md", FULL.replace(TIER, line)),
+                                      "--repo", SKILLS, "--pr", "7")
+                self.assertEqual((out.returncode, out.stdout.strip()), (0, "report ok"), out.stderr)
 
     def test_full_review_report_problems(self):
         self.world({"checks": green(OLD)}, pr={"head": {"sha": OLD}})

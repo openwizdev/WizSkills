@@ -467,6 +467,63 @@ class Check(unittest.TestCase):
                 code, out = self.check(self.project(**{'fleet.md': text}))
                 self.assertEqual((code, out.splitlines()), (5, [line, 'Settings: refused (1 problems).']))
 
+    def test_a_models_table_the_launch_reader_refuses_for_its_line_ends_is_refused(self):
+        # catches: setup trimming a row or the heading that launch-fleet reads whole, so a
+        # verified table stops every fleet start (review of #403, first finding).
+        starts = reader(SKILLS / 'launch-fleet/scripts/ops-starts.py')
+        follows = '| Fixer | follows Builder | | | |\n'
+        first, builder = no_model('Reviewer fall-back 1'), choice('Builder', 'claude-code', 'syn-claude-1')
+        fallen = NEW.replace(follows, follows + first + '\n')
+        header = '| Role | Harness | Model | Effort | `room-cli thread spawn` flags |'
+        row = 'fleet.md: Models: a table row does not end at its closing |'
+        heading = 'fleet.md: Models: the heading is not exactly ## Models'
+        cases = {
+            'a space after a fall-back row': (fallen.replace(first, first + ' '), row),
+            'a tab after a fall-back row': (fallen.replace(first, first + '\t'), row),
+            'two carriage returns after a fall-back row': (fallen.replace(first, first + '\r\r'), row),
+            'a space after the Builder row': (fallen.replace(builder, builder + ' '), row),
+            'a space after a following row': (fallen.replace(follows, follows[:-1] + ' \n'), row),
+            'a space after the header': (fallen.replace(header, header + ' '), row),
+            'a space after the rule': (fallen.replace('| --- | --- | --- | --- | --- |\n| Orch',
+                                                      '| --- | --- | --- | --- | --- | \n| Orch'), row),
+            'a space after the heading': (fallen.replace('## Models\n', '## Models \n'), heading),
+            'two spaces in the heading': (fallen.replace('## Models\n', '##  Models\n'), heading),
+        }
+        for name, (text, line) in cases.items():
+            with self.subTest(name):
+                self.assertNotEqual(text, fallen)
+                with self.assertRaises(ValueError):
+                    starts.read_models(text)
+                code, out = self.check(self.project(**{'fleet.md': text}))
+                self.assertEqual((code, out.splitlines()), (5, [line, 'Settings: refused (1 problems).']))
+        ended = fallen.replace('## Models\n', '## Models\r\n').replace(first, first + '\r').replace(
+            header, header + '\r')
+        self.assertEqual(len(starts.read_models(ended)['reviewer_fallbacks']), 1)
+        self.assertEqual(self.check(self.project(**{'fleet.md': ended})), (0, 'Settings: verified (4 files).\n'))
+
+    def test_an_orchestrator_row_needs_its_model(self):
+        # catches: a verified Orchestrator with no --model, whose loop update then
+        # carries no model id (review of #403, second finding).
+        orchestrator = choice('Orchestrator', 'claude-code', 'syn-claude-1')
+        follows = '| Fixer | follows Builder | | | |\n'
+        line = 'fleet.md: Models: Orchestrator: the flags are not one exact `--provider --model --reasoning-level`'
+        for name, text in {
+            'alone': NEW.replace(orchestrator, no_model('Orchestrator')),
+            'beside fall-back rows': NEW.replace(orchestrator, no_model('Orchestrator')).replace(
+                follows, follows + no_model('Reviewer fall-back 1') + '\n'),
+        }.items():
+            with self.subTest(name):
+                self.assertNotEqual(text, NEW)
+                code, out = self.check(self.project(**{'fleet.md': text}))
+                self.assertEqual((code, out.splitlines()), (5, [line, 'Settings: refused (1 problems).']))
+        for role in ('Builder', 'Reviewer'):
+            with self.subTest(role):
+                text = NEW.replace(choice(role, 'claude-code' if role == 'Builder' else 'codex',
+                                          'syn-claude-1' if role == 'Builder' else 'syn-codex-1'),
+                                   no_model(role).replace('antigravity', 'codex' if role == 'Reviewer' else 'antigravity'))
+                self.assertNotEqual(text, NEW)
+                self.assertEqual(self.check(self.project(**{'fleet.md': text})), (0, 'Settings: verified (4 files).\n'))
+
     def test_an_older_fixer_row_still_needs_its_model(self):
         fixer = ('## Fixer\n\n| Builder family | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
                  '| --- | --- | --- | --- | --- |\n%s\n\n' % no_model('Claude'))

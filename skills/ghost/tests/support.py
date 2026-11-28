@@ -29,7 +29,7 @@ if os.environ.get("FAKE_LIVE"):
     except OSError:
         live = "unreadable"
 with log.open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps({"args": args, "skill": skill, "live": live}) + "\n")
+    handle.write(json.dumps({"args": args, "skill": skill, "live": live, "home": home}) + "\n")
 if args[:2] == ["ghost", "--help"]:
     raise SystemExit(int(os.environ.get("FAKE_HELP", "0")))
 if args[:3] == ["ghost", "model", "install"]:
@@ -61,7 +61,7 @@ if args[:4] == ["ghost", "bench", "--source", "sent"]:
 raise SystemExit(2)
 """
 
-SKILL = b'{"phrases":[],"codes":[],"tone":"","never_suggest":[]}\n'
+SKILL = b'{"phrases":[],"tone":"","never_suggest":[]}\n'
 LEXICON = b'{"terms":[]}\n'
 SENT = b'{"text":"J381 all recs"}\n{"text":"J381 all recs"}\n'
 
@@ -93,15 +93,20 @@ def state_of(tmp):
     return state
 
 
+def ghost_of(tmp):
+    ghost = state_of(tmp) / "ghost"
+    ghost.mkdir(exist_ok=True)
+    return ghost
+
+
 def make_home(tmp, sent=SENT, skill=SKILL, lexicon=LEXICON, log=None, logging=False):
     home = Path(tmp) / "home"
     home.mkdir()
-    (home / "skill.json").write_bytes(skill)
-    (home / "lexicon.json").write_bytes(lexicon)
     (home / "sent.jsonl").write_bytes(sent)
     (home / "replay.json").write_bytes(b'{"schema":"openwiz.ghost.v1"}\n')
-    ghost = state_of(tmp) / "ghost"
-    ghost.mkdir(exist_ok=True)
+    ghost = ghost_of(tmp)
+    (ghost / "skill.json").write_bytes(skill)
+    (ghost / "lexicon.json").write_bytes(lexicon)
     if logging:
         (ghost / "settings.json").write_text('{"logging":true}\n', encoding="utf-8")
     if log is not None:

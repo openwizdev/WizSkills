@@ -16,12 +16,13 @@ EVENT = (
 class LearnPass(unittest.TestCase):
     def run_home(self, reports, **home):
         folder = self.enterContext(support_tmp())
-        house = support.make_home(folder, **home)
-        before_skill = (house / "skill.json").read_bytes()
-        before_lexicon = (house / "lexicon.json").read_bytes()
+        self.home = support.make_home(folder, **home)
+        live = support.ghost_of(folder)
+        before_skill = (live / "skill.json").read_bytes()
+        before_lexicon = (live / "lexicon.json").read_bytes()
         env, log = support.fake_env(folder, reports)
-        proc = support.run(support.LEARN, ["--home", str(house)], env)
-        return proc, house, before_skill, before_lexicon, support.calls(log)
+        proc = support.run(support.LEARN, ["--home", str(self.home)], env)
+        return proc, live, before_skill, before_lexicon, support.calls(log)
 
     def test_a_worsening_change_is_reverted(self):
         proc, house, skill, lexicon, rows = self.run_home(
@@ -40,7 +41,7 @@ class LearnPass(unittest.TestCase):
         after = json.loads((house / "skill.json").read_text(encoding="utf-8"))
         self.assertNotEqual((house / "skill.json").read_bytes(), skill)
         self.assertIn("all recs", after["phrases"])
-        self.assertIn("J381", after["codes"])
+        self.assertEqual(sorted(after), ["never_suggest", "phrases", "tone"])
         terms = json.loads((house / "lexicon.json").read_text(encoding="utf-8"))["terms"]
         self.assertEqual([term["term"] for term in terms], ["J381"])
         self.assertEqual(proc.stdout, "kept\n")
@@ -88,15 +89,16 @@ class LearnPass(unittest.TestCase):
     def run_live(self, reports):
         folder = self.enterContext(support_tmp())
         house = support.make_home(folder)
-        env, log = support.fake_env(folder, reports, FAKE_LIVE=str(house / "skill.json"))
+        live = support.ghost_of(folder)
+        env, log = support.fake_env(folder, reports, FAKE_LIVE=str(live / "skill.json"))
         proc = support.run(support.LEARN, ["--home", str(house)], env)
-        return proc, house, support.calls(log)
+        return proc, live, support.calls(log)
 
     def assert_live_untouched(self, house):
         self.assertEqual((house / "skill.json").read_bytes(), support.SKILL)
         self.assertEqual((house / "lexicon.json").read_bytes(), support.LEXICON)
         self.assertEqual(sorted(path.name for path in house.iterdir()),
-                         ["lexicon.json", "replay.json", "sent.jsonl", "skill.json"])
+                         ["lexicon.json", "skill.json"])
 
     def test_the_second_bench_reads_a_staged_candidate_not_the_live_files(self):
         proc, house, rows = self.run_live([support.report(0.4, 6), support.report(0.8, 12)])
@@ -133,7 +135,7 @@ class LearnPass(unittest.TestCase):
             env, calls = support.fake_env(
                 folder, [support.report(0.4, 6), support.report(0.8, 12)])
             proc = support.run(support.LEARN, ["--home", str(house)], env)
-            skill = json.loads((house / "skill.json").read_text(encoding="utf-8"))
+            skill = json.loads((support.ghost_of(folder) / "skill.json").read_text(encoding="utf-8"))
             self.assertEqual(proc.stdout, "kept\n")
             self.assertNotIn("sug-dismissed", skill["never_suggest"])
             self.assertNotIn("sug-home", skill["never_suggest"])
@@ -143,14 +145,16 @@ class LearnPass(unittest.TestCase):
             events.chmod(stat.S_IRUSR | stat.S_IWUSR)
             home_log.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
-    def test_a_dismissal_in_the_log_is_kept_when_the_bench_improves(self):
+    def test_a_dismissal_id_never_enters_never_suggest(self):
         proc, house, _skill, _lexicon, rows = self.run_home(
             [support.report(0.4, 6), support.report(0.8, 12)],
             log=EVENT.encode(), logging=True)
         skill = json.loads((house / "skill.json").read_text(encoding="utf-8"))
-        self.assertEqual(skill["never_suggest"], ["sug-dismissed"])
+        self.assertEqual(skill["never_suggest"], [],
+                         "the engine filters by suggestion text, so an event id blocks nothing")
         self.assertEqual(proc.stdout, "kept\n")
-        self.assertEqual([row["args"][5] for row in rows], [str(house / "replay.json"), str(house / "replay.json")])
+        self.assertEqual([row["args"][5] for row in rows],
+                         [str(self.home / "replay.json"), str(self.home / "replay.json")])
         self.assertFalse(any("http://" in " ".join(row["args"]) or "https://" in " ".join(row["args"])
                              for row in rows))
 
@@ -167,30 +171,62 @@ class LearnPass(unittest.TestCase):
             proc = support.run(support.LEARN, ["--home", str(house)], env)
             self.assertEqual(proc.stdout, "refused\n")
             self.assertEqual(support.calls(log), [])
-            self.assertEqual((house / "skill.json").read_bytes(), support.SKILL)
+            self.assertEqual((support.ghost_of(folder) / "skill.json").read_bytes(), support.SKILL)
         finally:
             outside.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
-    def test_forget_removes_the_rejections_the_learn_pass_reads(self):
+    def test_forget_leaves_no_trace_of_the_log_in_the_kept_skill(self):
         folder = self.enterContext(support_tmp())
         house = support.make_home(folder, log=EVENT.encode(), logging=True)
+        live = support.ghost_of(folder)
         env, _log = support.fake_env(folder, [
             support.report(0.4, 6), support.report(0.8, 12),
-            support.report(0.4, 6), support.report(0.8, 12),
+            support.report(0.8, 12), support.report(0.8, 12),
         ])
         first = support.run(support.LEARN, ["--home", str(house)], env)
-        skill = json.loads((house / "skill.json").read_text(encoding="utf-8"))
         self.assertEqual(first.stdout, "kept\n")
-        self.assertEqual(skill["never_suggest"], ["sug-dismissed"])
-        events = support.state_of(folder) / "ghost" / "events.jsonl"
+        self.assertNotIn(b"sug-dismissed", (live / "skill.json").read_bytes())
+        events = live / "events.jsonl"
         events.unlink()
-        (house / "skill.json").write_bytes(support.SKILL)
-        (house / "lexicon.json").write_bytes(support.LEXICON)
         second = support.run(support.LEARN, ["--home", str(house)], env)
-        again = json.loads((house / "skill.json").read_text(encoding="utf-8"))
         self.assertEqual(second.stdout, "kept\n")
-        self.assertNotIn("sug-dismissed", again["never_suggest"])
+        self.assertNotIn(b"sug-dismissed", (live / "skill.json").read_bytes())
+        self.assertNotIn(b"sug-dismissed", (live / "lexicon.json").read_bytes())
         self.assertFalse(events.exists())
+
+    def test_never_suggest_text_blocks_every_learned_phrase_containing_it(self):
+        proc, live, _skill, _lexicon, _rows = self.run_home(
+            [support.report(0.4, 6), support.report(0.8, 12)],
+            skill=b'{"phrases":[],"tone":"","never_suggest":["RECS"]}\n')
+        skill = json.loads((live / "skill.json").read_text(encoding="utf-8"))
+        self.assertEqual(proc.stdout, "kept\n")
+        self.assertEqual(skill["phrases"], ["j381 all"],
+                         "the engine drops any suggestion containing a never_suggest entry")
+        self.assertEqual(skill["never_suggest"], ["RECS"])
+
+    def test_the_kept_skill_file_is_the_engines_file_and_shape(self):
+        proc, live, _skill, _lexicon, rows = self.run_home(
+            [support.report(0.4, 6), support.report(0.8, 12)])
+        self.assertEqual(proc.stdout, "kept\n")
+        self.assertEqual(rows[0]["home"], str(live),
+                         "the first bench must read the engine's own skill file")
+        skill = json.loads((live / "skill.json").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(skill), ["never_suggest", "phrases", "tone"])
+        self.assertTrue(all(isinstance(item, str) for item in skill["phrases"] + skill["never_suggest"]))
+        self.assertIsInstance(skill["tone"], str)
+        self.assertFalse((self.home / "skill.json").exists())
+        self.assertEqual(sorted(path.name for path in live.iterdir()), ["lexicon.json", "skill.json"])
+
+    def test_a_skill_file_with_a_key_the_engine_refuses_is_refused(self):
+        for extra in (b'"codes":[],', b'"lexicon":[],'):
+            folder = self.enterContext(support_tmp())
+            skill = b'{"phrases":[],' + extra + b'"tone":"","never_suggest":[]}\n'
+            house = support.make_home(folder, skill=skill)
+            env, log = support.fake_env(folder, [support.report(0.4, 6)])
+            proc = support.run(support.LEARN, ["--home", str(house)], env)
+            self.assertEqual(proc.stdout, "refused\n", extra)
+            self.assertEqual(support.calls(log), [])
+            self.assertEqual((support.ghost_of(folder) / "skill.json").read_bytes(), skill)
 
     def test_a_repeated_key_in_the_bench_report_is_not_kept(self):
         duplicate = (

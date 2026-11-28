@@ -1,6 +1,9 @@
 import json
+import os
+import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import support
@@ -144,10 +147,55 @@ class Setup(unittest.TestCase):
         self.assertEqual((state / "ghost" / "settings.json").read_text(encoding="utf-8"),
                          '{"logging":false}\n')
 
+    def test_setup_creates_a_missing_state_directory(self):
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        fresh = folder / "fresh" / "openwiz"
+        proc, _home, _rows, state = self.invoke({"model": "no", "log": "yes"},
+                                                OPENWIZ_STATE_DIR=str(fresh))
+        self.assertEqual(state, fresh)
+        self.assertEqual(proc.stdout,
+                         "engine-ok\npaired\npairing-code: SYNTH-PAIR\nlog-on\n")
+        self.assertEqual((fresh / "ghost" / "settings.json").read_text(encoding="utf-8"),
+                         '{"logging":true}\n')
+        self.assertEqual(proc.returncode, 0)
+
     def test_setup_does_not_import_a_network_library(self):
         text = (support.ROOT / "scripts" / "setup.py").read_text(encoding="utf-8")
         for name in ("socket", "urllib", "http.client", "requests"):
             self.assertNotIn("import " + name, text)
+
+
+
+class StateDirectory(unittest.TestCase):
+    def resolve(self, platform, **env):
+        sys.path.insert(0, str(support.ROOT / "scripts"))
+        try:
+            import state
+        finally:
+            sys.path.pop(0)
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(sys, "platform", platform):
+            return state.state_dir()
+
+    def test_macos_uses_application_support_like_the_cli(self):
+        self.assertEqual(
+            self.resolve("darwin", HOME="/synthetic/home", XDG_STATE_HOME="/synthetic/xdg"),
+            Path("/synthetic/home/Library/Application Support/openwiz"))
+
+    def test_linux_uses_the_xdg_state_home(self):
+        self.assertEqual(
+            self.resolve("linux", HOME="/synthetic/home", XDG_STATE_HOME="/synthetic/xdg"),
+            Path("/synthetic/xdg/openwiz"))
+        self.assertEqual(self.resolve("linux", HOME="/synthetic/home", XDG_STATE_HOME="rel"),
+                         Path("/synthetic/home/.local/state/openwiz"))
+
+    def test_the_override_wins_on_every_platform_and_must_be_absolute(self):
+        for platform in ("darwin", "linux"):
+            self.assertEqual(self.resolve(platform, HOME="/synthetic/home",
+                                          OPENWIZ_STATE_DIR="/synthetic/state"),
+                             Path("/synthetic/state"))
+            self.assertIsNone(self.resolve(platform, HOME="/synthetic/home",
+                                           OPENWIZ_STATE_DIR="relative/state"))
+        self.assertIsNone(self.resolve("darwin", HOME="relative"))
 
 
 if __name__ == "__main__":

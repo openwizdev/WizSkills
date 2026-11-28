@@ -13,3 +13,11 @@ The skills talk about five triage roles. This file maps each role to the label t
 | `wontfix` | `<label>` | Will not be actioned |
 
 When a skill names a role (for example, "label it ready for an agent"), use that role's label from this table. Each label exists in the tracker exactly once.
+
+## Optional Pro triage
+
+| Label | Colour | Description |
+| --- | --- | --- |
+| `pro` | `#8250DF` | Opened by a Pro member |
+
+Automatic labelling is off by default. To turn it on, create `pro` in the issue tracker and add a line reading Pro repository: followed by owner/name of the private Pro repository. The label is public, so turn it on only where the project tells its Pro members about it.

@@ -167,6 +167,24 @@ ROW = "| Record authors | `openwiz[bot]`, `synthetic-owner` |"
 
 CROWDED = [issue(1), issue(2, labels=["needs-triage"] + [f"synthetic-{i}" for i in range(100)]), issue(3)]
 
+PRO_ISSUES = [
+    issue(1),
+    issue(2, labels=["pro", "needs-triage"], comments=[NOTES]),
+    issue(3, labels=["pro", "needs-info"]),
+    issue(4, labels=["pro"], milestone=True),
+    issue(5, labels=["pro", "enhancement"]),
+    issue(6, labels=["needs-triage"]),
+    issue(7, labels=["pro", "ready-for-agent", "needs-info"], parent=99),
+]
+PRO_OUT = [
+    "#3 pro reply: Synthetic issue 3",
+    "#5 pro new: Synthetic issue 5",
+    "#7 pro builder question: Synthetic issue 7",
+    "#1 new: Synthetic issue 1",
+    "#6 to sort: Synthetic issue 6",
+]
+
+
 CASES = [
     ("F1", "the shapes of triage work, closed issues among them", SHAPES, None, DEFAULT, "all", 0, SHAPES_OUT, None),
     ("F2", "1,001 open issues, work at the start, middle and end", MANY, None, DEFAULT, "all", 0,
@@ -217,6 +235,8 @@ CASES = [
      DEFAULT, "all", 2, [], "record authors"),
     ("F26", "two Record authors rows", SHAPES, {"kind": "fleet-doc", "doc": FLEET.replace(ROW, ROW + "\n" + ROW)},
      DEFAULT, "all", 2, [], "record authors"),
+    ("F28", "Pro work first with the usual order within each group", PRO_ISSUES, None,
+     DEFAULT, "all", 0, PRO_OUT, None),
 ]
 
 

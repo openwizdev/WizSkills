@@ -34,7 +34,7 @@ SUITES = {
                 ['python3', '-I', 'skills/install/tests/test_onboarding.py']],
     'huntr': [['sh', 'skills/huntr/scripts/test.sh']],
     'grill': [['sh', 'skills/grill/scripts/test.sh'],
-              ['python3', 'skills/grill/scripts/test_records.py']],
+              ['python3', '-I', 'skills/grill/scripts/test_records.py']],
     'role-call': [['python3', '-I', 'skills/role-call/scripts/test_channel.py']],
     'diagnose': [['node', '--test', 'skills/diagnose/tests/hitl-loop.test.mjs'],
                  ['python3', '-I', 'skills/diagnose/scripts/test_loop.py']],
@@ -555,6 +555,7 @@ def marketplace(root, version, out):
         out.add('manifest', MARKETPLACE, '`plugins[0].source` is `./`, the repository root')
     if 'version' in entry and entry['version'] != version:
         out.add('manifest', MARKETPLACE, f'`plugins[0].version` agrees with {PLUGIN}')
+    return data
 
 
 # ---- The standalone check and the suites ----

@@ -311,19 +311,71 @@ class OverloadTest(unittest.TestCase):
             self.assertEqual(ans['level'], 'alarm')
             self.assertIn('required_job_wait', ans['causes'])
 
-    def test_unestablished_required_check_classification_marks_observation_incomplete(self):
-        cases = (
-            ('branch rules error', {'rules_status': 500}),
-            ('fleet.md error', {'fleet_md_status': 500}),
-            ('classic protection forbidden', {'rules': [], 'classic_status': 403}),
-            ('no required checks configured anywhere', {
+    def test_fresh_repo_with_no_required_checks_admits_healthy_merge_batch(self):
+        with self.subTest('empty rules and no fleet.md admit repeated healthy merge batches'):
+            self.state.unlink(missing_ok=True)
+            self.gh_state.write_text(json.dumps({'rules': []}))
+            for _ in range(2):
+                r = self.run_fleet('merge-batch')
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                ans = json.loads(r.stdout)
+                self.assertTrue(ans['allowed'])
+                self.assertFalse(ans['paused'])
+                self.assertEqual(ans['level'], 'healthy')
+                self.assertFalse(self.state.exists())
+
+        with self.subTest('empty rules and fleet.md with no CI checks rows admit healthy merge batch'):
+            self.state.unlink(missing_ok=True)
+            self.gh_state.write_text(json.dumps({
+                'rules': [],
+                'fleet_md': '# Fleet settings\n\n## CI checks\n\nNone.\n',
+            }))
+            r = self.run_fleet('merge-batch')
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            ans = json.loads(r.stdout)
+            self.assertTrue(ans['allowed'])
+            self.assertFalse(ans['paused'])
+            self.assertEqual(ans['level'], 'healthy')
+            self.assertFalse(self.state.exists())
+
+        with self.subTest('queued job is classified as non-required when every source has no required checks'):
+            self.state.unlink(missing_ok=True)
+            self.gh_state.write_text(json.dumps({
                 'rules': [],
                 'runs': [{'id': 301, 'run_attempt': 1, 'event': 'pull_request', 'status': 'queued'}],
                 'jobs': {'301': [{
                     'id': 701, 'run_id': 301, 'run_attempt': 1, 'name': 'some-job', 'status': 'queued',
-                    'created_at': '2027-01-15T07:59:50Z', 'started_at': None,
+                    'created_at': '2027-01-15T07:53:20Z', 'started_at': None,
                 }]},
-            }),
+            }))
+            r = self.run_fleet('merge-batch')
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            ans = json.loads(r.stdout)
+            self.assertTrue(ans['allowed'])
+            self.assertFalse(ans['paused'])
+            self.assertEqual(ans['level'], 'healthy')
+            self.assertFalse(self.state.exists())
+
+        with self.subTest('fresh repo with no required checks still pauses on low REST budget'):
+            self.state.unlink(missing_ok=True)
+            self.gh_state.write_text(json.dumps({
+                'rules': [],
+                'rest': {'remaining': 100, 'limit': 5000, 'reset': NOW + 3600},
+            }))
+            r = self.run_fleet('merge-batch')
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            ans = json.loads(r.stdout)
+            self.assertFalse(ans['allowed'])
+            self.assertEqual(ans['level'], 'alarm')
+            self.assertIn('rest_below_ten_percent', ans['causes'])
+            self.assertTrue(self.state.exists())
+
+    def test_unestablished_required_check_classification_marks_observation_incomplete(self):
+        cases = (
+            ('repo info error', {'repo_status': 500}),
+            ('branch rules error', {'rules_status': 500}),
+            ('fleet.md error', {'fleet_md_status': 500}),
+            ('classic protection forbidden', {'rules': [], 'classic_status': 403}),
             ('job missing name', {
                 'runs': [{'id': 302, 'run_attempt': 1, 'event': 'pull_request', 'status': 'queued'}],
                 'jobs': {'302': [{

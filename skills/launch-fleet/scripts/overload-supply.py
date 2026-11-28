@@ -338,7 +338,7 @@ def required_checks(repo, read):
         except Fail:
             classic_ok = False
 
-    return checks, rules_ok and fleet_ok and classic_ok and bool(checks)
+    return checks, rules_ok and fleet_ok and classic_ok
 
 
 def pages(path, key, read):

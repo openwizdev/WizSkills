@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Run the guided demo against the install suite's synthetic GitHub."""
 import json
 from pathlib import Path
 import runpy
@@ -30,12 +29,11 @@ class Demo(unittest.TestCase):
         self.assertIn('tests/test_check.py', preview.stdout)
         self.assertIn('.github/workflows/check.yml', preview.stdout)
         self.assertEqual(self.world(journey)['repos'], {})
+        self.assertEqual(journey.gh_creates(), [])
         self.assertFalse(journey.state.exists())
         return preview.stdout.split('Confirmation: ')[1].splitlines()[0]
 
     def test_preview_to_passing_check(self):
-        # A README and a dummy passing test used to pass creation without giving
-        # the newcomer an app to run or a meaningful check to change.
         journey = Journey(self)
         confirmation = self.preview(journey)
         for flags in (('--yes',), ('--yes', '--confirm', '0' * 64),
@@ -44,13 +42,25 @@ class Demo(unittest.TestCase):
                 result = self.demo(journey, *flags)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(self.world(journey)['repos'], {})
+        journey.state.write_text(json.dumps({'host': {'agents': 'local', 'harnesses': ['claude-code', 'codex']}}))
+        options = FIXTURE['offering'](FIXTURE['OPUS'], FIXTURE['SOL'])
+        journey.options.write_text(json.dumps(dict(options, source='local')))
+        journey.state.chmod(0o600)
         approved = ('--yes', '--confirm', confirmation)
         result = self.demo(journey, *approved)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         main = self.world(journey)['repos'][REPO.lower()]['branches']['main']
         self.assertEqual(set(main), {'README.md', 'app.py', 'tests/test_check.py', '.github/workflows/check.yml'})
         self.assertTrue(self.world(journey)['repos'][REPO.lower()]['private'])
+        self.assertIn('Run first_fleet.py select', result.stdout)
+        selected = journey.helper(['select', '--repo', REPO])
+        self.assertEqual(selected.returncode, 0, selected.stdout + selected.stderr)
         self.assertEqual(json.loads(journey.state.read_text())['repo'], REPO)
+        journey.world['files'] = main
+        journey.save_world()
+        defaults = journey.helper(['defaults', '--options', str(journey.options)])
+        self.assertEqual(defaults.returncode, 12, defaults.stdout + defaults.stderr)
+        self.assertIn('Recommended setup', defaults.stdout)
         project = journey.dir / 'demo'
         for name, source in main.items():
             path = project / name
@@ -72,8 +82,6 @@ class Demo(unittest.TestCase):
         self.assertIn('AssertionError', broken.stderr)
 
     def test_retry_after_a_failed_read_keeps_owner_data(self):
-        # Creation can finish before the default branch read fails. Retrying
-        # must complete that same repo and keep any intervening user commit.
         journey = Journey(self)
         confirmation = self.preview(journey)
         fault = {'method': 'GET', 'path': f'repos/{REPO}/git/ref/heads/main', 'mode': 500, 'times': 1}
@@ -98,15 +106,23 @@ class Demo(unittest.TestCase):
         ]])
 
     def test_own_repository_uses_existing_select(self):
-        # The onboarding guide can accidentally route both choices to creation.
         steps = (INSTALL / 'SKILL.md').read_text().split('### 2. Choose a start\n', 1)[1].split('\n### 3.', 1)[0]
         self.assertLess(steps.index('**Demo repository**'), steps.index('**A repository they have:**'))
         self.assertIn('first_fleet.py select --repo <owner>/<name>', steps)
         journey = Journey(self)
+        confirmation = self.preview(journey)
+        files = {'README.md': 'Existing owner work.\n'}
+        existing = FIXTURE['demo_repository'](branches={'main': files})
+        journey.repos.write_text(github([existing]))
+        refused = self.demo(journey, '--yes', '--confirm', confirmation)
+        self.assertEqual(refused.returncode, 5, refused.stdout + refused.stderr)
+        before = self.world(journey)
+        self.assertEqual(before['repos'][REPO.lower()]['branches']['main'], files)
+        self.assertTrue(all(entry[0] == 'GET' for entry in before['log']))
         selected = journey.helper(['select', '--repo', REPO])
         self.assertEqual(selected.returncode, 0, selected.stdout)
         self.assertEqual(json.loads(journey.state.read_text())['repo'], REPO)
-        self.assertEqual(self.world(journey)['log'], [])
+        self.assertEqual(self.world(journey), before)
 
 
 if __name__ == '__main__':

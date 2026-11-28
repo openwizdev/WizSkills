@@ -35,6 +35,7 @@ SUITES = {
     'huntr': [['sh', 'skills/huntr/scripts/test.sh']],
     'grill': [['sh', 'skills/grill/scripts/test.sh'],
               ['python3', 'skills/grill/scripts/test_records.py']],
+    'role-call': [['python3', '-I', 'skills/role-call/scripts/test_channel.py']],
     'diagnose': [['node', '--test', 'skills/diagnose/tests/hitl-loop.test.mjs'],
                  ['python3', '-I', 'skills/diagnose/scripts/test_loop.py']],
     'dream-cycle': [['python3', '-I', 'skills/dream-cycle/test/test_contract.py'],
@@ -97,7 +98,8 @@ SUITES = {
               ['python3', '-I', 'check/test_bench.py'],
               ['python3', '-I', 'check/test_select.py'],
               ['python3', '-I', 'check/test_checklist_rules.py'],
-              ['python3', '-I', 'check/test_context_budget.py']],
+              ['python3', '-I', 'check/test_context_budget.py'],
+              ['python3', '-I', 'check/test_packaged_imports.py']],
 }
 
 PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}
@@ -115,6 +117,7 @@ def rows():
 ORIGINAL = "**Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills."
 SOURCE_LINES = {
     'dream-cycle': ORIGINAL,
+    'role-call': ORIGINAL,
     'feedback': ORIGINAL,
     'hill-climb': ORIGINAL,
     'huntr': ORIGINAL,

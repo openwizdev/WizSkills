@@ -153,9 +153,15 @@ def record_log(log):
             fail("settings-refused", 2)
         sys.stdout.write("log-unchanged\n")
         return
-    ghost.mkdir(mode=0o700, exist_ok=True)
     body = b'{"logging":true}\n' if log == "yes" else b'{"logging":false}\n'
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        ghost.mkdir(mode=0o700, exist_ok=True)
+        if ghost.is_symlink() or not ghost.is_dir():
+            fail("settings-refused", 2)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError:
+        fail("settings-refused", 2)
     try:
         os.write(fd, body)
     finally:

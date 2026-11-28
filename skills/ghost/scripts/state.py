@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 
 ON = '{"logging":true}'
@@ -17,6 +18,8 @@ def state_dir():
     home = os.environ.get("HOME", "")
     if not home or not _absolute(Path(home)):
         return None
+    if sys.platform == "darwin":
+        return Path(home) / "Library" / "Application Support" / "openwiz"
     xdg = os.environ.get("XDG_STATE_HOME", "")
     if xdg and _absolute(Path(xdg)):
         base = Path(xdg)

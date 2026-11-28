@@ -13,9 +13,9 @@ The per-user brain for ghost text. Setup runs on this machine. The learn pass ru
 ## Guards
 
 - Install a model server only when the answers file says `model` is exactly `yes`. Any other value, including a repeated key, installs nothing. If `openwiz ghost model install` exits 2, that command is absent: continue, and ghost text stays on recall.
-- The opt-in log is `ghost/events.jsonl` under the state directory (`OPENWIZ_STATE_DIR`, else `$XDG_STATE_HOME/openwiz` or `~/.local/state/openwiz`). Read it only when `ghost/settings.json` is exactly `{"logging":true}`. `openwiz ghost forget` deletes that events file and nothing else. Do not open the network, and do not delete an events file yourself.
-- After rewriting `skill.json` and `lexicon.json`, keep them only when a second bench report does not drop `acceptance_rate` or `chars_saved_per_message`. Otherwise restore the previous bytes.
-- A bench that fails, or a report that is not a ghost.v1 bench report with `source` `sent`, restores those bytes. One key twice is a bad report.
+- The state directory is the CLI's: `OPENWIZ_STATE_DIR`, else `~/Library/Application Support/openwiz` on macOS, else `$XDG_STATE_HOME/openwiz` or `~/.local/state/openwiz`. The opt-in log is `ghost/events.jsonl` under it. Read it only when `ghost/settings.json` is exactly `{"logging":true}`. `openwiz ghost forget` deletes that events file and nothing else. Do not open the network, and do not delete an events file yourself.
+- Bench the rewritten `skill.json` and `lexicon.json` in a private folder beside them, and replace the live files only when that second report does not drop `acceptance_rate` or `chars_saved_per_message`. Until then the live files stay as they were; a cancelled bench leaves them too.
+- A bench that fails, unreadable output, or a report that is not a ghost.v1 bench report with `source` `sent`, keeps the previous files. One key twice is a bad report.
 
 ## Setup
 
@@ -29,13 +29,13 @@ The script checks `openwiz ghost --help`, tries `openwiz ghost model install` on
 
 ## Learn
 
-Put the user's own sent messages in `sent.jsonl` (one `{"text":"..."}` line each), the skill file in `skill.json`, the lexicon in `lexicon.json`, and a held-out replay in `replay.json`, all inside the home. Then:
+The skill file is the engine's: `ghost/skill.json` under the state directory, exactly `{"phrases":[...],"tone":"...","never_suggest":[...]}`, the context pack's `skill`. The lexicon is `ghost/lexicon.json` beside it, `{"terms":[{"term":"...","meaning":"..."}]}`; learned codes such as `J12` or `#42` go there. On a first run, write those two files empty. Put the user's own sent messages in `sent.jsonl` (one `{"text":"..."}` line each) and a held-out replay in `replay.json`, inside the home. Then:
 
 ```sh
 python3 -I scripts/learn.py --home <home>
 ```
 
-The script runs `openwiz ghost bench --source sent --replay` on `replay.json` before the rewrite and again after it, with `OPENWIZ_GHOST_HOME` set to that home. The report is the ghost.v1 bench report. `skill.json` holds `phrases`, `codes`, `tone` and `never_suggest`. A dismissal or typed-over line in `ghost/events.jsonl` adds its suggestion id to `never_suggest` only while settings say logging is on. After `forget`, that file is gone and those rejections are not read again.
+The script runs `openwiz ghost bench --source sent --replay` on `replay.json` with `OPENWIZ_GHOST_HOME` set to the live `ghost` folder, then again with it set to the staged candidate. `never_suggest` holds suggestion text: the engine drops any suggestion containing an entry, ignoring case, and the learn pass drops learned phrases the same way and keeps every entry. A ghost.v1 event line carries a suggestion id, not its text, so the learn pass checks the log only while settings say logging is on and writes nothing from it. After `forget`, the skill file holds nothing from that log.
 
 ## Verify
 

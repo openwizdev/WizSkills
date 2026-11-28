@@ -25,7 +25,7 @@ EVENT_KEYS = {"schema", "kind", "at", "suggestion_id", "session_id", "surface",
 METRIC_KEYS = {"shown", "accepted", "acceptance_rate", "chars_saved_per_message",
                "suggestions_per_message", "p50_latency_ms", "p90_latency_ms"}
 REPORT_KEYS = {"schema", "kind", "source", "messages", "overall", "per_tier", "per_surface"}
-SKILL_KEYS = {"phrases", "codes", "tone", "never_suggest"}
+SKILL_KEYS = {"phrases", "tone", "never_suggest"}
 
 
 class Refuse(Exception):
@@ -111,7 +111,6 @@ def skill_of(text):
     if not isinstance(value, dict) or set(value) != SKILL_KEYS:
         raise ValueError("skill")
     strings(value["phrases"])
-    strings(value["codes"])
     strings(value["never_suggest"])
     if not isinstance(value["tone"], str):
         raise ValueError("tone")
@@ -168,15 +167,11 @@ def event_of(line):
     return value
 
 
-def rejected_of(text):
-    found = []
+def check_log(text):
     for line in text.splitlines():
         if not line:
             raise ValueError("blank")
-        event = event_of(line)
-        if event["outcome"] in {"dismissed", "typed_over"} and event["suggestion_id"] not in found:
-            found.append(event["suggestion_id"])
-    return found
+        event_of(line)
 
 
 def metrics_of(value):
@@ -220,7 +215,12 @@ def report_of(text):
     return overall
 
 
-def phrases_of(messages, blocked):
+def blocked_by(phrase, never):
+    lower = phrase.lower()
+    return any(item.strip().lower() and item.strip().lower() in lower for item in never)
+
+
+def phrases_of(messages, never):
     counts = {}
     for text in messages:
         words = text.lower().split()
@@ -228,28 +228,25 @@ def phrases_of(messages, blocked):
             for index in range(len(words) - size + 1):
                 phrase = " ".join(words[index:index + size])
                 counts[phrase] = counts.get(phrase, 0) + 1
-    learned = [phrase for phrase, count in counts.items() if count >= 2 and phrase not in blocked]
+    learned = [phrase for phrase, count in counts.items()
+               if count >= 2 and not blocked_by(phrase, never)]
     return sorted(learned)[:8]
 
 
-def rewrite(skill, lexicon, messages, rejected):
-    blocked = set(skill["never_suggest"]) | set(rejected)
-    phrases = phrases_of(messages, blocked)
-    codes = list(skill["codes"])
+def rewrite(skill, lexicon, messages):
+    never = list(skill["never_suggest"])
+    phrases = phrases_of(messages, never)
+    codes = []
     for text in messages:
         for code in CODE.findall(text):
             if code not in codes:
                 codes.append(code)
-    never = list(skill["never_suggest"])
-    for item in rejected:
-        if item not in never:
-            never.append(item)
     tone = "short" if max(len(text) for text in messages) <= 80 else "plain"
     terms = {term["term"]: term for term in lexicon["terms"]}
     for code in codes:
         term = code[1:] if code.startswith("#") else code
         terms.setdefault(term, {"term": term, "meaning": code})
-    new_skill = {"phrases": phrases, "codes": codes, "tone": tone, "never_suggest": never}
+    new_skill = {"phrases": phrases, "tone": tone, "never_suggest": never}
     new_lexicon = {"terms": [terms[key] for key in sorted(terms)]}
     return new_skill, new_lexicon
 
@@ -322,17 +319,20 @@ def dropped(before, after):
 
 def main(argv):
     home = home_of(argv)
-    skill_path = child(home, "skill.json")
-    lexicon_path = child(home, "lexicon.json")
     sent_path = child(home, "sent.jsonl")
     replay_path = child(home, "replay.json")
+    root = state.state_dir()
+    if root is None:
+        raise Refuse
+    ghost = root / "ghost"
+    if ghost.is_symlink() or not ghost.is_dir():
+        raise Refuse
+    skill_path = child(ghost, "skill.json")
+    lexicon_path = child(ghost, "lexicon.json")
     skill_text = read_file(skill_path, True)
     lexicon_text = read_file(lexicon_path, True)
     sent_text = read_file(sent_path, True)
     if read_file(replay_path, True) is None:
-        raise Refuse
-    root = state.state_dir()
-    if root is None:
         raise Refuse
     log_text = None
     if state.logging_value(read_settings(root) or "") is True:
@@ -341,19 +341,20 @@ def main(argv):
         skill = skill_of(skill_text)
         lexicon = lexicon_of(lexicon_text)
         messages = messages_of(sent_text)
-        rejected = rejected_of(log_text) if log_text is not None else []
+        if log_text is not None:
+            check_log(log_text)
     except ValueError as error:
         raise Refuse from error
     binary = shutil.which("openwiz")
     if not binary:
         raise Refuse
-    before = bench(binary, home, replay_path)
-    new_skill, new_lexicon = rewrite(skill, lexicon, messages, rejected)
+    before = bench(binary, ghost, replay_path)
+    new_skill, new_lexicon = rewrite(skill, lexicon, messages)
     skill_bytes = skill_text.encode("utf-8")
     lexicon_bytes = lexicon_text.encode("utf-8")
     new_skill_bytes = dump(new_skill)
     new_lexicon_bytes = dump(new_lexicon)
-    stage = Path(tempfile.mkdtemp(prefix=".learn-", dir=home))
+    stage = Path(tempfile.mkdtemp(prefix=".learn-", dir=ghost))
     try:
         try:
             atomic(stage / "skill.json", new_skill_bytes)

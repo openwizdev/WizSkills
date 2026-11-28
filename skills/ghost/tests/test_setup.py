@@ -168,7 +168,7 @@ class Setup(unittest.TestCase):
 
 class StateDirectory(unittest.TestCase):
     def resolve(self, platform, **env):
-        sys.path.insert(0, str(support.ROOT / "scripts"))
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
         try:
             import state
         finally:

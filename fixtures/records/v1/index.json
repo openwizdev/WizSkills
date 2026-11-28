@@ -1,0 +1,223 @@
+{
+  "schema": "wizskills.golden-records.v1",
+  "records_contract": 1,
+  "regenerate": "python3 -I scripts/golden/generate.py write",
+  "forms": [
+    {
+      "form": "Status note",
+      "fixtures": [
+        {
+          "path": "status-note/builder-working.md",
+          "made_by": "script",
+          "writer": "skills/launch-fleet/scripts/status.py",
+          "state": "working"
+        },
+        {
+          "path": "status-note/builder-asking.md",
+          "made_by": "script",
+          "writer": "skills/launch-fleet/scripts/status.py",
+          "state": "asking"
+        },
+        {
+          "path": "status-note/builder-done.md",
+          "made_by": "script",
+          "writer": "skills/launch-fleet/scripts/status.py",
+          "state": "done"
+        },
+        {
+          "path": "status-note/reviewer-done.md",
+          "made_by": "script",
+          "writer": "skills/launch-fleet/scripts/status.py",
+          "state": "done"
+        },
+        {
+          "path": "status-note/fleet-stopped.md",
+          "made_by": "script",
+          "writer": "skills/launch-fleet/scripts/status.py",
+          "state": "stopped"
+        }
+      ]
+    },
+    {
+      "form": "Decision request",
+      "fixtures": [
+        {
+          "path": "decision-request/grill-round-open.md",
+          "made_by": "script",
+          "writer": "skills/grill/scripts/records.py",
+          "kind": "grill_round",
+          "state": "open"
+        },
+        {
+          "path": "decision-request/grill-round-resolved.md",
+          "made_by": "script",
+          "writer": "skills/grill/scripts/records.py",
+          "kind": "grill_round",
+          "state": "resolved"
+        },
+        {
+          "path": "decision-request/grill-round-superseded.md",
+          "made_by": "script",
+          "writer": "skills/grill/scripts/records.py",
+          "kind": "grill_round",
+          "state": "superseded"
+        },
+        {
+          "path": "decision-request/grill-confirmation-open.md",
+          "made_by": "script",
+          "writer": "skills/grill/scripts/records.py",
+          "kind": "grill_confirmation",
+          "state": "open"
+        },
+        {
+          "path": "decision-request/grill-confirmation-resolved.md",
+          "made_by": "script",
+          "writer": "skills/grill/scripts/records.py",
+          "kind": "grill_confirmation",
+          "state": "resolved"
+        },
+        {
+          "path": "decision-request/spec-confirmation-open.md",
+          "made_by": "script",
+          "writer": "skills/to-tickets/scripts/request.py",
+          "kind": "spec_confirmation",
+          "state": "open"
+        },
+        {
+          "path": "decision-request/plan-approval-open.md",
+          "made_by": "script",
+          "writer": "skills/to-tickets/scripts/request.py",
+          "kind": "plan_approval",
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "form": "Decision answer",
+      "fixtures": [],
+      "why_none": "Written by the app (openwizdev/WizSite), never by a WizSkills writer."
+    },
+    {
+      "form": "Plan links",
+      "fixtures": [
+        {
+          "path": "spec-and-ticket/ticket-41.md",
+          "made_by": "template",
+          "writer": "skills/to-tickets/tickets.md",
+          "checked_by": "skills/to-tickets/check-links.sh"
+        },
+        {
+          "path": "spec-and-ticket/ticket-42.md",
+          "made_by": "template",
+          "writer": "skills/to-tickets/tickets.md",
+          "checked_by": "skills/to-tickets/check-links.sh"
+        },
+        {
+          "path": "plan-links/revision.txt",
+          "made_by": "script",
+          "writer": "skills/to-tickets/revision.sh"
+        },
+        {
+          "path": "plan-links/report.json",
+          "made_by": "script",
+          "writer": "skills/to-tickets/check-links.sh"
+        }
+      ]
+    },
+    {
+      "form": "Labels",
+      "fixtures": [
+        {
+          "path": "labels/triage-labels.md",
+          "made_by": "template",
+          "writer": "skills/setup/templates/triage-labels.md",
+          "checked_by": "skills/setup/scripts/settings.py"
+        }
+      ]
+    },
+    {
+      "form": "Fleet OpenWiz rows",
+      "fixtures": [],
+      "why_none": "No WizSkills writer yet: setup starts writing the rows in #3140 (0.1.2 MS2)."
+    },
+    {
+      "form": "Fleet record authors",
+      "fixtures": [
+        {
+          "path": "fleet/fleet.md",
+          "made_by": "template",
+          "writer": "skills/setup/templates/fleet.md",
+          "checked_by": "skills/setup/scripts/settings.py"
+        }
+      ]
+    },
+    {
+      "form": "Fleet models",
+      "fixtures": [
+        {
+          "path": "fleet/fleet.md",
+          "made_by": "template",
+          "writer": "skills/setup/templates/fleet.md",
+          "checked_by": "skills/setup/scripts/settings.py"
+        }
+      ]
+    },
+    {
+      "form": "Models-offered snapshot",
+      "fixtures": [],
+      "why_none": "No WizSkills writer: no skill writes docs/agents/models-offered.json."
+    },
+    {
+      "form": "Grill file",
+      "fixtures": [
+        {
+          "path": "grill-file/round-answered.md",
+          "made_by": "checked",
+          "writer": "skills/grill/assets/grill.md",
+          "checked_by": "skills/grill/scripts/records.py",
+          "state": "round"
+        },
+        {
+          "path": "grill-file/summary-confirmed.md",
+          "made_by": "checked",
+          "writer": "skills/grill/assets/grill.md",
+          "checked_by": "skills/grill/scripts/records.py",
+          "state": "summary"
+        }
+      ]
+    },
+    {
+      "form": "Spec and ticket templates",
+      "fixtures": [
+        {
+          "path": "spec-and-ticket/spec.md",
+          "made_by": "template",
+          "writer": "skills/to-spec/spec.md"
+        },
+        {
+          "path": "spec-and-ticket/ticket-41.md",
+          "made_by": "template",
+          "writer": "skills/to-tickets/tickets.md",
+          "checked_by": "skills/to-tickets/check-links.sh"
+        },
+        {
+          "path": "spec-and-ticket/ticket-42.md",
+          "made_by": "template",
+          "writer": "skills/to-tickets/tickets.md",
+          "checked_by": "skills/to-tickets/check-links.sh"
+        }
+      ]
+    },
+    {
+      "form": "Narrated-spec video comment",
+      "fixtures": [
+        {
+          "path": "video-comment/narrated-spec.md",
+          "made_by": "script",
+          "writer": "skills/to-spec/scripts/animatic.mjs",
+          "checked_by": "skills/to-spec/SKILL.md"
+        }
+      ]
+    }
+  ]
+}

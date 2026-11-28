@@ -1,0 +1,25 @@
+name: WizSkills release
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+jobs:
+  golden:
+    name: attach golden records
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+      - name: Attach the golden records as one archive named with the records-contract version, wizskills-records-v1.tar.gz (refused when the tag's fixtures are stale; an existing asset is never replaced)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          archive=$(python3 -I scripts/golden/generate.py archive "$RUNNER_TEMP/golden")
+          gh release upload "$TAG" "$archive" --repo "$GITHUB_REPOSITORY"

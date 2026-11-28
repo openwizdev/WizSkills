@@ -1,0 +1,4 @@
+plan-graph revision v2
+spec #40 body sha256 2417cff55f46daae595e7ed10cedb9a6a5e2ec7d9d8d5a1c1f06cf2ab2dbb419
+ticket #41 blocked-by none body sha256 6c514e55e71418b8b740d57a1f02eab1ef604426f7191cee029fa913df2425bf title 0.9.9 GN1: notes list in date order
+ticket #42 blocked-by #41 body sha256 f0ea545d1119f3873f9dc26e4a0ffc25947c66c6012001e58eaca91156a056f9 title 0.9.9 GN2: plain text export

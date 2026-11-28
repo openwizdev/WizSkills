@@ -182,9 +182,21 @@ jobs:
           TEST_JOBS: 2
           SHARD: ${{ matrix.shard }}
         run: python3 check/run.py --shard "$SHARD"
+  golden-fresh:
+    name: golden fresh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Golden records are fresh (regenerating fixtures/records/v1 from the real WizSkills writers gives no diff; a hand edit fails here), and the generator's own tests pass
+        run: |
+          python3 -I scripts/golden/test_golden.py
+          python3 -I scripts/golden/generate.py check
   check:
     name: check
-    needs: [list, gates, context-budget, shard]
+    needs: [list, gates, context-budget, shard, golden-fresh]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

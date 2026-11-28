@@ -1,6 +1,6 @@
 ---
 name: wait-what
-description: "Re-pitch the last message in plain words. Use when the user says 'wait what' or '/wait-what', or signals they are lost."
+description: "Re-pitch the last message in plain words. Use when the user says 'wait what', runs $wait-what (Codex CLI) or /openwiz:wait-what (Claude Code), or signals they are lost."
 version: 0.1.0
 ---
 

@@ -8,10 +8,13 @@ ABOUT = ('The completion check a builder runs before handing back. It prints one
          'Owned paths stay with `ticket.py scope`.')
 BOX = re.compile(r'\s*[-*]\s+\[[ xX]\]\s+(.+)')
 FENCE = re.compile(r'\s*(```|~~~)')
-NUMBERED = re.compile(r'(?i)\b(?:criteri(?:on|a)|acs?)[ \t]*#?(\d+(?:(?:\s*(?:,|&|-|and|to)\s*)+#?\d+)*)')
-SPAN = re.compile(r'(\d+)\s*(?:-|to)\s*#?(\d+)')
-BEFORE = re.compile(r'(?i)[\s>*_-]*before\b')
-AFTER = re.compile(r'(?i)[\s>*_-]*after\b')
+RANGE_SEPARATOR = r'(?:[-–]|\s*to\s*)'
+NUMBERED = re.compile(rf'(?i)\b(?:criteri(?:on|a)|acs?)[ \t]*#?'
+                      rf'(\d+(?:(?:{RANGE_SEPARATOR}|(?:\s*(?:,|&|and)\s*)+)#?\d+)*)')
+SPAN = re.compile(rf'(?i)(\d+){RANGE_SEPARATOR}#?(\d+)')
+BEFORE = re.compile(r'(?i)[\s#>*_-]*before\b')
+AFTER = re.compile(r'(?i)[\s#>*_-]*after\b')
+INLINE_AFTER = re.compile(r'(?i)\bafter[ \t*_]*:')
 FAILURE = re.compile(r'(?i)\b(?:fail(?:ed|ure|ures|ing|s)?|red|assertionerror|errors?)\b')
 PROVED = re.compile(r'"base_runs":\s*\[\s*"failed"(?:\s*,\s*"failed")*\s*\]')
 CLOSES = re.compile(r'(?im)^\s*closes\s+(?:[\w.-]+/[\w.-]+)?#(\d+)\b')
@@ -59,18 +62,22 @@ def named_numbers(line):
 
 
 def red_first(evidence):
-    block = None
+    in_before = False
     for line in evidence:
-        if PROVED.search(line):
-            return True
-        if BEFORE.match(line):
-            block = []
-        elif AFTER.match(line):
-            block = None
-        if block is not None:
-            block.append(line)
+        if AFTER.match(line):
+            in_before = False
+            continue
+        in_before = in_before or bool(BEFORE.match(line))
+        if in_before:
+            after = INLINE_AFTER.search(line)
+            if after:
+                line = line[:after.start()]
             if FAILURE.search(line):
                 return True
+            if after:
+                in_before = False
+        if PROVED.search(line):
+            return True
     return False
 
 

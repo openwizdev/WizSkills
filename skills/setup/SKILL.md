@@ -6,7 +6,7 @@ version: 0.4.0
 
 # Setup
 
-Write a project's settings as four short files in `docs/agents/`, which every fleet skill reads. Run it as the project's orchestrator. Every value comes from something you read or something the user decided, written with that source, so a run with nothing new changes nothing.
+The orchestrator writes four fleet settings files in `docs/agents/`. Cite the source or user decision for each value so the same inputs give the same files.
 
 | File | Says | Template |
 | --- | --- | --- |
@@ -47,9 +47,11 @@ Done when every missing setting has the user's answer.
 
 ## 3. Write
 
-Fill each template. Every `fleet.md` value names its source: a linked file, a command, or `<decider>, <YYYY-MM-DD>: <decision> ([private record](<comment URL>)).` Create a label only for a role with none (`gh label create <name> --description "<meaning>"`). Write no run date, so an unchanged project gives the same bytes. Write only these four files and missing labels, plus, when `docs/agents/review-rules.md` is missing and the user accepts your one offer of it, that file from [the template](templates/review-rules.md) with every section empty; private comments go only to the private repository, named with `--repo`.
+Fill the templates without a run date. Cite each `fleet.md` value with a file link, command, or `<decider>, <YYYY-MM-DD>: <decision> ([private record](<comment URL>)).` Create missing role labels with `gh label create <name> --description "<meaning>"`.
 
-For configured Pro triage, create the template's `pro` label if missing and add the line `Pro repository: owner/name` on its own, with the real private Pro repository. Otherwise add no such line.
+If the user names a private Pro repository, create `pro` if missing and add a standalone `Pro repository: owner/name` line with that repository.
+
+Write only the four files and missing labels. If `docs/agents/review-rules.md` is absent, offer it once and, on acceptance, copy [the template](templates/review-rules.md) with empty sections. Use `--repo` for private comments.
 
 Done when the four files are written.
 

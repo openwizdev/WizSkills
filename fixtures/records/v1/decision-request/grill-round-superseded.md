@@ -1,0 +1,3 @@
+```json
+{"schema":"openwiz.decisions.v1","id":"golden-round-1-old","status":"superseded","grill_file":"docs/grills/2099-01-01-golden-notebook.md","kind":"grill_round","risk":"ordinary","round":1,"questions":[{"id":"G1","decides":"Which order?","context":"Notes are listed for one synthetic person.","recommendation":"Use date order."},{"id":"G2","decides":"Which export?","context":"The notebook has two formats.","recommendation":"Use plain text."}],"answered":[],"fingerprint":"2bfdb81dfe47352018d3bd528aa1ac8775e19af3ba48ced68e9b6d0b62230131"}
+```

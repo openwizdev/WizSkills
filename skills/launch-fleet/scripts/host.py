@@ -284,8 +284,10 @@ def roster(text):
     return entries
 
 
-def note_model(name):
-    return '%s default effort' % (name[:42].rstrip() + '...' if len(name) > 45 else name)
+def note_model(name, effort=None):
+    effort = ' %s effort' % (effort or 'default')
+    room = 60 - len(effort)
+    return (name[:room - 3].rstrip() + '...' if len(name) > room else name) + effort
 
 
 def pick(entries, repo, ticket, role, choice):
@@ -304,7 +306,7 @@ def pick(entries, repo, ticket, role, choice):
     person = entry['writes_as'][:-len("'s App")]
     return {'pick': {'name': entry['name'], 'kind': entry['kind'], 'driver': entry['driver'],
                      'start': {'harness': harness, 'model': model},
-                     'note': {'harness': entry['label'], 'model': note_model(choice['model_name'])},
+                     'note': {'harness': entry['label'], 'model': note_model(choice['model_name'], choice.get('effort'))},
                      'writes_as': entry['writes_as'],
                      'token': {'service': person, 'requester': '%s-%s' % (role, ticket), 'repositories': [repo]}},
             'waits': None, 'look': None}
@@ -345,7 +347,8 @@ def roster_start(text, entries, repo, n, harness, model, skill, picked):
     provider = 'claude-code' if harness == 'claude' else harness
     row = models_row(text, provider, model, taking, picked)
     chosen = pick(entries, repo, int(n), taking, {'provider': provider, 'model': model,
-                                                  'model_name': row[0] if row else model})
+                                                  'model_name': row[0] if row else model,
+                                                  'effort': row[1] if row else None})
     if chosen['look']:
         raise Outcome(chosen['look'])
     if row is None:
@@ -770,8 +773,7 @@ def main(argv):
             raise Outcome('unknown: #%s started on %s but its run was not saved; save run %s on host %s for #%s '
                           'privately before anything else' % (n, host, new, host, n))
         print('started #%s on %s%s' % (n, host, ' as %s, %s' % (
-            picked['note']['harness'], picked['note']['model'][:-len('default effort')] + effort + ' effort'
-            if effort else picked['note']['model']) if picked else ''))
+            picked['note']['harness'], picked['note']['model']) if picked else ''))
         unclear = cleared(repo, n, host, 'started', skill)
         if unclear:
             print(unclear)

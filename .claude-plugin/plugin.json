@@ -14,6 +14,7 @@
     "./skills/diagnose",
     "./skills/dream-cycle",
     "./skills/feedback",
+    "./skills/ghost",
     "./skills/grill",
     "./skills/handoff",
     "./skills/hill-climb",

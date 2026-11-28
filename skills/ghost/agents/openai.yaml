@@ -1,0 +1,3 @@
+interface:
+  display_name: "Ghost"
+  short_description: "Set up ghost text and keep a phrase change only when the bench does not drop"

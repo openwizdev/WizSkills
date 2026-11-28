@@ -11,6 +11,7 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 | [`diagnose`](diagnose/SKILL.md) |
 | [`dream-cycle`](dream-cycle/SKILL.md) |
 | [`feedback`](feedback/SKILL.md) |
+| [`ghost`](ghost/SKILL.md) |
 | [`grill`](grill/SKILL.md) |
 | [`handoff`](handoff/SKILL.md) |
 | [`hill-climb`](hill-climb/SKILL.md) |

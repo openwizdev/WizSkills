@@ -117,7 +117,6 @@ class EventsTest(unittest.TestCase):
         return ledger
 
     def test_contract_fixtures(self):
-        """Exercise all actions, signatures and ledger rules at the router CLI."""
         fixtures = sorted(FIXTURES.glob('*.json'))
         self.assertTrue(fixtures, 'no contract fixtures found')
         for fixture in fixtures:
@@ -142,7 +141,6 @@ class EventsTest(unittest.TestCase):
                                              for file in root.rglob('*') if file.is_file()), 'secret leaked to a file')
 
     def test_failed_read_preserves_ledger_and_allows_retry(self):
-        """A partial GitHub response must neither emit checks nor spend the delivery ID."""
         world = json.loads((FIXTURES / 'duplicate-delivery.json').read_text())
         root = self.sandbox(world)
         ledger = self.seed(root, ['example-earlier-delivery'])
@@ -161,7 +159,6 @@ class EventsTest(unittest.TestCase):
         self.assertEqual(self.reads(root), ['read', 'read'])
 
     def test_paged_references_respect_read_budget(self):
-        """Cross-repo closing references are followed, but incomplete results never route."""
         world = json.loads((FIXTURES / 'pull-request-synchronized.json').read_text())
         delivery = world['deliveries'][0]
         pull = next(iter(world['closing_tickets']))
@@ -179,7 +176,6 @@ class EventsTest(unittest.TestCase):
                 self.assertEqual(self.reads(root), ['read'] * 3)
 
     def test_concurrent_deliveries_claim_once(self):
-        """Two processes receiving the same ID cannot both route it."""
         world = json.loads((FIXTURES / 'duplicate-delivery.json').read_text())
         root = self.sandbox(world)
         delivery = world['deliveries'][0]

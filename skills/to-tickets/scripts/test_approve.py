@@ -102,6 +102,12 @@ with open(os.environ['FAKE_LOG'], 'a') as log:
 world = json.loads(open(os.environ['FAKE_WORLD']).read())
 if world.get('fail'):
     sys.exit('gh: Server Error (HTTP 502)')
+if args[:2] == ['issue', 'view'] and len(args) == 7 and args[3] == '--repo' and args[5:] == ['--json', 'title']:
+    title = world.get('titles', {}).get(args[4] + '#' + args[2])
+    if title is None:
+        sys.exit('gh: Issue not found')
+    print(json.dumps({'title': title}))
+    sys.exit(0)
 if len(args) == 4 and args[0] == 'api' and args[2] == '--jq' and args[1].startswith('repos/'):
     owner, name, _, path = args[1][len('repos/'):].split('/', 3)
     mode = world.get('files', {}).get(owner + '/' + name + ':' + path)
@@ -312,8 +318,12 @@ class FlatGraphs(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp)
+        (self.tmp / 'bin').mkdir()
+        fake_gh = self.tmp / 'bin/gh'
+        fake_gh.write_text(FAKE_GH)
+        fake_gh.chmod(0o755)
 
-    def approve(self, graph, created=FLAT_SINCE, extra=''):
+    def approve(self, graph, created=FLAT_SINCE, extra='', titles=None):
         spec_body = SPEC_BODY + extra
         lines = [f'plan-graph revision v2\nspec #{graph["source"]["spec"]} body sha256 {sha(spec_body)}\n']
         for t in graph['tickets']:
@@ -322,11 +332,15 @@ class FlatGraphs(unittest.TestCase):
         (self.tmp / 'graph.json').write_text(json.dumps(graph))
         (self.tmp / 'revision.txt').write_text(''.join(lines))
         (self.tmp / 'spec.json').write_text(json.dumps({'body': spec_body, 'createdAt': created}))
+        (self.tmp / 'world.json').write_text(json.dumps({'titles': titles or {}}))
+        (self.tmp / 'gh.log').write_text('')
+        env = dict(os.environ, PATH=f'{self.tmp / "bin"}:{os.environ["PATH"]}',
+                   FAKE_LOG=str(self.tmp / 'gh.log'), FAKE_WORLD=str(self.tmp / 'world.json'))
         return subprocess.run(
             ['python3', '-I', str(APPROVE), '--graph', str(self.tmp / 'graph.json'),
              '--revision', str(self.tmp / 'revision.txt'), '--spec', str(self.tmp / 'spec.json'),
              '--grill', GRILL, '--number', '1', '--date', '2026-11-28', '--root', str(self.tmp)],
-            capture_output=True, text=True)
+            capture_output=True, text=True, env=env)
 
     def settings(self, name):
         return json.loads((FLAT / f'settings-{name}.json').read_text())
@@ -383,6 +397,34 @@ class FlatGraphs(unittest.TestCase):
                 self.assertEqual('approve: width: the critical chain' in out.stderr, refused, out.stderr)
                 if not refused:
                     self.assertIn(f'width: chain {depth}, ', out.stdout)
+
+    def test_the_skill_summary_states_the_depth_ratio_floor(self):
+        skill = ' '.join((HERE.parent / 'SKILL.md').read_text().split())
+        self.assertTrue('over 3 and over 2/3 of the open tickets' in skill, 'the summary must state the ratio floor')
+
+    def test_an_open_native_blocker_outside_the_spec_can_be_contract_first(self):
+        reason = '`tool show --json`, which the next part calls'
+        graph = self.chain(4, {1: reason, 2: reason})
+        graph['tickets'].pop(0)
+        graph['tickets'][1]['blocked_by'][0]['number'] = 9320
+        graph['tickets'][1]['body'] = graph['tickets'][1]['body'].replace('#9321 real:', '#9320 real:')
+        key = f'{graph["repo"]}#9320'
+        out = self.approve(graph, titles={key: 'The tool command, first'})
+        self.assertEqual((out.returncode, out.stderr), (0, ''), out.stderr)
+        calls = [json.loads(line) for line in (self.tmp / 'gh.log').read_text().splitlines()]
+        self.assertEqual(calls, [['issue', 'view', '9320', '--repo', graph['repo'], '--json', 'title']])
+
+        out = self.approve(graph, titles={key: 'Implement the tool command'})
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn('the real line for #9320 names only an interface', out.stderr)
+
+        out = self.approve(graph)
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertIn('cannot read the title of #9320', out.stderr)
+
+        out = self.approve(graph, created='2026-11-27T23:59:59Z')
+        self.assertEqual((out.returncode, out.stderr), (0, ''), out.stderr)
+        self.assertEqual((self.tmp / 'gh.log').read_text(), '')
 
     def test_a_real_line_that_names_only_an_interface_is_refused(self):
         refused = ('`tool show --json`, which the next part calls', 'the `tool set` command and its flags',

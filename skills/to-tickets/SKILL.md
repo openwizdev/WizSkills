@@ -43,9 +43,9 @@ never cut. For a spec created on or after approve.py's `SIZES_SINCE`, step 4
 refuses an L, and an M without that line. Cut flat (F6): the shortest critical
 chain, then the widest graph; disjoint owned paths; only the arrows a ticket
 truly needs. A ticket that needs only another's interface waits on a
-contract-first ticket instead; ordering is never a reason for an arrow. Step 4
-refuses a chain over 5, or over 2/3 of the open tickets, without a `Why deep:`
-line in the spec. To compare two cuts, write each as picture data and run
+contract-first ticket; ordering never justifies an arrow. Step 4 needs a spec
+`Why deep:` line for a chain over 5, or over 3 and over 2/3 of the open tickets.
+Compare cuts as picture data with
 `python3 -I "<this skill's folder>/scripts/prefer.py" <cut A> <cut B>`: it keeps
 the shorter chain, then the wider graph. Ask of each ticket: right size, merge
 or split? See [the ticket and graph inputs](tickets.md).

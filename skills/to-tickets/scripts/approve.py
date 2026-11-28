@@ -468,14 +468,23 @@ def behaviour_words(reason):
     return words, bool(EXTENDS.search(rest))
 
 
-def contract_first(ticket):
-    return ticket is not None and ticket['title'].rstrip().lower().endswith(', first')
+def blocker_title(repo, number):
+    message = f'cannot read the title of #{number} in {repo}'
+    try:
+        out = subprocess.run(['gh', 'issue', 'view', str(number), '--repo', repo, '--json', 'title'],
+                             capture_output=True, text=True, check=True)
+        title = json.loads(out.stdout)['title']
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError, TypeError) as e:
+        raise Unreadable(message) from e
+    if not isinstance(title, str) or not title.strip():
+        raise Unreadable(message)
+    return title
 
 
 def check_reasons(graph, agents, spec_text):
     if not flat_spec(spec_text)[0]:
         return []
-    tickets = {t['number']: t for t in graph['tickets']}
+    titles = {t['number']: t['title'] for t in graph['tickets']}
     repo = re.escape(graph['repo'])
     why = []
     for t in agents:
@@ -484,13 +493,21 @@ def check_reasons(graph, agents, spec_text):
         open_blockers = {b['number'] for b in t['blocked_by'] if b['state'] == 'OPEN'}
         for line in section(t['body'], 'Links') or []:
             m = re.fullmatch(rf'- (?:(?i:{repo}))?#([1-9][0-9]*) real:(.*)', line.rstrip(' \t'))
-            if not m or int(m[1]) not in open_blockers or contract_first(tickets.get(int(m[1]))):
+            if not m:
+                continue
+            blocker = int(m[1])
+            if blocker not in open_blockers:
                 continue
             words, extends = behaviour_words(m[2])
-            if not words and not extends:
-                why.append(f'#{t["number"]}: the real line for #{m[1]} names only an interface, not the behaviour '
-                           f'#{t["number"]} needs; name that behaviour, or say the ticket extends #{m[1]}\'s code, '
-                           'or block on a contract-first ticket instead')
+            if words or extends:
+                continue
+            if blocker not in titles:
+                titles[blocker] = blocker_title(graph['repo'], blocker)
+            if titles[blocker].rstrip().lower().endswith(', first'):
+                continue
+            why.append(f'#{t["number"]}: the real line for #{blocker} names only an interface, not the behaviour '
+                       f'#{t["number"]} needs; name that behaviour, or say the ticket extends #{blocker}\'s code, '
+                       'or block on a contract-first ticket instead')
     return why
 
 

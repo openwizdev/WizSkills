@@ -710,6 +710,21 @@ def record(repo, change):
         return False
 
 
+DOOR = ("refused: one-way door under a host driver: #%s's approach note needs its other-family reviewer before the "
+        "build, and a driver runs only the builder; next: ask the orchestrator")
+
+
+def one_way(repo, n):
+    issue = post.read_json('api', 'repos/%s/issues/%s' % (repo, n))
+    body = issue.get('body', 0) if isinstance(issue, dict) else 0
+    if not isinstance(body, (str, type(None))):
+        raise Unreadable("can't read #%s's body, so its one-way door can't be checked" % n)
+    lines = [line.strip() for line in (body or '').replace('\r', '').split('\n')]
+    parent = lines[lines.index('## Parent') + 1:] if '## Parent' in lines else []
+    end = next((i for i, line in enumerate(parent) if line.startswith('## ')), len(parent))
+    return 'One-way door: yes' in parent[:end]
+
+
 def main(argv):
     global DRIVER_ENV
     if configured():
@@ -753,6 +768,8 @@ def main(argv):
         ready(repo)
         if run and not run.get('stopped'):
             raise Outcome(live % (n, run['host']))
+        if skill == 'build-ticket' and one_way(repo, n):
+            raise Outcome(DOOR % n)
         given = dict({'repository': repo, 'ticket': int(n), 'skill': skill, 'harness': argv[3], 'model': argv[4]},
                      **({'effort': effort} if effort else {}))
         if effort and 'effort' not in can(host):

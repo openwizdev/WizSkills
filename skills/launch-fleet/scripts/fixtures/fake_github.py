@@ -98,6 +98,10 @@ if args[:2] != ['api', 'graphql'] and args[0] == 'api':
     endpoint = next(a for a in args[1:] if a.startswith('repos/'))
     base = 'repos/%s/' % repo
     if not endpoint.startswith(base):
+        for other in world.get('other_issue_repos', []):
+            lead = 'repos/%s/issues/' % other
+            if method == 'GET' and endpoint.startswith(lead) and endpoint[len(lead):].isdigit():
+                out({'number': int(endpoint[len(lead):]), 'labels': [], 'body': ''})
         fail('HTTP 404')
     rest = endpoint[len(base):].split('?')[0]
     if rest == 'contents/docs/agents/fleet.md':
@@ -135,7 +139,8 @@ if args[:2] != ['api', 'graphql'] and args[0] == 'api':
                 fail('connection reset')
         out(c)
     if method == 'GET' and parts[0] == 'issues' and len(parts) == 2:
-        out({'number': int(parts[1]), 'labels': [{'name': n} for n in world.get('labels', [])]})
+        out({'number': int(parts[1]), 'labels': [{'name': n} for n in world.get('labels', [])],
+             'body': world.get('body', '')})
     if method == 'GET' and parts[0] == 'issues' and parts[2:] == ['comments']:
         query = dict(x.split('=', 1) for x in endpoint.partition('?')[2].split('&') if '=' in x)
         later = query.get('page', '1') != '1'

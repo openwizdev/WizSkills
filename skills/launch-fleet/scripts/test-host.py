@@ -267,6 +267,38 @@ class Host(unittest.TestCase):
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', 'a' * 60)[0], 0)
         self.assertEqual(p.calls()[0]['input']['skill'], 'a' * 60)
 
+    def test_a_one_way_door_builder_start_is_refused_before_any_driver_call(self):
+        p = Project(self)
+        world = p.github()
+        world['body'] = '## Parent\n\nTicket of spec #1.\nOne-way door: yes\n\n## What to build\n\nSynthetic.\n'
+        p.world.write_text(json.dumps(world))
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5'),
+                         (1, "refused: one-way door under a host driver: #7's approach note needs its other-family "
+                             "reviewer before the build, and a driver runs only the builder; next: ask the orchestrator",
+                          ''))
+        self.assertEqual((p.calls(), p.saved(), p.github()['writes']), ([], None, []))
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm', 'launch-fleet')[:2], (0, 'started #7 on local'))
+        self.assertEqual(p.host('start', REPO, 8, 'codex', 'm', 'review-ticket')[:2], (0, 'started #8 on local'))
+
+    def test_only_a_standalone_marker_in_parent_refuses(self):
+        p = Project(self)
+        for n, body in enumerate(('## Parent\n\nTicket.\n\n## Notes\n\nOne-way door: yes\n',
+                                  '## Parent\n\nTicket.\n- One-way door: yes\n',
+                                  '## Parent\n\nOne-way door: no\n', None), 7):
+            world = p.github()
+            world['body'] = body
+            p.world.write_text(json.dumps(world))
+            self.assertEqual(p.host('start', REPO, n, 'claude', 'm')[:2], (0, 'started #%s on local' % n))
+
+    def test_an_unreadable_ticket_body_starts_nothing(self):
+        p = Project(self)
+        world = p.github()
+        world['body'] = 5
+        p.world.write_text(json.dumps(world))
+        self.assertEqual(p.host('start', REPO, 7, 'claude', 'm'),
+                         (2, '', "host.py: can't read #7's body, so its one-way door can't be checked"))
+        self.assertEqual((p.calls(), p.saved()), ([], None))
+
     def test_wake_and_stop_take_no_skill(self):
         p = Project(self)
         self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5')[0], 0)
@@ -837,6 +869,9 @@ class Roster(unittest.TestCase):
         self.assertTrue(all('--requester reviewer-9 --repository %s/site ' % owner in text
                             for text in running.values()))
         other = dict(env, LAUNCH_FLEET_RUNS=str(p.runs.with_name('runs-other.json')))
+        world = p.github()
+        world['other_issue_repos'] = [owner + '/site-reviewer']
+        p.world.write_text(json.dumps(world))
         self.assertEqual(p.host('start', owner + '/site-reviewer', 9, 'claude', 'claude-opus-5-5', '--row',
                                 'Builder', **other)[0], 0)
         after = {path: path.read_text() for path in folder.rglob('*') if path.is_file()}

@@ -42,6 +42,12 @@ Before posting, the reviewer tries to disprove every candidate finding and drops
 
 `<n>` is a whole number: `0`, or digits with no leading zero. The words stay the same for every `<n>`, `1` included.
 
+## Two faces
+
+Report gaps from the [two-face rubric](two-face.md) as Spec findings. A missing agent contract or a broken human-visible state is `[blocking]` when it breaks a concrete real-user path. Name the caller or person, the ordinary action and what breaks in the `User path:` line.
+
+Grade a gap that only affects proof, such as a missing screenshot, as `[polish]`. Use the [existing grading rules](../SKILL.md#3-grade) for `Risk:` when a finding demonstrates a security, privacy or data-loss risk.
+
 ## Examples
 
 Synthetic first verdict: Pantry ticket #41 under spec #38, pull request #57, whose description lists one ruling.

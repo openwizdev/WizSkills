@@ -1,0 +1,288 @@
+[
+  {
+    "name": "absent",
+    "fleet": "absent.md",
+    "ticket": 701,
+    "history": [
+      {"note": 8101, "start": 8001, "branch": "room/synthetic-first", "pr": 91, "end": "stopped", "checks": "not_green"},
+      {"note": 8102, "start": 8002, "branch": "room/synthetic-first", "pr": 91, "end": "replaced", "checks": "not_green"}
+    ],
+    "role": "small_builder",
+    "expected": {
+      "choice": "models",
+      "requested": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "low"},
+      "effective": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "low"},
+      "review": {"role": "reviewer", "provider": "codex"},
+      "record": null
+    }
+  },
+  {
+    "name": "one-ended",
+    "fleet": "present.md",
+    "ticket": 701,
+    "history": [
+      {"note": 8101, "start": 8001, "branch": "room/synthetic-first", "pr": 91, "end": "stopped", "checks": "not_green"},
+      {"note": 8102, "start": 8002, "branch": "room/synthetic-first", "pr": 91, "end": null, "checks": "not_green"}
+    ],
+    "expected": {
+      "choice": "models",
+      "requested": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "medium"},
+      "effective": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "medium"},
+      "review": {"role": "reviewer", "provider": "codex"},
+      "record": null,
+      "failed": [8101]
+    }
+  },
+  {
+    "name": "checks-were-green",
+    "fleet": "present.md",
+    "ticket": 701,
+    "history": [
+      {"note": 8101, "start": 8001, "branch": "room/synthetic-first", "pr": 91, "end": "stopped", "checks": "green"},
+      {"note": 8102, "start": 8002, "branch": "room/synthetic-first", "pr": 91, "end": "replaced", "checks": "not_green"}
+    ],
+    "expected": {
+      "choice": "models",
+      "requested": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "medium"},
+      "effective": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "medium"},
+      "review": {"role": "reviewer", "provider": "codex"},
+      "record": null,
+      "failed": [8102]
+    }
+  },
+  {
+    "name": "unknown-checks",
+    "fleet": "present.md",
+    "ticket": 701,
+    "history": [
+      {"note": 8101, "start": 8001, "branch": "room/synthetic-first", "pr": 91, "end": "stopped", "checks": "unknown"},
+      {"note": 8102, "start": 8002, "branch": "room/synthetic-first", "pr": 91, "end": "replaced", "checks": "not_green"}
+    ],
+    "expected": {
+      "choice": "models",
+      "requested": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "medium"},
+      "effective": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "medium"},
+      "review": {"role": "reviewer", "provider": "codex"},
+      "record": null,
+      "failed": [8102]
+    }
+  },
+  {
+    "name": "start-refused",
+    "fleet": "present.md",
+    "ticket": 701,
+    "history": [
+      {"note": 8101, "start": 8001, "branch": "room/synthetic-first", "pr": 91, "end": "stopped", "checks": "not_green"}
+    ],
+    "unstarted": [{"id": 8002, "body": "launch-fleet: start refused: driver start failed"}],
+    "expected": {
+      "choice": "models",
+      "requested": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "medium"},
+      "effective": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "medium"},
+      "review": {"role": "reviewer", "provider": "codex"},
+      "record": null,
+      "failed": [8101]
+    }
+  },
+  {
+    "name": "two-ended",
+    "fleet": "present.md",
+    "ticket": 701,
+    "history": [
+      {"note": 8101, "start": 8001, "branch": "room/synthetic-first", "pr": 91, "end": "stopped", "checks": "not_green"},
+      {"note": 8102, "start": 8002, "branch": "room/synthetic-first", "pr": 91, "end": "replaced", "checks": "not_green"}
+    ],
+    "expected": {
+      "choice": "escalation",
+      "requested": {"provider": "codex", "model": "gpt-6.2-sol", "effort": "xhigh"},
+      "effective": {"provider": "codex", "model": "gpt-6.2-sol", "effort": "xhigh"},
+      "review": {"role": "builder", "provider": "claude-code"},
+      "record": "launch-fleet: escalated #701 after 2 failed attempts: codex gpt-6.2-sol xhigh\nAttempts: 8101, 8102",
+      "failed": [8101, 8102]
+    }
+  },
+  {
+    "name": "three-ended",
+    "fleet": "present.md",
+    "ticket": 701,
+    "history": [
+      {"note": 8101, "start": 8001, "branch": "room/synthetic-first", "pr": 91, "end": "stopped", "checks": "not_green"},
+      {"note": 8102, "start": 8002, "branch": "room/synthetic-first", "pr": 91, "end": "replaced", "checks": "not_green"},
+      {"note": 8103, "start": 8003, "branch": "room/synthetic-third", "pr": null, "end": "failed", "checks": "no_pr"}
+    ],
+    "expected": {
+      "choice": "escalation",
+      "requested": {"provider": "codex", "model": "gpt-6.2-sol", "effort": "xhigh"},
+      "effective": {"provider": "codex", "model": "gpt-6.2-sol", "effort": "xhigh"},
+      "review": {"role": "builder", "provider": "claude-code"},
+      "record": "launch-fleet: escalated #701 after 2 failed attempts: codex gpt-6.2-sol xhigh\nAttempts: 8101, 8102",
+      "failed": [8101, 8102, 8103]
+    }
+  },
+  {
+    "name": "already-started",
+    "fleet": "present.md",
+    "ticket": 701,
+    "history": [
+      {"note": 8101, "start": 8001, "branch": "room/synthetic-first", "pr": 91, "end": "stopped", "checks": "not_green"},
+      {"note": 8102, "start": 8002, "branch": "room/synthetic-first", "pr": 91, "end": "replaced", "checks": "not_green"},
+      {"note": 8103, "start": 8003, "branch": "room/synthetic-third", "pr": null, "end": "failed", "checks": "no_pr"}
+    ],
+    "prior_escalation": {"body": "launch-fleet: escalated #701 after 2 failed attempts: codex gpt-6.2-sol xhigh\nAttempts: 8101, 8102", "start": 8003, "state": "started"},
+    "expected": {
+      "choice": "models",
+      "requested": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "medium"},
+      "effective": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "medium"},
+      "review": {"role": "reviewer", "provider": "codex"},
+      "record": null,
+      "failed": [8101, 8102, 8103]
+    }
+  },
+  {
+    "name": "unconfirmed-start",
+    "fleet": "present.md",
+    "ticket": 701,
+    "history": [
+      {"note": 8101, "start": 8001, "branch": "room/synthetic-first", "pr": 91, "end": "stopped", "checks": "not_green"},
+      {"note": 8102, "start": 8002, "branch": "room/synthetic-first", "pr": 91, "end": "replaced", "checks": "not_green"}
+    ],
+    "prior_escalation": {"body": "launch-fleet: escalated #701 after 2 failed attempts: codex gpt-6.2-sol xhigh\nAttempts: 8101, 8102", "start": null, "state": "unconfirmed"},
+    "expected": {
+      "choice": "wait",
+      "failed": [8101, 8102],
+      "reason": "unconfirmed_escalation"
+    }
+  },
+  {
+    "name": "retry-reservation",
+    "fleet": "present.md",
+    "ticket": 701,
+    "history": [
+      {"note": 8101, "start": 8001, "branch": "room/synthetic-first", "pr": 91, "end": "stopped", "checks": "not_green"},
+      {"note": 8102, "start": 8002, "branch": "room/synthetic-first", "pr": 91, "end": "replaced", "checks": "not_green"}
+    ],
+    "prior_escalation": {"body": "launch-fleet: escalated #701 after 2 failed attempts: codex gpt-6.2-sol xhigh\nAttempts: 8101, 8102", "start": null, "state": "not_started"},
+    "expected": {
+      "choice": "escalation",
+      "requested": {"provider": "codex", "model": "gpt-6.2-sol", "effort": "xhigh"},
+      "effective": {"provider": "codex", "model": "gpt-6.2-sol", "effort": "xhigh"},
+      "review": {"role": "builder", "provider": "claude-code"},
+      "record": null,
+      "failed": [8101, 8102]
+    }
+  },
+  {
+    "name": "unknown-builder-family",
+    "fleet": "present.md",
+    "ticket": 701,
+    "history": [
+      {"note": 8101, "start": 8001, "branch": "room/synthetic-first", "pr": 91, "end": "stopped", "checks": "not_green"},
+      {"note": 8102, "start": 8002, "branch": "room/synthetic-first", "pr": 91, "end": "replaced", "checks": "not_green"}
+    ],
+    "quota": {"state": "fallback", "choice": {"provider": "synthetic", "model": "vendor/demo", "effort": "medium"}},
+    "expected": {
+      "choice": "escalation",
+      "requested": {"provider": "codex", "model": "gpt-6.2-sol", "effort": "xhigh"},
+      "effective": {"provider": "synthetic", "model": "vendor/demo", "effort": "medium"},
+      "review": {"role": "waits"},
+      "record": "launch-fleet: escalated #701 after 2 failed attempts: codex gpt-6.2-sol xhigh\nAttempts: 8101, 8102",
+      "failed": [8101, 8102]
+    }
+  },
+  {
+    "name": "quota-fallback",
+    "fleet": "present.md",
+    "ticket": 701,
+    "history": [
+      {"note": 8101, "start": 8001, "branch": "room/synthetic-first", "pr": 91, "end": "stopped", "checks": "not_green"},
+      {"note": 8102, "start": 8002, "branch": "room/synthetic-first", "pr": 91, "end": "replaced", "checks": "not_green"}
+    ],
+    "quota": {"state": "fallback", "choice": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "medium"}},
+    "expected": {
+      "choice": "escalation",
+      "requested": {"provider": "codex", "model": "gpt-6.2-sol", "effort": "xhigh"},
+      "effective": {"provider": "claude-code", "model": "claude-sonnet-5-5", "effort": "medium"},
+      "review": {"role": "reviewer", "provider": "codex"},
+      "record": "launch-fleet: escalated #701 after 2 failed attempts: codex gpt-6.2-sol xhigh\nAttempts: 8101, 8102",
+      "failed": [8101, 8102]
+    }
+  },
+  {
+    "name": "quota-wait",
+    "fleet": "present.md",
+    "ticket": 701,
+    "history": [
+      {"note": 8101, "start": 8001, "branch": "room/synthetic-first", "pr": 91, "end": "stopped", "checks": "not_green"},
+      {"note": 8102, "start": 8002, "branch": "room/synthetic-first", "pr": 91, "end": "replaced", "checks": "not_green"}
+    ],
+    "quota": {"state": "wait"},
+    "expected": {
+      "choice": "escalation",
+      "requested": {"provider": "codex", "model": "gpt-6.2-sol", "effort": "xhigh"},
+      "effective": null,
+      "review": null,
+      "record": null,
+      "failed": [8101, 8102]
+    }
+  },
+  {
+    "name": "missing-table",
+    "fleet": "missing-table.md",
+    "ticket": 701,
+    "history": [],
+    "expected": {
+      "choice": "refused",
+      "reason": "invalid_escalation"
+    }
+  },
+  {
+    "name": "wrong-header",
+    "fleet": "wrong-header.md",
+    "ticket": 701,
+    "history": [],
+    "expected": {
+      "choice": "refused",
+      "reason": "invalid_escalation"
+    }
+  },
+  {
+    "name": "two-rows",
+    "fleet": "two-rows.md",
+    "ticket": 701,
+    "history": [],
+    "expected": {
+      "choice": "refused",
+      "reason": "invalid_escalation"
+    }
+  },
+  {
+    "name": "duplicate-heading",
+    "fleet": "duplicate-heading.md",
+    "ticket": 701,
+    "history": [],
+    "expected": {
+      "choice": "refused",
+      "reason": "invalid_escalation"
+    }
+  },
+  {
+    "name": "bad-flags",
+    "fleet": "bad-flags.md",
+    "ticket": 701,
+    "history": [],
+    "expected": {
+      "choice": "refused",
+      "reason": "invalid_escalation"
+    }
+  },
+  {
+    "name": "following-row",
+    "fleet": "following-row.md",
+    "ticket": 701,
+    "history": [],
+    "expected": {
+      "choice": "refused",
+      "reason": "invalid_escalation"
+    }
+  }
+]

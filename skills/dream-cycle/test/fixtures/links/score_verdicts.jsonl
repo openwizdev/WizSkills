@@ -1,0 +1,5 @@
+{"id": "sc-promise", "verdict": "CONFIRMED", "reason": "Confirmed promise and blocked ticket.", "evidence": ["grep -F export acme.md -> 1 match"], "blind": true, "changes_confirmed": true}
+{"id": "sc-tie-older", "verdict": "PLAUSIBLE", "reason": "Plausible doc mismatch.", "evidence": ["grep -F Offline README.md -> 1 match"], "blind": true, "changes_confirmed": true}
+{"id": "sc-tie-newer", "verdict": "CONFIRMED", "reason": "Confirmed rival move impacts #70.", "evidence": ["grep -F RivalCo rival.md -> 1 match"], "blind": true, "changes_confirmed": true}
+{"id": "sc-info", "verdict": "PLAUSIBLE", "reason": "Informational answer.", "evidence": ["grep -F export.v1 SKILL.md -> 1 match"], "blind": true, "changes_confirmed": false}
+{"id": "sc-null-changes-confirmed", "verdict": "CONFIRMED", "reason": "Prover forgot changes_confirmed.", "evidence": ["grep -F Offline scoreboard.md -> 1 match"], "blind": true, "changes_confirmed": null}

@@ -1,6 +1,6 @@
 # Records and private routing
 
-Read this when changing private routing or running the check's other commands. SKILL.md's "Records" table holds every record form. `scripts/post.py` writes every record and refuses private identities.
+Read this when changing private routing or running the check's other commands. This file's "Records" table holds every record form. `scripts/post.py` writes every record and refuses private identities.
 
 ## Records
 

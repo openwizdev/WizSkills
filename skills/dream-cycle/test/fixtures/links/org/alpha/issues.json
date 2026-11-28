@@ -1,0 +1,23 @@
+[
+  {
+    "number": 64,
+    "state": "open",
+    "title": "Export fix for acme",
+    "body": "Export fix: blocked, no owner. Organization: ExampleOrg",
+    "updated_at": "2030-01-14T00:00:00Z"
+  },
+  {
+    "number": 70,
+    "state": "open",
+    "title": "Evaluate local-cache sync",
+    "body": "RivalCo move affects our sync roadmap. Organization: ExampleOrg",
+    "updated_at": "2030-01-13T00:00:00Z"
+  },
+  {
+    "number": 99,
+    "state": "closed",
+    "title": "Old closed issue",
+    "body": "Already shipped last year.",
+    "updated_at": "2030-01-01T00:00:00Z"
+  }
+]

@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=1057
+CASES=1068
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -824,6 +824,31 @@ expect 'CI failed: tell the builder' 0 check.json 'pr31 | pull(31; .rollup = "FA
 CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
 EOF
 expect 'a CI failure already sent is not sent again' 0 check.json 'pr31 | pull(31; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE") | pr_say(31; 3101; "11:10"; "launch-fleet: CI failure sent \(sha(31))")' -- check < /dev/null
+FR14_APPROVED='reviewing31 | issue(12; .comments = []) | pr_say(31; 3102; "11:30"; "VERDICT: APPROVE at \(sha(31))") | pull(31; .queue = true)'
+FR14_RECEIPT='pr_say(31; 3103; "11:40"; "launch-fleet: merge queued \(sha(31)): synthetic approval")'
+FR14_RED='pull(31; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE")'
+FR14_PENDING='pull(31; .rollup = "PENDING" | .checks[1].status = "IN_PROGRESS" | .checks[1].conclusion = null)'
+expect 'FR14: red receipted head tells the builder and wakes the drop reader' 0 check.json "$FR14_APPROVED | $FR14_RECEIPT | $FR14_RED" -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder
+merge #31 for #12 at $S31: exact-head queue receipt; run merge.py merge to read the drop, skipping merge.py admit
+EOF
+expect 'FR14: red receipted head wakes again after the CI notice' 0 check.json "$FR14_APPROVED | $FR14_RECEIPT | $FR14_RED"' | pr_say(31; 3104; "11:50"; "launch-fleet: CI failure sent \(sha(31))")' -- check <<EOF
+merge #31 for #12 at $S31: exact-head queue receipt; run merge.py merge to read the drop, skipping merge.py admit
+EOF
+expect 'FR14: pending receipted head wakes the drop reader' 0 check.json "$FR14_APPROVED | $FR14_RECEIPT | $FR14_PENDING" -- wake 31 <<EOF
+merge #31 for #12 at $S31: exact-head queue receipt; run merge.py merge to read the drop, skipping merge.py admit
+EOF
+expect 'FR14: red approved head without a receipt only tells the builder' 0 check.json "$FR14_APPROVED | $FR14_RED" -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder
+EOF
+expect 'FR14: pending approved head without a receipt keeps waiting' 0 check.json "$FR14_APPROVED | $FR14_PENDING" -- check < /dev/null
+expect 'FR14: receipt for an older head cannot wake the current head' 0 check.json "$FR14_APPROVED | $FR14_PENDING"' | pr_say(31; 3103; "11:40"; "launch-fleet: merge queued \(sha(99)): before \(sha(31))")' -- check < /dev/null
+expect 'FR14: a receipt from an outsider does not count' 0 check.json "$FR14_APPROVED | $FR14_PENDING"' | pr_by(31; 3103; "11:40"; outsider; "launch-fleet: merge queued \(sha(31)): synthetic approval")' -- check < /dev/null
+expect 'FR14: a receipted head without current approval keeps waiting' 0 check.json "$FR14_APPROVED | $FR14_RECEIPT | $FR14_PENDING"' | pr_say(31; 3104; "11:50"; "VERDICT: CHANGES at \(sha(31))")' -- check < /dev/null
+expect 'FR14: a blocked receipted head keeps waiting' 0 check.json "$FR14_APPROVED | $FR14_RECEIPT | $FR14_PENDING"' | pr_say(31; 3104; "11:50"; "launch-fleet: merge blocked \(sha(31)): dropped twice at this head")' -- check < /dev/null
+expect 'FR14: a green receipted head keeps its usual merge line' 0 check.json "$FR14_APPROVED | $FR14_RECEIPT" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
 # #2119: synthetic API windows; required names occur only after 40 contexts.
 expect 'contexts: overflow reads required checks on the third page' 0 check.json 'pr31 | pull(31; .checks = ([range(40) | {name: "optional-\(.)", status: "COMPLETED", conclusion: "SUCCESS"}] + .checks))' -- check <<EOF
 review #31 for #12 at $S31: first review
@@ -1028,8 +1053,13 @@ EOF
 expect 'a failed claim whose reason names a thread does not retire that reviewer' 0 check.json 'rechecking31("11:00") | pull(31; .comments |= map(if .id == 3104 then .body = "launch-fleet: review failed \(sha("31f")): thread thr_synrev31 never got the message" else . end))' -- check <<EOF
 re-check #31 for #12 at $S31F: tell its reviewer, thread thr_synrev31 (retry after "review failed $S31F: thread thr_synrev31 never got the message")
 EOF
-expect 'a review record that names no thread: look, since its reviewer cannot be checked' 0 check.json 'pr31 | pr_say(31; 3101; "11:00"; "launch-fleet: review started \(sha(31))")' -- check <<EOF
+printf '%s\n' '{"repo":"synthetic-owner/synthetic-repo","threads":{}}' > "$tmp/discovery-routes.json"
+expect 'a review record that names no thread: look, since its reviewer cannot be checked' 0 check.json 'pr31 | pr_say(31; 3101; "11:00"; "launch-fleet: review started \(sha(31))")' \
+  LAUNCH_FLEET_STATE="$tmp/discovery-routes.json" -- check <<EOF
 look #31: thread discovery is out of reach
+EOF
+expect 'a fresh install with no private thread map names the file to create' 0 check.json 'pr31 | pr_say(31; 3101; "11:00"; "launch-fleet: review started \(sha(31))")' -- check <<EOF
+look #31: private thread map LAUNCH_FLEET_STATE is unset; create it outside the checkout with {"repo": "synthetic-owner/synthetic-repo", "threads": {}}
 EOF
 expect 'a review claim with no outcome after 10 minutes is reconciled' 0 check.json 'pr31 | pr_say(31; 3101; "11:40"; "launch-fleet: review starting \(sha(31))")' -- check <<EOF
 reconcile review #31 for #12 at $S31: claimed at 2026-11-01T11:40:00Z, no outcome after 10 minutes

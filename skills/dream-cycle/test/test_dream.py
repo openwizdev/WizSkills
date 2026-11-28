@@ -889,6 +889,92 @@ class DreamCycleMergeAndReportTests(unittest.TestCase):
             self.assertIn("verdicts_utf8.jsonl:2", unconfirmed_section)
             self.assertIn("utf-8", unconfirmed_section.lower())
 
+    def test_report_cleanup_preserves_non_inbox_markdown_in_inbox_dirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            run_dir = base / "run"
+            notes_dir = run_dir / "notes"
+            default_inboxes = run_dir / "inboxes"
+            fdir = base / "findings"
+            vdir = base / "verdicts"
+            for d in (notes_dir, default_inboxes, fdir, vdir):
+                d.mkdir(parents=True)
+
+            readme_text = "# Notes\n\nHand-written notes that must not be deleted.\n"
+            older_report_text = "# Dream cycle report — 2030-01-08\n\nOlder report.\n"
+            (notes_dir / "README.md").write_text(readme_text, encoding="utf-8")
+            (notes_dir / "2030-01-08.md").write_text(older_report_text, encoding="utf-8")
+            (default_inboxes / "README.md").write_text(readme_text, encoding="utf-8")
+
+            plat = _make_link("plat-01", route="pillar-inbox", owner="platform")
+            (fdir / "s.jsonl").write_text(json.dumps(plat) + "\n", encoding="utf-8")
+            (vdir / "v1.jsonl").write_text(
+                json.dumps(_make_verdict("plat-01", "CONFIRMED", changes_confirmed=True)) + "\n",
+                encoding="utf-8",
+            )
+            merged_file = base / "merged.json"
+            self.assertEqual(
+                self._run("merge", str(fdir), "--out", str(merged_file), "--batches-dir", str(base / "b"), "--batches", "1").returncode,
+                0,
+            )
+
+            proc1 = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--inboxes-dir", str(notes_dir),
+                "--out", str(run_dir / "2030-01-15.md"),
+                "--tickets-out", str(run_dir / "tickets.json"),
+            )
+            self.assertEqual(proc1.returncode, 0, proc1.stderr)
+            self.assertEqual(
+                sorted(p.name for p in notes_dir.glob("*.md")),
+                ["2030-01-08.md", "README.md", "platform.md"],
+            )
+            self.assertEqual((notes_dir / "README.md").read_text(encoding="utf-8"), readme_text)
+            self.assertEqual((notes_dir / "2030-01-08.md").read_text(encoding="utf-8"), older_report_text)
+
+            (vdir / "v2.jsonl").write_text(
+                json.dumps(_make_verdict("plat-01", "REJECTED", reason="Rejected on recheck", changes_confirmed=False)) + "\n",
+                encoding="utf-8",
+            )
+            proc2 = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--inboxes-dir", str(notes_dir),
+                "--out", str(run_dir / "2030-01-15.md"),
+                "--tickets-out", str(run_dir / "tickets.json"),
+            )
+            self.assertEqual(proc2.returncode, 0, proc2.stderr)
+            self.assertEqual(
+                sorted(p.name for p in notes_dir.glob("*.md")),
+                ["2030-01-08.md", "README.md"],
+            )
+            self.assertEqual((notes_dir / "README.md").read_text(encoding="utf-8"), readme_text)
+            self.assertEqual((notes_dir / "2030-01-08.md").read_text(encoding="utf-8"), older_report_text)
+
+            proc_default = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--out", str(run_dir / "2030-01-15.md"),
+                "--tickets-out", str(run_dir / "tickets.json"),
+            )
+            self.assertEqual(proc_default.returncode, 0, proc_default.stderr)
+            self.assertEqual(sorted(p.name for p in default_inboxes.glob("*.md")), ["README.md"])
+            self.assertEqual((default_inboxes / "README.md").read_text(encoding="utf-8"), readme_text)
+
+            (vdir / "v2.jsonl").unlink()
+            hand_platform_text = "# Platform handbook\n\nDo not overwrite.\n"
+            (notes_dir / "platform.md").write_text(hand_platform_text, encoding="utf-8")
+            proc_collision = self._run(
+                "report", str(merged_file), str(vdir),
+                "--date", "2030-01-15",
+                "--inboxes-dir", str(notes_dir),
+                "--out", str(run_dir / "2030-01-15.md"),
+                "--tickets-out", str(run_dir / "tickets.json"),
+            )
+            self.assertNotEqual(proc_collision.returncode, 0)
+            self.assertEqual((notes_dir / "platform.md").read_text(encoding="utf-8"), hand_platform_text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

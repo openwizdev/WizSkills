@@ -582,6 +582,19 @@ def _render_standard_item(index, finding, verdict_str):
     return "\n".join(lines)
 
 
+INBOX_HEADING_PREFIX = "# Dream cycle inbox — "
+INBOX_HEADING_BYTES = INBOX_HEADING_PREFIX.encode("utf-8")
+
+
+def _is_generated_inbox_file(path):
+    try:
+        with path.open("rb") as fh:
+            prefix = fh.read(len(INBOX_HEADING_BYTES))
+    except OSError:
+        return False
+    return prefix == INBOX_HEADING_BYTES
+
+
 def _check_inbox_dir(inboxes_dir, run_root):
     if inboxes_dir.is_symlink():
         raise ValueError(f"refused symlinked inbox directory: {inboxes_dir}")
@@ -617,8 +630,13 @@ def _plan_owner_inboxes(inboxes_dir, run_root, report_resolved, inbox_items, rep
             raise ValueError(f"refused inbox path outside run folder for owner {owner!r}")
         if target == report_resolved:
             raise ValueError(f"refused inbox path colliding with report file for owner {owner!r}")
+        if target_path.exists():
+            if not target_path.is_file():
+                raise ValueError(f"refused non-file inbox path for owner {owner!r}: {target_path}")
+            if not _is_generated_inbox_file(target_path):
+                raise ValueError(f"refused overwriting non-inbox file for owner {owner!r}: {target_path}")
         lines = [
-            f"# Dream cycle inbox — {owner} ({report_date})",
+            f"{INBOX_HEADING_PREFIX}{owner} ({report_date})",
             "",
             "Private run-folder inbox. Never written to a pillar repository; people drafts are DRAFT ONLY and never sent automatically.",
             "",
@@ -644,7 +662,6 @@ def _write_owner_inboxes(inboxes_dir, base_resolved, run_root, report_resolved, 
             written_targets.add(target)
 
     if inboxes_dir.is_dir():
-        same_as_root = base_resolved == run_root
         for existing in sorted(inboxes_dir.glob("*.md")):
             if existing.is_symlink() or not existing.is_file():
                 continue
@@ -653,13 +670,8 @@ def _write_owner_inboxes(inboxes_dir, base_resolved, run_root, report_resolved, 
                 continue
             if not resolved.is_relative_to(base_resolved) or not resolved.is_relative_to(run_root):
                 continue
-            if same_as_root:
-                try:
-                    first_line = existing.read_text(encoding="utf-8").splitlines()[:1]
-                except (OSError, UnicodeDecodeError):
-                    continue
-                if not first_line or not first_line[0].startswith("# Dream cycle inbox — "):
-                    continue
+            if not _is_generated_inbox_file(existing):
+                continue
             existing.unlink()
     return len(written_targets)
 

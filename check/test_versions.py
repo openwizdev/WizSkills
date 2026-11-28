@@ -17,9 +17,9 @@ spec.loader.exec_module(run)
 DOC_VERSION = re.compile(
     r'(?<![0-9A-Za-z._-])v?('
     r'[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)*'
-    r'(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?'
-    r'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?'
-    r')(?![0-9A-Za-z_-]|\.[0-9A-Za-z])'
+    r'(?:-[0-9A-Za-z-]*(?:\.[0-9A-Za-z-]+)*)?'
+    r'(?:\+[0-9A-Za-z-]*(?:\.[0-9A-Za-z-]+)*)?'
+    r')(?![0-9A-Za-z_+-]|\.[0-9A-Za-z])'
 )
 INSTALL_PINS = {
     'README.md': (

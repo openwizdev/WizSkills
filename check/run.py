@@ -100,6 +100,9 @@ SUITES = {
               ['python3', '-I', 'check/test_checklist_rules.py'],
               ['python3', '-I', 'check/test_context_budget.py'],
               ['python3', '-I', 'check/test_packaged_imports.py']],
+    'tools': [['python3', '-I', 'tools/review-rounds/test_bench.py'],
+              ['python3', '-I', 'tools/comment-check/test_ci.py'],
+              ['python3', '-I', 'tools/comment-check/test_commands.py']],
 }
 
 PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}
@@ -154,6 +157,7 @@ FRONTMATTER_KEYS = ('name', 'description', 'version')
 DESCRIPTION_MAX = 180
 OPENAI_KEYS = ('display_name', 'short_description')
 
+HOST_SKILLS = ('.agents/skills', '.claude/skills')
 PLUGIN = '.claude-plugin/plugin.json'
 MARKETPLACE = '.claude-plugin/marketplace.json'
 PLUGIN_KEYS = {'name', 'version', 'description', 'author', 'homepage', 'repository',
@@ -187,6 +191,7 @@ def rules(root):
     for name in names:
         skill(root, name, out)
     links(root, out)
+    host_links(root, names, out)
     plugin_version = plugin(root, names, out)
     marketplace(root, plugin_version, out)
     return out
@@ -417,6 +422,37 @@ def links(root, out):
         dirs[:] = [d for d in dirs if not (here / d).is_symlink()]
 
 
+def host_links(root, names, out):
+    expected = set(names)
+    for rel in HOST_SKILLS:
+        folder = root / rel
+        if folder.parent.is_symlink() or folder.is_symlink() or not folder.is_dir():
+            out.add('links', rel, 'the host skills folder is missing')
+            continue
+        try:
+            with os.scandir(folder) as it:
+                entries = sorted(it, key=lambda e: e.name)
+        except OSError:
+            out.add('links', rel, 'the host skills folder is unreadable')
+            continue
+        seen = set()
+        for entry in entries:
+            at = f'{rel}/{entry.name}'
+            seen.add(entry.name)
+            if entry.name not in expected:
+                out.add('links', at, f'`{entry.name}` is not a carried skill folder')
+                continue
+            target = f'../../skills/{entry.name}'
+            try:
+                actual = os.readlink(entry.path) if entry.is_symlink() else None
+            except OSError:
+                actual = None
+            if actual != target:
+                out.add('links', at, f'symlink must point to `{target}`')
+        for name in sorted(expected - seen):
+            out.add('links', f'{rel}/{name}', f'missing symlink to `../../skills/{name}`')
+
+
 def markdown(path, at, real_root, out):
     text = read(path)
     if text is None:
@@ -643,10 +679,16 @@ def unlisted_tests(root):
     covered.update('skills/huntr/scripts/' + name for name in
                    ('gate.test.mjs', 'manifest.test.mjs', 'records.test.mjs', 'controller.test.mjs',
                     'targets.test.mjs', 'findings.test.mjs'))
-    discovered = {p.relative_to(root).as_posix() for p in (root / 'skills').rglob('*')
-                  if p.is_file() and 'fixtures' not in p.parts and
-                  ((p.name.startswith('test') and p.suffix in ('.py', '.sh'))
-                   or p.name.endswith('.test.mjs'))}
+    discovered = set()
+    for folder in ('skills', 'tools'):
+        base = root / folder
+        if base.is_dir():
+            discovered.update(
+                p.relative_to(root).as_posix() for p in base.rglob('*')
+                if p.is_file() and 'fixtures' not in p.relative_to(root).parts and
+                ((p.name.startswith('test') and p.suffix in ('.py', '.sh'))
+                 or p.name.endswith('.test.mjs'))
+            )
     discovered.update(p.relative_to(root).as_posix() for p in (root / 'check').glob('test*.py'))
     return sorted(discovered - covered)
 

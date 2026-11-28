@@ -1,0 +1,40 @@
+{
+  "closing_tickets": {
+    "example-org/example-repo#19004": [
+      "example-org/example-repo#18004"
+    ]
+  },
+  "parents": {
+    "example-org/example-repo#18004": "example-org/example-repo#82"
+  },
+  "secret_configured": true,
+  "deliveries": [
+    {
+      "headers": {
+        "X-GitHub-Event": "check_run",
+        "X-GitHub-Delivery": "example-check-run-completed"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "check_run": {
+          "pull_requests": [
+            {
+              "number": 19004
+            }
+          ],
+          "conclusion": "failure"
+        },
+        "action": "completed"
+      },
+      "sign_body": true,
+      "expected": {
+        "exit_code": 0,
+        "stdout": [
+          "check spec 82"
+        ]
+      }
+    }
+  ]
+}

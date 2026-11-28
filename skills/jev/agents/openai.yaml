@@ -1,0 +1,3 @@
+interface:
+  display_name: "Jev"
+  short_description: "Use TypeSafe's Jev when a step needs a typed judgment"

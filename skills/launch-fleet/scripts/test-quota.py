@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -91,10 +92,59 @@ class QuotaCheckTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertEqual(r.stdout.strip(), 'launch-fleet: start not tried: quota')
 
-    def test_builders_probe_archives_errored_thread(self):
-        builders = (HERE.parent / 'references/builders.md').read_text(encoding='utf-8')
-        self.assertIn('archive that errored thread', builders)
-        self.assertNotIn('archive or stop that errored thread', builders)
+
+class QuotaRetirementTest(unittest.TestCase):
+    def retire(self, error, state, *flags):
+        with tempfile.TemporaryDirectory() as tmp:
+            room = Path(tmp) / 'room-cli'
+            calls = Path(tmp) / 'calls'
+            room.write_text(
+                '#!/bin/sh\n'
+                'printf "%s\\n" "$*" >> "$CALLS"\n'
+                '[ "$ARCHIVE_STATE" != refused ] || exit 1\n'
+                'if [ "$ARCHIVE_STATE" = local ]; then\n'
+                '  printf \'{"ok":true,"threadId":"thr_syn70","archivedThreadIds":["thr_syn70"]}\\n\'\n'
+                '  exit 0\n'
+                'fi\n'
+                'printf \'{"id":"thr_syn70","state":"%s"}\\n\' "$ARCHIVE_STATE"\n',
+                encoding='utf-8',
+            )
+            room.chmod(0o700)
+            result = subprocess.run(
+                [sys.executable, '-I', str(SCRIPT), 'retire', 'thr_syn70', *flags],
+                input=error, text=True, capture_output=True,
+                env={**os.environ, 'PATH': f'{tmp}:{os.environ["PATH"]}', 'CALLS': str(calls),
+                     'ARCHIVE_STATE': state, 'LAUNCH_FLEET_NOW': str(NOW + 1800)},
+                check=False,
+            )
+            return result, calls.read_text(encoding='utf-8').splitlines() if calls.exists() else []
+
+    def test_quota_record_requires_confirmed_archive(self):
+        for state in ('refused', 'queued', 'archived', 'local'):
+            with self.subTest(state=state):
+                result, calls = self.retire('Individual quota reached.', state)
+                self.assertEqual(calls, ['thread archive thr_syn70 --json'])
+                if state in ('archived', 'local'):
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(result.stdout.strip(), 'launch-fleet: start not tried: quota')
+                else:
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(result.stdout, '')
+                self.assertNotIn('thr_syn70', result.stdout + result.stderr)
+
+    def test_relative_reset_uses_the_error_time_or_is_omitted(self):
+        error = 'Individual quota reached. Try again in 45m.'
+        result, _ = self.retire(error, 'archived', '--now', str(NOW))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout.strip(), 'launch-fleet: start not tried: quota, resets 2026-11-24T20:45:00Z')
+        result, _ = self.retire(error, 'archived')
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout.strip(), 'launch-fleet: start not tried: quota')
+
+    def test_non_quota_failure_is_not_archived(self):
+        result, calls = self.retire('Disk quota exceeded', 'archived')
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(calls, [])
 
 
 if __name__ == '__main__':

@@ -2000,7 +2000,9 @@ def ticket_lines_now($s): . as $t
                records as $rs
                | ([plain[] | {id: .databaseId, at: (.updatedAt // .createdAt)}] | max_by([.at, .id])) as $act
                | look(.number; $rs; "blocked on scope \($st.rec.id)/\(if $act == null then "none" else "\($act.id)@\($act.at)" end): thread \($st.rec | thread) has no branch")
-             else "check start #\(.number): thread \($st.rec | thread), no branch 30 minutes after the start" end
+             else "check start #\(.number): thread \($st.rec | thread), no branch 30 minutes after the start"
+               + (if $st.rec.r == "started" and ($st.rec | thread // "" | startswith("thr_"))
+                  then "; verify the outcome with its starter" else "" end) end
          else empty end),
       (open_prs | map(select(.isDraft | not)) | first // empty | . as $p | .headRefOid as $head
        | records as $rs

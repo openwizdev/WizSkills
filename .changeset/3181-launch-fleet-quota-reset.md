@@ -2,4 +2,4 @@
 "launch-fleet": patch
 ---
 
-Catch first-turn model quota errors on builder starts with `start not tried: quota` (and reset time) instead of `started`, retry at the reset, and wait 10 minutes when that record is posted after the reset has passed.
+Let the builder's starting thread record first-turn quota failures, including failures reported after the starting wake ends. Confirm the failed builder is archived before recording `start not tried: quota`, then retry at the reset or use the 10-minute wait when the reset is unknown or has already passed.

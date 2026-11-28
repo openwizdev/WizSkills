@@ -27,3 +27,11 @@ Build the first small slice of the wish, one they can use within the hour; the r
 - **A countdown page**: the days until a trip, a launch or a birthday; one page with a clear finish line.
 - **A quiz on something they love**: ten questions and a score at the end; easy to grill, and theirs from the first question.
 - **A chore-saving script**: start a file-renaming tool with a preview. It lists the files in a folder they choose, groups them by date, and shows each proposed new name. The preview leaves every file unchanged.
+
+## Demo repository
+
+The demo starts with a Python greeting and a test. Each idea fits in one size-S ticket under the fleet bound in the [first-ten contract](https://github.com/openwizdev/OpenWiz/blob/main/contracts/first-ten.v1.md).
+
+- **Make the greeting yours.** Change the default greeting and update its test.
+- **Greet someone by name.** Accept an optional name on the command line and test the named and default greetings.
+- **Add a farewell.** Add a `--goodbye` flag and test its output.

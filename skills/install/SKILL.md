@@ -270,12 +270,15 @@ Done when `where` recorded the answer.
 
 ### 2. Choose a start
 
-Offer three ways to start: a small change in a repository they have, a fresh project from their idea, or something they've always wanted to build. Anyone without an idea gets two or three ideas from that choice's group in [ideas.md](ideas.md); their own idea always wins. Then its one repository:
+Offer the demo first and their own repository second. Use [ideas.md](ideas.md) if they want ideas.
 
+- **Demo repository** (first choice): verify their GitHub login below. Suggest `<their login>/openwiz-demo` or a fresh name. Run `python3 -I -B <this skill's folder>/scripts/demo.py --state <file> --repo <owner>/<name>`. Show its exact preview. On their yes, repeat with `--yes --confirm <confirmation>`. After exit 6 or a restart during demo creation, repeat the approved demo command before Connect. On success, run `first_fleet.py select --repo <owner>/<name>` with the same state. Offer the demo ideas.
 - **A repository they have:** confirm it, and that the fleet opens branches and pull requests there, then run `first_fleet.py select --repo <owner>/<name>`.
-- **A new repository:** GitHub sign-in first if not already signed in: ask once in plain words whether they already have a GitHub account; with none, say teach.md's "Where agents run" missing line with `a free GitHub account (the website where your project is kept)` and `https://github.com/signup` and wait for done. Then follow Guards' sign-in rule: after their clear yes ("I'll open GitHub's sign-in page and give you a short code; you type your password only on GitHub's own page. OK?"), run `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state> --yes` in the background, read the one-time code and `https://github.com/login/device` from its output, tell the person to open that link, type the code and sign in, and wait until they say done (without their yes, they can run it in their own terminal). Then run the read-only check, `python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir <state>`, and continue only when it reads their account. Recommend a short name made from their idea (lower case, words joined by `-`, such as `chore-stars`), then `first_fleet.py create-repo --repo <owner>/<name>` previews it, its one README commit, and the passing test and CI check (`check`) it adds; on the yes, add `--yes`. Exit 6: run it again. With CloudRoom, the user makes or picks its CloudRoom project.
+- **A new repository for their own idea:** verify GitHub login below, suggest a name and preview `first_fleet.py create-repo --repo <owner>/<name>`. Add `--yes` only after their yes. On exit 6 retry. Select the repository on success.
 
-Done when the idea and one repository are chosen and read back. There is no second repository.
+For a new repository, if signed out, ask once whether they have a GitHub account. If needed, use teach.md's "Where agents run" missing line with `a free GitHub account (the website where your project is kept)` and https://github.com/signup. Follow Guards' sign-in rule. On their clear yes to opening GitHub's sign-in page and giving them a code, run `python3 -I -B "$build"/runtime/setup/github_login.py sign-in --state-dir <state> --yes` in the background. Give them the code and https://github.com/login/device; they sign in there. Without their yes, they can run the command themselves. When they say done, verify with `python3 -I -B "$build"/runtime/setup/github_login.py status --state-dir <state>`. With CloudRoom, they make or pick its project.
+
+Done when the idea and one repository are chosen and read back.
 
 ### 3. Connect
 

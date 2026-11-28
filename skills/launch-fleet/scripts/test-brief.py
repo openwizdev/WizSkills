@@ -79,8 +79,13 @@ class Brief(unittest.TestCase):
         code, text = brief('tick', 'synthetic-owner/synthetic-repo', 'thr_syn-orch')
         self.assertTrue(text.endswith("do its Each wake section for the due lines below. "
                                       "The orchestrator's thread is thr_syn-orch. " + PASS_REPO), text)
-        code, text = brief('re-check', PR, HEAD, OLD, 'R1,R2', 'none')
-        self.assertIn('Open findings: R1,R2. Changed since %s: git diff %s %s' % (OLD, OLD, HEAD), text)
+        answer = 'https://github.com/synthetic-owner/synthetic-code/pull/31#issuecomment-5001'
+        for value in ('none', answer):
+            with self.subTest(answer=value):
+                code, text = brief('re-check', PR, HEAD, OLD, 'R1,R2', value)
+                self.assertEqual(code, 0)
+                self.assertIn("Open findings: R1,R2. Changed since %s: git diff %s %s; the builder's answer: %s."
+                              % (OLD, OLD, HEAD, value), text)
 
     def test_same_family_brief_keeps_the_machine_header_first(self):
         code, text = brief('reviewer', PR, HEAD, 'same-family')

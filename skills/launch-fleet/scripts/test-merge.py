@@ -1875,6 +1875,18 @@ class WizSkillsRoute(unittest.TestCase):
         self.assertEqual(w.writes(), [{'enqueue': 'PR_synthetic7', 'head': HEAD}, {'post': 7, 'body': receipt}])
         self.assertEqual((w.bodies(7), w.others[DEST].writes()), ([receipt], []))
 
+    def test_a_pending_enqueue_through_the_documented_route_writes_no_receipt(self):
+        argv, text = self.route()
+        w = World(self, repo=SKILLS, fleet_md=text, comments={'7': []},
+                  pr=pr(isMergeQueueEnabled=True, closes=closes((DEST, 12))),
+                  others={DEST: {'comments': {'12': []}}}, faults={'enqueue': 'pending'})
+        root = project(w, PRINTS)
+        r = subprocess.run(argv, capture_output=True, text=True, env=w.env, cwd=root, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(r.stdout.strip().startswith('pending: '), r.stdout)
+        self.assertEqual(w.writes(), [{'enqueue': 'PR_synthetic7', 'head': HEAD}])
+        self.assertEqual((w.bodies(7), w.others[DEST].writes()), ([], []))
+
     def test_before_the_queue_is_on_it_prints_the_fallback_line_and_writes_nothing(self):
         argv, text = self.route()
         fallback = re.search(r'While `merge\.py` prints `([^`]+)`', text)

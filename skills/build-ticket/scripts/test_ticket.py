@@ -936,6 +936,17 @@ class Seed(Case):
         self.assertEqual((code, last(out)), (1, 'push refused: the public split is not in HEAD; nothing pushed'), err)
         self.assertEqual((self.remote_refs(), self.receipt.exists()), ('', False))
 
+    def test_seed_refuses_a_push_that_disables_hooks_or_overwrites_refs(self):
+        self.split_source()
+        for push_args in (('--no-verify', 'origin', 'HEAD'), ('--force', 'origin', 'HEAD'),
+                          ('origin', '+HEAD:refs/heads/work'), ('origin', 'HEAD:refs/tags/work')):
+            with self.subTest(push_args=push_args):
+                code, out, err = self.run_ticket('push', str(self.receipt), '--seed-from', self.seed_from,
+                                                  '--', 'git', 'push', '-q', *push_args)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn('the command must push HEAD to origin', out)
+                self.assertEqual((self.remote_refs(), self.receipt.exists()), ('', False))
+
     def test_seed_refuses_github_webflow_as_historical_author(self):
         self.split_source(GIT_AUTHOR_NAME='GitHub', GIT_AUTHOR_EMAIL='noreply@github.com')
         code, out, err = self.seed()

@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from urllib.parse import quote
 
 LOGIN = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?')
 REPO_NAME = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')
@@ -17,6 +18,11 @@ DECISION = re.compile(r'\*\*Orchestrator decision:\*\* (?:(fix once more)|(log a
 PARK = re.compile(rf'Next: park ({FINDINGS}) as a decision for Jake\.')
 START = re.compile(r'launch-fleet: (?:started|start checked)\b')
 NOREPLY = re.compile(r'(?:\d+\+)?(' + LOGIN.pattern + r')@users\.noreply\.github\.com')
+C3_EMAIL = re.compile(r'(?:[1-9][0-9]*\+[A-Za-z0-9][A-Za-z0-9-]*(?:\[bot\])?|'
+                      r'[A-Za-z0-9][A-Za-z0-9-]*)@users\.noreply\.github\.com')
+IDENTITY = re.compile(r'.* <([^<>]*)> [0-9]+ [+-][0-9]{4}')
+GITHUB_SHA = re.compile(r'[0-9a-f]{40}')
+SEED_FROM = re.compile(rf'({REPO_NAME.pattern})@({GITHUB_SHA.pattern}):([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)')
 PUSH_OPTIONS = {'-q', '--quiet', '-v', '--verbose', '-u', '--set-upstream', '--porcelain', '--progress',
                 '--no-progress', '--atomic', '--no-verify', '--verify', '-f', '--force', '--force-with-lease',
                 '--force-if-includes'}
@@ -28,10 +34,10 @@ class Unreadable(Exception):
     pass
 
 
-def run(argv, what, timeout=120):
+def run(argv, what, timeout=120, *, env=None):
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired):
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env)
+    except (OSError, UnicodeDecodeError, subprocess.TimeoutExpired):
         raise Unreadable(f'cannot read {what}')
     if r.returncode:
         raise Unreadable(f'cannot read {what}')
@@ -395,7 +401,7 @@ def cmd_author():
     return 0
 
 
-def push_reach(command):
+def push_reach(command, seed=False):
     args, env = list(command), dict(os.environ)
     if args[:1] == ['env']:
         args.pop(0)
@@ -419,11 +425,15 @@ def push_reach(command):
             break
         if positional or not item.startswith('-'):
             positional.append(item)
+        elif seed and (item in ('-f', '--no-verify') or item.startswith('--force')):
+            return None
         elif item in ('-o', '--push-option') and args:
             args.pop(0)
         elif not item.startswith(('--push-option=', '--force-with-lease=')) and item not in PUSH_OPTIONS:
             return None
     if len(positional) < 2 or positional[0] != 'origin':
+        return None
+    if seed and len(positional) != 2:
         return None
 
     def same(*argv):
@@ -436,15 +446,17 @@ def push_reach(command):
     head = same('rev-parse', '--verify', '-q', 'HEAD^{commit}')
     for spec in positional[1:]:
         src, _, dst = spec.removeprefix('+').partition(':')
+        if seed and (src != 'HEAD' or spec.startswith('+') or (dst and not dst.startswith('refs/heads/'))):
+            return None
         if not src or '*' in spec or (':' in spec and not dst):
             return None
         if not head or same('rev-parse', '--verify', '-q', '--end-of-options', src + '^{commit}') != head:
             return None
-    return env, git
+    return env, git, head
 
 
-def origin_tips(env, git):
-    what = "origin's branches and tags: nothing pushed"
+def origin_tips(env, git, *, all_refs=False):
+    what = "origin's refs: nothing pushed" if all_refs else "origin's branches and tags: nothing pushed"
 
     def reach(*argv):
         try:
@@ -460,7 +472,8 @@ def origin_tips(env, git):
         raise Unreadable('origin has more than one push URL: nothing pushed')
     url = urls[0]
     tips = {}
-    for line in reach('ls-remote', '--heads', '--tags', '--end-of-options', url).splitlines():
+    selectors = ('--refs',) if all_refs else ('--heads', '--tags')
+    for line in reach('ls-remote', *selectors, '--end-of-options', url).splitlines():
         sha, _, ref = line.partition('\t')
         if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', sha) or not ref:
             raise Unreadable(f'cannot read {what}')
@@ -471,17 +484,17 @@ def origin_tips(env, git):
         return [ref for ref, sha in tips.items()
                 if subprocess.run([*git, 'cat-file', '-e', sha], capture_output=True, env=env).returncode]
 
-    if lacking():
+    if not all_refs and lacking():
         reach('fetch', '-q', '--no-tags', '--no-write-fetch-head', '--end-of-options', url, *lacking())
         if lacking():
             raise Unreadable(f'cannot read {what}')
     return sorted(set(tips.values()))
 
 
-def first_identity_violation(env, git):
+def first_identity_violation(env, git, tips, head='HEAD'):
     try:
-        r = subprocess.run([*git, 'log', '--format=%H%x00%an%x00%ae%x00%cn%x00%ce', '--stdin', 'HEAD'],
-                           input=''.join(f'^{sha}\n' for sha in origin_tips(env, git)),
+        r = subprocess.run([*git, 'log', '--format=%H%x00%an%x00%ae%x00%cn%x00%ce', '--stdin', head],
+                           input=''.join(f'^{sha}\n' for sha in tips),
                            capture_output=True, text=True, env=env, timeout=120)
     except (OSError, subprocess.TimeoutExpired):
         raise Unreadable('cannot read the outgoing commits: nothing pushed')
@@ -497,6 +510,72 @@ def first_identity_violation(env, git):
                 return sha, f'{who} is not a GitHub noreply address'
             if name != got[1]:
                 return sha, f"{who} name is not its noreply address's login"
+    return None
+
+
+def is_ancestor(env, git, ancestor, tip):
+    what = 'cannot read seed ancestry: nothing pushed'
+    try:
+        result = subprocess.run([*git, 'merge-base', '--is-ancestor', ancestor, tip],
+                                capture_output=True, env=env, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        raise Unreadable(what)
+    if result.returncode not in (0, 1):
+        raise Unreadable(what)
+    return result.returncode == 0
+
+
+def public_split(env, git, source):
+    found = SEED_FROM.fullmatch(source)
+    if not found or {'.', '..'} & set(found[3].split('/')):
+        raise Unreadable('seed source needs OWNER/REPO@COMMIT:PREFIX: nothing pushed')
+    repo, commit, prefix = found.groups()
+    repository = gh_json(['api', f'repos/{repo}'], 'the seed source repository: nothing pushed')
+    if not (isinstance(repository, dict) and isinstance(repository.get('full_name'), str)
+            and repository['full_name'].lower() == repo.lower() and repository.get('visibility') == 'public'
+            and repository.get('private') is False):
+        raise Unreadable('the seed source is not a verified public repository: nothing pushed')
+    branch = repository.get('default_branch')
+    if not isinstance(branch, str) or not branch:
+        raise Unreadable('cannot read the seed source default branch: nothing pushed')
+    ref = gh_json(['api', f'repos/{repo}/git/ref/heads/{quote(branch, safe="/")}'],
+                  'the seed source default branch: nothing pushed')
+    obj = ref.get('object') if isinstance(ref, dict) and ref.get('ref') == f'refs/heads/{branch}' else None
+    tip = obj.get('sha') if isinstance(obj, dict) and obj.get('type') == 'commit' else None
+    if not isinstance(tip, str) or not GITHUB_SHA.fullmatch(tip):
+        raise Unreadable('cannot read the seed source default branch: nothing pushed')
+    shallow = run([*git, 'rev-parse', '--is-shallow-repository'], 'the seed checkout: nothing pushed', env=env)
+    if shallow.strip() != 'false':
+        raise Unreadable('seed history needs a complete checkout: nothing pushed')
+    try:
+        run([*git, 'cat-file', '-e', f'{tip}^{{commit}}'], 'the seed source tip', env=env)
+    except Unreadable:
+        run([*git, 'fetch', '-q', '--no-tags', '--no-write-fetch-head', '--end-of-options',
+             f'https://github.com/{repo}.git', tip], 'the seed source tip: nothing pushed', env=env)
+    if not is_ancestor(env, git, commit, tip):
+        raise Unreadable('the seed pin is not on the public default branch: nothing pushed')
+    split = run([*git, 'subtree', 'split', '--ignore-joins', '--prefix', prefix, commit],
+                'the public history split: nothing pushed', env=env).strip()
+    if not GITHUB_SHA.fullmatch(split):
+        raise Unreadable('cannot read the public history split: nothing pushed')
+    return split
+
+
+def first_seed_identity_violation(env, git, split):
+    commits = run([*git, 'rev-list', split], 'the seed commits: nothing pushed', env=env).splitlines()
+    if not commits:
+        raise Unreadable('cannot read the seed commits: nothing pushed')
+    for sha in commits:
+        raw = run([*git, 'cat-file', 'commit', sha], 'a seed commit: nothing pushed', env=env)
+        headers, sep, _ = raw.partition('\n\n')
+        if not sep:
+            raise Unreadable('cannot read a seed commit: nothing pushed')
+        for role in ('author', 'committer'):
+            rows = [line for line in headers.splitlines() if line.startswith(role + ' ')]
+            identity = IDENTITY.fullmatch(rows[0]) if len(rows) == 1 else None
+            if not identity or not (C3_EMAIL.fullmatch(identity[1])
+                                    or (role == 'committer' and identity[1] == 'noreply@github.com')):
+                return sha, f'{role} is not a GitHub noreply address'
     return None
 
 
@@ -526,20 +605,41 @@ def earlier_push(branch):
     return base.returncode == 1 if base.returncode in (0, 1) else None
 
 
-def cmd_push(receipt, command):
+def cmd_push(receipt, command, seed_from=None):
     target = outside_checkout(receipt)
     if not command:
         raise Unreadable('no push command after --')
     branch = run(['git', 'symbolic-ref', '--short', 'HEAD'], 'the current branch').strip()
-    reach = push_reach(command)
+    reach = push_reach(command, seed=seed_from is not None)
     if reach is None:
         print(PUSH_REFUSED)
         return 1
-    bad = first_identity_violation(*reach)
+    env, git, checked_head = reach
+    if seed_from is None:
+        bad = first_identity_violation(env, git, origin_tips(env, git))
+    else:
+        env['GIT_NO_REPLACE_OBJECTS'] = '1'
+        if origin_tips(env, git, all_refs=True):
+            print('push refused: seed history requires an empty origin; nothing pushed')
+            return 1
+        split = public_split(env, git, seed_from)
+        if not is_ancestor(env, git, split, checked_head):
+            print('push refused: the public split is not in HEAD; nothing pushed')
+            return 1
+        bad = first_seed_identity_violation(env, git, split) or first_identity_violation(env, git, [split], checked_head)
     if bad:
         print(f'push refused: commit {bad[0][:12]} {bad[1]}; nothing pushed')
         return 1
-    earlier = None if target.exists() else earlier_push(branch)
+    if seed_from is not None:
+        _, _, dest = command[-1].partition(':')
+        dest = dest or run([*git, 'symbolic-ref', 'HEAD'], 'the seed destination: nothing pushed', env=env).strip()
+        if not dest.startswith('refs/heads/') or origin_tips(env, git, all_refs=True):
+            print('push refused: seed history needs a branch in an empty origin; nothing pushed')
+            return 1
+        command = [*command[:-1], f'{checked_head}:{dest}']
+    earlier = None
+    if not target.exists():
+        earlier = False if seed_from is not None else earlier_push(branch)
     if subprocess.run(command).returncode:
         print('push failed: no receipt')
         return 1
@@ -552,7 +652,7 @@ def cmd_push(receipt, command):
         print(f'receipt unknown: {why}; record none')
         return 0
     at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    head = run(['git', 'rev-parse', 'HEAD'], 'HEAD').strip()
+    head = checked_head if seed_from is not None else run(['git', 'rev-parse', 'HEAD'], 'HEAD').strip()
     line = f'First successful push: {head} at {at}\n'
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, 'x', encoding='utf-8') as f:
@@ -607,10 +707,14 @@ USAGE = (
     '                                            --comment checks that one named comment on N is trusted\n'
     "  ticket.py author                          set this clone's git identity to the GitHub user's\n"
     '                                            noreply address; refuse if anything still overrides it\n'
-    '  ticket.py push RECEIPT -- PUSH-COMMAND... refuse unless the command pushes only HEAD to origin and\n'
-    '                                            every commit origin does not hold yet has a noreply\n'
+    '  ticket.py push RECEIPT [--seed-from OWNER/REPO@COMMIT:PREFIX] -- PUSH-COMMAND...\n'
+    '                                            Push only HEAD to origin and require every outgoing commit\n'
+    '                                            to have a noreply\n'
     '                                            author and committer named as its login; then run the\n'
     "                                            push and keep the first success's receipt\n"
+    '                                            With --seed-from, require an empty origin and one non-forced\n'
+    '                                            branch push. Recreate the published directory split with\n'
+    '                                            git subtree split --ignore-joins and check C3 on its history.\n'
     '  ticket.py post-receipt REPO PR RECEIPT    post the receipt once as a record author, read back'
 )
 
@@ -618,7 +722,7 @@ USAGE = (
 def main(argv):
     try:
         args, flags = [], {'--base': [], '--supporting': [], '--owned': [], '--fleet-ref': [],
-                           '--comment': []}
+                           '--comment': [], '--seed-from': []}
         ticket_mode, rest = False, list(argv)
         if '--' in rest:
             rest, command = rest[:rest.index('--')], rest[rest.index('--') + 1:]
@@ -636,7 +740,8 @@ def main(argv):
                 args.append(item)
         ref = flags['--fleet-ref'][-1] if flags['--fleet-ref'] else 'origin/main'
         name = args[:1]
-        if command is not None and name != ['push']:
+        seeds = flags['--seed-from']
+        if (command is not None or seeds) and name != ['push']:
             raise ValueError
         if name == ['read'] and len(args) == 3 and not ticket_mode:
             return cmd_read(args[1], int(args[2]), ref)
@@ -652,8 +757,8 @@ def main(argv):
             return cmd_records(args[1], int(args[2]), ref, ticket_mode, named)
         if name == ['author'] and len(args) == 1:
             return cmd_author()
-        if name == ['push'] and len(args) == 2 and command:
-            return cmd_push(args[1], command)
+        if name == ['push'] and len(args) == 2 and command and len(seeds) <= 1:
+            return cmd_push(args[1], command, seeds[0] if seeds else None)
         if name == ['post-receipt'] and len(args) == 4:
             return cmd_post_receipt(args[1], int(args[2]), args[3], ref)
         raise ValueError

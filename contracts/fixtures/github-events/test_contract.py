@@ -11,6 +11,13 @@ VALIDATOR_SOURCE = CONTRACTS.parent / "skills/dream-cycle/test/test_contract.py"
 VALIDATE = runpy.run_path(str(VALIDATOR_SOURCE))["validate"]
 
 
+def validate_output(schema, output):
+    VALIDATE(schema, schema, output)
+    lines = output["stdout"]
+    if schema["properties"]["stdout"].get("uniqueItems") and len(lines) != len(set(lines)):
+        raise ValueError("$.stdout: uniqueItems not met")
+
+
 class GitHubEventsContractTests(unittest.TestCase):
     def fixture_outputs(self):
         paths = sorted(FIXTURES.glob("*.json"))
@@ -40,7 +47,7 @@ class GitHubEventsContractTests(unittest.TestCase):
         schema = self.schema()
         for name, expected in self.fixture_outputs():
             with self.subTest(fixture=name, expected=expected):
-                VALIDATE(schema, schema, expected)
+                validate_output(schema, expected)
                 specs = [int(line.removeprefix("check spec ")) for line in expected["stdout"]]
                 self.assertEqual(specs, sorted(set(specs)))
 
@@ -75,7 +82,7 @@ class GitHubEventsContractTests(unittest.TestCase):
             {"exit_code": 1, "stdout": []},
         ):
             with self.subTest(malformed=malformed), self.assertRaises(ValueError):
-                VALIDATE(schema, schema, malformed)
+                validate_output(schema, malformed)
 
     def test_fixtures_cover_dispatch_and_use_synthetic_identifiers(self):
         paths = sorted(FIXTURES.glob("*.json"))

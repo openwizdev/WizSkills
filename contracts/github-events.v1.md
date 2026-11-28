@@ -27,6 +27,13 @@ A route that supplies only a body can match the action and corresponding payload
 - Read the secret from the environment by name only, `OPENWIZ_WEBHOOK_SECRET`. When it is set and the route supplies headers, require `X-Hub-Signature-256` to match `sha256=` followed by the HMAC-SHA256 hex digest of the exact body bytes. Compare in constant time. Refuse missing or incorrect signatures before lookups or ledger updates. Never write, log or print the value. [GitHub signature validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
 - For an authenticated, acted-on event with `X-GitHub-Delivery`, claim that ID once before routing. Keep the last 1,000 claimed IDs in `.openwiz/home/github-events.json` as a JSON array ordered from oldest to newest. Serialize the duplicate check and append and update the ledger atomically. A recorded ID exits quietly, even if replayed after a process restart. Once an ID falls out of the window, it can be claimed again. Without the header there is no ID to record or deduplicate.
 
+## Router command
+
+- With headers, run `skills/launch-fleet/scripts/events.py --headers <file> --body <file>` to read one delivery from the two files.
+- Without headers, run `skills/launch-fleet/scripts/events.py` with the delivery body on standard input.
+
+Both forms follow the [output and exit status rules](#output) below.
+
 ## Output
 
 Exit `0` for an accepted delivery, including every quiet outcome. For each resolved spec, print exactly one `check spec <S>` line to stdout, where `<S>` is its positive decimal issue number. Sort by number, remove duplicates and terminate each printed line with a newline. Print zero bytes when no checks are due.

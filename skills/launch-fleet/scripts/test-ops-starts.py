@@ -977,6 +977,322 @@ class ModelsTable(unittest.TestCase):
                                    '--refused', 'claude', '--refused', 'antigravity', '--refused', 'codex')
             self.assertEqual((exhausted.returncode, exhausted.stdout), (1, ''))
 
+    def test_review_sort_setting_and_off_switch(self):
+        base = (
+            '# Fleet settings\n\n'
+            '## Models\n\n'
+            '| Role | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
+            '| --- | --- | --- | --- | --- |\n'
+            '| Orchestrator | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Builder | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Reviewer | Codex | Sol 6.2 | Medium | '
+            '`--provider codex --model gpt-6.2-sol --reasoning-level medium` |\n'
+        )
+        enabled_line = (
+            base
+            + '\n## Review sort\n\n'
+            + 'Review sort: Gemini Neon Low\n\n'
+            + 'One-line revert: set `Review sort: off`.\n\n'
+            + '```text\nReview sort: off\n```\n'
+        )
+        enabled_table = (
+            base
+            + '\n## Review sort\n\n'
+            + '| Setting | Value |\n'
+            + '| --- | --- |\n'
+            + '| Review sort | Gemini Neon Low |\n'
+        )
+        off_line = base + '\n## Review sort\n\nReview sort: off\n'
+        off_table = (
+            base
+            + '\n## Review sort\n\n'
+            + '| Setting | Value |\n'
+            + '| --- | --- |\n'
+            + '| Review sort | off |\n'
+        )
+        good_cases = (
+            ('enabled line with prose and fence mention', enabled_line,
+             (0, '--provider antigravity --reasoning-level low\n', '')),
+            ('enabled table row', enabled_table,
+             (0, '--provider antigravity --reasoning-level low\n', '')),
+            ('off line', off_line, (0, 'off\n', '')),
+            ('off table row', off_table, (0, 'off\n', '')),
+            ('absent setting defaults off', base, (0, 'off\n', '')),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, fleet, want in good_cases:
+                with self.subTest(name):
+                    run, gh_log = run_cli(tmp, fleet, 'review-sort', '--repo', 'synthetic/ops',
+                                          checkout=off_line if fleet is enabled_line else enabled_line)
+                    self.assertEqual((run.returncode, run.stdout, run.stderr), want)
+                    self.assertEqual(gh_log, [])
+            bad_cases = (
+                ('unknown model', base + '\nReview sort: Gemini Neon High\n'),
+                ('uppercase off', base + '\nReview sort: OFF\n'),
+                ('boolean false', base + '\nReview sort: false\n'),
+                ('empty value', base + '\nReview sort:\n'),
+                ('empty table value', base + '\n| Review sort | |\n'),
+                ('duplicate lines', base + '\nReview sort: Gemini Neon Low\nReview sort: off\n'),
+                ('line and table duplicate', enabled_line + '\n| Review sort | off |\n'),
+                ('extra table column', base + '\n| Review sort | Gemini Neon Low | extra |\n'),
+            )
+            for name, broken in bad_cases:
+                with self.subTest(name):
+                    run, _ = run_cli(tmp, broken, 'review-sort', '--repo', 'synthetic/ops')
+                    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]),
+                                     (2, '', 'ops-starts: refused: '))
+
+    def test_review_sort_routing_record_builder_and_follow_ups(self):
+        post_mod = load(HERE / 'post.py', 'launch_fleet_post')
+        head = 'a' * 40
+        pr = 'synthetic/ops#31'
+        base = (
+            '# Fleet settings\n\n'
+            '## Models\n\n'
+            '| Role | Harness | Model | Effort | `room-cli thread spawn` flags |\n'
+            '| --- | --- | --- | --- | --- |\n'
+            '| Orchestrator | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Builder | Claude Code | Opus 5.5 | Medium | '
+            '`--provider claude-code --model claude-opus-5-5 --reasoning-level medium` |\n'
+            '| Reviewer | Codex | Sol 6.2 | Medium | '
+            '`--provider codex --model gpt-6.2-sol --reasoning-level medium` |\n'
+        )
+        enabled = base + '\n## Review sort\n\nReview sort: Gemini Neon Low\n'
+        disabled = base + '\n## Review sort\n\nReview sort: off\n'
+        broken_setting = base + '\n## Review sort\n\nReview sort: unknown\n'
+        today_msg = (
+            f'The review of pull request {pr} at {head} asks for changes: read the report there. '
+            'Fix or dispute each open blocking finding once, then hand back a new green head.'
+        )
+
+        def route(tmp, fleet, sort_text, *extra, ids='R1,R2'):
+            return run_cli(
+                tmp, fleet, 'review-sort-route',
+                '--repo', 'synthetic/ops',
+                '--pr', pr,
+                '--head', head,
+                '--ids', ids,
+                '--ticket-repo', 'synthetic/ops',
+                '--ticket', '12',
+                '--spec', '5',
+                *extra, '-',
+                stdin=sort_text,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            meta_file = Path(tmp) / 'meta.json'
+            r2_file = Path(tmp) / 'r2.txt'
+            r2_file.write_text('Minor naming nit.\n')
+            meta_file.write_text(json.dumps({
+                'R2': {'title': 'Rename helper', 'finding': str(r2_file)},
+            }))
+
+            with self.subTest('mixed sort drives record, builder message, and follow-up'):
+                run, gh_log = route(tmp, enabled, 'R1: blocking\nR2: polish\n', '--finding-meta', str(meta_file))
+                self.assertEqual((run.returncode, run.stderr), (0, ''), run.stdout)
+                self.assertEqual(gh_log, [])
+                plan = json.loads(run.stdout)
+                self.assertEqual(plan['mode'], 'sorted')
+                self.assertEqual(plan['record'], f'launch-fleet: review sort {head}: R1 blocking, R2 polish')
+                post_mod.check(plan['record'])
+                self.assertEqual(plan['blocking'], ['R1'])
+                self.assertEqual(plan['polish'], ['R2'])
+                self.assertIn('R1', plan['builder_message'])
+                self.assertNotIn('R2', plan['builder_message'])
+                self.assertIsNone(plan['findings_record'])
+                self.assertEqual(len(plan['follow_ups']), 1)
+                fu = plan['follow_ups'][0]
+                self.assertEqual(fu['id'], 'R2')
+                self.assertEqual(fu['argv'], [
+                    'python3', '-I', "<review-ticket's folder>/scripts/review.py", 'follow-up',
+                    '--repo', 'synthetic/ops', '--ticket', '12', '--spec', '5',
+                    '--pr', pr, '--head', head, '--id', 'R2',
+                    '--title', 'Rename helper', '--finding', str(r2_file),
+                ])
+
+            with self.subTest('already-polish finding stays in record but is not re-filed'):
+                run, _ = route(
+                    tmp, enabled, 'R1: blocking\nR2: polish\nR3: polish\n',
+                    '--already-polish', 'R3', ids='R1,R2,R3',
+                )
+                self.assertEqual((run.returncode, run.stderr), (0, ''))
+                plan = json.loads(run.stdout)
+                self.assertEqual(plan['mode'], 'sorted')
+                self.assertEqual(
+                    plan['record'],
+                    f'launch-fleet: review sort {head}: R1 blocking, R2 polish, R3 polish',
+                )
+                self.assertEqual(plan['blocking'], ['R1'])
+                self.assertEqual(plan['polish'], ['R2'])
+                self.assertEqual([f['id'] for f in plan['follow_ups']], ['R2'])
+                self.assertIn('R1', plan['builder_message'])
+                self.assertNotIn('R2', plan['builder_message'])
+                self.assertNotIn('R3', plan['builder_message'])
+
+            with self.subTest('all-blocking sort sends all ids to builder and files no follow-ups'):
+                run, _ = route(tmp, enabled, 'R1: blocking\nR2: blocking\n')
+                self.assertEqual((run.returncode, run.stderr), (0, ''))
+                plan = json.loads(run.stdout)
+                self.assertEqual(plan['mode'], 'sorted')
+                self.assertEqual(plan['blocking'], ['R1', 'R2'])
+                self.assertEqual(plan['polish'], [])
+                self.assertIn('R1, R2', plan['builder_message'])
+                self.assertEqual(plan['follow_ups'], [])
+                self.assertEqual(plan['findings_record'], f'launch-fleet: findings sent {head}')
+
+            for spot, suffix in (('match', ' (spot-check: match)'),):
+                with self.subTest(spot_check=spot):
+                    run, _ = route(tmp, enabled, 'R1: blocking\nR2: polish\n', '--spot-check', spot)
+                    self.assertEqual((run.returncode, run.stderr), (0, ''))
+                    plan = json.loads(run.stdout)
+                    self.assertEqual(
+                        plan['record'],
+                        f'launch-fleet: review sort {head}: R1 blocking, R2 polish{suffix}',
+                    )
+                    post_mod.check(plan['record'])
+
+            fallback_cases = (
+                ('off switch reverts to today path', disabled, 'R1: blocking\nR2: polish\n'),
+                ('invalid setting fails open', broken_setting, 'R1: blocking\nR2: polish\n'),
+                ('empty output fails open', enabled, ''),
+                ('malformed line fails open', enabled, 'R1 maybe\nR2: polish\n'),
+                ('extra prose fails open', enabled, 'Here are the labels:\nR1: blocking\nR2: polish\n'),
+                ('missing finding fails open', enabled, 'R1: blocking\n'),
+                ('duplicate finding fails open', enabled, 'R1: blocking\nR1: polish\nR2: polish\n'),
+                ('unknown finding fails open', enabled, 'R1: blocking\nR2: polish\nR9: polish\n'),
+            )
+            for name, fleet, text in fallback_cases:
+                with self.subTest(name):
+                    run, _ = route(tmp, fleet, text)
+                    self.assertEqual((run.returncode, run.stderr), (0, ''), run.stdout)
+                    plan = json.loads(run.stdout)
+                    self.assertEqual(plan['mode'], 'fallback')
+                    self.assertIsNone(plan['record'])
+                    self.assertEqual(plan['blocking'], ['R1', 'R2'])
+                    self.assertEqual(plan['polish'], [])
+                    self.assertEqual(plan['follow_ups'], [])
+                    self.assertEqual(plan['builder_message'], today_msg)
+                    self.assertEqual(plan['findings_record'], f'launch-fleet: findings sent {head}')
+
+            with self.subTest('bad cli args refused'):
+                run, _ = run_cli(
+                    tmp, enabled, 'review-sort-route',
+                    '--repo', 'synthetic/ops', '--pr', 'not-a-pr', '--head', 'bad',
+                    '--ids', 'R1', '--ticket-repo', 'synthetic/ops', '--ticket', '12', '--spec', '5', '-',
+                    stdin='R1: blocking\n',
+                )
+                self.assertEqual((run.returncode, run.stdout, run.stderr[:21]),
+                                 (2, '', 'ops-starts: refused: '))
+
+    def test_review_sort_never_strands_or_misroutes_a_verdict(self):
+        post_mod = load(HERE / 'post.py', 'launch_fleet_post')
+        head = 'a' * 40
+        pr = 'synthetic/ops#31'
+        enabled = self.one + '\n## Review sort\n\nReview sort: Gemini Neon Low\n'
+        today_msg = (
+            f'The review of pull request {pr} at {head} asks for changes: read the report there. '
+            'Fix or dispute each open blocking finding once, then hand back a new green head.'
+        )
+
+        def route(tmp, sort_text, *extra, ids='R1,R2', spec=('--spec', '5')):
+            run, _ = run_cli(
+                tmp, enabled, 'review-sort-route', '--repo', 'synthetic/ops', '--pr', pr, '--head', head,
+                '--ids', ids, '--ticket-repo', 'synthetic/ops', '--ticket', '12', *spec, *extra, '-',
+                stdin=sort_text,
+            )
+            self.assertEqual((run.returncode, run.stderr), (0, ''), run.stdout)
+            return json.loads(run.stdout)
+
+        def today(plan, reason, blocking):
+            self.assertEqual((plan['mode'], plan['reason']), ('fallback', reason))
+            self.assertEqual((plan['blocking'], plan['polish'], plan['follow_ups']), (blocking, [], []))
+            self.assertEqual(plan['builder_message'], today_msg)
+            self.assertEqual(plan['findings_record'], f'launch-fleet: findings sent {head}')
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.subTest('an all-polish sort takes the existing path, so the head never waits on nobody'):
+                plan = route(tmp, 'R1: polish\nR2: polish\n')
+                today(plan, 'the sort left no blocking finding', ['R1', 'R2'])
+                self.assertIsNone(plan['record'])
+
+            with self.subTest('a spot-check mismatch discards the labels before any follow-up or fixer'):
+                plan = route(tmp, 'R1: polish\nR2: blocking\n', '--spot-check', 'mismatch')
+                today(plan, 'spot-check mismatch', ['R1', 'R2'])
+                self.assertEqual(plan['record'], f'launch-fleet: review sort {head}: spot-check mismatch, '
+                                                 'labels discarded; revert to off')
+                post_mod.check(plan['record'])
+
+            with self.subTest('a Risk finding is never sorted out of the fix round'):
+                plan = route(tmp, 'R1: polish\nR2: blocking\n', '--risk', 'R1')
+                today(plan, 'the sort called Risk finding R1 polish', ['R1', 'R2'])
+                self.assertIsNone(plan['record'])
+                kept = route(tmp, 'R1: blocking\nR2: polish\n', '--risk', 'R1')
+                self.assertEqual((kept['mode'], kept['blocking'], kept['polish']), ('sorted', ['R1'], ['R2']))
+
+            with self.subTest('a standalone ticket routes and files follow-ups under its own number'):
+                plan = route(tmp, 'R1: blocking\nR2: blocking\n', spec=())
+                self.assertEqual((plan['mode'], plan['blocking'], plan['follow_ups']), ('sorted', ['R1', 'R2'], []))
+                self.assertEqual(plan['findings_record'], f'launch-fleet: findings sent {head}')
+                plan = route(tmp, 'R1: blocking\nR2: polish\n', spec=())
+                argv = plan['follow_ups'][0]['argv']
+                self.assertEqual(argv[argv.index('--ticket'):argv.index('--pr')],
+                                 ['--ticket', '12', '--spec', '12'])
+
+            with self.subTest('a mixed sort leaves its findings record to the handoff, after the follow-ups'):
+                plan = route(tmp, 'R1: blocking\nR2: polish\n')
+                self.assertEqual((plan['mode'], plan['blocking'], plan['polish']), ('sorted', ['R1'], ['R2']))
+                self.assertIsNone(plan['findings_record'])
+
+            def handoff(*args):
+                run, gh_log = run_cli(tmp, enabled, 'review-sort-handoff', *args)
+                self.assertEqual(gh_log, [])
+                return run
+
+            findings = f'launch-fleet: findings sent {head}: review sort kept R1 and R4; follow-ups R3 #451, R5 #452'
+            with self.subTest('the handoff carries each sorted finding to the next head'):
+                run = handoff('--head', head, '--blocking', 'R1,R4', '--filed', 'R3=451,R5=452')
+                self.assertEqual((run.returncode, run.stderr), (0, ''), run.stdout)
+                first = json.loads(run.stdout)
+                self.assertEqual(first['findings_record'], findings)
+                post_mod.check(first['findings_record'])
+                self.assertEqual(first['recheck_ids'], 'R1,R4')
+                self.assertEqual(first['reviewer_note'], (
+                    f'Review sort at {head}: the fix round covered only R1 and R4. R3 (follow-up #451) and R5 '
+                    '(follow-up #452) were sorted polish before the fix round: never re-check or file them '
+                    'again. Give each the status `still open after the re-check: sorted polish before the fix '
+                    'round. Logged as follow-up #<its issue>.`'
+                ))
+                run = handoff('--record', findings)
+                self.assertEqual((run.returncode, run.stderr), (0, ''), run.stdout)
+                self.assertEqual(json.loads(run.stdout), first)
+
+            refused = (
+                ('a plain findings record', ['--record', f'launch-fleet: findings sent {head}']),
+                ('another head suffix', ['--record', f'launch-fleet: findings sent {head}: asked the orchestrator']),
+                ('no kept finding', ['--head', head, '--blocking', '', '--filed', 'R3=451']),
+                ('no filed follow-up', ['--head', head, '--blocking', 'R1', '--filed', '']),
+                ('an id both kept and filed', ['--head', head, '--blocking', 'R1', '--filed', 'R1=451']),
+                ('a follow-up with no issue', ['--head', head, '--blocking', 'R1', '--filed', 'R3']),
+                ('a short head', ['--head', 'abc1234', '--blocking', 'R1', '--filed', 'R3=451']),
+                ('both forms', ['--record', findings, '--head', head]),
+            )
+            for name, args in refused:
+                with self.subTest(name):
+                    run = handoff(*args)
+                    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]),
+                                     (2, '', 'ops-starts: refused: '))
+
+    def test_reviews_reference_routes_every_sort_outcome(self):
+        text = (HERE.parent / 'references/reviews.md').read_text()
+        self.assertNotIn('sorted polish only', text)
+        for needed in ('review-sort-handoff', '--risk', 'the sort left no blocking finding', 'spot-check mismatch'):
+            self.assertIn(needed, text)
+        recheck = next(p for p in text.split('\n\n') if p.startswith('**A re-check**'))
+        self.assertIn('review-sort-handoff --record', recheck)
+
     def test_gemini_antigravity_cross_family_reviews_both_ways(self):
         claude = dict(provider='claude-code', model='claude-opus-5-5', effort='medium')
         gemini = dict(provider='antigravity', model='gemini-4-neon', effort='medium')
